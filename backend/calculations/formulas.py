@@ -476,3 +476,124 @@ class DilutionFactorFormula(Formula):
             warnings=warnings,
             success=True,
         )
+
+
+class PurityFormula(Formula):
+    """
+    Calculate purity percentage using linear calibration equation.
+
+    Uses serial dilution calibration curve: purity_% = (peak_area - intercept) / slope
+
+    Inputs:
+        - rows with peak_area values OR total_area already calculated
+        - calibration_slope from settings
+        - calibration_intercept from settings
+
+    Outputs:
+        - purity_percent: Calculated purity percentage
+        - total_area: The area used in calculation
+        - calibration_used: {slope, intercept}
+    """
+
+    def validate(self, data: dict, settings: dict) -> list[str]:
+        """Validate purity calculation inputs."""
+        errors: list[str] = []
+
+        # Check calibration slope
+        slope = settings.get("calibration_slope")
+        if slope is None:
+            errors.append("calibration_slope not set in settings")
+        else:
+            try:
+                slope_val = float(slope)
+                if slope_val == 0:
+                    errors.append("calibration_slope cannot be zero")
+            except (ValueError, TypeError):
+                errors.append(f"Invalid calibration_slope value: {slope}")
+
+        # Check calibration intercept
+        intercept = settings.get("calibration_intercept")
+        if intercept is None:
+            errors.append("calibration_intercept not set in settings")
+        else:
+            try:
+                float(intercept)
+            except (ValueError, TypeError):
+                errors.append(f"Invalid calibration_intercept value: {intercept}")
+
+        # Check for area data
+        if not data:
+            errors.append("No sample data provided")
+        elif data.get("total_area") is None:
+            # Need to calculate from rows
+            rows = data.get("rows", [])
+            if not rows:
+                errors.append("No total_area or rows provided")
+            else:
+                has_area = any(row.get("peak_area") is not None for row in rows)
+                if not has_area:
+                    errors.append("No peak_area values found in data")
+
+        return errors
+
+    def execute(self, data: dict, settings: dict) -> CalculationResult:
+        """Execute purity calculation."""
+        warnings: list[str] = []
+
+        slope = float(settings["calibration_slope"])
+        intercept = float(settings["calibration_intercept"])
+
+        # Get total_area - either directly provided or calculate from rows
+        total_area = data.get("total_area")
+        if total_area is None:
+            # Calculate from rows
+            rows = data.get("rows", [])
+            total_area = 0.0
+            for row in rows:
+                area_val = row.get("peak_area")
+                if area_val is not None:
+                    try:
+                        total_area += float(area_val)
+                    except (ValueError, TypeError):
+                        pass
+            warnings.append("Calculated total_area from rows")
+
+        try:
+            total_area = float(total_area)
+        except (ValueError, TypeError):
+            return CalculationResult(
+                calculation_type="purity",
+                input_summary={"total_area": total_area},
+                output_values={},
+                warnings=warnings,
+                success=False,
+                error=f"Invalid total_area value: {total_area}",
+            )
+
+        # Calculate purity: purity_% = (area - intercept) / slope
+        purity_percent = (total_area - intercept) / slope
+
+        # Warn if outside normal range (but still return the value)
+        if purity_percent < 0:
+            warnings.append(f"Purity {purity_percent:.2f}% is negative - check calibration or input data")
+        elif purity_percent > 100:
+            warnings.append(f"Purity {purity_percent:.2f}% exceeds 100% - check calibration or input data")
+
+        return CalculationResult(
+            calculation_type="purity",
+            input_summary={
+                "total_area": total_area,
+                "calibration_slope": slope,
+                "calibration_intercept": intercept,
+            },
+            output_values={
+                "purity_percent": purity_percent,
+                "total_area": total_area,
+                "calibration_used": {
+                    "slope": slope,
+                    "intercept": intercept,
+                },
+            },
+            warnings=warnings,
+            success=True,
+        )
