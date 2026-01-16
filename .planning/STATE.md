@@ -4,33 +4,33 @@
 
 See: .planning/PROJECT.md (updated 2026-01-15)
 
-**Core value:** Streamlined morning workflow: import CSV → review batch → calculate purity → push to SENAITE
-**Current focus:** Phase 1 — Foundation (COMPLETE)
+**Core value:** Streamlined morning workflow: import CSV -> review batch -> calculate purity -> push to SENAITE
+**Current focus:** Phase 1 - Foundation (COMPLETE)
 
 ## Current Position
 
 Phase: 1 of 4 (Foundation)
-Plan: 2 of 2 complete
+Plan: 3 of 3 complete
 Status: Phase complete
-Last activity: 2026-01-16 — Completed 01-02-PLAN.md (Backend Setup)
+Last activity: 2026-01-16 - Completed 01-03-PLAN.md (CSP Fix)
 
-Progress: ██░░░░░░░░ 20%
+Progress: ███░░░░░░░ 30%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 2
-- Average duration: 4 min 13 sec
-- Total execution time: 8 min 25 sec
+- Total plans completed: 3
+- Average duration: 3 min 48 sec
+- Total execution time: 11 min 25 sec
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| 1. Foundation | 2 | 8 min 25 sec | 4 min 13 sec |
+| 1. Foundation | 3 | 11 min 25 sec | 3 min 48 sec |
 
 **Recent Trend:**
-- Last 5 plans: 01-01 (5 min), 01-02 (3 min 25 sec)
+- Last 5 plans: 01-01 (5 min), 01-02 (3 min 25 sec), 01-03 (3 min)
 - Trend: Foundation phase complete
 
 ## Accumulated Context
@@ -46,6 +46,8 @@ Recent decisions affecting current work:
 - SQLite database stored at ./data/accu-mk1.db
 - Backend CORS allows localhost:1420, localhost:5173, tauri://localhost
 - SQLAlchemy 2.0 style with mapped_column for type-safe models
+- CSP connect-src extended for backend URL (not HTTP plugin)
+- BackendStatus discriminated union pattern for connection states
 
 ### Pending Todos
 
@@ -57,6 +59,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-01-16T06:03:39Z
-Stopped at: Completed 01-02-PLAN.md (Backend Setup)
+Last session: 2026-01-16T06:13:00Z
+Stopped at: Completed 01-03-PLAN.md (CSP Fix)
 Resume file: None
