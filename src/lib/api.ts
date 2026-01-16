@@ -482,3 +482,87 @@ export async function getSampleResults(sampleId: number): Promise<StoredResult[]
     throw error
   }
 }
+
+// --- File Watcher API ---
+
+/**
+ * File watcher status.
+ */
+export interface WatcherStatus {
+  is_running: boolean
+  watch_path: string | null
+  pending_files: number
+}
+
+/**
+ * Detected files response.
+ */
+export interface DetectedFiles {
+  files: string[]
+  count: number
+}
+
+/**
+ * Get file watcher status.
+ */
+export async function getWatcherStatus(): Promise<WatcherStatus> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/watcher/status`)
+    if (!response.ok) {
+      throw new Error('Failed to get watcher status')
+    }
+    return response.json()
+  } catch (error) {
+    console.error('Get watcher status error:', error)
+    throw error
+  }
+}
+
+/**
+ * Start file watcher using report_directory from settings.
+ */
+export async function startWatcher(): Promise<{ status: string; watching: string }> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/watcher/start`, { method: 'POST' })
+    if (!response.ok) {
+      const error = await response.json()
+      throw new Error(error.detail || 'Failed to start watcher')
+    }
+    return response.json()
+  } catch (error) {
+    console.error('Start watcher error:', error)
+    throw error
+  }
+}
+
+/**
+ * Stop file watcher.
+ */
+export async function stopWatcher(): Promise<{ status: string }> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/watcher/stop`, { method: 'POST' })
+    if (!response.ok) {
+      throw new Error('Failed to stop watcher')
+    }
+    return response.json()
+  } catch (error) {
+    console.error('Stop watcher error:', error)
+    throw error
+  }
+}
+
+/**
+ * Get and clear list of detected files.
+ */
+export async function getDetectedFiles(): Promise<DetectedFiles> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/watcher/files`)
+    if (!response.ok) {
+      throw new Error('Failed to get detected files')
+    }
+    return response.json()
+  } catch (error) {
+    console.error('Get detected files error:', error)
+    throw error
+  }
+}
