@@ -368,6 +368,41 @@ export async function getJobSamples(jobId: number): Promise<Sample[]> {
   }
 }
 
+/**
+ * Sample with flattened calculation results for batch review UI.
+ * Includes purity, retention_time, and compound_id as top-level fields.
+ */
+export interface SampleWithResults {
+  id: number
+  job_id: number
+  filename: string
+  status: 'pending' | 'calculated' | 'approved' | 'rejected' | 'error' | string
+  rejection_reason: string | null
+  created_at: string
+  // Flattened calculation results
+  purity: number | null
+  retention_time: number | null
+  compound_id: string | null
+  has_results: boolean
+}
+
+/**
+ * Get all samples for a job with their calculation results flattened.
+ * Used for batch review tables where you need quick access to key values.
+ */
+export async function getSamplesWithResults(jobId: number): Promise<SampleWithResults[]> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/jobs/${jobId}/samples-with-results`)
+    if (!response.ok) {
+      throw new Error(`Get job ${jobId} samples with results failed: ${response.status}`)
+    }
+    return response.json()
+  } catch (error) {
+    console.error(`Get job ${jobId} samples with results error:`, error)
+    throw error
+  }
+}
+
 // --- Samples API ---
 
 /**
