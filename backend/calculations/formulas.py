@@ -266,6 +266,145 @@ class ResponseFactorFormula(Formula):
         )
 
 
+class CompoundIdentificationFormula(Formula):
+    """
+    Identify compounds by matching retention times to configured ranges.
+
+    Inputs:
+        - rows with retention_time values
+        - compound_ranges setting: JSON dict with format:
+          {"CompoundA": {"rt_min": 1.0, "rt_max": 2.0}, ...}
+
+    Outputs:
+        - identified_compounds: List of {compound_name, retention_time, peak_area}
+        - unidentified_peaks: List of {retention_time, peak_area} that didn't match
+        - compound_summary: Dict of compound -> count of peaks
+    """
+
+    def validate(self, data: dict, settings: dict) -> list[str]:
+        """Validate compound identification inputs."""
+        errors: list[str] = []
+
+        # Check compound_ranges setting
+        ranges_str = settings.get("compound_ranges")
+        if not ranges_str:
+            errors.append("compound_ranges setting not configured")
+        else:
+            try:
+                import json
+                ranges = json.loads(ranges_str)
+                if not isinstance(ranges, dict):
+                    errors.append("compound_ranges must be a JSON object")
+                elif not ranges:
+                    errors.append("compound_ranges is empty - no compounds configured")
+                else:
+                    # Validate each compound range
+                    for name, range_def in ranges.items():
+                        if not isinstance(range_def, dict):
+                            errors.append(f"Compound '{name}' range must be an object")
+                        elif "rt_min" not in range_def or "rt_max" not in range_def:
+                            errors.append(f"Compound '{name}' missing rt_min or rt_max")
+            except json.JSONDecodeError as e:
+                errors.append(f"compound_ranges is invalid JSON: {e}")
+
+        # Check data has rows with retention_time
+        if not data:
+            errors.append("No sample data provided")
+        else:
+            rows = data.get("rows", [])
+            if not rows:
+                errors.append("No data rows in sample")
+            else:
+                has_rt = any(row.get("retention_time") is not None for row in rows)
+                if not has_rt:
+                    errors.append("No retention_time values found in data")
+
+        return errors
+
+    def execute(self, data: dict, settings: dict) -> CalculationResult:
+        """Execute compound identification."""
+        import json
+
+        rows = data.get("rows", [])
+        warnings: list[str] = []
+
+        # Parse compound ranges
+        ranges = json.loads(settings["compound_ranges"])
+
+        identified_compounds: list[dict] = []
+        unidentified_peaks: list[dict] = []
+        compound_summary: dict[str, int] = {}
+        skipped_no_rt = 0
+
+        for row in rows:
+            rt_val = row.get("retention_time")
+
+            # Skip rows without retention time
+            if rt_val is None:
+                skipped_no_rt += 1
+                continue
+
+            try:
+                rt = float(rt_val)
+            except (ValueError, TypeError):
+                skipped_no_rt += 1
+                warnings.append(f"Invalid retention_time value: {rt_val}")
+                continue
+
+            # Get peak_area if available
+            area_val = row.get("peak_area")
+            try:
+                area = float(area_val) if area_val is not None else None
+            except (ValueError, TypeError):
+                area = None
+
+            # Check which compound range this RT falls into
+            matched_compound = None
+            for compound_name, range_def in ranges.items():
+                try:
+                    rt_min = float(range_def["rt_min"])
+                    rt_max = float(range_def["rt_max"])
+                    if rt_min <= rt <= rt_max:
+                        matched_compound = compound_name
+                        break
+                except (ValueError, TypeError, KeyError):
+                    continue
+
+            if matched_compound:
+                identified_compounds.append({
+                    "compound_name": matched_compound,
+                    "retention_time": rt,
+                    "peak_area": area,
+                })
+                compound_summary[matched_compound] = compound_summary.get(matched_compound, 0) + 1
+            else:
+                unidentified_peaks.append({
+                    "retention_time": rt,
+                    "peak_area": area,
+                })
+
+        if skipped_no_rt > 0:
+            warnings.append(f"Skipped {skipped_no_rt} rows without valid retention_time")
+
+        return CalculationResult(
+            calculation_type="compound_id",
+            input_summary={
+                "total_rows": len(rows),
+                "compounds_configured": len(ranges),
+                "compound_names": list(ranges.keys()),
+            },
+            output_values={
+                "identified_compounds": identified_compounds,
+                "unidentified_peaks": unidentified_peaks,
+                "compound_summary": compound_summary,
+                "identified_count": len(identified_compounds),
+                "unidentified_count": len(unidentified_peaks),
+            },
+            warnings=warnings,
+            success=True,
+        )
+
+
 class DilutionFactorFormula(Formula):
     """
     Adjust concentrations by dilution factor.
