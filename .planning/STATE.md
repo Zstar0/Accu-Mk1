@@ -63,6 +63,8 @@ Recent decisions affecting current work:
 - compound_ranges stored as JSON string with format {name: {rt_min, rt_max}}
 - watchdog library for cross-platform file system monitoring
 - get_detected_files clears list after retrieval (consume-once pattern)
+- Purity formula uses linear equation: (area - intercept) / slope
+- Calibration settings seeded with placeholder defaults (1.0, 0.0)
 
 ### Pending Todos
 
