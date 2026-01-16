@@ -223,17 +223,20 @@ export interface Job {
 
 /**
  * Sample record representing a single imported file.
+ *
+ * Status lifecycle: pending -> calculated -> approved/rejected
  */
 export interface Sample {
   id: number
   job_id: number
   filename: string
-  status: string
+  status: 'pending' | 'calculated' | 'approved' | 'rejected' | 'error' | string
   input_data: {
     rows: Record<string, string | number | null>[]
     headers: string[]
     row_count: number
   } | null
+  rejection_reason: string | null
   created_at: string
 }
 
@@ -278,6 +281,39 @@ export async function importBatch(filePaths: string[]): Promise<ImportResult> {
     return response.json()
   } catch (error) {
     console.error('Import batch error:', error)
+    throw error
+  }
+}
+
+/**
+ * File data for browser-based import.
+ */
+export interface FileData {
+  filename: string
+  headers: string[]
+  rows: Record<string, string | number | null>[]
+  row_count: number
+}
+
+/**
+ * Import pre-parsed file data from browser.
+ * Use this when files are selected via browser file input (no file path access).
+ */
+export async function importBatchData(files: FileData[]): Promise<ImportResult> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/import/batch-data`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ files }),
+    })
+    if (!response.ok) {
+      throw new Error(`Import batch data failed: ${response.status}`)
+    }
+    return response.json()
+  } catch (error) {
+    console.error('Import batch data error:', error)
     throw error
   }
 }
@@ -362,6 +398,48 @@ export async function getSample(sampleId: number): Promise<Sample> {
     return response.json()
   } catch (error) {
     console.error(`Get sample ${sampleId} error:`, error)
+    throw error
+  }
+}
+
+/**
+ * Approve a sample.
+ * Sets status to 'approved' and clears any rejection reason.
+ */
+export async function approveSample(sampleId: number): Promise<Sample> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/samples/${sampleId}/approve`, {
+      method: 'PUT',
+    })
+    if (!response.ok) {
+      throw new Error(`Approve sample ${sampleId} failed: ${response.status}`)
+    }
+    return response.json()
+  } catch (error) {
+    console.error(`Approve sample ${sampleId} error:`, error)
+    throw error
+  }
+}
+
+/**
+ * Reject a sample with a reason.
+ * Sets status to 'rejected' and stores the rejection reason.
+ */
+export async function rejectSample(sampleId: number, reason: string): Promise<Sample> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/samples/${sampleId}/reject`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ reason }),
+    })
+    if (!response.ok) {
+      throw new Error(`Reject sample ${sampleId} failed: ${response.status}`)
+    }
+    return response.json()
+  } catch (error) {
+    console.error(`Reject sample ${sampleId} error:`, error)
     throw error
   }
 }
