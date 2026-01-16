@@ -75,33 +75,33 @@ Which phases cover which requirements. Updated by create-roadmap.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| IMPORT-01 | TBD | Pending |
-| IMPORT-02 | TBD | Pending |
-| IMPORT-03 | TBD | Pending |
-| IMPORT-04 | TBD | Pending |
-| CALC-01 | TBD | Pending |
-| CALC-02 | TBD | Pending |
-| CALC-03 | TBD | Pending |
-| CALC-04 | TBD | Pending |
-| SETTINGS-01 | TBD | Pending |
-| SETTINGS-02 | TBD | Pending |
-| REVIEW-01 | TBD | Pending |
-| REVIEW-02 | TBD | Pending |
-| REVIEW-03 | TBD | Pending |
-| REVIEW-04 | TBD | Pending |
-| SENAITE-01 | TBD | Pending |
-| SENAITE-02 | TBD | Pending |
-| SENAITE-03 | TBD | Pending |
-| INFRA-01 | TBD | Pending |
-| INFRA-02 | TBD | Pending |
-| INFRA-03 | TBD | Pending |
-| INFRA-04 | TBD | Pending |
+| IMPORT-01 | Phase 2 | Pending |
+| IMPORT-02 | Phase 2 | Pending |
+| IMPORT-03 | Phase 2 | Pending |
+| IMPORT-04 | Phase 2 | Pending |
+| CALC-01 | Phase 2 | Pending |
+| CALC-02 | Phase 2 | Pending |
+| CALC-03 | Phase 2 | Pending |
+| CALC-04 | Phase 2 | Pending |
+| SETTINGS-01 | Phase 2 | Pending |
+| SETTINGS-02 | Phase 2 | Pending |
+| REVIEW-01 | Phase 3 | Pending |
+| REVIEW-02 | Phase 3 | Pending |
+| REVIEW-03 | Phase 3 | Pending |
+| REVIEW-04 | Phase 3 | Pending |
+| SENAITE-01 | Phase 4 | Pending |
+| SENAITE-02 | Phase 4 | Pending |
+| SENAITE-03 | Phase 4 | Pending |
+| INFRA-01 | Phase 1 | Pending |
+| INFRA-02 | Phase 1 | Pending |
+| INFRA-03 | Phase 1 | Pending |
+| INFRA-04 | Phase 1 | Pending |
 
 **Coverage:**
 - v1 requirements: 21 total
-- Mapped to phases: 0
-- Unmapped: 21 (pending roadmap creation)
+- Mapped to phases: 21
+- Unmapped: 0 ✓
 
 ---
 *Requirements defined: 2026-01-15*
-*Last updated: 2026-01-15 after initial definition*
+*Last updated: 2026-01-15 after roadmap creation*
