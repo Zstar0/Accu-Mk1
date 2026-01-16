@@ -10,6 +10,7 @@ from calculations.formulas import (
     ResponseFactorFormula,
     DilutionFactorFormula,
     CompoundIdentificationFormula,
+    PurityFormula,
 )
 
 
@@ -19,6 +20,7 @@ FORMULA_REGISTRY: dict[str, type[Formula]] = {
     "response_factor": ResponseFactorFormula,
     "dilution_factor": DilutionFactorFormula,
     "compound_id": CompoundIdentificationFormula,
+    "purity": PurityFormula,
 }
 
 
@@ -124,6 +126,10 @@ class CalculationEngine:
         compound_ranges = self.settings.get("compound_ranges")
         if compound_ranges and compound_ranges != "{}":
             results.append(self.calculate(sample_data, "compound_id"))
+
+        # Run purity calculation if calibration settings exist
+        if self.settings.get("calibration_slope") and self.settings.get("calibration_intercept"):
+            results.append(self.calculate(sample_data, "purity"))
 
         return results
 
