@@ -170,7 +170,9 @@ class ResultResponse(BaseModel):
 DEFAULT_SETTINGS = {
     "report_directory": "",
     "column_mappings": '{"peak_area": "Area", "retention_time": "RT", "compound_name": "Name"}',
-    "compound_ranges": '{}'
+    "compound_ranges": '{}',
+    "calibration_slope": "1.0",
+    "calibration_intercept": "0.0",
 }
 
 
