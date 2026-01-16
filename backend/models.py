@@ -54,6 +54,8 @@ class Sample(Base):
     """
     Represents a single sample within a job.
     Each sample corresponds to one HPLC export file.
+
+    Status lifecycle: pending -> calculated -> approved/rejected
     """
     __tablename__ = "samples"
 
@@ -62,6 +64,7 @@ class Sample(Base):
     filename: Mapped[str] = mapped_column(String(500), nullable=False)
     status: Mapped[str] = mapped_column(String(50), default="pending", nullable=False)
     input_data: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)  # Raw parsed data from file
+    rejection_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # Reason when status=rejected
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     # Relationships
