@@ -9,6 +9,7 @@ from calculations.formulas import (
     AccumulationFormula,
     ResponseFactorFormula,
     DilutionFactorFormula,
+    CompoundIdentificationFormula,
 )
 
 
@@ -17,6 +18,7 @@ FORMULA_REGISTRY: dict[str, type[Formula]] = {
     "accumulation": AccumulationFormula,
     "response_factor": ResponseFactorFormula,
     "dilution_factor": DilutionFactorFormula,
+    "compound_id": CompoundIdentificationFormula,
 }
 
 
@@ -117,6 +119,11 @@ class CalculationEngine:
         # Run dilution factor if setting exists
         if self.settings.get("dilution_factor"):
             results.append(self.calculate(sample_data, "dilution_factor"))
+
+        # Run compound identification if compound_ranges setting exists and is not empty
+        compound_ranges = self.settings.get("compound_ranges")
+        if compound_ranges and compound_ranges != "{}":
+            results.append(self.calculate(sample_data, "compound_id"))
 
         return results
 
