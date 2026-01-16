@@ -184,6 +184,24 @@ class ResultResponse(BaseModel):
         from_attributes = True
 
 
+class SampleWithResultsResponse(BaseModel):
+    """Schema for sample with calculated results flattened for UI."""
+    id: int
+    job_id: int
+    filename: str
+    status: str
+    rejection_reason: Optional[str] = None
+    created_at: datetime
+    # Flattened calculation results for easy UI consumption
+    purity: Optional[float] = None
+    retention_time: Optional[float] = None
+    compound_id: Optional[str] = None
+    has_results: bool = False
+
+    class Config:
+        from_attributes = True
+
+
 # --- Default settings ---
 
 DEFAULT_SETTINGS = {
@@ -624,6 +642,71 @@ async def get_job_samples(job_id: int, db: Session = Depends(get_db)):
     stmt = select(Sample).where(Sample.job_id == job_id).order_by(Sample.id)
     result = db.execute(stmt)
     return result.scalars().all()
+
+
+@app.get("/jobs/{job_id}/samples-with-results", response_model=list[SampleWithResultsResponse])
+async def get_job_samples_with_results(job_id: int, db: Session = Depends(get_db)):
+    """
+    Get all samples for a job with their calculation results flattened.
+
+    Returns samples with key calculation values (purity, retention_time, compound_id)
+    extracted from Result records for easy UI consumption in batch review tables.
+    """
+    # Verify job exists
+    job_stmt = select(Job).where(Job.id == job_id)
+    job = db.execute(job_stmt).scalar_one_or_none()
+    if not job:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+
+    # Get all samples for the job
+    stmt = select(Sample).where(Sample.job_id == job_id).order_by(Sample.id)
+    samples = db.execute(stmt).scalars().all()
+
+    # Build response with flattened results
+    response: list[SampleWithResultsResponse] = []
+    for sample in samples:
+        # Get the most recent purity result for this sample
+        result_stmt = (
+            select(Result)
+            .where(Result.sample_id == sample.id)
+            .where(Result.calculation_type == "purity")
+            .order_by(desc(Result.created_at))
+            .limit(1)
+        )
+        purity_result = db.execute(result_stmt).scalar_one_or_none()
+
+        # Extract values from result output_data
+        purity: Optional[float] = None
+        retention_time: Optional[float] = None
+        compound_id: Optional[str] = None
+        has_results = False
+
+        if purity_result and purity_result.output_data:
+            has_results = True
+            values = purity_result.output_data.get("values", {})
+            # Extract purity percentage
+            if "purity_percent" in values:
+                purity = values["purity_percent"]
+            # Extract matched compound info
+            if "matched_compound" in values:
+                compound_id = values["matched_compound"]
+            if "retention_time" in values:
+                retention_time = values["retention_time"]
+
+        response.append(SampleWithResultsResponse(
+            id=sample.id,
+            job_id=sample.job_id,
+            filename=sample.filename,
+            status=sample.status,
+            rejection_reason=sample.rejection_reason,
+            created_at=sample.created_at,
+            purity=purity,
+            retention_time=retention_time,
+            compound_id=compound_id,
+            has_results=has_results,
+        ))
+
+    return response
 
 
 @app.get("/samples", response_model=list[SampleResponse])
