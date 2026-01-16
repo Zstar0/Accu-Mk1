@@ -8,7 +8,7 @@ import { useState, useRef } from 'react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
-import { previewFile, importBatch, type ParsePreview } from '@/lib/api'
+import { importBatch, type ParsePreview } from '@/lib/api'
 import { PreviewTable } from './PreviewTable'
 import { toast } from 'sonner'
 import { FileText, X, Upload, Eye, Loader2 } from 'lucide-react'
@@ -83,11 +83,24 @@ export function FileSelector() {
         }
 
         // Assume tab-delimited format (common for HPLC exports)
-        const headers = lines[0].split('\t').map(h => h.trim())
+        const firstLine = lines[0]
+        if (!firstLine) {
+          newPreviews.push({
+            filename: file.name,
+            headers: [],
+            rows: [],
+            row_count: 0,
+            errors: ['File is empty'],
+          })
+          continue
+        }
+        const headers = firstLine.split('\t').map(h => h.trim())
         const rows: Record<string, string | number | null>[] = []
 
         for (let i = 1; i < lines.length; i++) {
-          const values = lines[i].split('\t')
+          const line = lines[i]
+          if (!line) continue
+          const values = line.split('\t')
           const row: Record<string, string | number | null> = {}
           headers.forEach((header, idx) => {
             const value = values[idx]?.trim() ?? null

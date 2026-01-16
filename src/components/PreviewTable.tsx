@@ -113,7 +113,7 @@ export function PreviewTable({ preview, onRemove }: PreviewTableProps) {
 /**
  * Format a cell value for display.
  */
-function formatCellValue(value: string | number | null): string {
+function formatCellValue(value: string | number | null | undefined): string {
   if (value === null || value === undefined) {
     return '-'
   }
