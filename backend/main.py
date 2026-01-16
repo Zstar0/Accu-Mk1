@@ -85,6 +85,19 @@ class BatchImportRequest(BaseModel):
     file_paths: list[str]
 
 
+class FileData(BaseModel):
+    """Schema for file data from browser."""
+    filename: str
+    headers: list[str]
+    rows: list[dict[str, Union[str, int, float, None]]]
+    row_count: int
+
+
+class BatchImportDataRequest(BaseModel):
+    """Schema for batch import with pre-parsed data from browser."""
+    files: list[FileData]
+
+
 class SampleSummary(BaseModel):
     """Summary of a created sample."""
     id: int
@@ -119,10 +132,16 @@ class SampleResponse(BaseModel):
     filename: str
     status: str
     input_data: Optional[dict]
+    rejection_reason: Optional[str] = None
     created_at: datetime
 
     class Config:
         from_attributes = True
+
+
+class RejectRequest(BaseModel):
+    """Schema for sample rejection request."""
+    reason: str
 
 
 # --- Calculation schemas ---
@@ -498,6 +517,84 @@ async def import_batch(
     )
 
 
+@app.post("/import/batch-data", response_model=ImportResultResponse)
+async def import_batch_data(
+    request: BatchImportDataRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    Import pre-parsed file data from browser.
+
+    This endpoint accepts already-parsed data from the frontend,
+    useful when files are selected via browser file input (no file path access).
+    """
+    errors: list[str] = []
+    samples: list[SampleSummary] = []
+
+    # Create Job
+    job = Job(
+        status="pending",
+        source_directory="browser-upload",
+    )
+    db.add(job)
+    db.flush()
+
+    # Create audit log for job creation
+    audit_log = AuditLog(
+        operation="create",
+        entity_type="job",
+        entity_id=str(job.id),
+        details={"file_count": len(request.files), "source": "browser-upload"},
+    )
+    db.add(audit_log)
+
+    # Process each file's data
+    for file_data in request.files:
+        # Create Sample with parsed data
+        sample = Sample(
+            job_id=job.id,
+            filename=file_data.filename,
+            status="pending",
+            input_data={
+                "rows": file_data.rows,
+                "headers": file_data.headers,
+                "row_count": file_data.row_count,
+            },
+        )
+        db.add(sample)
+        db.flush()
+
+        samples.append(SampleSummary(
+            id=sample.id,
+            filename=file_data.filename,
+            row_count=file_data.row_count,
+        ))
+
+        # Create audit log for sample creation
+        sample_audit = AuditLog(
+            operation="create",
+            entity_type="sample",
+            entity_id=str(sample.id),
+            details={
+                "job_id": job.id,
+                "filename": file_data.filename,
+                "row_count": file_data.row_count,
+            },
+        )
+        db.add(sample_audit)
+
+    # Update job status
+    job.status = "imported"
+    db.commit()
+
+    return ImportResultResponse(
+        job_id=job.id,
+        samples_created=len(samples),
+        samples=samples,
+        errors=errors,
+    )
+
+
 # --- Job and Sample Endpoints ---
 
 @app.get("/jobs", response_model=list[JobResponse])
@@ -547,6 +644,76 @@ async def get_sample(sample_id: int, db: Session = Depends(get_db)):
     sample = db.execute(stmt).scalar_one_or_none()
     if not sample:
         raise HTTPException(status_code=404, detail=f"Sample {sample_id} not found")
+    return sample
+
+
+@app.put("/samples/{sample_id}/approve", response_model=SampleResponse)
+async def approve_sample(sample_id: int, db: Session = Depends(get_db)):
+    """
+    Approve a sample.
+
+    Sets status to 'approved' and clears any rejection reason.
+    Creates an audit log entry.
+    """
+    stmt = select(Sample).where(Sample.id == sample_id)
+    sample = db.execute(stmt).scalar_one_or_none()
+    if not sample:
+        raise HTTPException(status_code=404, detail=f"Sample {sample_id} not found")
+
+    old_status = sample.status
+    sample.status = "approved"
+    sample.rejection_reason = None
+
+    # Create audit log
+    audit = AuditLog(
+        operation="approve",
+        entity_type="sample",
+        entity_id=str(sample_id),
+        details={"old_status": old_status, "new_status": "approved"},
+    )
+    db.add(audit)
+    db.commit()
+    db.refresh(sample)
+
+    return sample
+
+
+@app.put("/samples/{sample_id}/reject", response_model=SampleResponse)
+async def reject_sample(
+    sample_id: int,
+    request: RejectRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    Reject a sample with a reason.
+
+    Sets status to 'rejected' and stores the rejection reason.
+    Creates an audit log entry.
+    """
+    stmt = select(Sample).where(Sample.id == sample_id)
+    sample = db.execute(stmt).scalar_one_or_none()
+    if not sample:
+        raise HTTPException(status_code=404, detail=f"Sample {sample_id} not found")
+
+    old_status = sample.status
+    sample.status = "rejected"
+    sample.rejection_reason = request.reason
+
+    # Create audit log
+    audit = AuditLog(
+        operation="reject",
+        entity_type="sample",
+        entity_id=str(sample_id),
+        details={
+            "old_status": old_status,
+            "new_status": "rejected",
+            "reason": request.reason,
+        },
+    )
+    db.add(audit)
+    db.commit()
+    db.refresh(sample)
+
     return sample
 
 
