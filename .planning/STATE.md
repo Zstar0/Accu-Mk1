@@ -10,28 +10,28 @@ See: .planning/PROJECT.md (updated 2026-01-15)
 ## Current Position
 
 Phase: 2 of 4 (Data Pipeline)
-Plan: 1 of 4 complete
+Plan: 2 of 4 complete
 Status: In progress
-Last activity: 2026-01-16 - Completed 02-01-PLAN.md (Settings Backend and UI)
+Last activity: 2026-01-16 - Completed 02-02-PLAN.md (File Import Backend)
 
-Progress: ████░░░░░░ 40%
+Progress: █████░░░░░ 50%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 4
-- Average duration: 3 min 50 sec
-- Total execution time: 15 min 21 sec
+- Total plans completed: 5
+- Average duration: 3 min 52 sec
+- Total execution time: 19 min 21 sec
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
 | 1. Foundation | 3 | 11 min 25 sec | 3 min 48 sec |
-| 2. Data Pipeline | 1 | 3 min 56 sec | 3 min 56 sec |
+| 2. Data Pipeline | 2 | 7 min 56 sec | 3 min 58 sec |
 
 **Recent Trend:**
-- Last 5 plans: 01-01 (5 min), 01-02 (3 min 25 sec), 01-03 (3 min), 02-01 (3 min 56 sec)
+- Last 5 plans: 01-02 (3 min 25 sec), 01-03 (3 min), 02-01 (3 min 56 sec), 02-02 (4 min)
 - Trend: Consistent ~4 min per plan
 
 ## Accumulated Context
@@ -52,6 +52,8 @@ Recent decisions affecting current work:
 - Key-value pattern for settings (flexible, simple)
 - Column mappings stored as JSON string in value field
 - Settings seeded on startup with defaults
+- TXT parser first, CSV/Excel later
+- Sample.input_data stores raw parsed rows as JSON
 
 ### Pending Todos
 
@@ -63,6 +65,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-01-16T06:40:07Z
-Stopped at: Completed 02-01-PLAN.md (Settings Backend and UI)
+Last session: 2026-01-16T06:40:20Z
+Stopped at: Completed 02-02-PLAN.md (File Import Backend)
 Resume file: None
