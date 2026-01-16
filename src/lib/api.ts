@@ -365,3 +365,120 @@ export async function getSample(sampleId: number): Promise<Sample> {
     throw error
   }
 }
+
+// --- Calculations API ---
+
+/**
+ * Result of a single calculation.
+ */
+export interface CalculationResult {
+  calculation_type: string
+  input_summary: Record<string, unknown>
+  output_values: Record<string, number | string | Record<string, unknown>>
+  warnings: string[]
+  success: boolean
+  error: string | null
+}
+
+/**
+ * Summary of calculations run on a sample.
+ */
+export interface CalculationSummary {
+  sample_id: number
+  results: CalculationResult[]
+  total_calculations: number
+  successful: number
+  failed: number
+}
+
+/**
+ * Stored result record from database.
+ */
+export interface StoredResult {
+  id: number
+  sample_id: number
+  calculation_type: string
+  input_data: Record<string, unknown> | null
+  output_data: Record<string, unknown> | null
+  created_at: string
+}
+
+/**
+ * Run all applicable calculations for a sample.
+ * Results are stored in the database and returned.
+ */
+export async function calculateSample(sampleId: number): Promise<CalculationSummary> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/calculate/${sampleId}`, {
+      method: 'POST',
+    })
+    if (!response.ok) {
+      throw new Error(`Calculate sample ${sampleId} failed: ${response.status}`)
+    }
+    return response.json()
+  } catch (error) {
+    console.error(`Calculate sample ${sampleId} error:`, error)
+    throw error
+  }
+}
+
+/**
+ * Get list of available calculation types.
+ */
+export async function getCalculationTypes(): Promise<string[]> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/calculations/types`)
+    if (!response.ok) {
+      throw new Error(`Get calculation types failed: ${response.status}`)
+    }
+    return response.json()
+  } catch (error) {
+    console.error('Get calculation types error:', error)
+    throw error
+  }
+}
+
+/**
+ * Preview a calculation without saving.
+ * Useful for testing formulas with custom data.
+ */
+export async function previewCalculation(
+  data: Record<string, unknown>,
+  calculationType: string
+): Promise<CalculationResult> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/calculate/preview`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        data,
+        calculation_type: calculationType,
+      }),
+    })
+    if (!response.ok) {
+      throw new Error(`Preview calculation failed: ${response.status}`)
+    }
+    return response.json()
+  } catch (error) {
+    console.error('Preview calculation error:', error)
+    throw error
+  }
+}
+
+/**
+ * Get all stored calculation results for a sample.
+ */
+export async function getSampleResults(sampleId: number): Promise<StoredResult[]> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/samples/${sampleId}/results`)
+    if (!response.ok) {
+      throw new Error(`Get sample ${sampleId} results failed: ${response.status}`)
+    }
+    return response.json()
+  } catch (error) {
+    console.error(`Get sample ${sampleId} results error:`, error)
+    throw error
+  }
+}

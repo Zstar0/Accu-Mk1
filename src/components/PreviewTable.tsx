@@ -7,7 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { ScrollArea, ScrollBar } from '@/components/ui/scroll-area'
-import { type ParsePreview } from '@/lib/api'
+import type { ParsePreview } from '@/lib/api'
 import { FileText, X, AlertCircle, CheckCircle2 } from 'lucide-react'
 
 interface PreviewTableProps {
