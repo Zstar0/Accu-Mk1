@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { check } from '@tauri-apps/plugin-updater'
 import { relaunch } from '@tauri-apps/plugin-process'
 import { initializeCommandSystem } from './lib/commands'
@@ -6,13 +6,44 @@ import { buildAppMenu, setupMenuLanguageListener } from './lib/menu'
 import { initializeLanguage } from './i18n/language-init'
 import { logger } from './lib/logger'
 import { cleanupOldFiles } from './lib/recovery'
+import { healthCheck, type HealthResponse } from './lib/api'
 import { commands } from './lib/tauri-bindings'
 import './App.css'
 import { MainWindow } from './components/layout/MainWindow'
 import { ThemeProvider } from './components/ThemeProvider'
 import { ErrorBoundary } from './components/ErrorBoundary'
 
+// Backend connection status type
+type BackendStatus =
+  | { state: 'loading' }
+  | { state: 'connected'; data: HealthResponse }
+  | { state: 'error'; message: string }
+
 function App() {
+  // Backend connection status
+  const [backendStatus, setBackendStatus] = useState<BackendStatus>({
+    state: 'loading',
+  })
+
+  // Check backend health on mount
+  useEffect(() => {
+    const checkBackend = async () => {
+      try {
+        const health = await healthCheck()
+        setBackendStatus({ state: 'connected', data: health })
+        logger.info('Backend connected', { version: health.version })
+      } catch (error) {
+        setBackendStatus({
+          state: 'error',
+          message: 'Backend offline - start with: uvicorn backend.main:app',
+        })
+        logger.warn('Backend connection failed', { error })
+      }
+    }
+
+    checkBackend()
+  }, [])
+
   // Initialize command system and cleanup on app startup
   useEffect(() => {
     logger.info('🚀 Frontend application starting up')
@@ -108,10 +139,35 @@ function App() {
     return () => clearTimeout(updateTimer)
   }, [])
 
+  // Render backend status indicator
+  const renderBackendStatus = () => {
+    switch (backendStatus.state) {
+      case 'loading':
+        return (
+          <div className="fixed bottom-4 right-4 bg-yellow-100 dark:bg-yellow-900 text-yellow-800 dark:text-yellow-200 px-3 py-1 rounded-full text-sm">
+            Connecting to backend...
+          </div>
+        )
+      case 'connected':
+        return (
+          <div className="fixed bottom-4 right-4 bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200 px-3 py-1 rounded-full text-sm">
+            Backend connected (v{backendStatus.data.version})
+          </div>
+        )
+      case 'error':
+        return (
+          <div className="fixed bottom-4 right-4 bg-red-100 dark:bg-red-900 text-red-800 dark:text-red-200 px-3 py-1 rounded-full text-sm">
+            {backendStatus.message}
+          </div>
+        )
+    }
+  }
+
   return (
     <ErrorBoundary>
       <ThemeProvider>
         <MainWindow />
+        {renderBackendStatus()}
       </ThemeProvider>
     </ErrorBoundary>
   )

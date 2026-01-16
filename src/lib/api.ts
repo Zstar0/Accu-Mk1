@@ -74,7 +74,7 @@ export async function createAuditLog(
 /**
  * Get recent audit log entries.
  */
-export async function getAuditLogs(limit: number = 50): Promise<AuditLog[]> {
+export async function getAuditLogs(limit = 50): Promise<AuditLog[]> {
   try {
     const response = await fetch(`${API_BASE_URL}/audit?limit=${limit}`)
     if (!response.ok) {
