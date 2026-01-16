@@ -4,6 +4,7 @@ Provides REST API for scientific calculations, database access, and audit loggin
 """
 
 import json
+import os
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
@@ -19,6 +20,7 @@ from database import get_db, init_db
 from models import AuditLog, Settings, Job, Sample, Result
 from parsers import parse_txt_file
 from calculations import CalculationEngine
+from file_watcher import FileWatcher
 
 
 # --- Pydantic schemas ---
@@ -167,7 +169,8 @@ class ResultResponse(BaseModel):
 
 DEFAULT_SETTINGS = {
     "report_directory": "",
-    "column_mappings": '{"peak_area": "Area", "retention_time": "RT", "compound_name": "Name"}'
+    "column_mappings": '{"peak_area": "Area", "retention_time": "RT", "compound_name": "Name"}',
+    "compound_ranges": '{}'
 }
 
 
@@ -220,6 +223,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Global file watcher instance
+file_watcher = FileWatcher()
 
 
 # --- Endpoints ---
@@ -313,6 +319,45 @@ async def delete_setting(key: str, db: Session = Depends(get_db)):
     db.delete(setting)
     db.commit()
     return {"message": f"Setting '{key}' deleted"}
+
+
+# --- File Watcher Endpoints ---
+
+@app.get("/watcher/status")
+async def get_watcher_status():
+    """Get file watcher status."""
+    return file_watcher.status()
+
+
+@app.post("/watcher/start")
+async def start_watcher(db: Session = Depends(get_db)):
+    """Start file watcher using report_directory from settings."""
+    # Get report_directory from settings
+    setting = db.execute(
+        select(Settings).where(Settings.key == "report_directory")
+    ).scalar_one_or_none()
+    if not setting or not setting.value:
+        raise HTTPException(400, "report_directory not configured")
+
+    if not os.path.isdir(setting.value):
+        raise HTTPException(400, f"Directory does not exist: {setting.value}")
+
+    file_watcher.start(setting.value)
+    return {"status": "started", "watching": setting.value}
+
+
+@app.post("/watcher/stop")
+async def stop_watcher():
+    """Stop file watcher."""
+    file_watcher.stop()
+    return {"status": "stopped"}
+
+
+@app.get("/watcher/files")
+async def get_detected_files():
+    """Get and clear list of detected files."""
+    files = file_watcher.get_detected_files()
+    return {"files": files, "count": len(files)}
 
 
 # --- Import Endpoints ---
