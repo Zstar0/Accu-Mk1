@@ -6,8 +6,8 @@ Build a lab desktop application for HPLC result processing in 4 phases: foundati
 
 ## Phases
 
-- [ ] **Phase 1: Foundation** — Dual-mode app architecture (React + Tauri + FastAPI + SQLite)
-- [ ] **Phase 2: Data Pipeline** — File import, parsing, and calculations
+- [x] **Phase 1: Foundation** — Dual-mode app architecture (React + Tauri + FastAPI + SQLite)
+- [x] **Phase 2: Data Pipeline** — File import, parsing, and calculations
 - [ ] **Phase 3: Review Workflow** — Batch review UI with approve/reject
 - [ ] **Phase 4: SENAITE Integration** — Push approved results to LIMS
 
@@ -73,7 +73,7 @@ Build a lab desktop application for HPLC result processing in 4 phases: foundati
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Foundation | 0/TBD | Not started | - |
-| 2. Data Pipeline | 0/TBD | Not started | - |
+| 1. Foundation | 3/3 | Complete | 2026-01-16 |
+| 2. Data Pipeline | 7/7 | Complete | 2026-01-16 |
 | 3. Review Workflow | 0/TBD | Not started | - |
 | 4. SENAITE Integration | 0/TBD | Not started | - |

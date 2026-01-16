@@ -75,16 +75,16 @@ Which phases cover which requirements. Updated by create-roadmap.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| IMPORT-01 | Phase 2 | Pending |
-| IMPORT-02 | Phase 2 | Pending |
-| IMPORT-03 | Phase 2 | Pending |
-| IMPORT-04 | Phase 2 | Pending |
-| CALC-01 | Phase 2 | Pending |
-| CALC-02 | Phase 2 | Pending |
-| CALC-03 | Phase 2 | Pending |
-| CALC-04 | Phase 2 | Pending |
-| SETTINGS-01 | Phase 2 | Pending |
-| SETTINGS-02 | Phase 2 | Pending |
+| IMPORT-01 | Phase 2 | Complete |
+| IMPORT-02 | Phase 2 | Complete |
+| IMPORT-03 | Phase 2 | Complete |
+| IMPORT-04 | Phase 2 | Complete |
+| CALC-01 | Phase 2 | Complete |
+| CALC-02 | Phase 2 | Complete |
+| CALC-03 | Phase 2 | Complete |
+| CALC-04 | Phase 2 | Complete |
+| SETTINGS-01 | Phase 2 | Complete |
+| SETTINGS-02 | Phase 2 | Complete |
 | REVIEW-01 | Phase 3 | Pending |
 | REVIEW-02 | Phase 3 | Pending |
 | REVIEW-03 | Phase 3 | Pending |
@@ -104,4 +104,4 @@ Which phases cover which requirements. Updated by create-roadmap.
 
 ---
 *Requirements defined: 2026-01-15*
-*Last updated: 2026-01-16 after Phase 1 completion*
+*Last updated: 2026-01-16 after Phase 2 completion*
