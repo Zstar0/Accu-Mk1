@@ -25,3 +25,11 @@ jscpd-report
 *.njsproj
 *.sln
 *.sw?
+
+# Python
+backend/.venv/
+__pycache__/
+*.pyc
+
+# Local data
+data/
