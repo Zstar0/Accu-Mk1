@@ -92,10 +92,10 @@ Which phases cover which requirements. Updated by create-roadmap.
 | SENAITE-01 | Phase 4 | Pending |
 | SENAITE-02 | Phase 4 | Pending |
 | SENAITE-03 | Phase 4 | Pending |
-| INFRA-01 | Phase 1 | Pending |
-| INFRA-02 | Phase 1 | Pending |
-| INFRA-03 | Phase 1 | Pending |
-| INFRA-04 | Phase 1 | Pending |
+| INFRA-01 | Phase 1 | Complete |
+| INFRA-02 | Phase 1 | Complete |
+| INFRA-03 | Phase 1 | Complete |
+| INFRA-04 | Phase 1 | Complete |
 
 **Coverage:**
 - v1 requirements: 21 total
@@ -104,4 +104,4 @@ Which phases cover which requirements. Updated by create-roadmap.
 
 ---
 *Requirements defined: 2026-01-15*
-*Last updated: 2026-01-15 after roadmap creation*
+*Last updated: 2026-01-16 after Phase 1 completion*

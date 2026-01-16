@@ -8,7 +8,7 @@ from typing import Optional
 from sqlalchemy import String, Text, DateTime, ForeignKey, JSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from .database import Base
+from database import Base
 
 
 class AuditLog(Base):

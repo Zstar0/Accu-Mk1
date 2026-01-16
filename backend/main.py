@@ -13,8 +13,8 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from sqlalchemy import select, desc
 
-from .database import get_db, init_db
-from .models import AuditLog
+from database import get_db, init_db
+from models import AuditLog
 
 
 # --- Pydantic schemas ---
