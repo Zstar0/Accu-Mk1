@@ -10,28 +10,28 @@ See: .planning/PROJECT.md (updated 2026-01-15)
 ## Current Position
 
 Phase: 2 of 4 (Data Pipeline)
-Plan: 2 of 4 complete
+Plan: 3 of 4 complete
 Status: In progress
-Last activity: 2026-01-16 - Completed 02-02-PLAN.md (File Import Backend)
+Last activity: 2026-01-16 - Completed 02-04-PLAN.md (Calculation Engine)
 
-Progress: █████░░░░░ 50%
+Progress: ██████░░░░ 60%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 5
-- Average duration: 3 min 52 sec
-- Total execution time: 19 min 21 sec
+- Total plans completed: 6
+- Average duration: 3 min 54 sec
+- Total execution time: ~23 min 21 sec
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
 | 1. Foundation | 3 | 11 min 25 sec | 3 min 48 sec |
-| 2. Data Pipeline | 2 | 7 min 56 sec | 3 min 58 sec |
+| 2. Data Pipeline | 3 | ~11 min 56 sec | ~4 min |
 
 **Recent Trend:**
-- Last 5 plans: 01-02 (3 min 25 sec), 01-03 (3 min), 02-01 (3 min 56 sec), 02-02 (4 min)
+- Last 5 plans: 01-03 (3 min), 02-01 (3 min 56 sec), 02-02 (4 min), 02-03, 02-04 (~4 min)
 - Trend: Consistent ~4 min per plan
 
 ## Accumulated Context
@@ -54,6 +54,9 @@ Recent decisions affecting current work:
 - Settings seeded on startup with defaults
 - TXT parser first, CSV/Excel later
 - Sample.input_data stores raw parsed rows as JSON
+- CalculationResult dataclass in formulas.py (single source of truth)
+- Formula registry pattern for type-based lookup
+- calculate_all runs applicable calculations based on settings
 
 ### Pending Todos
 
@@ -65,6 +68,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-01-16T06:40:20Z
-Stopped at: Completed 02-02-PLAN.md (File Import Backend)
+Last session: 2026-01-16
+Stopped at: Completed 02-04-PLAN.md (Calculation Engine)
 Resume file: None
