@@ -61,6 +61,7 @@ class Sample(Base):
     job_id: Mapped[int] = mapped_column(ForeignKey("jobs.id"), nullable=False)
     filename: Mapped[str] = mapped_column(String(500), nullable=False)
     status: Mapped[str] = mapped_column(String(50), default="pending", nullable=False)
+    input_data: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)  # Raw parsed data from file
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     # Relationships
@@ -90,3 +91,19 @@ class Result(Base):
 
     def __repr__(self) -> str:
         return f"<Result(id={self.id}, calculation_type='{self.calculation_type}')>"
+
+
+class Settings(Base):
+    """
+    Application settings stored as key-value pairs.
+    Used for column mappings, report directory, and other configuration.
+    """
+    __tablename__ = "settings"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    key: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
+    value: Mapped[str] = mapped_column(Text, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def __repr__(self) -> str:
+        return f"<Settings(id={self.id}, key='{self.key}')>"

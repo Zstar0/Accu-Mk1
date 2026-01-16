@@ -14,7 +14,8 @@ from sqlalchemy.orm import Session
 from sqlalchemy import select, desc
 
 from database import get_db, init_db
-from models import AuditLog
+from models import AuditLog, Settings, Job, Sample
+from parsers import parse_txt_file
 
 
 # --- Pydantic schemas ---
@@ -47,12 +48,53 @@ class AuditLogResponse(BaseModel):
         from_attributes = True
 
 
+class SettingUpdate(BaseModel):
+    """Schema for updating a setting."""
+    value: str
+
+
+class SettingResponse(BaseModel):
+    """Schema for setting response."""
+    id: int
+    key: str
+    value: str
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+# --- Default settings ---
+
+DEFAULT_SETTINGS = {
+    "report_directory": "",
+    "column_mappings": '{"peak_area": "Area", "retention_time": "RT", "compound_name": "Name"}'
+}
+
+
 # --- App lifecycle ---
+
+def seed_default_settings(db: Session):
+    """Seed default settings if they don't exist."""
+    for key, value in DEFAULT_SETTINGS.items():
+        existing = db.execute(select(Settings).where(Settings.key == key)).scalar_one_or_none()
+        if not existing:
+            setting = Settings(key=key, value=value)
+            db.add(setting)
+    db.commit()
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Initialize database on startup."""
+    """Initialize database on startup and seed defaults."""
     init_db()
+    # Seed default settings
+    from database import SessionLocal
+    db = SessionLocal()
+    try:
+        seed_default_settings(db)
+    finally:
+        db.close()
     yield
 
 
@@ -116,3 +158,59 @@ async def get_audit_logs(
     stmt = select(AuditLog).order_by(desc(AuditLog.created_at)).limit(limit)
     result = db.execute(stmt)
     return result.scalars().all()
+
+
+# --- Settings Endpoints ---
+
+@app.get("/settings", response_model=list[SettingResponse])
+async def get_settings(db: Session = Depends(get_db)):
+    """Get all settings."""
+    stmt = select(Settings).order_by(Settings.key)
+    result = db.execute(stmt)
+    return result.scalars().all()
+
+
+@app.get("/settings/{key}", response_model=SettingResponse)
+async def get_setting(key: str, db: Session = Depends(get_db)):
+    """Get a single setting by key."""
+    stmt = select(Settings).where(Settings.key == key)
+    setting = db.execute(stmt).scalar_one_or_none()
+    if not setting:
+        raise HTTPException(status_code=404, detail=f"Setting '{key}' not found")
+    return setting
+
+
+@app.put("/settings/{key}", response_model=SettingResponse)
+async def update_setting(
+    key: str,
+    data: SettingUpdate,
+    db: Session = Depends(get_db),
+):
+    """Create or update a setting by key."""
+    stmt = select(Settings).where(Settings.key == key)
+    setting = db.execute(stmt).scalar_one_or_none()
+
+    if setting:
+        # Update existing
+        setting.value = data.value
+    else:
+        # Create new
+        setting = Settings(key=key, value=data.value)
+        db.add(setting)
+
+    db.commit()
+    db.refresh(setting)
+    return setting
+
+
+@app.delete("/settings/{key}")
+async def delete_setting(key: str, db: Session = Depends(get_db)):
+    """Delete a setting by key."""
+    stmt = select(Settings).where(Settings.key == key)
+    setting = db.execute(stmt).scalar_one_or_none()
+    if not setting:
+        raise HTTPException(status_code=404, detail=f"Setting '{key}' not found")
+
+    db.delete(setting)
+    db.commit()
+    return {"message": f"Setting '{key}' deleted"}
