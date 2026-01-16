@@ -16,8 +16,9 @@ from sqlalchemy.orm import Session
 from sqlalchemy import select, desc
 
 from database import get_db, init_db
-from models import AuditLog, Settings, Job, Sample
+from models import AuditLog, Settings, Job, Sample, Result
 from parsers import parse_txt_file
+from calculations import CalculationEngine
 
 
 # --- Pydantic schemas ---
@@ -116,6 +117,46 @@ class SampleResponse(BaseModel):
     filename: str
     status: str
     input_data: Optional[dict]
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+# --- Calculation schemas ---
+
+class CalculationResultResponse(BaseModel):
+    """Schema for a single calculation result."""
+    calculation_type: str
+    input_summary: dict
+    output_values: dict
+    warnings: list[str]
+    success: bool
+    error: Optional[str] = None
+
+
+class CalculationSummaryResponse(BaseModel):
+    """Schema for calculation summary response."""
+    sample_id: int
+    results: list[CalculationResultResponse]
+    total_calculations: int
+    successful: int
+    failed: int
+
+
+class CalculationPreviewRequest(BaseModel):
+    """Schema for calculation preview request."""
+    data: dict
+    calculation_type: str
+
+
+class ResultResponse(BaseModel):
+    """Schema for stored result response."""
+    id: int
+    sample_id: int
+    calculation_type: str
+    input_data: Optional[dict]
+    output_data: Optional[dict]
     created_at: datetime
 
     class Config:
@@ -460,3 +501,149 @@ async def get_sample(sample_id: int, db: Session = Depends(get_db)):
     if not sample:
         raise HTTPException(status_code=404, detail=f"Sample {sample_id} not found")
     return sample
+
+
+# --- Calculation Endpoints ---
+
+def _get_calculation_settings(db: Session) -> dict:
+    """Load all settings relevant to calculations as a dict."""
+    stmt = select(Settings)
+    settings = db.execute(stmt).scalars().all()
+    return {s.key: s.value for s in settings}
+
+
+@app.get("/calculations/types", response_model=list[str])
+async def get_calculation_types():
+    """Get list of available calculation types."""
+    return CalculationEngine.get_available_types()
+
+
+@app.post("/calculate/{sample_id}", response_model=CalculationSummaryResponse)
+async def calculate_sample(
+    sample_id: int,
+    db: Session = Depends(get_db),
+):
+    """
+    Run all applicable calculations for a sample.
+
+    Loads sample data, runs calculations based on settings,
+    stores results in Result table, and returns summary.
+    """
+    # Load sample
+    stmt = select(Sample).where(Sample.id == sample_id)
+    sample = db.execute(stmt).scalar_one_or_none()
+    if not sample:
+        raise HTTPException(status_code=404, detail=f"Sample {sample_id} not found")
+
+    if not sample.input_data:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Sample {sample_id} has no input data"
+        )
+
+    # Load settings
+    settings = _get_calculation_settings(db)
+
+    # Create engine and run calculations
+    engine = CalculationEngine(settings)
+    calc_results = engine.calculate_all(sample.input_data)
+
+    # Store results and create audit logs
+    stored_results: list[CalculationResultResponse] = []
+    for calc_result in calc_results:
+        # Create Result record
+        result = Result(
+            sample_id=sample_id,
+            calculation_type=calc_result.calculation_type,
+            input_data=calc_result.input_summary,
+            output_data={
+                "values": calc_result.output_values,
+                "warnings": calc_result.warnings,
+                "success": calc_result.success,
+                "error": calc_result.error,
+            },
+        )
+        db.add(result)
+        db.flush()
+
+        # Create audit log
+        audit = AuditLog(
+            operation="calculate",
+            entity_type="result",
+            entity_id=str(result.id),
+            details={
+                "sample_id": sample_id,
+                "calculation_type": calc_result.calculation_type,
+                "success": calc_result.success,
+            },
+        )
+        db.add(audit)
+
+        stored_results.append(CalculationResultResponse(
+            calculation_type=calc_result.calculation_type,
+            input_summary=calc_result.input_summary,
+            output_values=calc_result.output_values,
+            warnings=calc_result.warnings,
+            success=calc_result.success,
+            error=calc_result.error,
+        ))
+
+    # Update sample status
+    sample.status = "calculated"
+    db.commit()
+
+    successful = sum(1 for r in stored_results if r.success)
+    failed = len(stored_results) - successful
+
+    return CalculationSummaryResponse(
+        sample_id=sample_id,
+        results=stored_results,
+        total_calculations=len(stored_results),
+        successful=successful,
+        failed=failed,
+    )
+
+
+@app.post("/calculate/preview", response_model=CalculationResultResponse)
+async def preview_calculation(
+    request: CalculationPreviewRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    Run a calculation without saving (for testing/preview).
+
+    Useful for testing formulas with custom data before applying to samples.
+    """
+    settings = _get_calculation_settings(db)
+    engine = CalculationEngine(settings)
+
+    try:
+        result = engine.calculate(request.data, request.calculation_type)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    return CalculationResultResponse(
+        calculation_type=result.calculation_type,
+        input_summary=result.input_summary,
+        output_values=result.output_values,
+        warnings=result.warnings,
+        success=result.success,
+        error=result.error,
+    )
+
+
+@app.get("/samples/{sample_id}/results", response_model=list[ResultResponse])
+async def get_sample_results(
+    sample_id: int,
+    db: Session = Depends(get_db),
+):
+    """Get all calculation results for a sample."""
+    # Verify sample exists
+    stmt = select(Sample).where(Sample.id == sample_id)
+    sample = db.execute(stmt).scalar_one_or_none()
+    if not sample:
+        raise HTTPException(status_code=404, detail=f"Sample {sample_id} not found")
+
+    stmt = select(Result).where(Result.sample_id == sample_id).order_by(Result.created_at)
+    results = db.execute(stmt).scalars().all()
+    return results
