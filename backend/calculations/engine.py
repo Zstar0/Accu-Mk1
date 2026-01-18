@@ -3,6 +3,8 @@ Core calculation engine for processing HPLC sample data.
 Orchestrates formula execution and result collection.
 """
 
+import json
+
 from calculations.formulas import (
     Formula,
     CalculationResult,
@@ -40,6 +42,46 @@ class CalculationEngine:
                 Expected keys: response_factor, rt_window_start, rt_window_end, dilution_factor
         """
         self.settings = settings
+        self._column_mappings = self._load_column_mappings()
+
+    def _load_column_mappings(self) -> dict[str, str]:
+        """Load column mappings from settings and invert them for lookup."""
+        mappings_json = self.settings.get("column_mappings", "{}")
+        try:
+            # mappings format: {"peak_area": "Area", "retention_time": "RT"}
+            # We need to invert: {"Area": "peak_area", "RT": "retention_time"}
+            mappings = json.loads(mappings_json) if isinstance(mappings_json, str) else mappings_json
+            return {v: k for k, v in mappings.items()}
+        except (json.JSONDecodeError, TypeError):
+            return {}
+
+    def _apply_column_mappings(self, sample_data: dict) -> dict:
+        """
+        Apply column mappings to sample data rows.
+
+        Transforms raw column names (e.g., "Area") to internal names (e.g., "peak_area").
+        """
+        if not self._column_mappings or not sample_data:
+            return sample_data
+
+        rows = sample_data.get("rows", [])
+        if not rows:
+            return sample_data
+
+        # Transform each row's keys using column mappings
+        mapped_rows = []
+        for row in rows:
+            mapped_row = {}
+            for key, value in row.items():
+                # Use mapped name if available, otherwise keep original
+                mapped_key = self._column_mappings.get(key, key)
+                mapped_row[mapped_key] = value
+            mapped_rows.append(mapped_row)
+
+        return {
+            **sample_data,
+            "rows": mapped_rows,
+        }
 
     def get_formula(self, calculation_type: str) -> Formula:
         """
@@ -72,8 +114,11 @@ class CalculationEngine:
         try:
             formula = self.get_formula(calculation_type)
 
+            # Apply column mappings to transform raw names to internal names
+            mapped_data = self._apply_column_mappings(sample_data)
+
             # Validate inputs
-            validation_errors = formula.validate(sample_data, self.settings)
+            validation_errors = formula.validate(mapped_data, self.settings)
             if validation_errors:
                 return CalculationResult(
                     calculation_type=calculation_type,
@@ -85,7 +130,7 @@ class CalculationEngine:
                 )
 
             # Execute calculation
-            return formula.execute(sample_data, self.settings)
+            return formula.execute(mapped_data, self.settings)
 
         except Exception as e:
             return CalculationResult(

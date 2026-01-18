@@ -944,3 +944,146 @@ async def get_sample_results(
     stmt = select(Result).where(Result.sample_id == sample_id).order_by(Result.created_at)
     results = db.execute(stmt).scalars().all()
     return results
+
+
+# --- Explorer Endpoints (Integration Service Database) ---
+
+from integration_db import fetch_orders, fetch_ingestions_for_order, test_connection
+
+
+class ExplorerOrderResponse(BaseModel):
+    """Schema for order from Integration Service database."""
+    id: str
+    order_id: str
+    order_number: str
+    status: str
+    samples_expected: int
+    samples_delivered: int
+    error_message: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+    completed_at: Optional[datetime] = None
+
+
+class ExplorerIngestionResponse(BaseModel):
+    """Schema for ingestion from Integration Service database."""
+    id: str
+    sample_id: str
+    coa_version: int
+    order_ref: Optional[str] = None
+    status: str
+    s3_key: Optional[str] = None
+    verification_code: Optional[str] = None
+    error_message: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+    completed_at: Optional[datetime] = None
+    processing_time_ms: Optional[int] = None
+
+
+class ExplorerConnectionStatus(BaseModel):
+    """Schema for database connection status."""
+    connected: bool
+    environment: Optional[str] = None
+    database: Optional[str] = None
+    host: Optional[str] = None
+    wordpress_host: Optional[str] = None
+    error: Optional[str] = None
+
+
+class EnvironmentSwitchRequest(BaseModel):
+    """Schema for environment switch request."""
+    environment: str
+
+
+class EnvironmentListResponse(BaseModel):
+    """Schema for available environments response."""
+    environments: list[str]
+    current: str
+
+
+@app.get("/explorer/environments", response_model=EnvironmentListResponse)
+async def get_explorer_environments():
+    """Get list of available database environments."""
+    from integration_db import get_available_environments, get_environment
+    return EnvironmentListResponse(
+        environments=get_available_environments(),
+        current=get_environment()
+    )
+
+
+@app.post("/explorer/environments", response_model=ExplorerConnectionStatus)
+async def set_explorer_environment(request: EnvironmentSwitchRequest):
+    """
+    Switch to a different database environment.
+    
+    Returns the new connection status after switching.
+    """
+    from integration_db import set_environment
+    try:
+        set_environment(request.environment)
+        result = test_connection()
+        return ExplorerConnectionStatus(**result)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        return ExplorerConnectionStatus(connected=False, error=str(e))
+
+
+@app.get("/explorer/status", response_model=ExplorerConnectionStatus)
+async def get_explorer_status():
+    """Test connection to Integration Service database."""
+    try:
+        result = test_connection()
+        return ExplorerConnectionStatus(**result)
+    except Exception as e:
+        return ExplorerConnectionStatus(connected=False, error=str(e))
+
+
+@app.get("/explorer/orders", response_model=list[ExplorerOrderResponse])
+async def get_explorer_orders(
+    search: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+):
+    """
+    Get orders from Integration Service database.
+    
+    Query params:
+    - search: Filter by order_id or order_number (partial match)
+    - limit: Max records to return (default 50)
+    - offset: Pagination offset (default 0)
+    """
+    try:
+        orders = fetch_orders(search=search, limit=limit, offset=offset)
+        # Convert UUID to string for JSON serialization
+        for order in orders:
+            order['id'] = str(order['id'])
+        return orders
+    except Exception as e:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Failed to connect to Integration Service database: {e}"
+        )
+
+
+@app.get("/explorer/orders/{order_id}/ingestions", response_model=list[ExplorerIngestionResponse])
+async def get_order_ingestions(order_id: str):
+    """
+    Get all ingestions for an order from Integration Service database.
+    
+    Args:
+        order_id: The WordPress order ID (e.g., "12345")
+    """
+    try:
+        ingestions = fetch_ingestions_for_order(order_id)
+        # Convert UUID to string for JSON serialization
+        for ing in ingestions:
+            ing['id'] = str(ing['id'])
+        return ingestions
+    except Exception as e:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Failed to connect to Integration Service database: {e}"
+        )
+

@@ -8,8 +8,8 @@ import { useState, useRef } from 'react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
-import { importBatch } from '@/lib/api'
-import type { ParsePreview } from '@/lib/api'
+import { importBatchData } from '@/lib/api'
+import type { ParsePreview, FileData } from '@/lib/api'
 import { PreviewTable } from './PreviewTable'
 import { toast } from 'sonner'
 import { FileText, X, Upload, Eye, Loader2 } from 'lucide-react'
@@ -162,14 +162,15 @@ export function FileSelector() {
     setImporting(true)
 
     try {
-      // For import, we need to save files temporarily or send content
-      // For now, we'll show a message about the workflow
-      // In production, files would be saved to a temp location first
+      // Convert previews to FileData format for backend
+      const files: FileData[] = validPreviews.map(p => ({
+        filename: p.filename,
+        headers: p.headers,
+        rows: p.rows,
+        row_count: p.row_count,
+      }))
 
-      // Create file paths from previews (placeholder approach)
-      const filePaths = validPreviews.map(p => p.filename)
-
-      const result = await importBatch(filePaths)
+      const result = await importBatchData(files)
 
       if (result.errors.length > 0) {
         toast.warning(

@@ -54,7 +54,11 @@ Build a lab desktop application for HPLC result processing in 4 phases: foundati
   4. User can filter samples by status, compound, etc.
   5. User can sort samples by any column
 **Research**: Unlikely (standard UI patterns with shadcn/ui)
-**Plans**: TBD
+**Plans**: 4 plans
+  - 03-01: Sample Review Backend (status + approve/reject API)
+  - 03-02: Batch Review UI (table view)
+  - 03-03: Approve/Reject Actions (UI + mutations)
+  - 03-04: Filter and Sort (client-side)
 
 ### Phase 4: SENAITE Integration
 **Goal**: Push approved results to SENAITE LIMS, show sync status
@@ -75,5 +79,5 @@ Build a lab desktop application for HPLC result processing in 4 phases: foundati
 |-------|----------------|--------|-----------|
 | 1. Foundation | 3/3 | Complete | 2026-01-16 |
 | 2. Data Pipeline | 7/7 | Complete | 2026-01-16 |
-| 3. Review Workflow | 0/TBD | Not started | - |
+| 3. Review Workflow | 0/4 | Planned | - |
 | 4. SENAITE Integration | 0/TBD | Not started | - |

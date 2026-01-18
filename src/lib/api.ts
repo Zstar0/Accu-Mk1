@@ -679,3 +679,169 @@ export async function getDetectedFiles(): Promise<DetectedFiles> {
     throw error
   }
 }
+
+// --- Explorer API (Integration Service Database) ---
+
+/**
+ * Order from Integration Service database.
+ */
+export interface ExplorerOrder {
+  id: string
+  order_id: string
+  order_number: string
+  status: string
+  samples_expected: number
+  samples_delivered: number
+  error_message: string | null
+  created_at: string
+  updated_at: string
+  completed_at: string | null
+}
+
+/**
+ * Ingestion from Integration Service database.
+ */
+export interface ExplorerIngestion {
+  id: string
+  sample_id: string
+  coa_version: number
+  order_ref: string | null
+  status: string
+  s3_key: string | null
+  verification_code: string | null
+  error_message: string | null
+  created_at: string
+  updated_at: string
+  completed_at: string | null
+  processing_time_ms: number | null
+}
+
+/**
+ * Connection status for Integration Service database.
+ */
+export interface ExplorerConnectionStatus {
+  connected: boolean
+  environment?: string
+  database?: string
+  host?: string
+  wordpress_host?: string
+  error?: string
+}
+
+/**
+ * Check connection to Integration Service database.
+ */
+export async function getExplorerStatus(): Promise<ExplorerConnectionStatus> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/explorer/status`)
+    if (!response.ok) {
+      throw new Error(`Get explorer status failed: ${response.status}`)
+    }
+    return response.json()
+  } catch (error) {
+    console.error('Get explorer status error:', error)
+    throw error
+  }
+}
+
+/**
+ * Available environments response.
+ */
+export interface EnvironmentListResponse {
+  environments: string[]
+  current: string
+}
+
+/**
+ * Get available database environments.
+ */
+export async function getExplorerEnvironments(): Promise<EnvironmentListResponse> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/explorer/environments`)
+    if (!response.ok) {
+      throw new Error(`Get explorer environments failed: ${response.status}`)
+    }
+    return response.json()
+  } catch (error) {
+    console.error('Get explorer environments error:', error)
+    throw error
+  }
+}
+
+/**
+ * Switch to a different database environment.
+ *
+ * @param environment - "local" or "production"
+ * @returns Connection status after switching
+ */
+export async function setExplorerEnvironment(
+  environment: string
+): Promise<ExplorerConnectionStatus> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/explorer/environments`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ environment }),
+    })
+    if (!response.ok) {
+      throw new Error(`Set explorer environment failed: ${response.status}`)
+    }
+    return response.json()
+  } catch (error) {
+    console.error('Set explorer environment error:', error)
+    throw error
+  }
+}
+
+
+/**
+ * Get orders from Integration Service database.
+ *
+ * @param search - Optional search term for order_id or order_number
+ * @param limit - Max records to return (default 50)
+ * @param offset - Pagination offset (default 0)
+ */
+export async function getExplorerOrders(
+  search?: string,
+  limit = 50,
+  offset = 0
+): Promise<ExplorerOrder[]> {
+  try {
+    const params = new URLSearchParams()
+    if (search) params.set('search', search)
+    params.set('limit', String(limit))
+    params.set('offset', String(offset))
+
+    const response = await fetch(`${API_BASE_URL}/explorer/orders?${params}`)
+    if (!response.ok) {
+      throw new Error(`Get explorer orders failed: ${response.status}`)
+    }
+    return response.json()
+  } catch (error) {
+    console.error('Get explorer orders error:', error)
+    throw error
+  }
+}
+
+/**
+ * Get all ingestions for an order from Integration Service database.
+ *
+ * @param orderId - The WordPress order ID (e.g., "12345")
+ */
+export async function getOrderIngestions(orderId: string): Promise<ExplorerIngestion[]> {
+  try {
+    const response = await fetch(
+      `${API_BASE_URL}/explorer/orders/${encodeURIComponent(orderId)}/ingestions`
+    )
+    if (!response.ok) {
+      throw new Error(`Get order ${orderId} ingestions failed: ${response.status}`)
+    }
+    return response.json()
+  } catch (error) {
+    console.error(`Get order ${orderId} ingestions error:`, error)
+    throw error
+  }
+}
+

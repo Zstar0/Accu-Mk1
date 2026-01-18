@@ -1,12 +1,16 @@
 import { create } from 'zustand'
 import { devtools } from 'zustand/middleware'
 
+// Navigation sections for main content area
+export type ActiveSection = 'lab-operations' | 'accumark-tools'
+
 interface UIState {
   leftSidebarVisible: boolean
   rightSidebarVisible: boolean
   commandPaletteOpen: boolean
   preferencesOpen: boolean
   lastQuickPaneEntry: string | null
+  activeSection: ActiveSection
 
   toggleLeftSidebar: () => void
   setLeftSidebarVisible: (visible: boolean) => void
@@ -17,6 +21,7 @@ interface UIState {
   togglePreferences: () => void
   setPreferencesOpen: (open: boolean) => void
   setLastQuickPaneEntry: (text: string) => void
+  setActiveSection: (section: ActiveSection) => void
 }
 
 export const useUIStore = create<UIState>()(
@@ -27,6 +32,7 @@ export const useUIStore = create<UIState>()(
       commandPaletteOpen: false,
       preferencesOpen: false,
       lastQuickPaneEntry: null,
+      activeSection: 'lab-operations',
 
       toggleLeftSidebar: () =>
         set(
@@ -78,6 +84,9 @@ export const useUIStore = create<UIState>()(
 
       setLastQuickPaneEntry: text =>
         set({ lastQuickPaneEntry: text }, undefined, 'setLastQuickPaneEntry'),
+
+      setActiveSection: section =>
+        set({ activeSection: section }, undefined, 'setActiveSection'),
     }),
     {
       name: 'ui-store',

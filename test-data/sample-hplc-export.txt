@@ -1,0 +1,6 @@
+Name	RT	Area	Height	Amount
+Compound A	1.25	15000	2500	0.5
+Compound B	2.45	28000	4200	1.2
+Compound C	3.80	42000	6100	2.1
+Unknown	5.12	8500	1100	0.3
+Compound A	6.90	14500	2400	0.48
