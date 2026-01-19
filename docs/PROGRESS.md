@@ -1,5 +1,40 @@
 # Progress Log
 
+## 2026-01-18: v0.2.0 - Order Explorer Enhancements
+
+### New Features
+
+- **Payload Viewer**: View raw WordPress order payload data
+  - "View" button in Orders table opens formatted payload panel
+  - Displays billing, COA info, samples, services, pricing in readable sections
+  - Includes raw JSON view for debugging
+- **Resizable Table Columns**: Drag column headers to adjust width
+- **Processing Time Columns**: Added to both Orders and Ingestions tables
+  - Orders: Shows time from order creation to completion
+  - Ingestions: Shows time from order creation to COA delivery (end-to-end turnaround)
+- **Completed At Columns**: Shows when orders/ingestions finished processing
+- **Version Footer**: App now displays "Accu-Mk1 Ver. 0.2.0" at bottom center
+
+### Files Created
+
+| File                                         | Description                                      |
+| -------------------------------------------- | ------------------------------------------------ |
+| `src/components/PayloadPanel.tsx`            | Payload viewer component with formatted sections |
+| `src/components/ui/resizable-table-head.tsx` | Draggable column resize component                |
+
+### Files Modified
+
+| File                                   | Changes                                                                     |
+| -------------------------------------- | --------------------------------------------------------------------------- |
+| `package.json`                         | Bumped version to 0.2.0                                                     |
+| `backend/integration_db.py`            | Added `payload` to orders query                                             |
+| `backend/main.py`                      | Added `payload` to `ExplorerOrderResponse` schema                           |
+| `src/lib/api.ts`                       | Added `payload` to `ExplorerOrder` interface                                |
+| `src/components/OrderExplorer.tsx`     | Added payload button, resizable columns, processing time, completed columns |
+| `src/components/layout/MainWindow.tsx` | Added version footer                                                        |
+
+---
+
 ## 2026-01-17: Order Explorer Tool
 
 Added a new debugging tool to the **AccuMark Tools** section for visualizing orders and ingestions from the Integration Service PostgreSQL database.

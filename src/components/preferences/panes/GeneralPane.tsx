@@ -1,24 +1,34 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
-import { Switch } from '@/components/ui/switch'
+import { CheckCircle2, XCircle, Eye, EyeOff } from 'lucide-react'
 import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
+import { Button } from '@/components/ui/button'
 import { ShortcutPicker } from '../ShortcutPicker'
 import { SettingsField, SettingsSection } from '../shared/SettingsComponents'
 import { usePreferences, useSavePreferences } from '@/services/preferences'
 import { commands } from '@/lib/tauri-bindings'
 import { logger } from '@/lib/logger'
+import { getApiKey, setApiKey, isValidApiKeyFormat } from '@/lib/api-key'
 
 export function GeneralPane() {
   const { t } = useTranslation()
-  // Example local state - these are NOT persisted to disk
-  // To add persistent preferences:
-  // 1. Add the field to AppPreferences in both Rust and TypeScript
-  // 2. Use usePreferencesManager() and updatePreferences()
-  const [exampleText, setExampleText] = useState('Example value')
-  const [exampleToggle, setExampleToggle] = useState(true)
+  const queryClient = useQueryClient()
+  
+  // API Key state
+  const [apiKeyInput, setApiKeyInput] = useState('')
+  const [showApiKey, setShowApiKey] = useState(false)
+  const [isApiKeyConfigured, setIsApiKeyConfigured] = useState(false)
+  
+  // Load saved API key on mount
+  useEffect(() => {
+    const savedKey = getApiKey()
+    if (savedKey) {
+      setApiKeyInput(savedKey)
+      setIsApiKeyConfigured(true)
+    }
+  }, [])
 
   // Load preferences for keyboard shortcuts
   const { data: preferences } = usePreferences()
@@ -85,8 +95,94 @@ export function GeneralPane() {
     }
   }
 
+  const handleSaveApiKey = () => {
+    if (!apiKeyInput.trim()) {
+      toast.error('API key cannot be empty')
+      return
+    }
+    
+    if (!isValidApiKeyFormat(apiKeyInput)) {
+      toast.error('Invalid API key format', {
+        description: 'API key should start with "ak_"',
+      })
+      return
+    }
+    
+    setApiKey(apiKeyInput)
+    setIsApiKeyConfigured(true)
+    // Invalidate explorer queries to trigger re-fetch with new key
+    queryClient.invalidateQueries({ queryKey: ['explorer'] })
+    toast.success('API key saved', {
+      description: 'You may need to refresh the app for changes to take effect.',
+    })
+    logger.info('API key updated')
+  }
+
+  const handleClearApiKey = () => {
+    setApiKey('')
+    setApiKeyInput('')
+    setIsApiKeyConfigured(false)
+    queryClient.invalidateQueries({ queryKey: ['explorer'] })
+    toast.info('API key cleared')
+    logger.info('API key cleared')
+  }
+
   return (
     <div className="space-y-6">
+      {/* API Key Section - First for visibility */}
+      <SettingsSection title="API Key">
+        <SettingsField
+          label="Backend API Key"
+          description="Enter your API key to connect to the backend. Get this from your administrator."
+        >
+          <div className="space-y-3">
+            <div className="flex gap-2">
+              <div className="relative flex-1">
+                <Input
+                  type={showApiKey ? 'text' : 'password'}
+                  value={apiKeyInput}
+                  onChange={e => setApiKeyInput(e.target.value)}
+                  placeholder="ak_xxxxx..."
+                  className="pr-10"
+                />
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="absolute right-0 top-0 h-full px-3"
+                  onClick={() => setShowApiKey(!showApiKey)}
+                >
+                  {showApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </Button>
+              </div>
+              <Button onClick={handleSaveApiKey}>
+                Save
+              </Button>
+              {isApiKeyConfigured && (
+                <Button variant="outline" onClick={handleClearApiKey}>
+                  Clear
+                </Button>
+              )}
+            </div>
+            
+            {/* Status indicator */}
+            <div className="flex items-center gap-2 text-sm">
+              {isApiKeyConfigured ? (
+                <>
+                  <CheckCircle2 className="h-4 w-4 text-green-500" />
+                  <span className="text-green-600">API key configured</span>
+                </>
+              ) : (
+                <>
+                  <XCircle className="h-4 w-4 text-yellow-500" />
+                  <span className="text-yellow-600">No API key configured - AccuMark Tools features require an API key</span>
+                </>
+              )}
+            </div>
+          </div>
+        </SettingsField>
+      </SettingsSection>
+
       <SettingsSection title={t('preferences.general.keyboardShortcuts')}>
         <SettingsField
           label={t('preferences.general.quickPaneShortcut')}
@@ -101,35 +197,7 @@ export function GeneralPane() {
           />
         </SettingsField>
       </SettingsSection>
-
-      <SettingsSection title={t('preferences.general.exampleSettings')}>
-        <SettingsField
-          label={t('preferences.general.exampleText')}
-          description={t('preferences.general.exampleTextDescription')}
-        >
-          <Input
-            value={exampleText}
-            onChange={e => setExampleText(e.target.value)}
-            placeholder={t('preferences.general.exampleTextPlaceholder')}
-          />
-        </SettingsField>
-
-        <SettingsField
-          label={t('preferences.general.exampleToggle')}
-          description={t('preferences.general.exampleToggleDescription')}
-        >
-          <div className="flex items-center space-x-2">
-            <Switch
-              id="example-toggle"
-              checked={exampleToggle}
-              onCheckedChange={setExampleToggle}
-            />
-            <Label htmlFor="example-toggle" className="text-sm">
-              {exampleToggle ? t('common.enabled') : t('common.disabled')}
-            </Label>
-          </div>
-        </SettingsField>
-      </SettingsSection>
     </div>
   )
 }
+

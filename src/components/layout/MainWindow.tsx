@@ -39,7 +39,7 @@ export function MainWindow() {
   useMainWindowEventListeners()
 
   return (
-    <div className="flex h-screen w-full flex-col overflow-hidden rounded-xl bg-background">
+    <div className="relative flex h-screen w-full flex-col overflow-hidden rounded-xl bg-background">
       <TitleBar />
 
       <div className="flex flex-1 overflow-hidden">
@@ -96,6 +96,11 @@ export function MainWindow() {
           },
         }}
       />
+
+      {/* Version footer */}
+      <div className="absolute bottom-1 left-1/2 -translate-x-1/2 text-xs text-muted-foreground/50">
+        Accu-Mk1 Ver. 0.2.0
+      </div>
     </div>
   )
 }

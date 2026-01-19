@@ -144,6 +144,7 @@ def fetch_orders(
             samples_expected,
             samples_delivered,
             error_message,
+            payload,
             created_at,
             updated_at,
             completed_at

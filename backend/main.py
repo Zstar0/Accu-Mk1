@@ -5,12 +5,13 @@ Provides REST API for scientific calculations, database access, and audit loggin
 
 import json
 import os
+import secrets
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Union
 
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -21,6 +22,37 @@ from models import AuditLog, Settings, Job, Sample, Result
 from parsers import parse_txt_file
 from calculations import CalculationEngine
 from file_watcher import FileWatcher
+
+
+# --- API Key Configuration ---
+
+# API key can be set via environment variable, or uses a default for development
+# In production, set ACCU_MK1_API_KEY to a secure random value
+API_KEY = os.environ.get("ACCU_MK1_API_KEY", "ak_dev_accumark_2024")
+
+
+async def verify_api_key(x_api_key: Optional[str] = Header(None, alias="X-API-Key")):
+    """
+    Validate API key from X-API-Key header.
+    Returns None if valid, raises HTTPException if invalid.
+    """
+    if not x_api_key:
+        raise HTTPException(
+            status_code=401,
+            detail="API key required. Add your API key in Settings.",
+            headers={"WWW-Authenticate": "API-Key"}
+        )
+    
+    # Constant-time comparison to prevent timing attacks
+    if not secrets.compare_digest(x_api_key, API_KEY):
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid API key. Check your API key in Settings.",
+            headers={"WWW-Authenticate": "API-Key"}
+        )
+    
+    return x_api_key
+
 
 
 # --- Pydantic schemas ---
@@ -256,7 +288,9 @@ app.add_middleware(
         "http://127.0.0.1:1420",
         "http://localhost:5173",      # Vite default
         "http://127.0.0.1:5173",
-        "tauri://localhost",          # Tauri production
+        "tauri://localhost",          # Tauri production (v1)
+        "https://tauri.localhost",    # Tauri production (v2)
+        "http://tauri.localhost",     # Tauri production fallback
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -960,6 +994,7 @@ class ExplorerOrderResponse(BaseModel):
     samples_expected: int
     samples_delivered: int
     error_message: Optional[str] = None
+    payload: Optional[dict] = None
     created_at: datetime
     updated_at: datetime
     completed_at: Optional[datetime] = None
@@ -1003,7 +1038,7 @@ class EnvironmentListResponse(BaseModel):
 
 
 @app.get("/explorer/environments", response_model=EnvironmentListResponse)
-async def get_explorer_environments():
+async def get_explorer_environments(api_key: str = Depends(verify_api_key)):
     """Get list of available database environments."""
     from integration_db import get_available_environments, get_environment
     return EnvironmentListResponse(
@@ -1013,7 +1048,7 @@ async def get_explorer_environments():
 
 
 @app.post("/explorer/environments", response_model=ExplorerConnectionStatus)
-async def set_explorer_environment(request: EnvironmentSwitchRequest):
+async def set_explorer_environment(request: EnvironmentSwitchRequest, api_key: str = Depends(verify_api_key)):
     """
     Switch to a different database environment.
     
@@ -1031,7 +1066,7 @@ async def set_explorer_environment(request: EnvironmentSwitchRequest):
 
 
 @app.get("/explorer/status", response_model=ExplorerConnectionStatus)
-async def get_explorer_status():
+async def get_explorer_status(api_key: str = Depends(verify_api_key)):
     """Test connection to Integration Service database."""
     try:
         result = test_connection()
@@ -1045,6 +1080,7 @@ async def get_explorer_orders(
     search: Optional[str] = None,
     limit: int = 50,
     offset: int = 0,
+    api_key: str = Depends(verify_api_key),
 ):
     """
     Get orders from Integration Service database.
@@ -1068,7 +1104,7 @@ async def get_explorer_orders(
 
 
 @app.get("/explorer/orders/{order_id}/ingestions", response_model=list[ExplorerIngestionResponse])
-async def get_order_ingestions(order_id: str):
+async def get_order_ingestions(order_id: str, api_key: str = Depends(verify_api_key)):
     """
     Get all ingestions for an order from Integration Service database.
     

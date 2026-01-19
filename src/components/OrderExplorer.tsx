@@ -1,6 +1,7 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query'
 import { Search, Database, RefreshCw, ChevronRight, AlertCircle, CheckCircle2, Clock, XCircle } from 'lucide-react'
+import { ColumnDef } from '@tanstack/react-table'
 
 import { cn } from '@/lib/utils'
 import {
@@ -16,16 +17,8 @@ import {
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { ScrollArea } from '@/components/ui/scroll-area'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
+import { DataTable } from '@/components/ui/data-table'
 import {
   Select,
   SelectContent,
@@ -33,6 +26,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { PayloadPanel } from '@/components/PayloadPanel'
 
 
 /**
@@ -77,16 +71,55 @@ function formatDate(dateStr: string | null): string {
 
 
 /**
+ * Calculate and format processing time.
+ */
+function formatProcessingTime(createdAt: string, completedAt: string | null): string {
+  const start = new Date(createdAt)
+  const end = completedAt ? new Date(completedAt) : new Date()
+  const diffMs = end.getTime() - start.getTime()
+  
+  return formatMilliseconds(diffMs)
+}
+
+
+/**
+ * Format milliseconds into human-readable duration.
+ */
+function formatMilliseconds(ms: number): string {
+  if (ms < 0) return '—'
+  
+  const seconds = Math.floor(ms / 1000)
+  const minutes = Math.floor(seconds / 60)
+  const hours = Math.floor(minutes / 60)
+  const days = Math.floor(hours / 24)
+  
+  if (days > 0) {
+    return `${days}d ${hours % 24}h`
+  } else if (hours > 0) {
+    return `${hours}h ${minutes % 60}m`
+  } else if (minutes > 0) {
+    return `${minutes}m ${seconds % 60}s`
+  } else if (seconds > 0) {
+    return `${seconds}s`
+  } else {
+    return `${ms}ms`
+  }
+}
+
+
+/**
  * Ingestions panel showing COAs for selected order.
  */
 function IngestionsPanel({ 
   orderId, 
+  orderCreatedAt,
   wordpressHost,
-  onClose 
+  onClose,
 }: { 
   orderId: string
+  orderCreatedAt: string
   wordpressHost?: string
-  onClose: () => void 
+  onClose: () => void
 }) {
   const { data: ingestions, isLoading, error } = useQuery({
     queryKey: ['explorer', 'ingestions', orderId],
@@ -98,6 +131,74 @@ function IngestionsPanel({
     const baseUrl = wordpressHost || 'https://accumarklabs.local'
     return `${baseUrl}/verify?code=${code}`
   }
+
+  // Column definitions for ingestions table
+  const columns: ColumnDef<ExplorerIngestion>[] = useMemo(() => [
+    {
+      accessorKey: 'sample_id',
+      header: 'Sample ID',
+      size: 120,
+      cell: ({ row }) => (
+        <span className="font-mono text-sm">{row.original.sample_id}</span>
+      ),
+    },
+    {
+      accessorKey: 'coa_version',
+      header: 'Version',
+      size: 70,
+      cell: ({ row }) => `v${row.original.coa_version}`,
+    },
+    {
+      accessorKey: 'status',
+      header: 'Status',
+      size: 100,
+      cell: ({ row }) => <StatusBadge status={row.original.status} />,
+    },
+    {
+      accessorKey: 'verification_code',
+      header: 'Verification Code',
+      size: 140,
+      cell: ({ row }) => {
+        const code = row.original.verification_code
+        if (!code) return <span className="text-muted-foreground">—</span>
+        return (
+          <a
+            href={getVerifyUrl(code)}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="font-mono text-sm text-primary hover:underline"
+          >
+            {code}
+          </a>
+        )
+      },
+    },
+    {
+      accessorKey: 'completed_at',
+      header: 'Completed',
+      size: 130,
+      cell: ({ row }) => (
+        <span className="text-muted-foreground">{formatDate(row.original.completed_at)}</span>
+      ),
+    },
+    {
+      id: 'processing_time',
+      header: 'Processing Time',
+      size: 120,
+      cell: ({ row }) => {
+        const ing = row.original
+        return (
+          <span className={cn(
+            'font-mono text-sm',
+            ing.completed_at ? 'text-green-600' : 'text-yellow-600'
+          )}>
+            {formatProcessingTime(orderCreatedAt, ing.completed_at)}
+            {!ing.completed_at && ' ⏳'}
+          </span>
+        )
+      },
+    },
+  ], [orderCreatedAt, getVerifyUrl])
 
   return (
     <Card>
@@ -134,45 +235,11 @@ function IngestionsPanel({
         )}
 
         {ingestions && ingestions.length > 0 && (
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Sample ID</TableHead>
-                <TableHead>Version</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Verification Code</TableHead>
-                <TableHead>Created</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {ingestions.map((ing: ExplorerIngestion) => (
-                <TableRow key={ing.id}>
-                  <TableCell className="font-mono text-sm">{ing.sample_id}</TableCell>
-                  <TableCell>v{ing.coa_version}</TableCell>
-                  <TableCell>
-                    <StatusBadge status={ing.status} />
-                  </TableCell>
-                  <TableCell className="font-mono text-sm">
-                    {ing.verification_code ? (
-                      <a
-                        href={getVerifyUrl(ing.verification_code)}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-primary hover:underline cursor-pointer"
-                      >
-                        {ing.verification_code}
-                      </a>
-                    ) : (
-                      '—'
-                    )}
-                  </TableCell>
-                  <TableCell className="text-muted-foreground">
-                    {formatDate(ing.created_at)}
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+          <DataTable
+            columns={columns}
+            data={ingestions}
+            getRowId={(row) => String(row.id)}
+          />
         )}
       </CardContent>
     </Card>
@@ -187,9 +254,14 @@ function IngestionsPanel({
 export function OrderExplorer() {
   const [searchTerm, setSearchTerm] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
-  const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null)
+  const [selectedOrder, setSelectedOrder] = useState<ExplorerOrder | null>(null)
+
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [refreshSuccess, setRefreshSuccess] = useState(false)
+  const [selectedPayload, setSelectedPayload] = useState<{
+    payload: Record<string, unknown> | null
+    sampleId: string
+  } | null>(null)
   const queryClient = useQueryClient()
 
   // Clear refresh success indicator after 2 seconds
@@ -244,11 +316,13 @@ export function OrderExplorer() {
   }
 
   const handleOrderClick = (order: ExplorerOrder) => {
-    setSelectedOrderId(order.order_id)
+    setSelectedOrder(order)
+    setSelectedPayload(null) // Close payload panel when selecting different order
   }
 
   const handleEnvironmentChange = (env: string) => {
-    setSelectedOrderId(null) // Clear selection when switching
+    setSelectedOrder(null) // Clear selection when switching
+    setSelectedPayload(null) // Close payload panel when switching environment
     switchEnvMutation.mutate(env)
   }
 
@@ -259,6 +333,110 @@ export function OrderExplorer() {
     setIsRefreshing(false)
     setRefreshSuccess(true)
   }
+
+  // Column definitions for orders table
+  const ordersColumns: ColumnDef<ExplorerOrder>[] = useMemo(() => [
+    {
+      accessorKey: 'order_id',
+      header: 'Order ID',
+      size: 80,
+      minSize: 50,
+      cell: ({ row }) => (
+        <span className="font-mono text-sm">{row.original.order_id}</span>
+      ),
+    },
+    {
+      accessorKey: 'order_number',
+      header: 'Order #',
+      size: 80,
+      minSize: 50,
+      cell: ({ row }) => (
+        <span className="text-sm">{row.original.order_number}</span>
+      ),
+    },
+    {
+      accessorKey: 'status',
+      header: 'Status',
+      size: 100,
+      minSize: 60,
+      cell: ({ row }) => <StatusBadge status={row.original.status} />,
+    },
+    {
+      id: 'samples',
+      header: 'Samples',
+      size: 70,
+      minSize: 50,
+      cell: ({ row }) => (
+        <span>{row.original.samples_delivered}/{row.original.samples_expected}</span>
+      ),
+    },
+    {
+      accessorKey: 'created_at',
+      header: 'Created',
+      size: 130,
+      minSize: 80,
+      cell: ({ row }) => (
+        <span className="text-muted-foreground">{formatDate(row.original.created_at)}</span>
+      ),
+    },
+    {
+      accessorKey: 'completed_at',
+      header: 'Completed',
+      size: 130,
+      minSize: 80,
+      cell: ({ row }) => (
+        <span className="text-muted-foreground">{formatDate(row.original.completed_at)}</span>
+      ),
+    },
+    {
+      id: 'processing_time',
+      header: 'Processing Time',
+      size: 120,
+      minSize: 80,
+      cell: ({ row }) => {
+        const order = row.original
+        return (
+          <span className={cn(
+            'font-mono text-sm',
+            order.completed_at ? 'text-green-600' : 'text-yellow-600'
+          )}>
+            {formatProcessingTime(order.created_at, order.completed_at)}
+            {!order.completed_at && ' ⏳'}
+          </span>
+        )
+      },
+    },
+    {
+      id: 'payload',
+      header: 'Payload',
+      size: 70,
+      minSize: 50,
+      cell: ({ row }) => {
+        const order = row.original
+        if (!order.payload) return <span className="text-muted-foreground">—</span>
+        return (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={(e) => {
+              e.stopPropagation()
+              setSelectedPayload({ payload: order.payload, sampleId: order.order_id })
+            }}
+          >
+            View
+          </Button>
+        )
+      },
+    },
+    {
+      id: 'chevron',
+      header: '',
+      size: 32,
+      minSize: 32,
+      enableResizing: false,
+      cell: () => <ChevronRight className="h-4 w-4 text-muted-foreground" />,
+    },
+  ], [])
 
 
   return (
@@ -402,58 +580,36 @@ export function OrderExplorer() {
             )}
 
             {orders && orders.length > 0 && (
-              <ScrollArea className="h-[300px]">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Order ID</TableHead>
-                      <TableHead>Order Number</TableHead>
-                      <TableHead>Status</TableHead>
-                      <TableHead>Samples</TableHead>
-                      <TableHead>Created</TableHead>
-                      <TableHead></TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {orders.map((order: ExplorerOrder) => (
-                      <TableRow
-                        key={order.id}
-                        className={cn(
-                          'cursor-pointer hover:bg-muted/50',
-                          selectedOrderId === order.order_id && 'bg-muted'
-                        )}
-                        onClick={() => handleOrderClick(order)}
-                      >
-                        <TableCell className="font-mono">{order.order_id}</TableCell>
-                        <TableCell>{order.order_number}</TableCell>
-                        <TableCell>
-                          <StatusBadge status={order.status} />
-                        </TableCell>
-                        <TableCell>
-                          {order.samples_delivered}/{order.samples_expected}
-                        </TableCell>
-                        <TableCell className="text-muted-foreground">
-                          {formatDate(order.created_at)}
-                        </TableCell>
-                        <TableCell>
-                          <ChevronRight className="h-4 w-4 text-muted-foreground" />
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </ScrollArea>
+              <div className="max-h-[300px] overflow-auto">
+                <DataTable
+                  columns={ordersColumns}
+                  data={orders}
+                  onRowClick={handleOrderClick}
+                  selectedRowId={selectedOrder?.order_id}
+                  getRowId={(row) => row.order_id}
+                />
+              </div>
             )}
           </CardContent>
         </Card>
       )}
 
       {/* Ingestions panel */}
-      {selectedOrderId && (
+      {selectedOrder && (
         <IngestionsPanel
-          orderId={selectedOrderId}
+          orderId={selectedOrder.order_id}
+          orderCreatedAt={selectedOrder.created_at}
           wordpressHost={status?.wordpress_host}
-          onClose={() => setSelectedOrderId(null)}
+          onClose={() => setSelectedOrder(null)}
+        />
+      )}
+
+      {/* Payload panel - shows in right area */}
+      {selectedPayload && (
+        <PayloadPanel
+          payload={selectedPayload.payload}
+          orderId={selectedPayload.sampleId}
+          onClose={() => setSelectedPayload(null)}
         />
       )}
     </div>

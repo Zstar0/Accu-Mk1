@@ -682,6 +682,20 @@ export async function getDetectedFiles(): Promise<DetectedFiles> {
 
 // --- Explorer API (Integration Service Database) ---
 
+import { getApiKey } from './api-key'
+
+/**
+ * Get headers with API key authentication for explorer endpoints.
+ */
+function getAuthHeaders(): HeadersInit {
+  const apiKey = getApiKey()
+  const headers: HeadersInit = {}
+  if (apiKey) {
+    headers['X-API-Key'] = apiKey
+  }
+  return headers
+}
+
 /**
  * Order from Integration Service database.
  */
@@ -693,6 +707,7 @@ export interface ExplorerOrder {
   samples_expected: number
   samples_delivered: number
   error_message: string | null
+  payload: Record<string, unknown> | null
   created_at: string
   updated_at: string
   completed_at: string | null
@@ -733,8 +748,13 @@ export interface ExplorerConnectionStatus {
  */
 export async function getExplorerStatus(): Promise<ExplorerConnectionStatus> {
   try {
-    const response = await fetch(`${API_BASE_URL}/explorer/status`)
+    const response = await fetch(`${API_BASE_URL}/explorer/status`, {
+      headers: getAuthHeaders(),
+    })
     if (!response.ok) {
+      if (response.status === 401) {
+        throw new Error('API key required or invalid')
+      }
       throw new Error(`Get explorer status failed: ${response.status}`)
     }
     return response.json()
@@ -757,8 +777,13 @@ export interface EnvironmentListResponse {
  */
 export async function getExplorerEnvironments(): Promise<EnvironmentListResponse> {
   try {
-    const response = await fetch(`${API_BASE_URL}/explorer/environments`)
+    const response = await fetch(`${API_BASE_URL}/explorer/environments`, {
+      headers: getAuthHeaders(),
+    })
     if (!response.ok) {
+      if (response.status === 401) {
+        throw new Error('API key required or invalid')
+      }
       throw new Error(`Get explorer environments failed: ${response.status}`)
     }
     return response.json()
@@ -782,10 +807,14 @@ export async function setExplorerEnvironment(
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        ...getAuthHeaders(),
       },
       body: JSON.stringify({ environment }),
     })
     if (!response.ok) {
+      if (response.status === 401) {
+        throw new Error('API key required or invalid')
+      }
       throw new Error(`Set explorer environment failed: ${response.status}`)
     }
     return response.json()
@@ -814,8 +843,13 @@ export async function getExplorerOrders(
     params.set('limit', String(limit))
     params.set('offset', String(offset))
 
-    const response = await fetch(`${API_BASE_URL}/explorer/orders?${params}`)
+    const response = await fetch(`${API_BASE_URL}/explorer/orders?${params}`, {
+      headers: getAuthHeaders(),
+    })
     if (!response.ok) {
+      if (response.status === 401) {
+        throw new Error('API key required or invalid')
+      }
       throw new Error(`Get explorer orders failed: ${response.status}`)
     }
     return response.json()
@@ -833,9 +867,13 @@ export async function getExplorerOrders(
 export async function getOrderIngestions(orderId: string): Promise<ExplorerIngestion[]> {
   try {
     const response = await fetch(
-      `${API_BASE_URL}/explorer/orders/${encodeURIComponent(orderId)}/ingestions`
+      `${API_BASE_URL}/explorer/orders/${encodeURIComponent(orderId)}/ingestions`,
+      { headers: getAuthHeaders() }
     )
     if (!response.ok) {
+      if (response.status === 401) {
+        throw new Error('API key required or invalid')
+      }
       throw new Error(`Get order ${orderId} ingestions failed: ${response.status}`)
     }
     return response.json()
@@ -844,4 +882,5 @@ export async function getOrderIngestions(orderId: string): Promise<ExplorerInges
     throw error
   }
 }
+
 

@@ -17,6 +17,7 @@ import { ErrorBoundary } from './components/ErrorBoundary'
 type BackendStatus =
   | { state: 'loading' }
   | { state: 'connected'; data: HealthResponse }
+  | { state: 'api_key_required' }
   | { state: 'error'; message: string }
 
 function App() {
@@ -25,23 +26,44 @@ function App() {
     state: 'loading',
   })
 
-  // Check backend health on mount
+  // Check backend health on mount and periodically when offline
   useEffect(() => {
-    const checkBackend = async () => {
-      try {
-        const health = await healthCheck()
-        setBackendStatus({ state: 'connected', data: health })
-        logger.info('Backend connected', { version: health.version })
-      } catch (error) {
-        setBackendStatus({
-          state: 'error',
-          message: 'Backend offline - start with: uvicorn backend.main:app',
-        })
-        logger.warn('Backend connection failed', { error })
+    // Import here to avoid circular dependency issues
+    import('@/lib/api-key').then(({ hasApiKey }) => {
+      // First check if API key is configured
+      if (!hasApiKey()) {
+        setBackendStatus({ state: 'api_key_required' })
+        return
       }
-    }
+      
+      // If API key exists, proceed with health check
+      let intervalId: ReturnType<typeof setInterval> | null = null
 
-    checkBackend()
+      const checkBackend = async () => {
+        try {
+          const health = await healthCheck()
+          setBackendStatus({ state: 'connected', data: health })
+          logger.info('Backend connected', { version: health.version })
+          // Clear interval when connected
+          if (intervalId) {
+            clearInterval(intervalId)
+            intervalId = null
+          }
+        } catch (error) {
+          setBackendStatus({
+            state: 'error',
+            message: 'Backend offline - start with: uvicorn backend.main:app',
+          })
+          logger.warn('Backend connection failed', { error })
+          // Set up polling if not already polling
+          if (!intervalId) {
+            intervalId = setInterval(checkBackend, 5000)
+          }
+        }
+      }
+
+      checkBackend()
+    })
   }, [])
 
   // Initialize command system and cleanup on app startup
@@ -143,9 +165,11 @@ function App() {
   const renderBackendStatus = () => {
     switch (backendStatus.state) {
       case 'loading':
+        return null // Don't show anything while loading
+      case 'api_key_required':
         return (
-          <div className="fixed bottom-4 right-4 bg-yellow-100 dark:bg-yellow-900 text-yellow-800 dark:text-yellow-200 px-3 py-1 rounded-full text-sm">
-            Connecting to backend...
+          <div className="fixed bottom-4 right-4 bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200 px-3 py-1 rounded-full text-sm">
+            API key required - add in Settings
           </div>
         )
       case 'connected':

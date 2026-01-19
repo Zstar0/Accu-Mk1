@@ -1,0 +1,65 @@
+Acquisition Method:,1290 AOD9604 method.amx
+Path:,C:\Users\Administrator\Valence Analytical\Communication site - Documents\Lab Operations\Projects\1290\Results\AOD9604_Std_Targetmol_T7815L_20260112 192413.rslt
+Method parameters are filtered - only a subset is displayed
+2,DAD Method
+Peakwidth:,> 0.013 min (0.25 s response time) (20 Hz),Slit:,4 nm,UV Lamp Required:,Yes
+Module Display Name:,DAD,Module Type:,G7117B,Order:,1
+2.2,Signals
+Signal table
+Acquire,Signal,Wavelength,Bandwidth,Use Ref.,Ref Wavel.,Ref Bandw.
+Yes,Signal A,220.0 nm,4.0 nm,Yes,360.0 nm,100.0 nm
+No,Signal B,,,,,
+No,Signal C,,,,,
+No,Signal D,,,,,
+No,Signal E,,,,,
+No,Signal F,,,,,
+No,Signal G,,,,,
+No,Signal H,,,,,
+3,Column Comp. Method
+Ready when front door open:,No,Position Switch After Run:,Do not switch,Module Display Name:,Column Comp.
+Module Type:,G7116B,Order:,1
+3.1,Left Temperature Control
+Temperature Control Mode:,Temperature Set,Temperature:,30.0 °C
+3.1.1,Enable Analysis Left Temperature
+Enable Analysis Left Temperature On:,Yes,Enable Analysis Left Temperature Value:,0.8 °C,Left Temp. Equilibration Time:,0.0 min
+3.2,Right Temperature Control
+Right temperature Control Mode:,Combined
+3.2.1,Enable Analysis Right Temperature
+Enable Analysis Right Temperature On:,Yes,Enable Analysis Right Temperature Value:,0.8 °C,Right Temp. Equilibration Time:,0.0 min
+4,Quat. Pump Method
+Flow:,0.400 mL/min,Use Solvent Types:,Yes,Low Pressure Limit:,0.00 bar
+High Pressure Limit:,500.00 bar,Max. Flow Ramp Up:,100.000 mL/min²,Primary Channel:,Automatic
+Max. Flow Ramp Down:,100.000 mL/min²,Module Display Name:,Quat. Pump,Module Type:,G7104A
+Order:,1
+Solvent Composition
+Empty columns are hidden.
+Channel,Ch. 1 Solv.,Used,Percent
+A,100.0 % Water V.03,Yes,85.00 %
+B,,No,
+C,,No,
+D,100.0 % Acetonitrile V.03,Yes,15.00 %
+Timetable
+Time,A,B,C,D,Flow,Pressure
+Start. Cond. min,85.00 %,0.00 %,0.00 %,15.00 %,0.400 mL/min,500.00 bar
+10.00 min,65.00 %,0.00 %,0.00 %,35.00 %,0.400 mL/min,500.00 bar
+12.00 min,10.00 %,0.00 %,0.00 %,90.00 %,0.400 mL/min,500.00 bar
+18.00 min,10.00 %,0.00 %,0.00 %,90.00 %,0.400 mL/min,500.00 bar
+20.00 min,85.00 %,0.00 %,0.00 %,15.00 %,0.400 mL/min,500.00 bar
+4.1,Stroke
+Automatic Stroke Calculation:,Yes
+5,Multisampler Method
+Module Display Name:,Multisampler,Module Type:,G7167B,Order:,1
+5.2,Injection
+Needle Wash Mode:,Standard Wash,Injection Volume:,5.00 µL
+5.2.1,Standard Needle Wash
+Needle Wash Mode:,Flush Port,Duration:,15 s
+Method Audit Trail
+No method audit trail available
+Height,Area,Area%,Peak Begin Time,Peak End Time,RT [min]
+0.7409,6.3977,8.1687,6.882,7.083,7.075
+0.7446,5.1896,6.6261,7.083,7.212,7.090
+0.5745,2.5775,3.2910,7.212,7.383,7.222
+17.6559,56.9860,72.7608,7.383,7.815,7.643
+0.5889,7.1690,9.1535,8.573,8.951,8.751
+Sum,78.3197,,,,
+
