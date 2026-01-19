@@ -6,6 +6,12 @@
 const API_KEY_STORAGE_KEY = 'accu_mk1_api_key'
 
 /**
+ * Custom event name for API key changes.
+ * Listen for this event to react to API key updates.
+ */
+export const API_KEY_CHANGED_EVENT = 'accu-mk1-api-key-changed'
+
+/**
  * Get the stored API key.
  */
 export function getApiKey(): string | null {
@@ -15,18 +21,24 @@ export function getApiKey(): string | null {
 
 /**
  * Save the API key to storage.
+ * Dispatches a custom event to notify listeners of the change.
  */
 export function setApiKey(apiKey: string): void {
   if (typeof window === 'undefined') return
   localStorage.setItem(API_KEY_STORAGE_KEY, apiKey)
+  // Dispatch event to notify listeners
+  window.dispatchEvent(new CustomEvent(API_KEY_CHANGED_EVENT, { detail: { hasKey: true } }))
 }
 
 /**
  * Clear the stored API key.
+ * Dispatches a custom event to notify listeners of the change.
  */
 export function clearApiKey(): void {
   if (typeof window === 'undefined') return
   localStorage.removeItem(API_KEY_STORAGE_KEY)
+  // Dispatch event to notify listeners
+  window.dispatchEvent(new CustomEvent(API_KEY_CHANGED_EVENT, { detail: { hasKey: false } }))
 }
 
 /**
@@ -44,3 +56,4 @@ export function hasApiKey(): boolean {
 export function isValidApiKeyFormat(apiKey: string): boolean {
   return apiKey.startsWith('ak_') && apiKey.length >= 10
 }
+
