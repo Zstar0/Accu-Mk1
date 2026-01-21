@@ -113,7 +113,7 @@ export function MainWindow() {
 
       {/* Version footer */}
       <div className="absolute bottom-1 left-1/2 -translate-x-1/2 text-xs text-muted-foreground/50 flex items-center gap-2">
-        <span>Accu-Mk1 Ver. 0.3.0</span>
+        <span>Accu-Mk1 Ver. 0.3.1</span>
         {profileName && (
           <>
             <span>•</span>

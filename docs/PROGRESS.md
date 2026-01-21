@@ -1,5 +1,23 @@
 # Progress Log
 
+## 2026-01-21: v0.3.1 - Integration Service Compatibility
+
+### Fixes
+
+- **Dual Health Check**: `healthCheck()` now tries `/health` first, then `/v1/health` as fallback
+  - Local Python backend uses `/health`
+  - Integration Service uses `/v1/health`
+  - App now connects to both without configuration changes
+
+### Files Modified
+
+| File             | Changes                                     |
+| ---------------- | ------------------------------------------- |
+| `src/lib/api.ts` | Updated `healthCheck()` with fallback logic |
+| `package.json`   | Bumped version to 0.3.1                     |
+
+---
+
 ## 2026-01-20: v0.3.0 - API Profiles & Settings
 
 ### New Features

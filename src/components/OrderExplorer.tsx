@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react'
-import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Search, Database, RefreshCw, ChevronRight, AlertCircle, CheckCircle2, Clock, XCircle } from 'lucide-react'
 import { ColumnDef } from '@tanstack/react-table'
 
@@ -8,11 +8,15 @@ import {
   getExplorerStatus,
   getExplorerOrders,
   getOrderIngestions,
-  getExplorerEnvironments,
-  setExplorerEnvironment,
   type ExplorerOrder,
   type ExplorerIngestion,
 } from '@/lib/api'
+import {
+  getProfiles,
+  getActiveProfileId,
+  setActiveProfileId,
+  API_PROFILE_CHANGED_EVENT,
+} from '@/lib/api-profiles'
 
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
@@ -256,6 +260,10 @@ export function OrderExplorer() {
   const [debouncedSearch, setDebouncedSearch] = useState('')
   const [selectedOrder, setSelectedOrder] = useState<ExplorerOrder | null>(null)
 
+  // Profile state
+  const [activeProfileId, setActiveProfileIdState] = useState<string | null>(getActiveProfileId())
+  const profiles = getProfiles()
+
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [refreshSuccess, setRefreshSuccess] = useState(false)
   const [selectedPayload, setSelectedPayload] = useState<{
@@ -263,6 +271,17 @@ export function OrderExplorer() {
     sampleId: string
   } | null>(null)
   const queryClient = useQueryClient()
+
+  // Listen for profile changes
+  useEffect(() => {
+    const handleProfileChange = () => {
+      setActiveProfileIdState(getActiveProfileId())
+      setSelectedOrder(null)
+      setSelectedPayload(null)
+    }
+    window.addEventListener(API_PROFILE_CHANGED_EVENT, handleProfileChange)
+    return () => window.removeEventListener(API_PROFILE_CHANGED_EVENT, handleProfileChange)
+  }, [])
 
   // Clear refresh success indicator after 2 seconds
   useEffect(() => {
@@ -274,24 +293,10 @@ export function OrderExplorer() {
 
   // Connection status
   const { data: status, isLoading: statusLoading } = useQuery({
-    queryKey: ['explorer', 'status'],
+    queryKey: ['explorer', 'status', activeProfileId],
     queryFn: getExplorerStatus,
-    staleTime: 30000, // 30 seconds
-  })
-
-  // Available environments
-  const { data: envData } = useQuery({
-    queryKey: ['explorer', 'environments'],
-    queryFn: getExplorerEnvironments,
-  })
-
-  // Environment switch mutation
-  const switchEnvMutation = useMutation({
-    mutationFn: setExplorerEnvironment,
-    onSuccess: () => {
-      // Invalidate all explorer queries to refresh data
-      queryClient.invalidateQueries({ queryKey: ['explorer'] })
-    },
+    staleTime: 0, // Always check fresh when profile changes
+    enabled: !!activeProfileId,
   })
 
   // Orders query
@@ -301,7 +306,7 @@ export function OrderExplorer() {
     error: ordersError,
     refetch,
   } = useQuery({
-    queryKey: ['explorer', 'orders', debouncedSearch],
+    queryKey: ['explorer', 'orders', debouncedSearch, activeProfileId],
     queryFn: () => getExplorerOrders(debouncedSearch || undefined),
     enabled: status?.connected === true,
   })
@@ -320,10 +325,19 @@ export function OrderExplorer() {
     setSelectedPayload(null) // Close payload panel when selecting different order
   }
 
-  const handleEnvironmentChange = (env: string) => {
-    setSelectedOrder(null) // Clear selection when switching
-    setSelectedPayload(null) // Close payload panel when switching environment
-    switchEnvMutation.mutate(env)
+  const handleConnectionChange = async (profileId: string) => {
+    // Set active profile (this triggers saveState -> dispatch event)
+    setActiveProfileId(profileId)
+    setActiveProfileIdState(profileId)
+    
+    // Reset local state
+    setSelectedOrder(null)
+    setSelectedPayload(null)
+    
+    // Clear cache and refresh
+    queryClient.clear()
+    await queryClient.invalidateQueries({ queryKey: ['explorer'] })
+    refetch()
   }
 
   const handleRefresh = async () => {
@@ -455,59 +469,56 @@ export function OrderExplorer() {
           </div>
         </div>
 
-        {/* Environment selector and status */}
+        {/* Profile selector and status */}
         <div className="flex items-center gap-3">
-          {/* Environment dropdown */}
-          {envData && (
-            <>
-              <Select
-                value={envData.current}
-                onValueChange={handleEnvironmentChange}
-                disabled={switchEnvMutation.isPending}
-              >
-                <SelectTrigger className="w-[140px]">
-                  <SelectValue placeholder="Environment" />
-                </SelectTrigger>
-                <SelectContent>
-                  {envData.environments.map((env) => (
-                    <SelectItem key={env} value={env}>
-                      {env.charAt(0).toUpperCase() + env.slice(1)}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Button
-                variant="outline"
-                size="icon"
-                onClick={handleRefresh}
-                disabled={switchEnvMutation.isPending || statusLoading || isRefreshing}
-                title="Refresh data"
-              >
-                <RefreshCw className={cn('h-4 w-4', (isRefreshing || ordersLoading || switchEnvMutation.isPending) && 'animate-spin')} />
-              </Button>
-              {refreshSuccess && (
-                <CheckCircle2 
-                  className="h-5 w-5 text-green-500 animate-in fade-in zoom-in duration-200" 
-                  style={{ animation: 'fadeIn 0.2s ease-in, fadeOut 0.5s ease-out 1.5s forwards' }}
-                />
-              )}
-            </>
+          <Select
+            value={activeProfileId || ''}
+            onValueChange={handleConnectionChange}
+            disabled={isRefreshing}
+          >
+            <SelectTrigger className="w-[180px]">
+              <SelectValue placeholder="Select Profile" />
+            </SelectTrigger>
+            <SelectContent>
+              {profiles.map((profile) => (
+                <SelectItem key={profile.id} value={profile.id}>
+                  {profile.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+
+          <Button
+            variant="outline"
+            size="icon"
+            onClick={handleRefresh}
+            disabled={statusLoading || isRefreshing}
+            title="Refresh data"
+          >
+            <RefreshCw className={cn('h-4 w-4', (isRefreshing || ordersLoading) && 'animate-spin')} />
+          </Button>
+
+          {refreshSuccess && (
+            <CheckCircle2 
+              className="h-5 w-5 text-green-500 animate-in fade-in zoom-in duration-200" 
+              style={{ animation: 'fadeIn 0.2s ease-in, fadeOut 0.5s ease-out 1.5s forwards' }}
+            />
           )}
 
           {/* Connection status badge */}
-          {(statusLoading || switchEnvMutation.isPending) && (
+          {(statusLoading) && (
             <Badge variant="secondary">
               <RefreshCw className="h-3 w-3 animate-spin mr-1" />
-              {switchEnvMutation.isPending ? 'Switching...' : 'Connecting...'}
+              Connecting...
             </Badge>
           )}
-          {status?.connected && !switchEnvMutation.isPending && (
+          {status?.connected && !statusLoading && (
             <Badge variant="default" className="bg-green-600">
               <CheckCircle2 className="h-3 w-3 mr-1" />
               Connected
             </Badge>
           )}
-          {status && !status.connected && !switchEnvMutation.isPending && (
+          {status && !status.connected && !statusLoading && (
             <Badge variant="destructive">
               <XCircle className="h-3 w-3 mr-1" />
               Disconnected

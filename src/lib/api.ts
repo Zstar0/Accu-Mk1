@@ -47,18 +47,32 @@ export interface ColumnMappings {
 
 /**
  * Check if the backend is healthy and running.
+ * Tries /health first (local backend), then /v1/health (Integration Service).
  */
 export async function healthCheck(): Promise<HealthResponse> {
+  const baseUrl = API_BASE_URL()
+  
+  // Try /health first (local backend)
   try {
-    const response = await fetch(`${API_BASE_URL()}/health`)
-    if (!response.ok) {
-      throw new Error(`Health check failed: ${response.status}`)
+    const response = await fetch(`${baseUrl}/health`)
+    if (response.ok) {
+      return response.json()
     }
-    return response.json()
-  } catch (error) {
-    console.error('Health check error:', error)
-    throw error
+  } catch {
+    // Fall through to try /v1/health
   }
+  
+  // Try /v1/health (Integration Service)
+  try {
+    const response = await fetch(`${baseUrl}/v1/health`)
+    if (response.ok) {
+      return response.json()
+    }
+  } catch {
+    // Fall through to error
+  }
+  
+  throw new Error('Health check failed: Backend not reachable')
 }
 
 /**
