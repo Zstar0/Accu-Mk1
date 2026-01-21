@@ -8,7 +8,7 @@ import { useUIStore } from '@/store/ui-store'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { KeyRound, Settings } from 'lucide-react'
-import { hasApiKey } from '@/lib/api-key'
+import { hasApiKey, API_PROFILE_CHANGED_EVENT } from '@/lib/api-profiles'
 
 interface MainWindowContentProps {
   children?: React.ReactNode
@@ -23,9 +23,19 @@ export function MainWindowContent({
   const setPreferencesOpen = useUIStore(state => state.setPreferencesOpen)
   const [apiKeyConfigured, setApiKeyConfigured] = useState(true) // Default true to avoid flash
 
-  // Check for API key on mount and when section changes
+  // Check for API key on mount, when section changes, and when profile changes
   useEffect(() => {
-    setApiKeyConfigured(hasApiKey())
+    const checkApiKey = () => setApiKeyConfigured(hasApiKey())
+    
+    // Initial check
+    checkApiKey()
+    
+    // Listen for profile changes
+    window.addEventListener(API_PROFILE_CHANGED_EVENT, checkApiKey)
+    
+    return () => {
+      window.removeEventListener(API_PROFILE_CHANGED_EVENT, checkApiKey)
+    }
   }, [activeSection])
 
   // Render API key required message

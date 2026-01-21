@@ -157,73 +157,62 @@ ORDER BY i.created_at DESC
 
 All `/v1/desktop/*` endpoints should require API key authentication.
 
-### Admin Flow (Integration Service)
+### Configuration (.env)
 
-1. Admin creates API key for user via admin UI or CLI
-2. API key stored in database with associated user/permissions
-3. Admin provides API key to user (e.g., `ak_xxxxx-xxxxx-xxxxx`)
+Store allowed API keys as a comma-separated list in the environment:
 
-### User Flow (Desktop App)
-
-1. User opens Accu-Mk1 desktop app
-2. Goes to **Settings** → enters their API key
-3. API key is stored securely (Tauri secure storage)
-4. All API calls include `X-API-Key: ak_xxxxx-xxxxx-xxxxx` header
-5. App works!
-
-### Integration Service Implementation
-
-**Database Table:**
-
-```sql
-CREATE TABLE api_keys (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    key_hash VARCHAR(255) NOT NULL,        -- bcrypt hash of the key
-    key_prefix VARCHAR(10) NOT NULL,       -- First 10 chars for identification (e.g., "ak_xxxxx")
-    name VARCHAR(255) NOT NULL,            -- User/device name
-    permissions JSONB DEFAULT '["desktop:read"]',
-    created_at TIMESTAMP DEFAULT NOW(),
-    last_used_at TIMESTAMP,
-    expires_at TIMESTAMP,                  -- Optional expiration
-    is_active BOOLEAN DEFAULT TRUE
-);
+```bash
+# .env
+DESKTOP_API_KEYS=ak_prod_key_001,ak_prod_key_002
 ```
 
-**Endpoint Middleware:**
+### Middleware Implementation
 
 ```python
+import os
 from fastapi import Header, HTTPException
 
-async def verify_api_key(x_api_key: str = Header(...)):
+# Load allowed keys from environment (comma-separated)
+ALLOWED_API_KEYS = set(
+    key.strip()
+    for key in os.environ.get("DESKTOP_API_KEYS", "").split(",")
+    if key.strip()
+)
+
+async def verify_desktop_api_key(x_api_key: str = Header(..., alias="X-API-Key")):
     """Validate API key from X-API-Key header."""
-    if not x_api_key.startswith("ak_"):
-        raise HTTPException(401, "Invalid API key format")
+    if not x_api_key:
+        raise HTTPException(401, "API key required")
 
-    # Look up key in database by hashing and comparing
-    api_key = await get_api_key_by_hash(x_api_key)
-    if not api_key or not api_key.is_active:
-        raise HTTPException(401, "Invalid or inactive API key")
+    if x_api_key not in ALLOWED_API_KEYS:
+        raise HTTPException(401, "Invalid API key")
 
-    # Update last_used_at
-    await update_api_key_last_used(api_key.id)
-
-    return api_key
+    return x_api_key
 ```
 
-**Apply to routes:**
+### Apply to Routes
 
 ```python
-@app.get("/v1/desktop/orders", dependencies=[Depends(verify_api_key)])
-async def get_orders(...):
+from fastapi import Depends
+
+@app.get("/v1/desktop/status", dependencies=[Depends(verify_desktop_api_key)])
+async def get_desktop_status():
+    ...
+
+@app.get("/v1/desktop/orders", dependencies=[Depends(verify_desktop_api_key)])
+async def get_desktop_orders(...):
     ...
 ```
 
-### Desktop App Changes Needed
+### Desktop App Usage
 
-- Add **Settings** UI with API key input field
-- Store API key securely using Tauri's secure storage
-- Add `X-API-Key` header to all API calls in `src/lib/api.ts`
-- Handle 401 errors by prompting user to check their API key
+The desktop app sends API key via `X-API-Key` header:
+
+```typescript
+const response = await fetch(`${API_URL}/v1/desktop/orders`, {
+  headers: { 'X-API-Key': apiKey },
+})
+```
 
 ---
 

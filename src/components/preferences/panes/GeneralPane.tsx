@@ -2,34 +2,67 @@ import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
-import { CheckCircle2, XCircle, Eye, EyeOff } from 'lucide-react'
+import { CheckCircle2, XCircle, Eye, EyeOff, Plus, Trash2, Plug } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { ShortcutPicker } from '../ShortcutPicker'
 import { SettingsField, SettingsSection } from '../shared/SettingsComponents'
 import { usePreferences, useSavePreferences } from '@/services/preferences'
 import { commands } from '@/lib/tauri-bindings'
 import { logger } from '@/lib/logger'
-import { getApiKey, setApiKey, isValidApiKeyFormat } from '@/lib/api-key'
+import { useUIStore } from '@/store/ui-store'
+import {
+  getProfiles,
+  getActiveProfileId,
+  setActiveProfileId,
+  updateProfile,
+  addProfile,
+  deleteProfile,
+  API_PROFILE_CHANGED_EVENT,
+  type ApiProfile,
+} from '@/lib/api-profiles'
 
 export function GeneralPane() {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
+  const setPreferencesOpen = useUIStore(state => state.setPreferencesOpen)
   
-  // API Key state
+  // Profile state
+  const [profiles, setProfiles] = useState<ApiProfile[]>([])
+  const [activeId, setActiveId] = useState<string | null>(null)
+  const [serverUrl, setServerUrl] = useState('')
   const [apiKeyInput, setApiKeyInput] = useState('')
   const [showApiKey, setShowApiKey] = useState(false)
-  const [isApiKeyConfigured, setIsApiKeyConfigured] = useState(false)
+  const [hasChanges, setHasChanges] = useState(false)
+  const [isConnecting, setIsConnecting] = useState(false)
   
-  // Load saved API key on mount
+  // Load profiles on mount
   useEffect(() => {
-    const savedKey = getApiKey()
-    if (savedKey) {
-      setApiKeyInput(savedKey)
-      setIsApiKeyConfigured(true)
-    }
+    refreshProfiles()
   }, [])
-
+  
+  const refreshProfiles = () => {
+    const loadedProfiles = getProfiles()
+    const loadedActiveId = getActiveProfileId()
+    setProfiles(loadedProfiles)
+    setActiveId(loadedActiveId)
+    
+    // Load active profile data
+    const activeProfile = loadedProfiles.find(p => p.id === loadedActiveId)
+    if (activeProfile) {
+      setServerUrl(activeProfile.serverUrl)
+      setApiKeyInput(activeProfile.apiKey)
+    }
+    setHasChanges(false)
+  }
+  
   // Load preferences for keyboard shortcuts
   const { data: preferences } = usePreferences()
   const savePreferences = useSavePreferences()
@@ -40,147 +73,214 @@ export function GeneralPane() {
     queryFn: async () => {
       return await commands.getDefaultQuickPaneShortcut()
     },
-    staleTime: Infinity, // Never refetch - this is a constant
+    staleTime: Infinity,
   })
 
   const handleShortcutChange = async (newShortcut: string | null) => {
     if (!preferences) return
-
-    // Capture old shortcut for rollback if save fails
     const oldShortcut = preferences.quick_pane_shortcut
-
     logger.info('Updating quick pane shortcut', { oldShortcut, newShortcut })
-
-    // First, try to register the new shortcut
     const result = await commands.updateQuickPaneShortcut(newShortcut)
-
     if (result.status === 'error') {
       logger.error('Failed to register shortcut', { error: result.error })
-      toast.error(t('toast.error.shortcutFailed'), {
-        description: result.error,
-      })
+      toast.error(t('toast.error.shortcutFailed'), { description: result.error })
       return
     }
-
-    // If registration succeeded, try to save the preference
     try {
-      await savePreferences.mutateAsync({
-        ...preferences,
-        quick_pane_shortcut: newShortcut,
-      })
+      await savePreferences.mutateAsync({ ...preferences, quick_pane_shortcut: newShortcut })
     } catch {
-      // Save failed - roll back the backend registration
-      logger.warn('Save failed, rolling back shortcut registration', {
-        oldShortcut,
-        newShortcut,
-      })
-
+      logger.warn('Save failed, rolling back shortcut registration', { oldShortcut, newShortcut })
       const rollbackResult = await commands.updateQuickPaneShortcut(oldShortcut)
-
       if (rollbackResult.status === 'error') {
-        logger.error(
-          'Rollback failed - backend and preferences are out of sync',
-          {
-            error: rollbackResult.error,
-            attemptedShortcut: newShortcut,
-            originalShortcut: oldShortcut,
-          }
-        )
-        toast.error(t('toast.error.shortcutRestoreFailed'), {
-          description: t('toast.error.shortcutRestoreDescription'),
-        })
-      } else {
-        logger.info('Successfully rolled back shortcut registration')
+        logger.error('Rollback failed', { error: rollbackResult.error })
+        toast.error(t('toast.error.shortcutRestoreFailed'))
       }
     }
   }
 
-  const handleSaveApiKey = () => {
-    if (!apiKeyInput.trim()) {
-      toast.error('API key cannot be empty')
-      return
+  const handleProfileChange = (profileId: string) => {
+    setActiveProfileId(profileId)
+    setActiveId(profileId)
+    const profile = profiles.find(p => p.id === profileId)
+    if (profile) {
+      setServerUrl(profile.serverUrl)
+      setApiKeyInput(profile.apiKey)
     }
-    
-    if (!isValidApiKeyFormat(apiKeyInput)) {
-      toast.error('Invalid API key format', {
-        description: 'API key should start with "ak_"',
-      })
-      return
-    }
-    
-    setApiKey(apiKeyInput)
-    setIsApiKeyConfigured(true)
-    // Invalidate explorer queries to trigger re-fetch with new key
+    setHasChanges(false)
     queryClient.invalidateQueries({ queryKey: ['explorer'] })
-    toast.success('API key saved', {
-      description: 'You may need to refresh the app for changes to take effect.',
-    })
-    logger.info('API key updated')
+    toast.success('Switched profile', { description: `Now using ${profile?.name}` })
   }
 
-  const handleClearApiKey = () => {
-    setApiKey('')
-    setApiKeyInput('')
-    setIsApiKeyConfigured(false)
+  const handleSaveProfile = () => {
+    if (!activeId) return
+    updateProfile(activeId, { serverUrl, apiKey: apiKeyInput })
+    refreshProfiles()
     queryClient.invalidateQueries({ queryKey: ['explorer'] })
-    toast.info('API key cleared')
-    logger.info('API key cleared')
+    toast.success('Profile saved')
+    logger.info('Profile updated', { profileId: activeId })
   }
+
+  const handleAddProfile = () => {
+    const newProfile = addProfile({
+      name: `Profile ${profiles.length + 1}`,
+      serverUrl: 'http://127.0.0.1:8009',
+      apiKey: '',
+    })
+    refreshProfiles()
+    handleProfileChange(newProfile.id)
+    toast.success('New profile created')
+  }
+
+  const handleDeleteProfile = () => {
+    if (!activeId || profiles.length <= 1) {
+      toast.error('Cannot delete the last profile')
+      return
+    }
+    const profileName = profiles.find(p => p.id === activeId)?.name
+    deleteProfile(activeId)
+    refreshProfiles()
+    queryClient.invalidateQueries({ queryKey: ['explorer'] })
+    toast.info(`Deleted profile: ${profileName}`)
+  }
+
+  const handleFieldChange = (field: 'serverUrl' | 'apiKey', value: string) => {
+    if (field === 'serverUrl') setServerUrl(value)
+    else setApiKeyInput(value)
+    setHasChanges(true)
+  }
+
+  const handleConnect = async () => {
+    if (!activeId) return
+    if (!apiKeyInput.trim()) {
+      toast.error('API key is required to connect')
+      return
+    }
+    
+    setIsConnecting(true)
+    
+    // Save profile first
+    updateProfile(activeId, { serverUrl, apiKey: apiKeyInput })
+    refreshProfiles()
+    
+    // Clear all cached queries
+    queryClient.clear()
+    
+    // Dispatch profile changed event to notify the app
+    window.dispatchEvent(new CustomEvent(API_PROFILE_CHANGED_EVENT, { 
+      detail: { activeProfileId: activeId } 
+    }))
+    
+    // Close preferences dialog
+    setPreferencesOpen(false)
+    
+    // Show success message
+    toast.success(`Connected to ${profiles.find(p => p.id === activeId)?.name}`, {
+      description: 'App has been reset with new connection.',
+    })
+    
+    logger.info('Connected to API profile', { profileId: activeId, serverUrl })
+    setIsConnecting(false)
+    setHasChanges(false)
+  }
+
+  const activeProfile = profiles.find(p => p.id === activeId)
+  const isApiKeyConfigured = apiKeyInput.length > 0
 
   return (
     <div className="space-y-6">
-      {/* API Key Section - First for visibility */}
-      <SettingsSection title="API Key">
+      {/* API Connection Section */}
+      <SettingsSection title="API Connection">
+        {/* Profile Selector */}
         <SettingsField
-          label="Backend API Key"
-          description="Enter your API key to connect to the backend. Get this from your administrator."
+          label="Profile"
+          description="Select a saved profile or create a new one"
         >
-          <div className="space-y-3">
-            <div className="flex gap-2">
-              <div className="relative flex-1">
-                <Input
-                  type={showApiKey ? 'text' : 'password'}
-                  value={apiKeyInput}
-                  onChange={e => setApiKeyInput(e.target.value)}
-                  placeholder="ak_xxxxx..."
-                  className="pr-10"
-                />
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  className="absolute right-0 top-0 h-full px-3"
-                  onClick={() => setShowApiKey(!showApiKey)}
-                >
-                  {showApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                </Button>
-              </div>
-              <Button onClick={handleSaveApiKey}>
-                Save
+          <div className="flex gap-2">
+            <Select value={activeId ?? ''} onValueChange={handleProfileChange}>
+              <SelectTrigger className="flex-1">
+                <SelectValue placeholder="Select profile" />
+              </SelectTrigger>
+              <SelectContent>
+                {profiles.map(profile => (
+                  <SelectItem key={profile.id} value={profile.id}>
+                    {profile.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Button variant="outline" size="icon" onClick={handleAddProfile}>
+              <Plus className="h-4 w-4" />
+            </Button>
+          </div>
+        </SettingsField>
+
+        {/* Server URL */}
+        <SettingsField
+          label="Server URL"
+          description="The Integration Service API endpoint"
+        >
+          <Input
+            value={serverUrl}
+            onChange={e => handleFieldChange('serverUrl', e.target.value)}
+            placeholder="https://api.accumarklabs.com"
+          />
+        </SettingsField>
+
+        {/* API Key */}
+        <SettingsField
+          label="API Key"
+          description="Authentication key for the Integration Service"
+        >
+          <div className="flex gap-2">
+            <div className="relative flex-1">
+              <Input
+                type={showApiKey ? 'text' : 'password'}
+                value={apiKeyInput}
+                onChange={e => handleFieldChange('apiKey', e.target.value)}
+                placeholder="ak_xxxxx..."
+                className="pr-10"
+              />
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="absolute right-0 top-0 h-full px-3"
+                onClick={() => setShowApiKey(!showApiKey)}
+              >
+                {showApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
               </Button>
-              {isApiKeyConfigured && (
-                <Button variant="outline" onClick={handleClearApiKey}>
-                  Clear
-                </Button>
-              )}
-            </div>
-            
-            {/* Status indicator */}
-            <div className="flex items-center gap-2 text-sm">
-              {isApiKeyConfigured ? (
-                <>
-                  <CheckCircle2 className="h-4 w-4 text-green-500" />
-                  <span className="text-green-600">API key configured</span>
-                </>
-              ) : (
-                <>
-                  <XCircle className="h-4 w-4 text-yellow-500" />
-                  <span className="text-yellow-600">No API key configured - AccuMark Tools features require an API key</span>
-                </>
-              )}
             </div>
           </div>
         </SettingsField>
+
+        {/* Actions */}
+        <div className="flex items-center gap-3">
+          <Button onClick={handleSaveProfile} disabled={!hasChanges} variant="outline">
+            Save Profile
+          </Button>
+          <Button onClick={handleConnect} disabled={isConnecting || !apiKeyInput.trim()}>
+            <Plug className="h-4 w-4 mr-2" />
+            {isConnecting ? 'Connecting...' : 'Connect'}
+          </Button>
+          <Button variant="destructive" size="icon" onClick={handleDeleteProfile} disabled={profiles.length <= 1}>
+            <Trash2 className="h-4 w-4" />
+          </Button>
+          
+          {/* Status indicator */}
+          <div className="flex items-center gap-2 text-sm ml-auto">
+            {isApiKeyConfigured ? (
+              <>
+                <CheckCircle2 className="h-4 w-4 text-green-500" />
+                <span className="text-green-600">{activeProfile?.name}</span>
+              </>
+            ) : (
+              <>
+                <XCircle className="h-4 w-4 text-yellow-500" />
+                <span className="text-yellow-600">API key required</span>
+              </>
+            )}
+          </div>
+        </div>
       </SettingsSection>
 
       <SettingsSection title={t('preferences.general.keyboardShortcuts')}>

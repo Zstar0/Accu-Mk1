@@ -2,7 +2,11 @@
  * API client for communicating with the FastAPI backend.
  */
 
-import { API_BASE_URL } from './config'
+import { getApiBaseUrl } from './config'
+import { getApiKey } from './api-profiles'
+
+// Helper to get current API base URL (called dynamically)
+const API_BASE_URL = () => getApiBaseUrl()
 
 // --- Types ---
 
@@ -46,7 +50,7 @@ export interface ColumnMappings {
  */
 export async function healthCheck(): Promise<HealthResponse> {
   try {
-    const response = await fetch(`${API_BASE_URL}/health`)
+    const response = await fetch(`${API_BASE_URL()}/health`)
     if (!response.ok) {
       throw new Error(`Health check failed: ${response.status}`)
     }
@@ -67,7 +71,7 @@ export async function createAuditLog(
   details?: Record<string, unknown>
 ): Promise<AuditLog> {
   try {
-    const response = await fetch(`${API_BASE_URL}/audit`, {
+    const response = await fetch(`${API_BASE_URL()}/audit`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -94,7 +98,7 @@ export async function createAuditLog(
  */
 export async function getAuditLogs(limit = 50): Promise<AuditLog[]> {
   try {
-    const response = await fetch(`${API_BASE_URL}/audit?limit=${limit}`)
+    const response = await fetch(`${API_BASE_URL()}/audit?limit=${limit}`)
     if (!response.ok) {
       throw new Error(`Get audit logs failed: ${response.status}`)
     }
@@ -112,7 +116,7 @@ export async function getAuditLogs(limit = 50): Promise<AuditLog[]> {
  */
 export async function getSettings(): Promise<Setting[]> {
   try {
-    const response = await fetch(`${API_BASE_URL}/settings`)
+    const response = await fetch(`${API_BASE_URL()}/settings`)
     if (!response.ok) {
       throw new Error(`Get settings failed: ${response.status}`)
     }
@@ -128,7 +132,7 @@ export async function getSettings(): Promise<Setting[]> {
  */
 export async function getSetting(key: string): Promise<Setting> {
   try {
-    const response = await fetch(`${API_BASE_URL}/settings/${encodeURIComponent(key)}`)
+    const response = await fetch(`${API_BASE_URL()}/settings/${encodeURIComponent(key)}`)
     if (!response.ok) {
       throw new Error(`Get setting '${key}' failed: ${response.status}`)
     }
@@ -144,7 +148,7 @@ export async function getSetting(key: string): Promise<Setting> {
  */
 export async function updateSetting(key: string, value: string): Promise<Setting> {
   try {
-    const response = await fetch(`${API_BASE_URL}/settings/${encodeURIComponent(key)}`, {
+    const response = await fetch(`${API_BASE_URL()}/settings/${encodeURIComponent(key)}`, {
       method: 'PUT',
       headers: {
         'Content-Type': 'application/json',
@@ -247,7 +251,7 @@ export interface Sample {
 export async function previewFile(filePath: string): Promise<ParsePreview> {
   try {
     const response = await fetch(
-      `${API_BASE_URL}/import/file?file_path=${encodeURIComponent(filePath)}`,
+      `${API_BASE_URL()}/import/file?file_path=${encodeURIComponent(filePath)}`,
       {
         method: 'POST',
       }
@@ -268,7 +272,7 @@ export async function previewFile(filePath: string): Promise<ParsePreview> {
  */
 export async function importBatch(filePaths: string[]): Promise<ImportResult> {
   try {
-    const response = await fetch(`${API_BASE_URL}/import/batch`, {
+    const response = await fetch(`${API_BASE_URL()}/import/batch`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -301,7 +305,7 @@ export interface FileData {
  */
 export async function importBatchData(files: FileData[]): Promise<ImportResult> {
   try {
-    const response = await fetch(`${API_BASE_URL}/import/batch-data`, {
+    const response = await fetch(`${API_BASE_URL()}/import/batch-data`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -325,7 +329,7 @@ export async function importBatchData(files: FileData[]): Promise<ImportResult> 
  */
 export async function getJobs(limit = 50): Promise<Job[]> {
   try {
-    const response = await fetch(`${API_BASE_URL}/jobs?limit=${limit}`)
+    const response = await fetch(`${API_BASE_URL()}/jobs?limit=${limit}`)
     if (!response.ok) {
       throw new Error(`Get jobs failed: ${response.status}`)
     }
@@ -341,7 +345,7 @@ export async function getJobs(limit = 50): Promise<Job[]> {
  */
 export async function getJob(jobId: number): Promise<Job> {
   try {
-    const response = await fetch(`${API_BASE_URL}/jobs/${jobId}`)
+    const response = await fetch(`${API_BASE_URL()}/jobs/${jobId}`)
     if (!response.ok) {
       throw new Error(`Get job ${jobId} failed: ${response.status}`)
     }
@@ -357,7 +361,7 @@ export async function getJob(jobId: number): Promise<Job> {
  */
 export async function getJobSamples(jobId: number): Promise<Sample[]> {
   try {
-    const response = await fetch(`${API_BASE_URL}/jobs/${jobId}/samples`)
+    const response = await fetch(`${API_BASE_URL()}/jobs/${jobId}/samples`)
     if (!response.ok) {
       throw new Error(`Get job ${jobId} samples failed: ${response.status}`)
     }
@@ -392,7 +396,7 @@ export interface SampleWithResults {
  */
 export async function getSamplesWithResults(jobId: number): Promise<SampleWithResults[]> {
   try {
-    const response = await fetch(`${API_BASE_URL}/jobs/${jobId}/samples-with-results`)
+    const response = await fetch(`${API_BASE_URL()}/jobs/${jobId}/samples-with-results`)
     if (!response.ok) {
       throw new Error(`Get job ${jobId} samples with results failed: ${response.status}`)
     }
@@ -410,7 +414,7 @@ export async function getSamplesWithResults(jobId: number): Promise<SampleWithRe
  */
 export async function getSamples(limit = 50): Promise<Sample[]> {
   try {
-    const response = await fetch(`${API_BASE_URL}/samples?limit=${limit}`)
+    const response = await fetch(`${API_BASE_URL()}/samples?limit=${limit}`)
     if (!response.ok) {
       throw new Error(`Get samples failed: ${response.status}`)
     }
@@ -426,7 +430,7 @@ export async function getSamples(limit = 50): Promise<Sample[]> {
  */
 export async function getSample(sampleId: number): Promise<Sample> {
   try {
-    const response = await fetch(`${API_BASE_URL}/samples/${sampleId}`)
+    const response = await fetch(`${API_BASE_URL()}/samples/${sampleId}`)
     if (!response.ok) {
       throw new Error(`Get sample ${sampleId} failed: ${response.status}`)
     }
@@ -443,7 +447,7 @@ export async function getSample(sampleId: number): Promise<Sample> {
  */
 export async function approveSample(sampleId: number): Promise<Sample> {
   try {
-    const response = await fetch(`${API_BASE_URL}/samples/${sampleId}/approve`, {
+    const response = await fetch(`${API_BASE_URL()}/samples/${sampleId}/approve`, {
       method: 'PUT',
     })
     if (!response.ok) {
@@ -462,7 +466,7 @@ export async function approveSample(sampleId: number): Promise<Sample> {
  */
 export async function rejectSample(sampleId: number, reason: string): Promise<Sample> {
   try {
-    const response = await fetch(`${API_BASE_URL}/samples/${sampleId}/reject`, {
+    const response = await fetch(`${API_BASE_URL()}/samples/${sampleId}/reject`, {
       method: 'PUT',
       headers: {
         'Content-Type': 'application/json',
@@ -522,7 +526,7 @@ export interface StoredResult {
  */
 export async function calculateSample(sampleId: number): Promise<CalculationSummary> {
   try {
-    const response = await fetch(`${API_BASE_URL}/calculate/${sampleId}`, {
+    const response = await fetch(`${API_BASE_URL()}/calculate/${sampleId}`, {
       method: 'POST',
     })
     if (!response.ok) {
@@ -540,7 +544,7 @@ export async function calculateSample(sampleId: number): Promise<CalculationSumm
  */
 export async function getCalculationTypes(): Promise<string[]> {
   try {
-    const response = await fetch(`${API_BASE_URL}/calculations/types`)
+    const response = await fetch(`${API_BASE_URL()}/calculations/types`)
     if (!response.ok) {
       throw new Error(`Get calculation types failed: ${response.status}`)
     }
@@ -560,7 +564,7 @@ export async function previewCalculation(
   calculationType: string
 ): Promise<CalculationResult> {
   try {
-    const response = await fetch(`${API_BASE_URL}/calculate/preview`, {
+    const response = await fetch(`${API_BASE_URL()}/calculate/preview`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -585,7 +589,7 @@ export async function previewCalculation(
  */
 export async function getSampleResults(sampleId: number): Promise<StoredResult[]> {
   try {
-    const response = await fetch(`${API_BASE_URL}/samples/${sampleId}/results`)
+    const response = await fetch(`${API_BASE_URL()}/samples/${sampleId}/results`)
     if (!response.ok) {
       throw new Error(`Get sample ${sampleId} results failed: ${response.status}`)
     }
@@ -620,7 +624,7 @@ export interface DetectedFiles {
  */
 export async function getWatcherStatus(): Promise<WatcherStatus> {
   try {
-    const response = await fetch(`${API_BASE_URL}/watcher/status`)
+    const response = await fetch(`${API_BASE_URL()}/watcher/status`)
     if (!response.ok) {
       throw new Error('Failed to get watcher status')
     }
@@ -636,7 +640,7 @@ export async function getWatcherStatus(): Promise<WatcherStatus> {
  */
 export async function startWatcher(): Promise<{ status: string; watching: string }> {
   try {
-    const response = await fetch(`${API_BASE_URL}/watcher/start`, { method: 'POST' })
+    const response = await fetch(`${API_BASE_URL()}/watcher/start`, { method: 'POST' })
     if (!response.ok) {
       const error = await response.json()
       throw new Error(error.detail || 'Failed to start watcher')
@@ -653,7 +657,7 @@ export async function startWatcher(): Promise<{ status: string; watching: string
  */
 export async function stopWatcher(): Promise<{ status: string }> {
   try {
-    const response = await fetch(`${API_BASE_URL}/watcher/stop`, { method: 'POST' })
+    const response = await fetch(`${API_BASE_URL()}/watcher/stop`, { method: 'POST' })
     if (!response.ok) {
       throw new Error('Failed to stop watcher')
     }
@@ -669,7 +673,7 @@ export async function stopWatcher(): Promise<{ status: string }> {
  */
 export async function getDetectedFiles(): Promise<DetectedFiles> {
   try {
-    const response = await fetch(`${API_BASE_URL}/watcher/files`)
+    const response = await fetch(`${API_BASE_URL()}/watcher/files`)
     if (!response.ok) {
       throw new Error('Failed to get detected files')
     }
@@ -681,8 +685,6 @@ export async function getDetectedFiles(): Promise<DetectedFiles> {
 }
 
 // --- Explorer API (Integration Service Database) ---
-
-import { getApiKey } from './api-key'
 
 /**
  * Get headers with API key authentication for explorer endpoints.
@@ -748,7 +750,7 @@ export interface ExplorerConnectionStatus {
  */
 export async function getExplorerStatus(): Promise<ExplorerConnectionStatus> {
   try {
-    const response = await fetch(`${API_BASE_URL}/explorer/status`, {
+    const response = await fetch(`${API_BASE_URL()}/explorer/status`, {
       headers: getAuthHeaders(),
     })
     if (!response.ok) {
@@ -777,7 +779,7 @@ export interface EnvironmentListResponse {
  */
 export async function getExplorerEnvironments(): Promise<EnvironmentListResponse> {
   try {
-    const response = await fetch(`${API_BASE_URL}/explorer/environments`, {
+    const response = await fetch(`${API_BASE_URL()}/explorer/environments`, {
       headers: getAuthHeaders(),
     })
     if (!response.ok) {
@@ -803,7 +805,7 @@ export async function setExplorerEnvironment(
   environment: string
 ): Promise<ExplorerConnectionStatus> {
   try {
-    const response = await fetch(`${API_BASE_URL}/explorer/environments`, {
+    const response = await fetch(`${API_BASE_URL()}/explorer/environments`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -843,7 +845,7 @@ export async function getExplorerOrders(
     params.set('limit', String(limit))
     params.set('offset', String(offset))
 
-    const response = await fetch(`${API_BASE_URL}/explorer/orders?${params}`, {
+    const response = await fetch(`${API_BASE_URL()}/explorer/orders?${params}`, {
       headers: getAuthHeaders(),
     })
     if (!response.ok) {
@@ -867,7 +869,7 @@ export async function getExplorerOrders(
 export async function getOrderIngestions(orderId: string): Promise<ExplorerIngestion[]> {
   try {
     const response = await fetch(
-      `${API_BASE_URL}/explorer/orders/${encodeURIComponent(orderId)}/ingestions`,
+      `${API_BASE_URL()}/explorer/orders/${encodeURIComponent(orderId)}/ingestions`,
       { headers: getAuthHeaders() }
     )
     if (!response.ok) {

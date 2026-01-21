@@ -1,5 +1,39 @@
 # Progress Log
 
+## 2026-01-20: v0.3.0 - API Profiles & Settings
+
+### New Features
+
+- **API Profiles**: Save and switch between multiple server + API key configurations
+  - Profile dropdown in Settings → General
+  - Server URL field for configuring Integration Service endpoint
+  - API Key field with show/hide toggle
+  - Save Profile / Connect / Delete Profile buttons
+  - Default profiles: "Local Development" and "Production"
+  - Migration from old API key format on first load
+- **Connect Button**: Saves profile and resets app connection in one click
+- **Profile Indicator**: Shows active profile name in version footer (e.g., `Accu-Mk1 Ver. 0.3.0 • Local Development`)
+
+### Files Created
+
+| File                      | Description                                          |
+| ------------------------- | ---------------------------------------------------- |
+| `src/lib/api-profiles.ts` | Profile storage module with localStorage persistence |
+
+### Files Modified
+
+| File                                               | Changes                                           |
+| -------------------------------------------------- | ------------------------------------------------- |
+| `src/lib/config.ts`                                | Dynamic URL via `getApiBaseUrl()`                 |
+| `src/lib/api.ts`                                   | Uses profile-based URL and API key                |
+| `src/components/preferences/panes/GeneralPane.tsx` | Profile management UI                             |
+| `src/components/layout/MainWindow.tsx`             | Profile indicator in footer                       |
+| `src/components/layout/MainWindowContent.tsx`      | Uses api-profiles for key check                   |
+| `src/App.tsx`                                      | Uses api-profiles and listens for profile changes |
+| `package.json`                                     | Bumped version to 0.3.0                           |
+
+---
+
 ## 2026-01-18: v0.2.0 - Order Explorer Enhancements
 
 ### New Features

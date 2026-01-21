@@ -2,9 +2,19 @@
  * Application configuration constants.
  */
 
+import { getServerUrl } from './api-profiles'
+
 /**
- * Base URL for the FastAPI backend.
- * Default to localhost:8008 for both browser and Tauri modes.
- * In future, could detect Tauri and use different port/URL.
+ * Get the base URL for the API.
+ * Uses the active profile's server URL, or falls back to localhost.
+ */
+export function getApiBaseUrl(): string {
+  return getServerUrl()
+}
+
+/**
+ * Legacy constant for backward compatibility.
+ * @deprecated Use getApiBaseUrl() instead
  */
 export const API_BASE_URL = 'http://127.0.0.1:8009'
+

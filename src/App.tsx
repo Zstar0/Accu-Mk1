@@ -26,20 +26,20 @@ function App() {
     state: 'loading',
   })
 
-  // Check backend health on mount and periodically when offline
+  // Check backend health on mount and when profile changes
   useEffect(() => {
     // Import here to avoid circular dependency issues
-    import('@/lib/api-key').then(({ hasApiKey }) => {
-      // First check if API key is configured
-      if (!hasApiKey()) {
-        setBackendStatus({ state: 'api_key_required' })
-        return
-      }
-      
-      // If API key exists, proceed with health check
+    import('@/lib/api-profiles').then(({ hasApiKey, API_PROFILE_CHANGED_EVENT }) => {
       let intervalId: ReturnType<typeof setInterval> | null = null
 
       const checkBackend = async () => {
+        // First check if API key is configured
+        if (!hasApiKey()) {
+          setBackendStatus({ state: 'api_key_required' })
+          return
+        }
+        
+        // If API key exists, proceed with health check
         try {
           const health = await healthCheck()
           setBackendStatus({ state: 'connected', data: health })
@@ -62,7 +62,22 @@ function App() {
         }
       }
 
+      // Listen for profile changes (from Connect button)
+      const handleProfileChange = () => {
+        logger.info('API profile changed, re-checking connection')
+        checkBackend()
+      }
+      
+      window.addEventListener(API_PROFILE_CHANGED_EVENT, handleProfileChange)
+      
+      // Initial check
       checkBackend()
+      
+      // Cleanup
+      return () => {
+        window.removeEventListener(API_PROFILE_CHANGED_EVENT, handleProfileChange)
+        if (intervalId) clearInterval(intervalId)
+      }
     })
   }, [])
 

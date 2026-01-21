@@ -1,3 +1,4 @@
+import { useState, useEffect } from 'react'
 import {
   ResizablePanelGroup,
   ResizablePanel,
@@ -14,6 +15,7 @@ import { useTheme } from '@/hooks/use-theme'
 import { useUIStore } from '@/store/ui-store'
 import { useMainWindowEventListeners } from '@/hooks/useMainWindowEventListeners'
 import { cn } from '@/lib/utils'
+import { getActiveProfile, API_PROFILE_CHANGED_EVENT } from '@/lib/api-profiles'
 
 /**
  * Layout sizing configuration for resizable panels.
@@ -34,9 +36,21 @@ export function MainWindow() {
   const { theme } = useTheme()
   const leftSidebarVisible = useUIStore(state => state.leftSidebarVisible)
   const rightSidebarVisible = useUIStore(state => state.rightSidebarVisible)
+  const [profileName, setProfileName] = useState<string | null>(null)
 
   // Set up global event listeners (keyboard shortcuts, etc.)
   useMainWindowEventListeners()
+
+  // Track active profile name
+  useEffect(() => {
+    const updateProfileName = () => {
+      const profile = getActiveProfile()
+      setProfileName(profile?.name ?? null)
+    }
+    updateProfileName()
+    window.addEventListener(API_PROFILE_CHANGED_EVENT, updateProfileName)
+    return () => window.removeEventListener(API_PROFILE_CHANGED_EVENT, updateProfileName)
+  }, [])
 
   return (
     <div className="relative flex h-screen w-full flex-col overflow-hidden rounded-xl bg-background">
@@ -98,8 +112,14 @@ export function MainWindow() {
       />
 
       {/* Version footer */}
-      <div className="absolute bottom-1 left-1/2 -translate-x-1/2 text-xs text-muted-foreground/50">
-        Accu-Mk1 Ver. 0.2.0
+      <div className="absolute bottom-1 left-1/2 -translate-x-1/2 text-xs text-muted-foreground/50 flex items-center gap-2">
+        <span>Accu-Mk1 Ver. 0.3.0</span>
+        {profileName && (
+          <>
+            <span>•</span>
+            <span>{profileName}</span>
+          </>
+        )}
       </div>
     </div>
   )
