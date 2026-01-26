@@ -1,5 +1,34 @@
 # Progress Log
 
+## 2026-01-25: v0.4.1 - Chromatograph Viewer
+
+### New Features
+
+- **Chromatograph Viewer**: Native-like tool for visualizing HPLC results
+  - **Visualization**: HPLC-style chart (Time vs mAU) with auto-scaling
+  - **Interactivity**: Zoom controls (in/out/reset), tooltips, and file management
+  - **Dark Mode Support**: Chart colors adapt automatically to system theme (white text in dark mode)
+  - **Multi-File**: Overlay multiple chromatograms with automatic color coding
+  - **Drag & Drop**: Support for dragging multiple CSV/TSV files onto the drop zone
+  - **CSV Parsing**: Robust parser for common chromatography data formats (Agilent/ChemStation style)
+
+### Files Created
+
+| File                                     | Description                                    |
+| ---------------------------------------- | ---------------------------------------------- |
+| `src/components/ChromatographViewer.tsx` | Main chart component using Recharts and Lucide |
+
+### Files Modified
+
+| File                                          | Changes                                    |
+| --------------------------------------------- | ------------------------------------------ |
+| `src/components/layout/AppSidebar.tsx`        | Added "Chromatographs" sub-item navigation |
+| `src/store/ui-store.ts`                       | Added `activeSubSection` state management  |
+| `src/components/layout/MainWindowContent.tsx` | Added routing for new sub-sections         |
+| `package.json`                                | Bumped version to 0.4.1                    |
+
+---
+
 ## 2026-01-25: v0.4.0 - Shadcn Sidebar & Profile Enhancements
 
 ### New Features
