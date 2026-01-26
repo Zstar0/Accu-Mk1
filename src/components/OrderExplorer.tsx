@@ -14,6 +14,7 @@ import {
 import {
   getProfiles,
   getActiveProfileId,
+  getActiveProfile,
   setActiveProfileId,
   API_PROFILE_CHANGED_EVENT,
 } from '@/lib/api-profiles'
@@ -610,7 +611,7 @@ export function OrderExplorer() {
         <IngestionsPanel
           orderId={selectedOrder.order_id}
           orderCreatedAt={selectedOrder.created_at}
-          wordpressHost={status?.wordpress_host}
+          wordpressHost={getActiveProfile()?.wordpressUrl}
           onClose={() => setSelectedOrder(null)}
         />
       )}

@@ -1,5 +1,6 @@
 export { TitleBar } from '../titlebar/TitleBar'
 export { LeftSideBar } from './LeftSideBar'
+export { AppSidebar } from './AppSidebar'
 export { RightSideBar } from './RightSideBar'
 export { MainWindowContent } from './MainWindowContent'
 export { MainWindow } from './MainWindow'

@@ -14,6 +14,7 @@ export interface ApiProfile {
   name: string
   serverUrl: string
   apiKey: string
+  wordpressUrl: string
 }
 
 /**
@@ -33,12 +34,14 @@ const DEFAULT_PROFILES: ApiProfile[] = [
     name: 'Local Development',
     serverUrl: 'http://127.0.0.1:8009',
     apiKey: '',
+    wordpressUrl: 'https://accumarklabs.local',
   },
   {
     id: 'production',
     name: 'Production',
     serverUrl: 'https://api.accumarklabs.com',
     apiKey: '',
+    wordpressUrl: 'https://accumarklabs.com',
   },
 ]
 
@@ -66,6 +69,7 @@ function getState(): ApiProfilesState {
         name: 'Migrated',
         serverUrl: 'http://127.0.0.1:8009',
         apiKey: oldKey,
+        wordpressUrl: 'https://accumarklabs.local',
       }
       const state: ApiProfilesState = {
         profiles: [migratedProfile, ...DEFAULT_PROFILES],
@@ -163,6 +167,7 @@ export function updateProfile(profileId: string, updates: Partial<Omit<ApiProfil
     name: updates.name ?? existingProfile.name,
     serverUrl: updates.serverUrl ?? existingProfile.serverUrl,
     apiKey: updates.apiKey ?? existingProfile.apiKey,
+    wordpressUrl: updates.wordpressUrl ?? existingProfile.wordpressUrl,
   }
   saveState(state)
 }

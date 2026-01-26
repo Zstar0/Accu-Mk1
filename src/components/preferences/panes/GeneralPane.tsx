@@ -38,6 +38,7 @@ export function GeneralPane() {
   const [profiles, setProfiles] = useState<ApiProfile[]>([])
   const [activeId, setActiveId] = useState<string | null>(null)
   const [serverUrl, setServerUrl] = useState('')
+  const [wordpressUrl, setWordpressUrl] = useState('')
   const [apiKeyInput, setApiKeyInput] = useState('')
   const [showApiKey, setShowApiKey] = useState(false)
   const [hasChanges, setHasChanges] = useState(false)
@@ -58,6 +59,7 @@ export function GeneralPane() {
     const activeProfile = loadedProfiles.find(p => p.id === loadedActiveId)
     if (activeProfile) {
       setServerUrl(activeProfile.serverUrl)
+      setWordpressUrl(activeProfile.wordpressUrl || '')
       setApiKeyInput(activeProfile.apiKey)
     }
     setHasChanges(false)
@@ -104,6 +106,7 @@ export function GeneralPane() {
     const profile = profiles.find(p => p.id === profileId)
     if (profile) {
       setServerUrl(profile.serverUrl)
+      setWordpressUrl(profile.wordpressUrl || '')
       setApiKeyInput(profile.apiKey)
     }
     setHasChanges(false)
@@ -113,7 +116,7 @@ export function GeneralPane() {
 
   const handleSaveProfile = () => {
     if (!activeId) return
-    updateProfile(activeId, { serverUrl, apiKey: apiKeyInput })
+    updateProfile(activeId, { serverUrl, wordpressUrl, apiKey: apiKeyInput })
     refreshProfiles()
     queryClient.invalidateQueries({ queryKey: ['explorer'] })
     toast.success('Profile saved')
@@ -124,6 +127,7 @@ export function GeneralPane() {
     const newProfile = addProfile({
       name: `Profile ${profiles.length + 1}`,
       serverUrl: 'http://127.0.0.1:8009',
+      wordpressUrl: 'https://accumarklabs.local',
       apiKey: '',
     })
     refreshProfiles()
@@ -143,8 +147,9 @@ export function GeneralPane() {
     toast.info(`Deleted profile: ${profileName}`)
   }
 
-  const handleFieldChange = (field: 'serverUrl' | 'apiKey', value: string) => {
+  const handleFieldChange = (field: 'serverUrl' | 'wordpressUrl' | 'apiKey', value: string) => {
     if (field === 'serverUrl') setServerUrl(value)
+    else if (field === 'wordpressUrl') setWordpressUrl(value)
     else setApiKeyInput(value)
     setHasChanges(true)
   }
@@ -159,7 +164,7 @@ export function GeneralPane() {
     setIsConnecting(true)
     
     // Save profile first
-    updateProfile(activeId, { serverUrl, apiKey: apiKeyInput })
+    updateProfile(activeId, { serverUrl, wordpressUrl, apiKey: apiKeyInput })
     refreshProfiles()
     
     // Clear all cached queries
@@ -223,6 +228,18 @@ export function GeneralPane() {
             value={serverUrl}
             onChange={e => handleFieldChange('serverUrl', e.target.value)}
             placeholder="https://api.accumarklabs.com"
+          />
+        </SettingsField>
+
+        {/* WordPress URL */}
+        <SettingsField
+          label="WordPress URL"
+          description="The WordPress site for verification links"
+        >
+          <Input
+            value={wordpressUrl}
+            onChange={e => handleFieldChange('wordpressUrl', e.target.value)}
+            placeholder="https://accumarklabs.com"
           />
         </SettingsField>
 
