@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect } from 'react'
 import { check } from '@tauri-apps/plugin-updater'
 import { relaunch } from '@tauri-apps/plugin-process'
 import { initializeCommandSystem } from './lib/commands'
@@ -6,81 +6,13 @@ import { buildAppMenu, setupMenuLanguageListener } from './lib/menu'
 import { initializeLanguage } from './i18n/language-init'
 import { logger } from './lib/logger'
 import { cleanupOldFiles } from './lib/recovery'
-import { healthCheck, type HealthResponse } from './lib/api'
 import { commands } from './lib/tauri-bindings'
 import './App.css'
 import { MainWindow } from './components/layout/MainWindow'
 import { ThemeProvider } from './components/ThemeProvider'
 import { ErrorBoundary } from './components/ErrorBoundary'
 
-// Backend connection status type
-type BackendStatus =
-  | { state: 'loading' }
-  | { state: 'connected'; data: HealthResponse }
-  | { state: 'api_key_required' }
-  | { state: 'error'; message: string }
-
 function App() {
-  // Backend connection status
-  const [backendStatus, setBackendStatus] = useState<BackendStatus>({
-    state: 'loading',
-  })
-
-  // Check backend health on mount and when profile changes
-  useEffect(() => {
-    // Import here to avoid circular dependency issues
-    import('@/lib/api-profiles').then(({ hasApiKey, API_PROFILE_CHANGED_EVENT }) => {
-      let intervalId: ReturnType<typeof setInterval> | null = null
-
-      const checkBackend = async () => {
-        // First check if API key is configured
-        if (!hasApiKey()) {
-          setBackendStatus({ state: 'api_key_required' })
-          return
-        }
-        
-        // If API key exists, proceed with health check
-        try {
-          const health = await healthCheck()
-          setBackendStatus({ state: 'connected', data: health })
-          logger.info('Backend connected', { version: health.version })
-          // Clear interval when connected
-          if (intervalId) {
-            clearInterval(intervalId)
-            intervalId = null
-          }
-        } catch (error) {
-          setBackendStatus({
-            state: 'error',
-            message: 'Backend offline - start with: uvicorn backend.main:app',
-          })
-          logger.warn('Backend connection failed', { error })
-          // Set up polling if not already polling
-          if (!intervalId) {
-            intervalId = setInterval(checkBackend, 5000)
-          }
-        }
-      }
-
-      // Listen for profile changes (from Connect button)
-      const handleProfileChange = () => {
-        logger.info('API profile changed, re-checking connection')
-        checkBackend()
-      }
-      
-      window.addEventListener(API_PROFILE_CHANGED_EVENT, handleProfileChange)
-      
-      // Initial check
-      checkBackend()
-      
-      // Cleanup
-      return () => {
-        window.removeEventListener(API_PROFILE_CHANGED_EVENT, handleProfileChange)
-        if (intervalId) clearInterval(intervalId)
-      }
-    })
-  }, [])
-
   // Initialize command system and cleanup on app startup
   useEffect(() => {
     logger.info('🚀 Frontend application starting up')
@@ -176,37 +108,10 @@ function App() {
     return () => clearTimeout(updateTimer)
   }, [])
 
-  // Render backend status indicator
-  const renderBackendStatus = () => {
-    switch (backendStatus.state) {
-      case 'loading':
-        return null // Don't show anything while loading
-      case 'api_key_required':
-        return (
-          <div className="fixed bottom-4 right-4 bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200 px-3 py-1 rounded-full text-sm">
-            API key required - add in Settings
-          </div>
-        )
-      case 'connected':
-        return (
-          <div className="fixed bottom-4 right-4 bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200 px-3 py-1 rounded-full text-sm">
-            Backend connected (v{backendStatus.data.version})
-          </div>
-        )
-      case 'error':
-        return (
-          <div className="fixed bottom-4 right-4 bg-red-100 dark:bg-red-900 text-red-800 dark:text-red-200 px-3 py-1 rounded-full text-sm">
-            {backendStatus.message}
-          </div>
-        )
-    }
-  }
-
   return (
     <ErrorBoundary>
       <ThemeProvider>
         <MainWindow />
-        {renderBackendStatus()}
       </ThemeProvider>
     </ErrorBoundary>
   )
