@@ -3,6 +3,7 @@ import { cn } from '@/lib/utils'
 import { FileSelector } from '@/components/FileSelector'
 import { BatchReview } from '@/components/BatchReview'
 import { AccuMarkTools } from '@/components/AccuMarkTools'
+import { ChromatographViewer } from '@/components/ChromatographViewer'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { useUIStore } from '@/store/ui-store'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -20,6 +21,7 @@ export function MainWindowContent({
   className,
 }: MainWindowContentProps) {
   const activeSection = useUIStore(state => state.activeSection)
+  const activeSubSection = useUIStore(state => state.activeSubSection)
   const setPreferencesOpen = useUIStore(state => state.setPreferencesOpen)
   const [apiKeyConfigured, setApiKeyConfigured] = useState(true) // Default true to avoid flash
 
@@ -61,15 +63,17 @@ export function MainWindowContent({
     </div>
   )
 
-  // Render section content based on active section
-  const renderSectionContent = () => {
-    // Check for API key first
-    if (!apiKeyConfigured) {
-      return renderApiKeyRequired()
-    }
-
-    switch (activeSection) {
-      case 'lab-operations':
+  // Render Lab Operations content based on sub-section
+  const renderLabOperationsContent = () => {
+    switch (activeSubSection) {
+      case 'chromatographs':
+        return <ChromatographViewer />
+      case 'sample-intake':
+      case 'results-entry':
+      case 'coa-generation':
+      case 'overview':
+      default:
+        // Default Lab Operations view (legacy)
         return (
           <ScrollArea className="h-full">
             <div className="flex flex-col gap-6 p-6">
@@ -78,6 +82,19 @@ export function MainWindowContent({
             </div>
           </ScrollArea>
         )
+    }
+  }
+
+  // Render section content based on active section
+  const renderSectionContent = () => {
+    // Check for API key first (only for sections that need it)
+    if (!apiKeyConfigured && activeSection === 'accumark-tools') {
+      return renderApiKeyRequired()
+    }
+
+    switch (activeSection) {
+      case 'lab-operations':
+        return renderLabOperationsContent()
       case 'accumark-tools':
         return <AccuMarkTools />
       default:
@@ -91,4 +108,3 @@ export function MainWindowContent({
     </div>
   )
 }
-

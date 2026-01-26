@@ -1,4 +1,4 @@
-import { ChevronRight, FlaskConical, Wrench, Database, Settings } from 'lucide-react'
+import { ChevronRight, FlaskConical, Wrench, Settings, Activity } from 'lucide-react'
 import {
   Collapsible,
   CollapsibleContent,
@@ -19,16 +19,18 @@ import {
   SidebarFooter,
   SidebarHeader,
 } from '@/components/ui/sidebar'
-import { useUIStore, type ActiveSection } from '@/store/ui-store'
+import { useUIStore, type ActiveSection, type ActiveSubSection } from '@/store/ui-store'
+
+interface SubItem {
+  id: ActiveSubSection
+  label: string
+}
 
 interface NavItem {
   id: ActiveSection
   label: string
   icon: React.ComponentType<{ className?: string }>
-  subItems?: {
-    id: string
-    label: string
-  }[]
+  subItems?: SubItem[]
 }
 
 const navItems: NavItem[] = [
@@ -37,6 +39,8 @@ const navItems: NavItem[] = [
     label: 'Lab Operations',
     icon: FlaskConical,
     subItems: [
+      { id: 'overview', label: 'Overview' },
+      { id: 'chromatographs', label: 'Chromatographs' },
       { id: 'sample-intake', label: 'Sample Intake' },
       { id: 'results-entry', label: 'Results Entry' },
       { id: 'coa-generation', label: 'COA Generation' },
@@ -47,6 +51,7 @@ const navItems: NavItem[] = [
     label: 'AccuMark Tools',
     icon: Wrench,
     subItems: [
+      { id: 'overview', label: 'Overview' },
       { id: 'order-explorer', label: 'Order Explorer' },
     ],
   },
@@ -54,13 +59,15 @@ const navItems: NavItem[] = [
 
 export function AppSidebar() {
   const activeSection = useUIStore(state => state.activeSection)
-  const setActiveSection = useUIStore(state => state.setActiveSection)
+  const activeSubSection = useUIStore(state => state.activeSubSection)
+  const navigateTo = useUIStore(state => state.navigateTo)
+  const setPreferencesOpen = useUIStore(state => state.setPreferencesOpen)
 
   return (
     <Sidebar collapsible="icon">
       <SidebarHeader className="border-b border-sidebar-border">
         <div className="flex items-center gap-2 px-2 py-1">
-          <Database className="h-5 w-5 text-primary" />
+          <Activity className="h-5 w-5 text-primary" />
           <span className="font-semibold text-sm group-data-[collapsible=icon]:hidden">
             Accu-Mk1
           </span>
@@ -90,7 +97,6 @@ export function AppSidebar() {
                           <SidebarMenuButton
                             tooltip={item.label}
                             isActive={isActive}
-                            onClick={() => setActiveSection(item.id)}
                           >
                             <Icon className="h-4 w-4" />
                             <span>{item.label}</span>
@@ -99,18 +105,24 @@ export function AppSidebar() {
                         </CollapsibleTrigger>
                         <CollapsibleContent>
                           <SidebarMenuSub>
-                            {item.subItems!.map(subItem => (
-                              <SidebarMenuSubItem key={subItem.id}>
-                                <SidebarMenuSubButton asChild>
-                                  <button
-                                    type="button"
-                                    onClick={() => setActiveSection(item.id)}
+                            {item.subItems!.map(subItem => {
+                              const isSubActive = isActive && activeSubSection === subItem.id
+                              return (
+                                <SidebarMenuSubItem key={subItem.id}>
+                                  <SidebarMenuSubButton
+                                    asChild
+                                    isActive={isSubActive}
                                   >
-                                    <span>{subItem.label}</span>
-                                  </button>
-                                </SidebarMenuSubButton>
-                              </SidebarMenuSubItem>
-                            ))}
+                                    <button
+                                      type="button"
+                                      onClick={() => navigateTo(item.id, subItem.id)}
+                                    >
+                                      <span>{subItem.label}</span>
+                                    </button>
+                                  </SidebarMenuSubButton>
+                                </SidebarMenuSubItem>
+                              )
+                            })}
                           </SidebarMenuSub>
                         </CollapsibleContent>
                       </SidebarMenuItem>
@@ -123,7 +135,7 @@ export function AppSidebar() {
                     <SidebarMenuButton
                       tooltip={item.label}
                       isActive={isActive}
-                      onClick={() => setActiveSection(item.id)}
+                      onClick={() => navigateTo(item.id, 'overview')}
                     >
                       <Icon className="h-4 w-4" />
                       <span>{item.label}</span>
@@ -139,7 +151,10 @@ export function AppSidebar() {
       <SidebarFooter className="border-t border-sidebar-border">
         <SidebarMenu>
           <SidebarMenuItem>
-            <SidebarMenuButton tooltip="Settings">
+            <SidebarMenuButton
+              tooltip="Settings"
+              onClick={() => setPreferencesOpen(true)}
+            >
               <Settings className="h-4 w-4" />
               <span>Settings</span>
             </SidebarMenuButton>

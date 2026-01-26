@@ -4,6 +4,11 @@ import { devtools } from 'zustand/middleware'
 // Navigation sections for main content area
 export type ActiveSection = 'lab-operations' | 'accumark-tools'
 
+// Sub-sections within each main section
+export type LabOperationsSubSection = 'overview' | 'chromatographs' | 'sample-intake' | 'results-entry' | 'coa-generation'
+export type AccuMarkToolsSubSection = 'overview' | 'order-explorer'
+export type ActiveSubSection = LabOperationsSubSection | AccuMarkToolsSubSection
+
 interface UIState {
   leftSidebarVisible: boolean
   rightSidebarVisible: boolean
@@ -11,6 +16,7 @@ interface UIState {
   preferencesOpen: boolean
   lastQuickPaneEntry: string | null
   activeSection: ActiveSection
+  activeSubSection: ActiveSubSection
 
   toggleLeftSidebar: () => void
   setLeftSidebarVisible: (visible: boolean) => void
@@ -22,6 +28,8 @@ interface UIState {
   setPreferencesOpen: (open: boolean) => void
   setLastQuickPaneEntry: (text: string) => void
   setActiveSection: (section: ActiveSection) => void
+  setActiveSubSection: (subSection: ActiveSubSection) => void
+  navigateTo: (section: ActiveSection, subSection: ActiveSubSection) => void
 }
 
 export const useUIStore = create<UIState>()(
@@ -33,6 +41,7 @@ export const useUIStore = create<UIState>()(
       preferencesOpen: false,
       lastQuickPaneEntry: null,
       activeSection: 'lab-operations',
+      activeSubSection: 'overview',
 
       toggleLeftSidebar: () =>
         set(
@@ -86,7 +95,13 @@ export const useUIStore = create<UIState>()(
         set({ lastQuickPaneEntry: text }, undefined, 'setLastQuickPaneEntry'),
 
       setActiveSection: section =>
-        set({ activeSection: section }, undefined, 'setActiveSection'),
+        set({ activeSection: section, activeSubSection: 'overview' }, undefined, 'setActiveSection'),
+
+      setActiveSubSection: subSection =>
+        set({ activeSubSection: subSection }, undefined, 'setActiveSubSection'),
+
+      navigateTo: (section, subSection) =>
+        set({ activeSection: section, activeSubSection: subSection }, undefined, 'navigateTo'),
     }),
     {
       name: 'ui-store',

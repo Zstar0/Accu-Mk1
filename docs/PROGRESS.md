@@ -1,5 +1,39 @@
 # Progress Log
 
+## 2026-01-25: v0.4.0 - Shadcn Sidebar & Profile Enhancements
+
+### New Features
+
+- **Shadcn Sidebar Migration**: Replaced custom left navigation with full shadcn/ui Sidebar component
+  - Collapsible sidebar with keyboard shortcut (`Ctrl+B`)
+  - Icon-only mode when collapsed with tooltips
+  - Collapsible menu groups with chevron indicators
+  - Support for nested subitems under main navigation items
+  - Mobile-responsive with sheet overlay
+- **WordPress URL Field**: Added WordPress URL to API profiles
+  - Each profile now stores its own WordPress URL
+  - Verification code links in Order Explorer use the profile's WordPress URL
+  - Default profiles: Local (`https://accumarklabs.local`), Production (`https://accumarklabs.com`)
+
+### Files Created
+
+| File                                   | Description                                             |
+| -------------------------------------- | ------------------------------------------------------- |
+| `src/components/layout/AppSidebar.tsx` | New sidebar using shadcn Sidebar with collapsible menus |
+| `src/components/ui/collapsible.tsx`    | Shadcn Collapsible component for expandable items       |
+
+### Files Modified
+
+| File                                               | Changes                                              |
+| -------------------------------------------------- | ---------------------------------------------------- |
+| `src/lib/api-profiles.ts`                          | Added `wordpressUrl` field to `ApiProfile` interface |
+| `src/components/preferences/panes/GeneralPane.tsx` | Added WordPress URL input field in settings          |
+| `src/components/OrderExplorer.tsx`                 | Uses profile's `wordpressUrl` for verify links       |
+| `src/components/layout/MainWindow.tsx`             | Rewrote to use `SidebarProvider` and `SidebarInset`  |
+| `src/components/layout/index.ts`                   | Added `AppSidebar` export                            |
+
+---
+
 ## 2026-01-21: v0.3.1 - Integration Service Compatibility
 
 ### Fixes
