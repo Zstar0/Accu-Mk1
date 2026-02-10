@@ -2,7 +2,7 @@ import { create } from 'zustand'
 import { devtools } from 'zustand/middleware'
 
 // Navigation sections for main content area
-export type ActiveSection = 'lab-operations' | 'hplc-analysis' | 'accumark-tools' | 'account'
+export type ActiveSection = 'dashboard' | 'lab-operations' | 'hplc-analysis' | 'accumark-tools' | 'account'
 
 // Sub-sections within each main section
 export type LabOperationsSubSection = 'chromatographs' | 'sample-intake'
@@ -42,7 +42,7 @@ export const useUIStore = create<UIState>()(
       commandPaletteOpen: false,
       preferencesOpen: false,
       lastQuickPaneEntry: null,
-      activeSection: 'lab-operations',
+      activeSection: 'dashboard',
       activeSubSection: 'overview',
 
       toggleLeftSidebar: () =>

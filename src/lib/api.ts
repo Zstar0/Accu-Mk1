@@ -1269,6 +1269,9 @@ export interface CalibrationCurve {
   r_squared: number
   standard_data: { concentrations: number[]; areas: number[] } | null
   source_filename: string | null
+  source_path: string | null
+  source_date: string | null
+  sharepoint_url: string | null
   is_active: boolean
   created_at: string
 }
@@ -1604,4 +1607,81 @@ export async function getHPLCAnalysis(
     console.error(`Get HPLC analysis ${analysisId} error:`, error)
     throw error
   }
+}
+
+// --- SharePoint Integration ---
+
+export interface SharePointItem {
+  id: string
+  name: string
+  type: 'folder' | 'file'
+  size: number
+  created: string | null
+  last_modified: string | null
+  child_count: number | null
+  mime_type: string | null
+}
+
+export interface SharePointBrowseResult {
+  path: string
+  root: string
+  items: SharePointItem[]
+}
+
+export interface SharePointStatus {
+  status: 'connected' | 'error'
+  site_id?: string
+  drive_id?: string
+  peptides_path?: string
+  peptide_folders?: string[]
+  error?: string
+}
+
+export interface SharePointDownloadedFile {
+  id: string
+  filename: string
+  content: string
+}
+
+export async function getSharePointStatus(): Promise<SharePointStatus> {
+  const response = await fetch(`${API_BASE_URL()}/sharepoint/status`, {
+    headers: getBearerHeaders(),
+  })
+  if (!response.ok) {
+    throw new Error(`SharePoint status check failed: ${response.status}`)
+  }
+  return response.json()
+}
+
+export async function browseSharePoint(
+  path: string = '',
+  root: 'lims' | 'peptides' = 'lims'
+): Promise<SharePointBrowseResult> {
+  const params = new URLSearchParams({ path, root })
+  const response = await fetch(`${API_BASE_URL()}/sharepoint/browse?${params}`, {
+    headers: getBearerHeaders(),
+  })
+  if (!response.ok) {
+    const detail = await response.text()
+    throw new Error(`SharePoint browse failed: ${response.status} — ${detail}`)
+  }
+  return response.json()
+}
+
+export async function downloadSharePointFiles(
+  fileIds: string[]
+): Promise<SharePointDownloadedFile[]> {
+  const response = await fetch(`${API_BASE_URL()}/sharepoint/download-batch`, {
+    method: 'POST',
+    headers: {
+      ...getBearerHeaders(),
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(fileIds),
+  })
+  if (!response.ok) {
+    throw new Error(`SharePoint batch download failed: ${response.status}`)
+  }
+  const data = await response.json()
+  return data.files
 }

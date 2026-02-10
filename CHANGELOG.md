@@ -1,5 +1,42 @@
 # Changelog
 
+## [0.8.0] - 2026-02-10
+
+### Added
+
+- **Dashboard** — New default landing page with system overview
+  - KPI cards: Total Peptides, Missing Curves, Orders Today, Outstanding Orders
+  - Peptides Without Curves panel — lists peptides needing calibration data with quick-nav to Peptide Config
+  - Orders bar chart (Recharts) — last 14 days with today highlighted in blue
+  - Outstanding Orders table — pending/processing/failed orders with Order ID, Order #, Email, Status, Samples, Created, and Age columns
+  - Test email filtering — orders from internal test accounts are excluded from all dashboard stats and charts
+  - Quick-nav links to Peptide Config and Order Explorer from each panel
+
+- **Peptide Config UI Overhaul** — Full-width table with slide-out sidebar
+  - Replaced 2-column grid layout with full-width peptide table
+  - Slide-out sidebar overlay from the right when clicking a peptide row (smooth animation, blurred backdrop, X close)
+  - Filter dropdown (All / Has Calibration / No Calibration)
+  - Curve Date column showing active calibration's file date
+  - Yellow "No Curve" badges for peptides without calibration
+  - Incremental commits during import with real-time SSE refresh of the peptide list
+
+- **SharePoint Integration Improvements**
+  - Direct Excel Online links: `webUrl` captured from Graph API and stored on CalibrationCurve records
+  - New `sharepoint_url` database column with migration
+  - Retry-with-backoff for file downloads (handles 503/429 errors, up to 3 retries with exponential backoff)
+  - Fallback URL construction for legacy records imported before `webUrl` capture
+
+### Changed
+
+- Default landing page changed from Lab Operations → Dashboard
+- Removed "Sample Intake" from sidebar navigation (deprecated by Dashboard)
+- Version footer updated to show current version (0.8.0)
+- Tauri app version synced to 0.8.0
+
+### New Files
+
+- `src/components/Dashboard.tsx` — Dashboard component with KPI cards, order chart, and outstanding orders table
+
 ## [0.7.0] - 2026-02-10
 
 ### Added

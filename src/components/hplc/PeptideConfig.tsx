@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import {
   Plus,
   Trash2,
@@ -6,8 +6,13 @@ import {
   FlaskConical,
   Loader2,
   AlertCircle,
-  Download,
+  Cloud,
   X,
+  Terminal,
+  CheckCircle2,
+  XCircle,
+  Copy,
+  Filter,
 } from 'lucide-react'
 import {
   Card,
@@ -32,10 +37,31 @@ import { CalibrationPanel } from './CalibrationPanel'
 import {
   getPeptides,
   deletePeptide,
-  seedPeptides,
   type PeptideRecord,
-  type SeedPeptidesResult,
 } from '@/lib/api'
+import { getApiBaseUrl } from '@/lib/config'
+import { getAuthToken } from '@/store/auth-store'
+
+interface LogLine {
+  message: string
+  level: 'info' | 'dim' | 'heading' | 'success' | 'warn' | 'error'
+  timestamp: number
+}
+
+interface SeedProgress {
+  current: number
+  total: number
+  phase: string
+}
+
+interface SeedDonePayload {
+  success: boolean
+  created?: number
+  calibrations?: number
+  skipped?: number
+  total?: number
+  error?: string
+}
 
 export function PeptideConfig() {
   const [peptides, setPeptides] = useState<PeptideRecord[]>([])
@@ -43,8 +69,17 @@ export function PeptideConfig() {
   const [error, setError] = useState<string | null>(null)
   const [selectedId, setSelectedId] = useState<number | null>(null)
   const [showAddForm, setShowAddForm] = useState(false)
+  const [filterMode, setFilterMode] = useState<'all' | 'has_cal' | 'no_cal'>('all')
+
+  // Streaming seed state
   const [seeding, setSeeding] = useState(false)
-  const [seedResult, setSeedResult] = useState<SeedPeptidesResult | null>(null)
+  const [seedLogs, setSeedLogs] = useState<LogLine[]>([])
+  const [seedProgress, setSeedProgress] = useState<SeedProgress | null>(null)
+  const [seedDone, setSeedDone] = useState<SeedDonePayload | null>(null)
+  const [showLogs, setShowLogs] = useState(false)
+  const logEndRef = useRef<HTMLDivElement>(null)
+  const logContainerRef = useRef<HTMLDivElement>(null)
+  const abortRef = useRef<AbortController | null>(null)
 
   const loadPeptides = useCallback(async () => {
     try {
@@ -63,6 +98,28 @@ export function PeptideConfig() {
     loadPeptides()
   }, [loadPeptides])
 
+  // Smart auto-scroll: only scroll if user was already at/near the bottom
+  useEffect(() => {
+    const container = logContainerRef.current
+    if (container) {
+      // Threshold: 100px from bottom
+      const isAtBottom =
+        container.scrollHeight - container.scrollTop - container.clientHeight < 100
+      
+      // Also force scroll if it's the very first few logs
+      const isStart = seedLogs.length < 5
+      
+      if (isAtBottom || isStart) {
+        container.scrollTop = container.scrollHeight
+      }
+    }
+  }, [seedLogs])
+
+  const copyLogs = useCallback(() => {
+    const text = seedLogs.map(l => l.message).join('\n')
+    navigator.clipboard.writeText(text).catch(console.error)
+  }, [seedLogs])
+
   const handleDelete = useCallback(
     async (id: number) => {
       try {
@@ -78,22 +135,119 @@ export function PeptideConfig() {
     [selectedId, loadPeptides]
   )
 
-  const handleSeed = useCallback(async () => {
+  const handleSeedStream = useCallback(async () => {
     setSeeding(true)
-    setSeedResult(null)
+    setSeedLogs([])
+    setSeedProgress(null)
+    setSeedDone(null)
+    setShowLogs(true)
     setError(null)
+
+    const controller = new AbortController()
+    abortRef.current = controller
+
     try {
-      const result = await seedPeptides()
-      setSeedResult(result)
-      await loadPeptides()
+      const token = getAuthToken()
+      const response = await fetch(`${getApiBaseUrl()}/hplc/seed-peptides/stream`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        signal: controller.signal,
+      })
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+      }
+
+      const reader = response.body?.getReader()
+      if (!reader) throw new Error('No response body')
+
+      const decoder = new TextDecoder()
+      let buffer = ''
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+
+        // Parse SSE events from buffer
+        const lines = buffer.split('\n')
+        buffer = lines.pop() || '' // Keep incomplete line in buffer
+
+        let eventType = ''
+        let eventData = ''
+
+        for (const line of lines) {
+          if (line.startsWith('event: ')) {
+            eventType = line.slice(7).trim()
+          } else if (line.startsWith('data: ')) {
+            eventData = line.slice(6)
+          } else if (line === '' && eventType && eventData) {
+            // Complete event
+            try {
+              const payload = JSON.parse(eventData)
+
+              if (eventType === 'log') {
+                setSeedLogs(prev => [...prev, {
+                  message: payload.message,
+                  level: payload.level || 'info',
+                  timestamp: Date.now(),
+                }])
+              } else if (eventType === 'progress') {
+                setSeedProgress({
+                  current: payload.current,
+                  total: payload.total,
+                  phase: payload.phase,
+                })
+              } else if (eventType === 'done') {
+                setSeedDone(payload)
+              } else if (eventType === 'refresh') {
+                loadPeptides()
+              }
+            } catch {
+              // Skip malformed events
+            }
+            eventType = ''
+            eventData = ''
+          }
+        }
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Seed failed')
+      if ((err as Error).name !== 'AbortError') {
+        setError(err instanceof Error ? err.message : 'Seed stream failed')
+        setSeedDone({ success: false, error: String(err) })
+      }
     } finally {
       setSeeding(false)
+      abortRef.current = null
+      await loadPeptides()
     }
   }, [loadPeptides])
 
+  const handleCancelSeed = useCallback(() => {
+    abortRef.current?.abort()
+    setSeeding(false)
+  }, [])
+
   const selectedPeptide = peptides.find(p => p.id === selectedId) ?? null
+
+  const filteredPeptides = peptides.filter(p => {
+    if (filterMode === 'has_cal') return !!p.active_calibration
+    if (filterMode === 'no_cal') return !p.active_calibration
+    return true
+  })
+
+  const noCalsCount = peptides.filter(p => !p.active_calibration).length
+
+  const logLevelClass = (level: string) => {
+    switch (level) {
+      case 'success': return 'text-green-400'
+      case 'error': return 'text-red-400'
+      case 'warn': return 'text-yellow-400'
+      case 'heading': return 'text-blue-400 font-semibold'
+      case 'dim': return 'text-zinc-500'
+      default: return 'text-zinc-300'
+    }
+  }
 
   return (
     <ScrollArea className="h-full">
@@ -110,16 +264,16 @@ export function PeptideConfig() {
           <div className="flex gap-2">
             <Button
               variant="outline"
-              onClick={handleSeed}
+              onClick={handleSeedStream}
               disabled={seeding}
               className="gap-2"
             >
               {seeding ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
               ) : (
-                <Download className="h-4 w-4" />
+                <Cloud className="h-4 w-4" />
               )}
-              {seeding ? 'Importing...' : 'Import from Lab'}
+              {seeding ? 'Scanning...' : 'Import from SharePoint'}
             </Button>
             <Button onClick={() => setShowAddForm(true)} className="gap-2">
               <Plus className="h-4 w-4" />
@@ -137,27 +291,104 @@ export function PeptideConfig() {
           </Card>
         )}
 
-        {/* Seed results */}
-        {seedResult && (
-          <Card className={seedResult.success ? 'border-green-500' : 'border-destructive'}>
+        {/* Live import log panel */}
+        {showLogs && (
+          <Card className="border-blue-500/50 bg-zinc-950">
             <CardHeader className="pb-2">
               <div className="flex items-center justify-between">
-                <CardTitle className="text-sm">
-                  {seedResult.success ? 'Import Complete' : 'Import Failed'}
-                </CardTitle>
-                <button
-                  type="button"
-                  onClick={() => setSeedResult(null)}
-                  className="rounded p-1 text-muted-foreground hover:text-foreground"
-                >
-                  <X className="h-4 w-4" />
-                </button>
+                <div className="flex items-center gap-2">
+                  <Terminal className="h-4 w-4 text-blue-400" />
+                  <CardTitle className="text-sm text-zinc-200">
+                    SharePoint Import
+                    {seeding && (
+                      <span className="ml-2 text-xs text-zinc-500 font-normal">
+                        streaming...
+                      </span>
+                    )}
+                  </CardTitle>
+                </div>
+                <div className="flex items-center gap-2">
+                  {seedDone && (
+                    seedDone.success ? (
+                      <Badge variant="default" className="bg-green-600 gap-1 text-xs">
+                        <CheckCircle2 className="h-3 w-3" />
+                        Complete
+                      </Badge>
+                    ) : (
+                      <Badge variant="destructive" className="gap-1 text-xs">
+                        <XCircle className="h-3 w-3" />
+                        Failed
+                      </Badge>
+                    )
+                  )}
+                  {seeding && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={handleCancelSeed}
+                      className="h-7 text-xs text-zinc-400 hover:text-white"
+                    >
+                      Cancel
+                    </Button>
+                  )}
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={copyLogs}
+                    className="h-7 text-xs text-zinc-400 hover:text-white"
+                    title="Copy log to clipboard"
+                  >
+                    <Copy className="h-3.5 w-3.5" />
+                  </Button>
+
+                  {!seeding && (
+                    <button
+                      type="button"
+                      onClick={() => setShowLogs(false)}
+                      className="rounded p-1 text-zinc-500 hover:text-zinc-300"
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  )}
+                </div>
               </div>
+              {/* Progress bar */}
+              {seedProgress && seedProgress.total > 0 && (
+                <div className="mt-2">
+                  <div className="flex items-center justify-between text-xs text-zinc-500 mb-1">
+                    <span>{seedProgress.phase}</span>
+                    <span>{seedProgress.current}/{seedProgress.total}</span>
+                  </div>
+                  <div className="h-1.5 w-full bg-zinc-800 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-blue-500 rounded-full transition-all duration-300"
+                      style={{ width: `${(seedProgress.current / seedProgress.total) * 100}%` }}
+                    />
+                  </div>
+                </div>
+              )}
             </CardHeader>
             <CardContent>
-              <pre className="max-h-64 overflow-auto whitespace-pre-wrap rounded bg-muted p-3 text-xs font-mono">
-                {seedResult.output || seedResult.errors || 'No output'}
-              </pre>
+              <div ref={logContainerRef} className="bg-zinc-900 rounded border border-zinc-800 max-h-72 overflow-auto overflow-x-hidden font-mono text-xs p-3 space-y-0.5">
+                {seedLogs.map((log, i) => (
+                  <div key={i} className={`${logLevelClass(log.level)} break-all`}>
+                    {log.message}
+                  </div>
+                ))}
+                {seeding && seedLogs.length === 0 && (
+                  <div className="text-zinc-600 animate-pulse">Connecting to SharePoint...</div>
+                )}
+                <div ref={logEndRef} />
+              </div>
+              {/* Summary stats */}
+              {seedDone?.success && (
+                <div className="flex gap-4 mt-3 text-xs text-zinc-400">
+                  <span>Created: <strong className="text-green-400">{seedDone.created}</strong></span>
+                  <span>Calibrations: <strong className="text-green-400">{seedDone.calibrations}</strong></span>
+                  <span>Skipped: <strong className="text-zinc-500">{seedDone.skipped}</strong></span>
+                  <span>Total: <strong className="text-zinc-300">{seedDone.total}</strong></span>
+                </div>
+              )}
             </CardContent>
           </Card>
         )}
@@ -173,15 +404,31 @@ export function PeptideConfig() {
           />
         )}
 
-        <div className="grid gap-6 lg:grid-cols-2">
-          {/* Peptide List */}
+        <div>
+          {/* Peptide List - Full Width */}
           <Card>
             <CardHeader>
-              <CardTitle className="text-base">Peptides</CardTitle>
-              <CardDescription>
-                {peptides.length} peptide{peptides.length !== 1 ? 's' : ''}{' '}
-                configured
-              </CardDescription>
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle className="text-base">Peptides</CardTitle>
+                  <CardDescription>
+                    {filteredPeptides.length} of {peptides.length} peptide{peptides.length !== 1 ? 's' : ''}
+                    {filterMode !== 'all' && ' (filtered)'}
+                  </CardDescription>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <Filter className="h-3.5 w-3.5 text-muted-foreground" />
+                  <select
+                    value={filterMode}
+                    onChange={e => setFilterMode(e.target.value as typeof filterMode)}
+                    className="text-xs bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-zinc-300 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                  >
+                    <option value="all">All</option>
+                    <option value="has_cal">Has Calibration</option>
+                    <option value="no_cal">No Calibration{noCalsCount > 0 ? ` (${noCalsCount})` : ''}</option>
+                  </select>
+                </div>
+              </div>
             </CardHeader>
             <CardContent>
               {loading ? (
@@ -206,91 +453,142 @@ export function PeptideConfig() {
                     <TableRow>
                       <TableHead>Peptide</TableHead>
                       <TableHead className="text-right">Ref RT</TableHead>
-                      <TableHead className="text-center">
-                        Calibration
-                      </TableHead>
+                      <TableHead className="text-center">Calibration</TableHead>
+                      <TableHead className="text-right">Curve Date</TableHead>
                       <TableHead className="w-16"></TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {peptides.map(p => (
-                      <TableRow
-                        key={p.id}
-                        className={
-                          selectedId === p.id
-                            ? 'bg-muted/50 cursor-pointer'
-                            : 'cursor-pointer hover:bg-muted/30'
-                        }
-                        onClick={() => setSelectedId(p.id)}
-                      >
-                        <TableCell>
-                          <div className="flex items-center gap-2">
-                            <span className="font-medium">
-                              {p.abbreviation}
-                            </span>
-                            <span className="text-xs text-muted-foreground">
-                              {p.name}
-                            </span>
-                          </div>
-                        </TableCell>
-                        <TableCell className="text-right font-mono text-sm">
-                          {p.reference_rt != null
-                            ? `${p.reference_rt.toFixed(3)} min`
-                            : '—'}
-                        </TableCell>
-                        <TableCell className="text-center">
-                          {p.active_calibration ? (
-                            <Badge
-                              variant="default"
-                              className="text-xs"
-                            >
-                              Active
-                            </Badge>
-                          ) : (
-                            <Badge variant="outline" className="text-xs">
-                              None
-                            </Badge>
-                          )}
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex items-center gap-1">
-                            <button
-                              type="button"
-                              onClick={e => {
-                                e.stopPropagation()
-                                handleDelete(p.id)
-                              }}
-                              className="rounded p-1 text-muted-foreground hover:text-destructive"
-                            >
-                              <Trash2 className="h-3.5 w-3.5" />
-                            </button>
-                            <ChevronRight className="h-4 w-4 text-muted-foreground" />
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                    ))}
+                    {filteredPeptides.map(p => {
+                      const calDate = p.active_calibration?.source_date || p.active_calibration?.created_at
+                      return (
+                        <TableRow
+                          key={p.id}
+                          className={
+                            selectedId === p.id
+                              ? 'bg-muted/50 cursor-pointer'
+                              : 'cursor-pointer hover:bg-muted/30'
+                          }
+                          onClick={() => setSelectedId(p.id)}
+                        >
+                          <TableCell>
+                            <div className="flex items-center gap-2">
+                              <span className="font-medium">
+                                {p.abbreviation}
+                              </span>
+                              <span className="text-xs text-muted-foreground">
+                                {p.name}
+                              </span>
+                            </div>
+                          </TableCell>
+                          <TableCell className="text-right font-mono text-sm">
+                            {p.reference_rt != null
+                              ? `${p.reference_rt.toFixed(3)} min`
+                              : '—'}
+                          </TableCell>
+                          <TableCell className="text-center">
+                            {p.active_calibration ? (
+                              <Badge
+                                variant="default"
+                                className="text-xs"
+                              >
+                                Active
+                              </Badge>
+                            ) : (
+                              <Badge variant="outline" className="text-xs border-yellow-600/50 text-yellow-500">
+                                No Curve
+                              </Badge>
+                            )}
+                          </TableCell>
+                          <TableCell className="text-right text-xs text-muted-foreground">
+                            {calDate
+                              ? new Date(calDate).toLocaleDateString('en-US', {
+                                  month: 'short',
+                                  day: 'numeric',
+                                  year: 'numeric',
+                                })
+                              : '—'}
+                          </TableCell>
+                          <TableCell>
+                            <div className="flex items-center gap-1">
+                              <button
+                                type="button"
+                                onClick={e => {
+                                  e.stopPropagation()
+                                  handleDelete(p.id)
+                                }}
+                                className="rounded p-1 text-muted-foreground hover:text-destructive"
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </button>
+                              <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      )
+                    })}
                   </TableBody>
                 </Table>
               )}
             </CardContent>
           </Card>
-
-          {/* Detail Panel */}
-          {selectedPeptide ? (
-            <CalibrationPanel
-              peptide={selectedPeptide}
-              onUpdated={loadPeptides}
-            />
-          ) : (
-            <Card>
-              <CardContent className="flex h-full items-center justify-center py-16 text-muted-foreground">
-                <p className="text-sm">
-                  Select a peptide to view calibration details
-                </p>
-              </CardContent>
-            </Card>
-          )}
         </div>
+
+        {/* Slide-out Sidebar Overlay */}
+        {selectedPeptide && (
+          <>
+            {/* Backdrop */}
+            <div
+              className="fixed inset-0 bg-black/40 z-40"
+              onClick={() => setSelectedId(null)}
+              style={{
+                backdropFilter: 'blur(2px)',
+                animation: 'fadeIn 0.2s ease-out',
+              }}
+            />
+            {/* Sidebar Panel */}
+            <div
+              className="fixed top-0 right-0 h-full w-full max-w-xl z-50 bg-zinc-950 border-l border-zinc-800 shadow-2xl overflow-y-auto"
+              style={{
+                animation: 'slideInRight 0.25s ease-out',
+              }}
+            >
+              {/* Sticky header */}
+              <div className="sticky top-0 z-10 flex items-center justify-between px-5 py-4 bg-zinc-950/95 border-b border-zinc-800 backdrop-blur">
+                <div>
+                  <h3 className="text-base font-semibold">{selectedPeptide.abbreviation}</h3>
+                  <p className="text-xs text-muted-foreground">{selectedPeptide.name}</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setSelectedId(null)}
+                  className="rounded-md p-1.5 text-muted-foreground hover:text-foreground hover:bg-zinc-800 transition-colors"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+              {/* Panel content */}
+              <div className="p-5">
+                <CalibrationPanel
+                  peptide={selectedPeptide}
+                  onUpdated={loadPeptides}
+                />
+              </div>
+            </div>
+          </>
+        )}
+
+        {/* Keyframe animations */}
+        <style>{`
+          @keyframes slideInRight {
+            from { transform: translateX(100%); }
+            to { transform: translateX(0); }
+          }
+          @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+          }
+        `}</style>
       </div>
     </ScrollArea>
   )

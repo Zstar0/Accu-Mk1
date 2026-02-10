@@ -1281,6 +1281,9 @@ class CalibrationCurveResponse(BaseModel):
     r_squared: float
     standard_data: Optional[dict]
     source_filename: Optional[str]
+    source_path: Optional[str] = None
+    source_date: Optional[datetime] = None
+    sharepoint_url: Optional[str] = None
     is_active: bool
     created_at: datetime
 
@@ -1312,6 +1315,18 @@ class CalibrationDataInput(BaseModel):
     source_filename: Optional[str] = None
 
 
+def _cal_to_response(cal: CalibrationCurve) -> CalibrationCurveResponse:
+    """Convert CalibrationCurve model to response with SharePoint URL."""
+    resp = CalibrationCurveResponse.model_validate(cal)
+    # Prefer stored webUrl from Graph API; fall back to computed URL for legacy records
+    if cal.sharepoint_url:
+        resp.sharepoint_url = cal.sharepoint_url
+    elif cal.source_path:
+        from sharepoint import get_sharepoint_file_url
+        resp.sharepoint_url = get_sharepoint_file_url(cal.source_path)
+    return resp
+
+
 def _get_active_calibration(db: Session, peptide_id: int) -> Optional[CalibrationCurveResponse]:
     """Get the active calibration curve for a peptide."""
     stmt = (
@@ -1323,7 +1338,7 @@ def _get_active_calibration(db: Session, peptide_id: int) -> Optional[Calibratio
     )
     cal = db.execute(stmt).scalar_one_or_none()
     if cal:
-        return CalibrationCurveResponse.model_validate(cal)
+        return _cal_to_response(cal)
     return None
 
 
@@ -1404,7 +1419,8 @@ async def get_calibrations(peptide_id: int, db: Session = Depends(get_db), _curr
         .where(CalibrationCurve.peptide_id == peptide_id)
         .order_by(desc(CalibrationCurve.created_at))
     )
-    return db.execute(stmt).scalars().all()
+    cals = db.execute(stmt).scalars().all()
+    return [_cal_to_response(c) for c in cals]
 
 
 @app.post("/peptides/{peptide_id}/calibrations", response_model=CalibrationCurveResponse, status_code=201)
@@ -1455,6 +1471,50 @@ async def create_calibration(
     db.commit()
     db.refresh(curve)
     return curve
+
+
+@app.post("/peptides/{peptide_id}/calibrations/{calibration_id}/activate", response_model=CalibrationCurveResponse)
+async def activate_calibration(
+    peptide_id: int,
+    calibration_id: int,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """
+    Set a specific calibration curve as the active one for a peptide.
+    Deactivates all other curves for that peptide.
+    """
+    peptide = db.execute(select(Peptide).where(Peptide.id == peptide_id)).scalar_one_or_none()
+    if not peptide:
+        raise HTTPException(404, f"Peptide {peptide_id} not found")
+
+    target = db.execute(
+        select(CalibrationCurve)
+        .where(CalibrationCurve.id == calibration_id)
+        .where(CalibrationCurve.peptide_id == peptide_id)
+    ).scalar_one_or_none()
+    if not target:
+        raise HTTPException(404, f"Calibration {calibration_id} not found for peptide {peptide_id}")
+
+    # Deactivate all curves for this peptide
+    all_cals = db.execute(
+        select(CalibrationCurve).where(CalibrationCurve.peptide_id == peptide_id)
+    ).scalars().all()
+    for cal in all_cals:
+        cal.is_active = False
+
+    # Activate the target
+    target.is_active = True
+
+    # Update peptide's reference RT from this curve's RT data
+    if target.standard_data and target.standard_data.get("rts"):
+        rts = target.standard_data["rts"]
+        if rts:
+            peptide.reference_rt = round(sum(rts) / len(rts), 4)
+
+    db.commit()
+    db.refresh(target)
+    return _cal_to_response(target)
 
 
 # --- Full HPLC Analysis Endpoint ---
@@ -1730,58 +1790,754 @@ async def get_hplc_analysis(analysis_id: int, db: Session = Depends(get_db), _cu
 
 
 class SeedPeptidesResponse(BaseModel):
-    """Response from running the peptide seed script."""
+    """Response from running the peptide seed/scan."""
     success: bool
     output: str
     errors: str
 
 
-@app.post("/hplc/seed-peptides", response_model=SeedPeptidesResponse)
-def seed_peptides_from_lab(_current_user=Depends(get_current_user)):
-    """
-    Run the peptide seed script to import peptides and calibration curves
-    from the lab's HPLC folder structure.
+# ── Excel calibration parsing helpers (shared with seed script) ──
 
-    Uses sync def (not async) so FastAPI runs it in a threadpool,
-    allowing the subprocess to make HTTP calls back to this server.
+def _is_number(v) -> bool:
+    """Check if a value is a numeric value."""
+    if v is None:
+        return False
+    if isinstance(v, (int, float)):
+        return True
+    if isinstance(v, str):
+        try:
+            float(v)
+            return True
+        except ValueError:
+            return False
+    return False
+
+
+def _to_float(v) -> float:
+    if isinstance(v, (int, float)):
+        return float(v)
+    return float(str(v))
+
+
+def _try_extract_calibration(ws, filename: str, max_rows: int = 25) -> dict | None:
     """
-    script_path = Path(__file__).parent.parent / "scripts" / "seed_peptides.py"
-    if not script_path.exists():
-        raise HTTPException(404, f"Seed script not found at {script_path}")
+    Try to extract calibration data from a worksheet by scanning for headers
+    or falling back to known fixed layouts.
+    """
+    # 1. Dynamic Header Scan
+    conc_col = None
+    area_col = None
+    rt_col = None
+    header_row = None
+
+    # Scan top 20 rows for headers using substring matching
+    # This catches variants like "Actual Concentration", "Target Conc. (µg/mL)", etc.
+    found_headers = False
+
+    # Patterns: if ANY keyword appears in the cell value, it's a match.
+    # Listed most-specific first to avoid false positives.
+    _conc_keywords = ("actual concentration", "concentration", "target conc",
+                      "std. conc", "std conc", "amount", "cal level", "level")
+    _area_keywords = ("peak area", "area")
+    _rt_keywords   = ("ret. time", "ret time", "ret_time", "rt")
+    # Words that disqualify a cell even if it contains a keyword
+    _area_exclude  = ("area %", "area%", "area purity", "purity")
+
+    for r_idx, row in enumerate(ws.iter_rows(min_row=1, max_row=20, values_only=False), start=1):
+        for cell in row:
+            if not cell.value or not isinstance(cell.value, str):
+                continue
+            val = cell.value.lower().strip()
+
+            # --- Concentration column ---
+            if conc_col is None:
+                for kw in _conc_keywords:
+                    if kw in val:
+                        conc_col = cell.column
+                        break
+
+            # --- Area column (exclude "Area %" / "Area Purity") ---
+            if area_col is None:
+                if not any(ex in val for ex in _area_exclude):
+                    for kw in _area_keywords:
+                        if kw in val:
+                            area_col = cell.column
+                            break
+
+            # --- RT column ---
+            if rt_col is None:
+                for kw in _rt_keywords:
+                    if kw in val:
+                        rt_col = cell.column
+                        break
+
+        if conc_col and area_col:
+            header_row = r_idx
+            found_headers = True
+            break
+            
+    # DEBUG: Log if headers not found for KPV
+    if not found_headers and "KPV" in filename and ws.title not in ("Sequence", "Instrument Method"):
+         # Grab first row as sample
+         row1 = [c.value for c in next(ws.iter_rows(min_row=1, max_row=1)) if c.value]
+         print(f"[DEBUG-KPV] {filename}/{ws.title}: No headers found. Row 1: {row1}")
+    
+    # If headers found, extract data below
+    if found_headers:
+        concentrations = []
+        areas = []
+        rts = []
+        
+        # Scan data rows below header (stop after 2 consecutive empty rows)
+        consecutive_empty = 0
+        for r in range(header_row + 1, header_row + 1 + max_rows):
+            conc_val = ws.cell(row=r, column=conc_col).value
+            area_val = ws.cell(row=r, column=area_col).value
+            
+            if not _is_number(conc_val) or not _is_number(area_val):
+                consecutive_empty += 1
+                if consecutive_empty >= 2:
+                    break
+                continue
+            
+            c = _to_float(conc_val)
+            a = _to_float(area_val)
+            
+            if c <= 0 or a <= 0:
+                consecutive_empty += 1
+                if consecutive_empty >= 2:
+                    break
+                continue
+            
+            consecutive_empty = 0  # Reset on valid row
+            concentrations.append(c)
+            areas.append(a)
+            
+            if rt_col:
+                rt_val = ws.cell(row=r, column=rt_col).value
+                if _is_number(rt_val) and _to_float(rt_val) > 0:
+                    rts.append(_to_float(rt_val))
+
+        if len(concentrations) >= 3:
+            # Check for linearity/validity (simple check)
+            max_c = max(concentrations)
+            min_c = min(concentrations)
+            if max_c > min_c: # Just ensure some spread
+                 return {
+                    "concentrations": concentrations,
+                    "areas": areas,
+                    "rts": rts,
+                    "format": "dynamic_header",
+                    "n_points": len(concentrations),
+                }
+
+    # 2. Fallback to fixed layouts (if dynamic failed)
+    layouts = [
+        ("new_S_U", 2, 19, 21),     # B, S, U
+        ("old_J_L", 2, 10, 12),     # B, J, L
+        ("older_B_G", 2, 7, None),  # B, G, no RT
+    ]
+
+    for fmt_name, c_col, a_col, r_col in layouts:
+        concentrations = []
+        areas = []
+        rts = []
+
+        for row in range(2, 2 + max_rows):
+            conc_val = ws.cell(row=row, column=c_col).value
+            area_val = ws.cell(row=row, column=a_col).value
+
+            if not _is_number(conc_val) or not _is_number(area_val):
+                continue
+
+            conc = _to_float(conc_val)
+            area = _to_float(area_val)
+
+            if conc <= 0 or area <= 0:
+                continue
+
+            concentrations.append(conc)
+            areas.append(area)
+
+            if r_col is not None:
+                rt_val = ws.cell(row=row, column=r_col).value
+                if _is_number(rt_val) and _to_float(rt_val) > 0:
+                    rts.append(_to_float(rt_val))
+
+        if len(concentrations) >= 3:
+            # Simple validity check: range of areas should be somewhat large spread
+            # if max_area <= min_area * 1.5, likely just noise or same sample repeated
+            max_conc_area = areas[concentrations.index(max(concentrations))]
+            min_conc_area = areas[concentrations.index(min(concentrations))]
+            if max_conc_area <= min_conc_area * 1.05: # lenient
+                continue
+
+            return {
+                "concentrations": concentrations,
+                "areas": areas,
+                "rts": rts,
+                "format": fmt_name,
+                "n_points": len(concentrations),
+            }
+
+    return None
+
+
+def _parse_calibration_excel_bytes(data: bytes, filename: str) -> dict | None:
+    """Parse calibration data from Excel file bytes (downloaded from SharePoint)."""
+    import openpyxl
+    from io import BytesIO
+
+    skip_sheets = {"Dissolution method", "Dissolution Method"}
+    skip_prefixes = ("SOP CalStds", "SOP_CalStds")
 
     try:
-        result = subprocess.run(
-            [sys.executable, str(script_path)],
-            capture_output=True,
-            text=True,
-            timeout=120,
-        )
+        wb = openpyxl.load_workbook(BytesIO(data), data_only=True, read_only=True)
+    except Exception:
+        return None
+
+    for sheet_name in wb.sheetnames:
+        if sheet_name in skip_sheets:
+            continue
+        if any(sheet_name.startswith(p) for p in skip_prefixes):
+            continue
+
+        ws = wb[sheet_name]
+        try:
+            result = _try_extract_calibration(ws, filename)
+        except Exception as e:
+            # Catch worksheet access errors
+            print(f"[ERROR] failed parsing sheet {sheet_name} in {filename}: {e}")
+            continue
+
+        if result:
+            result["sheet"] = sheet_name
+            result["filename"] = filename
+            wb.close()
+            return result
+
+    wb.close()
+    return None
+
+
+@app.post("/hplc/seed-peptides", response_model=SeedPeptidesResponse)
+async def seed_peptides_from_sharepoint(
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """
+    Scan the SharePoint Peptides folder and import peptides + ALL calibration curves.
+
+    - Discovers peptide folders dynamically (no hardcoded map).
+    - Scans entire peptide folder for .xlsx files.
+    - Parses each for concentration/area/RT data.
+    - Creates new peptides and imports ALL valid calibration curves.
+    - For existing peptides, imports any new calibrations not yet in DB.
+    - Most recent calibration (by filename sort) is set as active.
+    """
+    import sharepoint as sp
+    from calculations.calibration import calculate_calibration_curve
+
+    log_lines = []
+    error_lines = []
+
+    def log(msg: str):
+        print(msg)  # Ensure it shows in docker logs
+        log_lines.append(msg)
+
+    try:
+        # 1. List all folders in the Peptides root
+        peptide_folders = await sp.list_folder("")
+        peptide_dirs = [f for f in peptide_folders if f["type"] == "folder"]
+        log(f"Found {len(peptide_dirs)} folders in Peptides root\n")
+
+        # 2. Get existing peptides from DB
+        existing_peptides = {
+            p.abbreviation: p
+            for p in db.execute(select(Peptide).order_by(Peptide.abbreviation)).scalars().all()
+        }
+        log(f"Existing peptides in DB: {len(existing_peptides)} ({', '.join(existing_peptides.keys()) or 'none'})\n")
+
+        created = 0
+        calibrations_added = 0
+        skipped = 0
+        no_cal_data = []
+
+        for folder in sorted(peptide_dirs, key=lambda f: f["name"]):
+            folder_name = folder["name"]
+            abbreviation = folder_name.strip()
+
+            # Skip known non-peptide folders
+            skip_names = {"Templates", "Blends", "_Templates", "Archive"}
+            if folder_name in skip_names:
+                log(f"[SKIP] {folder_name}/ — non-peptide folder")
+                continue
+
+            log(f"\n--- {folder_name} ---")
+
+            # 3. Find ALL Excel files in the peptide folder
+            cal_files = []
+            try:
+                all_xlsx = await sp.list_files_recursive(
+                    folder_name,
+                    extensions=[".xlsx"],
+                    root="peptides",
+                )
+                for item in all_xlsx:
+                    fn = item["name"]
+                    if fn.startswith("~$"):
+                        continue
+                    # Skip Agilent data exports
+                    if ".dx_" in fn or "_PeakData" in fn:
+                        continue
+                    cal_files.append(item)
+            except Exception as e:
+                log(f"  [ERROR] Failed to list files: {e}")
+
+            # 4. Download and parse calibration files (skip already-imported paths)
+            cal_files.sort(key=lambda f: f["name"])
+            parsed_cals = []
+
+            # Pre-load all known source_paths for this peptide to skip downloads
+            peptide = existing_peptides.get(abbreviation)
+            known_paths = set()
+            if peptide:
+                known_paths = set(
+                    r[0] for r in db.execute(
+                        select(CalibrationCurve.source_path)
+                        .where(CalibrationCurve.peptide_id == peptide.id)
+                        .where(CalibrationCurve.source_path.isnot(None))
+                    ).all()
+                )
+
+            for cal_file in cal_files:
+                file_path = cal_file.get("path", cal_file["name"])
+                if file_path in known_paths:
+                    log(f"  [SKIP] Already imported: {cal_file['name']}")
+                    continue
+                try:
+                    file_bytes, filename = await sp.download_file(cal_file["id"])
+                    result = _parse_calibration_excel_bytes(file_bytes, filename)
+                    if result:
+                        result["_sharepoint_path"] = file_path
+                        result["_last_modified"] = cal_file.get("last_modified")
+                        result["_web_url"] = cal_file.get("web_url")
+                        parsed_cals.append(result)
+                except Exception as e:
+                    log(f"  [WARN] Failed to download/parse {cal_file['name']}: {e}")
+
+            # 5. Get or create peptide
+            peptide = existing_peptides.get(abbreviation)
+            is_new = peptide is None
+
+            if is_new:
+                # Extract reference RT from most recent calibration
+                ref_rt = None
+                if parsed_cals:
+                    last_cal = parsed_cals[-1]
+                    if last_cal.get("rts"):
+                        ref_rt = round(sum(last_cal["rts"]) / len(last_cal["rts"]), 4)
+
+                peptide = Peptide(
+                    name=folder_name,
+                    abbreviation=abbreviation,
+                    reference_rt=ref_rt,
+                    rt_tolerance=0.5,
+                    diluent_density=997.1,
+                )
+                db.add(peptide)
+                db.flush()
+                created += 1
+                existing_peptides[abbreviation] = peptide
+                log(f"  Created peptide (id={peptide.id})")
+            else:
+                log(f"  [EXISTS] {abbreviation} (id={peptide.id})")
+                # Update reference RT if not set and we have new calibration data
+                if peptide.reference_rt is None and parsed_cals:
+                    last_cal = parsed_cals[-1]
+                    if last_cal.get("rts"):
+                        ref_rt = round(sum(last_cal["rts"]) / len(last_cal["rts"]), 4)
+                        peptide.reference_rt = ref_rt
+                        log(f"  Updated reference RT: {ref_rt}")
+
+            # 6. Get existing calibration source filenames for this peptide
+            existing_cal_filenames = set()
+            existing_cals = db.execute(
+                select(CalibrationCurve)
+                .where(CalibrationCurve.peptide_id == peptide.id)
+            ).scalars().all()
+            for ec in existing_cals:
+                if ec.source_filename:
+                    existing_cal_filenames.add(ec.source_filename)
+
+            # 7. Import all parsed calibrations that aren't already in DB
+            new_cals_for_peptide = []
+            for cal_data in parsed_cals:
+                source = f"{cal_data['filename']}[{cal_data['sheet']}]"
+                if source in existing_cal_filenames:
+                    log(f"  [EXISTS] Calibration: {source}")
+                    continue
+
+                try:
+                    cal_result = calculate_calibration_curve(
+                        cal_data["concentrations"],
+                        cal_data["areas"],
+                    )
+                    cal_curve = CalibrationCurve(
+                        peptide_id=peptide.id,
+                        slope=cal_result["slope"],
+                        intercept=cal_result["intercept"],
+                        r_squared=cal_result["r_squared"],
+                        standard_data={
+                            "concentrations": cal_data["concentrations"],
+                            "areas": cal_data["areas"],
+                            "rts": cal_data.get("rts", []),
+                        },
+                        source_filename=source,
+                        source_path=cal_data.get("_sharepoint_path"),
+                        source_date=(
+                            datetime.fromisoformat(cal_data["_last_modified"].replace("Z", "+00:00"))
+                            if cal_data.get("_last_modified")
+                            else None
+                        ),
+                        sharepoint_url=cal_data.get("_web_url"),
+                        is_active=False,  # Will activate the most recent below
+                    )
+                    db.add(cal_curve)
+                    new_cals_for_peptide.append(cal_curve)
+                    calibrations_added += 1
+                    log(f"  + Calibration: {source} "
+                        f"(slope={cal_result['slope']:.4f}, R²={cal_result['r_squared']:.6f})")
+                except Exception as e:
+                    error_lines.append(f"Calibration error for {abbreviation} ({source}): {e}")
+                    log(f"  [ERROR] Calibration {source}: {e}")
+
+            # 8. Set the most recent calibration as active
+            if new_cals_for_peptide:
+                # Deactivate all existing
+                for ec in existing_cals:
+                    ec.is_active = False
+                # Activate the last (most recent by filename sort)
+                db.flush()
+                new_cals_for_peptide[-1].is_active = True
+                log(f"  ✓ Active: {new_cals_for_peptide[-1].source_filename}")
+
+            if not parsed_cals and is_new:
+                no_cal_data.append(folder_name)
+                log(f"  No calibration data found")
+
+            if not is_new and not new_cals_for_peptide and not parsed_cals:
+                skipped += 1
+
+        db.commit()
+
+        # Summary
+        log(f"\n{'=' * 60}")
+        log(f"SUMMARY")
+        log(f"  Peptides created:      {created}")
+        log(f"  Calibrations added:    {calibrations_added}")
+        log(f"  Skipped (no changes):  {skipped}")
+        log(f"  No calibration data:   {len(no_cal_data)}")
+        if no_cal_data:
+            log(f"    {', '.join(no_cal_data)}")
+        log(f"  Total in DB:           {len(existing_peptides)}")
+
         return SeedPeptidesResponse(
-            success=result.returncode == 0,
-            output=result.stdout,
-            errors=result.stderr,
-        )
-    except subprocess.TimeoutExpired:
-        return SeedPeptidesResponse(
-            success=False,
-            output="",
-            errors="Seed script timed out after 120 seconds",
+            success=True,
+            output="\n".join(log_lines),
+            errors="\n".join(error_lines),
         )
     except Exception as e:
+        db.rollback()
         return SeedPeptidesResponse(
             success=False,
-            output="",
-            errors=str(e),
+            output="\n".join(log_lines),
+            errors=f"SharePoint scan failed: {e}\n" + "\n".join(error_lines),
         )
 
 
-# --- HPLC Weight Extraction from Lab Excel Files ---
+@app.get("/hplc/seed-peptides/stream")
+async def seed_peptides_stream(
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """
+    SSE streaming version of seed-peptides.
+    Imports ALL calibration curves per peptide.
+    Sends each log line as a server-sent event for real-time progress display.
+    """
+    from starlette.responses import StreamingResponse
+    import sharepoint as sp
+    import asyncio
+    from calculations.calibration import calculate_calibration_curve
+
+    async def event_generator():
+        def send_event(event_type: str, data: dict) -> str:
+            """Format an SSE event and log to console."""
+            if event_type == "log":
+                import sys
+                msg = data.get("message", "")
+                level = data.get("level", "info")
+                # Print to stderr to ensure it shows up in docker logs immediately
+                print(f"[{level.upper()}] {msg}", file=sys.stderr)
+            
+            payload = json.dumps(data)
+            return f"event: {event_type}\ndata: {payload}\n\n"
+
+        created = 0
+        calibrations_added = 0
+        skipped = 0
+        no_cal_data = []
+        error_lines = []
+
+        try:
+            # 1. List all folders in the Peptides root
+            yield send_event("log", {"message": "Connecting to SharePoint...", "level": "info"})
+            await asyncio.sleep(0)  # flush
+
+            peptide_folders = await sp.list_folder("")
+            peptide_dirs = [f for f in peptide_folders if f["type"] == "folder"]
+            total = len(peptide_dirs)
+            yield send_event("log", {"message": f"Found {total} folders in Peptides root", "level": "info"})
+            yield send_event("progress", {"current": 0, "total": total, "phase": "scanning"})
+
+            # 2. Get existing peptides from DB
+            existing_peptides = {
+                p.abbreviation: p
+                for p in db.execute(select(Peptide).order_by(Peptide.abbreviation)).scalars().all()
+            }
+            yield send_event("log", {
+                "message": f"Existing peptides in DB: {len(existing_peptides)} ({', '.join(existing_peptides.keys()) or 'none'})",
+                "level": "info",
+            })
+
+            processed = 0
+            for folder in sorted(peptide_dirs, key=lambda f: f["name"]):
+                processed += 1
+                folder_name = folder["name"]
+                abbreviation = folder_name.strip()
+
+                # Skip known non-peptide folders
+                skip_names = {"Templates", "Blends", "_Templates", "Archive"}
+                if folder_name in skip_names:
+                    yield send_event("log", {"message": f"[SKIP] {folder_name}/ — non-peptide folder", "level": "dim"})
+                    yield send_event("progress", {"current": processed, "total": total, "phase": "scanning"})
+                    continue
+
+                yield send_event("log", {"message": f"--- {folder_name} ---", "level": "heading"})
+                yield send_event("progress", {"current": processed, "total": total, "phase": f"Processing {folder_name}"})
+
+                # 3. Find ALL Excel files in the peptide folder
+                cal_files = []
+                try:
+                    yield send_event("log", {"message": f"  Scanning for Excel files...", "level": "dim"})
+                    all_xlsx = await sp.list_files_recursive(
+                        folder_name,
+                        extensions=[".xlsx"],
+                        root="peptides",
+                    )
+                    for item in all_xlsx:
+                        fn = item["name"]
+                        if fn.startswith("~$"):
+                            continue
+                        if ".dx_" in fn or "_PeakData" in fn:
+                            continue
+                        cal_files.append(item)
+                    if cal_files:
+                        yield send_event("log", {"message": f"  Found {len(cal_files)} Excel file(s)", "level": "info"})
+                except Exception as e:
+                    yield send_event("log", {"message": f"  [ERROR] File listing failed: {e}", "level": "error"})
+                    import sys
+                    print(f"[ERROR] list_files_recursive failed for {folder_name}: {e}", file=sys.stderr)
+
+                # 4. Download and parse calibration files (skip already-imported paths)
+                cal_files.sort(key=lambda f: f["name"])
+                parsed_cals = []
+
+                # Pre-load known source_paths for this peptide to skip downloads
+                peptide = existing_peptides.get(abbreviation)
+                known_paths = set()
+                if peptide:
+                    known_paths = set(
+                        r[0] for r in db.execute(
+                            select(CalibrationCurve.source_path)
+                            .where(CalibrationCurve.peptide_id == peptide.id)
+                            .where(CalibrationCurve.source_path.isnot(None))
+                        ).all()
+                    )
+
+                skipped_count = 0
+                for cal_file in cal_files:
+                    file_path = cal_file.get("path", cal_file["name"])
+                    if file_path in known_paths:
+                        skipped_count += 1
+                        continue
+                    try:
+                        yield send_event("log", {"message": f"  Downloading {cal_file['name']}...", "level": "dim"})
+                        file_bytes, filename = await sp.download_file(cal_file["id"])
+                        result = _parse_calibration_excel_bytes(file_bytes, filename)
+                        if result:
+                            result["_sharepoint_path"] = file_path
+                            result["_last_modified"] = cal_file.get("last_modified")
+                            result["_web_url"] = cal_file.get("web_url")
+                            parsed_cals.append(result)
+                    except Exception as e:
+                        yield send_event("log", {"message": f"  [WARN] Failed: {cal_file['name']}: {e}", "level": "warn"})
+
+                if skipped_count:
+                    yield send_event("log", {"message": f"  [SKIP] {skipped_count} file(s) already imported", "level": "dim"})
+
+                # 5. Get or create peptide
+                peptide = existing_peptides.get(abbreviation)
+                is_new = peptide is None
+
+                if is_new:
+                    ref_rt = None
+                    if parsed_cals:
+                        last_cal = parsed_cals[-1]
+                        if last_cal.get("rts"):
+                            ref_rt = round(sum(last_cal["rts"]) / len(last_cal["rts"]), 4)
+
+                    peptide = Peptide(
+                        name=folder_name,
+                        abbreviation=abbreviation,
+                        reference_rt=ref_rt,
+                        rt_tolerance=0.5,
+                        diluent_density=997.1,
+                    )
+                    db.add(peptide)
+                    db.flush()
+                    created += 1
+                    existing_peptides[abbreviation] = peptide
+                    yield send_event("log", {"message": f"  ✓ Created peptide (id={peptide.id})", "level": "success"})
+                else:
+                    yield send_event("log", {
+                        "message": f"  [EXISTS] {abbreviation} (id={peptide.id})",
+                        "level": "dim",
+                    })
+                    # Update reference RT if not set and we have new calibration data
+                    if peptide.reference_rt is None and parsed_cals:
+                        last_cal = parsed_cals[-1]
+                        if last_cal.get("rts"):
+                            ref_rt = round(sum(last_cal["rts"]) / len(last_cal["rts"]), 4)
+                            peptide.reference_rt = ref_rt
+                            yield send_event("log", {
+                                "message": f"  Updated reference RT: {ref_rt}",
+                                "level": "success",
+                            })
+
+                # 6. Check existing calibration source filenames
+                existing_cal_filenames = set()
+                existing_cals = db.execute(
+                    select(CalibrationCurve)
+                    .where(CalibrationCurve.peptide_id == peptide.id)
+                ).scalars().all()
+                for ec in existing_cals:
+                    if ec.source_filename:
+                        existing_cal_filenames.add(ec.source_filename)
+
+                # 7. Import all new calibrations
+                new_cals_for_peptide = []
+                for cal_data in parsed_cals:
+                    source = f"{cal_data['filename']}[{cal_data['sheet']}]"
+                    if source in existing_cal_filenames:
+                        yield send_event("log", {"message": f"  [EXISTS] Cal: {source}", "level": "dim"})
+                        continue
+
+                    try:
+                        cal_result = calculate_calibration_curve(
+                            cal_data["concentrations"],
+                            cal_data["areas"],
+                        )
+                        cal_curve = CalibrationCurve(
+                            peptide_id=peptide.id,
+                            slope=cal_result["slope"],
+                            intercept=cal_result["intercept"],
+                            r_squared=cal_result["r_squared"],
+                            standard_data={
+                                "concentrations": cal_data["concentrations"],
+                                "areas": cal_data["areas"],
+                                "rts": cal_data.get("rts", []),
+                            },
+                            source_filename=source,
+                            source_path=cal_data.get("_sharepoint_path"),
+                            source_date=(
+                                datetime.fromisoformat(cal_data["_last_modified"].replace("Z", "+00:00"))
+                                if cal_data.get("_last_modified")
+                                else None
+                            ),
+                            sharepoint_url=cal_data.get("_web_url"),
+                            is_active=False,
+                        )
+                        db.add(cal_curve)
+                        new_cals_for_peptide.append(cal_curve)
+                        calibrations_added += 1
+                        yield send_event("log", {
+                            "message": f"  + Cal: {source} (slope={cal_result['slope']:.4f}, R²={cal_result['r_squared']:.6f})",
+                            "level": "success",
+                        })
+                    except Exception as e:
+                        error_lines.append(f"Calibration error for {abbreviation} ({source}): {e}")
+                        yield send_event("log", {"message": f"  ✗ Cal error {source}: {e}", "level": "error"})
+
+                # 8. Set the most recent as active
+                if new_cals_for_peptide:
+                    for ec in existing_cals:
+                        ec.is_active = False
+                    db.flush()
+                    new_cals_for_peptide[-1].is_active = True
+                    yield send_event("log", {
+                        "message": f"  ✓ Active: {new_cals_for_peptide[-1].source_filename}",
+                        "level": "success",
+                    })
+
+                if not parsed_cals and is_new:
+                    no_cal_data.append(folder_name)
+                    yield send_event("log", {
+                        "message": f"  No calibration data found",
+                        "level": "warn",
+                    })
+
+                if not is_new and not new_cals_for_peptide and not parsed_cals:
+                    skipped += 1
+
+                # Commit after each peptide so progress is saved incrementally
+                db.commit()
+                yield send_event("refresh", {})
+
+            # Summary
+            yield send_event("log", {"message": "=" * 50, "level": "info"})
+            yield send_event("log", {"message": "SUMMARY", "level": "heading"})
+            yield send_event("log", {"message": f"  Peptides created:    {created}", "level": "success" if created else "info"})
+            yield send_event("log", {"message": f"  Calibrations added:  {calibrations_added}", "level": "success" if calibrations_added else "info"})
+            yield send_event("log", {"message": f"  Skipped (no changes):{skipped}", "level": "dim"})
+            yield send_event("log", {"message": f"  No calibration data: {len(no_cal_data)}", "level": "warn" if no_cal_data else "info"})
+            yield send_event("log", {"message": f"  Total in DB:         {len(existing_peptides)}", "level": "info"})
+
+            yield send_event("done", {
+                "success": True,
+                "created": created,
+                "calibrations": calibrations_added,
+                "skipped": skipped,
+                "total": len(existing_peptides),
+            })
+
+        except Exception as e:
+            db.rollback()
+            yield send_event("log", {"message": f"✗ FAILED: {e}", "level": "error"})
+            yield send_event("done", {"success": False, "error": str(e)})
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
-PEPTIDES_ROOT = Path(
-    r"C:\Users\forre\Valence Analytical\Communication site - Documents"
-    r"\Analytical\Lab Reports\Purity and Quantity (HPLC)\Peptides"
-)
 
 
 class DilutionRow(BaseModel):
@@ -1805,29 +2561,9 @@ class WeightExtractionResponse(BaseModel):
     error: Optional[str] = None
 
 
-def _find_sample_folder(sample_id: str) -> tuple[Optional[Path], Optional[str]]:
-    """Search Peptides root for a folder matching the sample ID.
-
-    Returns (sample_folder_path, peptide_folder_name) or (None, None).
+def _extract_weights_from_excel_bytes(data: bytes) -> dict:
     """
-    if not PEPTIDES_ROOT.exists():
-        return None, None
-    # Search all peptide folders for a Raw Data subfolder matching sample_id
-    for peptide_dir in PEPTIDES_ROOT.iterdir():
-        if not peptide_dir.is_dir():
-            continue
-        raw_data = peptide_dir / "Raw Data"
-        if not raw_data.exists():
-            continue
-        for sub in raw_data.iterdir():
-            if sub.is_dir() and sample_id.upper() in sub.name.upper():
-                return sub, peptide_dir.name
-    return None, None
-
-
-def _extract_weights_from_excel(excel_path: Path) -> dict:
-    """
-    Parse a lab HPLC Excel file for stock + dilution weights.
+    Parse a lab HPLC Excel file (bytes) for stock + dilution weights.
 
     Looks for:
     - Stock row: row where col E contains "Stock" (case-insensitive)
@@ -1840,8 +2576,9 @@ def _extract_weights_from_excel(excel_path: Path) -> dict:
     - Dilution weights in cols C, E, H
     """
     import openpyxl
+    from io import BytesIO
 
-    wb = openpyxl.load_workbook(str(excel_path), data_only=True, read_only=True)
+    wb = openpyxl.load_workbook(BytesIO(data), data_only=True, read_only=True)
     result = {
         "stock_vial_empty": None,
         "stock_vial_with_diluent": None,
@@ -1947,65 +2684,99 @@ def _extract_weights_from_excel(excel_path: Path) -> dict:
 @app.get("/hplc/weights/{sample_id}", response_model=WeightExtractionResponse)
 async def get_sample_weights(sample_id: str, _current_user=Depends(get_current_user)):
     """
-    Search the Peptides lab folder for a sample ID and extract weight data
+    Search SharePoint Peptides folder for a sample ID and extract weight data
     from the associated Excel workbook.
+
+    Scans each peptide subfolder's Raw Data directory for a folder matching
+    the sample ID, then downloads and parses the lab Excel file.
     """
-    folder, peptide_folder = _find_sample_folder(sample_id)
-    if not folder:
+    import sharepoint as sp
+
+    # 1. Search SharePoint for the sample folder
+    try:
+        sample_info = await sp.search_sample_folder(sample_id)
+    except Exception as e:
+        return WeightExtractionResponse(
+            found=False,
+            error=f"SharePoint search error: {e}"
+        )
+
+    if not sample_info:
         return WeightExtractionResponse(
             found=False,
             error=f"No folder matching '{sample_id}' found in Peptides root"
         )
 
-    # Find the lab workbook Excel file (P-XXXX_Samp_* or P-XXXX_Std_*)
-    # Skip Agilent data exports (contain ".dx_" or "_PeakData" in name)
-    excel_path = None
-    search_dirs = [folder / "1290", folder]
-    for search_dir in search_dirs:
-        if not search_dir.exists():
-            continue
-        candidates = []
-        for f in search_dir.iterdir():
-            if f.suffix != ".xlsx" or f.name.startswith("~$"):
-                continue
-            # Skip Agilent instrument data exports
-            if ".dx_" in f.name or "_PeakData" in f.name:
-                continue
-            candidates.append(f)
-        # Prefer files matching P-XXXX_Samp_* or P-XXXX_Std_* patterns
-        for c in candidates:
-            if "_Samp_" in c.name or "_Std_" in c.name:
-                excel_path = c
-                break
-        if not excel_path and candidates:
-            excel_path = candidates[0]
-        if excel_path:
-            break
+    folder_name = sample_info["name"]
+    peptide_folder = sample_info["peptide_folder"]
+    sample_path = sample_info["path"]
 
-    if not excel_path:
+    # 2. List files in the sample folder (and 1290 subfolder)
+    try:
+        all_files = await sp.list_files_recursive(sample_path, extensions=[".xlsx"])
+    except Exception as e:
         return WeightExtractionResponse(
             found=True,
-            folder_name=folder.name,
+            folder_name=folder_name,
+            peptide_folder=peptide_folder,
+            error=f"Error listing files: {e}"
+        )
+
+    # Filter to lab workbook files (not Agilent data exports)
+    excel_candidates = []
+    for f in all_files:
+        name = f["name"]
+        if name.startswith("~$"):
+            continue
+        if ".dx_" in name or "_PeakData" in name:
+            continue
+        excel_candidates.append(f)
+
+    if not excel_candidates:
+        return WeightExtractionResponse(
+            found=True,
+            folder_name=folder_name,
             peptide_folder=peptide_folder,
             error="No Excel file found in sample folder"
         )
 
+    # Prefer _Samp_ or _Std_ files
+    chosen = None
+    for c in excel_candidates:
+        if "_Samp_" in c["name"] or "_Std_" in c["name"]:
+            chosen = c
+            break
+    if not chosen:
+        chosen = excel_candidates[0]
+
+    # 3. Download and parse the Excel file
     try:
-        weights = _extract_weights_from_excel(excel_path)
+        file_bytes, filename = await sp.download_file(chosen["id"])
     except Exception as e:
         return WeightExtractionResponse(
             found=True,
-            folder_name=folder.name,
+            folder_name=folder_name,
             peptide_folder=peptide_folder,
-            excel_filename=excel_path.name,
+            excel_filename=chosen["name"],
+            error=f"Error downloading Excel: {e}"
+        )
+
+    try:
+        weights = _extract_weights_from_excel_bytes(file_bytes)
+    except Exception as e:
+        return WeightExtractionResponse(
+            found=True,
+            folder_name=folder_name,
+            peptide_folder=peptide_folder,
+            excel_filename=filename,
             error=f"Error parsing Excel: {e}"
         )
 
     return WeightExtractionResponse(
         found=True,
-        folder_name=folder.name,
+        folder_name=folder_name,
         peptide_folder=peptide_folder,
-        excel_filename=excel_path.name,
+        excel_filename=filename,
         stock_vial_empty=weights["stock_vial_empty"],
         stock_vial_with_diluent=weights["stock_vial_with_diluent"],
         dilution_rows=[DilutionRow(**d) for d in weights["dilution_rows"]],
@@ -2155,3 +2926,110 @@ async def get_order_ingestions(order_id: str, _current_user=Depends(get_current_
             detail=f"Failed to connect to Integration Service database: {e}"
         )
 
+
+# ── SharePoint Integration ─────────────────────────────────────────
+
+import sharepoint as sp
+
+
+@app.get("/sharepoint/status")
+async def sharepoint_status(_current_user=Depends(get_current_user)):
+    """Test SharePoint connection and return site info."""
+    return await sp.verify_connection()
+
+
+@app.get("/sharepoint/browse")
+async def sharepoint_browse(
+    path: str = "",
+    root: str = "lims",
+    _current_user=Depends(get_current_user),
+):
+    """
+    Browse folders/files in SharePoint.
+
+    Args:
+        path: Relative path within the root (empty = root itself)
+        root: Which root — 'lims' (LIMS CSVs) or 'peptides'
+    """
+    try:
+        if root == "lims":
+            items = await sp.list_lims_folder(path)
+        else:
+            items = await sp.list_folder(path)
+        return {"path": path, "root": root, "items": items}
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"SharePoint error: {e}")
+
+
+@app.get("/sharepoint/sample/{sample_id}/files")
+async def sharepoint_sample_files(
+    sample_id: str,
+    _current_user=Depends(get_current_user),
+):
+    """
+    Find a sample folder and list all CSV/Excel files within it.
+    Searches the Peptides root for a sample ID match.
+    """
+    try:
+        result = await sp.get_sample_files(sample_id)
+        if not result:
+            raise HTTPException(status_code=404, detail=f"Sample '{sample_id}' not found")
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"SharePoint error: {e}")
+
+
+@app.get("/sharepoint/download/{item_id}")
+async def sharepoint_download(
+    item_id: str,
+    _current_user=Depends(get_current_user),
+):
+    """
+    Download a file from SharePoint by its item ID.
+    Returns the raw file content.
+    """
+    from fastapi.responses import Response
+
+    try:
+        content, filename = await sp.download_file(item_id)
+
+        # Determine content type
+        if filename.lower().endswith(".csv"):
+            media_type = "text/csv"
+        elif filename.lower().endswith(".xlsx"):
+            media_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        else:
+            media_type = "application/octet-stream"
+
+        return Response(
+            content=content,
+            media_type=media_type,
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"SharePoint download error: {e}")
+
+
+@app.post("/sharepoint/download-batch")
+async def sharepoint_download_batch(
+    file_ids: list[str],
+    _current_user=Depends(get_current_user),
+):
+    """
+    Download multiple files from SharePoint and return their contents.
+    Used to fetch all CSVs for HPLC analysis in one request.
+    """
+    try:
+        results = []
+        for item_id in file_ids:
+            content, filename = await sp.download_file(item_id)
+            results.append({
+                "id": item_id,
+                "filename": filename,
+                "content": content.decode("utf-8", errors="replace"),
+            })
+        return {"files": results}
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"SharePoint batch download error: {e}")

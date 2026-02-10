@@ -9,6 +9,8 @@ import {
   AlertCircle,
   ArrowRight,
   ArrowLeft,
+  Cloud,
+  Search,
 } from 'lucide-react'
 import {
   Card,
@@ -37,12 +39,15 @@ import {
   parseHPLCFiles,
   runHPLCAnalysis,
   fetchSampleWeights,
+  downloadSharePointFiles,
   type HPLCParseResult,
   type HPLCWeightsInput,
   type HPLCAnalysisResult,
   type PeptideRecord,
   type WeightExtractionResult,
+  type SharePointItem,
 } from '@/lib/api'
+import { SharePointBrowser } from './SharePointBrowser'
 
 type Step = 'parse' | 'configure' | 'results'
 
@@ -68,7 +73,7 @@ export function NewAnalysis() {
   const [parsing, setParsing] = useState(false)
   const [parseResult, setParseResult] = useState<HPLCParseResult | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [scanProgress, setScanProgress] = useState<{
+  const [_scanProgress, setScanProgress] = useState<{
     total: number
     processed: number
     filesFound: number
@@ -83,16 +88,22 @@ export function NewAnalysis() {
   const [weights, setWeights] = useState<HPLCWeightsInput>(EMPTY_WEIGHTS)
   const [weightData, setWeightData] = useState<WeightExtractionResult | null>(null)
   const [weightsFetched, setWeightsFetched] = useState(false)
+  const [weightsLoading, setWeightsLoading] = useState(false)
+
+  // SharePoint state
+  const [spLoading, setSpLoading] = useState(false)
+  const [spFolderName, setSpFolderName] = useState<string | null>(null)
 
   // Step 3: Results
   const [analyzing, setAnalyzing] = useState(false)
   const [analysisResult, setAnalysisResult] =
     useState<HPLCAnalysisResult | null>(null)
 
-  // Auto-fetch weights from lab folder when entering configure step
+  // Auto-fetch weights from SharePoint when entering configure step
   useEffect(() => {
     if (step !== 'configure' || !sampleId || weightsFetched) return
     setWeightsFetched(true)
+    setWeightsLoading(true)
 
     fetchSampleWeights(sampleId)
       .then(data => {
@@ -112,6 +123,7 @@ export function NewAnalysis() {
       .catch(() => {
         // Silent fail — user can still enter manually
       })
+      .finally(() => setWeightsLoading(false))
   }, [step, sampleId, weightsFetched])
 
   // --- Helpers ---
@@ -422,7 +434,93 @@ export function NewAnalysis() {
     setWeightData(null)
     setWeightsFetched(false)
     setAnalysisResult(null)
+    setSpFolderName(null)
   }, [])
+
+  // --- SharePoint folder selection handler ---
+  const handleSharePointFolder = useCallback(
+    async (_path: string, folderName: string, items: SharePointItem[]) => {
+      setSpLoading(true)
+      setError(null)
+      setSpFolderName(folderName)
+
+      try {
+        // Filter CSV file IDs from the selected folder
+        const csvItems = items.filter(
+          i => i.type === 'file' && i.name.toLowerCase().endsWith('.csv')
+        )
+
+        if (csvItems.length === 0) {
+          setError('No CSV files found in the selected folder.')
+          setSpLoading(false)
+          return
+        }
+
+        // Download all CSVs in one batch request
+        const downloaded = await downloadSharePointFiles(
+          csvItems.map(i => i.id)
+        )
+
+        // Separate PeakData from chromatogram files
+        const peakFiles: FileEntry[] = []
+        const chromTraces: ChromatogramTrace[] = []
+
+        for (const dl of downloaded) {
+          const lower = dl.filename.toLowerCase()
+          if (lower.includes('peakdata') && lower.endsWith('.csv')) {
+            // Create a File-like object for the existing parse pipeline
+            const blob = new Blob([dl.content], { type: 'text/csv' })
+            const file = new File([blob], dl.filename, { type: 'text/csv' })
+            peakFiles.push({ file, name: dl.filename })
+          } else if (lower.includes('dx_dad1a') && lower.endsWith('.csv')) {
+            // Parse chromatogram data
+            const raw = parseChromatogramCsv(dl.content)
+            if (raw.length > 0) {
+              const points = downsampleLTTB(raw, 1500)
+              const injMatch = dl.filename.match(/Inj[_\s]*(\d+)/i)
+              const name = injMatch
+                ? `Inj ${injMatch[1]}`
+                : dl.filename.replace(/\.csv$/i, '')
+              chromTraces.push({ name, points })
+            }
+          }
+        }
+
+        if (peakFiles.length === 0) {
+          setError('No PeakData CSV files found in the downloaded files.')
+          setSpLoading(false)
+          return
+        }
+
+        // Sort chromatogram traces
+        chromTraces.sort((a, b) => a.name.localeCompare(b.name))
+        setChromatograms(chromTraces)
+
+        // Auto-detect sample ID from folder name or filename
+        if (!sampleId) {
+          let detectedId = extractSampleId(folderName)
+          if (!detectedId) {
+            for (const f of peakFiles) {
+              detectedId = extractSampleId(f.name)
+              if (detectedId) break
+            }
+          }
+          if (detectedId) setSampleId(detectedId)
+        }
+
+        // Set files and clear any old parse result
+        setFiles(peakFiles)
+        setParseResult(null)
+      } catch (err) {
+        setError(
+          err instanceof Error ? err.message : 'Failed to load SharePoint files'
+        )
+      } finally {
+        setSpLoading(false)
+      }
+    },
+    [sampleId]
+  )
 
   const canProceedToConfigure =
     parseResult !== null && parseResult.injections.length > 0
@@ -440,7 +538,7 @@ export function NewAnalysis() {
           <div>
             <h1 className="text-2xl font-bold tracking-tight">New Analysis</h1>
             <p className="text-muted-foreground">
-              {step === 'parse' && 'Step 1: Drop PeakData CSV files and parse peaks.'}
+              {step === 'parse' && 'Step 1: Select a sample folder from SharePoint and parse peaks.'}
               {step === 'configure' && 'Step 2: Select peptide and enter sample weights.'}
               {step === 'results' && 'Step 3: Analysis complete.'}
             </p>
@@ -467,67 +565,51 @@ export function NewAnalysis() {
         {/* STEP 1: Parse */}
         {step === 'parse' && (
           <>
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-base">PeakData Files</CardTitle>
-                <CardDescription>
-                  Drop CSV files containing peak data. Supports multiple injections.
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="flex flex-col gap-4">
-                <div
-                  onDrop={handleDrop}
-                  onDragOver={e => e.preventDefault()}
-                  className="flex min-h-[120px] cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed border-muted-foreground/25 bg-muted/50 p-6 transition-colors hover:border-primary/50 hover:bg-muted"
-                  onClick={() =>
-                    document.getElementById('hplc-file-input')?.click()
-                  }
-                >
-                  <div className="flex items-center gap-3 text-muted-foreground/50">
-                    <Upload className="h-8 w-8" />
-                    <FolderOpen className="h-8 w-8" />
-                  </div>
-                  <p className="text-sm text-muted-foreground">
-                    Drop CSV files or a folder — PeakData files are found automatically
-                  </p>
-                  <p className="text-xs text-muted-foreground/60">
-                    or click to browse for individual files
-                  </p>
-                  <input
-                    id="hplc-file-input"
-                    type="file"
-                    accept=".csv"
-                    multiple
-                    className="hidden"
-                    onChange={handleFileInput}
-                  />
-                </div>
+            {/* SharePoint Browser */}
+            <SharePointBrowser
+              onFolderSelected={handleSharePointFolder}
+              disabled={spLoading || parsing}
+            />
 
-                {/* Folder scan progress */}
-                {scanProgress && (
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between text-xs text-muted-foreground">
-                      <span className="flex items-center gap-2">
-                        <Loader2 className="h-3 w-3 animate-spin" />
-                        Scanning folder...
-                      </span>
-                      <span className="font-mono">
-                        {scanProgress.filesFound} PeakData file{scanProgress.filesFound !== 1 ? 's' : ''} found
-                      </span>
-                    </div>
-                    <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
-                      <div
-                        className="h-full rounded-full bg-primary transition-all duration-200"
-                        style={{
-                          width: `${scanProgress.total > 0 ? Math.round((scanProgress.processed / scanProgress.total) * 100) : 0}%`,
-                        }}
-                      />
-                    </div>
+            {/* Loading state for SharePoint download */}
+            {spLoading && (
+              <Card>
+                <CardContent className="flex items-center gap-3 py-6">
+                  <Loader2 className="h-5 w-5 animate-spin text-blue-500" />
+                  <div>
+                    <p className="text-sm font-medium">Downloading files from SharePoint...</p>
+                    <p className="text-xs text-muted-foreground">
+                      Fetching CSVs from {spFolderName || 'selected folder'}
+                    </p>
                   </div>
-                )}
+                </CardContent>
+              </Card>
+            )}
 
-                {files.length > 0 && (
-                  <div className="flex flex-col gap-2">
+            {/* Downloaded files + parse controls */}
+            {files.length > 0 && !spLoading && (
+              <Card>
+                <CardHeader>
+                  <div className="flex items-center gap-2">
+                    {spFolderName ? (
+                      <Cloud className="h-4 w-4 text-blue-500" />
+                    ) : (
+                      <FolderOpen className="h-4 w-4 text-muted-foreground" />
+                    )}
+                    <CardTitle className="text-base">
+                      {spFolderName
+                        ? `Files from: ${spFolderName}`
+                        : 'PeakData Files'}
+                    </CardTitle>
+                  </div>
+                  <CardDescription>
+                    {files.length} PeakData CSV{files.length !== 1 ? 's' : ''}
+                    {chromatograms.length > 0 &&
+                      ` + ${chromatograms.length} chromatogram${chromatograms.length !== 1 ? 's' : ''}`}
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="flex flex-col gap-4">
+                  <div className="flex flex-col gap-2 max-h-[200px] overflow-auto">
                     {files.map(f => (
                       <div
                         key={f.name}
@@ -547,26 +629,55 @@ export function NewAnalysis() {
                       </div>
                     ))}
                   </div>
-                )}
 
-                <div className="flex gap-2">
-                  <Button
-                    onClick={handleParse}
-                    disabled={files.length === 0 || parsing}
-                  >
-                    {parsing && (
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    )}
-                    {parsing ? 'Parsing...' : 'Parse Files'}
-                  </Button>
-                  {files.length > 0 && (
+                  <div className="flex gap-2">
+                    <Button
+                      onClick={handleParse}
+                      disabled={files.length === 0 || parsing}
+                    >
+                      {parsing && (
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      )}
+                      {parsing ? 'Parsing...' : 'Parse Files'}
+                    </Button>
                     <Button variant="outline" onClick={handleReset}>
                       Clear
                     </Button>
-                  )}
-                </div>
-              </CardContent>
-            </Card>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+
+            {/* Fallback: drag-and-drop for local files */}
+            {files.length === 0 && !spLoading && (
+              <Card className="border-muted">
+                <CardContent className="pt-4">
+                  <div
+                    onDrop={handleDrop}
+                    onDragOver={e => e.preventDefault()}
+                    className="flex min-h-[80px] cursor-pointer flex-col items-center justify-center gap-1.5 rounded-lg border-2 border-dashed border-muted-foreground/15 bg-muted/30 p-4 transition-colors hover:border-primary/30 hover:bg-muted/50"
+                    onClick={() =>
+                      document.getElementById('hplc-file-input')?.click()
+                    }
+                  >
+                    <div className="flex items-center gap-2 text-muted-foreground/40">
+                      <Upload className="h-5 w-5" />
+                    </div>
+                    <p className="text-xs text-muted-foreground/60">
+                      Or drop local CSV files / folders here
+                    </p>
+                    <input
+                      id="hplc-file-input"
+                      type="file"
+                      accept=".csv"
+                      multiple
+                      className="hidden"
+                      onChange={handleFileInput}
+                    />
+                  </div>
+                </CardContent>
+              </Card>
+            )}
 
             {/* Parse warnings */}
             {parseResult && parseResult.errors.length > 0 && (
@@ -692,6 +803,65 @@ export function NewAnalysis() {
         {/* STEP 2: Configure */}
         {step === 'configure' && (
           <>
+            {/* SharePoint search status banner */}
+            {weightsLoading && (
+              <Card className="border-blue-500/50 bg-blue-500/5">
+                <CardContent className="flex items-center gap-3 py-3">
+                  <div className="flex items-center justify-center h-8 w-8 rounded-full bg-blue-500/10">
+                    <Search className="h-4 w-4 text-blue-500 animate-pulse" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-medium">Searching SharePoint...</p>
+                    <p className="text-xs text-muted-foreground">
+                      Looking for sample <span className="font-mono">{sampleId}</span> in Peptides folder
+                    </p>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+
+            {!weightsLoading && weightData && (
+              <Card className={weightData.found && weightData.dilution_rows.length > 0
+                ? 'border-green-500/50 bg-green-500/5'
+                : 'border-yellow-500/50 bg-yellow-500/5'
+              }>
+                <CardContent className="flex items-center gap-3 py-3">
+                  <div className={`flex items-center justify-center h-8 w-8 rounded-full ${
+                    weightData.found && weightData.dilution_rows.length > 0
+                      ? 'bg-green-500/10'
+                      : 'bg-yellow-500/10'
+                  }`}>
+                    {weightData.found && weightData.dilution_rows.length > 0 ? (
+                      <CheckCircle2 className="h-4 w-4 text-green-500" />
+                    ) : (
+                      <AlertCircle className="h-4 w-4 text-yellow-500" />
+                    )}
+                  </div>
+                  <div className="flex-1">
+                    {weightData.found && weightData.dilution_rows.length > 0 ? (
+                      <>
+                        <p className="text-sm font-medium text-green-700 dark:text-green-400">
+                          Found sample in <span className="font-mono">{weightData.peptide_folder}</span>
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          Auto-loaded {weightData.dilution_rows.length} dilution row(s) from {weightData.excel_filename}
+                        </p>
+                      </>
+                    ) : (
+                      <>
+                        <p className="text-sm font-medium text-yellow-700 dark:text-yellow-400">
+                          {weightData.found ? 'No weight data found' : 'Sample not found on SharePoint'}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          {weightData.error || 'Enter weights manually below'}
+                        </p>
+                      </>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+
             <Card>
               <CardHeader>
                 <CardTitle className="text-base">Sample & Peptide</CardTitle>

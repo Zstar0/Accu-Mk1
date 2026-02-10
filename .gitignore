@@ -43,4 +43,4 @@ ReportFiles/
 # Tool artifacts
 .agent/
 .playwright-mcp/
-nul
+nulbackend_logs*.txt

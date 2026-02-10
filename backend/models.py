@@ -155,6 +155,9 @@ class CalibrationCurve(Base):
     r_squared: Mapped[float] = mapped_column(Float, nullable=False)
     standard_data: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)  # {concentrations: [], areas: []}
     source_filename: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    source_path: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)  # Full SharePoint relative path
+    source_date: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)  # File last-modified date from SharePoint
+    sharepoint_url: Mapped[Optional[str]] = mapped_column(String(2000), nullable=True)  # Direct web URL from Graph API
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 

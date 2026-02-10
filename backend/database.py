@@ -50,3 +50,23 @@ def init_db():
     # Import models to register them with Base
     import models
     Base.metadata.create_all(bind=engine)
+
+    # Migrations: add new columns to existing tables
+    from sqlalchemy import text
+    with engine.connect() as conn:
+        # Add source_path column to calibration_curves (added Feb 2026)
+        try:
+            conn.execute(text("ALTER TABLE calibration_curves ADD COLUMN source_path VARCHAR(1000)"))
+            conn.commit()
+        except Exception:
+            pass  # Column already exists
+        try:
+            conn.execute(text("ALTER TABLE calibration_curves ADD COLUMN source_date DATETIME"))
+            conn.commit()
+        except Exception:
+            pass  # Column already exists
+        try:
+            conn.execute(text("ALTER TABLE calibration_curves ADD COLUMN sharepoint_url VARCHAR(2000)"))
+            conn.commit()
+        except Exception:
+            pass  # Column already exists

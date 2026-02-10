@@ -7,6 +7,7 @@ import {
   Activity,
   Users,
   LogOut,
+  LayoutDashboard,
 } from 'lucide-react'
 import {
   Collapsible,
@@ -51,12 +52,16 @@ interface NavItem {
 
 const navItems: NavItem[] = [
   {
+    id: 'dashboard',
+    label: 'Dashboard',
+    icon: LayoutDashboard,
+  },
+  {
     id: 'lab-operations',
     label: 'Lab Operations',
     icon: FlaskConical,
     subItems: [
       { id: 'chromatographs', label: 'Chromatographs' },
-      { id: 'sample-intake', label: 'Sample Intake' },
     ],
   },
   {

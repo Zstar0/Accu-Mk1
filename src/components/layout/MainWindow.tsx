@@ -160,7 +160,7 @@ export function MainWindow() {
 
         {/* Version footer */}
         <div className="absolute bottom-1 left-1/2 -translate-x-1/2 text-xs text-muted-foreground/50 flex items-center gap-2 select-none pointer-events-none">
-          <span>Accu-Mk1 Ver. 0.4.1</span>
+          <span>Accu-Mk1 Ver. 0.8.0</span>
           <span>•</span>
           {renderStatusText()}
         </div>
