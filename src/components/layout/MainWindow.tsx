@@ -13,23 +13,24 @@ import { Toaster } from 'sonner'
 import { useTheme } from '@/hooks/use-theme'
 import { useMainWindowEventListeners } from '@/hooks/useMainWindowEventListeners'
 import {
-  getActiveProfile,
-  hasApiKey,
+  getActiveEnvironmentName,
+  hasOverride,
   API_PROFILE_CHANGED_EVENT,
 } from '@/lib/api-profiles'
 import { healthCheck, type HealthResponse } from '@/lib/api'
 import { Separator } from '@/components/ui/separator'
+import { Badge } from '@/components/ui/badge'
 
 // Backend connection status type
 type BackendStatus =
   | { state: 'loading' }
   | { state: 'connected'; data: HealthResponse }
-  | { state: 'api_key_required' }
   | { state: 'error'; message: string }
 
 export function MainWindow() {
   const { theme } = useTheme()
-  const [profileName, setProfileName] = useState<string | null>(null)
+  const [envName, setEnvName] = useState<string | null>(null)
+  const [isOverridden, setIsOverridden] = useState(false)
   const [backendStatus, setBackendStatus] = useState<BackendStatus>({
     state: 'loading',
   })
@@ -37,22 +38,16 @@ export function MainWindow() {
   // Set up global event listeners (keyboard shortcuts, etc.)
   useMainWindowEventListeners()
 
-  // Track active profile name and backend status
+  // Track active environment and backend status
   useEffect(() => {
     let intervalId: ReturnType<typeof setInterval> | null = null
 
-    const updateProfileName = () => {
-      const profile = getActiveProfile()
-      setProfileName(profile?.name ?? null)
+    const updateEnvInfo = () => {
+      setEnvName(getActiveEnvironmentName())
+      setIsOverridden(hasOverride())
     }
 
     const checkBackend = async () => {
-      // First check if API key is configured
-      if (!hasApiKey()) {
-        setBackendStatus({ state: 'api_key_required' })
-        return
-      }
-
       try {
         const health = await healthCheck()
         setBackendStatus({ state: 'connected', data: health })
@@ -73,14 +68,14 @@ export function MainWindow() {
       }
     }
 
-    // Listen for profile changes
+    // Listen for environment changes (admin override)
     const handleProfileChange = () => {
-      updateProfileName()
+      updateEnvInfo()
       checkBackend()
     }
 
     // Initial checks
-    updateProfileName()
+    updateEnvInfo()
     checkBackend()
 
     window.addEventListener(API_PROFILE_CHANGED_EVENT, handleProfileChange)
@@ -95,12 +90,18 @@ export function MainWindow() {
     switch (backendStatus.state) {
       case 'loading':
         return <span className="text-muted-foreground">Connecting...</span>
-      case 'api_key_required':
-        return <span className="text-amber-500">API Key Required</span>
       case 'connected':
         return (
           <span className="text-green-600 dark:text-green-500">
-            Connected - {profileName || 'Unknown'}
+            Connected - {envName || 'Unknown'}
+            {isOverridden && (
+              <Badge
+                variant="outline"
+                className="ml-1.5 text-[10px] px-1.5 py-0 border-amber-500 text-amber-600 dark:text-amber-400"
+              >
+                override
+              </Badge>
+            )}
           </span>
         )
       case 'error':

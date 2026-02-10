@@ -1,0 +1,48 @@
+# ============================================================
+# Accu-Mk1 — Docker Compose
+# ============================================================
+# Usage:
+#   Local test:  docker compose up -d --build
+#   Production:  docker compose -f docker-compose.yml up -d --build
+# ============================================================
+
+services:
+  # --- Frontend (Vite + Nginx) ---
+  frontend:
+    container_name: accu-mk1-frontend
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "3100:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+    networks:
+      - accu-mk1
+
+  # --- Backend (FastAPI + Uvicorn) ---
+  backend:
+    container_name: accu-mk1-backend
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    env_file:
+      - ./backend/.env
+    volumes:
+      # Persist SQLite database across container restarts
+      - accu-mk1-data:/app/data
+    expose:
+      - "8012"
+    restart: unless-stopped
+    networks:
+      - accu-mk1
+
+networks:
+  accu-mk1:
+    name: accu-mk1
+    driver: bridge
+
+volumes:
+  accu-mk1-data:
+    name: accu-mk1-data

@@ -33,7 +33,11 @@ __pycache__/
 
 # Local data
 data/
+# Root .env (secrets) — .env.development, .env.production, .env.docker* are committed (no secrets)
 .env
+# Backend .env files contain secrets (DB passwords, JWT secret, API keys)
+backend/.env
+backend/.env.prod
 ReportFiles/
 
 # Tool artifacts

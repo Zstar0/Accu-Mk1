@@ -3,7 +3,6 @@
  */
 
 import { getApiBaseUrl } from './config'
-import { getApiKey } from './api-profiles'
 import { getAuthToken } from '@/store/auth-store'
 
 // Helper to get current API base URL (called dynamically)
@@ -775,20 +774,12 @@ export async function getDetectedFiles(): Promise<DetectedFiles> {
 // --- Explorer API (Integration Service Database) ---
 
 /**
- * Get headers with both Bearer token and API key for explorer endpoints.
- * Explorer endpoints still use API key on the backend for now.
+ * Get headers for explorer endpoints.
+ * API key for the Integration Service is now in the backend .env,
+ * so we only need the Bearer token here.
  */
 function getAuthHeaders(): HeadersInit {
-  const token = getAuthToken()
-  const apiKey = getApiKey()
-  const headers: HeadersInit = {}
-  if (token) {
-    headers['Authorization'] = `Bearer ${token}`
-  }
-  if (apiKey) {
-    headers['X-API-Key'] = apiKey
-  }
-  return headers
+  return getBearerHeaders()
 }
 
 /**

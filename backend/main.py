@@ -301,6 +301,9 @@ app.add_middleware(
         "http://127.0.0.1:1420",
         "http://localhost:5173",      # Vite default
         "http://127.0.0.1:5173",
+        "http://localhost:3100",      # Docker local test
+        "http://127.0.0.1:3100",
+        "https://accumk1.valenceanalytical.com",  # Production
         "tauri://localhost",          # Tauri production (v1)
         "https://tauri.localhost",    # Tauri production (v2)
         "http://tauri.localhost",     # Tauri production fallback
@@ -2067,7 +2070,7 @@ class EnvironmentListResponse(BaseModel):
 
 
 @app.get("/explorer/environments", response_model=EnvironmentListResponse)
-async def get_explorer_environments(api_key: str = Depends(verify_api_key)):
+async def get_explorer_environments(_current_user=Depends(get_current_user)):
     """Get list of available database environments."""
     from integration_db import get_available_environments, get_environment
     return EnvironmentListResponse(
@@ -2077,7 +2080,7 @@ async def get_explorer_environments(api_key: str = Depends(verify_api_key)):
 
 
 @app.post("/explorer/environments", response_model=ExplorerConnectionStatus)
-async def set_explorer_environment(request: EnvironmentSwitchRequest, api_key: str = Depends(verify_api_key)):
+async def set_explorer_environment(request: EnvironmentSwitchRequest, _current_user=Depends(get_current_user)):
     """
     Switch to a different database environment.
     
@@ -2095,7 +2098,7 @@ async def set_explorer_environment(request: EnvironmentSwitchRequest, api_key: s
 
 
 @app.get("/explorer/status", response_model=ExplorerConnectionStatus)
-async def get_explorer_status(api_key: str = Depends(verify_api_key)):
+async def get_explorer_status(_current_user=Depends(get_current_user)):
     """Test connection to Integration Service database."""
     try:
         result = test_connection()
@@ -2109,7 +2112,7 @@ async def get_explorer_orders(
     search: Optional[str] = None,
     limit: int = 50,
     offset: int = 0,
-    api_key: str = Depends(verify_api_key),
+    _current_user=Depends(get_current_user),
 ):
     """
     Get orders from Integration Service database.
@@ -2133,7 +2136,7 @@ async def get_explorer_orders(
 
 
 @app.get("/explorer/orders/{order_id}/ingestions", response_model=list[ExplorerIngestionResponse])
-async def get_order_ingestions(order_id: str, api_key: str = Depends(verify_api_key)):
+async def get_order_ingestions(order_id: str, _current_user=Depends(get_current_user)):
     """
     Get all ingestions for an order from Integration Service database.
     

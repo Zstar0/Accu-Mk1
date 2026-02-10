@@ -1,17 +1,8 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
-import {
-  CheckCircle2,
-  XCircle,
-  Eye,
-  EyeOff,
-  Plus,
-  Trash2,
-  Plug,
-} from 'lucide-react'
-import { Input } from '@/components/ui/input'
+import { CheckCircle2, AlertTriangle, Shield } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
   Select,
@@ -20,64 +11,49 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { Badge } from '@/components/ui/badge'
 import { ShortcutPicker } from '../ShortcutPicker'
 import { SettingsField, SettingsSection } from '../shared/SettingsComponents'
 import { usePreferences, useSavePreferences } from '@/services/preferences'
 import { commands } from '@/lib/tauri-bindings'
 import { logger } from '@/lib/logger'
-import { useUIStore } from '@/store/ui-store'
+import { useAuthStore } from '@/store/auth-store'
 import {
-  getProfiles,
-  getActiveProfileId,
-  setActiveProfileId,
-  updateProfile,
-  addProfile,
-  deleteProfile,
-  API_PROFILE_CHANGED_EVENT,
-  type ApiProfile,
+  getServerUrl,
+  getDefaultUrl,
+  hasOverride,
+  setOverride,
+  clearOverride,
+  getActiveEnvironmentName,
+  KNOWN_ENVIRONMENTS,
 } from '@/lib/api-profiles'
 
 export function GeneralPane() {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
-  const setPreferencesOpen = useUIStore(state => state.setPreferencesOpen)
+  const user = useAuthStore(state => state.user)
+  const isAdmin = user?.role === 'admin'
 
-  // Profile state - initialized from localStorage
-  const [profiles, setProfiles] = useState<ApiProfile[]>(() => getProfiles())
-  const [activeId, setActiveId] = useState<string | null>(() =>
-    getActiveProfileId()
+  // Track current API state
+  const [currentUrl, setCurrentUrl] = useState(() => getServerUrl())
+  const [currentEnvName, setCurrentEnvName] = useState(() =>
+    getActiveEnvironmentName()
   )
-  const [serverUrl, setServerUrl] = useState(() => {
-    const active = getProfiles().find(p => p.id === getActiveProfileId())
-    return active?.serverUrl ?? ''
-  })
-  const [wordpressUrl, setWordpressUrl] = useState(() => {
-    const active = getProfiles().find(p => p.id === getActiveProfileId())
-    return active?.wordpressUrl ?? ''
-  })
-  const [apiKeyInput, setApiKeyInput] = useState(() => {
-    const active = getProfiles().find(p => p.id === getActiveProfileId())
-    return active?.apiKey ?? ''
-  })
-  const [showApiKey, setShowApiKey] = useState(false)
-  const [hasChanges, setHasChanges] = useState(false)
-  const [isConnecting, setIsConnecting] = useState(false)
+  const [isOverridden, setIsOverridden] = useState(() => hasOverride())
 
-  const refreshProfiles = () => {
-    const loadedProfiles = getProfiles()
-    const loadedActiveId = getActiveProfileId()
-    setProfiles(loadedProfiles)
-    setActiveId(loadedActiveId)
+  // Selected value for the dropdown (the environment id or 'custom')
+  const [selectedEnvId, setSelectedEnvId] = useState<string>(() => {
+    const url = getServerUrl()
+    const known = KNOWN_ENVIRONMENTS.find(e => e.url === url)
+    return known?.id ?? 'default'
+  })
 
-    // Load active profile data
-    const activeProfile = loadedProfiles.find(p => p.id === loadedActiveId)
-    if (activeProfile) {
-      setServerUrl(activeProfile.serverUrl)
-      setWordpressUrl(activeProfile.wordpressUrl || '')
-      setApiKeyInput(activeProfile.apiKey)
-    }
-    setHasChanges(false)
-  }
+  // Sync state on mount
+  useEffect(() => {
+    setCurrentUrl(getServerUrl())
+    setCurrentEnvName(getActiveEnvironmentName())
+    setIsOverridden(hasOverride())
+  }, [])
 
   // Load preferences for keyboard shortcuts
   const { data: preferences } = usePreferences()
@@ -122,230 +98,148 @@ export function GeneralPane() {
     }
   }
 
-  const handleProfileChange = (profileId: string) => {
-    setActiveProfileId(profileId)
-    setActiveId(profileId)
-    const profile = profiles.find(p => p.id === profileId)
-    if (profile) {
-      setServerUrl(profile.serverUrl)
-      setWordpressUrl(profile.wordpressUrl || '')
-      setApiKeyInput(profile.apiKey)
-    }
-    setHasChanges(false)
-    queryClient.invalidateQueries({ queryKey: ['explorer'] })
-    toast.success('Switched profile', {
-      description: `Now using ${profile?.name}`,
-    })
-  }
+  const handleEnvironmentChange = (envId: string) => {
+    setSelectedEnvId(envId)
 
-  const handleSaveProfile = () => {
-    if (!activeId) return
-    updateProfile(activeId, { serverUrl, wordpressUrl, apiKey: apiKeyInput })
-    refreshProfiles()
-    queryClient.invalidateQueries({ queryKey: ['explorer'] })
-    toast.success('Profile saved')
-    logger.info('Profile updated', { profileId: activeId })
-  }
-
-  const handleAddProfile = () => {
-    const newProfile = addProfile({
-      name: `Profile ${profiles.length + 1}`,
-      serverUrl: 'http://127.0.0.1:8012',
-      wordpressUrl: 'https://accumarklabs.local',
-      apiKey: '',
-    })
-    refreshProfiles()
-    handleProfileChange(newProfile.id)
-    toast.success('New profile created')
-  }
-
-  const handleDeleteProfile = () => {
-    if (!activeId || profiles.length <= 1) {
-      toast.error('Cannot delete the last profile')
-      return
-    }
-    const profileName = profiles.find(p => p.id === activeId)?.name
-    deleteProfile(activeId)
-    refreshProfiles()
-    queryClient.invalidateQueries({ queryKey: ['explorer'] })
-    toast.info(`Deleted profile: ${profileName}`)
-  }
-
-  const handleFieldChange = (
-    field: 'serverUrl' | 'wordpressUrl' | 'apiKey',
-    value: string
-  ) => {
-    if (field === 'serverUrl') setServerUrl(value)
-    else if (field === 'wordpressUrl') setWordpressUrl(value)
-    else setApiKeyInput(value)
-    setHasChanges(true)
-  }
-
-  const handleConnect = async () => {
-    if (!activeId) return
-    if (!apiKeyInput.trim()) {
-      toast.error('API key is required to connect')
-      return
-    }
-
-    setIsConnecting(true)
-
-    // Save profile first
-    updateProfile(activeId, { serverUrl, wordpressUrl, apiKey: apiKeyInput })
-    refreshProfiles()
-
-    // Clear all cached queries
-    queryClient.clear()
-
-    // Dispatch profile changed event to notify the app
-    window.dispatchEvent(
-      new CustomEvent(API_PROFILE_CHANGED_EVENT, {
-        detail: { activeProfileId: activeId },
+    if (envId === 'default') {
+      // Revert to build-time default
+      clearOverride()
+      queryClient.clear()
+      setCurrentUrl(getServerUrl())
+      setCurrentEnvName(getActiveEnvironmentName())
+      setIsOverridden(false)
+      toast.success('Reverted to default', {
+        description: `Using build-time default: ${getDefaultUrl()}`,
       })
-    )
+      logger.info('Cleared API override, using build default')
+      return
+    }
 
-    // Close preferences dialog
-    setPreferencesOpen(false)
+    const env = KNOWN_ENVIRONMENTS.find(e => e.id === envId)
+    if (!env) return
 
-    // Show success message
-    toast.success(
-      `Connected to ${profiles.find(p => p.id === activeId)?.name}`,
-      {
-        description: 'App has been reset with new connection.',
-      }
-    )
+    // If this is the same as the default, just clear the override
+    if (env.url === getDefaultUrl()) {
+      clearOverride()
+    } else {
+      setOverride(env.url)
+    }
 
-    logger.info('Connected to API profile', { profileId: activeId, serverUrl })
-    setIsConnecting(false)
-    setHasChanges(false)
+    queryClient.clear()
+    setCurrentUrl(getServerUrl())
+    setCurrentEnvName(getActiveEnvironmentName())
+    setIsOverridden(hasOverride())
+
+    toast.success(`Switched to ${env.name}`, {
+      description: `API: ${env.url}`,
+    })
+    logger.info('Admin API override applied', {
+      environment: env.name,
+      url: env.url,
+    })
   }
 
-  const activeProfile = profiles.find(p => p.id === activeId)
-  const isApiKeyConfigured = apiKeyInput.length > 0
+  const handleClearOverride = () => {
+    clearOverride()
+    queryClient.clear()
+    setCurrentUrl(getServerUrl())
+    setCurrentEnvName(getActiveEnvironmentName())
+    setIsOverridden(false)
+    setSelectedEnvId(() => {
+      const url = getServerUrl()
+      const known = KNOWN_ENVIRONMENTS.find(e => e.url === url)
+      return known?.id ?? 'default'
+    })
+    toast.info('Override cleared', {
+      description: `Reverted to build default: ${getDefaultUrl()}`,
+    })
+    logger.info('Admin cleared API override')
+  }
 
   return (
     <div className="space-y-6">
-      {/* API Connection Section */}
+      {/* API Connection Info */}
       <SettingsSection title="API Connection">
-        {/* Profile Selector */}
         <SettingsField
-          label="Profile"
-          description="Select a saved profile or create a new one"
+          label="Current Backend"
+          description="The API server this app is connected to"
         >
-          <div className="flex gap-2">
-            <Select value={activeId ?? ''} onValueChange={handleProfileChange}>
-              <SelectTrigger className="flex-1">
-                <SelectValue placeholder="Select profile" />
-              </SelectTrigger>
-              <SelectContent>
-                {profiles.map(profile => (
-                  <SelectItem key={profile.id} value={profile.id}>
-                    {profile.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <Button variant="outline" size="icon" onClick={handleAddProfile}>
-              <Plus className="h-4 w-4" />
-            </Button>
+          <div className="flex items-center gap-3">
+            <code className="flex-1 rounded-md bg-muted px-3 py-2 text-sm font-mono">
+              {currentUrl}
+            </code>
+            <Badge
+              variant={isOverridden ? 'secondary' : 'default'}
+              className={isOverridden ? '' : 'bg-green-600'}
+            >
+              {currentEnvName}
+            </Badge>
           </div>
-        </SettingsField>
-
-        {/* Server URL */}
-        <SettingsField
-          label="Server URL"
-          description="The Integration Service API endpoint"
-        >
-          <Input
-            value={serverUrl}
-            onChange={e => handleFieldChange('serverUrl', e.target.value)}
-            placeholder="https://api.accumarklabs.com"
-          />
-        </SettingsField>
-
-        {/* WordPress URL */}
-        <SettingsField
-          label="WordPress URL"
-          description="The WordPress site for verification links"
-        >
-          <Input
-            value={wordpressUrl}
-            onChange={e => handleFieldChange('wordpressUrl', e.target.value)}
-            placeholder="https://accumarklabs.com"
-          />
-        </SettingsField>
-
-        {/* API Key */}
-        <SettingsField
-          label="API Key"
-          description="Authentication key for the Integration Service"
-        >
-          <div className="flex gap-2">
-            <div className="relative flex-1">
-              <Input
-                type={showApiKey ? 'text' : 'password'}
-                value={apiKeyInput}
-                onChange={e => handleFieldChange('apiKey', e.target.value)}
-                placeholder="ak_xxxxx..."
-                className="pr-10"
-              />
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                className="absolute right-0 top-0 h-full px-3"
-                onClick={() => setShowApiKey(!showApiKey)}
-              >
-                {showApiKey ? (
-                  <EyeOff className="h-4 w-4" />
-                ) : (
-                  <Eye className="h-4 w-4" />
-                )}
-              </Button>
+          {isOverridden && (
+            <div className="mt-2 flex items-center gap-2 text-xs text-amber-600 dark:text-amber-400">
+              <AlertTriangle className="h-3.5 w-3.5" />
+              <span>
+                Session override active — will revert to{' '}
+                <code className="rounded bg-muted px-1">{getDefaultUrl()}</code>{' '}
+                when this tab is closed.
+              </span>
             </div>
-          </div>
+          )}
         </SettingsField>
 
-        {/* Actions */}
-        <div className="flex items-center gap-3">
-          <Button
-            onClick={handleSaveProfile}
-            disabled={!hasChanges}
-            variant="outline"
+        {/* Admin-only environment override */}
+        {isAdmin && (
+          <SettingsField
+            label={
+              <span className="flex items-center gap-1.5">
+                <Shield className="h-3.5 w-3.5 text-primary" />
+                Environment Override
+              </span>
+            }
+            description="Admin only — temporarily point this session at a different backend"
           >
-            Save Profile
-          </Button>
-          <Button
-            onClick={handleConnect}
-            disabled={isConnecting || !apiKeyInput.trim()}
-          >
-            <Plug className="h-4 w-4 mr-2" />
-            {isConnecting ? 'Connecting...' : 'Connect'}
-          </Button>
-          <Button
-            variant="destructive"
-            size="icon"
-            onClick={handleDeleteProfile}
-            disabled={profiles.length <= 1}
-          >
-            <Trash2 className="h-4 w-4" />
-          </Button>
+            <div className="flex items-center gap-2">
+              <Select
+                value={selectedEnvId}
+                onValueChange={handleEnvironmentChange}
+              >
+                <SelectTrigger className="flex-1">
+                  <SelectValue placeholder="Select environment" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="default">
+                    Build Default ({getDefaultUrl()})
+                  </SelectItem>
+                  {KNOWN_ENVIRONMENTS.map(env => (
+                    <SelectItem key={env.id} value={env.id}>
+                      {env.name} — {env.url}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {isOverridden && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleClearOverride}
+                >
+                  Clear Override
+                </Button>
+              )}
+            </div>
+          </SettingsField>
+        )}
 
-          {/* Status indicator */}
-          <div className="flex items-center gap-2 text-sm ml-auto">
-            {isApiKeyConfigured ? (
-              <>
-                <CheckCircle2 className="h-4 w-4 text-green-500" />
-                <span className="text-green-600">{activeProfile?.name}</span>
-              </>
-            ) : (
-              <>
-                <XCircle className="h-4 w-4 text-yellow-500" />
-                <span className="text-yellow-600">API key required</span>
-              </>
-            )}
+        {/* Non-admin info */}
+        {!isAdmin && (
+          <div className="flex items-center gap-2 rounded-md bg-muted/50 px-3 py-2 text-xs text-muted-foreground">
+            <CheckCircle2 className="h-3.5 w-3.5 text-green-500" />
+            <span>
+              Connected to <strong>{currentEnvName}</strong>. Contact an admin
+              to change the environment.
+            </span>
           </div>
-        </div>
+        )}
       </SettingsSection>
 
       <SettingsSection title={t('preferences.general.keyboardShortcuts')}>

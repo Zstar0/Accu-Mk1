@@ -2,25 +2,28 @@
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-02-09)
+See: .planning/PROJECT.md (updated 2026-02-10)
 
 **Core value:** Streamlined morning workflow with secure access control for production deployment
-**Current focus:** v0.6.0 — User Authentication (COMPLETE)
+**Current focus:** Between milestones — ready for next milestone planning
 
-## Current Milestone: v0.6.0
+## Last Completed Milestone: v0.6.0
 
-Phase: 7 of 7 (Admin User Management)
-Plan: Complete
-Status: All phases complete
-Last activity: 2026-02-09 — All auth features implemented and tested
+Status: Complete (2026-02-09)
+Delivered: JWT user authentication, role-based access, admin management
 
-Progress: ████████████████████ 100%
+## Previous Milestones
+
+- v0.6.0 — User Authentication (JWT, roles, admin UI)
+- v0.5.0 — HPLC Peptide Analysis Pipeline (purity, quantity, identity)
+- v0.4.x — Chromatograph viewer, AccuMark Tools, settings/API profiles
 
 ## Milestone Documents
 
-- Requirements: `.planning/REQUIREMENTS-v0.6.0.md` (23 requirements — all implemented)
-- Roadmap: `.planning/ROADMAP-v0.6.0.md` (3 phases: 5-7 — all complete)
-- Research: `.planning/research/` (STACK, FEATURES, ARCHITECTURE, PITFALLS)
+- v0.6.0 Requirements: `.planning/REQUIREMENTS-v0.6.0.md`
+- v0.6.0 Roadmap: `.planning/ROADMAP-v0.6.0.md`
+- Original roadmap (phases 1-2 complete, 3-4 superseded): `.planning/ROADMAP-v0.4-archived.md`
+- Research: `.planning/research/`
 
 ## Accumulated Context
 
@@ -35,6 +38,7 @@ Progress: ████████████████████ 100%
 - Console/log-based password reset (no email infra for v1)
 - First admin auto-seeded on startup
 - Backend moved to port 8012 (avoid conflicts with other services)
+- Original Phase 3 (BatchReview) and Phase 4 (SENAITE) superseded by v0.5.0 HPLC pipeline
 
 ### Blockers/Concerns
 
@@ -50,6 +54,6 @@ Progress: ████████████████████ 100%
 
 ## Session Continuity
 
-Last session: 2026-02-09
-Stopped at: v0.6.0 complete, committed
+Last session: 2026-02-10
+Stopped at: Closed out stale phases 3-4, ready for new milestone
 Resume file: None

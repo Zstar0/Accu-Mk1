@@ -20,10 +20,8 @@ import {
   type ExplorerOrder,
 } from '@/lib/api'
 import {
-  getProfiles,
-  getActiveProfileId,
-  getActiveProfile,
-  setActiveProfileId,
+  getActiveEnvironmentName,
+  getWordpressUrl,
   API_PROFILE_CHANGED_EVENT,
 } from '@/lib/api-profiles'
 
@@ -38,13 +36,6 @@ import {
   CardTitle,
 } from '@/components/ui/card'
 import { DataTable } from '@/components/ui/data-table'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
 import { PayloadPanel } from '@/components/PayloadPanel'
 import { OrderDetailPanel } from '@/components/explorer/OrderDetailPanel'
 
@@ -187,11 +178,8 @@ export function OrderExplorer() {
   const [page, setPage] = useState(0)
   const [selectedOrder, setSelectedOrder] = useState<ExplorerOrder | null>(null)
 
-  // Profile state
-  const [activeProfileId, setActiveProfileIdState] = useState<string | null>(
-    getActiveProfileId()
-  )
-  const profiles = getProfiles()
+  // Track the current environment name for display
+  const [envName, setEnvName] = useState(() => getActiveEnvironmentName())
 
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [refreshSuccess, setRefreshSuccess] = useState(false)
@@ -201,10 +189,10 @@ export function OrderExplorer() {
   } | null>(null)
   const queryClient = useQueryClient()
 
-  // Listen for profile changes
+  // Listen for environment changes (admin override)
   useEffect(() => {
     const handleProfileChange = () => {
-      setActiveProfileIdState(getActiveProfileId())
+      setEnvName(getActiveEnvironmentName())
       setSelectedOrder(null)
       setSelectedPayload(null)
       setPage(0)
@@ -224,10 +212,9 @@ export function OrderExplorer() {
 
   // Connection status
   const { data: status, isLoading: statusLoading } = useQuery({
-    queryKey: ['explorer', 'status', activeProfileId],
+    queryKey: ['explorer', 'status', envName],
     queryFn: getExplorerStatus,
     staleTime: 0,
-    enabled: !!activeProfileId,
   })
 
   // Orders query with status filter and pagination
@@ -235,7 +222,6 @@ export function OrderExplorer() {
     data: orders,
     isLoading: ordersLoading,
     error: ordersError,
-    refetch,
   } = useQuery({
     queryKey: [
       'explorer',
@@ -243,7 +229,7 @@ export function OrderExplorer() {
       debouncedSearch,
       statusFilter,
       page,
-      activeProfileId,
+      envName,
     ],
     queryFn: () =>
       getExplorerOrders(
@@ -272,17 +258,6 @@ export function OrderExplorer() {
   const handleOrderClick = (order: ExplorerOrder) => {
     setSelectedOrder(order)
     setSelectedPayload(null)
-  }
-
-  const handleConnectionChange = async (profileId: string) => {
-    setActiveProfileId(profileId)
-    setActiveProfileIdState(profileId)
-    setSelectedOrder(null)
-    setSelectedPayload(null)
-    setPage(0)
-    queryClient.clear()
-    await queryClient.invalidateQueries({ queryKey: ['explorer'] })
-    refetch()
   }
 
   const handleRefresh = async () => {
@@ -432,24 +407,11 @@ export function OrderExplorer() {
           </div>
         </div>
 
-        {/* Profile selector and status */}
+        {/* Status and refresh */}
         <div className="flex items-center gap-3">
-          <Select
-            value={activeProfileId || ''}
-            onValueChange={handleConnectionChange}
-            disabled={isRefreshing}
-          >
-            <SelectTrigger className="w-[180px]">
-              <SelectValue placeholder="Select Profile" />
-            </SelectTrigger>
-            <SelectContent>
-              {profiles.map(profile => (
-                <SelectItem key={profile.id} value={profile.id}>
-                  {profile.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <Badge variant="outline" className="text-xs">
+            {envName}
+          </Badge>
 
           <Button
             variant="outline"
@@ -519,18 +481,17 @@ export function OrderExplorer() {
               className="pl-10"
             />
           </div>
-          <Select value={statusFilter} onValueChange={handleStatusFilterChange}>
-            <SelectTrigger className="w-[160px]">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {STATUS_OPTIONS.map(opt => (
-                <SelectItem key={opt.value} value={opt.value}>
-                  {opt.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <select
+            value={statusFilter}
+            onChange={e => handleStatusFilterChange(e.target.value)}
+            className="h-10 rounded-md border border-input bg-background px-3 text-sm text-foreground"
+          >
+            {STATUS_OPTIONS.map(opt => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label}
+              </option>
+            ))}
+          </select>
         </div>
       )}
 
@@ -617,7 +578,7 @@ export function OrderExplorer() {
       {selectedOrder && (
         <OrderDetailPanel
           order={selectedOrder}
-          wordpressHost={getActiveProfile()?.wordpressUrl}
+          wordpressHost={getWordpressUrl()}
           onClose={() => setSelectedOrder(null)}
           onViewPayload={order =>
             setSelectedPayload({

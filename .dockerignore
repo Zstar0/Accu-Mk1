@@ -1,0 +1,33 @@
+# Dependencies & build artifacts
+node_modules/
+dist/
+.venv/
+
+# Backend (has its own Dockerfile)
+backend/
+
+# Tauri (desktop-only)
+src-tauri/
+
+# Dev/CI/IDE
+.git/
+.github/
+.vscode/
+.claude/
+.agent/
+.ast-grep/
+.playwright-mcp/
+.planning/
+__pycache__/
+*.pyc
+
+# Data & docs
+data/
+test-data/
+docs/
+ReportFiles/
+
+# Large files
+*.tar
+*.tar.gz
+*.zip

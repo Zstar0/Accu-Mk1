@@ -1,5 +1,46 @@
 # Changelog
 
+## [0.7.0] - 2026-02-10
+
+### Added
+
+- **Docker Deployment** — Full containerization for production hosting
+  - Multi-stage `Dockerfile` for frontend (Node 20 build → Nginx Alpine serve)
+  - Backend `Dockerfile` (Python 3.12 slim + Uvicorn)
+  - `docker-compose.yml` orchestrating frontend + backend with named volume for SQLite persistence
+  - Nginx config with SPA fallback, `/api/` reverse proxy to backend, gzip, and asset caching
+  - `.env.docker` / `.env.docker.prod` for Docker-specific Vite build vars (`VITE_API_URL=/api`)
+  - `.dockerignore` files for both frontend and backend
+
+- **Production Deployment** — Live at `https://accumk1.valenceanalytical.com`
+  - Hosted on DigitalOcean droplet (`165.227.241.81`) alongside SENAITE
+  - Nginx reverse proxy with Let's Encrypt SSL (auto-renewing)
+  - Deploy script (`scripts/deploy.sh`) with rsync, Docker build, health checks, and cleanup
+  - Supports `--dry-run`, `--frontend`, `--backend` flags
+
+- **Favicon** — Custom microscope SVG icon matching the app's sidebar nav icon
+
+### Changed
+
+- Explorer API endpoints now use JWT Bearer auth (`get_current_user`) instead of `X-API-Key` header
+- CORS origins updated to include Docker local test (`localhost:3100`) and production domain
+- API configuration refactored to use Vite environment variables (`VITE_API_URL`, `VITE_WORDPRESS_URL`)
+- `SettingsComponents.tsx` label prop widened from `string` to `ReactNode`
+- Fixed `WORDPRESS_PROD_HOST` from Kinsta staging URL to `accumarklabs.com`
+
+### New Files
+
+- `Dockerfile` — Frontend multi-stage build
+- `backend/Dockerfile` — Backend container
+- `docker-compose.yml` — Service orchestration
+- `nginx.conf` — Frontend Nginx config (SPA + API proxy)
+- `.dockerignore`, `backend/.dockerignore` — Build context filters
+- `.env.docker`, `.env.docker.prod` — Docker build environment variables
+- `.env.development`, `.env.production` — Vite environment configs
+- `public/favicon.svg` — Microscope favicon
+- `scripts/deploy.sh` — Production deploy automation
+- `backend/.env.example` — Updated with all required env vars
+
 ## [0.6.0] - 2026-02-09
 
 ### Added
