@@ -2,7 +2,7 @@
 
 ## What This Is
 
-A desktop application for lab operators to import overnight HPLC exports, calculate purity metrics, review and validate results in a batch workflow, and push approved results to SENAITE LIMS. Runs as both a browser app (for development/agent testing) and a Tauri-packaged desktop app.
+A lab application for operators to import overnight HPLC exports, calculate purity metrics, review and validate results in a batch workflow, and push approved results to SENAITE LIMS. Runs as both a browser app (shared web server) and a Tauri-packaged desktop app, with user authentication protecting access.
 
 ## Core Value
 
@@ -24,13 +24,17 @@ Streamlined morning workflow: import CSV → review batch → calculate purity �
 - [ ] Modern, polished UI aesthetic (ClickUp/Figma-inspired visual design)
 - [ ] Local SQLite database for job state, results, audit logs
 - [ ] File cache for raw HPLC exports
+- [ ] User authentication (login, registration, password reset)
+- [ ] Role-based access control (standard + admin roles)
+- [ ] Protected routes and API endpoints
 
 ### Out of Scope
 
 - Direct instrument control — this app processes exports, doesn't talk to instruments
-- Multi-user authentication — single-operator workstation model
-- Cloud hosting — local-first architecture only
+- ~~Multi-user authentication — single-operator workstation model~~ → Now active (v0.6.0)
 - Complex calculation UI — backend owns all scientific logic, UI just displays results
+- Email-based password reset — v1 uses console/log-based reset tokens, email added later
+- OAuth/social login — email+password sufficient for lab environment
 
 ## Context
 
@@ -50,24 +54,42 @@ Streamlined morning workflow: import CSV → review batch → calculate purity �
 - **Logic principle**: Backend owns all scientific calculations — UI never parses files or calculates metrics
 - **Audit principle**: All imports and pushes must be idempotent, traceable, repeatable
 
-## Current Milestone: v0.5.0 — Order Explorer Enhancement
+## Current Milestone: v0.6.0 — User Authentication (COMPLETE)
 
-**Goal:** Transform the Order Explorer from a basic order list into a comprehensive debugging and browsing tool that surfaces all Integration Service data — orders, COA generations, submission attempts, sample status events, access logs, and verification codes — with links to WordPress orders and SENAITE samples.
+**Goal:** Add a fully functional user account system to protect the application for production deployment. Users log in with email + password, with standard and admin roles. Replaces the current API key system with proper JWT-based authentication.
 
-**Context:** The Integration Service PostgreSQL database has 7 tables (order_submissions, order_submission_attempts, ingestions, coa_generations, sample_status_events, coa_access_logs, verification_codes), but the Order Explorer currently only shows orders and ingestions via 3 explorer endpoints. The backend needs new API endpoints exposed, and the frontend needs a richer detail view to help operators examine orders, debug issues, and navigate to related systems.
+**Delivered features:**
+- User login with email + password (JWT access tokens, 1-hour expiry)
+- Password hashing with bcrypt (direct library, not passlib)
+- Password reset via admin UI (temporary password shown once)
+- Two roles: standard and admin with backend enforcement
+- Auth gate at App.tsx level (login page for unauthenticated users)
+- All API endpoints protected with JWT Bearer auth
+- Admin user management page (create, deactivate, reset password)
+- Change password form (requires current password)
+- Auto-seeded admin on first startup
+- Works in both browser and Tauri desktop modes
 
-**Integration Service repo:** `C:\Users\forre\OneDrive\Documents\GitHub\Accumark-Workspace\integration-service`
+**Stack additions:** bcrypt, python-jose[cryptography], python-multipart
+
+## Previous Milestones
+
+- **v0.5.0** — HPLC Peptide Analysis Pipeline (purity, quantity, identity)
+- **v0.4.x** — Chromatograph viewer, AccuMark Tools, settings/API profiles
 
 ## Key Decisions
 
 | Decision | Rationale | Outcome |
 |----------|-----------|---------|
-| Dual-mode (browser + Tauri) | Enables agent testing in Chrome while shipping as desktop app | — Pending |
-| Folder-watch ingestion | Minimizes UI platform differences, simpler than manual upload | — Pending |
-| FastAPI backend | Python ecosystem for scientific calculations, familiar for lab tooling | — Pending |
-| SQLite local storage | Local-first requirement, no external dependencies | — Pending |
-| Explorer API Key auth | Desktop app uses API key (not JWT) for explorer endpoints | Active |
-| Tabbed order detail view | Show related data (ingestions, COAs, attempts, events) as tabs | v0.5.0 |
+| Dual-mode (browser + Tauri) | Enables agent testing in Chrome while shipping as desktop app | Working |
+| Folder-watch ingestion | Minimizes UI platform differences, simpler than manual upload | Working |
+| FastAPI backend | Python ecosystem for scientific calculations, familiar for lab tooling | Working |
+| SQLite local storage | Local-first requirement, no external dependencies | Working |
+| Manual JWT (not FastAPI Users) | Avoids async SQLAlchemy migration, simpler to debug | v0.6.0 |
+| Direct bcrypt (not passlib) | passlib incompatible with bcrypt>=4.1 | v0.6.0 |
+| JWT Bearer tokens | Works for both web browser and Tauri desktop modes | v0.6.0 |
+| Console password reset | Skip email infra for v1, log reset tokens to console/UI | v0.6.0 |
+| Backend port 8012 | Avoid conflicts with Docker services on 8008-8009 | v0.6.0 |
 
 ---
-*Last updated: 2026-02-09 after v0.5.0 milestone start*
+*Last updated: 2026-02-09 after v0.6.0 milestone complete*

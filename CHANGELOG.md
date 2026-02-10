@@ -1,5 +1,51 @@
 # Changelog
 
+## [0.6.0] - 2026-02-09
+
+### Added
+
+- **User Authentication** — JWT-based login with bcrypt password hashing
+  - Login page with email/password form and auth gate (unauthenticated users see login page)
+  - Zustand auth store with localStorage persistence (survives refresh and app restart)
+  - Bearer token authorization on all API endpoints (except `/health`, `/auth/login`)
+  - Two roles: standard and admin, with backend enforcement (403 for unauthorized)
+  - First admin auto-seeded on startup with random password logged to console
+
+- **Admin User Management** — Full CRUD for user accounts
+  - Create new users with email, password, and role selection
+  - View all users with role badges and active status
+  - Deactivate/reactivate user accounts
+  - Reset user passwords (temporary password displayed once)
+
+- **Account Section** — User self-service
+  - Change password form (requires current password verification)
+  - User email display in sidebar
+  - Sign out button
+
+- **Dark Mode Autofill Fix** — CSS overrides for password manager compatibility in dark theme
+
+### Changed
+
+- All ~30 existing API endpoints now require JWT Bearer authentication
+- Backend default port moved from 8009 to 8012 (avoid conflicts with other services)
+- CSP connect-src updated to allow ports 8011 and 8012
+- Replaced passlib with direct bcrypt library (passlib incompatible with bcrypt>=4.1)
+
+### New Dependencies
+
+- `bcrypt>=4.0.0` — password hashing
+- `python-jose[cryptography]>=3.3.0` — JWT token creation and validation
+- `python-multipart>=0.0.9` — form data parsing for login endpoint
+
+### New Files
+
+- `backend/auth.py` — Auth module (JWT utilities, password hashing, Pydantic schemas, FastAPI dependencies)
+- `src/components/auth/LoginPage.tsx` — Login form component
+- `src/components/auth/UserManagement.tsx` — Admin user management table with CRUD actions
+- `src/components/auth/ChangePassword.tsx` — Password change form
+- `src/lib/auth-api.ts` — Auth API client functions (login, logout, CRUD, password reset)
+- `src/store/auth-store.ts` — Zustand auth state with token/user persistence
+
 ## [0.5.0] - 2026-02-09
 
 ### Added

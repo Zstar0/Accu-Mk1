@@ -4,6 +4,18 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/* Fix autofill text color in dark mode — outside @layer for higher specificity */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus,
+input:-webkit-autofill:active {
+  -webkit-text-fill-color: hsl(var(--foreground)) !important;
+  -webkit-box-shadow: 0 0 0px 1000px hsl(var(--input)) inset !important;
+  box-shadow: 0 0 0px 1000px hsl(var(--input)) inset !important;
+  transition: background-color 5000s ease-in-out 0s;
+  caret-color: hsl(var(--foreground));
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;

@@ -11,11 +11,36 @@ import './App.css'
 import { MainWindow } from './components/layout/MainWindow'
 import { ThemeProvider } from './components/ThemeProvider'
 import { ErrorBoundary } from './components/ErrorBoundary'
+import { LoginPage } from './components/auth/LoginPage'
+import { useAuthStore } from './store/auth-store'
+import { fetchCurrentUser } from './lib/auth-api'
 
 function App() {
+  const isAuthenticated = useAuthStore(state => state.isAuthenticated)
+  const isLoading = useAuthStore(state => state.isLoading)
+  const clearAuth = useAuthStore(state => state.clearAuth)
+
+  // Validate persisted token on mount
+  useEffect(() => {
+    const validateToken = async () => {
+      const token = useAuthStore.getState().token
+      if (!token) {
+        useAuthStore.getState().setLoading(false)
+        return
+      }
+      try {
+        await fetchCurrentUser()
+      } catch {
+        clearAuth()
+      }
+      useAuthStore.getState().setLoading(false)
+    }
+    validateToken()
+  }, [clearAuth])
+
   // Initialize command system and cleanup on app startup
   useEffect(() => {
-    logger.info('🚀 Frontend application starting up')
+    logger.info('Frontend application starting up')
     initializeCommandSystem()
     logger.debug('Command system initialized')
 
@@ -108,10 +133,15 @@ function App() {
     return () => clearTimeout(updateTimer)
   }, [])
 
+  // Show nothing while validating persisted token
+  if (isLoading) {
+    return null
+  }
+
   return (
     <ErrorBoundary>
       <ThemeProvider>
-        <MainWindow />
+        {isAuthenticated ? <MainWindow /> : <LoginPage />}
       </ThemeProvider>
     </ErrorBoundary>
   )

@@ -150,7 +150,7 @@ export function GeneralPane() {
   const handleAddProfile = () => {
     const newProfile = addProfile({
       name: `Profile ${profiles.length + 1}`,
-      serverUrl: 'http://127.0.0.1:8009',
+      serverUrl: 'http://127.0.0.1:8012',
       wordpressUrl: 'https://accumarklabs.local',
       apiKey: '',
     })

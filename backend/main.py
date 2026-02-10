@@ -6,19 +6,26 @@ Provides REST API for scientific calculations, database access, and audit loggin
 import json
 import os
 import secrets
+import subprocess
+import sys
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Union
 
-from fastapi import FastAPI, Depends, HTTPException, Header
+from fastapi import FastAPI, Depends, HTTPException, Header, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from sqlalchemy import select, desc
 
 from database import get_db, init_db
-from models import AuditLog, Settings, Job, Sample, Result, Peptide, CalibrationCurve, HPLCAnalysis
+from models import AuditLog, Settings, Job, Sample, Result, Peptide, CalibrationCurve, HPLCAnalysis, User
+from auth import (
+    get_current_user, require_admin, create_access_token,
+    verify_password, get_password_hash, seed_admin_user,
+    UserCreate, UserRead, UserUpdate, PasswordChange, TokenResponse,
+)
 from parsers import parse_txt_file
 from parsers.peakdata_csv_parser import parse_hplc_files, calculate_purity
 from calculations import CalculationEngine
@@ -266,11 +273,12 @@ def seed_default_settings(db: Session):
 async def lifespan(app: FastAPI):
     """Initialize database on startup and seed defaults."""
     init_db()
-    # Seed default settings
+    # Seed default settings and admin user
     from database import SessionLocal
     db = SessionLocal()
     try:
         seed_default_settings(db)
+        seed_admin_user(db)
     finally:
         db.close()
     yield
@@ -314,10 +322,160 @@ async def health_check():
     return HealthResponse(status="ok", version="0.1.0")
 
 
+# --- Auth Endpoints ---
+
+@app.post("/auth/login", response_model=TokenResponse)
+async def login(
+    form_data: UserCreate,
+    db: Session = Depends(get_db),
+):
+    """Authenticate user and return JWT access token."""
+    user = db.query(User).filter(User.email == form_data.email).first()
+    if not user or not verify_password(form_data.password, user.hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid credentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Account is deactivated",
+        )
+
+    access_token = create_access_token(data={"sub": str(user.id)})
+    return TokenResponse(
+        access_token=access_token,
+        user=UserRead.model_validate(user),
+    )
+
+
+@app.get("/auth/me", response_model=UserRead)
+async def get_me(current_user=Depends(get_current_user)):
+    """Get current authenticated user info."""
+    return UserRead.model_validate(current_user)
+
+
+@app.put("/auth/change-password")
+async def change_password(
+    data: PasswordChange,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Change current user's password (requires current password)."""
+    if not verify_password(data.current_password, current_user.hashed_password):
+        raise HTTPException(status_code=400, detail="Current password is incorrect")
+
+    if len(data.new_password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+
+    current_user.hashed_password = get_password_hash(data.new_password)
+    db.commit()
+    return {"message": "Password changed successfully"}
+
+
+# --- Admin User Management ---
+
+@app.get("/auth/users", response_model=list[UserRead])
+async def list_users(
+    admin=Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """List all users (admin only)."""
+    users = db.query(User).order_by(User.created_at.desc()).all()
+    return [UserRead.model_validate(u) for u in users]
+
+
+@app.post("/auth/users", response_model=UserRead)
+async def create_user(
+    data: UserCreate,
+    admin=Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Create a new user (admin only)."""
+    existing = db.query(User).filter(User.email == data.email).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Email already registered")
+
+    if data.role not in ("standard", "admin"):
+        raise HTTPException(status_code=400, detail="Role must be 'standard' or 'admin'")
+
+    if len(data.password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+
+    user = User(
+        email=data.email,
+        hashed_password=get_password_hash(data.password),
+        role=data.role,
+        is_active=True,
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return UserRead.model_validate(user)
+
+
+@app.put("/auth/users/{user_id}", response_model=UserRead)
+async def update_user(
+    user_id: int,
+    data: UserUpdate,
+    admin=Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Update a user (admin only). Can change role and active status."""
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    if data.role is not None:
+        if data.role not in ("standard", "admin"):
+            raise HTTPException(status_code=400, detail="Role must be 'standard' or 'admin'")
+        user.role = data.role
+
+    if data.is_active is not None:
+        user.is_active = data.is_active
+
+    if data.email is not None:
+        existing = db.query(User).filter(User.email == data.email, User.id != user_id).first()
+        if existing:
+            raise HTTPException(status_code=400, detail="Email already in use")
+        user.email = data.email
+
+    db.commit()
+    db.refresh(user)
+    return UserRead.model_validate(user)
+
+
+@app.post("/auth/users/{user_id}/reset-password")
+async def admin_reset_password(
+    user_id: int,
+    admin=Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Reset a user's password (admin only). Returns temporary password."""
+    import secrets as _secrets
+
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    temp_password = _secrets.token_urlsafe(12)
+    user.hashed_password = get_password_hash(temp_password)
+    db.commit()
+
+    print(f"\n[ADMIN RESET] Password reset for {user.email}: {temp_password}\n")
+
+    return {
+        "message": f"Password reset for {user.email}",
+        "temporary_password": temp_password,
+    }
+
+
 @app.post("/audit", response_model=AuditLogResponse)
 async def create_audit_log(
     audit_data: AuditLogCreate,
     db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
 ):
     """Create a new audit log entry."""
     audit_log = AuditLog(
@@ -336,6 +494,7 @@ async def create_audit_log(
 async def get_audit_logs(
     limit: int = 50,
     db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
 ):
     """Get recent audit log entries."""
     stmt = select(AuditLog).order_by(desc(AuditLog.created_at)).limit(limit)
@@ -346,7 +505,7 @@ async def get_audit_logs(
 # --- Settings Endpoints ---
 
 @app.get("/settings", response_model=list[SettingResponse])
-async def get_settings(db: Session = Depends(get_db)):
+async def get_settings(db: Session = Depends(get_db), _current_user=Depends(get_current_user)):
     """Get all settings."""
     stmt = select(Settings).order_by(Settings.key)
     result = db.execute(stmt)
@@ -354,7 +513,7 @@ async def get_settings(db: Session = Depends(get_db)):
 
 
 @app.get("/settings/{key}", response_model=SettingResponse)
-async def get_setting(key: str, db: Session = Depends(get_db)):
+async def get_setting(key: str, db: Session = Depends(get_db), _current_user=Depends(get_current_user)):
     """Get a single setting by key."""
     stmt = select(Settings).where(Settings.key == key)
     setting = db.execute(stmt).scalar_one_or_none()
@@ -368,6 +527,7 @@ async def update_setting(
     key: str,
     data: SettingUpdate,
     db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
 ):
     """Create or update a setting by key."""
     stmt = select(Settings).where(Settings.key == key)
@@ -387,7 +547,7 @@ async def update_setting(
 
 
 @app.delete("/settings/{key}")
-async def delete_setting(key: str, db: Session = Depends(get_db)):
+async def delete_setting(key: str, db: Session = Depends(get_db), _current_user=Depends(get_current_user)):
     """Delete a setting by key."""
     stmt = select(Settings).where(Settings.key == key)
     setting = db.execute(stmt).scalar_one_or_none()
@@ -402,13 +562,13 @@ async def delete_setting(key: str, db: Session = Depends(get_db)):
 # --- File Watcher Endpoints ---
 
 @app.get("/watcher/status")
-async def get_watcher_status():
+async def get_watcher_status(_current_user=Depends(get_current_user)):
     """Get file watcher status."""
     return file_watcher.status()
 
 
 @app.post("/watcher/start")
-async def start_watcher(db: Session = Depends(get_db)):
+async def start_watcher(db: Session = Depends(get_db), _current_user=Depends(get_current_user)):
     """Start file watcher using report_directory from settings."""
     # Get report_directory from settings
     setting = db.execute(
@@ -425,14 +585,14 @@ async def start_watcher(db: Session = Depends(get_db)):
 
 
 @app.post("/watcher/stop")
-async def stop_watcher():
+async def stop_watcher(_current_user=Depends(get_current_user)):
     """Stop file watcher."""
     file_watcher.stop()
     return {"status": "stopped"}
 
 
 @app.get("/watcher/files")
-async def get_detected_files():
+async def get_detected_files(_current_user=Depends(get_current_user)):
     """Get and clear list of detected files."""
     files = file_watcher.get_detected_files()
     return {"files": files, "count": len(files)}
@@ -456,6 +616,7 @@ def _get_column_mappings(db: Session) -> dict:
 async def import_file_preview(
     file_path: str,
     db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
 ):
     """
     Preview a single file parse without saving.
@@ -481,6 +642,7 @@ async def import_file_preview(
 async def import_batch(
     request: BatchImportRequest,
     db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
 ):
     """
     Import multiple files and create a job with samples.
@@ -578,6 +740,7 @@ async def import_batch(
 async def import_batch_data(
     request: BatchImportDataRequest,
     db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
 ):
     """
     Import pre-parsed file data from browser.
@@ -658,6 +821,7 @@ async def import_batch_data(
 async def get_jobs(
     limit: int = 50,
     db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
 ):
     """Get recent jobs."""
     stmt = select(Job).order_by(desc(Job.created_at)).limit(limit)
@@ -666,7 +830,7 @@ async def get_jobs(
 
 
 @app.get("/jobs/{job_id}", response_model=JobResponse)
-async def get_job(job_id: int, db: Session = Depends(get_db)):
+async def get_job(job_id: int, db: Session = Depends(get_db), _current_user=Depends(get_current_user)):
     """Get a single job by ID."""
     stmt = select(Job).where(Job.id == job_id)
     job = db.execute(stmt).scalar_one_or_none()
@@ -676,7 +840,7 @@ async def get_job(job_id: int, db: Session = Depends(get_db)):
 
 
 @app.get("/jobs/{job_id}/samples", response_model=list[SampleResponse])
-async def get_job_samples(job_id: int, db: Session = Depends(get_db)):
+async def get_job_samples(job_id: int, db: Session = Depends(get_db), _current_user=Depends(get_current_user)):
     """Get all samples for a job."""
     stmt = select(Sample).where(Sample.job_id == job_id).order_by(Sample.id)
     result = db.execute(stmt)
@@ -684,7 +848,7 @@ async def get_job_samples(job_id: int, db: Session = Depends(get_db)):
 
 
 @app.get("/jobs/{job_id}/samples-with-results", response_model=list[SampleWithResultsResponse])
-async def get_job_samples_with_results(job_id: int, db: Session = Depends(get_db)):
+async def get_job_samples_with_results(job_id: int, db: Session = Depends(get_db), _current_user=Depends(get_current_user)):
     """
     Get all samples for a job with their calculation results flattened.
 
@@ -752,6 +916,7 @@ async def get_job_samples_with_results(job_id: int, db: Session = Depends(get_db
 async def get_samples(
     limit: int = 50,
     db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
 ):
     """Get recent samples."""
     stmt = select(Sample).order_by(desc(Sample.created_at)).limit(limit)
@@ -760,7 +925,7 @@ async def get_samples(
 
 
 @app.get("/samples/{sample_id}", response_model=SampleResponse)
-async def get_sample(sample_id: int, db: Session = Depends(get_db)):
+async def get_sample(sample_id: int, db: Session = Depends(get_db), _current_user=Depends(get_current_user)):
     """Get a single sample by ID."""
     stmt = select(Sample).where(Sample.id == sample_id)
     sample = db.execute(stmt).scalar_one_or_none()
@@ -770,7 +935,7 @@ async def get_sample(sample_id: int, db: Session = Depends(get_db)):
 
 
 @app.put("/samples/{sample_id}/approve", response_model=SampleResponse)
-async def approve_sample(sample_id: int, db: Session = Depends(get_db)):
+async def approve_sample(sample_id: int, db: Session = Depends(get_db), _current_user=Depends(get_current_user)):
     """
     Approve a sample.
 
@@ -805,6 +970,7 @@ async def reject_sample(
     sample_id: int,
     request: RejectRequest,
     db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
 ):
     """
     Reject a sample with a reason.
@@ -849,7 +1015,7 @@ def _get_calculation_settings(db: Session) -> dict:
 
 
 @app.get("/calculations/types", response_model=list[str])
-async def get_calculation_types():
+async def get_calculation_types(_current_user=Depends(get_current_user)):
     """Get list of available calculation types."""
     return CalculationEngine.get_available_types()
 
@@ -858,6 +1024,7 @@ async def get_calculation_types():
 async def calculate_sample(
     sample_id: int,
     db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
 ):
     """
     Run all applicable calculations for a sample.
@@ -944,6 +1111,7 @@ async def calculate_sample(
 async def preview_calculation(
     request: CalculationPreviewRequest,
     db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
 ):
     """
     Run a calculation without saving (for testing/preview).
@@ -972,6 +1140,7 @@ async def preview_calculation(
 async def get_sample_results(
     sample_id: int,
     db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
 ):
     """Get all calculation results for a sample."""
     # Verify sample exists
@@ -1035,7 +1204,7 @@ class HPLCParseResponse(BaseModel):
 
 
 @app.post("/hplc/parse-files", response_model=HPLCParseResponse)
-async def parse_hplc_peakdata(request: HPLCParseBrowserRequest):
+async def parse_hplc_peakdata(request: HPLCParseBrowserRequest, _current_user=Depends(get_current_user)):
     """
     Parse HPLC PeakData CSV files and calculate purity.
 
@@ -1163,7 +1332,7 @@ def _peptide_to_response(db: Session, peptide: Peptide) -> PeptideResponse:
 
 
 @app.get("/peptides", response_model=list[PeptideResponse])
-async def get_peptides(db: Session = Depends(get_db)):
+async def get_peptides(db: Session = Depends(get_db), _current_user=Depends(get_current_user)):
     """Get all peptides with their active calibration curves."""
     stmt = select(Peptide).order_by(Peptide.abbreviation)
     peptides = db.execute(stmt).scalars().all()
@@ -1171,7 +1340,7 @@ async def get_peptides(db: Session = Depends(get_db)):
 
 
 @app.post("/peptides", response_model=PeptideResponse, status_code=201)
-async def create_peptide(data: PeptideCreate, db: Session = Depends(get_db)):
+async def create_peptide(data: PeptideCreate, db: Session = Depends(get_db), _current_user=Depends(get_current_user)):
     """Create a new peptide."""
     # Check uniqueness
     existing = db.execute(
@@ -1194,7 +1363,7 @@ async def create_peptide(data: PeptideCreate, db: Session = Depends(get_db)):
 
 
 @app.put("/peptides/{peptide_id}", response_model=PeptideResponse)
-async def update_peptide(peptide_id: int, data: PeptideUpdate, db: Session = Depends(get_db)):
+async def update_peptide(peptide_id: int, data: PeptideUpdate, db: Session = Depends(get_db), _current_user=Depends(get_current_user)):
     """Update a peptide."""
     peptide = db.execute(select(Peptide).where(Peptide.id == peptide_id)).scalar_one_or_none()
     if not peptide:
@@ -1209,7 +1378,7 @@ async def update_peptide(peptide_id: int, data: PeptideUpdate, db: Session = Dep
 
 
 @app.delete("/peptides/{peptide_id}")
-async def delete_peptide(peptide_id: int, db: Session = Depends(get_db)):
+async def delete_peptide(peptide_id: int, db: Session = Depends(get_db), _current_user=Depends(get_current_user)):
     """Delete a peptide and all its calibration curves."""
     peptide = db.execute(select(Peptide).where(Peptide.id == peptide_id)).scalar_one_or_none()
     if not peptide:
@@ -1221,7 +1390,7 @@ async def delete_peptide(peptide_id: int, db: Session = Depends(get_db)):
 
 
 @app.get("/peptides/{peptide_id}/calibrations", response_model=list[CalibrationCurveResponse])
-async def get_calibrations(peptide_id: int, db: Session = Depends(get_db)):
+async def get_calibrations(peptide_id: int, db: Session = Depends(get_db), _current_user=Depends(get_current_user)):
     """Get all calibration curves for a peptide (newest first)."""
     peptide = db.execute(select(Peptide).where(Peptide.id == peptide_id)).scalar_one_or_none()
     if not peptide:
@@ -1240,6 +1409,7 @@ async def create_calibration(
     peptide_id: int,
     data: CalibrationDataInput,
     db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
 ):
     """
     Create a calibration curve from concentration/area pairs.
@@ -1324,6 +1494,7 @@ class HPLCAnalysisResponse(BaseModel):
 async def run_hplc_analysis(
     request: HPLCAnalyzeRequest,
     db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
 ):
     """
     Run a complete HPLC analysis: purity + quantity + identity.
@@ -1452,6 +1623,7 @@ async def get_hplc_analyses(
     limit: int = 50,
     offset: int = 0,
     db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
 ):
     """
     List HPLC analyses with optional search and filtering.
@@ -1495,8 +1667,34 @@ async def get_hplc_analyses(
     return HPLCAnalysisListResponse(items=items, total=total)
 
 
+@app.delete("/hplc/analyses/{analysis_id}")
+async def delete_hplc_analysis(analysis_id: int, db: Session = Depends(get_db), _current_user=Depends(get_current_user)):
+    """Delete an HPLC analysis and its related audit log entries."""
+    analysis = db.execute(
+        select(HPLCAnalysis).where(HPLCAnalysis.id == analysis_id)
+    ).scalar_one_or_none()
+    if not analysis:
+        raise HTTPException(404, f"HPLC Analysis {analysis_id} not found")
+
+    sample_label = analysis.sample_id_label
+
+    # Delete related audit logs
+    audit_logs = db.execute(
+        select(AuditLog).where(
+            AuditLog.entity_type == "hplc_analysis",
+            AuditLog.entity_id == sample_label,
+        )
+    ).scalars().all()
+    for log in audit_logs:
+        db.delete(log)
+
+    db.delete(analysis)
+    db.commit()
+    return {"message": f"Analysis {analysis_id} ({sample_label}) deleted"}
+
+
 @app.get("/hplc/analyses/{analysis_id}", response_model=HPLCAnalysisResponse)
-async def get_hplc_analysis(analysis_id: int, db: Session = Depends(get_db)):
+async def get_hplc_analysis(analysis_id: int, db: Session = Depends(get_db), _current_user=Depends(get_current_user)):
     """Get full detail of a single HPLC analysis including calculation trace."""
     analysis = db.execute(
         select(HPLCAnalysis).where(HPLCAnalysis.id == analysis_id)
@@ -1523,6 +1721,55 @@ async def get_hplc_analysis(analysis_id: int, db: Session = Depends(get_db)):
         calculation_trace=analysis.calculation_trace,
         created_at=analysis.created_at,
     )
+
+
+# --- Peptide Seed from Lab Folder ---
+
+
+class SeedPeptidesResponse(BaseModel):
+    """Response from running the peptide seed script."""
+    success: bool
+    output: str
+    errors: str
+
+
+@app.post("/hplc/seed-peptides", response_model=SeedPeptidesResponse)
+def seed_peptides_from_lab(_current_user=Depends(get_current_user)):
+    """
+    Run the peptide seed script to import peptides and calibration curves
+    from the lab's HPLC folder structure.
+
+    Uses sync def (not async) so FastAPI runs it in a threadpool,
+    allowing the subprocess to make HTTP calls back to this server.
+    """
+    script_path = Path(__file__).parent.parent / "scripts" / "seed_peptides.py"
+    if not script_path.exists():
+        raise HTTPException(404, f"Seed script not found at {script_path}")
+
+    try:
+        result = subprocess.run(
+            [sys.executable, str(script_path)],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        return SeedPeptidesResponse(
+            success=result.returncode == 0,
+            output=result.stdout,
+            errors=result.stderr,
+        )
+    except subprocess.TimeoutExpired:
+        return SeedPeptidesResponse(
+            success=False,
+            output="",
+            errors="Seed script timed out after 120 seconds",
+        )
+    except Exception as e:
+        return SeedPeptidesResponse(
+            success=False,
+            output="",
+            errors=str(e),
+        )
 
 
 # --- HPLC Weight Extraction from Lab Excel Files ---
@@ -1695,7 +1942,7 @@ def _extract_weights_from_excel(excel_path: Path) -> dict:
 
 
 @app.get("/hplc/weights/{sample_id}", response_model=WeightExtractionResponse)
-async def get_sample_weights(sample_id: str):
+async def get_sample_weights(sample_id: str, _current_user=Depends(get_current_user)):
     """
     Search the Peptides lab folder for a sample ID and extract weight data
     from the associated Excel workbook.

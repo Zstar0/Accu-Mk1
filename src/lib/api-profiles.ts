@@ -32,7 +32,7 @@ const DEFAULT_PROFILES: ApiProfile[] = [
   {
     id: 'local',
     name: 'Local Development',
-    serverUrl: 'http://127.0.0.1:8009',
+    serverUrl: 'http://127.0.0.1:8012',
     apiKey: '',
     wordpressUrl: 'https://accumarklabs.local',
   },
@@ -67,7 +67,7 @@ function getState(): ApiProfilesState {
       const migratedProfile: ApiProfile = {
         id: 'migrated',
         name: 'Migrated',
-        serverUrl: 'http://127.0.0.1:8009',
+        serverUrl: 'http://127.0.0.1:8012',
         apiKey: oldKey,
         wordpressUrl: 'https://accumarklabs.local',
       }
@@ -208,5 +208,5 @@ export function getApiKey(): string | null {
  */
 export function getServerUrl(): string {
   const profile = getActiveProfile()
-  return profile?.serverUrl ?? 'http://127.0.0.1:8009'
+  return profile?.serverUrl ?? 'http://127.0.0.1:8012'
 }

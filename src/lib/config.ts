@@ -16,5 +16,5 @@ export function getApiBaseUrl(): string {
  * Legacy constant for backward compatibility.
  * @deprecated Use getApiBaseUrl() instead
  */
-export const API_BASE_URL = 'http://127.0.0.1:8009'
+export const API_BASE_URL = 'http://127.0.0.1:8012'
 

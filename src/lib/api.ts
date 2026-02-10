@@ -4,9 +4,25 @@
 
 import { getApiBaseUrl } from './config'
 import { getApiKey } from './api-profiles'
+import { getAuthToken } from '@/store/auth-store'
 
 // Helper to get current API base URL (called dynamically)
 const API_BASE_URL = () => getApiBaseUrl()
+
+/**
+ * Get headers with JWT Bearer token for authenticated requests.
+ */
+function getBearerHeaders(contentType?: string): HeadersInit {
+  const token = getAuthToken()
+  const headers: HeadersInit = {}
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`
+  }
+  if (contentType) {
+    headers['Content-Type'] = contentType
+  }
+  return headers
+}
 
 // --- Types ---
 
@@ -87,9 +103,7 @@ export async function createAuditLog(
   try {
     const response = await fetch(`${API_BASE_URL()}/audit`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers: getBearerHeaders('application/json'),
       body: JSON.stringify({
         operation,
         entity_type: entityType,
@@ -112,7 +126,9 @@ export async function createAuditLog(
  */
 export async function getAuditLogs(limit = 50): Promise<AuditLog[]> {
   try {
-    const response = await fetch(`${API_BASE_URL()}/audit?limit=${limit}`)
+    const response = await fetch(`${API_BASE_URL()}/audit?limit=${limit}`, {
+      headers: getBearerHeaders(),
+    })
     if (!response.ok) {
       throw new Error(`Get audit logs failed: ${response.status}`)
     }
@@ -130,7 +146,9 @@ export async function getAuditLogs(limit = 50): Promise<AuditLog[]> {
  */
 export async function getSettings(): Promise<Setting[]> {
   try {
-    const response = await fetch(`${API_BASE_URL()}/settings`)
+    const response = await fetch(`${API_BASE_URL()}/settings`, {
+      headers: getBearerHeaders(),
+    })
     if (!response.ok) {
       throw new Error(`Get settings failed: ${response.status}`)
     }
@@ -147,7 +165,8 @@ export async function getSettings(): Promise<Setting[]> {
 export async function getSetting(key: string): Promise<Setting> {
   try {
     const response = await fetch(
-      `${API_BASE_URL()}/settings/${encodeURIComponent(key)}`
+      `${API_BASE_URL()}/settings/${encodeURIComponent(key)}`,
+      { headers: getBearerHeaders() }
     )
     if (!response.ok) {
       throw new Error(`Get setting '${key}' failed: ${response.status}`)
@@ -171,9 +190,7 @@ export async function updateSetting(
       `${API_BASE_URL()}/settings/${encodeURIComponent(key)}`,
       {
         method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: getBearerHeaders('application/json'),
         body: JSON.stringify({ value }),
       }
     )
@@ -278,6 +295,7 @@ export async function previewFile(filePath: string): Promise<ParsePreview> {
       `${API_BASE_URL()}/import/file?file_path=${encodeURIComponent(filePath)}`,
       {
         method: 'POST',
+        headers: getBearerHeaders(),
       }
     )
     if (!response.ok) {
@@ -298,9 +316,7 @@ export async function importBatch(filePaths: string[]): Promise<ImportResult> {
   try {
     const response = await fetch(`${API_BASE_URL()}/import/batch`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers: getBearerHeaders('application/json'),
       body: JSON.stringify({ file_paths: filePaths }),
     })
     if (!response.ok) {
@@ -333,9 +349,7 @@ export async function importBatchData(
   try {
     const response = await fetch(`${API_BASE_URL()}/import/batch-data`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers: getBearerHeaders('application/json'),
       body: JSON.stringify({ files }),
     })
     if (!response.ok) {
@@ -355,7 +369,9 @@ export async function importBatchData(
  */
 export async function getJobs(limit = 50): Promise<Job[]> {
   try {
-    const response = await fetch(`${API_BASE_URL()}/jobs?limit=${limit}`)
+    const response = await fetch(`${API_BASE_URL()}/jobs?limit=${limit}`, {
+      headers: getBearerHeaders(),
+    })
     if (!response.ok) {
       throw new Error(`Get jobs failed: ${response.status}`)
     }
@@ -371,7 +387,9 @@ export async function getJobs(limit = 50): Promise<Job[]> {
  */
 export async function getJob(jobId: number): Promise<Job> {
   try {
-    const response = await fetch(`${API_BASE_URL()}/jobs/${jobId}`)
+    const response = await fetch(`${API_BASE_URL()}/jobs/${jobId}`, {
+      headers: getBearerHeaders(),
+    })
     if (!response.ok) {
       throw new Error(`Get job ${jobId} failed: ${response.status}`)
     }
@@ -387,7 +405,9 @@ export async function getJob(jobId: number): Promise<Job> {
  */
 export async function getJobSamples(jobId: number): Promise<Sample[]> {
   try {
-    const response = await fetch(`${API_BASE_URL()}/jobs/${jobId}/samples`)
+    const response = await fetch(`${API_BASE_URL()}/jobs/${jobId}/samples`, {
+      headers: getBearerHeaders(),
+    })
     if (!response.ok) {
       throw new Error(`Get job ${jobId} samples failed: ${response.status}`)
     }
@@ -425,7 +445,8 @@ export async function getSamplesWithResults(
 ): Promise<SampleWithResults[]> {
   try {
     const response = await fetch(
-      `${API_BASE_URL()}/jobs/${jobId}/samples-with-results`
+      `${API_BASE_URL()}/jobs/${jobId}/samples-with-results`,
+      { headers: getBearerHeaders() }
     )
     if (!response.ok) {
       throw new Error(
@@ -446,7 +467,9 @@ export async function getSamplesWithResults(
  */
 export async function getSamples(limit = 50): Promise<Sample[]> {
   try {
-    const response = await fetch(`${API_BASE_URL()}/samples?limit=${limit}`)
+    const response = await fetch(`${API_BASE_URL()}/samples?limit=${limit}`, {
+      headers: getBearerHeaders(),
+    })
     if (!response.ok) {
       throw new Error(`Get samples failed: ${response.status}`)
     }
@@ -462,7 +485,9 @@ export async function getSamples(limit = 50): Promise<Sample[]> {
  */
 export async function getSample(sampleId: number): Promise<Sample> {
   try {
-    const response = await fetch(`${API_BASE_URL()}/samples/${sampleId}`)
+    const response = await fetch(`${API_BASE_URL()}/samples/${sampleId}`, {
+      headers: getBearerHeaders(),
+    })
     if (!response.ok) {
       throw new Error(`Get sample ${sampleId} failed: ${response.status}`)
     }
@@ -483,6 +508,7 @@ export async function approveSample(sampleId: number): Promise<Sample> {
       `${API_BASE_URL()}/samples/${sampleId}/approve`,
       {
         method: 'PUT',
+        headers: getBearerHeaders(),
       }
     )
     if (!response.ok) {
@@ -508,9 +534,7 @@ export async function rejectSample(
       `${API_BASE_URL()}/samples/${sampleId}/reject`,
       {
         method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: getBearerHeaders('application/json'),
         body: JSON.stringify({ reason }),
       }
     )
@@ -571,6 +595,7 @@ export async function calculateSample(
   try {
     const response = await fetch(`${API_BASE_URL()}/calculate/${sampleId}`, {
       method: 'POST',
+      headers: getBearerHeaders(),
     })
     if (!response.ok) {
       throw new Error(`Calculate sample ${sampleId} failed: ${response.status}`)
@@ -587,7 +612,9 @@ export async function calculateSample(
  */
 export async function getCalculationTypes(): Promise<string[]> {
   try {
-    const response = await fetch(`${API_BASE_URL()}/calculations/types`)
+    const response = await fetch(`${API_BASE_URL()}/calculations/types`, {
+      headers: getBearerHeaders(),
+    })
     if (!response.ok) {
       throw new Error(`Get calculation types failed: ${response.status}`)
     }
@@ -609,9 +636,7 @@ export async function previewCalculation(
   try {
     const response = await fetch(`${API_BASE_URL()}/calculate/preview`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers: getBearerHeaders('application/json'),
       body: JSON.stringify({
         data,
         calculation_type: calculationType,
@@ -635,7 +660,8 @@ export async function getSampleResults(
 ): Promise<StoredResult[]> {
   try {
     const response = await fetch(
-      `${API_BASE_URL()}/samples/${sampleId}/results`
+      `${API_BASE_URL()}/samples/${sampleId}/results`,
+      { headers: getBearerHeaders() }
     )
     if (!response.ok) {
       throw new Error(
@@ -673,7 +699,9 @@ export interface DetectedFiles {
  */
 export async function getWatcherStatus(): Promise<WatcherStatus> {
   try {
-    const response = await fetch(`${API_BASE_URL()}/watcher/status`)
+    const response = await fetch(`${API_BASE_URL()}/watcher/status`, {
+      headers: getBearerHeaders(),
+    })
     if (!response.ok) {
       throw new Error('Failed to get watcher status')
     }
@@ -694,6 +722,7 @@ export async function startWatcher(): Promise<{
   try {
     const response = await fetch(`${API_BASE_URL()}/watcher/start`, {
       method: 'POST',
+      headers: getBearerHeaders(),
     })
     if (!response.ok) {
       const error = await response.json()
@@ -713,6 +742,7 @@ export async function stopWatcher(): Promise<{ status: string }> {
   try {
     const response = await fetch(`${API_BASE_URL()}/watcher/stop`, {
       method: 'POST',
+      headers: getBearerHeaders(),
     })
     if (!response.ok) {
       throw new Error('Failed to stop watcher')
@@ -729,7 +759,9 @@ export async function stopWatcher(): Promise<{ status: string }> {
  */
 export async function getDetectedFiles(): Promise<DetectedFiles> {
   try {
-    const response = await fetch(`${API_BASE_URL()}/watcher/files`)
+    const response = await fetch(`${API_BASE_URL()}/watcher/files`, {
+      headers: getBearerHeaders(),
+    })
     if (!response.ok) {
       throw new Error('Failed to get detected files')
     }
@@ -743,11 +775,16 @@ export async function getDetectedFiles(): Promise<DetectedFiles> {
 // --- Explorer API (Integration Service Database) ---
 
 /**
- * Get headers with API key authentication for explorer endpoints.
+ * Get headers with both Bearer token and API key for explorer endpoints.
+ * Explorer endpoints still use API key on the backend for now.
  */
 function getAuthHeaders(): HeadersInit {
+  const token = getAuthToken()
   const apiKey = getApiKey()
   const headers: HeadersInit = {}
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`
+  }
   if (apiKey) {
     headers['X-API-Key'] = apiKey
   }
@@ -1218,9 +1255,7 @@ export async function parseHPLCFiles(
   try {
     const response = await fetch(`${API_BASE_URL()}/hplc/parse-files`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers: getBearerHeaders('application/json'),
       body: JSON.stringify({ files }),
     })
     if (!response.ok) {
@@ -1276,7 +1311,9 @@ export interface CalibrationDataInput {
 
 export async function getPeptides(): Promise<PeptideRecord[]> {
   try {
-    const response = await fetch(`${API_BASE_URL()}/peptides`)
+    const response = await fetch(`${API_BASE_URL()}/peptides`, {
+      headers: getBearerHeaders(),
+    })
     if (!response.ok) {
       throw new Error(`Get peptides failed: ${response.status}`)
     }
@@ -1293,7 +1330,7 @@ export async function createPeptide(
   try {
     const response = await fetch(`${API_BASE_URL()}/peptides`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getBearerHeaders('application/json'),
       body: JSON.stringify(data),
     })
     if (!response.ok) {
@@ -1314,7 +1351,7 @@ export async function updatePeptide(
   try {
     const response = await fetch(`${API_BASE_URL()}/peptides/${peptideId}`, {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getBearerHeaders('application/json'),
       body: JSON.stringify(data),
     })
     if (!response.ok) {
@@ -1331,6 +1368,7 @@ export async function deletePeptide(peptideId: number): Promise<void> {
   try {
     const response = await fetch(`${API_BASE_URL()}/peptides/${peptideId}`, {
       method: 'DELETE',
+      headers: getBearerHeaders(),
     })
     if (!response.ok) {
       throw new Error(`Delete peptide failed: ${response.status}`)
@@ -1346,7 +1384,8 @@ export async function getCalibrations(
 ): Promise<CalibrationCurve[]> {
   try {
     const response = await fetch(
-      `${API_BASE_URL()}/peptides/${peptideId}/calibrations`
+      `${API_BASE_URL()}/peptides/${peptideId}/calibrations`,
+      { headers: getBearerHeaders() }
     )
     if (!response.ok) {
       throw new Error(`Get calibrations failed: ${response.status}`)
@@ -1367,7 +1406,7 @@ export async function createCalibration(
       `${API_BASE_URL()}/peptides/${peptideId}/calibrations`,
       {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getBearerHeaders('application/json'),
         body: JSON.stringify(data),
       }
     )
@@ -1423,7 +1462,7 @@ export async function runHPLCAnalysis(
   try {
     const response = await fetch(`${API_BASE_URL()}/hplc/analyze`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getBearerHeaders('application/json'),
       body: JSON.stringify(data),
     })
     if (!response.ok) {
@@ -1464,12 +1503,37 @@ export async function fetchSampleWeights(
   sampleId: string
 ): Promise<WeightExtractionResult> {
   const response = await fetch(
-    `${API_BASE_URL()}/hplc/weights/${encodeURIComponent(sampleId)}`
+    `${API_BASE_URL()}/hplc/weights/${encodeURIComponent(sampleId)}`,
+    { headers: getBearerHeaders() }
   )
   if (!response.ok) {
     throw new Error(`Fetch weights failed: ${response.status}`)
   }
   return response.json()
+}
+
+// --- Peptide Seed API ---
+
+export interface SeedPeptidesResult {
+  success: boolean
+  output: string
+  errors: string
+}
+
+export async function seedPeptides(): Promise<SeedPeptidesResult> {
+  try {
+    const response = await fetch(`${API_BASE_URL()}/hplc/seed-peptides`, {
+      method: 'POST',
+      headers: getBearerHeaders(),
+    })
+    if (!response.ok) {
+      throw new Error(`Seed peptides failed: ${response.status}`)
+    }
+    return response.json()
+  } catch (error) {
+    console.error('Seed peptides error:', error)
+    throw error
+  }
 }
 
 // --- HPLC Analysis History API ---
@@ -1503,7 +1567,8 @@ export async function getHPLCAnalyses(
     params.set('offset', String(offset))
 
     const response = await fetch(
-      `${API_BASE_URL()}/hplc/analyses?${params}`
+      `${API_BASE_URL()}/hplc/analyses?${params}`,
+      { headers: getBearerHeaders() }
     )
     if (!response.ok) {
       throw new Error(`Get HPLC analyses failed: ${response.status}`)
@@ -1515,12 +1580,30 @@ export async function getHPLCAnalyses(
   }
 }
 
+export async function deleteHPLCAnalysis(
+  analysisId: number
+): Promise<void> {
+  try {
+    const response = await fetch(
+      `${API_BASE_URL()}/hplc/analyses/${analysisId}`,
+      { method: 'DELETE', headers: getBearerHeaders() }
+    )
+    if (!response.ok) {
+      throw new Error(`Delete HPLC analysis ${analysisId} failed: ${response.status}`)
+    }
+  } catch (error) {
+    console.error(`Delete HPLC analysis ${analysisId} error:`, error)
+    throw error
+  }
+}
+
 export async function getHPLCAnalysis(
   analysisId: number
 ): Promise<HPLCAnalysisResult> {
   try {
     const response = await fetch(
-      `${API_BASE_URL()}/hplc/analyses/${analysisId}`
+      `${API_BASE_URL()}/hplc/analyses/${analysisId}`,
+      { headers: getBearerHeaders() }
     )
     if (!response.ok) {
       throw new Error(`Get HPLC analysis ${analysisId} failed: ${response.status}`)

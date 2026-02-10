@@ -6,6 +6,8 @@ import {
   FlaskConical,
   Loader2,
   AlertCircle,
+  Download,
+  X,
 } from 'lucide-react'
 import {
   Card,
@@ -30,7 +32,9 @@ import { CalibrationPanel } from './CalibrationPanel'
 import {
   getPeptides,
   deletePeptide,
+  seedPeptides,
   type PeptideRecord,
+  type SeedPeptidesResult,
 } from '@/lib/api'
 
 export function PeptideConfig() {
@@ -39,6 +43,8 @@ export function PeptideConfig() {
   const [error, setError] = useState<string | null>(null)
   const [selectedId, setSelectedId] = useState<number | null>(null)
   const [showAddForm, setShowAddForm] = useState(false)
+  const [seeding, setSeeding] = useState(false)
+  const [seedResult, setSeedResult] = useState<SeedPeptidesResult | null>(null)
 
   const loadPeptides = useCallback(async () => {
     try {
@@ -72,6 +78,21 @@ export function PeptideConfig() {
     [selectedId, loadPeptides]
   )
 
+  const handleSeed = useCallback(async () => {
+    setSeeding(true)
+    setSeedResult(null)
+    setError(null)
+    try {
+      const result = await seedPeptides()
+      setSeedResult(result)
+      await loadPeptides()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Seed failed')
+    } finally {
+      setSeeding(false)
+    }
+  }, [loadPeptides])
+
   const selectedPeptide = peptides.find(p => p.id === selectedId) ?? null
 
   return (
@@ -86,10 +107,25 @@ export function PeptideConfig() {
               Manage peptides, reference retention times, and calibration curves.
             </p>
           </div>
-          <Button onClick={() => setShowAddForm(true)} className="gap-2">
-            <Plus className="h-4 w-4" />
-            Add Peptide
-          </Button>
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              onClick={handleSeed}
+              disabled={seeding}
+              className="gap-2"
+            >
+              {seeding ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Download className="h-4 w-4" />
+              )}
+              {seeding ? 'Importing...' : 'Import from Lab'}
+            </Button>
+            <Button onClick={() => setShowAddForm(true)} className="gap-2">
+              <Plus className="h-4 w-4" />
+              Add Peptide
+            </Button>
+          </div>
         </div>
 
         {error && (
@@ -97,6 +133,31 @@ export function PeptideConfig() {
             <CardContent className="flex items-center gap-2 pt-6">
               <AlertCircle className="h-4 w-4 text-destructive" />
               <span className="text-sm text-destructive">{error}</span>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Seed results */}
+        {seedResult && (
+          <Card className={seedResult.success ? 'border-green-500' : 'border-destructive'}>
+            <CardHeader className="pb-2">
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-sm">
+                  {seedResult.success ? 'Import Complete' : 'Import Failed'}
+                </CardTitle>
+                <button
+                  type="button"
+                  onClick={() => setSeedResult(null)}
+                  className="rounded p-1 text-muted-foreground hover:text-foreground"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <pre className="max-h-64 overflow-auto whitespace-pre-wrap rounded bg-muted p-3 text-xs font-mono">
+                {seedResult.output || seedResult.errors || 'No output'}
+              </pre>
             </CardContent>
           </Card>
         )}

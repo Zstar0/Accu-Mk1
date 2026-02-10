@@ -5,6 +5,8 @@ import {
   Wrench,
   Settings,
   Activity,
+  Users,
+  LogOut,
 } from 'lucide-react'
 import {
   Collapsible,
@@ -31,10 +33,13 @@ import {
   type ActiveSection,
   type ActiveSubSection,
 } from '@/store/ui-store'
+import { useAuthStore } from '@/store/auth-store'
+import { logout } from '@/lib/auth-api'
 
 interface SubItem {
   id: ActiveSubSection
   label: string
+  adminOnly?: boolean
 }
 
 interface NavItem {
@@ -50,11 +55,8 @@ const navItems: NavItem[] = [
     label: 'Lab Operations',
     icon: FlaskConical,
     subItems: [
-      { id: 'overview', label: 'Overview' },
       { id: 'chromatographs', label: 'Chromatographs' },
       { id: 'sample-intake', label: 'Sample Intake' },
-      { id: 'results-entry', label: 'Results Entry' },
-      { id: 'coa-generation', label: 'COA Generation' },
     ],
   },
   {
@@ -77,6 +79,15 @@ const navItems: NavItem[] = [
       { id: 'order-explorer', label: 'Order Explorer' },
     ],
   },
+  {
+    id: 'account',
+    label: 'Account',
+    icon: Users,
+    subItems: [
+      { id: 'change-password', label: 'Change Password' },
+      { id: 'user-management', label: 'User Management', adminOnly: true },
+    ],
+  },
 ]
 
 export function AppSidebar() {
@@ -84,6 +95,8 @@ export function AppSidebar() {
   const activeSubSection = useUIStore(state => state.activeSubSection)
   const navigateTo = useUIStore(state => state.navigateTo)
   const setPreferencesOpen = useUIStore(state => state.setPreferencesOpen)
+  const user = useAuthStore(state => state.user)
+  const isAdmin = user?.role === 'admin'
 
   return (
     <Sidebar collapsible="icon">
@@ -104,7 +117,10 @@ export function AppSidebar() {
               {navItems.map(item => {
                 const Icon = item.icon
                 const isActive = activeSection === item.id
-                const hasSubItems = item.subItems && item.subItems.length > 0
+                const visibleSubItems = item.subItems?.filter(
+                  sub => !sub.adminOnly || isAdmin
+                )
+                const hasSubItems = visibleSubItems && visibleSubItems.length > 0
 
                 if (hasSubItems) {
                   return (
@@ -127,7 +143,7 @@ export function AppSidebar() {
                         </CollapsibleTrigger>
                         <CollapsibleContent>
                           <SidebarMenuSub>
-                            {item.subItems?.map(subItem => {
+                            {visibleSubItems?.map(subItem => {
                               const isSubActive =
                                 isActive && activeSubSection === subItem.id
                               return (
@@ -184,7 +200,21 @@ export function AppSidebar() {
               <span>Settings</span>
             </SidebarMenuButton>
           </SidebarMenuItem>
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              tooltip="Sign Out"
+              onClick={() => logout()}
+            >
+              <LogOut className="h-4 w-4" />
+              <span>Sign Out</span>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
         </SidebarMenu>
+        {user && (
+          <div className="px-3 py-1 text-xs text-muted-foreground truncate group-data-[collapsible=icon]:hidden">
+            {user.email}
+          </div>
+        )}
       </SidebarFooter>
     </Sidebar>
   )

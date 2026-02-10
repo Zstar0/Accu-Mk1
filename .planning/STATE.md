@@ -4,58 +4,52 @@
 
 See: .planning/PROJECT.md (updated 2026-02-09)
 
-**Core value:** Full visibility into Integration Service data for order debugging and management
-**Current focus:** v0.5.0 — Order Explorer Enhancement
+**Core value:** Streamlined morning workflow with secure access control for production deployment
+**Current focus:** v0.6.0 — User Authentication (COMPLETE)
 
-## Current Milestone: v0.5.0
+## Current Milestone: v0.6.0
 
-Phase: 1 of 4 (Backend Explorer API Expansion)
-Plan: 0/TBD
-Status: Not started
-Last activity: 2026-02-09 - Milestone defined, requirements and roadmap created
+Phase: 7 of 7 (Admin User Management)
+Plan: Complete
+Status: All phases complete
+Last activity: 2026-02-09 — All auth features implemented and tested
 
-Progress: ░░░░░░░░░░░░░░░░░░░░ 0%
+Progress: ████████████████████ 100%
 
 ## Milestone Documents
 
-- Requirements: `.planning/REQUIREMENTS-v0.5.0.md` (18 requirements)
-- Roadmap: `.planning/ROADMAP-v0.5.0.md` (4 phases)
-- Integration Service repo: `C:\Users\forre\OneDrive\Documents\GitHub\Accumark-Workspace\integration-service`
-
-## Previous Milestone (v1 - HPLC Workflow)
-
-Phase: 3 of 4 (Review Workflow - paused)
-Status: Paused at plan 1/4 of Phase 3
-Documents: `.planning/ROADMAP.md`, `.planning/REQUIREMENTS.md`
-
-**Performance Metrics (v1):**
-- Total plans completed: 11
-- Average duration: 3 min 51 sec
-- Total execution time: ~42 min 52 sec
+- Requirements: `.planning/REQUIREMENTS-v0.6.0.md` (23 requirements — all implemented)
+- Roadmap: `.planning/ROADMAP-v0.6.0.md` (3 phases: 5-7 — all complete)
+- Research: `.planning/research/` (STACK, FEATURES, ARCHITECTURE, PITFALLS)
 
 ## Accumulated Context
 
 ### Decisions
 
-- All 7 Integration Service tables confirmed ACTIVE (no retired tables)
-- Explorer endpoints use API Key auth (X-API-Key header), not JWT
-- Phase 1 work happens in integration-service repo (Python/FastAPI)
-- Phases 2-4 work happens in Accu-Mk1 repo (React/TypeScript)
-- Tabbed detail view pattern chosen for order details (Summary, Ingestions, COAs, Attempts, Events)
-- JWT auth needed for Phase 4 (signed URL service endpoints)
-
-### Pending Todos
-
-- Uncommitted lint fixes and CONCERNS fixes from previous session
-- `.planning/codebase/` mapper output not committed
+- Manual JWT implementation (not FastAPI Users) — avoids async SQLAlchemy migration
+- Direct bcrypt library (not passlib) — passlib incompatible with bcrypt>=4.1
+- python-jose for JWT — sub claim must be string per spec
+- JWT Bearer tokens stored in localStorage (works for both browser and Tauri)
+- Zustand auth store (consistent with existing pattern)
+- Two roles: standard + admin
+- Console/log-based password reset (no email infra for v1)
+- First admin auto-seeded on startup
+- Backend moved to port 8012 (avoid conflicts with other services)
 
 ### Blockers/Concerns
 
-- Phase 4 requires JWT auth flow investigation (currently only API Key auth used in frontend)
-- Updater signing not configured (TAURI_SIGNING_PRIVATE_KEY needed for release builds)
+- None
+
+### Key Bug Fixes During Implementation
+
+- passlib + bcrypt>=4.1 incompatibility → replaced with direct bcrypt
+- JWT sub claim must be string → changed to str(user.id)
+- uvicorn --reload broken on OneDrive paths → manual restarts needed
+- Port conflicts (8009 occupied, 8011 ghost process) → moved to 8012
+- Dark mode autofill unreadable → CSS overrides outside @layer base
 
 ## Session Continuity
 
 Last session: 2026-02-09
-Stopped at: v0.5.0 milestone defined — ready to plan Phase 1
+Stopped at: v0.6.0 complete, committed
 Resume file: None

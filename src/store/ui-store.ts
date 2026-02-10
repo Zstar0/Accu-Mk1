@@ -2,13 +2,14 @@ import { create } from 'zustand'
 import { devtools } from 'zustand/middleware'
 
 // Navigation sections for main content area
-export type ActiveSection = 'lab-operations' | 'hplc-analysis' | 'accumark-tools'
+export type ActiveSection = 'lab-operations' | 'hplc-analysis' | 'accumark-tools' | 'account'
 
 // Sub-sections within each main section
-export type LabOperationsSubSection = 'overview' | 'chromatographs' | 'sample-intake' | 'results-entry' | 'coa-generation'
+export type LabOperationsSubSection = 'chromatographs' | 'sample-intake'
 export type HPLCAnalysisSubSection = 'overview' | 'new-analysis' | 'peptide-config' | 'analysis-history'
 export type AccuMarkToolsSubSection = 'overview' | 'order-explorer'
-export type ActiveSubSection = LabOperationsSubSection | HPLCAnalysisSubSection | AccuMarkToolsSubSection
+export type AccountSubSection = 'change-password' | 'user-management'
+export type ActiveSubSection = LabOperationsSubSection | HPLCAnalysisSubSection | AccuMarkToolsSubSection | AccountSubSection
 
 interface UIState {
   leftSidebarVisible: boolean

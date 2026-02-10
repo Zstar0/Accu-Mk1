@@ -297,21 +297,27 @@ def main():
         folder_path = PEPTIDES_ROOT / folder_name
 
         if not folder_path.exists():
-            print(f"[MISSING] {folder_name}/ — folder not found")
+            print(f"[MISSING] {folder_name}/")
+            continue
+
+        # Find calibration Excel files
+        cal_files = find_calibration_files(folder_path)
+
+        # Fast path: skip existing peptides with one-line summary
+        if abbreviation in existing:
+            skipped += 1
+            if not cal_files:
+                no_data.append(folder_name)
+                print(f"[SKIP] {abbreviation} — exists (id={existing[abbreviation]['id']}), no cal files")
+            else:
+                print(f"[SKIP] {abbreviation} — exists (id={existing[abbreviation]['id']})")
             continue
 
         print(f"--- {folder_name} ({abbreviation}) ---")
 
-        # Find calibration Excel files
-        cal_files = find_calibration_files(folder_path)
         if not cal_files:
-            print(f"  No calibration files found")
             no_data.append(folder_name)
-            # Still create the peptide (without calibration)
-            if abbreviation in existing:
-                print(f"  Peptide already exists (id={existing[abbreviation]['id']})")
-                skipped += 1
-            elif dry_run:
+            if dry_run:
                 print(f"  [DRY RUN] Would create peptide: {full_name} ({abbreviation})")
                 created += 1
             else:
@@ -333,13 +339,8 @@ def main():
                 break
 
         if not best_cal:
-            print(f"  No valid calibration data extracted from any file")
             no_data.append(folder_name)
-            # Create peptide without calibration
-            if abbreviation in existing:
-                print(f"  Peptide already exists (id={existing[abbreviation]['id']})")
-                skipped += 1
-            elif dry_run:
+            if dry_run:
                 print(f"  [DRY RUN] Would create peptide: {full_name} ({abbreviation})")
                 created += 1
             else:
@@ -361,19 +362,6 @@ def main():
         print(f"    Areas: {[round(a, 2) for a in best_cal['areas']]}")
         if ref_rt:
             print(f"    Avg RT: {ref_rt} min")
-
-        # Create or skip peptide
-        if abbreviation in existing:
-            peptide_id = existing[abbreviation]["id"]
-            print(f"  Peptide already exists (id={peptide_id})")
-            skipped += 1
-
-            # Still add calibration if we have data and they want to update
-            # For idempotency, we skip calibration if peptide already has one
-            # (user can manually add more via the UI if needed)
-            print(f"  Skipping calibration (peptide already seeded)")
-            print()
-            continue
 
         if dry_run:
             print(f"  [DRY RUN] Would create peptide: {full_name} ({abbreviation})")

@@ -6,6 +6,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Loader2,
+  Trash2,
 } from 'lucide-react'
 import {
   Card,
@@ -19,6 +20,7 @@ import { Badge } from '@/components/ui/badge'
 import {
   getHPLCAnalyses,
   getHPLCAnalysis,
+  deleteHPLCAnalysis,
   type HPLCAnalysisListItem,
   type HPLCAnalysisResult,
 } from '@/lib/api'
@@ -84,6 +86,16 @@ export function AnalysisHistory() {
       cancelled = true
     }
   }, [selectedId])
+
+  const handleDelete = async (id: number, label: string) => {
+    if (!window.confirm(`Delete analysis for "${label}"? This cannot be undone.`)) return
+    try {
+      await deleteHPLCAnalysis(id)
+      fetchList()
+    } catch {
+      setError('Failed to delete analysis')
+    }
+  }
 
   const totalPages = Math.ceil(total / PAGE_SIZE)
 
@@ -172,6 +184,7 @@ export function AnalysisHistory() {
                     <th className="pb-2 pr-4 font-medium text-right">Quantity (mg)</th>
                     <th className="pb-2 pr-4 font-medium">Identity</th>
                     <th className="pb-2 font-medium">Date</th>
+                    <th className="pb-2 font-medium w-10"></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -214,6 +227,19 @@ export function AnalysisHistory() {
                       </td>
                       <td className="py-2.5 text-muted-foreground">
                         {new Date(item.created_at).toLocaleDateString()}
+                      </td>
+                      <td className="py-2.5">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                          onClick={e => {
+                            e.stopPropagation()
+                            handleDelete(item.id, item.sample_id_label)
+                          }}
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </Button>
                       </td>
                     </tr>
                   ))}

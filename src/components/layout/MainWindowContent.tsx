@@ -5,8 +5,11 @@ import { BatchReview } from '@/components/BatchReview'
 import { AccuMarkTools } from '@/components/AccuMarkTools'
 import { ChromatographViewer } from '@/components/ChromatographViewer'
 import { HPLCAnalysis } from '@/components/hplc/HPLCAnalysis'
+import { UserManagement } from '@/components/auth/UserManagement'
+import { ChangePassword } from '@/components/auth/ChangePassword'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { useUIStore } from '@/store/ui-store'
+import { useAuthStore } from '@/store/auth-store'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { KeyRound, Settings } from 'lucide-react'
@@ -24,6 +27,7 @@ export function MainWindowContent({
   const activeSection = useUIStore(state => state.activeSection)
   const activeSubSection = useUIStore(state => state.activeSubSection)
   const setPreferencesOpen = useUIStore(state => state.setPreferencesOpen)
+  const isAdmin = useAuthStore(state => state.user?.role === 'admin')
   const [apiKeyConfigured, setApiKeyConfigured] = useState(true) // Default true to avoid flash
 
   // Check for API key on mount, when section changes, and when profile changes
@@ -70,9 +74,6 @@ export function MainWindowContent({
       case 'chromatographs':
         return <ChromatographViewer />
       case 'sample-intake':
-      case 'results-entry':
-      case 'coa-generation':
-      case 'overview':
       default:
         // Default Lab Operations view (legacy)
         return (
@@ -100,6 +101,11 @@ export function MainWindowContent({
         return <HPLCAnalysis />
       case 'accumark-tools':
         return <AccuMarkTools />
+      case 'account':
+        if (activeSubSection === 'user-management' && isAdmin) {
+          return <UserManagement />
+        }
+        return <ChangePassword />
       default:
         return null
     }
