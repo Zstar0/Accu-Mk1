@@ -287,31 +287,30 @@ function CalibrationRow({
               <span>R² = {calibration.r_squared.toFixed(6)}</span>
               <span>•</span>
               <span>{dateStr}</span>
-              {calibration.source_filename && (
-                <>
-                  <span>•</span>
-                  {calibration.sharepoint_url ? (
-                    <a
-                      href={calibration.sharepoint_url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="flex items-center gap-1 truncate hover:text-primary transition-colors"
-                      onClick={e => e.stopPropagation()}
-                      title="Open in SharePoint"
-                    >
-                      <FileSpreadsheet className="h-3 w-3 shrink-0" />
-                      <span className="truncate">{calibration.source_filename}</span>
-                      <ExternalLink className="h-2.5 w-2.5 shrink-0 opacity-60" />
-                    </a>
-                  ) : (
-                    <span className="flex items-center gap-1 truncate">
-                      <FileSpreadsheet className="h-3 w-3" />
-                      {calibration.source_filename}
-                    </span>
-                  )}
-                </>
-              )}
             </div>
+            {calibration.source_filename && (
+              <div className="text-xs text-muted-foreground mt-0.5">
+                {calibration.sharepoint_url ? (
+                  <a
+                    href={calibration.sharepoint_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-1 hover:text-primary transition-colors"
+                    onClick={e => e.stopPropagation()}
+                    title="Open in SharePoint"
+                  >
+                    <FileSpreadsheet className="h-3 w-3 shrink-0" />
+                    <span className="truncate">{calibration.source_filename}</span>
+                    <ExternalLink className="h-2.5 w-2.5 shrink-0 opacity-60" />
+                  </a>
+                ) : (
+                  <span className="flex items-center gap-1">
+                    <FileSpreadsheet className="h-3 w-3" />
+                    {calibration.source_filename}
+                  </span>
+                )}
+              </div>
+            )}
           </div>
         </div>
         <div className="flex items-center gap-2 shrink-0">

@@ -548,7 +548,7 @@ export function PeptideConfig() {
             />
             {/* Sidebar Panel */}
             <div
-              className="fixed top-0 right-0 h-full w-full max-w-xl z-50 bg-zinc-950 border-l border-zinc-800 shadow-2xl overflow-y-auto"
+              className="fixed top-0 right-0 h-full w-full max-w-3xl z-50 bg-zinc-950 border-l border-zinc-800 shadow-2xl overflow-y-auto"
               style={{
                 animation: 'slideInRight 0.25s ease-out',
               }}
