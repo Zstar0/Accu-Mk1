@@ -1,4 +1,11 @@
-import { ChevronRight, FlaskConical, Wrench, Settings, Activity } from 'lucide-react'
+import {
+  ChevronRight,
+  FlaskConical,
+  Microscope,
+  Wrench,
+  Settings,
+  Activity,
+} from 'lucide-react'
 import {
   Collapsible,
   CollapsibleContent,
@@ -19,7 +26,11 @@ import {
   SidebarFooter,
   SidebarHeader,
 } from '@/components/ui/sidebar'
-import { useUIStore, type ActiveSection, type ActiveSubSection } from '@/store/ui-store'
+import {
+  useUIStore,
+  type ActiveSection,
+  type ActiveSubSection,
+} from '@/store/ui-store'
 
 interface SubItem {
   id: ActiveSubSection
@@ -44,6 +55,17 @@ const navItems: NavItem[] = [
       { id: 'sample-intake', label: 'Sample Intake' },
       { id: 'results-entry', label: 'Results Entry' },
       { id: 'coa-generation', label: 'COA Generation' },
+    ],
+  },
+  {
+    id: 'hplc-analysis',
+    label: 'HPLC Analysis',
+    icon: Microscope,
+    subItems: [
+      { id: 'overview', label: 'Overview' },
+      { id: 'new-analysis', label: 'New Analysis' },
+      { id: 'peptide-config', label: 'Peptide Config' },
+      { id: 'analysis-history', label: 'History' },
     ],
   },
   {
@@ -105,8 +127,9 @@ export function AppSidebar() {
                         </CollapsibleTrigger>
                         <CollapsibleContent>
                           <SidebarMenuSub>
-                            {item.subItems!.map(subItem => {
-                              const isSubActive = isActive && activeSubSection === subItem.id
+                            {item.subItems?.map(subItem => {
+                              const isSubActive =
+                                isActive && activeSubSection === subItem.id
                               return (
                                 <SidebarMenuSubItem key={subItem.id}>
                                   <SidebarMenuSubButton
@@ -115,7 +138,9 @@ export function AppSidebar() {
                                   >
                                     <button
                                       type="button"
-                                      onClick={() => navigateTo(item.id, subItem.id)}
+                                      onClick={() =>
+                                        navigateTo(item.id, subItem.id)
+                                      }
                                     >
                                       <span>{subItem.label}</span>
                                     </button>

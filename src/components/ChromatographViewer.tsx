@@ -9,8 +9,21 @@ import {
   ResponsiveContainer,
   ReferenceLine,
 } from 'recharts'
-import { Upload, FileSpreadsheet, Trash2, ZoomIn, ZoomOut, RotateCcw } from 'lucide-react'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import {
+  Upload,
+  FileSpreadsheet,
+  Trash2,
+  ZoomIn,
+  ZoomOut,
+  RotateCcw,
+} from 'lucide-react'
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 
@@ -44,62 +57,82 @@ function parseCSV(content: string): ChromatogramData[] {
 
   // Try to detect the delimiter
   const delimiter = lines[0]?.includes('\t') ? '\t' : ','
-  
+
   // Parse header to find column indices
-  const header = lines[0]?.toLowerCase().split(delimiter).map(h => h.trim()) ?? []
-  let timeIndex = header.findIndex(h => h.includes('time') || h.includes('min') || h === 'x')
-  let mAUIndex = header.findIndex(h => h.includes('mau') || h.includes('absorbance') || h.includes('intensity') || h === 'y')
-  
+  const header =
+    lines[0]
+      ?.toLowerCase()
+      .split(delimiter)
+      .map(h => h.trim()) ?? []
+  let timeIndex = header.findIndex(
+    h => h.includes('time') || h.includes('min') || h === 'x'
+  )
+  let mAUIndex = header.findIndex(
+    h =>
+      h.includes('mau') ||
+      h.includes('absorbance') ||
+      h.includes('intensity') ||
+      h === 'y'
+  )
+
   // If no header detected, assume first two columns are time, mAU
   if (timeIndex === -1) timeIndex = 0
   if (mAUIndex === -1) mAUIndex = 1
-  
+
   // Skip header row if it looks like text
-  const startRow = isNaN(parseFloat(lines[0]?.split(delimiter)[timeIndex] ?? '')) ? 1 : 0
-  
+  const startRow = isNaN(
+    parseFloat(lines[0]?.split(delimiter)[timeIndex] ?? '')
+  )
+    ? 1
+    : 0
+
   const data: ChromatogramData[] = []
   for (let i = startRow; i < lines.length; i++) {
     const cols = lines[i]?.split(delimiter)
     if (!cols || cols.length < 2) continue
-    
+
     const time = parseFloat(cols[timeIndex] ?? '')
     const mAU = parseFloat(cols[mAUIndex] ?? '')
-    
+
     if (!isNaN(time) && !isNaN(mAU)) {
       data.push({ time, mAU })
     }
   }
-  
+
   return data
 }
 
 export function ChromatographViewer() {
   const [files, setFiles] = useState<ParsedFile[]>([])
   const [isDragging, setIsDragging] = useState(false)
-  const [yDomain, setYDomain] = useState<[number, number] | undefined>(undefined)
+  const [yDomain, setYDomain] = useState<[number, number] | undefined>(
+    undefined
+  )
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const handleFileSelect = async (selectedFiles: FileList | null) => {
     if (!selectedFiles) return
 
     const newFiles: ParsedFile[] = []
-    
-    for (let i = 0; i < selectedFiles.length; i++) {
-      const file = selectedFiles[i]
-      if (!file) continue
-      
+
+    for (const file of selectedFiles) {
       const content = await file.text()
       const data = parseCSV(content)
-      
+
       if (data.length > 0) {
         newFiles.push({
           name: file.name,
           data,
-          color: CHART_COLORS[(files.length + newFiles.length) % CHART_COLORS.length] ?? CHART_COLORS[0]!,
+          color:
+            CHART_COLORS[
+              (files.length + newFiles.length) % CHART_COLORS.length
+            ] ??
+            CHART_COLORS[0] ??
+            '#8884d8',
         })
       }
     }
-    
+
     setFiles(prev => [...prev, ...newFiles])
   }
 
@@ -158,16 +191,31 @@ export function ChromatographViewer() {
             Upload CSV files to visualize HPLC chromatograms
           </p>
         </div>
-        
+
         {hasData && (
           <div className="flex items-center gap-2">
-            <Button variant="outline" size="icon" onClick={zoomIn} title="Zoom In">
+            <Button
+              variant="outline"
+              size="icon"
+              onClick={zoomIn}
+              title="Zoom In"
+            >
               <ZoomIn className="h-4 w-4" />
             </Button>
-            <Button variant="outline" size="icon" onClick={zoomOut} title="Zoom Out">
+            <Button
+              variant="outline"
+              size="icon"
+              onClick={zoomOut}
+              title="Zoom Out"
+            >
               <ZoomOut className="h-4 w-4" />
             </Button>
-            <Button variant="outline" size="icon" onClick={resetZoom} title="Reset Zoom">
+            <Button
+              variant="outline"
+              size="icon"
+              onClick={resetZoom}
+              title="Reset Zoom"
+            >
               <RotateCcw className="h-4 w-4" />
             </Button>
             <Button variant="outline" onClick={clearAll}>
@@ -182,7 +230,9 @@ export function ChromatographViewer() {
       <Card
         className={cn(
           'border-2 border-dashed transition-colors cursor-pointer',
-          isDragging ? 'border-primary bg-primary/5' : 'border-muted-foreground/25 hover:border-primary/50'
+          isDragging
+            ? 'border-primary bg-primary/5'
+            : 'border-muted-foreground/25 hover:border-primary/50'
         )}
         onDrop={handleDrop}
         onDragOver={handleDragOver}
@@ -222,9 +272,11 @@ export function ChromatographViewer() {
               />
               <FileSpreadsheet className="h-4 w-4" />
               <span className="max-w-[200px] truncate">{file.name}</span>
-              <span className="text-muted-foreground">({file.data.length} pts)</span>
+              <span className="text-muted-foreground">
+                ({file.data.length} pts)
+              </span>
               <button
-                onClick={(e) => {
+                onClick={e => {
                   e.stopPropagation()
                   removeFile(index)
                 }}
@@ -249,7 +301,10 @@ export function ChromatographViewer() {
           <CardContent className="h-[calc(100%-80px)]">
             <ResponsiveContainer width="100%" height="100%">
               <LineChart margin={{ top: 20, right: 30, left: 20, bottom: 30 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+                <CartesianGrid
+                  strokeDasharray="3 3"
+                  stroke="hsl(var(--border))"
+                />
                 <XAxis
                   dataKey="time"
                   type="number"
@@ -289,8 +344,12 @@ export function ChromatographViewer() {
                     fontSize: '12px',
                   }}
                 />
-                <ReferenceLine y={0} stroke="hsl(var(--muted-foreground))" strokeWidth={1} />
-                
+                <ReferenceLine
+                  y={0}
+                  stroke="hsl(var(--muted-foreground))"
+                  strokeWidth={1}
+                />
+
                 {files.map((file, index) => (
                   <Line
                     key={`${file.name}-${index}`}

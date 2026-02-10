@@ -1,4 +1,12 @@
-import { X, FileJson, User, Package, FlaskConical, DollarSign, MapPin } from 'lucide-react'
+import {
+  X,
+  FileJson,
+  User,
+  Package,
+  FlaskConical,
+  DollarSign,
+  MapPin,
+} from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -15,7 +23,7 @@ interface PayloadPanelProps {
  */
 function Field({ label, value }: { label: string; value: unknown }) {
   if (value === null || value === undefined || value === '') return null
-  
+
   return (
     <div className="flex flex-col gap-0.5">
       <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
@@ -27,7 +35,6 @@ function Field({ label, value }: { label: string; value: unknown }) {
     </div>
   )
 }
-
 
 /**
  * Panel for displaying order payload data in a friendly format.
@@ -44,7 +51,7 @@ export function PayloadPanel({ payload, orderId, onClose }: PayloadPanelProps) {
   // Extract common sections from the payload
   const billing = payload.billing as Record<string, unknown> | undefined
   const coaInfo = payload.coa_info as Record<string, unknown> | undefined
-  const samples = payload.samples as Array<Record<string, unknown>> | undefined
+  const samples = payload.samples as Record<string, unknown>[] | undefined
   const services = payload.services as Record<string, unknown> | undefined
   const prices = payload.prices as Record<string, unknown> | undefined
 
@@ -78,18 +85,23 @@ export function PayloadPanel({ payload, orderId, onClose }: PayloadPanelProps) {
               </CardHeader>
               <CardContent className="grid grid-cols-2 gap-3 text-sm">
                 <Field label="Company" value={billing.company} />
-                <Field label="Name" value={`${billing.first_name || ''} ${billing.last_name || ''}`} />
+                <Field
+                  label="Name"
+                  value={`${billing.first_name || ''} ${billing.last_name || ''}`}
+                />
                 <Field label="Email" value={billing.email} />
                 <Field label="Phone" value={billing.phone} />
                 <div className="col-span-2">
-                  <Field 
-                    label="Address" 
+                  <Field
+                    label="Address"
                     value={[
                       billing.address_1,
                       billing.address_2,
                       `${billing.city || ''}, ${billing.state || ''} ${billing.postcode || ''}`,
-                      billing.country
-                    ].filter(Boolean).join('\n')} 
+                      billing.country,
+                    ]
+                      .filter(Boolean)
+                      .join('\n')}
                   />
                 </div>
               </CardContent>
@@ -125,10 +137,17 @@ export function PayloadPanel({ payload, orderId, onClose }: PayloadPanelProps) {
               </CardHeader>
               <CardContent className="space-y-3">
                 {samples.map((sample, index) => (
-                  <div key={index} className="p-3 rounded-lg bg-muted/50 space-y-2">
+                  <div
+                    key={index}
+                    className="p-3 rounded-lg bg-muted/50 space-y-2"
+                  >
                     <div className="flex items-center justify-between">
                       <span className="font-medium text-sm">
-                        {String(sample.peptide_name || sample.blend_name || `Sample ${index + 1}`)}
+                        {String(
+                          sample.peptide_name ||
+                            sample.blend_name ||
+                            `Sample ${index + 1}`
+                        )}
                       </span>
                       <Badge variant="outline" className="text-xs">
                         {String(sample.sample_type || 'Unknown')}
@@ -137,15 +156,19 @@ export function PayloadPanel({ payload, orderId, onClose }: PayloadPanelProps) {
                     <div className="grid grid-cols-2 gap-2 text-xs">
                       <Field label="Declared Qty" value={sample.declared_qty} />
                       <Field label="Lot" value={sample.lot} />
-                      {sample.blend_peptides !== undefined && sample.blend_peptides !== null && (
-                        <div className="col-span-2">
-                          <Field label="Blend Peptides" value={
-                            Array.isArray(sample.blend_peptides) 
-                              ? JSON.stringify(sample.blend_peptides)
-                              : String(sample.blend_peptides)
-                          } />
-                        </div>
-                      )}
+                      {sample.blend_peptides !== undefined &&
+                        sample.blend_peptides !== null && (
+                          <div className="col-span-2">
+                            <Field
+                              label="Blend Peptides"
+                              value={
+                                Array.isArray(sample.blend_peptides)
+                                  ? JSON.stringify(sample.blend_peptides)
+                                  : String(sample.blend_peptides)
+                              }
+                            />
+                          </div>
+                        )}
                     </div>
                   </div>
                 ))}
@@ -164,13 +187,14 @@ export function PayloadPanel({ payload, orderId, onClose }: PayloadPanelProps) {
               </CardHeader>
               <CardContent>
                 <div className="flex flex-wrap gap-2">
-                  {Object.entries(services).map(([key, value]) => (
-                    value === true && (
-                      <Badge key={key} variant="secondary">
-                        {key.replace(/_/g, ' ')}
-                      </Badge>
-                    )
-                  ))}
+                  {Object.entries(services).map(
+                    ([key, value]) =>
+                      value === true && (
+                        <Badge key={key} variant="secondary">
+                          {key.replace(/_/g, ' ')}
+                        </Badge>
+                      )
+                  )}
                 </div>
               </CardContent>
             </Card>
@@ -187,7 +211,11 @@ export function PayloadPanel({ payload, orderId, onClose }: PayloadPanelProps) {
               </CardHeader>
               <CardContent className="grid grid-cols-2 gap-2 text-sm">
                 {Object.entries(prices).map(([key, value]) => (
-                  <Field key={key} label={key.replace(/_/g, ' ')} value={`$${value}`} />
+                  <Field
+                    key={key}
+                    label={key.replace(/_/g, ' ')}
+                    value={`$${value}`}
+                  />
                 ))}
               </CardContent>
             </Card>

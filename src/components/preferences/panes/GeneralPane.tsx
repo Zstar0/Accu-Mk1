@@ -1,8 +1,16 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
-import { CheckCircle2, XCircle, Eye, EyeOff, Plus, Trash2, Plug } from 'lucide-react'
+import {
+  CheckCircle2,
+  XCircle,
+  Eye,
+  EyeOff,
+  Plus,
+  Trash2,
+  Plug,
+} from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import {
@@ -33,28 +41,34 @@ export function GeneralPane() {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
   const setPreferencesOpen = useUIStore(state => state.setPreferencesOpen)
-  
-  // Profile state
-  const [profiles, setProfiles] = useState<ApiProfile[]>([])
-  const [activeId, setActiveId] = useState<string | null>(null)
-  const [serverUrl, setServerUrl] = useState('')
-  const [wordpressUrl, setWordpressUrl] = useState('')
-  const [apiKeyInput, setApiKeyInput] = useState('')
+
+  // Profile state - initialized from localStorage
+  const [profiles, setProfiles] = useState<ApiProfile[]>(() => getProfiles())
+  const [activeId, setActiveId] = useState<string | null>(() =>
+    getActiveProfileId()
+  )
+  const [serverUrl, setServerUrl] = useState(() => {
+    const active = getProfiles().find(p => p.id === getActiveProfileId())
+    return active?.serverUrl ?? ''
+  })
+  const [wordpressUrl, setWordpressUrl] = useState(() => {
+    const active = getProfiles().find(p => p.id === getActiveProfileId())
+    return active?.wordpressUrl ?? ''
+  })
+  const [apiKeyInput, setApiKeyInput] = useState(() => {
+    const active = getProfiles().find(p => p.id === getActiveProfileId())
+    return active?.apiKey ?? ''
+  })
   const [showApiKey, setShowApiKey] = useState(false)
   const [hasChanges, setHasChanges] = useState(false)
   const [isConnecting, setIsConnecting] = useState(false)
-  
-  // Load profiles on mount
-  useEffect(() => {
-    refreshProfiles()
-  }, [])
-  
+
   const refreshProfiles = () => {
     const loadedProfiles = getProfiles()
     const loadedActiveId = getActiveProfileId()
     setProfiles(loadedProfiles)
     setActiveId(loadedActiveId)
-    
+
     // Load active profile data
     const activeProfile = loadedProfiles.find(p => p.id === loadedActiveId)
     if (activeProfile) {
@@ -64,7 +78,7 @@ export function GeneralPane() {
     }
     setHasChanges(false)
   }
-  
+
   // Load preferences for keyboard shortcuts
   const { data: preferences } = usePreferences()
   const savePreferences = useSavePreferences()
@@ -85,13 +99,21 @@ export function GeneralPane() {
     const result = await commands.updateQuickPaneShortcut(newShortcut)
     if (result.status === 'error') {
       logger.error('Failed to register shortcut', { error: result.error })
-      toast.error(t('toast.error.shortcutFailed'), { description: result.error })
+      toast.error(t('toast.error.shortcutFailed'), {
+        description: result.error,
+      })
       return
     }
     try {
-      await savePreferences.mutateAsync({ ...preferences, quick_pane_shortcut: newShortcut })
+      await savePreferences.mutateAsync({
+        ...preferences,
+        quick_pane_shortcut: newShortcut,
+      })
     } catch {
-      logger.warn('Save failed, rolling back shortcut registration', { oldShortcut, newShortcut })
+      logger.warn('Save failed, rolling back shortcut registration', {
+        oldShortcut,
+        newShortcut,
+      })
       const rollbackResult = await commands.updateQuickPaneShortcut(oldShortcut)
       if (rollbackResult.status === 'error') {
         logger.error('Rollback failed', { error: rollbackResult.error })
@@ -111,7 +133,9 @@ export function GeneralPane() {
     }
     setHasChanges(false)
     queryClient.invalidateQueries({ queryKey: ['explorer'] })
-    toast.success('Switched profile', { description: `Now using ${profile?.name}` })
+    toast.success('Switched profile', {
+      description: `Now using ${profile?.name}`,
+    })
   }
 
   const handleSaveProfile = () => {
@@ -147,7 +171,10 @@ export function GeneralPane() {
     toast.info(`Deleted profile: ${profileName}`)
   }
 
-  const handleFieldChange = (field: 'serverUrl' | 'wordpressUrl' | 'apiKey', value: string) => {
+  const handleFieldChange = (
+    field: 'serverUrl' | 'wordpressUrl' | 'apiKey',
+    value: string
+  ) => {
     if (field === 'serverUrl') setServerUrl(value)
     else if (field === 'wordpressUrl') setWordpressUrl(value)
     else setApiKeyInput(value)
@@ -160,29 +187,34 @@ export function GeneralPane() {
       toast.error('API key is required to connect')
       return
     }
-    
+
     setIsConnecting(true)
-    
+
     // Save profile first
     updateProfile(activeId, { serverUrl, wordpressUrl, apiKey: apiKeyInput })
     refreshProfiles()
-    
+
     // Clear all cached queries
     queryClient.clear()
-    
+
     // Dispatch profile changed event to notify the app
-    window.dispatchEvent(new CustomEvent(API_PROFILE_CHANGED_EVENT, { 
-      detail: { activeProfileId: activeId } 
-    }))
-    
+    window.dispatchEvent(
+      new CustomEvent(API_PROFILE_CHANGED_EVENT, {
+        detail: { activeProfileId: activeId },
+      })
+    )
+
     // Close preferences dialog
     setPreferencesOpen(false)
-    
+
     // Show success message
-    toast.success(`Connected to ${profiles.find(p => p.id === activeId)?.name}`, {
-      description: 'App has been reset with new connection.',
-    })
-    
+    toast.success(
+      `Connected to ${profiles.find(p => p.id === activeId)?.name}`,
+      {
+        description: 'App has been reset with new connection.',
+      }
+    )
+
     logger.info('Connected to API profile', { profileId: activeId, serverUrl })
     setIsConnecting(false)
     setHasChanges(false)
@@ -264,7 +296,11 @@ export function GeneralPane() {
                 className="absolute right-0 top-0 h-full px-3"
                 onClick={() => setShowApiKey(!showApiKey)}
               >
-                {showApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                {showApiKey ? (
+                  <EyeOff className="h-4 w-4" />
+                ) : (
+                  <Eye className="h-4 w-4" />
+                )}
               </Button>
             </div>
           </div>
@@ -272,17 +308,29 @@ export function GeneralPane() {
 
         {/* Actions */}
         <div className="flex items-center gap-3">
-          <Button onClick={handleSaveProfile} disabled={!hasChanges} variant="outline">
+          <Button
+            onClick={handleSaveProfile}
+            disabled={!hasChanges}
+            variant="outline"
+          >
             Save Profile
           </Button>
-          <Button onClick={handleConnect} disabled={isConnecting || !apiKeyInput.trim()}>
+          <Button
+            onClick={handleConnect}
+            disabled={isConnecting || !apiKeyInput.trim()}
+          >
             <Plug className="h-4 w-4 mr-2" />
             {isConnecting ? 'Connecting...' : 'Connect'}
           </Button>
-          <Button variant="destructive" size="icon" onClick={handleDeleteProfile} disabled={profiles.length <= 1}>
+          <Button
+            variant="destructive"
+            size="icon"
+            onClick={handleDeleteProfile}
+            disabled={profiles.length <= 1}
+          >
             <Trash2 className="h-4 w-4" />
           </Button>
-          
+
           {/* Status indicator */}
           <div className="flex items-center gap-2 text-sm ml-auto">
             {isApiKeyConfigured ? (
@@ -317,4 +365,3 @@ export function GeneralPane() {
     </div>
   )
 }
-

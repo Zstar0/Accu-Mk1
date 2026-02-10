@@ -5,7 +5,7 @@ Uses SQLAlchemy 2.0 style with mapped_column.
 
 from datetime import datetime
 from typing import Optional
-from sqlalchemy import String, Text, DateTime, ForeignKey, JSON
+from sqlalchemy import String, Text, Float, Boolean, DateTime, ForeignKey, JSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from database import Base
@@ -94,6 +94,100 @@ class Result(Base):
 
     def __repr__(self) -> str:
         return f"<Result(id={self.id}, calculation_type='{self.calculation_type}')>"
+
+
+class Peptide(Base):
+    """
+    Peptide reference data for HPLC analysis.
+    Stores expected retention time, tolerance, and diluent density.
+    """
+    __tablename__ = "peptides"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    abbreviation: Mapped[str] = mapped_column(String(50), nullable=False, unique=True)
+    reference_rt: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    rt_tolerance: Mapped[float] = mapped_column(Float, default=0.5)
+    diluent_density: Mapped[float] = mapped_column(Float, default=997.1)  # mg/mL for water
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationships
+    calibration_curves: Mapped[list["CalibrationCurve"]] = relationship(
+        "CalibrationCurve", back_populates="peptide", cascade="all, delete-orphan"
+    )
+
+    def __repr__(self) -> str:
+        return f"<Peptide(id={self.id}, abbreviation='{self.abbreviation}')>"
+
+
+class CalibrationCurve(Base):
+    """
+    Calibration curve for a peptide.
+    Stores linear regression parameters (slope, intercept, R²)
+    and the original standard data used to derive them.
+    """
+    __tablename__ = "calibration_curves"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    peptide_id: Mapped[int] = mapped_column(ForeignKey("peptides.id"), nullable=False)
+    slope: Mapped[float] = mapped_column(Float, nullable=False)
+    intercept: Mapped[float] = mapped_column(Float, nullable=False)
+    r_squared: Mapped[float] = mapped_column(Float, nullable=False)
+    standard_data: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)  # {concentrations: [], areas: []}
+    source_filename: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    # Relationships
+    peptide: Mapped["Peptide"] = relationship("Peptide", back_populates="calibration_curves")
+
+    def __repr__(self) -> str:
+        return f"<CalibrationCurve(id={self.id}, peptide_id={self.peptide_id}, slope={self.slope})>"
+
+
+class HPLCAnalysis(Base):
+    """
+    Complete HPLC analysis record.
+    Stores all inputs, intermediate calculations, and final results.
+    """
+    __tablename__ = "hplc_analyses"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    sample_id_label: Mapped[str] = mapped_column(String(200), nullable=False)  # e.g., "P-0142"
+    peptide_id: Mapped[int] = mapped_column(ForeignKey("peptides.id"), nullable=False)
+
+    # Tech inputs: 5 balance weights (mg)
+    stock_vial_empty: Mapped[float] = mapped_column(Float, nullable=False)
+    stock_vial_with_diluent: Mapped[float] = mapped_column(Float, nullable=False)
+    dil_vial_empty: Mapped[float] = mapped_column(Float, nullable=False)
+    dil_vial_with_diluent: Mapped[float] = mapped_column(Float, nullable=False)
+    dil_vial_with_diluent_and_sample: Mapped[float] = mapped_column(Float, nullable=False)
+
+    # Intermediate calculations
+    dilution_factor: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    stock_volume_ml: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    avg_main_peak_area: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    concentration_ug_ml: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+
+    # Final results
+    purity_percent: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    quantity_mg: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    identity_conforms: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    identity_rt_delta: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+
+    # Full audit data
+    calculation_trace: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    raw_data: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)  # Parsed injection data
+    status: Mapped[str] = mapped_column(String(50), default="completed")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    # Relationships
+    peptide: Mapped["Peptide"] = relationship("Peptide")
+
+    def __repr__(self) -> str:
+        return f"<HPLCAnalysis(id={self.id}, sample='{self.sample_id_label}', purity={self.purity_percent})>"
 
 
 class Settings(Base):

@@ -1,13 +1,13 @@
 'use client'
 
 import {
-  ColumnDef,
+  type ColumnDef,
   flexRender,
   getCoreRowModel,
   useReactTable,
-  SortingState,
+  type SortingState,
   getSortedRowModel,
-  ColumnResizeMode,
+  type ColumnResizeMode,
 } from '@tanstack/react-table'
 import { useState } from 'react'
 
@@ -38,9 +38,11 @@ export function DataTable<TData, TValue>({
   getRowId,
   enableColumnResizing = true,
 }: DataTableProps<TData, TValue>) {
+  'use no memo'
   const [sorting, setSorting] = useState<SortingState>([])
   const [columnResizeMode] = useState<ColumnResizeMode>('onChange')
 
+  // eslint-disable-next-line react-hooks/incompatible-library -- TanStack Table known issue with React Compiler
   const table = useReactTable({
     data,
     columns,
@@ -61,9 +63,9 @@ export function DataTable<TData, TValue>({
 
   return (
     <div className="overflow-auto rounded-md border">
-      <Table 
+      <Table
         className="w-full"
-        style={{ 
+        style={{
           width: table.getCenterTotalSize(),
           tableLayout: 'fixed',
         }}
@@ -112,7 +114,8 @@ export function DataTable<TData, TValue>({
               const rowId = getRowId
                 ? getRowId(row.original)
                 : (row.original as Record<string, unknown>).id
-              const isSelected = selectedRowId !== undefined && rowId === selectedRowId
+              const isSelected =
+                selectedRowId !== undefined && rowId === selectedRowId
 
               return (
                 <TableRow
@@ -151,4 +154,3 @@ export function DataTable<TData, TValue>({
     </div>
   )
 }
-

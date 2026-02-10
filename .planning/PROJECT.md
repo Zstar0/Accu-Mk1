@@ -50,6 +50,14 @@ Streamlined morning workflow: import CSV → review batch → calculate purity �
 - **Logic principle**: Backend owns all scientific calculations — UI never parses files or calculates metrics
 - **Audit principle**: All imports and pushes must be idempotent, traceable, repeatable
 
+## Current Milestone: v0.5.0 — Order Explorer Enhancement
+
+**Goal:** Transform the Order Explorer from a basic order list into a comprehensive debugging and browsing tool that surfaces all Integration Service data — orders, COA generations, submission attempts, sample status events, access logs, and verification codes — with links to WordPress orders and SENAITE samples.
+
+**Context:** The Integration Service PostgreSQL database has 7 tables (order_submissions, order_submission_attempts, ingestions, coa_generations, sample_status_events, coa_access_logs, verification_codes), but the Order Explorer currently only shows orders and ingestions via 3 explorer endpoints. The backend needs new API endpoints exposed, and the frontend needs a richer detail view to help operators examine orders, debug issues, and navigate to related systems.
+
+**Integration Service repo:** `C:\Users\forre\OneDrive\Documents\GitHub\Accumark-Workspace\integration-service`
+
 ## Key Decisions
 
 | Decision | Rationale | Outcome |
@@ -58,6 +66,8 @@ Streamlined morning workflow: import CSV → review batch → calculate purity �
 | Folder-watch ingestion | Minimizes UI platform differences, simpler than manual upload | — Pending |
 | FastAPI backend | Python ecosystem for scientific calculations, familiar for lab tooling | — Pending |
 | SQLite local storage | Local-first requirement, no external dependencies | — Pending |
+| Explorer API Key auth | Desktop app uses API key (not JWT) for explorer endpoints | Active |
+| Tabbed order detail view | Show related data (ingestions, COAs, attempts, events) as tabs | v0.5.0 |
 
 ---
-*Last updated: 2026-01-15 after initialization*
+*Last updated: 2026-02-09 after v0.5.0 milestone start*

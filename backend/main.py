@@ -18,9 +18,14 @@ from sqlalchemy.orm import Session
 from sqlalchemy import select, desc
 
 from database import get_db, init_db
-from models import AuditLog, Settings, Job, Sample, Result
+from models import AuditLog, Settings, Job, Sample, Result, Peptide, CalibrationCurve, HPLCAnalysis
 from parsers import parse_txt_file
+from parsers.peakdata_csv_parser import parse_hplc_files, calculate_purity
 from calculations import CalculationEngine
+from calculations.calibration import calculate_calibration_curve
+from calculations.hplc_processor import (
+    process_hplc_analysis, AnalysisInput, WeightInputs, CalibrationParams, PeptideParams
+)
 from file_watcher import FileWatcher
 
 
@@ -978,6 +983,783 @@ async def get_sample_results(
     stmt = select(Result).where(Result.sample_id == sample_id).order_by(Result.created_at)
     results = db.execute(stmt).scalars().all()
     return results
+
+
+# --- HPLC Analysis Endpoints ---
+
+class HPLCFileInput(BaseModel):
+    """A single file's content for HPLC parsing."""
+    filename: str
+    content: str
+
+
+class HPLCParseBrowserRequest(BaseModel):
+    """Request to parse HPLC PeakData files from browser upload."""
+    files: list[HPLCFileInput]
+
+
+class PeakResponse(BaseModel):
+    """Response for a single chromatographic peak."""
+    height: float
+    area: float
+    area_percent: float
+    begin_time: float
+    end_time: float
+    retention_time: float
+    is_solvent_front: bool
+    is_main_peak: bool
+
+
+class InjectionResponse(BaseModel):
+    """Response for one injection's parsed data."""
+    injection_name: str
+    peaks: list[PeakResponse]
+    total_area: float
+    main_peak_index: int
+
+
+class PurityResponse(BaseModel):
+    """Purity calculation result."""
+    purity_percent: Optional[float]
+    individual_values: list[float]
+    injection_names: list[str]
+    rsd_percent: Optional[float]
+    error: Optional[str] = None
+
+
+class HPLCParseResponse(BaseModel):
+    """Response from parsing HPLC files."""
+    injections: list[InjectionResponse]
+    purity: PurityResponse
+    errors: list[str]
+
+
+@app.post("/hplc/parse-files", response_model=HPLCParseResponse)
+async def parse_hplc_peakdata(request: HPLCParseBrowserRequest):
+    """
+    Parse HPLC PeakData CSV files and calculate purity.
+
+    Accepts file contents from browser upload, parses peak tables,
+    identifies main peaks (excluding solvent front), and averages
+    Area% across injections for purity calculation.
+    """
+    files_data = [{"filename": f.filename, "content": f.content} for f in request.files]
+    result = parse_hplc_files(files_data)
+
+    # Calculate purity from parsed injections
+    purity = calculate_purity(result.injections)
+
+    # Build response
+    injections_resp = []
+    for inj in result.injections:
+        peaks_resp = [
+            PeakResponse(
+                height=p.height,
+                area=p.area,
+                area_percent=p.area_percent,
+                begin_time=p.begin_time,
+                end_time=p.end_time,
+                retention_time=p.retention_time,
+                is_solvent_front=p.is_solvent_front,
+                is_main_peak=p.is_main_peak,
+            )
+            for p in inj.peaks
+        ]
+        injections_resp.append(InjectionResponse(
+            injection_name=inj.injection_name,
+            peaks=peaks_resp,
+            total_area=inj.total_area,
+            main_peak_index=inj.main_peak_index,
+        ))
+
+    return HPLCParseResponse(
+        injections=injections_resp,
+        purity=PurityResponse(**purity),
+        errors=result.errors,
+    )
+
+
+# --- Peptide & Calibration Endpoints ---
+
+class PeptideCreate(BaseModel):
+    """Schema for creating a peptide."""
+    name: str
+    abbreviation: str
+    reference_rt: Optional[float] = None
+    rt_tolerance: float = 0.5
+    diluent_density: float = 997.1
+
+
+class PeptideUpdate(BaseModel):
+    """Schema for updating a peptide."""
+    name: Optional[str] = None
+    abbreviation: Optional[str] = None
+    reference_rt: Optional[float] = None
+    rt_tolerance: Optional[float] = None
+    diluent_density: Optional[float] = None
+    active: Optional[bool] = None
+
+
+class CalibrationCurveResponse(BaseModel):
+    """Schema for calibration curve response."""
+    id: int
+    peptide_id: int
+    slope: float
+    intercept: float
+    r_squared: float
+    standard_data: Optional[dict]
+    source_filename: Optional[str]
+    is_active: bool
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class PeptideResponse(BaseModel):
+    """Schema for peptide response."""
+    id: int
+    name: str
+    abbreviation: str
+    reference_rt: Optional[float]
+    rt_tolerance: float
+    diluent_density: float
+    active: bool
+    created_at: datetime
+    updated_at: datetime
+    active_calibration: Optional[CalibrationCurveResponse] = None
+
+    class Config:
+        from_attributes = True
+
+
+class CalibrationDataInput(BaseModel):
+    """Schema for manual calibration data entry."""
+    concentrations: list[float]
+    areas: list[float]
+    source_filename: Optional[str] = None
+
+
+def _get_active_calibration(db: Session, peptide_id: int) -> Optional[CalibrationCurveResponse]:
+    """Get the active calibration curve for a peptide."""
+    stmt = (
+        select(CalibrationCurve)
+        .where(CalibrationCurve.peptide_id == peptide_id)
+        .where(CalibrationCurve.is_active == True)
+        .order_by(desc(CalibrationCurve.created_at))
+        .limit(1)
+    )
+    cal = db.execute(stmt).scalar_one_or_none()
+    if cal:
+        return CalibrationCurveResponse.model_validate(cal)
+    return None
+
+
+def _peptide_to_response(db: Session, peptide: Peptide) -> PeptideResponse:
+    """Convert Peptide model to response with active calibration."""
+    resp = PeptideResponse.model_validate(peptide)
+    resp.active_calibration = _get_active_calibration(db, peptide.id)
+    return resp
+
+
+@app.get("/peptides", response_model=list[PeptideResponse])
+async def get_peptides(db: Session = Depends(get_db)):
+    """Get all peptides with their active calibration curves."""
+    stmt = select(Peptide).order_by(Peptide.abbreviation)
+    peptides = db.execute(stmt).scalars().all()
+    return [_peptide_to_response(db, p) for p in peptides]
+
+
+@app.post("/peptides", response_model=PeptideResponse, status_code=201)
+async def create_peptide(data: PeptideCreate, db: Session = Depends(get_db)):
+    """Create a new peptide."""
+    # Check uniqueness
+    existing = db.execute(
+        select(Peptide).where(Peptide.abbreviation == data.abbreviation)
+    ).scalar_one_or_none()
+    if existing:
+        raise HTTPException(400, f"Peptide with abbreviation '{data.abbreviation}' already exists")
+
+    peptide = Peptide(
+        name=data.name,
+        abbreviation=data.abbreviation,
+        reference_rt=data.reference_rt,
+        rt_tolerance=data.rt_tolerance,
+        diluent_density=data.diluent_density,
+    )
+    db.add(peptide)
+    db.commit()
+    db.refresh(peptide)
+    return _peptide_to_response(db, peptide)
+
+
+@app.put("/peptides/{peptide_id}", response_model=PeptideResponse)
+async def update_peptide(peptide_id: int, data: PeptideUpdate, db: Session = Depends(get_db)):
+    """Update a peptide."""
+    peptide = db.execute(select(Peptide).where(Peptide.id == peptide_id)).scalar_one_or_none()
+    if not peptide:
+        raise HTTPException(404, f"Peptide {peptide_id} not found")
+
+    for field, value in data.model_dump(exclude_unset=True).items():
+        setattr(peptide, field, value)
+
+    db.commit()
+    db.refresh(peptide)
+    return _peptide_to_response(db, peptide)
+
+
+@app.delete("/peptides/{peptide_id}")
+async def delete_peptide(peptide_id: int, db: Session = Depends(get_db)):
+    """Delete a peptide and all its calibration curves."""
+    peptide = db.execute(select(Peptide).where(Peptide.id == peptide_id)).scalar_one_or_none()
+    if not peptide:
+        raise HTTPException(404, f"Peptide {peptide_id} not found")
+
+    db.delete(peptide)
+    db.commit()
+    return {"message": f"Peptide '{peptide.abbreviation}' deleted"}
+
+
+@app.get("/peptides/{peptide_id}/calibrations", response_model=list[CalibrationCurveResponse])
+async def get_calibrations(peptide_id: int, db: Session = Depends(get_db)):
+    """Get all calibration curves for a peptide (newest first)."""
+    peptide = db.execute(select(Peptide).where(Peptide.id == peptide_id)).scalar_one_or_none()
+    if not peptide:
+        raise HTTPException(404, f"Peptide {peptide_id} not found")
+
+    stmt = (
+        select(CalibrationCurve)
+        .where(CalibrationCurve.peptide_id == peptide_id)
+        .order_by(desc(CalibrationCurve.created_at))
+    )
+    return db.execute(stmt).scalars().all()
+
+
+@app.post("/peptides/{peptide_id}/calibrations", response_model=CalibrationCurveResponse, status_code=201)
+async def create_calibration(
+    peptide_id: int,
+    data: CalibrationDataInput,
+    db: Session = Depends(get_db),
+):
+    """
+    Create a calibration curve from concentration/area pairs.
+
+    Calculates linear regression and stores the curve.
+    Automatically sets this as the active calibration for the peptide.
+    """
+    peptide = db.execute(select(Peptide).where(Peptide.id == peptide_id)).scalar_one_or_none()
+    if not peptide:
+        raise HTTPException(404, f"Peptide {peptide_id} not found")
+
+    try:
+        regression = calculate_calibration_curve(data.concentrations, data.areas)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+    # Deactivate existing active curves
+    active_cals = db.execute(
+        select(CalibrationCurve)
+        .where(CalibrationCurve.peptide_id == peptide_id)
+        .where(CalibrationCurve.is_active == True)
+    ).scalars().all()
+    for cal in active_cals:
+        cal.is_active = False
+
+    # Create new active curve
+    curve = CalibrationCurve(
+        peptide_id=peptide_id,
+        slope=regression["slope"],
+        intercept=regression["intercept"],
+        r_squared=regression["r_squared"],
+        standard_data={
+            "concentrations": data.concentrations,
+            "areas": data.areas,
+        },
+        source_filename=data.source_filename,
+        is_active=True,
+    )
+    db.add(curve)
+    db.commit()
+    db.refresh(curve)
+    return curve
+
+
+# --- Full HPLC Analysis Endpoint ---
+
+class HPLCWeightsInput(BaseModel):
+    """Five balance weights from the tech."""
+    stock_vial_empty: float
+    stock_vial_with_diluent: float
+    dil_vial_empty: float
+    dil_vial_with_diluent: float
+    dil_vial_with_diluent_and_sample: float
+
+
+class HPLCAnalyzeRequest(BaseModel):
+    """Request to run a full HPLC analysis."""
+    sample_id_label: str
+    peptide_id: int
+    weights: HPLCWeightsInput
+    injections: list[dict]  # Parsed injection data from /hplc/parse-files
+
+
+class HPLCAnalysisResponse(BaseModel):
+    """Full analysis result."""
+    id: int
+    sample_id_label: str
+    peptide_abbreviation: str
+    purity_percent: Optional[float]
+    quantity_mg: Optional[float]
+    identity_conforms: Optional[bool]
+    identity_rt_delta: Optional[float]
+    dilution_factor: Optional[float]
+    stock_volume_ml: Optional[float]
+    avg_main_peak_area: Optional[float]
+    concentration_ug_ml: Optional[float]
+    calculation_trace: Optional[dict]
+    created_at: datetime
+
+
+@app.post("/hplc/analyze", response_model=HPLCAnalysisResponse, status_code=201)
+async def run_hplc_analysis(
+    request: HPLCAnalyzeRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    Run a complete HPLC analysis: purity + quantity + identity.
+
+    Requires parsed injection data (from /hplc/parse-files), peptide selection,
+    and 5 balance weights for dilution factor calculation.
+    """
+    # Load peptide
+    peptide = db.execute(select(Peptide).where(Peptide.id == request.peptide_id)).scalar_one_or_none()
+    if not peptide:
+        raise HTTPException(404, f"Peptide {request.peptide_id} not found")
+
+    # Load active calibration
+    cal = db.execute(
+        select(CalibrationCurve)
+        .where(CalibrationCurve.peptide_id == peptide.id)
+        .where(CalibrationCurve.is_active == True)
+        .order_by(desc(CalibrationCurve.created_at))
+        .limit(1)
+    ).scalar_one_or_none()
+    if not cal:
+        raise HTTPException(400, f"No active calibration curve for peptide '{peptide.abbreviation}'")
+
+    # Build analysis input
+    analysis_input = AnalysisInput(
+        injections=request.injections,
+        weights=WeightInputs(
+            stock_vial_empty=request.weights.stock_vial_empty,
+            stock_vial_with_diluent=request.weights.stock_vial_with_diluent,
+            dil_vial_empty=request.weights.dil_vial_empty,
+            dil_vial_with_diluent=request.weights.dil_vial_with_diluent,
+            dil_vial_with_diluent_and_sample=request.weights.dil_vial_with_diluent_and_sample,
+        ),
+        calibration=CalibrationParams(slope=cal.slope, intercept=cal.intercept),
+        peptide=PeptideParams(
+            reference_rt=peptide.reference_rt,
+            rt_tolerance=peptide.rt_tolerance,
+            diluent_density=peptide.diluent_density,
+        ),
+    )
+
+    # Run analysis
+    result = process_hplc_analysis(analysis_input)
+
+    # Store in database
+    analysis = HPLCAnalysis(
+        sample_id_label=request.sample_id_label,
+        peptide_id=peptide.id,
+        stock_vial_empty=request.weights.stock_vial_empty,
+        stock_vial_with_diluent=request.weights.stock_vial_with_diluent,
+        dil_vial_empty=request.weights.dil_vial_empty,
+        dil_vial_with_diluent=request.weights.dil_vial_with_diluent,
+        dil_vial_with_diluent_and_sample=request.weights.dil_vial_with_diluent_and_sample,
+        dilution_factor=result.get("dilution_factor"),
+        stock_volume_ml=result.get("stock_volume_ml"),
+        avg_main_peak_area=result.get("avg_main_peak_area"),
+        concentration_ug_ml=result.get("concentration_ug_ml"),
+        purity_percent=result.get("purity_percent"),
+        quantity_mg=result.get("quantity_mg"),
+        identity_conforms=result.get("identity_conforms"),
+        identity_rt_delta=result.get("identity_rt_delta"),
+        calculation_trace=result.get("calculation_trace"),
+        raw_data={"injections": request.injections},
+    )
+    db.add(analysis)
+
+    # Audit log
+    audit = AuditLog(
+        operation="hplc_analysis",
+        entity_type="hplc_analysis",
+        entity_id=request.sample_id_label,
+        details={
+            "peptide": peptide.abbreviation,
+            "purity": result.get("purity_percent"),
+            "quantity_mg": result.get("quantity_mg"),
+            "identity_conforms": result.get("identity_conforms"),
+        },
+    )
+    db.add(audit)
+    db.commit()
+    db.refresh(analysis)
+
+    return HPLCAnalysisResponse(
+        id=analysis.id,
+        sample_id_label=analysis.sample_id_label,
+        peptide_abbreviation=peptide.abbreviation,
+        purity_percent=analysis.purity_percent,
+        quantity_mg=analysis.quantity_mg,
+        identity_conforms=analysis.identity_conforms,
+        identity_rt_delta=analysis.identity_rt_delta,
+        dilution_factor=analysis.dilution_factor,
+        stock_volume_ml=analysis.stock_volume_ml,
+        avg_main_peak_area=analysis.avg_main_peak_area,
+        concentration_ug_ml=analysis.concentration_ug_ml,
+        calculation_trace=analysis.calculation_trace,
+        created_at=analysis.created_at,
+    )
+
+
+# --- HPLC Analysis History Endpoints ---
+
+class HPLCAnalysisListItem(BaseModel):
+    """Summary item for analysis history list."""
+    id: int
+    sample_id_label: str
+    peptide_abbreviation: str
+    purity_percent: Optional[float]
+    quantity_mg: Optional[float]
+    identity_conforms: Optional[bool]
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class HPLCAnalysisListResponse(BaseModel):
+    """Paginated list of analyses."""
+    items: list[HPLCAnalysisListItem]
+    total: int
+
+
+@app.get("/hplc/analyses", response_model=HPLCAnalysisListResponse)
+async def get_hplc_analyses(
+    search: Optional[str] = None,
+    peptide_id: Optional[int] = None,
+    limit: int = 50,
+    offset: int = 0,
+    db: Session = Depends(get_db),
+):
+    """
+    List HPLC analyses with optional search and filtering.
+
+    Query params:
+    - search: Filter by sample_id_label (partial match)
+    - peptide_id: Filter by peptide
+    - limit/offset: Pagination
+    """
+    from sqlalchemy import func
+
+    base = select(HPLCAnalysis)
+    count_base = select(func.count(HPLCAnalysis.id))
+
+    if search:
+        base = base.where(HPLCAnalysis.sample_id_label.ilike(f"%{search}%"))
+        count_base = count_base.where(HPLCAnalysis.sample_id_label.ilike(f"%{search}%"))
+    if peptide_id is not None:
+        base = base.where(HPLCAnalysis.peptide_id == peptide_id)
+        count_base = count_base.where(HPLCAnalysis.peptide_id == peptide_id)
+
+    total = db.execute(count_base).scalar() or 0
+
+    stmt = base.order_by(desc(HPLCAnalysis.created_at)).offset(offset).limit(limit)
+    analyses = db.execute(stmt).scalars().all()
+
+    # Build list items with peptide abbreviation
+    items = []
+    for a in analyses:
+        peptide = db.execute(select(Peptide).where(Peptide.id == a.peptide_id)).scalar_one_or_none()
+        items.append(HPLCAnalysisListItem(
+            id=a.id,
+            sample_id_label=a.sample_id_label,
+            peptide_abbreviation=peptide.abbreviation if peptide else "?",
+            purity_percent=a.purity_percent,
+            quantity_mg=a.quantity_mg,
+            identity_conforms=a.identity_conforms,
+            created_at=a.created_at,
+        ))
+
+    return HPLCAnalysisListResponse(items=items, total=total)
+
+
+@app.get("/hplc/analyses/{analysis_id}", response_model=HPLCAnalysisResponse)
+async def get_hplc_analysis(analysis_id: int, db: Session = Depends(get_db)):
+    """Get full detail of a single HPLC analysis including calculation trace."""
+    analysis = db.execute(
+        select(HPLCAnalysis).where(HPLCAnalysis.id == analysis_id)
+    ).scalar_one_or_none()
+    if not analysis:
+        raise HTTPException(404, f"HPLC Analysis {analysis_id} not found")
+
+    peptide = db.execute(
+        select(Peptide).where(Peptide.id == analysis.peptide_id)
+    ).scalar_one_or_none()
+
+    return HPLCAnalysisResponse(
+        id=analysis.id,
+        sample_id_label=analysis.sample_id_label,
+        peptide_abbreviation=peptide.abbreviation if peptide else "?",
+        purity_percent=analysis.purity_percent,
+        quantity_mg=analysis.quantity_mg,
+        identity_conforms=analysis.identity_conforms,
+        identity_rt_delta=analysis.identity_rt_delta,
+        dilution_factor=analysis.dilution_factor,
+        stock_volume_ml=analysis.stock_volume_ml,
+        avg_main_peak_area=analysis.avg_main_peak_area,
+        concentration_ug_ml=analysis.concentration_ug_ml,
+        calculation_trace=analysis.calculation_trace,
+        created_at=analysis.created_at,
+    )
+
+
+# --- HPLC Weight Extraction from Lab Excel Files ---
+
+
+PEPTIDES_ROOT = Path(
+    r"C:\Users\forre\Valence Analytical\Communication site - Documents"
+    r"\Analytical\Lab Reports\Purity and Quantity (HPLC)\Peptides"
+)
+
+
+class DilutionRow(BaseModel):
+    """One dilution level's weights from the Excel file."""
+    label: str
+    concentration: Optional[str] = None
+    dil_vial_empty: float
+    dil_vial_with_diluent: float
+    dil_vial_with_diluent_and_sample: float
+
+
+class WeightExtractionResponse(BaseModel):
+    """Extracted weight data from a lab Excel file."""
+    found: bool
+    folder_name: Optional[str] = None
+    peptide_folder: Optional[str] = None
+    excel_filename: Optional[str] = None
+    stock_vial_empty: Optional[float] = None
+    stock_vial_with_diluent: Optional[float] = None
+    dilution_rows: list[DilutionRow] = []
+    error: Optional[str] = None
+
+
+def _find_sample_folder(sample_id: str) -> tuple[Optional[Path], Optional[str]]:
+    """Search Peptides root for a folder matching the sample ID.
+
+    Returns (sample_folder_path, peptide_folder_name) or (None, None).
+    """
+    if not PEPTIDES_ROOT.exists():
+        return None, None
+    # Search all peptide folders for a Raw Data subfolder matching sample_id
+    for peptide_dir in PEPTIDES_ROOT.iterdir():
+        if not peptide_dir.is_dir():
+            continue
+        raw_data = peptide_dir / "Raw Data"
+        if not raw_data.exists():
+            continue
+        for sub in raw_data.iterdir():
+            if sub.is_dir() and sample_id.upper() in sub.name.upper():
+                return sub, peptide_dir.name
+    return None, None
+
+
+def _extract_weights_from_excel(excel_path: Path) -> dict:
+    """
+    Parse a lab HPLC Excel file for stock + dilution weights.
+
+    Looks for:
+    - Stock row: row where col E contains "Stock" (case-insensitive)
+      → F = stock_vial_empty, G = stock_vial_with_diluent
+    - Dilution rows: rows with numeric data in F, G, H starting after header row 9
+      → F = dil_vial_empty, G = + diluent, H = + diluent + sample
+
+    Also handles the alternate layout (Sheet2 / ReRun sheets) where:
+    - Stock weights in rows with "Stock Vial+cap" label
+    - Dilution weights in cols C, E, H
+    """
+    import openpyxl
+
+    wb = openpyxl.load_workbook(str(excel_path), data_only=True, read_only=True)
+    result = {
+        "stock_vial_empty": None,
+        "stock_vial_with_diluent": None,
+        "dilution_rows": [],
+    }
+
+    for sheet_name in wb.sheetnames:
+        ws = wb[sheet_name]
+
+        # --- Try "Sample" sheet layout (F/G/H columns, Stock in row with "Stock" in col E) ---
+        stock_empty = None
+        stock_diluent = None
+        dilutions = []
+
+        for row in range(1, 40):
+            e_val = ws.cell(row=row, column=5).value  # col E
+            f_val = ws.cell(row=row, column=6).value  # col F
+            g_val = ws.cell(row=row, column=7).value  # col G
+            h_val = ws.cell(row=row, column=8).value  # col H
+
+            # Check for stock row
+            if e_val and isinstance(e_val, str) and "stock" in e_val.lower():
+                if isinstance(f_val, (int, float)) and isinstance(g_val, (int, float)):
+                    stock_empty = float(f_val)
+                    stock_diluent = float(g_val)
+                continue
+
+            # Check for dilution data rows (need F, G, H all numeric)
+            # Real vial weights are 2000-6000mg and must increase:
+            # empty < +diluent < +diluent+sample
+            if (isinstance(f_val, (int, float)) and f_val > 2000
+                    and isinstance(g_val, (int, float)) and g_val > f_val
+                    and isinstance(h_val, (int, float)) and h_val >= g_val):
+                # Get concentration label from col E
+                conc_label = str(e_val) if e_val else f"Row {row}"
+                dilutions.append({
+                    "label": conc_label,
+                    "concentration": conc_label,
+                    "dil_vial_empty": float(f_val),
+                    "dil_vial_with_diluent": float(g_val),
+                    "dil_vial_with_diluent_and_sample": float(h_val),
+                })
+
+        if dilutions:
+            result["stock_vial_empty"] = stock_empty
+            result["stock_vial_with_diluent"] = stock_diluent
+            result["dilution_rows"] = dilutions
+            wb.close()
+            return result
+
+        # --- Try alternate layout (C/E/H columns) ---
+        for row in range(1, 40):
+            a_val = ws.cell(row=row, column=1).value  # col A
+            b_val = ws.cell(row=row, column=2).value  # col B
+
+            # Look for stock vial labels in col A
+            if a_val and isinstance(a_val, str):
+                lower = a_val.lower()
+                if "stock vial+cap" in lower or "stock vial + cap" in lower:
+                    if isinstance(b_val, (int, float)):
+                        stock_empty = float(b_val)
+                elif "stock peptide+vial" in lower or "stock vial+cap+diluent" in lower:
+                    if isinstance(b_val, (int, float)):
+                        stock_diluent = float(b_val)
+
+        # Also scan for C/E/H dilution layout
+        alt_dilutions = []
+        for row in range(1, 40):
+            a_val = ws.cell(row=row, column=1).value
+            c_val = ws.cell(row=row, column=3).value  # col C
+            e_val = ws.cell(row=row, column=5).value  # col E
+            h_val = ws.cell(row=row, column=8).value  # col H
+
+            if (isinstance(c_val, (int, float)) and c_val > 2000
+                    and isinstance(e_val, (int, float)) and e_val > c_val
+                    and isinstance(h_val, (int, float)) and h_val >= e_val):
+                label = str(a_val) if a_val else f"Row {row}"
+                if "stock" in label.lower():
+                    # Stock row in C/E layout: C=empty, E=with diluent
+                    if stock_empty is None:
+                        stock_empty = float(c_val)
+                        stock_diluent = float(e_val)
+                else:
+                    alt_dilutions.append({
+                        "label": label,
+                        "concentration": label,
+                        "dil_vial_empty": float(c_val),
+                        "dil_vial_with_diluent": float(e_val),
+                        "dil_vial_with_diluent_and_sample": float(h_val),
+                    })
+
+        if alt_dilutions:
+            result["stock_vial_empty"] = stock_empty
+            result["stock_vial_with_diluent"] = stock_diluent
+            result["dilution_rows"] = alt_dilutions
+            wb.close()
+            return result
+
+    wb.close()
+    return result
+
+
+@app.get("/hplc/weights/{sample_id}", response_model=WeightExtractionResponse)
+async def get_sample_weights(sample_id: str):
+    """
+    Search the Peptides lab folder for a sample ID and extract weight data
+    from the associated Excel workbook.
+    """
+    folder, peptide_folder = _find_sample_folder(sample_id)
+    if not folder:
+        return WeightExtractionResponse(
+            found=False,
+            error=f"No folder matching '{sample_id}' found in Peptides root"
+        )
+
+    # Find the lab workbook Excel file (P-XXXX_Samp_* or P-XXXX_Std_*)
+    # Skip Agilent data exports (contain ".dx_" or "_PeakData" in name)
+    excel_path = None
+    search_dirs = [folder / "1290", folder]
+    for search_dir in search_dirs:
+        if not search_dir.exists():
+            continue
+        candidates = []
+        for f in search_dir.iterdir():
+            if f.suffix != ".xlsx" or f.name.startswith("~$"):
+                continue
+            # Skip Agilent instrument data exports
+            if ".dx_" in f.name or "_PeakData" in f.name:
+                continue
+            candidates.append(f)
+        # Prefer files matching P-XXXX_Samp_* or P-XXXX_Std_* patterns
+        for c in candidates:
+            if "_Samp_" in c.name or "_Std_" in c.name:
+                excel_path = c
+                break
+        if not excel_path and candidates:
+            excel_path = candidates[0]
+        if excel_path:
+            break
+
+    if not excel_path:
+        return WeightExtractionResponse(
+            found=True,
+            folder_name=folder.name,
+            peptide_folder=peptide_folder,
+            error="No Excel file found in sample folder"
+        )
+
+    try:
+        weights = _extract_weights_from_excel(excel_path)
+    except Exception as e:
+        return WeightExtractionResponse(
+            found=True,
+            folder_name=folder.name,
+            peptide_folder=peptide_folder,
+            excel_filename=excel_path.name,
+            error=f"Error parsing Excel: {e}"
+        )
+
+    return WeightExtractionResponse(
+        found=True,
+        folder_name=folder.name,
+        peptide_folder=peptide_folder,
+        excel_filename=excel_path.name,
+        stock_vial_empty=weights["stock_vial_empty"],
+        stock_vial_with_diluent=weights["stock_vial_with_diluent"],
+        dilution_rows=[DilutionRow(**d) for d in weights["dilution_rows"]],
+    )
 
 
 # --- Explorer Endpoints (Integration Service Database) ---

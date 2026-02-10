@@ -1,15 +1,23 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Search, Database, RefreshCw, ChevronRight, AlertCircle, CheckCircle2, Clock, XCircle } from 'lucide-react'
-import { ColumnDef } from '@tanstack/react-table'
+import {
+  Search,
+  Database,
+  RefreshCw,
+  ChevronRight,
+  ChevronLeft,
+  AlertCircle,
+  CheckCircle2,
+  Clock,
+  XCircle,
+} from 'lucide-react'
+import type { ColumnDef } from '@tanstack/react-table'
 
 import { cn } from '@/lib/utils'
 import {
   getExplorerStatus,
   getExplorerOrders,
-  getOrderIngestions,
   type ExplorerOrder,
-  type ExplorerIngestion,
 } from '@/lib/api'
 import {
   getProfiles,
@@ -22,7 +30,13 @@ import {
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from '@/components/ui/card'
 import { DataTable } from '@/components/ui/data-table'
 import {
   Select,
@@ -32,21 +46,32 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { PayloadPanel } from '@/components/PayloadPanel'
+import { OrderDetailPanel } from '@/components/explorer/OrderDetailPanel'
 
+// --- Helpers ---
 
-/**
- * Status badge component with appropriate colors.
- */
 function StatusBadge({ status }: { status: string }) {
-  const variants: Record<string, { variant: 'default' | 'secondary' | 'destructive' | 'outline'; icon: React.ReactNode }> = {
+  const variants: Record<
+    string,
+    {
+      variant: 'default' | 'secondary' | 'destructive' | 'outline'
+      icon: React.ReactNode
+    }
+  > = {
     pending: { variant: 'secondary', icon: <Clock className="h-3 w-3" /> },
-    processing: { variant: 'secondary', icon: <RefreshCw className="h-3 w-3 animate-spin" /> },
-    accepted: { variant: 'default', icon: <CheckCircle2 className="h-3 w-3" /> },
-    uploaded: { variant: 'default', icon: <CheckCircle2 className="h-3 w-3" /> },
-    notified: { variant: 'default', icon: <CheckCircle2 className="h-3 w-3" /> },
+    processing: {
+      variant: 'secondary',
+      icon: <RefreshCw className="h-3 w-3 animate-spin" />,
+    },
+    accepted: {
+      variant: 'default',
+      icon: <CheckCircle2 className="h-3 w-3" />,
+    },
     failed: { variant: 'destructive', icon: <XCircle className="h-3 w-3" /> },
-    error: { variant: 'destructive', icon: <XCircle className="h-3 w-3" /> },
-    validation_failed: { variant: 'destructive', icon: <AlertCircle className="h-3 w-3" /> },
+    partial_failure: {
+      variant: 'destructive',
+      icon: <AlertCircle className="h-3 w-3" />,
+    },
   }
 
   const config = variants[status] || { variant: 'outline' as const, icon: null }
@@ -59,12 +84,8 @@ function StatusBadge({ status }: { status: string }) {
   )
 }
 
-
-/**
- * Format datetime for display.
- */
 function formatDate(dateStr: string | null): string {
-  if (!dateStr) return '—'
+  if (!dateStr) return '\u2014'
   const date = new Date(dateStr)
   return date.toLocaleString('en-US', {
     month: 'short',
@@ -74,184 +95,87 @@ function formatDate(dateStr: string | null): string {
   })
 }
 
-
-/**
- * Calculate and format processing time.
- */
-function formatProcessingTime(createdAt: string, completedAt: string | null): string {
+function formatProcessingTime(
+  createdAt: string,
+  completedAt: string | null
+): string {
   const start = new Date(createdAt)
   const end = completedAt ? new Date(completedAt) : new Date()
-  const diffMs = end.getTime() - start.getTime()
-  
-  return formatMilliseconds(diffMs)
-}
+  const ms = end.getTime() - start.getTime()
+  if (ms < 0) return '\u2014'
 
-
-/**
- * Format milliseconds into human-readable duration.
- */
-function formatMilliseconds(ms: number): string {
-  if (ms < 0) return '—'
-  
   const seconds = Math.floor(ms / 1000)
   const minutes = Math.floor(seconds / 60)
   const hours = Math.floor(minutes / 60)
   const days = Math.floor(hours / 24)
-  
-  if (days > 0) {
-    return `${days}d ${hours % 24}h`
-  } else if (hours > 0) {
-    return `${hours}h ${minutes % 60}m`
-  } else if (minutes > 0) {
-    return `${minutes}m ${seconds % 60}s`
-  } else if (seconds > 0) {
-    return `${seconds}s`
-  } else {
-    return `${ms}ms`
-  }
+
+  if (days > 0) return `${days}d ${hours % 24}h`
+  if (hours > 0) return `${hours}h ${minutes % 60}m`
+  if (minutes > 0) return `${minutes}m ${seconds % 60}s`
+  if (seconds > 0) return `${seconds}s`
+  return `${ms}ms`
 }
 
-
-/**
- * Ingestions panel showing COAs for selected order.
- */
-function IngestionsPanel({ 
-  orderId, 
-  orderCreatedAt,
-  wordpressHost,
-  onClose,
-}: { 
-  orderId: string
-  orderCreatedAt: string
-  wordpressHost?: string
-  onClose: () => void
+function SampleIdCell({
+  sampleResults,
+}: {
+  sampleResults: Record<string, { senaite_id: string; status: string }> | null
 }) {
-  const { data: ingestions, isLoading, error } = useQuery({
-    queryKey: ['explorer', 'ingestions', orderId],
-    queryFn: () => getOrderIngestions(orderId),
-  })
+  const [expanded, setExpanded] = useState(false)
 
-  // Build verify URL for a code
-  const getVerifyUrl = (code: string) => {
-    const baseUrl = wordpressHost || 'https://accumarklabs.local'
-    return `${baseUrl}/verify?code=${code}`
-  }
+  if (!sampleResults) return <span className="text-muted-foreground">{'\u2014'}</span>
 
-  // Column definitions for ingestions table
-  const columns: ColumnDef<ExplorerIngestion>[] = useMemo(() => [
-    {
-      accessorKey: 'sample_id',
-      header: 'Sample ID',
-      size: 120,
-      cell: ({ row }) => (
-        <span className="font-mono text-sm">{row.original.sample_id}</span>
-      ),
-    },
-    {
-      accessorKey: 'coa_version',
-      header: 'Version',
-      size: 70,
-      cell: ({ row }) => `v${row.original.coa_version}`,
-    },
-    {
-      accessorKey: 'status',
-      header: 'Status',
-      size: 100,
-      cell: ({ row }) => <StatusBadge status={row.original.status} />,
-    },
-    {
-      accessorKey: 'verification_code',
-      header: 'Verification Code',
-      size: 140,
-      cell: ({ row }) => {
-        const code = row.original.verification_code
-        if (!code) return <span className="text-muted-foreground">—</span>
-        return (
-          <a
-            href={getVerifyUrl(code)}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="font-mono text-sm text-primary hover:underline"
-          >
-            {code}
-          </a>
-        )
-      },
-    },
-    {
-      accessorKey: 'completed_at',
-      header: 'Completed',
-      size: 130,
-      cell: ({ row }) => (
-        <span className="text-muted-foreground">{formatDate(row.original.completed_at)}</span>
-      ),
-    },
-    {
-      id: 'processing_time',
-      header: 'Processing Time',
-      size: 120,
-      cell: ({ row }) => {
-        const ing = row.original
-        return (
-          <span className={cn(
-            'font-mono text-sm',
-            ing.completed_at ? 'text-green-600' : 'text-yellow-600'
-          )}>
-            {formatProcessingTime(orderCreatedAt, ing.completed_at)}
-            {!ing.completed_at && ' ⏳'}
-          </span>
-        )
-      },
-    },
-  ], [orderCreatedAt, getVerifyUrl])
+  const ids = Object.values(sampleResults).map(s => s.senaite_id)
+  if (ids.length === 0) return <span className="text-muted-foreground">{'\u2014'}</span>
+
+  const visible = expanded ? ids : ids.slice(0, 2)
+  const remaining = ids.length - 2
 
   return (
-    <Card>
-      <CardHeader className="pb-3">
-        <div className="flex items-center justify-between">
-          <div>
-            <CardTitle className="text-lg">Ingestions for Order #{orderId}</CardTitle>
-            <CardDescription>COA records linked to this order</CardDescription>
-          </div>
-          <Button variant="ghost" size="sm" onClick={onClose}>
-            ✕
-          </Button>
-        </div>
-      </CardHeader>
-      <CardContent>
-        {isLoading && (
-          <div className="flex items-center gap-2 text-muted-foreground py-4">
-            <RefreshCw className="h-4 w-4 animate-spin" />
-            Loading ingestions...
-          </div>
-        )}
-
-        {error && (
-          <div className="flex items-center gap-2 text-destructive py-4">
-            <AlertCircle className="h-4 w-4" />
-            Failed to load ingestions
-          </div>
-        )}
-
-        {ingestions && ingestions.length === 0 && (
-          <div className="text-muted-foreground py-4 text-center">
-            No ingestions found for this order
-          </div>
-        )}
-
-        {ingestions && ingestions.length > 0 && (
-          <DataTable
-            columns={columns}
-            data={ingestions}
-            getRowId={(row) => String(row.id)}
-          />
-        )}
-      </CardContent>
-    </Card>
+    <div className="flex flex-wrap items-center gap-1">
+      {visible.map(id => (
+        <Badge key={id} variant="outline" className="font-mono text-xs px-1.5 py-0">
+          {id}
+        </Badge>
+      ))}
+      {!expanded && remaining > 0 && (
+        <button
+          type="button"
+          className="text-xs text-muted-foreground hover:text-foreground"
+          onClick={e => {
+            e.stopPropagation()
+            setExpanded(true)
+          }}
+        >
+          +{remaining} more
+        </button>
+      )}
+      {expanded && ids.length > 2 && (
+        <button
+          type="button"
+          className="text-xs text-muted-foreground hover:text-foreground"
+          onClick={e => {
+            e.stopPropagation()
+            setExpanded(false)
+          }}
+        >
+          show less
+        </button>
+      )}
+    </div>
   )
 }
 
+const PAGE_SIZE = 50
 
+const STATUS_OPTIONS = [
+  { value: 'all', label: 'All Statuses' },
+  { value: 'pending', label: 'Pending' },
+  { value: 'processing', label: 'Processing' },
+  { value: 'accepted', label: 'Accepted' },
+  { value: 'partial_failure', label: 'Partial Failure' },
+  { value: 'failed', label: 'Failed' },
+]
 
 /**
  * Order Explorer - Debugging tool for viewing Integration Service data.
@@ -259,10 +183,14 @@ function IngestionsPanel({
 export function OrderExplorer() {
   const [searchTerm, setSearchTerm] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
+  const [statusFilter, setStatusFilter] = useState('all')
+  const [page, setPage] = useState(0)
   const [selectedOrder, setSelectedOrder] = useState<ExplorerOrder | null>(null)
 
   // Profile state
-  const [activeProfileId, setActiveProfileIdState] = useState<string | null>(getActiveProfileId())
+  const [activeProfileId, setActiveProfileIdState] = useState<string | null>(
+    getActiveProfileId()
+  )
   const profiles = getProfiles()
 
   const [isRefreshing, setIsRefreshing] = useState(false)
@@ -279,9 +207,11 @@ export function OrderExplorer() {
       setActiveProfileIdState(getActiveProfileId())
       setSelectedOrder(null)
       setSelectedPayload(null)
+      setPage(0)
     }
     window.addEventListener(API_PROFILE_CHANGED_EVENT, handleProfileChange)
-    return () => window.removeEventListener(API_PROFILE_CHANGED_EVENT, handleProfileChange)
+    return () =>
+      window.removeEventListener(API_PROFILE_CHANGED_EVENT, handleProfileChange)
   }, [])
 
   // Clear refresh success indicator after 2 seconds
@@ -296,46 +226,60 @@ export function OrderExplorer() {
   const { data: status, isLoading: statusLoading } = useQuery({
     queryKey: ['explorer', 'status', activeProfileId],
     queryFn: getExplorerStatus,
-    staleTime: 0, // Always check fresh when profile changes
+    staleTime: 0,
     enabled: !!activeProfileId,
   })
 
-  // Orders query
+  // Orders query with status filter and pagination
   const {
     data: orders,
     isLoading: ordersLoading,
     error: ordersError,
     refetch,
   } = useQuery({
-    queryKey: ['explorer', 'orders', debouncedSearch, activeProfileId],
-    queryFn: () => getExplorerOrders(debouncedSearch || undefined),
+    queryKey: [
+      'explorer',
+      'orders',
+      debouncedSearch,
+      statusFilter,
+      page,
+      activeProfileId,
+    ],
+    queryFn: () =>
+      getExplorerOrders(
+        debouncedSearch || undefined,
+        PAGE_SIZE,
+        page * PAGE_SIZE,
+        statusFilter === 'all' ? undefined : statusFilter
+      ),
     enabled: status?.connected === true,
   })
 
   // Handle search with debounce
   const handleSearchChange = (value: string) => {
     setSearchTerm(value)
-    // Simple debounce using timeout
+    setPage(0)
     setTimeout(() => {
       setDebouncedSearch(value)
     }, 300)
   }
 
+  const handleStatusFilterChange = (value: string) => {
+    setStatusFilter(value)
+    setPage(0)
+  }
+
   const handleOrderClick = (order: ExplorerOrder) => {
     setSelectedOrder(order)
-    setSelectedPayload(null) // Close payload panel when selecting different order
+    setSelectedPayload(null)
   }
 
   const handleConnectionChange = async (profileId: string) => {
-    // Set active profile (this triggers saveState -> dispatch event)
     setActiveProfileId(profileId)
     setActiveProfileIdState(profileId)
-    
-    // Reset local state
     setSelectedOrder(null)
     setSelectedPayload(null)
-    
-    // Clear cache and refresh
+    setPage(0)
     queryClient.clear()
     await queryClient.invalidateQueries({ queryKey: ['explorer'] })
     refetch()
@@ -350,7 +294,7 @@ export function OrderExplorer() {
   }
 
   // Column definitions for orders table
-  const ordersColumns: ColumnDef<ExplorerOrder>[] = useMemo(() => [
+  const ordersColumns: ColumnDef<ExplorerOrder>[] = [
     {
       accessorKey: 'order_id',
       header: 'Order ID',
@@ -370,6 +314,30 @@ export function OrderExplorer() {
       ),
     },
     {
+      id: 'email',
+      header: 'Email',
+      size: 140,
+      minSize: 80,
+      cell: ({ row }) => {
+        const email =
+          (row.original.payload as Record<string, unknown> | null)?.billing &&
+          typeof (row.original.payload as Record<string, unknown>).billing ===
+            'object'
+            ? (
+                (row.original.payload as Record<string, Record<string, unknown>>)
+                  .billing?.email as string | undefined
+              ) ?? null
+            : null
+        if (!email) return <span className="text-muted-foreground">{'\u2014'}</span>
+        const localPart = email.split('@')[0]
+        return (
+          <span className="text-sm truncate block max-w-[130px]" title={email}>
+            {localPart}@...
+          </span>
+        )
+      },
+    },
+    {
       accessorKey: 'status',
       header: 'Status',
       size: 100,
@@ -382,8 +350,17 @@ export function OrderExplorer() {
       size: 70,
       minSize: 50,
       cell: ({ row }) => (
-        <span>{row.original.samples_delivered}/{row.original.samples_expected}</span>
+        <span>
+          {row.original.samples_delivered}/{row.original.samples_expected}
+        </span>
       ),
+    },
+    {
+      id: 'sample_ids',
+      header: 'Sample IDs',
+      size: 160,
+      minSize: 80,
+      cell: ({ row }) => <SampleIdCell sampleResults={row.original.sample_results} />,
     },
     {
       accessorKey: 'created_at',
@@ -391,7 +368,9 @@ export function OrderExplorer() {
       size: 130,
       minSize: 80,
       cell: ({ row }) => (
-        <span className="text-muted-foreground">{formatDate(row.original.created_at)}</span>
+        <span className="text-muted-foreground">
+          {formatDate(row.original.created_at)}
+        </span>
       ),
     },
     {
@@ -400,7 +379,9 @@ export function OrderExplorer() {
       size: 130,
       minSize: 80,
       cell: ({ row }) => (
-        <span className="text-muted-foreground">{formatDate(row.original.completed_at)}</span>
+        <span className="text-muted-foreground">
+          {formatDate(row.original.completed_at)}
+        </span>
       ),
     },
     {
@@ -411,35 +392,14 @@ export function OrderExplorer() {
       cell: ({ row }) => {
         const order = row.original
         return (
-          <span className={cn(
-            'font-mono text-sm',
-            order.completed_at ? 'text-green-600' : 'text-yellow-600'
-          )}>
-            {formatProcessingTime(order.created_at, order.completed_at)}
-            {!order.completed_at && ' ⏳'}
-          </span>
-        )
-      },
-    },
-    {
-      id: 'payload',
-      header: 'Payload',
-      size: 70,
-      minSize: 50,
-      cell: ({ row }) => {
-        const order = row.original
-        if (!order.payload) return <span className="text-muted-foreground">—</span>
-        return (
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={(e) => {
-              e.stopPropagation()
-              setSelectedPayload({ payload: order.payload, sampleId: order.order_id })
-            }}
+          <span
+            className={cn(
+              'font-mono text-sm',
+              order.completed_at ? 'text-green-600' : 'text-yellow-600'
+            )}
           >
-            View
-          </Button>
+            {formatProcessingTime(order.created_at, order.completed_at)}
+          </span>
         )
       },
     },
@@ -451,8 +411,10 @@ export function OrderExplorer() {
       enableResizing: false,
       cell: () => <ChevronRight className="h-4 w-4 text-muted-foreground" />,
     },
-  ], [])
+  ]
 
+  const hasNextPage = orders && orders.length === PAGE_SIZE
+  const hasPrevPage = page > 0
 
   return (
     <div className="flex flex-col gap-4">
@@ -465,7 +427,7 @@ export function OrderExplorer() {
           <div>
             <h2 className="text-xl font-semibold">Order Explorer</h2>
             <p className="text-sm text-muted-foreground">
-              View orders and ingestions from the Integration Service
+              Browse orders and ingestions from the Integration Service
             </p>
           </div>
         </div>
@@ -481,7 +443,7 @@ export function OrderExplorer() {
               <SelectValue placeholder="Select Profile" />
             </SelectTrigger>
             <SelectContent>
-              {profiles.map((profile) => (
+              {profiles.map(profile => (
                 <SelectItem key={profile.id} value={profile.id}>
                   {profile.name}
                 </SelectItem>
@@ -496,18 +458,20 @@ export function OrderExplorer() {
             disabled={statusLoading || isRefreshing}
             title="Refresh data"
           >
-            <RefreshCw className={cn('h-4 w-4', (isRefreshing || ordersLoading) && 'animate-spin')} />
+            <RefreshCw
+              className={cn(
+                'h-4 w-4',
+                (isRefreshing || ordersLoading) && 'animate-spin'
+              )}
+            />
           </Button>
 
           {refreshSuccess && (
-            <CheckCircle2 
-              className="h-5 w-5 text-green-500 animate-in fade-in zoom-in duration-200" 
-              style={{ animation: 'fadeIn 0.2s ease-in, fadeOut 0.5s ease-out 1.5s forwards' }}
-            />
+            <CheckCircle2 className="h-5 w-5 text-green-500 animate-in fade-in zoom-in duration-200" />
           )}
 
           {/* Connection status badge */}
-          {(statusLoading) && (
+          {statusLoading && (
             <Badge variant="secondary">
               <RefreshCw className="h-3 w-3 animate-spin mr-1" />
               Connecting...
@@ -543,7 +507,7 @@ export function OrderExplorer() {
         </Card>
       )}
 
-      {/* Search and refresh */}
+      {/* Search, status filter */}
       {status?.connected && (
         <div className="flex items-center gap-2">
           <div className="relative flex-1">
@@ -555,9 +519,18 @@ export function OrderExplorer() {
               className="pl-10"
             />
           </div>
-          <Button variant="outline" size="icon" onClick={() => refetch()}>
-            <RefreshCw className={cn('h-4 w-4', ordersLoading && 'animate-spin')} />
-          </Button>
+          <Select value={statusFilter} onValueChange={handleStatusFilterChange}>
+            <SelectTrigger className="w-[160px]">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {STATUS_OPTIONS.map(opt => (
+                <SelectItem key={opt.value} value={opt.value}>
+                  {opt.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
       )}
 
@@ -565,10 +538,42 @@ export function OrderExplorer() {
       {status?.connected && (
         <Card>
           <CardHeader className="pb-3">
-            <CardTitle className="text-lg">Orders</CardTitle>
-            <CardDescription>
-              {orders?.length ?? 0} orders found. Click to view ingestions.
-            </CardDescription>
+            <div className="flex items-center justify-between">
+              <div>
+                <CardTitle className="text-lg">Orders</CardTitle>
+                <CardDescription>
+                  {orders
+                    ? `${orders.length} orders${orders.length === PAGE_SIZE ? '+' : ''}`
+                    : 'Loading...'}
+                  {statusFilter !== 'all' && ` (filtered: ${statusFilter})`}.
+                  Click to view details.
+                </CardDescription>
+              </div>
+              {/* Pagination */}
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setPage(p => p - 1)}
+                  disabled={!hasPrevPage || ordersLoading}
+                >
+                  <ChevronLeft className="h-4 w-4" />
+                  Prev
+                </Button>
+                <span className="text-sm text-muted-foreground min-w-[60px] text-center">
+                  Page {page + 1}
+                </span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setPage(p => p + 1)}
+                  disabled={!hasNextPage || ordersLoading}
+                >
+                  Next
+                  <ChevronRight className="h-4 w-4" />
+                </Button>
+              </div>
+            </div>
           </CardHeader>
           <CardContent>
             {ordersLoading && (
@@ -587,7 +592,9 @@ export function OrderExplorer() {
 
             {orders && orders.length === 0 && !ordersLoading && (
               <div className="text-muted-foreground py-8 text-center">
-                {debouncedSearch ? 'No orders match your search' : 'No orders found'}
+                {debouncedSearch
+                  ? 'No orders match your search'
+                  : 'No orders found'}
               </div>
             )}
 
@@ -598,7 +605,7 @@ export function OrderExplorer() {
                   data={orders}
                   onRowClick={handleOrderClick}
                   selectedRowId={selectedOrder?.order_id}
-                  getRowId={(row) => row.order_id}
+                  getRowId={row => row.order_id}
                 />
               </div>
             )}
@@ -606,17 +613,22 @@ export function OrderExplorer() {
         </Card>
       )}
 
-      {/* Ingestions panel */}
+      {/* Order detail panel (tabbed) */}
       {selectedOrder && (
-        <IngestionsPanel
-          orderId={selectedOrder.order_id}
-          orderCreatedAt={selectedOrder.created_at}
+        <OrderDetailPanel
+          order={selectedOrder}
           wordpressHost={getActiveProfile()?.wordpressUrl}
           onClose={() => setSelectedOrder(null)}
+          onViewPayload={order =>
+            setSelectedPayload({
+              payload: order.payload,
+              sampleId: order.order_id,
+            })
+          }
         />
       )}
 
-      {/* Payload panel - shows in right area */}
+      {/* Payload panel */}
       {selectedPayload && (
         <PayloadPanel
           payload={selectedPayload.payload}

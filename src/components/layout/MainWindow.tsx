@@ -1,5 +1,9 @@
 import { useState, useEffect } from 'react'
-import { SidebarProvider, SidebarInset, SidebarTrigger } from '@/components/ui/sidebar'
+import {
+  SidebarProvider,
+  SidebarInset,
+  SidebarTrigger,
+} from '@/components/ui/sidebar'
 import { TitleBar } from '@/components/titlebar/TitleBar'
 import { AppSidebar } from './AppSidebar'
 import { MainWindowContent } from './MainWindowContent'
@@ -8,7 +12,11 @@ import { PreferencesDialog } from '@/components/preferences/PreferencesDialog'
 import { Toaster } from 'sonner'
 import { useTheme } from '@/hooks/use-theme'
 import { useMainWindowEventListeners } from '@/hooks/useMainWindowEventListeners'
-import { getActiveProfile, hasApiKey, API_PROFILE_CHANGED_EVENT } from '@/lib/api-profiles'
+import {
+  getActiveProfile,
+  hasApiKey,
+  API_PROFILE_CHANGED_EVENT,
+} from '@/lib/api-profiles'
 import { healthCheck, type HealthResponse } from '@/lib/api'
 import { Separator } from '@/components/ui/separator'
 
@@ -22,7 +30,9 @@ type BackendStatus =
 export function MainWindow() {
   const { theme } = useTheme()
   const [profileName, setProfileName] = useState<string | null>(null)
-  const [backendStatus, setBackendStatus] = useState<BackendStatus>({ state: 'loading' })
+  const [backendStatus, setBackendStatus] = useState<BackendStatus>({
+    state: 'loading',
+  })
 
   // Set up global event listeners (keyboard shortcuts, etc.)
   useMainWindowEventListeners()
@@ -42,7 +52,7 @@ export function MainWindow() {
         setBackendStatus({ state: 'api_key_required' })
         return
       }
-      
+
       try {
         const health = await healthCheck()
         setBackendStatus({ state: 'connected', data: health })
@@ -51,7 +61,7 @@ export function MainWindow() {
           clearInterval(intervalId)
           intervalId = null
         }
-      } catch (error) {
+      } catch {
         setBackendStatus({
           state: 'error',
           message: 'Backend Offline',
@@ -74,7 +84,7 @@ export function MainWindow() {
     checkBackend()
 
     window.addEventListener(API_PROFILE_CHANGED_EVENT, handleProfileChange)
-    
+
     return () => {
       window.removeEventListener(API_PROFILE_CHANGED_EVENT, handleProfileChange)
       if (intervalId) clearInterval(intervalId)
@@ -88,9 +98,17 @@ export function MainWindow() {
       case 'api_key_required':
         return <span className="text-amber-500">API Key Required</span>
       case 'connected':
-        return <span className="text-green-600 dark:text-green-500">Connected - {profileName || 'Unknown'}</span>
+        return (
+          <span className="text-green-600 dark:text-green-500">
+            Connected - {profileName || 'Unknown'}
+          </span>
+        )
       case 'error':
-        return <span className="text-red-500 font-medium">{backendStatus.message}</span>
+        return (
+          <span className="text-red-500 font-medium">
+            {backendStatus.message}
+          </span>
+        )
     }
   }
 
@@ -101,15 +119,13 @@ export function MainWindow() {
 
         <div className="flex flex-1 overflow-hidden">
           <AppSidebar />
-          
+
           <SidebarInset>
             {/* Header with sidebar trigger */}
             <header className="flex h-10 shrink-0 items-center gap-2 border-b px-4">
               <SidebarTrigger className="-ml-1" />
               <Separator orientation="vertical" className="mr-2 h-4" />
-              <span className="text-sm text-muted-foreground">
-                Accu-Mk1
-              </span>
+              <span className="text-sm text-muted-foreground">Accu-Mk1</span>
             </header>
 
             {/* Main content area */}

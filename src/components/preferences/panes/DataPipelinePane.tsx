@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
@@ -38,32 +38,40 @@ export function DataPipelinePane() {
   const [isDirty, setIsDirty] = useState(false)
 
   // Fetch settings from backend
-  const { data: settings, isLoading, isError } = useQuery({
+  const {
+    data: settings,
+    isLoading,
+    isError,
+  } = useQuery({
     queryKey: ['settings'],
     queryFn: getSettings,
   })
 
-  // Initialize form state from fetched settings
-  useEffect(() => {
-    if (settings) {
-      const settingsMap = settingsToMap(settings)
+  // Sync form state from fetched settings (render-time pattern per React docs)
+  const [prevSettings, setPrevSettings] = useState<Setting[] | undefined>(
+    undefined
+  )
+  if (settings && settings !== prevSettings) {
+    setPrevSettings(settings)
+    const settingsMap = settingsToMap(settings)
 
-      const reportDir = settingsMap.get('report_directory') ?? ''
-      setReportDirectory(reportDir)
+    setReportDirectory(settingsMap.get('report_directory') ?? '')
 
-      const mappingsJson = settingsMap.get('column_mappings')
-      if (mappingsJson) {
-        try {
-          const parsed = JSON.parse(mappingsJson) as ColumnMappings
-          setColumnMappings(parsed)
-        } catch {
-          console.error('Failed to parse column_mappings JSON')
-        }
+    const mappingsJson = settingsMap.get('column_mappings')
+    if (mappingsJson) {
+      try {
+        const parsed = JSON.parse(mappingsJson) as ColumnMappings
+        setColumnMappings(parsed)
+      } catch (error) {
+        console.error('Failed to parse column_mappings JSON:', error)
+        toast.error('Column mappings are corrupted', {
+          description: 'Using default values. Re-save to fix.',
+        })
       }
-
-      setIsDirty(false)
     }
-  }, [settings])
+
+    setIsDirty(false)
+  }
 
   // Mutation for saving settings
   const saveMutation = useMutation({
@@ -90,7 +98,10 @@ export function DataPipelinePane() {
     setIsDirty(true)
   }
 
-  const handleColumnMappingChange = (key: keyof ColumnMappings, value: string) => {
+  const handleColumnMappingChange = (
+    key: keyof ColumnMappings,
+    value: string
+  ) => {
     setColumnMappings(prev => ({ ...prev, [key]: value }))
     setIsDirty(true)
   }
@@ -125,12 +136,16 @@ export function DataPipelinePane() {
           <Input
             value={reportDirectory}
             onChange={e => handleReportDirectoryChange(e.target.value)}
-            placeholder={t('preferences.dataPipeline.reportDirectoryPlaceholder')}
+            placeholder={t(
+              'preferences.dataPipeline.reportDirectoryPlaceholder'
+            )}
           />
         </SettingsField>
       </SettingsSection>
 
-      <SettingsSection title={t('preferences.dataPipeline.columnMappingsTitle')}>
+      <SettingsSection
+        title={t('preferences.dataPipeline.columnMappingsTitle')}
+      >
         <p className="text-sm text-muted-foreground mb-4">
           {t('preferences.dataPipeline.columnMappingsDescription')}
         </p>
@@ -141,7 +156,9 @@ export function DataPipelinePane() {
         >
           <Input
             value={columnMappings.peak_area}
-            onChange={e => handleColumnMappingChange('peak_area', e.target.value)}
+            onChange={e =>
+              handleColumnMappingChange('peak_area', e.target.value)
+            }
           />
         </SettingsField>
 
@@ -151,7 +168,9 @@ export function DataPipelinePane() {
         >
           <Input
             value={columnMappings.retention_time}
-            onChange={e => handleColumnMappingChange('retention_time', e.target.value)}
+            onChange={e =>
+              handleColumnMappingChange('retention_time', e.target.value)
+            }
           />
         </SettingsField>
 
@@ -161,7 +180,9 @@ export function DataPipelinePane() {
         >
           <Input
             value={columnMappings.compound_name}
-            onChange={e => handleColumnMappingChange('compound_name', e.target.value)}
+            onChange={e =>
+              handleColumnMappingChange('compound_name', e.target.value)
+            }
           />
         </SettingsField>
       </SettingsSection>

@@ -4,6 +4,7 @@ import { FileSelector } from '@/components/FileSelector'
 import { BatchReview } from '@/components/BatchReview'
 import { AccuMarkTools } from '@/components/AccuMarkTools'
 import { ChromatographViewer } from '@/components/ChromatographViewer'
+import { HPLCAnalysis } from '@/components/hplc/HPLCAnalysis'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { useUIStore } from '@/store/ui-store'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -95,6 +96,8 @@ export function MainWindowContent({
     switch (activeSection) {
       case 'lab-operations':
         return renderLabOperationsContent()
+      case 'hplc-analysis':
+        return <HPLCAnalysis />
       case 'accumark-tools':
         return <AccuMarkTools />
       default:

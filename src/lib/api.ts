@@ -51,27 +51,27 @@ export interface ColumnMappings {
  */
 export async function healthCheck(): Promise<HealthResponse> {
   const baseUrl = API_BASE_URL()
-  
+
   // Try /health first (local backend)
   try {
     const response = await fetch(`${baseUrl}/health`)
     if (response.ok) {
       return response.json()
     }
-  } catch {
-    // Fall through to try /v1/health
+  } catch (error) {
+    console.error('/health check failed:', error)
   }
-  
+
   // Try /v1/health (Integration Service)
   try {
     const response = await fetch(`${baseUrl}/v1/health`)
     if (response.ok) {
       return response.json()
     }
-  } catch {
-    // Fall through to error
+  } catch (error) {
+    console.error('/v1/health check failed:', error)
   }
-  
+
   throw new Error('Health check failed: Backend not reachable')
 }
 
@@ -146,7 +146,9 @@ export async function getSettings(): Promise<Setting[]> {
  */
 export async function getSetting(key: string): Promise<Setting> {
   try {
-    const response = await fetch(`${API_BASE_URL()}/settings/${encodeURIComponent(key)}`)
+    const response = await fetch(
+      `${API_BASE_URL()}/settings/${encodeURIComponent(key)}`
+    )
     if (!response.ok) {
       throw new Error(`Get setting '${key}' failed: ${response.status}`)
     }
@@ -160,15 +162,21 @@ export async function getSetting(key: string): Promise<Setting> {
 /**
  * Create or update a setting.
  */
-export async function updateSetting(key: string, value: string): Promise<Setting> {
+export async function updateSetting(
+  key: string,
+  value: string
+): Promise<Setting> {
   try {
-    const response = await fetch(`${API_BASE_URL()}/settings/${encodeURIComponent(key)}`, {
-      method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ value }),
-    })
+    const response = await fetch(
+      `${API_BASE_URL()}/settings/${encodeURIComponent(key)}`,
+      {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ value }),
+      }
+    )
     if (!response.ok) {
       throw new Error(`Update setting '${key}' failed: ${response.status}`)
     }
@@ -192,7 +200,9 @@ export async function getColumnMappings(): Promise<ColumnMappings> {
  * Update column mappings.
  * Stringifies the object before saving.
  */
-export async function updateColumnMappings(mappings: ColumnMappings): Promise<Setting> {
+export async function updateColumnMappings(
+  mappings: ColumnMappings
+): Promise<Setting> {
   return updateSetting('column_mappings', JSON.stringify(mappings))
 }
 
@@ -317,7 +327,9 @@ export interface FileData {
  * Import pre-parsed file data from browser.
  * Use this when files are selected via browser file input (no file path access).
  */
-export async function importBatchData(files: FileData[]): Promise<ImportResult> {
+export async function importBatchData(
+  files: FileData[]
+): Promise<ImportResult> {
   try {
     const response = await fetch(`${API_BASE_URL()}/import/batch-data`, {
       method: 'POST',
@@ -408,11 +420,17 @@ export interface SampleWithResults {
  * Get all samples for a job with their calculation results flattened.
  * Used for batch review tables where you need quick access to key values.
  */
-export async function getSamplesWithResults(jobId: number): Promise<SampleWithResults[]> {
+export async function getSamplesWithResults(
+  jobId: number
+): Promise<SampleWithResults[]> {
   try {
-    const response = await fetch(`${API_BASE_URL()}/jobs/${jobId}/samples-with-results`)
+    const response = await fetch(
+      `${API_BASE_URL()}/jobs/${jobId}/samples-with-results`
+    )
     if (!response.ok) {
-      throw new Error(`Get job ${jobId} samples with results failed: ${response.status}`)
+      throw new Error(
+        `Get job ${jobId} samples with results failed: ${response.status}`
+      )
     }
     return response.json()
   } catch (error) {
@@ -461,9 +479,12 @@ export async function getSample(sampleId: number): Promise<Sample> {
  */
 export async function approveSample(sampleId: number): Promise<Sample> {
   try {
-    const response = await fetch(`${API_BASE_URL()}/samples/${sampleId}/approve`, {
-      method: 'PUT',
-    })
+    const response = await fetch(
+      `${API_BASE_URL()}/samples/${sampleId}/approve`,
+      {
+        method: 'PUT',
+      }
+    )
     if (!response.ok) {
       throw new Error(`Approve sample ${sampleId} failed: ${response.status}`)
     }
@@ -478,15 +499,21 @@ export async function approveSample(sampleId: number): Promise<Sample> {
  * Reject a sample with a reason.
  * Sets status to 'rejected' and stores the rejection reason.
  */
-export async function rejectSample(sampleId: number, reason: string): Promise<Sample> {
+export async function rejectSample(
+  sampleId: number,
+  reason: string
+): Promise<Sample> {
   try {
-    const response = await fetch(`${API_BASE_URL()}/samples/${sampleId}/reject`, {
-      method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ reason }),
-    })
+    const response = await fetch(
+      `${API_BASE_URL()}/samples/${sampleId}/reject`,
+      {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ reason }),
+      }
+    )
     if (!response.ok) {
       throw new Error(`Reject sample ${sampleId} failed: ${response.status}`)
     }
@@ -538,7 +565,9 @@ export interface StoredResult {
  * Run all applicable calculations for a sample.
  * Results are stored in the database and returned.
  */
-export async function calculateSample(sampleId: number): Promise<CalculationSummary> {
+export async function calculateSample(
+  sampleId: number
+): Promise<CalculationSummary> {
   try {
     const response = await fetch(`${API_BASE_URL()}/calculate/${sampleId}`, {
       method: 'POST',
@@ -601,11 +630,17 @@ export async function previewCalculation(
 /**
  * Get all stored calculation results for a sample.
  */
-export async function getSampleResults(sampleId: number): Promise<StoredResult[]> {
+export async function getSampleResults(
+  sampleId: number
+): Promise<StoredResult[]> {
   try {
-    const response = await fetch(`${API_BASE_URL()}/samples/${sampleId}/results`)
+    const response = await fetch(
+      `${API_BASE_URL()}/samples/${sampleId}/results`
+    )
     if (!response.ok) {
-      throw new Error(`Get sample ${sampleId} results failed: ${response.status}`)
+      throw new Error(
+        `Get sample ${sampleId} results failed: ${response.status}`
+      )
     }
     return response.json()
   } catch (error) {
@@ -652,9 +687,14 @@ export async function getWatcherStatus(): Promise<WatcherStatus> {
 /**
  * Start file watcher using report_directory from settings.
  */
-export async function startWatcher(): Promise<{ status: string; watching: string }> {
+export async function startWatcher(): Promise<{
+  status: string
+  watching: string
+}> {
   try {
-    const response = await fetch(`${API_BASE_URL()}/watcher/start`, { method: 'POST' })
+    const response = await fetch(`${API_BASE_URL()}/watcher/start`, {
+      method: 'POST',
+    })
     if (!response.ok) {
       const error = await response.json()
       throw new Error(error.detail || 'Failed to start watcher')
@@ -671,7 +711,9 @@ export async function startWatcher(): Promise<{ status: string; watching: string
  */
 export async function stopWatcher(): Promise<{ status: string }> {
   try {
-    const response = await fetch(`${API_BASE_URL()}/watcher/stop`, { method: 'POST' })
+    const response = await fetch(`${API_BASE_URL()}/watcher/stop`, {
+      method: 'POST',
+    })
     if (!response.ok) {
       throw new Error('Failed to stop watcher')
     }
@@ -724,6 +766,7 @@ export interface ExplorerOrder {
   samples_delivered: number
   error_message: string | null
   payload: Record<string, unknown> | null
+  sample_results: Record<string, { senaite_id: string; status: string }> | null
   created_at: string
   updated_at: string
   completed_at: string | null
@@ -757,6 +800,77 @@ export interface ExplorerConnectionStatus {
   host?: string
   wordpress_host?: string
   error?: string
+}
+
+/**
+ * Submission attempt (retry audit trail).
+ */
+export interface ExplorerAttempt {
+  id: string
+  attempt_number: number
+  event_id: string | null
+  status: string
+  error_message: string | null
+  samples_processed: Record<string, unknown> | null
+  created_at: string
+}
+
+/**
+ * COA generation record.
+ */
+export interface ExplorerCOAGeneration {
+  id: string
+  sample_id: string
+  generation_number: number
+  verification_code: string
+  content_hash: string
+  status: string // draft | published | superseded
+  anchor_status: string
+  anchor_tx_hash: string | null
+  chromatogram_s3_key: string | null
+  published_at: string | null
+  superseded_at: string | null
+  created_at: string
+}
+
+/**
+ * Sample status event (workflow transition).
+ */
+export interface ExplorerSampleEvent {
+  id: string
+  sample_id: string
+  transition: string
+  new_status: string
+  event_id: string | null
+  event_timestamp: number | null
+  wp_notified: boolean
+  wp_status_sent: string | null
+  wp_error: string | null
+  created_at: string
+}
+
+/**
+ * COA access/download log entry.
+ */
+export interface ExplorerAccessLog {
+  id: string
+  sample_id: string
+  coa_version: number
+  action: string
+  requester_ip: string | null
+  user_agent: string | null
+  requested_by: string | null
+  timestamp: string
+}
+
+/**
+ * Presigned URL response for COA/chromatogram downloads.
+ */
+export interface ExplorerSignedURLResponse {
+  url: string
+  expires_at: string
+  sample_id: string
+  version: number | null
 }
 
 /**
@@ -840,28 +954,33 @@ export async function setExplorerEnvironment(
   }
 }
 
-
 /**
  * Get orders from Integration Service database.
  *
  * @param search - Optional search term for order_id or order_number
  * @param limit - Max records to return (default 50)
  * @param offset - Pagination offset (default 0)
+ * @param status - Optional status filter
  */
 export async function getExplorerOrders(
   search?: string,
   limit = 50,
-  offset = 0
+  offset = 0,
+  status?: string
 ): Promise<ExplorerOrder[]> {
   try {
     const params = new URLSearchParams()
     if (search) params.set('search', search)
+    if (status) params.set('status', status)
     params.set('limit', String(limit))
     params.set('offset', String(offset))
 
-    const response = await fetch(`${API_BASE_URL()}/explorer/orders?${params}`, {
-      headers: getAuthHeaders(),
-    })
+    const response = await fetch(
+      `${API_BASE_URL()}/explorer/orders?${params}`,
+      {
+        headers: getAuthHeaders(),
+      }
+    )
     if (!response.ok) {
       if (response.status === 401) {
         throw new Error('API key required or invalid')
@@ -880,7 +999,9 @@ export async function getExplorerOrders(
  *
  * @param orderId - The WordPress order ID (e.g., "12345")
  */
-export async function getOrderIngestions(orderId: string): Promise<ExplorerIngestion[]> {
+export async function getOrderIngestions(
+  orderId: string
+): Promise<ExplorerIngestion[]> {
   try {
     const response = await fetch(
       `${API_BASE_URL()}/explorer/orders/${encodeURIComponent(orderId)}/ingestions`,
@@ -890,7 +1011,9 @@ export async function getOrderIngestions(orderId: string): Promise<ExplorerInges
       if (response.status === 401) {
         throw new Error('API key required or invalid')
       }
-      throw new Error(`Get order ${orderId} ingestions failed: ${response.status}`)
+      throw new Error(
+        `Get order ${orderId} ingestions failed: ${response.status}`
+      )
     }
     return response.json()
   } catch (error) {
@@ -899,4 +1022,512 @@ export async function getOrderIngestions(orderId: string): Promise<ExplorerInges
   }
 }
 
+/**
+ * Get submission attempts for an order (retry audit trail).
+ */
+export async function getOrderAttempts(
+  orderId: string
+): Promise<ExplorerAttempt[]> {
+  try {
+    const response = await fetch(
+      `${API_BASE_URL()}/explorer/orders/${encodeURIComponent(orderId)}/attempts`,
+      { headers: getAuthHeaders() }
+    )
+    if (!response.ok) {
+      throw new Error(
+        `Get order ${orderId} attempts failed: ${response.status}`
+      )
+    }
+    return response.json()
+  } catch (error) {
+    console.error(`Get order ${orderId} attempts error:`, error)
+    throw error
+  }
+}
 
+/**
+ * Get COA generations for an order.
+ */
+export async function getOrderCOAGenerations(
+  orderId: string
+): Promise<ExplorerCOAGeneration[]> {
+  try {
+    const response = await fetch(
+      `${API_BASE_URL()}/explorer/orders/${encodeURIComponent(orderId)}/coa-generations`,
+      { headers: getAuthHeaders() }
+    )
+    if (!response.ok) {
+      throw new Error(
+        `Get order ${orderId} COA generations failed: ${response.status}`
+      )
+    }
+    return response.json()
+  } catch (error) {
+    console.error(`Get order ${orderId} COA generations error:`, error)
+    throw error
+  }
+}
+
+/**
+ * Get sample status events for an order (workflow transitions).
+ */
+export async function getOrderSampleEvents(
+  orderId: string
+): Promise<ExplorerSampleEvent[]> {
+  try {
+    const response = await fetch(
+      `${API_BASE_URL()}/explorer/orders/${encodeURIComponent(orderId)}/sample-events`,
+      { headers: getAuthHeaders() }
+    )
+    if (!response.ok) {
+      throw new Error(
+        `Get order ${orderId} sample events failed: ${response.status}`
+      )
+    }
+    return response.json()
+  } catch (error) {
+    console.error(`Get order ${orderId} sample events error:`, error)
+    throw error
+  }
+}
+
+/**
+ * Get COA access logs for an order.
+ */
+export async function getOrderAccessLogs(
+  orderId: string
+): Promise<ExplorerAccessLog[]> {
+  try {
+    const response = await fetch(
+      `${API_BASE_URL()}/explorer/orders/${encodeURIComponent(orderId)}/access-logs`,
+      { headers: getAuthHeaders() }
+    )
+    if (!response.ok) {
+      throw new Error(
+        `Get order ${orderId} access logs failed: ${response.status}`
+      )
+    }
+    return response.json()
+  } catch (error) {
+    console.error(`Get order ${orderId} access logs error:`, error)
+    throw error
+  }
+}
+
+/**
+ * Get a presigned download URL for a COA PDF.
+ */
+export async function getExplorerCOASignedUrl(
+  sampleId: string,
+  version: number
+): Promise<ExplorerSignedURLResponse> {
+  try {
+    const response = await fetch(
+      `${API_BASE_URL()}/explorer/signed-url/coa`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...getAuthHeaders(),
+        },
+        body: JSON.stringify({ sample_id: sampleId, version }),
+      }
+    )
+    if (!response.ok) {
+      if (response.status === 404) {
+        throw new Error(`COA PDF not found for ${sampleId} v${version}`)
+      }
+      throw new Error(`Get COA signed URL failed: ${response.status}`)
+    }
+    return response.json()
+  } catch (error) {
+    console.error(`Get COA signed URL error:`, error)
+    throw error
+  }
+}
+
+/**
+ * Get a presigned download URL for a chromatogram image.
+ */
+export async function getExplorerChromatogramSignedUrl(
+  sampleId: string,
+  version: number
+): Promise<ExplorerSignedURLResponse> {
+  try {
+    const response = await fetch(
+      `${API_BASE_URL()}/explorer/signed-url/chromatogram`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...getAuthHeaders(),
+        },
+        body: JSON.stringify({ sample_id: sampleId, version }),
+      }
+    )
+    if (!response.ok) {
+      if (response.status === 404) {
+        throw new Error(`Chromatogram not found for ${sampleId}`)
+      }
+      throw new Error(`Get chromatogram signed URL failed: ${response.status}`)
+    }
+    return response.json()
+  } catch (error) {
+    console.error(`Get chromatogram signed URL error:`, error)
+    throw error
+  }
+}
+
+// --- HPLC Analysis API ---
+
+export interface HPLCPeak {
+  height: number
+  area: number
+  area_percent: number
+  begin_time: number
+  end_time: number
+  retention_time: number
+  is_solvent_front: boolean
+  is_main_peak: boolean
+}
+
+export interface HPLCInjection {
+  injection_name: string
+  peaks: HPLCPeak[]
+  total_area: number
+  main_peak_index: number
+}
+
+export interface HPLCPurity {
+  purity_percent: number | null
+  individual_values: number[]
+  injection_names: string[]
+  rsd_percent: number | null
+  error?: string
+}
+
+export interface HPLCParseResult {
+  injections: HPLCInjection[]
+  purity: HPLCPurity
+  errors: string[]
+}
+
+export async function parseHPLCFiles(
+  files: { filename: string; content: string }[]
+): Promise<HPLCParseResult> {
+  try {
+    const response = await fetch(`${API_BASE_URL()}/hplc/parse-files`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ files }),
+    })
+    if (!response.ok) {
+      throw new Error(`Parse HPLC files failed: ${response.status}`)
+    }
+    return response.json()
+  } catch (error) {
+    console.error('Parse HPLC files error:', error)
+    throw error
+  }
+}
+
+// --- Peptide & Calibration API ---
+
+export interface CalibrationCurve {
+  id: number
+  peptide_id: number
+  slope: number
+  intercept: number
+  r_squared: number
+  standard_data: { concentrations: number[]; areas: number[] } | null
+  source_filename: string | null
+  is_active: boolean
+  created_at: string
+}
+
+export interface PeptideRecord {
+  id: number
+  name: string
+  abbreviation: string
+  reference_rt: number | null
+  rt_tolerance: number
+  diluent_density: number
+  active: boolean
+  created_at: string
+  updated_at: string
+  active_calibration: CalibrationCurve | null
+}
+
+export interface PeptideCreateInput {
+  name: string
+  abbreviation: string
+  reference_rt?: number | null
+  rt_tolerance?: number
+  diluent_density?: number
+}
+
+export interface CalibrationDataInput {
+  concentrations: number[]
+  areas: number[]
+  source_filename?: string
+}
+
+export async function getPeptides(): Promise<PeptideRecord[]> {
+  try {
+    const response = await fetch(`${API_BASE_URL()}/peptides`)
+    if (!response.ok) {
+      throw new Error(`Get peptides failed: ${response.status}`)
+    }
+    return response.json()
+  } catch (error) {
+    console.error('Get peptides error:', error)
+    throw error
+  }
+}
+
+export async function createPeptide(
+  data: PeptideCreateInput
+): Promise<PeptideRecord> {
+  try {
+    const response = await fetch(`${API_BASE_URL()}/peptides`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!response.ok) {
+      const err = await response.json().catch(() => null)
+      throw new Error(err?.detail || `Create peptide failed: ${response.status}`)
+    }
+    return response.json()
+  } catch (error) {
+    console.error('Create peptide error:', error)
+    throw error
+  }
+}
+
+export async function updatePeptide(
+  peptideId: number,
+  data: Partial<PeptideCreateInput & { active: boolean }>
+): Promise<PeptideRecord> {
+  try {
+    const response = await fetch(`${API_BASE_URL()}/peptides/${peptideId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!response.ok) {
+      throw new Error(`Update peptide failed: ${response.status}`)
+    }
+    return response.json()
+  } catch (error) {
+    console.error('Update peptide error:', error)
+    throw error
+  }
+}
+
+export async function deletePeptide(peptideId: number): Promise<void> {
+  try {
+    const response = await fetch(`${API_BASE_URL()}/peptides/${peptideId}`, {
+      method: 'DELETE',
+    })
+    if (!response.ok) {
+      throw new Error(`Delete peptide failed: ${response.status}`)
+    }
+  } catch (error) {
+    console.error('Delete peptide error:', error)
+    throw error
+  }
+}
+
+export async function getCalibrations(
+  peptideId: number
+): Promise<CalibrationCurve[]> {
+  try {
+    const response = await fetch(
+      `${API_BASE_URL()}/peptides/${peptideId}/calibrations`
+    )
+    if (!response.ok) {
+      throw new Error(`Get calibrations failed: ${response.status}`)
+    }
+    return response.json()
+  } catch (error) {
+    console.error('Get calibrations error:', error)
+    throw error
+  }
+}
+
+export async function createCalibration(
+  peptideId: number,
+  data: CalibrationDataInput
+): Promise<CalibrationCurve> {
+  try {
+    const response = await fetch(
+      `${API_BASE_URL()}/peptides/${peptideId}/calibrations`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      }
+    )
+    if (!response.ok) {
+      const err = await response.json().catch(() => null)
+      throw new Error(
+        err?.detail || `Create calibration failed: ${response.status}`
+      )
+    }
+    return response.json()
+  } catch (error) {
+    console.error('Create calibration error:', error)
+    throw error
+  }
+}
+
+// --- Full HPLC Analysis API ---
+
+export interface HPLCWeightsInput {
+  stock_vial_empty: number
+  stock_vial_with_diluent: number
+  dil_vial_empty: number
+  dil_vial_with_diluent: number
+  dil_vial_with_diluent_and_sample: number
+}
+
+export interface HPLCAnalyzeRequest {
+  sample_id_label: string
+  peptide_id: number
+  weights: HPLCWeightsInput
+  injections: Record<string, unknown>[]
+}
+
+export interface HPLCAnalysisResult {
+  id: number
+  sample_id_label: string
+  peptide_abbreviation: string
+  purity_percent: number | null
+  quantity_mg: number | null
+  identity_conforms: boolean | null
+  identity_rt_delta: number | null
+  dilution_factor: number | null
+  stock_volume_ml: number | null
+  avg_main_peak_area: number | null
+  concentration_ug_ml: number | null
+  calculation_trace: Record<string, unknown> | null
+  created_at: string
+}
+
+export async function runHPLCAnalysis(
+  data: HPLCAnalyzeRequest
+): Promise<HPLCAnalysisResult> {
+  try {
+    const response = await fetch(`${API_BASE_URL()}/hplc/analyze`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!response.ok) {
+      const err = await response.json().catch(() => null)
+      throw new Error(
+        err?.detail || `HPLC analysis failed: ${response.status}`
+      )
+    }
+    return response.json()
+  } catch (error) {
+    console.error('HPLC analysis error:', error)
+    throw error
+  }
+}
+
+// --- HPLC Weight Extraction API ---
+
+export interface DilutionRow {
+  label: string
+  concentration: string | null
+  dil_vial_empty: number
+  dil_vial_with_diluent: number
+  dil_vial_with_diluent_and_sample: number
+}
+
+export interface WeightExtractionResult {
+  found: boolean
+  folder_name: string | null
+  peptide_folder: string | null
+  excel_filename: string | null
+  stock_vial_empty: number | null
+  stock_vial_with_diluent: number | null
+  dilution_rows: DilutionRow[]
+  error: string | null
+}
+
+export async function fetchSampleWeights(
+  sampleId: string
+): Promise<WeightExtractionResult> {
+  const response = await fetch(
+    `${API_BASE_URL()}/hplc/weights/${encodeURIComponent(sampleId)}`
+  )
+  if (!response.ok) {
+    throw new Error(`Fetch weights failed: ${response.status}`)
+  }
+  return response.json()
+}
+
+// --- HPLC Analysis History API ---
+
+export interface HPLCAnalysisListItem {
+  id: number
+  sample_id_label: string
+  peptide_abbreviation: string
+  purity_percent: number | null
+  quantity_mg: number | null
+  identity_conforms: boolean | null
+  created_at: string
+}
+
+export interface HPLCAnalysisListResponse {
+  items: HPLCAnalysisListItem[]
+  total: number
+}
+
+export async function getHPLCAnalyses(
+  search?: string,
+  peptideId?: number,
+  limit = 50,
+  offset = 0
+): Promise<HPLCAnalysisListResponse> {
+  try {
+    const params = new URLSearchParams()
+    if (search) params.set('search', search)
+    if (peptideId != null) params.set('peptide_id', String(peptideId))
+    params.set('limit', String(limit))
+    params.set('offset', String(offset))
+
+    const response = await fetch(
+      `${API_BASE_URL()}/hplc/analyses?${params}`
+    )
+    if (!response.ok) {
+      throw new Error(`Get HPLC analyses failed: ${response.status}`)
+    }
+    return response.json()
+  } catch (error) {
+    console.error('Get HPLC analyses error:', error)
+    throw error
+  }
+}
+
+export async function getHPLCAnalysis(
+  analysisId: number
+): Promise<HPLCAnalysisResult> {
+  try {
+    const response = await fetch(
+      `${API_BASE_URL()}/hplc/analyses/${analysisId}`
+    )
+    if (!response.ok) {
+      throw new Error(`Get HPLC analysis ${analysisId} failed: ${response.status}`)
+    }
+    return response.json()
+  } catch (error) {
+    console.error(`Get HPLC analysis ${analysisId} error:`, error)
+    throw error
+  }
+}
