@@ -135,8 +135,8 @@ function buildOrderChart(orders: ExplorerOrder[]): DayBucket[] {
     const bucket = bucketMap.get(key)
     if (bucket) {
       bucket.total++
-      if (order.status === 'accepted') bucket.completed++
-      else if (order.status === 'failed' || order.status === 'partial_failure') bucket.failed++
+      if (order.status === 'failed' || order.status === 'partial_failure') bucket.failed++
+      else if (order.completed_at) bucket.completed++
       else bucket.pending++
     }
   }
@@ -204,9 +204,9 @@ export function Dashboard() {
   // Derived data — filter out test orders
   const realOrders = orders.filter(o => !isTestOrder(o))
   const noCurvePeptides = peptides.filter(p => !p.active_calibration)
-  const outstandingOrders = realOrders.filter(o => o.status === 'pending' || o.status === 'processing')
+  const outstandingOrders = realOrders.filter(o => !o.completed_at && o.status !== 'failed' && o.status !== 'partial_failure')
   const failedOrders = realOrders.filter(o => o.status === 'failed' || o.status === 'partial_failure')
-  const completedOrders = realOrders.filter(o => o.status === 'accepted')
+  const completedOrders = realOrders.filter(o => !!o.completed_at)
   const chartData = useMemo(() => buildOrderChart(realOrders), [realOrders])
 
   // Stats
