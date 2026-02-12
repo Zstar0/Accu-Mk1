@@ -211,6 +211,24 @@ class HPLCAnalysis(Base):
         return f"<HPLCAnalysis(id={self.id}, sample='{self.sample_id_label}', purity={self.purity_percent})>"
 
 
+class SharePointFileCache(Base):
+    """
+    Tracks SharePoint files already downloaded during peptide seeding.
+    Prevents re-downloading files that don't produce calibration curves
+    (e.g., sample data files, workbooks without standard data).
+    """
+    __tablename__ = "sharepoint_file_cache"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    source_path: Mapped[str] = mapped_column(String(1000), unique=True, nullable=False)
+    peptide_abbreviation: Mapped[str] = mapped_column(String(50), nullable=False)
+    produced_calibration: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    def __repr__(self) -> str:
+        return f"<SharePointFileCache(path='{self.source_path}', cal={self.produced_calibration})>"
+
+
 class Settings(Base):
     """
     Application settings stored as key-value pairs.

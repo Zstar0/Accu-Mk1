@@ -16,6 +16,7 @@ import {
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import type { HPLCAnalysisResult } from '@/lib/api'
+import { useUIStore } from '@/store/ui-store'
 import { CalculationVisuals } from './CalculationVisuals'
 import { ChromatogramChart, type ChromatogramTrace } from './ChromatogramChart'
 
@@ -27,6 +28,7 @@ interface AnalysisResultsProps {
 export function AnalysisResults({ result, chromatograms }: AnalysisResultsProps) {
   const [traceOpen, setTraceOpen] = useState(true)
   const [traceView, setTraceView] = useState<'visual' | 'json'>('visual')
+  const navigateToPeptide = useUIStore(state => state.navigateToPeptide)
 
   return (
     <div className="flex flex-col gap-4">
@@ -107,11 +109,23 @@ export function AnalysisResults({ result, chromatograms }: AnalysisResultsProps)
                 <span className="text-lg text-muted-foreground">—</span>
               )}
             </div>
-            {result.identity_rt_delta != null && (
+            {result.identity_rt_delta != null ? (
               <p className="mt-1 text-xs text-muted-foreground">
                 RT delta: {result.identity_rt_delta.toFixed(4)} min | Peptide:{' '}
                 {result.peptide_abbreviation}
               </p>
+            ) : result.identity_conforms == null && (
+              <button
+                type="button"
+                className="mt-1 text-xs text-amber-500 underline-offset-2 hover:underline text-left"
+                onClick={() => navigateToPeptide(result.peptide_id)}
+              >
+                {(() => {
+                  const trace = result.calculation_trace as { identity?: { error?: string } } | undefined
+                  return trace?.identity?.error ?? 'No reference RT configured'
+                })()}
+                {' \u2192 Configure'}
+              </button>
             )}
           </CardContent>
         </Card>
@@ -121,7 +135,13 @@ export function AnalysisResults({ result, chromatograms }: AnalysisResultsProps)
       <div className="flex items-center gap-2 rounded-md bg-muted/50 px-4 py-2 text-sm">
         <span className="font-medium">{result.sample_id_label}</span>
         <span className="text-muted-foreground">|</span>
-        <span>{result.peptide_abbreviation}</span>
+        <button
+          type="button"
+          className="text-primary underline-offset-2 hover:underline"
+          onClick={() => navigateToPeptide(result.peptide_id)}
+        >
+          {result.peptide_abbreviation}
+        </button>
         <span className="text-muted-foreground">|</span>
         <span className="font-mono text-xs">
           Area: {result.avg_main_peak_area?.toFixed(2)} → Conc:{' '}

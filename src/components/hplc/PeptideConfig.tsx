@@ -41,6 +41,7 @@ import {
 } from '@/lib/api'
 import { getApiBaseUrl } from '@/lib/config'
 import { getAuthToken } from '@/store/auth-store'
+import { useUIStore } from '@/store/ui-store'  // getState() for peptide target navigation
 
 interface LogLine {
   message: string
@@ -97,6 +98,19 @@ export function PeptideConfig() {
   useEffect(() => {
     loadPeptides()
   }, [loadPeptides])
+
+  // Open flyout if navigated here with a target peptide ID
+  useEffect(() => {
+    const targetId = useUIStore.getState().peptideConfigTargetId
+    if (targetId && peptides.length > 0) {
+      const match = peptides.find(p => p.id === targetId)
+      if (match) {
+        setSelectedId(targetId)
+      }
+      // Clear the target so it doesn't re-trigger
+      useUIStore.setState({ peptideConfigTargetId: null })
+    }
+  }, [peptides])
 
   // Smart auto-scroll: only scroll if user was already at/near the bottom
   useEffect(() => {

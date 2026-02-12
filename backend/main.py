@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import select, desc
 
 from database import get_db, init_db
-from models import AuditLog, Settings, Job, Sample, Result, Peptide, CalibrationCurve, HPLCAnalysis, User
+from models import AuditLog, Settings, Job, Sample, Result, Peptide, CalibrationCurve, HPLCAnalysis, User, SharePointFileCache
 from auth import (
     get_current_user, require_admin, create_access_token,
     verify_password, get_password_hash, seed_admin_user,
@@ -1540,6 +1540,7 @@ class HPLCAnalysisResponse(BaseModel):
     """Full analysis result."""
     id: int
     sample_id_label: str
+    peptide_id: int
     peptide_abbreviation: str
     purity_percent: Optional[float]
     quantity_mg: Optional[float]
@@ -1581,6 +1582,16 @@ async def run_hplc_analysis(
     if not cal:
         raise HTTPException(400, f"No active calibration curve for peptide '{peptide.abbreviation}'")
 
+    # Resolve reference RT: prefer peptide setting, fall back to calibration standard RTs
+    ref_rt = peptide.reference_rt
+    if ref_rt is None and cal.standard_data:
+        cal_rts = cal.standard_data.get("rts", [])
+        if cal_rts:
+            ref_rt = round(sum(cal_rts) / len(cal_rts), 4)
+            # Persist so future analyses don't need this fallback
+            peptide.reference_rt = ref_rt
+            db.flush()
+
     # Build analysis input
     analysis_input = AnalysisInput(
         injections=request.injections,
@@ -1593,7 +1604,7 @@ async def run_hplc_analysis(
         ),
         calibration=CalibrationParams(slope=cal.slope, intercept=cal.intercept),
         peptide=PeptideParams(
-            reference_rt=peptide.reference_rt,
+            reference_rt=ref_rt,
             rt_tolerance=peptide.rt_tolerance,
             diluent_density=peptide.diluent_density,
         ),
@@ -1643,6 +1654,7 @@ async def run_hplc_analysis(
     return HPLCAnalysisResponse(
         id=analysis.id,
         sample_id_label=analysis.sample_id_label,
+        peptide_id=peptide.id,
         peptide_abbreviation=peptide.abbreviation,
         purity_percent=analysis.purity_percent,
         quantity_mg=analysis.quantity_mg,
@@ -1772,6 +1784,7 @@ async def get_hplc_analysis(analysis_id: int, db: Session = Depends(get_db), _cu
     return HPLCAnalysisResponse(
         id=analysis.id,
         sample_id_label=analysis.sample_id_label,
+        peptide_id=analysis.peptide_id,
         peptide_abbreviation=peptide.abbreviation if peptide else "?",
         purity_percent=analysis.purity_percent,
         quantity_mg=analysis.quantity_mg,
@@ -1836,7 +1849,8 @@ def _try_extract_calibration(ws, filename: str, max_rows: int = 25) -> dict | No
 
     # Patterns: if ANY keyword appears in the cell value, it's a match.
     # Listed most-specific first to avoid false positives.
-    _conc_keywords = ("actual concentration", "concentration", "target conc",
+    _conc_keywords = ("actual concentration", "actual (ug", "actual (\u00b5g",
+                      "concentration", "target conc", "target (ug", "target (\u00b5g",
                       "std. conc", "std conc", "amount", "cal level", "level")
     _area_keywords = ("peak area", "area")
     _rt_keywords   = ("ret. time", "ret time", "ret_time", "rt")
@@ -1849,8 +1863,8 @@ def _try_extract_calibration(ws, filename: str, max_rows: int = 25) -> dict | No
                 continue
             val = cell.value.lower().strip()
 
-            # --- Concentration column ---
-            if conc_col is None:
+            # --- Concentration column (prefer "actual" over "target") ---
+            if conc_col is None or ("actual" in val and "target" not in val):
                 for kw in _conc_keywords:
                     if kw in val:
                         conc_col = cell.column
@@ -2098,11 +2112,17 @@ async def seed_peptides_from_sharepoint(
             cal_files.sort(key=lambda f: f["name"])
             parsed_cals = []
 
-            # Pre-load all known source_paths for this peptide to skip downloads
+            # Pre-load known source_paths to skip downloads (from file cache + calibration curves)
+            known_paths = set(
+                r[0] for r in db.execute(
+                    select(SharePointFileCache.source_path)
+                    .where(SharePointFileCache.peptide_abbreviation == abbreviation)
+                ).all()
+            )
             peptide = existing_peptides.get(abbreviation)
-            known_paths = set()
             if peptide:
-                known_paths = set(
+                # Also include paths from calibration curves (covers pre-cache data)
+                known_paths.update(
                     r[0] for r in db.execute(
                         select(CalibrationCurve.source_path)
                         .where(CalibrationCurve.peptide_id == peptide.id)
@@ -2118,11 +2138,18 @@ async def seed_peptides_from_sharepoint(
                 try:
                     file_bytes, filename = await sp.download_file(cal_file["id"])
                     result = _parse_calibration_excel_bytes(file_bytes, filename)
+                    produced_cal = result is not None
                     if result:
                         result["_sharepoint_path"] = file_path
                         result["_last_modified"] = cal_file.get("last_modified")
                         result["_web_url"] = cal_file.get("web_url")
                         parsed_cals.append(result)
+                    # Cache this path so we never re-download it
+                    db.add(SharePointFileCache(
+                        source_path=file_path,
+                        peptide_abbreviation=abbreviation,
+                        produced_calibration=produced_cal,
+                    ))
                 except Exception as e:
                     log(f"  [WARN] Failed to download/parse {cal_file['name']}: {e}")
 
@@ -2354,11 +2381,17 @@ async def seed_peptides_stream(
                 cal_files.sort(key=lambda f: f["name"])
                 parsed_cals = []
 
-                # Pre-load known source_paths for this peptide to skip downloads
+                # Pre-load known source_paths to skip downloads (from file cache + calibration curves)
+                known_paths = set(
+                    r[0] for r in db.execute(
+                        select(SharePointFileCache.source_path)
+                        .where(SharePointFileCache.peptide_abbreviation == abbreviation)
+                    ).all()
+                )
                 peptide = existing_peptides.get(abbreviation)
-                known_paths = set()
                 if peptide:
-                    known_paths = set(
+                    # Also include paths from calibration curves (covers pre-cache data)
+                    known_paths.update(
                         r[0] for r in db.execute(
                             select(CalibrationCurve.source_path)
                             .where(CalibrationCurve.peptide_id == peptide.id)
@@ -2376,11 +2409,18 @@ async def seed_peptides_stream(
                         yield send_event("log", {"message": f"  Downloading {cal_file['name']}...", "level": "dim"})
                         file_bytes, filename = await sp.download_file(cal_file["id"])
                         result = _parse_calibration_excel_bytes(file_bytes, filename)
+                        produced_cal = result is not None
                         if result:
                             result["_sharepoint_path"] = file_path
                             result["_last_modified"] = cal_file.get("last_modified")
                             result["_web_url"] = cal_file.get("web_url")
                             parsed_cals.append(result)
+                        # Cache this path so we never re-download it
+                        db.add(SharePointFileCache(
+                            source_path=file_path,
+                            peptide_abbreviation=abbreviation,
+                            produced_calibration=produced_cal,
+                        ))
                     except Exception as e:
                         yield send_event("log", {"message": f"  [WARN] Failed: {cal_file['name']}: {e}", "level": "warn"})
 
@@ -2565,15 +2605,10 @@ def _extract_weights_from_excel_bytes(data: bytes) -> dict:
     """
     Parse a lab HPLC Excel file (bytes) for stock + dilution weights.
 
-    Looks for:
-    - Stock row: row where col E contains "Stock" (case-insensitive)
-      → F = stock_vial_empty, G = stock_vial_with_diluent
-    - Dilution rows: rows with numeric data in F, G, H starting after header row 9
-      → F = dil_vial_empty, G = + diluent, H = + diluent + sample
-
-    Also handles the alternate layout (Sheet2 / ReRun sheets) where:
-    - Stock weights in rows with "Stock Vial+cap" label
-    - Dilution weights in cols C, E, H
+    Tries multiple layout strategies in order:
+    1. F/G/H columns with "Stock" label in col E
+    2. Header-label scan: finds rows with "vial and cap" / "vial cap and diluent" headers
+    3. Alternate layout: A/B labels for stock, C/E/H for dilution data
     """
     import openpyxl
     from io import BytesIO
@@ -2585,15 +2620,17 @@ def _extract_weights_from_excel_bytes(data: bytes) -> dict:
         "dilution_rows": [],
     }
 
+    max_scan_row = 70  # Some files have weight data past row 40
+
     for sheet_name in wb.sheetnames:
         ws = wb[sheet_name]
 
-        # --- Try "Sample" sheet layout (F/G/H columns, Stock in row with "Stock" in col E) ---
+        # --- Strategy 1: "Sample" sheet layout (F/G/H columns, Stock in row with "Stock" in col E) ---
         stock_empty = None
         stock_diluent = None
         dilutions = []
 
-        for row in range(1, 40):
+        for row in range(1, max_scan_row):
             e_val = ws.cell(row=row, column=5).value  # col E
             f_val = ws.cell(row=row, column=6).value  # col F
             g_val = ws.cell(row=row, column=7).value  # col G
@@ -2607,12 +2644,9 @@ def _extract_weights_from_excel_bytes(data: bytes) -> dict:
                 continue
 
             # Check for dilution data rows (need F, G, H all numeric)
-            # Real vial weights are 2000-6000mg and must increase:
-            # empty < +diluent < +diluent+sample
             if (isinstance(f_val, (int, float)) and f_val > 2000
                     and isinstance(g_val, (int, float)) and g_val > f_val
                     and isinstance(h_val, (int, float)) and h_val >= g_val):
-                # Get concentration label from col E
                 conc_label = str(e_val) if e_val else f"Row {row}"
                 dilutions.append({
                     "label": conc_label,
@@ -2629,12 +2663,103 @@ def _extract_weights_from_excel_bytes(data: bytes) -> dict:
             wb.close()
             return result
 
-        # --- Try alternate layout (C/E/H columns) ---
-        for row in range(1, 40):
-            a_val = ws.cell(row=row, column=1).value  # col A
-            b_val = ws.cell(row=row, column=2).value  # col B
+        # --- Strategy 2: Header-label scan ---
+        # Look for header rows containing weight-related labels, then read data from the row below.
+        # Handles layouts like:
+        #   Row 55: "Weight Vial and cap (mg)" | "Weight of Vial cap and Diluent (mg)" | "Weight of ... and sample (mg)"
+        #   Row 56: 2758.79                    | 4139.42                                | 4262.24
+        #   Row 59: "Weight Sample Vial and cap (mg)" | "Weight of Vial cap and Diluent (mg)"
+        #   Row 60: 5462                              | 6450.26
+        dil_header_row = None
+        stock_header_row = None
 
-            # Look for stock vial labels in col A
+        for row in range(1, max_scan_row):
+            a_val = ws.cell(row=row, column=1).value
+            if not a_val or not isinstance(a_val, str):
+                continue
+            lower = a_val.lower()
+
+            # Dilution weights header: contains "vial" + "cap" but NOT "sample vial"
+            if "weight" in lower and "vial" in lower and "cap" in lower and "sample" not in lower:
+                # Check if col B or C also has a weight-related header (confirming this is a header row)
+                b_val = ws.cell(row=row, column=2).value
+                c_val = ws.cell(row=row, column=3).value
+                has_dil_header = False
+                for check in (b_val, c_val):
+                    if check and isinstance(check, str) and "diluent" in check.lower():
+                        has_dil_header = True
+                        break
+                if has_dil_header:
+                    dil_header_row = row
+
+            # Stock weights header: contains "sample vial" + "cap"
+            if "weight" in lower and "sample vial" in lower and "cap" in lower:
+                b_val = ws.cell(row=row, column=2).value
+                if b_val and isinstance(b_val, str) and "diluent" in b_val.lower():
+                    stock_header_row = row
+
+        label_dilutions = []
+        if dil_header_row:
+            # Determine which columns have data by checking the header row
+            # Find columns containing "vial and cap", "diluent", "sample" in the header
+            empty_col = None
+            diluent_col = None
+            sample_col = None
+            for col in range(1, 10):
+                hdr = ws.cell(row=dil_header_row, column=col).value
+                if not hdr or not isinstance(hdr, str):
+                    continue
+                h_lower = hdr.lower()
+                if "sample" in h_lower and "diluent" in h_lower:
+                    sample_col = col
+                elif "diluent" in h_lower:
+                    diluent_col = col
+                elif "vial" in h_lower and "cap" in h_lower:
+                    empty_col = col
+
+            if empty_col and diluent_col and sample_col:
+                # Read data row(s) below header
+                for data_row in range(dil_header_row + 1, dil_header_row + 5):
+                    ev = ws.cell(row=data_row, column=empty_col).value
+                    dv = ws.cell(row=data_row, column=diluent_col).value
+                    sv = ws.cell(row=data_row, column=sample_col).value
+                    if (isinstance(ev, (int, float)) and ev > 1000
+                            and isinstance(dv, (int, float)) and dv > ev
+                            and isinstance(sv, (int, float)) and sv >= dv):
+                        label_dilutions.append({
+                            "label": f"Row {data_row}",
+                            "concentration": f"Row {data_row}",
+                            "dil_vial_empty": float(ev),
+                            "dil_vial_with_diluent": float(dv),
+                            "dil_vial_with_diluent_and_sample": float(sv),
+                        })
+                    else:
+                        break  # Stop on first non-data row
+
+        if stock_header_row:
+            # Read stock data from the row below the stock header
+            for data_row in range(stock_header_row + 1, stock_header_row + 3):
+                sv_empty = ws.cell(row=data_row, column=1).value
+                sv_dil = ws.cell(row=data_row, column=2).value
+                if isinstance(sv_empty, (int, float)) and isinstance(sv_dil, (int, float)):
+                    stock_empty = float(sv_empty)
+                    stock_diluent = float(sv_dil)
+                    break
+
+        if label_dilutions:
+            result["stock_vial_empty"] = stock_empty
+            result["stock_vial_with_diluent"] = stock_diluent
+            result["dilution_rows"] = label_dilutions
+            wb.close()
+            return result
+
+        # --- Strategy 3: Alternate layout (A/B labels for stock, C/E/H for dilution) ---
+        stock_empty = None
+        stock_diluent = None
+        for row in range(1, max_scan_row):
+            a_val = ws.cell(row=row, column=1).value
+            b_val = ws.cell(row=row, column=2).value
+
             if a_val and isinstance(a_val, str):
                 lower = a_val.lower()
                 if "stock vial+cap" in lower or "stock vial + cap" in lower:
@@ -2644,20 +2769,18 @@ def _extract_weights_from_excel_bytes(data: bytes) -> dict:
                     if isinstance(b_val, (int, float)):
                         stock_diluent = float(b_val)
 
-        # Also scan for C/E/H dilution layout
         alt_dilutions = []
-        for row in range(1, 40):
+        for row in range(1, max_scan_row):
             a_val = ws.cell(row=row, column=1).value
-            c_val = ws.cell(row=row, column=3).value  # col C
-            e_val = ws.cell(row=row, column=5).value  # col E
-            h_val = ws.cell(row=row, column=8).value  # col H
+            c_val = ws.cell(row=row, column=3).value
+            e_val = ws.cell(row=row, column=5).value
+            h_val = ws.cell(row=row, column=8).value
 
             if (isinstance(c_val, (int, float)) and c_val > 2000
                     and isinstance(e_val, (int, float)) and e_val > c_val
                     and isinstance(h_val, (int, float)) and h_val >= e_val):
                 label = str(a_val) if a_val else f"Row {row}"
                 if "stock" in label.lower():
-                    # Stock row in C/E layout: C=empty, E=with diluent
                     if stock_empty is None:
                         stock_empty = float(c_val)
                         stock_diluent = float(e_val)

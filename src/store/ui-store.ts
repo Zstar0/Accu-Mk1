@@ -19,6 +19,7 @@ interface UIState {
   lastQuickPaneEntry: string | null
   activeSection: ActiveSection
   activeSubSection: ActiveSubSection
+  peptideConfigTargetId: number | null
 
   toggleLeftSidebar: () => void
   setLeftSidebarVisible: (visible: boolean) => void
@@ -32,6 +33,7 @@ interface UIState {
   setActiveSection: (section: ActiveSection) => void
   setActiveSubSection: (subSection: ActiveSubSection) => void
   navigateTo: (section: ActiveSection, subSection: ActiveSubSection) => void
+  navigateToPeptide: (peptideId: number) => void
 }
 
 export const useUIStore = create<UIState>()(
@@ -44,6 +46,7 @@ export const useUIStore = create<UIState>()(
       lastQuickPaneEntry: null,
       activeSection: 'dashboard',
       activeSubSection: 'overview',
+      peptideConfigTargetId: null,
 
       toggleLeftSidebar: () =>
         set(
@@ -104,6 +107,13 @@ export const useUIStore = create<UIState>()(
 
       navigateTo: (section, subSection) =>
         set({ activeSection: section, activeSubSection: subSection }, undefined, 'navigateTo'),
+
+      navigateToPeptide: peptideId =>
+        set({
+          activeSection: 'hplc-analysis',
+          activeSubSection: 'peptide-config',
+          peptideConfigTargetId: peptideId,
+        }, undefined, 'navigateToPeptide'),
     }),
     {
       name: 'ui-store',

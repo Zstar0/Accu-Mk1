@@ -66,6 +66,13 @@ def _get_access_token() -> str:
     return result["access_token"]
 
 
+def _invalidate_token():
+    """Force token refresh on next request."""
+    global _token_cache
+    _token_cache = {"access_token": None, "expires_at": 0}
+    logger.info("Invalidated cached Graph API token")
+
+
 def _headers() -> dict:
     """Auth headers for Graph API requests."""
     return {"Authorization": f"Bearer {_get_access_token()}"}
@@ -88,6 +95,9 @@ async def _get_site_id() -> str:
             url = f"{GRAPH_BASE_URL}/sites/{SHAREPOINT_HOSTNAME}"
 
         resp = await client.get(url, headers=_headers())
+        if resp.status_code == 401:
+            _invalidate_token()
+            resp = await client.get(url, headers=_headers())
         resp.raise_for_status()
         data = resp.json()
         _site_id_cache = data["id"]
@@ -105,6 +115,9 @@ async def _get_drive_id() -> str:
     async with httpx.AsyncClient() as client:
         url = f"{GRAPH_BASE_URL}/sites/{site_id}/drives"
         resp = await client.get(url, headers=_headers())
+        if resp.status_code == 401:
+            _invalidate_token()
+            resp = await client.get(url, headers=_headers())
         resp.raise_for_status()
         drives = resp.json().get("value", [])
 
@@ -156,9 +169,15 @@ async def _list_folder_at_root(root_path: str, path: str = "") -> list[dict]:
     }
 
     items = []
+    retried_auth = False
     async with httpx.AsyncClient() as client:
         while url:
             resp = await client.get(url, headers=_headers(), params=params)
+            if resp.status_code == 401 and not retried_auth:
+                logger.info("Got 401 from Graph API, refreshing token and retrying")
+                _invalidate_token()
+                retried_auth = True
+                resp = await client.get(url, headers=_headers(), params=params)
             resp.raise_for_status()
             data = resp.json()
 
@@ -243,13 +262,19 @@ async def download_file(item_id: str) -> tuple[bytes, str]:
         # Get file metadata first for the filename
         meta_url = f"{GRAPH_BASE_URL}/drives/{drive_id}/items/{item_id}"
         meta_resp = await client.get(meta_url, headers=_headers())
+        if meta_resp.status_code == 401:
+            _invalidate_token()
+            meta_resp = await client.get(meta_url, headers=_headers())
         meta_resp.raise_for_status()
         filename = meta_resp.json()["name"]
 
-        # Download content with retry for rate-limiting
+        # Download content with retry for rate-limiting and auth
         url = f"{GRAPH_BASE_URL}/drives/{drive_id}/items/{item_id}/content"
         for attempt in range(max_retries + 1):
             resp = await client.get(url, headers=_headers())
+            if resp.status_code == 401:
+                _invalidate_token()
+                resp = await client.get(url, headers=_headers())
             if resp.status_code in (429, 503) and attempt < max_retries:
                 retry_after = int(resp.headers.get("Retry-After", 2 ** attempt))
                 await asyncio.sleep(retry_after)
@@ -273,6 +298,9 @@ async def download_file_by_path(path: str) -> tuple[bytes, str]:
         encoded_path = quote(full_path, safe="/")
         url = f"{GRAPH_BASE_URL}/drives/{drive_id}/root:/{encoded_path}:/content"
         resp = await client.get(url, headers=_headers())
+        if resp.status_code == 401:
+            _invalidate_token()
+            resp = await client.get(url, headers=_headers())
         resp.raise_for_status()
 
         filename = PurePosixPath(path).name

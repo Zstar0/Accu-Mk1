@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.9.0] - 2026-02-11
+
+### Fixed
+
+- **Calibration extraction from Excel** — Fixed header detection for files using "Target (ug/mL)" / "Actual (ug/mL)" column headers. Old code failed to match these headers, fell through to a fixed-layout fallback, and extracted wrong columns (e.g., "Total uL" instead of "Peak Area"), producing garbage calibration curves (R²=0.77 instead of 0.9999). Quantity calculations now match lab COA figures.
+- **Prefer "Actual" over "Target" concentrations** — When both columns exist in calibration data, the extractor now correctly uses the actual measured concentrations rather than nominal targets
+- **Weight extraction from Excel** — Extended scan range from 40 to 70 rows and added a header-label scan strategy for files with weights in non-standard positions (rows 55-60). Handles layouts where weight headers like "Weight Vial and cap (mg)" appear above data rows.
+- **SharePoint token expiry (401 errors)** — Added `_invalidate_token()` and auto-retry with token refresh on all Graph API calls (`_get_site_id`, `_get_drive_id`, `_list_folder_at_root`, `download_file`, `download_file_by_path`). No more "Invalid or expired token" errors after leaving the app idle.
+- **SharePoint import re-downloading files** — Added `SharePointFileCache` table to track all downloaded files regardless of whether they produced a calibration curve. Previously only files that yielded a `CalibrationCurve` record were tracked, causing files without standard data to be re-downloaded every import run.
+- **Identity card empty for peptides without reference RT** — Analysis endpoint now falls back to deriving reference RT from the active calibration curve's standard data RTs when the peptide has no explicit `reference_rt` configured
+
+### Added
+
+- **Peptide navigation from Analysis Results** — Clickable peptide abbreviation in the analysis summary line navigates to Peptide Config with the flyout auto-opened for that peptide. Identity card shows an amber "Configure" link when no reference RT is set.
+- **`peptide_id` in analysis response** — Enables cross-linking between analysis results and peptide configuration UI
+
+### Changed
+
+- `backend/models.py`: Added `SharePointFileCache` model
+- `src/store/ui-store.ts`: Added `peptideConfigTargetId` state and `navigateToPeptide` action
+- `src/components/hplc/PeptideConfig.tsx`: Consumes `peptideConfigTargetId` to auto-open flyout
+- `src/lib/api.ts`: Added `peptide_id` to `HPLCAnalysisResult` interface
+
 ## [0.8.0] - 2026-02-10
 
 ### Added

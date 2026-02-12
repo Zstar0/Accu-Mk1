@@ -1437,6 +1437,7 @@ export interface HPLCAnalyzeRequest {
 export interface HPLCAnalysisResult {
   id: number
   sample_id_label: string
+  peptide_id: number
   peptide_abbreviation: string
   purity_percent: number | null
   quantity_mg: number | null
