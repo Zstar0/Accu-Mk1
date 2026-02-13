@@ -10,8 +10,12 @@
 - **`navigateToOrderExplorer()`** store action for cross-section navigation to Order Explorer
 - **Integration Service network** added to Docker Compose for backend-to-Integration Service connectivity
 - **`INTEGRATION_SERVICE_URL`** env var for proxying explorer requests
+- **Per-peptide resync button** in Peptides list — re-imports a single peptide's calibration files from SharePoint without running a full import
+- **`GET /hplc/peptides/{id}/resync/stream`** backend SSE endpoint for single-peptide resync
 
 ### Changed
+
+- **Reference RT** now always updates from the active curve's retention times when switching curves via Set Active, full import, or single-peptide resync
 
 - **Ingestions tab renamed** to "COAs Published" across all UI text (tab, loading, error, and empty states)
 - **Order Explorer subtitle** updated from "Browse orders and ingestions" to "Browse orders and COAs"
@@ -20,6 +24,7 @@
 ### Fixed
 
 - **Sample IDs column** in orders table now shows SENAITE IDs (was always empty because `sample_results` wasn't queried from the database)
+- **Set Active button** in Calibration Panel was silently failing due to wrong auth token localStorage key
 
 ## v0.9.0 — 2026-02-11
 
