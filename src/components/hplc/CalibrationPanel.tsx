@@ -35,6 +35,8 @@ import {
   type PeptideRecord,
   type CalibrationCurve,
 } from '@/lib/api'
+import { getApiBaseUrl } from '@/lib/config'
+import { getAuthToken } from '@/store/auth-store'
 
 interface CalibrationPanelProps {
   peptide: PeptideRecord
@@ -190,7 +192,7 @@ export function CalibrationPanel({
                     onSetActive={async () => {
                       try {
                         const response = await fetch(
-                          `${getApiBase()}/peptides/${peptide.id}/calibrations/${cal.id}/activate`,
+                          `${getApiBaseUrl()}/peptides/${peptide.id}/calibrations/${cal.id}/activate`,
                           {
                             method: 'POST',
                             headers: getBearerHeadersForCal(),
@@ -221,17 +223,8 @@ export function CalibrationPanel({
 }
 
 
-// Helper to get API base URL — reuses the same logic as api.ts
-function getApiBase(): string {
-  const mode = (import.meta as any).env?.MODE
-  if (mode === 'production') {
-    return (import.meta as any).env?.VITE_API_URL || '/api'
-  }
-  return (import.meta as any).env?.VITE_API_URL || 'http://localhost:8012'
-}
-
 function getBearerHeadersForCal(): Record<string, string> {
-  const token = localStorage.getItem('token')
+  const token = getAuthToken()
   const headers: Record<string, string> = {}
   if (token) headers['Authorization'] = `Bearer ${token}`
   return headers

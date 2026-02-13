@@ -13,6 +13,7 @@ import {
   XCircle,
   Copy,
   Filter,
+  RefreshCw,
 } from 'lucide-react'
 import {
   Card,
@@ -241,6 +242,90 @@ export function PeptideConfig() {
     abortRef.current?.abort()
     setSeeding(false)
   }, [])
+
+  const handleResyncPeptide = useCallback(async (peptideId: number) => {
+    setSeeding(true)
+    setSeedLogs([])
+    setSeedProgress(null)
+    setSeedDone(null)
+    setShowLogs(true)
+    setError(null)
+
+    const controller = new AbortController()
+    abortRef.current = controller
+
+    try {
+      const token = getAuthToken()
+      const response = await fetch(`${getApiBaseUrl()}/hplc/peptides/${peptideId}/resync/stream`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        signal: controller.signal,
+      })
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+      }
+
+      const reader = response.body?.getReader()
+      if (!reader) throw new Error('No response body')
+
+      const decoder = new TextDecoder()
+      let buffer = ''
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() || ''
+
+        let eventType = ''
+        let eventData = ''
+
+        for (const line of lines) {
+          if (line.startsWith('event: ')) {
+            eventType = line.slice(7).trim()
+          } else if (line.startsWith('data: ')) {
+            eventData = line.slice(6)
+          } else if (line === '' && eventType && eventData) {
+            try {
+              const payload = JSON.parse(eventData)
+              if (eventType === 'log') {
+                setSeedLogs(prev => [...prev, {
+                  message: payload.message,
+                  level: payload.level || 'info',
+                  timestamp: Date.now(),
+                }])
+              } else if (eventType === 'progress') {
+                setSeedProgress({
+                  current: payload.current,
+                  total: payload.total,
+                  phase: payload.phase,
+                })
+              } else if (eventType === 'done') {
+                setSeedDone(payload)
+              } else if (eventType === 'refresh') {
+                loadPeptides()
+              }
+            } catch {
+              // Skip malformed events
+            }
+            eventType = ''
+            eventData = ''
+          }
+        }
+      }
+    } catch (err) {
+      if ((err as Error).name !== 'AbortError') {
+        setError(err instanceof Error ? err.message : 'Resync failed')
+        setSeedDone({ success: false, error: String(err) })
+      }
+    } finally {
+      setSeeding(false)
+      abortRef.current = null
+      await loadPeptides()
+    }
+  }, [loadPeptides])
 
   const selectedPeptide = peptides.find(p => p.id === selectedId) ?? null
 
@@ -525,6 +610,18 @@ export function PeptideConfig() {
                           </TableCell>
                           <TableCell>
                             <div className="flex items-center gap-1">
+                              <button
+                                type="button"
+                                title="Re-sync from SharePoint"
+                                onClick={e => {
+                                  e.stopPropagation()
+                                  handleResyncPeptide(p.id)
+                                }}
+                                disabled={seeding}
+                                className="rounded p-1 text-muted-foreground hover:text-blue-400 disabled:opacity-30"
+                              >
+                                <RefreshCw className="h-3.5 w-3.5" />
+                              </button>
                               <button
                                 type="button"
                                 onClick={e => {

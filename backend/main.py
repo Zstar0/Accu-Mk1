@@ -17,7 +17,7 @@ from fastapi import FastAPI, Depends, HTTPException, Header, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
-from sqlalchemy import select, desc
+from sqlalchemy import select, desc, delete
 
 from database import get_db, init_db
 from models import AuditLog, Settings, Job, Sample, Result, Peptide, CalibrationCurve, HPLCAnalysis, User, SharePointFileCache
@@ -2176,13 +2176,6 @@ async def seed_peptides_from_sharepoint(
                 log(f"  Created peptide (id={peptide.id})")
             else:
                 log(f"  [EXISTS] {abbreviation} (id={peptide.id})")
-                # Update reference RT if not set and we have new calibration data
-                if peptide.reference_rt is None and parsed_cals:
-                    last_cal = parsed_cals[-1]
-                    if last_cal.get("rts"):
-                        ref_rt = round(sum(last_cal["rts"]) / len(last_cal["rts"]), 4)
-                        peptide.reference_rt = ref_rt
-                        log(f"  Updated reference RT: {ref_rt}")
 
             # 6. Get existing calibration source filenames for this peptide
             existing_cal_filenames = set()
@@ -2245,6 +2238,11 @@ async def seed_peptides_from_sharepoint(
                 db.flush()
                 new_cals_for_peptide[-1].is_active = True
                 log(f"  ✓ Active: {new_cals_for_peptide[-1].source_filename}")
+                # Update reference RT from active curve
+                active_data = new_cals_for_peptide[-1].standard_data
+                if active_data and active_data.get("rts"):
+                    peptide.reference_rt = round(sum(active_data["rts"]) / len(active_data["rts"]), 4)
+                    log(f"  Updated reference RT: {peptide.reference_rt}")
 
             if not parsed_cals and is_new:
                 no_cal_data.append(folder_name)
@@ -2452,16 +2450,6 @@ async def seed_peptides_stream(
                         "message": f"  [EXISTS] {abbreviation} (id={peptide.id})",
                         "level": "dim",
                     })
-                    # Update reference RT if not set and we have new calibration data
-                    if peptide.reference_rt is None and parsed_cals:
-                        last_cal = parsed_cals[-1]
-                        if last_cal.get("rts"):
-                            ref_rt = round(sum(last_cal["rts"]) / len(last_cal["rts"]), 4)
-                            peptide.reference_rt = ref_rt
-                            yield send_event("log", {
-                                "message": f"  Updated reference RT: {ref_rt}",
-                                "level": "success",
-                            })
 
                 # 6. Check existing calibration source filenames
                 existing_cal_filenames = set()
@@ -2527,6 +2515,14 @@ async def seed_peptides_stream(
                         "message": f"  ✓ Active: {new_cals_for_peptide[-1].source_filename}",
                         "level": "success",
                     })
+                    # Update reference RT from active curve
+                    active_data = new_cals_for_peptide[-1].standard_data
+                    if active_data and active_data.get("rts"):
+                        peptide.reference_rt = round(sum(active_data["rts"]) / len(active_data["rts"]), 4)
+                        yield send_event("log", {
+                            "message": f"  Updated reference RT: {peptide.reference_rt}",
+                            "level": "success",
+                        })
 
                 if not parsed_cals and is_new:
                     no_cal_data.append(folder_name)
@@ -2575,6 +2571,198 @@ async def seed_peptides_stream(
     )
 
 
+
+
+@app.get("/hplc/peptides/{peptide_id}/resync/stream")
+async def resync_peptide_stream(
+    peptide_id: int,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """
+    SSE streaming re-sync of a single peptide from SharePoint.
+    Clears the file cache for this peptide so all files are re-downloaded and re-parsed.
+    """
+    from starlette.responses import StreamingResponse
+    import sharepoint as sp
+    import asyncio
+    from calculations.calibration import calculate_calibration_curve
+
+    # Look up peptide first (outside generator so we can 404 early)
+    peptide = db.get(Peptide, peptide_id)
+    if not peptide:
+        raise HTTPException(status_code=404, detail="Peptide not found")
+
+    abbreviation = peptide.abbreviation
+
+    async def event_generator():
+        def send_event(event_type: str, data: dict) -> str:
+            if event_type == "log":
+                import sys
+                msg = data.get("message", "")
+                level = data.get("level", "info")
+                print(f"[{level.upper()}] {msg}", file=sys.stderr)
+            payload = json.dumps(data)
+            return f"event: {event_type}\ndata: {payload}\n\n"
+
+        calibrations_added = 0
+
+        try:
+            yield send_event("log", {"message": f"Re-syncing {abbreviation}...", "level": "heading"})
+            await asyncio.sleep(0)
+
+            # 1. Clear file cache for this peptide so everything is re-downloaded
+            deleted_cache = db.execute(
+                delete(SharePointFileCache).where(
+                    SharePointFileCache.peptide_abbreviation == abbreviation
+                )
+            )
+            db.flush()
+            yield send_event("log", {
+                "message": f"Cleared {deleted_cache.rowcount} cached file(s)",
+                "level": "info",
+            })
+
+            # 2. List Excel files in the peptide's SharePoint folder
+            yield send_event("log", {"message": "Scanning SharePoint for Excel files...", "level": "info"})
+            cal_files = []
+            try:
+                all_xlsx = await sp.list_files_recursive(
+                    abbreviation,
+                    extensions=[".xlsx"],
+                    root="peptides",
+                )
+                for item in all_xlsx:
+                    fn = item["name"]
+                    if fn.startswith("~$"):
+                        continue
+                    if ".dx_" in fn or "_PeakData" in fn:
+                        continue
+                    cal_files.append(item)
+                yield send_event("log", {"message": f"Found {len(cal_files)} Excel file(s)", "level": "info"})
+                yield send_event("progress", {"current": 0, "total": len(cal_files), "phase": "downloading"})
+            except Exception as e:
+                yield send_event("log", {"message": f"[ERROR] File listing failed: {e}", "level": "error"})
+                yield send_event("done", {"success": False, "error": str(e)})
+                return
+
+            # 3. Download and parse each file
+            cal_files.sort(key=lambda f: f["name"])
+            parsed_cals = []
+
+            for idx, cal_file in enumerate(cal_files):
+                file_path = cal_file.get("path", cal_file["name"])
+                try:
+                    yield send_event("log", {"message": f"  Downloading {cal_file['name']}...", "level": "dim"})
+                    yield send_event("progress", {"current": idx + 1, "total": len(cal_files), "phase": f"Downloading {cal_file['name']}"})
+                    file_bytes, filename = await sp.download_file(cal_file["id"])
+                    result = _parse_calibration_excel_bytes(file_bytes, filename)
+                    produced_cal = result is not None
+                    if result:
+                        result["_sharepoint_path"] = file_path
+                        result["_last_modified"] = cal_file.get("last_modified")
+                        result["_web_url"] = cal_file.get("web_url")
+                        parsed_cals.append(result)
+                    # Re-cache this path
+                    db.add(SharePointFileCache(
+                        source_path=file_path,
+                        peptide_abbreviation=abbreviation,
+                        produced_calibration=produced_cal,
+                    ))
+                except Exception as e:
+                    yield send_event("log", {"message": f"  [WARN] Failed: {cal_file['name']}: {e}", "level": "warn"})
+
+            # 4. Check existing calibrations
+            existing_cal_filenames = set()
+            existing_cals = db.execute(
+                select(CalibrationCurve).where(CalibrationCurve.peptide_id == peptide.id)
+            ).scalars().all()
+            for ec in existing_cals:
+                if ec.source_filename:
+                    existing_cal_filenames.add(ec.source_filename)
+
+            # 5. Import new calibrations
+            new_cals = []
+            for cal_data in parsed_cals:
+                source = f"{cal_data['filename']}[{cal_data['sheet']}]"
+                if source in existing_cal_filenames:
+                    yield send_event("log", {"message": f"  [EXISTS] Cal: {source}", "level": "dim"})
+                    continue
+
+                try:
+                    cal_result = calculate_calibration_curve(
+                        cal_data["concentrations"],
+                        cal_data["areas"],
+                    )
+                    cal_curve = CalibrationCurve(
+                        peptide_id=peptide.id,
+                        slope=cal_result["slope"],
+                        intercept=cal_result["intercept"],
+                        r_squared=cal_result["r_squared"],
+                        standard_data={
+                            "concentrations": cal_data["concentrations"],
+                            "areas": cal_data["areas"],
+                            "rts": cal_data.get("rts", []),
+                        },
+                        source_filename=source,
+                        source_path=cal_data.get("_sharepoint_path"),
+                        source_date=(
+                            datetime.fromisoformat(cal_data["_last_modified"].replace("Z", "+00:00"))
+                            if cal_data.get("_last_modified")
+                            else None
+                        ),
+                        sharepoint_url=cal_data.get("_web_url"),
+                        is_active=False,
+                    )
+                    db.add(cal_curve)
+                    new_cals.append(cal_curve)
+                    calibrations_added += 1
+                    yield send_event("log", {
+                        "message": f"  + Cal: {source} (slope={cal_result['slope']:.4f}, R²={cal_result['r_squared']:.6f})",
+                        "level": "success",
+                    })
+                except Exception as e:
+                    yield send_event("log", {"message": f"  ✗ Cal error {source}: {e}", "level": "error"})
+
+            # 6. Set most recent as active if new cals were added
+            if new_cals:
+                for ec in existing_cals:
+                    ec.is_active = False
+                db.flush()
+                new_cals[-1].is_active = True
+                yield send_event("log", {
+                    "message": f"  ✓ Active: {new_cals[-1].source_filename}",
+                    "level": "success",
+                })
+                # Update reference RT from active curve
+                active_data = new_cals[-1].standard_data
+                if active_data and active_data.get("rts"):
+                    peptide.reference_rt = round(sum(active_data["rts"]) / len(active_data["rts"]), 4)
+                    yield send_event("log", {"message": f"  Updated reference RT: {peptide.reference_rt}", "level": "success"})
+
+            db.commit()
+            yield send_event("refresh", {})
+
+            yield send_event("log", {"message": f"Done — {calibrations_added} new calibration(s) imported", "level": "success" if calibrations_added else "info"})
+            yield send_event("done", {
+                "success": True,
+                "calibrations": calibrations_added,
+            })
+
+        except Exception as e:
+            db.rollback()
+            yield send_event("log", {"message": f"✗ FAILED: {e}", "level": "error"})
+            yield send_event("done", {"success": False, "error": str(e)})
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 class DilutionRow(BaseModel):
