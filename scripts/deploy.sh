@@ -43,7 +43,8 @@ header()  { echo -e "\n${BOLD}${CYAN}═══ $* ═══${NC}\n"; }
 
 ssh_cmd() {
     sshpass -p "$REMOTE_PASS" ssh -o StrictHostKeyChecking=no \
-        -o ConnectTimeout=10 "$REMOTE_USER@$REMOTE_HOST" "$@"
+        -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=20 \
+        "$REMOTE_USER@$REMOTE_HOST" "$@"
 }
 
 scp_cmd() {
