@@ -10,6 +10,7 @@ import {
   type ColumnResizeMode,
 } from '@tanstack/react-table'
 import { useState } from 'react'
+import { ArrowUp, ArrowDown, ArrowUpDown } from 'lucide-react'
 
 import {
   Table,
@@ -82,14 +83,31 @@ export function DataTable<TData, TValue>({
                   }}
                   className="relative overflow-hidden"
                 >
-                  <div className="truncate">
-                    {header.isPlaceholder
-                      ? null
-                      : flexRender(
-                          header.column.columnDef.header,
-                          header.getContext()
-                        )}
-                  </div>
+                  {header.isPlaceholder ? null : header.column.getCanSort() ? (
+                    <button
+                      type="button"
+                      className="flex items-center gap-1 truncate hover:text-foreground transition-colors -ml-1 px-1 rounded"
+                      onClick={header.column.getToggleSortingHandler()}
+                    >
+                      {flexRender(
+                        header.column.columnDef.header,
+                        header.getContext()
+                      )}
+                      {{
+                        asc: <ArrowUp className="h-3 w-3 shrink-0" />,
+                        desc: <ArrowDown className="h-3 w-3 shrink-0" />,
+                      }[header.column.getIsSorted() as string] ?? (
+                        <ArrowUpDown className="h-3 w-3 shrink-0 opacity-40" />
+                      )}
+                    </button>
+                  ) : (
+                    <div className="truncate">
+                      {flexRender(
+                        header.column.columnDef.header,
+                        header.getContext()
+                      )}
+                    </div>
+                  )}
                   {/* Resize handle - wider for easier interaction */}
                   {enableColumnResizing && header.column.getCanResize() && (
                     <div

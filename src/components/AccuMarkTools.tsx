@@ -1,31 +1,22 @@
-import { Wrench } from 'lucide-react'
-import { ScrollArea } from '@/components/ui/scroll-area'
+import { useUIStore } from '@/store/ui-store'
+import type { AccuMarkToolsSubSection } from '@/store/ui-store'
 import { OrderExplorer } from '@/components/OrderExplorer'
+import { COAExplorer } from '@/components/COAExplorer'
 
 /**
- * AccuMark Tools section - debugging and utility tools
+ * AccuMark Tools section - debugging and utility tools.
+ * Routes to the active sub-section (follows HPLCAnalysis pattern).
  */
 export function AccuMarkTools() {
-  return (
-    <ScrollArea className="h-full">
-      <div className="flex flex-col gap-6 p-6">
-        {/* Header */}
-        <div className="flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10">
-            <Wrench className="h-5 w-5 text-primary" />
-          </div>
-          <div>
-            <h1 className="text-2xl font-semibold tracking-tight">AccuMark Tools</h1>
-            <p className="text-sm text-muted-foreground">
-              Utilities and tools for lab operations
-            </p>
-          </div>
-        </div>
+  const activeSubSection = useUIStore(
+    state => state.activeSubSection
+  ) as AccuMarkToolsSubSection
 
-        {/* Order Explorer */}
-        <OrderExplorer />
-      </div>
-    </ScrollArea>
-  )
+  switch (activeSubSection) {
+    case 'coa-explorer':
+      return <COAExplorer />
+    case 'order-explorer':
+    default:
+      return <OrderExplorer />
+  }
 }
-

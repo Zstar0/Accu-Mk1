@@ -447,7 +447,7 @@ function IngestionsTab({
     return (
       <div className="flex items-center gap-2 text-muted-foreground py-4">
         <RefreshCw className="h-4 w-4 animate-spin" />
-        Loading ingestions...
+        Loading published COAs...
       </div>
     )
   }
@@ -456,7 +456,7 @@ function IngestionsTab({
     return (
       <div className="flex items-center gap-2 text-destructive py-4">
         <AlertCircle className="h-4 w-4" />
-        Failed to load ingestions
+        Failed to load published COAs
       </div>
     )
   }
@@ -464,7 +464,7 @@ function IngestionsTab({
   if (!ingestions || ingestions.length === 0) {
     return (
       <div className="text-muted-foreground py-4 text-center">
-        No ingestions found for this order
+        No published COAs found for this order
       </div>
     )
   }
@@ -741,6 +741,165 @@ function COAGenerationsTab({
       data={generations}
       getRowId={row => String(row.id)}
     />
+  )
+}
+
+// --- In Progress Tab ---
+
+interface InProgressRow {
+  id: string
+  sample_name: string
+  sample_identity: string
+  lot_code: string
+  senaite_id: string | null
+  coa_status: 'awaiting_delivery' | 'delivered' | 'published'
+}
+
+function InProgressTab({
+  orderId,
+  payload,
+  sampleResults,
+  samplesExpected,
+  samplesDelivered,
+}: {
+  orderId: string
+  payload: Record<string, unknown> | null
+  sampleResults: Record<string, { senaite_id: string; status: string }> | null
+  samplesExpected: number
+  samplesDelivered: number
+}) {
+  const {
+    data: generations,
+    isLoading,
+  } = useQuery({
+    queryKey: ['explorer', 'coa-generations', orderId],
+    queryFn: () => getOrderCOAGenerations(orderId),
+  })
+
+  const rows = useMemo(() => {
+    const payloadSamples = (
+      payload?.samples as Array<{
+        number: number
+        sample_name: string
+        sample_identity: string
+        lot_code: string
+      }> | undefined
+    ) ?? []
+
+    const publishedSampleIds = new Set(
+      (generations ?? [])
+        .filter(g => g.status === 'published')
+        .map(g => g.sample_id)
+    )
+
+    // sample_results is keyed by sample number (e.g. "1", "2") with senaite_id
+    const sampleResultsByNumber = new Map(
+      Object.entries(sampleResults ?? {}).map(([key, val]) => [key, val])
+    )
+
+    const result: InProgressRow[] = []
+
+    for (const ps of payloadSamples) {
+      const sr = sampleResultsByNumber.get(String(ps.number))
+      const senaiteId = sr?.senaite_id ?? null
+      const isPublished = senaiteId ? publishedSampleIds.has(senaiteId) : false
+
+      if (isPublished) continue
+
+      result.push({
+        id: `${orderId}-${ps.number}`,
+        sample_name: ps.sample_name,
+        sample_identity: ps.sample_identity,
+        lot_code: ps.lot_code,
+        senaite_id: senaiteId,
+        coa_status: senaiteId ? 'delivered' : 'awaiting_delivery',
+      })
+    }
+
+    return result
+  }, [orderId, payload, sampleResults, generations])
+
+  const columns: ColumnDef<InProgressRow>[] = [
+    {
+      accessorKey: 'senaite_id',
+      header: 'Sample ID',
+      size: 100,
+      cell: ({ row }) => {
+        const id = row.original.senaite_id
+        if (!id) return <span className="text-muted-foreground">{'\u2014'}</span>
+        return <span className="font-mono text-sm">{id}</span>
+      },
+    },
+    {
+      accessorKey: 'sample_name',
+      header: 'Sample Name',
+      size: 140,
+    },
+    {
+      accessorKey: 'sample_identity',
+      header: 'Identity',
+      size: 120,
+    },
+    {
+      accessorKey: 'lot_code',
+      header: 'Lot Code',
+      size: 100,
+      cell: ({ row }) => (
+        <span className="font-mono text-sm">{row.original.lot_code}</span>
+      ),
+    },
+    {
+      accessorKey: 'coa_status',
+      header: 'Status',
+      size: 140,
+      cell: ({ row }) => {
+        const status = row.original.coa_status
+        if (status === 'awaiting_delivery') {
+          return (
+            <Badge variant="outline" className="gap-1 text-yellow-500 border-yellow-500/30">
+              <Clock className="h-3 w-3" />
+              Awaiting Delivery
+            </Badge>
+          )
+        }
+        return (
+          <Badge variant="secondary" className="gap-1">
+            <RefreshCw className="h-3 w-3" />
+            Awaiting COA
+          </Badge>
+        )
+      },
+    },
+  ]
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center gap-2 text-muted-foreground py-4">
+        <RefreshCw className="h-4 w-4 animate-spin" />
+        Loading...
+      </div>
+    )
+  }
+
+  if (rows.length === 0) {
+    return (
+      <div className="text-muted-foreground py-4 text-center">
+        All samples have published COAs
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="text-sm text-muted-foreground">
+        {samplesDelivered}/{samplesExpected} samples delivered
+      </div>
+      <DataTable
+        columns={columns}
+        data={rows}
+        getRowId={row => row.id}
+      />
+    </div>
   )
 }
 
@@ -1022,7 +1181,8 @@ export function OrderDetailPanel({
         <Tabs defaultValue="summary">
           <TabsList>
             <TabsTrigger value="summary">Summary</TabsTrigger>
-            <TabsTrigger value="ingestions">Ingestions</TabsTrigger>
+            <TabsTrigger value="in-progress">In Progress</TabsTrigger>
+            <TabsTrigger value="ingestions">COAs Published</TabsTrigger>
             <TabsTrigger value="coa-generations">COA Generations</TabsTrigger>
             <TabsTrigger value="attempts">Attempts</TabsTrigger>
             <TabsTrigger value="sample-events">Sample Events</TabsTrigger>
@@ -1030,6 +1190,15 @@ export function OrderDetailPanel({
           </TabsList>
           <TabsContent value="summary" className="mt-4">
             <SummaryTab order={order} wordpressHost={wordpressHost} />
+          </TabsContent>
+          <TabsContent value="in-progress" className="mt-4">
+            <InProgressTab
+              orderId={order.order_id}
+              payload={order.payload}
+              sampleResults={order.sample_results}
+              samplesExpected={order.samples_expected}
+              samplesDelivered={order.samples_delivered}
+            />
           </TabsContent>
           <TabsContent value="ingestions" className="mt-4">
             <IngestionsTab

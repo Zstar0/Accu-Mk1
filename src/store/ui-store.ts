@@ -7,7 +7,7 @@ export type ActiveSection = 'dashboard' | 'lab-operations' | 'hplc-analysis' | '
 // Sub-sections within each main section
 export type LabOperationsSubSection = 'chromatographs' | 'sample-intake'
 export type HPLCAnalysisSubSection = 'overview' | 'new-analysis' | 'peptide-config' | 'analysis-history'
-export type AccuMarkToolsSubSection = 'overview' | 'order-explorer'
+export type AccuMarkToolsSubSection = 'overview' | 'order-explorer' | 'coa-explorer'
 export type AccountSubSection = 'change-password' | 'user-management'
 export type ActiveSubSection = LabOperationsSubSection | HPLCAnalysisSubSection | AccuMarkToolsSubSection | AccountSubSection
 
@@ -20,6 +20,7 @@ interface UIState {
   activeSection: ActiveSection
   activeSubSection: ActiveSubSection
   peptideConfigTargetId: number | null
+  orderExplorerTargetOrderId: string | null
 
   toggleLeftSidebar: () => void
   setLeftSidebarVisible: (visible: boolean) => void
@@ -34,6 +35,7 @@ interface UIState {
   setActiveSubSection: (subSection: ActiveSubSection) => void
   navigateTo: (section: ActiveSection, subSection: ActiveSubSection) => void
   navigateToPeptide: (peptideId: number) => void
+  navigateToOrderExplorer: (orderId?: string) => void
 }
 
 export const useUIStore = create<UIState>()(
@@ -47,6 +49,7 @@ export const useUIStore = create<UIState>()(
       activeSection: 'dashboard',
       activeSubSection: 'overview',
       peptideConfigTargetId: null,
+      orderExplorerTargetOrderId: null,
 
       toggleLeftSidebar: () =>
         set(
@@ -114,6 +117,13 @@ export const useUIStore = create<UIState>()(
           activeSubSection: 'peptide-config',
           peptideConfigTargetId: peptideId,
         }, undefined, 'navigateToPeptide'),
+
+      navigateToOrderExplorer: (orderId) =>
+        set({
+          activeSection: 'accumark-tools',
+          activeSubSection: 'order-explorer',
+          orderExplorerTargetOrderId: orderId ?? null,
+        }, undefined, 'navigateToOrderExplorer'),
     }),
     {
       name: 'ui-store',

@@ -24,7 +24,7 @@ from database import get_db
 
 SECRET_KEY = os.environ.get("JWT_SECRET", "dev-secret-change-in-production")
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60
+ACCESS_TOKEN_EXPIRE_MINUTES = int(os.environ.get("JWT_EXPIRE_MINUTES", 10080))  # Default: 7 days
 
 # ── Password hashing ─────────────────────────────────────────
 

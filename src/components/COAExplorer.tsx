@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Search,
-  Database,
+  FileCheck,
   RefreshCw,
   ChevronRight,
   ChevronLeft,
@@ -10,14 +10,19 @@ import {
   CheckCircle2,
   Clock,
   XCircle,
+  ExternalLink,
+  Download,
+  Image,
 } from 'lucide-react'
 import type { ColumnDef } from '@tanstack/react-table'
 
 import { cn } from '@/lib/utils'
 import {
   getExplorerStatus,
-  getExplorerOrders,
-  type ExplorerOrder,
+  getExplorerCOAGenerations,
+  getExplorerCOASignedUrl,
+  getExplorerChromatogramSignedUrl,
+  type ExplorerCOAGeneration,
 } from '@/lib/api'
 import {
   getActiveEnvironmentName,
@@ -37,8 +42,6 @@ import {
   CardTitle,
 } from '@/components/ui/card'
 import { DataTable } from '@/components/ui/data-table'
-import { PayloadPanel } from '@/components/PayloadPanel'
-import { OrderDetailPanel } from '@/components/explorer/OrderDetailPanel'
 
 // --- Helpers ---
 
@@ -50,20 +53,25 @@ function StatusBadge({ status }: { status: string }) {
       icon: React.ReactNode
     }
   > = {
+    draft: { variant: 'secondary', icon: <Clock className="h-3 w-3" /> },
+    published: {
+      variant: 'default',
+      icon: <CheckCircle2 className="h-3 w-3" />,
+    },
+    superseded: {
+      variant: 'outline',
+      icon: <XCircle className="h-3 w-3" />,
+    },
     pending: { variant: 'secondary', icon: <Clock className="h-3 w-3" /> },
-    processing: {
+    confirming: {
       variant: 'secondary',
       icon: <RefreshCw className="h-3 w-3 animate-spin" />,
     },
-    accepted: {
+    anchored: {
       variant: 'default',
       icon: <CheckCircle2 className="h-3 w-3" />,
     },
     failed: { variant: 'destructive', icon: <XCircle className="h-3 w-3" /> },
-    partial_failure: {
-      variant: 'destructive',
-      icon: <AlertCircle className="h-3 w-3" />,
-    },
   }
 
   const config = variants[status] || { variant: 'outline' as const, icon: null }
@@ -87,74 +95,99 @@ function formatDate(dateStr: string | null): string {
   })
 }
 
-function formatProcessingTime(
-  createdAt: string,
-  completedAt: string | null
-): string {
-  const start = new Date(createdAt)
-  const end = completedAt ? new Date(completedAt) : new Date()
-  const ms = end.getTime() - start.getTime()
-  if (ms < 0) return '\u2014'
-
-  const seconds = Math.floor(ms / 1000)
-  const minutes = Math.floor(seconds / 60)
-  const hours = Math.floor(minutes / 60)
-  const days = Math.floor(hours / 24)
-
-  if (days > 0) return `${days}d ${hours % 24}h`
-  if (hours > 0) return `${hours}h ${minutes % 60}m`
-  if (minutes > 0) return `${minutes}m ${seconds % 60}s`
-  if (seconds > 0) return `${seconds}s`
-  return `${ms}ms`
-}
-
-function SampleIdCell({
-  sampleResults,
+function DownloadCOAButton({
+  sampleId,
+  version,
 }: {
-  sampleResults: Record<string, { senaite_id: string; status: string }> | null
+  sampleId: string
+  version: number
 }) {
-  const [expanded, setExpanded] = useState(false)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
-  if (!sampleResults) return <span className="text-muted-foreground">{'\u2014'}</span>
+  const handleDownload = async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const result = await getExplorerCOASignedUrl(sampleId, version)
+      window.open(result.url, '_blank')
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Download failed')
+    } finally {
+      setLoading(false)
+    }
+  }
 
-  const ids = Object.values(sampleResults).map(s => s.senaite_id)
-  if (ids.length === 0) return <span className="text-muted-foreground">{'\u2014'}</span>
-
-  const visible = expanded ? ids : ids.slice(0, 2)
-  const remaining = ids.length - 2
+  if (error) {
+    return (
+      <span className="text-xs text-destructive flex items-center gap-1" title={error}>
+        <AlertCircle className="h-3 w-3" />
+        No PDF
+      </span>
+    )
+  }
 
   return (
-    <div className="flex flex-wrap items-center gap-1">
-      {visible.map(id => (
-        <Badge key={id} variant="outline" className="font-mono text-xs px-1.5 py-0">
-          {id}
-        </Badge>
-      ))}
-      {!expanded && remaining > 0 && (
-        <button
-          type="button"
-          className="text-xs text-muted-foreground hover:text-foreground"
-          onClick={e => {
-            e.stopPropagation()
-            setExpanded(true)
-          }}
-        >
-          +{remaining} more
-        </button>
+    <Button
+      variant="ghost"
+      size="sm"
+      className="h-7 px-2 text-xs"
+      onClick={(e) => { e.stopPropagation(); handleDownload() }}
+      disabled={loading}
+      title="Download COA PDF"
+    >
+      {loading ? (
+        <RefreshCw className="h-3 w-3 animate-spin" />
+      ) : (
+        <Download className="h-3 w-3" />
       )}
-      {expanded && ids.length > 2 && (
-        <button
-          type="button"
-          className="text-xs text-muted-foreground hover:text-foreground"
-          onClick={e => {
-            e.stopPropagation()
-            setExpanded(false)
-          }}
-        >
-          show less
-        </button>
+      PDF
+    </Button>
+  )
+}
+
+function ViewChromatogramButton({ sampleId }: { sampleId: string }) {
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const handleView = async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const result = await getExplorerChromatogramSignedUrl(sampleId, 1)
+      window.open(result.url, '_blank')
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to load')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  if (error) {
+    return (
+      <span className="text-xs text-destructive flex items-center gap-1" title={error}>
+        <AlertCircle className="h-3 w-3" />
+        Not found
+      </span>
+    )
+  }
+
+  return (
+    <Button
+      variant="ghost"
+      size="sm"
+      className="h-7 px-2 text-xs"
+      onClick={(e) => { e.stopPropagation(); handleView() }}
+      disabled={loading}
+      title="View Chromatogram"
+    >
+      {loading ? (
+        <RefreshCw className="h-3 w-3 animate-spin" />
+      ) : (
+        <Image className="h-3 w-3" />
       )}
-    </div>
+      Chrom
+    </Button>
   )
 }
 
@@ -162,52 +195,42 @@ const PAGE_SIZE = 50
 
 const STATUS_OPTIONS = [
   { value: 'all', label: 'All Statuses' },
+  { value: 'draft', label: 'Draft' },
+  { value: 'published', label: 'Published' },
+  { value: 'superseded', label: 'Superseded' },
+]
+
+const ANCHOR_STATUS_OPTIONS = [
+  { value: 'all', label: 'All Blockchain' },
   { value: 'pending', label: 'Pending' },
-  { value: 'processing', label: 'Processing' },
-  { value: 'accepted', label: 'Accepted' },
-  { value: 'partial_failure', label: 'Partial Failure' },
+  { value: 'confirming', label: 'Confirming' },
+  { value: 'anchored', label: 'Anchored' },
   { value: 'failed', label: 'Failed' },
 ]
 
 /**
- * Order Explorer - Debugging tool for viewing Integration Service data.
+ * COA Explorer - Top-level view of all COA generations across all orders.
  */
-export function OrderExplorer() {
+export function COAExplorer() {
   const [searchTerm, setSearchTerm] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState('all')
+  const [anchorStatusFilter, setAnchorStatusFilter] = useState('all')
   const [page, setPage] = useState(0)
-  const [selectedOrder, setSelectedOrder] = useState<ExplorerOrder | null>(null)
+
+  const navigateToOrderExplorer = useUIStore(state => state.navigateToOrderExplorer)
 
   // Track the current environment name for display
   const [envName, setEnvName] = useState(() => getActiveEnvironmentName())
 
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [refreshSuccess, setRefreshSuccess] = useState(false)
-  const [selectedPayload, setSelectedPayload] = useState<{
-    payload: Record<string, unknown> | null
-    sampleId: string
-  } | null>(null)
   const queryClient = useQueryClient()
-
-  // Cross-navigation: consume target order ID from COA Explorer
-  const orderExplorerTargetOrderId = useUIStore(state => state.orderExplorerTargetOrderId)
-  useEffect(() => {
-    if (orderExplorerTargetOrderId) {
-      setSearchTerm(orderExplorerTargetOrderId)
-      setDebouncedSearch(orderExplorerTargetOrderId)
-      setPage(0)
-      // Clear the target so it doesn't re-trigger
-      useUIStore.setState({ orderExplorerTargetOrderId: null })
-    }
-  }, [orderExplorerTargetOrderId])
 
   // Listen for environment changes (admin override)
   useEffect(() => {
     const handleProfileChange = () => {
       setEnvName(getActiveEnvironmentName())
-      setSelectedOrder(null)
-      setSelectedPayload(null)
       setPage(0)
     }
     window.addEventListener(API_PROFILE_CHANGED_EVENT, handleProfileChange)
@@ -230,26 +253,28 @@ export function OrderExplorer() {
     staleTime: 0,
   })
 
-  // Orders query with status filter and pagination
+  // COA generations query
   const {
-    data: orders,
-    isLoading: ordersLoading,
-    error: ordersError,
+    data: generations,
+    isLoading: generationsLoading,
+    error: generationsError,
   } = useQuery({
     queryKey: [
       'explorer',
-      'orders',
+      'coa-generations-all',
       debouncedSearch,
       statusFilter,
+      anchorStatusFilter,
       page,
       envName,
     ],
     queryFn: () =>
-      getExplorerOrders(
+      getExplorerCOAGenerations(
         debouncedSearch || undefined,
         PAGE_SIZE,
         page * PAGE_SIZE,
-        statusFilter === 'all' ? undefined : statusFilter
+        statusFilter === 'all' ? undefined : statusFilter,
+        anchorStatusFilter === 'all' ? undefined : anchorStatusFilter
       ),
     enabled: status?.connected === true,
   })
@@ -268,9 +293,9 @@ export function OrderExplorer() {
     setPage(0)
   }
 
-  const handleOrderClick = (order: ExplorerOrder) => {
-    setSelectedOrder(order)
-    setSelectedPayload(null)
+  const handleAnchorStatusFilterChange = (value: string) => {
+    setAnchorStatusFilter(value)
+    setPage(0)
   }
 
   const handleRefresh = async () => {
@@ -281,86 +306,118 @@ export function OrderExplorer() {
     setRefreshSuccess(true)
   }
 
-  // Column definitions for orders table
-  const ordersColumns: ColumnDef<ExplorerOrder>[] = [
+  const handleOrderClick = (orderId: string) => {
+    navigateToOrderExplorer(orderId)
+  }
+
+  // Get WordPress host for verification links
+  const wordpressHost = getWordpressUrl() || 'https://accumarklabs.local'
+
+  // Column definitions
+  const columns: ColumnDef<ExplorerCOAGeneration>[] = [
     {
-      accessorKey: 'order_id',
-      header: 'Order ID',
-      size: 80,
-      minSize: 50,
+      accessorKey: 'sample_id',
+      header: 'Sample ID',
+      size: 110,
       enableSorting: true,
       cell: ({ row }) => (
-        <span className="font-mono text-sm">{row.original.order_id}</span>
+        <span className="font-mono text-sm">{row.original.sample_id}</span>
       ),
     },
     {
-      accessorKey: 'order_number',
-      header: 'Order #',
-      size: 80,
-      minSize: 50,
+      accessorKey: 'generation_number',
+      header: 'Gen #',
+      size: 60,
       enableSorting: true,
       cell: ({ row }) => (
-        <span className="text-sm">{row.original.order_number}</span>
+        <span className="font-mono">#{row.original.generation_number}</span>
       ),
-    },
-    {
-      id: 'email',
-      header: 'Email',
-      size: 140,
-      minSize: 80,
-      enableSorting: false,
-      cell: ({ row }) => {
-        const email =
-          (row.original.payload as Record<string, unknown> | null)?.billing &&
-          typeof (row.original.payload as Record<string, unknown>).billing ===
-            'object'
-            ? (
-                (row.original.payload as Record<string, Record<string, unknown>>)
-                  .billing?.email as string | undefined
-              ) ?? null
-            : null
-        if (!email) return <span className="text-muted-foreground">{'\u2014'}</span>
-        const localPart = email.split('@')[0]
-        return (
-          <span className="text-sm truncate block max-w-[130px]" title={email}>
-            {localPart}@...
-          </span>
-        )
-      },
     },
     {
       accessorKey: 'status',
       header: 'Status',
       size: 100,
-      minSize: 60,
       enableSorting: true,
       cell: ({ row }) => <StatusBadge status={row.original.status} />,
     },
     {
-      id: 'samples',
-      header: 'Samples',
-      size: 70,
-      minSize: 50,
+      accessorKey: 'verification_code',
+      header: 'Verification Code',
+      size: 140,
       enableSorting: false,
       cell: ({ row }) => (
-        <span>
-          {row.original.samples_delivered}/{row.original.samples_expected}
+        <a
+          href={`${wordpressHost}/verify?code=${row.original.verification_code}`}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="font-mono text-sm text-primary hover:underline"
+          onClick={e => e.stopPropagation()}
+        >
+          {row.original.verification_code}
+        </a>
+      ),
+    },
+    {
+      accessorKey: 'anchor_status',
+      header: 'Blockchain',
+      size: 110,
+      enableSorting: true,
+      cell: ({ row }) => {
+        const gen = row.original
+        if (gen.anchor_status === 'anchored' && gen.anchor_tx_hash) {
+          return (
+            <Badge variant="default" className="gap-1 text-xs">
+              <CheckCircle2 className="h-3 w-3" />
+              Anchored
+            </Badge>
+          )
+        }
+        return <StatusBadge status={gen.anchor_status} />
+      },
+    },
+    {
+      accessorKey: 'content_hash',
+      header: 'Hash',
+      size: 100,
+      enableSorting: false,
+      cell: ({ row }) => (
+        <span
+          className="font-mono text-xs text-muted-foreground"
+          title={row.original.content_hash}
+        >
+          {row.original.content_hash.slice(0, 12)}...
         </span>
       ),
     },
     {
-      id: 'sample_ids',
-      header: 'Sample IDs',
-      size: 160,
-      minSize: 80,
+      id: 'order',
+      header: 'Order',
+      size: 100,
       enableSorting: false,
-      cell: ({ row }) => <SampleIdCell sampleResults={row.original.sample_results} />,
+      cell: ({ row }) => {
+        const gen = row.original
+        if (!gen.order_id && !gen.order_number) {
+          return <span className="text-muted-foreground">{'\u2014'}</span>
+        }
+        return (
+          <button
+            type="button"
+            className="flex items-center gap-1 text-sm text-primary hover:underline"
+            onClick={e => {
+              e.stopPropagation()
+              if (gen.order_id) handleOrderClick(gen.order_id)
+            }}
+          >
+            {gen.order_number || gen.order_id}
+            <ExternalLink className="h-3 w-3" />
+          </button>
+        )
+      },
     },
     {
       accessorKey: 'created_at',
       header: 'Created',
       size: 130,
-      minSize: 80,
       enableSorting: true,
       cell: ({ row }) => (
         <span className="text-muted-foreground">
@@ -369,34 +426,25 @@ export function OrderExplorer() {
       ),
     },
     {
-      accessorKey: 'completed_at',
-      header: 'Completed',
-      size: 130,
-      minSize: 80,
-      enableSorting: true,
-      cell: ({ row }) => (
-        <span className="text-muted-foreground">
-          {formatDate(row.original.completed_at)}
-        </span>
-      ),
-    },
-    {
-      id: 'processing_time',
-      header: 'Processing Time',
-      size: 120,
-      minSize: 80,
+      id: 'actions',
+      header: '',
+      size: 140,
       enableSorting: false,
+      enableResizing: false,
       cell: ({ row }) => {
-        const order = row.original
+        const gen = row.original
         return (
-          <span
-            className={cn(
-              'font-mono text-sm',
-              order.completed_at ? 'text-green-600' : 'text-yellow-600'
+          <div className="flex items-center gap-1">
+            {gen.status === 'published' && (
+              <DownloadCOAButton
+                sampleId={gen.sample_id}
+                version={gen.generation_number}
+              />
             )}
-          >
-            {formatProcessingTime(order.created_at, order.completed_at)}
-          </span>
+            {gen.chromatogram_s3_key && (
+              <ViewChromatogramButton sampleId={gen.sample_id} />
+            )}
+          </div>
         )
       },
     },
@@ -404,14 +452,16 @@ export function OrderExplorer() {
       id: 'chevron',
       header: '',
       size: 32,
-      minSize: 32,
       enableSorting: false,
       enableResizing: false,
-      cell: () => <ChevronRight className="h-4 w-4 text-muted-foreground" />,
+      cell: ({ row }) =>
+        row.original.order_id ? (
+          <ChevronRight className="h-4 w-4 text-muted-foreground" />
+        ) : null,
     },
   ]
 
-  const hasNextPage = orders && orders.length === PAGE_SIZE
+  const hasNextPage = generations && generations.length === PAGE_SIZE
   const hasPrevPage = page > 0
 
   return (
@@ -420,12 +470,12 @@ export function OrderExplorer() {
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
           <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10">
-            <Database className="h-5 w-5 text-primary" />
+            <FileCheck className="h-5 w-5 text-primary" />
           </div>
           <div>
-            <h2 className="text-xl font-semibold">Order Explorer</h2>
+            <h2 className="text-xl font-semibold">COA Explorer</h2>
             <p className="text-sm text-muted-foreground">
-              Browse orders and COAs from the Integration Service
+              Browse all COA generations across all orders
             </p>
           </div>
         </div>
@@ -446,7 +496,7 @@ export function OrderExplorer() {
             <RefreshCw
               className={cn(
                 'h-4 w-4',
-                (isRefreshing || ordersLoading) && 'animate-spin'
+                (isRefreshing || generationsLoading) && 'animate-spin'
               )}
             />
           </Button>
@@ -492,13 +542,13 @@ export function OrderExplorer() {
         </Card>
       )}
 
-      {/* Search, status filter */}
+      {/* Search and filters */}
       {status?.connected && (
         <div className="flex items-center gap-2">
           <div className="relative flex-1">
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <Input
-              placeholder="Search by Order ID or Order Number..."
+              placeholder="Search by Sample ID..."
               value={searchTerm}
               onChange={e => handleSearchChange(e.target.value)}
               className="pl-10"
@@ -515,22 +565,35 @@ export function OrderExplorer() {
               </option>
             ))}
           </select>
+          <select
+            value={anchorStatusFilter}
+            onChange={e => handleAnchorStatusFilterChange(e.target.value)}
+            className="h-10 rounded-md border border-input bg-background px-3 text-sm text-foreground"
+          >
+            {ANCHOR_STATUS_OPTIONS.map(opt => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label}
+              </option>
+            ))}
+          </select>
         </div>
       )}
 
-      {/* Orders table */}
+      {/* COA Generations table */}
       {status?.connected && (
         <Card>
           <CardHeader className="pb-3">
             <div className="flex items-center justify-between">
               <div>
-                <CardTitle className="text-lg">Orders</CardTitle>
+                <CardTitle className="text-lg">COA Generations</CardTitle>
                 <CardDescription>
-                  {orders
-                    ? `${orders.length} orders${orders.length === PAGE_SIZE ? '+' : ''}`
+                  {generations
+                    ? `${generations.length} generations${generations.length === PAGE_SIZE ? '+' : ''}`
                     : 'Loading...'}
-                  {statusFilter !== 'all' && ` (filtered: ${statusFilter})`}.
-                  Click to view details.
+                  {statusFilter !== 'all' && ` (status: ${statusFilter})`}
+                  {anchorStatusFilter !== 'all' &&
+                    ` (blockchain: ${anchorStatusFilter})`}
+                  . Click a row to view its order.
                 </CardDescription>
               </div>
               {/* Pagination */}
@@ -539,7 +602,7 @@ export function OrderExplorer() {
                   variant="outline"
                   size="sm"
                   onClick={() => setPage(p => p - 1)}
-                  disabled={!hasPrevPage || ordersLoading}
+                  disabled={!hasPrevPage || generationsLoading}
                 >
                   <ChevronLeft className="h-4 w-4" />
                   Prev
@@ -551,7 +614,7 @@ export function OrderExplorer() {
                   variant="outline"
                   size="sm"
                   onClick={() => setPage(p => p + 1)}
-                  disabled={!hasNextPage || ordersLoading}
+                  disabled={!hasNextPage || generationsLoading}
                 >
                   Next
                   <ChevronRight className="h-4 w-4" />
@@ -560,65 +623,42 @@ export function OrderExplorer() {
             </div>
           </CardHeader>
           <CardContent>
-            {ordersLoading && (
+            {generationsLoading && (
               <div className="flex items-center gap-2 text-muted-foreground py-8 justify-center">
                 <RefreshCw className="h-4 w-4 animate-spin" />
-                Loading orders...
+                Loading COA generations...
               </div>
             )}
 
-            {ordersError && (
+            {generationsError && (
               <div className="flex items-center gap-2 text-destructive py-8 justify-center">
                 <AlertCircle className="h-4 w-4" />
-                Failed to load orders
+                Failed to load COA generations
               </div>
             )}
 
-            {orders && orders.length === 0 && !ordersLoading && (
+            {generations && generations.length === 0 && !generationsLoading && (
               <div className="text-muted-foreground py-8 text-center">
                 {debouncedSearch
-                  ? 'No orders match your search'
-                  : 'No orders found'}
+                  ? 'No COA generations match your search'
+                  : 'No COA generations found'}
               </div>
             )}
 
-            {orders && orders.length > 0 && (
-              <div className="max-h-[300px] overflow-auto">
+            {generations && generations.length > 0 && (
+              <div className="max-h-[500px] overflow-auto">
                 <DataTable
-                  columns={ordersColumns}
-                  data={orders}
-                  onRowClick={handleOrderClick}
-                  selectedRowId={selectedOrder?.order_id}
-                  getRowId={row => row.order_id}
+                  columns={columns}
+                  data={generations}
+                  onRowClick={row => {
+                    if (row.order_id) handleOrderClick(row.order_id)
+                  }}
+                  getRowId={row => row.id}
                 />
               </div>
             )}
           </CardContent>
         </Card>
-      )}
-
-      {/* Order detail panel (tabbed) */}
-      {selectedOrder && (
-        <OrderDetailPanel
-          order={selectedOrder}
-          wordpressHost={getWordpressUrl()}
-          onClose={() => setSelectedOrder(null)}
-          onViewPayload={order =>
-            setSelectedPayload({
-              payload: order.payload,
-              sampleId: order.order_id,
-            })
-          }
-        />
-      )}
-
-      {/* Payload panel */}
-      {selectedPayload && (
-        <PayloadPanel
-          payload={selectedPayload.payload}
-          orderId={selectedPayload.sampleId}
-          onClose={() => setSelectedPayload(null)}
-        />
       )}
     </div>
   )

@@ -859,6 +859,8 @@ export interface ExplorerCOAGeneration {
   published_at: string | null
   superseded_at: string | null
   created_at: string
+  order_id: string | null
+  order_number: string | null
 }
 
 /**
@@ -1018,6 +1020,49 @@ export async function getExplorerOrders(
     return response.json()
   } catch (error) {
     console.error('Get explorer orders error:', error)
+    throw error
+  }
+}
+
+/**
+ * Get all COA generations across all orders from Integration Service.
+ *
+ * @param search - Optional search term for sample_id
+ * @param limit - Max records to return (default 50)
+ * @param offset - Pagination offset (default 0)
+ * @param status - Optional status filter (draft, published, superseded)
+ * @param anchorStatus - Optional anchor_status filter (pending, confirming, anchored, failed)
+ */
+export async function getExplorerCOAGenerations(
+  search?: string,
+  limit = 50,
+  offset = 0,
+  status?: string,
+  anchorStatus?: string
+): Promise<ExplorerCOAGeneration[]> {
+  try {
+    const params = new URLSearchParams()
+    if (search) params.set('search', search)
+    if (status) params.set('status', status)
+    if (anchorStatus) params.set('anchor_status', anchorStatus)
+    params.set('limit', String(limit))
+    params.set('offset', String(offset))
+
+    const response = await fetch(
+      `${API_BASE_URL()}/explorer/coa-generations?${params}`,
+      {
+        headers: getAuthHeaders(),
+      }
+    )
+    if (!response.ok) {
+      if (response.status === 401) {
+        throw new Error('API key required or invalid')
+      }
+      throw new Error(`Get explorer COA generations failed: ${response.status}`)
+    }
+    return response.json()
+  } catch (error) {
+    console.error('Get explorer COA generations error:', error)
     throw error
   }
 }

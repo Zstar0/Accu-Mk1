@@ -82,6 +82,7 @@ const navItems: NavItem[] = [
     subItems: [
       { id: 'overview', label: 'Overview' },
       { id: 'order-explorer', label: 'Order Explorer' },
+      { id: 'coa-explorer', label: 'COA Explorer' },
     ],
   },
   {

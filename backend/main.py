@@ -2003,7 +2003,6 @@ def _parse_calibration_excel_bytes(data: bytes, filename: str) -> dict | None:
     from io import BytesIO
 
     skip_sheets = {"Dissolution method", "Dissolution Method"}
-    skip_prefixes = ("SOP CalStds", "SOP_CalStds")
 
     try:
         wb = openpyxl.load_workbook(BytesIO(data), data_only=True, read_only=True)
@@ -2012,8 +2011,6 @@ def _parse_calibration_excel_bytes(data: bytes, filename: str) -> dict | None:
 
     for sheet_name in wb.sheetnames:
         if sheet_name in skip_sheets:
-            continue
-        if any(sheet_name.startswith(p) for p in skip_prefixes):
             continue
 
         ws = wb[sheet_name]
@@ -2908,7 +2905,15 @@ async def get_sample_weights(sample_id: str, _current_user=Depends(get_current_u
 
 # --- Explorer Endpoints (Integration Service Database) ---
 
-from integration_db import fetch_orders, fetch_ingestions_for_order, test_connection
+from integration_db import (
+    fetch_orders,
+    fetch_ingestions_for_order,
+    fetch_attempts_for_order,
+    fetch_coa_generations_for_order,
+    fetch_sample_events_for_order,
+    fetch_access_logs_for_order,
+    test_connection,
+)
 
 
 class ExplorerOrderResponse(BaseModel):
@@ -2921,6 +2926,7 @@ class ExplorerOrderResponse(BaseModel):
     samples_delivered: int
     error_message: Optional[str] = None
     payload: Optional[dict] = None
+    sample_results: Optional[dict] = None
     created_at: datetime
     updated_at: datetime
     completed_at: Optional[datetime] = None
@@ -2950,6 +2956,61 @@ class ExplorerConnectionStatus(BaseModel):
     host: Optional[str] = None
     wordpress_host: Optional[str] = None
     error: Optional[str] = None
+
+
+class ExplorerAttemptResponse(BaseModel):
+    """Schema for order submission attempt."""
+    id: str
+    attempt_number: int
+    event_id: Optional[str] = None
+    status: str
+    error_message: Optional[str] = None
+    samples_processed: Optional[dict] = None
+    created_at: datetime
+
+
+class ExplorerCOAGenerationResponse(BaseModel):
+    """Schema for COA generation record."""
+    id: str
+    sample_id: str
+    generation_number: int
+    verification_code: str
+    content_hash: str
+    status: str
+    anchor_status: str
+    anchor_tx_hash: Optional[str] = None
+    chromatogram_s3_key: Optional[str] = None
+    published_at: Optional[datetime] = None
+    superseded_at: Optional[datetime] = None
+    created_at: datetime
+    order_id: Optional[str] = None
+    order_number: Optional[str] = None
+
+
+class ExplorerSampleEventResponse(BaseModel):
+    """Schema for sample status event."""
+    id: str
+    sample_id: str
+    transition: str
+    new_status: str
+    event_id: Optional[str] = None
+    event_timestamp: Optional[int] = None
+    wp_notified: bool
+    wp_status_sent: Optional[str] = None
+    wp_error: Optional[str] = None
+    created_at: datetime
+
+
+class ExplorerAccessLogResponse(BaseModel):
+    """Schema for COA access log entry."""
+    id: str
+    sample_id: str
+    coa_version: int
+    action: str
+    requester_ip: Optional[str] = None
+    user_agent: Optional[str] = None
+    requested_by: Optional[str] = None
+    timestamp: datetime
 
 
 class EnvironmentSwitchRequest(BaseModel):
@@ -3048,6 +3109,158 @@ async def get_order_ingestions(order_id: str, _current_user=Depends(get_current_
             status_code=503,
             detail=f"Failed to connect to Integration Service database: {e}"
         )
+
+
+# ── Integration Service HTTP Proxy ─────────────────────────────────
+# These endpoints proxy through the Integration Service HTTP API
+# rather than querying the database directly. This keeps the
+# integration-service as the single source of truth for query logic.
+
+import httpx
+
+INTEGRATION_SERVICE_URL = os.environ.get("INTEGRATION_SERVICE_URL", "http://host.docker.internal:8000")
+INTEGRATION_SERVICE_API_KEY = os.environ.get("ACCU_MK1_API_KEY", "")
+
+
+async def _proxy_explorer_get(path: str) -> list[dict]:
+    """Proxy a GET request to the Integration Service explorer API."""
+    url = f"{INTEGRATION_SERVICE_URL}/explorer{path}"
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        resp = await client.get(url, headers={"X-API-Key": INTEGRATION_SERVICE_API_KEY})
+        resp.raise_for_status()
+        return resp.json()
+
+
+@app.get("/explorer/orders/{order_id}/coa-generations", response_model=list[ExplorerCOAGenerationResponse])
+async def get_order_coa_generations(order_id: str, _current_user=Depends(get_current_user)):
+    """Get COA generation records for an order (proxied to Integration Service)."""
+    try:
+        return await _proxy_explorer_get(f"/orders/{order_id}/coa-generations")
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(status_code=e.response.status_code, detail=e.response.text)
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Integration Service unavailable: {e}")
+
+
+@app.get("/explorer/orders/{order_id}/attempts", response_model=list[ExplorerAttemptResponse])
+async def get_order_attempts(order_id: str, _current_user=Depends(get_current_user)):
+    """Get submission attempts for an order (proxied to Integration Service)."""
+    try:
+        return await _proxy_explorer_get(f"/orders/{order_id}/attempts")
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(status_code=e.response.status_code, detail=e.response.text)
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Integration Service unavailable: {e}")
+
+
+@app.get("/explorer/orders/{order_id}/sample-events", response_model=list[ExplorerSampleEventResponse])
+async def get_order_sample_events(order_id: str, _current_user=Depends(get_current_user)):
+    """Get sample status events for an order (proxied to Integration Service)."""
+    try:
+        return await _proxy_explorer_get(f"/orders/{order_id}/sample-events")
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(status_code=e.response.status_code, detail=e.response.text)
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Integration Service unavailable: {e}")
+
+
+@app.get("/explorer/orders/{order_id}/access-logs", response_model=list[ExplorerAccessLogResponse])
+async def get_order_access_logs(order_id: str, _current_user=Depends(get_current_user)):
+    """Get COA access logs for an order (proxied to Integration Service)."""
+    try:
+        return await _proxy_explorer_get(f"/orders/{order_id}/access-logs")
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(status_code=e.response.status_code, detail=e.response.text)
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Integration Service unavailable: {e}")
+
+
+@app.get("/explorer/coa-generations", response_model=list[ExplorerCOAGenerationResponse])
+async def get_all_coa_generations(
+    search: Optional[str] = None,
+    status: Optional[str] = None,
+    anchor_status: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+    _current_user=Depends(get_current_user),
+):
+    """Get all COA generations across all orders (proxied to Integration Service)."""
+    try:
+        params: dict[str, str] = {}
+        if search:
+            params["search"] = search
+        if status:
+            params["status"] = status
+        if anchor_status:
+            params["anchor_status"] = anchor_status
+        params["limit"] = str(limit)
+        params["offset"] = str(offset)
+        url = f"{INTEGRATION_SERVICE_URL}/explorer/coa-generations"
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(
+                url,
+                params=params,
+                headers={"X-API-Key": INTEGRATION_SERVICE_API_KEY},
+            )
+            resp.raise_for_status()
+            return resp.json()
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(status_code=e.response.status_code, detail=e.response.text)
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Integration Service unavailable: {e}")
+
+
+class SignedURLRequest(BaseModel):
+    sample_id: str
+    version: int
+
+
+class SignedURLResponse(BaseModel):
+    url: str
+
+
+@app.post("/explorer/signed-url/coa", response_model=SignedURLResponse)
+async def get_coa_signed_url(
+    body: SignedURLRequest,
+    _current_user=Depends(get_current_user),
+):
+    """Get a presigned download URL for a COA PDF (proxied to Integration Service)."""
+    try:
+        url = f"{INTEGRATION_SERVICE_URL}/explorer/signed-url/coa"
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(
+                url,
+                json=body.model_dump(),
+                headers={"X-API-Key": INTEGRATION_SERVICE_API_KEY},
+            )
+            resp.raise_for_status()
+            return resp.json()
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(status_code=e.response.status_code, detail=e.response.text)
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Integration Service unavailable: {e}")
+
+
+@app.post("/explorer/signed-url/chromatogram", response_model=SignedURLResponse)
+async def get_chromatogram_signed_url(
+    body: SignedURLRequest,
+    _current_user=Depends(get_current_user),
+):
+    """Get a presigned download URL for a chromatogram image (proxied to Integration Service)."""
+    try:
+        url = f"{INTEGRATION_SERVICE_URL}/explorer/signed-url/chromatogram"
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(
+                url,
+                json=body.model_dump(),
+                headers={"X-API-Key": INTEGRATION_SERVICE_API_KEY},
+            )
+            resp.raise_for_status()
+            return resp.json()
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(status_code=e.response.status_code, detail=e.response.text)
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Integration Service unavailable: {e}")
 
 
 # ── SharePoint Integration ─────────────────────────────────────────

@@ -136,7 +136,7 @@ def fetch_orders(
         List of order dicts
     """
     query = """
-        SELECT 
+        SELECT
             id,
             order_id,
             order_number,
@@ -145,6 +145,7 @@ def fetch_orders(
             samples_delivered,
             error_message,
             payload,
+            sample_results,
             created_at,
             updated_at,
             completed_at
@@ -214,6 +215,193 @@ def fetch_ingestions_for_order(order_id: str) -> list[dict]:
             # Fetch ingestions
             cur.execute(ingestions_query, [order_row['id']])
             rows = cur.fetchall()
+            return [dict(row) for row in rows]
+
+
+def fetch_attempts_for_order(order_id: str) -> list[dict]:
+    """
+    Fetch all submission attempts for an order.
+
+    Args:
+        order_id: The WordPress order ID (string)
+
+    Returns:
+        List of attempt dicts
+    """
+    find_order_query = """
+        SELECT id FROM order_submissions WHERE order_id = %s
+    """
+
+    attempts_query = """
+        SELECT
+            id,
+            attempt_number,
+            event_id,
+            status,
+            error_message,
+            samples_processed,
+            created_at
+        FROM order_submission_attempts
+        WHERE order_submission_id = %s
+        ORDER BY attempt_number ASC
+    """
+
+    with get_integration_db() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(find_order_query, [order_id])
+            order_row = cur.fetchone()
+
+            if not order_row:
+                return []
+
+            cur.execute(attempts_query, [order_row['id']])
+            rows = cur.fetchall()
+            return [dict(row) for row in rows]
+
+
+def fetch_coa_generations_for_order(order_id: str) -> list[dict]:
+    """
+    Fetch all COA generations linked to an order.
+
+    Linked via order_submission_id directly, or via ingestions.
+
+    Args:
+        order_id: The WordPress order ID (string)
+
+    Returns:
+        List of COA generation dicts
+    """
+    find_order_query = """
+        SELECT id FROM order_submissions WHERE order_id = %s
+    """
+
+    generations_query = """
+        SELECT
+            g.id,
+            g.sample_id,
+            g.generation_number,
+            g.verification_code,
+            g.content_hash,
+            g.status,
+            g.anchor_status,
+            g.anchor_tx_hash,
+            g.chromatogram_s3_key,
+            g.published_at,
+            g.superseded_at,
+            g.created_at
+        FROM coa_generations g
+        WHERE g.order_submission_id = %s
+           OR g.ingestion_id IN (
+               SELECT i.id FROM ingestions i WHERE i.order_submission_id = %s
+           )
+        ORDER BY g.created_at DESC
+    """
+
+    with get_integration_db() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(find_order_query, [order_id])
+            order_row = cur.fetchone()
+
+            if not order_row:
+                return []
+
+            order_uuid = order_row['id']
+            cur.execute(generations_query, [order_uuid, order_uuid])
+            rows = cur.fetchall()
+            return [dict(row) for row in rows]
+
+
+def fetch_sample_events_for_order(order_id: str) -> list[dict]:
+    """
+    Fetch all sample status events for an order.
+
+    Args:
+        order_id: The WordPress order ID (string)
+
+    Returns:
+        List of sample event dicts
+    """
+    find_order_query = """
+        SELECT id FROM order_submissions WHERE order_id = %s
+    """
+
+    events_query = """
+        SELECT
+            id,
+            sample_id,
+            transition,
+            new_status,
+            event_id,
+            event_timestamp,
+            wp_notified,
+            wp_status_sent,
+            wp_error,
+            created_at
+        FROM sample_status_events
+        WHERE order_submission_id = %s
+        ORDER BY created_at DESC
+    """
+
+    with get_integration_db() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(find_order_query, [order_id])
+            order_row = cur.fetchone()
+
+            if not order_row:
+                return []
+
+            cur.execute(events_query, [order_row['id']])
+            rows = cur.fetchall()
+            return [dict(row) for row in rows]
+
+
+def fetch_access_logs_for_order(order_id: str) -> list[dict]:
+    """
+    Fetch all COA access logs for an order.
+
+    Linked via ingestions belonging to this order.
+
+    Args:
+        order_id: The WordPress order ID (string)
+
+    Returns:
+        List of access log dicts
+    """
+    find_order_query = """
+        SELECT id FROM order_submissions WHERE order_id = %s
+    """
+
+    logs_query = """
+        SELECT
+            l.id,
+            l.sample_id,
+            l.coa_version,
+            l.action,
+            l.requester_ip,
+            l.user_agent,
+            l.requested_by,
+            l.timestamp
+        FROM coa_access_logs l
+        WHERE l.ingestion_id IN (
+            SELECT i.id FROM ingestions i WHERE i.order_submission_id = %s
+        )
+        ORDER BY l.timestamp DESC
+    """
+
+    with get_integration_db() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(find_order_query, [order_id])
+            order_row = cur.fetchone()
+
+            if not order_row:
+                return []
+
+            cur.execute(logs_query, [order_row['id']])
+            rows = cur.fetchall()
+            # Convert INET type to string
+            for row in rows:
+                if row.get('requester_ip') is not None:
+                    row['requester_ip'] = str(row['requester_ip'])
             return [dict(row) for row in rows]
 
 

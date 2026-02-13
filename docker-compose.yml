@@ -37,11 +37,14 @@ services:
     restart: unless-stopped
     networks:
       - accu-mk1
+      - senaite_default  # Connect to Integration Service network
 
 networks:
   accu-mk1:
     name: accu-mk1
     driver: bridge
+  senaite_default:
+    external: true  # Integration Service lives on this network
 
 volumes:
   accu-mk1-data:
