@@ -51,6 +51,7 @@ export function CalibrationPanel({
   const [loading, setLoading] = useState(true)
   const [showAddForm, setShowAddForm] = useState(false)
   const [expandedId, setExpandedId] = useState<number | null>(null)
+  const [instrumentFilter, setInstrumentFilter] = useState<string>('all')
 
   // Load all calibrations for this peptide
   const loadCalibrations = useCallback(async () => {
@@ -74,8 +75,16 @@ export function CalibrationPanel({
     loadCalibrations()
   }, [loadCalibrations])
 
-  const activeCal = allCalibrations.find(c => c.is_active)
-  const inactiveCals = allCalibrations.filter(c => !c.is_active)
+  // Unique instruments present across all curves (null → 'unknown')
+  const instruments = [...new Set(allCalibrations.map(c => c.instrument ?? 'unknown'))]
+  const showFilter = instruments.length > 1
+
+  const filteredCals = instrumentFilter === 'all'
+    ? allCalibrations
+    : allCalibrations.filter(c => (c.instrument ?? 'unknown') === instrumentFilter)
+
+  const activeCal = filteredCals.find(c => c.is_active)
+  const inactiveCals = filteredCals.filter(c => !c.is_active)
 
   return (
     <Card>
@@ -136,6 +145,26 @@ export function CalibrationPanel({
               onUpdated()
             }}
           />
+        )}
+
+        {/* Instrument filter — only shown when multiple instruments exist */}
+        {!loading && showFilter && (
+          <div className="flex items-center gap-1.5">
+            <span className="text-xs text-muted-foreground">Instrument:</span>
+            {['all', ...instruments].map(inst => (
+              <button
+                key={inst}
+                onClick={() => setInstrumentFilter(inst)}
+                className={`px-2 py-0.5 rounded text-xs font-mono border transition-colors ${
+                  instrumentFilter === inst
+                    ? 'bg-primary text-primary-foreground border-primary'
+                    : 'border-border text-muted-foreground hover:text-foreground hover:border-foreground/40'
+                }`}
+              >
+                {inst === 'all' ? 'All' : inst}
+              </button>
+            ))}
+          </div>
         )}
 
         {loading ? (
@@ -270,6 +299,11 @@ function CalibrationRow({
               {calibration.is_active && (
                 <Badge variant="default" className="text-[10px] px-1.5 py-0">
                   Active
+                </Badge>
+              )}
+              {calibration.instrument && (
+                <Badge variant="outline" className="text-[10px] px-1.5 py-0 font-mono">
+                  {calibration.instrument}
                 </Badge>
               )}
               <span className="font-mono text-sm truncate">
