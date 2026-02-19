@@ -1308,6 +1308,12 @@ class CalibrationCurveResponse(BaseModel):
         from_attributes = True
 
 
+class InstrumentSummary(BaseModel):
+    """Per-instrument calibration curve count for a peptide."""
+    instrument: str  # "1260", "1290", or "unknown"
+    curve_count: int
+
+
 class PeptideResponse(BaseModel):
     """Schema for peptide response."""
     id: int
@@ -1320,6 +1326,7 @@ class PeptideResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     active_calibration: Optional[CalibrationCurveResponse] = None
+    calibration_summary: list[InstrumentSummary] = []
 
     class Config:
         from_attributes = True
@@ -1368,10 +1375,42 @@ def _peptide_to_response(db: Session, peptide: Peptide) -> PeptideResponse:
 
 @app.get("/peptides", response_model=list[PeptideResponse])
 async def get_peptides(db: Session = Depends(get_db), _current_user=Depends(get_current_user)):
-    """Get all peptides with their active calibration curves."""
-    stmt = select(Peptide).order_by(Peptide.abbreviation)
-    peptides = db.execute(stmt).scalars().all()
-    return [_peptide_to_response(db, p) for p in peptides]
+    """Get all peptides with their active calibration curves and per-instrument summary."""
+    peptides = db.execute(select(Peptide).order_by(Peptide.abbreviation)).scalars().all()
+
+    # Batch 1: per-instrument curve counts for all peptides in one query
+    summary_rows = db.execute(
+        select(
+            CalibrationCurve.peptide_id,
+            func.coalesce(CalibrationCurve.instrument, "unknown").label("instrument"),
+            func.count().label("curve_count"),
+        )
+        .group_by(CalibrationCurve.peptide_id, func.coalesce(CalibrationCurve.instrument, "unknown"))
+    ).all()
+    summary_map: dict[int, list[InstrumentSummary]] = {}
+    for row in summary_rows:
+        summary_map.setdefault(row.peptide_id, []).append(
+            InstrumentSummary(instrument=row.instrument, curve_count=row.curve_count)
+        )
+
+    # Batch 2: all active calibration curves in one query, keep first per peptide
+    active_cals = db.execute(
+        select(CalibrationCurve)
+        .where(CalibrationCurve.is_active == True)
+        .order_by(CalibrationCurve.peptide_id, desc(CalibrationCurve.created_at))
+    ).scalars().all()
+    active_cal_map: dict[int, CalibrationCurveResponse] = {}
+    for cal in active_cals:
+        if cal.peptide_id not in active_cal_map:
+            active_cal_map[cal.peptide_id] = _cal_to_response(cal)
+
+    results = []
+    for p in peptides:
+        resp = PeptideResponse.model_validate(p)
+        resp.active_calibration = active_cal_map.get(p.id)
+        resp.calibration_summary = sorted(summary_map.get(p.id, []), key=lambda x: x.instrument)
+        results.append(resp)
+    return results
 
 
 @app.post("/peptides", response_model=PeptideResponse, status_code=201)

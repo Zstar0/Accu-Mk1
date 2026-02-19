@@ -593,20 +593,18 @@ export function PeptideConfig() {
                               : '—'}
                           </TableCell>
                           <TableCell>
-                            {p.active_calibration ? (
-                              <div className="flex items-center gap-1.5 flex-wrap">
-                                <Badge variant="default" className="text-xs">Active</Badge>
-                                {p.active_calibration.instrument && (
-                                  <Badge variant="outline" className="text-xs font-mono border-blue-600/50 text-blue-400">
-                                    {p.active_calibration.instrument}
-                                  </Badge>
-                                )}
-                                {p.active_calibration.vendor && (
-                                  <span className="text-xs text-muted-foreground">{p.active_calibration.vendor}</span>
-                                )}
-                                {p.active_calibration.lot_number && (
-                                  <span className="text-xs text-zinc-500">#{p.active_calibration.lot_number.replace(/^#/, '')}</span>
-                                )}
+                            {p.calibration_summary.length > 0 ? (
+                              <div className="flex items-center gap-2 flex-wrap">
+                                {p.calibration_summary.map(s => (
+                                  <span key={s.instrument} className="flex items-center gap-1">
+                                    <Badge variant="outline" className="text-xs font-mono border-blue-600/50 text-blue-400">
+                                      {s.instrument}
+                                    </Badge>
+                                    <span className="text-xs text-muted-foreground">
+                                      {s.curve_count} curve{s.curve_count !== 1 ? 's' : ''}
+                                    </span>
+                                  </span>
+                                ))}
                               </div>
                             ) : (
                               <Badge variant="outline" className="text-xs border-yellow-600/50 text-yellow-500">

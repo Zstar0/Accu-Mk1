@@ -1338,6 +1338,11 @@ export interface CalibrationCurve {
   notes: string | null
 }
 
+export interface InstrumentSummary {
+  instrument: string  // "1260", "1290", or "unknown"
+  curve_count: number
+}
+
 export interface PeptideRecord {
   id: number
   name: string
@@ -1349,6 +1354,7 @@ export interface PeptideRecord {
   created_at: string
   updated_at: string
   active_calibration: CalibrationCurve | null
+  calibration_summary: InstrumentSummary[]
 }
 
 export interface PeptideCreateInput {
