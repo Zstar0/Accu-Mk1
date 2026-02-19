@@ -1,942 +1,761 @@
-# Architecture: JWT Authentication Integration
+# Architecture: Sample Prep Wizard + Scale Integration
 
-**Project:** Accu-Mk1 User Authentication
-**Domain:** FastAPI + SQLAlchemy + React SPA + Tauri Desktop
-**Researched:** 2026-02-09
-**Overall Confidence:** HIGH
+**Project:** Accu-Mk1 v0.11.0 — New Analysis Wizard
+**Domain:** FastAPI + SQLAlchemy + React SPA + Mettler Toledo TCP scale bridge
+**Researched:** 2026-02-19
+**Overall Confidence:** HIGH (scale bridge) / HIGH (wizard session DB) / HIGH (SSE pattern)
+
+---
 
 ## Executive Summary
 
-Adding JWT authentication to an existing FastAPI + SQLAlchemy + React (Tauri) app requires integrating fastapi-users library on the backend and replacing the current X-API-Key header pattern with Bearer token authentication on the frontend. The architecture follows a layered dependency injection pattern where database adapters feed into a UserManager, which provides current_user dependencies for route protection.
+The v0.11.0 wizard adds two distinct architectural concerns to the existing system: a **Scale Bridge** (TCP connection to Mettler Toledo XSR105DU via MT-SICS protocol) and a **Wizard Session** (resumable multi-step form with DB-backed state). These concerns are independent enough to be built and tested separately. The wizard can be built first with manual weight entry, then the scale bridge plugged in.
 
-**Key Integration Points:**
-- Backend: Add User model to existing database.py, mount auth routers alongside existing endpoints, replace `Depends(verify_api_key)` with `Depends(current_active_user)`
-- Frontend: Replace X-API-Key header with Authorization: Bearer {token}, add token refresh logic via Axios interceptors
-- Storage: Use localStorage for tokens in both browser and Tauri (desktop apps can safely use localStorage, unlike web SPAs that face XSS risks)
+The existing SSE streaming pattern (used for SharePoint import, rebuild-standards, resync) is a direct model for scale weight streaming. No new streaming technology is needed — the same `StreamingResponse` + `fetch` + `ReadableStream` pattern applies.
 
-**Critical Consideration:** FastAPI Users does not include built-in roles/permissions. Must extend the User model manually with a `role` field (enum: standard/admin).
+**Recommended build order:**
 
-## Current Architecture
+1. DB models first (wizard session + measurements)
+2. Wizard endpoints without scale (manual weight entry)
+3. Scale bridge service as an injectable dependency
+4. SSE weight-read endpoint that uses scale bridge
+5. Frontend wizard UI with manual-entry fallback
 
-### Backend (FastAPI)
+---
 
-```
-backend/
-├── main.py               # FastAPI app with ~1900 lines
-│   ├── API_KEY env var   # Current auth: os.environ.get("ACCU_MK1_API_KEY")
-│   └── verify_api_key()  # Dependency checking X-API-Key header
-├── database.py           # SQLAlchemy 2.0 setup
-│   ├── Base              # DeclarativeBase for models
-│   ├── engine            # SQLite at ./data/accu-mk1.db
-│   ├── SessionLocal      # Session maker
-│   └── get_db()          # FastAPI dependency
-└── models.py             # Existing models: AuditLog, Job, Sample, etc.
-```
+## Existing Architecture Context
 
-**Current Auth Pattern:**
+### Current SSE Pattern (HIGH confidence — code verified)
+
+The project already uses SSE via `starlette.responses.StreamingResponse` with `media_type="text/event-stream"`. Four existing endpoints follow this pattern:
+
+- `GET /hplc/seed-peptides/stream`
+- `GET /hplc/rebuild-standards/stream`
+- `GET /hplc/import-standards/stream`
+- `GET /hplc/peptides/{id}/resync/stream`
+
+**Backend pattern (from main.py):**
+
 ```python
-async def verify_api_key(x_api_key: Optional[str] = Header(None, alias="X-API-Key")):
-    if not secrets.compare_digest(x_api_key, API_KEY):
-        raise HTTPException(status_code=401, detail="Invalid API key")
+from starlette.responses import StreamingResponse
+
+async def event_generator():
+    def send_event(event_type: str, data: dict) -> str:
+        payload = json.dumps(data)
+        return f"event: {event_type}\ndata: {payload}\n\n"
+
+    yield send_event("progress", {"status": "reading", "value": None})
+    await asyncio.sleep(0)  # flush
+
+    # ... do work, yield more events ...
+
+    yield send_event("done", {"value": 100.05, "unit": "mg", "stable": True})
+
+return StreamingResponse(
+    event_generator(),
+    media_type="text/event-stream",
+    headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
+)
 ```
 
-**Protected endpoints:**
-```python
-@app.get("/explorer/environments")
-async def get_explorer_environments(api_key: str = Depends(verify_api_key)):
-    # Only 5 endpoints currently protected
-```
+**Frontend pattern (from AdvancedPane.tsx and PeptideConfig.tsx):**
 
-### Frontend (React + Tauri)
-
-```
-src/
-├── lib/
-│   ├── api.ts            # ~1550 lines, fetch-based API client
-│   │   └── getApiKey()   # Gets key from api-profiles module
-│   ├── api-key.ts        # localStorage management for API key
-│   │   ├── getApiKey()
-│   │   ├── setApiKey()
-│   │   └── clearApiKey()
-│   └── config.ts         # API base URL configuration
-└── store/
-    └── ui-store.ts       # Zustand state (no auth state currently)
-```
-
-**Current Auth Pattern:**
 ```typescript
-// In api.ts makeRequest helper
-if (apiKey) {
-  headers['X-API-Key'] = apiKey
+const response = await fetch(`${getApiBaseUrl()}/wizard/steps/weigh/stream`, {
+  headers: token ? { Authorization: `Bearer ${token}` } : {},
+})
+const reader = response.body!.getReader()
+const decoder = new TextDecoder()
+let buffer = ''
+
+while (true) {
+  const { done, value } = await reader.read()
+  if (done) break
+  buffer += decoder.decode(value, { stream: true })
+  const parts = buffer.split('\n\n')
+  buffer = parts.pop() ?? ''
+  for (const part of parts) {
+    const dataLine = part.split('\n').find(l => l.startsWith('data:'))
+    const eventLine = part.split('\n').find(l => l.startsWith('event:'))
+    if (!dataLine) continue
+    const payload = JSON.parse(dataLine.slice(5).trim())
+    const eventType = eventLine?.slice(6).trim()
+    // handle: 'reading', 'weight', 'stable', 'error', 'timeout'
+  }
 }
 ```
 
-**Storage:** API key stored in `localStorage.getItem('accu_mk1_api_key')`
+This is the proven, working SSE transport already in use. Use it for scale weight streaming without modification to the pattern.
 
-## Target Architecture with JWT
+### Current Auth Pattern (HIGH confidence — code verified)
 
-### Backend Components
+All endpoints use `Depends(get_current_user)` (JWT Bearer). Wizard endpoints follow the same pattern. SSE endpoints pass the token via `Authorization: Bearer` header in the initial fetch request — this is already proven to work with the existing SSE streaming endpoints.
 
-#### 1. New Files
+---
 
-**backend/auth/models.py** - User model extending fastapi-users base
-```python
-from fastapi_users.db import SQLAlchemyBaseUserTable
-from sqlalchemy import String, Enum
-from sqlalchemy.orm import Mapped, mapped_column
-import enum
+## Scale Bridge Architecture
 
-class UserRole(enum.Enum):
-    STANDARD = "standard"
-    ADMIN = "admin"
+### MT-SICS Protocol Facts (MEDIUM confidence — multiple source cross-check)
 
-class User(SQLAlchemyBaseUserTable[int], Base):
-    __tablename__ = "users"
+The Mettler Toledo XSR105DU communicates via **MT-SICS (Mettler Toledo Standard Interface Command Set)** over TCP. Key facts verified across multiple sources:
 
-    id: Mapped[int] = mapped_column(primary_key=True)
-    email: Mapped[str] = mapped_column(String(320), unique=True, nullable=False)
-    hashed_password: Mapped[str] = mapped_column(String(1024), nullable=False)
-    is_active: Mapped[bool] = mapped_column(default=True)
-    is_superuser: Mapped[bool] = mapped_column(default=False)
-    is_verified: Mapped[bool] = mapped_column(default=False)
+**Transport:** TCP socket, plain text, commands terminated with `\r\n` (CRLF)
 
-    # Custom field for role-based access
-    role: Mapped[UserRole] = mapped_column(Enum(UserRole), default=UserRole.STANDARD)
+**Key commands:**
+| Command | Sent | Purpose |
+|---------|------|---------|
+| `S\r\n` | Client → Scale | Request stable weight (blocks until stable) |
+| `SI\r\n` | Client → Scale | Request immediate weight (returns instantly, stable or not) |
+| `SIR\r\n` | Client → Scale | Request immediate weight, then repeat on each change |
+| `@\r\n` | Client → Scale | Reset / abort current command |
+| `I4\r\n` | Client → Scale | Query balance serial number |
+
+**Response format for weight commands:**
+
+```
+<CMD> <STATUS> <     WEIGHT> <UNIT>\r\n
+
+Examples:
+S S      100.05 mg\r\n    — stable weight, 100.05 mg
+S D       98.21 mg\r\n    — dynamic (unstable) weight
+SI S     100.05 mg\r\n    — immediate, but happened to be stable
+SI D      99.87 mg\r\n    — immediate, unstable
+S I\r\n                    — S command timed out (balance still moving)
+S +\r\n                    — overload
+S -\r\n                    — underload
 ```
 
-**backend/auth/schemas.py** - Pydantic schemas for user operations
+**Status codes:**
+- `S` — stable weight value
+- `D` — dynamic (unstable) weight value
+- `I` — balance not stable in time / command not executable
+- `+` — overload
+- `-` — underload
+- `E` — error (command syntax or parameter error)
+
+**Weight value:** Right-aligned, 10 characters including decimal point and sign. Immediately preceded and followed by spaces.
+
+**Ethernet port:** Not documented as a universal default in searched sources, but the Node.js mt-sics library example uses port 4001. The XSR series allows configuration via balance menu. Treat as configurable via environment variable — default 4001.
+
+**CRITICAL constraint from protocol docs:** Do not send multiple commands without waiting for the corresponding response. The balance may confuse the sequence or ignore commands. The scale bridge must enforce serial command/response discipline.
+
+### Scale Bridge Design
+
+The scale bridge is a **singleton async service** that manages a persistent TCP connection. It is created at application startup and injected into endpoints via FastAPI `Depends()`.
+
+**Why a singleton (not per-request connection):**
+
+- TCP connection setup to lab instruments takes time (100-500ms)
+- The balance does not support concurrent connections well (serial command/response protocol)
+- A single connection can be reused across multiple weighing steps
+- Connection state (connected/disconnected) must be tracked and exposed to the frontend
+
+**Component: `backend/scale_bridge.py`**
+
 ```python
-from fastapi_users import schemas
-
-class UserRead(schemas.BaseUser[int]):
-    role: str
-
-class UserCreate(schemas.BaseUserCreate):
-    role: str = "standard"
-
-class UserUpdate(schemas.BaseUserUpdate):
-    role: Optional[str] = None
-```
-
-**backend/auth/manager.py** - User management logic
-```python
-from fastapi_users import BaseUserManager, IntegerIDMixin
+"""
+Scale Bridge: Manages TCP connection to Mettler Toledo XSR105DU.
+Uses MT-SICS protocol. Connection is persistent across requests.
+"""
+import asyncio
+import socket
+from dataclasses import dataclass
 from typing import Optional
+from enum import Enum
 
-SECRET = os.environ.get("JWT_SECRET", "CHANGE_THIS_SECRET")
 
-class UserManager(IntegerIDMixin, BaseUserManager[User, int]):
-    reset_password_token_secret = SECRET
-    verification_token_secret = SECRET
+class ScaleStatus(str, Enum):
+    DISCONNECTED = "disconnected"
+    CONNECTING = "connecting"
+    CONNECTED = "connected"
+    ERROR = "error"
 
-    async def on_after_register(self, user: User, request: Optional[Request] = None):
-        print(f"User {user.id} has registered.")
+
+@dataclass
+class WeightReading:
+    value_mg: float      # Weight in milligrams
+    unit: str            # Unit as reported by scale (e.g., "mg", "g")
+    stable: bool         # True if status was 'S'
+    raw_response: str    # Full raw response for audit
+
+
+class ScaleBridge:
+    """
+    Persistent TCP connection to Mettler Toledo XSR105DU.
+    Thread-safe for single-connection, serial-command model.
+    """
+
+    def __init__(self, host: str, port: int, timeout: float = 10.0):
+        self.host = host
+        self.port = port
+        self.timeout = timeout
+        self._reader: Optional[asyncio.StreamReader] = None
+        self._writer: Optional[asyncio.StreamWriter] = None
+        self._lock = asyncio.Lock()  # Enforce serial command/response
+        self.status = ScaleStatus.DISCONNECTED
+
+    async def connect(self) -> None:
+        """Open TCP connection. Called at app startup."""
+        ...
+
+    async def disconnect(self) -> None:
+        """Close TCP connection. Called at app shutdown."""
+        ...
+
+    async def get_stable_weight(
+        self,
+        timeout_s: float = 15.0,
+    ) -> WeightReading:
+        """
+        Send S command, poll until stable reading received.
+        Raises ScaleTimeoutError if not stable within timeout_s.
+        """
+        async with self._lock:
+            ...
+
+    async def get_immediate_weight(self) -> WeightReading:
+        """
+        Send SI command, return current weight regardless of stability.
+        Used for live preview streaming.
+        """
+        async with self._lock:
+            ...
+
+    def _parse_response(self, line: str) -> WeightReading:
+        """
+        Parse MT-SICS weight response line.
+        Format: <CMD> <STATUS> <     WEIGHT> <UNIT>
+        Example: 'S S      100.05 mg'
+        """
+        parts = line.strip().split()
+        # parts[0] = command echo (S, SI)
+        # parts[1] = status (S, D, I, +, -, E)
+        # parts[2] = weight value
+        # parts[3] = unit
+        ...
 ```
 
-**backend/auth/config.py** - Authentication configuration
+**Dependency injection pattern (mirrors existing DB pattern):**
+
 ```python
-from fastapi_users.authentication import (
-    AuthenticationBackend,
-    BearerTransport,
-    JWTStrategy,
-)
+# In main.py lifespan:
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    init_db()
+    # existing startup...
 
-bearer_transport = BearerTransport(tokenUrl="auth/jwt/login")
+    # Scale bridge startup (if configured)
+    scale_host = os.environ.get("SCALE_HOST")
+    scale_port = int(os.environ.get("SCALE_PORT", "4001"))
+    if scale_host:
+        app.state.scale = ScaleBridge(scale_host, scale_port)
+        await app.state.scale.connect()
+    else:
+        app.state.scale = None  # No scale configured — manual entry mode
 
-def get_jwt_strategy() -> JWTStrategy:
-    return JWTStrategy(
-        secret=SECRET,
-        lifetime_seconds=3600,  # 1 hour access token
-        algorithm="HS256"
+    yield
+
+    if app.state.scale:
+        await app.state.scale.disconnect()
+
+
+def get_scale(request: Request) -> Optional[ScaleBridge]:
+    """FastAPI dependency. Returns None if scale not configured."""
+    return getattr(request.app.state, "scale", None)
+```
+
+### Stable Weight Polling via SSE
+
+When a tech clicks "Read Weight" on a wizard step, the frontend opens an SSE connection to a weight-read endpoint. The backend polls the scale (using SIR or repeated SI) and streams live weight values until a stable reading is locked.
+
+**Endpoint: `GET /wizard/sessions/{session_id}/steps/{step_key}/weigh/stream`**
+
+```python
+@app.get("/wizard/sessions/{session_id}/steps/{step_key}/weigh/stream")
+async def stream_weigh(
+    session_id: int,
+    step_key: str,
+    scale: Optional[ScaleBridge] = Depends(get_scale),
+    db: Session = Depends(get_db),
+    _current_user = Depends(get_current_user),
+):
+    async def event_generator():
+        def send(event_type: str, data: dict) -> str:
+            return f"event: {event_type}\ndata: {json.dumps(data)}\n\n"
+
+        if scale is None:
+            # Manual entry mode — signal frontend to show text input
+            yield send("manual_entry", {"reason": "no_scale_configured"})
+            return
+
+        if scale.status != ScaleStatus.CONNECTED:
+            yield send("error", {"code": "scale_disconnected", "message": "Scale is not connected"})
+            return
+
+        try:
+            # Stream live readings while waiting for stability
+            yield send("reading", {"status": "waiting", "message": "Place sample on scale..."})
+            await asyncio.sleep(0)
+
+            deadline = asyncio.get_event_loop().time() + 30.0
+            while asyncio.get_event_loop().time() < deadline:
+                reading = await scale.get_immediate_weight()
+                yield send("weight", {
+                    "value_mg": reading.value_mg,
+                    "unit": reading.unit,
+                    "stable": reading.stable,
+                })
+                await asyncio.sleep(0)  # flush
+
+                if reading.stable:
+                    # Lock the value into the DB
+                    _save_measurement(db, session_id, step_key, reading)
+                    yield send("stable", {
+                        "value_mg": reading.value_mg,
+                        "unit": reading.unit,
+                    })
+                    return
+
+                await asyncio.sleep(0.5)  # poll interval
+
+            yield send("timeout", {"message": "Scale did not stabilize within 30 seconds"})
+
+        except Exception as e:
+            yield send("error", {"code": "scale_error", "message": str(e)})
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
     )
-
-auth_backend = AuthenticationBackend(
-    name="jwt",
-    transport=bearer_transport,
-    get_strategy=get_jwt_strategy,
-)
 ```
 
-**backend/auth/dependencies.py** - FastAPI dependencies for auth
-```python
-from fastapi import Depends, HTTPException, status
-from fastapi_users import FastAPIUsers
-from backend.auth.config import auth_backend
-from backend.auth.manager import UserManager, get_user_manager
-from backend.auth.models import User
+### SSE vs WebSocket Decision
 
-fastapi_users = FastAPIUsers[User, int](
-    get_user_manager,
-    [auth_backend],
-)
+**Use SSE. Do not use WebSockets.**
 
-# Reusable dependencies
-current_active_user = fastapi_users.current_user(active=True)
-current_superuser = fastapi_users.current_user(active=True, superuser=True)
+Rationale:
+- SSE is already the established pattern in this codebase (4 existing endpoints)
+- Weight reading is **unidirectional** — backend pushes, frontend listens
+- The single bidirectional action (tech clicks "cancel") can be handled by the frontend simply closing the fetch connection (AbortController)
+- WebSockets would require a new dependency or manual protocol implementation
+- SSE with `X-Accel-Buffering: no` already handles nginx proxy flushing
 
-# Custom role checker
-def require_admin(user: User = Depends(current_active_user)) -> User:
-    if user.role != UserRole.ADMIN:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin access required"
-        )
-    return user
+**SSE is appropriate here.** The weight streaming event is short-lived (seconds), closes when stable or timeout, and does not need two-way messaging.
+
+---
+
+## Wizard Session Persistence
+
+### Session State Machine
+
+A wizard session has a well-defined lifecycle:
+
+```
+created → in_progress → completed
+                     ↘ abandoned
 ```
 
-#### 2. Modified Files
+**State transitions:**
+- `created`: Session record exists, no steps completed yet
+- `in_progress`: One or more steps saved, not yet submitted
+- `completed`: All required steps done, final record saved
+- `abandoned`: Tech explicitly cancelled or session too old (optional)
 
-**backend/database.py** - No major changes
-- User model imports from auth/models.py
-- init_db() will create users table automatically
+**The key design principle:** Sessions are resumable. If a tech starts, weighs steps 1-3, leaves for lunch, and returns — they can resume from step 3. The DB record shows which steps have measurements.
 
-**backend/main.py** - Mount auth routers, update dependencies
+### New DB Tables
+
+**Table: `wizard_sessions`**
+
 ```python
-from backend.auth.dependencies import (
-    fastapi_users,
-    current_active_user,
-    require_admin,
-    auth_backend
-)
-from backend.auth.schemas import UserRead, UserCreate, UserUpdate
+class WizardSession(Base):
+    """
+    A single sample prep wizard session.
+    One session = one sample being prepared for HPLC injection.
+    """
+    __tablename__ = "wizard_sessions"
 
-# Mount auth routers (add these includes)
-app.include_router(
-    fastapi_users.get_auth_router(auth_backend),
-    prefix="/auth/jwt",
-    tags=["auth"],
-)
-app.include_router(
-    fastapi_users.get_register_router(UserRead, UserCreate),
-    prefix="/auth",
-    tags=["auth"],
-)
-app.include_router(
-    fastapi_users.get_reset_password_router(),
-    prefix="/auth",
-    tags=["auth"],
-)
-app.include_router(
-    fastapi_users.get_verify_router(UserRead),
-    prefix="/auth",
-    tags=["auth"],
-)
-app.include_router(
-    fastapi_users.get_users_router(UserRead, UserUpdate),
-    prefix="/users",
-    tags=["users"],
-)
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    status: Mapped[str] = mapped_column(String(20), default="in_progress")
+    # Status: "in_progress" | "completed" | "abandoned"
 
-# Update protected endpoints
-@app.get("/explorer/environments")
-async def get_explorer_environments(
-    user: User = Depends(current_active_user)  # Changed from verify_api_key
+    # Sample identity (from SENAITE lookup or manual entry)
+    sample_id_label: Mapped[str] = mapped_column(String(200), nullable=False)
+    peptide_id: Mapped[Optional[int]] = mapped_column(ForeignKey("peptides.id"), nullable=True)
+
+    # Tech-entered targets (entered at wizard start)
+    target_concentration_ug_ml: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    target_volume_ml: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+
+    # Derived outputs (computed, not stored — recalculated from measurements)
+    # These are stored only in wizard_measurements.calculation_trace
+
+    # Session metadata
+    operator_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    # Relationships
+    measurements: Mapped[list["WizardMeasurement"]] = relationship(
+        "WizardMeasurement", back_populates="session", cascade="all, delete-orphan"
+    )
+    peptide: Mapped[Optional["Peptide"]] = relationship("Peptide")
+```
+
+**Table: `wizard_measurements`**
+
+```python
+class WizardMeasurement(Base):
+    """
+    One weighing step within a wizard session.
+    Each weighing event creates a record — raw weight only.
+    All derived values (dilution factor, concentrations) are recalculated
+    at read time from the raw measurements.
+    """
+    __tablename__ = "wizard_measurements"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    session_id: Mapped[int] = mapped_column(ForeignKey("wizard_sessions.id"), nullable=False)
+
+    # Which step this measurement belongs to
+    step_key: Mapped[str] = mapped_column(String(50), nullable=False)
+    # step_key values: "stock_vial_empty", "stock_vial_with_diluent",
+    #                  "dil_vial_empty", "dil_vial_with_diluent",
+    #                  "dil_vial_with_sample"
+
+    # Raw weight from scale (or manual entry)
+    weight_mg: Mapped[float] = mapped_column(Float, nullable=False)
+    unit: Mapped[str] = mapped_column(String(10), default="mg")
+
+    # Provenance
+    source: Mapped[str] = mapped_column(String(20), default="scale")
+    # source: "scale" | "manual"
+    scale_raw_response: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Raw MT-SICS response for audit: "S S      100.05 mg"
+
+    # Whether this reading was superseded (tech re-weighed)
+    is_current: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    recorded_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    # Relationships
+    session: Mapped["WizardSession"] = relationship("WizardSession", back_populates="measurements")
+```
+
+**Design rationale — why store only raw weights:**
+
+The existing `hplc_processor.py` already calculates `dilution_factor`, `stock_volume_ml`, etc. from 5 balance weights. The wizard produces those same 5 weights as measurements. Storing only raw weights means:
+
+1. Calculation bugs can be fixed without data migration
+2. Full audit trail: every measurement is immutable, re-weighing creates a new record with `is_current=False` on the old one
+3. Consistent with the existing `HPLCAnalysis` model which stores raw weights and calculates everything else
+
+### Re-weigh Pattern
+
+If a tech makes an error and re-weighs a step, the endpoint does NOT update the existing record. It inserts a new `WizardMeasurement` and sets `is_current=False` on the previous record for the same `(session_id, step_key)`. This preserves the full weighing history.
+
+```python
+# When saving a measurement:
+# 1. Set is_current=False on any existing current measurement for this step
+db.execute(
+    update(WizardMeasurement)
+    .where(WizardMeasurement.session_id == session_id)
+    .where(WizardMeasurement.step_key == step_key)
+    .where(WizardMeasurement.is_current == True)
+    .values(is_current=False)
+)
+# 2. Insert new current measurement
+db.add(WizardMeasurement(
+    session_id=session_id,
+    step_key=step_key,
+    weight_mg=reading.value_mg,
+    source="scale",
+    scale_raw_response=reading.raw_response,
+))
+db.commit()
+```
+
+---
+
+## Backend Endpoint Design
+
+### Wizard Endpoints
+
+All endpoints follow existing patterns: `Depends(get_db)`, `Depends(get_current_user)`, SQLAlchemy sync session.
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `POST` | `/wizard/sessions` | Create new wizard session (returns session_id) |
+| `GET` | `/wizard/sessions` | List sessions (with status filter) |
+| `GET` | `/wizard/sessions/{id}` | Get full session state (steps + measurements + calculated values) |
+| `PUT` | `/wizard/sessions/{id}` | Update session metadata (targets, sample ID) |
+| `PATCH` | `/wizard/sessions/{id}/complete` | Mark session completed |
+| `PATCH` | `/wizard/sessions/{id}/abandon` | Mark session abandoned |
+| `POST` | `/wizard/sessions/{id}/steps/{step_key}/manual` | Record manual weight entry |
+| `GET` | `/wizard/sessions/{id}/steps/{step_key}/weigh/stream` | SSE: read weight from scale |
+| `GET` | `/wizard/sessions/{id}/calculations` | Return recalculated values from current measurements |
+| `GET` | `/scale/status` | Scale connection status (connected/disconnected) |
+
+### Calculated Values Endpoint
+
+The `GET /wizard/sessions/{id}/calculations` endpoint recalculates from raw measurements on demand. It reuses the existing `calculate_dilution_factor()` from `hplc_processor.py`:
+
+```python
+@app.get("/wizard/sessions/{session_id}/calculations")
+async def get_wizard_calculations(
+    session_id: int,
+    db: Session = Depends(get_db),
+    _current_user = Depends(get_current_user),
 ):
-    # Existing logic
-
-# Admin-only endpoints
-@app.post("/admin/settings")
-async def update_settings(
-    setting: SettingUpdate,
-    user: User = Depends(require_admin)  # Admin check
-):
-    # Existing logic
+    """
+    Recalculate all derived values from current measurements.
+    Returns None for any values that cannot be calculated yet
+    (i.e., required measurements not yet recorded).
+    """
+    measurements = _get_current_measurements(db, session_id)
+    # ... build WeightInputs from measurements ...
+    # ... call calculate_dilution_factor() ...
+    # ... return derived values ...
 ```
 
-**backend/models.py** - Optionally link AuditLog to User
-```python
-# Add user_id to AuditLog for tracking who performed actions
-user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True)
-```
+This means the frontend does not need to implement any calculation logic. All scientific values are computed server-side, consistent with the existing "backend owns all calculations" principle.
 
-### Frontend Components
-
-#### 1. New Files
-
-**src/lib/auth.ts** - Auth state and token management
-```typescript
-import { create } from 'zustand'
-import { persist } from 'zustand/middleware'
-
-interface AuthState {
-  accessToken: string | null
-  user: { email: string; role: string; id: number } | null
-
-  setAuth: (token: string, user: AuthState['user']) => void
-  clearAuth: () => void
-  isAuthenticated: () => boolean
-  isAdmin: () => boolean
-}
-
-export const useAuthStore = create<AuthState>()(
-  persist(
-    (set, get) => ({
-      accessToken: null,
-      user: null,
-
-      setAuth: (token, user) => set({ accessToken: token, user }),
-      clearAuth: () => set({ accessToken: null, user: null }),
-      isAuthenticated: () => get().accessToken !== null,
-      isAdmin: () => get().user?.role === 'admin',
-    }),
-    {
-      name: 'auth-storage',
-      partialize: (state) => ({
-        accessToken: state.accessToken,
-        user: state.user,
-      }),
-    }
-  )
-)
-```
-
-**src/lib/api-auth.ts** - Auth-specific API calls
-```typescript
-import { getApiBaseUrl } from './config'
-import { useAuthStore } from './auth'
-
-export interface LoginRequest {
-  username: string  // fastapi-users uses username field for email
-  password: string
-}
-
-export interface LoginResponse {
-  access_token: string
-  token_type: string
-}
-
-export interface UserResponse {
-  id: number
-  email: string
-  role: string
-  is_active: boolean
-  is_superuser: boolean
-  is_verified: boolean
-}
-
-export async function login(email: string, password: string): Promise<void> {
-  const response = await fetch(`${getApiBaseUrl()}/auth/jwt/login`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ username: email, password }),
-  })
-
-  if (!response.ok) {
-    throw new Error('Login failed')
-  }
-
-  const data: LoginResponse = await response.json()
-
-  // Fetch user details
-  const userResponse = await fetch(`${getApiBaseUrl()}/users/me`, {
-    headers: { Authorization: `Bearer ${data.access_token}` },
-  })
-
-  const user: UserResponse = await userResponse.json()
-
-  useAuthStore.getState().setAuth(data.access_token, {
-    id: user.id,
-    email: user.email,
-    role: user.role,
-  })
-}
-
-export async function logout(): Promise<void> {
-  const token = useAuthStore.getState().accessToken
-  if (token) {
-    await fetch(`${getApiBaseUrl()}/auth/jwt/logout`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${token}` },
-    })
-  }
-  useAuthStore.getState().clearAuth()
-}
-
-export async function register(email: string, password: string, role: string = 'standard'): Promise<void> {
-  const response = await fetch(`${getApiBaseUrl()}/auth/register`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, password, role }),
-  })
-
-  if (!response.ok) {
-    throw new Error('Registration failed')
-  }
-}
-```
-
-**src/components/LoginForm.tsx** - Login UI component
-```typescript
-import { useState } from 'react'
-import { login } from '../lib/api-auth'
-
-export function LoginForm() {
-  const [email, setEmail] = useState('')
-  const [password, setPassword] = useState('')
-  const [error, setError] = useState('')
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    try {
-      await login(email, password)
-      // Navigate to main app
-    } catch (err) {
-      setError('Invalid email or password')
-    }
-  }
-
-  return (
-    <form onSubmit={handleSubmit}>
-      <input
-        type="email"
-        value={email}
-        onChange={(e) => setEmail(e.target.value)}
-        placeholder="Email"
-      />
-      <input
-        type="password"
-        value={password}
-        onChange={(e) => setPassword(e.target.value)}
-        placeholder="Password"
-      />
-      {error && <div>{error}</div>}
-      <button type="submit">Login</button>
-    </form>
-  )
-}
-```
-
-#### 2. Modified Files
-
-**src/lib/api.ts** - Update to use Bearer tokens
-```typescript
-import { useAuthStore } from './auth'
-
-// Update makeRequest helper (around line 752)
-function makeRequest(endpoint: string, options: RequestInit = {}): Promise<Response> {
-  const token = useAuthStore.getState().accessToken
-
-  const headers = {
-    'Content-Type': 'application/json',
-    ...options.headers,
-  }
-
-  // Replace X-API-Key with Bearer token
-  if (token) {
-    headers['Authorization'] = `Bearer ${token}`
-  }
-
-  return fetch(`${API_BASE_URL()}${endpoint}`, {
-    ...options,
-    headers,
-  })
-}
-```
-
-**src/lib/api-key.ts** - Deprecate or remove
-```typescript
-// This file can be removed or marked as deprecated
-// Token management now in auth.ts
-```
-
-**src/App.tsx** - Add route protection
-```typescript
-import { useAuthStore } from './lib/auth'
-import { LoginForm } from './components/LoginForm'
-
-function App() {
-  const isAuthenticated = useAuthStore((state) => state.isAuthenticated())
-
-  if (!isAuthenticated) {
-    return <LoginForm />
-  }
-
-  return (
-    // Existing app layout
-  )
-}
-```
-
-## Data Flow
-
-### Authentication Flow
-
-```
-1. User enters credentials
-   └→ LoginForm.tsx
-
-2. POST /auth/jwt/login (username + password as form data)
-   └→ FastAPI Users processes login
-   └→ Validates credentials via UserManager
-   └→ Returns { access_token, token_type }
-
-3. Frontend stores token
-   └→ useAuthStore.setAuth(token, user)
-   └→ Token saved to localStorage via zustand persist
-
-4. GET /users/me with Bearer token
-   └→ Fetch user details (id, email, role)
-   └→ Store user info in auth state
-```
-
-### Request Flow (Authenticated)
-
-```
-Frontend Request:
-  api.ts makeRequest()
-  └→ Get token from useAuthStore
-  └→ Add Authorization: Bearer {token} header
-  └→ fetch(endpoint, { headers })
-
-Backend Processing:
-  FastAPI receives request
-  └→ Bearer transport extracts token from Authorization header
-  └→ JWT strategy validates token signature & expiration
-  └→ UserManager loads User from database
-  └→ Depends(current_active_user) injects User into handler
-  └→ Handler checks user.role if needed
-  └→ Return response
-
-Frontend Response:
-  ✓ 200-299: Process response
-  ✗ 401: Token expired → Clear auth, redirect to login
-  ✗ 403: Insufficient permissions → Show error
-```
-
-### Token Refresh Flow (Optional Enhancement)
-
-```
-1. Request fails with 401
-   └→ Axios response interceptor catches error
-
-2. POST /auth/jwt/refresh (with current token)
-   └→ Backend validates refresh token
-   └→ Returns new access_token
-
-3. Retry original request
-   └→ Update Authorization header with new token
-   └→ Return response to caller
-```
-
-**Note:** fastapi-users does NOT include token refresh by default. Must implement manually or use short-lived tokens (1 hour) and require re-login.
+---
 
 ## Component Boundaries
 
-### Backend Layers
+### System Components
 
-| Layer | Components | Responsibility |
-|-------|-----------|---------------|
-| **Transport** | BearerTransport | Extract token from Authorization header |
-| **Strategy** | JWTStrategy | Validate token signature, decode payload |
-| **User Manager** | UserManager | Load user from DB, handle registration/password reset |
-| **Database** | SQLAlchemy User model | Persist user data, query users |
-| **Route Protection** | current_active_user dependency | Inject authenticated user into handlers |
-| **Authorization** | require_admin dependency | Check user.role for permission |
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│  React Frontend                                                      │
+│                                                                      │
+│  ┌─────────────────────────────┐   ┌────────────────────────────┐  │
+│  │  WizardPage                 │   │  ScaleStatusBadge          │  │
+│  │  (step navigation, state)   │   │  (poll /scale/status)      │  │
+│  └──────────────┬──────────────┘   └────────────────────────────┘  │
+│                 │                                                     │
+│  ┌──────────────┴──────────────────────────────────────────────┐    │
+│  │  WeighStep                                                   │    │
+│  │  - Opens SSE to /wizard/sessions/{id}/steps/{key}/weigh/stream│  │
+│  │  - Shows live weight preview                                  │    │
+│  │  - Falls back to text input if scale not connected            │    │
+│  └─────────────────────────────────────────────────────────────┘    │
+└──────────────────────────────────┬──────────────────────────────────┘
+                                   │ HTTP + SSE
+                                   │ Authorization: Bearer <token>
+┌──────────────────────────────────┴──────────────────────────────────┐
+│  FastAPI Backend                                                     │
+│                                                                      │
+│  ┌────────────────────┐   ┌─────────────────────────────────────┐  │
+│  │  Wizard Endpoints  │   │  Scale Bridge (singleton)           │  │
+│  │  /wizard/sessions  │   │                                      │  │
+│  │  /wizard/*/weigh   │   │  ┌─────────────────────────────┐   │  │
+│  │  /scale/status     │   │  │  asyncio.StreamReader/Writer│   │  │
+│  └──────────┬─────────┘   │  │  TCP socket to scale        │   │  │
+│             │             │  └─────────────────────────────┘   │  │
+│  ┌──────────┴─────────┐   │  _lock: asyncio.Lock()             │  │
+│  │  hplc_processor.py │   │  (serial cmd/response enforced)    │  │
+│  │  (reused for calcs)│   └─────────────────────────┬───────────┘  │
+│  └────────────────────┘                             │               │
+│                                                     │               │
+│  ┌─────────────────────────────────────────────────┐               │
+│  │  SQLite DB                                       │               │
+│  │  wizard_sessions + wizard_measurements           │               │
+│  └─────────────────────────────────────────────────┘               │
+└─────────────────────────────────────────────────────────────────────┘
+                                                      │ TCP
+                                   ┌──────────────────┴──────┐
+                                   │  Mettler Toledo         │
+                                   │  XSR105DU               │
+                                   │  MT-SICS over TCP:4001  │
+                                   └─────────────────────────┘
+```
 
-### Frontend Layers
+### Data Flow: Weighing Step
 
-| Layer | Components | Responsibility |
-|-------|-----------|---------------|
-| **State Management** | useAuthStore (Zustand) | Store token and user info, persist to localStorage |
-| **API Client** | api.ts makeRequest() | Add Bearer token to all requests |
-| **Auth API** | api-auth.ts | Login, logout, register functions |
-| **UI Components** | LoginForm, ProtectedRoute | User authentication flows |
-| **Route Guards** | App.tsx isAuthenticated check | Redirect unauthenticated users |
+```
+1. Tech clicks "Read Weight" on step N
+   └→ Frontend opens SSE: GET /wizard/sessions/42/steps/stock_vial_empty/weigh/stream
 
-## Migration Strategy
+2. Backend receives request
+   └→ ScaleBridge.get_immediate_weight() called in loop (0.5s interval)
+   └→ SSE events streamed: "reading" → "weight" (with live value) → "weight" → ... → "stable"
 
-### Phase 1: Backend Auth Infrastructure
-**Goal:** Add User model and auth routers without breaking existing API
+3. On stable reading:
+   └→ Backend saves WizardMeasurement to DB (step_key="stock_vial_empty", weight_mg=100.05)
+   └→ Backend yields "stable" event with confirmed value
+   └→ SSE connection closes (generator returns)
 
-1. Create auth/ directory with models, schemas, manager, config
-2. Add User table to database (run alembic migration or manual CREATE TABLE)
-3. Mount fastapi-users routers under /auth/ and /users/ prefixes
-4. Keep existing verify_api_key endpoints working (dual auth temporarily)
+4. Frontend receives "stable" event
+   └→ Marks step as complete
+   └→ Fetches GET /wizard/sessions/42/calculations for updated derived values
+   └→ Advances to next step
+```
 
-**Validation:** POST /auth/register creates user, POST /auth/jwt/login returns token, GET /users/me returns user with Bearer token
+### Data Flow: Session Resume
 
-### Phase 2: Frontend Auth State
-**Goal:** Add login UI and token storage without breaking existing features
+```
+1. Tech returns after leaving mid-session
+   └→ Frontend queries GET /wizard/sessions (filter: status=in_progress)
+   └→ Shows "Resume" option for incomplete sessions
 
-1. Create useAuthStore with Zustand persist
-2. Create api-auth.ts with login/logout/register functions
-3. Build LoginForm component
-4. Keep existing API calls working (api.ts still uses X-API-Key if present)
+2. Tech resumes session 42
+   └→ GET /wizard/sessions/42
+   └→ Backend returns: session metadata + all current measurements + calculated values
+   └→ Frontend restores wizard to correct step (first step with no measurement)
 
-**Validation:** User can login, token stored in localStorage, token visible in Zustand devtools
+3. Tech continues from where they left off
+   └→ Steps with measurements shown as complete (read-only, with re-weigh option)
+   └→ Steps without measurements shown as pending
+```
 
-### Phase 3: Migrate API Client
-**Goal:** Switch from X-API-Key to Bearer tokens
+---
 
-1. Update api.ts makeRequest() to use Authorization header
-2. Update all fetch calls to check useAuthStore instead of api-key.ts
-3. Handle 401 responses (clear auth, redirect to login)
-4. Deprecate api-key.ts functions
+## Build Order and Testability
 
-**Validation:** All API calls use Bearer token, 401 errors redirect to login
+### Phase 1: DB Models + Wizard Core (No Scale Required)
 
-### Phase 4: Migrate Backend Endpoints
-**Goal:** Replace verify_api_key with current_active_user
+**Goal:** Working wizard with manual weight entry only.
 
-1. Replace `Depends(verify_api_key)` with `Depends(current_active_user)` on protected endpoints
-2. Add admin checks with `Depends(require_admin)` where needed
-3. Remove verify_api_key function
-4. Remove API_KEY environment variable
+Build sequence:
+1. Add `WizardSession` and `WizardMeasurement` models to `models.py`
+2. Add migration in `database.py` (`init_db` pattern — add columns with try/except)
+3. Implement wizard REST endpoints (create, get, list, update, complete)
+4. Implement manual weight entry endpoint (`POST /wizard/sessions/{id}/steps/{key}/manual`)
+5. Implement calculations endpoint (`GET /wizard/sessions/{id}/calculations`)
+6. Build frontend wizard UI with step navigation and manual text inputs
 
-**Validation:** All protected endpoints require valid JWT, admin endpoints check user.role
+**Independently testable:** Full wizard flow works without any scale hardware. This phase delivers usable functionality even if scale integration is never built.
 
-### Phase 5: Role-Based Features
-**Goal:** Add role-specific UI and permissions
+### Phase 2: Scale Bridge (Independently Testable)
 
-1. Add isAdmin() checks in frontend for admin-only UI elements
-2. Add admin-only routes/pages
-3. Update audit logs to track user_id
-4. Add user management UI (admin only)
+**Goal:** `ScaleBridge` service that can be tested in isolation.
 
-**Validation:** Standard users cannot access admin features, audit logs show user_id
+Build sequence:
+1. Create `backend/scale_bridge.py` with `ScaleBridge` class
+2. Add configuration via environment variables (`SCALE_HOST`, `SCALE_PORT`)
+3. Register bridge in `lifespan` — gracefully skip if `SCALE_HOST` not set
+4. Add `GET /scale/status` endpoint
+5. Write a standalone test script that connects to the scale and reads one weight
 
-## Architecture Patterns to Follow
+**Test without full app:** `ScaleBridge` can be tested with a standalone `asyncio` script:
 
-### Pattern 1: Dependency Factory
-**What:** Create dependencies as module-level variables, not inline
-
-**Example:**
 ```python
-# Good
-current_active_user = fastapi_users.current_user(active=True)
+# test_scale.py — run directly, no FastAPI required
+import asyncio
+from scale_bridge import ScaleBridge
 
-@app.get("/protected")
-def protected(user: User = Depends(current_active_user)):
-    pass
+async def main():
+    bridge = ScaleBridge(host="192.168.1.100", port=4001)
+    await bridge.connect()
+    reading = await bridge.get_stable_weight(timeout_s=10.0)
+    print(f"Weight: {reading.value_mg} mg (stable={reading.stable})")
+    await bridge.disconnect()
 
-# Bad - creates new dependency on every route definition
-@app.get("/protected")
-def protected(user: User = Depends(fastapi_users.current_user(active=True))):
-    pass
+asyncio.run(main())
 ```
 
-**Why:** Improves testability, allows dependency overriding, reduces memory
+**Mock fallback for CI:** When `SCALE_HOST` is not set, `get_scale()` dependency returns `None`. Endpoints that call `get_scale()` respond with `manual_entry` SSE event or appropriate status. Tests can run without any scale hardware.
 
-### Pattern 2: Layered Authorization
-**What:** Separate authentication (who are you) from authorization (what can you do)
+### Phase 3: SSE Weight Streaming (Connects Phase 1 + Phase 2)
 
-**Example:**
-```python
-# Authentication layer
-current_active_user = fastapi_users.current_user(active=True)
+**Goal:** Replace manual weight entry with scale-driven SSE stream.
 
-# Authorization layer
-def require_admin(user: User = Depends(current_active_user)) -> User:
-    if user.role != UserRole.ADMIN:
-        raise HTTPException(403)
-    return user
+Build sequence:
+1. Add `GET /wizard/sessions/{id}/steps/{key}/weigh/stream` endpoint
+2. Frontend: open SSE connection when tech clicks "Read Weight"
+3. Frontend: handle all SSE event types (reading, weight, stable, error, timeout, manual_entry)
+4. Graceful fallback: if `manual_entry` event received, show text input
 
-# Use in routes
-@app.delete("/admin/users/{user_id}")
-async def delete_user(user_id: int, admin: User = Depends(require_admin)):
-    pass
+---
+
+## Docker Network Consideration
+
+The scale bridge connects to a physical device on the lab network. In Docker, the backend container needs network access to the scale's IP. The existing `docker-compose.yml` uses a custom bridge network. The scale is accessible via the host network — options:
+
+**Option A (recommended):** Add `SCALE_HOST` environment variable to `backend/.env`. Since the backend container is on the same LAN as the scale (not the Docker overlay network), use `network_mode: host` for the backend service, or configure the scale with a static IP reachable from the Docker bridge network.
+
+**Option B:** Use the Docker host's external IP (not `localhost`) to reach the scale from within the container.
+
+**Option C (simpler for lab deployment):** If the scale is on the same physical network as the server host, the Docker container can reach it via a static IP. Add the IP to `.env`:
+
+```env
+SCALE_HOST=192.168.1.100
+SCALE_PORT=4001
 ```
 
-**Why:** Reusable permission checks, clear separation of concerns, easy to extend
+The scale bridge handles reconnection on startup. If the scale is off or unreachable, the bridge sets `status=disconnected` and the wizard runs in manual-entry mode.
 
-### Pattern 3: Frontend Token Abstraction
-**What:** Centralize token access in Zustand store, never directly access localStorage
-
-**Example:**
-```typescript
-// Good
-const token = useAuthStore.getState().accessToken
-
-// Bad
-const token = localStorage.getItem('auth-storage')
-```
-
-**Why:** Single source of truth, easier to mock in tests, can change storage strategy
-
-### Pattern 4: Graceful Auth Failure
-**What:** Handle 401/403 gracefully without breaking UI
-
-**Example:**
-```typescript
-try {
-  const data = await fetchProtectedData()
-  return data
-} catch (error) {
-  if (error.status === 401) {
-    useAuthStore.getState().clearAuth()
-    navigate('/login')
-  } else if (error.status === 403) {
-    toast.error('You do not have permission to perform this action')
-  }
-  throw error
-}
-```
-
-**Why:** Better UX, clear error messages, automatic session cleanup
+---
 
 ## Anti-Patterns to Avoid
 
-### Anti-Pattern 1: Hardcoded JWT Secret
-**What goes wrong:** Using default or predictable JWT_SECRET allows attackers to forge tokens
+### Anti-Pattern 1: Per-Request Scale Connection
 
-**Prevention:**
-```python
-# Bad
-SECRET = "my-secret-key"
+**What goes wrong:** Opening a new TCP connection for each weighing SSE request. The Mettler Toledo balance may not handle rapid reconnects gracefully, and TCP setup latency will be visible to the user.
 
-# Good
-SECRET = os.environ.get("JWT_SECRET")
-if not SECRET or SECRET == "CHANGE_THIS_SECRET":
-    raise ValueError("JWT_SECRET must be set to a strong random value")
-```
+**Instead:** Use the singleton `ScaleBridge` attached to `app.state`. One connection persists for the application lifetime.
 
-**Detection:** Check .env files into git, default secrets in code
+### Anti-Pattern 2: Storing Calculated Values in DB
 
-### Anti-Pattern 2: Storing Sensitive Data in JWT
-**What goes wrong:** JWTs are base64-encoded, not encrypted. Readable by anyone.
+**What goes wrong:** Storing `dilution_factor`, `stock_concentration_ug_ml` etc. alongside raw weights. If the calculation formula changes, stored values become wrong and require data migration.
 
-**Prevention:**
-```python
-# Bad - hashed password visible in JWT
-payload = {"user_id": user.id, "hashed_password": user.hashed_password}
+**Instead:** Store only raw measurements (`weight_mg` for each step). Recalculate everything on demand via `GET /wizard/sessions/{id}/calculations`. This matches the existing pattern in `HPLCAnalysis` and `hplc_processor.py`.
 
-# Good - only identifiers
-payload = {"user_id": user.id, "role": user.role}
-```
+### Anti-Pattern 3: Blocking asyncio with Scale TCP Read
 
-**Detection:** Large JWT tokens, sensitive fields in token claims
+**What goes wrong:** Using synchronous `socket.recv()` inside an async FastAPI endpoint. This blocks the event loop and prevents other requests from being served during the weight read.
 
-### Anti-Pattern 3: No Token Expiration
-**What goes wrong:** Stolen tokens remain valid forever
+**Instead:** Use `asyncio.open_connection()` which gives `asyncio.StreamReader`/`asyncio.StreamWriter`. The scale bridge must be fully async. The `_lock` prevents concurrent commands to the scale without blocking the event loop.
 
-**Prevention:**
-```python
-# Good - 1 hour expiration
-JWTStrategy(secret=SECRET, lifetime_seconds=3600)
-```
+### Anti-Pattern 4: Updating Measurement Records In-Place
 
-**Detection:** Users never need to re-login, tokens work indefinitely
+**What goes wrong:** When a tech re-weighs a step, overwriting the existing measurement record. Audit trail is lost.
 
-### Anti-Pattern 4: Mixing Auth Strategies
-**What goes wrong:** Supporting both API keys and JWT creates security holes
+**Instead:** On re-weigh, set `is_current=False` on the old record and insert a new record. The weighing history is preserved. Queries always filter `is_current=True` to get current values.
 
-**Prevention:**
-- Use JWT for user authentication
-- Use API keys only for service-to-service communication (if needed)
-- Never allow same endpoint to accept both
+### Anti-Pattern 5: Scale State in Frontend
 
-**Detection:** Routes with multiple auth dependencies, OR logic in auth checks
+**What goes wrong:** Frontend tracks whether the scale is connected and uses this as the source of truth.
 
-### Anti-Pattern 5: Client-Side Authorization Only
-**What goes wrong:** Hiding UI elements doesn't prevent API access
+**Instead:** Backend owns scale state. Frontend polls `GET /scale/status` (e.g., every 5 seconds). The frontend can cache the last known status for UI display, but never assumes the scale is connected.
 
-**Prevention:**
-```typescript
-// Frontend - hide admin UI
-{isAdmin() && <AdminButton />}
+### Anti-Pattern 6: WebSockets for Weight Streaming
 
-// Backend - MUST enforce
-@app.delete("/users/{id}")
-async def delete_user(id: int, admin: User = Depends(require_admin)):
-    pass
-```
+**What goes wrong:** Adding WebSocket dependency when SSE already works for this use case. Increases complexity — WebSockets require ping/pong keepalive, connection management, and a different client pattern than the 4 existing SSE consumers.
 
-**Detection:** Admin features accessible via API without admin token
+**Instead:** SSE via `StreamingResponse` with `ReadableStream` reader on the frontend. This is already proven in the codebase and sufficient for unidirectional weight push.
 
-## Tauri-Specific Considerations
-
-### Storage Security
-
-**Desktop apps CAN safely use localStorage:**
-- No XSS risk (single origin, no third-party scripts)
-- File system access already trusted (app has access to OS)
-- Tauri's IPC sandboxing prevents malicious webviews from accessing storage
-
-**Alternative: Tauri Store Plugin**
-```typescript
-import { Store } from 'tauri-plugin-store-api'
-
-const store = new Store('.auth.dat')
-await store.set('access_token', token)
-const token = await store.get('access_token')
-```
-
-**When to use:** If you need encrypted storage or OS keychain integration. For basic JWT tokens, localStorage is sufficient.
-
-### CORS Configuration
-
-Desktop app runs on `tauri://localhost`, which is a special origin. Backend must allow it:
-
-```python
-from fastapi.middleware.cors import CORSMiddleware
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",    # Vite dev server
-        "tauri://localhost",         # Tauri production
-        "http://tauri.localhost",    # Tauri dev (Windows)
-    ],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-```
-
-### API Base URL Detection
-
-Tauri needs different API URLs for dev vs production:
-
-```typescript
-export function getApiBaseUrl(): string {
-  // Check if running in Tauri
-  if (window.__TAURI__) {
-    return 'http://localhost:8000'  // Backend always on localhost for desktop
-  }
-
-  // Browser - use env var or relative path
-  return import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
-}
-```
+---
 
 ## Scalability Considerations
 
-| Concern | At 10 Users | At 100 Users | At 1000+ Users |
-|---------|------------|--------------|----------------|
-| **Token Secret** | Single SECRET env var | Same | Rotate secrets with versioning |
-| **Token Expiration** | 1 hour is fine | Same | Consider 15-30 min + refresh tokens |
-| **Database** | SQLite works | SQLite works | Migrate to PostgreSQL for concurrent writes |
-| **Session Storage** | In-memory JWT validation | Same | Consider Redis for token blacklisting |
-| **Rate Limiting** | Not needed | Add to /auth/login | Add to all public endpoints |
-| **User Management** | Manual via SQL | Build admin UI | Add user provisioning API |
+This is a lab application with at most 2-3 simultaneous users. These are not cloud-scale concerns, but they affect correctness:
 
-## Security Checklist
+| Concern | At 1-2 Lab Users | Notes |
+|---------|-----------------|-------|
+| Scale concurrency | No concurrent weighing — physical lab constraint (one balance) | The `asyncio.Lock()` on ScaleBridge enforces this technically |
+| Session isolation | Sessions are per-tech (operator_id FK) | No cross-session contamination |
+| DB write contention | SQLite with sync sessions — fine for 2-3 users | Existing pattern |
+| SSE connection lifetime | Each weighing step = one short-lived SSE connection (seconds) | No long-held connections unlike SharePoint import streams |
+| Scale reconnection | Auto-reconnect on startup; manual reconnect via `GET /scale/reconnect` endpoint (optional) | Should handle lab restarts |
 
-Before deploying to production:
+---
 
-- [ ] JWT_SECRET is strong random value (not default)
-- [ ] JWT_SECRET stored in environment variable (not committed to git)
-- [ ] Token expiration set to reasonable value (≤1 hour)
-- [ ] HTTPS enforced in production
-- [ ] CORS restricted to known origins
-- [ ] Password hashing uses strong algorithm (bcrypt/argon2)
-- [ ] Rate limiting on /auth/login endpoint
-- [ ] Admin routes protected with require_admin dependency
-- [ ] Frontend hides admin UI from standard users
-- [ ] Backend enforces authorization on all protected endpoints
-- [ ] Sensitive data NOT stored in JWT payload
-- [ ] 401/403 errors handled gracefully in UI
+## Sources
 
-## Build Order (Dependencies)
-
-```
-Backend Phase 1: Auth Infrastructure
-  ├─ User model (depends on: database.py Base)
-  ├─ Auth schemas (depends on: User model)
-  ├─ UserManager (depends on: User model)
-  ├─ JWT config (depends on: UserManager)
-  └─ Mount auth routers (depends on: JWT config)
-
-Frontend Phase 2: Auth State
-  ├─ useAuthStore (depends on: nothing - can start immediately)
-  ├─ api-auth.ts (depends on: useAuthStore, backend auth routers)
-  └─ LoginForm (depends on: api-auth.ts)
-
-Integration Phase 3: Connect Frontend to Backend
-  ├─ Update api.ts (depends on: useAuthStore)
-  └─ Update App.tsx routing (depends on: useAuthStore, LoginForm)
-
-Migration Phase 4: Replace Old Auth
-  ├─ Update backend endpoints (depends on: current_active_user dependency)
-  └─ Remove verify_api_key (depends on: all endpoints migrated)
-
-Enhancement Phase 5: Role-Based Features
-  ├─ require_admin dependency (depends on: current_active_user)
-  ├─ Admin UI components (depends on: useAuthStore.isAdmin())
-  └─ Audit log user tracking (depends on: User model)
-```
-
-## Testing Strategy
-
-### Backend Tests
-
-```python
-# Test protected endpoint
-def test_protected_endpoint_requires_auth(client):
-    response = client.get("/explorer/environments")
-    assert response.status_code == 401
-
-def test_protected_endpoint_with_token(client, user_token):
-    response = client.get(
-        "/explorer/environments",
-        headers={"Authorization": f"Bearer {user_token}"}
-    )
-    assert response.status_code == 200
-
-def test_admin_endpoint_rejects_standard_user(client, standard_user_token):
-    response = client.delete(
-        "/admin/users/1",
-        headers={"Authorization": f"Bearer {standard_user_token}"}
-    )
-    assert response.status_code == 403
-```
-
-### Frontend Tests
-
-```typescript
-// Test login flow
-test('login stores token and user', async () => {
-  await login('test@example.com', 'password123')
-
-  expect(useAuthStore.getState().accessToken).toBeTruthy()
-  expect(useAuthStore.getState().user?.email).toBe('test@example.com')
-})
-
-// Test API client adds Bearer token
-test('API requests include Bearer token', async () => {
-  useAuthStore.getState().setAuth('test-token', { id: 1, email: 'test@example.com', role: 'standard' })
-
-  const mockFetch = vi.fn()
-  global.fetch = mockFetch
-
-  await healthCheck()
-
-  expect(mockFetch).toHaveBeenCalledWith(
-    expect.any(String),
-    expect.objectContaining({
-      headers: expect.objectContaining({
-        Authorization: 'Bearer test-token'
-      })
-    })
-  )
-})
-```
-
-## Sources and Confidence
-
-| Topic | Confidence | Sources |
-|-------|-----------|---------|
-| FastAPI Users architecture | HIGH | [Official docs](https://fastapi-users.github.io/fastapi-users/latest/configuration/overview/), [Full example](https://fastapi-users.github.io/fastapi-users/10.1/configuration/full-example/) |
-| JWT authentication patterns | HIGH | [FastAPI JWT tutorial](https://fastapi.tiangolo.com/tutorial/security/oauth2-jwt/), [TestDriven.io guide](https://testdriven.io/blog/fastapi-jwt-auth/) |
-| SQLAlchemy 2.0 integration | HIGH | [Medium: FastAPI + Async SQLAlchemy 2.0 + JWT](https://medium.com/algomart/fastapi-async-sqlalchemy-2-0-jwt-postgresql-boilerplate-setup-19e74d6bad5c) |
-| React JWT storage | MEDIUM | [Dev.to: JWT storage guide](https://dev.to/zeeshanali0704/authentication-in-react-with-jwts-access-refresh-tokens-569i), [WorkOS: Secure JWT storage](https://workos.com/blog/secure-jwt-storage) |
-| Tauri token storage | HIGH | [Tauri security docs](https://v2.tauri.app/security/), [Medium: Tauri token storage](https://vincenteliezer.medium.com/building-a-cross-platform-admin-desktop-app-with-next-js-tauri-rust-token-storage-234c6e88bf2d) |
-| Roles/permissions patterns | MEDIUM | [GitHub discussion](https://github.com/fastapi-users/fastapi-users/discussions/454), [Dev.to: Modern permission management](https://dev.to/mochafreddo/building-a-modern-user-permission-management-system-with-fastapi-sqlalchemy-and-mariadb-5fp1) |
-| Token refresh patterns | MEDIUM | [Medium: JWT refresh tokens](https://medium.com/@jagan_reddy/jwt-in-fastapi-the-secure-way-refresh-tokens-explained-f7d2d17b1d17), [Dev.to: Axios interceptors](https://dev.to/ayon_ssp/jwt-refresh-with-axios-interceptors-in-react-2bnk) |
-| Dependency injection | HIGH | [FastAPI Users: current_user](https://fastapi-users.github.io/fastapi-users/10.0/usage/current-user/), [TheLinuxCode: DI playbook](https://thelinuxcode.com/dependency-injection-in-fastapi-2026-playbook-for-modular-testable-apis/) |
-
-## Key Takeaways for Roadmap
-
-1. **Backend can be built independently** - Add User model and auth routers without touching existing endpoints
-2. **Frontend can be built independently** - Add login UI and token storage without breaking existing API calls
-3. **Migration is gradual** - Can run dual auth (X-API-Key + JWT) during transition
-4. **Roles require manual extension** - fastapi-users doesn't include RBAC, must add role field to User model
-5. **Token refresh is optional** - fastapi-users doesn't include it, can defer or use short-lived tokens + re-login
-6. **Tauri storage is safe** - localStorage works fine for desktop apps, no XSS risk
-
-**Critical path:** User model → JWT config → Mount routers → Frontend token storage → Update API client → Migrate endpoints
-
-**Likely research flags:**
-- Token refresh implementation (if needed beyond 1-hour tokens)
-- Admin user provisioning (how to create first admin)
-- Migration strategy for existing data (if any user-specific data exists)
+| Claim | Source | Confidence |
+|-------|--------|------------|
+| MT-SICS response format: `S S 100.05 mg\r\n` | Multiple MT-SICS reference manual search results, Node.js mt-sics library, community documentation | MEDIUM (PDFs couldn't be fetched directly; format confirmed by multiple independent sources) |
+| S command waits for stable; SI returns immediately | Official MT-SICS documentation (multiple PDFs referenced) + mettler_toledo_device_python README | HIGH |
+| Commands terminated with `\r\n` | Official MT-SICS docs + multiple sources | HIGH |
+| Do not send multiple commands without waiting for response | Official MT-SICS protocol specification | HIGH |
+| Status codes: S=stable, D=dynamic, I=not executable, +/- overload | Multiple MT-SICS reference manual sources | MEDIUM-HIGH |
+| Port 4001 as example | Node.js mt-sics library example | LOW (configurable — treat as default only) |
+| Ethernet TCP interface option exists for Excellence series | Official MT.com Ethernet interface documentation URL found (403 response) | MEDIUM |
+| SSE pattern (StreamingResponse + ReadableStream) | Codebase verified — 4 working endpoints | HIGH |
+| asyncio.Lock for serial command enforcement | Python docs + standard concurrent async pattern | HIGH |
+| Re-weigh audit via is_current flag | Standard immutable audit log pattern | HIGH (architectural best practice) |

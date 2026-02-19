@@ -1,205 +1,310 @@
-# Feature Landscape: User Authentication
+# Feature Landscape: Sample Prep Wizard (v0.11.0)
 
-**Domain:** Lab application authentication (FastAPI + React SPA)
-**Context:** Small team (5-10 users), dual deployment (web + Tauri desktop), no email infrastructure v1
-**Researched:** 2026-02-09
+**Domain:** Guided lab workflow wizard — HPLC sample preparation with scale integration
+**Milestone type:** Subsequent (adding to existing lab app)
+**Researched:** 2026-02-19
+
+---
+
+## Context
+
+This wizard guides a lab tech through 5 sequential steps to prepare a peptide sample for HPLC injection:
+
+1. Sample lookup (SENAITE by ID)
+2. Enter target concentration and total volume
+3. Stock prep: weigh empty vial → add peptide → add diluent → weigh again → calculate stock concentration
+4. Dilution: weigh new vial → add calculated diluent → weigh → add calculated stock → weigh
+5. Review and confirm session record
+
+Scale integration: Mettler Toledo XSR105DU over TCP/IP using MT-SICS protocol. Backend polls the scale for a stable weight reading (`S` command over TCP port 8001, response `S S <value> <unit>\r\n`). Frontend receives the reading via SSE or WebSocket stream.
+
+---
 
 ## Table Stakes
 
-Features users expect in any authenticated application. Missing these = product feels incomplete or insecure.
+Features the wizard must have to be usable. Missing any of these = broken workflow.
 
 | Feature | Why Expected | Complexity | Notes |
 |---------|--------------|------------|-------|
-| **Email + password login** | Standard authentication method, no learning curve | Low | JWT-based with access/refresh tokens |
-| **Password hashing** | Security baseline — storing plaintext is negligent | Low | Use Argon2 (2026 standard, GPU-resistant) not bcrypt |
-| **Logout functionality** | Users expect to explicitly end session | Low | Invalidate refresh token, clear client storage |
-| **Protected routes** | Unauthenticated users must not access app pages | Low | React Router guards, redirect to login |
-| **Protected API endpoints** | Backend must validate JWT on protected routes | Medium | FastAPI dependency injection pattern |
-| **Role-based access (RBAC)** | Admin vs standard user permissions | Medium | Two roles sufficient for lab context |
-| **Password strength requirements** | Prevent weak passwords (123456, etc.) | Low | Min 8 chars, require mix of char types |
-| **Session timeout (idle)** | Auto-logout after inactivity for security | Medium | 30 min idle for lab apps (NIST guideline) |
-| **"Remember me" state** | Session persists across browser/app restarts | Low | Refresh token with longer expiration |
-| **Login error feedback** | Clear messaging on auth failures | Low | Generic "invalid credentials" (not "user not found") |
-| **User profile view** | Users see their own account info | Low | Email, role, account creation date |
-| **Password change (authenticated)** | Logged-in users change their password | Low | Require current password for security |
+| **Vertical step sidebar (left) + content area (right)** | Standard two-column wizard layout; established pattern (Stripe, PatternFly, Google). Gives tech orientation at a glance. | Low | Step list fixed left, scrollable content right. Steps labeled with action nouns, not numbers alone. |
+| **Step completion gating (linear forward)** | Each step depends on prior data. Dilution calculation requires stock concentration from step 3. Tech cannot skip ahead. | Low | "Next" button disabled until step's required data is captured or confirmed. |
+| **Completed steps are revisitable via sidebar** | Techs must correct mistakes (e.g., re-read a weight). Forcing re-entry from step 1 is unacceptable. | Low | Clicking a completed step in the sidebar navigates back; data is preserved. Future (unvisited) steps remain locked. |
+| **Live weight display with stable indicator** | Lab tech needs to see whether the current reading is stable before accepting it. An unstable reading auto-accepted is a GMP violation. | Medium | Show live numeric value + animated "Stabilizing..." vs "Stable" badge. Only enable "Accept Weight" or auto-accept when scale reports stable (`S S` response, not `S D`). |
+| **Auto-accept stable weight** | Tech's hands are occupied placing vials. Requiring a button click while holding a vial causes errors. | Medium | When scale returns stable for N consecutive readings (e.g., 3 in a row), auto-accept. Show 3–5 second countdown so tech can intervene. |
+| **Calculated values shown inline (not hidden)** | Lab tech must verify computed values before proceeding. Hiding the formula = no auditability. | Low | Show formula, inputs, and result. E.g., "Stock conc = mass added / volume = 12.34 mg / 1.000 mL = 12.34 mg/mL". |
+| **SENAITE sample lookup by ID** | Sample data (peptide name, declared weight) must be pulled from LIMS. Manual entry introduces transcription errors. | Medium | Text input, search button, spinner, display returned sample fields. Show peptide name, batch/lot, declared purity. |
+| **Session autosave on every step advance** | Lab workflow is interrupted constantly. Power cycling, shifts, distractions. Losing 20 minutes of weighing data is unacceptable. | Medium | On "Next", persist current step data to DB before advancing. Draft record exists even for incomplete sessions. |
+| **Session resume from draft** | If tech navigates away or app crashes, they must be able to resume without re-weighing. | Medium | Load draft by session ID; restore to last completed step; prefill all captured data. |
+| **Scale offline/error state** | Scale is physically connected via LAN; network drops happen. Tech must know the scale is unavailable. | Medium | Show "Scale offline" banner with retry option. Allow manual weight entry as fallback. |
+| **SENAITE not found / error state** | Sample ID may be wrong, SENAITE may be unreachable. Fail clearly, don't silently pass. | Low | Show specific error: "No sample found for ID X" vs "SENAITE unreachable". |
+| **Confirm/accept button for each weighing step** | After auto-accept, tech should still be able to re-read. Provide an "Accept" affordance and a "Re-read" or "Clear" button. | Low | "Accept Weight" + "Re-read" buttons per weighing step. Auto-accept is a convenience, not a lock. |
+| **Session record written to DB on completion** | Audit trail. Lab must know every measurement, timestamp, and who performed the prep. | Medium | On wizard completion: write session record with all weights, calcs, timestamps, user ID. |
+| **Abandon / cancel wizard** | Tech must be able to exit without completing. Accidentally triggering session creation is wrong. | Low | "Cancel" accessible at any step. Show confirmation dialog. Draft persists; can be resumed or deleted. |
+
+---
 
 ## Differentiators
 
-Features that add polish and align with 2026 enterprise expectations. Not expected by all users, but valued.
+Features that elevate the wizard from functional to delightful. Not expected, but valued — especially in a daily-use lab tool.
 
 | Feature | Value Proposition | Complexity | Notes |
 |---------|-------------------|------------|-------|
-| **Admin user management page** | Admins create/disable accounts without console | Medium | CRUD for users, role assignment |
-| **Audit trail for auth events** | Track logins, failed attempts, password changes | Medium | Log to SQLite with timestamps, IP addresses |
-| **Session timeout warning** | 2-min warning before auto-logout with extend option | Medium | Prevents data loss during long tasks |
-| **Absolute session timeout** | Force re-auth after 8-12 hours regardless of activity | Low | Hybrid timeout (idle OR absolute) |
-| **Rate limiting on login** | Prevent brute-force attacks | Medium | Max 5 attempts per 15 min per IP/email |
-| **Account lockout** | Disable account after N failed login attempts | Medium | Admin must unlock, prevents automation attacks |
-| **Password reset (admin-assisted)** | Admin generates reset token, shares via secure channel | Low | Console/log output for v1 (no email) |
-| **Last login timestamp** | Show user when they last logged in | Low | Security awareness, detect unauthorized access |
-| **Active session indicator** | Show user they're logged in, where | Medium | Display session start time, device info |
-| **Token refresh transparency** | Auto-refresh tokens without user interaction | Medium | Refresh before expiration, seamless UX |
-| **Console password reset** | Generate reset link in server logs/console | Low | Temporary solution until email infra added |
+| **Step status icons in sidebar** | Completed steps show a checkmark, current step shows a dot or ring, locked steps are dimmed. Zero ambiguity about progress. | Low | Using Lucide icons: `CheckCircle2` (done), `Circle` (current), `Lock` (locked). Matches existing codebase icon usage. |
+| **Step subtitle in sidebar** | Sidebar shows not just step name but a summary of completed data. E.g., "Sample lookup — WB-0042 / Peptide-A" | Low | Reduces need to click back to verify. Collapsed summary is read-only. |
+| **Countdown timer before auto-accept** | 3-second countdown gives tech a chance to lift the vial or reject the reading before it's committed. | Low | Progress bar or counter: "Auto-accepting in 3...". Cancel button resets auto-accept. |
+| **Weight trend sparkline** | Show the last 5–10 weight readings as a tiny sparkline to visualize drift and settling. Lab techs recognize settling behavior. | Medium | SSE/WebSocket streams readings; frontend buffers last N values, renders mini chart. |
+| **Tare reminder** | Before each weighing step that requires a vial, prompt: "Ensure scale is tared / vial is on scale." | Low | Inline instruction card before the weight display activates. |
+| **Calculated result with formula toggle** | Show result by default; "Show formula" expander reveals C1V1 = C2V2 derivation or mass/volume calc. For verification by senior staff. | Low | shadcn `Collapsible` component — already in codebase. |
+| **Step completion timestamp** | Each completed step in the sidebar shows a timestamp. "Stock prep — completed 09:14 AM". | Low | Stored in session record; displayed in sidebar tooltip or subtitle. |
+| **GMP-compliant session record export** | After completion, offer PDF/CSV export of the session record (all inputs, outputs, timestamps, user). | High | Defer to v2 — high effort, but flag as a likely compliance requirement. |
+| **Keyboard navigation** | Tab to navigate between fields; Enter to advance when step is complete. Essential for tech who uses keyboard more than mouse while wearing gloves. | Medium | Aligns with PatternFly and WCAG guidance on wizard keyboard support. |
+| **Inline help text per step** | Short instruction below the step heading: what to do, what the system will capture. First-time tech orientation. | Low | shadcn `Label` with muted text. No modal required — inline is less disruptive. |
+| **Weight units display** | Show unit as returned by scale (e.g., `g`). Don't hardcode. XSR105DU returns unit in the response string. | Low | Parse from SICS response: `S S   0.0123 g`. Display alongside value. |
+| **Re-read with reason** | If tech clicks "Re-read" after accepting, optionally prompt for a brief reason (e.g., "Sample spilled"). Logged in session record. | Low | Simple optional text field. Defaults blank. Useful for GMP audit trail. |
+
+---
 
 ## Anti-Features
 
-Features to explicitly NOT build. Common mistakes or scope creep for this context.
+Features to explicitly NOT build in v0.11.0. Scope control.
 
 | Anti-Feature | Why Avoid | What to Do Instead |
 |--------------|-----------|-------------------|
-| **Email-based password reset** | Requires email infra (SMTP, templates, deliverability) | Use admin-assisted reset via console/logs for v1 |
-| **OAuth/social login** | Adds complexity, unnecessary for closed lab environment | Stick to email+password, sufficient for 5-10 users |
-| **Multi-factor authentication (MFA)** | Overkill for v1, adds friction for small trusted team | Defer to post-v1 if compliance requires it |
-| **Security questions** | Weak security, easily guessable, poor UX | Use admin-assisted password reset instead |
-| **Username field** | Email serves as unique identifier, extra field = confusion | Use email as login identifier |
-| **Public registration** | Lab app = closed system, not open to internet | Admin creates accounts, no self-service signup |
-| **Passwordless auth (magic links)** | Requires email infrastructure | Wait for v2 after email is implemented |
-| **Biometric authentication** | Desktop/web support inconsistent, complex for Tauri | Future enhancement if strong demand |
-| **Single Sign-On (SSO)** | Enterprise feature, unnecessary for 5-10 user lab | Defer until larger deployment or customer request |
-| **Password expiration** | [Modern guidance](https://auth0.com/blog/balance-user-experience-and-security-to-retain-customers/) discourages forced rotation | Only implement if compliance requires it |
-| **CAPTCHA on login** | Unnecessary with rate limiting, degrades UX | Use rate limiting + account lockout instead |
-| **"Forgot username" flow** | Email is username, users know their email | Not needed |
+| **Non-linear step jumping (full free navigation)** | This wizard has hard data dependencies: dilution calc requires stock conc, which requires weighing step 3. Allowing free-jump creates invalid states. | Lock future steps. Allow back-navigation to completed steps only. |
+| **Editable completed step data without invalidation** | If tech goes back and changes a weight that feeds into a calculation, downstream results become stale without recalculation. Complex to handle correctly. | When navigating back and editing, flag downstream steps as "needs reconfirmation" — but do NOT try to auto-recalculate silently. Force tech to re-advance through affected steps. Implement in v2 if needed. |
+| **Multiple simultaneous sessions** | One tech, one balance, one prep at a time. Managing concurrent sessions adds session selection UI, conflict resolution, and auth complexity. | One active session per user at a time. Draft is singular. |
+| **Auto-calculate dilution on the fly as tech types** | Target concentration and volume change as tech types; live recalculation is visually noisy and confusing mid-entry. | Calculate once, on step advance (when tech confirms inputs). Show formula and result. |
+| **Scale calibration or tare commands from the app** | The XSR105DU is a precision analytical balance. Calibration is SOP-controlled and should not be triggered from software. Tare is done manually by the tech at the instrument. | The app reads only. Send `S` or `SI` commands only. Do not send tare (`T`) or calibration commands. |
+| **Barcode scanner integration** | Useful, but adds hardware dependency and driver complexity. Not all workstations have scanners. | Manual text input with SENAITE search for v1. Barcode support deferred. |
+| **Email/notification on session completion** | No email infrastructure exists in this app. SENAITE integration pattern is pull, not push. | Write session to DB. Tech manually continues to HPLC injection. |
+| **Undo history within a step** | React form state handles undo for text fields. Weight readings are discrete accepted values, not a typed stream. Undo across steps is dangerous in a lab context. | Re-read button is the "undo" for weight steps. Back navigation is the "undo" for form steps. Explicit, not implicit. |
+| **Tutorial / onboarding overlay on first use** | Wizard itself is already guided. Overlay-on-top adds cognitive load and is often dismissed without reading. | Use inline instruction text on each step. No overlay. |
+| **Offline mode (no SENAITE, no scale)** | Without scale, you cannot do sample prep. Without SENAITE, you have no sample data. Full offline mode is not a valid lab scenario. | Handle transient outages gracefully (retry, manual fallback), but do not build a fully offline mode. |
+| **Results entry / purity calculation in this wizard** | The project description includes "results entry after HPLC run" as a target feature, but that is a different workflow that happens after injection. Mixing it into this wizard conflates two distinct lab activities. | Results entry is a separate post-run workflow. This wizard ends at "session ready for injection." |
+
+---
+
+## Step-by-Step Behavior Specification
+
+### Step Locking / Unlocking Logic
+
+```
+LOCKED   = step not yet reachable (greyed, not clickable in sidebar)
+CURRENT  = active step (highlighted in sidebar, content shown)
+COMPLETE = step done (checkmark, clickable in sidebar to go back)
+
+Rules:
+- Step N+1 is LOCKED until Step N is COMPLETE
+- COMPLETE steps become clickable (back navigation)
+- Going back to a COMPLETE step does NOT lock steps after it
+  UNLESS the tech modifies data in that step (flag downstream as "needs reconfirm")
+- v0.11.0: If tech modifies a past step, require they re-advance through affected steps
+  (simple invalidation — no silent recalc)
+```
+
+### Step-Type Classification
+
+| Step | Type | Unlock Condition |
+|------|------|-----------------|
+| 1. Sample Lookup | User action + confirm | SENAITE returns valid sample; tech clicks "Use this sample" |
+| 2. Target Parameters | Form entry + confirm | Both target concentration and total volume entered (non-zero); tech clicks "Next" |
+| 3. Stock Prep (5 weighings) | Instrument reading x5 | All 5 weight readings accepted; stock concentration calculated; tech clicks "Confirm Stock Prep" |
+| 4. Dilution (3 weighings) | Instrument reading x3 | All 3 weight readings accepted; dilution verified; tech clicks "Confirm Dilution" |
+| 5. Review & Confirm | Review + confirm | Tech clicks "Complete Session" |
+
+### Weighing Step Sub-flow
+
+Each weighing point within steps 3 and 4 follows this pattern:
+
+```
+1. Display instruction: "Place empty vial on scale"
+2. Show live weight value (polling from backend SSE/WS)
+3. Show stability indicator: "Stabilizing..." → "Stable"
+4. Stable for 3 consecutive readings → start auto-accept countdown (3 sec)
+5. Tech can: (a) let it auto-accept, or (b) click "Accept Weight" immediately, or (c) click "Re-read" to clear
+6. On accept: value locked, instruction advances to next weighing point
+7. All weighing points complete → calculations shown → "Confirm" button active
+```
+
+### Scale Weight Display States
+
+| State | Visual | Description |
+|-------|--------|-------------|
+| Connecting | Spinner + "Connecting to scale..." | Initial TCP connection establishing |
+| Live / Unstable | Animated value + amber "Stabilizing" badge | `SI` reading coming in, balance in motion |
+| Stable | Value + green "Stable" badge + countdown | `S` command returned stable reading |
+| Auto-accepted | Locked value + checkmark | Weight committed to session |
+| Scale offline | Red banner + "Retry" | TCP connection failed or timed out |
+| Manual fallback | Input field + "Enter manually" | Tech overrides with keyboard entry |
+
+### Session Persistence Model
+
+```
+States:
+  draft     = in-progress wizard, incomplete
+  complete  = all steps done, session record written
+
+On each "Next":
+  → persist current step data to DB (upsert by session_id)
+  → advance to next step
+  → update current_step pointer
+
+On navigate away / close:
+  → draft persists silently (no confirmation needed)
+  → "Resume" banner shown on wizard entry if draft exists
+
+On "Cancel":
+  → confirmation dialog: "Discard this session?"
+  → Yes: delete draft, return to app
+  → No: stay in wizard
+
+On "Complete Session":
+  → write final record (status = complete, all measurements, calcs, user_id, timestamps)
+  → show success state
+  → return to app
+```
+
+---
+
+## Error State Coverage
+
+| Scenario | Expected Behavior |
+|----------|------------------|
+| SENAITE unreachable | Show "Cannot connect to SENAITE" with retry button. Do not block — allow tech to enter sample data manually as fallback. |
+| SENAITE returns no match for ID | Show "No sample found for ID [X]". Tech can correct ID and retry. |
+| SENAITE returns multiple matches | Show disambiguation list with client, date, status. Tech selects correct sample. |
+| Scale offline at wizard start | Show "Scale offline" banner. Auto-retry every 10 seconds. Manual entry fallback available. |
+| Scale disconnects mid-step | Show inline error in the weight display area: "Scale disconnected — retrying..." Auto-retry. Current accepted weights are preserved. |
+| Scale returns unstable reading indefinitely | After 60 seconds without stable, show advisory: "Scale not stabilizing. Check for vibration or overload. Enter weight manually if needed." |
+| Weight outlier (>20% deviation from tare) | Flag as advisory, not hard block. Show: "Weight change larger than expected. Verify sample is correct." Tech must acknowledge before proceeding. |
+| Weight negative after tare | Show error: "Negative weight reading. Check vial is on scale and scale is tared." Block accept. |
+| Session DB write failure | Show error, allow retry. Do not lose the captured data — hold in frontend state until write succeeds. |
+| Navigating away with unsaved data | Browser/app close: autosave fires. Explicit navigation within the app: silent autosave, no confirmation popup (draft is preserved). |
+
+---
 
 ## Feature Dependencies
 
 ```
-Core Authentication Flow:
-├── Email + password login → JWT access token
-├── Access token → Protected routes (frontend)
-├── Access token → Protected API endpoints (backend)
-└── Refresh token → Seamless token renewal
+Step 1 (Sample Lookup)
+  └── SENAITE JSON API integration (backend)
+  └── Sample ID input + search UI
 
-Password Management:
-├── Password hashing (Argon2) → Secure storage
-├── Password strength validation → User registration/change
-└── Console password reset → Admin-assisted recovery
+Step 2 (Target Parameters)
+  └── Numeric inputs: target concentration (mg/mL), total volume (mL)
 
-Authorization:
-├── Role assignment (admin/standard) → User creation
-├── RBAC middleware → Protected endpoints
-└── Admin user management page → Role changes
+Step 3 (Stock Prep)
+  └── Scale TCP polling (backend → SSE/WS → frontend)
+  └── Weight acceptance UI (live display + accept/re-read)
+  └── Calculation: stock_concentration = mass_peptide / volume_diluent_added
+  └── "mass_peptide" = (vial+peptide weight) - (empty vial weight)
+  └── "volume_diluent_added" = (vial+peptide+diluent weight) - (vial+peptide weight)
+        [uses density of diluent — typically 1.000 g/mL for water-based]
 
-Session Management:
-├── Idle timeout (30 min) → Auto-logout
-├── Absolute timeout (8-12 hours) → Force re-auth
-└── Session warning (2 min before timeout) → UX polish
+Step 4 (Dilution)
+  └── Calculation from Step 2 + Step 3:
+        required_stock_volume = (C_target × V_total) / C_stock   [C1V1 = C2V2]
+        required_diluent_volume = V_total - required_stock_volume
+  └── Scale reading for 3 weighing points
+  └── Verification: actual added vs calculated
 
-Security:
-├── Rate limiting → Brute-force prevention
-├── Account lockout → Attack mitigation
-└── Audit trail → Security monitoring
+Step 5 (Review)
+  └── Read-only summary of all steps
+  └── DB write on confirm
 ```
 
-## MVP Recommendation
+---
 
-For v0.6.0 authentication milestone, prioritize:
+## MVP Recommendation for v0.11.0
 
-### Must-Have (Table Stakes)
-1. **Email + password login** with JWT (access + refresh tokens)
-2. **Password hashing** with Argon2
-3. **Logout** functionality
-4. **Protected routes** (React) and **protected endpoints** (FastAPI)
-5. **Two roles** (admin, standard) with RBAC
-6. **Password strength** validation
-7. **Session timeout** (30 min idle)
-8. **Login error feedback**
-9. **User profile view**
-10. **Password change** (authenticated users)
+### Must-Build (Table Stakes — Wizard is broken without these)
 
-### Nice-to-Have (Differentiators for v0.6.0)
-1. **Admin user management page** (create/disable users, assign roles)
-2. **Console password reset** (log-based token generation for admins)
-3. **Audit trail** for auth events (login, logout, password change)
-4. **Session timeout warning** (2 min before auto-logout)
-5. **Rate limiting** on login endpoint (5 attempts per 15 min)
+1. Vertical step sidebar with 3 states: locked, current, complete
+2. Linear step gating — "Next" disabled until step complete
+3. Back navigation to completed steps (sidebar click)
+4. SENAITE sample lookup by ID (backend endpoint, frontend search UI)
+5. Scale live weight display with stable/unstable indicator
+6. Auto-accept stable weight with countdown (3 sec)
+7. "Accept Weight" and "Re-read" buttons per weighing point
+8. Inline calculated results (formula + result)
+9. Autosave on each step advance (draft persistence)
+10. Session resume from draft
+11. Scale offline state + manual entry fallback
+12. SENAITE not-found / unreachable error states
+13. Session record written to DB on completion
+14. Cancel wizard with confirmation
 
-### Defer to Post-MVP
-- **Absolute session timeout** (implement if 30-min idle insufficient)
-- **Account lockout** (wait to see if rate limiting sufficient)
-- **Last login timestamp** (polish feature)
-- **Active session indicator** (polish feature)
-- **Email-based password reset** (requires email infrastructure)
-- **MFA** (implement only if compliance requires)
-- **SSO** (enterprise feature for future)
+### Build if Time Allows (Differentiators for v0.11.0)
 
-## Integration with Existing Features
+1. Step status icons in sidebar (checkmark / dot / lock)
+2. Step subtitle showing captured data summary
+3. Countdown timer with cancel for auto-accept
+4. Tare reminder card before each weighing substep
+5. "Show formula" collapsible on calculated results
+6. Weight unit display from SICS response string
+7. Inline help text per step (what to do, what happens next)
+8. Keyboard navigation (Tab / Enter flow)
 
-| Existing Feature | Auth Integration Required | Notes |
-|------------------|---------------------------|-------|
-| **HPLC file import** | Protected route, standard user can access | File operations allowed for all authenticated users |
-| **Purity calculations** | Protected endpoint, standard user can access | Core workflow, all users need access |
-| **Batch review UI** | Protected route, standard user can access | Operators perform reviews |
-| **SENAITE integration** | Protected endpoint, consider admin-only | Push to LIMS may be admin privilege |
-| **Settings management** | Protected route, likely admin-only | Configuration changes = admin permission |
-| **Order Explorer** | Protected route, replace API key auth with JWT | Currently uses X-API-Key, migrate to JWT |
-| **SQLite database** | Add users, roles, auth_events tables | Extend schema for auth data |
-| **File cache** | User-scoped or shared? | Decide: shared cache or per-user isolation |
+### Defer to v0.12.0 or Later
 
-## Domain-Specific Considerations
+- Weight trend sparkline (requires buffered SSE stream UI)
+- Step completion timestamps in sidebar
+- GMP session record PDF/CSV export
+- Re-read with reason logging
+- Barcode scanner integration
+- Results entry / purity calculation post-run (separate workflow)
+- Editable completed step data with downstream invalidation
+- Weight outlier advisory (nice-to-have safety net)
 
-### Lab Environment Security Balance
-- **Low threat model**: Small trusted team (5-10 users), not internet-facing
-- **Compliance aware**: Audit trail important for FDA/GMP validation later
-- **Usability critical**: Operators use app daily, friction = non-adoption
-- **Recommendation**: Strong baseline security (Argon2, JWT, RBAC) but avoid over-engineering (no MFA v1, no forced password rotation)
+---
 
-### Dual Deployment (Web + Tauri)
-- **Token storage**: localStorage acceptable for Tauri desktop, consider httpOnly cookies for web
-- **Session persistence**: Both modes should "remember me" across restarts
-- **Security consideration**: Tauri apps can use localStorage safely (no XSS risk from external scripts)
-- **Recommendation**: Use localStorage for simplicity, works consistently across both modes
+## Confidence Assessment
 
-### No Email Infrastructure (v1)
-- **Password reset**: Admin-assisted via console-generated reset tokens
-- **New user onboarding**: Admin creates account, shares temporary password securely
-- **Account notifications**: None for v1, add after email implemented
-- **Recommendation**: Document admin workflow clearly, plan email integration for v2
+| Area | Confidence | Source |
+|------|------------|--------|
+| Wizard step navigation patterns | HIGH | NNG, PatternFly design guidelines, Eleken (verified against multiple authoritative sources) |
+| Stripe-style vertical step navigator behavior | HIGH | Stripe OnboardingView component docs (official) — 4 states: not-started, in-progress, blocked, complete; left sidebar + right content |
+| Scale MT-SICS protocol basics | MEDIUM | N3uron docs (confirmed S/SI commands and stable response concept); PDFs unreadable but multiple sources confirm TCP port 8001 and SICS command structure |
+| Scale UX waiting / stable indicator pattern | MEDIUM | WebSearch + NNG status visibility heuristic; no single authoritative lab-instrument-web-UI source; derived from established UX principles |
+| SENAITE JSON API search | HIGH | Official ReadTheDocs — search by ID with catalog param confirmed; `&complete=True` for full fields; Basic Auth |
+| Session persistence / draft state | HIGH | AppMaster article on save-and-resume wizards; corroborated by react-admin, Zustand persist middleware patterns |
+| Step locking logic | HIGH | PatternFly design guidelines (official) + NNG article — sequential locking is the recommended default |
+| HPLC dilution calculation (C1V1 = C2V2) | HIGH | Standard chemistry; confirmed in multiple chromatography forum and calculator sources |
+| Anti-feature reasoning | MEDIUM | Derived from wizard UX principles + domain knowledge of GMP/lab constraints; no single authoritative source for lab-specific anti-features |
 
-### Small Team Operations
-- **User provisioning**: Admin creates accounts manually, acceptable for 5-10 users
-- **Role changes**: Rare event, admin can update via management page
-- **Password resets**: Infrequent, console-based acceptable
-- **Recommendation**: Optimize for simplicity over self-service automation
-
-## Complexity Assessment
-
-| Complexity Tier | Features | Implementation Effort |
-|-----------------|----------|----------------------|
-| **Low** | Login, logout, password hashing, protected routes, password strength | 1-2 days |
-| **Medium** | RBAC, protected endpoints, JWT refresh, admin user management, audit trail | 3-5 days |
-| **High** | Rate limiting, account lockout, session timeout with warning, token refresh transparency | 2-3 days |
-
-**Total MVP estimate**: 6-10 days for core auth system (table stakes + key differentiators)
+---
 
 ## Sources
 
-### FastAPI + JWT Authentication
-- [OAuth2 with Password (and hashing), Bearer with JWT tokens - FastAPI](https://fastapi.tiangolo.com/tutorial/security/oauth2-jwt/)
-- [Securing FastAPI with JWT Token-based Authentication | TestDriven.io](https://testdriven.io/blog/fastapi-jwt-auth/)
-- [FastAPI Best Practices for Production: Complete 2026 Guide](https://fastlaunchapi.dev/blog/fastapi-best-practices-production-2026)
-- [Authentication and Authorization with FastAPI: A Complete Guide](https://betterstack.com/community/guides/scaling-python/authentication-fastapi/)
+### Wizard UX
 
-### React SPA Authentication Patterns
-- [How To Add Login Authentication to React Applications | DigitalOcean](https://www.digitalocean.com/community/tutorials/how-to-add-login-authentication-to-react-applications)
-- [The Complete Guide to React User Authentication | Auth0](https://auth0.com/blog/complete-guide-to-react-user-authentication/)
-- [Authentication in SPA (ReactJS and VueJS) the right way | Medium](https://medium.com/@jcbaey/authentication-in-spa-reactjs-and-vuejs-the-right-way-e4a9ac5cd9a3)
+- [Wizards: Definition and Design Recommendations — NNG](https://www.nngroup.com/articles/wizards/)
+- [PatternFly Wizard Design Guidelines](https://www.patternfly.org/components/wizard/design-guidelines/)
+- [Wizard UI Pattern: When to Use It — Eleken](https://www.eleken.co/blog-posts/wizard-ui-pattern-explained)
+- [Wizard Design Pattern — UX Planet (Nick Babich)](https://uxplanet.org/wizard-design-pattern-8c86e14f2a38)
+- [Save-and-resume multi-step wizard patterns — AppMaster](https://appmaster.io/blog/save-and-resume-multi-step-wizard)
 
-### Lab/Enterprise Authentication Requirements
-- [LIMS Requirements | User, System & Functional Requirements Checklist](https://www.thelabhq.com/resource-centre/requirements)
-- [Meet Your Lab's Regulatory Compliance Requirements with Lockbox LIMS](https://thirdwaveanalytics.com/blog/regulatory-compliance-with-lims/)
-- [Role-Based Access Control: A Comprehensive Guide |2026 | Zluri](https://www.zluri.com/blog/role-based-access-control)
+### Stripe Wizard Reference
 
-### Session Management Best Practices
-- [Session Timeout Best Practices | Descope](https://www.descope.com/learn/post/session-timeout-best-practices)
-- [Balance User Experience and Security to Retain Customers | Auth0](https://auth0.com/blog/balance-user-experience-and-security-to-retain-customers/)
-- [Session Management | NIST](https://pages.nist.gov/800-63-3-Implementation-Resources/63B/Session/)
+- [OnboardingView component — Stripe Apps SDK](https://docs.stripe.com/stripe-apps/components/onboardingview?app-sdk-version=9)
+- [Stripe Apps Patterns](https://docs.stripe.com/stripe-apps/patterns)
 
-### Security and Anti-Patterns
-- [sec-context/ANTI_PATTERNS_DEPTH.md | Arcanum-Sec](https://github.com/Arcanum-Sec/sec-context/blob/main/ANTI_PATTERNS_DEPTH.md)
-- [Design Best Practices for an Authentication System | IEEE Cybersecurity](https://cybersecurity.ieee.org/blog/2016/06/02/design-best-practices-for-an-authentication-system/)
-- [Forgot Password - OWASP Cheat Sheet Series](https://cheatsheetseries.owasp.org/cheatsheets/Forgot_Password_Cheat_Sheet.html)
+### Scale Integration
 
-### Tauri Desktop Authentication
-- [Adding Auth0 to Your Tauri App: Secure Authentication | DEV Community](https://dev.to/yannamsellem/adding-auth0-to-your-tauri-app-secure-authentication-for-agx-on-web-and-desktop-1h4k)
-- [Security | Tauri](https://v2.tauri.app/security/)
-- [Tauri + oauth2 - DEV Community](https://dev.to/datner/tauri-oauth2-5f1h)
+- [MT-SICS Reference Manual (Excellence Balances) — Mettler Toledo](https://www.mt.com/dam/product_organizations/laboratory_weighing/WEIGHING_SOLUTIONS/PRODUCTS/MT-SICS/MANUALS/en/Excellence-SICS-BA-en-11780711D.pdf)
+- [Mettler Toledo Client Configuration — N3uron](https://docs.n3uron.com/docs/mettler-toledo-configuration)
+- [mt-sics Node.js library — Atlantis-Software (GitHub)](https://github.com/Atlantis-Software/mt-sics)
+
+### SENAITE
+
+- [SENAITE JSON API — ReadTheDocs](https://senaitejsonapi.readthedocs.io/en/latest/api.html)
+
+### React + shadcn Stepper
+
+- [Stepperize — shadcn template](https://www.shadcn.io/template/damianricobelli-stepperize)
+- [React Hook Form Multi-Step — Zustand + Zod + shadcn](https://www.buildwithmatija.com/blog/master-multi-step-forms-build-a-dynamic-react-form-in-6-simple-steps)
+
+### Multi-Step Form Patterns
+
+- [8 Best Multi-Step Form Examples 2025 — Webstacks](https://www.webstacks.com/blog/multi-step-form)
+- [Baymard: Back Button UX Expectations](https://baymard.com/blog/back-button-expectations)

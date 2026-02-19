@@ -1,790 +1,514 @@
-# Domain Pitfalls: Adding JWT Authentication to Existing FastAPI + React App
+# Domain Pitfalls: Lab Scale Integration + Guided Sample Prep Wizard
 
-**Domain:** Retrofitting user authentication onto existing unprotected system
-**Researched:** 2026-02-09
-**Context:** FastAPI + React (Tauri desktop) app, currently using X-API-Key, adding FastAPI Users with JWT Bearer tokens
+**Domain:** Hardware-coupled wizard flow for laboratory sample preparation
+**Researched:** 2026-02-19
+**Context:** Accu-Mk1 v0.11.0 — Mettler Toledo XSR105DU (MT-SICS over TCP), 5-step weighing wizard, FastAPI SSE backend, SQLite session persistence
+**Milestone:** Adding scale integration + guided prep wizard to existing FastAPI + React (Tauri) app
 
 ---
 
 ## Critical Pitfalls
 
-Mistakes that cause rewrites, security vulnerabilities, or major system breakage.
+Mistakes that cause incorrect measurements, corrupted session data, or rewrites.
 
-### Pitfall 1: Breaking All Existing Endpoints at Once
+---
 
-**What goes wrong:** Adding authentication dependencies to existing endpoints breaks all current API consumers immediately. The app becomes unusable until every single endpoint is migrated and every client is updated.
+### Pitfall 1: Accepting "S D" (Dynamic) Weight as a Confirmed Reading
+
+**What goes wrong:** The backend polls the scale with the `S` command. When the scale is not stable, it returns a response with the `D` stability indicator (dynamic/unstable weight). Code that ignores this indicator captures a live-fluctuating value and treats it as a confirmed weight. The tech confirms a number that is still changing.
+
+**How MT-SICS stability works:**
+- `S` command — requests current weight; the scale **waits** for stability before responding. If it times out waiting, some models return a `D` response rather than blocking indefinitely.
+- `SI` command — returns the current weight **irrespective of stability** (always returns immediately, stability field will be `S` or `D`).
+- Response format: `S <status> <value> <unit>` where status is one of:
+  - `S` — stable weight value
+  - `D` — dynamic (unstable) weight value
+  - `I` — internal balance error (not ready)
+  - `+` — overload (weighing range exceeded)
+  - `-` — underload (pan not in place or below minimum)
 
 **Why it happens:**
-- Developers add `Depends(current_user)` to existing routes thinking it's just "adding security"
-- No migration strategy for gradual rollout
-- Underestimating how many places call the API
+- Developer uses `SI` for responsiveness (no blocking wait), but doesn't gate confirmation on `status == 'S'`
+- Response parser splits on whitespace and takes the number field directly, skipping the stability character
+- SSE stream sends every polled value to the frontend; UI shows "current reading" and the tech clicks confirm on a mid-swing value
 
 **Consequences:**
-- Complete system outage during migration
-- Can't test authentication incrementally
-- Rollback requires removing all auth changes
-- Tauri desktop app and any other clients stop working instantly
+- Captured weight is wrong (could be off by 5–50 mg depending on timing)
+- Stock concentration calculation is wrong (`stock_conc = declared_weight_mg * 1000 / diluent_mL`)
+- Error propagates silently through all downstream dilution calculations
+- Session record contains incorrect data with no indication it was captured during instability
 
 **Prevention:**
-1. **Phase endpoints migration, don't big-bang:**
-   - Phase 1: Add new `/auth` endpoints (register, login, logout) - no breaking changes
-   - Phase 2: Add optional authentication to existing endpoints (accept both X-API-Key and JWT)
-   - Phase 3: Make authentication required on critical endpoints
-   - Phase 4: Deprecate X-API-Key with timeline
+1. **Gate confirmation on stability status, not just value presence.** The backend must parse the stability field from every MT-SICS response and only expose a "confirmable" reading when `status === 'S'`.
+2. **Use `S` (not `SI`) for the final capture call** after the SSE stream shows stability for N consecutive polls. The blocking `S` command gives the scale an opportunity to self-stabilize.
+3. **Stream stability state to frontend.** SSE payload should include a `stable: boolean` field. The "Confirm Weight" button must be disabled when `stable === false`.
+4. **Add stability dwell time.** Require the reading to be stable for at least 2–3 consecutive polls (at a poll interval of 500ms or similar) before enabling confirmation. This prevents transient stable-then-unstable oscillation.
 
-2. **Create dual-auth dependency:**
+**Warning signs:**
+- Confirm button enabled the moment any value appears on screen
+- Backend sends raw `SI` response to frontend without parsing stability field
+- Weight value jumps around after tech confirms and a second poll fires
+
+**Which phase:** Phase 1 (Scale Integration Foundation) — stability gating must be part of the initial scale service design, not retrofitted.
+
+---
+
+### Pitfall 2: Scale Has Tare Accumulated from Previous Session
+
+**What goes wrong:** The Mettler Toledo XSR105DU retains its tare state across power cycles and TCP reconnections. If a previous operator left a container on the pan (or the app crashed mid-session with a tare applied), the scale's internal tare is non-zero when the new session starts. The app connects, polls the scale, and receives a net weight relative to an unknown tare — not the true gross weight.
+
+**MT-SICS tare behavior:**
+- `T` command — tares the scale (waits for stability, then sets tare to current stable weight). Returns `T S <tare_value> <unit>` on success, `T I` if balance not ready.
+- `TI` command — immediate tare (doesn't wait for stability).
+- `TA` command — queries or sets the current tare value directly.
+- Tare persists in balance memory. It is not cleared by TCP disconnect or application restart.
+
+**Why it happens:**
+- App assumes scale always shows gross weight at session start
+- No startup check of current tare state
+- Wizards begin collecting weights without zeroing first
+- Operator runs two sessions back-to-back without physically clearing the pan
+
+**Consequences:**
+- Container weight is misattributed (what looks like "0.00 g net" is actually tare minus previous container)
+- Peptide mass calculation uses a wrong baseline
+- The error is invisible — readings appear plausible, just offset
+
+**Prevention:**
+1. **Check tare state at session start with `TA` command.** If tare is non-zero, surface a warning to the tech: "Scale has an existing tare of X g. Clear it before proceeding?"
+2. **Design a mandatory "scale check" step at wizard start.** Show current scale state (net weight, tare value, stability). Require the tech to confirm the pan is empty and tare is zeroed, or actively apply a fresh tare.
+3. **Never silently tare the scale from software** unless the wizard explicitly asks the tech to place only the container on the pan at that specific step.
+4. **Use `Z` (zero) on session init if tare is zero and gross weight is also near-zero.** This re-zeroes the scale from a clean state.
+
+**Warning signs:**
+- Wizard skips directly from "connect to scale" to "place container, confirm tare" without reading current tare state
+- Scale reads a non-trivial value before anything is placed on it
+
+**Which phase:** Phase 1 (Scale Integration Foundation) — tare state check must be part of the session initialization sequence.
+
+---
+
+### Pitfall 3: TCP Connection Drop Without Detection — Silent Stale Readings
+
+**What goes wrong:** The TCP socket to the scale drops (scale sleep, network blip, cable, switch reboot) but the FastAPI polling loop does not detect the disconnection. The SSE stream continues sending the last cached reading to the frontend. The tech sees a number that looks live but is stale. They confirm a weight that was captured minutes ago.
+
+**TCP socket behavior in Python:**
+- `socket.recv()` blocks on a dropped connection without necessarily raising an exception immediately. The OS-level TCP keepalive may take minutes (default 2 hours on Linux) to detect the dead connection.
+- A socket write to a dead connection may succeed initially (data goes into OS buffer) and only fail on the second write.
+- `SO_KEEPALIVE` with aggressive settings is needed to detect drops within seconds.
+
+**Why it happens:**
+- Simple `asyncio` TCP connection without keepalive configuration
+- Error caught at socket level but polling loop continues with last known value
+- No "last updated" timestamp surfaced to the frontend
+- Scale enters sleep/idle mode (some Mettler Toledo models have configurable auto-shutoff)
+
+**Consequences:**
+- Tech confirms a weight that is seconds or minutes old, not current
+- If scale was moved or bumped between reads, the stale value is from before the disturbance
+- No indication to the tech that the connection is down
+
+**Prevention:**
+1. **Configure TCP keepalive with aggressive parameters:**
    ```python
-   async def get_current_user_optional(
-       api_key: Optional[str] = Header(None, alias="X-API-Key"),
-       token: Optional[str] = Depends(oauth2_scheme_optional)
-   ):
-       # Try JWT first, fall back to API key
-       if token:
-           return await verify_jwt_token(token)
-       if api_key:
-           return await verify_api_key(api_key)
-       return None  # Allow anonymous for backward compatibility
+   import socket
+   sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+   sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 5)    # Start after 5s idle
+   sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 2)   # Probe every 2s
+   sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 3)     # 3 probes then drop
    ```
+2. **Track last successful read timestamp.** SSE payload must include `last_updated: ISO8601`. If `now - last_updated > threshold` (e.g., 3 seconds), set `status: 'stale'` in the SSE payload.
+3. **Disable the Confirm button when status is `'stale'` or `'disconnected'`.** The UI must visually distinguish between "live reading", "stale reading", and "no connection."
+4. **Implement reconnect loop in the polling service.** On any socket error, close the socket, wait N seconds, and attempt reconnection. SSE stream continues but broadcasts `{ status: 'reconnecting' }` until restored.
+5. **Check whether the XSR105DU has an auto-sleep setting.** If the lab leaves it idle, the scale may power down its network stack. Configure the balance to disable auto-shutoff for lab-network-connected use.
 
-3. **Use feature flags** to control rollout per endpoint
+**Warning signs:**
+- SSE stream shows a constant value that never fluctuates (dead connection mimics perfect stability)
+- No "connection lost" UI state in the wizard
+- Poll timestamp not included in SSE events
 
-**Detection:**
-- Running existing client code against new backend fails with 401/403
-- Integration tests for existing flows break
-- Tauri app can't fetch data after backend update
-
-**Which phase:** Phase 1 (Auth Foundation) must establish dual-auth pattern BEFORE touching existing endpoints
-
----
-
-### Pitfall 2: Token Storage in Tauri - Local Storage XSS Vulnerability
-
-**What goes wrong:** Storing JWT tokens in localStorage makes them vulnerable to XSS attacks. In a Tauri app, this is a critical security issue since the app has filesystem access.
-
-**Why it happens:**
-- React tutorials typically show localStorage for simplicity
-- Developers don't realize Tauri apps run in a webview with elevated privileges
-- HttpOnly cookies don't work the same way in Tauri as in browsers
-
-**Consequences:**
-- If XSS vulnerability exists anywhere in React app, attacker can steal tokens
-- Stolen token = full user impersonation
-- In Tauri, XSS could potentially access filesystem, not just steal tokens
-- Refresh tokens in localStorage = long-term persistent access for attackers
-
-**Prevention:**
-
-**For Tauri desktop app:**
-1. Use Tauri's secure storage plugin (tauri-plugin-store) for tokens
-2. Never store refresh tokens in localStorage or sessionStorage
-3. Use Tauri's IPC to handle token storage in Rust backend
-
-```typescript
-// WRONG - vulnerable to XSS
-localStorage.setItem('access_token', token);
-
-// RIGHT - Tauri secure storage
-import { Store } from 'tauri-plugin-store-api';
-const store = new Store('.settings.dat');
-await store.set('access_token', token);
-```
-
-**For browser deployment:**
-1. Store access token in memory (React state/context)
-2. Store refresh token in httpOnly cookie (requires backend to set it)
-3. Accept that user must re-authenticate on page refresh OR
-4. Use silent refresh pattern with httpOnly refresh token cookie
-
-**Detection:**
-- Security audit finds tokens in localStorage
-- XSS vulnerability scan shows token theft is possible
-- Tauri app stores sensitive data in plain text in localStorage
-
-**Which phase:** Phase 1 (Auth Foundation) - must decide token storage strategy before implementing login
+**Which phase:** Phase 1 (Scale Integration Foundation) — connection health monitoring is part of the core polling service, not optional.
 
 ---
 
-### Pitfall 3: CORS Configuration Breaks Credential Passing
+### Pitfall 4: MT-SICS Single-Client TCP Limitation — Connection Conflict
 
-**What goes wrong:** FastAPI CORS middleware isn't configured for credentials, causing JWT bearer tokens in Authorization headers to be blocked. Or worse, using `allow_origins=["*"]` with `allow_credentials=True` which browsers reject.
+**What goes wrong:** Many Mettler Toledo balance Ethernet interfaces accept only one concurrent TCP client connection. If a previous connection was not cleanly closed (app crash, process restart, network failure), the balance may be in a state where it believes a client is still connected and refuses new connections, returning ECONNREFUSED or simply hanging the connection attempt.
 
 **Why it happens:**
-- Default CORS config doesn't include `allow_credentials=True`
-- Developers set `allow_origins=["*"]` which is incompatible with credentials
-- Different config needed for development (localhost:3000) vs production
+- App crashes or is force-killed without closing the TCP socket
+- Debugging session leaves a dangling connection open
+- OS TCP_TIME_WAIT delays effective port release
 
 **Consequences:**
-- Login works but subsequent authenticated requests fail with CORS error
-- Browser silently drops Authorization header
-- Error messages are cryptic: "CORS policy: Credentials flag is 'true', but the 'Access-Control-Allow-Credentials' header is ''"
+- New app startup cannot connect to the scale
+- Lab tech cannot use the wizard until the scale is power-cycled or the stale connection times out
+- Debugging is difficult because the port appears open at the network level
 
 **Prevention:**
+1. **Implement a connection timeout on connect attempts** (5–10 seconds). If connect hangs, fail cleanly rather than blocking the startup flow.
+2. **Track scale connection state in SQLite.** On startup, check if a previous session left a "connected" flag and warn the user before attempting reconnect.
+3. **Set `SO_REUSEADDR` on the client socket** to avoid address binding issues on restart.
+4. **Log the existing connection** in lab documentation: if scale won't connect, power cycle the balance (30 seconds off) to clear stale TCP state.
+5. **Backend should attempt connect once on wizard start**, not at app boot. Don't hold an idle TCP connection if no wizard session is active.
 
+**Warning signs:**
+- Scale connection works on first launch but fails after app restart
+- Balance's network indicator light shows active connection when app is not running
+- Connection timeout errors only on second launch attempt
+
+**Which phase:** Phase 1 (Scale Integration Foundation).
+
+---
+
+### Pitfall 5: Floating-Point Precision Errors in Weight Difference Calculations
+
+**What goes wrong:** Weight differences are calculated in Python/JavaScript using IEEE 754 double-precision floating point. For values like `4213.58 - 2783.16`, the result is not exactly `1430.42` in binary floating point. The error (typically at the 13th–15th decimal digit) is harmless for display but dangerous when chained through multiple calculations.
+
+**Concrete example:**
 ```python
-# WRONG - allows any origin but credentials won't work
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,  # IGNORED - browsers reject this combination
-)
-
-# RIGHT - specific origins with credentials
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",  # React dev server
-        "https://yourdomain.com",  # Production
-        "tauri://localhost",      # Tauri custom protocol
-    ],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+>>> 4213.58 - 2783.16
+1430.4199999999998  # Not 1430.42
 ```
 
-**Tauri-specific consideration:** Tauri uses custom protocol (`tauri://localhost`), must be in allowed origins.
+In the calculation chain for this app:
+- `container_tare = vial_empty - vial_before_peptide` (weight difference)
+- `peptide_mass_mg = vial_after_peptide - vial_before_peptide` (weight difference)
+- `stock_conc_ug_ml = peptide_mass_mg * 1000 / total_diluent_mL`
 
-**Detection:**
-- Browser console shows CORS error when making authenticated requests
-- Login succeeds but fetching user data fails
-- Works in development but breaks in production (different origins)
+Each operation can accumulate error. When `stock_conc` feeds into `diluent_to_add` and `stock_to_add`, the final volumes may be off by a non-trivial amount at µL scale.
 
-**Which phase:** Phase 1 (Auth Foundation) - configure CORS before testing login flow
+**Why it happens:**
+- Decimal fractions like 0.58 cannot be represented exactly in binary floating point
+- Python's `float` is IEEE 754 double (same as JavaScript's `number`)
+- The scale returns 4 decimal places (e.g., `0.0001 g` resolution for XSR105DU) — these values are particularly prone to binary representation errors
+
+**Consequences:**
+- Displayed concentration values that differ from what would be calculated by hand
+- Round-trip storage of floats in SQLite and retrieval may subtly change values
+- Dilution volumes that are systematically wrong at the µL level
+
+**Prevention:**
+1. **Use Python's `decimal.Decimal` for all scientific calculations in the backend.** Set precision to match instrument resolution + safety margin:
+   ```python
+   from decimal import Decimal, ROUND_HALF_UP, getcontext
+   getcontext().prec = 28  # More than enough for 4-decimal-place weights
+
+   peptide_mass = Decimal('4213.58') - Decimal('2783.16')  # Exact: 1430.42
+   stock_conc = peptide_mass * Decimal('1000') / Decimal(str(total_diluent_ml))
+   ```
+2. **Parse scale response values as strings first, then convert to Decimal.** Do not parse them as float intermediately:
+   ```python
+   # WRONG - float intermediate loses precision
+   weight = float(response_parts[2])
+
+   # CORRECT - string to Decimal directly
+   weight = Decimal(response_parts[2])
+   ```
+3. **Return calculated values to the frontend as strings, not JSON numbers.** JSON numbers are parsed as JavaScript floats. Use `str(result)` to serialize.
+4. **Store weights in SQLite as TEXT (the string representation) or REAL with explicit rounding.** Do not chain calculations through REAL columns and re-read.
+5. **Define explicit rounding policy:** final displayed values rounded to 4 significant decimal places for weights, 2 for concentrations. Apply rounding only at display/output, not in intermediate calculations.
+
+**Warning signs:**
+- `peptide_mass_mg * 1000 / total_diluent_mL` returns values like `498.9999999999999` instead of `499.0`
+- Unit tests for calculations fail at `==` comparison for exact values
+- Different results when calculation is performed in Python vs JavaScript
+
+**Which phase:** Phase 1 (Scale Integration Foundation) — the calculation module must use `Decimal` from the first line of code. Retrofitting later requires auditing all arithmetic.
 
 ---
 
-### Pitfall 4: Race Condition - React Router Renders Before Auth Check Completes
+### Pitfall 6: Unit Inconsistency in the Calculation Chain
 
-**What goes wrong:** On initial page load, React Router renders routes before authentication status is verified, causing protected routes to redirect to login, then immediately redirect back when auth loads.
+**What goes wrong:** The calculation chain mixes units without explicit conversion, and the mixing is invisible because all values are just Python floats. The scale returns values in **grams** (g), but calculations need **milligrams** (mg). Diluent volume may be entered in **mL** but dilution ratios need consistent units. A conversion factor applied in the wrong place (or forgotten) silently corrupts all concentration values.
+
+**The specific chain for this app:**
+
+| Variable | Source Unit | Needed Unit | Conversion |
+|----------|-------------|-------------|------------|
+| Scale reading (peptide mass) | g | mg | ×1000 |
+| Declared weight (from SENAITE) | mg | mg | none |
+| Total diluent volume | mL (user-entered) | mL | none |
+| Stock concentration | µg/mL | µg/mL | mg×1000/mL = µg/mL |
+| Target concentration | µg/mL (user-entered) | µg/mL | none |
+| Diluent to add | mL | mL | none |
+| Stock to add | mL | mL | none |
+
+**Formula audit:**
+```
+stock_conc (µg/mL) = peptide_mass_mg * 1000 / total_diluent_mL
+  -- requires peptide_mass in mg. If scale returns g, must multiply by 1000 first.
+  -- The inner ×1000 converts mg → µg (not g → mg). Both conversions must happen.
+
+diluent_to_add (mL) = total_volume_mL * (1 - target_conc_ug_ml / stock_conc_ug_ml)
+stock_to_add (mL) = total_volume_mL * target_conc_ug_ml / stock_conc_ug_ml
+```
+
+If `peptide_mass` is in **g** (not mg) and the ×1000 is interpreted as g→mg rather than mg→µg:
+- Result is 1000× too high for concentration (g treated as mg)
+- Or if only the mg→µg ×1000 is applied: result is 1000× too low (g→µg without g→mg conversion)
 
 **Why it happens:**
-- AuthProvider initializes with `isLoading: true` but RouterProvider doesn't wait
-- Token verification is async but route rendering is synchronous
-- No loading state shown while checking authentication
+- Scale response is in g; formula comment says "mg"; developer misreads which ×1000 is which
+- Unit context is implicit in variable names only, not enforced
+- No unit tests verify the numeric magnitude of the calculation output
 
 **Consequences:**
-- Flash of login page even when user is authenticated
-- Infinite redirect loop between login and protected routes
-- Poor UX - users see unauthorized page briefly before correct page loads
-- Race condition makes testing unreliable
+- Stock concentration off by factor of 1000
+- All dilution volumes wrong
+- No error is raised — the calculation runs fine, just with wrong numbers
 
 **Prevention:**
+1. **Use explicit unit suffixes in all variable names:**
+   ```python
+   weight_g = Decimal(scale_response)      # Raw scale value in grams
+   peptide_mass_mg = weight_g * 1000       # Explicit g → mg conversion
+   stock_conc_ug_per_ml = peptide_mass_mg * 1000 / total_diluent_ml  # mg → µg
+   ```
+2. **Write unit-annotated docstrings for every calculation function:**
+   ```python
+   def calculate_stock_concentration(peptide_mass_mg: Decimal, total_diluent_ml: Decimal) -> Decimal:
+       """Returns stock concentration in µg/mL. Input must be mg and mL."""
+   ```
+3. **Write numeric range validation tests.** For a 1 mg peptide in 1 mL, stock conc should be ~1000 µg/mL. If the result is ~1.0 or ~1,000,000, the unit chain is wrong.
+4. **Consider using a unit-aware library (like `pint`) for internal calculations**, especially if more calculation types are added.
 
-```typescript
-// WRONG - Router renders immediately, auth state loads later
-function App() {
-  return (
-    <AuthProvider>
-      <RouterProvider router={router} />
-    </AuthProvider>
-  );
-}
+**Warning signs:**
+- Stock concentration results that are implausibly low (<1 µg/mL) or implausibly high (>100,000 µg/mL) for typical peptide samples
+- A variable named `peptide_mass` without a unit suffix
+- The same ×1000 factor applied twice in the same formula
 
-// RIGHT - Wait for auth check before rendering routes
-function App() {
-  const { isLoading, isAuthenticated } = useAuth();
-
-  if (isLoading) {
-    return <LoadingSpinner />;  // Show spinner while verifying token
-  }
-
-  return <RouterProvider router={router} />;
-}
-
-// Protected route checks loading state first
-function ProtectedRoute({ children }) {
-  const { isLoading, isAuthenticated } = useAuth();
-
-  if (isLoading) {
-    return <LoadingSpinner />;  // Critical - check loading BEFORE auth
-  }
-
-  if (!isAuthenticated) {
-    return <Navigate to="/login" />;
-  }
-
-  return children;
-}
-```
-
-**Detection:**
-- Visual flash of wrong page on initial load
-- Redirect loop in browser dev tools network tab
-- Protected routes briefly show unauthorized state
-
-**Which phase:** Phase 2 (Protected Routes) - structure auth context correctly before adding route protection
-
----
-
-### Pitfall 5: JWT Can't Be Invalidated - No Server-Side Logout
-
-**What goes wrong:** JWTs are stateless and can't be revoked. When user logs out, the token is removed from client but remains valid until expiration. If token is stolen, attacker can use it until it expires.
-
-**Why it happens:**
-- Developers assume deleting token from client = user is logged out
-- No token blacklist/revocation mechanism implemented
-- JWT expiration set too long (days/weeks)
-
-**Consequences:**
-- Compromised tokens remain valid for hours/days after "logout"
-- Can't force logout of specific user (e.g., suspicious activity, password change)
-- Can't invalidate all sessions when security incident occurs
-- User expects logout to be immediate and complete
-
-**Prevention:**
-
-**Option 1: Short-lived access tokens + refresh tokens (recommended)**
-- Access token: 15-30 minutes expiration
-- Refresh token: stored server-side, can be revoked
-- On logout, invalidate refresh token in database
-- Stolen access token expires quickly
-
-```python
-# In database model
-class RefreshToken(Base):
-    token: str
-    user_id: int
-    expires_at: datetime
-    revoked: bool = False  # Can set to True on logout
-```
-
-**Option 2: Token blacklist (Redis)**
-- Store revoked tokens in Redis with TTL = token expiration time
-- Check blacklist on every authenticated request
-- Performance impact on every request
-
-**Option 3: Token versioning**
-- Add `token_version` to user model
-- Include in JWT payload
-- Increment version on logout/password change
-- Verify version matches on each request
-
-**Detection:**
-- User logs out but can still access API with old token
-- Security audit shows no token revocation mechanism
-- No way to force logout specific user
-
-**Which phase:** Phase 1 (Auth Foundation) - decide revocation strategy before implementing JWT
-
----
-
-### Pitfall 6: Database Migration Breaks Production - No Rollback Plan
-
-**What goes wrong:** Adding `users` table and foreign keys to existing tables in production fails mid-migration, leaving database in inconsistent state with no clear rollback path.
-
-**Why it happens:**
-- Testing migration on empty database, not production-like data
-- No down() migration written
-- Foreign key constraints conflict with existing data
-- SQLite limitations with Alembic batch operations
-
-**Consequences:**
-- Production database corrupted
-- Can't rollback migration cleanly
-- Existing app can't run (missing tables) and new app can't run (partial migration)
-- Data loss if migration is forced
-
-**Prevention:**
-
-1. **Always write reversible migrations:**
-```python
-def upgrade():
-    # Add users table
-    op.create_table('users', ...)
-
-    # Add FK to existing table AFTER users table exists
-    op.add_column('analyses', sa.Column('created_by_id', sa.Integer, nullable=True))
-    op.create_foreign_key('fk_analyses_user', 'analyses', 'users', ['created_by_id'], ['id'])
-
-def downgrade():
-    # Reverse in opposite order
-    op.drop_constraint('fk_analyses_user', 'analyses')
-    op.drop_column('analyses', 'created_by_id')
-    op.drop_table('users')
-```
-
-2. **Make foreign keys nullable initially:**
-   - Don't require `created_by_id` to exist for old records
-   - Add column as `nullable=True`
-   - Optionally backfill with admin user ID
-   - Make non-nullable in future migration if needed
-
-3. **Test on production-like data:**
-   - Copy production database to staging
-   - Run migration on real data
-   - Test rollback works
-
-4. **SQLite batch mode for constraints:**
-```python
-with op.batch_alter_table('analyses') as batch_op:
-    batch_op.add_column(sa.Column('created_by_id', sa.Integer, nullable=True))
-    batch_op.create_foreign_key('fk_analyses_user', 'users', ['created_by_id'], ['id'])
-```
-
-**Detection:**
-- Migration fails with foreign key constraint error
-- `alembic downgrade` fails or doesn't exist
-- Can't run either old or new version of app
-
-**Which phase:** Phase 1 (Auth Foundation) - before running any migrations
+**Which phase:** Phase 1 (Calculation Module) — define unit convention and enforce it in the first formula written.
 
 ---
 
 ## Moderate Pitfalls
 
-Mistakes that cause delays, technical debt, or user frustration.
-
-### Pitfall 7: Token Expiration Without Refresh = Poor UX
-
-**What goes wrong:** Access token expires while user is actively using the app, forcing them to login again mid-session. No automatic refresh mechanism.
-
-**Why it happens:**
-- Only implementing access tokens, no refresh flow
-- Not intercepting 401 responses to refresh token
-- Token expiration too short without refresh strategy
-
-**Consequences:**
-- User filling out form, token expires, form submission fails
-- User forced to login multiple times per day
-- Data loss when token expires mid-operation
-
-**Prevention:**
-
-1. **Implement silent refresh pattern:**
-```typescript
-// Axios interceptor for automatic token refresh
-axios.interceptors.response.use(
-  response => response,
-  async error => {
-    if (error.response?.status === 401) {
-      try {
-        const newToken = await refreshAccessToken();
-        // Retry original request with new token
-        error.config.headers['Authorization'] = `Bearer ${newToken}`;
-        return axios.request(error.config);
-      } catch (refreshError) {
-        // Refresh failed, redirect to login
-        window.location.href = '/login';
-      }
-    }
-    return Promise.reject(error);
-  }
-);
-```
-
-2. **Use appropriate token lifetimes:**
-   - Access token: 15-30 minutes (short enough to be secure)
-   - Refresh token: 7-30 days (user doesn't re-login frequently)
-
-3. **Queue refresh requests to prevent race condition:**
-   - Multiple concurrent requests with expired token
-   - Only one should refresh, others should wait
-   - Use promise queue pattern
-
-**Detection:**
-- Users complain about being logged out randomly
-- 401 errors mid-session in logs
-- No refresh endpoint in API
-
-**Which phase:** Phase 1 (Auth Foundation) - implement refresh flow with initial auth
+Mistakes that cause incorrect state, confusing UX, or data integrity issues.
 
 ---
 
-### Pitfall 8: Role Checks in Every Route Instead of Dependency
+### Pitfall 7: Wizard Step Regression Invalidates Downstream Steps — No Cascade
 
-**What goes wrong:** Role-based access control logic is duplicated in every endpoint function instead of using reusable dependencies, leading to inconsistent permission checks.
+**What goes wrong:** A tech completes steps 1–4, then navigates back to step 2 and changes a weight. Steps 3 and 4 were calculated using the old weight value. The database now has step 3 and 4 results that are inconsistent with the new step 2 value. No recalculation or invalidation occurs.
+
+**Specific scenario:**
+- Step 2: Weigh vial + peptide → 4213.58 g confirmed
+- Step 4 calculates stock concentration from step 2 value → stored in DB
+- Tech goes back to step 2, re-weighs → now 4198.21 g
+- Step 4 still shows old concentration
 
 **Why it happens:**
-- Not understanding FastAPI dependency composition
-- Copy-pasting permission checks
-- No centralized permission system
+- Wizard stores each step as a DB record on confirm; update to prior step doesn't cascade
+- Frontend allows backward navigation without triggering recalculation
+- "Completed" steps are treated as immutable once confirmed
 
 **Consequences:**
-- Inconsistent role checks (some endpoints check role, others forget)
-- Hard to audit who can access what
-- Changing role logic requires updating every endpoint
-- Security vulnerabilities from missed checks
+- Session record contains internal contradictions
+- Tech submits for HPLC run with wrong stock concentration
+- Audit trail shows no indication that step 2 was re-done after step 4
 
 **Prevention:**
+1. **Define a step dependency graph explicitly.** Step N is valid only if all steps it depends on are confirmed AND their values have not changed since.
+   ```
+   Step 1 (container tare) → Step 2 (peptide + container)
+   Step 2 → Step 3 (diluent volume) → Step 4 (stock concentration)
+   Step 4 → Step 5 (dilution volumes)
+   ```
+2. **On step regression with a value change, invalidate all downstream steps.** The DB update for step 2 should mark steps 3, 4, 5 as `status: 'invalidated'`. The UI should show these steps as needing re-confirmation.
+3. **Distinguish "going back to review" from "going back to change."** Navigation back without a value change does not invalidate downstream steps. Only a change to a confirmed value triggers cascade invalidation.
+4. **Show an explicit warning when navigating back to a confirmed step:** "If you change this reading, steps 3, 4, and 5 will need to be re-confirmed."
+5. **The session record must log the full history of changes**, not just the final values. If step 2 was confirmed at 4213.58 g, then changed to 4198.21 g, both values and timestamps should be in the audit log.
 
-```python
-# WRONG - permission check in endpoint
-@router.get("/admin/users")
-async def list_users(current_user: User = Depends(get_current_user)):
-    if current_user.role != "admin":
-        raise HTTPException(403, "Not authorized")
-    return db.query(User).all()
+**Warning signs:**
+- Wizard allows backward navigation without any "are you sure?" prompt
+- Step confirmation stores a single row per step (no history)
+- Session review page shows only latest values, not change history
 
-# RIGHT - reusable permission dependency
-async def require_admin(current_user: User = Depends(get_current_user)):
-    if current_user.role != "admin":
-        raise HTTPException(status_code=403, detail="Admin access required")
-    return current_user
-
-@router.get("/admin/users")
-async def list_users(admin: User = Depends(require_admin)):
-    return db.query(User).all()
-```
-
-**Even better - role dependency factory:**
-```python
-def require_role(required_role: str):
-    async def role_checker(current_user: User = Depends(get_current_user)):
-        if current_user.role != required_role:
-            raise HTTPException(403, f"{required_role} access required")
-        return current_user
-    return role_checker
-
-@router.get("/admin/users", dependencies=[Depends(require_role("admin"))])
-async def list_users(): ...
-```
-
-**Detection:**
-- Role check logic scattered across endpoints
-- Some endpoints missing permission checks
-- Code review finds inconsistent patterns
-
-**Which phase:** Phase 3 (Authorization/Roles) - establish dependency pattern before adding many protected endpoints
+**Which phase:** Phase 2 (Wizard Flow) — invalidation logic must be part of the state model, not added after UX is built.
 
 ---
 
-### Pitfall 9: Password Reset Without Email = Weak Security Model
+### Pitfall 8: SSE Stream Desync After Reconnection — Frontend Shows Stale State
 
-**What goes wrong:** Console-based admin password reset for v1 (no email infrastructure) leads to poor security practices - admins resetting passwords and telling users the new password.
+**What goes wrong:** The SSE connection from the frontend to the FastAPI `/events/scale` endpoint drops (network blip, tab sleep, browser power save). The browser automatically reconnects SSE. However, the backend has been buffering new readings and the reconnect may replay old events or, more commonly, deliver only new events — leaving the frontend in an inconsistent state where it missed the transition from "unstable" to "stable."
 
-**Why it happens:**
-- No email service configured yet
-- Assuming console reset is "good enough for v1"
-- Not considering security implications
+**SSE reconnect behavior:**
+- Browser sends `Last-Event-ID` header on reconnect
+- If the backend does not implement `Last-Event-ID` replay, the frontend misses all events during the outage
+- If the backend has no ID scheme, every reconnect starts fresh — frontend doesn't know what it missed
 
 **Consequences:**
-- Passwords transmitted over insecure channels (Slack, email, phone)
-- Admin knows user's password temporarily
-- No audit trail of password resets
-- Users don't change temporary password (security risk)
+- Frontend shows "awaiting stable reading" when the scale has already stabilized (missed the event)
+- Or: frontend shows "stable" from a pre-disconnect reading when the scale is now in motion
+- Confirm button state is wrong
 
 **Prevention:**
+1. **Always emit the current scale state as the first SSE event on any new connection.** Backend connects → immediately sends `{ weight: current, stable: bool, status: string }` — client is always bootstrapped.
+2. **Do not rely on event replay for state reconstruction.** Scale readings are time-sensitive; replaying old events does not help. Instead, ensure the backend re-broadcasts state on reconnect.
+3. **Implement a client-side SSE reconnect handler** that shows "reconnecting..." state until the first new event arrives:
+   ```typescript
+   eventSource.onerror = () => {
+     setScaleStatus('reconnecting')
+   }
+   eventSource.onmessage = (e) => {
+     setScaleStatus('connected')
+     // ... handle event
+   }
+   ```
+4. **Add a heartbeat event every 2–3 seconds** so the frontend can distinguish "no readings" (scale quiet, no change) from "connection lost" (no events at all).
 
-1. **Force password change on admin reset:**
-```python
-@router.post("/admin/reset-password/{user_id}")
-async def admin_reset_password(
-    user_id: int,
-    admin: User = Depends(require_admin),
-    db: Session = Depends(get_db)
-):
-    user = db.query(User).filter(User.id == user_id).first()
-    temp_password = generate_secure_random_password()
-    user.hashed_password = hash_password(temp_password)
-    user.must_change_password = True  # Force change on next login
-    db.commit()
+**Warning signs:**
+- No heartbeat events in SSE stream
+- Frontend scale display does not show a reconnecting state
+- SSE event handler only handles `onmessage`, not `onerror`
 
-    # Log action for audit
-    log_admin_action(admin.id, "password_reset", user_id)
-
-    return {"temporary_password": temp_password, "must_change": True}
-```
-
-2. **Audit trail:**
-   - Log who reset password and when
-   - Log IP address and user agent
-   - Alert user that password was reset (if email available later)
-
-3. **Secure delivery:**
-   - Generate strong random temporary password
-   - Show only once to admin
-   - Expire temporary password after first use or 24 hours
-
-4. **Plan for email v2:**
-   - Design with email in mind
-   - Use database-backed password reset tokens
-   - Easy to switch to email-based reset later
-
-**Detection:**
-- Users keeping admin-set passwords indefinitely
-- No audit trail of password resets
-- Passwords shared over insecure channels
-
-**Which phase:** Phase 1 (Auth Foundation) - implement secure console reset pattern from start
+**Which phase:** Phase 2 (Wizard Flow) — SSE stream design must include reconnect handling from the start.
 
 ---
 
-### Pitfall 10: FastAPI Users is in Maintenance Mode
+### Pitfall 9: Scale Overload/Underload Not Handled in Wizard UI
 
-**What goes wrong:** Choosing FastAPI Users library without knowing it's in maintenance mode (no new features, only security updates). Future features may not be possible without switching libraries.
+**What goes wrong:** MT-SICS returns `+` (overload) or `-` (underload) as the status field instead of a weight value. Backend parses this as a number, gets NaN or zero, and streams it to the frontend. UI shows "0.00 g" or crashes the SSE parser. Tech is confused. The wizard does not know why it cannot get a stable reading.
+
+**MT-SICS overload/underload codes:**
+- `S + <value> <unit>` — overload: weight exceeds max capacity (XSR105DU capacity is 120g)
+- `S - <value> <unit>` — underload: pan missing or below minimum detectable weight
+- `S I <value> <unit>` — internal error: balance not ready (warming up, calibrating)
+- `S EL <value> <unit>` — logical error: command cannot execute in current state
 
 **Why it happens:**
-- Not checking project status before adopting
-- Assuming active development from popularity
-- Not reading documentation carefully
+- Response parser assumes `status == 'S' or status == 'D'` and tries to parse a numeric value from the weight field
+- `+` and `-` are not numeric; parsing fails silently
+- No distinction made between "no weight" and "error condition"
 
 **Consequences:**
-- Stuck with current feature set
-- Must switch libraries later for new features
-- Migration work if switching to successor library
-- Security updates only, no bug fixes for non-security issues
+- UI shows misleading "0.00 g" when the scale is actually overloaded
+- Tech doesn't know to remove weight or check the pan
+- Wizard is stuck with no actionable error message
 
 **Prevention:**
+1. **Parse all five MT-SICS status codes explicitly:**
+   ```python
+   MT_SICS_STATUS = {
+       'S': 'stable',
+       'D': 'dynamic',
+       '+': 'overload',
+       '-': 'underload',
+       'I': 'not_ready',
+       'L': 'logical_error',
+   }
+   ```
+2. **SSE payload must include the parsed status string, not just the weight value.** Frontend renders different UI for each status.
+3. **Show user-facing error messages for each condition:**
+   - Overload: "Weight exceeds scale capacity (120g max). Remove some material."
+   - Underload: "Pan may be missing or weight below minimum. Check the balance pan."
+   - Not ready: "Balance is warming up or calibrating. Please wait."
+4. **Block the Confirm button for all non-`stable` statuses**, not just `dynamic`.
 
-1. **Acknowledge maintenance mode in architecture decision:**
-   - Document that library is stable but not evolving
-   - Plan for potential migration to successor (in development by same team)
-   - Ensure core features needed are already present
+**Warning signs:**
+- SSE payload only has `weight` and `stable` fields (missing `status`)
+- Backend sends NaN to frontend when scale returns `+` or `-`
+- No error message variation in the UI for different scale states
 
-2. **Abstract authentication layer:**
-   - Don't couple entire codebase to FastAPI Users
-   - Create internal auth interfaces
-   - Easier to swap implementations later
-
-3. **Monitor for successor library:**
-   - FastAPI Users team is building replacement
-   - Track progress on GitHub
-   - Plan migration window when stable
-
-**What FastAPI Users provides (stable):**
-- JWT authentication ✅
-- Database backend ✅
-- User registration/login ✅
-- Role system (basic) ✅
-- SQLAlchemy integration ✅
-
-**What may require workarounds:**
-- Complex role hierarchies
-- Fine-grained permissions
-- OAuth providers
-- MFA (not built-in)
-
-**Detection:**
-- Feature request can't be implemented without library changes
-- GitHub issues closed with "won't fix, maintenance mode"
-- Realizing limitation after significant development
-
-**Which phase:** Phase 0 (Research/Planning) - evaluate library status before committing
+**Which phase:** Phase 1 (Scale Integration Foundation) — status parsing belongs in the MT-SICS response parser, day one.
 
 ---
 
-### Pitfall 11: Not Testing Both Browser and Tauri Auth Flows
+### Pitfall 10: SQLite Session Persistence Without Atomic Step Commits
 
-**What goes wrong:** Authentication works perfectly in browser development but breaks in Tauri desktop app due to different security contexts, storage mechanisms, and CORS behavior.
+**What goes wrong:** A wizard step requires the tech to confirm a weight AND trigger a recalculation. The backend:
+1. Saves the weight to the `wizard_steps` table
+2. Calculates stock concentration
+3. Updates the `session_calculations` table
+
+If the process crashes between steps 2 and 3, the session has a confirmed weight but no calculation record. On resume, the wizard doesn't know if the calculation was done and may skip it, show stale values, or error out.
 
 **Why it happens:**
-- Developing and testing only in browser
-- Assuming Tauri is "just a browser"
-- Not understanding Tauri's custom protocol and security model
+- Multi-step DB writes without a wrapping transaction
+- Session resume logic reads step status but doesn't verify calculation consistency
+- "Step completed" flag set before all effects of that step are committed
 
 **Consequences:**
-- Auth works in browser but fails in Tauri
-- Token storage incompatible between platforms
-- CORS issues specific to Tauri
-- Deployment blocked by platform-specific bugs
+- Resumed session is in an inconsistent state
+- Tech may not notice that a calculation is missing
+- Audit trail shows a confirmed step without the resulting calculation
 
 **Prevention:**
+1. **Wrap every step confirmation in a single SQLite transaction:**
+   ```python
+   with db.begin():
+       db.execute("INSERT INTO wizard_steps ...")   # Save weight
+       db.execute("UPDATE session_calculations ...") # Save result
+       db.execute("UPDATE wizard_sessions SET current_step = ?", [next_step])
+   ```
+   All three writes succeed or none do.
+2. **Session resume must validate consistency, not just step status.** A step is truly "complete" only if both the input value and the dependent output are present and consistent.
+3. **Define a session integrity check function** that runs at wizard resume and reports any incomplete state with a clear recovery path.
 
-1. **Test matrix from day 1:**
-   - Browser (Chrome/Firefox/Safari)
-   - Tauri development mode
-   - Tauri production build
+**Warning signs:**
+- Step confirmation triggers multiple separate `db.execute()` calls outside a transaction
+- Session resume reads only `current_step` without validating downstream calculation records
 
-2. **Environment-aware token storage:**
-```typescript
-import { invoke } from '@tauri-apps/api/tauri';
-
-// Detect environment
-const isTauri = window.__TAURI__ !== undefined;
-
-async function storeToken(token: string) {
-  if (isTauri) {
-    // Use Tauri secure storage
-    await invoke('store_token', { token });
-  } else {
-    // Use browser storage (sessionStorage or memory)
-    sessionStorage.setItem('token', token);
-  }
-}
-```
-
-3. **Tauri-specific CORS config:**
-```python
-# FastAPI CORS
-allow_origins=[
-    "http://localhost:3000",  # React dev
-    "https://yourdomain.com", # Production web
-    "tauri://localhost",      # Tauri custom protocol
-    "http://tauri.localhost", # Alternative Tauri origin
-]
-```
-
-**Detection:**
-- Auth works in browser but 401 errors in Tauri
-- Token storage errors in Tauri console
-- CORS errors specific to Tauri
-
-**Which phase:** Phase 2 (Protected Routes) - establish test matrix before deploying
+**Which phase:** Phase 2 (Session Persistence) — transaction discipline is a first-commit requirement.
 
 ---
 
 ## Minor Pitfalls
 
-Mistakes that cause annoyance but are easily fixable.
-
-### Pitfall 12: Weak Password Requirements Allow "password123"
-
-**What goes wrong:** No password strength validation allows users to set weak passwords like "password", "123456", increasing security risk.
-
-**Why it happens:**
-- Using FastAPI Users default settings
-- Not configuring custom password validator
-- Assuming library handles it
-
-**Prevention:**
-
-```python
-from fastapi_users import schemas
-import re
-
-class UserCreate(schemas.BaseUserCreate):
-    @validator('password')
-    def validate_password(cls, password):
-        if len(password) < 8:
-            raise ValueError('Password must be at least 8 characters')
-        if not re.search(r'[A-Z]', password):
-            raise ValueError('Password must contain uppercase letter')
-        if not re.search(r'[a-z]', password):
-            raise ValueError('Password must contain lowercase letter')
-        if not re.search(r'\d', password):
-            raise ValueError('Password must contain number')
-        return password
-```
-
-**Detection:**
-- Users registering with weak passwords
-- Security audit flags weak password policy
-
-**Which phase:** Phase 1 (Auth Foundation) - configure during schema setup
+Mistakes that cause annoyance but are fixable.
 
 ---
 
-### Pitfall 13: No Username Display - Only Email
+### Pitfall 11: MT-SICS Response Parsing — Line Ending Sensitivity
 
-**What goes wrong:** Using email as the only identifier means user's email is displayed everywhere in UI, which users may not want (privacy concern).
-
-**Why it happens:**
-- FastAPI Users defaults to email-based auth
-- Not adding username field to user model
-- Assuming email is sufficient
+**What goes wrong:** MT-SICS responses are terminated with `<CR><LF>` (`\r\n`). Python `socket.recv()` or `asyncio.StreamReader.readline()` may return lines with `\r` included if the reader splits only on `\n`. Parsing `"S S 1234.5678 g\r"` splits correctly only if the trailing `\r` is stripped. If not stripped, the unit field becomes `"g\r"` which fails unit comparisons.
 
 **Prevention:**
+- Always call `.strip()` or `.rstrip('\r\n')` on each MT-SICS response line before parsing.
+- Use `asyncio.StreamReader.readuntil(b'\r\n')` for reliable frame detection; then decode and strip both.
 
-```python
-class User(SQLAlchemyBaseUserTable[int], Base):
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    email: Mapped[str] = mapped_column(String, unique=True, nullable=False)
-    username: Mapped[str] = mapped_column(String, unique=True, nullable=False)  # Add this
-    hashed_password: Mapped[str] = mapped_column(String, nullable=False)
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
-    is_superuser: Mapped[bool] = mapped_column(Boolean, default=False)
-```
-
-**Detection:**
-- User feedback about displaying email everywhere
-- Privacy concerns in UI
-
-**Which phase:** Phase 1 (Auth Foundation) - decide user model fields before migrations
+**Which phase:** Phase 1 (Scale Integration Foundation).
 
 ---
 
-### Pitfall 14: Forgetting to Hash API Keys in Database
+### Pitfall 12: Scale Time Drift Between Polls — Wizard Thinks Scale Is Unresponsive
 
-**What goes wrong:** During migration from X-API-Key to JWT, the existing API keys are stored in plain text in database, creating security vulnerability if database is compromised.
-
-**Why it happens:**
-- API keys were internal/development only, not considered sensitive
-- Adding auth makes database more attractive to attackers
-- Not treating API keys like passwords
+**What goes wrong:** The `S` (stable weight, blocking) command can take several seconds if the scale is in motion. If the backend poll interval is shorter than the blocking time, commands queue up. The queue grows unboundedly, responses arrive out of order, and the backend may report stale readings as current.
 
 **Prevention:**
+- Use a request-response pattern: send `S`, wait for response, then wait the poll interval, then send the next `S`. Never send a new command until the previous response is received.
+- Set a command timeout (e.g., 8 seconds) and abort the command if no response arrives. Treat timeout as a `D` (unstable) reading.
+- Use `SI` for the live display stream (fast, non-blocking), and switch to `S` only for the final confirmed capture.
 
-1. **Hash API keys like passwords:**
-```python
-import secrets
-import hashlib
-
-def hash_api_key(api_key: str) -> str:
-    return hashlib.sha256(api_key.encode()).hexdigest()
-
-# When creating API key
-raw_key = secrets.token_urlsafe(32)
-hashed = hash_api_key(raw_key)
-# Store hashed in database, show raw_key only once to user
-```
-
-2. **Migration plan:**
-   - Generate new hashed API keys
-   - Invalidate old plain-text keys
-   - Notify users to update
-
-**Detection:**
-- Database dump shows API keys in plain text
-- Security audit flags unencrypted credentials
-
-**Which phase:** Phase 1 (Auth Foundation) - before creating API key migration
+**Which phase:** Phase 1 (Scale Integration Foundation).
 
 ---
 
-### Pitfall 15: No Rate Limiting on Login Endpoint
+### Pitfall 13: Declared Weight from SENAITE Is in Different Units Than Scale Output
 
-**What goes wrong:** Login endpoint has no rate limiting, allowing brute force password attacks.
-
-**Why it happens:**
-- Focusing on functionality, not security
-- Assuming authentication library handles it
-- Not considering attack vectors
+**What goes wrong:** SENAITE stores declared peptide weight in mg (per spec). The scale outputs in g. The validation step ("does measured weight match declared weight?") compares the two values directly without conversion — comparing mg to g — resulting in a 1000× discrepancy that always fails or always passes depending on direction.
 
 **Prevention:**
+- Normalize all weights to a single canonical unit (mg) at the boundary of the system:
+  - Scale response → convert g to mg immediately upon parse
+  - SENAITE declared weight → already in mg, no conversion
+- All internal calculations operate in mg. Convert to g only for display if needed.
 
-```python
-from slowapi import Limiter
-from slowapi.util import get_remote_address
+**Which phase:** Phase 1 (Scale Integration Foundation) — establish the canonical unit at the system boundary.
 
-limiter = Limiter(key_func=get_remote_address)
+---
 
-@router.post("/auth/login")
-@limiter.limit("5/minute")  # 5 attempts per minute
-async def login(credentials: OAuth2PasswordRequestForm = Depends()):
-    ...
-```
+### Pitfall 14: Confirm Button Double-Submit Race Condition
 
-**Better - account lockout:**
-```python
-# Track failed attempts in database
-class User(Base):
-    failed_login_attempts: int = 0
-    locked_until: datetime | None = None
+**What goes wrong:** The tech clicks "Confirm Weight" while the SSE stream delivers a new reading 50ms later. Two confirmation requests hit the backend simultaneously. The backend commits two rows to `wizard_steps` for the same step, or commits one and then overwrites it with a slightly different value from the second request.
 
-async def login(credentials):
-    user = get_user_by_email(credentials.username)
-    if user.locked_until and user.locked_until > datetime.now():
-        raise HTTPException(429, "Account locked. Try again later")
+**Prevention:**
+- Debounce the Confirm button (disable for 500ms after first click).
+- Backend must enforce a unique constraint: `(session_id, step_number)` in `wizard_steps`. Second insert for same step returns a conflict error; frontend surfaces this gracefully.
+- Or: use optimistic locking — include a `step_version` in the confirm request; backend rejects if version doesn't match current.
 
-    if not verify_password(credentials.password, user.hashed_password):
-        user.failed_login_attempts += 1
-        if user.failed_login_attempts >= 5:
-            user.locked_until = datetime.now() + timedelta(minutes=15)
-        db.commit()
-        raise HTTPException(401, "Invalid credentials")
-
-    # Reset on successful login
-    user.failed_login_attempts = 0
-    user.locked_until = None
-    db.commit()
-```
-
-**Detection:**
-- No rate limiting headers in login response
-- Able to make unlimited login attempts
-- Security audit flags brute force vulnerability
-
-**Which phase:** Phase 1 (Auth Foundation) - add rate limiting before deployment
+**Which phase:** Phase 2 (Wizard Flow).
 
 ---
 
@@ -792,168 +516,62 @@ async def login(credentials):
 
 | Phase Topic | Likely Pitfall | Mitigation |
 |-------------|---------------|------------|
-| **Phase 1: Auth Foundation** | Breaking existing API with required auth | Use dual-auth pattern (JWT + API key), make endpoints gradually protected |
-| **Phase 1: Auth Foundation** | CORS misconfiguration blocks credentials | Set `allow_credentials=True` with specific origins, include `tauri://localhost` |
-| **Phase 1: Auth Foundation** | No token revocation mechanism | Implement refresh token strategy with server-side storage |
-| **Phase 1: Auth Foundation** | Database migration fails in production | Test on production-like data, write reversible migrations, make FKs nullable |
-| **Phase 2: Protected Routes** | Race condition - router renders before auth check | Wait for auth loading state before rendering routes |
-| **Phase 2: Protected Routes** | Token storage vulnerable to XSS | Use Tauri secure storage for desktop, memory + httpOnly cookies for browser |
-| **Phase 2: Protected Routes** | Token expires mid-session | Implement automatic token refresh with axios interceptor |
-| **Phase 2: Protected Routes** | Browser and Tauri auth flows diverge | Test both platforms from day 1, abstract storage layer |
-| **Phase 3: Authorization/Roles** | Permission checks duplicated in endpoints | Use dependency composition for role requirements |
-| **Phase 3: Authorization/Roles** | N+1 queries checking permissions | Cache role in JWT payload, don't query DB for every permission check |
-| **Phase 4: Migration** | X-API-Key consumers break when disabled | Provide deprecation timeline, support both auth methods during transition |
-| **Phase 4: Migration** | No way to track who uses which auth method | Add logging/metrics to dual-auth dependency |
-
----
-
-## Integration Pitfalls with Existing System
-
-Specific to retrofitting auth onto Accu-Mk1's current architecture.
-
-### Integration Pitfall 1: Explorer Endpoints Lose Access
-
-**What:** The existing explorer functionality (currently using X-API-Key) breaks when auth is added to those endpoints.
-
-**Prevention:**
-- Keep explorer endpoints accessible with X-API-Key during Phase 1-3
-- Add optional JWT support alongside X-API-Key
-- Migrate explorer to use JWT in Phase 4 after main app is stable
-- Consider if explorer needs authentication at all (read-only public data?)
-
-### Integration Pitfall 2: Analysis Ownership Ambiguity
-
-**What:** Existing analyses in database have no `created_by` field. When adding user authentication, unclear who owns historical data.
-
-**Prevention:**
-- Add `created_by_id` as nullable foreign key initially
-- Create "System" or "Legacy" admin user
-- Backfill historical records with system user ID
-- Future analyses require authenticated user
-
-### Integration Pitfall 3: Shared Desktop Sessions
-
-**What:** Tauri desktop app may be installed on shared lab computers. Multiple users should be able to use same installation with different accounts.
-
-**Prevention:**
-- Implement proper logout that clears all stored credentials
-- Don't persist tokens beyond app closure by default
-- Add "Remember me" option that's opt-in, not default
-- Clear session on app close unless explicitly kept
-
-### Integration Pitfall 4: Offline Functionality Breaks
-
-**What:** If Tauri app had any offline capabilities, requiring JWT authentication breaks them (can't verify token without server).
-
-**Prevention:**
-- Design token verification to gracefully fail offline
-- Cache user data for offline access
-- Queue authenticated actions when offline, sync when online
-- Consider long-lived tokens with offline grace period
+| **Scale Service (initial)** | Accepting `D` (dynamic) readings as confirmed | Parse stability field; gate Confirm on `stable === true` |
+| **Scale Service (initial)** | Stale tare from previous session | Read `TA` command at session start; surface tare state to tech |
+| **Scale Service (initial)** | TCP drop without detection | Aggressive keepalive + timestamp-based staleness detection |
+| **Scale Service (initial)** | Overload/underload shows as "0.00 g" | Parse all 5+ MT-SICS status codes; map to user-facing messages |
+| **Scale Service (initial)** | `g` vs `mg` unit confusion at parse boundary | Convert to canonical mg immediately on parse |
+| **Calculation Module** | Float arithmetic in Python/JS accumulates error | Use `Decimal` from first formula; parse scale strings directly to `Decimal` |
+| **Calculation Module** | Unit inconsistency (g vs mg vs µg) in formula chain | Explicit unit suffixes in variable names; validate output magnitude in tests |
+| **Wizard Flow** | Step regression invalidates downstream without cascade | Dependency graph + cascade invalidation on value change |
+| **Wizard Flow** | SSE reconnect leaves frontend in stale state | Re-broadcast current state on any new SSE connection |
+| **Wizard Flow** | Confirm button double-submit | Debounce + `UNIQUE(session_id, step_number)` in DB |
+| **Session Persistence** | Crash between weight save and calculation save | Single transaction per step confirmation |
+| **Session Persistence** | Session resume sees inconsistent state | Consistency check function at resume time |
 
 ---
 
 ## Confidence Assessment
 
-| Area | Confidence | Source Quality |
-|------|-----------|----------------|
-| **FastAPI JWT Security** | HIGH | Official FastAPI docs, Context7-equivalent sources, multiple 2026 guides |
-| **React Auth Race Conditions** | HIGH | GitHub issues from React Router and Auth0 repos, documented patterns |
-| **Tauri Token Storage** | MEDIUM | Tauri official security docs, inferred from general secure storage practices |
-| **FastAPI Users Library** | HIGH | Official documentation, maintenance mode status confirmed |
-| **Migration Strategies** | MEDIUM | Multiple real-world examples (Adobe, Google Cloud), API versioning guides |
-| **Database Migrations** | HIGH | Alembic official documentation, SQLAlchemy patterns |
-| **CORS + Credentials** | HIGH | FastAPI official docs, multiple verified sources |
-| **Password Reset Security** | MEDIUM | Industry best practices from Google Workspace, Microsoft 365 admin guides |
-| **Rate Limiting** | MEDIUM | Common patterns, library docs (slowapi) |
+| Area | Confidence | Source |
+|------|------------|--------|
+| MT-SICS response codes (S/D/+/-/I/L/ES/ET/EL) | HIGH | InstrumentKit Python library source code; multiple official MT-SICS reference manuals (indirect via search); N3uron integration docs |
+| MT-SICS tare state persistence | MEDIUM | Documented in MT-SICS protocol behavior; inferred from tare command set (T, TI, TA) and balance memory design |
+| TCP keepalive behavior on Python sockets | HIGH | Python socket documentation; Linux kernel TCP behavior; well-documented pattern |
+| MT-SICS single-client TCP limitation | MEDIUM | Reported in integration forum discussions; inferred from Mettler Toledo "server or server+client" mode documentation; not explicitly stated for XSR105DU |
+| IEEE 754 float precision in weight subtraction | HIGH | Multiple authoritative sources including Oracle IEEE 754 documentation, Python decimal module docs |
+| SSE reconnect behavior and bootstrap pattern | HIGH | SSE specification; multiple authoritative articles; Tauri SSE plugin docs |
+| Wizard step regression invalidation pattern | MEDIUM | General state machine patterns; no specific hardware-wizard literature found |
+| SQLite transaction isolation for wizard steps | HIGH | SQLite documentation; standard ACID pattern |
 
 ---
 
 ## Sources
 
-### FastAPI JWT & Security
-- [OAuth2 with Password (and hashing), Bearer with JWT tokens - FastAPI](https://fastapi.tiangolo.com/tutorial/security/oauth2-jwt/)
-- [Securing FastAPI with JWT Token-based Authentication | TestDriven.io](https://testdriven.io/blog/fastapi-jwt-auth/)
-- [Bulletproof JWT Authentication in FastAPI: A Complete Guide | Medium](https://medium.com/@ancilartech/bulletproof-jwt-authentication-in-fastapi-a-complete-guide-2c5602a38b4f)
-- [JWT - FastAPI Users](https://fastapi-users.github.io/fastapi-users/10.3/configuration/authentication/strategies/jwt/)
-- [Authentication and Authorization with FastAPI: A Complete Guide | Better Stack](https://betterstack.com/community/guides/scaling-python/authentication-fastapi/)
+### MT-SICS Protocol
+- [MT-SICS Response Status Codes — InstrumentKit Python Library Source](https://instrumentkit.readthedocs.io/en/latest/_modules/instruments/mettler_toledo/mt_sics.html) (HIGH confidence — actual parsing code)
+- [MT-SICS Spider Error Codes (ES/ET/EL) — ManualsLib](https://www.manualslib.com/manual/1443956/Mettler-Toledo-Spider.html?page=58)
+- [Mettler Toledo N3uron Integration Docs — Stable vs Immediate Weight](https://docs.n3uron.com/docs/mettler-toledo-configuration)
+- [MT-SICS Supplement Reference Manual — geass.com (2024)](https://www.geass.com/wp-content/uploads/2024/12/MT-SICS.pdf)
+- [node-mt-sics Library — Atlantis-Software on GitHub](https://github.com/Atlantis-Software/mt-sics)
+- [OmniServer MT-SICS Starter Protocol — Software Toolbox](https://softwaretoolbox.com/omniserver/metter-toledo-mt-sics-opc-ua-driver)
 
-### Token Storage & Security
-- [Security | Tauri](https://v2.tauri.app/security/)
-- [Secure JWT Storage: Best Practices | Syncfusion](https://www.syncfusion.com/blogs/post/secure-jwt-storage-best-practices)
-- [JWT Security Best Practices:Checklist for APIs | Curity](https://curity.io/resources/learn/jwt-best-practices/)
-- [Token Storage - Auth0 Docs](https://auth0.com/docs/secure/security-guidance/data-security/token-storage)
+### TCP/Socket Engineering
+- [node-net-reconnect npm — Reconnecting TCP Socket Library](https://www.npmjs.com/package/node-net-reconnect)
+- [Node.js TCP Socket Reconnect Pattern — GitHub Gist](https://gist.github.com/branneman/0a77af5d10b93084e4f2)
+- [NI Community: Communication Issue with Mettler Toledo Analytical Balance](https://forums.ni.com/t5/LabVIEW/Communication-Issue-between-Driver-and-Analytical-Balance/td-p/2497172)
 
-### React Protected Routes & Race Conditions
-- [Protected Routes in React Router: Secure Authentication Patterns](https://react.wiki/router/protected-routes/)
-- [Race Condition, React Router flushes before React state updates · Issue #10232](https://github.com/remix-run/react-router/issues/10232)
-- [Race condition between isAuthenticated and isLoading (redirects) · Issue #343](https://github.com/auth0/auth0-react/issues/343)
-- [Building Reliable Protected Routes with React Router v7 - DEV Community](https://dev.to/ra1nbow1/building-reliable-protected-routes-with-react-router-v7-1ka0)
+### Floating Point Precision
+- [What Every Computer Scientist Should Know About Floating-Point Arithmetic — Oracle](https://docs.oracle.com/cd/E19957-01/806-3568/ncg_goldberg.html)
+- [Catastrophic Cancellation — Wikipedia](https://en.wikipedia.org/wiki/Catastrophic_cancellation)
+- [Decimal.js — arbitrary-precision Decimal for JavaScript](https://mikemcl.github.io/decimal.js/)
+- [Handling Floating Point Precision in JavaScript — Java Code Geeks (2024)](https://www.javacodegeeks.com/2024/11/handling-floating-point-precision-in-javascript.html)
+- [Precision Decimal Math in JavaScript — Atomic Object](https://spin.atomicobject.com/javascript-math-precision-decimals/)
 
-### API Migration & Backward Compatibility
-- [Adobe: Migrating from Service Account (JWT) credential to OAuth](https://developer.adobe.com/developer-console/docs/guides/authentication/ServerToServerAuthentication/migration)
-- [API key vs JWT: Secure B2B SaaS with modern M2M authentication](https://www.scalekit.com/blog/apikey-jwt-comparison)
-- [Managing API Changes: 8 Strategies That Reduce Disruption | Theneo Blog](https://www.theneo.io/blog/managing-api-changes-strategies)
-- [8 API Versioning Best Practices for Developers in 2026](https://getlate.dev/blog/api-versioning-best-practices)
+### SSE Reliability
+- [The Hidden Risks of SSE — Medium](https://medium.com/@2957607810/the-hidden-risks-of-sse-server-sent-events-what-developers-often-overlook-14221a4b3bfe)
+- [SSE Reconnect in React — OneUptime (2026)](https://oneuptime.com/blog/post/2026-01-15-server-sent-events-sse-react/view)
 
-### JWT Refresh Tokens
-- [How do I handle JWT expiration and refresh token strategies? | CIAM Q&A](https://mojoauth.com/ciam-qna/how-to-handle-jwt-expiration-refresh-token-strategies)
-- [Refresh Token Rotation | Auth.js](https://authjs.dev/guides/refresh-token-rotation)
-- [What Are Refresh Tokens and How to Use Them Securely | Auth0](https://auth0.com/blog/refresh-tokens-what-are-they-and-when-to-use-them/)
-
-### CORS Configuration
-- [CORS (Cross-Origin Resource Sharing) - FastAPI](https://fastapi.tiangolo.com/tutorial/cors/)
-- [Blocked by CORS in FastAPI? Here's How to Fix It](https://davidmuraya.com/blog/fastapi-cors-configuration/)
-
-### Database Migrations
-- [Database Migrations: What are the Types of DB Migrations? | Prisma](https://www.prisma.io/dataguide/types/relational/what-are-database-migrations)
-- [Operation Reference — Alembic Documentation](https://alembic.sqlalchemy.org/en/latest/ops.html)
-- [Auto Generating Migrations — Alembic Documentation](https://alembic.sqlalchemy.org/en/latest/autogenerate.html)
-- [How to Handle Database Migration / Schema Change? | Bytebase](https://www.bytebase.com/blog/how-to-handle-database-schema-change/)
-
-### Password Reset & Admin Security
-- [Reset passwords - Microsoft 365 admin | Microsoft Learn](https://learn.microsoft.com/en-us/microsoft-365/admin/add-users/reset-passwords?view=o365-worldwide)
-- [Reset a user's password | Google Workspace Help](https://knowledge.workspace.google.com/admin/users/reset-a-users-password)
-- [3 Ways to Change a User Password in Google Workspace in 2026 | Torii](https://www.toriihq.com/articles/how-to-change-user-password-google-workspace)
-
-### FastAPI Best Practices & Common Mistakes
-- [Common Mistakes Developers Make While Building FastAPI Applications | Medium](https://medium.com/@rameshkannanyt0078/common-mistakes-developers-make-while-building-fastapi-applications-bec0a55fe48f)
-- [FastAPI: 10 Common Mistakes to Avoid | Medium](https://medium.com/@kasperjuunge/fastapi-10-ways-not-to-use-it-de35875c9bc2)
-- [How to Use Dependency Injection in FastAPI](https://oneuptime.com/blog/post/2026-02-02-fastapi-dependency-injection/view)
-- [Dependency Injection in FastAPI: 2026 Playbook for Modular, Testable APIs](https://thelinuxcode.com/dependency-injection-in-fastapi-2026-playbook-for-modular-testable-apis/)
-
-### Role-Based Access Control
-- [Role Based Access Control (RBAC): 2026 Guide | Concentric AI](https://concentric.ai/how-role-based-access-control-rbac-helps-data-security-governance/)
-- [How to Build a Role-Based Access Control Layer](https://www.osohq.com/learn/rbac-role-based-access-control)
-- [Role-Based Access Control - Auth0 Docs](https://auth0.com/docs/manage-users/access-control/rbac)
-
----
-
-## Summary
-
-When adding JWT authentication to an existing FastAPI + React (Tauri) app:
-
-**Top 3 Critical Pitfalls:**
-1. **Breaking all endpoints at once** - Use dual-auth pattern (JWT + existing X-API-Key) for gradual migration
-2. **Token storage security in Tauri** - Use Tauri secure storage, never localStorage for sensitive tokens
-3. **Race condition in React Router** - Wait for auth loading state before rendering protected routes
-
-**Key Prevention Strategies:**
-- Phase the migration (don't big-bang)
-- Test both browser and Tauri from day 1
-- Implement token refresh from the start
-- Write reversible database migrations
-- Use dependency composition for consistent role checks
-- Configure CORS correctly for credentials
-- Plan for token revocation mechanism
-
-**Library Awareness:**
-- FastAPI Users is in maintenance mode (stable but no new features)
-- Successor library in development by same team
-- Abstract auth layer for easier future migration
-
-The research reveals that **retrofitting authentication is more about migration strategy than authentication implementation**. The actual JWT/FastAPI Users setup is well-documented and straightforward. The complexity lies in:
-- Not breaking existing functionality
-- Supporting multiple client types (browser + Tauri)
-- Handling token lifecycle properly
-- Migrating data and access patterns safely
+### Wizard State Management
+- [Solving the Wizard Problem — Chris Zempel](https://chriszempel.com/posts/thewizardproblem/)
+- [A Composable Pattern for Pure State Machines — Andy Matuschak (GitHub Gist)](https://gist.github.com/andymatuschak/d5f0a8730ad601bcccae97e8398e25b2)
