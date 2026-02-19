@@ -1286,6 +1286,23 @@ class CalibrationCurveResponse(BaseModel):
     sharepoint_url: Optional[str] = None
     is_active: bool
     created_at: datetime
+    # Standard identification metadata
+    instrument: Optional[str] = None
+    vendor: Optional[str] = None
+    lot_number: Optional[str] = None
+    batch_number: Optional[str] = None
+    cap_color: Optional[str] = None
+    run_date: Optional[datetime] = None
+    # Wizard fields (populated when creating standards in AccuMk1)
+    standard_weight_mg: Optional[float] = None
+    stock_concentration_ug_ml: Optional[float] = None
+    diluent: Optional[str] = None
+    column_type: Optional[str] = None
+    wavelength_nm: Optional[float] = None
+    flow_rate_ml_min: Optional[float] = None
+    injection_volume_ul: Optional[float] = None
+    operator: Optional[str] = None
+    notes: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -1807,6 +1824,115 @@ class SeedPeptidesResponse(BaseModel):
     success: bool
     output: str
     errors: str
+
+
+# ── Filename metadata parser ──
+
+def _parse_filename_metadata(filename: str, path: str = "") -> dict:
+    """
+    Extract structured metadata from a standard curve filename and path.
+
+    Returns a dict with keys:
+      instrument, vendor, lot_number, batch_number, cap_color, run_date
+    All values are None if not detected.
+    """
+    import re
+    from datetime import datetime as dt
+
+    stem = filename.removesuffix(".xlsx").removesuffix(".xls")
+    upper = stem.upper()
+
+    # --- Instrument: from directory path ---
+    instrument = None
+    if "\\1260" in path or "/1260" in path:
+        instrument = "1260"
+    elif "\\1290" in path or "/1290" in path:
+        instrument = "1290"
+
+    # --- Vendor ---
+    vendor = None
+    vendor_map = [
+        (r"cayman", "Cayman"),
+        (r"targetmol", "Targetmol"),
+        (r"shanghai.?sigma.?audley|ssa(?=_)", "Shanghai Sigma Audley"),
+        (r"hyb(?=_|\b)", "HYB"),
+        (r"polaris", "Polaris"),
+        (r"achemblock", "AChemBlocks"),
+        (r"astatech", "AstaTech"),
+        (r"levi(?=_|\b)", "Levi"),
+        (r"valor(?=_|\b)", "Valor"),
+        (r"drpeptide|dr.peptide", "Dr. Peptide"),
+    ]
+    for pattern, name in vendor_map:
+        if re.search(pattern, stem, re.IGNORECASE):
+            vendor = name
+            break
+
+    # --- Cap color: word immediately before "Cap" ---
+    cap_color = None
+    cap_match = re.search(r"([A-Za-z]+)cap", stem, re.IGNORECASE)
+    if cap_match:
+        cap_color = cap_match.group(1).capitalize() + "Cap"
+
+    # --- Date: look for YYYYMMDD or MMDDYYYY or YYYY-MM-DD ---
+    run_date = None
+    # ISO with hyphens: 2026-02-03
+    iso_match = re.search(r"(\d{4})-(\d{2})-(\d{2})", stem)
+    if iso_match:
+        try:
+            run_date = dt(int(iso_match.group(1)), int(iso_match.group(2)), int(iso_match.group(3)))
+        except ValueError:
+            pass
+    if run_date is None:
+        # 8-digit block: try YYYYMMDD first, then MMDDYYYY
+        for m in re.finditer(r"\b(\d{8})\b", stem):
+            s = m.group(1)
+            y, mo, d = int(s[:4]), int(s[4:6]), int(s[6:])
+            if 2020 <= y <= 2035 and 1 <= mo <= 12 and 1 <= d <= 31:
+                try:
+                    run_date = dt(y, mo, d)
+                    break
+                except ValueError:
+                    pass
+            # Try MMDDYYYY
+            mo2, d2, y2 = int(s[:2]), int(s[2:4]), int(s[4:])
+            if 2020 <= y2 <= 2035 and 1 <= mo2 <= 12 and 1 <= d2 <= 31:
+                try:
+                    run_date = dt(y2, mo2, d2)
+                    break
+                except ValueError:
+                    pass
+
+    # --- Lot number ---
+    lot_number = None
+    # Hash-prefixed: #63162
+    hash_match = re.search(r"#(\d{4,})", stem)
+    if hash_match:
+        lot_number = f"#{hash_match.group(1)}"
+    else:
+        # Standalone 5-6+ digit number not part of a date
+        for m in re.finditer(r"\b(\d{5,7})\b", stem):
+            val = m.group(1)
+            # Skip if it looks like part of a date we already parsed
+            if run_date and str(run_date.year) in val:
+                continue
+            lot_number = val
+            break
+
+    # --- Batch number: Targetmol-style codes (e.g. T20561L, TP2328L) ---
+    batch_number = None
+    batch_match = re.search(r"\b(T[P]?\d{4,}[A-Z]?)\b", stem, re.IGNORECASE)
+    if batch_match:
+        batch_number = batch_match.group(1).upper()
+
+    return {
+        "instrument": instrument,
+        "vendor": vendor,
+        "lot_number": lot_number,
+        "batch_number": batch_number,
+        "cap_color": cap_color,
+        "run_date": run_date,
+    }
 
 
 # ── Excel calibration parsing helpers (shared with seed script) ──
@@ -2571,6 +2697,248 @@ async def seed_peptides_stream(
     )
 
 
+@app.get("/hplc/rebuild-standards/stream")
+async def rebuild_standards_stream(
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """
+    Hard-wipe all peptide standard curves and rebuild from SharePoint.
+
+    - Deletes ALL existing Peptide and CalibrationCurve records.
+    - Scans SharePoint Peptides folder for _Std_ / STD_ files only.
+    - Skips prep sheets (blank Peak Areas), COA summary sheets, template files.
+    - Extracts structured metadata from filename + path (instrument, vendor, lot, etc.).
+    - Deduplicates within each peptide+instrument by peak area fingerprint.
+    - Sets the most recent curve (by run_date) as active per peptide+instrument.
+    """
+    from starlette.responses import StreamingResponse
+    import sharepoint as sp
+    import asyncio
+    import re
+    from calculations.calibration import calculate_calibration_curve
+
+    async def event_generator():
+        def send_event(event_type: str, data: dict) -> str:
+            if event_type == "log":
+                import sys
+                print(f"[{data.get('level','info').upper()}] {data.get('message','')}", file=sys.stderr)
+            return f"event: {event_type}\ndata: {json.dumps(data)}\n\n"
+
+        skip_folder_names = {"Templates", "Blends", "_Templates", "Archive",
+                              "1_SampleName_Std_GreenCap_Cayman_YearMonthDay_template",
+                              "Organic_synthesis_Checks"}
+        skip_file_fragments = ["DAD1A", "YearMonthDay", "template", "Template",
+                                "Master sheet", "Calibration_Curve_Template",
+                                "P-###"]
+        std_pattern = re.compile(r"[_\s]Std[_\s]|[_\s]STD[_\s]|^STD_|^Std_", re.IGNORECASE)
+
+        created_peptides = 0
+        created_curves = 0
+        skipped_no_data = 0
+        skipped_dup = 0
+        errors = []
+
+        try:
+            # ── 1. Hard wipe ──────────────────────────────────────────────────────
+            yield send_event("log", {"message": "Wiping existing peptide standards...", "level": "warn"})
+            await asyncio.sleep(0)
+            db.execute(delete(CalibrationCurve))
+            db.execute(delete(Peptide))
+            db.commit()
+            yield send_event("log", {"message": "✓ Wipe complete", "level": "info"})
+
+            # ── 2. List peptide folders ───────────────────────────────────────────
+            yield send_event("log", {"message": "Scanning SharePoint Peptides folder...", "level": "info"})
+            peptide_folders = await sp.list_folder("")
+            peptide_dirs = [f for f in peptide_folders
+                            if f["type"] == "folder" and f["name"] not in skip_folder_names]
+            total = len(peptide_dirs)
+            yield send_event("log", {"message": f"Found {total} peptide folders", "level": "info"})
+            yield send_event("progress", {"current": 0, "total": total, "phase": "scanning"})
+
+            # ── 3. Process each peptide folder ────────────────────────────────────
+            peptide_map: dict[str, Peptide] = {}  # abbreviation → Peptide
+
+            for idx, folder in enumerate(sorted(peptide_dirs, key=lambda f: f["name"]), 1):
+                folder_name = folder["name"]
+                yield send_event("log", {"message": f"── {folder_name}", "level": "info"})
+                yield send_event("progress", {"current": idx, "total": total, "phase": folder_name})
+                await asyncio.sleep(0)
+
+                # List all xlsx files in this peptide folder
+                try:
+                    all_xlsx = await sp.list_files_recursive(
+                        folder_name,
+                        extensions=[".xlsx"],
+                        root="peptides",
+                    )
+                except Exception as e:
+                    yield send_event("log", {"message": f"  [ERROR] listing {folder_name}: {e}", "level": "error"})
+                    errors.append(f"{folder_name}: {e}")
+                    continue
+
+                # Filter to _Std_ files only, skip temps and templates
+                std_files = []
+                for item in all_xlsx:
+                    fn = item["name"]
+                    if fn.startswith("~$"):
+                        continue
+                    if any(frag in fn for frag in skip_file_fragments):
+                        continue
+                    if not std_pattern.search(fn):
+                        continue
+                    std_files.append(item)
+
+                if not std_files:
+                    yield send_event("log", {"message": f"  No standard files found", "level": "info"})
+                    continue
+
+                yield send_event("log", {"message": f"  {len(std_files)} standard file(s) found", "level": "info"})
+
+                # Track fingerprints seen this peptide to deduplicate
+                # Key: (instrument, frozenset of rounded areas)
+                seen_fingerprints: set = set()
+
+                folder_curves = 0
+
+                for item in std_files:
+                    fn = item["name"]
+                    item_path = item.get("path", "")
+
+                    # Download file
+                    try:
+                        file_bytes = await sp.download_file(item_path)
+                    except Exception as e:
+                        yield send_event("log", {"message": f"  [SKIP] {fn}: download failed ({e})", "level": "warn"})
+                        skipped_no_data += 1
+                        continue
+
+                    # Parse calibration data
+                    cal = _parse_calibration_excel_bytes(file_bytes, fn)
+                    if not cal:
+                        yield send_event("log", {"message": f"  [SKIP] {fn}: no parseable curve data", "level": "info"})
+                        skipped_no_data += 1
+                        continue
+
+                    # Parse filename metadata (instrument from path)
+                    meta = _parse_filename_metadata(fn, item_path)
+                    instrument = meta["instrument"]
+
+                    # Deduplication fingerprint: instrument + sorted rounded areas
+                    fp = (instrument, tuple(sorted(round(a, 1) for a in cal["areas"])))
+                    if fp in seen_fingerprints:
+                        yield send_event("log", {"message": f"  [DUP]  {fn}", "level": "info"})
+                        skipped_dup += 1
+                        continue
+                    seen_fingerprints.add(fp)
+
+                    # Regression
+                    try:
+                        regression = calculate_calibration_curve(cal["concentrations"], cal["areas"])
+                    except Exception as e:
+                        yield send_event("log", {"message": f"  [ERROR] {fn}: regression failed ({e})", "level": "error"})
+                        errors.append(f"{fn}: {e}")
+                        continue
+
+                    # Create Peptide record if needed
+                    if folder_name not in peptide_map:
+                        peptide = Peptide(
+                            name=folder_name,
+                            abbreviation=folder_name,
+                        )
+                        db.add(peptide)
+                        db.flush()  # get id
+                        peptide_map[folder_name] = peptide
+                        created_peptides += 1
+
+                    peptide = peptide_map[folder_name]
+
+                    # Create CalibrationCurve with full metadata
+                    curve = CalibrationCurve(
+                        peptide_id=peptide.id,
+                        slope=regression["slope"],
+                        intercept=regression["intercept"],
+                        r_squared=regression["r_squared"],
+                        standard_data={
+                            "concentrations": cal["concentrations"],
+                            "areas": cal["areas"],
+                            "rts": cal.get("rts", []),
+                        },
+                        source_filename=fn,
+                        source_path=item_path,
+                        sharepoint_url=item.get("webUrl"),
+                        source_date=item.get("lastModified"),
+                        is_active=False,  # set active after all curves loaded
+                        # Metadata from filename
+                        instrument=meta["instrument"],
+                        vendor=meta["vendor"],
+                        lot_number=meta["lot_number"],
+                        batch_number=meta["batch_number"],
+                        cap_color=meta["cap_color"],
+                        run_date=meta["run_date"],
+                    )
+                    db.add(curve)
+                    folder_curves += 1
+                    created_curves += 1
+                    yield send_event("log", {
+                        "message": f"  [OK]   {fn} ({instrument or '?'}, {meta['vendor'] or '?'}, R²={regression['r_squared']:.4f})",
+                        "level": "info",
+                    })
+
+                db.flush()
+
+                # Set active: most recent curve by run_date (fallback: source_date) per instrument
+                curves_for_peptide = (
+                    db.execute(
+                        select(CalibrationCurve)
+                        .where(CalibrationCurve.peptide_id == peptide_map.get(folder_name, Peptide()).id
+                               if folder_name in peptide_map else CalibrationCurve.id == -1)
+                    ).scalars().all()
+                )
+                # Group by instrument, activate newest in each group
+                by_instrument: dict[str, list] = {}
+                for c in curves_for_peptide:
+                    key = c.instrument or "unknown"
+                    by_instrument.setdefault(key, []).append(c)
+                for inst_curves in by_instrument.values():
+                    newest = max(
+                        inst_curves,
+                        key=lambda c: (c.run_date or c.source_date or c.created_at)
+                    )
+                    newest.is_active = True
+
+            db.commit()
+
+            yield send_event("log", {"message": f"\n✓ Rebuild complete", "level": "info"})
+            yield send_event("log", {"message": f"  {created_peptides} peptides created", "level": "info"})
+            yield send_event("log", {"message": f"  {created_curves} curves imported", "level": "info"})
+            yield send_event("log", {"message": f"  {skipped_no_data} files skipped (no data)", "level": "info"})
+            yield send_event("log", {"message": f"  {skipped_dup} duplicates skipped", "level": "info"})
+            if errors:
+                yield send_event("log", {"message": f"  {len(errors)} errors", "level": "warn"})
+            yield send_event("done", {
+                "success": True,
+                "peptides": created_peptides,
+                "curves": created_curves,
+                "skipped_no_data": skipped_no_data,
+                "skipped_dup": skipped_dup,
+            })
+
+        except Exception as e:
+            db.rollback()
+            yield send_event("log", {"message": f"✗ FAILED: {e}", "level": "error"})
+            yield send_event("done", {"success": False, "error": str(e)})
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @app.get("/hplc/peptides/{peptide_id}/resync/stream")

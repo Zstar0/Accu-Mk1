@@ -1319,6 +1319,23 @@ export interface CalibrationCurve {
   sharepoint_url: string | null
   is_active: boolean
   created_at: string
+  // Standard identification metadata
+  instrument: string | null
+  vendor: string | null
+  lot_number: string | null
+  batch_number: string | null
+  cap_color: string | null
+  run_date: string | null
+  // Wizard fields
+  standard_weight_mg: number | null
+  stock_concentration_ug_ml: number | null
+  diluent: string | null
+  column_type: string | null
+  wavelength_nm: number | null
+  flow_rate_ml_min: number | null
+  injection_volume_ul: number | null
+  operator: string | null
+  notes: string | null
 }
 
 export interface PeptideRecord {

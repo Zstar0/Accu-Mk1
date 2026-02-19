@@ -142,7 +142,7 @@ class Peptide(Base):
 
 class CalibrationCurve(Base):
     """
-    Calibration curve for a peptide.
+    Calibration curve for a peptide standard.
     Stores linear regression parameters (slope, intercept, R²)
     and the original standard data used to derive them.
     """
@@ -153,13 +153,32 @@ class CalibrationCurve(Base):
     slope: Mapped[float] = mapped_column(Float, nullable=False)
     intercept: Mapped[float] = mapped_column(Float, nullable=False)
     r_squared: Mapped[float] = mapped_column(Float, nullable=False)
-    standard_data: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)  # {concentrations: [], areas: []}
+    standard_data: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)  # {concentrations: [], areas: [], rts: []}
     source_filename: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     source_path: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)  # Full SharePoint relative path
     source_date: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)  # File last-modified date from SharePoint
     sharepoint_url: Mapped[Optional[str]] = mapped_column(String(2000), nullable=True)  # Direct web URL from Graph API
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    # --- Standard identification metadata (Phase 1: populated from filename/path on import) ---
+    instrument: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)    # "1260" or "1290"
+    vendor: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)       # Cayman, Targetmol, HYB, etc.
+    lot_number: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)   # Vendor lot # (e.g. "27262", "#63162")
+    batch_number: Mapped[Optional[str]] = mapped_column(String(100), nullable=True) # Secondary batch code (e.g. "T20561L")
+    cap_color: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)     # Physical vial cap color
+    run_date: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)   # Date standard was run (from filename)
+
+    # --- Wizard fields (Phase 2: populated when creating standards directly in AccuMk1) ---
+    standard_weight_mg: Mapped[Optional[float]] = mapped_column(Float, nullable=True)       # mg in supplier vial
+    stock_concentration_ug_ml: Mapped[Optional[float]] = mapped_column(Float, nullable=True) # Calculated stock conc
+    diluent: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)              # Dissolution solvent
+    column_type: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)         # HPLC column used
+    wavelength_nm: Mapped[Optional[float]] = mapped_column(Float, nullable=True)            # Detection wavelength
+    flow_rate_ml_min: Mapped[Optional[float]] = mapped_column(Float, nullable=True)         # Flow rate
+    injection_volume_ul: Mapped[Optional[float]] = mapped_column(Float, nullable=True)      # Injection volume
+    operator: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)             # Who ran the standard
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)                       # Free-form notes
 
     # Relationships
     peptide: Mapped["Peptide"] = relationship("Peptide", back_populates="calibration_curves")

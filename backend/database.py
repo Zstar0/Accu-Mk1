@@ -70,3 +70,27 @@ def init_db():
             conn.commit()
         except Exception:
             pass  # Column already exists
+        # Standard metadata columns (added Feb 2026)
+        new_cols = [
+            "ALTER TABLE calibration_curves ADD COLUMN instrument VARCHAR(10)",
+            "ALTER TABLE calibration_curves ADD COLUMN vendor VARCHAR(100)",
+            "ALTER TABLE calibration_curves ADD COLUMN lot_number VARCHAR(100)",
+            "ALTER TABLE calibration_curves ADD COLUMN batch_number VARCHAR(100)",
+            "ALTER TABLE calibration_curves ADD COLUMN cap_color VARCHAR(50)",
+            "ALTER TABLE calibration_curves ADD COLUMN run_date DATETIME",
+            "ALTER TABLE calibration_curves ADD COLUMN standard_weight_mg FLOAT",
+            "ALTER TABLE calibration_curves ADD COLUMN stock_concentration_ug_ml FLOAT",
+            "ALTER TABLE calibration_curves ADD COLUMN diluent VARCHAR(200)",
+            "ALTER TABLE calibration_curves ADD COLUMN column_type VARCHAR(200)",
+            "ALTER TABLE calibration_curves ADD COLUMN wavelength_nm FLOAT",
+            "ALTER TABLE calibration_curves ADD COLUMN flow_rate_ml_min FLOAT",
+            "ALTER TABLE calibration_curves ADD COLUMN injection_volume_ul FLOAT",
+            "ALTER TABLE calibration_curves ADD COLUMN operator VARCHAR(100)",
+            "ALTER TABLE calibration_curves ADD COLUMN notes TEXT",
+        ]
+        for sql in new_cols:
+            try:
+                conn.execute(text(sql))
+                conn.commit()
+            except Exception:
+                pass  # Column already exists

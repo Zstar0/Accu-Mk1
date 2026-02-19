@@ -58,10 +58,16 @@ interface SeedProgress {
 
 interface SeedDonePayload {
   success: boolean
+  // Legacy seeder fields
   created?: number
   calibrations?: number
   skipped?: number
   total?: number
+  // Rebuild fields
+  peptides?: number
+  curves?: number
+  skipped_no_data?: number
+  skipped_dup?: number
   error?: string
 }
 
@@ -163,7 +169,7 @@ export function PeptideConfig() {
 
     try {
       const token = getAuthToken()
-      const response = await fetch(`${getApiBaseUrl()}/hplc/seed-peptides/stream`, {
+      const response = await fetch(`${getApiBaseUrl()}/hplc/rebuild-standards/stream`, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
         signal: controller.signal,
       })
@@ -354,10 +360,10 @@ export function PeptideConfig() {
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-bold tracking-tight">
-              Peptide Configuration
+              Peptide Standards
             </h1>
             <p className="text-muted-foreground">
-              Manage peptides, reference retention times, and calibration curves.
+              Manage peptide standard curves — vendor, lot, instrument, and calibration data.
             </p>
           </div>
           <div className="flex gap-2">
@@ -372,7 +378,7 @@ export function PeptideConfig() {
               ) : (
                 <Cloud className="h-4 w-4" />
               )}
-              {seeding ? 'Scanning...' : 'Import from SharePoint'}
+              {seeding ? 'Rebuilding...' : 'Rebuild Standards'}
             </Button>
             <Button onClick={() => setShowAddForm(true)} className="gap-2">
               <Plus className="h-4 w-4" />
@@ -509,7 +515,7 @@ export function PeptideConfig() {
             <CardHeader>
               <div className="flex items-center justify-between">
                 <div>
-                  <CardTitle className="text-base">Peptides</CardTitle>
+                  <CardTitle className="text-base">Peptide Standards</CardTitle>
                   <CardDescription>
                     {filteredPeptides.length} of {peptides.length} peptide{peptides.length !== 1 ? 's' : ''}
                     {filterMode !== 'all' && ' (filtered)'}
@@ -552,8 +558,8 @@ export function PeptideConfig() {
                     <TableRow>
                       <TableHead>Peptide</TableHead>
                       <TableHead className="text-right">Ref RT</TableHead>
-                      <TableHead className="text-center">Calibration</TableHead>
-                      <TableHead className="text-right">Curve Date</TableHead>
+                      <TableHead>Active Standard</TableHead>
+                      <TableHead className="text-right">Run Date</TableHead>
                       <TableHead className="w-16"></TableHead>
                     </TableRow>
                   </TableHeader>
@@ -585,14 +591,22 @@ export function PeptideConfig() {
                               ? `${p.reference_rt.toFixed(3)} min`
                               : '—'}
                           </TableCell>
-                          <TableCell className="text-center">
+                          <TableCell>
                             {p.active_calibration ? (
-                              <Badge
-                                variant="default"
-                                className="text-xs"
-                              >
-                                Active
-                              </Badge>
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <Badge variant="default" className="text-xs">Active</Badge>
+                                {p.active_calibration.instrument && (
+                                  <Badge variant="outline" className="text-xs font-mono border-blue-600/50 text-blue-400">
+                                    {p.active_calibration.instrument}
+                                  </Badge>
+                                )}
+                                {p.active_calibration.vendor && (
+                                  <span className="text-xs text-muted-foreground">{p.active_calibration.vendor}</span>
+                                )}
+                                {p.active_calibration.lot_number && (
+                                  <span className="text-xs text-zinc-500">#{p.active_calibration.lot_number.replace(/^#/, '')}</span>
+                                )}
+                              </div>
                             ) : (
                               <Badge variant="outline" className="text-xs border-yellow-600/50 text-yellow-500">
                                 No Curve
