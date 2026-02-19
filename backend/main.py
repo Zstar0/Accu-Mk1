@@ -2942,6 +2942,252 @@ async def rebuild_standards_stream(
     )
 
 
+@app.get("/hplc/import-standards/stream")
+async def import_standards_stream(
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """
+    Incremental import of peptide standard curves from SharePoint.
+
+    - Loads already-processed file paths from CalibrationCurve.source_path and SharePointFileCache.
+    - Scans SharePoint Peptides folder for _Std_/STD_ files only.
+    - Skips files already seen in previous imports.
+    - For new files: finds or creates Peptide records, adds CalibrationCurve records.
+    - Re-evaluates is_active for any peptide that received new curves.
+    - Adds all processed files to SharePointFileCache so they are skipped next time.
+    """
+    from starlette.responses import StreamingResponse
+    import sharepoint as sp
+    import asyncio
+    import re
+    from calculations.calibration import calculate_calibration_curve
+
+    async def event_generator():
+        def send_event(event_type: str, data: dict) -> str:
+            if event_type == "log":
+                import sys
+                print(f"[{data.get('level','info').upper()}] {data.get('message','')}", file=sys.stderr)
+            return f"event: {event_type}\ndata: {json.dumps(data)}\n\n"
+
+        skip_folder_names = {"Templates", "Blends", "_Templates", "Archive",
+                              "1_SampleName_Std_GreenCap_Cayman_YearMonthDay_template",
+                              "Organic_synthesis_Checks"}
+        skip_file_fragments = ["DAD1A", "YearMonthDay", "template", "Template",
+                                "Master sheet", "Calibration_Curve_Template", "P-###"]
+        std_pattern = re.compile(r"[_\s]Std[_\s]|[_\s]STD[_\s]|^STD_|^Std_", re.IGNORECASE)
+
+        new_peptides = 0
+        new_curves = 0
+        skipped_cached = 0
+        skipped_no_data = 0
+        skipped_dup = 0
+        errors = []
+
+        try:
+            # ── 1. Load already-processed paths ────────────────────────────────────
+            yield send_event("log", {"message": "Loading known file paths...", "level": "info"})
+            known_paths: set[str] = set()
+
+            existing_paths = db.execute(
+                select(CalibrationCurve.source_path).where(CalibrationCurve.source_path.isnot(None))
+            ).scalars().all()
+            known_paths.update(p for p in existing_paths if p)
+
+            cache_paths = db.execute(select(SharePointFileCache.source_path)).scalars().all()
+            known_paths.update(p for p in cache_paths if p)
+
+            yield send_event("log", {"message": f"Skipping {len(known_paths)} already-processed files", "level": "info"})
+
+            # ── 2. List peptide folders ─────────────────────────────────────────────
+            yield send_event("log", {"message": "Scanning SharePoint Peptides folder...", "level": "info"})
+            peptide_folders = await sp.list_folder("")
+            peptide_dirs = [f for f in peptide_folders
+                            if f["type"] == "folder" and f["name"] not in skip_folder_names]
+            total = len(peptide_dirs)
+            yield send_event("log", {"message": f"Found {total} peptide folders", "level": "info"})
+            yield send_event("progress", {"current": 0, "total": total, "phase": "scanning"})
+
+            # ── 3. Process each peptide folder ─────────────────────────────────────
+            for idx, folder in enumerate(sorted(peptide_dirs, key=lambda f: f["name"]), 1):
+                folder_name = folder["name"]
+                yield send_event("progress", {"current": idx, "total": total, "phase": folder_name})
+                await asyncio.sleep(0)
+
+                try:
+                    all_xlsx = await sp.list_files_recursive(
+                        folder_name, extensions=[".xlsx"], root="peptides",
+                    )
+                except Exception as e:
+                    yield send_event("log", {"message": f"  [ERROR] listing {folder_name}: {e}", "level": "error"})
+                    errors.append(f"{folder_name}: {e}")
+                    continue
+
+                # Filter to _Std_ files only
+                std_files = []
+                for item in all_xlsx:
+                    fn = item["name"]
+                    if fn.startswith("~$"):
+                        continue
+                    if any(frag in fn for frag in skip_file_fragments):
+                        continue
+                    if not std_pattern.search(fn):
+                        continue
+                    std_files.append(item)
+
+                # Partition into new vs already-cached
+                new_files = []
+                for item in std_files:
+                    item_path = item.get("path", "")
+                    if item_path in known_paths:
+                        skipped_cached += 1
+                    else:
+                        new_files.append(item)
+
+                if not new_files:
+                    continue
+
+                yield send_event("log", {"message": f"── {folder_name}  ({len(new_files)} new file(s))", "level": "info"})
+
+                # Find or create Peptide
+                peptide = db.execute(
+                    select(Peptide).where(Peptide.abbreviation == folder_name)
+                ).scalar_one_or_none()
+                if not peptide:
+                    peptide = Peptide(name=folder_name, abbreviation=folder_name)
+                    db.add(peptide)
+                    db.flush()
+                    new_peptides += 1
+
+                # Seed fingerprint set from existing curves for this peptide
+                seen_fingerprints: set = set()
+                for row in db.execute(
+                    select(CalibrationCurve.standard_data, CalibrationCurve.instrument)
+                    .where(CalibrationCurve.peptide_id == peptide.id)
+                ).all():
+                    if row.standard_data and "areas" in row.standard_data:
+                        inst = row.instrument or "unknown"
+                        seen_fingerprints.add(
+                            (inst, tuple(sorted(round(a, 1) for a in row.standard_data["areas"])))
+                        )
+
+                folder_new_curves = 0
+
+                for item in new_files:
+                    fn = item["name"]
+                    item_path = item.get("path", "")
+                    item_id = item["id"]
+                    known_paths.add(item_path)  # prevent double-processing within this run
+
+                    try:
+                        file_bytes, _ = await sp.download_file(item_id)
+                    except Exception as e:
+                        yield send_event("log", {"message": f"  [SKIP] {fn}: download failed ({e})", "level": "warn"})
+                        db.merge(SharePointFileCache(
+                            source_path=item_path, peptide_abbreviation=folder_name, produced_calibration=False
+                        ))
+                        skipped_no_data += 1
+                        continue
+
+                    cal = _parse_calibration_excel_bytes(file_bytes, fn)
+                    db.merge(SharePointFileCache(
+                        source_path=item_path, peptide_abbreviation=folder_name, produced_calibration=bool(cal)
+                    ))
+
+                    if not cal:
+                        yield send_event("log", {"message": f"  [SKIP] {fn}: no parseable curve data", "level": "dim"})
+                        skipped_no_data += 1
+                        continue
+
+                    meta = _parse_filename_metadata(fn, item_path)
+                    instrument = meta["instrument"]
+                    fp = (instrument, tuple(sorted(round(a, 1) for a in cal["areas"])))
+                    if fp in seen_fingerprints:
+                        yield send_event("log", {"message": f"  [DUP]  {fn}", "level": "dim"})
+                        skipped_dup += 1
+                        continue
+                    seen_fingerprints.add(fp)
+
+                    try:
+                        regression = calculate_calibration_curve(cal["concentrations"], cal["areas"])
+                    except Exception as e:
+                        yield send_event("log", {"message": f"  [ERROR] {fn}: regression failed ({e})", "level": "error"})
+                        errors.append(f"{fn}: {e}")
+                        continue
+
+                    curve = CalibrationCurve(
+                        peptide_id=peptide.id,
+                        slope=regression["slope"],
+                        intercept=regression["intercept"],
+                        r_squared=regression["r_squared"],
+                        standard_data={"concentrations": cal["concentrations"], "areas": cal["areas"], "rts": cal.get("rts", [])},
+                        source_filename=fn,
+                        source_path=item_path,
+                        sharepoint_url=item.get("webUrl"),
+                        source_date=item.get("lastModified"),
+                        is_active=False,
+                        instrument=meta["instrument"],
+                        vendor=meta["vendor"],
+                        lot_number=meta["lot_number"],
+                        batch_number=meta["batch_number"],
+                        cap_color=meta["cap_color"],
+                        run_date=meta["run_date"],
+                    )
+                    db.add(curve)
+                    folder_new_curves += 1
+                    new_curves += 1
+                    yield send_event("log", {
+                        "message": f"  [OK]   {fn} ({instrument or '?'}, {meta['vendor'] or '?'}, R²={regression['r_squared']:.4f})",
+                        "level": "info",
+                    })
+
+                db.flush()
+
+                # Re-evaluate is_active for this peptide if new curves were added
+                if folder_new_curves > 0:
+                    all_curves = db.execute(
+                        select(CalibrationCurve).where(CalibrationCurve.peptide_id == peptide.id)
+                    ).scalars().all()
+                    for c in all_curves:
+                        c.is_active = False
+                    by_instrument: dict[str, list] = {}
+                    for c in all_curves:
+                        by_instrument.setdefault(c.instrument or "unknown", []).append(c)
+                    for inst_curves in by_instrument.values():
+                        newest = max(inst_curves, key=lambda c: (c.run_date or c.source_date or c.created_at))
+                        newest.is_active = True
+
+            db.commit()
+
+            yield send_event("log", {"message": "\n✓ Import complete", "level": "info"})
+            yield send_event("log", {"message": f"  {new_peptides} new peptides", "level": "info"})
+            yield send_event("log", {"message": f"  {new_curves} new curves imported", "level": "info"})
+            yield send_event("log", {"message": f"  {skipped_cached} files already cached (skipped)", "level": "info"})
+            yield send_event("log", {"message": f"  {skipped_no_data} files skipped (no data)", "level": "info"})
+            yield send_event("log", {"message": f"  {skipped_dup} duplicates skipped", "level": "info"})
+            if errors:
+                yield send_event("log", {"message": f"  {len(errors)} errors", "level": "warn"})
+            yield send_event("done", {
+                "success": True,
+                "new_peptides": new_peptides,
+                "new_curves": new_curves,
+                "skipped_cached": skipped_cached,
+                "skipped_no_data": skipped_no_data,
+                "skipped_dup": skipped_dup,
+            })
+
+        except Exception as e:
+            db.rollback()
+            yield send_event("log", {"message": f"✗ FAILED: {e}", "level": "error"})
+            yield send_event("done", {"success": False, "error": str(e)})
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
+    )
+
+
 @app.get("/hplc/peptides/{peptide_id}/resync/stream")
 async def resync_peptide_stream(
     peptide_id: int,

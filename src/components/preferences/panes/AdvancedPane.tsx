@@ -1,66 +1,124 @@
 import { useState } from 'react'
-import { useTranslation } from 'react-i18next'
-import { Label } from '@/components/ui/label'
-import { Switch } from '@/components/ui/switch'
+import { AlertTriangle, Loader2, RefreshCw } from 'lucide-react'
+import { Button } from '@/components/ui/button'
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from '@/components/ui/alert-dialog'
 import { SettingsField, SettingsSection } from '../shared/SettingsComponents'
+import { getApiBaseUrl } from '@/lib/config'
+import { getAuthToken } from '@/store/auth-store'
+import { toast } from 'sonner'
 
 export function AdvancedPane() {
-  const { t } = useTranslation()
-  // Example local state - these are NOT persisted to disk
-  // To add persistent preferences:
-  // 1. Add the field to AppPreferences in both Rust and TypeScript
-  // 2. Use usePreferencesManager() and updatePreferences()
-  const [exampleAdvancedToggle, setExampleAdvancedToggle] = useState(false)
-  const [exampleDropdown, setExampleDropdown] = useState('option1')
+  const [rebuilding, setRebuilding] = useState(false)
+
+  const handleWipeAndRebuild = async () => {
+    setRebuilding(true)
+    try {
+      const token = getAuthToken()
+      const response = await fetch(`${getApiBaseUrl()}/hplc/rebuild-standards/stream`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      })
+      if (!response.ok || !response.body) {
+        throw new Error(`Request failed: ${response.status}`)
+      }
+
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        const parts = buffer.split('\n\n')
+        buffer = parts.pop() ?? ''
+        for (const part of parts) {
+          const dataLine = part.split('\n').find(l => l.startsWith('data:'))
+          const eventLine = part.split('\n').find(l => l.startsWith('event:'))
+          if (!dataLine) continue
+          try {
+            const payload = JSON.parse(dataLine.slice(5).trim())
+            const eventType = eventLine?.slice(6).trim()
+            if (eventType === 'done') {
+              if (payload.success) {
+                toast.success('Rebuild complete', {
+                  description: `${payload.peptides ?? 0} peptides · ${payload.curves ?? 0} curves imported`,
+                })
+              } else {
+                toast.error('Rebuild failed', { description: payload.error })
+              }
+            }
+          } catch {
+            // ignore parse errors
+          }
+        }
+      }
+    } catch (err) {
+      toast.error('Rebuild failed', { description: String(err) })
+    } finally {
+      setRebuilding(false)
+    }
+  }
 
   return (
     <div className="space-y-6">
-      <SettingsSection title={t('preferences.advanced.title')}>
+      <SettingsSection title="HPLC Standards">
         <SettingsField
-          label={t('preferences.advanced.toggle')}
-          description={t('preferences.advanced.toggleDescription')}
+          label="Wipe & Rebuild Standards"
+          description="Delete all existing peptide standards and curves, then re-import everything from SharePoint. Use this to fix corrupted data or after major folder restructuring."
         >
-          <div className="flex items-center space-x-2">
-            <Switch
-              id="example-advanced-toggle"
-              checked={exampleAdvancedToggle}
-              onCheckedChange={setExampleAdvancedToggle}
-            />
-            <Label htmlFor="example-advanced-toggle" className="text-sm">
-              {exampleAdvancedToggle
-                ? t('common.enabled')
-                : t('common.disabled')}
-            </Label>
-          </div>
-        </SettingsField>
-
-        <SettingsField
-          label={t('preferences.advanced.dropdown')}
-          description={t('preferences.advanced.dropdownDescription')}
-        >
-          <Select value={exampleDropdown} onValueChange={setExampleDropdown}>
-            <SelectTrigger>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="option1">
-                {t('preferences.advanced.option1')}
-              </SelectItem>
-              <SelectItem value="option2">
-                {t('preferences.advanced.option2')}
-              </SelectItem>
-              <SelectItem value="option3">
-                {t('preferences.advanced.option3')}
-              </SelectItem>
-            </SelectContent>
-          </Select>
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <Button
+                variant="destructive"
+                size="sm"
+                disabled={rebuilding}
+                className="gap-2"
+              >
+                {rebuilding ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <RefreshCw className="h-4 w-4" />
+                )}
+                {rebuilding ? 'Rebuilding...' : 'Wipe & Rebuild'}
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle className="flex items-center gap-2">
+                  <AlertTriangle className="h-5 w-5 text-destructive" />
+                  Wipe all peptide standards?
+                </AlertDialogTitle>
+                <AlertDialogDescription>
+                  This will permanently delete all peptide records and calibration
+                  curves, then re-import from SharePoint from scratch. Any manual
+                  edits (reference RT, tolerance, wizard fields) will be lost.
+                  <br />
+                  <br />
+                  Use <strong>Import Standards</strong> on the Peptide Standards
+                  page to incrementally add only new files instead.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                <AlertDialogAction
+                  className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                  onClick={handleWipeAndRebuild}
+                >
+                  Yes, wipe and rebuild
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
         </SettingsField>
       </SettingsSection>
     </div>

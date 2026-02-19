@@ -63,9 +63,10 @@ interface SeedDonePayload {
   calibrations?: number
   skipped?: number
   total?: number
-  // Rebuild fields
-  peptides?: number
-  curves?: number
+  // Import fields
+  new_peptides?: number
+  new_curves?: number
+  skipped_cached?: number
   skipped_no_data?: number
   skipped_dup?: number
   error?: string
@@ -169,7 +170,7 @@ export function PeptideConfig() {
 
     try {
       const token = getAuthToken()
-      const response = await fetch(`${getApiBaseUrl()}/hplc/rebuild-standards/stream`, {
+      const response = await fetch(`${getApiBaseUrl()}/hplc/import-standards/stream`, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
         signal: controller.signal,
       })
@@ -378,7 +379,7 @@ export function PeptideConfig() {
               ) : (
                 <Cloud className="h-4 w-4" />
               )}
-              {seeding ? 'Rebuilding...' : 'Rebuild Standards'}
+              {seeding ? 'Importing...' : 'Import Standards'}
             </Button>
             <Button onClick={() => setShowAddForm(true)} className="gap-2">
               <Plus className="h-4 w-4" />
