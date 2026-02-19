@@ -2790,6 +2790,14 @@ async def rebuild_standards_stream(
                         continue
                     std_files.append(item)
 
+                # Always ensure a Peptide stub exists for every folder
+                if folder_name not in peptide_map:
+                    peptide = Peptide(name=folder_name, abbreviation=folder_name)
+                    db.add(peptide)
+                    db.flush()
+                    peptide_map[folder_name] = peptide
+                    created_peptides += 1
+
                 if not std_files:
                     yield send_event("log", {"message": f"  No standard files found", "level": "info"})
                     continue
@@ -2841,17 +2849,6 @@ async def rebuild_standards_stream(
                         yield send_event("log", {"message": f"  [ERROR] {fn}: regression failed ({e})", "level": "error"})
                         errors.append(f"{fn}: {e}")
                         continue
-
-                    # Create Peptide record if needed
-                    if folder_name not in peptide_map:
-                        peptide = Peptide(
-                            name=folder_name,
-                            abbreviation=folder_name,
-                        )
-                        db.add(peptide)
-                        db.flush()  # get id
-                        peptide_map[folder_name] = peptide
-                        created_peptides += 1
 
                     peptide = peptide_map[folder_name]
 
@@ -3035,6 +3032,16 @@ async def import_standards_stream(
                         continue
                     std_files.append(item)
 
+                # Always ensure a Peptide stub exists for every folder
+                peptide = db.execute(
+                    select(Peptide).where(Peptide.abbreviation == folder_name)
+                ).scalar_one_or_none()
+                if not peptide:
+                    peptide = Peptide(name=folder_name, abbreviation=folder_name)
+                    db.add(peptide)
+                    db.flush()
+                    new_peptides += 1
+
                 # Partition into new vs already-cached
                 new_files = []
                 for item in std_files:
@@ -3048,16 +3055,6 @@ async def import_standards_stream(
                     continue
 
                 yield send_event("log", {"message": f"── {folder_name}  ({len(new_files)} new file(s))", "level": "info"})
-
-                # Find or create Peptide
-                peptide = db.execute(
-                    select(Peptide).where(Peptide.abbreviation == folder_name)
-                ).scalar_one_or_none()
-                if not peptide:
-                    peptide = Peptide(name=folder_name, abbreviation=folder_name)
-                    db.add(peptide)
-                    db.flush()
-                    new_peptides += 1
 
                 # Seed fingerprint set from existing curves for this peptide
                 seen_fingerprints: set = set()
@@ -3211,6 +3208,8 @@ async def resync_peptide_stream(
     abbreviation = peptide.abbreviation
 
     async def event_generator():
+        import re
+
         def send_event(event_type: str, data: dict) -> str:
             if event_type == "log":
                 import sys
@@ -3220,149 +3219,157 @@ async def resync_peptide_stream(
             payload = json.dumps(data)
             return f"event: {event_type}\ndata: {payload}\n\n"
 
+        skip_file_fragments = ["DAD1A", "YearMonthDay", "template", "Template",
+                                "Master sheet", "Calibration_Curve_Template", "P-###"]
+        std_pattern = re.compile(r"[_\s]Std[_\s]|[_\s]STD[_\s]|^STD_|^Std_", re.IGNORECASE)
+
         calibrations_added = 0
 
         try:
             yield send_event("log", {"message": f"Re-syncing {abbreviation}...", "level": "heading"})
             await asyncio.sleep(0)
 
-            # 1. Clear file cache for this peptide so everything is re-downloaded
+            # 1. Clear file cache + existing curves for this peptide (full re-import)
             deleted_cache = db.execute(
-                delete(SharePointFileCache).where(
-                    SharePointFileCache.peptide_abbreviation == abbreviation
-                )
+                delete(SharePointFileCache).where(SharePointFileCache.peptide_abbreviation == abbreviation)
+            )
+            deleted_curves = db.execute(
+                delete(CalibrationCurve).where(CalibrationCurve.peptide_id == peptide.id)
             )
             db.flush()
             yield send_event("log", {
-                "message": f"Cleared {deleted_cache.rowcount} cached file(s)",
+                "message": f"Cleared {deleted_curves.rowcount} existing curve(s) and {deleted_cache.rowcount} cache entry(ies)",
                 "level": "info",
             })
 
-            # 2. List Excel files in the peptide's SharePoint folder
-            yield send_event("log", {"message": "Scanning SharePoint for Excel files...", "level": "info"})
-            cal_files = []
+            # 2. List std files in the peptide's SharePoint folder
+            yield send_event("log", {"message": "Scanning SharePoint for standard files...", "level": "info"})
+            std_files = []
             try:
                 all_xlsx = await sp.list_files_recursive(
-                    abbreviation,
-                    extensions=[".xlsx"],
-                    root="peptides",
+                    abbreviation, extensions=[".xlsx"], root="peptides",
                 )
                 for item in all_xlsx:
                     fn = item["name"]
                     if fn.startswith("~$"):
                         continue
-                    if ".dx_" in fn or "_PeakData" in fn:
+                    if any(frag in fn for frag in skip_file_fragments):
                         continue
-                    cal_files.append(item)
-                yield send_event("log", {"message": f"Found {len(cal_files)} Excel file(s)", "level": "info"})
-                yield send_event("progress", {"current": 0, "total": len(cal_files), "phase": "downloading"})
+                    if not std_pattern.search(fn):
+                        continue
+                    std_files.append(item)
+                yield send_event("log", {"message": f"Found {len(std_files)} standard file(s)", "level": "info"})
+                yield send_event("progress", {"current": 0, "total": len(std_files), "phase": "downloading"})
             except Exception as e:
                 yield send_event("log", {"message": f"[ERROR] File listing failed: {e}", "level": "error"})
                 yield send_event("done", {"success": False, "error": str(e)})
                 return
 
-            # 3. Download and parse each file
-            cal_files.sort(key=lambda f: f["name"])
-            parsed_cals = []
+            # 3. Download, parse, and create curves with full metadata
+            seen_fingerprints: set = set()
+            new_curves: list[CalibrationCurve] = []
 
-            for idx, cal_file in enumerate(cal_files):
-                file_path = cal_file.get("path", cal_file["name"])
+            for idx, item in enumerate(sorted(std_files, key=lambda f: f["name"])):
+                fn = item["name"]
+                item_path = item.get("path", "")
+                item_id = item["id"]
+
+                yield send_event("progress", {"current": idx + 1, "total": len(std_files), "phase": f"Downloading {fn}"})
+
                 try:
-                    yield send_event("log", {"message": f"  Downloading {cal_file['name']}...", "level": "dim"})
-                    yield send_event("progress", {"current": idx + 1, "total": len(cal_files), "phase": f"Downloading {cal_file['name']}"})
-                    file_bytes, filename = await sp.download_file(cal_file["id"])
-                    result = _parse_calibration_excel_bytes(file_bytes, filename)
-                    produced_cal = result is not None
-                    if result:
-                        result["_sharepoint_path"] = file_path
-                        result["_last_modified"] = cal_file.get("last_modified")
-                        result["_web_url"] = cal_file.get("web_url")
-                        parsed_cals.append(result)
-                    # Re-cache this path
-                    db.add(SharePointFileCache(
-                        source_path=file_path,
-                        peptide_abbreviation=abbreviation,
-                        produced_calibration=produced_cal,
-                    ))
+                    file_bytes, _ = await sp.download_file(item_id)
                 except Exception as e:
-                    yield send_event("log", {"message": f"  [WARN] Failed: {cal_file['name']}: {e}", "level": "warn"})
-
-            # 4. Check existing calibrations
-            existing_cal_filenames = set()
-            existing_cals = db.execute(
-                select(CalibrationCurve).where(CalibrationCurve.peptide_id == peptide.id)
-            ).scalars().all()
-            for ec in existing_cals:
-                if ec.source_filename:
-                    existing_cal_filenames.add(ec.source_filename)
-
-            # 5. Import new calibrations
-            new_cals = []
-            for cal_data in parsed_cals:
-                source = f"{cal_data['filename']}[{cal_data['sheet']}]"
-                if source in existing_cal_filenames:
-                    yield send_event("log", {"message": f"  [EXISTS] Cal: {source}", "level": "dim"})
+                    yield send_event("log", {"message": f"  [SKIP] {fn}: download failed ({e})", "level": "warn"})
+                    db.merge(SharePointFileCache(
+                        source_path=item_path, peptide_abbreviation=abbreviation, produced_calibration=False
+                    ))
                     continue
 
-                try:
-                    cal_result = calculate_calibration_curve(
-                        cal_data["concentrations"],
-                        cal_data["areas"],
-                    )
-                    cal_curve = CalibrationCurve(
-                        peptide_id=peptide.id,
-                        slope=cal_result["slope"],
-                        intercept=cal_result["intercept"],
-                        r_squared=cal_result["r_squared"],
-                        standard_data={
-                            "concentrations": cal_data["concentrations"],
-                            "areas": cal_data["areas"],
-                            "rts": cal_data.get("rts", []),
-                        },
-                        source_filename=source,
-                        source_path=cal_data.get("_sharepoint_path"),
-                        source_date=(
-                            datetime.fromisoformat(cal_data["_last_modified"].replace("Z", "+00:00"))
-                            if cal_data.get("_last_modified")
-                            else None
-                        ),
-                        sharepoint_url=cal_data.get("_web_url"),
-                        is_active=False,
-                    )
-                    db.add(cal_curve)
-                    new_cals.append(cal_curve)
-                    calibrations_added += 1
-                    yield send_event("log", {
-                        "message": f"  + Cal: {source} (slope={cal_result['slope']:.4f}, R²={cal_result['r_squared']:.6f})",
-                        "level": "success",
-                    })
-                except Exception as e:
-                    yield send_event("log", {"message": f"  ✗ Cal error {source}: {e}", "level": "error"})
+                cal = _parse_calibration_excel_bytes(file_bytes, fn)
+                db.merge(SharePointFileCache(
+                    source_path=item_path, peptide_abbreviation=abbreviation, produced_calibration=bool(cal)
+                ))
 
-            # 6. Set most recent as active if new cals were added
-            if new_cals:
-                for ec in existing_cals:
-                    ec.is_active = False
-                db.flush()
-                new_cals[-1].is_active = True
+                if not cal:
+                    yield send_event("log", {"message": f"  [SKIP] {fn}: no parseable curve data", "level": "dim"})
+                    continue
+
+                meta = _parse_filename_metadata(fn, item_path)
+                instrument = meta["instrument"]
+                fp = (instrument, tuple(sorted(round(a, 1) for a in cal["areas"])))
+                if fp in seen_fingerprints:
+                    yield send_event("log", {"message": f"  [DUP]  {fn}", "level": "dim"})
+                    continue
+                seen_fingerprints.add(fp)
+
+                try:
+                    regression = calculate_calibration_curve(cal["concentrations"], cal["areas"])
+                except Exception as e:
+                    yield send_event("log", {"message": f"  [ERROR] {fn}: regression failed ({e})", "level": "error"})
+                    continue
+
+                curve = CalibrationCurve(
+                    peptide_id=peptide.id,
+                    slope=regression["slope"],
+                    intercept=regression["intercept"],
+                    r_squared=regression["r_squared"],
+                    standard_data={"concentrations": cal["concentrations"], "areas": cal["areas"], "rts": cal.get("rts", [])},
+                    source_filename=fn,
+                    source_path=item_path,
+                    sharepoint_url=item.get("webUrl"),
+                    source_date=item.get("lastModified"),
+                    is_active=False,
+                    instrument=meta["instrument"],
+                    vendor=meta["vendor"],
+                    lot_number=meta["lot_number"],
+                    batch_number=meta["batch_number"],
+                    cap_color=meta["cap_color"],
+                    run_date=meta["run_date"],
+                )
+                db.add(curve)
+                new_curves.append(curve)
+                calibrations_added += 1
                 yield send_event("log", {
-                    "message": f"  ✓ Active: {new_cals[-1].source_filename}",
+                    "message": f"  [OK]   {fn} ({instrument or '?'}, {meta['vendor'] or '?'}, R²={regression['r_squared']:.4f})",
                     "level": "success",
                 })
-                # Update reference RT from active curve
-                active_data = new_cals[-1].standard_data
-                if active_data and active_data.get("rts"):
-                    peptide.reference_rt = round(sum(active_data["rts"]) / len(active_data["rts"]), 4)
+
+            db.flush()
+
+            # 4. Set active: newest per instrument by run_date
+            if new_curves:
+                by_instrument: dict[str, list] = {}
+                for c in new_curves:
+                    by_instrument.setdefault(c.instrument or "unknown", []).append(c)
+                for inst_curves in by_instrument.values():
+                    newest = max(inst_curves, key=lambda c: (c.run_date or c.source_date or c.created_at))
+                    newest.is_active = True
+                    yield send_event("log", {
+                        "message": f"  ✓ Active ({newest.instrument or '?'}): {newest.source_filename}",
+                        "level": "success",
+                    })
+
+                # Update reference RT from the active curve (prefer 1290 > 1260 > unknown)
+                priority_order = ["1290", "1260", "unknown"]
+                active_for_rt = None
+                for inst_key in priority_order:
+                    group = by_instrument.get(inst_key)
+                    if group:
+                        active_for_rt = max(group, key=lambda c: (c.run_date or c.source_date or c.created_at))
+                        break
+                if active_for_rt and active_for_rt.standard_data and active_for_rt.standard_data.get("rts"):
+                    rts = active_for_rt.standard_data["rts"]
+                    peptide.reference_rt = round(sum(rts) / len(rts), 4)
                     yield send_event("log", {"message": f"  Updated reference RT: {peptide.reference_rt}", "level": "success"})
 
             db.commit()
             yield send_event("refresh", {})
 
-            yield send_event("log", {"message": f"Done — {calibrations_added} new calibration(s) imported", "level": "success" if calibrations_added else "info"})
-            yield send_event("done", {
-                "success": True,
-                "calibrations": calibrations_added,
+            yield send_event("log", {
+                "message": f"Done — {calibrations_added} curve(s) imported",
+                "level": "success" if calibrations_added else "info",
             })
+            yield send_event("done", {"success": True, "calibrations": calibrations_added})
 
         except Exception as e:
             db.rollback()
