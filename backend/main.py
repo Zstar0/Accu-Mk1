@@ -2731,7 +2731,6 @@ async def rebuild_standards_stream(
         skip_file_fragments = ["DAD1A", "YearMonthDay", "template", "Template",
                                 "Master sheet", "Calibration_Curve_Template",
                                 "P-###"]
-        std_pattern = re.compile(r"[_\s]Std[_\s]|[_\s]STD[_\s]|^STD_|^Std_", re.IGNORECASE)
 
         created_peptides = 0
         created_curves = 0
@@ -2778,15 +2777,13 @@ async def rebuild_standards_stream(
                     errors.append(f"{folder_name}: {e}")
                     continue
 
-                # Filter to _Std_ files only, skip temps and templates
+                # Filter out temp files and known non-data fragments
                 std_files = []
                 for item in all_xlsx:
                     fn = item["name"]
                     if fn.startswith("~$"):
                         continue
                     if any(frag in fn for frag in skip_file_fragments):
-                        continue
-                    if not std_pattern.search(fn):
                         continue
                     std_files.append(item)
 
@@ -2972,7 +2969,6 @@ async def import_standards_stream(
                               "Organic_synthesis_Checks"}
         skip_file_fragments = ["DAD1A", "YearMonthDay", "template", "Template",
                                 "Master sheet", "Calibration_Curve_Template", "P-###"]
-        std_pattern = re.compile(r"[_\s]Std[_\s]|[_\s]STD[_\s]|^STD_|^Std_", re.IGNORECASE)
 
         new_peptides = 0
         new_curves = 0
@@ -3020,15 +3016,13 @@ async def import_standards_stream(
                     errors.append(f"{folder_name}: {e}")
                     continue
 
-                # Filter to _Std_ files only
+                # Filter out temp files and known non-data fragments
                 std_files = []
                 for item in all_xlsx:
                     fn = item["name"]
                     if fn.startswith("~$"):
                         continue
                     if any(frag in fn for frag in skip_file_fragments):
-                        continue
-                    if not std_pattern.search(fn):
                         continue
                     std_files.append(item)
 
@@ -3221,7 +3215,6 @@ async def resync_peptide_stream(
 
         skip_file_fragments = ["DAD1A", "YearMonthDay", "template", "Template",
                                 "Master sheet", "Calibration_Curve_Template", "P-###"]
-        std_pattern = re.compile(r"[_\s]Std[_\s]|[_\s]STD[_\s]|^STD_|^Std_", re.IGNORECASE)
 
         calibrations_added = 0
 
@@ -3242,8 +3235,8 @@ async def resync_peptide_stream(
                 "level": "info",
             })
 
-            # 2. List std files in the peptide's SharePoint folder
-            yield send_event("log", {"message": "Scanning SharePoint for standard files...", "level": "info"})
+            # 2. List all xlsx files in the peptide's SharePoint folder (parser filters non-calibration files)
+            yield send_event("log", {"message": "Scanning SharePoint for calibration files...", "level": "info"})
             std_files = []
             try:
                 all_xlsx = await sp.list_files_recursive(
@@ -3254,8 +3247,6 @@ async def resync_peptide_stream(
                     if fn.startswith("~$"):
                         continue
                     if any(frag in fn for frag in skip_file_fragments):
-                        continue
-                    if not std_pattern.search(fn):
                         continue
                     std_files.append(item)
                 yield send_event("log", {"message": f"Found {len(std_files)} standard file(s)", "level": "info"})
