@@ -2805,10 +2805,11 @@ async def rebuild_standards_stream(
                 for item in std_files:
                     fn = item["name"]
                     item_path = item.get("path", "")
+                    item_id = item["id"]
 
                     # Download file
                     try:
-                        file_bytes = await sp.download_file(item_path)
+                        file_bytes, _ = await sp.download_file(item_id)
                     except Exception as e:
                         yield send_event("log", {"message": f"  [SKIP] {fn}: download failed ({e})", "level": "warn"})
                         skipped_no_data += 1
