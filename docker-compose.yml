@@ -34,6 +34,8 @@ services:
       - accu-mk1-data:/app/data
     expose:
       - "8012"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"  # Resolve host on Linux (Docker Desktop handles this automatically)
     restart: unless-stopped
     networks:
       - accu-mk1
