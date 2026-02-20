@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-02-19)
 
 **Core value:** Streamlined lab workflow: guide tech through sample prep step-by-step with auto weight capture — stock prep, dilution, ready for HPLC injection.
-**Current focus:** v0.11.0 — New Analysis Wizard, Phase 4 COMPLETE — full end-to-end wizard flow functional
+**Current focus:** v0.11.0 — New Analysis Wizard, Phase 5 IN PROGRESS — SENAITE LIMS integration
 
 ## Current Position
 
-Phase: 4 of 5 (Wizard UI) — COMPLETE
-Plan: 3 of 3 in current phase — COMPLETE
-Status: Phase 4 complete — all 5 wizard steps functional, Analysis History tabbed
-Last activity: 2026-02-20 — Completed 04-03-PLAN.md (Step4Results, Step5Summary, WizardSessionHistory, AnalysisHistory tabs)
+Phase: 5 of 5 (SENAITE Sample Lookup) — In progress
+Plan: 1 of 2 in current phase
+Status: In progress — backend endpoints and frontend API functions complete
+Last activity: 2026-02-20 — Completed 05-01-PLAN.md (SENAITE backend endpoints and frontend API)
 
-Progress: [████████░░] 80%
+Progress: [█████████░] 89%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 7
+- Total plans completed: 8
 - Average duration: ~4min per plan (estimated)
-- Total execution time: ~34min
+- Total execution time: ~36min
 
 **By Phase:**
 
@@ -31,6 +31,7 @@ Progress: [████████░░] 80%
 | 02-scale-bridge | 1 | ~4min | ~4min |
 | 03-sse-weight-streaming | 1 | ~10min | ~10min |
 | 04-wizard-ui | 3/3 | ~9min | ~3min |
+| 05-senaite-sample-lookup | 1/2 | ~2min | ~2min |
 
 *Updated after each plan completion*
 
@@ -65,31 +66,28 @@ Progress: [████████░░] 80%
 - Step 2 transfer confirmation: `transferConfirmed || meas2d != null` — loaded vial weight implies transfer occurred
 - AnalysisHistory early return converted to conditional render inside TabsContent — tabs persist in detail view
 - Step5Summary resetWizard before navigateTo — wizard always resets regardless of navigation
+- SENAITE lookup errors differentiated: 404 for not-found, 503 for unavailable/timeout/5xx
+- Fuzzy peptide match uses simple contains (`stripped_name.lower() in peptide.name.lower()`) — not Levenshtein
+- SENAITE_URL absent = lookup tab hidden; same optional pattern as SCALE_HOST
+- Em-dash in 503 message: "SENAITE is currently unavailable — use manual entry"
+- Analyte suffix regex: `r'\s*-\s*[^-]+\([^)]+\)\s*$'` strips " - Identity (HPLC)" style suffixes
 
 ### Key Source Files
 
-- `backend/main.py` — FastAPI app, all endpoints, lifespan setup, scale bridge singleton
+- `backend/main.py` — FastAPI app, all endpoints, SENAITE integration (Phase 5), scale bridge singleton
 - `backend/scale_bridge.py` — ScaleBridge class with asyncio TCP client and read_weight()
 - `src/lib/scale-stream.ts` — useScaleStream hook (SSE consumer with stability detection)
 - `src/components/hplc/WeightInput.tsx` — dual-mode weight input (scale SSE / manual)
 - `src/components/hplc/PeptideConfig.tsx` — reference SSE consumer pattern
 - `src/store/wizard-store.ts` — PrepWizardStore with stepStates field, deriveStepStates pure function, WIZARD_STEPS constant
-- `src/lib/api.ts` — All API functions including 6 new wizard endpoints
+- `src/lib/api.ts` — All API functions including wizard endpoints + SENAITE lookup functions
 - `src/components/hplc/CreateAnalysis.tsx` — WizardPage split-panel layout (all 5 steps wired)
-- `src/components/hplc/wizard/WizardStepList.tsx` — Step sidebar with 4-state indicators
-- `src/components/hplc/wizard/WizardStepPanel.tsx` — Animated content wrapper
-- `src/components/hplc/wizard/steps/Step1SampleInfo.tsx` — Session creation form (peptide dropdown + targets)
-- `src/components/hplc/wizard/steps/Step2StockPrep.tsx` — Stock prep 4-sub-step weighing with calcs
-- `src/components/hplc/wizard/steps/Step3Dilution.tsx` — Dilution 3-sub-step weighing with actual calcs
-- `src/components/hplc/wizard/steps/Step4Results.tsx` — Peak area input with calculated results card
-- `src/components/hplc/wizard/steps/Step5Summary.tsx` — Full read-only summary + Complete Session button
-- `src/components/hplc/wizard/WizardSessionHistory.tsx` — Completed wizard sessions table
-- `src/components/hplc/AnalysisHistory.tsx` — Tabbed: HPLC Import + Sample Prep Wizard tabs
+- `src/components/hplc/wizard/steps/Step1SampleInfo.tsx` — Session creation form (to be extended with SENAITE tab in 05-02)
 
 ### Blockers/Concerns
 
 - Phase 2/3 hardware test deferred: scale at 192.168.3.113 on remote network; `test_scale.py` ready to run when accessible. WeightInput falls back to manual mode automatically when scale is offline.
-- Phase 5 (SENAITE): requires live instance access — fetch a known sample with `?complete=yes` to identify peptide name and declared weight field names before building search UI
+- SENAITE env vars need to be set for integration to function — see .env.example SENAITE section
 
 ### Pending Todos
 
@@ -97,6 +95,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-02-20T05:17:38Z
-Stopped at: Completed 04-03-PLAN.md (Phase 4 plan 03 — Step4Results, Step5Summary, WizardSessionHistory, AnalysisHistory tabs)
+Last session: 2026-02-20T06:44:23Z
+Stopped at: Completed 05-01-PLAN.md (Phase 5 plan 01 — SENAITE backend endpoints and frontend API)
 Resume file: None

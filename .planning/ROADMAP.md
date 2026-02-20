@@ -115,7 +115,7 @@ Plans:
 **Plans**: 2 plans
 
 Plans:
-- [ ] 05-01-PLAN.md — SENAITE backend endpoints (status + lookup), httpx client with Basic auth, analyte name stripping, fuzzy peptide matching, frontend API types and functions
+- [x] 05-01-PLAN.md — SENAITE backend endpoints (status + lookup), httpx client with Basic auth, analyte name stripping, fuzzy peptide matching, frontend API types and functions
 - [ ] 05-02-PLAN.md — Step1SampleInfo two-tab UI rewrite (SENAITE Lookup + Manual Entry), lookup summary card, blend analyte display, error states
 
 ---
