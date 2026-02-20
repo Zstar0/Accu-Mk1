@@ -1678,6 +1678,212 @@ export async function getHPLCAnalysis(
   }
 }
 
+// --- Wizard Session API ---
+
+export interface WizardMeasurementResponse {
+  id: number
+  session_id: number
+  step_key: string
+  weight_mg: number
+  source: string
+  is_current: boolean
+  recorded_at: string
+}
+
+export interface WizardSessionResponse {
+  id: number
+  peptide_id: number
+  calibration_curve_id: number | null
+  status: string
+  sample_id_label: string | null
+  declared_weight_mg: number | null
+  target_conc_ug_ml: number | null
+  target_total_vol_ul: number | null
+  peak_area: number | null
+  created_at: string
+  updated_at: string
+  completed_at: string | null
+  measurements: WizardMeasurementResponse[]
+  calculations: Record<string, number> | null
+}
+
+export interface WizardSessionListItem {
+  id: number
+  peptide_id: number
+  status: string
+  sample_id_label: string | null
+  declared_weight_mg: number | null
+  created_at: string
+  updated_at: string
+  completed_at: string | null
+}
+
+/**
+ * Create a new wizard session.
+ */
+export async function createWizardSession(data: {
+  peptide_id: number
+  sample_id_label?: string
+  declared_weight_mg?: number
+  target_conc_ug_ml?: number
+  target_total_vol_ul?: number
+}): Promise<WizardSessionResponse> {
+  try {
+    const response = await fetch(`${API_BASE_URL()}/wizard/sessions`, {
+      method: 'POST',
+      headers: getBearerHeaders('application/json'),
+      body: JSON.stringify(data),
+    })
+    if (!response.ok) {
+      throw new Error(`Create wizard session failed: ${response.status}`)
+    }
+    return response.json()
+  } catch (error) {
+    console.error('Create wizard session error:', error)
+    throw error
+  }
+}
+
+/**
+ * Get a wizard session by ID.
+ */
+export async function getWizardSession(
+  sessionId: number
+): Promise<WizardSessionResponse> {
+  try {
+    const response = await fetch(
+      `${API_BASE_URL()}/wizard/sessions/${sessionId}`,
+      { headers: getBearerHeaders() }
+    )
+    if (!response.ok) {
+      throw new Error(`Get wizard session ${sessionId} failed: ${response.status}`)
+    }
+    return response.json()
+  } catch (error) {
+    console.error(`Get wizard session ${sessionId} error:`, error)
+    throw error
+  }
+}
+
+/**
+ * List wizard sessions (flat array, not paginated).
+ */
+export async function listWizardSessions(params?: {
+  status?: string
+  peptide_id?: number
+  limit?: number
+  offset?: number
+}): Promise<WizardSessionListItem[]> {
+  try {
+    const urlParams = new URLSearchParams()
+    if (params?.status) urlParams.set('status', params.status)
+    if (params?.peptide_id != null) urlParams.set('peptide_id', String(params.peptide_id))
+    if (params?.limit != null) urlParams.set('limit', String(params.limit))
+    if (params?.offset != null) urlParams.set('offset', String(params.offset))
+
+    const qs = urlParams.toString()
+    const response = await fetch(
+      `${API_BASE_URL()}/wizard/sessions${qs ? `?${qs}` : ''}`,
+      { headers: getBearerHeaders() }
+    )
+    if (!response.ok) {
+      throw new Error(`List wizard sessions failed: ${response.status}`)
+    }
+    return response.json()
+  } catch (error) {
+    console.error('List wizard sessions error:', error)
+    throw error
+  }
+}
+
+/**
+ * Record a weight measurement for a wizard session step.
+ */
+export async function recordWizardMeasurement(
+  sessionId: number,
+  data: { step_key: string; weight_mg: number; source: string }
+): Promise<WizardSessionResponse> {
+  try {
+    const response = await fetch(
+      `${API_BASE_URL()}/wizard/sessions/${sessionId}/measurements`,
+      {
+        method: 'POST',
+        headers: getBearerHeaders('application/json'),
+        body: JSON.stringify(data),
+      }
+    )
+    if (!response.ok) {
+      throw new Error(
+        `Record wizard measurement for session ${sessionId} failed: ${response.status}`
+      )
+    }
+    return response.json()
+  } catch (error) {
+    console.error(`Record wizard measurement error:`, error)
+    throw error
+  }
+}
+
+/**
+ * Update wizard session parameters.
+ */
+export async function updateWizardSession(
+  sessionId: number,
+  data: {
+    sample_id_label?: string
+    declared_weight_mg?: number
+    target_conc_ug_ml?: number
+    target_total_vol_ul?: number
+    peak_area?: number
+  }
+): Promise<WizardSessionResponse> {
+  try {
+    const response = await fetch(
+      `${API_BASE_URL()}/wizard/sessions/${sessionId}`,
+      {
+        method: 'PATCH',
+        headers: getBearerHeaders('application/json'),
+        body: JSON.stringify(data),
+      }
+    )
+    if (!response.ok) {
+      throw new Error(
+        `Update wizard session ${sessionId} failed: ${response.status}`
+      )
+    }
+    return response.json()
+  } catch (error) {
+    console.error(`Update wizard session ${sessionId} error:`, error)
+    throw error
+  }
+}
+
+/**
+ * Complete a wizard session.
+ */
+export async function completeWizardSession(
+  sessionId: number
+): Promise<WizardSessionResponse> {
+  try {
+    const response = await fetch(
+      `${API_BASE_URL()}/wizard/sessions/${sessionId}/complete`,
+      {
+        method: 'POST',
+        headers: getBearerHeaders(),
+      }
+    )
+    if (!response.ok) {
+      throw new Error(
+        `Complete wizard session ${sessionId} failed: ${response.status}`
+      )
+    }
+    return response.json()
+  } catch (error) {
+    console.error(`Complete wizard session ${sessionId} error:`, error)
+    throw error
+  }
+}
+
 // --- SharePoint Integration ---
 
 export interface SharePointItem {
