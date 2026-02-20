@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { AlertTriangle, Loader2, RefreshCw } from 'lucide-react'
+import { AlertTriangle, Loader2, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
   AlertDialog,
@@ -18,54 +18,28 @@ import { getAuthToken } from '@/store/auth-store'
 import { toast } from 'sonner'
 
 export function AdvancedPane() {
-  const [rebuilding, setRebuilding] = useState(false)
+  const [wiping, setWiping] = useState(false)
 
-  const handleWipeAndRebuild = async () => {
-    setRebuilding(true)
+  const handleWipe = async () => {
+    setWiping(true)
     try {
       const token = getAuthToken()
-      const response = await fetch(`${getApiBaseUrl()}/hplc/rebuild-standards/stream`, {
+      const response = await fetch(`${getApiBaseUrl()}/peptides/wipe-all`, {
+        method: 'DELETE',
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       })
-      if (!response.ok || !response.body) {
-        throw new Error(`Request failed: ${response.status}`)
+      if (!response.ok) {
+        const body = await response.json().catch(() => null)
+        throw new Error(body?.detail || `Request failed: ${response.status}`)
       }
-
-      const reader = response.body.getReader()
-      const decoder = new TextDecoder()
-      let buffer = ''
-
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-        buffer += decoder.decode(value, { stream: true })
-        const parts = buffer.split('\n\n')
-        buffer = parts.pop() ?? ''
-        for (const part of parts) {
-          const dataLine = part.split('\n').find(l => l.startsWith('data:'))
-          const eventLine = part.split('\n').find(l => l.startsWith('event:'))
-          if (!dataLine) continue
-          try {
-            const payload = JSON.parse(dataLine.slice(5).trim())
-            const eventType = eventLine?.slice(6).trim()
-            if (eventType === 'done') {
-              if (payload.success) {
-                toast.success('Rebuild complete', {
-                  description: `${payload.peptides ?? 0} peptides · ${payload.curves ?? 0} curves imported`,
-                })
-              } else {
-                toast.error('Rebuild failed', { description: payload.error })
-              }
-            }
-          } catch {
-            // ignore parse errors
-          }
-        }
-      }
+      const data = await response.json()
+      toast.success('Wipe complete', {
+        description: `${data.peptides_deleted} peptides and ${data.curves_deleted} curves deleted`,
+      })
     } catch (err) {
-      toast.error('Rebuild failed', { description: String(err) })
+      toast.error('Wipe failed', { description: String(err) })
     } finally {
-      setRebuilding(false)
+      setWiping(false)
     }
   }
 
@@ -73,23 +47,23 @@ export function AdvancedPane() {
     <div className="space-y-6">
       <SettingsSection title="HPLC Standards">
         <SettingsField
-          label="Wipe & Rebuild Standards"
-          description="Delete all existing peptide standards and curves, then re-import everything from SharePoint. Use this to fix corrupted data or after major folder restructuring."
+          label="Wipe Standards"
+          description="Delete all existing peptide standards and calibration curves. Use Import Standards on the Peptide Standards page afterward to re-import from SharePoint."
         >
           <AlertDialog>
             <AlertDialogTrigger asChild>
               <Button
                 variant="destructive"
                 size="sm"
-                disabled={rebuilding}
+                disabled={wiping}
                 className="gap-2"
               >
-                {rebuilding ? (
+                {wiping ? (
                   <Loader2 className="h-4 w-4 animate-spin" />
                 ) : (
-                  <RefreshCw className="h-4 w-4" />
+                  <Trash2 className="h-4 w-4" />
                 )}
-                {rebuilding ? 'Rebuilding...' : 'Wipe & Rebuild'}
+                {wiping ? 'Wiping...' : 'Wipe Standards'}
               </Button>
             </AlertDialogTrigger>
             <AlertDialogContent>
@@ -100,21 +74,21 @@ export function AdvancedPane() {
                 </AlertDialogTitle>
                 <AlertDialogDescription>
                   This will permanently delete all peptide records and calibration
-                  curves, then re-import from SharePoint from scratch. Any manual
-                  edits (reference RT, tolerance, wizard fields) will be lost.
+                  curves. Any manual edits (reference RT, tolerance, wizard fields)
+                  will be lost.
                   <br />
                   <br />
-                  Use <strong>Import Standards</strong> on the Peptide Standards
-                  page to incrementally add only new files instead.
+                  You can re-import from SharePoint afterward using{' '}
+                  <strong>Import Standards</strong> on the Peptide Standards page.
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>
                 <AlertDialogCancel>Cancel</AlertDialogCancel>
                 <AlertDialogAction
                   className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                  onClick={handleWipeAndRebuild}
+                  onClick={handleWipe}
                 >
-                  Yes, wipe and rebuild
+                  Yes, wipe all standards
                 </AlertDialogAction>
               </AlertDialogFooter>
             </AlertDialogContent>

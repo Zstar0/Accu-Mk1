@@ -1458,6 +1458,19 @@ async def create_peptide(data: PeptideCreate, db: Session = Depends(get_db), _cu
     return _peptide_to_response(db, peptide)
 
 
+@app.delete("/peptides/wipe-all")
+async def wipe_all_peptides(db: Session = Depends(get_db), _current_user=Depends(get_current_user)):
+    """Delete ALL peptide standards and calibration curves."""
+    curves_deleted = db.execute(delete(CalibrationCurve)).rowcount
+    peptides_deleted = db.execute(delete(Peptide)).rowcount
+    db.commit()
+    return {
+        "message": f"Wiped {peptides_deleted} peptides and {curves_deleted} calibration curves",
+        "peptides_deleted": peptides_deleted,
+        "curves_deleted": curves_deleted,
+    }
+
+
 @app.put("/peptides/{peptide_id}", response_model=PeptideResponse)
 async def update_peptide(peptide_id: int, data: PeptideUpdate, db: Session = Depends(get_db), _current_user=Depends(get_current_user)):
     """Update a peptide."""
