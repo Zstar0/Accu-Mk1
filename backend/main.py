@@ -13,7 +13,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional, Union
 
-from fastapi import FastAPI, Depends, HTTPException, Header, status
+from fastapi import FastAPI, Depends, HTTPException, Header, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -254,6 +254,8 @@ DEFAULT_SETTINGS = {
     "compound_ranges": '{}',
     "calibration_slope": "1.0",
     "calibration_intercept": "0.0",
+    "scale_host": "",      # Empty = scale disabled; set to IP address to enable
+    "scale_port": "8001",  # Default MT-SICS TCP port for Excellence/XSR series
 }
 
 
@@ -281,7 +283,27 @@ async def lifespan(app: FastAPI):
         seed_admin_user(db)
     finally:
         db.close()
+
+    # --- Scale Bridge (Phase 2) ---
+    from scale_bridge import ScaleBridge, SCALE_PORT_DEFAULT
+    import logging as _logging
+    _logger = _logging.getLogger(__name__)
+
+    scale_host = os.environ.get("SCALE_HOST")
+    scale_port = int(os.environ.get("SCALE_PORT", str(SCALE_PORT_DEFAULT)))
+    if scale_host:
+        app.state.scale_bridge = ScaleBridge(host=scale_host, port=scale_port)
+        await app.state.scale_bridge.start()
+        _logger.info(f"ScaleBridge started: {scale_host}:{scale_port}")
+    else:
+        app.state.scale_bridge = None
+        _logger.info("SCALE_HOST not set — scale bridge disabled (manual-entry mode)")
+
     yield
+
+    # --- Scale Bridge shutdown ---
+    if getattr(app.state, 'scale_bridge', None) is not None:
+        await app.state.scale_bridge.stop()
 
 
 # --- FastAPI app ---
@@ -4629,3 +4651,28 @@ async def complete_wizard_session(
     db.commit()
     db.refresh(session)
     return _build_session_response(session, db)
+
+
+# --- Scale endpoints (Phase 2) ---
+
+@app.get("/scale/status")
+async def get_scale_status(
+    request: Request,
+    _current_user=Depends(get_current_user),
+):
+    """
+    Get scale connection status.
+
+    Returns:
+        disabled     — SCALE_HOST not configured; manual-entry mode
+        connected    — SCALE_HOST set and balance is reachable
+        disconnected — SCALE_HOST set but balance is unreachable
+    """
+    bridge = getattr(request.app.state, 'scale_bridge', None)
+    if bridge is None:
+        return {"status": "disabled", "host": None, "port": None}
+    return {
+        "status": "connected" if bridge.connected else "disconnected",
+        "host": bridge.host,
+        "port": bridge.port,
+    }
