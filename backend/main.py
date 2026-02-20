@@ -4363,6 +4363,7 @@ def _build_session_response(session: WizardSession, db: Session) -> WizardSessio
 
     actual_conc_d = None
     actual_total_d = None
+    actual_stock_d = None
 
     if stock_conc_d is not None and all(v is not None for v in [dil_empty, dil_diluent, dil_final]):
         try:
@@ -4377,6 +4378,7 @@ def _build_session_response(session: WizardSession, db: Session) -> WizardSessio
             )
             actual_conc_d = ad["actual_conc_ug_ml"]
             actual_total_d = ad["actual_total_vol_ul"]
+            actual_stock_d = ad["actual_stock_vol_ul"]
             calcs["actual_diluent_vol_ul"] = float(ad["actual_diluent_vol_ul"])
             calcs["actual_stock_vol_ul"] = float(ad["actual_stock_vol_ul"])
             calcs["actual_total_vol_ul"] = float(ad["actual_total_vol_ul"])
@@ -4385,7 +4387,7 @@ def _build_session_response(session: WizardSession, db: Session) -> WizardSessio
             pass
 
     # Stage 4: Results — requires Stage 3 + peak_area + calibration curve
-    if actual_conc_d is not None and actual_total_d is not None and session.peak_area and session.calibration_curve_id:
+    if actual_conc_d is not None and actual_total_d is not None and actual_stock_d is not None and session.peak_area and session.calibration_curve_id:
         try:
             from calculations.wizard import calc_results
             cal = db.execute(
@@ -4393,11 +4395,12 @@ def _build_session_response(session: WizardSession, db: Session) -> WizardSessio
             ).scalar_one_or_none()
             if cal:
                 res = calc_results(
-                    Decimal(str(session.peak_area)),
                     Decimal(str(cal.slope)),
                     Decimal(str(cal.intercept)),
+                    Decimal(str(session.peak_area)),
                     actual_conc_d,
                     actual_total_d,
+                    actual_stock_d,
                 )
                 calcs["determined_conc_ug_ml"] = float(res["determined_conc_ug_ml"])
                 calcs["peptide_mass_mg"] = float(res["peptide_mass_mg"])
