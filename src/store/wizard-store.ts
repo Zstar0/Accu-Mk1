@@ -45,7 +45,7 @@ export function deriveStepStates(
     }
     if (currentStep === 2) return 'in-progress'
     if (calcs?.stock_conc_ug_ml != null) return 'complete'
-    return 'locked'
+    return 'not-started'
   })()
 
   // Step 3: locked if no stock_conc calculation; complete if actual_conc calculated
@@ -55,7 +55,7 @@ export function deriveStepStates(
     }
     if (currentStep === 3) return 'in-progress'
     if (calcs?.actual_conc_ug_ml != null) return 'complete'
-    return 'locked'
+    return 'not-started'
   })()
 
   // Step 4: locked if no actual_conc calculation; complete if determined_conc calculated
@@ -65,7 +65,7 @@ export function deriveStepStates(
     }
     if (currentStep === 4) return 'in-progress'
     if (calcs?.determined_conc_ug_ml != null) return 'complete'
-    return 'locked'
+    return 'not-started'
   })()
 
   // Step 5: locked if no determined_conc; complete if session is 'completed'
@@ -75,7 +75,7 @@ export function deriveStepStates(
     }
     if (currentStep === 5) return 'in-progress'
     if (session?.status === 'completed') return 'complete'
-    return 'locked'
+    return 'not-started'
   })()
 
   return { 1: step1, 2: step2, 3: step3, 4: step4, 5: step5 }

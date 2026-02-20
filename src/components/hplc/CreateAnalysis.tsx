@@ -25,7 +25,9 @@ function renderCurrentStep(currentStep: StepId): React.ReactNode {
 
 export function CreateAnalysis() {
   const currentStep = useWizardStore(state => state.currentStep)
-  const canAdvance = useWizardStore(state => state.canAdvance)
+  const canAdvance = useWizardStore(state =>
+    state.currentStep !== 5 && state.stepStates[(state.currentStep + 1) as StepId] !== 'locked'
+  )
 
   function handleBack() {
     useWizardStore.getState().setCurrentStep((currentStep - 1) as StepId)
@@ -64,7 +66,7 @@ export function CreateAnalysis() {
           </Button>
           <Button
             onClick={handleNext}
-            disabled={currentStep === 5 || !canAdvance()}
+            disabled={!canAdvance}
           >
             Next Step
           </Button>

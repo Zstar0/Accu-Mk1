@@ -4691,11 +4691,14 @@ def _fuzzy_match_peptide(stripped_name: str, peptides: list) -> Optional[tuple]:
     """Case-insensitive substring match of stripped analyte name against local peptides.
 
     Returns (peptide.id, peptide.name) if a match is found, else None.
-    Uses simple 'contains' matching: stripped_name in peptide.name (case-insensitive).
+    Normalizes hyphens and spaces so "BPC-157" matches "BPC157".
     """
     needle = stripped_name.lower()
+    needle_norm = needle.replace("-", "").replace(" ", "")
     for peptide in peptides:
-        if needle in peptide.name.lower():
+        hay = peptide.name.lower()
+        hay_norm = hay.replace("-", "").replace(" ", "")
+        if needle in hay or needle_norm in hay_norm:
             return (peptide.id, peptide.name)
     return None
 

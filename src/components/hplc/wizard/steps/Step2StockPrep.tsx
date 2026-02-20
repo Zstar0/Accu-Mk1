@@ -54,7 +54,7 @@ export function Step2StockPrep() {
   // Sub-step 2b: locked until 2a done; confirmed/done if transferDone
   const step2bLocked = !step2aDone
   // Sub-step 2c + 2d: locked until transfer confirmed
-  const step2cdLocked = !transferDone && !step2aDone
+  const step2cdLocked = !transferDone
 
   // Step 2d done if measurement exists and not re-weighing
   const step2dDone = meas2d != null && !reweigh2d
