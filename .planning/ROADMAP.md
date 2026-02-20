@@ -28,11 +28,11 @@ This milestone adds a guided 5-step sample preparation wizard to the existing Fa
 3. The calculations endpoint returns correct stock concentration, actual diluent added, required dilution volumes, actual concentration, dilution factor, peptide mass, and purity — all using Decimal arithmetic, all recalculated on demand from raw measurements.
 4. A session in progress can be resumed after navigating away — the API returns all current measurements and calculated values needed to restore wizard state.
 
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 01-01: DB models, migration, and wizard session REST endpoints
-- [ ] 01-02: Calculation engine (Decimal arithmetic, all wizard-derived values)
+- [ ] 01-01-PLAN.md — DB models (WizardSession, WizardMeasurement), wizard_sessions/wizard_measurements tables, 6 REST endpoints for session lifecycle
+- [ ] 01-02-PLAN.md — Decimal calculation engine (calc_stock_prep, calc_required_volumes, calc_actual_dilution, calc_results) with TDD unit tests verified against lab Excel values
 
 ---
 
@@ -124,7 +124,7 @@ Plans:
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. DB Models and Calculation Foundation | 0/2 | Not started | - |
+| 1. DB Models and Calculation Foundation | 0/2 | In progress | - |
 | 2. Scale Bridge Service | 0/1 | Not started | - |
 | 3. SSE Weight Streaming | 0/1 | Not started | - |
 | 4. Wizard UI | 0/2 | Not started | - |
