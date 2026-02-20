@@ -54,7 +54,21 @@ Streamlined morning workflow: import CSV → review batch → calculate purity �
 - **Logic principle**: Backend owns all scientific calculations — UI never parses files or calculates metrics
 - **Audit principle**: All imports and pushes must be idempotent, traceable, repeatable
 
-## Current Milestone: v0.6.0 — User Authentication (COMPLETE)
+## Current Milestone: v0.11.0 — New Analysis Wizard
+
+**Goal:** Guide lab techs step-by-step through HPLC sample prep — stock preparation, dilution, and weighing — with Mettler Toledo scale integration for automatic weight capture, producing a complete session record ready for HPLC injection.
+
+**Target features:**
+- SENAITE sample lookup (pull sample ID, peptide, declared weight)
+- Stripe-style step wizard UI with vertical progress navigation
+- Mettler Toledo XSR105DU scale integration via network (auto-pull stable weight readings)
+- Stock preparation workflow (5 weighing steps + stock concentration calculation)
+- Dilution calculation (compute diluent volume + stock volume to hit target conc/volume)
+- Tech-entered target concentration and total volume
+- Session record persisted to DB (all measurements, calculations, timestamps)
+- Results entry after HPLC run (peak area → purity %, peptide mass)
+
+## Previous Milestone: v0.6.0 — User Authentication (COMPLETE)
 
 **Goal:** Add a fully functional user account system to protect the application for production deployment. Users log in with email + password, with standard and admin roles. Replaces the current API key system with proper JWT-based authentication.
 
@@ -74,6 +88,11 @@ Streamlined morning workflow: import CSV → review batch → calculate purity �
 
 ## Previous Milestones
 
+- **v0.10.0** — COA Explorer, In Progress tab, explorer improvements
+- **v0.9.0** — Calibration accuracy fixes, SharePoint reliability, analysis UX
+- **v0.8.0** — Dashboard, Peptide Config UI overhaul, SharePoint improvements
+- **v0.7.0** — Docker deployment + production hosting
+- **v0.6.0** — User authentication (JWT, roles, admin UI)
 - **v0.5.0** — HPLC Peptide Analysis Pipeline (purity, quantity, identity)
 - **v0.4.x** — Chromatograph viewer, AccuMark Tools, settings/API profiles
 
@@ -92,4 +111,4 @@ Streamlined morning workflow: import CSV → review batch → calculate purity �
 | Backend port 8012 | Avoid conflicts with Docker services on 8008-8009 | v0.6.0 |
 
 ---
-*Last updated: 2026-02-09 after v0.6.0 milestone complete*
+*Last updated: 2026-02-19 after v0.11.0 milestone started*

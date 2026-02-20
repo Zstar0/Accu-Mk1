@@ -1,107 +1,127 @@
-# Requirements: Accu-Mk1
+# Requirements: Accu-Mk1 v0.11.0 — New Analysis Wizard
 
-**Defined:** 2026-01-15
-**Core Value:** Streamlined morning workflow: import CSV → review batch → calculate purity → push to SENAITE
+**Defined:** 2026-02-19
+**Core Value:** Guide lab tech through sample prep step-by-step with auto weight capture — stock prep → dilution → ready for HPLC injection
 
-## v1 Requirements
+## v0.11.0 Requirements
 
-Requirements for initial release. Each maps to roadmap phases.
+Requirements for the New Analysis Wizard milestone.
 
-### File Import
+### Session
 
-- [ ] **IMPORT-01**: System watches configured local directory for new CSV/Excel files
-- [ ] **IMPORT-02**: System imports all detected files as single batch
-- [ ] **IMPORT-03**: System caches raw files for audit trail
-- [ ] **IMPORT-04**: User can manually browse and select files as fallback
+- [ ] **SESS-01**: Tech can start a new analysis session from the New Analysis page
+- [ ] **SESS-02**: Session state is autosaved after each step so tech can resume if they navigate away
+- [ ] **SESS-03**: All measurements, calculated values, and timestamps are persisted to DB on completion
+- [ ] **SESS-04**: Completed sessions appear in Analysis History
 
-### Calculations
+### Wizard UI
 
-- [ ] **CALC-01**: System calculates purity % using linear equation (serial dilution)
-- [ ] **CALC-02**: System extracts and displays retention times from HPLC data
-- [ ] **CALC-03**: System identifies compounds by matching retention times to configured ranges
-- [ ] **CALC-04**: System logs calculation inputs/outputs for audit trail
+- [ ] **WIZ-01**: Wizard displays vertical step list (left sidebar) + content panel (right) — Stripe-style layout
+- [ ] **WIZ-02**: Steps show 4 states: not-started, in-progress, complete, locked
+- [ ] **WIZ-03**: Steps advance sequentially — tech cannot skip ahead
+- [ ] **WIZ-04**: Tech can navigate back to review completed steps
+- [ ] **WIZ-05**: Transitions between steps are animated and fluid
 
-### Settings
+### Sample Lookup
 
-- [ ] **SETTINGS-01**: User can configure compound retention time ranges in app settings
-- [ ] **SETTINGS-02**: User can configure watched directory path
+- [ ] **SMP-01**: Tech searches for a sample by SENAITE sample ID
+- [ ] **SMP-02**: App displays retrieved details: sample ID, peptide name, declared weight (mg)
+- [ ] **SMP-03**: If SENAITE is unavailable, tech can enter sample details manually
+- [ ] **SMP-04**: Tech enters target concentration (µg/mL) and target total volume (µL)
 
-### Review
+### Stock Preparation
 
-- [ ] **REVIEW-01**: User can view all samples in batch with calculated results (purity, retention time, compound ID)
-- [ ] **REVIEW-02**: User can approve individual samples
-- [ ] **REVIEW-03**: User can reject individual samples with reason/comment
-- [ ] **REVIEW-04**: User can filter and sort samples in batch view
+- [ ] **STK-01**: Wizard instructs tech to weigh empty sample vial + cap; app captures weight
+- [ ] **STK-02**: Wizard instructs tech to transfer peptide; tech confirms when done
+- [ ] **STK-03**: App displays calculated diluent volume to add (in µL)
+- [ ] **STK-04**: Wizard instructs tech to add diluent then re-weigh vial; app captures weight
+- [ ] **STK-05**: App calculates and displays: actual diluent added (mL) and stock concentration (µg/mL)
 
-### SENAITE Integration
+### Dilution
 
-- [ ] **SENAITE-01**: User can push approved results to SENAITE
-- [ ] **SENAITE-02**: System updates existing SENAITE samples (not create new)
-- [ ] **SENAITE-03**: User can see sync status (success/failure) per sample
+- [ ] **DIL-01**: App calculates and displays required diluent volume + stock volume for target conc/volume
+- [ ] **DIL-02**: Wizard instructs tech to weigh a new empty dilution vial + cap; app captures weight
+- [ ] **DIL-03**: Wizard instructs tech to add diluent volume then re-weigh; app captures weight
+- [ ] **DIL-04**: Wizard instructs tech to add stock volume then weigh final dilution vial; app captures weight
+- [ ] **DIL-05**: App calculates and displays actual concentration and actual total volume
 
-### Infrastructure
+### Scale Integration
 
-- [ ] **INFRA-01**: App runs in browser at localhost for development/testing
-- [ ] **INFRA-02**: App packages as Tauri desktop application
-- [ ] **INFRA-03**: App uses SQLite database for jobs, results, logs
-- [ ] **INFRA-04**: System maintains full audit trail of all operations
+- [ ] **SCALE-01**: Backend connects to Mettler Toledo XSR105DU via TCP using MT-SICS protocol
+- [ ] **SCALE-02**: App streams live weight readings to the wizard UI via SSE
+- [ ] **SCALE-03**: App detects stable weight (5 consecutive readings within 0.5 mg) and signals the tech visually
+- [ ] **SCALE-04**: Tech can manually enter a weight at any step if scale is offline
+- [ ] **SCALE-05**: Scale IP and port are configurable in app settings
 
-## v2 Requirements
+### Results
 
-Deferred to future release. Tracked but not in current roadmap.
+- [ ] **RES-01**: After HPLC run, tech can enter the peak area for the injection
+- [ ] **RES-02**: App calculates determined concentration, dilution factor, peptide mass (mg), and purity (%)
+- [ ] **RES-03**: Results summary shows all prep measurements alongside the final HPLC results
 
-### Calculations
+## Future Requirements
 
-- **CALC-05**: Pluggable architecture for additional calculations
+### Wizard UI
 
-### SENAITE Integration
+- **WIZ-F01**: Keyboard navigation through wizard steps
+- **WIZ-F02**: Inline help text / SOP reference for each step
 
-- **SENAITE-04**: Retry failed pushes
+### Scale Integration
+
+- **SCALE-F01**: Multiple injections tracked per session (batch of vials)
+- **SCALE-F02**: Historical scale readings review per session
+
+### Results
+
+- **RES-F01**: Push results directly to SENAITE after HPLC run
+- **RES-F02**: Generate prep sheet PDF for lab records
 
 ## Out of Scope
 
-Explicitly excluded. Documented to prevent scope creep.
-
 | Feature | Reason |
 |---------|--------|
-| Direct instrument control | App processes exports, doesn't talk to instruments |
-| Multi-user authentication | Single-operator workstation model |
-| Cloud hosting | Local-first architecture only |
-| Complex calculation UI | Backend owns all scientific logic |
+| Multiple samples per session | One-at-a-time keeps wizard focused; batch queuing is v2 |
+| SENAITE results push | Requires result field mapping validation; deferred to v2 |
+| Instrument control (HPLC start/stop) | App processes exports, doesn't talk to HPLC |
+| Email/notification on completion | No email infra in v1 |
+| PDF prep sheet export | Nice-to-have; wizard record in DB serves audit trail for v1 |
 
 ## Traceability
 
-Which phases cover which requirements. Updated by create-roadmap.
-
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| IMPORT-01 | Phase 2 | Complete |
-| IMPORT-02 | Phase 2 | Complete |
-| IMPORT-03 | Phase 2 | Complete |
-| IMPORT-04 | Phase 2 | Complete |
-| CALC-01 | Phase 2 | Complete |
-| CALC-02 | Phase 2 | Complete |
-| CALC-03 | Phase 2 | Complete |
-| CALC-04 | Phase 2 | Complete |
-| SETTINGS-01 | Phase 2 | Complete |
-| SETTINGS-02 | Phase 2 | Complete |
-| REVIEW-01 | Phase 3 | Pending |
-| REVIEW-02 | Phase 3 | Pending |
-| REVIEW-03 | Phase 3 | Pending |
-| REVIEW-04 | Phase 3 | Pending |
-| SENAITE-01 | Phase 4 | Pending |
-| SENAITE-02 | Phase 4 | Pending |
-| SENAITE-03 | Phase 4 | Pending |
-| INFRA-01 | Phase 1 | Complete |
-| INFRA-02 | Phase 1 | Complete |
-| INFRA-03 | Phase 1 | Complete |
-| INFRA-04 | Phase 1 | Complete |
-
-**Coverage:**
-- v1 requirements: 21 total
-- Mapped to phases: 21
-- Unmapped: 0 ✓
+| SESS-01 | Phase 1 — DB Models and Calculation Foundation | Pending |
+| SESS-02 | Phase 1 — DB Models and Calculation Foundation | Pending |
+| SESS-03 | Phase 1 — DB Models and Calculation Foundation | Pending |
+| STK-05 | Phase 1 — DB Models and Calculation Foundation | Pending |
+| DIL-01 | Phase 1 — DB Models and Calculation Foundation | Pending |
+| DIL-05 | Phase 1 — DB Models and Calculation Foundation | Pending |
+| RES-02 | Phase 1 — DB Models and Calculation Foundation | Pending |
+| SCALE-01 | Phase 2 — Scale Bridge Service | Pending |
+| SCALE-05 | Phase 2 — Scale Bridge Service | Pending |
+| SCALE-02 | Phase 3 — SSE Weight Streaming | Pending |
+| SCALE-03 | Phase 3 — SSE Weight Streaming | Pending |
+| SCALE-04 | Phase 3 — SSE Weight Streaming | Pending |
+| WIZ-01 | Phase 4 — Wizard UI | Pending |
+| WIZ-02 | Phase 4 — Wizard UI | Pending |
+| WIZ-03 | Phase 4 — Wizard UI | Pending |
+| WIZ-04 | Phase 4 — Wizard UI | Pending |
+| WIZ-05 | Phase 4 — Wizard UI | Pending |
+| SMP-04 | Phase 4 — Wizard UI | Pending |
+| STK-01 | Phase 4 — Wizard UI | Pending |
+| STK-02 | Phase 4 — Wizard UI | Pending |
+| STK-03 | Phase 4 — Wizard UI | Pending |
+| STK-04 | Phase 4 — Wizard UI | Pending |
+| DIL-02 | Phase 4 — Wizard UI | Pending |
+| DIL-03 | Phase 4 — Wizard UI | Pending |
+| DIL-04 | Phase 4 — Wizard UI | Pending |
+| RES-01 | Phase 4 — Wizard UI | Pending |
+| RES-03 | Phase 4 — Wizard UI | Pending |
+| SESS-04 | Phase 4 — Wizard UI | Pending |
+| SMP-01 | Phase 5 — SENAITE Sample Lookup | Pending |
+| SMP-02 | Phase 5 — SENAITE Sample Lookup | Pending |
+| SMP-03 | Phase 5 — SENAITE Sample Lookup | Pending |
 
 ---
-*Requirements defined: 2026-01-15*
-*Last updated: 2026-01-16 after Phase 2 completion*
+*Requirements defined: 2026-02-19*
+*Last updated: 2026-02-19 — traceability populated by roadmapper*

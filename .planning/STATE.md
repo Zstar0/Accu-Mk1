@@ -2,58 +2,58 @@
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-02-10)
+See: .planning/PROJECT.md (updated 2026-02-19)
 
-**Core value:** Streamlined morning workflow with secure access control for production deployment
-**Current focus:** Between milestones — ready for next milestone planning
+**Core value:** Streamlined lab workflow: guide tech through sample prep step-by-step with auto weight capture — stock prep, dilution, ready for HPLC injection.
+**Current focus:** v0.11.0 — New Analysis Wizard, Phase 1
 
-## Last Completed Milestone: v0.6.0
+## Current Position
 
-Status: Complete (2026-02-09)
-Delivered: JWT user authentication, role-based access, admin management
+Phase: 1 of 5 (DB Models and Calculation Foundation)
+Plan: 0 of 2 in current phase
+Status: Ready to plan
+Last activity: 2026-02-19 — Roadmap created, requirements mapped, ready to plan Phase 1
 
-## Previous Milestones
+Progress: [░░░░░░░░░░] 0%
 
-- v0.6.0 — User Authentication (JWT, roles, admin UI)
-- v0.5.0 — HPLC Peptide Analysis Pipeline (purity, quantity, identity)
-- v0.4.x — Chromatograph viewer, AccuMark Tools, settings/API profiles
+## Performance Metrics
 
-## Milestone Documents
+**Velocity:**
+- Total plans completed: 0
+- Average duration: -
+- Total execution time: -
 
-- v0.6.0 Requirements: `.planning/REQUIREMENTS-v0.6.0.md`
-- v0.6.0 Roadmap: `.planning/ROADMAP-v0.6.0.md`
-- Original roadmap (phases 1-2 complete, 3-4 superseded): `.planning/ROADMAP-v0.4-archived.md`
-- Research: `.planning/research/`
+**By Phase:**
+
+| Phase | Plans | Total | Avg/Plan |
+|-------|-------|-------|----------|
+| - | - | - | - |
+
+*Updated after each plan completion*
 
 ## Accumulated Context
 
 ### Decisions
 
-- Manual JWT implementation (not FastAPI Users) — avoids async SQLAlchemy migration
-- Direct bcrypt library (not passlib) — passlib incompatible with bcrypt>=4.1
-- python-jose for JWT — sub claim must be string per spec
-- JWT Bearer tokens stored in localStorage (works for both browser and Tauri)
-- Zustand auth store (consistent with existing pattern)
-- Two roles: standard + admin
-- Console/log-based password reset (no email infra for v1)
-- First admin auto-seeded on startup
-- Backend moved to port 8012 (avoid conflicts with other services)
-- Original Phase 3 (BatchReview) and Phase 4 (SENAITE) superseded by v0.5.0 HPLC pipeline
+- Use `Decimal` arithmetic from first formula — no retrofitting allowed
+- Store only raw weights in DB; recalculate all derived values on demand
+- ScaleBridge as singleton on `app.state` (not per-request connection)
+- SSE via `StreamingResponse` (existing codebase pattern — 4 endpoints already using it)
+- Re-weigh inserts new record + sets `is_current=False` on old (audit trail preserved)
+- SCALE_HOST env var controls scale mode; absent = manual-entry mode (no crash)
+- Phase 2 is hardware-dependent: confirm Ethernet module, IP, and TCP port on physical balance before coding
 
 ### Blockers/Concerns
 
-- None
+- Phase 2 (Scale Bridge): requires physical balance access — confirm Ethernet module installed, get static IP and configured TCP port before coding begins
+- Phase 5 (SENAITE): requires live instance access — fetch a known sample with `?complete=yes` to identify peptide name and declared weight field names before building search UI
 
-### Key Bug Fixes During Implementation
+### Pending Todos
 
-- passlib + bcrypt>=4.1 incompatibility → replaced with direct bcrypt
-- JWT sub claim must be string → changed to str(user.id)
-- uvicorn --reload broken on OneDrive paths → manual restarts needed
-- Port conflicts (8009 occupied, 8011 ghost process) → moved to 8012
-- Dark mode autofill unreadable → CSS overrides outside @layer base
+None.
 
 ## Session Continuity
 
-Last session: 2026-02-10
-Stopped at: Closed out stale phases 3-4, ready for new milestone
+Last session: 2026-02-19
+Stopped at: Roadmap written, REQUIREMENTS.md traceability updated, ready to run /gsd:plan-phase 1
 Resume file: None
