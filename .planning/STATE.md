@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-02-19)
 
 **Core value:** Streamlined lab workflow: guide tech through sample prep step-by-step with auto weight capture — stock prep, dilution, ready for HPLC injection.
-**Current focus:** v0.11.0 — New Analysis Wizard, Phase 5 IN PROGRESS — SENAITE LIMS integration
+**Current focus:** v0.11.0 — New Analysis Wizard, Phase 5 COMPLETE — SENAITE LIMS integration done
 
 ## Current Position
 
-Phase: 5 of 5 (SENAITE Sample Lookup) — In progress
-Plan: 1 of 2 in current phase
-Status: In progress — backend endpoints and frontend API functions complete
-Last activity: 2026-02-20 — Completed 05-01-PLAN.md (SENAITE backend endpoints and frontend API)
+Phase: 5 of 5 (SENAITE Sample Lookup) — Phase complete
+Plan: 2 of 2 in current phase
+Status: Phase complete — SENAITE backend + UI fully implemented
+Last activity: 2026-02-20 — Completed 05-02-PLAN.md (Step1SampleInfo SENAITE lookup tabs)
 
-Progress: [█████████░] 89%
+Progress: [██████████] 100%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 8
+- Total plans completed: 9
 - Average duration: ~4min per plan (estimated)
-- Total execution time: ~36min
+- Total execution time: ~39min
 
 **By Phase:**
 
@@ -31,7 +31,7 @@ Progress: [█████████░] 89%
 | 02-scale-bridge | 1 | ~4min | ~4min |
 | 03-sse-weight-streaming | 1 | ~10min | ~10min |
 | 04-wizard-ui | 3/3 | ~9min | ~3min |
-| 05-senaite-sample-lookup | 1/2 | ~2min | ~2min |
+| 05-senaite-sample-lookup | 2/2 | ~5min | ~2.5min |
 
 *Updated after each plan completion*
 
@@ -71,6 +71,8 @@ Progress: [█████████░] 89%
 - SENAITE_URL absent = lookup tab hidden; same optional pattern as SCALE_HOST
 - Em-dash in 503 message: "SENAITE is currently unavailable — use manual entry"
 - Analyte suffix regex: `r'\s*-\s*[^-]+\([^)]+\)\s*$'` strips " - Identity (HPLC)" style suffixes
+- Step1 tab switch clears all fields (peptideId, sampleIdLabel, declaredWeightMg) — no data leaks between entry modes
+- Blue summary card for SENAITE lookup results; green card for confirmed session — distinct visual language
 
 ### Key Source Files
 
@@ -82,7 +84,7 @@ Progress: [█████████░] 89%
 - `src/store/wizard-store.ts` — PrepWizardStore with stepStates field, deriveStepStates pure function, WIZARD_STEPS constant
 - `src/lib/api.ts` — All API functions including wizard endpoints + SENAITE lookup functions
 - `src/components/hplc/CreateAnalysis.tsx` — WizardPage split-panel layout (all 5 steps wired)
-- `src/components/hplc/wizard/steps/Step1SampleInfo.tsx` — Session creation form (to be extended with SENAITE tab in 05-02)
+- `src/components/hplc/wizard/steps/Step1SampleInfo.tsx` — Two-tab SENAITE Lookup / Manual Entry form (Phase 5 complete)
 
 ### Blockers/Concerns
 
@@ -95,6 +97,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-02-20T06:44:23Z
-Stopped at: Completed 05-01-PLAN.md (Phase 5 plan 01 — SENAITE backend endpoints and frontend API)
+Last session: 2026-02-20T06:50:46Z
+Stopped at: Completed 05-02-PLAN.md (Phase 5 plan 02 — Step1SampleInfo SENAITE lookup tabs)
 Resume file: None

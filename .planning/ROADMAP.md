@@ -10,7 +10,7 @@ This milestone adds a guided 5-step sample preparation wizard to the existing Fa
 - [x] **Phase 2: Scale Bridge Service** — Singleton asyncio TCP service connecting to the Mettler Toledo XSR105DU via MT-SICS protocol.
 - [x] **Phase 3: SSE Weight Streaming** — SSE endpoint and frontend hook wiring the scale bridge into the wizard with live weight display and fallback.
 - [x] **Phase 4: Wizard UI** — Full CreateAnalysis.tsx wizard with Stripe-style step sidebar, all 5 wizard steps, and WeighStep components wired to scale SSE.
-- [ ] **Phase 5: SENAITE Sample Lookup** — httpx SENAITE client with sample search UI in step 1 of the wizard and manual entry fallback.
+- [x] **Phase 5: SENAITE Sample Lookup** — httpx SENAITE client with sample search UI in step 1 of the wizard and manual entry fallback.
 
 ## Phase Details
 
@@ -116,7 +116,7 @@ Plans:
 
 Plans:
 - [x] 05-01-PLAN.md — SENAITE backend endpoints (status + lookup), httpx client with Basic auth, analyte name stripping, fuzzy peptide matching, frontend API types and functions
-- [ ] 05-02-PLAN.md — Step1SampleInfo two-tab UI rewrite (SENAITE Lookup + Manual Entry), lookup summary card, blend analyte display, error states
+- [x] 05-02-PLAN.md — Step1SampleInfo two-tab UI rewrite (SENAITE Lookup + Manual Entry), lookup summary card, blend analyte display, error states
 
 ---
 
@@ -130,7 +130,7 @@ Plans:
 | 2. Scale Bridge Service | 1/1 | Complete | 2026-02-20 |
 | 3. SSE Weight Streaming | 1/1 | Complete | 2026-02-20 |
 | 4. Wizard UI | 3/3 | Complete | 2026-02-20 |
-| 5. SENAITE Sample Lookup | 0/2 | Not started | - |
+| 5. SENAITE Sample Lookup | 2/2 | Complete | 2026-02-20 |
 
 ---
 
