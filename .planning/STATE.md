@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-02-19)
 
 **Core value:** Streamlined lab workflow: guide tech through sample prep step-by-step with auto weight capture — stock prep, dilution, ready for HPLC injection.
-**Current focus:** v0.11.0 — New Analysis Wizard, Phase 4 IN PROGRESS — wizard shell complete, step components next
+**Current focus:** v0.11.0 — New Analysis Wizard, Phase 4 in progress — Steps 1-3 complete, Steps 4-5 next
 
 ## Current Position
 
 Phase: 4 of 5 (Wizard UI) — In progress
-Plan: 1 of 3 in current phase — COMPLETE
-Status: In progress — 04-01 done
-Last activity: 2026-02-20 — Completed 04-01-PLAN.md (PrepWizardStore, wizard API functions, split-panel layout with WizardStepList and WizardStepPanel)
+Plan: 2 of 3 in current phase — COMPLETE
+Status: In progress — 04-01, 04-02 done, executing 04-03 next
+Last activity: 2026-02-20 — Completed 04-02-PLAN.md (Step1SampleInfo, Step2StockPrep, Step3Dilution with WeightInput integration)
 
-Progress: [█████░░░░░] 50%
+Progress: [██████░░░░] 60%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 5
+- Total plans completed: 6
 - Average duration: ~5min per plan (estimated)
-- Total execution time: ~27min (Phase 1 + Phase 2 + Phase 3 + Phase 4 plan 1)
+- Total execution time: ~31min
 
 **By Phase:**
 
@@ -30,7 +30,7 @@ Progress: [█████░░░░░] 50%
 | 01-wizard-db | 2 | ~10min | ~5min |
 | 02-scale-bridge | 1 | ~4min | ~4min |
 | 03-sse-weight-streaming | 1 | ~10min | ~10min |
-| 04-wizard-ui | 1/3 | ~2min | ~2min |
+| 04-wizard-ui | 2/3 | ~6min | ~3min |
 
 *Updated after each plan completion*
 
@@ -58,6 +58,11 @@ Progress: [█████░░░░░] 50%
 - `deriveStepStates` exported as pure function callable outside the store
 - `setCurrentStep` silently no-ops if target step is locked (no error thrown)
 - `listWizardSessions` returns flat array `Promise<WizardSessionListItem[]>` (not paginated envelope)
+- Step1SampleInfo: if `session !== null` show read-only summary — form not re-shown after session created
+- Sub-step done check: `session.measurements.find(m => m.step_key === KEY && m.is_current)` — same pattern for Step2 and Step3
+- Re-weigh: local boolean flag resets sub-step display to WeightInput; next Accept inserts new measurement (server handles audit trail)
+- `const sessionId = session.id` captured before async handlers — TypeScript narrowing lost across async closures
+- Step 2 transfer confirmation: `transferConfirmed || meas2d != null` — loaded vial weight implies transfer occurred
 
 ### Key Source Files
 
@@ -68,9 +73,12 @@ Progress: [█████░░░░░] 50%
 - `src/components/hplc/PeptideConfig.tsx` — reference SSE consumer pattern
 - `src/store/wizard-store.ts` — PrepWizardStore with stepStates field, deriveStepStates pure function, WIZARD_STEPS constant
 - `src/lib/api.ts` — All API functions including 6 new wizard endpoints
-- `src/components/hplc/CreateAnalysis.tsx` — WizardPage split-panel layout
+- `src/components/hplc/CreateAnalysis.tsx` — WizardPage split-panel layout (steps 1-3 wired)
 - `src/components/hplc/wizard/WizardStepList.tsx` — Step sidebar with 4-state indicators
 - `src/components/hplc/wizard/WizardStepPanel.tsx` — Animated content wrapper
+- `src/components/hplc/wizard/steps/Step1SampleInfo.tsx` — Session creation form (peptide dropdown + targets)
+- `src/components/hplc/wizard/steps/Step2StockPrep.tsx` — Stock prep 4-sub-step weighing with calcs
+- `src/components/hplc/wizard/steps/Step3Dilution.tsx` — Dilution 3-sub-step weighing with actual calcs
 
 ### Blockers/Concerns
 
@@ -83,6 +91,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-02-20T05:02:36Z
-Stopped at: Completed 04-01-PLAN.md (Phase 4 plan 01 — PrepWizardStore, wizard API functions, WizardPage split-panel layout)
+Last session: 2026-02-20T05:10:33Z
+Stopped at: Completed 04-02-PLAN.md (Phase 4 plan 02 — Step1SampleInfo, Step2StockPrep, Step3Dilution)
 Resume file: None
