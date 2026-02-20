@@ -9,7 +9,7 @@ This milestone adds a guided 5-step sample preparation wizard to the existing Fa
 - [x] **Phase 1: DB Models and Calculation Foundation** — Session persistence, all calculation logic, REST endpoints, manual weight entry. No hardware required.
 - [x] **Phase 2: Scale Bridge Service** — Singleton asyncio TCP service connecting to the Mettler Toledo XSR105DU via MT-SICS protocol.
 - [x] **Phase 3: SSE Weight Streaming** — SSE endpoint and frontend hook wiring the scale bridge into the wizard with live weight display and fallback.
-- [ ] **Phase 4: Wizard UI** — Full CreateAnalysis.tsx wizard with Stripe-style step sidebar, all 5 wizard steps, and WeighStep components wired to scale SSE.
+- [x] **Phase 4: Wizard UI** — Full CreateAnalysis.tsx wizard with Stripe-style step sidebar, all 5 wizard steps, and WeighStep components wired to scale SSE.
 - [ ] **Phase 5: SENAITE Sample Lookup** — httpx SENAITE client with sample search UI in step 1 of the wizard and manual entry fallback.
 
 ## Phase Details
@@ -94,9 +94,9 @@ Plans:
 **Plans**: 3 plans
 
 Plans:
-- [ ] 04-01-PLAN.md — PrepWizardStore (Zustand), wizard API functions, WizardPage layout with step sidebar, animated transitions
-- [ ] 04-02-PLAN.md — Step 1 (Sample Info form), Step 2 (Stock Prep weighing), Step 3 (Dilution weighing) wired to API and WeightInput
-- [ ] 04-03-PLAN.md — Step 4 (Results entry), Step 5 (Summary), WizardSessionHistory, AnalysisHistory tabs
+- [x] 04-01-PLAN.md — PrepWizardStore (Zustand), wizard API functions, WizardPage layout with step sidebar, animated transitions
+- [x] 04-02-PLAN.md — Step 1 (Sample Info form), Step 2 (Stock Prep weighing), Step 3 (Dilution weighing) wired to API and WeightInput
+- [x] 04-03-PLAN.md — Step 4 (Results entry), Step 5 (Summary), WizardSessionHistory, AnalysisHistory tabs
 
 ---
 
@@ -128,7 +128,7 @@ Plans:
 | 1. DB Models and Calculation Foundation | 2/2 | Complete | 2026-02-20 |
 | 2. Scale Bridge Service | 1/1 | Complete | 2026-02-20 |
 | 3. SSE Weight Streaming | 1/1 | Complete | 2026-02-20 |
-| 4. Wizard UI | 0/3 | Not started | - |
+| 4. Wizard UI | 3/3 | Complete | 2026-02-20 |
 | 5. SENAITE Sample Lookup | 0/1 | Not started | - |
 
 ---

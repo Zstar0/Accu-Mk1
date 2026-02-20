@@ -12,37 +12,37 @@ Requirements for the New Analysis Wizard milestone.
 - [x] **SESS-01**: Tech can start a new analysis session from the New Analysis page
 - [x] **SESS-02**: Session state is autosaved after each step so tech can resume if they navigate away
 - [x] **SESS-03**: All measurements, calculated values, and timestamps are persisted to DB on completion
-- [ ] **SESS-04**: Completed sessions appear in Analysis History
+- [x] **SESS-04**: Completed sessions appear in Analysis History
 
 ### Wizard UI
 
-- [ ] **WIZ-01**: Wizard displays vertical step list (left sidebar) + content panel (right) — Stripe-style layout
-- [ ] **WIZ-02**: Steps show 4 states: not-started, in-progress, complete, locked
-- [ ] **WIZ-03**: Steps advance sequentially — tech cannot skip ahead
-- [ ] **WIZ-04**: Tech can navigate back to review completed steps
-- [ ] **WIZ-05**: Transitions between steps are animated and fluid
+- [x] **WIZ-01**: Wizard displays vertical step list (left sidebar) + content panel (right) — Stripe-style layout
+- [x] **WIZ-02**: Steps show 4 states: not-started, in-progress, complete, locked
+- [x] **WIZ-03**: Steps advance sequentially — tech cannot skip ahead
+- [x] **WIZ-04**: Tech can navigate back to review completed steps
+- [x] **WIZ-05**: Transitions between steps are animated and fluid
 
 ### Sample Lookup
 
 - [ ] **SMP-01**: Tech searches for a sample by SENAITE sample ID
 - [ ] **SMP-02**: App displays retrieved details: sample ID, peptide name, declared weight (mg)
 - [ ] **SMP-03**: If SENAITE is unavailable, tech can enter sample details manually
-- [ ] **SMP-04**: Tech enters target concentration (µg/mL) and target total volume (µL)
+- [x] **SMP-04**: Tech enters target concentration (µg/mL) and target total volume (µL)
 
 ### Stock Preparation
 
-- [ ] **STK-01**: Wizard instructs tech to weigh empty sample vial + cap; app captures weight
-- [ ] **STK-02**: Wizard instructs tech to transfer peptide; tech confirms when done
-- [ ] **STK-03**: App displays calculated diluent volume to add (in µL)
-- [ ] **STK-04**: Wizard instructs tech to add diluent then re-weigh vial; app captures weight
+- [x] **STK-01**: Wizard instructs tech to weigh empty sample vial + cap; app captures weight
+- [x] **STK-02**: Wizard instructs tech to transfer peptide; tech confirms when done
+- [x] **STK-03**: App displays calculated diluent volume to add (in µL)
+- [x] **STK-04**: Wizard instructs tech to add diluent then re-weigh vial; app captures weight
 - [x] **STK-05**: App calculates and displays: actual diluent added (mL) and stock concentration (µg/mL)
 
 ### Dilution
 
 - [x] **DIL-01**: App calculates and displays required diluent volume + stock volume for target conc/volume
-- [ ] **DIL-02**: Wizard instructs tech to weigh a new empty dilution vial + cap; app captures weight
-- [ ] **DIL-03**: Wizard instructs tech to add diluent volume then re-weigh; app captures weight
-- [ ] **DIL-04**: Wizard instructs tech to add stock volume then weigh final dilution vial; app captures weight
+- [x] **DIL-02**: Wizard instructs tech to weigh a new empty dilution vial + cap; app captures weight
+- [x] **DIL-03**: Wizard instructs tech to add diluent volume then re-weigh; app captures weight
+- [x] **DIL-04**: Wizard instructs tech to add stock volume then weigh final dilution vial; app captures weight
 - [x] **DIL-05**: App calculates and displays actual concentration and actual total volume
 
 ### Scale Integration
@@ -55,9 +55,9 @@ Requirements for the New Analysis Wizard milestone.
 
 ### Results
 
-- [ ] **RES-01**: After HPLC run, tech can enter the peak area for the injection
+- [x] **RES-01**: After HPLC run, tech can enter the peak area for the injection
 - [x] **RES-02**: App calculates determined concentration, dilution factor, peptide mass (mg), and purity (%)
-- [ ] **RES-03**: Results summary shows all prep measurements alongside the final HPLC results
+- [x] **RES-03**: Results summary shows all prep measurements alongside the final HPLC results
 
 ## Future Requirements
 
@@ -102,26 +102,26 @@ Requirements for the New Analysis Wizard milestone.
 | SCALE-02 | Phase 3 — SSE Weight Streaming | Complete |
 | SCALE-03 | Phase 3 — SSE Weight Streaming | Complete |
 | SCALE-04 | Phase 3 — SSE Weight Streaming | Complete |
-| WIZ-01 | Phase 4 — Wizard UI | Pending |
-| WIZ-02 | Phase 4 — Wizard UI | Pending |
-| WIZ-03 | Phase 4 — Wizard UI | Pending |
-| WIZ-04 | Phase 4 — Wizard UI | Pending |
-| WIZ-05 | Phase 4 — Wizard UI | Pending |
-| SMP-04 | Phase 4 — Wizard UI | Pending |
-| STK-01 | Phase 4 — Wizard UI | Pending |
-| STK-02 | Phase 4 — Wizard UI | Pending |
-| STK-03 | Phase 4 — Wizard UI | Pending |
-| STK-04 | Phase 4 — Wizard UI | Pending |
-| DIL-02 | Phase 4 — Wizard UI | Pending |
-| DIL-03 | Phase 4 — Wizard UI | Pending |
-| DIL-04 | Phase 4 — Wizard UI | Pending |
-| RES-01 | Phase 4 — Wizard UI | Pending |
-| RES-03 | Phase 4 — Wizard UI | Pending |
-| SESS-04 | Phase 4 — Wizard UI | Pending |
+| WIZ-01 | Phase 4 — Wizard UI | Complete |
+| WIZ-02 | Phase 4 — Wizard UI | Complete |
+| WIZ-03 | Phase 4 — Wizard UI | Complete |
+| WIZ-04 | Phase 4 — Wizard UI | Complete |
+| WIZ-05 | Phase 4 — Wizard UI | Complete |
+| SMP-04 | Phase 4 — Wizard UI | Complete |
+| STK-01 | Phase 4 — Wizard UI | Complete |
+| STK-02 | Phase 4 — Wizard UI | Complete |
+| STK-03 | Phase 4 — Wizard UI | Complete |
+| STK-04 | Phase 4 — Wizard UI | Complete |
+| DIL-02 | Phase 4 — Wizard UI | Complete |
+| DIL-03 | Phase 4 — Wizard UI | Complete |
+| DIL-04 | Phase 4 — Wizard UI | Complete |
+| RES-01 | Phase 4 — Wizard UI | Complete |
+| RES-03 | Phase 4 — Wizard UI | Complete |
+| SESS-04 | Phase 4 — Wizard UI | Complete |
 | SMP-01 | Phase 5 — SENAITE Sample Lookup | Pending |
 | SMP-02 | Phase 5 — SENAITE Sample Lookup | Pending |
 | SMP-03 | Phase 5 — SENAITE Sample Lookup | Pending |
 
 ---
 *Requirements defined: 2026-02-19*
-*Last updated: 2026-02-20 — Phase 1 requirements marked Complete*
+*Last updated: 2026-02-20 — Phase 4 requirements marked Complete*
