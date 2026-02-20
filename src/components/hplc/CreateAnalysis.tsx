@@ -1,0 +1,70 @@
+import { Button } from '@/components/ui/button'
+import { useWizardStore, type StepId } from '@/store/wizard-store'
+import { WizardStepList } from './wizard/WizardStepList'
+import { WizardStepPanel } from './wizard/WizardStepPanel'
+
+function renderCurrentStep(currentStep: StepId): React.ReactNode {
+  switch (currentStep) {
+    case 1:
+      return <div className="p-4 text-muted-foreground">Step 1: Sample Info (placeholder)</div>
+    case 2:
+      return <div className="p-4 text-muted-foreground">Step 2: Stock Prep (placeholder)</div>
+    case 3:
+      return <div className="p-4 text-muted-foreground">Step 3: Dilution (placeholder)</div>
+    case 4:
+      return <div className="p-4 text-muted-foreground">Step 4: Results (placeholder)</div>
+    case 5:
+      return <div className="p-4 text-muted-foreground">Step 5: Summary (placeholder)</div>
+  }
+}
+
+export function CreateAnalysis() {
+  const currentStep = useWizardStore(state => state.currentStep)
+  const canAdvance = useWizardStore(state => state.canAdvance)
+
+  function handleBack() {
+    useWizardStore.getState().setCurrentStep((currentStep - 1) as StepId)
+  }
+
+  function handleNext() {
+    useWizardStore.getState().setCurrentStep((currentStep + 1) as StepId)
+  }
+
+  return (
+    <div className="flex h-full">
+      {/* Left sidebar — step list */}
+      <div className="w-64 shrink-0 border-r p-4">
+        <h2 className="mb-4 text-sm font-semibold text-muted-foreground uppercase tracking-wider">
+          New Analysis
+        </h2>
+        <WizardStepList />
+      </div>
+
+      {/* Right content — step panel */}
+      <div className="flex flex-1 flex-col overflow-y-auto">
+        <div className="flex-1 p-6">
+          <WizardStepPanel stepId={currentStep}>
+            {renderCurrentStep(currentStep)}
+          </WizardStepPanel>
+        </div>
+
+        {/* Navigation footer */}
+        <div className="flex items-center justify-between border-t p-4">
+          <Button
+            variant="outline"
+            onClick={handleBack}
+            disabled={currentStep === 1}
+          >
+            Back
+          </Button>
+          <Button
+            onClick={handleNext}
+            disabled={currentStep === 5 || !canAdvance()}
+          >
+            Next Step
+          </Button>
+        </div>
+      </div>
+    </div>
+  )
+}
