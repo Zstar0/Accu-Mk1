@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import select, desc, delete, func
 
 from database import get_db, init_db
-from models import AuditLog, Settings, Job, Sample, Result, Peptide, CalibrationCurve, HPLCAnalysis, User, SharePointFileCache
+from models import AuditLog, Settings, Job, Sample, Result, Peptide, CalibrationCurve, HPLCAnalysis, User, SharePointFileCache, WizardSession, WizardMeasurement
 from auth import (
     get_current_user, require_admin, create_access_token,
     verify_password, get_password_hash, seed_admin_user,
@@ -4209,3 +4209,420 @@ async def sharepoint_download_batch(
         return {"files": results}
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"SharePoint batch download error: {e}")
+
+
+# ─── Wizard Session Endpoints ──────────────────────────────────────────────────
+
+# --- Pydantic schemas ---
+
+VALID_STEP_KEYS = {
+    "stock_vial_empty_mg",
+    "stock_vial_loaded_mg",
+    "dil_vial_empty_mg",
+    "dil_vial_with_diluent_mg",
+    "dil_vial_final_mg",
+}
+
+
+class WizardSessionCreate(BaseModel):
+    """Schema for creating a new wizard session."""
+    peptide_id: int
+    sample_id_label: Optional[str] = None
+    declared_weight_mg: Optional[float] = None  # mg; must be > 0 and < 5000 if provided
+    target_conc_ug_ml: Optional[float] = None
+    target_total_vol_ul: Optional[float] = None
+
+
+class WizardSessionUpdate(BaseModel):
+    """Schema for updating session fields (PATCH). All fields optional."""
+    sample_id_label: Optional[str] = None
+    declared_weight_mg: Optional[float] = None
+    target_conc_ug_ml: Optional[float] = None
+    target_total_vol_ul: Optional[float] = None
+    peak_area: Optional[float] = None
+
+
+class WizardMeasurementCreate(BaseModel):
+    """Schema for recording a weight measurement."""
+    step_key: str  # Must be one of VALID_STEP_KEYS
+    weight_mg: float  # Raw balance reading in milligrams
+    source: str = "manual"  # 'manual' | 'scale'
+
+
+class WizardMeasurementResponse(BaseModel):
+    """Schema for measurement response."""
+    id: int
+    session_id: int
+    step_key: str
+    weight_mg: float
+    source: str
+    is_current: bool
+    recorded_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class WizardSessionResponse(BaseModel):
+    """
+    Full session response including current measurements and calculated values.
+    Calculations are recalculated on demand — never stored in DB.
+    Decimal values are converted to float at this boundary.
+    """
+    id: int
+    peptide_id: int
+    calibration_curve_id: Optional[int]
+    status: str
+    sample_id_label: Optional[str]
+    declared_weight_mg: Optional[float]
+    target_conc_ug_ml: Optional[float]
+    target_total_vol_ul: Optional[float]
+    peak_area: Optional[float]
+    created_at: datetime
+    updated_at: datetime
+    completed_at: Optional[datetime]
+    measurements: list[WizardMeasurementResponse] = []
+    calculations: Optional[dict] = None  # Populated by _build_session_response()
+
+    class Config:
+        from_attributes = True
+
+
+class WizardSessionListItem(BaseModel):
+    """Lightweight session entry for list view."""
+    id: int
+    peptide_id: int
+    status: str
+    sample_id_label: Optional[str]
+    declared_weight_mg: Optional[float]
+    created_at: datetime
+    updated_at: datetime
+    completed_at: Optional[datetime]
+
+    class Config:
+        from_attributes = True
+
+
+# --- Helper: build session response with inline calculations ---
+
+def _build_session_response(session: WizardSession, db: Session) -> WizardSessionResponse:
+    """
+    Build a WizardSessionResponse from an ORM session object.
+    Loads current measurements and triggers calculation.
+    Decimal arithmetic happens inside calculations/wizard.py.
+    float() conversion happens here at the response boundary.
+    """
+    from decimal import Decimal
+
+    # Collect current measurements keyed by step_key
+    current = {m.step_key: m.weight_mg for m in session.measurements if m.is_current}
+
+    calcs: dict = {}
+
+    # Stage 1: Stock Prep — requires declared_weight + 2 vial weights
+    stock_empty = current.get("stock_vial_empty_mg")
+    stock_loaded = current.get("stock_vial_loaded_mg")
+    declared = session.declared_weight_mg
+
+    stock_conc_d = None  # Decimal — used in subsequent stages
+
+    if all(v is not None for v in [declared, stock_empty, stock_loaded]):
+        try:
+            from calculations.wizard import calc_stock_prep
+            density = Decimal(str(session.peptide.diluent_density))
+            sp = calc_stock_prep(
+                Decimal(str(declared)),
+                Decimal(str(stock_empty)),
+                Decimal(str(stock_loaded)),
+                density,
+            )
+            stock_conc_d = sp["stock_conc_ug_ml"]
+            calcs["diluent_added_ml"] = float(sp["total_diluent_added_ml"])
+            calcs["stock_conc_ug_ml"] = float(sp["stock_conc_ug_ml"])
+        except Exception:
+            pass  # Partial session — skip this stage
+
+    # Stage 2: Required Volumes — requires Stage 1 + target params
+    if stock_conc_d is not None and session.target_conc_ug_ml and session.target_total_vol_ul:
+        try:
+            from calculations.wizard import calc_required_volumes
+            rv = calc_required_volumes(
+                stock_conc_d,
+                Decimal(str(session.target_conc_ug_ml)),
+                Decimal(str(session.target_total_vol_ul)),
+            )
+            calcs["required_stock_vol_ul"] = float(rv["required_stock_vol_ul"])
+            calcs["required_diluent_vol_ul"] = float(rv["required_diluent_vol_ul"])
+        except Exception:
+            pass
+
+    # Stage 3: Actual Dilution — requires Stage 1 + 3 dilution vial weights
+    dil_empty = current.get("dil_vial_empty_mg")
+    dil_diluent = current.get("dil_vial_with_diluent_mg")
+    dil_final = current.get("dil_vial_final_mg")
+
+    actual_conc_d = None
+    actual_total_d = None
+
+    if stock_conc_d is not None and all(v is not None for v in [dil_empty, dil_diluent, dil_final]):
+        try:
+            from calculations.wizard import calc_actual_dilution
+            density = Decimal(str(session.peptide.diluent_density))
+            ad = calc_actual_dilution(
+                stock_conc_d,
+                Decimal(str(dil_empty)),
+                Decimal(str(dil_diluent)),
+                Decimal(str(dil_final)),
+                density,
+            )
+            actual_conc_d = ad["actual_conc_ug_ml"]
+            actual_total_d = ad["actual_total_vol_ul"]
+            calcs["actual_diluent_vol_ul"] = float(ad["actual_diluent_vol_ul"])
+            calcs["actual_stock_vol_ul"] = float(ad["actual_stock_vol_ul"])
+            calcs["actual_total_vol_ul"] = float(ad["actual_total_vol_ul"])
+            calcs["actual_conc_ug_ml"] = float(ad["actual_conc_ug_ml"])
+        except Exception:
+            pass
+
+    # Stage 4: Results — requires Stage 3 + peak_area + calibration curve
+    if actual_conc_d is not None and actual_total_d is not None and session.peak_area and session.calibration_curve_id:
+        try:
+            from calculations.wizard import calc_results
+            cal = db.execute(
+                select(CalibrationCurve).where(CalibrationCurve.id == session.calibration_curve_id)
+            ).scalar_one_or_none()
+            if cal:
+                res = calc_results(
+                    Decimal(str(session.peak_area)),
+                    Decimal(str(cal.slope)),
+                    Decimal(str(cal.intercept)),
+                    actual_conc_d,
+                    actual_total_d,
+                )
+                calcs["determined_conc_ug_ml"] = float(res["determined_conc_ug_ml"])
+                calcs["peptide_mass_mg"] = float(res["peptide_mass_mg"])
+                calcs["purity_pct"] = float(res["purity_pct"])
+                calcs["dilution_factor"] = float(res["dilution_factor"])
+        except Exception:
+            pass
+
+    # Build current measurements list (only is_current=True)
+    current_measurements = [m for m in session.measurements if m.is_current]
+
+    return WizardSessionResponse(
+        id=session.id,
+        peptide_id=session.peptide_id,
+        calibration_curve_id=session.calibration_curve_id,
+        status=session.status,
+        sample_id_label=session.sample_id_label,
+        declared_weight_mg=session.declared_weight_mg,
+        target_conc_ug_ml=session.target_conc_ug_ml,
+        target_total_vol_ul=session.target_total_vol_ul,
+        peak_area=session.peak_area,
+        created_at=session.created_at,
+        updated_at=session.updated_at,
+        completed_at=session.completed_at,
+        measurements=[
+            WizardMeasurementResponse.model_validate(m) for m in current_measurements
+        ],
+        calculations=calcs if calcs else None,
+    )
+
+
+# --- Endpoints ---
+
+@app.post("/wizard/sessions", response_model=WizardSessionResponse, status_code=201)
+async def create_wizard_session(
+    data: WizardSessionCreate,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """
+    Start a new analysis wizard session (SESS-01).
+    Auto-resolves the active calibration curve for the peptide.
+    Returns 400 if no active calibration curve exists.
+    Returns 404 if peptide not found.
+    """
+    peptide = db.execute(select(Peptide).where(Peptide.id == data.peptide_id)).scalar_one_or_none()
+    if not peptide:
+        raise HTTPException(status_code=404, detail=f"Peptide {data.peptide_id} not found")
+
+    cal = db.execute(
+        select(CalibrationCurve)
+        .where(CalibrationCurve.peptide_id == data.peptide_id)
+        .where(CalibrationCurve.is_active == True)
+        .order_by(desc(CalibrationCurve.created_at))
+        .limit(1)
+    ).scalar_one_or_none()
+    if not cal:
+        raise HTTPException(
+            status_code=400,
+            detail=f"No active calibration curve found for peptide {data.peptide_id}. Activate a calibration curve before starting a session."
+        )
+
+    if data.declared_weight_mg is not None and not (0 < data.declared_weight_mg < 5000):
+        raise HTTPException(status_code=422, detail="declared_weight_mg must be between 0 and 5000 mg")
+
+    session = WizardSession(
+        peptide_id=data.peptide_id,
+        calibration_curve_id=cal.id,
+        sample_id_label=data.sample_id_label,
+        declared_weight_mg=data.declared_weight_mg,
+        target_conc_ug_ml=data.target_conc_ug_ml,
+        target_total_vol_ul=data.target_total_vol_ul,
+    )
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+    return _build_session_response(session, db)
+
+
+@app.get("/wizard/sessions", response_model=list[WizardSessionListItem])
+async def list_wizard_sessions(
+    status: Optional[str] = None,
+    peptide_id: Optional[int] = None,
+    limit: int = 50,
+    offset: int = 0,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """
+    List wizard sessions with optional filtering.
+    Returns lightweight list items (no measurements, no calculations).
+    """
+    stmt = select(WizardSession).order_by(desc(WizardSession.created_at))
+    if status:
+        stmt = stmt.where(WizardSession.status == status)
+    if peptide_id:
+        stmt = stmt.where(WizardSession.peptide_id == peptide_id)
+    stmt = stmt.offset(offset).limit(limit)
+    sessions = db.execute(stmt).scalars().all()
+    return sessions
+
+
+@app.get("/wizard/sessions/{session_id}", response_model=WizardSessionResponse)
+async def get_wizard_session(
+    session_id: int,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """
+    Get a wizard session with all current measurements and recalculated values.
+    Used for resuming an in-progress session (SESS-02).
+    """
+    session = db.execute(
+        select(WizardSession).where(WizardSession.id == session_id)
+    ).scalar_one_or_none()
+    if not session:
+        raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
+    return _build_session_response(session, db)
+
+
+@app.patch("/wizard/sessions/{session_id}", response_model=WizardSessionResponse)
+async def update_wizard_session(
+    session_id: int,
+    data: WizardSessionUpdate,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """
+    Update session fields (target params, peak_area, sample label, declared weight).
+    Returns updated session with recalculated values.
+    """
+    session = db.execute(
+        select(WizardSession).where(WizardSession.id == session_id)
+    ).scalar_one_or_none()
+    if not session:
+        raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
+    if session.status == "completed":
+        raise HTTPException(status_code=400, detail="Cannot update a completed session")
+
+    update_data = data.model_dump(exclude_unset=True)
+    if "declared_weight_mg" in update_data and update_data["declared_weight_mg"] is not None:
+        if not (0 < update_data["declared_weight_mg"] < 5000):
+            raise HTTPException(status_code=422, detail="declared_weight_mg must be between 0 and 5000 mg")
+
+    for field, value in update_data.items():
+        setattr(session, field, value)
+
+    db.commit()
+    db.refresh(session)
+    return _build_session_response(session, db)
+
+
+@app.post("/wizard/sessions/{session_id}/measurements", response_model=WizardSessionResponse, status_code=201)
+async def record_measurement(
+    session_id: int,
+    data: WizardMeasurementCreate,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """
+    Record a weight for a wizard step. If a measurement for this step already exists,
+    mark the old record as is_current=False (audit trail preserved) and insert a new one.
+    Returns updated session with recalculated values.
+    """
+    session = db.execute(
+        select(WizardSession).where(WizardSession.id == session_id)
+    ).scalar_one_or_none()
+    if not session:
+        raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
+    if session.status == "completed":
+        raise HTTPException(status_code=400, detail="Cannot add measurements to a completed session")
+
+    if data.step_key not in VALID_STEP_KEYS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid step_key '{data.step_key}'. Must be one of: {sorted(VALID_STEP_KEYS)}"
+        )
+    if data.source not in ("manual", "scale"):
+        raise HTTPException(status_code=422, detail="source must be 'manual' or 'scale'")
+
+    # Mark existing current measurement for this step as superseded
+    old = db.execute(
+        select(WizardMeasurement)
+        .where(WizardMeasurement.session_id == session_id)
+        .where(WizardMeasurement.step_key == data.step_key)
+        .where(WizardMeasurement.is_current == True)
+    ).scalar_one_or_none()
+    if old:
+        old.is_current = False
+
+    # Insert new measurement
+    new_m = WizardMeasurement(
+        session_id=session_id,
+        step_key=data.step_key,
+        weight_mg=data.weight_mg,
+        source=data.source,
+        is_current=True,
+    )
+    db.add(new_m)
+    db.commit()
+    db.refresh(session)
+    return _build_session_response(session, db)
+
+
+@app.post("/wizard/sessions/{session_id}/complete", response_model=WizardSessionResponse)
+async def complete_wizard_session(
+    session_id: int,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """
+    Mark a wizard session as complete (SESS-03).
+    Sets status='completed' and records completed_at timestamp.
+    Returns 400 if already completed.
+    """
+    session = db.execute(
+        select(WizardSession).where(WizardSession.id == session_id)
+    ).scalar_one_or_none()
+    if not session:
+        raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
+    if session.status == "completed":
+        raise HTTPException(status_code=400, detail="Session is already completed")
+
+    session.status = "completed"
+    session.completed_at = datetime.utcnow()
+    db.commit()
+    db.refresh(session)
+    return _build_session_response(session, db)
