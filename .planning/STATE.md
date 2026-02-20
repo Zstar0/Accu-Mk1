@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-02-19)
 
 **Core value:** Streamlined lab workflow: guide tech through sample prep step-by-step with auto weight capture — stock prep, dilution, ready for HPLC injection.
-**Current focus:** v0.11.0 — New Analysis Wizard, Phase 4 in progress — Steps 1-3 complete, Steps 4-5 next
+**Current focus:** v0.11.0 — New Analysis Wizard, Phase 4 COMPLETE — full end-to-end wizard flow functional
 
 ## Current Position
 
-Phase: 4 of 5 (Wizard UI) — In progress
-Plan: 2 of 3 in current phase — COMPLETE
-Status: In progress — 04-01, 04-02 done, executing 04-03 next
-Last activity: 2026-02-20 — Completed 04-02-PLAN.md (Step1SampleInfo, Step2StockPrep, Step3Dilution with WeightInput integration)
+Phase: 4 of 5 (Wizard UI) — COMPLETE
+Plan: 3 of 3 in current phase — COMPLETE
+Status: Phase 4 complete — all 5 wizard steps functional, Analysis History tabbed
+Last activity: 2026-02-20 — Completed 04-03-PLAN.md (Step4Results, Step5Summary, WizardSessionHistory, AnalysisHistory tabs)
 
-Progress: [██████░░░░] 60%
+Progress: [███████░░░] 70%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 6
-- Average duration: ~5min per plan (estimated)
-- Total execution time: ~31min
+- Total plans completed: 7
+- Average duration: ~4min per plan (estimated)
+- Total execution time: ~34min
 
 **By Phase:**
 
@@ -30,7 +30,7 @@ Progress: [██████░░░░] 60%
 | 01-wizard-db | 2 | ~10min | ~5min |
 | 02-scale-bridge | 1 | ~4min | ~4min |
 | 03-sse-weight-streaming | 1 | ~10min | ~10min |
-| 04-wizard-ui | 2/3 | ~6min | ~3min |
+| 04-wizard-ui | 3/3 | ~9min | ~3min |
 
 *Updated after each plan completion*
 
@@ -63,6 +63,8 @@ Progress: [██████░░░░] 60%
 - Re-weigh: local boolean flag resets sub-step display to WeightInput; next Accept inserts new measurement (server handles audit trail)
 - `const sessionId = session.id` captured before async handlers — TypeScript narrowing lost across async closures
 - Step 2 transfer confirmation: `transferConfirmed || meas2d != null` — loaded vial weight implies transfer occurred
+- AnalysisHistory early return converted to conditional render inside TabsContent — tabs persist in detail view
+- Step5Summary resetWizard before navigateTo — wizard always resets regardless of navigation
 
 ### Key Source Files
 
@@ -73,12 +75,16 @@ Progress: [██████░░░░] 60%
 - `src/components/hplc/PeptideConfig.tsx` — reference SSE consumer pattern
 - `src/store/wizard-store.ts` — PrepWizardStore with stepStates field, deriveStepStates pure function, WIZARD_STEPS constant
 - `src/lib/api.ts` — All API functions including 6 new wizard endpoints
-- `src/components/hplc/CreateAnalysis.tsx` — WizardPage split-panel layout (steps 1-3 wired)
+- `src/components/hplc/CreateAnalysis.tsx` — WizardPage split-panel layout (all 5 steps wired)
 - `src/components/hplc/wizard/WizardStepList.tsx` — Step sidebar with 4-state indicators
 - `src/components/hplc/wizard/WizardStepPanel.tsx` — Animated content wrapper
 - `src/components/hplc/wizard/steps/Step1SampleInfo.tsx` — Session creation form (peptide dropdown + targets)
 - `src/components/hplc/wizard/steps/Step2StockPrep.tsx` — Stock prep 4-sub-step weighing with calcs
 - `src/components/hplc/wizard/steps/Step3Dilution.tsx` — Dilution 3-sub-step weighing with actual calcs
+- `src/components/hplc/wizard/steps/Step4Results.tsx` — Peak area input with calculated results card
+- `src/components/hplc/wizard/steps/Step5Summary.tsx` — Full read-only summary + Complete Session button
+- `src/components/hplc/wizard/WizardSessionHistory.tsx` — Completed wizard sessions table
+- `src/components/hplc/AnalysisHistory.tsx` — Tabbed: HPLC Import + Sample Prep Wizard tabs
 
 ### Blockers/Concerns
 
@@ -91,6 +97,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-02-20T05:10:33Z
-Stopped at: Completed 04-02-PLAN.md (Phase 4 plan 02 — Step1SampleInfo, Step2StockPrep, Step3Dilution)
+Last session: 2026-02-20T05:17:38Z
+Stopped at: Completed 04-03-PLAN.md (Phase 4 plan 03 — Step4Results, Step5Summary, WizardSessionHistory, AnalysisHistory tabs)
 Resume file: None
