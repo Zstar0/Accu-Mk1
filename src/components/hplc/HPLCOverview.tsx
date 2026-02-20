@@ -25,12 +25,12 @@ export function HPLCOverview() {
       <div className="grid gap-4 md:grid-cols-3">
         <Card
           className="cursor-pointer transition-colors hover:bg-muted/50"
-          onClick={() => navigateTo('hplc-analysis', 'new-analysis')}
+          onClick={() => navigateTo('hplc-analysis', 'import-analysis')}
         >
           <CardHeader>
             <div className="flex items-center gap-2">
               <Microscope className="h-5 w-5 text-primary" />
-              <CardTitle className="text-base">New Analysis</CardTitle>
+              <CardTitle className="text-base">Import Analysis</CardTitle>
             </div>
             <CardDescription>
               Drop PeakData CSV files to parse peaks and calculate purity.

@@ -536,7 +536,7 @@ export function NewAnalysis() {
         {/* Header with step indicator */}
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-bold tracking-tight">New Analysis</h1>
+            <h1 className="text-2xl font-bold tracking-tight">Import Analysis</h1>
             <p className="text-muted-foreground">
               {step === 'parse' && 'Step 1: Select a sample folder from SharePoint and parse peaks.'}
               {step === 'configure' && 'Step 2: Select peptide and enter sample weights.'}
@@ -987,7 +987,7 @@ export function NewAnalysis() {
             <AnalysisResults result={analysisResult} chromatograms={chromatograms} />
             <div className="flex gap-2">
               <Button variant="outline" onClick={handleReset}>
-                New Analysis
+                Import Another
               </Button>
             </div>
           </>

@@ -6,7 +6,7 @@ export type ActiveSection = 'dashboard' | 'lab-operations' | 'hplc-analysis' | '
 
 // Sub-sections within each main section
 export type LabOperationsSubSection = 'chromatographs' | 'sample-intake'
-export type HPLCAnalysisSubSection = 'overview' | 'new-analysis' | 'peptide-config' | 'analysis-history'
+export type HPLCAnalysisSubSection = 'overview' | 'new-analysis' | 'import-analysis' | 'peptide-config' | 'analysis-history'
 export type AccuMarkToolsSubSection = 'overview' | 'order-explorer' | 'coa-explorer'
 export type AccountSubSection = 'change-password' | 'user-management'
 export type ActiveSubSection = LabOperationsSubSection | HPLCAnalysisSubSection | AccuMarkToolsSubSection | AccountSubSection
