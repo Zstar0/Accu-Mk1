@@ -2,15 +2,18 @@ import { Button } from '@/components/ui/button'
 import { useWizardStore, type StepId } from '@/store/wizard-store'
 import { WizardStepList } from './wizard/WizardStepList'
 import { WizardStepPanel } from './wizard/WizardStepPanel'
+import { Step1SampleInfo } from './wizard/steps/Step1SampleInfo'
+import { Step2StockPrep } from './wizard/steps/Step2StockPrep'
+import { Step3Dilution } from './wizard/steps/Step3Dilution'
 
 function renderCurrentStep(currentStep: StepId): React.ReactNode {
   switch (currentStep) {
     case 1:
-      return <div className="p-4 text-muted-foreground">Step 1: Sample Info (placeholder)</div>
+      return <Step1SampleInfo />
     case 2:
-      return <div className="p-4 text-muted-foreground">Step 2: Stock Prep (placeholder)</div>
+      return <Step2StockPrep />
     case 3:
-      return <div className="p-4 text-muted-foreground">Step 3: Dilution (placeholder)</div>
+      return <Step3Dilution />
     case 4:
       return <div className="p-4 text-muted-foreground">Step 4: Results (placeholder)</div>
     case 5:
