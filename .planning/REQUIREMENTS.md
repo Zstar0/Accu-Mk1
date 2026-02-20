@@ -24,9 +24,9 @@ Requirements for the New Analysis Wizard milestone.
 
 ### Sample Lookup
 
-- [ ] **SMP-01**: Tech searches for a sample by SENAITE sample ID
-- [ ] **SMP-02**: App displays retrieved details: sample ID, peptide name, declared weight (mg)
-- [ ] **SMP-03**: If SENAITE is unavailable, tech can enter sample details manually
+- [x] **SMP-01**: Tech searches for a sample by SENAITE sample ID
+- [x] **SMP-02**: App displays retrieved details: sample ID, peptide name, declared weight (mg)
+- [x] **SMP-03**: If SENAITE is unavailable, tech can enter sample details manually
 - [x] **SMP-04**: Tech enters target concentration (µg/mL) and target total volume (µL)
 
 ### Stock Preparation
@@ -118,10 +118,10 @@ Requirements for the New Analysis Wizard milestone.
 | RES-01 | Phase 4 — Wizard UI | Complete |
 | RES-03 | Phase 4 — Wizard UI | Complete |
 | SESS-04 | Phase 4 — Wizard UI | Complete |
-| SMP-01 | Phase 5 — SENAITE Sample Lookup | Pending |
-| SMP-02 | Phase 5 — SENAITE Sample Lookup | Pending |
-| SMP-03 | Phase 5 — SENAITE Sample Lookup | Pending |
+| SMP-01 | Phase 5 — SENAITE Sample Lookup | Complete |
+| SMP-02 | Phase 5 — SENAITE Sample Lookup | Complete |
+| SMP-03 | Phase 5 — SENAITE Sample Lookup | Complete |
 
 ---
 *Requirements defined: 2026-02-19*
-*Last updated: 2026-02-20 — Phase 4 requirements marked Complete*
+*Last updated: 2026-02-20 — Phase 5 requirements marked Complete*
