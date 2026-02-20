@@ -70,10 +70,10 @@ Plans:
 2. When 5 consecutive readings are within 0.5 mg of each other, the UI shows a stable-weight visual indicator and enables the "Accept Weight" button.
 3. When the scale is offline or SCALE_HOST is not configured, the wizard step shows a manual weight entry input instead of the SSE live display — the tech can continue without a scale.
 
-**Plans**: TBD
+**Plans**: 1 plan
 
 Plans:
-- [ ] 03-01: SSE weight stream endpoint and frontend ScaleBridge hook with manual fallback
+- [ ] 03-01-PLAN.md — SSE weight stream endpoint, useScaleStream frontend hook with stability detection, WeightInput component with SSE/manual dual mode
 
 ---
 
