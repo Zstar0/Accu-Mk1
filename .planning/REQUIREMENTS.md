@@ -9,9 +9,9 @@ Requirements for the New Analysis Wizard milestone.
 
 ### Session
 
-- [ ] **SESS-01**: Tech can start a new analysis session from the New Analysis page
-- [ ] **SESS-02**: Session state is autosaved after each step so tech can resume if they navigate away
-- [ ] **SESS-03**: All measurements, calculated values, and timestamps are persisted to DB on completion
+- [x] **SESS-01**: Tech can start a new analysis session from the New Analysis page
+- [x] **SESS-02**: Session state is autosaved after each step so tech can resume if they navigate away
+- [x] **SESS-03**: All measurements, calculated values, and timestamps are persisted to DB on completion
 - [ ] **SESS-04**: Completed sessions appear in Analysis History
 
 ### Wizard UI
@@ -35,15 +35,15 @@ Requirements for the New Analysis Wizard milestone.
 - [ ] **STK-02**: Wizard instructs tech to transfer peptide; tech confirms when done
 - [ ] **STK-03**: App displays calculated diluent volume to add (in µL)
 - [ ] **STK-04**: Wizard instructs tech to add diluent then re-weigh vial; app captures weight
-- [ ] **STK-05**: App calculates and displays: actual diluent added (mL) and stock concentration (µg/mL)
+- [x] **STK-05**: App calculates and displays: actual diluent added (mL) and stock concentration (µg/mL)
 
 ### Dilution
 
-- [ ] **DIL-01**: App calculates and displays required diluent volume + stock volume for target conc/volume
+- [x] **DIL-01**: App calculates and displays required diluent volume + stock volume for target conc/volume
 - [ ] **DIL-02**: Wizard instructs tech to weigh a new empty dilution vial + cap; app captures weight
 - [ ] **DIL-03**: Wizard instructs tech to add diluent volume then re-weigh; app captures weight
 - [ ] **DIL-04**: Wizard instructs tech to add stock volume then weigh final dilution vial; app captures weight
-- [ ] **DIL-05**: App calculates and displays actual concentration and actual total volume
+- [x] **DIL-05**: App calculates and displays actual concentration and actual total volume
 
 ### Scale Integration
 
@@ -56,7 +56,7 @@ Requirements for the New Analysis Wizard milestone.
 ### Results
 
 - [ ] **RES-01**: After HPLC run, tech can enter the peak area for the injection
-- [ ] **RES-02**: App calculates determined concentration, dilution factor, peptide mass (mg), and purity (%)
+- [x] **RES-02**: App calculates determined concentration, dilution factor, peptide mass (mg), and purity (%)
 - [ ] **RES-03**: Results summary shows all prep measurements alongside the final HPLC results
 
 ## Future Requirements
@@ -90,13 +90,13 @@ Requirements for the New Analysis Wizard milestone.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| SESS-01 | Phase 1 — DB Models and Calculation Foundation | Pending |
-| SESS-02 | Phase 1 — DB Models and Calculation Foundation | Pending |
-| SESS-03 | Phase 1 — DB Models and Calculation Foundation | Pending |
-| STK-05 | Phase 1 — DB Models and Calculation Foundation | Pending |
-| DIL-01 | Phase 1 — DB Models and Calculation Foundation | Pending |
-| DIL-05 | Phase 1 — DB Models and Calculation Foundation | Pending |
-| RES-02 | Phase 1 — DB Models and Calculation Foundation | Pending |
+| SESS-01 | Phase 1 — DB Models and Calculation Foundation | Complete |
+| SESS-02 | Phase 1 — DB Models and Calculation Foundation | Complete |
+| SESS-03 | Phase 1 — DB Models and Calculation Foundation | Complete |
+| STK-05 | Phase 1 — DB Models and Calculation Foundation | Complete |
+| DIL-01 | Phase 1 — DB Models and Calculation Foundation | Complete |
+| DIL-05 | Phase 1 — DB Models and Calculation Foundation | Complete |
+| RES-02 | Phase 1 — DB Models and Calculation Foundation | Complete |
 | SCALE-01 | Phase 2 — Scale Bridge Service | Pending |
 | SCALE-05 | Phase 2 — Scale Bridge Service | Pending |
 | SCALE-02 | Phase 3 — SSE Weight Streaming | Pending |
@@ -124,4 +124,4 @@ Requirements for the New Analysis Wizard milestone.
 
 ---
 *Requirements defined: 2026-02-19*
-*Last updated: 2026-02-19 — traceability populated by roadmapper*
+*Last updated: 2026-02-20 — Phase 1 requirements marked Complete*

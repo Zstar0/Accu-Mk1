@@ -6,7 +6,7 @@ This milestone adds a guided 5-step sample preparation wizard to the existing Fa
 
 ## Phases
 
-- [ ] **Phase 1: DB Models and Calculation Foundation** — Session persistence, all calculation logic, REST endpoints, manual weight entry. No hardware required.
+- [x] **Phase 1: DB Models and Calculation Foundation** — Session persistence, all calculation logic, REST endpoints, manual weight entry. No hardware required.
 - [ ] **Phase 2: Scale Bridge Service** — Singleton asyncio TCP service connecting to the Mettler Toledo XSR105DU via MT-SICS protocol.
 - [ ] **Phase 3: SSE Weight Streaming** — SSE endpoint and frontend hook wiring the scale bridge into the wizard with live weight display and fallback.
 - [ ] **Phase 4: Wizard UI** — Full CreateAnalysis.tsx wizard with Stripe-style step sidebar, all 5 wizard steps, and WeighStep components wired to scale SSE.
@@ -31,8 +31,8 @@ This milestone adds a guided 5-step sample preparation wizard to the existing Fa
 **Plans**: 2 plans
 
 Plans:
-- [ ] 01-01-PLAN.md — DB models (WizardSession, WizardMeasurement), wizard_sessions/wizard_measurements tables, 6 REST endpoints for session lifecycle
-- [ ] 01-02-PLAN.md — Decimal calculation engine (calc_stock_prep, calc_required_volumes, calc_actual_dilution, calc_results) with TDD unit tests verified against lab Excel values
+- [x] 01-01-PLAN.md — DB models (WizardSession, WizardMeasurement), wizard_sessions/wizard_measurements tables, 6 REST endpoints for session lifecycle
+- [x] 01-02-PLAN.md — Decimal calculation engine (calc_stock_prep, calc_required_volumes, calc_actual_dilution, calc_results) with TDD unit tests verified against lab Excel values
 
 ---
 
@@ -124,7 +124,7 @@ Plans:
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. DB Models and Calculation Foundation | 0/2 | In progress | - |
+| 1. DB Models and Calculation Foundation | 2/2 | Complete | 2026-02-20 |
 | 2. Scale Bridge Service | 0/1 | Not started | - |
 | 3. SSE Weight Streaming | 0/1 | Not started | - |
 | 4. Wizard UI | 0/2 | Not started | - |
