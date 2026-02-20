@@ -4653,6 +4653,146 @@ async def complete_wizard_session(
     return _build_session_response(session, db)
 
 
+# ─── SENAITE Integration (Phase 5) ────────────────────────────────────────────
+
+# -- SENAITE Integration -----------------------------------------------
+SENAITE_URL = os.environ.get("SENAITE_URL")          # None = disabled
+SENAITE_USER = os.environ.get("SENAITE_USER", "")
+SENAITE_PASSWORD = os.environ.get("SENAITE_PASSWORD", "")
+SENAITE_TIMEOUT = httpx.Timeout(connect=5.0, read=10.0)
+
+
+class SenaiteAnalyte(BaseModel):
+    raw_name: str
+    matched_peptide_id: Optional[int] = None
+    matched_peptide_name: Optional[str] = None
+
+
+class SenaiteLookupResult(BaseModel):
+    sample_id: str
+    declared_weight_mg: Optional[float] = None
+    analytes: list[SenaiteAnalyte]
+
+
+class SenaiteStatusResponse(BaseModel):
+    enabled: bool
+
+
+def _strip_method_suffix(name: str) -> str:
+    """Strip trailing ' - Method (Type)' suffixes from SENAITE analyte names.
+
+    Example: 'BPC-157 - Identity (HPLC)' -> 'BPC-157'
+    """
+    import re
+    return re.sub(r'\s*-\s*[^-]+\([^)]+\)\s*$', '', name).strip()
+
+
+def _fuzzy_match_peptide(stripped_name: str, peptides: list) -> Optional[tuple]:
+    """Case-insensitive substring match of stripped analyte name against local peptides.
+
+    Returns (peptide.id, peptide.name) if a match is found, else None.
+    Uses simple 'contains' matching: stripped_name in peptide.name (case-insensitive).
+    """
+    needle = stripped_name.lower()
+    for peptide in peptides:
+        if needle in peptide.name.lower():
+            return (peptide.id, peptide.name)
+    return None
+
+
+async def _fetch_senaite_sample(sample_id: str) -> dict:
+    """Fetch a sample from SENAITE by ID using the AnalysisRequest API.
+
+    Calls GET {SENAITE_URL}/senaite/@@API/senaite/v1/AnalysisRequest?id={id}&complete=yes
+    with HTTP Basic auth. Returns the full parsed JSON response dict.
+    Raises httpx exceptions on network/HTTP errors.
+    """
+    url = f"{SENAITE_URL}/senaite/@@API/senaite/v1/AnalysisRequest"
+    async with httpx.AsyncClient(
+        timeout=SENAITE_TIMEOUT,
+        auth=httpx.BasicAuth(SENAITE_USER, SENAITE_PASSWORD),
+    ) as client:
+        resp = await client.get(url, params={"id": sample_id, "complete": "yes"})
+        resp.raise_for_status()
+        return resp.json()
+
+
+@app.get("/wizard/senaite/status", response_model=SenaiteStatusResponse)
+async def get_senaite_status(_current_user=Depends(get_current_user)):
+    """Return whether SENAITE integration is enabled (SENAITE_URL env var is set)."""
+    return SenaiteStatusResponse(enabled=SENAITE_URL is not None)
+
+
+@app.get("/wizard/senaite/lookup", response_model=SenaiteLookupResult)
+async def lookup_senaite_sample(
+    id: str,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """
+    Look up a sample in SENAITE by ID and return structured analyte data.
+
+    Returns:
+        SenaiteLookupResult with sample_id, declared_weight_mg, and analytes list.
+
+    Raises:
+        503 if SENAITE is not configured or is unreachable/timed out.
+        404 if the sample ID does not exist in SENAITE.
+    """
+    if SENAITE_URL is None:
+        raise HTTPException(status_code=503, detail="SENAITE not configured")
+
+    try:
+        data = await _fetch_senaite_sample(id)
+
+        if data.get("count", 0) == 0:
+            raise HTTPException(status_code=404, detail=f"Sample {id} not found in SENAITE")
+
+        item = data["items"][0]
+
+        # Parse sample_id
+        sample_id = item["id"]
+
+        # Parse declared_weight_mg — DeclaredTotalQuantity is a decimal string or null
+        declared_weight_mg: Optional[float] = None
+        raw_qty = item.get("DeclaredTotalQuantity")
+        if raw_qty is not None and str(raw_qty).strip() != "":
+            try:
+                declared_weight_mg = float(raw_qty)
+            except (ValueError, TypeError):
+                declared_weight_mg = None
+
+        # Parse analytes from Analyte1Peptide through Analyte4Peptide
+        all_peptides = db.query(Peptide).all()
+        analytes: list[SenaiteAnalyte] = []
+        for key in ("Analyte1Peptide", "Analyte2Peptide", "Analyte3Peptide", "Analyte4Peptide"):
+            raw_name = item.get(key)
+            if raw_name is None or str(raw_name).strip() == "":
+                continue
+            stripped = _strip_method_suffix(str(raw_name))
+            match = _fuzzy_match_peptide(stripped, all_peptides)
+            analytes.append(SenaiteAnalyte(
+                raw_name=raw_name,
+                matched_peptide_id=match[0] if match else None,
+                matched_peptide_name=match[1] if match else None,
+            ))
+
+        return SenaiteLookupResult(
+            sample_id=sample_id,
+            declared_weight_mg=declared_weight_mg,
+            analytes=analytes,
+        )
+
+    except HTTPException:
+        raise
+    except httpx.TimeoutException:
+        raise HTTPException(status_code=503, detail="SENAITE is currently unavailable \u2014 use manual entry")
+    except httpx.HTTPStatusError:
+        raise HTTPException(status_code=503, detail="SENAITE is currently unavailable \u2014 use manual entry")
+    except Exception:
+        raise HTTPException(status_code=503, detail="SENAITE is currently unavailable \u2014 use manual entry")
+
+
 # --- Scale endpoints (Phase 2) ---
 
 @app.get("/scale/status")
