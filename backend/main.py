@@ -1460,14 +1460,16 @@ async def create_peptide(data: PeptideCreate, db: Session = Depends(get_db), _cu
 
 @app.delete("/peptides/wipe-all")
 async def wipe_all_peptides(db: Session = Depends(get_db), _current_user=Depends(get_current_user)):
-    """Delete ALL peptide standards and calibration curves."""
+    """Delete ALL peptide standards, calibration curves, and SharePoint file cache."""
+    cache_deleted = db.execute(delete(SharePointFileCache)).rowcount
     curves_deleted = db.execute(delete(CalibrationCurve)).rowcount
     peptides_deleted = db.execute(delete(Peptide)).rowcount
     db.commit()
     return {
-        "message": f"Wiped {peptides_deleted} peptides and {curves_deleted} calibration curves",
+        "message": f"Wiped {peptides_deleted} peptides, {curves_deleted} curves, and {cache_deleted} cached file records",
         "peptides_deleted": peptides_deleted,
         "curves_deleted": curves_deleted,
+        "cache_deleted": cache_deleted,
     }
 
 

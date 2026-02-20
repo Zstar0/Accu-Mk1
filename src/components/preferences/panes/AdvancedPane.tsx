@@ -34,7 +34,7 @@ export function AdvancedPane() {
       }
       const data = await response.json()
       toast.success('Wipe complete', {
-        description: `${data.peptides_deleted} peptides and ${data.curves_deleted} curves deleted`,
+        description: `${data.peptides_deleted} peptides, ${data.curves_deleted} curves, and ${data.cache_deleted} cached files cleared`,
       })
     } catch (err) {
       toast.error('Wipe failed', { description: String(err) })
