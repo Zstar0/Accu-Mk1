@@ -4659,7 +4659,7 @@ async def complete_wizard_session(
 SENAITE_URL = os.environ.get("SENAITE_URL")          # None = disabled
 SENAITE_USER = os.environ.get("SENAITE_USER", "")
 SENAITE_PASSWORD = os.environ.get("SENAITE_PASSWORD", "")
-SENAITE_TIMEOUT = httpx.Timeout(connect=5.0, read=10.0)
+SENAITE_TIMEOUT = httpx.Timeout(10.0, connect=5.0)
 
 
 class SenaiteAnalyte(BaseModel):
