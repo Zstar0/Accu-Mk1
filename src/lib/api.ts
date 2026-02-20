@@ -1884,6 +1884,46 @@ export async function completeWizardSession(
   }
 }
 
+// --- SENAITE Lookup API ---
+
+export interface SenaiteAnalyte {
+  raw_name: string
+  matched_peptide_id: number | null
+  matched_peptide_name: string | null
+}
+
+export interface SenaiteLookupResult {
+  sample_id: string
+  declared_weight_mg: number | null
+  analytes: SenaiteAnalyte[]
+}
+
+export interface SenaiteStatusResponse {
+  enabled: boolean
+}
+
+export async function getSenaiteStatus(): Promise<SenaiteStatusResponse> {
+  const response = await fetch(`${API_BASE_URL()}/wizard/senaite/status`, {
+    headers: getBearerHeaders(),
+  })
+  if (!response.ok) throw new Error(`SENAITE status check failed: ${response.status}`)
+  return response.json()
+}
+
+export async function lookupSenaiteSample(
+  sampleId: string
+): Promise<SenaiteLookupResult> {
+  const response = await fetch(
+    `${API_BASE_URL()}/wizard/senaite/lookup?id=${encodeURIComponent(sampleId)}`,
+    { headers: getBearerHeaders() }
+  )
+  if (!response.ok) {
+    const err = await response.json().catch(() => null)
+    throw new Error(err?.detail || `SENAITE lookup failed: ${response.status}`)
+  }
+  return response.json()
+}
+
 // --- SharePoint Integration ---
 
 export interface SharePointItem {
