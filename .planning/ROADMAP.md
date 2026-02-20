@@ -50,10 +50,10 @@ Plans:
 3. When SCALE_HOST is not set in the environment, the app starts normally and scale-dependent features degrade to manual-entry mode — no crash or startup error.
 4. Scale IP and port are configurable via SCALE_HOST and SCALE_PORT environment variables, editable in app settings.
 
-**Plans**: TBD
+**Plans**: 1 plan
 
 Plans:
-- [ ] 02-01: ScaleBridge singleton, MT-SICS TCP client, FastAPI lifespan registration, status endpoint
+- [ ] 02-01-PLAN.md — ScaleBridge singleton, MT-SICS TCP client, FastAPI lifespan registration, status endpoint, settings, standalone test script
 
 ---
 
@@ -125,7 +125,7 @@ Plans:
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. DB Models and Calculation Foundation | 2/2 | Complete | 2026-02-20 |
-| 2. Scale Bridge Service | 0/1 | Not started | - |
+| 2. Scale Bridge Service | 0/1 | Planned | - |
 | 3. SSE Weight Streaming | 0/1 | Not started | - |
 | 4. Wizard UI | 0/2 | Not started | - |
 | 5. SENAITE Sample Lookup | 0/1 | Not started | - |
