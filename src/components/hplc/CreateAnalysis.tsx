@@ -5,6 +5,8 @@ import { WizardStepPanel } from './wizard/WizardStepPanel'
 import { Step1SampleInfo } from './wizard/steps/Step1SampleInfo'
 import { Step2StockPrep } from './wizard/steps/Step2StockPrep'
 import { Step3Dilution } from './wizard/steps/Step3Dilution'
+import { Step4Results } from './wizard/steps/Step4Results'
+import { Step5Summary } from './wizard/steps/Step5Summary'
 
 function renderCurrentStep(currentStep: StepId): React.ReactNode {
   switch (currentStep) {
@@ -15,9 +17,9 @@ function renderCurrentStep(currentStep: StepId): React.ReactNode {
     case 3:
       return <Step3Dilution />
     case 4:
-      return <div className="p-4 text-muted-foreground">Step 4: Results (placeholder)</div>
+      return <Step4Results />
     case 5:
-      return <div className="p-4 text-muted-foreground">Step 5: Summary (placeholder)</div>
+      return <Step5Summary />
   }
 }
 
