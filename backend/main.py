@@ -4676,3 +4676,57 @@ async def get_scale_status(
         "host": bridge.host,
         "port": bridge.port,
     }
+
+
+@app.get("/scale/weight/stream")
+async def stream_scale_weight(
+    request: Request,
+    _current_user=Depends(get_current_user),
+):
+    """
+    Stream live weight readings from the balance via SSE at 4 Hz.
+
+    Yields 'weight' events with value/unit/stable fields.
+    Yields 'error' events on ConnectionError or ValueError (bridge may reconnect — does not stop stream).
+    Returns 503 when SCALE_HOST is not configured.
+    """
+    from starlette.responses import StreamingResponse
+    import asyncio
+
+    bridge = getattr(request.app.state, 'scale_bridge', None)
+    if bridge is None:
+        raise HTTPException(status_code=503, detail="Scale not configured (SCALE_HOST not set)")
+
+    async def event_generator():
+        def send_event(event_type: str, data: dict) -> str:
+            payload = json.dumps(data)
+            return f"event: {event_type}\ndata: {payload}\n\n"
+
+        try:
+            while True:
+                if await request.is_disconnected():
+                    break
+
+                try:
+                    reading = await bridge.read_weight()
+                    yield send_event("weight", {
+                        "value": reading["value"],
+                        "unit": reading["unit"],
+                        "stable": reading["stable"],
+                    })
+                except (ConnectionError, ValueError) as e:
+                    yield send_event("error", {"message": str(e)})
+
+                await asyncio.sleep(0.25)
+        except asyncio.CancelledError:
+            pass
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
