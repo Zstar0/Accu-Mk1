@@ -91,11 +91,12 @@ Plans:
 3. All 5 steps — sample info, stock prep (4 weighing sub-steps with calculated outputs displayed inline), dilution (3 weighing sub-steps), results entry, and summary — are reachable and functional.
 4. Transitions between steps are animated. Completed sessions appear in Analysis History.
 
-**Plans**: TBD
+**Plans**: 3 plans
 
 Plans:
-- [ ] 04-01: PrepWizardStore (Zustand), WizardPage layout, step state machine, animated transitions
-- [ ] 04-02: All 5 wizard step components wired to backend API and WeighStep SSE consumer
+- [ ] 04-01-PLAN.md — PrepWizardStore (Zustand), wizard API functions, WizardPage layout with step sidebar, animated transitions
+- [ ] 04-02-PLAN.md — Step 1 (Sample Info form), Step 2 (Stock Prep weighing), Step 3 (Dilution weighing) wired to API and WeightInput
+- [ ] 04-03-PLAN.md — Step 4 (Results entry), Step 5 (Summary), WizardSessionHistory, AnalysisHistory tabs
 
 ---
 
@@ -127,7 +128,7 @@ Plans:
 | 1. DB Models and Calculation Foundation | 2/2 | Complete | 2026-02-20 |
 | 2. Scale Bridge Service | 1/1 | Complete | 2026-02-20 |
 | 3. SSE Weight Streaming | 1/1 | Complete | 2026-02-20 |
-| 4. Wizard UI | 0/2 | Not started | - |
+| 4. Wizard UI | 0/3 | Not started | - |
 | 5. SENAITE Sample Lookup | 0/1 | Not started | - |
 
 ---
