@@ -112,10 +112,11 @@ Plans:
 1. Tech can type a SENAITE sample ID into the search field in wizard step 1 and the app retrieves and displays the sample ID, peptide name, and declared weight (mg).
 2. When SENAITE is unreachable or returns no match, the wizard shows a clear error state and lets tech enter sample details manually to continue.
 
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 05-01: SENAITE httpx client, sample search endpoint, step 1 search UI
+- [ ] 05-01-PLAN.md — SENAITE backend endpoints (status + lookup), httpx client with Basic auth, analyte name stripping, fuzzy peptide matching, frontend API types and functions
+- [ ] 05-02-PLAN.md — Step1SampleInfo two-tab UI rewrite (SENAITE Lookup + Manual Entry), lookup summary card, blend analyte display, error states
 
 ---
 
@@ -129,7 +130,7 @@ Plans:
 | 2. Scale Bridge Service | 1/1 | Complete | 2026-02-20 |
 | 3. SSE Weight Streaming | 1/1 | Complete | 2026-02-20 |
 | 4. Wizard UI | 3/3 | Complete | 2026-02-20 |
-| 5. SENAITE Sample Lookup | 0/1 | Not started | - |
+| 5. SENAITE Sample Lookup | 0/2 | Not started | - |
 
 ---
 
