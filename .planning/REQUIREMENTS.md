@@ -47,11 +47,11 @@ Requirements for the New Analysis Wizard milestone.
 
 ### Scale Integration
 
-- [ ] **SCALE-01**: Backend connects to Mettler Toledo XSR105DU via TCP using MT-SICS protocol
+- [x] **SCALE-01**: Backend connects to Mettler Toledo XSR105DU via TCP using MT-SICS protocol
 - [ ] **SCALE-02**: App streams live weight readings to the wizard UI via SSE
 - [ ] **SCALE-03**: App detects stable weight (5 consecutive readings within 0.5 mg) and signals the tech visually
 - [ ] **SCALE-04**: Tech can manually enter a weight at any step if scale is offline
-- [ ] **SCALE-05**: Scale IP and port are configurable in app settings
+- [x] **SCALE-05**: Scale IP and port are configurable in app settings
 
 ### Results
 
@@ -97,8 +97,8 @@ Requirements for the New Analysis Wizard milestone.
 | DIL-01 | Phase 1 — DB Models and Calculation Foundation | Complete |
 | DIL-05 | Phase 1 — DB Models and Calculation Foundation | Complete |
 | RES-02 | Phase 1 — DB Models and Calculation Foundation | Complete |
-| SCALE-01 | Phase 2 — Scale Bridge Service | Pending |
-| SCALE-05 | Phase 2 — Scale Bridge Service | Pending |
+| SCALE-01 | Phase 2 — Scale Bridge Service | Complete |
+| SCALE-05 | Phase 2 — Scale Bridge Service | Complete |
 | SCALE-02 | Phase 3 — SSE Weight Streaming | Pending |
 | SCALE-03 | Phase 3 — SSE Weight Streaming | Pending |
 | SCALE-04 | Phase 3 — SSE Weight Streaming | Pending |

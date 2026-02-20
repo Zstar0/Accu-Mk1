@@ -7,7 +7,7 @@ This milestone adds a guided 5-step sample preparation wizard to the existing Fa
 ## Phases
 
 - [x] **Phase 1: DB Models and Calculation Foundation** — Session persistence, all calculation logic, REST endpoints, manual weight entry. No hardware required.
-- [ ] **Phase 2: Scale Bridge Service** — Singleton asyncio TCP service connecting to the Mettler Toledo XSR105DU via MT-SICS protocol.
+- [x] **Phase 2: Scale Bridge Service** — Singleton asyncio TCP service connecting to the Mettler Toledo XSR105DU via MT-SICS protocol.
 - [ ] **Phase 3: SSE Weight Streaming** — SSE endpoint and frontend hook wiring the scale bridge into the wizard with live weight display and fallback.
 - [ ] **Phase 4: Wizard UI** — Full CreateAnalysis.tsx wizard with Stripe-style step sidebar, all 5 wizard steps, and WeighStep components wired to scale SSE.
 - [ ] **Phase 5: SENAITE Sample Lookup** — httpx SENAITE client with sample search UI in step 1 of the wizard and manual entry fallback.
@@ -53,7 +53,7 @@ Plans:
 **Plans**: 1 plan
 
 Plans:
-- [ ] 02-01-PLAN.md — ScaleBridge singleton, MT-SICS TCP client, FastAPI lifespan registration, status endpoint, settings, standalone test script
+- [x] 02-01-PLAN.md — ScaleBridge singleton, MT-SICS TCP client, FastAPI lifespan registration, status endpoint, settings, standalone test script
 
 ---
 
@@ -125,7 +125,7 @@ Plans:
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. DB Models and Calculation Foundation | 2/2 | Complete | 2026-02-20 |
-| 2. Scale Bridge Service | 0/1 | Planned | - |
+| 2. Scale Bridge Service | 1/1 | Complete | 2026-02-20 |
 | 3. SSE Weight Streaming | 0/1 | Not started | - |
 | 4. Wizard UI | 0/2 | Not started | - |
 | 5. SENAITE Sample Lookup | 0/1 | Not started | - |
