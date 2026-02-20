@@ -30,7 +30,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' tauri: ipc: http://ipc.localhost http://127.0.0.1:8008 http://127.0.0.1:8009 http://127.0.0.1:8011 http://127.0.0.1:8012"
+      "csp": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' tauri: ipc: http://ipc.localhost http://127.0.0.1:8008 http://127.0.0.1:8009 http://127.0.0.1:8011 http://127.0.0.1:8012 https://accumk1.valenceanalytical.com"
     },
     "macOSPrivateApi": true
   },

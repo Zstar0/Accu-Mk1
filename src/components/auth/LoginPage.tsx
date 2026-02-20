@@ -5,6 +5,8 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Activity, Loader2 } from 'lucide-react'
 import { login } from '@/lib/auth-api'
+import { getServerUrl } from '@/lib/api-profiles'
+import { TitleBar } from '@/components/titlebar/TitleBar'
 
 export function LoginPage() {
   const [email, setEmail] = useState('')
@@ -27,7 +29,9 @@ export function LoginPage() {
   }
 
   return (
-    <div className="flex h-screen w-full items-center justify-center bg-background p-4">
+    <div className="flex h-screen w-full flex-col bg-background">
+      <TitleBar />
+      <div className="flex flex-1 items-center justify-center p-4">
       <Card className="w-full max-w-sm">
         <CardHeader className="text-center">
           <div className="mx-auto mb-2 flex h-12 w-12 items-center justify-center rounded-full bg-primary/10">
@@ -67,6 +71,10 @@ export function LoginPage() {
               <p className="text-sm text-destructive text-center">{error}</p>
             )}
 
+            <p className="text-xs text-muted-foreground text-center break-all">
+              API: {getServerUrl()}
+            </p>
+
             <Button type="submit" className="w-full" disabled={isSubmitting}>
               {isSubmitting ? (
                 <>
@@ -80,6 +88,7 @@ export function LoginPage() {
           </form>
         </CardContent>
       </Card>
+      </div>
     </div>
   )
 }
