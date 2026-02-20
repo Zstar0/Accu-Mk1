@@ -262,3 +262,77 @@ class Settings(Base):
 
     def __repr__(self) -> str:
         return f"<Settings(id={self.id}, key='{self.key}')>"
+
+
+class WizardSession(Base):
+    """
+    Wizard session record. One session = one sample prep run.
+    Status lifecycle: 'in_progress' | 'completed'
+
+    declared_weight_mg is stored here (not as WizardMeasurement) because it is
+    a manually entered text value, not a balance reading.
+    """
+    __tablename__ = "wizard_sessions"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    peptide_id: Mapped[int] = mapped_column(ForeignKey("peptides.id"), nullable=False)
+    calibration_curve_id: Mapped[Optional[int]] = mapped_column(ForeignKey("calibration_curves.id"), nullable=True)
+    status: Mapped[str] = mapped_column(String(50), default="in_progress", nullable=False)
+
+    # Step 1: Sample info
+    sample_id_label: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    declared_weight_mg: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+
+    # Step 1b: Target dilution parameters (manually entered)
+    target_conc_ug_ml: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    target_total_vol_ul: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+
+    # Step 4: HPLC results (entered after instrument run)
+    peak_area: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+
+    # Timestamps
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    # Relationships
+    measurements: Mapped[list["WizardMeasurement"]] = relationship(
+        "WizardMeasurement", back_populates="session", cascade="all, delete-orphan"
+    )
+    peptide: Mapped["Peptide"] = relationship("Peptide")
+    calibration_curve: Mapped[Optional["CalibrationCurve"]] = relationship("CalibrationCurve")
+
+    def __repr__(self) -> str:
+        return f"<WizardSession(id={self.id}, status='{self.status}')>"
+
+
+class WizardMeasurement(Base):
+    """
+    Individual balance reading within a wizard session.
+    Re-weighing inserts a NEW record and sets is_current=False on the old one.
+    This preserves the full audit trail.
+
+    step_key values (exactly these 5 strings):
+      'stock_vial_empty_mg'       - Empty stock vial + cap
+      'stock_vial_loaded_mg'      - Stock vial after adding diluent
+      'dil_vial_empty_mg'         - Empty dilution vial + cap
+      'dil_vial_with_diluent_mg'  - Dilution vial after adding diluent
+      'dil_vial_final_mg'         - Dilution vial after adding stock aliquot
+
+    source: 'manual' (Phase 1) | 'scale' (Phase 2 adds this)
+    """
+    __tablename__ = "wizard_measurements"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    session_id: Mapped[int] = mapped_column(ForeignKey("wizard_sessions.id"), nullable=False)
+    step_key: Mapped[str] = mapped_column(String(50), nullable=False)
+    weight_mg: Mapped[float] = mapped_column(Float, nullable=False)
+    source: Mapped[str] = mapped_column(String(20), default="manual", nullable=False)
+    is_current: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    recorded_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    # Relationships
+    session: Mapped["WizardSession"] = relationship("WizardSession", back_populates="measurements")
+
+    def __repr__(self) -> str:
+        return f"<WizardMeasurement(session={self.session_id}, step='{self.step_key}', weight={self.weight_mg})>"
