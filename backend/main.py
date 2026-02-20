@@ -3915,7 +3915,7 @@ async def set_explorer_environment(request: EnvironmentSwitchRequest, _current_u
 
 
 @app.get("/explorer/status", response_model=ExplorerConnectionStatus)
-async def get_explorer_status(_current_user=Depends(get_current_user)):
+def get_explorer_status(_current_user=Depends(get_current_user)):
     """Test connection to Integration Service database."""
     try:
         result = test_connection()
@@ -3925,7 +3925,7 @@ async def get_explorer_status(_current_user=Depends(get_current_user)):
 
 
 @app.get("/explorer/orders", response_model=list[ExplorerOrderResponse])
-async def get_explorer_orders(
+def get_explorer_orders(
     search: Optional[str] = None,
     limit: int = 50,
     offset: int = 0,
@@ -3953,7 +3953,7 @@ async def get_explorer_orders(
 
 
 @app.get("/explorer/orders/{order_id}/ingestions", response_model=list[ExplorerIngestionResponse])
-async def get_order_ingestions(order_id: str, _current_user=Depends(get_current_user)):
+def get_order_ingestions(order_id: str, _current_user=Depends(get_current_user)):
     """
     Get all ingestions for an order from Integration Service database.
     
