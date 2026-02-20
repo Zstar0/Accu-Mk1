@@ -4746,6 +4746,20 @@ async def lookup_senaite_sample(
         data = await _fetch_senaite_sample(id)
 
         if data.get("count", 0) == 0:
+            # Distinguish "sample not found" from "credentials/permissions failure".
+            # If a sanity query (no ID filter) also returns 0, SENAITE auth is broken.
+            url = f"{SENAITE_URL}/senaite/@@API/senaite/v1/AnalysisRequest"
+            async with httpx.AsyncClient(
+                timeout=SENAITE_TIMEOUT,
+                auth=httpx.BasicAuth(SENAITE_USER, SENAITE_PASSWORD),
+            ) as client:
+                sanity = await client.get(url, params={"limit": 1})
+                sanity.raise_for_status()
+                if sanity.json().get("count", 0) == 0:
+                    raise HTTPException(
+                        status_code=503,
+                        detail="SENAITE is currently unavailable \u2014 use manual entry",
+                    )
             raise HTTPException(status_code=404, detail=f"Sample {id} not found in SENAITE")
 
         item = data["items"][0]
