@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-02-19)
 
 **Core value:** Streamlined lab workflow: guide tech through sample prep step-by-step with auto weight capture — stock prep, dilution, ready for HPLC injection.
-**Current focus:** v0.11.0 — New Analysis Wizard, Phase 3 COMPLETE — ready for Phase 4
+**Current focus:** v0.11.0 — New Analysis Wizard, Phase 4 IN PROGRESS — wizard shell complete, step components next
 
 ## Current Position
 
-Phase: 3 of 5 (SSE Weight Streaming) — COMPLETE
-Plan: 1 of 1 in current phase — COMPLETE
-Status: Phase complete — 03-01 done
-Last activity: 2026-02-20 — Completed 03-01-PLAN.md (SSE weight streaming endpoint, useScaleStream hook, WeightInput component)
+Phase: 4 of 5 (Wizard UI) — In progress
+Plan: 1 of 3 in current phase — COMPLETE
+Status: In progress — 04-01 done
+Last activity: 2026-02-20 — Completed 04-01-PLAN.md (PrepWizardStore, wizard API functions, split-panel layout with WizardStepList and WizardStepPanel)
 
-Progress: [████░░░░░░] 40%
+Progress: [█████░░░░░] 50%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 4
-- Average duration: ~7min per plan (estimated)
-- Total execution time: ~25min (Phase 1 + Phase 2 + Phase 3)
+- Total plans completed: 5
+- Average duration: ~5min per plan (estimated)
+- Total execution time: ~27min (Phase 1 + Phase 2 + Phase 3 + Phase 4 plan 1)
 
 **By Phase:**
 
@@ -30,6 +30,7 @@ Progress: [████░░░░░░] 40%
 | 01-wizard-db | 2 | ~10min | ~5min |
 | 02-scale-bridge | 1 | ~4min | ~4min |
 | 03-sse-weight-streaming | 1 | ~10min | ~10min |
+| 04-wizard-ui | 1/3 | ~2min | ~2min |
 
 *Updated after each plan completion*
 
@@ -53,6 +54,10 @@ Progress: [████░░░░░░] 40%
 - SSE error events do NOT break loop — bridge reconnects, client stays connected
 - Stability detection is pure frontend rolling window (5 readings, max-min <= 0.5 mg) — server stays stateless
 - WeightInput uses local state only (not Zustand) — transient UI, not shared, not persisted
+- `stepStates` stored as Zustand field (not computed selector) — stable reference, only re-renders when set() provides new object
+- `deriveStepStates` exported as pure function callable outside the store
+- `setCurrentStep` silently no-ops if target step is locked (no error thrown)
+- `listWizardSessions` returns flat array `Promise<WizardSessionListItem[]>` (not paginated envelope)
 
 ### Key Source Files
 
@@ -61,6 +66,11 @@ Progress: [████░░░░░░] 40%
 - `src/lib/scale-stream.ts` — useScaleStream hook (SSE consumer with stability detection)
 - `src/components/hplc/WeightInput.tsx` — dual-mode weight input (scale SSE / manual)
 - `src/components/hplc/PeptideConfig.tsx` — reference SSE consumer pattern
+- `src/store/wizard-store.ts` — PrepWizardStore with stepStates field, deriveStepStates pure function, WIZARD_STEPS constant
+- `src/lib/api.ts` — All API functions including 6 new wizard endpoints
+- `src/components/hplc/CreateAnalysis.tsx` — WizardPage split-panel layout
+- `src/components/hplc/wizard/WizardStepList.tsx` — Step sidebar with 4-state indicators
+- `src/components/hplc/wizard/WizardStepPanel.tsx` — Animated content wrapper
 
 ### Blockers/Concerns
 
@@ -73,6 +83,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-02-20T04:33:00Z
-Stopped at: Completed 03-01-PLAN.md (Phase 3 plan 01 — SSE weight stream endpoint, useScaleStream hook, WeightInput component)
+Last session: 2026-02-20T05:02:36Z
+Stopped at: Completed 04-01-PLAN.md (Phase 4 plan 01 — PrepWizardStore, wizard API functions, WizardPage split-panel layout)
 Resume file: None
