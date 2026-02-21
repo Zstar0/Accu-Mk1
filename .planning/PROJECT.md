@@ -54,19 +54,26 @@ Streamlined morning workflow: import CSV → review batch → calculate purity �
 - **Logic principle**: Backend owns all scientific calculations — UI never parses files or calculates metrics
 - **Audit principle**: All imports and pushes must be idempotent, traceable, repeatable
 
-## Current Milestone: v0.11.0 — New Analysis Wizard
+## Current State: v0.11.0 SHIPPED 2026-02-20
+
+The New Analysis Wizard is fully delivered. Lab techs can now run a complete sample prep workflow — SENAITE lookup → weighing steps → stock prep → dilution → HPLC results entry — all with scale integration and a full audit-trail session record in SQLite.
+
+**Shipped in v0.11.0:**
+- SENAITE sample lookup with auto-population (peptide, declared weight, analytes)
+- Stripe-style 5-step wizard UI with sequential locking and animated transitions
+- Mettler Toledo XSR105DU scale integration via MT-SICS TCP (SSE live streaming + stability detection)
+- Stock preparation workflow (4 weighing sub-steps + inline calculated outputs)
+- Dilution calculation (3 weighing sub-steps + computed target volumes)
+- Decimal arithmetic throughout (no float precision errors)
+- Session records persisted to SQLite with full measurement audit trail
+- Results entry (peak area → determined conc, dilution factor, peptide mass, purity %)
+- Analysis History tabs (HPLC Import + Sample Prep Wizard sessions)
+
+**Next Milestone:** _Not yet planned — run `/gsd:new-milestone` to start_
+
+## Previous Milestone: v0.11.0 — New Analysis Wizard (COMPLETE)
 
 **Goal:** Guide lab techs step-by-step through HPLC sample prep — stock preparation, dilution, and weighing — with Mettler Toledo scale integration for automatic weight capture, producing a complete session record ready for HPLC injection.
-
-**Target features:**
-- SENAITE sample lookup (pull sample ID, peptide, declared weight)
-- Stripe-style step wizard UI with vertical progress navigation
-- Mettler Toledo XSR105DU scale integration via network (auto-pull stable weight readings)
-- Stock preparation workflow (5 weighing steps + stock concentration calculation)
-- Dilution calculation (compute diluent volume + stock volume to hit target conc/volume)
-- Tech-entered target concentration and total volume
-- Session record persisted to DB (all measurements, calculations, timestamps)
-- Results entry after HPLC run (peak area → purity %, peptide mass)
 
 ## Previous Milestone: v0.6.0 — User Authentication (COMPLETE)
 
@@ -88,6 +95,7 @@ Streamlined morning workflow: import CSV → review batch → calculate purity �
 
 ## Previous Milestones
 
+- **v0.11.0** — New Analysis Wizard (scale integration, sample prep, SENAITE lookup) — [Archive →](.planning/milestones/v0.11.0-new-analysis-wizard.md)
 - **v0.10.0** — COA Explorer, In Progress tab, explorer improvements
 - **v0.9.0** — Calibration accuracy fixes, SharePoint reliability, analysis UX
 - **v0.8.0** — Dashboard, Peptide Config UI overhaul, SharePoint improvements
