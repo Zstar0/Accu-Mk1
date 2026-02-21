@@ -11,6 +11,9 @@ import {
   ArrowLeft,
   Cloud,
   Search,
+  Star,
+  Eye,
+  FlaskConical,
 } from 'lucide-react'
 import {
   Card,
@@ -25,10 +28,23 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from '@/components/ui/popover'
 import { PeakTable } from './PeakTable'
 import { PeptideSelector } from './PeptideSelector'
 import { WeightsForm } from './WeightsForm'
 import { AnalysisResults } from './AnalysisResults'
+import { CalibrationChart } from './CalibrationChart'
 import {
   ChromatogramChart,
   parseChromatogramCsv,
@@ -40,10 +56,12 @@ import {
   runHPLCAnalysis,
   fetchSampleWeights,
   downloadSharePointFiles,
+  getCalibrations,
   type HPLCParseResult,
   type HPLCWeightsInput,
   type HPLCAnalysisResult,
   type PeptideRecord,
+  type CalibrationCurve,
   type WeightExtractionResult,
   type SharePointItem,
 } from '@/lib/api'
@@ -80,6 +98,16 @@ export function NewAnalysis() {
   } | null>(null)
   const [chromatograms, setChromatograms] = useState<ChromatogramTrace[]>([])
 
+  // Blend state: which peptide from a blend is being analyzed
+  const [selectedBlendPeptide, setSelectedBlendPeptide] = useState<string | null>(null)
+  const isBlend = (parseResult?.detected_peptides?.length ?? 0) > 1
+  const blendPeptides = parseResult?.detected_peptides ?? []
+
+  // Filtered injections for current blend peptide (or all if not a blend)
+  const activeInjections = isBlend && selectedBlendPeptide
+    ? parseResult?.injections.filter(inj => inj.peptide_label === selectedBlendPeptide) ?? []
+    : parseResult?.injections ?? []
+
   // Step 2: Configure
   const [sampleId, setSampleId] = useState('')
   const [selectedPeptide, setSelectedPeptide] = useState<PeptideRecord | null>(
@@ -90,6 +118,12 @@ export function NewAnalysis() {
   const [weightsFetched, setWeightsFetched] = useState(false)
   const [weightsLoading, setWeightsLoading] = useState(false)
 
+  // Instrument & curve selection
+  const [allCalibrations, setAllCalibrations] = useState<CalibrationCurve[]>([])
+  const [selectedInstrument, setSelectedInstrument] = useState<string>('1290')
+  const [selectedCurve, setSelectedCurve] = useState<CalibrationCurve | null>(null)
+  const [calibrationsLoading, setCalibrationsLoading] = useState(false)
+
   // SharePoint state
   const [spLoading, setSpLoading] = useState(false)
   const [spFolderName, setSpFolderName] = useState<string | null>(null)
@@ -98,6 +132,72 @@ export function NewAnalysis() {
   const [analyzing, setAnalyzing] = useState(false)
   const [analysisResult, setAnalysisResult] =
     useState<HPLCAnalysisResult | null>(null)
+
+  // Fetch calibrations when peptide changes
+  useEffect(() => {
+    if (!selectedPeptide) {
+      setAllCalibrations([])
+      setSelectedCurve(null)
+      return
+    }
+    setCalibrationsLoading(true)
+    getCalibrations(selectedPeptide.id)
+      .then(cals => {
+        setAllCalibrations(cals)
+        // Auto-select the active curve for the current instrument
+        const activeCurve = cals.find(
+          c => c.is_active && (c.instrument ?? 'unknown') === selectedInstrument
+        )
+        if (activeCurve) {
+          setSelectedCurve(activeCurve)
+        } else {
+          // Fall back to any active curve
+          const anyActive = cals.find(c => c.is_active)
+          if (anyActive) {
+            setSelectedCurve(anyActive)
+            setSelectedInstrument(anyActive.instrument ?? 'unknown')
+          } else {
+            setSelectedCurve(null)
+          }
+        }
+      })
+      .catch(() => {
+        setAllCalibrations([])
+        setSelectedCurve(null)
+      })
+      .finally(() => setCalibrationsLoading(false))
+  }, [selectedPeptide?.id])
+
+  // When instrument changes, auto-select the active curve for that instrument
+  useEffect(() => {
+    if (allCalibrations.length === 0) return
+    const activeCurve = allCalibrations.find(
+      c => c.is_active && (c.instrument ?? 'unknown') === selectedInstrument
+    )
+    if (activeCurve) {
+      setSelectedCurve(activeCurve)
+    } else {
+      // Fall back to most recent curve for this instrument
+      const instrCals = allCalibrations.filter(
+        c => (c.instrument ?? 'unknown') === selectedInstrument
+      )
+      setSelectedCurve(instrCals[0] ?? null)
+    }
+  }, [selectedInstrument, allCalibrations])
+
+  // Helper: populate weight fields from an analyte's data
+  const applyAnalyteWeights = useCallback((analyte: { stock_vial_empty: number | null, stock_vial_with_diluent: number | null, dilution_rows: { dil_vial_empty: number, dil_vial_with_diluent: number, dil_vial_with_diluent_and_sample: number }[] }) => {
+    if (analyte.dilution_rows.length > 0) {
+      const firstDil = analyte.dilution_rows[0]!
+      setWeights({
+        stock_vial_empty: analyte.stock_vial_empty ?? 0,
+        stock_vial_with_diluent: analyte.stock_vial_with_diluent ?? 0,
+        dil_vial_empty: firstDil.dil_vial_empty,
+        dil_vial_with_diluent: firstDil.dil_vial_with_diluent,
+        dil_vial_with_diluent_and_sample: firstDil.dil_vial_with_diluent_and_sample,
+      })
+    }
+  }, [])
 
   // Auto-fetch weights from SharePoint when entering configure step
   useEffect(() => {
@@ -108,28 +208,47 @@ export function NewAnalysis() {
     fetchSampleWeights(sampleId)
       .then(data => {
         setWeightData(data)
+        // For blends with per-analyte sheets, pick the matching analyte
+        if (data.found && data.analytes.length > 1 && selectedBlendPeptide) {
+          const blendLabel = selectedBlendPeptide.toLowerCase().replace(/[-\s]/g, '')
+          const match = data.analytes.find(a =>
+            a.sheet_name.toLowerCase().replace(/[-\s]/g, '').includes(blendLabel) ||
+            blendLabel.includes(a.sheet_name.toLowerCase().replace(/[-\s]/g, ''))
+          )
+          if (match) {
+            applyAnalyteWeights(match)
+            return
+          }
+        }
+        // Non-blend or no match: use top-level weights
         if (data.found && data.dilution_rows.length > 0) {
-          // Auto-populate stock weights + first dilution row
-          const firstDil = data.dilution_rows[0]!
-          setWeights({
-            stock_vial_empty: data.stock_vial_empty ?? 0,
-            stock_vial_with_diluent: data.stock_vial_with_diluent ?? 0,
-            dil_vial_empty: firstDil.dil_vial_empty,
-            dil_vial_with_diluent: firstDil.dil_vial_with_diluent,
-            dil_vial_with_diluent_and_sample: firstDil.dil_vial_with_diluent_and_sample,
-          })
+          applyAnalyteWeights(data)
         }
       })
       .catch(() => {
         // Silent fail — user can still enter manually
       })
       .finally(() => setWeightsLoading(false))
-  }, [step, sampleId, weightsFetched])
+  }, [step, sampleId, weightsFetched, selectedBlendPeptide, applyAnalyteWeights])
+
+  // When blend peptide changes, re-apply weights from the matching analyte sheet
+  useEffect(() => {
+    if (!weightData || !selectedBlendPeptide || weightData.analytes.length <= 1) return
+    const blendLabel = selectedBlendPeptide.toLowerCase().replace(/[-\s]/g, '')
+    const match = weightData.analytes.find(a =>
+      a.sheet_name.toLowerCase().replace(/[-\s]/g, '').includes(blendLabel) ||
+      blendLabel.includes(a.sheet_name.toLowerCase().replace(/[-\s]/g, ''))
+    )
+    if (match) {
+      applyAnalyteWeights(match)
+    }
+  }, [selectedBlendPeptide, weightData, applyAnalyteWeights])
 
   // --- Helpers ---
   const extractSampleId = (filename: string): string | null => {
-    // Match P-XXXX pattern from filenames like "P-0142_Inj_1_PeakData.csv"
-    const match = filename.match(/^(P-\d+)/i)
+    // Match P-XXXX or PB-XXXX pattern from filenames
+    // e.g. "P-0142_Inj_1_PeakData.csv" or "PB-0053_Inj_1_BPC_PeakData.csv"
+    const match = filename.match(/^(PB?-\d+)/i)
     return match?.[1]?.toUpperCase() ?? null
   }
 
@@ -402,12 +521,18 @@ export function NewAnalysis() {
     setAnalyzing(true)
     setError(null)
 
+    // For blends, only send the selected peptide's injections
+    const injToSend = isBlend && selectedBlendPeptide
+      ? parseResult.injections.filter(inj => inj.peptide_label === selectedBlendPeptide)
+      : parseResult.injections
+
     try {
       const result = await runHPLCAnalysis({
         sample_id_label: sampleId.trim() || 'Unknown',
         peptide_id: selectedPeptide.id,
+        calibration_curve_id: selectedCurve?.id,
         weights,
-        injections: parseResult.injections as unknown as Record<
+        injections: injToSend as unknown as Record<
           string,
           unknown
         >[],
@@ -419,7 +544,7 @@ export function NewAnalysis() {
     } finally {
       setAnalyzing(false)
     }
-  }, [parseResult, selectedPeptide, sampleId, weights])
+  }, [parseResult, selectedPeptide, selectedCurve, sampleId, weights, isBlend, selectedBlendPeptide])
 
   const handleReset = useCallback(() => {
     setStep('parse')
@@ -430,11 +555,15 @@ export function NewAnalysis() {
     setChromatograms([])
     setSampleId('')
     setSelectedPeptide(null)
+    setSelectedBlendPeptide(null)
     setWeights(EMPTY_WEIGHTS)
     setWeightData(null)
     setWeightsFetched(false)
     setAnalysisResult(null)
     setSpFolderName(null)
+    setAllCalibrations([])
+    setSelectedInstrument('1290')
+    setSelectedCurve(null)
   }, [])
 
   // --- SharePoint folder selection handler ---
@@ -526,30 +655,44 @@ export function NewAnalysis() {
     parseResult !== null && parseResult.injections.length > 0
   const canRunAnalysis =
     selectedPeptide !== null &&
-    selectedPeptide.active_calibration !== null &&
+    selectedCurve !== null &&
     weights.stock_vial_empty > 0 &&
-    weights.dil_vial_with_diluent_and_sample > 0
+    weights.dil_vial_with_diluent_and_sample > 0 &&
+    (!isBlend || selectedBlendPeptide !== null)
 
   return (
     <ScrollArea className="h-full">
       <div className="flex flex-col gap-6 p-6">
-        {/* Header with step indicator */}
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight">Import Analysis</h1>
-            <p className="text-muted-foreground">
-              {step === 'parse' && 'Step 1: Select a sample folder from SharePoint and parse peaks.'}
-              {step === 'configure' && 'Step 2: Select peptide and enter sample weights.'}
-              {step === 'results' && 'Step 3: Analysis complete.'}
-            </p>
+        {/* Header with sample ID and step indicator */}
+        <div className="flex flex-col gap-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <h1 className="text-2xl font-bold tracking-tight">Import Analysis</h1>
+              {sampleId && (
+                <Badge variant="outline" className="text-base font-mono font-semibold px-3 py-0.5 border-primary/40">
+                  {sampleId}
+                </Badge>
+              )}
+              {isBlend && selectedBlendPeptide && step !== 'parse' && (
+                <Badge className="bg-purple-600 text-white text-xs">
+                  <FlaskConical className="h-3 w-3 mr-1" />
+                  {selectedBlendPeptide}
+                </Badge>
+              )}
+            </div>
+            <div className="flex items-center gap-1 text-sm">
+              <StepDot active={step === 'parse'} done={step !== 'parse'} label="1. Parse" />
+              <ArrowRight className="h-3 w-3 text-muted-foreground" />
+              <StepDot active={step === 'configure'} done={step === 'results'} label="2. Configure" />
+              <ArrowRight className="h-3 w-3 text-muted-foreground" />
+              <StepDot active={step === 'results'} done={false} label="3. Results" />
+            </div>
           </div>
-          <div className="flex items-center gap-1 text-sm">
-            <StepDot active={step === 'parse'} done={step !== 'parse'} label="1. Parse" />
-            <ArrowRight className="h-3 w-3 text-muted-foreground" />
-            <StepDot active={step === 'configure'} done={step === 'results'} label="2. Configure" />
-            <ArrowRight className="h-3 w-3 text-muted-foreground" />
-            <StepDot active={step === 'results'} done={false} label="3. Results" />
-          </div>
+          <p className="text-muted-foreground">
+            {step === 'parse' && 'Step 1: Select a sample folder from SharePoint and parse peaks.'}
+            {step === 'configure' && 'Step 2: Select peptide and enter sample weights.'}
+            {step === 'results' && 'Step 3: Analysis complete.'}
+          </p>
         </div>
 
         {/* Error */}
@@ -695,45 +838,118 @@ export function NewAnalysis() {
             {/* Parsed results preview */}
             {parseResult && parseResult.injections.length > 0 && (
               <>
-                <Card>
-                  <CardHeader>
-                    <div className="flex items-center gap-2">
-                      <CheckCircle2 className="h-5 w-5 text-green-600" />
-                      <CardTitle className="text-base">
-                        Purity (preview)
-                      </CardTitle>
-                    </div>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="flex items-baseline gap-6">
-                      <div>
-                        <span className="text-4xl font-bold tabular-nums">
-                          {parseResult.purity.purity_percent != null
-                            ? parseResult.purity.purity_percent.toFixed(2)
-                            : '—'}
-                        </span>
-                        <span className="ml-1 text-2xl text-muted-foreground">
-                          %
-                        </span>
+                {/* Blend detection banner */}
+                {isBlend && (
+                  <Card className="border-purple-500/50 bg-purple-500/5">
+                    <CardContent className="flex items-center gap-3 py-3">
+                      <div className="flex items-center justify-center h-8 w-8 rounded-full bg-purple-500/10">
+                        <FlaskConical className="h-4 w-4 text-purple-500" />
                       </div>
-                      <div className="flex flex-col gap-1 text-sm text-muted-foreground">
-                        {parseResult.purity.individual_values.map((val, i) => (
-                          <div key={i} className="flex items-center gap-2">
-                            <Badge
-                              variant="outline"
-                              className="font-mono text-xs"
-                            >
-                              {parseResult.purity.injection_names[i]}
+                      <div className="flex-1">
+                        <p className="text-sm font-medium text-purple-700 dark:text-purple-400">
+                          Blend Detected — {blendPeptides.length} peptides
+                        </p>
+                        <div className="flex gap-1.5 mt-1">
+                          {blendPeptides.map(label => (
+                            <Badge key={label} variant="outline" className="text-xs border-purple-500/30">
+                              {label}
                             </Badge>
-                            <span className="font-mono">
-                              {val.toFixed(4)}%
-                            </span>
-                          </div>
-                        ))}
+                          ))}
+                        </div>
                       </div>
-                    </div>
-                  </CardContent>
-                </Card>
+                      <p className="text-xs text-muted-foreground max-w-48">
+                        Each peptide will be analyzed separately in Step 2.
+                      </p>
+                    </CardContent>
+                  </Card>
+                )}
+
+                {/* Purity preview — per-peptide for blends */}
+                {isBlend ? (
+                  <Card>
+                    <CardHeader>
+                      <div className="flex items-center gap-2">
+                        <CheckCircle2 className="h-5 w-5 text-green-600" />
+                        <CardTitle className="text-base">
+                          Purity (preview per peptide)
+                        </CardTitle>
+                      </div>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="flex flex-wrap gap-6">
+                        {blendPeptides.map(label => {
+                          const pepInjs = parseResult.injections.filter(
+                            inj => inj.peptide_label === label
+                          )
+                          const values = pepInjs
+                            .filter(inj => inj.main_peak_index >= 0)
+                            .map(inj => inj.peaks[inj.main_peak_index]!.area_percent)
+                          const avg = values.length > 0
+                            ? values.reduce((a, b) => a + b, 0) / values.length
+                            : null
+                          return (
+                            <div key={label} className="flex flex-col gap-1">
+                              <Badge variant="outline" className="w-fit text-xs border-purple-500/30 mb-1">
+                                {label}
+                              </Badge>
+                              <div className="flex items-baseline gap-1">
+                                <span className="text-2xl font-bold tabular-nums">
+                                  {avg != null ? avg.toFixed(2) : '—'}
+                                </span>
+                                <span className="text-lg text-muted-foreground">%</span>
+                              </div>
+                              <div className="flex flex-col gap-0.5 text-xs text-muted-foreground">
+                                {values.map((val, i) => (
+                                  <span key={i} className="font-mono">{pepInjs[i]?.injection_name}: {val.toFixed(4)}%</span>
+                                ))}
+                              </div>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </CardContent>
+                  </Card>
+                ) : (
+                  <Card>
+                    <CardHeader>
+                      <div className="flex items-center gap-2">
+                        <CheckCircle2 className="h-5 w-5 text-green-600" />
+                        <CardTitle className="text-base">
+                          Purity (preview)
+                        </CardTitle>
+                      </div>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="flex items-baseline gap-6">
+                        <div>
+                          <span className="text-4xl font-bold tabular-nums">
+                            {parseResult.purity.purity_percent != null
+                              ? parseResult.purity.purity_percent.toFixed(2)
+                              : '—'}
+                          </span>
+                          <span className="ml-1 text-2xl text-muted-foreground">
+                            %
+                          </span>
+                        </div>
+                        <div className="flex flex-col gap-1 text-sm text-muted-foreground">
+                          {parseResult.purity.individual_values.map((val, i) => (
+                            <div key={i} className="flex items-center gap-2">
+                              <Badge
+                                variant="outline"
+                                className="font-mono text-xs"
+                              >
+                                {parseResult.purity.injection_names[i]}
+                              </Badge>
+                              <span className="font-mono">
+                                {val.toFixed(4)}%
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+                )}
 
                 {chromatograms.length > 0 && (
                   <ChromatogramChart
@@ -787,7 +1003,13 @@ export function NewAnalysis() {
 
                 <div className="flex justify-end">
                   <Button
-                    onClick={() => setStep('configure')}
+                    onClick={() => {
+                      // Auto-select first blend peptide when transitioning
+                      if (isBlend && !selectedBlendPeptide && blendPeptides.length > 0) {
+                        setSelectedBlendPeptide(blendPeptides[0]!)
+                      }
+                      setStep('configure')
+                    }}
                     disabled={!canProceedToConfigure}
                     className="gap-2"
                   >
@@ -803,12 +1025,53 @@ export function NewAnalysis() {
         {/* STEP 2: Configure */}
         {step === 'configure' && (
           <>
+            {/* Blend peptide selector */}
+            {isBlend && (
+              <Card className="border-purple-500/50">
+                <CardContent className="flex items-center gap-4 py-3">
+                  <div className="flex items-center gap-2">
+                    <FlaskConical className="h-4 w-4 text-purple-500" />
+                    <span className="text-sm font-medium">Analyzing peptide:</span>
+                  </div>
+                  <div className="flex gap-1.5">
+                    {blendPeptides.map(label => (
+                      <Button
+                        key={label}
+                        size="sm"
+                        variant={selectedBlendPeptide === label ? 'default' : 'outline'}
+                        className={selectedBlendPeptide === label
+                          ? 'bg-purple-600 hover:bg-purple-700 text-white'
+                          : 'border-purple-500/30 text-purple-700 dark:text-purple-400'
+                        }
+                        onClick={() => {
+                          setSelectedBlendPeptide(label)
+                          // Reset peptide/curve selection for new blend peptide
+                          setSelectedPeptide(null)
+                          setSelectedCurve(null)
+                          setAllCalibrations([])
+                        }}
+                      >
+                        {label}
+                      </Button>
+                    ))}
+                  </div>
+                  {selectedBlendPeptide && (
+                    <span className="text-xs text-muted-foreground ml-auto">
+                      {activeInjections.length} injection{activeInjections.length !== 1 ? 's' : ''}
+                    </span>
+                  )}
+                </CardContent>
+              </Card>
+            )}
+
             {/* SharePoint search status banner */}
             {weightsLoading && (
               <Card className="border-blue-500/50 bg-blue-500/5">
                 <CardContent className="flex items-center gap-3 py-3">
-                  <div className="flex items-center justify-center h-8 w-8 rounded-full bg-blue-500/10">
-                    <Search className="h-4 w-4 text-blue-500 animate-pulse" />
+                  <div className="relative flex items-center justify-center h-8 w-8">
+                    <div className="absolute inset-0 rounded-full border-2 border-blue-500/20" />
+                    <div className="absolute inset-0 rounded-full border-2 border-transparent border-t-blue-500 animate-spin" />
+                    <Search className="h-3.5 w-3.5 text-blue-500" />
                   </div>
                   <div>
                     <p className="text-sm font-medium">Searching SharePoint...</p>
@@ -844,7 +1107,20 @@ export function NewAnalysis() {
                           Found sample in <span className="font-mono">{weightData.peptide_folder}</span>
                         </p>
                         <p className="text-xs text-muted-foreground">
-                          Auto-loaded {weightData.dilution_rows.length} dilution row(s) from {weightData.excel_filename}
+                          {weightData.analytes.length > 1
+                            ? `${weightData.analytes.length} analyte sheets in ${weightData.excel_filename}`
+                            : `Auto-loaded from ${weightData.excel_filename}`
+                          }
+                          {weightData.analytes.length > 1 && selectedBlendPeptide && (() => {
+                            const blendLabel = selectedBlendPeptide.toLowerCase().replace(/[-\s]/g, '')
+                            const match = weightData.analytes.find(a =>
+                              a.sheet_name.toLowerCase().replace(/[-\s]/g, '').includes(blendLabel) ||
+                              blendLabel.includes(a.sheet_name.toLowerCase().replace(/[-\s]/g, ''))
+                            )
+                            return match
+                              ? ` — using sheet "${match.sheet_name}"`
+                              : ''
+                          })()}
                         </p>
                       </>
                     ) : (
@@ -879,25 +1155,19 @@ export function NewAnalysis() {
                   value={selectedPeptide?.id ?? null}
                   onChange={setSelectedPeptide}
                   autoSelectFolder={weightData?.peptide_folder}
+                  autoSelectLabel={selectedBlendPeptide}
                 />
-                {selectedPeptide && !selectedPeptide.active_calibration && (
-                  <p className="text-sm text-destructive">
-                    This peptide has no active calibration curve. Add one in
-                    Peptide Config first.
-                  </p>
-                )}
-                {selectedPeptide?.active_calibration && (
-                  <div className="rounded-md bg-muted/50 p-3 text-sm">
-                    <p className="font-mono">
-                      Area = {selectedPeptide.active_calibration.slope.toFixed(4)}{' '}
-                      × Conc +{' '}
-                      {selectedPeptide.active_calibration.intercept.toFixed(4)}
-                    </p>
-                    <p className="text-xs text-muted-foreground">
-                      R² ={' '}
-                      {selectedPeptide.active_calibration.r_squared.toFixed(6)}
-                    </p>
-                  </div>
+                {/* Instrument & Curve Selection */}
+                {selectedPeptide && (
+                  <CurveSelector
+                    allCalibrations={allCalibrations}
+                    selectedInstrument={selectedInstrument}
+                    selectedCurve={selectedCurve}
+                    loading={calibrationsLoading}
+                    onInstrumentChange={setSelectedInstrument}
+                    onCurveChange={setSelectedCurve}
+                    matchingCurveIds={weightData?.tech_calibration?.matching_curve_ids ?? []}
+                  />
                 )}
               </CardContent>
             </Card>
@@ -926,10 +1196,10 @@ export function NewAnalysis() {
                 {weightData?.found && weightData.dilution_rows.length > 1 && (
                   <div className="space-y-1">
                     <Label className="text-xs">Standard Concentration</Label>
-                    <select
-                      className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring font-mono"
-                      onChange={e => {
-                        const idx = parseInt(e.target.value)
+                    <Select
+                      defaultValue="0"
+                      onValueChange={val => {
+                        const idx = parseInt(val)
                         const row = weightData.dilution_rows[idx]
                         if (row) {
                           setWeights(prev => ({
@@ -941,12 +1211,17 @@ export function NewAnalysis() {
                         }
                       }}
                     >
-                      {weightData.dilution_rows.map((row, i) => (
-                        <option key={i} value={i}>
-                          {row.label}
-                        </option>
-                      ))}
-                    </select>
+                      <SelectTrigger className="font-mono">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {weightData.dilution_rows.map((row, i) => (
+                          <SelectItem key={i} value={String(i)} className="font-mono">
+                            {row.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                   </div>
                 )}
                 <WeightsForm
@@ -986,6 +1261,30 @@ export function NewAnalysis() {
           <>
             <AnalysisResults result={analysisResult} chromatograms={chromatograms} />
             <div className="flex gap-2">
+              {/* For blends, offer to analyze next peptide */}
+              {isBlend && (() => {
+                const currentIdx = blendPeptides.indexOf(selectedBlendPeptide ?? '')
+                const nextLabel = currentIdx >= 0 && currentIdx < blendPeptides.length - 1
+                  ? blendPeptides[currentIdx + 1]
+                  : null
+                return nextLabel ? (
+                  <Button
+                    onClick={() => {
+                      setSelectedBlendPeptide(nextLabel)
+                      setSelectedPeptide(null)
+                      setSelectedCurve(null)
+                      setAllCalibrations([])
+                      setAnalysisResult(null)
+                      setStep('configure')
+                    }}
+                    className="gap-2 bg-purple-600 hover:bg-purple-700"
+                  >
+                    <FlaskConical className="h-4 w-4" />
+                    Analyze {nextLabel}
+                    <ArrowRight className="h-4 w-4" />
+                  </Button>
+                ) : null
+              })()}
               <Button variant="outline" onClick={handleReset}>
                 Import Another
               </Button>
@@ -994,6 +1293,219 @@ export function NewAnalysis() {
         )}
       </div>
     </ScrollArea>
+  )
+}
+
+function CurveSelector({
+  allCalibrations,
+  selectedInstrument,
+  selectedCurve,
+  loading,
+  onInstrumentChange,
+  onCurveChange,
+  matchingCurveIds = [],
+}: {
+  allCalibrations: CalibrationCurve[]
+  selectedInstrument: string
+  selectedCurve: CalibrationCurve | null
+  loading: boolean
+  onInstrumentChange: (inst: string) => void
+  onCurveChange: (curve: CalibrationCurve | null) => void
+  matchingCurveIds?: number[]
+}) {
+  const instrumentOrder = ['1290', '1260', 'unknown']
+  const instruments = instrumentOrder.filter(inst =>
+    allCalibrations.some(c => (c.instrument ?? 'unknown') === inst)
+  )
+
+  const instrumentCals = allCalibrations.filter(
+    c => (c.instrument ?? 'unknown') === selectedInstrument
+  )
+
+  if (loading) {
+    return (
+      <div className="flex items-center gap-2 text-sm text-muted-foreground py-2">
+        <Loader2 className="h-4 w-4 animate-spin" />
+        Loading calibration curves...
+      </div>
+    )
+  }
+
+  if (allCalibrations.length === 0) {
+    return (
+      <p className="text-sm text-destructive">
+        This peptide has no calibration curves. Add one in Peptide Standards first.
+      </p>
+    )
+  }
+
+  const formatDate = (dateStr: string) =>
+    new Date(dateStr).toLocaleDateString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+    })
+
+  return (
+    <div className="flex flex-col gap-3">
+      {/* Instrument selector */}
+      {instruments.length > 1 && (
+        <div className="flex items-center gap-2">
+          <Label className="text-xs text-muted-foreground shrink-0">Instrument</Label>
+          <div className="flex items-center gap-1">
+            {instruments.map(inst => (
+              <button
+                key={inst}
+                onClick={() => onInstrumentChange(inst)}
+                className={`px-2.5 py-1 rounded text-xs font-mono border transition-colors ${
+                  selectedInstrument === inst
+                    ? 'bg-primary text-primary-foreground border-primary'
+                    : 'border-border text-muted-foreground hover:text-foreground hover:border-foreground/40'
+                }`}
+              >
+                {inst}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Curve selector */}
+      {instrumentCals.length === 0 ? (
+        <p className="text-sm text-destructive">
+          No calibration curves for instrument {selectedInstrument}.
+        </p>
+      ) : (
+        <div className="flex flex-col gap-2">
+          {instrumentCals.map(cal => {
+            const isSelected = selectedCurve?.id === cal.id
+            const displayDate = cal.source_date || cal.created_at
+            const isTechMatch = matchingCurveIds.includes(cal.id)
+            return (
+              <button
+                key={cal.id}
+                onClick={() => onCurveChange(cal)}
+                className={`flex items-center gap-3 rounded-md border px-3 py-2.5 text-left transition-colors ${
+                  isSelected
+                    ? 'border-primary/50 bg-primary/5 ring-1 ring-primary/20'
+                    : 'border-border bg-card hover:bg-accent/50'
+                }`}
+              >
+                <div className="flex items-center gap-2 flex-1 min-w-0">
+                  {cal.is_active && (
+                    <Star className="h-3.5 w-3.5 text-amber-500 fill-amber-500 shrink-0" />
+                  )}
+                  <div className="flex flex-col min-w-0">
+                    <div className="flex items-center gap-2">
+                      {cal.is_active && (
+                        <Badge variant="default" className="text-[10px] px-1.5 py-0">
+                          Active
+                        </Badge>
+                      )}
+                      {isTechMatch && (
+                        <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-emerald-500/50 text-emerald-500">
+                          Tech Match
+                        </Badge>
+                      )}
+                      <span className="font-mono text-sm truncate">
+                        y = {cal.slope.toFixed(4)}x + {cal.intercept.toFixed(4)}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                      <span>R² = {cal.r_squared.toFixed(6)}</span>
+                      <span>•</span>
+                      <span>{formatDate(displayDate)}</span>
+                      {cal.source_filename && (
+                        <>
+                          <span>•</span>
+                          <span className="truncate">{cal.source_filename}</span>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Preview button */}
+                {cal.standard_data && cal.standard_data.concentrations.length > 0 && (
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 w-7 p-0 shrink-0"
+                        onClick={e => e.stopPropagation()}
+                      >
+                        <Eye className="h-3.5 w-3.5" />
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent side="left" align="center" className="w-[400px] p-3 max-h-[480px] overflow-auto">
+                      <div className="flex flex-col gap-3">
+                        <p className="text-xs font-medium text-muted-foreground">
+                          Calibration Curve Preview
+                        </p>
+                        <CalibrationChart
+                          concentrations={cal.standard_data.concentrations}
+                          areas={cal.standard_data.areas}
+                          slope={cal.slope}
+                          intercept={cal.intercept}
+                        />
+                        <div className="text-xs font-mono text-center text-muted-foreground">
+                          y = {cal.slope.toFixed(4)}x + {cal.intercept.toFixed(4)} • R² = {cal.r_squared.toFixed(6)}
+                        </div>
+                        {/* Standard data table */}
+                        <table className="w-full text-xs">
+                          <thead>
+                            <tr className="border-b text-muted-foreground">
+                              <th className="py-1 text-left font-medium w-8">#</th>
+                              <th className="py-1 text-right font-medium">Conc (µg/mL)</th>
+                              <th className="py-1 text-right font-medium">Area</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {cal.standard_data.concentrations.map((conc, i) => (
+                              <tr key={i} className="border-b border-border/50">
+                                <td className="py-1 font-mono text-muted-foreground">{i + 1}</td>
+                                <td className="py-1 text-right font-mono">{conc.toFixed(2)}</td>
+                                <td className="py-1 text-right font-mono">
+                                  {cal.standard_data!.areas[i] != null
+                                    ? cal.standard_data!.areas[i].toFixed(3)
+                                    : '—'}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </PopoverContent>
+                  </Popover>
+                )}
+
+                {/* Selection indicator */}
+                {isSelected && (
+                  <div className="h-2 w-2 rounded-full bg-primary shrink-0" />
+                )}
+              </button>
+            )
+          })}
+        </div>
+      )}
+
+      {/* Selected curve summary */}
+      {selectedCurve && (
+        <div className="rounded-md bg-muted/50 p-3 text-sm">
+          <p className="font-mono">
+            Area = {selectedCurve.slope.toFixed(4)} × Conc +{' '}
+            {selectedCurve.intercept.toFixed(4)}
+          </p>
+          <p className="text-xs text-muted-foreground">
+            R² = {selectedCurve.r_squared.toFixed(6)}
+            {selectedCurve.instrument && (
+              <span> • Instrument: {selectedCurve.instrument}</span>
+            )}
+          </p>
+        </div>
+      )}
+    </div>
   )
 }
 

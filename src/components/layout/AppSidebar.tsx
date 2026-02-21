@@ -8,7 +8,9 @@ import {
   Users,
   LogOut,
   LayoutDashboard,
+  RefreshCw,
 } from 'lucide-react'
+import { relaunch } from '@tauri-apps/plugin-process'
 import {
   Collapsible,
   CollapsibleContent,
@@ -55,6 +57,10 @@ const navItems: NavItem[] = [
     id: 'dashboard',
     label: 'Dashboard',
     icon: LayoutDashboard,
+    subItems: [
+      { id: 'orders', label: 'Orders' },
+      { id: 'analytics', label: 'Analytics' },
+    ],
   },
   {
     id: 'lab-operations',
@@ -102,6 +108,8 @@ export function AppSidebar() {
   const activeSubSection = useUIStore(state => state.activeSubSection)
   const navigateTo = useUIStore(state => state.navigateTo)
   const setPreferencesOpen = useUIStore(state => state.setPreferencesOpen)
+  const updateVersion = useUIStore(state => state.updateVersion)
+  const updateReady = useUIStore(state => state.updateReady)
   const user = useAuthStore(state => state.user)
   const isAdmin = user?.role === 'admin'
 
@@ -197,6 +205,18 @@ export function AppSidebar() {
       </SidebarContent>
 
       <SidebarFooter className="border-t border-sidebar-border">
+        {updateReady && (
+          <button
+            type="button"
+            onClick={() => relaunch()}
+            className="mx-2 mb-1 flex items-center gap-2 rounded-md bg-primary px-3 py-2 text-xs font-medium text-primary-foreground hover:bg-primary/90 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-2"
+          >
+            <RefreshCw className="h-3.5 w-3.5 shrink-0" />
+            <span className="group-data-[collapsible=icon]:hidden">
+              v{updateVersion} ready — Restart to update
+            </span>
+          </button>
+        )}
         <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton

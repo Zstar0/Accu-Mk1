@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { getVersion } from '@tauri-apps/api/app'
 import {
   SidebarProvider,
   SidebarInset,
@@ -29,6 +30,7 @@ type BackendStatus =
 
 export function MainWindow() {
   const { theme } = useTheme()
+  const [appVersion, setAppVersion] = useState<string>('')
   const [envName, setEnvName] = useState<string | null>(null)
   const [isOverridden, setIsOverridden] = useState(false)
   const [backendStatus, setBackendStatus] = useState<BackendStatus>({
@@ -37,6 +39,10 @@ export function MainWindow() {
 
   // Set up global event listeners (keyboard shortcuts, etc.)
   useMainWindowEventListeners()
+
+  useEffect(() => {
+    getVersion().then(setAppVersion).catch(() => {})
+  }, [])
 
   // Track active environment and backend status
   useEffect(() => {
@@ -160,7 +166,7 @@ export function MainWindow() {
 
         {/* Version footer */}
         <div className="absolute bottom-1 left-1/2 -translate-x-1/2 text-xs text-muted-foreground/50 flex items-center gap-2 select-none pointer-events-none">
-          <span>Accu-Mk1 Ver. 0.8.0</span>
+          <span>Accu-Mk1 v{appVersion}</span>
           <span>•</span>
           {renderStatusText()}
         </div>

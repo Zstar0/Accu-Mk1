@@ -25,7 +25,7 @@ jobs:
           - platform: 'macos-latest'
             args: '--bundles app,dmg'
           - platform: 'windows-latest'
-            args: '--bundles msi'
+            args: '--bundles nsis'
           - platform: 'ubuntu-22.04'
             args: '--bundles appimage'
 

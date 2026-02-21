@@ -1,6 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
 import {
-  Plus,
   Loader2,
   ChevronDown,
   ChevronUp,
@@ -18,8 +17,6 @@ import {
 } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
 import {
   Table,
   TableBody,
@@ -30,7 +27,6 @@ import {
 } from '@/components/ui/table'
 import { CalibrationChart } from './CalibrationChart'
 import {
-  createCalibration,
   getCalibrations,
   type PeptideRecord,
   type CalibrationCurve,
@@ -49,9 +45,8 @@ export function CalibrationPanel({
 }: CalibrationPanelProps) {
   const [allCalibrations, setAllCalibrations] = useState<CalibrationCurve[]>([])
   const [loading, setLoading] = useState(true)
-  const [showAddForm, setShowAddForm] = useState(false)
   const [expandedId, setExpandedId] = useState<number | null>(null)
-  const [instrumentFilter, setInstrumentFilter] = useState<string>('all')
+  const [instrumentFilter, setInstrumentFilter] = useState<string>('1290')
 
   // Load all calibrations for this peptide
   const loadCalibrations = useCallback(async () => {
@@ -75,15 +70,18 @@ export function CalibrationPanel({
     loadCalibrations()
   }, [loadCalibrations])
 
-  // Unique instruments present across all curves (null → 'unknown')
-  const instruments = [...new Set(allCalibrations.map(c => c.instrument ?? 'unknown'))]
+  // Instruments in preferred order: 1290, 1260, unknown
+  const instrumentOrder = ['1290', '1260', 'unknown']
+  const instruments = instrumentOrder.filter(inst =>
+    allCalibrations.some(c => (c.instrument ?? 'unknown') === inst)
+  )
   const showFilter = instruments.length > 1
 
   const filteredCals = instrumentFilter === 'all'
     ? allCalibrations
     : allCalibrations.filter(c => (c.instrument ?? 'unknown') === instrumentFilter)
 
-  const activeCal = filteredCals.find(c => c.is_active)
+  const activeCals = filteredCals.filter(c => c.is_active)
   const inactiveCals = filteredCals.filter(c => !c.is_active)
 
   return (
@@ -99,15 +97,6 @@ export function CalibrationPanel({
               {peptide.name}
             </CardDescription>
           </div>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setShowAddForm(!showAddForm)}
-            className="gap-1"
-          >
-            <Plus className="h-3.5 w-3.5" />
-            {showAddForm ? 'Cancel' : 'New Calibration'}
-          </Button>
         </div>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
@@ -135,23 +124,11 @@ export function CalibrationPanel({
           </div>
         </div>
 
-        {/* Add calibration form */}
-        {showAddForm && (
-          <CalibrationDataForm
-            peptideId={peptide.id}
-            onSaved={() => {
-              setShowAddForm(false)
-              loadCalibrations()
-              onUpdated()
-            }}
-          />
-        )}
-
         {/* Instrument filter — only shown when multiple instruments exist */}
         {!loading && showFilter && (
           <div className="flex items-center gap-1.5">
             <span className="text-xs text-muted-foreground">Instrument:</span>
-            {['all', ...instruments].map(inst => (
+            {instruments.map(inst => (
               <button
                 key={inst}
                 onClick={() => setInstrumentFilter(inst)}
@@ -175,25 +152,17 @@ export function CalibrationPanel({
         ) : allCalibrations.length === 0 ? (
           <div className="flex flex-col items-center gap-2 py-6 text-muted-foreground">
             <p className="text-sm">No calibration curves yet</p>
-            {!showAddForm && (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setShowAddForm(true)}
-              >
-                Add calibration data
-              </Button>
-            )}
           </div>
         ) : (
           <div className="flex flex-col gap-3">
-            {/* Active calibration — always shown first */}
-            {activeCal && (
+            {/* Active calibrations — always shown first */}
+            {activeCals.map(cal => (
               <CalibrationRow
-                calibration={activeCal}
-                isExpanded={expandedId === activeCal.id}
+                key={cal.id}
+                calibration={cal}
+                isExpanded={expandedId === cal.id}
                 onToggle={() =>
-                  setExpandedId(expandedId === activeCal.id ? null : activeCal.id)
+                  setExpandedId(expandedId === cal.id ? null : cal.id)
                 }
                 onSetActive={undefined}
                 peptideId={peptide.id}
@@ -202,7 +171,7 @@ export function CalibrationPanel({
                   onUpdated()
                 }}
               />
-            )}
+            ))}
 
             {/* Previous calibrations */}
             {inactiveCals.length > 0 && (
@@ -409,157 +378,5 @@ function CalibrationRow({
         </div>
       )}
     </div>
-  )
-}
-
-
-function CalibrationDataForm({
-  peptideId,
-  onSaved,
-}: {
-  peptideId: number
-  onSaved: () => void
-}) {
-  const [rows, setRows] = useState<{ conc: string; area: string }[]>([
-    { conc: '', area: '' },
-    { conc: '', area: '' },
-    { conc: '', area: '' },
-    { conc: '', area: '' },
-    { conc: '', area: '' },
-  ])
-  const [sourceFilename, setSourceFilename] = useState('')
-  const [saving, setSaving] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-
-  const updateRow = useCallback(
-    (index: number, field: 'conc' | 'area', value: string) => {
-      setRows(prev => {
-        const next = [...prev]
-        const row = next[index]!
-        next[index] = { conc: row.conc, area: row.area, [field]: value }
-        return next
-      })
-    },
-    []
-  )
-
-  const addRow = useCallback(() => {
-    setRows(prev => [...prev, { conc: '', area: '' }])
-  }, [])
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    setError(null)
-
-    // Filter to rows with both values
-    const validRows = rows.filter(
-      r => r.conc.trim() !== '' && r.area.trim() !== ''
-    )
-    if (validRows.length < 2) {
-      setError('Need at least 2 data points')
-      return
-    }
-
-    const concentrations = validRows.map(r => parseFloat(r.conc))
-    const areas = validRows.map(r => parseFloat(r.area))
-
-    if (concentrations.some(isNaN) || areas.some(isNaN)) {
-      setError('All values must be valid numbers')
-      return
-    }
-
-    setSaving(true)
-    try {
-      await createCalibration(peptideId, {
-        concentrations,
-        areas,
-        source_filename: sourceFilename.trim() || undefined,
-      })
-      onSaved()
-    } catch (err) {
-      setError(
-        err instanceof Error ? err.message : 'Failed to create calibration'
-      )
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  return (
-    <Card className="border-primary/30">
-      <CardHeader className="pb-2">
-        <CardTitle className="text-sm">Enter Calibration Data</CardTitle>
-        <CardDescription className="text-xs">
-          Enter concentration (µg/mL) and peak area for each standard level
-        </CardDescription>
-      </CardHeader>
-      <CardContent>
-        <form onSubmit={handleSubmit} className="flex flex-col gap-3">
-          <div className="space-y-2">
-            <Label className="text-xs">Source filename (optional)</Label>
-            <Input
-              placeholder="e.g., KPV_Calibration_Curve_1290.xlsx"
-              value={sourceFilename}
-              onChange={e => setSourceFilename(e.target.value)}
-              className="h-8 text-sm"
-            />
-          </div>
-
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead className="w-12 text-xs">#</TableHead>
-                <TableHead className="text-xs">Conc (µg/mL)</TableHead>
-                <TableHead className="text-xs">Area</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {rows.map((row, i) => (
-                <TableRow key={i}>
-                  <TableCell className="font-mono text-xs">{i + 1}</TableCell>
-                  <TableCell className="p-1">
-                    <Input
-                      type="number"
-                      step="any"
-                      placeholder="998.83"
-                      value={row.conc}
-                      onChange={e => updateRow(i, 'conc', e.target.value)}
-                      className="h-7 font-mono text-xs"
-                    />
-                  </TableCell>
-                  <TableCell className="p-1">
-                    <Input
-                      type="number"
-                      step="any"
-                      placeholder="6060.778"
-                      value={row.area}
-                      onChange={e => updateRow(i, 'area', e.target.value)}
-                      className="h-7 font-mono text-xs"
-                    />
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            onClick={addRow}
-            className="self-start text-xs"
-          >
-            + Add row
-          </Button>
-
-          {error && <p className="text-xs text-destructive">{error}</p>}
-
-          <Button type="submit" size="sm" disabled={saving}>
-            {saving && <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />}
-            {saving ? 'Calculating...' : 'Calculate & Save'}
-          </Button>
-        </form>
-      </CardContent>
-    </Card>
   )
 }

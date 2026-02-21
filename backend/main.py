@@ -1207,6 +1207,7 @@ class PeakResponse(BaseModel):
 class InjectionResponse(BaseModel):
     """Response for one injection's parsed data."""
     injection_name: str
+    peptide_label: str = ""
     peaks: list[PeakResponse]
     total_area: float
     main_peak_index: int
@@ -1226,6 +1227,7 @@ class HPLCParseResponse(BaseModel):
     injections: list[InjectionResponse]
     purity: PurityResponse
     errors: list[str]
+    detected_peptides: list[str] = []
 
 
 @app.post("/hplc/parse-files", response_model=HPLCParseResponse)
@@ -1261,15 +1263,22 @@ async def parse_hplc_peakdata(request: HPLCParseBrowserRequest, _current_user=De
         ]
         injections_resp.append(InjectionResponse(
             injection_name=inj.injection_name,
+            peptide_label=inj.peptide_label,
             peaks=peaks_resp,
             total_area=inj.total_area,
             main_peak_index=inj.main_peak_index,
         ))
 
+    # Collect unique peptide labels (non-empty) for blend detection
+    detected_peptides = sorted(set(
+        inj.peptide_label for inj in result.injections if inj.peptide_label
+    ))
+
     return HPLCParseResponse(
         injections=injections_resp,
         purity=PurityResponse(**purity),
         errors=result.errors,
+        detected_peptides=detected_peptides,
     )
 
 
@@ -1625,6 +1634,7 @@ class HPLCAnalyzeRequest(BaseModel):
     """Request to run a full HPLC analysis."""
     sample_id_label: str
     peptide_id: int
+    calibration_curve_id: Optional[int] = None  # If provided, use this specific curve
     weights: HPLCWeightsInput
     injections: list[dict]  # Parsed injection data from /hplc/parse-files
 
@@ -1664,16 +1674,25 @@ async def run_hplc_analysis(
     if not peptide:
         raise HTTPException(404, f"Peptide {request.peptide_id} not found")
 
-    # Load active calibration
-    cal = db.execute(
-        select(CalibrationCurve)
-        .where(CalibrationCurve.peptide_id == peptide.id)
-        .where(CalibrationCurve.is_active == True)
-        .order_by(desc(CalibrationCurve.created_at))
-        .limit(1)
-    ).scalar_one_or_none()
-    if not cal:
-        raise HTTPException(400, f"No active calibration curve for peptide '{peptide.abbreviation}'")
+    # Load calibration curve: use specific one if requested, else fall back to active
+    if request.calibration_curve_id:
+        cal = db.execute(
+            select(CalibrationCurve)
+            .where(CalibrationCurve.id == request.calibration_curve_id)
+            .where(CalibrationCurve.peptide_id == peptide.id)
+        ).scalar_one_or_none()
+        if not cal:
+            raise HTTPException(404, f"Calibration curve {request.calibration_curve_id} not found for peptide '{peptide.abbreviation}'")
+    else:
+        cal = db.execute(
+            select(CalibrationCurve)
+            .where(CalibrationCurve.peptide_id == peptide.id)
+            .where(CalibrationCurve.is_active == True)
+            .order_by(desc(CalibrationCurve.created_at))
+            .limit(1)
+        ).scalar_one_or_none()
+        if not cal:
+            raise HTTPException(400, f"No active calibration curve for peptide '{peptide.abbreviation}'")
 
     # Resolve reference RT: prefer peptide setting, fall back to calibration standard RTs
     ref_rt = peptide.reference_rt
@@ -3463,6 +3482,25 @@ class DilutionRow(BaseModel):
     dil_vial_with_diluent_and_sample: float
 
 
+class TechCalibrationData(BaseModel):
+    """Calibration curve data extracted from the tech's working Excel file."""
+    concentrations: list[float]
+    areas: list[float]
+    slope: float
+    intercept: float
+    r_squared: float
+    n_points: int
+    matching_curve_ids: list[int] = []  # IDs of stored curves that match
+
+
+class AnalyteWeights(BaseModel):
+    """Weight data for a single analyte in a blend."""
+    sheet_name: str
+    stock_vial_empty: Optional[float] = None
+    stock_vial_with_diluent: Optional[float] = None
+    dilution_rows: list[DilutionRow] = []
+
+
 class WeightExtractionResponse(BaseModel):
     """Extracted weight data from a lab Excel file."""
     found: bool
@@ -3472,6 +3510,8 @@ class WeightExtractionResponse(BaseModel):
     stock_vial_empty: Optional[float] = None
     stock_vial_with_diluent: Optional[float] = None
     dilution_rows: list[DilutionRow] = []
+    tech_calibration: Optional[TechCalibrationData] = None
+    analytes: list[AnalyteWeights] = []
     error: Optional[str] = None
 
 
@@ -3479,10 +3519,15 @@ def _extract_weights_from_excel_bytes(data: bytes) -> dict:
     """
     Parse a lab HPLC Excel file (bytes) for stock + dilution weights.
 
-    Tries multiple layout strategies in order:
+    For blend Excel files with per-analyte tabs, collects data from ALL sheets
+    into an 'analytes' list. The top-level fields are populated from the first
+    sheet that has data.
+
+    Tries multiple layout strategies in order per sheet:
     1. F/G/H columns with "Stock" label in col E
-    2. Header-label scan: finds rows with "vial and cap" / "vial cap and diluent" headers
-    3. Alternate layout: A/B labels for stock, C/E/H for dilution data
+    2. "Peptide Sample Stock Preparation" section header
+    3. Header-label scan: rows with "vial and cap" / "vial cap and diluent" headers
+    4. Alternate layout: A/B labels for stock, C/E/H for dilution data
     """
     import openpyxl
     from io import BytesIO
@@ -3492,6 +3537,7 @@ def _extract_weights_from_excel_bytes(data: bytes) -> dict:
         "stock_vial_empty": None,
         "stock_vial_with_diluent": None,
         "dilution_rows": [],
+        "analytes": [],
     }
 
     max_scan_row = 70  # Some files have weight data past row 40
@@ -3531,13 +3577,128 @@ def _extract_weights_from_excel_bytes(data: bytes) -> dict:
                 })
 
         if dilutions:
-            result["stock_vial_empty"] = stock_empty
-            result["stock_vial_with_diluent"] = stock_diluent
-            result["dilution_rows"] = dilutions
-            wb.close()
-            return result
+            # Record this sheet's data as an analyte
+            result["analytes"].append({
+                "sheet_name": sheet_name,
+                "stock_vial_empty": stock_empty,
+                "stock_vial_with_diluent": stock_diluent,
+                "dilution_rows": dilutions,
+            })
+            # Populate top-level from the first sheet that has data
+            if result["stock_vial_empty"] is None:
+                result["stock_vial_empty"] = stock_empty
+                result["stock_vial_with_diluent"] = stock_diluent
+                result["dilution_rows"] = dilutions
+            continue  # Try next sheet (blend support)
 
-        # --- Strategy 2: Header-label scan ---
+        # --- Strategy 2: "Peptide Sample Stock Preparation" section ---
+        # Files have a standard-curve section first (rows 1-36) then a sample-prep
+        # section starting with a "Peptide Sample Stock Preparation" header.
+        # Layout:
+        #   Row 43: "Weight Sample Vial and cap (mg)" | 5501.68    (A/B label-value pairs)
+        #   Row 45: "Weight of Sample Vial cap and Diluent (mg)" | 8505.75
+        #   Row 53: header row with "Weight Vial and cap (mg)" in B, "...Diluent (mg)" in D,
+        #           "...Diluent and sample (mg)" in G
+        #   Row 54: data row with values in B, D, G
+        sample_section_start = None
+        for row in range(1, max_scan_row):
+            a_val = ws.cell(row=row, column=1).value
+            if (a_val and isinstance(a_val, str)
+                    and "peptide sample stock preparation" in a_val.lower()):
+                sample_section_start = row
+                break
+
+        if sample_section_start:
+            # Extract stock vial weights from A/B label-value pairs
+            sample_stock_empty = None
+            sample_stock_diluent = None
+            for row in range(sample_section_start, min(sample_section_start + 15, max_scan_row)):
+                a_val = ws.cell(row=row, column=1).value
+                b_val = ws.cell(row=row, column=2).value
+                if not a_val or not isinstance(a_val, str):
+                    continue
+                lower = a_val.lower()
+                if "weight" in lower and "vial" in lower and "cap" in lower:
+                    if "diluent" in lower:
+                        # "Weight of Sample Vial cap and Diluent (mg)" → stock with diluent
+                        if isinstance(b_val, (int, float)):
+                            sample_stock_diluent = float(b_val)
+                    elif "sample" in lower:
+                        # "Weight Sample Vial and cap (mg)" → stock empty
+                        if isinstance(b_val, (int, float)):
+                            sample_stock_empty = float(b_val)
+
+            # Find the dilution header row: scan for a row where multiple columns
+            # have weight-related header strings (e.g. "Weight Vial and cap")
+            dil_header_row = None
+            for row in range(sample_section_start + 5, min(sample_section_start + 20, max_scan_row)):
+                weight_headers = 0
+                for col in range(1, 10):
+                    hdr = ws.cell(row=row, column=col).value
+                    if hdr and isinstance(hdr, str) and "weight" in hdr.lower() and "vial" in hdr.lower():
+                        weight_headers += 1
+                if weight_headers >= 2:
+                    dil_header_row = row
+                    break
+
+            sample_dilutions = []
+            if dil_header_row:
+                # Map columns by header content
+                empty_col = None
+                diluent_col = None
+                sample_col = None
+                for col in range(1, 12):
+                    hdr = ws.cell(row=dil_header_row, column=col).value
+                    if not hdr or not isinstance(hdr, str):
+                        continue
+                    h_lower = hdr.lower()
+                    if "sample" in h_lower and "diluent" in h_lower:
+                        sample_col = col
+                    elif "diluent" in h_lower and "weight" in h_lower:
+                        diluent_col = col
+                    elif "vial" in h_lower and "cap" in h_lower and "diluent" not in h_lower:
+                        empty_col = col
+
+                if empty_col and diluent_col and sample_col:
+                    for data_row in range(dil_header_row + 1, dil_header_row + 5):
+                        ev = ws.cell(row=data_row, column=empty_col).value
+                        dv = ws.cell(row=data_row, column=diluent_col).value
+                        sv = ws.cell(row=data_row, column=sample_col).value
+                        if (isinstance(ev, (int, float)) and ev > 1000
+                                and isinstance(dv, (int, float)) and dv > ev
+                                and isinstance(sv, (int, float)) and sv >= dv):
+                            # Try to get the target concentration from the section above
+                            conc_label = None
+                            for scan_row in range(sample_section_start, dil_header_row):
+                                scan_a = ws.cell(row=scan_row, column=1).value
+                                if scan_a and isinstance(scan_a, str) and "target conc" in scan_a.lower():
+                                    scan_b = ws.cell(row=scan_row, column=2).value
+                                    if scan_b is not None:
+                                        conc_label = str(int(scan_b) if isinstance(scan_b, float) and scan_b == int(scan_b) else scan_b)
+                            sample_dilutions.append({
+                                "label": conc_label or f"Row {data_row}",
+                                "concentration": conc_label,
+                                "dil_vial_empty": float(ev),
+                                "dil_vial_with_diluent": float(dv),
+                                "dil_vial_with_diluent_and_sample": float(sv),
+                            })
+                        else:
+                            break
+
+            if sample_dilutions:
+                result["analytes"].append({
+                    "sheet_name": sheet_name,
+                    "stock_vial_empty": sample_stock_empty,
+                    "stock_vial_with_diluent": sample_stock_diluent,
+                    "dilution_rows": sample_dilutions,
+                })
+                if result["stock_vial_empty"] is None:
+                    result["stock_vial_empty"] = sample_stock_empty
+                    result["stock_vial_with_diluent"] = sample_stock_diluent
+                    result["dilution_rows"] = sample_dilutions
+                continue
+
+        # --- Strategy 3: Header-label scan ---
         # Look for header rows containing weight-related labels, then read data from the row below.
         # Handles layouts like:
         #   Row 55: "Weight Vial and cap (mg)" | "Weight of Vial cap and Diluent (mg)" | "Weight of ... and sample (mg)"
@@ -3621,13 +3782,19 @@ def _extract_weights_from_excel_bytes(data: bytes) -> dict:
                     break
 
         if label_dilutions:
-            result["stock_vial_empty"] = stock_empty
-            result["stock_vial_with_diluent"] = stock_diluent
-            result["dilution_rows"] = label_dilutions
-            wb.close()
-            return result
+            result["analytes"].append({
+                "sheet_name": sheet_name,
+                "stock_vial_empty": stock_empty,
+                "stock_vial_with_diluent": stock_diluent,
+                "dilution_rows": label_dilutions,
+            })
+            if result["stock_vial_empty"] is None:
+                result["stock_vial_empty"] = stock_empty
+                result["stock_vial_with_diluent"] = stock_diluent
+                result["dilution_rows"] = label_dilutions
+            continue
 
-        # --- Strategy 3: Alternate layout (A/B labels for stock, C/E/H for dilution) ---
+        # --- Strategy 4: Alternate layout (A/B labels for stock, C/E/H for dilution) ---
         stock_empty = None
         stock_diluent = None
         for row in range(1, max_scan_row):
@@ -3668,21 +3835,30 @@ def _extract_weights_from_excel_bytes(data: bytes) -> dict:
                     })
 
         if alt_dilutions:
-            result["stock_vial_empty"] = stock_empty
-            result["stock_vial_with_diluent"] = stock_diluent
-            result["dilution_rows"] = alt_dilutions
-            wb.close()
-            return result
+            result["analytes"].append({
+                "sheet_name": sheet_name,
+                "stock_vial_empty": stock_empty,
+                "stock_vial_with_diluent": stock_diluent,
+                "dilution_rows": alt_dilutions,
+            })
+            if result["stock_vial_empty"] is None:
+                result["stock_vial_empty"] = stock_empty
+                result["stock_vial_with_diluent"] = stock_diluent
+                result["dilution_rows"] = alt_dilutions
 
     wb.close()
     return result
 
 
 @app.get("/hplc/weights/{sample_id}", response_model=WeightExtractionResponse)
-async def get_sample_weights(sample_id: str, _current_user=Depends(get_current_user)):
+async def get_sample_weights(
+    sample_id: str,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
     """
     Search SharePoint Peptides folder for a sample ID and extract weight data
-    from the associated Excel workbook.
+    + calibration curve from the associated Excel workbook.
 
     Scans each peptide subfolder's Raw Data directory for a folder matching
     the sample ID, then downloads and parses the lab Excel file.
@@ -3693,9 +3869,11 @@ async def get_sample_weights(sample_id: str, _current_user=Depends(get_current_u
     try:
         sample_info = await sp.search_sample_folder(sample_id)
     except Exception as e:
+        error_msg = str(e) or repr(e)
+        print(f"[WARN] SharePoint search_sample_folder failed for '{sample_id}': {error_msg}")
         return WeightExtractionResponse(
             found=False,
-            error=f"SharePoint search error: {e}"
+            error=f"SharePoint search error: {error_msg}"
         )
 
     if not sample_info:
@@ -3769,6 +3947,70 @@ async def get_sample_weights(sample_id: str, _current_user=Depends(get_current_u
             error=f"Error parsing Excel: {e}"
         )
 
+    # 4. Try to extract calibration curve from the same Excel file
+    tech_cal = None
+    try:
+        cal_data = _parse_calibration_excel_bytes(file_bytes, filename)
+        if cal_data and len(cal_data.get("concentrations", [])) >= 3:
+            from calculations.calibration import calculate_calibration_curve
+            regression = calculate_calibration_curve(
+                cal_data["concentrations"], cal_data["areas"]
+            )
+
+            # Match against stored curves by area fingerprint
+            tech_fp = tuple(sorted(round(a, 1) for a in cal_data["areas"]))
+            matching_ids: list[int] = []
+
+            # Find the peptide by folder name to scope the search
+            peptide_row = db.execute(
+                select(Peptide).where(
+                    func.lower(Peptide.abbreviation) == func.lower(peptide_folder)
+                )
+            ).scalar_one_or_none()
+
+            if peptide_row:
+                stored_cals = db.execute(
+                    select(CalibrationCurve.id, CalibrationCurve.standard_data, CalibrationCurve.slope, CalibrationCurve.intercept)
+                    .where(CalibrationCurve.peptide_id == peptide_row.id)
+                ).all()
+
+                for row in stored_cals:
+                    # Strategy 1: Area fingerprint match
+                    if row.standard_data and "areas" in row.standard_data:
+                        stored_fp = tuple(sorted(round(a, 1) for a in row.standard_data["areas"]))
+                        if tech_fp == stored_fp:
+                            matching_ids.append(row.id)
+                            continue
+
+                    # Strategy 2: Slope/intercept match (within 0.1% tolerance)
+                    if row.slope and row.intercept:
+                        slope_match = abs(row.slope - regression["slope"]) < abs(regression["slope"]) * 0.001
+                        intercept_match = abs(row.intercept - regression["intercept"]) < max(abs(regression["intercept"]) * 0.001, 0.01)
+                        if slope_match and intercept_match:
+                            matching_ids.append(row.id)
+
+            tech_cal = TechCalibrationData(
+                concentrations=cal_data["concentrations"],
+                areas=cal_data["areas"],
+                slope=regression["slope"],
+                intercept=regression["intercept"],
+                r_squared=regression["r_squared"],
+                n_points=regression["n_points"],
+                matching_curve_ids=matching_ids,
+            )
+    except Exception as e:
+        print(f"[WARN] Failed to extract calibration from {filename}: {e}")
+
+    # Build analyte weight entries from per-sheet data
+    analyte_entries = []
+    for a in weights.get("analytes", []):
+        analyte_entries.append(AnalyteWeights(
+            sheet_name=a["sheet_name"],
+            stock_vial_empty=a["stock_vial_empty"],
+            stock_vial_with_diluent=a["stock_vial_with_diluent"],
+            dilution_rows=[DilutionRow(**d) for d in a["dilution_rows"]],
+        ))
+
     return WeightExtractionResponse(
         found=True,
         folder_name=folder_name,
@@ -3777,6 +4019,8 @@ async def get_sample_weights(sample_id: str, _current_user=Depends(get_current_u
         stock_vial_empty=weights["stock_vial_empty"],
         stock_vial_with_diluent=weights["stock_vial_with_diluent"],
         dilution_rows=[DilutionRow(**d) for d in weights["dilution_rows"]],
+        tech_calibration=tech_cal,
+        analytes=analyte_entries,
     )
 
 

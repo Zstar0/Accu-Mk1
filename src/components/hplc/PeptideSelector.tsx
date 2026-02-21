@@ -16,9 +16,11 @@ interface PeptideSelectorProps {
   onChange: (peptide: PeptideRecord | null) => void
   /** Peptide folder name from weight extraction — triggers auto-select */
   autoSelectFolder?: string | null
+  /** Blend peptide label (e.g. "BPC", "TB500") — triggers auto-select by abbreviation */
+  autoSelectLabel?: string | null
 }
 
-export function PeptideSelector({ value, onChange, autoSelectFolder }: PeptideSelectorProps) {
+export function PeptideSelector({ value, onChange, autoSelectFolder, autoSelectLabel }: PeptideSelectorProps) {
   const [peptides, setPeptides] = useState<PeptideRecord[]>([])
   const [loading, setLoading] = useState(true)
 
@@ -29,17 +31,34 @@ export function PeptideSelector({ value, onChange, autoSelectFolder }: PeptideSe
       .finally(() => setLoading(false))
   }, [])
 
-  // Auto-select peptide when folder name is provided
+  // Auto-select peptide: blend label takes priority over folder name
   useEffect(() => {
-    if (!autoSelectFolder || value != null || peptides.length === 0) return
-    const folder = autoSelectFolder.toLowerCase()
-    const match =
-      peptides.find(p => p.name.toLowerCase() === folder) ??
-      peptides.find(p => p.abbreviation.toLowerCase() === folder) ??
-      peptides.find(p => folder.includes(p.name.toLowerCase()) || p.name.toLowerCase().includes(folder)) ??
-      peptides.find(p => folder.includes(p.abbreviation.toLowerCase()))
-    if (match) onChange(match)
-  }, [autoSelectFolder, peptides, value, onChange])
+    if (value != null || peptides.length === 0) return
+
+    // For blends, use the specific peptide label (e.g. "BPC" → BPC-157)
+    if (autoSelectLabel) {
+      const label = autoSelectLabel.toLowerCase()
+      const match =
+        peptides.find(p => p.abbreviation.toLowerCase() === label) ??
+        peptides.find(p => p.name.toLowerCase() === label) ??
+        peptides.find(p => p.abbreviation.toLowerCase().replace(/[-\s]/g, '').includes(label.replace(/[-\s]/g, '')) ||
+          label.replace(/[-\s]/g, '').includes(p.abbreviation.toLowerCase().replace(/[-\s]/g, ''))) ??
+        peptides.find(p => p.name.toLowerCase().includes(label) || label.includes(p.name.toLowerCase()))
+      if (match) onChange(match)
+      return  // Don't fall through to folder match for blends
+    }
+
+    // For non-blend: match by SharePoint folder name
+    if (autoSelectFolder) {
+      const folder = autoSelectFolder.toLowerCase()
+      const match =
+        peptides.find(p => p.name.toLowerCase() === folder) ??
+        peptides.find(p => p.abbreviation.toLowerCase() === folder) ??
+        peptides.find(p => folder.includes(p.name.toLowerCase()) || p.name.toLowerCase().includes(folder)) ??
+        peptides.find(p => folder.includes(p.abbreviation.toLowerCase()))
+      if (match) onChange(match)
+    }
+  }, [autoSelectFolder, autoSelectLabel, peptides, value, onChange])
 
   if (loading) {
     return (

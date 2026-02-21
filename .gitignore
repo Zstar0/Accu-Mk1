@@ -44,3 +44,8 @@ ReportFiles/
 .agent/
 .playwright-mcp/
 nulbackend_logs*.txt
+
+# Signing keys (generated locally, never commit)
+~/
+*.key
+*.key.pub

@@ -119,27 +119,11 @@ async function prepareRelease() {
       console.log('✅ Updater public key configured')
     }
 
-    // Final check that Rust code compiles
-    console.log('\n🔍 Running final compilation check...')
-    exec('source ~/.cargo/env && cd src-tauri && cargo check')
-    console.log('✅ Rust compilation check passed')
-
     console.log(`\n🎉 Successfully prepared release ${tagVersion}!`)
-    console.log('\n📋 Git commands to execute:')
-    console.log(`   git add .`)
-    console.log(`   git commit -m "chore: release ${tagVersion}"`)
-    console.log(`   git tag ${tagVersion}`)
-    console.log(`   git push origin main --tags`)
-
-    console.log('\n🚀 After pushing:')
-    console.log('   • GitHub Actions will automatically build the release')
-    console.log('   • A draft release will be created on GitHub')
-    console.log("   • You'll need to manually publish the draft release")
-    console.log('   • Users will receive auto-update notifications')
 
     // Interactive execution option
     const answer = await askQuestion(
-      '\n❓ Would you like me to execute these git commands? (y/N): '
+      '\n❓ Commit, tag, and push to trigger GitHub Actions build? (y/N): '
     )
 
     if (answer.toLowerCase() === 'y' || answer.toLowerCase() === 'yes') {
@@ -155,21 +139,35 @@ async function prepareRelease() {
       exec(`git tag ${tagVersion}`)
 
       console.log('📤 Pushing to remote...')
-      exec('git push origin main --tags')
+      exec('git push origin master --tags')
 
-      console.log(`\n🎊 Release ${tagVersion} has been published!`)
-      console.log(
-        '📱 Check GitHub Actions: https://github.com/YOUR_USERNAME/YOUR_REPO/actions'
+      console.log(`\n🎊 Release ${tagVersion} pushed! GitHub Actions is now building...`)
+      console.log('📱 https://github.com/Zstar0/Accu-Mk1/actions')
+
+      const publishAnswer = await askQuestion(
+        '\n❓ Wait for build and auto-publish the release? Requires gh CLI. (y/N): '
       )
-      console.log(
-        '📦 Draft release will appear at: https://github.com/YOUR_USERNAME/YOUR_REPO/releases'
-      )
-      console.log(
-        '\n⚠️  Remember: You need to manually publish the draft release on GitHub!'
-      )
+
+      if (publishAnswer.toLowerCase() === 'y' || publishAnswer.toLowerCase() === 'yes') {
+        console.log('\n⏳ Waiting for GitHub Actions to complete (this takes ~5 minutes)...')
+        try {
+          exec(`gh run watch --repo Zstar0/Accu-Mk1 --exit-status`)
+          console.log('\n✅ Build complete! Publishing release...')
+          exec(`gh release edit ${tagVersion} --repo Zstar0/Accu-Mk1 --draft=false`)
+          console.log(`\n🚀 Release ${tagVersion} is live! Users will be notified on next launch.`)
+          console.log('📦 https://github.com/Zstar0/Accu-Mk1/releases')
+        } catch {
+          console.log('\n⚠️  Could not auto-publish. Publish manually at:')
+          console.log('   https://github.com/Zstar0/Accu-Mk1/releases')
+        }
+      } else {
+        console.log('\n📦 Publish the draft manually when the build finishes:')
+        console.log('   https://github.com/Zstar0/Accu-Mk1/releases')
+        console.log(`   Or run: gh release edit ${tagVersion} --repo Zstar0/Accu-Mk1 --draft=false`)
+      }
     } else {
-      console.log('\n📝 Git commands saved for manual execution.')
-      console.log("   Run them when you're ready to release.")
+      console.log('\n📝 Run these when ready:')
+      console.log(`   git add . && git commit -m "chore: release ${tagVersion}" && git tag ${tagVersion} && git push origin master --tags`)
     }
   } catch (error) {
     console.error('\n❌ Pre-release preparation failed:', error.message)

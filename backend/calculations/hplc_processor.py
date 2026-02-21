@@ -74,9 +74,9 @@ def calculate_dilution_factor(
     total_vol_ul = diluent_vol_ul + sample_vol_ul
     dilution_factor = total_vol_ul / sample_vol_ul if sample_vol_ul > 0 else 0
 
-    # Stock volume (mL) — from stock vial weights
+    # Stock volume (mL) — from stock vial weights, using diluent density
     stock_mass_mg = weights.stock_vial_with_diluent - weights.stock_vial_empty
-    stock_volume_ml = stock_mass_mg / 1000  # Convert mg to mL (assuming ~1 mg/µL for water)
+    stock_volume_ml = stock_mass_mg / density  # Convert mg to mL using diluent density (mg/mL)
 
     return {
         "diluent_mass_mg": round(diluent_mass_mg, 4),

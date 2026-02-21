@@ -34,6 +34,7 @@ class InjectionData:
     peaks: list[Peak]
     total_area: float
     main_peak_index: int = -1
+    peptide_label: str = ""
 
 
 @dataclass
@@ -43,29 +44,47 @@ class HPLCParseResult:
     errors: list[str] = field(default_factory=list)
 
 
-def _extract_injection_name(filename: str) -> str:
+def _extract_injection_info(filename: str) -> tuple[str, str]:
     """
-    Extract injection name from filename.
+    Extract injection name and peptide label from filename.
+
+    Returns:
+        (injection_name, peptide_label) where peptide_label is empty for non-blend files.
 
     Examples:
-        'P-0142_Inj_1_PeakData.csv' -> 'Inj_1'
-        'P-0142_Inj_2_PeakData.csv' -> 'Inj_2'
-        '250_Report.csv' -> '250_Report'
-        'unknown.csv' -> 'unknown'
+        'P-0142_Inj_1_PeakData.csv'       -> ('Inj_1', '')
+        'P-0142_Inj_2_PeakData.csv'       -> ('Inj_2', '')
+        'PB-0053_Inj_1_BPC_PeakData.csv'  -> ('BPC_Inj_1', 'BPC')
+        'PB-0053_Inj_1_TB500_PeakData.csv' -> ('TB500_Inj_1', 'TB500')
+        '250_Report.csv'                    -> ('250_Report', '')
+        'unknown.csv'                       -> ('unknown', '')
     """
     name = filename.rsplit('.', 1)[0]  # Remove extension
-
-    # Look for Inj_N pattern
     parts = name.split('_')
+
+    # Look for Inj_N pattern and any peptide label between Inj_N and PeakData
     for i, part in enumerate(parts):
         if part == 'Inj' and i + 1 < len(parts):
-            return f"Inj_{parts[i + 1]}"
+            inj_num = parts[i + 1]
+            # Check for peptide label: parts between Inj_N and PeakData
+            # e.g. PB-0053_Inj_1_BPC_PeakData → peptide_label = "BPC"
+            peptide_parts = []
+            for j in range(i + 2, len(parts)):
+                if parts[j].lower() == 'peakdata':
+                    break
+                peptide_parts.append(parts[j])
+
+            if peptide_parts:
+                peptide_label = '_'.join(peptide_parts)
+                return f"{peptide_label}_Inj_{inj_num}", peptide_label
+
+            return f"Inj_{inj_num}", ""
 
     # For Report files, use the prefix (e.g., "250" from "250_Report.csv")
     if '_Report' in name:
-        return name
+        return name, ""
 
-    return name
+    return name, ""
 
 
 def _find_peak_table_start(lines: list[str]) -> int:
@@ -212,13 +231,14 @@ def parse_peakdata_csv(filename: str, content: str) -> InjectionData:
     if total_area == 0.0:
         total_area = sum(p.area for p in peaks)
 
-    injection_name = _extract_injection_name(filename)
+    injection_name, peptide_label = _extract_injection_info(filename)
 
     return InjectionData(
         injection_name=injection_name,
         peaks=peaks,
         total_area=total_area,
         main_peak_index=main_idx,
+        peptide_label=peptide_label,
     )
 
 

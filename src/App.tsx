@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 import { check } from '@tauri-apps/plugin-updater'
-import { relaunch } from '@tauri-apps/plugin-process'
+import { useUIStore } from './store/ui-store'
 import { initializeCommandSystem } from './lib/commands'
 import { buildAppMenu, setupMenuLanguageListener } from './lib/menu'
 import { initializeLanguage } from './i18n/language-init'
@@ -77,58 +77,26 @@ function App() {
       mode: import.meta.env.MODE,
     })
 
-    // Auto-updater logic - check for updates 5 seconds after app loads
+    // Check for updates silently in the background — notify via sidebar banner when ready
     const checkForUpdates = async () => {
       try {
         const update = await check()
         if (update) {
-          logger.info(`Update available: ${update.version}`)
-
-          // Show confirmation dialog
-          const shouldUpdate = confirm(
-            `Update available: ${update.version}\n\nWould you like to install this update now?`
-          )
-
-          if (shouldUpdate) {
-            try {
-              // Download and install with progress logging
-              await update.downloadAndInstall(event => {
-                switch (event.event) {
-                  case 'Started':
-                    logger.info(`Downloading ${event.data.contentLength} bytes`)
-                    break
-                  case 'Progress':
-                    logger.info(`Downloaded: ${event.data.chunkLength} bytes`)
-                    break
-                  case 'Finished':
-                    logger.info('Download complete, installing...')
-                    break
-                }
-              })
-
-              // Ask if user wants to restart now
-              const shouldRestart = confirm(
-                'Update completed successfully!\n\nWould you like to restart the app now to use the new version?'
-              )
-
-              if (shouldRestart) {
-                await relaunch()
-              }
-            } catch (updateError) {
-              logger.error(`Update installation failed: ${String(updateError)}`)
-              alert(
-                `Update failed: There was a problem with the automatic download.\n\n${String(updateError)}`
-              )
+          logger.info(`Update available: ${update.version}, downloading in background`)
+          useUIStore.getState().setUpdateVersion(update.version)
+          await update.downloadAndInstall(event => {
+            if (event.event === 'Finished') {
+              logger.info('Update downloaded, ready to install')
+              useUIStore.getState().setUpdateReady(true)
             }
-          }
+          })
         }
-      } catch (checkError) {
-        logger.error(`Update check failed: ${String(checkError)}`)
-        // Silent fail for update checks - don't bother user with network issues
+      } catch (error) {
+        // Silent fail — don't interrupt lab techs over a network/update issue
+        logger.warn(`Update check failed: ${String(error)}`)
       }
     }
 
-    // Check for updates 5 seconds after app loads
     const updateTimer = setTimeout(checkForUpdates, 5000)
     return () => clearTimeout(updateTimer)
   }, [])

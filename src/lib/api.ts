@@ -1266,6 +1266,7 @@ export interface HPLCPeak {
 
 export interface HPLCInjection {
   injection_name: string
+  peptide_label: string
   peaks: HPLCPeak[]
   total_area: number
   main_peak_index: number
@@ -1283,6 +1284,7 @@ export interface HPLCParseResult {
   injections: HPLCInjection[]
   purity: HPLCPurity
   errors: string[]
+  detected_peptides: string[]
 }
 
 export async function parseHPLCFiles(
@@ -1498,6 +1500,7 @@ export interface HPLCWeightsInput {
 export interface HPLCAnalyzeRequest {
   sample_id_label: string
   peptide_id: number
+  calibration_curve_id?: number
   weights: HPLCWeightsInput
   injections: Record<string, unknown>[]
 }
@@ -1551,6 +1554,23 @@ export interface DilutionRow {
   dil_vial_with_diluent_and_sample: number
 }
 
+export interface TechCalibrationData {
+  concentrations: number[]
+  areas: number[]
+  slope: number
+  intercept: number
+  r_squared: number
+  n_points: number
+  matching_curve_ids: number[]
+}
+
+export interface AnalyteWeights {
+  sheet_name: string
+  stock_vial_empty: number | null
+  stock_vial_with_diluent: number | null
+  dilution_rows: DilutionRow[]
+}
+
 export interface WeightExtractionResult {
   found: boolean
   folder_name: string | null
@@ -1560,6 +1580,8 @@ export interface WeightExtractionResult {
   stock_vial_with_diluent: number | null
   dilution_rows: DilutionRow[]
   error: string | null
+  tech_calibration: TechCalibrationData | null
+  analytes: AnalyteWeights[]
 }
 
 export async function fetchSampleWeights(

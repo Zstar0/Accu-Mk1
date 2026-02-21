@@ -4,7 +4,8 @@ import { BatchReview } from '@/components/BatchReview'
 import { AccuMarkTools } from '@/components/AccuMarkTools'
 import { ChromatographViewer } from '@/components/ChromatographViewer'
 import { HPLCAnalysis } from '@/components/hplc/HPLCAnalysis'
-import { Dashboard } from '@/components/Dashboard'
+import { OrderDashboard } from '@/components/dashboard/OrderDashboard'
+import { AnalyticsDashboard } from '@/components/dashboard/AnalyticsDashboard'
 import { UserManagement } from '@/components/auth/UserManagement'
 import { ChangePassword } from '@/components/auth/ChangePassword'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -47,7 +48,8 @@ export function MainWindowContent({
   const renderSectionContent = () => {
     switch (activeSection) {
       case 'dashboard':
-        return <Dashboard />
+        if (activeSubSection === 'analytics') return <AnalyticsDashboard />
+        return <OrderDashboard />
       case 'lab-operations':
         return renderLabOperationsContent()
       case 'hplc-analysis':

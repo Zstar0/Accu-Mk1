@@ -51,7 +51,6 @@ export function LoginPage() {
                 value={email}
                 onChange={e => setEmail(e.target.value)}
                 required
-                autoFocus
                 disabled={isSubmitting}
               />
             </div>
