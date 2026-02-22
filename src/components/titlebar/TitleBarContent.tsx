@@ -1,13 +1,18 @@
+import { flushSync } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
 import { useUIStore } from '@/store/ui-store'
 import { executeCommand, useCommandContext } from '@/lib/commands'
+import { useTheme } from '@/hooks/use-theme'
+import { Switch } from '@/components/ui/switch'
 import {
   PanelLeft,
   PanelLeftClose,
   PanelRight,
   PanelRightClose,
   Settings,
+  Sun,
+  Moon,
 } from 'lucide-react'
 
 /**
@@ -51,6 +56,12 @@ export function TitleBarRightActions() {
   const rightSidebarVisible = useUIStore(state => state.rightSidebarVisible)
   const toggleRightSidebar = useUIStore(state => state.toggleRightSidebar)
   const commandContext = useCommandContext()
+  const { theme, setTheme } = useTheme()
+
+  // Resolve effective theme — 'system' follows OS preference
+  const isDark =
+    theme === 'dark' ||
+    (theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
 
   const handleOpenPreferences = async () => {
     const result = await executeCommand('open-preferences', commandContext)
@@ -59,8 +70,38 @@ export function TitleBarRightActions() {
     }
   }
 
+  const handleThemeToggle = (e: React.MouseEvent) => {
+    const newTheme = isDark ? 'light' : 'dark'
+    const root = document.documentElement
+    root.style.setProperty('--theme-x', `${e.clientX}px`)
+    root.style.setProperty('--theme-y', `${e.clientY}px`)
+
+    if (!('startViewTransition' in document)) {
+      setTheme(newTheme)
+      return
+    }
+
+    ;(document as Document & {
+      startViewTransition: (fn: () => void) => void
+    }).startViewTransition(() => flushSync(() => setTheme(newTheme)))
+  }
+
   return (
     <div className="flex items-center gap-1">
+      <div
+        className="flex items-center gap-1 text-foreground/70 cursor-pointer"
+        title={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
+        onClick={handleThemeToggle}
+      >
+        <Sun className="h-3 w-3" />
+        <Switch
+          checked={isDark}
+          onCheckedChange={() => {}}
+          className="h-4 w-7 data-[state=checked]:bg-primary/60 pointer-events-none"
+        />
+        <Moon className="h-3 w-3" />
+      </div>
+
       <Button
         onClick={handleOpenPreferences}
         variant="ghost"

@@ -2,15 +2,16 @@ import { create } from 'zustand'
 import { devtools } from 'zustand/middleware'
 
 // Navigation sections for main content area
-export type ActiveSection = 'dashboard' | 'lab-operations' | 'hplc-analysis' | 'accumark-tools' | 'account'
+export type ActiveSection = 'dashboard' | 'intake' | 'lab-operations' | 'hplc-analysis' | 'accumark-tools' | 'account'
 
 // Sub-sections within each main section
-export type DashboardSubSection = 'orders' | 'analytics'
+export type DashboardSubSection = 'orders' | 'analytics' | 'senaite'
+export type IntakeSubSection = 'receive-sample'
 export type LabOperationsSubSection = 'chromatographs' | 'sample-intake'
 export type HPLCAnalysisSubSection = 'overview' | 'new-analysis' | 'import-analysis' | 'peptide-config' | 'analysis-history'
 export type AccuMarkToolsSubSection = 'overview' | 'order-explorer' | 'coa-explorer'
 export type AccountSubSection = 'change-password' | 'user-management'
-export type ActiveSubSection = DashboardSubSection | LabOperationsSubSection | HPLCAnalysisSubSection | AccuMarkToolsSubSection | AccountSubSection
+export type ActiveSubSection = DashboardSubSection | IntakeSubSection | LabOperationsSubSection | HPLCAnalysisSubSection | AccuMarkToolsSubSection | AccountSubSection
 
 interface UIState {
   leftSidebarVisible: boolean
@@ -20,6 +21,7 @@ interface UIState {
   lastQuickPaneEntry: string | null
   activeSection: ActiveSection
   activeSubSection: ActiveSubSection
+  navigationKey: number
   peptideConfigTargetId: number | null
   orderExplorerTargetOrderId: string | null
   updateVersion: string | null
@@ -53,6 +55,7 @@ export const useUIStore = create<UIState>()(
       lastQuickPaneEntry: null,
       activeSection: 'dashboard',
       activeSubSection: 'orders',
+      navigationKey: 0,
       peptideConfigTargetId: null,
       orderExplorerTargetOrderId: null,
       updateVersion: null,
@@ -116,21 +119,35 @@ export const useUIStore = create<UIState>()(
         set({ activeSubSection: subSection }, undefined, 'setActiveSubSection'),
 
       navigateTo: (section, subSection) =>
-        set({ activeSection: section, activeSubSection: subSection }, undefined, 'navigateTo'),
+        set(
+          state => ({ activeSection: section, activeSubSection: subSection, navigationKey: state.navigationKey + 1 }),
+          undefined,
+          'navigateTo'
+        ),
 
       navigateToPeptide: peptideId =>
-        set({
-          activeSection: 'hplc-analysis',
-          activeSubSection: 'peptide-config',
-          peptideConfigTargetId: peptideId,
-        }, undefined, 'navigateToPeptide'),
+        set(
+          state => ({
+            activeSection: 'hplc-analysis',
+            activeSubSection: 'peptide-config',
+            peptideConfigTargetId: peptideId,
+            navigationKey: state.navigationKey + 1,
+          }),
+          undefined,
+          'navigateToPeptide'
+        ),
 
       navigateToOrderExplorer: (orderId) =>
-        set({
-          activeSection: 'accumark-tools',
-          activeSubSection: 'order-explorer',
-          orderExplorerTargetOrderId: orderId ?? null,
-        }, undefined, 'navigateToOrderExplorer'),
+        set(
+          state => ({
+            activeSection: 'accumark-tools',
+            activeSubSection: 'order-explorer',
+            orderExplorerTargetOrderId: orderId ?? null,
+            navigationKey: state.navigationKey + 1,
+          }),
+          undefined,
+          'navigateToOrderExplorer'
+        ),
 
       setUpdateVersion: (version) =>
         set({ updateVersion: version }, undefined, 'setUpdateVersion'),

@@ -1195,17 +1195,14 @@ export async function getExplorerCOASignedUrl(
   version: number
 ): Promise<ExplorerSignedURLResponse> {
   try {
-    const response = await fetch(
-      `${API_BASE_URL()}/explorer/signed-url/coa`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...getAuthHeaders(),
-        },
-        body: JSON.stringify({ sample_id: sampleId, version }),
-      }
-    )
+    const response = await fetch(`${API_BASE_URL()}/explorer/signed-url/coa`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...getAuthHeaders(),
+      },
+      body: JSON.stringify({ sample_id: sampleId, version }),
+    })
     if (!response.ok) {
       if (response.status === 404) {
         throw new Error(`COA PDF not found for ${sampleId} v${version}`)
@@ -1341,7 +1338,7 @@ export interface CalibrationCurve {
 }
 
 export interface InstrumentSummary {
-  instrument: string  // "1260", "1290", or "unknown"
+  instrument: string // "1260", "1290", or "unknown"
   curve_count: number
 }
 
@@ -1399,7 +1396,9 @@ export async function createPeptide(
     })
     if (!response.ok) {
       const err = await response.json().catch(() => null)
-      throw new Error(err?.detail || `Create peptide failed: ${response.status}`)
+      throw new Error(
+        err?.detail || `Create peptide failed: ${response.status}`
+      )
     }
     return response.json()
   } catch (error) {
@@ -1533,9 +1532,7 @@ export async function runHPLCAnalysis(
     })
     if (!response.ok) {
       const err = await response.json().catch(() => null)
-      throw new Error(
-        err?.detail || `HPLC analysis failed: ${response.status}`
-      )
+      throw new Error(err?.detail || `HPLC analysis failed: ${response.status}`)
     }
     return response.json()
   } catch (error) {
@@ -1651,10 +1648,9 @@ export async function getHPLCAnalyses(
     params.set('limit', String(limit))
     params.set('offset', String(offset))
 
-    const response = await fetch(
-      `${API_BASE_URL()}/hplc/analyses?${params}`,
-      { headers: getBearerHeaders() }
-    )
+    const response = await fetch(`${API_BASE_URL()}/hplc/analyses?${params}`, {
+      headers: getBearerHeaders(),
+    })
     if (!response.ok) {
       throw new Error(`Get HPLC analyses failed: ${response.status}`)
     }
@@ -1665,16 +1661,16 @@ export async function getHPLCAnalyses(
   }
 }
 
-export async function deleteHPLCAnalysis(
-  analysisId: number
-): Promise<void> {
+export async function deleteHPLCAnalysis(analysisId: number): Promise<void> {
   try {
     const response = await fetch(
       `${API_BASE_URL()}/hplc/analyses/${analysisId}`,
       { method: 'DELETE', headers: getBearerHeaders() }
     )
     if (!response.ok) {
-      throw new Error(`Delete HPLC analysis ${analysisId} failed: ${response.status}`)
+      throw new Error(
+        `Delete HPLC analysis ${analysisId} failed: ${response.status}`
+      )
     }
   } catch (error) {
     console.error(`Delete HPLC analysis ${analysisId} error:`, error)
@@ -1691,7 +1687,9 @@ export async function getHPLCAnalysis(
       { headers: getBearerHeaders() }
     )
     if (!response.ok) {
-      throw new Error(`Get HPLC analysis ${analysisId} failed: ${response.status}`)
+      throw new Error(
+        `Get HPLC analysis ${analysisId} failed: ${response.status}`
+      )
     }
     return response.json()
   } catch (error) {
@@ -1778,7 +1776,9 @@ export async function getWizardSession(
       { headers: getBearerHeaders() }
     )
     if (!response.ok) {
-      throw new Error(`Get wizard session ${sessionId} failed: ${response.status}`)
+      throw new Error(
+        `Get wizard session ${sessionId} failed: ${response.status}`
+      )
     }
     return response.json()
   } catch (error) {
@@ -1799,7 +1799,8 @@ export async function listWizardSessions(params?: {
   try {
     const urlParams = new URLSearchParams()
     if (params?.status) urlParams.set('status', params.status)
-    if (params?.peptide_id != null) urlParams.set('peptide_id', String(params.peptide_id))
+    if (params?.peptide_id != null)
+      urlParams.set('peptide_id', String(params.peptide_id))
     if (params?.limit != null) urlParams.set('limit', String(params.limit))
     if (params?.offset != null) urlParams.set('offset', String(params.offset))
 
@@ -1914,10 +1915,31 @@ export interface SenaiteAnalyte {
   matched_peptide_name: string | null
 }
 
+export interface SenaiteCOAInfo {
+  company_logo_url: string | null
+  chromatograph_background_url: string | null
+  company_name: string | null
+  email: string | null
+  website: string | null
+  address: string | null
+  verification_code: string | null
+}
+
 export interface SenaiteLookupResult {
   sample_id: string
+  client: string | null
+  contact: string | null
+  sample_type: string | null
+  date_received: string | null
+  date_sampled: string | null
+  profiles: string[]
+  client_order_number: string | null
+  client_sample_id: string | null
+  client_lot: string | null
+  review_state: string | null
   declared_weight_mg: number | null
   analytes: SenaiteAnalyte[]
+  coa: SenaiteCOAInfo
 }
 
 export interface SenaiteStatusResponse {
@@ -1928,7 +1950,8 @@ export async function getSenaiteStatus(): Promise<SenaiteStatusResponse> {
   const response = await fetch(`${API_BASE_URL()}/wizard/senaite/status`, {
     headers: getBearerHeaders(),
   })
-  if (!response.ok) throw new Error(`SENAITE status check failed: ${response.status}`)
+  if (!response.ok)
+    throw new Error(`SENAITE status check failed: ${response.status}`)
   return response.json()
 }
 
@@ -1942,6 +1965,77 @@ export async function lookupSenaiteSample(
   if (!response.ok) {
     const err = await response.json().catch(() => null)
     throw new Error(err?.detail || `SENAITE lookup failed: ${response.status}`)
+  }
+  return response.json()
+}
+
+export interface SenaiteSample {
+  uid: string
+  id: string
+  title: string
+  client_id: string | null
+  client_order_number: string | null
+  date_received: string | null
+  date_sampled: string | null
+  review_state: string
+  sample_type: string | null
+  contact: string | null
+}
+
+export interface SenaiteSamplesResponse {
+  items: SenaiteSample[]
+  total: number
+  b_start: number
+}
+
+export async function getSenaiteSamples(
+  reviewState?: string,
+  limit = 50,
+  bStart = 0
+): Promise<SenaiteSamplesResponse> {
+  const params = new URLSearchParams({
+    limit: String(limit),
+    b_start: String(bStart),
+  })
+  if (reviewState) params.set('review_state', reviewState)
+  const response = await fetch(`${API_BASE_URL()}/senaite/samples?${params}`, {
+    headers: getBearerHeaders(),
+  })
+  if (!response.ok) {
+    const err = await response.json().catch(() => null)
+    throw new Error(err?.detail || `SENAITE samples failed: ${response.status}`)
+  }
+  return response.json()
+}
+
+export interface SenaiteReceiveSampleResponse {
+  success: boolean
+  message: string
+  senaite_response: Record<string, unknown> | null
+}
+
+export async function receiveSenaiteSample(
+  sampleUid: string,
+  sampleId: string,
+  imageBase64: string | null,
+  remarks: string | null
+): Promise<SenaiteReceiveSampleResponse> {
+  const response = await fetch(
+    `${API_BASE_URL()}/wizard/senaite/receive-sample`,
+    {
+      method: 'POST',
+      headers: getBearerHeaders('application/json'),
+      body: JSON.stringify({
+        sample_uid: sampleUid,
+        sample_id: sampleId,
+        image_base64: imageBase64,
+        remarks,
+      }),
+    }
+  )
+  if (!response.ok) {
+    const err = await response.json().catch(() => null)
+    throw new Error(err?.detail || `Receive sample failed: ${response.status}`)
   }
   return response.json()
 }
@@ -1995,9 +2089,12 @@ export async function browseSharePoint(
   root: 'lims' | 'peptides' = 'lims'
 ): Promise<SharePointBrowseResult> {
   const params = new URLSearchParams({ path, root })
-  const response = await fetch(`${API_BASE_URL()}/sharepoint/browse?${params}`, {
-    headers: getBearerHeaders(),
-  })
+  const response = await fetch(
+    `${API_BASE_URL()}/sharepoint/browse?${params}`,
+    {
+      headers: getBearerHeaders(),
+    }
+  )
   if (!response.ok) {
     const detail = await response.text()
     throw new Error(`SharePoint browse failed: ${response.status} — ${detail}`)

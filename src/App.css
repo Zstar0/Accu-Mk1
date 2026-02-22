@@ -30,10 +30,6 @@ input:-webkit-autofill:active {
     line-height: 1.6;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
-    user-select: none;
-    -webkit-user-select: none;
-    -moz-user-select: none;
-    -ms-user-select: none;
     overscroll-behavior: none;
     min-height: 100vh;
     min-width: 100vw;
@@ -65,5 +61,20 @@ input:-webkit-autofill:active {
   *[data-tauri-drag-region] {
     -webkit-app-region: drag;
     app-region: drag;
+  }
+}
+
+/* Theme toggle — circular wipe using View Transition API */
+@media (prefers-reduced-motion: no-preference) {
+  ::view-transition-old(root) {
+    animation: none;
+  }
+  ::view-transition-new(root) {
+    animation: theme-circle-expand 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  @keyframes theme-circle-expand {
+    from { clip-path: circle(0% at var(--theme-x, 50%) var(--theme-y, 50%)); }
+    to   { clip-path: circle(150% at var(--theme-x, 50%) var(--theme-y, 50%)); }
   }
 }

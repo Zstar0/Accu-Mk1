@@ -2,7 +2,9 @@ import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
-import { CheckCircle2, AlertTriangle, Shield } from 'lucide-react'
+import { CheckCircle2, AlertTriangle, Shield, RefreshCw, Download, CheckCheck } from 'lucide-react'
+import { check } from '@tauri-apps/plugin-updater'
+import { relaunch } from '@tauri-apps/plugin-process'
 import { Button } from '@/components/ui/button'
 import {
   Select,
@@ -18,6 +20,7 @@ import { usePreferences, useSavePreferences } from '@/services/preferences'
 import { commands } from '@/lib/tauri-bindings'
 import { logger } from '@/lib/logger'
 import { useAuthStore } from '@/store/auth-store'
+import { useUIStore } from '@/store/ui-store'
 import {
   getServerUrl,
   getDefaultUrl,
@@ -28,11 +31,61 @@ import {
   KNOWN_ENVIRONMENTS,
 } from '@/lib/api-profiles'
 
+type UpdateCheckStatus =
+  | { state: 'idle' }
+  | { state: 'checking' }
+  | { state: 'up-to-date' }
+  | { state: 'downloading'; version: string }
+  | { state: 'ready'; version: string }
+  | { state: 'error'; message: string }
+
 export function GeneralPane() {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
   const user = useAuthStore(state => state.user)
   const isAdmin = user?.role === 'admin'
+
+  // Update check state — initialized from background download progress if already running
+  const storeUpdateVersion = useUIStore(state => state.updateVersion)
+  const storeUpdateReady = useUIStore(state => state.updateReady)
+  const [updateStatus, setUpdateStatus] = useState<UpdateCheckStatus>(() => {
+    if (storeUpdateReady && storeUpdateVersion) {
+      return { state: 'ready', version: storeUpdateVersion }
+    }
+    if (storeUpdateVersion) {
+      return { state: 'downloading', version: storeUpdateVersion }
+    }
+    return { state: 'idle' }
+  })
+
+  // Keep local display in sync if background download completes while dialog is open
+  useEffect(() => {
+    if (storeUpdateReady && storeUpdateVersion) {
+      setUpdateStatus({ state: 'ready', version: storeUpdateVersion })
+    }
+  }, [storeUpdateReady, storeUpdateVersion])
+
+  const handleCheckForUpdates = async () => {
+    setUpdateStatus({ state: 'checking' })
+    try {
+      const update = await check()
+      if (update) {
+        setUpdateStatus({ state: 'downloading', version: update.version })
+        useUIStore.getState().setUpdateVersion(update.version)
+        await update.downloadAndInstall(event => {
+          if (event.event === 'Finished') {
+            useUIStore.getState().setUpdateReady(true)
+            setUpdateStatus({ state: 'ready', version: update.version })
+          }
+        })
+      } else {
+        setUpdateStatus({ state: 'up-to-date' })
+      }
+    } catch (error) {
+      logger.warn(`Manual update check failed: ${String(error)}`)
+      setUpdateStatus({ state: 'error', message: String(error) })
+    }
+  }
 
   // Track current API state
   const [currentUrl, setCurrentUrl] = useState(() => getServerUrl())
@@ -254,6 +307,69 @@ export function GeneralPane() {
             onChange={handleShortcutChange}
             disabled={!preferences || savePreferences.isPending}
           />
+        </SettingsField>
+      </SettingsSection>
+
+      <SettingsSection title="Software Updates">
+        <SettingsField
+          label="Application Version"
+          description="Check for updates to get the latest features and fixes."
+        >
+          <div className="flex items-center gap-3">
+            {updateStatus.state === 'idle' && (
+              <Button variant="outline" size="sm" onClick={handleCheckForUpdates}>
+                <RefreshCw className="mr-2 h-3.5 w-3.5" />
+                Check for Updates
+              </Button>
+            )}
+
+            {updateStatus.state === 'checking' && (
+              <Button variant="outline" size="sm" disabled>
+                <RefreshCw className="mr-2 h-3.5 w-3.5 animate-spin" />
+                Checking...
+              </Button>
+            )}
+
+            {updateStatus.state === 'up-to-date' && (
+              <>
+                <Button variant="outline" size="sm" onClick={handleCheckForUpdates}>
+                  <RefreshCw className="mr-2 h-3.5 w-3.5" />
+                  Check Again
+                </Button>
+                <span className="flex items-center gap-1.5 text-sm text-green-600 dark:text-green-500">
+                  <CheckCheck className="h-4 w-4" />
+                  You're up to date
+                </span>
+              </>
+            )}
+
+            {updateStatus.state === 'downloading' && (
+              <Button variant="outline" size="sm" disabled>
+                <Download className="mr-2 h-3.5 w-3.5 animate-bounce" />
+                Downloading v{updateStatus.version}...
+              </Button>
+            )}
+
+            {updateStatus.state === 'ready' && (
+              <Button size="sm" onClick={() => relaunch()}>
+                <RefreshCw className="mr-2 h-3.5 w-3.5" />
+                v{updateStatus.version} ready — Restart to update
+              </Button>
+            )}
+
+            {updateStatus.state === 'error' && (
+              <>
+                <Button variant="outline" size="sm" onClick={handleCheckForUpdates}>
+                  <RefreshCw className="mr-2 h-3.5 w-3.5" />
+                  Retry
+                </Button>
+                <span className="flex items-center gap-1.5 text-sm text-destructive">
+                  <AlertTriangle className="h-4 w-4" />
+                  Update check failed
+                </span>
+              </>
+            )}
+          </div>
         </SettingsField>
       </SettingsSection>
     </div>

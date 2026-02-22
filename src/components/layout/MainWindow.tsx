@@ -13,6 +13,7 @@ import { PreferencesDialog } from '@/components/preferences/PreferencesDialog'
 import { Toaster } from 'sonner'
 import { useTheme } from '@/hooks/use-theme'
 import { useMainWindowEventListeners } from '@/hooks/useMainWindowEventListeners'
+import { useHashNavigation } from '@/lib/hash-navigation'
 import {
   getActiveEnvironmentName,
   hasOverride,
@@ -39,6 +40,7 @@ export function MainWindow() {
 
   // Set up global event listeners (keyboard shortcuts, etc.)
   useMainWindowEventListeners()
+  useHashNavigation()
 
   useEffect(() => {
     getVersion().then(setAppVersion).catch(() => {})

@@ -134,6 +134,15 @@ pub fn run() {
 
             Ok(())
         })
+        .on_window_event(|window, event| {
+            // Exit the process when the main window is closed.
+            // Without this, the hidden quick-pane window keeps the process alive.
+            if window.label() == "main" {
+                if let tauri::WindowEvent::Destroyed = event {
+                    window.app_handle().exit(0);
+                }
+            }
+        })
         .invoke_handler(builder.invoke_handler())
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

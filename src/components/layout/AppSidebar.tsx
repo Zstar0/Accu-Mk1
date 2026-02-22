@@ -9,6 +9,7 @@ import {
   LogOut,
   LayoutDashboard,
   RefreshCw,
+  ClipboardList,
 } from 'lucide-react'
 import { relaunch } from '@tauri-apps/plugin-process'
 import {
@@ -60,6 +61,15 @@ const navItems: NavItem[] = [
     subItems: [
       { id: 'orders', label: 'Orders' },
       { id: 'analytics', label: 'Analytics' },
+      { id: 'senaite', label: 'SENAITE' },
+    ],
+  },
+  {
+    id: 'intake',
+    label: 'Intake',
+    icon: ClipboardList,
+    subItems: [
+      { id: 'receive-sample', label: 'Receive Sample' },
     ],
   },
   {

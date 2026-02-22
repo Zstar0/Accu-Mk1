@@ -4034,6 +4034,7 @@ from integration_db import (
     fetch_sample_events_for_order,
     fetch_access_logs_for_order,
     test_connection,
+    get_wordpress_host,
 )
 
 
@@ -4927,10 +4928,31 @@ class SenaiteAnalyte(BaseModel):
     matched_peptide_name: Optional[str] = None
 
 
+class SenaiteCOAInfo(BaseModel):
+    company_logo_url: Optional[str] = None
+    chromatograph_background_url: Optional[str] = None
+    company_name: Optional[str] = None
+    email: Optional[str] = None
+    website: Optional[str] = None
+    address: Optional[str] = None
+    verification_code: Optional[str] = None
+
+
 class SenaiteLookupResult(BaseModel):
     sample_id: str
+    client: Optional[str] = None
+    contact: Optional[str] = None
+    sample_type: Optional[str] = None
+    date_received: Optional[str] = None
+    date_sampled: Optional[str] = None
+    profiles: list[str] = []
+    client_order_number: Optional[str] = None
+    client_sample_id: Optional[str] = None
+    client_lot: Optional[str] = None
+    review_state: Optional[str] = None
     declared_weight_mg: Optional[float] = None
     analytes: list[SenaiteAnalyte]
+    coa: SenaiteCOAInfo = SenaiteCOAInfo()
 
 
 class SenaiteStatusResponse(BaseModel):
@@ -5053,10 +5075,46 @@ async def lookup_senaite_sample(
                 matched_peptide_name=match[1] if match else None,
             ))
 
+        # Parse profiles
+        profiles: list[str] = []
+        profiles_str = item.get("getProfilesTitleStr") or item.get("ProfilesTitleStr")
+        if profiles_str:
+            profiles = [p.strip() for p in str(profiles_str).split(",") if p.strip()]
+
+        # Resolve image URLs — prepend WordPress host for relative paths
+        def resolve_wp_url(raw: str | None) -> str | None:
+            if not raw:
+                return None
+            if raw.startswith("http://") or raw.startswith("https://"):
+                return raw
+            return get_wordpress_host().rstrip("/") + "/" + raw.lstrip("/")
+
+        # Parse COA info
+        coa = SenaiteCOAInfo(
+            company_logo_url=resolve_wp_url(item.get("CompanyLogoUrl")),
+            chromatograph_background_url=resolve_wp_url(item.get("ChromatographBackgroundUrl")),
+            company_name=item.get("CoaCompanyName") or None,
+            email=item.get("CoaEmail") or None,
+            website=item.get("CoaWebsite") or None,
+            address=item.get("CoaAddress") or None,
+            verification_code=item.get("VerificationCode") or None,
+        )
+
         return SenaiteLookupResult(
             sample_id=sample_id,
+            client=item.get("getClientTitle") or item.get("ClientTitle") or None,
+            contact=item.get("ContactFullName") or None,
+            sample_type=item.get("SampleTypeTitle") or item.get("getSampleTypeTitle") or None,
+            date_received=item.get("DateReceived") or item.get("getDateReceived") or None,
+            date_sampled=item.get("DateSampled") or item.get("getDateSampled") or None,
+            profiles=profiles,
+            client_order_number=item.get("ClientOrderNumber") or item.get("getClientOrderNumber") or None,
+            client_sample_id=item.get("ClientSampleID") or item.get("getClientSampleID") or None,
+            client_lot=str(item["ClientLot"]) if item.get("ClientLot") is not None else None,
+            review_state=item.get("review_state") or None,
             declared_weight_mg=declared_weight_mg,
             analytes=analytes,
+            coa=coa,
         )
 
     except HTTPException:
@@ -5067,6 +5125,348 @@ async def lookup_senaite_sample(
         raise HTTPException(status_code=503, detail="SENAITE is currently unavailable \u2014 use manual entry")
     except Exception:
         raise HTTPException(status_code=503, detail="SENAITE is currently unavailable \u2014 use manual entry")
+
+
+class SenaiteSampleItem(BaseModel):
+    uid: str
+    id: str
+    title: str
+    client_id: Optional[str] = None
+    client_order_number: Optional[str] = None
+    date_received: Optional[str] = None
+    date_sampled: Optional[str] = None
+    review_state: str
+    sample_type: Optional[str] = None
+    contact: Optional[str] = None
+
+
+class SenaiteSamplesResponse(BaseModel):
+    items: list[SenaiteSampleItem]
+    total: int
+    b_start: int
+
+
+@app.get("/senaite/samples", response_model=SenaiteSamplesResponse)
+async def list_senaite_samples(
+    review_state: Optional[str] = None,
+    limit: int = 50,
+    b_start: int = 0,
+    _current_user=Depends(get_current_user),
+):
+    """
+    List AnalysisRequests from SENAITE with optional review_state filter.
+
+    Query params:
+    - review_state: Comma-separated state(s) e.g. "sample_received,to_be_verified"
+    - limit: Max results (default 50)
+    - b_start: Pagination offset (default 0)
+
+    Returns items sorted by DateReceived descending.
+    """
+    if SENAITE_URL is None:
+        raise HTTPException(status_code=503, detail="SENAITE not configured")
+
+    url = f"{SENAITE_URL}/senaite/@@API/senaite/v1/AnalysisRequest"
+    params: dict = {"limit": limit, "b_start": b_start, "complete": "yes", "sort_on": "DateReceived", "sort_order": "descending"}
+
+    # SENAITE supports review_state:list for multiple states
+    states = [s.strip() for s in review_state.split(",") if s.strip()] if review_state else []
+
+    try:
+        async with httpx.AsyncClient(
+            timeout=SENAITE_TIMEOUT,
+            auth=httpx.BasicAuth(SENAITE_USER, SENAITE_PASSWORD),
+        ) as client:
+            if len(states) == 1:
+                resp = await client.get(url, params={**params, "review_state": states[0]})
+            elif len(states) > 1:
+                # Build multivalue query string manually for review_state:list
+                base_params = "&".join(f"{k}={v}" for k, v in params.items())
+                state_params = "&".join(f"review_state:list={s}" for s in states)
+                resp = await client.get(f"{url}?{base_params}&{state_params}")
+            else:
+                resp = await client.get(url, params=params)
+
+        resp.raise_for_status()
+        data = resp.json()
+
+        def _extract_contact(item: dict) -> Optional[str]:
+            contact = item.get("contact")
+            if not contact:
+                return None
+            if isinstance(contact, dict):
+                return contact.get("title") or contact.get("id")
+            return str(contact)
+
+        items = []
+        for it in data.get("items", []):
+            items.append(SenaiteSampleItem(
+                uid=str(it.get("uid", "")),
+                id=str(it.get("id", "")),
+                title=str(it.get("title", "")),
+                client_id=it.get("getClientTitle") or it.get("ClientID") or it.get("getClientID") or None,
+                client_order_number=it.get("getClientOrderNumber") or it.get("ClientOrderNumber") or None,
+                date_received=it.get("getDateReceived") or it.get("DateReceived") or None,
+                date_sampled=it.get("getDateSampled") or it.get("DateSampled") or None,
+                review_state=str(it.get("review_state", "")),
+                sample_type=it.get("getSampleTypeTitle") or it.get("SampleTypeTitle") or it.get("SampleType") or None,
+                contact=_extract_contact(it),
+            ))
+
+        return SenaiteSamplesResponse(
+            items=items,
+            total=data.get("total", len(items)),
+            b_start=b_start,
+        )
+
+    except HTTPException:
+        raise
+    except httpx.TimeoutException:
+        raise HTTPException(status_code=503, detail="SENAITE is currently unavailable")
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(status_code=503, detail=f"SENAITE returned {e.response.status_code}")
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"SENAITE error: {e}")
+
+
+class SenaiteReceiveSampleRequest(BaseModel):
+    sample_uid: str
+    sample_id: str
+    image_base64: Optional[str] = None  # data URL or raw base64 (optional)
+    remarks: Optional[str] = None
+
+
+class SenaiteReceiveSampleResponse(BaseModel):
+    success: bool
+    message: str
+    senaite_response: Optional[dict] = None
+
+
+@app.post(
+    "/wizard/senaite/receive-sample",
+    response_model=SenaiteReceiveSampleResponse,
+)
+async def receive_senaite_sample(
+    req: SenaiteReceiveSampleRequest,
+    _current_user=Depends(get_current_user),
+):
+    """Check-in / receive a sample in SENAITE.
+
+    Performs up to three actions in sequence:
+      1. Upload sample image attachment (if image provided).
+      2. Add remarks to the sample (if remarks provided).
+      3. Transition the sample to 'received' state.
+    """
+    if SENAITE_URL is None:
+        return SenaiteReceiveSampleResponse(
+            success=False, message="SENAITE not configured"
+        )
+
+    import base64
+    import re
+
+    # Decode image if provided
+    image_bytes = None
+    if req.image_base64:
+        image_data = req.image_base64
+        if image_data.startswith("data:"):
+            image_data = image_data.split(",", 1)[1]
+        try:
+            image_bytes = base64.b64decode(image_data)
+        except Exception as e:
+            return SenaiteReceiveSampleResponse(
+                success=False, message=f"Invalid base64 image data: {e}"
+            )
+
+    steps_done = []
+
+    try:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(30.0, connect=5.0),
+            auth=httpx.BasicAuth(SENAITE_USER, SENAITE_PASSWORD),
+            follow_redirects=True,
+        ) as client:
+            # Fetch sample via JSON API to get physical path
+            api_url = f"{SENAITE_URL}/senaite/@@API/senaite/v1/AnalysisRequest"
+            sample_resp = await client.get(
+                api_url, params={"UID": req.sample_uid, "limit": 1}
+            )
+            sample_resp.raise_for_status()
+            sample_data = sample_resp.json()
+
+            if sample_data.get("count", 0) == 0:
+                return SenaiteReceiveSampleResponse(
+                    success=False,
+                    message=f"Sample {req.sample_id} not found in SENAITE",
+                    senaite_response=sample_data,
+                )
+
+            sample_item = sample_data["items"][0]
+            current_state = sample_item.get("review_state", "")
+            sample_path = sample_item.get("path", "")
+            if not sample_path:
+                return SenaiteReceiveSampleResponse(
+                    success=False,
+                    message="Could not determine sample path in SENAITE",
+                )
+            sample_url = f"{SENAITE_URL}{sample_path}"
+
+            # GET sample page for CSRF token (needed for attachment + workflow)
+            page_resp = await client.get(sample_url)
+            page_html = page_resp.text
+
+            auth_match = re.search(
+                r'name="_authenticator"\s+value="([^"]+)"', page_html
+            )
+            authenticator = auth_match.group(1) if auth_match else ""
+
+            # --- Step 1: Upload image attachment (optional) ---
+            if image_bytes:
+                type_match = re.search(
+                    r'<option\s+value="([^"]+)"[^>]*>\s*Sample Image\s*</option>',
+                    page_html,
+                )
+                attachment_type_uid = (
+                    type_match.group(1) if type_match else ""
+                )
+
+                filename = f"{req.sample_id}-sample-image.png"
+                form_url = f"{sample_url}/@@attachments_view/add"
+                form_data = {
+                    "submitted": "1",
+                    "_authenticator": authenticator,
+                    "AttachmentType": attachment_type_uid,
+                    "Analysis": "",  # empty = "Attach to Sample"
+                    "AttachmentKeys": "",
+                    "RenderInReport:boolean": "True",
+                    "RenderInReport:boolean:default": "False",
+                    "addARAttachment": "Add Attachment",
+                }
+                files = {
+                    "AttachmentFile_file": (
+                        filename,
+                        image_bytes,
+                        "image/png",
+                    ),
+                }
+                headers = {
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                    "Referer": sample_url,
+                }
+                att_resp = await client.post(
+                    form_url,
+                    data=form_data,
+                    files=files,
+                    headers=headers,
+                )
+                if att_resp.status_code in (200, 301, 302):
+                    steps_done.append("image_uploaded")
+                else:
+                    return SenaiteReceiveSampleResponse(
+                        success=False,
+                        message=f"Image upload failed: SENAITE returned {att_resp.status_code}",
+                        senaite_response={"steps_done": steps_done},
+                    )
+
+            # --- Step 2: Add remarks (optional) ---
+            if req.remarks and req.remarks.strip():
+                update_url = f"{SENAITE_URL}/senaite/@@API/senaite/v1/update/{req.sample_uid}"
+                remark_resp = await client.post(
+                    update_url, json={"Remarks": req.remarks.strip()}
+                )
+                if remark_resp.status_code == 200:
+                    steps_done.append("remarks_added")
+                else:
+                    return SenaiteReceiveSampleResponse(
+                        success=False,
+                        message=f"Remarks update failed: SENAITE returned {remark_resp.status_code}",
+                        senaite_response={"steps_done": steps_done},
+                    )
+
+            # --- Step 3: Transition to 'received' ---
+            # Only attempt if sample is still in 'sample_due' state.
+            # Samples already received or further along don't need this.
+            if current_state == "sample_due":
+                # Always re-fetch CSRF right before workflow transition
+                # (prior steps may have rotated the token)
+                page_resp2 = await client.get(sample_url)
+                auth_match2 = re.search(
+                    r'name="_authenticator"\s+value="([^"]+)"',
+                    page_resp2.text,
+                )
+                authenticator = (
+                    auth_match2.group(1) if auth_match2 else authenticator
+                )
+
+                wf_url = f"{sample_url}/workflow_action"
+                wf_data = {
+                    "workflow_action": "receive",
+                    "_authenticator": authenticator,
+                }
+                headers = {
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                    "Referer": sample_url,
+                }
+                wf_resp = await client.post(
+                    wf_url, data=wf_data, headers=headers
+                )
+                if wf_resp.status_code not in (200, 301, 302):
+                    return SenaiteReceiveSampleResponse(
+                        success=False,
+                        message=f"Workflow transition failed: SENAITE returned {wf_resp.status_code}",
+                        senaite_response={"steps_done": steps_done},
+                    )
+
+                # Verify the transition actually took effect
+                verify_resp = await client.get(
+                    api_url, params={"UID": req.sample_uid, "limit": 1}
+                )
+                verify_data = verify_resp.json()
+                new_state = (
+                    verify_data["items"][0].get("review_state", "")
+                    if verify_data.get("count", 0) > 0
+                    else ""
+                )
+                if new_state == "sample_received":
+                    steps_done.append("received")
+                else:
+                    return SenaiteReceiveSampleResponse(
+                        success=False,
+                        message=f"Workflow transition did not take effect (state is still '{new_state}')",
+                        senaite_response={"steps_done": steps_done},
+                    )
+            else:
+                steps_done.append(f"already_{current_state}")
+                return SenaiteReceiveSampleResponse(
+                    success=True,
+                    message=f"Sample {req.sample_id} is already '{current_state}' — image/remarks added but no state change needed",
+                    senaite_response={"steps_done": steps_done},
+                )
+
+        return SenaiteReceiveSampleResponse(
+            success=True,
+            message=f"Sample {req.sample_id} received successfully",
+            senaite_response={"steps_done": steps_done},
+        )
+
+    except httpx.TimeoutException:
+        return SenaiteReceiveSampleResponse(
+            success=False,
+            message="SENAITE request timed out",
+            senaite_response={"steps_done": steps_done},
+        )
+    except httpx.HTTPStatusError as e:
+        return SenaiteReceiveSampleResponse(
+            success=False,
+            message=f"SENAITE returned {e.response.status_code}",
+            senaite_response={"steps_done": steps_done},
+        )
+    except Exception as e:
+        return SenaiteReceiveSampleResponse(
+            success=False,
+            message=f"Receive error: {e}",
+            senaite_response={"steps_done": steps_done},
+        )
 
 
 # --- Scale endpoints (Phase 2) ---

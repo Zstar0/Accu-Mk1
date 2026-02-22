@@ -30,9 +30,14 @@ export const KNOWN_ENVIRONMENTS: ApiEnvironment[] = [
     url: 'http://127.0.0.1:8012',
   },
   {
+    id: 'docker',
+    name: 'Docker (local)',
+    url: '/api',
+  },
+  {
     id: 'production',
     name: 'Production',
-    url: 'https://api.accumarklabs.com',
+    url: 'https://accumk1.valenceanalytical.com/api',
   },
 ]
 
