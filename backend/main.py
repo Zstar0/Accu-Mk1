@@ -4938,6 +4938,12 @@ class SenaiteCOAInfo(BaseModel):
     verification_code: Optional[str] = None
 
 
+class SenaiteRemark(BaseModel):
+    content: str  # HTML string from SENAITE
+    user_id: Optional[str] = None
+    created: Optional[str] = None
+
+
 class SenaiteLookupResult(BaseModel):
     sample_id: str
     client: Optional[str] = None
@@ -4953,6 +4959,7 @@ class SenaiteLookupResult(BaseModel):
     declared_weight_mg: Optional[float] = None
     analytes: list[SenaiteAnalyte]
     coa: SenaiteCOAInfo = SenaiteCOAInfo()
+    remarks: list[SenaiteRemark] = []
 
 
 class SenaiteStatusResponse(BaseModel):
@@ -5100,6 +5107,18 @@ async def lookup_senaite_sample(
             verification_code=item.get("VerificationCode") or None,
         )
 
+        # Parse remarks (list of {content, user_id, created, ...})
+        senaite_remarks: list[SenaiteRemark] = []
+        raw_remarks = item.get("Remarks")
+        if isinstance(raw_remarks, list):
+            for r in raw_remarks:
+                if isinstance(r, dict) and r.get("content"):
+                    senaite_remarks.append(SenaiteRemark(
+                        content=r["content"],
+                        user_id=r.get("user_id") or None,
+                        created=r.get("created") or None,
+                    ))
+
         return SenaiteLookupResult(
             sample_id=sample_id,
             client=item.get("getClientTitle") or item.get("ClientTitle") or None,
@@ -5115,6 +5134,7 @@ async def lookup_senaite_sample(
             declared_weight_mg=declared_weight_mg,
             analytes=analytes,
             coa=coa,
+            remarks=senaite_remarks,
         )
 
     except HTTPException:

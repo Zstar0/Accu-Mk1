@@ -1925,6 +1925,12 @@ export interface SenaiteCOAInfo {
   verification_code: string | null
 }
 
+export interface SenaiteRemark {
+  content: string
+  user_id: string | null
+  created: string | null
+}
+
 export interface SenaiteLookupResult {
   sample_id: string
   client: string | null
@@ -1940,6 +1946,7 @@ export interface SenaiteLookupResult {
   declared_weight_mg: number | null
   analytes: SenaiteAnalyte[]
   coa: SenaiteCOAInfo
+  remarks: SenaiteRemark[]
 }
 
 export interface SenaiteStatusResponse {

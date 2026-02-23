@@ -12,6 +12,7 @@ import {
   FileText,
   Image,
   RotateCcw,
+  MessageSquare,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Alert, AlertDescription } from '@/components/ui/alert'
@@ -672,6 +673,37 @@ export function ReceiveSample() {
                           </p>
                         )}
                       </div>
+
+                      {/* Remarks from SENAITE */}
+                      {lookupResult.remarks.length > 0 && (
+                        <div className="border-t border-border/50 pt-3 space-y-2">
+                          <div className="flex items-center gap-2 text-sm font-medium">
+                            <MessageSquare className="h-4 w-4 text-amber-500 dark:text-amber-400" />
+                            Remarks
+                          </div>
+                          <div className="space-y-2">
+                            {lookupResult.remarks.map((r, i) => (
+                              <div
+                                key={i}
+                                className="rounded border border-amber-200 bg-amber-50/60 dark:border-amber-900/40 dark:bg-amber-950/20 px-3 py-2"
+                              >
+                                <div
+                                  className="text-sm prose prose-sm dark:prose-invert max-w-none [&_p]:m-0"
+                                  dangerouslySetInnerHTML={{
+                                    __html: r.content,
+                                  }}
+                                />
+                                {r.created && (
+                                  <p className="text-xs text-muted-foreground mt-1">
+                                    {r.user_id && `${r.user_id} — `}
+                                    {formatDate(r.created)}
+                                  </p>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
 
                       {/* COA — collapsible */}
                       <details className="border-t border-border/50 pt-3 group">
