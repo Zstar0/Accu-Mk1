@@ -4919,7 +4919,7 @@ async def complete_wizard_session(
 SENAITE_URL = os.environ.get("SENAITE_URL")          # None = disabled
 SENAITE_USER = os.environ.get("SENAITE_USER", "")
 SENAITE_PASSWORD = os.environ.get("SENAITE_PASSWORD", "")
-SENAITE_TIMEOUT = httpx.Timeout(10.0, connect=5.0)
+SENAITE_TIMEOUT = httpx.Timeout(30.0, connect=10.0)
 
 
 class SenaiteAnalyte(BaseModel):
@@ -4944,8 +4944,20 @@ class SenaiteRemark(BaseModel):
     created: Optional[str] = None
 
 
+class SenaiteAnalysis(BaseModel):
+    title: str
+    result: Optional[str] = None
+    unit: Optional[str] = None
+    method: Optional[str] = None
+    instrument: Optional[str] = None
+    analyst: Optional[str] = None
+    due_date: Optional[str] = None
+    review_state: Optional[str] = None
+
+
 class SenaiteLookupResult(BaseModel):
     sample_id: str
+    sample_uid: Optional[str] = None
     client: Optional[str] = None
     contact: Optional[str] = None
     sample_type: Optional[str] = None
@@ -4960,10 +4972,20 @@ class SenaiteLookupResult(BaseModel):
     analytes: list[SenaiteAnalyte]
     coa: SenaiteCOAInfo = SenaiteCOAInfo()
     remarks: list[SenaiteRemark] = []
+    analyses: list[SenaiteAnalysis] = []
+    senaite_url: Optional[str] = None  # e.g. "/clients/client-8/PB-0057"
 
 
 class SenaiteStatusResponse(BaseModel):
     enabled: bool
+
+
+def _senaite_path(item: dict) -> Optional[str]:
+    """Extract the SENAITE-relative path (e.g. '/clients/client-8/PB-0057') from a sample item."""
+    raw = item.get("path") or ""
+    if raw.startswith("/senaite/"):
+        return raw[len("/senaite"):]  # strip '/senaite' prefix, keep leading slash
+    return raw or None
 
 
 def _strip_method_suffix(name: str) -> str:
@@ -4999,11 +5021,13 @@ async def _fetch_senaite_sample(sample_id: str) -> dict:
     Raises httpx exceptions on network/HTTP errors.
     """
     url = f"{SENAITE_URL}/senaite/@@API/senaite/v1/AnalysisRequest"
+    print(f"[INFO] _fetch_senaite_sample: GET {url}?id={sample_id}&complete=yes")
     async with httpx.AsyncClient(
         timeout=SENAITE_TIMEOUT,
         auth=httpx.BasicAuth(SENAITE_USER, SENAITE_PASSWORD),
     ) as client:
         resp = await client.get(url, params={"id": sample_id, "complete": "yes"})
+        print(f"[INFO] _fetch_senaite_sample: status={resp.status_code}")
         resp.raise_for_status()
         return resp.json()
 
@@ -5119,8 +5143,41 @@ async def lookup_senaite_sample(
                         created=r.get("created") or None,
                     ))
 
+        # Fetch analyses (lab test results) for this sample.
+        # Use getRequestID (the sample ID string) — this is the only reliable
+        # filter on SENAITE's Analysis endpoint (getRequestUID is ignored).
+        sample_uid = item.get("uid") or item.get("UID") or ""
+        senaite_analyses: list[SenaiteAnalysis] = []
+        try:
+            analysis_url = f"{SENAITE_URL}/senaite/@@API/senaite/v1/Analysis"
+            async with httpx.AsyncClient(
+                timeout=SENAITE_TIMEOUT,
+                auth=httpx.BasicAuth(SENAITE_USER, SENAITE_PASSWORD),
+            ) as client:
+                an_resp = await client.get(analysis_url, params={
+                    "getRequestID": sample_id,
+                    "limit": "100",
+                })
+                an_resp.raise_for_status()
+                an_data = an_resp.json()
+                for an_item in an_data.get("items", []):
+                    senaite_analyses.append(SenaiteAnalysis(
+                        title=an_item.get("title") or an_item.get("Title") or str(an_item.get("id", "")),
+                        result=str(an_item["Result"]) if an_item.get("Result") not in (None, "") else None,
+                        unit=an_item.get("Unit") or an_item.get("getUnit") or None,
+                        method=an_item.get("getMethodTitle") or an_item.get("MethodTitle") or None,
+                        instrument=an_item.get("getInstrumentTitle") or an_item.get("InstrumentTitle") or None,
+                        analyst=an_item.get("getAnalyst") or an_item.get("Analyst") or None,
+                        due_date=an_item.get("getDueDate") or an_item.get("DueDate") or None,
+                        review_state=an_item.get("review_state") or None,
+                    ))
+            print(f"[INFO] Fetched {len(senaite_analyses)} analyses for sample {sample_id}")
+        except Exception as exc:
+            print(f"[WARN] Failed to fetch analyses for {sample_id}: {exc}")
+
         return SenaiteLookupResult(
             sample_id=sample_id,
+            sample_uid=sample_uid or None,
             client=item.get("getClientTitle") or item.get("ClientTitle") or None,
             contact=item.get("ContactFullName") or None,
             sample_type=item.get("SampleTypeTitle") or item.get("getSampleTypeTitle") or None,
@@ -5135,15 +5192,20 @@ async def lookup_senaite_sample(
             analytes=analytes,
             coa=coa,
             remarks=senaite_remarks,
+            analyses=senaite_analyses,
+            senaite_url=_senaite_path(item),
         )
 
     except HTTPException:
         raise
-    except httpx.TimeoutException:
+    except httpx.TimeoutException as exc:
+        print(f"[WARN] SENAITE lookup timeout for {id}: {exc}")
         raise HTTPException(status_code=503, detail="SENAITE is currently unavailable \u2014 use manual entry")
-    except httpx.HTTPStatusError:
+    except httpx.HTTPStatusError as exc:
+        print(f"[WARN] SENAITE lookup HTTP error for {id}: {exc}")
         raise HTTPException(status_code=503, detail="SENAITE is currently unavailable \u2014 use manual entry")
-    except Exception:
+    except Exception as exc:
+        print(f"[WARN] SENAITE lookup error for {id}: {type(exc).__name__} {exc}")
         raise HTTPException(status_code=503, detail="SENAITE is currently unavailable \u2014 use manual entry")
 
 

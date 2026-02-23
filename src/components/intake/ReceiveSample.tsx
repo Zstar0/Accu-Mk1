@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import {
   Check,
   Loader2,
@@ -26,6 +26,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import { Checkbox } from '@/components/ui/checkbox'
 import { cn } from '@/lib/utils'
 import { PhotoCapture } from '@/components/intake/PhotoCapture'
 import {
@@ -177,6 +178,13 @@ function InlineField({
   )
 }
 
+/** Contacts whose samples are hidden unless "Show Test Samples" is checked. */
+const TEST_CONTACTS = [
+  'forrest@valenceanalytical.com',
+  'valence internal 2',
+  'val_int2',
+]
+
 export function ReceiveSample() {
   const [currentStep, setCurrentStep] = useState<IntakeStep>(1)
   const [completedSteps, setCompletedSteps] = useState<Set<IntakeStep>>(
@@ -185,7 +193,6 @@ export function ReceiveSample() {
 
   // Step 1: Due samples list
   const [dueSamples, setDueSamples] = useState<SenaiteSample[]>([])
-  const [dueSamplesTotal, setDueSamplesTotal] = useState(0)
   const [dueSamplesLoading, setDueSamplesLoading] = useState(true)
   const [dueSamplesConnected, setDueSamplesConnected] = useState(false)
   const [dueSamplesError, setDueSamplesError] = useState<string | null>(null)
@@ -194,6 +201,7 @@ export function ReceiveSample() {
   )
   const [sortColumn, setSortColumn] = useState<SortColumn | null>(null)
   const [sortDir, setSortDir] = useState<SortDir>('asc')
+  const [showTestSamples, setShowTestSamples] = useState(false)
 
   function handleSort(col: SortColumn) {
     if (sortColumn === col) {
@@ -204,8 +212,16 @@ export function ReceiveSample() {
     }
   }
 
+  const filteredSamples = showTestSamples
+    ? dueSamples
+    : dueSamples.filter(
+        s =>
+          !s.client_id ||
+          !TEST_CONTACTS.includes(s.client_id.toLowerCase())
+      )
+
   const sortedSamples = sortColumn
-    ? [...dueSamples].sort((a, b) => {
+    ? [...filteredSamples].sort((a, b) => {
         const valA = a[sortColumn] ?? ''
         const valB = b[sortColumn] ?? ''
         const cmp = String(valA).localeCompare(String(valB), undefined, {
@@ -213,7 +229,7 @@ export function ReceiveSample() {
         })
         return sortDir === 'asc' ? cmp : -cmp
       })
-    : dueSamples
+    : filteredSamples
 
   const loadDueSamples = useCallback(async () => {
     setDueSamplesLoading(true)
@@ -224,7 +240,6 @@ export function ReceiveSample() {
       if (status.enabled) {
         const result = await getSenaiteSamples('sample_due', 50, 0)
         setDueSamples(result.items)
-        setDueSamplesTotal(result.total)
       }
     } catch (e) {
       setDueSamplesConnected(false)
@@ -292,6 +307,30 @@ export function ReceiveSample() {
       setLookupLoading(false)
     }
   }
+
+  // Intercept browser back button: go to Step 1 instead of leaving the page.
+  // We push a same-hash history entry when entering Step 2 so the first
+  // "back" press pops that entry (hash stays the same → hash-nav is a no-op)
+  // and our listener moves to Step 1.
+  const stepRef = useRef(currentStep)
+  stepRef.current = currentStep
+
+  useEffect(() => {
+    if (currentStep !== 2) return
+
+    // Push an extra history entry with the current hash so "back" stays on same page
+    const currentHash = window.location.hash
+    history.pushState({ intakeStep: 2 }, '', currentHash)
+
+    const handlePopState = () => {
+      if (stepRef.current === 2) {
+        setCurrentStep(1)
+      }
+    }
+
+    window.addEventListener('popstate', handlePopState)
+    return () => window.removeEventListener('popstate', handlePopState)
+  }, [currentStep])
 
   // Auto-lookup when arriving at step 2 with a pending sample from step 1
   useEffect(() => {
@@ -407,8 +446,8 @@ export function ReceiveSample() {
                     <p className="text-muted-foreground">
                       {dueSamplesConnected &&
                       !dueSamplesLoading &&
-                      dueSamplesTotal > 0
-                        ? `${dueSamplesTotal} due sample${dueSamplesTotal !== 1 ? 's' : ''} — select one to receive`
+                      filteredSamples.length > 0
+                        ? `${filteredSamples.length} due sample${filteredSamples.length !== 1 ? 's' : ''} — select one to receive`
                         : 'Select a due sample from SENAITE to receive'}
                     </p>
                   </div>
@@ -424,6 +463,18 @@ export function ReceiveSample() {
                     />
                   </Button>
                 </div>
+
+                <label
+                  htmlFor="show-test-samples"
+                  className="flex items-center gap-2 text-sm text-muted-foreground cursor-pointer select-none"
+                >
+                  <Checkbox
+                    id="show-test-samples"
+                    checked={showTestSamples}
+                    onCheckedChange={v => setShowTestSamples(v === true)}
+                  />
+                  Show Test Samples
+                </label>
 
                 {dueSamplesLoading ? (
                   <div className="flex items-center justify-center py-12">
@@ -706,7 +757,7 @@ export function ReceiveSample() {
                       )}
 
                       {/* COA — collapsible */}
-                      <details className="border-t border-border/50 pt-3 group">
+                      <details open className="border-t border-border/50 pt-3 group">
                         <summary className="flex items-center gap-2 cursor-pointer text-sm font-medium select-none">
                           <FileText className="h-4 w-4 text-blue-500 dark:text-slate-400" />
                           COA Information

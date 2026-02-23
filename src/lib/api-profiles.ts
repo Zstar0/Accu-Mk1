@@ -128,6 +128,16 @@ export function getWordpressUrl(): string {
   return import.meta.env.VITE_WORDPRESS_URL || 'https://accumarklabs.local'
 }
 
+// ── SENAITE URL (from env var) ──────────────────────────────────
+
+/**
+ * Get the SENAITE base URL for direct browser links.
+ * Local dev uses http://localhost:8080/senaite, production uses the public domain.
+ */
+export function getSenaiteUrl(): string {
+  return import.meta.env.VITE_SENAITE_URL || 'http://localhost:8080/senaite'
+}
+
 // ── Legacy compatibility ───────────────────────────────────────
 // These existed for the old API key system. The API key now lives
 // in the backend .env, so these return null / false.

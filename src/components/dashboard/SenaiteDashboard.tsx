@@ -26,6 +26,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { getSenaiteSamples, getSenaiteStatus, type SenaiteSample } from '@/lib/api'
+import { useUIStore } from '@/store/ui-store'
 
 // --- Constants ---
 
@@ -117,11 +118,13 @@ function SampleTable({
   loading,
   connected,
   error,
+  onSelectSample,
 }: {
   samples: SenaiteSample[]
   loading: boolean
   connected: boolean
   error: string | null
+  onSelectSample?: (sampleId: string) => void
 }) {
   if (loading) {
     return (
@@ -173,7 +176,11 @@ function SampleTable({
         </TableHeader>
         <TableBody>
           {samples.map(s => (
-            <TableRow key={s.uid} className="hover:bg-muted/30">
+            <TableRow
+              key={s.uid}
+              className="hover:bg-muted/30 cursor-pointer"
+              onClick={() => onSelectSample?.(s.id)}
+            >
               <TableCell className="font-mono text-sm">{s.id}</TableCell>
               <TableCell className="text-sm text-muted-foreground">{s.client_order_number ?? '—'}</TableCell>
               <TableCell className="text-sm">{s.client_id ?? '—'}</TableCell>
@@ -193,6 +200,7 @@ function SampleTable({
 // --- Main Dashboard ---
 
 export function SenaiteDashboard() {
+  const navigateToSample = useUIStore(state => state.navigateToSample)
   const [activeTab, setActiveTab] = useState('open')
   const [connected, setConnected] = useState(false)
   const [loading, setLoading] = useState(true)
@@ -344,6 +352,7 @@ export function SenaiteDashboard() {
                     loading={loading && activeTab === tab.id}
                     connected={connected}
                     error={error}
+                    onSelectSample={navigateToSample}
                   />
                 </TabsContent>
               ))}

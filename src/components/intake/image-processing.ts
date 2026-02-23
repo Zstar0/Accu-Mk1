@@ -113,21 +113,25 @@ function stepDownScale(
  * @param canvas     An offscreen <canvas> element to use as a work surface
  * @param guideRatio Fraction of the shorter video axis covered by the guide
  * @param enhance    When true, applies auto-levels / contrast / white-balance
+ * @param zoomCrop   When true, crops to the guide square; when false, captures the full frame as a square
  * @returns PNG data URL of the processed 500 x 496 image
  */
 export function processVialPhoto(
   video: HTMLVideoElement,
   canvas: HTMLCanvasElement,
   guideRatio: number,
-  enhance = true
+  enhance = true,
+  zoomCrop = false
 ): string {
   const vw = video.videoWidth
   const vh = video.videoHeight
   if (vw === 0 || vh === 0) throw new Error('Video has no dimensions')
 
-  // --- Step 1: Center-crop to the guide square ---
+  // --- Step 1: Crop to square ---
   const shorter = Math.min(vw, vh)
-  const cropSize = Math.round(shorter * guideRatio)
+  const cropSize = zoomCrop
+    ? Math.round(shorter * guideRatio) // Zoom: crop to guide square
+    : shorter // No zoom: use full shorter axis (center-square)
   const sx = Math.round((vw - cropSize) / 2)
   const sy = Math.round((vh - cropSize) / 2)
 

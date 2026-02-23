@@ -1931,8 +1931,20 @@ export interface SenaiteRemark {
   created: string | null
 }
 
+export interface SenaiteAnalysis {
+  title: string
+  result: string | null
+  unit: string | null
+  method: string | null
+  instrument: string | null
+  analyst: string | null
+  due_date: string | null
+  review_state: string | null
+}
+
 export interface SenaiteLookupResult {
   sample_id: string
+  sample_uid: string | null
   client: string | null
   contact: string | null
   sample_type: string | null
@@ -1947,6 +1959,8 @@ export interface SenaiteLookupResult {
   analytes: SenaiteAnalyte[]
   coa: SenaiteCOAInfo
   remarks: SenaiteRemark[]
+  analyses: SenaiteAnalysis[]
+  senaite_url: string | null
 }
 
 export interface SenaiteStatusResponse {

@@ -23,6 +23,7 @@ const GUIDE_RATIO = 0.6
 
 const SS_DEVICE_KEY = 'intake:receive-sample:camera-device'
 const SS_ENHANCE_KEY = 'intake:receive-sample:enhance'
+const SS_ZOOM_CROP_KEY = 'intake:receive-sample:zoom-crop'
 
 // ---------------------------------------------------------------------------
 // State machine
@@ -59,9 +60,14 @@ export function PhotoCapture({
     () => sessionStorage.getItem(SS_DEVICE_KEY) ?? ''
   )
 
-  // Post-processing toggle
-  const [enhance, setEnhance] = useState(
+  // Post-processing toggle (hidden for now — always reads from sessionStorage)
+  const [enhance] = useState(
     () => sessionStorage.getItem(SS_ENHANCE_KEY) !== 'false'
+  )
+
+  // Zoom & crop toggle (off by default — capture full frame)
+  const [zoomCrop, setZoomCrop] = useState(
+    () => sessionStorage.getItem(SS_ZOOM_CROP_KEY) === 'true'
   )
 
   // Bump this to trigger a camera (re)start via the effect
@@ -110,6 +116,11 @@ export function PhotoCapture({
   useEffect(() => {
     sessionStorage.setItem(SS_ENHANCE_KEY, String(enhance))
   }, [enhance])
+
+  // Persist zoom/crop toggle
+  useEffect(() => {
+    sessionStorage.setItem(SS_ZOOM_CROP_KEY, String(zoomCrop))
+  }, [zoomCrop])
 
   // -------------------------------------------------------------------
   // Camera lifecycle — driven by `cameraRequest` + `selectedDeviceId`
@@ -190,7 +201,7 @@ export function PhotoCapture({
     // Use requestAnimationFrame to let the UI update before blocking
     requestAnimationFrame(() => {
       try {
-        const dataUrl = processVialPhoto(video, canvas, GUIDE_RATIO, enhance)
+        const dataUrl = processVialPhoto(video, canvas, GUIDE_RATIO, enhance, zoomCrop)
         // Stop camera tracks
         streamRef.current?.getTracks().forEach(t => t.stop())
         streamRef.current = null
@@ -283,19 +294,19 @@ export function PhotoCapture({
         </div>
       )}
 
-      {/* ---- Post-processing toggle ---- */}
+      {/* ---- Zoom & crop toggle ---- */}
       {state.phase !== 'review' && (
         <label
-          htmlFor="enhance-toggle"
+          htmlFor="zoom-crop-toggle"
           className="flex items-center gap-2 w-full max-w-lg cursor-pointer"
         >
           <Checkbox
-            id="enhance-toggle"
-            checked={enhance}
-            onCheckedChange={v => setEnhance(v === true)}
+            id="zoom-crop-toggle"
+            checked={zoomCrop}
+            onCheckedChange={v => setZoomCrop(v === true)}
           />
           <span className="text-sm text-muted-foreground select-none">
-            Auto-enhance (levels, contrast, white balance)
+            Zoom &amp; crop to guide square
           </span>
         </label>
       )}
@@ -317,8 +328,8 @@ export function PhotoCapture({
             className="block w-full"
           />
 
-          {/* Guide overlay: darkens outside, shows centered square */}
-          {(state.phase === 'preview' || state.phase === 'processing') && (
+          {/* Guide overlay: darkens outside, shows centered square (only when zoom & crop enabled) */}
+          {zoomCrop && (state.phase === 'preview' || state.phase === 'processing') && (
             <>
               <div
                 className="absolute border-2 border-white/80 rounded-sm pointer-events-none"
@@ -369,7 +380,9 @@ export function PhotoCapture({
         {(state.phase === 'preview' || state.phase === 'processing') && (
           <>
             <p className="text-xs text-muted-foreground">
-              Position the vial inside the guide square
+              {zoomCrop
+                ? 'Position the vial inside the guide square'
+                : 'Center the vial in the frame'}
             </p>
 
             <Button

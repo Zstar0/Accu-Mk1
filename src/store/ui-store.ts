@@ -5,7 +5,7 @@ import { devtools } from 'zustand/middleware'
 export type ActiveSection = 'dashboard' | 'intake' | 'lab-operations' | 'hplc-analysis' | 'accumark-tools' | 'account'
 
 // Sub-sections within each main section
-export type DashboardSubSection = 'orders' | 'analytics' | 'senaite'
+export type DashboardSubSection = 'orders' | 'analytics' | 'senaite' | 'sample-details'
 export type IntakeSubSection = 'receive-sample'
 export type LabOperationsSubSection = 'chromatographs' | 'sample-intake'
 export type HPLCAnalysisSubSection = 'overview' | 'new-analysis' | 'import-analysis' | 'peptide-config' | 'analysis-history'
@@ -24,6 +24,7 @@ interface UIState {
   navigationKey: number
   peptideConfigTargetId: number | null
   orderExplorerTargetOrderId: string | null
+  sampleDetailsTargetId: string | null
   updateVersion: string | null
   updateReady: boolean
 
@@ -41,6 +42,7 @@ interface UIState {
   navigateTo: (section: ActiveSection, subSection: ActiveSubSection) => void
   navigateToPeptide: (peptideId: number) => void
   navigateToOrderExplorer: (orderId?: string) => void
+  navigateToSample: (sampleId: string) => void
   setUpdateVersion: (version: string | null) => void
   setUpdateReady: (ready: boolean) => void
 }
@@ -58,6 +60,7 @@ export const useUIStore = create<UIState>()(
       navigationKey: 0,
       peptideConfigTargetId: null,
       orderExplorerTargetOrderId: null,
+      sampleDetailsTargetId: null,
       updateVersion: null,
       updateReady: false,
 
@@ -147,6 +150,18 @@ export const useUIStore = create<UIState>()(
           }),
           undefined,
           'navigateToOrderExplorer'
+        ),
+
+      navigateToSample: (sampleId) =>
+        set(
+          state => ({
+            activeSection: 'dashboard',
+            activeSubSection: 'sample-details',
+            sampleDetailsTargetId: sampleId,
+            navigationKey: state.navigationKey + 1,
+          }),
+          undefined,
+          'navigateToSample'
         ),
 
       setUpdateVersion: (version) =>
