@@ -42,6 +42,25 @@ Internet
 | `/etc/letsencrypt/` | SSL certificates (Let's Encrypt) | Certbot auto-renewal |
 | Docker volume `accu-mk1-data` | SQLite database | Persistent across deploys |
 
+### Environment Files — Two Files, Two Purposes
+
+There are **two separate env files** on the server. They serve completely different purposes:
+
+| File | Purpose | Contains | Overwritten by deploy? |
+|------|---------|----------|----------------------|
+| `.env.docker` | **Frontend** Vite build vars | `VITE_API_URL`, `VITE_WORDPRESS_URL`, `VITE_SENAITE_URL` | **Yes** — deploy.sh copies `.env.docker.prod` → `.env.docker` every deploy |
+| `backend/.env` | **Backend** secrets | DB credentials, JWT secret, API keys, SENAITE creds | **Never** — excluded from rsync, must be edited manually via SSH |
+
+**`.env.docker`** (safe to overwrite):
+- Baked into the frontend JS bundle at Docker build time (`COPY .env.docker .env.production` in Dockerfile)
+- Source of truth is `.env.docker.prod` in the repo (committed, no secrets)
+- If wrong: frontend points to wrong API/SENAITE URLs — fix by redeploying or manually copying `.env.docker.prod`
+
+**`backend/.env`** (never overwrite):
+- Read at runtime by the FastAPI backend container
+- Contains production database credentials, JWT secret, API keys, SENAITE credentials
+- If lost: backend cannot connect to anything — restore from team password manager
+
 ### Critical Files That Must Not Be Overwritten
 
 These files exist only on the production server and contain environment-specific secrets. The deploy script is configured to **never sync them**, but you must be aware:
@@ -102,6 +121,31 @@ The script will:
 5. Run `docker compose up -d --build` on the server
 6. Wait 3 seconds, then health-check `https://accumk1.valenceanalytical.com/api/health`
 7. Prune dangling Docker images
+
+#### If the Deploy Script Fails Mid-Way
+
+The script uses multiple SSH connections (rsync, scp, ssh). If the connection is flaky, it may succeed at syncing code but fail on later steps. If this happens, SSH in manually and finish:
+
+```bash
+ssh root@165.227.241.81
+cd /root/accu-mk1
+
+# Check .env.docker has production values (VITE_API_URL=/api, not http://localhost)
+cat .env.docker
+
+# If it shows local/dev values, fix it:
+# cat > .env.docker << 'EOF'
+# # Production Docker build
+# VITE_API_URL=/api
+# VITE_WORDPRESS_URL=https://accumarklabs.com
+# VITE_SENAITE_URL=https://senaite.valenceanalytical.com
+# EOF
+
+# Rebuild and verify
+docker compose up -d --build
+sleep 3
+curl -s http://localhost:3100/api/health
+```
 
 #### What Gets Synced (and What Doesn't)
 
