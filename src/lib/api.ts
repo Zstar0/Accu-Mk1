@@ -1165,6 +1165,22 @@ export async function getOrderSampleEvents(
 }
 
 /**
+ * Get all sample status events across all orders (most recent first).
+ */
+export async function getAllSampleEvents(
+  limit = 200
+): Promise<ExplorerSampleEvent[]> {
+  const response = await fetch(
+    `${API_BASE_URL()}/explorer/sample-events?limit=${limit}`,
+    { headers: getAuthHeaders() }
+  )
+  if (!response.ok) {
+    throw new Error(`Get sample events failed: ${response.status}`)
+  }
+  return response.json()
+}
+
+/**
  * Get COA access logs for an order.
  */
 export async function getOrderAccessLogs(

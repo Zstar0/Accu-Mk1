@@ -1,5 +1,26 @@
 # Changelog
 
+## v0.15.0 — 2026-02-24
+
+### Added
+
+- **SENAITE promoted to top-level navigation** — SENAITE is now its own section in the sidebar (previously nested under Dashboard) with "Samples" and "Event Log" sub-items
+- **Event Log page** — new table showing all sample workflow status transitions (receive, submit, verify, publish, retract, cancel, reinstate) fetched from the integration service's `sample_status_events` table
+  - Color-coded transition badges and status badges per row
+  - WP notification status (check/X icon) and WP status text columns
+  - Clickable Sample ID links navigate directly to Sample Details
+  - Sample ID filter with search input in card header and per-row filter icon toggle
+  - Refresh button, loading spinner, empty states, and filtered-results empty state
+- **`GET /explorer/sample-events`** backend proxy — forwards to integration service for cross-order event retrieval
+- **`getAllSampleEvents()` API function** — frontend fetch wrapper for the new endpoint
+- **Shared SENAITE utilities** — extracted `StateBadge`, `STATE_LABELS`, and `formatDate` into `senaite-utils.tsx` for reuse across SenaiteDashboard and SampleEventLog
+
+### Changed
+
+- **SENAITE components reorganized** — moved `SenaiteDashboard.tsx`, `SampleDetails.tsx`, and `EditableField.tsx` from `components/dashboard/` to `components/senaite/` for better cohesion
+- **Navigation types updated** — `ActiveSection` now includes `'senaite'`; new `SenaiteSubSection` type; `navigateToSample()` routes to `senaite/sample-details` instead of `dashboard/sample-details`
+- **Hash navigation** — `'senaite'` added to `VALID_SECTIONS`; deep links work at `#senaite/samples`, `#senaite/event-log`, and `#senaite/sample-details?id=XX`
+
 ## v0.14.0 — 2026-02-24
 
 ### Added

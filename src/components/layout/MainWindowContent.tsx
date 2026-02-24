@@ -6,8 +6,9 @@ import { ChromatographViewer } from '@/components/ChromatographViewer'
 import { HPLCAnalysis } from '@/components/hplc/HPLCAnalysis'
 import { OrderDashboard } from '@/components/dashboard/OrderDashboard'
 import { AnalyticsDashboard } from '@/components/dashboard/AnalyticsDashboard'
-import { SenaiteDashboard } from '@/components/dashboard/SenaiteDashboard'
-import { SampleDetails } from '@/components/dashboard/SampleDetails'
+import { SenaiteDashboard } from '@/components/senaite/SenaiteDashboard'
+import { SampleDetails } from '@/components/senaite/SampleDetails'
+import { SampleEventLog } from '@/components/senaite/SampleEventLog'
 import { ReceiveSample } from '@/components/intake/ReceiveSample'
 import { UserManagement } from '@/components/auth/UserManagement'
 import { ChangePassword } from '@/components/auth/ChangePassword'
@@ -53,9 +54,11 @@ export function MainWindowContent({
     switch (activeSection) {
       case 'dashboard':
         if (activeSubSection === 'analytics') return <AnalyticsDashboard />
-        if (activeSubSection === 'senaite') return <SenaiteDashboard />
-        if (activeSubSection === 'sample-details') return <SampleDetails />
         return <OrderDashboard />
+      case 'senaite':
+        if (activeSubSection === 'event-log') return <SampleEventLog />
+        if (activeSubSection === 'sample-details') return <SampleDetails />
+        return <SenaiteDashboard />
       case 'intake':
         return <ReceiveSample />
       case 'lab-operations':

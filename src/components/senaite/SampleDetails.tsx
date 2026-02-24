@@ -624,7 +624,7 @@ export function SampleDetails() {
             variant="ghost"
             size="sm"
             className="cursor-pointer"
-            onClick={() => navigateTo('dashboard', 'senaite')}
+            onClick={() => navigateTo('senaite', 'samples')}
           >
             Back to Samples
           </Button>
@@ -669,7 +669,7 @@ export function SampleDetails() {
               variant="ghost"
               size="sm"
               className="gap-1.5 text-muted-foreground hover:text-foreground cursor-pointer"
-              onClick={() => navigateTo('dashboard', 'senaite')}
+              onClick={() => navigateTo('senaite', 'samples')}
             >
               <ArrowLeft size={14} />
               Samples
@@ -929,6 +929,7 @@ export function SampleDetails() {
                               Analyte {slot}
                             </span>
                           </div>
+                          <div className="[&>div]:border-0 [&>div]:py-1">
                           <EditableDataRow
                             label="Peptide"
                             value={displayName}
@@ -966,6 +967,7 @@ export function SampleDetails() {
                               })
                             }
                           />
+                          </div>
                         </div>
                       )
                     })}
@@ -976,7 +978,7 @@ export function SampleDetails() {
                 {data.declared_weight_mg != null && (
                   <div className="mt-3 pt-3 border-t border-border">
                     <DataRow
-                      label="Total Declared"
+                      label="Total Declared Qty"
                       value={
                         <span className="font-mono text-amber-600 dark:text-amber-400 font-semibold">
                           {data.declared_weight_mg} mg

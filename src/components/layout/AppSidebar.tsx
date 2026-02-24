@@ -61,7 +61,15 @@ const navItems: NavItem[] = [
     subItems: [
       { id: 'orders', label: 'Orders' },
       { id: 'analytics', label: 'Analytics' },
-      { id: 'senaite', label: 'SENAITE' },
+    ],
+  },
+  {
+    id: 'senaite',
+    label: 'SENAITE',
+    icon: FlaskConical,
+    subItems: [
+      { id: 'samples', label: 'Samples' },
+      { id: 'event-log', label: 'Event Log' },
     ],
   },
   {

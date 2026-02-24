@@ -2,16 +2,17 @@ import { create } from 'zustand'
 import { devtools } from 'zustand/middleware'
 
 // Navigation sections for main content area
-export type ActiveSection = 'dashboard' | 'intake' | 'lab-operations' | 'hplc-analysis' | 'accumark-tools' | 'account'
+export type ActiveSection = 'dashboard' | 'senaite' | 'intake' | 'lab-operations' | 'hplc-analysis' | 'accumark-tools' | 'account'
 
 // Sub-sections within each main section
-export type DashboardSubSection = 'orders' | 'analytics' | 'senaite' | 'sample-details'
+export type DashboardSubSection = 'orders' | 'analytics'
+export type SenaiteSubSection = 'samples' | 'event-log' | 'sample-details'
 export type IntakeSubSection = 'receive-sample'
 export type LabOperationsSubSection = 'chromatographs' | 'sample-intake'
 export type HPLCAnalysisSubSection = 'overview' | 'new-analysis' | 'import-analysis' | 'peptide-config' | 'analysis-history'
 export type AccuMarkToolsSubSection = 'overview' | 'order-explorer' | 'coa-explorer'
 export type AccountSubSection = 'change-password' | 'user-management'
-export type ActiveSubSection = DashboardSubSection | IntakeSubSection | LabOperationsSubSection | HPLCAnalysisSubSection | AccuMarkToolsSubSection | AccountSubSection
+export type ActiveSubSection = DashboardSubSection | SenaiteSubSection | IntakeSubSection | LabOperationsSubSection | HPLCAnalysisSubSection | AccuMarkToolsSubSection | AccountSubSection
 
 interface UIState {
   leftSidebarVisible: boolean
@@ -155,7 +156,7 @@ export const useUIStore = create<UIState>()(
       navigateToSample: (sampleId) =>
         set(
           state => ({
-            activeSection: 'dashboard',
+            activeSection: 'senaite',
             activeSubSection: 'sample-details',
             sampleDetailsTargetId: sampleId,
             navigationKey: state.navigationKey + 1,

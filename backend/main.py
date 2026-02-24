@@ -4275,6 +4275,17 @@ async def get_order_attempts(order_id: str, _current_user=Depends(get_current_us
         raise HTTPException(status_code=503, detail=f"Integration Service unavailable: {e}")
 
 
+@app.get("/explorer/sample-events", response_model=list[ExplorerSampleEventResponse])
+async def get_all_sample_events(limit: int = 200, _current_user=Depends(get_current_user)):
+    """Get all sample status events across all orders (proxied to Integration Service)."""
+    try:
+        return await _proxy_explorer_get(f"/sample-events?limit={limit}")
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(status_code=e.response.status_code, detail=e.response.text)
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Integration Service unavailable: {e}")
+
+
 @app.get("/explorer/orders/{order_id}/sample-events", response_model=list[ExplorerSampleEventResponse])
 async def get_order_sample_events(order_id: str, _current_user=Depends(get_current_user)):
     """Get sample status events for an order (proxied to Integration Service)."""

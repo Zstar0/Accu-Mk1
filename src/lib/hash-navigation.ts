@@ -19,6 +19,7 @@ import { useUIStore, type ActiveSection, type ActiveSubSection } from '@/store/u
 
 const VALID_SECTIONS = new Set<string>([
   'dashboard',
+  'senaite',
   'intake',
   'lab-operations',
   'hplc-analysis',
