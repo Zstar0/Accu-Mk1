@@ -4953,6 +4953,9 @@ class SenaiteAnalysis(BaseModel):
     analyst: Optional[str] = None
     due_date: Optional[str] = None
     review_state: Optional[str] = None
+    sort_key: Optional[float] = None
+    captured: Optional[str] = None
+    retested: bool = False
 
 
 class SenaiteLookupResult(BaseModel):
@@ -5057,6 +5060,9 @@ async def lookup_senaite_sample(
     if SENAITE_URL is None:
         raise HTTPException(status_code=503, detail="SENAITE not configured")
 
+    # SENAITE sample IDs are always uppercase (e.g. PB-0056) — normalize
+    id = id.strip().upper()
+
     try:
         data = await _fetch_senaite_sample(id)
 
@@ -5156,21 +5162,139 @@ async def lookup_senaite_sample(
             ) as client:
                 an_resp = await client.get(analysis_url, params={
                     "getRequestID": sample_id,
+                    "complete": "yes",
                     "limit": "100",
                 })
                 an_resp.raise_for_status()
                 an_data = an_resp.json()
+
+                _inst_uid_to_indices: dict[str, list[int]] = {}
+
                 for an_item in an_data.get("items", []):
+                    # Result: prefer formatted string for selection-type results,
+                    # then fall back to raw numeric Result
+                    raw_result = an_item.get("Result") or an_item.get("getResult") or an_item.get("result")
+                    result_str: Optional[str] = None
+                    if raw_result not in (None, ""):
+                        # For selection-type analyses (e.g. Pos/Neg), map the
+                        # raw value through ResultOptions to get display text
+                        result_options = an_item.get("ResultOptions") or an_item.get("getResultOptions") or []
+                        if result_options and isinstance(result_options, list):
+                            for opt in result_options:
+                                if isinstance(opt, dict) and str(opt.get("ResultValue")) == str(raw_result):
+                                    result_str = str(opt.get("ResultText", raw_result))
+                                    break
+                        if result_str is None:
+                            result_str = str(raw_result)
+
+                    # Sort key: numeric priority for display ordering
+                    raw_sort_key = an_item.get("SortKey") or an_item.get("getSortKey")
+                    sort_key_val: Optional[float] = None
+                    if raw_sort_key is not None:
+                        try:
+                            sort_key_val = float(raw_sort_key)
+                        except (ValueError, TypeError):
+                            sort_key_val = None
+
+                    # Captured: when the result was entered
+                    captured = an_item.get("ResultCaptureDate") or an_item.get("getResultCaptureDate") or None
+
+                    # Retested: RetestOf is a dict — non-empty means this IS a retest
+                    retest_of = an_item.get("RetestOf") or {}
+                    retested_val = bool(retest_of) if isinstance(retest_of, dict) else False
+
+                    # Method: getMethodTitle is a string, Method is an object ref
+                    method_title = an_item.get("getMethodTitle") or None
+                    if not method_title:
+                        method_obj = an_item.get("Method")
+                        if isinstance(method_obj, dict) and method_obj.get("title"):
+                            method_title = method_obj["title"]
+
+                    # Instrument: try getInstrumentTitle first, then Instrument object ref
+                    instrument_title = an_item.get("getInstrumentTitle") or None
+                    instrument_uid = None
+                    if not instrument_title:
+                        instrument_obj = an_item.get("Instrument")
+                        if isinstance(instrument_obj, dict):
+                            instrument_title = instrument_obj.get("title") or instrument_obj.get("Title") or None
+                            if not instrument_title and instrument_obj.get("uid"):
+                                instrument_uid = instrument_obj["uid"]
+
+                    # Analyst: Analyst field is often None; getSubmittedBy has the user
+                    analyst = an_item.get("Analyst") or an_item.get("getSubmittedBy") or None
+
+                    # SENAITE shows "Manual" for submitted analyses with no method/instrument
+                    an_review_state = an_item.get("review_state") or ""
+                    has_result = an_review_state in ("verified", "published", "to_be_verified")
+                    if not method_title and has_result:
+                        method_title = "Manual"
+                    # Delay instrument "Manual" fallback — resolve UIDs first
+                    if not instrument_title and not instrument_uid and has_result:
+                        instrument_title = "Manual"
+
                     senaite_analyses.append(SenaiteAnalysis(
                         title=an_item.get("title") or an_item.get("Title") or str(an_item.get("id", "")),
-                        result=str(an_item["Result"]) if an_item.get("Result") not in (None, "") else None,
+                        result=result_str,
                         unit=an_item.get("Unit") or an_item.get("getUnit") or None,
-                        method=an_item.get("getMethodTitle") or an_item.get("MethodTitle") or None,
-                        instrument=an_item.get("getInstrumentTitle") or an_item.get("InstrumentTitle") or None,
-                        analyst=an_item.get("getAnalyst") or an_item.get("Analyst") or None,
+                        method=method_title,
+                        instrument=instrument_title,
+                        analyst=analyst,
                         due_date=an_item.get("getDueDate") or an_item.get("DueDate") or None,
                         review_state=an_item.get("review_state") or None,
+                        sort_key=sort_key_val,
+                        captured=str(captured) if captured else None,
+                        retested=retested_val,
                     ))
+                    # Track indices that need instrument resolution
+                    if instrument_uid:
+                        if instrument_uid not in _inst_uid_to_indices:
+                            _inst_uid_to_indices[instrument_uid] = []
+                        _inst_uid_to_indices[instrument_uid].append(len(senaite_analyses) - 1)
+            # Resolve instrument UIDs → titles via batch API call
+            if _inst_uid_to_indices:
+                try:
+                    inst_url = f"{SENAITE_URL}/senaite/@@API/senaite/v1/Instrument"
+                    uid_filter = "|".join(_inst_uid_to_indices.keys())
+                    async with httpx.AsyncClient(
+                        timeout=SENAITE_TIMEOUT,
+                        auth=httpx.BasicAuth(SENAITE_USER, SENAITE_PASSWORD),
+                    ) as inst_client:
+                        inst_resp = await inst_client.get(inst_url, params={
+                            "UID": uid_filter,
+                            "limit": "50",
+                        })
+                        inst_resp.raise_for_status()
+                        inst_data = inst_resp.json()
+                        uid_to_title: dict[str, str] = {}
+                        for inst_item in inst_data.get("items", []):
+                            uid = inst_item.get("uid") or inst_item.get("UID") or ""
+                            title = inst_item.get("title") or inst_item.get("Title") or ""
+                            if uid and title:
+                                uid_to_title[uid] = title
+                        # Apply resolved titles to analyses
+                        for uid, indices in _inst_uid_to_indices.items():
+                            resolved = uid_to_title.get(uid)
+                            for idx in indices:
+                                if resolved:
+                                    senaite_analyses[idx].instrument = resolved
+                                elif not senaite_analyses[idx].instrument:
+                                    senaite_analyses[idx].instrument = "Manual"
+                except Exception as inst_exc:
+                    print(f"[WARN] Failed to resolve instrument UIDs: {inst_exc}")
+                    # Fall back to "Manual" for unresolved
+                    for uid, indices in _inst_uid_to_indices.items():
+                        for idx in indices:
+                            if not senaite_analyses[idx].instrument:
+                                senaite_analyses[idx].instrument = "Manual"
+
+            # Filter out rejected/retracted analyses — SENAITE's default "Valid" view hides them
+            senaite_analyses = [a for a in senaite_analyses if a.review_state not in ("rejected", "retracted")]
+            # Sort by sort_key, then title, then non-retested first to match SENAITE
+            senaite_analyses.sort(key=lambda a: (
+                a.sort_key if a.sort_key is not None else float("inf"),
+                a.title.lower(),
+                a.retested,  # False (0) before True (1)
+            ))
             print(f"[INFO] Fetched {len(senaite_analyses)} analyses for sample {sample_id}")
         except Exception as exc:
             print(f"[WARN] Failed to fetch analyses for {sample_id}: {exc}")

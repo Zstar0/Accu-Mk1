@@ -5,7 +5,13 @@
  *  - Refreshing the page restores the current section/subsection
  *  - The browser back/forward buttons walk through navigation history
  *
- * Hash format: #section/subsection  (e.g. #dashboard/senaite)
+ * Hash format: #section/subsection          (e.g. #dashboard/senaite)
+ *              #section/subsection?id=value  (e.g. #dashboard/sample-details?id=P-0091)
+ *
+ * Sub-sections that carry a target ID:
+ *  - dashboard/sample-details   → sampleDetailsTargetId
+ *  - accumark-tools/order-explorer → orderExplorerTargetOrderId
+ *  - hplc-analysis/peptide-config  → peptideConfigTargetId
  */
 
 import { useEffect } from 'react'
@@ -20,18 +26,79 @@ const VALID_SECTIONS = new Set<string>([
   'account',
 ])
 
-function parseNavHash(hash: string): { section: ActiveSection; subSection: ActiveSubSection } | null {
+interface ParsedNav {
+  section: ActiveSection
+  subSection: ActiveSubSection
+  targetId: string | null
+}
+
+function parseNavHash(hash: string): ParsedNav | null {
   const clean = hash.replace(/^#/, '')
   if (!clean) return null
-  const slash = clean.indexOf('/')
+
+  // Split path from query: "dashboard/sample-details?id=P-0091"
+  const qIdx = clean.indexOf('?')
+  const path = qIdx === -1 ? clean : clean.slice(0, qIdx)
+  const query = qIdx === -1 ? '' : clean.slice(qIdx + 1)
+
+  const slash = path.indexOf('/')
   if (slash === -1) return null
-  const section = clean.slice(0, slash)
-  const subSection = clean.slice(slash + 1)
+  const section = path.slice(0, slash)
+  const subSection = path.slice(slash + 1)
   if (!VALID_SECTIONS.has(section) || !subSection) return null
+
+  // Extract ?id= parameter
+  let targetId: string | null = null
+  if (query) {
+    const params = new URLSearchParams(query)
+    targetId = params.get('id')
+  }
+
   return {
     section: section as ActiveSection,
     subSection: subSection as ActiveSubSection,
+    targetId,
   }
+}
+
+/** Apply a parsed nav to the store, including any target ID. */
+function applyNavToStore(nav: ParsedNav) {
+  const store = useUIStore.getState()
+  const { section, subSection, targetId } = nav
+
+  // Use the specialized navigators when a target ID is present
+  // Sample IDs are always uppercase (e.g. PB-0056) — normalize for case-insensitive URLs
+  if (subSection === 'sample-details' && targetId) {
+    store.navigateToSample(targetId.toUpperCase())
+  } else if (subSection === 'order-explorer' && targetId) {
+    store.navigateToOrderExplorer(targetId)
+  } else if (subSection === 'peptide-config' && targetId) {
+    store.navigateToPeptide(Number(targetId))
+  } else {
+    store.navigateTo(section, subSection)
+  }
+}
+
+/** Build the hash string from the current store state, including target IDs. */
+function buildHash(state: {
+  activeSection: string
+  activeSubSection: string
+  sampleDetailsTargetId: string | null
+  orderExplorerTargetOrderId: string | null
+  peptideConfigTargetId: number | null
+}): string {
+  let hash = `#${state.activeSection}/${state.activeSubSection}`
+
+  // Append ?id= for sub-sections that carry a target
+  if (state.activeSubSection === 'sample-details' && state.sampleDetailsTargetId) {
+    hash += `?id=${encodeURIComponent(state.sampleDetailsTargetId)}`
+  } else if (state.activeSubSection === 'order-explorer' && state.orderExplorerTargetOrderId) {
+    hash += `?id=${encodeURIComponent(state.orderExplorerTargetOrderId)}`
+  } else if (state.activeSubSection === 'peptide-config' && state.peptideConfigTargetId != null) {
+    hash += `?id=${encodeURIComponent(String(state.peptideConfigTargetId))}`
+  }
+
+  return hash
 }
 
 /**
@@ -43,11 +110,11 @@ export function useHashNavigation() {
     // 1. Restore navigation state from hash on page load/refresh
     const initial = parseNavHash(window.location.hash)
     if (initial) {
-      useUIStore.getState().navigateTo(initial.section, initial.subSection)
+      applyNavToStore(initial)
     } else {
       // No valid hash — seed the URL from the current store state
-      const { activeSection, activeSubSection } = useUIStore.getState()
-      history.replaceState(null, '', `#${activeSection}/${activeSubSection}`)
+      const state = useUIStore.getState()
+      history.replaceState(null, '', buildHash(state))
     }
 
     // 2. Keep the URL hash in sync whenever navigation state changes.
@@ -56,9 +123,12 @@ export function useHashNavigation() {
     const unsubscribe = useUIStore.subscribe((state, prev) => {
       if (
         state.activeSection !== prev.activeSection ||
-        state.activeSubSection !== prev.activeSubSection
+        state.activeSubSection !== prev.activeSubSection ||
+        state.sampleDetailsTargetId !== prev.sampleDetailsTargetId ||
+        state.orderExplorerTargetOrderId !== prev.orderExplorerTargetOrderId ||
+        state.peptideConfigTargetId !== prev.peptideConfigTargetId
       ) {
-        const newHash = `#${state.activeSection}/${state.activeSubSection}`
+        const newHash = buildHash(state)
         if (window.location.hash !== newHash) {
           history.pushState(null, '', newHash)
         }
@@ -71,7 +141,7 @@ export function useHashNavigation() {
     const handlePopState = () => {
       const nav = parseNavHash(window.location.hash)
       if (nav) {
-        useUIStore.getState().navigateTo(nav.section, nav.subSection)
+        applyNavToStore(nav)
       }
     }
     window.addEventListener('popstate', handlePopState)

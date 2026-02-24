@@ -1,5 +1,31 @@
 # Changelog
 
+## v0.13.0 — 2026-02-23
+
+### Added
+
+- **Sample Details page redesign** — complete UI overhaul of the SENAITE sample detail view
+  - Two-column grid layout: sample info & order details on the left, analytes & COA info on the right
+  - Analysis profile theming with color-coded chips (Peptide/violet, Endotoxin/teal, Sterility-PCR/rose)
+  - Row-level status tinting in the analyses table (colored left border + subtle background per state)
+  - New table columns: Retested indicator and Result Captured date
+  - Integrated progress bar showing verified/pending analysis completion percentage
+  - Collapsible sections with proper accessibility (`aria-expanded`, `aria-controls`)
+  - Remarks rendered as sanitized HTML via DOMPurify (supports links, bold, italic)
+- **Deep-linkable sample details** — hash navigation now supports query parameters (`#dashboard/sample-details?id=PB-0056`) for direct links to specific samples
+- **Richer SENAITE analysis data** — backend returns `sort_key`, `captured` date, `retested` flag, and resolves selection-type results through SENAITE's ResultOptions mapping
+
+### Fixed
+
+- **SENAITE link follows active environment** — "Open in SENAITE" link now dynamically resolves based on the active API environment profile (local Docker vs production) instead of being fixed at build time
+- **Docker env file separation** — `.env.docker` now targets local testing (SENAITE at localhost:8080); production builds use `--build-arg ENV_FILE=.env.docker.prod`
+- **Sample ID normalization** — backend uppercases and trims sample IDs before SENAITE lookup
+
+### Infrastructure
+
+- Dockerfile accepts `ENV_FILE` build arg for switching between local and production env files
+- docker-compose.yml passes `ENV_FILE` arg (defaults to `.env.docker`)
+
 ## v0.12.0 — 2026-02-21
 
 ### Added

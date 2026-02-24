@@ -21,6 +21,7 @@ export interface ApiEnvironment {
   id: string
   name: string
   url: string
+  senaiteUrl: string
 }
 
 export const KNOWN_ENVIRONMENTS: ApiEnvironment[] = [
@@ -28,16 +29,19 @@ export const KNOWN_ENVIRONMENTS: ApiEnvironment[] = [
     id: 'local',
     name: 'Local Development',
     url: 'http://127.0.0.1:8012',
+    senaiteUrl: 'http://localhost:8080/senaite',
   },
   {
     id: 'docker',
     name: 'Docker (local)',
     url: '/api',
+    senaiteUrl: 'http://localhost:8080/senaite',
   },
   {
     id: 'production',
     name: 'Production',
     url: 'https://accumk1.valenceanalytical.com/api',
+    senaiteUrl: 'https://senaite.valenceanalytical.com',
   },
 ]
 
@@ -128,13 +132,19 @@ export function getWordpressUrl(): string {
   return import.meta.env.VITE_WORDPRESS_URL || 'https://accumarklabs.local'
 }
 
-// ── SENAITE URL (from env var) ──────────────────────────────────
+// ── SENAITE URL ─────────────────────────────────────────────────
 
 /**
  * Get the SENAITE base URL for direct browser links.
- * Local dev uses http://localhost:8080/senaite, production uses the public domain.
+ *
+ * Follows the active API environment so that switching from
+ * "Docker (local)" to "Production" also switches the SENAITE link.
  */
 export function getSenaiteUrl(): string {
+  const activeUrl = getServerUrl()
+  const known = KNOWN_ENVIRONMENTS.find(e => e.url === activeUrl)
+  if (known) return known.senaiteUrl
+  // Fallback to env var / default
   return import.meta.env.VITE_SENAITE_URL || 'http://localhost:8080/senaite'
 }
 

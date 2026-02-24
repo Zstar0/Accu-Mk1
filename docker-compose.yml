@@ -13,6 +13,10 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        # Default: local Docker dev (SENAITE on localhost:8080)
+        # Override for prod: ENV_FILE=.env.docker.prod
+        ENV_FILE: ${ENV_FILE:-.env.docker}
     ports:
       - "3100:80"
     depends_on:

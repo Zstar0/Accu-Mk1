@@ -1940,6 +1940,9 @@ export interface SenaiteAnalysis {
   analyst: string | null
   due_date: string | null
   review_state: string | null
+  sort_key: number | null
+  captured: string | null
+  retested: boolean
 }
 
 export interface SenaiteLookupResult {

@@ -7,6 +7,11 @@
 # --- Stage 1: Build ---
 FROM node:20-slim AS build
 
+# Which env file to bake into the frontend bundle.
+# Default: .env.docker (local Docker dev — SENAITE on localhost:8080)
+# Production: docker build --build-arg ENV_FILE=.env.docker.prod .
+ARG ENV_FILE=.env.docker
+
 WORKDIR /app
 
 # Copy package files first for better layer caching
@@ -17,7 +22,7 @@ RUN npm ci
 COPY . .
 
 # Use the Docker-specific env vars (relative /api path for Nginx proxy)
-COPY .env.docker .env.production
+COPY ${ENV_FILE} .env.production
 
 # Build production bundle — Vite reads .env.production for VITE_* vars
 RUN npm run build
