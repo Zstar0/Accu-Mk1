@@ -18,19 +18,28 @@ import {
   ArrowLeft,
   RefreshCw,
   Dna,
+  Copy,
   type LucideIcon,
 } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
+import { toast } from 'sonner'
 import {
   lookupSenaiteSample,
+  updateSenaiteSampleFields,
+  getSampleAdditionalCOAs,
+  updateAdditionalCOAConfig,
   type SenaiteLookupResult,
   type SenaiteAnalysis,
+  type AdditionalCOAConfig,
 } from '@/lib/api'
+import { Textarea } from '@/components/ui/textarea'
+import { Spinner } from '@/components/ui/spinner'
 import { useUIStore } from '@/store/ui-store'
 import { getSenaiteUrl } from '@/lib/api-profiles'
+import { EditableDataRow } from '@/components/dashboard/EditableField'
 
 // --- Local helpers ---
 
@@ -293,6 +302,233 @@ function formatDate(dateStr: string | null | undefined): string {
   })
 }
 
+// --- Add Remark Form ---
+
+function AddRemarkForm({
+  sampleUid,
+  sampleId,
+  onAdded,
+}: {
+  sampleUid: string
+  sampleId: string
+  onAdded: () => void
+}) {
+  const [text, setText] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [open, setOpen] = useState(false)
+
+  async function handleSubmit() {
+    const trimmed = text.trim()
+    if (!trimmed) return
+
+    setSaving(true)
+    try {
+      const result = await updateSenaiteSampleFields(sampleUid, { Remarks: trimmed })
+      if (!result.success) throw new Error(result.message)
+      toast.success('Remark added')
+      setText('')
+      setOpen(false)
+      onAdded()
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Unknown error'
+      toast.error('Failed to add remark', { description: msg })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  if (!open) {
+    return (
+      <button
+        onClick={() => setOpen(true)}
+        className="mt-3 text-xs text-muted-foreground hover:text-foreground transition-colors cursor-pointer flex items-center gap-1.5"
+      >
+        <MessageSquare size={12} />
+        Add remark
+      </button>
+    )
+  }
+
+  return (
+    <div className="mt-3 pt-3 border-t border-border space-y-2">
+      <Textarea
+        value={text}
+        onChange={e => setText(e.target.value)}
+        placeholder="Type your remark..."
+        disabled={saving}
+        className="min-h-15 text-sm"
+        aria-label={`Add remark to ${sampleId}`}
+        onKeyDown={e => {
+          if (e.key === 'Escape') {
+            e.preventDefault()
+            setOpen(false)
+            setText('')
+          }
+        }}
+      />
+      <div className="flex items-center gap-2 justify-end">
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => {
+            setOpen(false)
+            setText('')
+          }}
+          disabled={saving}
+          className="cursor-pointer"
+        >
+          Cancel
+        </Button>
+        <Button
+          size="sm"
+          onClick={handleSubmit}
+          disabled={saving || !text.trim()}
+          className="cursor-pointer gap-1.5"
+        >
+          {saving && <Spinner className="size-3.5" />}
+          Add Remark
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+// --- Additional COA Card (collapsible) ---
+
+function AdditionalCoaCard({
+  coa,
+  onUpdateState,
+}: {
+  coa: AdditionalCOAConfig
+  onUpdateState: (field: keyof AdditionalCOAConfig['coa_info'], newValue: string | number | null) => void
+}) {
+  const [open, setOpen] = useState(false)
+
+  const updateCoaField = (field: keyof AdditionalCOAConfig['coa_info']) =>
+    async (newValue: string | number | null) => {
+      await updateAdditionalCOAConfig(coa.config_id, {
+        [field]: newValue as string | null,
+      })
+    }
+
+  const updateCoaState = (field: keyof AdditionalCOAConfig['coa_info']) =>
+    (newValue: string | number | null) => {
+      onUpdateState(field, newValue)
+    }
+
+  return (
+    <div className="rounded-lg bg-muted/50 border border-border/30">
+      <button
+        onClick={() => setOpen(!open)}
+        className="flex items-center justify-between w-full p-2.5 cursor-pointer rounded-lg hover:bg-muted/80 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        <div className="flex items-center gap-2 min-w-0">
+          {open ? (
+            <ChevronDown size={13} className="text-muted-foreground shrink-0" />
+          ) : (
+            <ChevronRight size={13} className="text-muted-foreground shrink-0" />
+          )}
+          <span className="font-mono text-xs px-1.5 py-0.5 rounded bg-muted text-muted-foreground shrink-0">
+            #{coa.coa_index}
+          </span>
+          <span className="text-sm font-medium text-foreground truncate">
+            {coa.coa_info.company_name || 'Untitled COA'}
+          </span>
+        </div>
+        <Badge
+          variant={
+            coa.status === 'published'
+              ? 'default'
+              : coa.status === 'generated'
+                ? 'secondary'
+                : coa.status === 'failed'
+                  ? 'destructive'
+                  : 'outline'
+          }
+          className="text-[10px] shrink-0"
+        >
+          {coa.status}
+        </Badge>
+      </button>
+      {open && (
+        <div className="px-2.5 pb-2.5 space-y-1">
+          <EditableDataRow
+            label="Company"
+            value={coa.coa_info.company_name ?? null}
+            emphasis
+            onSave={updateCoaField('company_name')}
+            onSaved={updateCoaState('company_name')}
+          />
+          <div className="flex items-start gap-3">
+            <div className="flex-1 min-w-0 space-y-0">
+              <EditableDataRow
+                label="Website"
+                value={coa.coa_info.website ?? null}
+                onSave={updateCoaField('website')}
+                onSaved={updateCoaState('website')}
+              />
+              <EditableDataRow
+                label="Email"
+                value={coa.coa_info.email ?? null}
+                onSave={updateCoaField('email')}
+                onSaved={updateCoaState('email')}
+              />
+              <EditableDataRow
+                label="Address"
+                value={coa.coa_info.address ?? null}
+                onSave={updateCoaField('address')}
+                onSaved={updateCoaState('address')}
+              />
+              <EditableDataRow
+                label="Logo URL"
+                value={coa.coa_info.logo_url ?? null}
+                truncateStart
+                onSave={updateCoaField('logo_url')}
+                onSaved={updateCoaState('logo_url')}
+              />
+              <EditableDataRow
+                label="Chromat. BG"
+                value={coa.coa_info.chromatograph_background_url ?? null}
+                truncateStart
+                onSave={updateCoaField('chromatograph_background_url')}
+                onSaved={updateCoaState('chromatograph_background_url')}
+              />
+            </div>
+            {(coa.coa_info.logo_url || coa.coa_info.chromatograph_background_url) && (
+              <div className="flex items-start gap-2 shrink-0">
+                {coa.coa_info.logo_url && (
+                  <div className="flex flex-col items-center gap-1">
+                    <div className="h-10 w-14 rounded border bg-white flex items-center justify-center overflow-hidden">
+                      <img
+                        src={coa.coa_info.logo_url}
+                        alt={`${coa.coa_info.company_name ?? 'COA'} logo`}
+                        className="max-h-full max-w-full object-contain"
+                      />
+                    </div>
+                    <span className="text-[9px] text-muted-foreground">Logo</span>
+                  </div>
+                )}
+                {coa.coa_info.chromatograph_background_url && (
+                  <div className="flex flex-col items-center gap-1">
+                    <div className="h-10 w-14 rounded border bg-white flex items-center justify-center overflow-hidden">
+                      <img
+                        src={coa.coa_info.chromatograph_background_url}
+                        alt="Chromatograph background"
+                        className="max-h-full max-w-full object-contain"
+                      />
+                    </div>
+                    <span className="text-[9px] text-muted-foreground">Chromat.</span>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // --- Main Component ---
 
 export function SampleDetails() {
@@ -303,6 +539,7 @@ export function SampleDetails() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [analysisFilter, setAnalysisFilter] = useState<'all' | 'verified' | 'pending'>('all')
+  const [additionalCoas, setAdditionalCoas] = useState<AdditionalCOAConfig[]>([])
 
   const fetchSample = (id: string) => {
     setLoading(true)
@@ -331,6 +568,20 @@ export function SampleDetails() {
       .finally(() => {
         if (!cancelled) setLoading(false)
       })
+
+    return () => {
+      cancelled = true
+    }
+  }, [sampleId])
+
+  // Fetch additional COAs from integration service
+  useEffect(() => {
+    if (!sampleId) return
+    let cancelled = false
+
+    getSampleAdditionalCOAs(sampleId).then(configs => {
+      if (!cancelled) setAdditionalCoas(configs)
+    })
 
     return () => {
       cancelled = true
@@ -518,20 +769,44 @@ export function SampleDetails() {
               <SectionHeader icon={Package} title="Sample Info">
                 <div className="space-y-0">
                   <DataRow label="Sample Type" value={data.sample_type} emphasis />
-                  <DataRow label="Date Sampled" value={formatDate(data.date_sampled)} />
+                  <EditableDataRow
+                    label="Date Sampled"
+                    value={data.date_sampled}
+                    senaiteField="DateSampled"
+                    sampleUid={data.sample_uid ?? ''}
+                    formatDisplay={v => formatDate(v as string)}
+                    onSaved={v =>
+                      setData(prev =>
+                        prev ? { ...prev, date_sampled: v as string | null } : prev
+                      )
+                    }
+                  />
                   <DataRow label="Date Received" value={formatDate(data.date_received)} />
-                  <DataRow
+                  <EditableDataRow
                     label="Declared Qty"
-                    value={
-                      data.declared_weight_mg != null ? (
+                    value={data.declared_weight_mg}
+                    senaiteField="DeclaredTotalQuantity"
+                    sampleUid={data.sample_uid ?? ''}
+                    type="number"
+                    mono
+                    emphasis
+                    suffix="mg"
+                    formatDisplay={v =>
+                      v != null ? (
                         <span className="font-mono text-emerald-700 dark:text-emerald-400 font-semibold">
-                          {data.declared_weight_mg} mg
+                          {v} mg
                         </span>
                       ) : (
                         '—'
                       )
                     }
-                    emphasis
+                    onSaved={v =>
+                      setData(prev =>
+                        prev
+                          ? { ...prev, declared_weight_mg: v != null ? Number(v) : null }
+                          : prev
+                      )
+                    }
                   />
                 </div>
                 {data.profiles.length > 0 && (
@@ -552,9 +827,43 @@ export function SampleDetails() {
             <Card className="p-4">
               <SectionHeader icon={Hash} title="Order Details">
                 <div className="space-y-0">
-                  <DataRow label="Order #" value={data.client_order_number} mono emphasis />
-                  <DataRow label="Client Sample ID" value={data.client_sample_id} mono />
-                  <DataRow label="Client Lot" value={data.client_lot} mono />
+                  <EditableDataRow
+                    label="Order #"
+                    value={data.client_order_number}
+                    senaiteField="ClientOrderNumber"
+                    sampleUid={data.sample_uid ?? ''}
+                    mono
+                    emphasis
+                    onSaved={v =>
+                      setData(prev =>
+                        prev ? { ...prev, client_order_number: v as string | null } : prev
+                      )
+                    }
+                  />
+                  <EditableDataRow
+                    label="Client Sample ID"
+                    value={data.client_sample_id}
+                    senaiteField="ClientSampleID"
+                    sampleUid={data.sample_uid ?? ''}
+                    mono
+                    onSaved={v =>
+                      setData(prev =>
+                        prev ? { ...prev, client_sample_id: v as string | null } : prev
+                      )
+                    }
+                  />
+                  <EditableDataRow
+                    label="Client Lot"
+                    value={data.client_lot}
+                    senaiteField="ClientLot"
+                    sampleUid={data.sample_uid ?? ''}
+                    mono
+                    onSaved={v =>
+                      setData(prev =>
+                        prev ? { ...prev, client_lot: v as string | null } : prev
+                      )
+                    }
+                  />
                   <DataRow label="Contact" value={data.contact} />
                   <DataRow
                     label="Client"
@@ -571,6 +880,31 @@ export function SampleDetails() {
                 </div>
               </SectionHeader>
             </Card>
+
+            {/* Additional COAs from Integration Service */}
+            {additionalCoas.length > 0 && (
+              <Card className="p-4">
+                <SectionHeader icon={Copy} title={`Additional COAs (${additionalCoas.length})`}>
+                  <div className="space-y-3">
+                    {additionalCoas.map(coa => (
+                      <AdditionalCoaCard
+                        key={coa.config_id}
+                        coa={coa}
+                        onUpdateState={(field, newValue) =>
+                          setAdditionalCoas(prev =>
+                            prev.map(c =>
+                              c.config_id === coa.config_id
+                                ? { ...c, coa_info: { ...c.coa_info, [field]: newValue as string | null } }
+                                : c
+                            )
+                          )
+                        }
+                      />
+                    ))}
+                  </div>
+                </SectionHeader>
+              </Card>
+            )}
           </div>
 
           {/* Right column: Analytes + COA Info stacked */}
@@ -581,22 +915,57 @@ export function SampleDetails() {
                   <div className="space-y-3">
                     {data.analytes.map((analyte) => {
                       const displayName = analyteNameMap.get(analyte.slot_number) ?? analyte.raw_name
+                      const slot = analyte.slot_number
                       return (
                         <div
-                          key={analyte.slot_number}
-                          className="flex items-center justify-between p-2.5 rounded-lg bg-muted/50 border border-border/30"
+                          key={slot}
+                          className="p-2.5 rounded-lg bg-muted/50 border border-border/30 space-y-1"
                         >
-                          <div>
-                            <div className="text-sm font-medium text-foreground flex items-center gap-2">
-                              <span className="font-mono text-xs px-1.5 py-0.5 rounded bg-muted text-muted-foreground">
-                                A{analyte.slot_number}
-                              </span>
-                              {displayName}
-                            </div>
-                            <div className="text-[11px] text-muted-foreground mt-0.5">
-                              Analyte {analyte.slot_number}
-                            </div>
+                          <div className="flex items-center gap-2 mb-1">
+                            <span className="font-mono text-xs px-1.5 py-0.5 rounded bg-muted text-muted-foreground">
+                              A{slot}
+                            </span>
+                            <span className="text-[11px] text-muted-foreground">
+                              Analyte {slot}
+                            </span>
                           </div>
+                          <EditableDataRow
+                            label="Peptide"
+                            value={displayName}
+                            senaiteField={`Analyte${slot}Peptide`}
+                            sampleUid={data.sample_uid ?? ''}
+                            onSaved={v =>
+                              setData(prev => {
+                                if (!prev) return prev
+                                const updated = prev.analytes.map(a =>
+                                  a.slot_number === slot
+                                    ? { ...a, matched_peptide_name: (v as string) ?? a.matched_peptide_name }
+                                    : a
+                                )
+                                return { ...prev, analytes: updated }
+                              })
+                            }
+                          />
+                          <EditableDataRow
+                            label="Declared Qty"
+                            value={analyte.declared_quantity}
+                            senaiteField={`Analyte${slot}DeclaredQuantity`}
+                            sampleUid={data.sample_uid ?? ''}
+                            type="number"
+                            mono
+                            suffix="mg"
+                            onSaved={v =>
+                              setData(prev => {
+                                if (!prev) return prev
+                                const updated = prev.analytes.map(a =>
+                                  a.slot_number === slot
+                                    ? { ...a, declared_quantity: v != null ? Number(v) : null }
+                                    : a
+                                )
+                                return { ...prev, analytes: updated }
+                              })
+                            }
+                          />
                         </div>
                       )
                     })}
@@ -623,36 +992,131 @@ export function SampleDetails() {
             <Card className="p-4">
               <SectionHeader icon={Shield} title="COA Info">
                 <div className="space-y-0">
-                  <DataRow label="Company" value={data.coa.company_name} />
-                  <DataRow
+                  <EditableDataRow
+                    label="Company"
+                    value={data.coa.company_name}
+                    senaiteField="CoaCompanyName"
+                    sampleUid={data.sample_uid ?? ''}
+                    onSaved={v =>
+                      setData(prev =>
+                        prev
+                          ? { ...prev, coa: { ...prev.coa, company_name: v as string | null } }
+                          : prev
+                      )
+                    }
+                  />
+                  <EditableDataRow
                     label="Website"
-                    value={
-                      data.coa.website ? (
-                        <a
-                          href={data.coa.website}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-blue-700 dark:text-blue-400 hover:text-blue-600 dark:hover:text-blue-300 flex items-center gap-1 cursor-pointer"
-                        >
-                          {data.coa.website}
-                          <ExternalLink size={10} />
-                        </a>
-                      ) : (
-                        '—'
+                    value={data.coa.website}
+                    senaiteField="CoaWebsite"
+                    sampleUid={data.sample_uid ?? ''}
+                    onSaved={v =>
+                      setData(prev =>
+                        prev
+                          ? { ...prev, coa: { ...prev.coa, website: v as string | null } }
+                          : prev
                       )
                     }
                   />
-                  <DataRow label="Email" value={data.coa.email} />
-                  <DataRow
+                  <EditableDataRow
+                    label="Email"
+                    value={data.coa.email}
+                    senaiteField="CoaEmail"
+                    sampleUid={data.sample_uid ?? ''}
+                    onSaved={v =>
+                      setData(prev =>
+                        prev
+                          ? { ...prev, coa: { ...prev.coa, email: v as string | null } }
+                          : prev
+                      )
+                    }
+                  />
+                  <EditableDataRow
                     label="Verification"
-                    value={
-                      data.coa.verification_code ? (
-                        <span className="font-mono text-xs">{data.coa.verification_code}</span>
-                      ) : (
-                        '—'
+                    value={data.coa.verification_code}
+                    senaiteField="VerificationCode"
+                    sampleUid={data.sample_uid ?? ''}
+                    mono
+                    onSaved={v =>
+                      setData(prev =>
+                        prev
+                          ? { ...prev, coa: { ...prev.coa, verification_code: v as string | null } }
+                          : prev
                       )
                     }
                   />
+                  <EditableDataRow
+                    label="Address"
+                    value={data.coa.address}
+                    senaiteField="CoaAddress"
+                    sampleUid={data.sample_uid ?? ''}
+                    onSaved={v =>
+                      setData(prev =>
+                        prev
+                          ? { ...prev, coa: { ...prev.coa, address: v as string | null } }
+                          : prev
+                      )
+                    }
+                  />
+                  <EditableDataRow
+                    label="Logo URL"
+                    value={data.coa.company_logo_url}
+                    senaiteField="CompanyLogoUrl"
+                    sampleUid={data.sample_uid ?? ''}
+                    truncateStart
+                    onSaved={v =>
+                      setData(prev =>
+                        prev
+                          ? { ...prev, coa: { ...prev.coa, company_logo_url: v as string | null } }
+                          : prev
+                      )
+                    }
+                  />
+                  <EditableDataRow
+                    label="Chromatograph BG"
+                    value={data.coa.chromatograph_background_url}
+                    senaiteField="ChromatographBackgroundUrl"
+                    sampleUid={data.sample_uid ?? ''}
+                    truncateStart
+                    onSaved={v =>
+                      setData(prev =>
+                        prev
+                          ? {
+                              ...prev,
+                              coa: { ...prev.coa, chromatograph_background_url: v as string | null },
+                            }
+                          : prev
+                      )
+                    }
+                  />
+                  {(data.coa.company_logo_url || data.coa.chromatograph_background_url) && (
+                    <div className="py-2 flex items-center gap-3 justify-end">
+                      {data.coa.company_logo_url && (
+                        <div className="flex flex-col items-center gap-1">
+                          <div className="h-16 w-24 rounded border bg-white flex items-center justify-center overflow-hidden">
+                            <img
+                              src={data.coa.company_logo_url}
+                              alt="Company logo"
+                              className="max-h-full max-w-full object-contain"
+                            />
+                          </div>
+                          <span className="text-[10px] text-muted-foreground">Logo</span>
+                        </div>
+                      )}
+                      {data.coa.chromatograph_background_url && (
+                        <div className="flex flex-col items-center gap-1">
+                          <div className="h-16 w-24 rounded border bg-white flex items-center justify-center overflow-hidden">
+                            <img
+                              src={data.coa.chromatograph_background_url}
+                              alt="Chromatograph background"
+                              className="max-h-full max-w-full object-contain"
+                            />
+                          </div>
+                          <span className="text-[10px] text-muted-foreground">Chromatograph</span>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               </SectionHeader>
             </Card>
@@ -693,6 +1157,13 @@ export function SampleDetails() {
               </div>
             ) : (
               <p className="text-sm text-muted-foreground">No remarks</p>
+            )}
+            {data.sample_uid && (
+              <AddRemarkForm
+                sampleUid={data.sample_uid}
+                sampleId={data.sample_id}
+                onAdded={() => fetchSample(data.sample_id)}
+              />
             )}
           </SectionHeader>
         </Card>
@@ -818,9 +1289,9 @@ export function SampleDetails() {
 /** Replace "Analyte N" prefix with the mapped peptide name when available. */
 function formatAnalysisTitle(title: string, nameMap: Map<number, string>): { display: string; original: string } {
   const match = title.match(/^Analyte\s+(\d)\s*(.*)/i)
-  if (match) {
+  if (match?.[1]) {
     const slot = parseInt(match[1], 10)
-    const suffix = match[2] // e.g. "— Purity" or "— Quantity"
+    const suffix = match[2] ?? '' // e.g. "— Purity" or "— Quantity"
     const peptideName = nameMap.get(slot)
     if (peptideName) {
       return { display: `${peptideName} ${suffix}`.trim(), original: title }

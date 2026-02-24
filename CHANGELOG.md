@@ -1,5 +1,27 @@
 # Changelog
 
+## v0.14.0 — 2026-02-24
+
+### Added
+
+- **Inline editing for Sample Details** — click any editable field value to edit it in-place with save/cancel controls
+  - New `EditableField` and `EditableDataRow` components with optimistic updates, loading spinners, and toast notifications
+  - Editable fields: Order #, Client Sample ID, Client Lot, Date Sampled, Declared Qty, analyte peptide names, analyte declared quantities, and all COA branding fields (company name, website, email, address, verification code, logo URL, chromatograph BG URL)
+  - Keyboard support: Enter to save, Escape to cancel, focus management on edit mode entry
+  - Custom `onSave` prop allows reuse with non-SENAITE backends (used for additional COA configs)
+- **Additional COAs section** in Sample Details — displays additional branded COA configurations from the Integration Service
+  - Collapsible per-COA cards showing company name, status badge, and branding details
+  - Inline editing of all additional COA fields (company name, website, email, address, logo URL, chromatograph BG URL)
+  - Image thumbnails for logo and chromatograph background alongside text fields
+  - `PATCH /explorer/additional-coas/{config_id}` backend proxy for updating additional COA branding
+- **SENAITE field update endpoint** — `POST /wizard/senaite/samples/{uid}/update` proxies field writes to SENAITE
+  - JSON-first strategy with form-encoded fallback to handle both extension fields and isDecimal-type fields
+- **URL left-truncation** — `truncateStart` prop on editable fields shows the filename end of long URLs instead of the domain
+
+### Fixed
+
+- **Extension field saves now persist** — Logo URL and Chromatograph BG URL writes previously returned false success (SENAITE silently ignored form-encoded extension fields). Fixed with JSON-first approach that falls back to form-encoded on 400 errors.
+
 ## v0.13.0 — 2026-02-23
 
 ### Added

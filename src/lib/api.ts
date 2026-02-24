@@ -1248,6 +1248,70 @@ export async function getExplorerChromatogramSignedUrl(
   }
 }
 
+// --- Additional COA Configs ---
+
+export interface AdditionalCOAConfig {
+  config_id: string
+  coa_index: number
+  status: string
+  wp_profile_id: string | null
+  coa_info: {
+    company_name?: string
+    website?: string
+    email?: string
+    address?: string
+    logo_url?: string
+    chromatograph_background_url?: string
+  }
+  generation_id: string | null
+}
+
+/**
+ * Get additional COA configurations for a sample.
+ */
+export async function getSampleAdditionalCOAs(
+  sampleId: string
+): Promise<AdditionalCOAConfig[]> {
+  try {
+    const response = await fetch(
+      `${API_BASE_URL()}/explorer/samples/${encodeURIComponent(sampleId)}/additional-coas`,
+      { headers: getAuthHeaders() }
+    )
+    if (!response.ok) {
+      if (response.status === 503) return []
+      throw new Error(`Get additional COAs failed: ${response.status}`)
+    }
+    return response.json()
+  } catch {
+    return []
+  }
+}
+
+export interface AdditionalCOAUpdateResponse {
+  success: boolean
+  message: string
+  updated_fields: string[]
+}
+
+export async function updateAdditionalCOAConfig(
+  configId: string,
+  fields: Partial<AdditionalCOAConfig['coa_info']>
+): Promise<AdditionalCOAUpdateResponse> {
+  const response = await fetch(
+    `${API_BASE_URL()}/explorer/additional-coas/${encodeURIComponent(configId)}`,
+    {
+      method: 'PATCH',
+      headers: getBearerHeaders('application/json'),
+      body: JSON.stringify(fields),
+    }
+  )
+  if (!response.ok) {
+    const err = await response.json().catch(() => null)
+    throw new Error(err?.detail || `Update failed: ${response.status}`)
+  }
+  return response.json()
+}
+
 // --- HPLC Analysis API ---
 
 export interface HPLCPeak {
@@ -1914,6 +1978,7 @@ export interface SenaiteAnalyte {
   slot_number: number // 1-4, corresponding to Analyte1..Analyte4 in SENAITE
   matched_peptide_id: number | null
   matched_peptide_name: string | null
+  declared_quantity: number | null // per-analyte declared qty (mg)
 }
 
 export interface SenaiteCOAInfo {
@@ -1990,6 +2055,31 @@ export async function lookupSenaiteSample(
   if (!response.ok) {
     const err = await response.json().catch(() => null)
     throw new Error(err?.detail || `SENAITE lookup failed: ${response.status}`)
+  }
+  return response.json()
+}
+
+export interface SenaiteFieldUpdateResponse {
+  success: boolean
+  message: string
+  updated_fields: string[] | null
+}
+
+export async function updateSenaiteSampleFields(
+  uid: string,
+  fields: Record<string, string | number | null>
+): Promise<SenaiteFieldUpdateResponse> {
+  const response = await fetch(
+    `${API_BASE_URL()}/wizard/senaite/samples/${encodeURIComponent(uid)}/update`,
+    {
+      method: 'POST',
+      headers: getBearerHeaders('application/json'),
+      body: JSON.stringify({ fields }),
+    }
+  )
+  if (!response.ok) {
+    const err = await response.json().catch(() => null)
+    throw new Error(err?.detail || `SENAITE update failed: ${response.status}`)
   }
   return response.json()
 }

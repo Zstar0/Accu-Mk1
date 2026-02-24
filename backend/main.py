@@ -4297,6 +4297,51 @@ async def get_order_access_logs(order_id: str, _current_user=Depends(get_current
         raise HTTPException(status_code=503, detail=f"Integration Service unavailable: {e}")
 
 
+@app.get("/explorer/samples/{sample_id}/additional-coas")
+async def get_sample_additional_coas(sample_id: str, _current_user=Depends(get_current_user)):
+    """Get additional COA configs for a sample (proxied to Integration Service)."""
+    try:
+        return await _proxy_explorer_get(f"/samples/{sample_id}/additional-coas")
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 404:
+            return []
+        raise HTTPException(status_code=e.response.status_code, detail=e.response.text)
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Integration Service unavailable: {e}")
+
+
+class AdditionalCOAUpdateRequest(BaseModel):
+    company_name: Optional[str] = None
+    website: Optional[str] = None
+    email: Optional[str] = None
+    address: Optional[str] = None
+    logo_url: Optional[str] = None
+    chromatograph_background_url: Optional[str] = None
+
+
+@app.patch("/explorer/additional-coas/{config_id}")
+async def update_additional_coa_config(
+    config_id: str,
+    body: AdditionalCOAUpdateRequest,
+    _current_user=Depends(get_current_user),
+):
+    """Update additional COA config branding (proxied to Integration Service)."""
+    try:
+        url = f"{INTEGRATION_SERVICE_URL}/explorer/additional-coas/{config_id}"
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.patch(
+                url,
+                json=body.model_dump(exclude_unset=True),
+                headers={"X-API-Key": INTEGRATION_SERVICE_API_KEY},
+            )
+            resp.raise_for_status()
+            return resp.json()
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(status_code=e.response.status_code, detail=e.response.text)
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Integration Service unavailable: {e}")
+
+
 @app.get("/explorer/coa-generations", response_model=list[ExplorerCOAGenerationResponse])
 async def get_all_coa_generations(
     search: Optional[str] = None,
@@ -4927,6 +4972,7 @@ class SenaiteAnalyte(BaseModel):
     slot_number: int  # 1-4, corresponding to Analyte1..Analyte4 in SENAITE
     matched_peptide_id: Optional[int] = None
     matched_peptide_name: Optional[str] = None
+    declared_quantity: Optional[float] = None  # per-analyte declared qty (mg)
 
 
 class SenaiteCOAInfo(BaseModel):
@@ -5107,11 +5153,21 @@ async def lookup_senaite_sample(
                 continue
             stripped = _strip_method_suffix(str(raw_name))
             match = _fuzzy_match_peptide(stripped, all_peptides)
+            # Parse per-analyte declared quantity
+            qty_key = f"Analyte{slot}DeclaredQuantity"
+            raw_analyte_qty = item.get(qty_key)
+            analyte_declared_qty = None
+            if raw_analyte_qty is not None and str(raw_analyte_qty).strip() != "":
+                try:
+                    analyte_declared_qty = float(raw_analyte_qty)
+                except (ValueError, TypeError):
+                    analyte_declared_qty = None
             analytes.append(SenaiteAnalyte(
                 raw_name=raw_name,
                 slot_number=slot,
                 matched_peptide_id=match[0] if match else None,
                 matched_peptide_name=match[1] if match else None,
+                declared_quantity=analyte_declared_qty,
             ))
 
         # Parse profiles
@@ -5674,6 +5730,99 @@ async def receive_senaite_sample(
             success=False,
             message=f"Receive error: {e}",
             senaite_response={"steps_done": steps_done},
+        )
+
+
+# --- SENAITE field update endpoint ---
+
+
+class SenaiteFieldUpdateRequest(BaseModel):
+    fields: dict  # e.g. {"ClientOrderNumber": "WP-1234", "ClientLot": "LOT-5"}
+
+
+class SenaiteFieldUpdateResponse(BaseModel):
+    success: bool
+    message: str
+    updated_fields: Optional[list] = None
+
+
+@app.post(
+    "/wizard/senaite/samples/{uid}/update",
+    response_model=SenaiteFieldUpdateResponse,
+)
+async def update_senaite_sample_fields(
+    uid: str,
+    req: SenaiteFieldUpdateRequest,
+    _current_user=Depends(get_current_user),
+):
+    """Update one or more fields on a SENAITE sample via the JSON API."""
+    if SENAITE_URL is None:
+        return SenaiteFieldUpdateResponse(
+            success=False, message="SENAITE not configured"
+        )
+
+    if not req.fields:
+        return SenaiteFieldUpdateResponse(
+            success=False, message="No fields provided"
+        )
+
+    try:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(30.0, connect=5.0),
+            auth=httpx.BasicAuth(SENAITE_USER, SENAITE_PASSWORD),
+            follow_redirects=True,
+        ) as client:
+            update_url = (
+                f"{SENAITE_URL}/senaite/@@API/senaite/v1/update/{uid}"
+            )
+            senaite_fields = {
+                k: str(v) if v is not None else ""
+                for k, v in req.fields.items()
+            }
+
+            # Strategy: try JSON body first (required for extension fields
+            # like CompanyLogoUrl, ChromatographBackgroundUrl which are
+            # silently ignored when sent form-encoded).
+            #
+            # If SENAITE returns 400 (e.g. isDecimal validator rejects
+            # unicode strings in Python 2), fall back to form-encoded
+            # which sends Python 2 str values that pass the validator.
+            try:
+                resp = await client.post(update_url, json=senaite_fields)
+                resp.raise_for_status()
+            except httpx.HTTPStatusError as json_err:
+                if json_err.response.status_code == 400:
+                    # Fallback: form-encoded for isDecimal-type fields
+                    resp = await client.post(
+                        update_url, data=senaite_fields
+                    )
+                    resp.raise_for_status()
+                else:
+                    raise
+
+            return SenaiteFieldUpdateResponse(
+                success=True,
+                message=f"Updated {len(req.fields)} field(s)",
+                updated_fields=list(req.fields.keys()),
+            )
+
+    except httpx.TimeoutException:
+        return SenaiteFieldUpdateResponse(
+            success=False, message="SENAITE request timed out"
+        )
+    except httpx.HTTPStatusError as e:
+        detail = ""
+        try:
+            detail = e.response.text[:200]
+        except Exception:
+            pass
+        return SenaiteFieldUpdateResponse(
+            success=False,
+            message=f"SENAITE returned {e.response.status_code}: {detail}".strip(),
+        )
+    except Exception as e:
+        return SenaiteFieldUpdateResponse(
+            success=False, message=f"Update error: {e}"
         )
 
 
