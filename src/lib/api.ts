@@ -1911,6 +1911,7 @@ export async function completeWizardSession(
 
 export interface SenaiteAnalyte {
   raw_name: string
+  slot_number: number // 1-4, corresponding to Analyte1..Analyte4 in SENAITE
   matched_peptide_id: number | null
   matched_peptide_name: string | null
 }

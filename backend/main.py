@@ -4924,6 +4924,7 @@ SENAITE_TIMEOUT = httpx.Timeout(30.0, connect=10.0)
 
 class SenaiteAnalyte(BaseModel):
     raw_name: str
+    slot_number: int  # 1-4, corresponding to Analyte1..Analyte4 in SENAITE
     matched_peptide_id: Optional[int] = None
     matched_peptide_name: Optional[str] = None
 
@@ -5100,7 +5101,7 @@ async def lookup_senaite_sample(
         # Parse analytes from Analyte1Peptide through Analyte4Peptide
         all_peptides = db.query(Peptide).all()
         analytes: list[SenaiteAnalyte] = []
-        for key in ("Analyte1Peptide", "Analyte2Peptide", "Analyte3Peptide", "Analyte4Peptide"):
+        for slot, key in enumerate(("Analyte1Peptide", "Analyte2Peptide", "Analyte3Peptide", "Analyte4Peptide"), start=1):
             raw_name = item.get(key)
             if raw_name is None or str(raw_name).strip() == "":
                 continue
@@ -5108,6 +5109,7 @@ async def lookup_senaite_sample(
             match = _fuzzy_match_peptide(stripped, all_peptides)
             analytes.append(SenaiteAnalyte(
                 raw_name=raw_name,
+                slot_number=slot,
                 matched_peptide_id=match[0] if match else None,
                 matched_peptide_name=match[1] if match else None,
             ))

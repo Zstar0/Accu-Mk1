@@ -400,6 +400,14 @@ export function SampleDetails() {
 
   const senaiteBaseUrl = getSenaiteUrl()
 
+  // Build a map from slot number → display peptide name
+  // e.g. { 1: "BPC-157", 2: "TB-500" }
+  const analyteNameMap = new Map<number, string>()
+  for (const analyte of data.analytes) {
+    const displayName = analyte.matched_peptide_name ?? analyte.raw_name.replace(/\s*-\s*[^-]+\([^)]+\)\s*$/, '')
+    analyteNameMap.set(analyte.slot_number, displayName)
+  }
+
   return (
     <ScrollArea className="h-full">
       <div className="max-w-6xl mx-auto px-6 py-6">
@@ -571,26 +579,27 @@ export function SampleDetails() {
               <SectionHeader icon={Layers} title="Analytes">
                 {data.analytes.length > 0 ? (
                   <div className="space-y-3">
-                    {data.analytes.map((analyte, i) => (
-                      <div
-                        key={analyte.raw_name + i}
-                        className="flex items-center justify-between p-2.5 rounded-lg bg-muted/50 border border-border/30"
-                      >
-                        <div>
-                          <div className="text-sm font-medium text-foreground flex items-center gap-2">
-                            <span className="font-mono text-xs px-1.5 py-0.5 rounded bg-muted text-muted-foreground">
-                              A{i + 1}
-                            </span>
-                            {analyte.raw_name}
-                          </div>
-                          {analyte.matched_peptide_name && (
-                            <div className="text-[11px] text-muted-foreground mt-0.5">
-                              Matched: {analyte.matched_peptide_name}
+                    {data.analytes.map((analyte) => {
+                      const displayName = analyteNameMap.get(analyte.slot_number) ?? analyte.raw_name
+                      return (
+                        <div
+                          key={analyte.slot_number}
+                          className="flex items-center justify-between p-2.5 rounded-lg bg-muted/50 border border-border/30"
+                        >
+                          <div>
+                            <div className="text-sm font-medium text-foreground flex items-center gap-2">
+                              <span className="font-mono text-xs px-1.5 py-0.5 rounded bg-muted text-muted-foreground">
+                                A{analyte.slot_number}
+                              </span>
+                              {displayName}
                             </div>
-                          )}
+                            <div className="text-[11px] text-muted-foreground mt-0.5">
+                              Analyte {analyte.slot_number}
+                            </div>
+                          </div>
                         </div>
-                      </div>
-                    ))}
+                      )
+                    })}
                   </div>
                 ) : (
                   <p className="text-sm text-muted-foreground">No analytes defined</p>
@@ -782,7 +791,7 @@ export function SampleDetails() {
                 <tbody>
                   {filteredAnalyses.length > 0 ? (
                     filteredAnalyses.map((a, i) => (
-                      <AnalysisRow key={`${a.title}-${i}`} analysis={a} />
+                      <AnalysisRow key={`${a.title}-${i}`} analysis={a} analyteNameMap={analyteNameMap} />
                     ))
                   ) : (
                     <tr>
@@ -806,11 +815,34 @@ export function SampleDetails() {
 
 // --- Analysis row ---
 
-function AnalysisRow({ analysis }: { analysis: SenaiteAnalysis }) {
+/** Replace "Analyte N" prefix with the mapped peptide name when available. */
+function formatAnalysisTitle(title: string, nameMap: Map<number, string>): { display: string; original: string } {
+  const match = title.match(/^Analyte\s+(\d)\s*(.*)/i)
+  if (match) {
+    const slot = parseInt(match[1], 10)
+    const suffix = match[2] // e.g. "— Purity" or "— Quantity"
+    const peptideName = nameMap.get(slot)
+    if (peptideName) {
+      return { display: `${peptideName} ${suffix}`.trim(), original: title }
+    }
+  }
+  return { display: title, original: title }
+}
+
+function AnalysisRow({ analysis, analyteNameMap }: { analysis: SenaiteAnalysis; analyteNameMap: Map<number, string> }) {
   const rowTint = ROW_STATUS_STYLE[analysis.review_state ?? ''] ?? ''
+  const { display, original } = formatAnalysisTitle(analysis.title, analyteNameMap)
+  const wasRenamed = display !== original
   return (
     <tr className={`border-b border-border/50 hover:bg-muted/30 transition-colors ${rowTint}`}>
-      <td className="py-2.5 px-3 text-sm text-foreground font-medium">{analysis.title}</td>
+      <td className="py-2.5 px-3 text-sm text-foreground font-medium" title={wasRenamed ? original : undefined}>
+        {display}
+        {wasRenamed && (
+          <span className="ml-1.5 text-[10px] text-muted-foreground font-normal">
+            ({original.match(/^Analyte\s+\d/i)?.[0]})
+          </span>
+        )}
+      </td>
       <td className="py-2.5 px-3">
         <span
           className={`text-sm font-mono ${analysis.result ? 'text-foreground' : 'text-muted-foreground italic'}`}
