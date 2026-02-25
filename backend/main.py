@@ -5003,6 +5003,8 @@ class SenaiteRemark(BaseModel):
 
 
 class SenaiteAnalysis(BaseModel):
+    uid: Optional[str] = None
+    keyword: Optional[str] = None
     title: str
     result: Optional[str] = None
     unit: Optional[str] = None
@@ -5302,6 +5304,8 @@ async def lookup_senaite_sample(
                         instrument_title = "Manual"
 
                     senaite_analyses.append(SenaiteAnalysis(
+                        uid=an_item.get("uid") or an_item.get("UID") or None,
+                        keyword=an_item.get("Keyword") or an_item.get("getKeyword") or None,
                         title=an_item.get("title") or an_item.get("Title") or str(an_item.get("id", "")),
                         result=result_str,
                         unit=an_item.get("Unit") or an_item.get("getUnit") or None,
