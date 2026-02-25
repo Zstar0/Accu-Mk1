@@ -10,25 +10,25 @@ See: .planning/PROJECT.md (updated 2026-02-24)
 ## Current Position
 
 Phase: 07 of 08 (Per-Row Workflow Transitions)
-Plan: 1 of 3 in current phase
+Plan: 2 of 3 in current phase (07-02 complete)
 Status: In progress
-Last activity: 2026-02-25 — Completed 07-01-PLAN.md
+Last activity: 2026-02-25 — Completed 07-02-PLAN.md
 
-Progress: [█████░░░░░] 45%
+Progress: [██████░░░░] 50%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 5 (this milestone)
+- Total plans completed: 6 (this milestone)
 - Average duration: ~3 min
-- Total execution time: ~15 min
+- Total execution time: ~18 min
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
 | 06 | 4/4 | 11 min | 3 min |
-| 07 | 1/3 | ~4 min | ~4 min |
+| 07 | 2/3 | ~7 min | ~3.5 min |
 | 08 | 0/3 | -- | -- |
 
 *Updated after each plan completion*
@@ -57,13 +57,14 @@ Progress: [█████░░░░░] 45%
 - TRANSITION_LABELS defined locally in both hook and AnalysisTable.tsx (hook must not import from component)
 - AlertDialog placed outside table element — Radix Portal renders to document.body regardless of JSX position
 - pendingUids uses Set<string> not boolean — independent per-row loading state for concurrent transitions
-- onTransitionComplete not wired in Plan 01 (Plan 02 adds sample-level refresh via SampleDetails)
+- refreshSample() does not call setError(null) — keeps current error state; background refresh failure shows toast not page replacement
+- refreshSample() replaces entire data object via setData(result) — full replacement ensures all derived state reflects server truth
 
 ### Key Source Files
 
 - `backend/main.py` -- FastAPI app, all endpoints, SENAITE integration
-- `src/components/senaite/SampleDetails.tsx` -- Sample Details page (imports AnalysisTable, passes onResultSaved)
-- `src/components/senaite/AnalysisTable.tsx` -- Analysis table with inline editing, filter tabs, progress bar, Actions column
+- `src/components/senaite/SampleDetails.tsx` -- Sample Details page with refreshSample() silent re-fetch, onTransitionComplete wired to AnalysisTable
+- `src/components/senaite/AnalysisTable.tsx` -- Analysis table with inline editing, filter tabs, progress bar, Actions column, onTransitionComplete prop
 - `src/hooks/use-analysis-editing.ts` -- Hook for inline result editing (edit state, save, cancel, Tab nav)
 - `src/hooks/use-analysis-transition.ts` -- Hook for per-row workflow transitions (pendingUids Set, confirmAndExecute)
 - `src/lib/api.ts` -- All API functions including setAnalysisResult and transitionAnalysis
@@ -84,7 +85,7 @@ Progress: [█████░░░░░] 45%
 ### Blockers/Concerns
 
 - Phase 07: Before implementing retract/reject AlertDialog, manually test the retract transition against live SENAITE via Swagger UI. Confirm whether Remarks field is required. If yes, add Textarea to dialog before building UI.
-  (Note: Plan 01 UI built without Remarks field — if backend requires it, Plan 02 or a follow-up plan adds Textarea to AlertDialog)
+  (Note: Plan 01 UI built without Remarks field — if backend requires it, Plan 03 or a follow-up plan adds Textarea to AlertDialog)
 
 ### Pending Todos
 
@@ -93,5 +94,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-25
-Stopped at: Completed 07-01-PLAN.md — per-row transition API, hook, and Actions column
+Stopped at: Completed 07-02-PLAN.md — silent refreshSample + onTransitionComplete wiring
 Resume file: None
