@@ -2014,6 +2014,8 @@ export interface SenaiteRemark {
 }
 
 export interface SenaiteAnalysis {
+  uid: string | null
+  keyword: string | null
   title: string
   result: string | null
   unit: string | null
