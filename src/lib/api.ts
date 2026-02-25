@@ -2102,6 +2102,32 @@ export async function updateSenaiteSampleFields(
   return response.json()
 }
 
+export interface AnalysisResultResponse {
+  success: boolean
+  message: string
+  new_review_state: string | null
+  keyword: string | null
+}
+
+export async function setAnalysisResult(
+  uid: string,
+  result: string
+): Promise<AnalysisResultResponse> {
+  const response = await fetch(
+    `${API_BASE_URL()}/wizard/senaite/analyses/${encodeURIComponent(uid)}/result`,
+    {
+      method: 'POST',
+      headers: getBearerHeaders('application/json'),
+      body: JSON.stringify({ result }),
+    }
+  )
+  if (!response.ok) {
+    const err = await response.json().catch(() => null)
+    throw new Error(err?.detail || `Set result failed: ${response.status}`)
+  }
+  return response.json()
+}
+
 export interface SenaiteSample {
   uid: string
   id: string
