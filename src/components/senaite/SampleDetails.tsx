@@ -437,6 +437,13 @@ export function SampleDetails() {
       .finally(() => setLoading(false))
   }
 
+  /** Silent re-fetch: updates data without triggering full-page loading state. */
+  const refreshSample = (id: string) => {
+    lookupSenaiteSample(id)
+      .then(result => setData(result))
+      .catch(e => toast.error('Refresh failed', { description: e instanceof Error ? e.message : String(e) }))
+  }
+
   useEffect(() => {
     if (!sampleId) return
     let cancelled = false
@@ -1063,6 +1070,7 @@ export function SampleDetails() {
               }
             })
           }}
+          onTransitionComplete={() => refreshSample(data.sample_id)}
         />
       </div>
     </ScrollArea>
