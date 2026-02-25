@@ -19,6 +19,8 @@ import {
   RefreshCw,
   Dna,
   Copy,
+  Paperclip,
+  ImageIcon,
   type LucideIcon,
 } from 'lucide-react'
 import { Card } from '@/components/ui/card'
@@ -31,8 +33,10 @@ import {
   updateSenaiteSampleFields,
   getSampleAdditionalCOAs,
   updateAdditionalCOAConfig,
+  fetchSenaiteAttachmentUrl,
   type SenaiteLookupResult,
   type SenaiteAnalysis,
+  type SenaiteAttachment,
   type AdditionalCOAConfig,
 } from '@/lib/api'
 import { Textarea } from '@/components/ui/textarea'
@@ -42,6 +46,57 @@ import { getSenaiteUrl } from '@/lib/api-profiles'
 import { EditableDataRow } from '@/components/dashboard/EditableField'
 
 // --- Local helpers ---
+
+function AttachmentImage({ attachment }: { attachment: SenaiteAttachment }) {
+  const [src, setSrc] = useState<string | null>(null)
+  const [error, setError] = useState(false)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    if (!attachment.download_url) {
+      setError(true)
+      setLoading(false)
+      return
+    }
+    let cancelled = false
+    fetchSenaiteAttachmentUrl(attachment.uid)
+      .then(url => {
+        if (!cancelled) setSrc(url)
+      })
+      .catch(() => {
+        if (!cancelled) setError(true)
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => { cancelled = true }
+  }, [attachment.uid, attachment.download_url])
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center w-full h-48 rounded-lg bg-muted/40 border border-border/30">
+        <Spinner className="size-5" />
+      </div>
+    )
+  }
+
+  if (error || !src) {
+    return (
+      <div className="flex flex-col items-center justify-center gap-2 w-full h-48 rounded-lg bg-muted/40 border border-border/30">
+        <ImageIcon size={24} className="text-muted-foreground" />
+        <span className="text-xs text-muted-foreground">Failed to load image</span>
+      </div>
+    )
+  }
+
+  return (
+    <img
+      src={src}
+      alt={attachment.filename}
+      className="rounded-lg border border-border/30 max-h-80 w-auto object-contain"
+    />
+  )
+}
 
 function DataRow({
   label,
@@ -1169,6 +1224,47 @@ export function SampleDetails() {
             )}
           </SectionHeader>
         </Card>
+
+        {/* Attachments */}
+        {data.attachments && data.attachments.length > 0 && (
+          <Card className="p-4 mb-6">
+            <SectionHeader icon={Paperclip} title={`Attachments (${data.attachments.length})`}>
+              <div className="space-y-4">
+                {data.attachments.filter(a =>
+                  a.content_type?.startsWith('image/')
+                ).map(attachment => (
+                  <div key={attachment.uid} className="space-y-2">
+                    <div className="flex items-center gap-2">
+                      <ImageIcon size={14} className="text-muted-foreground shrink-0" />
+                      <span className="text-sm font-medium text-foreground truncate">
+                        {attachment.filename}
+                      </span>
+                      {attachment.attachment_type && (
+                        <Badge variant="secondary" className="text-[10px] shrink-0">
+                          {attachment.attachment_type}
+                        </Badge>
+                      )}
+                    </div>
+                    <AttachmentImage attachment={attachment} />
+                  </div>
+                ))}
+                {data.attachments.filter(a =>
+                  !a.content_type?.startsWith('image/')
+                ).map(attachment => (
+                  <div key={attachment.uid} className="flex items-center gap-2 p-2 rounded-lg bg-muted/40 border border-border/30">
+                    <Paperclip size={14} className="text-muted-foreground shrink-0" />
+                    <span className="text-sm text-foreground truncate">{attachment.filename}</span>
+                    {attachment.attachment_type && (
+                      <Badge variant="secondary" className="text-[10px] shrink-0">
+                        {attachment.attachment_type}
+                      </Badge>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </SectionHeader>
+          </Card>
+        )}
 
         {/* Analyses Table — progress bar integrated here */}
         {analyses.length > 0 && (

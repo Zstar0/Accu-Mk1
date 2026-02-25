@@ -5016,6 +5016,18 @@ class SenaiteAnalysis(BaseModel):
     retested: bool = False
 
 
+class SenaiteAttachment(BaseModel):
+    uid: str
+    filename: str
+    content_type: Optional[str] = None
+    attachment_type: Optional[str] = None  # e.g. "Sample Image", "HPLC Graph"
+    download_url: Optional[str] = None  # proxied through our backend
+
+
+# Cache SENAITE download URLs for attachment proxy (uid -> {download_url, content_type, filename})
+_attachment_download_cache: dict[str, dict[str, str]] = {}
+
+
 class SenaiteLookupResult(BaseModel):
     sample_id: str
     sample_uid: Optional[str] = None
@@ -5034,6 +5046,7 @@ class SenaiteLookupResult(BaseModel):
     coa: SenaiteCOAInfo = SenaiteCOAInfo()
     remarks: list[SenaiteRemark] = []
     analyses: list[SenaiteAnalysis] = []
+    attachments: list[SenaiteAttachment] = []
     senaite_url: Optional[str] = None  # e.g. "/clients/client-8/PB-0057"
 
 
@@ -5368,6 +5381,52 @@ async def lookup_senaite_sample(
         except Exception as exc:
             print(f"[WARN] Failed to fetch analyses for {sample_id}: {exc}")
 
+        # Fetch sample-level attachments
+        senaite_attachments: list[SenaiteAttachment] = []
+        try:
+            raw_attachments = item.get("Attachment") or []
+            if isinstance(raw_attachments, list) and raw_attachments:
+                async with httpx.AsyncClient(
+                    timeout=SENAITE_TIMEOUT,
+                    auth=httpx.BasicAuth(SENAITE_USER, SENAITE_PASSWORD),
+                ) as att_client:
+                    for att_ref in raw_attachments:
+                        att_api_url = att_ref.get("api_url")
+                        att_uid = att_ref.get("uid")
+                        if not att_api_url or not att_uid:
+                            continue
+                        try:
+                            att_resp = await att_client.get(att_api_url)
+                            att_resp.raise_for_status()
+                            att_data = att_resp.json()
+                            att_item = att_data["items"][0] if "items" in att_data and att_data["items"] else att_data
+                            att_file = att_item.get("AttachmentFile") or {}
+                            filename = att_file.get("filename") or ""
+                            content_type = att_file.get("content_type") or ""
+                            att_type_title = att_item.get("AttachmentType") or att_item.get("getAttachmentType") or None
+                            if isinstance(att_type_title, dict):
+                                att_type_title = att_type_title.get("title") or att_type_title.get("Title") or None
+                            # Cache the SENAITE download URL for the proxy endpoint
+                            senaite_dl_url = att_file.get("download") or ""
+                            if senaite_dl_url:
+                                _attachment_download_cache[att_uid] = {
+                                    "download_url": senaite_dl_url,
+                                    "content_type": content_type or "application/octet-stream",
+                                    "filename": filename or "attachment",
+                                }
+                            senaite_attachments.append(SenaiteAttachment(
+                                uid=att_uid,
+                                filename=filename,
+                                content_type=content_type,
+                                attachment_type=att_type_title,
+                                download_url=f"/wizard/senaite/attachment/{att_uid}",
+                            ))
+                        except Exception as att_exc:
+                            print(f"[WARN] Failed to fetch attachment {att_uid}: {att_exc}")
+                print(f"[INFO] Fetched {len(senaite_attachments)} attachments for sample {sample_id}")
+        except Exception as exc:
+            print(f"[WARN] Failed to fetch attachments for {sample_id}: {exc}")
+
         return SenaiteLookupResult(
             sample_id=sample_id,
             sample_uid=sample_uid or None,
@@ -5386,6 +5445,7 @@ async def lookup_senaite_sample(
             coa=coa,
             remarks=senaite_remarks,
             analyses=senaite_analyses,
+            attachments=senaite_attachments,
             senaite_url=_senaite_path(item),
         )
 
@@ -5400,6 +5460,63 @@ async def lookup_senaite_sample(
     except Exception as exc:
         print(f"[WARN] SENAITE lookup error for {id}: {type(exc).__name__} {exc}")
         raise HTTPException(status_code=503, detail="SENAITE is currently unavailable \u2014 use manual entry")
+
+
+@app.get("/wizard/senaite/attachment/{uid}")
+async def get_senaite_attachment(
+    uid: str,
+    _current_user=Depends(get_current_user),
+):
+    """Proxy an attachment file from SENAITE, streaming it with correct content type."""
+    if SENAITE_URL is None:
+        raise HTTPException(status_code=503, detail="SENAITE not configured")
+
+    from starlette.responses import StreamingResponse
+
+    try:
+        cached = _attachment_download_cache.get(uid)
+
+        if cached:
+            download_url = cached["download_url"]
+            content_type = cached["content_type"]
+            filename = cached["filename"]
+        else:
+            att_url = f"{SENAITE_URL}/senaite/@@API/senaite/v1/Attachment/{uid}"
+            async with httpx.AsyncClient(
+                timeout=SENAITE_TIMEOUT,
+                auth=httpx.BasicAuth(SENAITE_USER, SENAITE_PASSWORD),
+            ) as client:
+                meta_resp = await client.get(att_url)
+                meta_resp.raise_for_status()
+                meta_data = meta_resp.json()
+                att_item = meta_data
+                if "items" in meta_data and meta_data["items"]:
+                    att_item = meta_data["items"][0]
+                att_file = att_item.get("AttachmentFile") or {}
+                download_url = att_file.get("download")
+                content_type = att_file.get("content_type") or "application/octet-stream"
+                filename = att_file.get("filename") or "attachment"
+
+        if not download_url:
+            raise HTTPException(status_code=404, detail="Attachment has no download URL")
+
+        async with httpx.AsyncClient(
+            timeout=SENAITE_TIMEOUT,
+            auth=httpx.BasicAuth(SENAITE_USER, SENAITE_PASSWORD),
+        ) as client:
+            file_resp = await client.get(download_url)
+            file_resp.raise_for_status()
+
+            return StreamingResponse(
+                iter([file_resp.content]),
+                media_type=content_type,
+                headers={"Content-Disposition": f'inline; filename="{filename}"'},
+            )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        print(f"[WARN] Failed to proxy attachment {uid}: {exc}")
+        raise HTTPException(status_code=503, detail="Failed to retrieve attachment")
 
 
 class SenaiteSampleItem(BaseModel):

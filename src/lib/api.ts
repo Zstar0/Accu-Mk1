@@ -2027,6 +2027,14 @@ export interface SenaiteAnalysis {
   retested: boolean
 }
 
+export interface SenaiteAttachment {
+  uid: string
+  filename: string
+  content_type: string | null
+  attachment_type: string | null
+  download_url: string | null
+}
+
 export interface SenaiteLookupResult {
   sample_id: string
   sample_uid: string | null
@@ -2045,6 +2053,7 @@ export interface SenaiteLookupResult {
   coa: SenaiteCOAInfo
   remarks: SenaiteRemark[]
   analyses: SenaiteAnalysis[]
+  attachments: SenaiteAttachment[]
   senaite_url: string | null
 }
 
@@ -2073,6 +2082,27 @@ export async function lookupSenaiteSample(
     throw new Error(err?.detail || `SENAITE lookup failed: ${response.status}`)
   }
   return response.json()
+}
+
+const _attachmentCache = new Map<string, string>()
+
+export async function fetchSenaiteAttachmentUrl(
+  attachmentUid: string
+): Promise<string> {
+  const cached = _attachmentCache.get(attachmentUid)
+  if (cached) return cached
+
+  const response = await fetch(
+    `${API_BASE_URL()}/wizard/senaite/attachment/${encodeURIComponent(attachmentUid)}`,
+    { headers: getBearerHeaders() }
+  )
+  if (!response.ok) {
+    throw new Error(`Failed to fetch attachment: ${response.status}`)
+  }
+  const blob = await response.blob()
+  const url = URL.createObjectURL(blob)
+  _attachmentCache.set(attachmentUid, url)
+  return url
 }
 
 export interface SenaiteFieldUpdateResponse {
