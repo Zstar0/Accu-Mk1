@@ -10,24 +10,24 @@ See: .planning/PROJECT.md (updated 2026-02-24)
 ## Current Position
 
 Phase: 06 of 08 (Data Foundation + Inline Editing)
-Plan: 1 of 4 in current phase
+Plan: 2 of 4 in current phase
 Status: In progress
-Last activity: 2026-02-25 — Completed 06-01-PLAN.md
+Last activity: 2026-02-25 — Completed 06-02-PLAN.md
 
-Progress: [█░░░░░░░░░] 10%
+Progress: [██░░░░░░░░] 20%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 1 (this milestone)
-- Average duration: 1 min
-- Total execution time: 1 min
+- Total plans completed: 2 (this milestone)
+- Average duration: 2 min
+- Total execution time: 3 min
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| 06 | 1/4 | 1 min | 1 min |
+| 06 | 2/4 | 3 min | 2 min |
 | 07 | 0/3 | — | — |
 | 08 | 0/3 | — | — |
 
@@ -46,6 +46,8 @@ Progress: [█░░░░░░░░░] 10%
 - uid and keyword placed before title field as primary identifiers in SenaiteAnalysis model
 - Both uid/keyword nullable for backward compatibility with older cached responses
 - uid mapping uses dual fallback (uid/UID) and keyword mapping uses (Keyword/getKeyword) for SENAITE API casing
+- Result-set and transition are separate atomic endpoints — frontend controls the two-step workflow
+- EXPECTED_POST_STATES mapping validates post-transition review_state to catch SENAITE silent rejections (DATA-04)
 
 ### Key Source Files
 
@@ -77,5 +79,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-25
-Stopped at: Completed 06-01-PLAN.md
+Stopped at: Completed 06-02-PLAN.md
 Resume file: None
