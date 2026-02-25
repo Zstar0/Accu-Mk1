@@ -1,9 +1,26 @@
 import { useState, useEffect, useRef } from 'react'
-import { Activity, Pencil } from 'lucide-react'
+import { Activity, MoreHorizontal, Pencil } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { Spinner } from '@/components/ui/spinner'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import type { SenaiteAnalysis } from '@/lib/api'
 import { useAnalysisEditing, type UseAnalysisEditingReturn } from '@/hooks/use-analysis-editing'
+import { useAnalysisTransition, type UseAnalysisTransitionReturn } from '@/hooks/use-analysis-transition'
 
 // --- Status styling constants ---
 
@@ -76,6 +93,22 @@ const ROW_STATUS_STYLE: Record<string, string> = {
 
 /** States where an analysis result cell is editable. */
 const EDITABLE_STATES = new Set<string | null>(['unassigned', null])
+
+/** Maps review_state to valid transition action names. */
+const ALLOWED_TRANSITIONS: Record<string, readonly string[]> = {
+  unassigned: ['submit'],
+  to_be_verified: ['verify', 'retract', 'reject'],
+  verified: ['retract'],
+}
+
+const TRANSITION_LABELS: Record<string, string> = {
+  submit: 'Submit',
+  verify: 'Verify',
+  retract: 'Retract',
+  reject: 'Reject',
+}
+
+const DESTRUCTIVE_TRANSITIONS = new Set(['retract', 'reject'])
 
 // --- Shared components ---
 
@@ -256,14 +289,22 @@ function AnalysisRow({
   analysis,
   analyteNameMap,
   editing,
+  transition,
 }: {
   analysis: SenaiteAnalysis
   analyteNameMap: Map<number, string>
   editing: UseAnalysisEditingReturn
+  transition: UseAnalysisTransitionReturn
 }) {
   const rowTint = ROW_STATUS_STYLE[analysis.review_state ?? ''] ?? ''
   const { display, original } = formatAnalysisTitle(analysis.title, analyteNameMap)
   const wasRenamed = display !== original
+  const allowedTransitions =
+    analysis.uid && analysis.review_state
+      ? (ALLOWED_TRANSITIONS[analysis.review_state] ?? [])
+      : []
+  const isPending = !!analysis.uid && transition.pendingUids.has(analysis.uid)
+
   return (
     <tr className={`border-b border-border/50 hover:bg-muted/30 transition-colors ${rowTint}`}>
       <td className="py-2.5 px-3 text-sm text-foreground font-medium" title={wasRenamed ? original : undefined}>
@@ -293,6 +334,43 @@ function AnalysisRow({
       <td className="py-2.5 px-3 text-xs text-muted-foreground whitespace-nowrap">
         {formatDate(analysis.captured)}
       </td>
+      <td className="py-2 px-3 text-right">
+        {analysis.uid && allowedTransitions.length > 0 && (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                disabled={isPending}
+                className="inline-flex items-center justify-center size-7 rounded-md hover:bg-muted/60 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 disabled:cursor-not-allowed"
+                aria-label="Analysis actions"
+              >
+                {isPending ? (
+                  <Spinner className="size-3.5" />
+                ) : (
+                  <MoreHorizontal size={14} />
+                )}
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              {allowedTransitions.map(t => (
+                <DropdownMenuItem
+                  key={t}
+                  variant={DESTRUCTIVE_TRANSITIONS.has(t) ? 'destructive' : 'default'}
+                  onClick={() => {
+                    if (!analysis.uid) return
+                    if (DESTRUCTIVE_TRANSITIONS.has(t)) {
+                      transition.requestConfirm(analysis.uid, t, analysis.title)
+                    } else {
+                      void transition.executeTransition(analysis.uid, t)
+                    }
+                  }}
+                >
+                  {TRANSITION_LABELS[t] ?? t}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
+      </td>
     </tr>
   )
 }
@@ -303,11 +381,13 @@ interface AnalysisTableProps {
   analyses: SenaiteAnalysis[]
   analyteNameMap: Map<number, string>
   onResultSaved?: (uid: string, newResult: string, newReviewState: string | null) => void
+  onTransitionComplete?: () => void
 }
 
-export function AnalysisTable({ analyses, analyteNameMap, onResultSaved }: AnalysisTableProps) {
+export function AnalysisTable({ analyses, analyteNameMap, onResultSaved, onTransitionComplete }: AnalysisTableProps) {
   const [analysisFilter, setAnalysisFilter] = useState<'all' | 'verified' | 'pending'>('all')
   const editing = useAnalysisEditing({ analyses, onResultSaved })
+  const transition = useAnalysisTransition({ onTransitionComplete })
 
   const verifiedCount = analyses.filter(
     a => a.review_state === 'verified' || a.review_state === 'published'
@@ -414,6 +494,9 @@ export function AnalysisTable({ analyses, analyteNameMap, onResultSaved }: Analy
               <th className="py-2 px-3 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
                 Captured
               </th>
+              <th className="py-2 px-3 text-right text-[11px] font-semibold text-muted-foreground uppercase tracking-wider w-12">
+                <span className="sr-only">Actions</span>
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -424,12 +507,13 @@ export function AnalysisTable({ analyses, analyteNameMap, onResultSaved }: Analy
                   analysis={a}
                   analyteNameMap={analyteNameMap}
                   editing={editing}
+                  transition={transition}
                 />
               ))
             ) : (
               <tr>
                 <td
-                  colSpan={8}
+                  colSpan={9}
                   className="py-8 text-center text-sm text-muted-foreground"
                 >
                   No {analysisFilter === 'all' ? '' : analysisFilter} analyses found
@@ -438,6 +522,39 @@ export function AnalysisTable({ analyses, analyteNameMap, onResultSaved }: Analy
             )}
           </tbody>
         </table>
+
+        <AlertDialog
+          open={transition.pendingConfirm !== null}
+          onOpenChange={(open) => {
+            if (!open) transition.cancelConfirm()
+          }}
+        >
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>
+                {transition.pendingConfirm?.transition === 'retract'
+                  ? 'Retract analysis?'
+                  : 'Reject analysis?'}
+              </AlertDialogTitle>
+              <AlertDialogDescription>
+                <strong>{transition.pendingConfirm?.analysisTitle}</strong> will be{' '}
+                {transition.pendingConfirm?.transition === 'retract'
+                  ? 'retracted back to unassigned state'
+                  : 'permanently rejected'}
+                . This action cannot be undone from this application.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                onClick={() => { void transition.confirmAndExecute() }}
+              >
+                Confirm {transition.pendingConfirm?.transition}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </div>
     </Card>
   )
