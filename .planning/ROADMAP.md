@@ -12,7 +12,7 @@
 
 - [x] **Phase 06: Data Foundation + Inline Editing** ✅ — uid/keyword model, backend endpoints, AnalysisTable extraction, and click-to-edit result cells
 - [x] **Phase 07: Per-Row Workflow Transitions** ✅ — state-aware action menus for all four transitions with sample-level refresh after each action
-- [ ] **Phase 08: Bulk Selection & Floating Toolbar** — checkbox selection, floating batch action toolbar, and sequential bulk processing
+- [x] **Phase 08: Bulk Selection & Floating Toolbar** ✅ — checkbox selection, floating batch action toolbar, and sequential bulk processing
 
 ---
 
@@ -83,8 +83,8 @@ Plans:
 **Plans:** 2 plans in 2 waves
 
 Plans:
-- [ ] 08-01-PLAN.md — Checkbox indeterminate visual + useBulkAnalysisTransition hook (selection state, sequential bulk processing, summary toast)
-- [ ] 08-02-PLAN.md — Checkbox column, floating toolbar, state-aware batch buttons, progress counter, destructive bulk confirmation in AnalysisTable
+- [x] 08-01-PLAN.md — Checkbox indeterminate visual + useBulkAnalysisTransition hook (selection state, sequential bulk processing, summary toast)
+- [x] 08-02-PLAN.md — Checkbox column, floating toolbar, state-aware batch buttons, progress counter, destructive bulk confirmation in AnalysisTable
 
 ---
 
@@ -94,4 +94,4 @@ Plans:
 |-------|-----------|----------------|--------|-----------|
 | 06. Data Foundation + Inline Editing | v0.12.0 | 4/4 | ✓ Complete | 2026-02-25 |
 | 07. Per-Row Workflow Transitions | v0.12.0 | 2/2 | ✓ Complete | 2026-02-25 |
-| 08. Bulk Selection & Floating Toolbar | v0.12.0 | 0/2 | Not started | - |
+| 08. Bulk Selection & Floating Toolbar | v0.12.0 | 2/2 | ✓ Complete | 2026-02-25 |

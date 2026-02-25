@@ -38,10 +38,10 @@ Requirements for Analysis Results & Workflow Actions milestone. Each maps to roa
 
 ### Bulk Operations
 
-- [ ] **BULK-01**: Checkbox column for selecting multiple analyses in the table
-- [ ] **BULK-02**: Floating toolbar appears when rows are selected, showing selection count + batch action buttons
-- [ ] **BULK-03**: Batch actions are state-aware (only show actions valid for ALL selected analyses)
-- [ ] **BULK-04**: Bulk operations process analyses sequentially with per-item success/failure reporting via toast
+- [x] **BULK-01**: Checkbox column for selecting multiple analyses in the table
+- [x] **BULK-02**: Floating toolbar appears when rows are selected, showing selection count + batch action buttons
+- [x] **BULK-03**: Batch actions are state-aware (only show actions valid for ALL selected analyses)
+- [x] **BULK-04**: Bulk operations process analyses sequentially with per-item success/failure reporting via toast
 
 ### Sample State Refresh
 
@@ -96,10 +96,10 @@ Deferred to later milestones.
 | WKFL-07 | Phase 07 | Complete |
 | REFR-01 | Phase 07 | Complete |
 | REFR-02 | Phase 07 | Complete |
-| BULK-01 | Phase 08 | Pending |
-| BULK-02 | Phase 08 | Pending |
-| BULK-03 | Phase 08 | Pending |
-| BULK-04 | Phase 08 | Pending |
+| BULK-01 | Phase 08 | Complete |
+| BULK-02 | Phase 08 | Complete |
+| BULK-03 | Phase 08 | Complete |
+| BULK-04 | Phase 08 | Complete |
 
 **Coverage:**
 - v0.12.0 requirements: 23 total
@@ -108,4 +108,4 @@ Deferred to later milestones.
 
 ---
 *Requirements defined: 2026-02-24*
-*Last updated: 2026-02-25 — Phase 07 requirements marked Complete*
+*Last updated: 2026-02-25 — Phase 08 requirements marked Complete (all v0.12.0 requirements complete)*
