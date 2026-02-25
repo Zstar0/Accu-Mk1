@@ -5920,6 +5920,112 @@ async def set_analysis_result(
         )
 
 
+class AnalysisTransitionRequest(BaseModel):
+    transition: str  # "submit", "verify", "retract", "reject"
+
+
+# After a successful transition, SENAITE should move to this review_state.
+# If the actual state differs, SENAITE silently rejected the transition (DATA-04).
+EXPECTED_POST_STATES: dict[str, str] = {
+    "submit": "to_be_verified",
+    "verify": "verified",
+    "retract": "unassigned",
+    "reject": "rejected",
+}
+
+
+@app.post(
+    "/wizard/senaite/analyses/{uid}/transition",
+    response_model=AnalysisResultResponse,
+)
+async def transition_analysis(
+    uid: str,
+    req: AnalysisTransitionRequest,
+    _current_user=Depends(get_current_user),
+):
+    """Trigger a workflow transition on a SENAITE analysis.
+
+    Proxies to SENAITE REST API: POST /update/{uid} with {"transition": action}.
+    Validates post-transition review_state against EXPECTED_POST_STATES to catch
+    silent rejections (SENAITE returns 200 OK even when transitions are skipped).
+    """
+    if SENAITE_URL is None:
+        return AnalysisResultResponse(
+            success=False, message="SENAITE not configured"
+        )
+
+    if req.transition not in EXPECTED_POST_STATES:
+        return AnalysisResultResponse(
+            success=False,
+            message=f"Invalid transition: {req.transition}. "
+            f"Must be one of: {', '.join(EXPECTED_POST_STATES.keys())}",
+        )
+
+    try:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(30.0, connect=5.0),
+            auth=httpx.BasicAuth(SENAITE_USER, SENAITE_PASSWORD),
+            follow_redirects=True,
+        ) as client:
+            update_url = (
+                f"{SENAITE_URL}/senaite/@@API/senaite/v1/update/{uid}"
+            )
+            resp = await client.post(
+                update_url, json={"transition": req.transition}
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            items = data.get("items", [])
+            if not items:
+                return AnalysisResultResponse(
+                    success=False,
+                    message="SENAITE returned no items — transition may have failed",
+                )
+            item = items[0]
+            actual_state = item.get("review_state", "")
+            keyword = item.get("Keyword", "")
+            expected_state = EXPECTED_POST_STATES[req.transition]
+
+            # DATA-04: Detect silent rejection by comparing actual vs expected state
+            if actual_state != expected_state:
+                return AnalysisResultResponse(
+                    success=False,
+                    message=(
+                        f"Transition '{req.transition}' was silently rejected "
+                        f"by SENAITE. Expected state '{expected_state}' but "
+                        f"got '{actual_state}'."
+                    ),
+                    new_review_state=actual_state,
+                    keyword=keyword,
+                )
+
+            return AnalysisResultResponse(
+                success=True,
+                message=f"Transition '{req.transition}' completed",
+                new_review_state=actual_state,
+                keyword=keyword,
+            )
+
+    except httpx.TimeoutException:
+        return AnalysisResultResponse(
+            success=False, message="SENAITE request timed out"
+        )
+    except httpx.HTTPStatusError as e:
+        detail = ""
+        try:
+            detail = e.response.text[:200]
+        except Exception:
+            pass
+        return AnalysisResultResponse(
+            success=False,
+            message=f"SENAITE returned {e.response.status_code}: {detail}".strip(),
+        )
+    except Exception as e:
+        return AnalysisResultResponse(
+            success=False, message=f"Transition error: {e}"
+        )
+
+
 # --- Scale endpoints (Phase 2) ---
 
 @app.get("/scale/status")
