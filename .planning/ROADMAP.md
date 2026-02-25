@@ -80,12 +80,11 @@ Plans:
 3. User can trigger "Submit selected" and watch a progress counter ("Submitting 2/5...") advance through each analysis sequentially, with a final summary toast ("3 submitted, 1 failed")
 4. After bulk operations complete, the sample-level progress bar and status badge reflect the aggregate result with a single refresh
 
-**Plans:** TBD
+**Plans:** 2 plans in 2 waves
 
 Plans:
-- [ ] 08-01: Checkbox selection column, indeterminate header checkbox, selectedUids state in AnalysisTable
-- [ ] 08-02: Floating bulk action toolbar — conditional render, selection count, state-aware batch buttons
-- [ ] 08-03: Sequential bulk processing loop — for...await, progress counter, per-item outcome tracking, post-batch fetchSample refresh
+- [ ] 08-01-PLAN.md — Checkbox indeterminate visual + useBulkAnalysisTransition hook (selection state, sequential bulk processing, summary toast)
+- [ ] 08-02-PLAN.md — Checkbox column, floating toolbar, state-aware batch buttons, progress counter, destructive bulk confirmation in AnalysisTable
 
 ---
 
@@ -95,4 +94,4 @@ Plans:
 |-------|-----------|----------------|--------|-----------|
 | 06. Data Foundation + Inline Editing | v0.12.0 | 4/4 | ✓ Complete | 2026-02-25 |
 | 07. Per-Row Workflow Transitions | v0.12.0 | 2/2 | ✓ Complete | 2026-02-25 |
-| 08. Bulk Selection & Floating Toolbar | v0.12.0 | 0/3 | Not started | - |
+| 08. Bulk Selection & Floating Toolbar | v0.12.0 | 0/2 | Not started | - |
