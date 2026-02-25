@@ -5841,6 +5841,85 @@ async def update_senaite_sample_fields(
         )
 
 
+# --- Analysis result and transition endpoints ---
+
+
+class AnalysisResultRequest(BaseModel):
+    result: str  # The result value to set
+
+
+class AnalysisResultResponse(BaseModel):
+    success: bool
+    message: str
+    new_review_state: Optional[str] = None
+    keyword: Optional[str] = None
+
+
+@app.post(
+    "/wizard/senaite/analyses/{uid}/result",
+    response_model=AnalysisResultResponse,
+)
+async def set_analysis_result(
+    uid: str,
+    req: AnalysisResultRequest,
+    _current_user=Depends(get_current_user),
+):
+    """Set the Result value on a SENAITE analysis.
+
+    Proxies to SENAITE REST API: POST /update/{uid} with {"Result": value}.
+    Does NOT trigger a workflow transition — that is a separate explicit action.
+    """
+    if SENAITE_URL is None:
+        return AnalysisResultResponse(
+            success=False, message="SENAITE not configured"
+        )
+
+    try:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(30.0, connect=5.0),
+            auth=httpx.BasicAuth(SENAITE_USER, SENAITE_PASSWORD),
+            follow_redirects=True,
+        ) as client:
+            update_url = (
+                f"{SENAITE_URL}/senaite/@@API/senaite/v1/update/{uid}"
+            )
+            resp = await client.post(update_url, json={"Result": req.result})
+            resp.raise_for_status()
+            data = resp.json()
+            items = data.get("items", [])
+            if not items:
+                return AnalysisResultResponse(
+                    success=False,
+                    message="SENAITE returned no items — update may have failed",
+                )
+            item = items[0]
+            return AnalysisResultResponse(
+                success=True,
+                message="Result updated",
+                new_review_state=item.get("review_state", ""),
+                keyword=item.get("Keyword", ""),
+            )
+
+    except httpx.TimeoutException:
+        return AnalysisResultResponse(
+            success=False, message="SENAITE request timed out"
+        )
+    except httpx.HTTPStatusError as e:
+        detail = ""
+        try:
+            detail = e.response.text[:200]
+        except Exception:
+            pass
+        return AnalysisResultResponse(
+            success=False,
+            message=f"SENAITE returned {e.response.status_code}: {detail}".strip(),
+        )
+    except Exception as e:
+        return AnalysisResultResponse(
+            success=False, message=f"Update error: {e}"
+        )
+
+
 # --- Scale endpoints (Phase 2) ---
 
 @app.get("/scale/status")
