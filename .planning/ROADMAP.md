@@ -11,7 +11,7 @@
 **Milestone Goal:** Enable lab staff to manage SENAITE analysis results directly from the Sample Details page — inline editing of result values, and full workflow transitions (submit, verify, retract, reject) with both per-row actions and bulk operations via a modern UI.
 
 - [x] **Phase 06: Data Foundation + Inline Editing** ✅ — uid/keyword model, backend endpoints, AnalysisTable extraction, and click-to-edit result cells
-- [ ] **Phase 07: Per-Row Workflow Transitions** — state-aware action menus for all four transitions with sample-level refresh after each action
+- [x] **Phase 07: Per-Row Workflow Transitions** ✅ — state-aware action menus for all four transitions with sample-level refresh after each action
 - [ ] **Phase 08: Bulk Selection & Floating Toolbar** — checkbox selection, floating batch action toolbar, and sequential bulk processing
 
 ---
@@ -61,8 +61,8 @@ Plans:
 **Plans:** 2 plans in 2 waves
 
 Plans:
-- [ ] 07-01-PLAN.md — API function + transition hook + ALLOWED_TRANSITIONS constants + Actions column DropdownMenu + AlertDialog for destructive actions
-- [ ] 07-02-PLAN.md — Silent sample refresh after transitions: refreshSample wiring in SampleDetails for badge/progress/counter updates
+- [x] 07-01-PLAN.md — API function + transition hook + ALLOWED_TRANSITIONS constants + Actions column DropdownMenu + AlertDialog for destructive actions
+- [x] 07-02-PLAN.md — Silent sample refresh after transitions: refreshSample wiring in SampleDetails for badge/progress/counter updates
 
 ---
 
@@ -94,5 +94,5 @@ Plans:
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
 | 06. Data Foundation + Inline Editing | v0.12.0 | 4/4 | ✓ Complete | 2026-02-25 |
-| 07. Per-Row Workflow Transitions | v0.12.0 | 0/2 | Not started | - |
+| 07. Per-Row Workflow Transitions | v0.12.0 | 2/2 | ✓ Complete | 2026-02-25 |
 | 08. Bulk Selection & Floating Toolbar | v0.12.0 | 0/3 | Not started | - |

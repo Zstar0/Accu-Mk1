@@ -5,30 +5,30 @@
 See: .planning/PROJECT.md (updated 2026-02-24)
 
 **Core value:** Streamlined morning workflow: import CSV -> review batch -> calculate purity -> push to SENAITE. One operator, one workstation, no friction.
-**Current focus:** v0.12.0 — Analysis Results & Workflow Actions — Phase 07
+**Current focus:** v0.12.0 — Analysis Results & Workflow Actions — Phase 08
 
 ## Current Position
 
-Phase: 07 of 08 (Per-Row Workflow Transitions)
-Plan: 2 of 3 in current phase (07-02 complete)
-Status: In progress
-Last activity: 2026-02-25 — Completed 07-02-PLAN.md
+Phase: 08 of 08 (Bulk Selection & Floating Toolbar)
+Plan: 0 of 3 in current phase
+Status: Ready to plan
+Last activity: 2026-02-25 — Phase 07 verified and complete
 
-Progress: [██████░░░░] 50%
+Progress: [███████░░░] 70%
 
 ## Performance Metrics
 
 **Velocity:**
 - Total plans completed: 6 (this milestone)
-- Average duration: ~3 min
-- Total execution time: ~18 min
+- Average duration: 3 min
+- Total execution time: 18 min
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
 | 06 | 4/4 | 11 min | 3 min |
-| 07 | 2/3 | ~7 min | ~3.5 min |
+| 07 | 2/2 | 7 min | 4 min |
 | 08 | 0/3 | -- | -- |
 
 *Updated after each plan completion*
@@ -54,20 +54,22 @@ Progress: [██████░░░░] 50%
 - savePendingRef guard pattern prevents onBlur + onKeyDown Enter double-save race condition
 - Tab advances forward only through editable (unassigned/null) analyses; does not wrap
 - Failed saves keep cell in edit mode for user retry
+- ALLOWED_TRANSITIONS constant gates per-row action menus (unassigned->submit, to_be_verified->verify/retract/reject, verified->retract)
+- DESTRUCTIVE_TRANSITIONS (retract, reject) gate through AlertDialog confirmation; non-destructive execute immediately
 - TRANSITION_LABELS defined locally in both hook and AnalysisTable.tsx (hook must not import from component)
-- AlertDialog placed outside table element — Radix Portal renders to document.body regardless of JSX position
-- pendingUids uses Set<string> not boolean — independent per-row loading state for concurrent transitions
-- refreshSample() does not call setError(null) — keeps current error state; background refresh failure shows toast not page replacement
-- refreshSample() replaces entire data object via setData(result) — full replacement ensures all derived state reflects server truth
+- pendingUids uses Set<string> not boolean -- independent per-row loading state for concurrent transitions
+- pendingConfirm object drives controlled AlertDialog (outside <table> for valid DOM nesting)
+- refreshSample is a silent re-fetch (no setLoading(true)) to avoid full-page spinner flash after transitions
+- refreshSample replaces entire data object via setData(result) -- full replacement ensures all derived state reflects server truth
 
 ### Key Source Files
 
 - `backend/main.py` -- FastAPI app, all endpoints, SENAITE integration
 - `src/components/senaite/SampleDetails.tsx` -- Sample Details page with refreshSample() silent re-fetch, onTransitionComplete wired to AnalysisTable
-- `src/components/senaite/AnalysisTable.tsx` -- Analysis table with inline editing, filter tabs, progress bar, Actions column, onTransitionComplete prop
+- `src/components/senaite/AnalysisTable.tsx` -- Analysis table with inline editing, filter tabs, progress bar, Actions column with DropdownMenu + AlertDialog, onTransitionComplete prop
 - `src/hooks/use-analysis-editing.ts` -- Hook for inline result editing (edit state, save, cancel, Tab nav)
-- `src/hooks/use-analysis-transition.ts` -- Hook for per-row workflow transitions (pendingUids Set, confirmAndExecute)
-- `src/lib/api.ts` -- All API functions including setAnalysisResult and transitionAnalysis
+- `src/hooks/use-analysis-transition.ts` -- Hook for per-row workflow transitions (pendingUids Set, pendingConfirm, confirmAndExecute)
+- `src/lib/api.ts` -- All API functions including setAnalysisResult, transitionAnalysis
 - `src/components/ui/data-table.tsx` -- TanStack Table pattern with 'use no memo' directive (required for any new useReactTable call)
 - `integration-service/app/adapters/senaite.py` -- SENAITE adapter (reference for API patterns)
 
@@ -84,8 +86,7 @@ Progress: [██████░░░░] 50%
 
 ### Blockers/Concerns
 
-- Phase 07: Before implementing retract/reject AlertDialog, manually test the retract transition against live SENAITE via Swagger UI. Confirm whether Remarks field is required. If yes, add Textarea to dialog before building UI.
-  (Note: Plan 01 UI built without Remarks field — if backend requires it, Plan 03 or a follow-up plan adds Textarea to AlertDialog)
+None.
 
 ### Pending Todos
 
@@ -94,5 +95,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-25
-Stopped at: Completed 07-02-PLAN.md — silent refreshSample + onTransitionComplete wiring
+Stopped at: Phase 07 verified and complete -- ready to plan Phase 08
 Resume file: None

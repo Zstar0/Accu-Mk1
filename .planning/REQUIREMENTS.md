@@ -28,13 +28,13 @@ Requirements for Analysis Results & Workflow Actions milestone. Each maps to roa
 
 ### Workflow Transitions
 
-- [ ] **WKFL-01**: Each analysis row shows a state-aware action menu with only valid transitions for that analysis's current state
-- [ ] **WKFL-02**: User can submit an unassigned analysis (sets result value + triggers submit transition in one action)
-- [ ] **WKFL-03**: User can verify a to_be_verified analysis (triggers verify transition)
-- [ ] **WKFL-04**: User can retract a to_be_verified or verified analysis (triggers retract transition)
-- [ ] **WKFL-05**: User can reject a to_be_verified analysis (triggers reject transition)
-- [ ] **WKFL-06**: Retract and reject display a confirmation dialog before executing the transition
-- [ ] **WKFL-07**: Per-row loading spinner during transition execution (disables other actions on that row)
+- [x] **WKFL-01**: Each analysis row shows a state-aware action menu with only valid transitions for that analysis's current state
+- [x] **WKFL-02**: User can submit an unassigned analysis (sets result value + triggers submit transition in one action)
+- [x] **WKFL-03**: User can verify a to_be_verified analysis (triggers verify transition)
+- [x] **WKFL-04**: User can retract a to_be_verified or verified analysis (triggers retract transition)
+- [x] **WKFL-05**: User can reject a to_be_verified analysis (triggers reject transition)
+- [x] **WKFL-06**: Retract and reject display a confirmation dialog before executing the transition
+- [x] **WKFL-07**: Per-row loading spinner during transition execution (disables other actions on that row)
 
 ### Bulk Operations
 
@@ -45,8 +45,8 @@ Requirements for Analysis Results & Workflow Actions milestone. Each maps to roa
 
 ### Sample State Refresh
 
-- [ ] **REFR-01**: After any analysis transition, re-fetch the parent sample to reflect updated progress bar and status badge
-- [ ] **REFR-02**: Sample-level auto-transitions (e.g. all analyses submitted -> sample moves to to_be_verified) are visible immediately after refresh
+- [x] **REFR-01**: After any analysis transition, re-fetch the parent sample to reflect updated progress bar and status badge
+- [x] **REFR-02**: Sample-level auto-transitions (e.g. all analyses submitted -> sample moves to to_be_verified) are visible immediately after refresh
 
 ## Future Requirements
 
@@ -87,15 +87,15 @@ Deferred to later milestones.
 | EDIT-02 | Phase 06 | Complete |
 | EDIT-03 | Phase 06 | Complete |
 | EDIT-04 | Phase 06 | Complete |
-| WKFL-01 | Phase 07 | Pending |
-| WKFL-02 | Phase 07 | Pending |
-| WKFL-03 | Phase 07 | Pending |
-| WKFL-04 | Phase 07 | Pending |
-| WKFL-05 | Phase 07 | Pending |
-| WKFL-06 | Phase 07 | Pending |
-| WKFL-07 | Phase 07 | Pending |
-| REFR-01 | Phase 07 | Pending |
-| REFR-02 | Phase 07 | Pending |
+| WKFL-01 | Phase 07 | Complete |
+| WKFL-02 | Phase 07 | Complete |
+| WKFL-03 | Phase 07 | Complete |
+| WKFL-04 | Phase 07 | Complete |
+| WKFL-05 | Phase 07 | Complete |
+| WKFL-06 | Phase 07 | Complete |
+| WKFL-07 | Phase 07 | Complete |
+| REFR-01 | Phase 07 | Complete |
+| REFR-02 | Phase 07 | Complete |
 | BULK-01 | Phase 08 | Pending |
 | BULK-02 | Phase 08 | Pending |
 | BULK-03 | Phase 08 | Pending |
@@ -108,4 +108,4 @@ Deferred to later milestones.
 
 ---
 *Requirements defined: 2026-02-24*
-*Last updated: 2026-02-25 — Phase 06 requirements marked Complete*
+*Last updated: 2026-02-25 — Phase 07 requirements marked Complete*
