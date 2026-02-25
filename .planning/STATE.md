@@ -10,18 +10,18 @@ See: .planning/PROJECT.md (updated 2026-02-24)
 ## Current Position
 
 Phase: 08 of 08 (Bulk Selection & Floating Toolbar)
-Plan: 0 of 3 in current phase
-Status: Ready to plan
-Last activity: 2026-02-25 — Phase 07 verified and complete
+Plan: 1 of 3 in current phase
+Status: In progress
+Last activity: 2026-02-25 — Completed 08-01-PLAN.md
 
-Progress: [███████░░░] 70%
+Progress: [████████░░] 75%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 6 (this milestone)
+- Total plans completed: 7 (this milestone)
 - Average duration: 3 min
-- Total execution time: 18 min
+- Total execution time: 19 min
 
 **By Phase:**
 
@@ -29,7 +29,7 @@ Progress: [███████░░░] 70%
 |-------|-------|-------|----------|
 | 06 | 4/4 | 11 min | 3 min |
 | 07 | 2/2 | 7 min | 4 min |
-| 08 | 0/3 | -- | -- |
+| 08 | 1/3 | 1 min | 1 min |
 
 *Updated after each plan completion*
 
@@ -61,6 +61,9 @@ Progress: [███████░░░] 70%
 - pendingConfirm object drives controlled AlertDialog (outside <table> for valid DOM nesting)
 - refreshSample is a silent re-fetch (no setLoading(true)) to avoid full-page spinner flash after transitions
 - refreshSample replaces entire data object via setData(result) -- full replacement ensures all derived state reflects server truth
+- TRANSITION_PAST_TENSE map defined locally in bulk hook (hook must not import from component)
+- Checkbox indeterminate state uses data-[state=indeterminate] Tailwind variants on Indicator's child icons
+- clearSelection called inside executeBulk after onTransitionComplete — hook cleans its own selection state
 
 ### Key Source Files
 
@@ -71,6 +74,8 @@ Progress: [███████░░░] 70%
 - `src/hooks/use-analysis-transition.ts` -- Hook for per-row workflow transitions (pendingUids Set, pendingConfirm, confirmAndExecute)
 - `src/lib/api.ts` -- All API functions including setAnalysisResult, transitionAnalysis
 - `src/components/ui/data-table.tsx` -- TanStack Table pattern with 'use no memo' directive (required for any new useReactTable call)
+- `src/components/ui/checkbox.tsx` -- Shared Checkbox with indeterminate visual (MinusIcon)
+- `src/hooks/use-bulk-analysis-transition.ts` -- Bulk selection state + sequential processing hook
 - `integration-service/app/adapters/senaite.py` -- SENAITE adapter (reference for API patterns)
 
 ### SENAITE Analysis Workflow (Reference)
@@ -95,5 +100,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-25
-Stopped at: Phase 07 verified and complete -- ready to plan Phase 08
+Stopped at: Completed 08-01-PLAN.md — Checkbox indeterminate visual + useBulkAnalysisTransition hook
 Resume file: None
