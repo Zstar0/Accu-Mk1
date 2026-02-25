@@ -1047,7 +1047,23 @@ export function SampleDetails() {
         </Card>
 
         {/* Analyses Table */}
-        <AnalysisTable analyses={analyses} analyteNameMap={analyteNameMap} />
+        <AnalysisTable
+          analyses={analyses}
+          analyteNameMap={analyteNameMap}
+          onResultSaved={(uid, newResult, newReviewState) => {
+            setData(prev => {
+              if (!prev) return prev
+              return {
+                ...prev,
+                analyses: prev.analyses.map(a =>
+                  a.uid === uid
+                    ? { ...a, result: newResult, review_state: newReviewState ?? a.review_state }
+                    : a
+                ),
+              }
+            })
+          }}
+        />
       </div>
     </ScrollArea>
   )

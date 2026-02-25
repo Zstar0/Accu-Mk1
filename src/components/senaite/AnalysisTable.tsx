@@ -1,7 +1,9 @@
-import { useState } from 'react'
-import { Activity } from 'lucide-react'
+import { useState, useEffect, useRef } from 'react'
+import { Activity, Pencil } from 'lucide-react'
 import { Card } from '@/components/ui/card'
+import { Spinner } from '@/components/ui/spinner'
 import type { SenaiteAnalysis } from '@/lib/api'
+import { useAnalysisEditing, type UseAnalysisEditingReturn } from '@/hooks/use-analysis-editing'
 
 // --- Status styling constants ---
 
@@ -71,6 +73,9 @@ const ROW_STATUS_STYLE: Record<string, string> = {
   cancelled:
     'border-l-2 border-l-zinc-900 bg-zinc-100/60 dark:border-l-zinc-400 dark:bg-zinc-500/[0.06]',
 }
+
+/** States where an analysis result cell is editable. */
+const EDITABLE_STATES = new Set<string | null>(['unassigned', null])
 
 // --- Shared components ---
 
@@ -153,7 +158,109 @@ function formatAnalysisTitle(title: string, nameMap: Map<number, string>): { dis
   return { display: title, original: title }
 }
 
-function AnalysisRow({ analysis, analyteNameMap }: { analysis: SenaiteAnalysis; analyteNameMap: Map<number, string> }) {
+// --- Inline edit cell ---
+
+function EditableResultCell({
+  analysis,
+  editing,
+}: {
+  analysis: SenaiteAnalysis
+  editing: UseAnalysisEditingReturn
+}) {
+  const inputRef = useRef<HTMLInputElement>(null)
+  const isEditing = editing.editingUid === analysis.uid
+  const canEdit = !!analysis.uid && EDITABLE_STATES.has(analysis.review_state)
+
+  // Auto-focus when entering edit mode
+  useEffect(() => {
+    if (isEditing && inputRef.current) {
+      inputRef.current.focus()
+      inputRef.current.select()
+    }
+  }, [isEditing])
+
+  // Editing mode: show input
+  if (isEditing) {
+    return (
+      <td className="py-1.5 px-3">
+        <div className="flex items-center gap-1.5">
+          <input
+            ref={inputRef}
+            type="text"
+            value={editing.draft}
+            onChange={e => editing.setDraft(e.target.value)}
+            onKeyDown={e => { if (analysis.uid) editing.handleKeyDown(e, analysis.uid) }}
+            onBlur={() => {
+              // Only cancel if a save is NOT pending (prevents blur from cancelling an in-flight save)
+              if (!editing.savePendingRef.current) {
+                editing.cancelEditing()
+              }
+            }}
+            disabled={editing.isSaving}
+            className="text-sm font-mono h-7 px-2 py-1 rounded border border-input bg-background focus:outline-none focus:ring-2 focus:ring-ring w-full max-w-32 disabled:opacity-50"
+            aria-label={`Edit result for ${analysis.title}`}
+          />
+          {editing.isSaving && <Spinner className="size-3.5 shrink-0" />}
+          {analysis.unit && analysis.unit.toLowerCase() !== 'text' && (
+            <span className="text-xs text-muted-foreground shrink-0">{analysis.unit}</span>
+          )}
+        </div>
+      </td>
+    )
+  }
+
+  // Display mode: editable (clickable) or read-only
+  if (canEdit) {
+    return (
+      <td className="py-2.5 px-3">
+        <button
+          onClick={() => { if (analysis.uid) editing.startEditing(analysis.uid, analysis.result) }}
+          className="group inline-flex items-center gap-1.5 cursor-pointer rounded-md px-1 -mx-1 py-0.5 -my-0.5 hover:bg-muted/60 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          aria-label={`Edit result for ${analysis.title}`}
+        >
+          <span
+            className={`text-sm font-mono ${analysis.result ? 'text-foreground' : 'text-muted-foreground italic'}`}
+          >
+            {analysis.result || 'Pending'}
+          </span>
+          <Pencil
+            size={12}
+            className="text-muted-foreground/0 group-hover:text-muted-foreground transition-colors shrink-0"
+          />
+        </button>
+        {analysis.unit && analysis.unit.toLowerCase() !== 'text' && (
+          <span className="text-xs text-muted-foreground ml-1.5">{analysis.unit}</span>
+        )}
+      </td>
+    )
+  }
+
+  // Read-only (verified, to_be_verified, etc.)
+  return (
+    <td className="py-2.5 px-3">
+      <span
+        className={`text-sm font-mono ${analysis.result ? 'text-foreground' : 'text-muted-foreground italic'}`}
+      >
+        {analysis.result || 'Pending'}
+      </span>
+      {analysis.unit && analysis.unit.toLowerCase() !== 'text' && (
+        <span className="text-xs text-muted-foreground ml-1.5">{analysis.unit}</span>
+      )}
+    </td>
+  )
+}
+
+// --- Analysis row ---
+
+function AnalysisRow({
+  analysis,
+  analyteNameMap,
+  editing,
+}: {
+  analysis: SenaiteAnalysis
+  analyteNameMap: Map<number, string>
+  editing: UseAnalysisEditingReturn
+}) {
   const rowTint = ROW_STATUS_STYLE[analysis.review_state ?? ''] ?? ''
   const { display, original } = formatAnalysisTitle(analysis.title, analyteNameMap)
   const wasRenamed = display !== original
@@ -167,16 +274,7 @@ function AnalysisRow({ analysis, analyteNameMap }: { analysis: SenaiteAnalysis; 
           </span>
         )}
       </td>
-      <td className="py-2.5 px-3">
-        <span
-          className={`text-sm font-mono ${analysis.result ? 'text-foreground' : 'text-muted-foreground italic'}`}
-        >
-          {analysis.result || 'Pending'}
-        </span>
-        {analysis.unit && analysis.unit.toLowerCase() !== 'text' && (
-          <span className="text-xs text-muted-foreground ml-1.5">{analysis.unit}</span>
-        )}
-      </td>
+      <EditableResultCell analysis={analysis} editing={editing} />
       <td className="py-2.5 px-3 text-center">
         {analysis.retested ? (
           <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-medium bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-400">
@@ -204,10 +302,12 @@ function AnalysisRow({ analysis, analyteNameMap }: { analysis: SenaiteAnalysis; 
 interface AnalysisTableProps {
   analyses: SenaiteAnalysis[]
   analyteNameMap: Map<number, string>
+  onResultSaved?: (uid: string, newResult: string, newReviewState: string | null) => void
 }
 
-export function AnalysisTable({ analyses, analyteNameMap }: AnalysisTableProps) {
+export function AnalysisTable({ analyses, analyteNameMap, onResultSaved }: AnalysisTableProps) {
   const [analysisFilter, setAnalysisFilter] = useState<'all' | 'verified' | 'pending'>('all')
+  const editing = useAnalysisEditing({ analyses, onResultSaved })
 
   const verifiedCount = analyses.filter(
     a => a.review_state === 'verified' || a.review_state === 'published'
@@ -319,7 +419,12 @@ export function AnalysisTable({ analyses, analyteNameMap }: AnalysisTableProps) 
           <tbody>
             {filteredAnalyses.length > 0 ? (
               filteredAnalyses.map((a, i) => (
-                <AnalysisRow key={`${a.title}-${i}`} analysis={a} analyteNameMap={analyteNameMap} />
+                <AnalysisRow
+                  key={a.uid ?? `${a.title}-${i}`}
+                  analysis={a}
+                  analyteNameMap={analyteNameMap}
+                  editing={editing}
+                />
               ))
             ) : (
               <tr>
