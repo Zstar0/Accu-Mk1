@@ -33,13 +33,13 @@
 4. User can click a result cell on an unassigned analysis, type a value, press Enter to save, and see the cell update immediately with a success toast
 5. User can press Escape to cancel an edit with no change persisted; a failed save rolls back the cell to its previous value with an error toast
 
-**Plans:** TBD
+**Plans:** 4 plans in 3 waves
 
 Plans:
-- [ ] 06-01: Data model — uid/keyword on SenaiteAnalysis (backend Pydantic + frontend TypeScript + lookup route mapping)
-- [ ] 06-02: Backend endpoints — POST /wizard/senaite/analyses/{uid}/result and /transition with EXPECTED_POST_STATES validation
-- [ ] 06-03: Component extraction — AnalysisTable standalone component with useAnalysisEditing hook
-- [ ] 06-04: Inline editing — click-to-edit cells, Enter/Escape/Tab, optimistic update, rollback, toast feedback
+- [ ] 06-01-PLAN.md — Data model: uid/keyword on SenaiteAnalysis (backend Pydantic + frontend TypeScript + lookup route mapping)
+- [ ] 06-02-PLAN.md — Backend endpoints: POST /wizard/senaite/analyses/{uid}/result and /transition with EXPECTED_POST_STATES validation
+- [ ] 06-03-PLAN.md — Component extraction: AnalysisTable standalone component from SampleDetails.tsx
+- [ ] 06-04-PLAN.md — Inline editing: click-to-edit cells, Enter/Escape/Tab, optimistic update, rollback, toast feedback
 
 ---
 
