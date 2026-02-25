@@ -1,761 +1,571 @@
-# Architecture: Sample Prep Wizard + Scale Integration
+# Architecture: Inline Result Editing + SENAITE Workflow Transitions
 
-**Project:** Accu-Mk1 v0.11.0 — New Analysis Wizard
-**Domain:** FastAPI + SQLAlchemy + React SPA + Mettler Toledo TCP scale bridge
-**Researched:** 2026-02-19
-**Overall Confidence:** HIGH (scale bridge) / HIGH (wizard session DB) / HIGH (SSE pattern)
+**Milestone:** Subsequent — Inline analysis result editing and workflow actions
+**Domain:** Tauri + React + FastAPI (Accu-Mk1 local backend) + Integration-Service + SENAITE REST API
+**Researched:** 2026-02-24
+**Overall Confidence:** HIGH (all claims verified against actual codebase)
 
 ---
 
 ## Executive Summary
 
-The v0.11.0 wizard adds two distinct architectural concerns to the existing system: a **Scale Bridge** (TCP connection to Mettler Toledo XSR105DU via MT-SICS protocol) and a **Wizard Session** (resumable multi-step form with DB-backed state). These concerns are independent enough to be built and tested separately. The wizard can be built first with manual weight entry, then the scale bridge plugged in.
+This milestone adds two closely related capabilities to `SampleDetails.tsx`:
 
-The existing SSE streaming pattern (used for SharePoint import, rebuild-standards, resync) is a direct model for scale weight streaming. No new streaming technology is needed — the same `StreamingResponse` + `fetch` + `ReadableStream` pattern applies.
+1. **Inline result editing** — click a result cell in the analyses table, type a value, save.
+2. **Workflow transitions** — buttons to submit, verify, or reject individual analyses (or in bulk).
+
+Both capabilities are "thin wires" through the existing stack. The backend pattern (proxy to SENAITE's two-step update+transition) already exists in the integration-service. The frontend pattern (click-to-edit with optimistic update + rollback) already exists in `EditableField.tsx`. The gap is connecting them: new Accu-Mk1 backend endpoints that call SENAITE's `POST /update/{uid}`, and a revamped `AnalysisRow` component that exercises those endpoints.
+
+The most significant structural decision is **where to add the backend endpoints**: they belong in the Accu-Mk1 local backend (`backend/main.py`), following the same pattern as `update_senaite_sample_fields`, not in the integration-service. The integration-service's desktop.py `submit_sample_results` endpoint is the reference implementation but serves a different auth context (API key for desktop) and targets a different workflow path (batch result submission by keyword, not per-analysis editing).
 
 **Recommended build order:**
 
-1. DB models first (wizard session + measurements)
-2. Wizard endpoints without scale (manual weight entry)
-3. Scale bridge service as an injectable dependency
-4. SSE weight-read endpoint that uses scale bridge
-5. Frontend wizard UI with manual-entry fallback
+1. Extend `SenaiteAnalysis` type to include `uid` (one-line Python + TypeScript change)
+2. Add two Accu-Mk1 backend endpoints: `POST /wizard/senaite/analyses/{uid}/result` and `POST /wizard/senaite/analyses/{uid}/transition`
+3. Upgrade `AnalysisRow` to support inline result editing
+4. Add per-row transition action buttons (submit, verify, reject)
+5. Add bulk action toolbar to the analyses table header
 
 ---
 
-## Existing Architecture Context
+## Current Architecture Audit
 
-### Current SSE Pattern (HIGH confidence — code verified)
+### The Missing `uid` Field
 
-The project already uses SSE via `starlette.responses.StreamingResponse` with `media_type="text/event-stream"`. Four existing endpoints follow this pattern:
+**This is the single most critical prerequisite.** The existing `SenaiteAnalysis` model on both the backend and frontend is missing `uid`.
 
-- `GET /hplc/seed-peptides/stream`
-- `GET /hplc/rebuild-standards/stream`
-- `GET /hplc/import-standards/stream`
-- `GET /hplc/peptides/{id}/resync/stream`
-
-**Backend pattern (from main.py):**
-
+**Backend model (`backend/main.py`, line 5005):**
 ```python
-from starlette.responses import StreamingResponse
-
-async def event_generator():
-    def send_event(event_type: str, data: dict) -> str:
-        payload = json.dumps(data)
-        return f"event: {event_type}\ndata: {payload}\n\n"
-
-    yield send_event("progress", {"status": "reading", "value": None})
-    await asyncio.sleep(0)  # flush
-
-    # ... do work, yield more events ...
-
-    yield send_event("done", {"value": 100.05, "unit": "mg", "stable": True})
-
-return StreamingResponse(
-    event_generator(),
-    media_type="text/event-stream",
-    headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
-)
+class SenaiteAnalysis(BaseModel):
+    title: str
+    result: Optional[str] = None
+    unit: Optional[str] = None
+    method: Optional[str] = None
+    instrument: Optional[str] = None
+    analyst: Optional[str] = None
+    due_date: Optional[str] = None
+    review_state: Optional[str] = None
+    sort_key: Optional[float] = None
+    captured: Optional[str] = None
+    retested: bool = False
+    # uid is NOT here — must be added
 ```
 
-**Frontend pattern (from AdvancedPane.tsx and PeptideConfig.tsx):**
-
+**Frontend type (`src/lib/api.ts`, line 2016):**
 ```typescript
-const response = await fetch(`${getApiBaseUrl()}/wizard/steps/weigh/stream`, {
-  headers: token ? { Authorization: `Bearer ${token}` } : {},
-})
-const reader = response.body!.getReader()
-const decoder = new TextDecoder()
-let buffer = ''
-
-while (true) {
-  const { done, value } = await reader.read()
-  if (done) break
-  buffer += decoder.decode(value, { stream: true })
-  const parts = buffer.split('\n\n')
-  buffer = parts.pop() ?? ''
-  for (const part of parts) {
-    const dataLine = part.split('\n').find(l => l.startsWith('data:'))
-    const eventLine = part.split('\n').find(l => l.startsWith('event:'))
-    if (!dataLine) continue
-    const payload = JSON.parse(dataLine.slice(5).trim())
-    const eventType = eventLine?.slice(6).trim()
-    // handle: 'reading', 'weight', 'stable', 'error', 'timeout'
-  }
+export interface SenaiteAnalysis {
+  title: string
+  result: string | null
+  unit: string | null
+  method: string | null
+  instrument: string | null
+  analyst: string | null
+  due_date: string | null
+  review_state: string | null
+  sort_key: number | null
+  captured: string | null
+  retested: boolean
+  // uid is NOT here — must be added
 }
 ```
 
-This is the proven, working SSE transport already in use. Use it for scale weight streaming without modification to the pattern.
+**Where the uid is fetched but dropped:** In the lookup endpoint (`backend/main.py` around line 5304), the analysis items from SENAITE already include `uid` in the response JSON. The field is just never mapped into `SenaiteAnalysis`. Adding it is a one-field addition in both files with no schema migration required.
 
-### Current Auth Pattern (HIGH confidence — code verified)
+### Existing SENAITE Proxy Pattern (HIGH confidence — code verified)
 
-All endpoints use `Depends(get_current_user)` (JWT Bearer). Wizard endpoints follow the same pattern. SSE endpoints pass the token via `Authorization: Bearer` header in the initial fetch request — this is already proven to work with the existing SSE streaming endpoints.
+The `update_senaite_sample_fields` endpoint at `POST /wizard/senaite/samples/{uid}/update` (line 5760) is the direct model for new analysis endpoints:
+
+```python
+# Current pattern — used for sample field updates:
+POST /wizard/senaite/samples/{uid}/update
+Body: {"fields": {"Remarks": "some text"}}
+→ backend proxies to: POST {SENAITE_URL}/senaite/@@API/senaite/v1/update/{uid}
+→ returns SenaiteFieldUpdateResponse(success, message, updated_fields)
+```
+
+The new analysis endpoints follow the same HTTP proxy pattern, same auth (`Depends(get_current_user)`), same httpx client configuration (JSON body first, form-encoded fallback on 400), same error handling.
+
+### Existing Two-Step Pattern (HIGH confidence — code verified)
+
+The integration-service adapter's `submit_analysis_result` (line 901 in `senaite.py`) documents the SENAITE two-step workflow as observed, working code:
+
+```python
+# Step 1: Set result value
+POST {SENAITE_URL}/senaite/@@API/senaite/v1/update/{analysis_uid}
+Body: {"Result": "95.4"}
+
+# Step 2: Submit (transition state)
+POST {SENAITE_URL}/senaite/@@API/senaite/v1/update/{analysis_uid}
+Body: {"transition": "submit"}
+```
+
+The transition name `"submit"` moves the analysis from `unassigned` to `to_be_verified`. Other transitions: `"verify"` (`to_be_verified` → `verified`), `"retract"` (reverts), `"reject"`. The exact available transitions per state are SENAITE workflow-dependent and should be verified against the live instance during implementation.
+
+### Existing EditableField Pattern (HIGH confidence — code verified)
+
+`EditableField.tsx` already implements the exact UX pattern needed for result cells:
+- Click to enter edit mode
+- Optimistic update via `onSaved` callback (immediate UI update before server confirms)
+- Save via custom `onSave` async function or default `updateSenaiteSampleFields`
+- Rollback on failure with error toast
+- Keyboard: Enter to save, Escape to cancel
+
+The `AnalysisRow` component needs the same behavior. The cleanest implementation passes an `onSave` callback that calls a new `updateAnalysisResult(uid, value)` API function. No new UI primitives are needed.
+
+### Current SampleDetails Data Loading Pattern (HIGH confidence — code verified)
+
+`SampleDetails.tsx` uses manual `useState` + `useEffect` with the `lookupSenaiteSample()` call — it does **not** use TanStack Query. The `fetchSample` function is already factored out and callable imperatively:
+
+```typescript
+const fetchSample = (id: string) => {
+  setLoading(true)
+  setError(null)
+  lookupSenaiteSample(id)
+    .then(result => setData(result))
+    .catch(e => setError(...))
+    .finally(() => setLoading(false))
+}
+```
+
+This `fetchSample` function is passed down as a refresh callback after mutations complete. After a result is saved or a transition fires, call `fetchSample(sampleId)` to re-fetch the full sample including updated analysis states. This is the existing pattern for `onAdded={() => fetchSample(data.sample_id)}` on the COA section.
+
+**Decision: Do not convert to TanStack Query for this milestone.** The existing useState+useEffect pattern is functional, and converting a 1400-line component mid-milestone introduces risk. Use the existing `fetchSample` as the post-mutation refresh mechanism.
 
 ---
 
-## Scale Bridge Architecture
+## New Components Required
 
-### MT-SICS Protocol Facts (MEDIUM confidence — multiple source cross-check)
+### Backend: Two New Endpoints in `backend/main.py`
 
-The Mettler Toledo XSR105DU communicates via **MT-SICS (Mettler Toledo Standard Interface Command Set)** over TCP. Key facts verified across multiple sources:
+Both endpoints follow the established `update_senaite_sample_fields` pattern exactly.
 
-**Transport:** TCP socket, plain text, commands terminated with `\r\n` (CRLF)
-
-**Key commands:**
-| Command | Sent | Purpose |
-|---------|------|---------|
-| `S\r\n` | Client → Scale | Request stable weight (blocks until stable) |
-| `SI\r\n` | Client → Scale | Request immediate weight (returns instantly, stable or not) |
-| `SIR\r\n` | Client → Scale | Request immediate weight, then repeat on each change |
-| `@\r\n` | Client → Scale | Reset / abort current command |
-| `I4\r\n` | Client → Scale | Query balance serial number |
-
-**Response format for weight commands:**
+#### Endpoint 1: Set Analysis Result
 
 ```
-<CMD> <STATUS> <     WEIGHT> <UNIT>\r\n
-
-Examples:
-S S      100.05 mg\r\n    — stable weight, 100.05 mg
-S D       98.21 mg\r\n    — dynamic (unstable) weight
-SI S     100.05 mg\r\n    — immediate, but happened to be stable
-SI D      99.87 mg\r\n    — immediate, unstable
-S I\r\n                    — S command timed out (balance still moving)
-S +\r\n                    — overload
-S -\r\n                    — underload
+POST /wizard/senaite/analyses/{uid}/result
+Body: {"value": "95.4"}
+Response: {"success": true, "message": "Result updated", "new_review_state": "unassigned"}
 ```
 
-**Status codes:**
-- `S` — stable weight value
-- `D` — dynamic (unstable) weight value
-- `I` — balance not stable in time / command not executable
-- `+` — overload
-- `-` — underload
-- `E` — error (command syntax or parameter error)
+This endpoint:
+1. POSTs `{"Result": value}` to SENAITE `update/{uid}`
+2. Returns success/failure + the updated `review_state` from SENAITE's response
+3. Does NOT auto-submit — submit is a separate explicit action
 
-**Weight value:** Right-aligned, 10 characters including decimal point and sign. Immediately preceded and followed by spaces.
+Separating set-result from submit-transition is important: a lab tech may want to enter a result value and review it before formally submitting. Forcing auto-submit on save removes that review window.
 
-**Ethernet port:** Not documented as a universal default in searched sources, but the Node.js mt-sics library example uses port 4001. The XSR series allows configuration via balance menu. Treat as configurable via environment variable — default 4001.
+#### Endpoint 2: Apply Transition
 
-**CRITICAL constraint from protocol docs:** Do not send multiple commands without waiting for the corresponding response. The balance may confuse the sequence or ignore commands. The scale bridge must enforce serial command/response discipline.
+```
+POST /wizard/senaite/analyses/{uid}/transition
+Body: {"transition": "submit"}  -- or "verify", "retract", "reject"
+Response: {"success": true, "message": "Transitioned to to_be_verified", "new_review_state": "to_be_verified"}
+```
 
-### Scale Bridge Design
+This endpoint:
+1. POSTs `{"transition": transitionName}` to SENAITE `update/{uid}`
+2. Returns success/failure + new `review_state` from SENAITE's response
+3. Is intentionally separate from the result endpoint — supports verify/retract/reject which don't involve result values
 
-The scale bridge is a **singleton async service** that manages a persistent TCP connection. It is created at application startup and injected into endpoints via FastAPI `Depends()`.
+**Why two endpoints instead of combining:** The two-step pattern in SENAITE is sequential but the UI actions are conceptually distinct. A tech entering a result mid-session should not trigger workflow state changes. Transitions are explicit lab decisions (submit for review, verify, reject). Keeping them separate also supports transitions on already-submitted analyses (e.g., verify) where no result change is involved.
 
-**Why a singleton (not per-request connection):**
-
-- TCP connection setup to lab instruments takes time (100-500ms)
-- The balance does not support concurrent connections well (serial command/response protocol)
-- A single connection can be reused across multiple weighing steps
-- Connection state (connected/disconnected) must be tracked and exposed to the frontend
-
-**Component: `backend/scale_bridge.py`**
+#### Pydantic Models
 
 ```python
-"""
-Scale Bridge: Manages TCP connection to Mettler Toledo XSR105DU.
-Uses MT-SICS protocol. Connection is persistent across requests.
-"""
-import asyncio
-import socket
-from dataclasses import dataclass
-from typing import Optional
-from enum import Enum
+class AnalysisResultRequest(BaseModel):
+    value: str
 
+class AnalysisResultResponse(BaseModel):
+    success: bool
+    message: str
+    new_review_state: Optional[str] = None
 
-class ScaleStatus(str, Enum):
-    DISCONNECTED = "disconnected"
-    CONNECTING = "connecting"
-    CONNECTED = "connected"
-    ERROR = "error"
+class AnalysisTransitionRequest(BaseModel):
+    transition: str  # "submit" | "verify" | "retract" | "reject"
 
-
-@dataclass
-class WeightReading:
-    value_mg: float      # Weight in milligrams
-    unit: str            # Unit as reported by scale (e.g., "mg", "g")
-    stable: bool         # True if status was 'S'
-    raw_response: str    # Full raw response for audit
-
-
-class ScaleBridge:
-    """
-    Persistent TCP connection to Mettler Toledo XSR105DU.
-    Thread-safe for single-connection, serial-command model.
-    """
-
-    def __init__(self, host: str, port: int, timeout: float = 10.0):
-        self.host = host
-        self.port = port
-        self.timeout = timeout
-        self._reader: Optional[asyncio.StreamReader] = None
-        self._writer: Optional[asyncio.StreamWriter] = None
-        self._lock = asyncio.Lock()  # Enforce serial command/response
-        self.status = ScaleStatus.DISCONNECTED
-
-    async def connect(self) -> None:
-        """Open TCP connection. Called at app startup."""
-        ...
-
-    async def disconnect(self) -> None:
-        """Close TCP connection. Called at app shutdown."""
-        ...
-
-    async def get_stable_weight(
-        self,
-        timeout_s: float = 15.0,
-    ) -> WeightReading:
-        """
-        Send S command, poll until stable reading received.
-        Raises ScaleTimeoutError if not stable within timeout_s.
-        """
-        async with self._lock:
-            ...
-
-    async def get_immediate_weight(self) -> WeightReading:
-        """
-        Send SI command, return current weight regardless of stability.
-        Used for live preview streaming.
-        """
-        async with self._lock:
-            ...
-
-    def _parse_response(self, line: str) -> WeightReading:
-        """
-        Parse MT-SICS weight response line.
-        Format: <CMD> <STATUS> <     WEIGHT> <UNIT>
-        Example: 'S S      100.05 mg'
-        """
-        parts = line.strip().split()
-        # parts[0] = command echo (S, SI)
-        # parts[1] = status (S, D, I, +, -, E)
-        # parts[2] = weight value
-        # parts[3] = unit
-        ...
+class AnalysisTransitionResponse(BaseModel):
+    success: bool
+    message: str
+    new_review_state: Optional[str] = None
 ```
 
-**Dependency injection pattern (mirrors existing DB pattern):**
+### Frontend: Two New API Functions in `src/lib/api.ts`
 
-```python
-# In main.py lifespan:
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    init_db()
-    # existing startup...
+```typescript
+export interface AnalysisResultResponse {
+  success: boolean
+  message: string
+  new_review_state: string | null
+}
 
-    # Scale bridge startup (if configured)
-    scale_host = os.environ.get("SCALE_HOST")
-    scale_port = int(os.environ.get("SCALE_PORT", "4001"))
-    if scale_host:
-        app.state.scale = ScaleBridge(scale_host, scale_port)
-        await app.state.scale.connect()
-    else:
-        app.state.scale = None  # No scale configured — manual entry mode
+export async function updateAnalysisResult(
+  uid: string,
+  value: string
+): Promise<AnalysisResultResponse> {
+  const response = await fetch(
+    `${API_BASE_URL()}/wizard/senaite/analyses/${encodeURIComponent(uid)}/result`,
+    {
+      method: 'POST',
+      headers: getBearerHeaders('application/json'),
+      body: JSON.stringify({ value }),
+    }
+  )
+  if (!response.ok) {
+    const err = await response.json().catch(() => null)
+    throw new Error(err?.detail || `Result update failed: ${response.status}`)
+  }
+  return response.json()
+}
 
-    yield
-
-    if app.state.scale:
-        await app.state.scale.disconnect()
-
-
-def get_scale(request: Request) -> Optional[ScaleBridge]:
-    """FastAPI dependency. Returns None if scale not configured."""
-    return getattr(request.app.state, "scale", None)
+export async function transitionAnalysis(
+  uid: string,
+  transition: string
+): Promise<AnalysisResultResponse> {
+  const response = await fetch(
+    `${API_BASE_URL()}/wizard/senaite/analyses/${encodeURIComponent(uid)}/transition`,
+    {
+      method: 'POST',
+      headers: getBearerHeaders('application/json'),
+      body: JSON.stringify({ transition }),
+    }
+  )
+  if (!response.ok) {
+    const err = await response.json().catch(() => null)
+    throw new Error(err?.detail || `Transition failed: ${response.status}`)
+  }
+  return response.json()
+}
 ```
 
-### Stable Weight Polling via SSE
+### Frontend: Upgraded `AnalysisRow` Component
 
-When a tech clicks "Read Weight" on a wizard step, the frontend opens an SSE connection to a weight-read endpoint. The backend polls the scale (using SIR or repeated SI) and streams live weight values until a stable reading is locked.
+The `AnalysisRow` function (line 1305) changes from a pure display row to an interactive row. It needs:
 
-**Endpoint: `GET /wizard/sessions/{session_id}/steps/{step_key}/weigh/stream`**
+1. **Editable result cell** — replace static text with an inline input when the analysis is in `unassigned` or `assigned` state (states where result entry is permitted). Use the `EditableField` pattern: click → input → Enter/save button → confirm, with optimistic update.
 
-```python
-@app.get("/wizard/sessions/{session_id}/steps/{step_key}/weigh/stream")
-async def stream_weigh(
-    session_id: int,
-    step_key: str,
-    scale: Optional[ScaleBridge] = Depends(get_scale),
-    db: Session = Depends(get_db),
-    _current_user = Depends(get_current_user),
-):
-    async def event_generator():
-        def send(event_type: str, data: dict) -> str:
-            return f"event: {event_type}\ndata: {json.dumps(data)}\n\n"
+2. **Transition action buttons** — a small action button or dropdown per row, showing only the transitions valid for the current `review_state`. SENAITE workflow rules:
+   - `unassigned` / `assigned` → "Submit" (requires result first)
+   - `to_be_verified` → "Verify", "Reject"
+   - `verified` → no actions (locked)
+   - `published` → no actions (locked)
 
-        if scale is None:
-            # Manual entry mode — signal frontend to show text input
-            yield send("manual_entry", {"reason": "no_scale_configured"})
-            return
+3. **Row-level loading state** — while a save or transition is pending, show a spinner in the row and disable its controls. Since analyses are independent, other rows remain interactive.
 
-        if scale.status != ScaleStatus.CONNECTED:
-            yield send("error", {"code": "scale_disconnected", "message": "Scale is not connected"})
-            return
+4. **Post-action refresh** — after any mutation succeeds, call the `fetchSample` refresh callback to reload the full sample. This updates the sample-level `review_state` if SENAITE auto-transitioned the parent (e.g., sample moves to `to_be_verified` when all analyses are submitted).
 
-        try:
-            # Stream live readings while waiting for stability
-            yield send("reading", {"status": "waiting", "message": "Place sample on scale..."})
-            await asyncio.sleep(0)
+**Component signature change:**
 
-            deadline = asyncio.get_event_loop().time() + 30.0
-            while asyncio.get_event_loop().time() < deadline:
-                reading = await scale.get_immediate_weight()
-                yield send("weight", {
-                    "value_mg": reading.value_mg,
-                    "unit": reading.unit,
-                    "stable": reading.stable,
-                })
-                await asyncio.sleep(0)  # flush
+```typescript
+// Before:
+function AnalysisRow({ analysis, analyteNameMap }: {
+  analysis: SenaiteAnalysis
+  analyteNameMap: Map<number, string>
+})
 
-                if reading.stable:
-                    # Lock the value into the DB
-                    _save_measurement(db, session_id, step_key, reading)
-                    yield send("stable", {
-                        "value_mg": reading.value_mg,
-                        "unit": reading.unit,
-                    })
-                    return
-
-                await asyncio.sleep(0.5)  # poll interval
-
-            yield send("timeout", {"message": "Scale did not stabilize within 30 seconds"})
-
-        except Exception as e:
-            yield send("error", {"code": "scale_error", "message": str(e)})
-
-    return StreamingResponse(
-        event_generator(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
-    )
+// After:
+function AnalysisRow({ analysis, analyteNameMap, onMutated }: {
+  analysis: SenaiteAnalysis
+  analyteNameMap: Map<number, string>
+  onMutated: () => void  // calls fetchSample after any mutation succeeds
+})
 ```
 
-### SSE vs WebSocket Decision
+### Frontend: Bulk Action Toolbar
 
-**Use SSE. Do not use WebSockets.**
+For bulk operations (e.g., select all unassigned analyses, submit all), a toolbar sits between the filter tabs and the progress bar in the analyses card. It appears only when one or more rows are selected.
 
-Rationale:
-- SSE is already the established pattern in this codebase (4 existing endpoints)
-- Weight reading is **unidirectional** — backend pushes, frontend listens
-- The single bidirectional action (tech clicks "cancel") can be handled by the frontend simply closing the fetch connection (AbortController)
-- WebSockets would require a new dependency or manual protocol implementation
-- SSE with `X-Accel-Buffering: no` already handles nginx proxy flushing
+**State required (local to SampleDetails, not Zustand):**
+```typescript
+const [selectedUids, setSelectedUids] = useState<Set<string>>(new Set())
+```
 
-**SSE is appropriate here.** The weight streaming event is short-lived (seconds), closes when stable or timeout, and does not need two-way messaging.
+**Bulk actions:**
+- "Submit selected" — calls `transitionAnalysis(uid, 'submit')` for each selected uid sequentially (not in parallel — SENAITE can struggle with concurrent writes to the same sample)
+- "Verify selected" — same pattern with `'verify'`
+
+The bulk action progress is shown inline ("Submitting 3 of 5...") using a local counter state. A single `fetchSample` refresh happens after all batch operations complete.
+
+**Sequential constraint:** SENAITE's analysis workflow may update sample-level state after each analysis transitions. Firing concurrent requests risks race conditions in SENAITE's state machine. Process bulk actions one at a time with await between each call.
 
 ---
 
-## Wizard Session Persistence
+## Data Flow: Edit → Save → Refresh
 
-### Session State Machine
-
-A wizard session has a well-defined lifecycle:
+### Single Analysis Result Save
 
 ```
-created → in_progress → completed
-                     ↘ abandoned
+1. Tech clicks result cell on an "unassigned" analysis row
+   └→ AnalysisRow enters edit mode (local useState)
+   └→ Optimistic: UI shows new value immediately (pre-confirm)
+
+2. Tech types value, presses Enter or clicks save button
+   └→ POST /wizard/senaite/analyses/{uid}/result {"value": "95.4"}
+
+3. Backend receives request
+   └→ httpx POST to SENAITE: /update/{uid} {"Result": "95.4"}
+   └→ Returns AnalysisResultResponse(success=true, new_review_state="unassigned")
+
+4. Frontend receives success
+   └→ toast.success("Result saved")
+   └→ onMutated() called → fetchSample(sampleId) → full refresh
+
+5. On failure:
+   └→ toast.error("Failed to save result", description: err.message)
+   └→ Optimistic rollback: revert displayed value to original
 ```
 
-**State transitions:**
-- `created`: Session record exists, no steps completed yet
-- `in_progress`: One or more steps saved, not yet submitted
-- `completed`: All required steps done, final record saved
-- `abandoned`: Tech explicitly cancelled or session too old (optional)
+### Single Analysis Transition (Submit)
 
-**The key design principle:** Sessions are resumable. If a tech starts, weighs steps 1-3, leaves for lunch, and returns — they can resume from step 3. The DB record shows which steps have measurements.
+```
+1. Tech clicks "Submit" button on a row with result entered
+   └→ Row enters loading state (spinner, controls disabled)
 
-### New DB Tables
+2. POST /wizard/senaite/analyses/{uid}/transition {"transition": "submit"}
 
-**Table: `wizard_sessions`**
+3. Backend proxies to SENAITE:
+   └→ POST /update/{uid} {"transition": "submit"}
+   └→ SENAITE moves analysis from "unassigned" → "to_be_verified"
+   └→ SENAITE may auto-transition sample to "to_be_verified" if all analyses submitted
 
-```python
-class WizardSession(Base):
-    """
-    A single sample prep wizard session.
-    One session = one sample being prepared for HPLC injection.
-    """
-    __tablename__ = "wizard_sessions"
+4. Returns AnalysisTransitionResponse(success=true, new_review_state="to_be_verified")
 
-    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    status: Mapped[str] = mapped_column(String(20), default="in_progress")
-    # Status: "in_progress" | "completed" | "abandoned"
-
-    # Sample identity (from SENAITE lookup or manual entry)
-    sample_id_label: Mapped[str] = mapped_column(String(200), nullable=False)
-    peptide_id: Mapped[Optional[int]] = mapped_column(ForeignKey("peptides.id"), nullable=True)
-
-    # Tech-entered targets (entered at wizard start)
-    target_concentration_ug_ml: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    target_volume_ml: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-
-    # Derived outputs (computed, not stored — recalculated from measurements)
-    # These are stored only in wizard_measurements.calculation_trace
-
-    # Session metadata
-    operator_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
-
-    # Relationships
-    measurements: Mapped[list["WizardMeasurement"]] = relationship(
-        "WizardMeasurement", back_populates="session", cascade="all, delete-orphan"
-    )
-    peptide: Mapped[Optional["Peptide"]] = relationship("Peptide")
+5. Frontend:
+   └→ toast.success("Analysis submitted for verification")
+   └→ onMutated() → fetchSample(sampleId) → full refresh
+   └→ Full refresh picks up: updated analysis review_state AND updated sample review_state
 ```
 
-**Table: `wizard_measurements`**
+### Bulk Submit Flow
 
-```python
-class WizardMeasurement(Base):
-    """
-    One weighing step within a wizard session.
-    Each weighing event creates a record — raw weight only.
-    All derived values (dilution factor, concentrations) are recalculated
-    at read time from the raw measurements.
-    """
-    __tablename__ = "wizard_measurements"
-
-    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    session_id: Mapped[int] = mapped_column(ForeignKey("wizard_sessions.id"), nullable=False)
-
-    # Which step this measurement belongs to
-    step_key: Mapped[str] = mapped_column(String(50), nullable=False)
-    # step_key values: "stock_vial_empty", "stock_vial_with_diluent",
-    #                  "dil_vial_empty", "dil_vial_with_diluent",
-    #                  "dil_vial_with_sample"
-
-    # Raw weight from scale (or manual entry)
-    weight_mg: Mapped[float] = mapped_column(Float, nullable=False)
-    unit: Mapped[str] = mapped_column(String(10), default="mg")
-
-    # Provenance
-    source: Mapped[str] = mapped_column(String(20), default="scale")
-    # source: "scale" | "manual"
-    scale_raw_response: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    # Raw MT-SICS response for audit: "S S      100.05 mg"
-
-    # Whether this reading was superseded (tech re-weighed)
-    is_current: Mapped[bool] = mapped_column(Boolean, default=True)
-
-    recorded_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-
-    # Relationships
-    session: Mapped["WizardSession"] = relationship("WizardSession", back_populates="measurements")
 ```
+1. Tech checks 3 analyses, clicks "Submit selected"
+   └→ BulkActionState: { pending: 3, completed: 0, failed: 0 }
 
-**Design rationale — why store only raw weights:**
+2. For each uid in selectedUids (sequentially, not parallel):
+   a. POST /wizard/senaite/analyses/{uid}/transition {"transition": "submit"}
+   b. await response
+   c. Update counter: completed++
+   d. If error: failed++, continue to next (don't abort batch)
 
-The existing `hplc_processor.py` already calculates `dilution_factor`, `stock_volume_ml`, etc. from 5 balance weights. The wizard produces those same 5 weights as measurements. Storing only raw weights means:
-
-1. Calculation bugs can be fixed without data migration
-2. Full audit trail: every measurement is immutable, re-weighing creates a new record with `is_current=False` on the old one
-3. Consistent with the existing `HPLCAnalysis` model which stores raw weights and calculates everything else
-
-### Re-weigh Pattern
-
-If a tech makes an error and re-weighs a step, the endpoint does NOT update the existing record. It inserts a new `WizardMeasurement` and sets `is_current=False` on the previous record for the same `(session_id, step_key)`. This preserves the full weighing history.
-
-```python
-# When saving a measurement:
-# 1. Set is_current=False on any existing current measurement for this step
-db.execute(
-    update(WizardMeasurement)
-    .where(WizardMeasurement.session_id == session_id)
-    .where(WizardMeasurement.step_key == step_key)
-    .where(WizardMeasurement.is_current == True)
-    .values(is_current=False)
-)
-# 2. Insert new current measurement
-db.add(WizardMeasurement(
-    session_id=session_id,
-    step_key=step_key,
-    weight_mg=reading.value_mg,
-    source="scale",
-    scale_raw_response=reading.raw_response,
-))
-db.commit()
+3. After all complete:
+   └→ fetchSample(sampleId) — single refresh for all changes
+   └→ toast.success("3 submitted, 0 failed") or toast.warning("2 submitted, 1 failed")
+   └→ Clear selectedUids
 ```
 
 ---
 
-## Backend Endpoint Design
+## Component Boundaries and Dependency Graph
 
-### Wizard Endpoints
-
-All endpoints follow existing patterns: `Depends(get_db)`, `Depends(get_current_user)`, SQLAlchemy sync session.
-
-| Method | Path | Purpose |
-|--------|------|---------|
-| `POST` | `/wizard/sessions` | Create new wizard session (returns session_id) |
-| `GET` | `/wizard/sessions` | List sessions (with status filter) |
-| `GET` | `/wizard/sessions/{id}` | Get full session state (steps + measurements + calculated values) |
-| `PUT` | `/wizard/sessions/{id}` | Update session metadata (targets, sample ID) |
-| `PATCH` | `/wizard/sessions/{id}/complete` | Mark session completed |
-| `PATCH` | `/wizard/sessions/{id}/abandon` | Mark session abandoned |
-| `POST` | `/wizard/sessions/{id}/steps/{step_key}/manual` | Record manual weight entry |
-| `GET` | `/wizard/sessions/{id}/steps/{step_key}/weigh/stream` | SSE: read weight from scale |
-| `GET` | `/wizard/sessions/{id}/calculations` | Return recalculated values from current measurements |
-| `GET` | `/scale/status` | Scale connection status (connected/disconnected) |
-
-### Calculated Values Endpoint
-
-The `GET /wizard/sessions/{id}/calculations` endpoint recalculates from raw measurements on demand. It reuses the existing `calculate_dilution_factor()` from `hplc_processor.py`:
-
-```python
-@app.get("/wizard/sessions/{session_id}/calculations")
-async def get_wizard_calculations(
-    session_id: int,
-    db: Session = Depends(get_db),
-    _current_user = Depends(get_current_user),
-):
-    """
-    Recalculate all derived values from current measurements.
-    Returns None for any values that cannot be calculated yet
-    (i.e., required measurements not yet recorded).
-    """
-    measurements = _get_current_measurements(db, session_id)
-    # ... build WeightInputs from measurements ...
-    # ... call calculate_dilution_factor() ...
-    # ... return derived values ...
+```
+SampleDetails.tsx
+│
+├── State: data (SenaiteLookupResult), loading, error
+├── State: analysisFilter, selectedUids
+├── fetchSample() ─────────────────────────── calls lookupSenaiteSample()
+│
+├── AnalysesTable (inline, not extracted)
+│   ├── BulkActionToolbar
+│   │   ├── State: bulkPending (local)
+│   │   └── Calls: transitionAnalysis() [sequential loop] → onAllComplete → fetchSample()
+│   │
+│   └── AnalysisRow (one per filteredAnalysis)
+│       ├── Props: analysis (now includes uid), analyteNameMap, onMutated
+│       ├── State: editing (bool), draft (string), saving (bool) [all local]
+│       │
+│       ├── EditableResultCell (inline or extracted)
+│       │   └── Calls: updateAnalysisResult(uid, value) → onMutated → fetchSample()
+│       │
+│       └── TransitionButtons
+│           └── Calls: transitionAnalysis(uid, transition) → onMutated → fetchSample()
+│
+└── api.ts
+    ├── lookupSenaiteSample() — GET /wizard/senaite/lookup
+    ├── updateAnalysisResult() — POST /wizard/senaite/analyses/{uid}/result  [NEW]
+    └── transitionAnalysis() — POST /wizard/senaite/analyses/{uid}/transition [NEW]
 ```
 
-This means the frontend does not need to implement any calculation logic. All scientific values are computed server-side, consistent with the existing "backend owns all calculations" principle.
+```
+backend/main.py
+│
+├── POST /wizard/senaite/analyses/{uid}/result  [NEW]
+│   └── httpx POST → SENAITE /@@API/senaite/v1/update/{uid}  {"Result": value}
+│
+└── POST /wizard/senaite/analyses/{uid}/transition  [NEW]
+    └── httpx POST → SENAITE /@@API/senaite/v1/update/{uid}  {"transition": name}
+```
+
+No changes required to:
+- Zustand `ui-store.ts` — no new global UI state needed
+- Integration-service — new endpoints are in Accu-Mk1 backend only
+- Any other component outside `SampleDetails.tsx` and `EditableField.tsx`
 
 ---
 
-## Component Boundaries
+## Modified vs. New: Explicit Inventory
 
-### System Components
+### Files That Change
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│  React Frontend                                                      │
-│                                                                      │
-│  ┌─────────────────────────────┐   ┌────────────────────────────┐  │
-│  │  WizardPage                 │   │  ScaleStatusBadge          │  │
-│  │  (step navigation, state)   │   │  (poll /scale/status)      │  │
-│  └──────────────┬──────────────┘   └────────────────────────────┘  │
-│                 │                                                     │
-│  ┌──────────────┴──────────────────────────────────────────────┐    │
-│  │  WeighStep                                                   │    │
-│  │  - Opens SSE to /wizard/sessions/{id}/steps/{key}/weigh/stream│  │
-│  │  - Shows live weight preview                                  │    │
-│  │  - Falls back to text input if scale not connected            │    │
-│  └─────────────────────────────────────────────────────────────┘    │
-└──────────────────────────────────┬──────────────────────────────────┘
-                                   │ HTTP + SSE
-                                   │ Authorization: Bearer <token>
-┌──────────────────────────────────┴──────────────────────────────────┐
-│  FastAPI Backend                                                     │
-│                                                                      │
-│  ┌────────────────────┐   ┌─────────────────────────────────────┐  │
-│  │  Wizard Endpoints  │   │  Scale Bridge (singleton)           │  │
-│  │  /wizard/sessions  │   │                                      │  │
-│  │  /wizard/*/weigh   │   │  ┌─────────────────────────────┐   │  │
-│  │  /scale/status     │   │  │  asyncio.StreamReader/Writer│   │  │
-│  └──────────┬─────────┘   │  │  TCP socket to scale        │   │  │
-│             │             │  └─────────────────────────────┘   │  │
-│  ┌──────────┴─────────┐   │  _lock: asyncio.Lock()             │  │
-│  │  hplc_processor.py │   │  (serial cmd/response enforced)    │  │
-│  │  (reused for calcs)│   └─────────────────────────┬───────────┘  │
-│  └────────────────────┘                             │               │
-│                                                     │               │
-│  ┌─────────────────────────────────────────────────┐               │
-│  │  SQLite DB                                       │               │
-│  │  wizard_sessions + wizard_measurements           │               │
-│  └─────────────────────────────────────────────────┘               │
-└─────────────────────────────────────────────────────────────────────┘
-                                                      │ TCP
-                                   ┌──────────────────┴──────┐
-                                   │  Mettler Toledo         │
-                                   │  XSR105DU               │
-                                   │  MT-SICS over TCP:4001  │
-                                   └─────────────────────────┘
-```
+| File | Change Type | What Changes |
+|------|-------------|--------------|
+| `backend/main.py` | Addition | 2 new endpoints + 4 new Pydantic models; no existing code modified |
+| `src/lib/api.ts` | Addition | `uid` added to `SenaiteAnalysis` interface; 2 new API functions; 1 new response type |
+| `src/components/senaite/SampleDetails.tsx` | Modification | `AnalysisRow` gains `uid` prop, inline edit, transition buttons; analyses table gains checkbox column and bulk toolbar; `onMutated` prop threading |
 
-### Data Flow: Weighing Step
+### Files That Do Not Change
 
-```
-1. Tech clicks "Read Weight" on step N
-   └→ Frontend opens SSE: GET /wizard/sessions/42/steps/stock_vial_empty/weigh/stream
-
-2. Backend receives request
-   └→ ScaleBridge.get_immediate_weight() called in loop (0.5s interval)
-   └→ SSE events streamed: "reading" → "weight" (with live value) → "weight" → ... → "stable"
-
-3. On stable reading:
-   └→ Backend saves WizardMeasurement to DB (step_key="stock_vial_empty", weight_mg=100.05)
-   └→ Backend yields "stable" event with confirmed value
-   └→ SSE connection closes (generator returns)
-
-4. Frontend receives "stable" event
-   └→ Marks step as complete
-   └→ Fetches GET /wizard/sessions/42/calculations for updated derived values
-   └→ Advances to next step
-```
-
-### Data Flow: Session Resume
-
-```
-1. Tech returns after leaving mid-session
-   └→ Frontend queries GET /wizard/sessions (filter: status=in_progress)
-   └→ Shows "Resume" option for incomplete sessions
-
-2. Tech resumes session 42
-   └→ GET /wizard/sessions/42
-   └→ Backend returns: session metadata + all current measurements + calculated values
-   └→ Frontend restores wizard to correct step (first step with no measurement)
-
-3. Tech continues from where they left off
-   └→ Steps with measurements shown as complete (read-only, with re-weigh option)
-   └→ Steps without measurements shown as pending
-```
+| File | Why Untouched |
+|------|---------------|
+| `src/components/dashboard/EditableField.tsx` | Used as-is; or its pattern replicated inline in AnalysisRow |
+| `src/store/ui-store.ts` | No new global state needed |
+| `integration-service/app/api/desktop.py` | Reference only; not modified |
+| `integration-service/app/adapters/senaite.py` | Reference only; not modified |
+| Any other component | Edits are fully contained |
 
 ---
 
-## Build Order and Testability
+## Suggested Build Order
 
-### Phase 1: DB Models + Wizard Core (No Scale Required)
+This order minimizes risk by making each step independently verifiable before proceeding.
 
-**Goal:** Working wizard with manual weight entry only.
+### Step 1: Add `uid` to the Data Model (Prerequisite, ~30 min)
 
-Build sequence:
-1. Add `WizardSession` and `WizardMeasurement` models to `models.py`
-2. Add migration in `database.py` (`init_db` pattern — add columns with try/except)
-3. Implement wizard REST endpoints (create, get, list, update, complete)
-4. Implement manual weight entry endpoint (`POST /wizard/sessions/{id}/steps/{key}/manual`)
-5. Implement calculations endpoint (`GET /wizard/sessions/{id}/calculations`)
-6. Build frontend wizard UI with step navigation and manual text inputs
+1. In `backend/main.py` `SenaiteAnalysis` model: add `uid: Optional[str] = None`
+2. In the lookup endpoint where analyses are built (line ~5304): map `an_item.get("uid", "")` into the model
+3. In `src/lib/api.ts` `SenaiteAnalysis` interface: add `uid: string | null`
 
-**Independently testable:** Full wizard flow works without any scale hardware. This phase delivers usable functionality even if scale integration is never built.
+**Verify:** Reload a sample in the UI. Open browser devtools, check the network response for `/wizard/senaite/lookup` — analysis items should now include `uid` populated with SENAITE UIDs (not empty strings).
 
-### Phase 2: Scale Bridge (Independently Testable)
+### Step 2: Backend Endpoints (No Frontend Yet, ~1 hour)
 
-**Goal:** `ScaleBridge` service that can be tested in isolation.
+1. Add `AnalysisResultRequest`, `AnalysisResultResponse`, `AnalysisTransitionRequest`, `AnalysisTransitionResponse` Pydantic models to `backend/main.py`
+2. Add `POST /wizard/senaite/analyses/{uid}/result` endpoint
+3. Add `POST /wizard/senaite/analyses/{uid}/transition` endpoint
+4. Follow the `update_senaite_sample_fields` error handling pattern exactly (JSON body first, form-encoded fallback, timeout handling)
 
-Build sequence:
-1. Create `backend/scale_bridge.py` with `ScaleBridge` class
-2. Add configuration via environment variables (`SCALE_HOST`, `SCALE_PORT`)
-3. Register bridge in `lifespan` — gracefully skip if `SCALE_HOST` not set
-4. Add `GET /scale/status` endpoint
-5. Write a standalone test script that connects to the scale and reads one weight
+**Verify:** Use curl or the FastAPI `/docs` swagger UI to manually call the endpoints with a real SENAITE analysis UID. Confirm result values set and transitions fire in SENAITE.
 
-**Test without full app:** `ScaleBridge` can be tested with a standalone `asyncio` script:
+### Step 3: Inline Result Editing in `AnalysisRow` (~2 hours)
 
-```python
-# test_scale.py — run directly, no FastAPI required
-import asyncio
-from scale_bridge import ScaleBridge
+1. Add `uid` and `onMutated` to `AnalysisRow` props
+2. Add local state: `editing`, `draft`, `saving`
+3. Replace the static result `<td>` with an interactive cell:
+   - Non-editable states (verified, published): static display as before
+   - Editable states (unassigned, assigned, to_be_verified): click-to-edit using the EditableField pattern
+4. Wire the save handler to `updateAnalysisResult(uid, draft)` → on success call `onMutated()`
+5. Thread `onMutated={() => fetchSample(sampleId)}` from `SampleDetails` into each `AnalysisRow`
 
-async def main():
-    bridge = ScaleBridge(host="192.168.1.100", port=4001)
-    await bridge.connect()
-    reading = await bridge.get_stable_weight(timeout_s=10.0)
-    print(f"Weight: {reading.value_mg} mg (stable={reading.stable})")
-    await bridge.disconnect()
+**Verify:** Click a result cell on an unassigned analysis. Edit the value. Save. Confirm SENAITE shows the updated result. Confirm the UI refreshes.
 
-asyncio.run(main())
-```
+### Step 4: Per-Row Transition Buttons (~1.5 hours)
 
-**Mock fallback for CI:** When `SCALE_HOST` is not set, `get_scale()` dependency returns `None`. Endpoints that call `get_scale()` respond with `manual_entry` SSE event or appropriate status. Tests can run without any scale hardware.
+1. Add a narrow "Actions" column to the analyses table header
+2. In `AnalysisRow`, render action buttons conditional on `review_state`:
+   - `unassigned` / `assigned`: "Submit" button (only if `result` is non-null)
+   - `to_be_verified`: "Verify" and "Reject" buttons
+   - `verified` / `published`: no buttons (or empty cell)
+3. Each button calls `transitionAnalysis(uid, transitionName)` → on success call `onMutated()`
+4. Disable all row controls when `saving` is true
 
-### Phase 3: SSE Weight Streaming (Connects Phase 1 + Phase 2)
+**Verify:** Submit an analysis with a result. Verify an analysis in to_be_verified state. Confirm sample-level state updates if all analyses transition (SENAITE auto-transition).
 
-**Goal:** Replace manual weight entry with scale-driven SSE stream.
+### Step 5: Bulk Actions (~2 hours)
 
-Build sequence:
-1. Add `GET /wizard/sessions/{id}/steps/{key}/weigh/stream` endpoint
-2. Frontend: open SSE connection when tech clicks "Read Weight"
-3. Frontend: handle all SSE event types (reading, weight, stable, error, timeout, manual_entry)
-4. Graceful fallback: if `manual_entry` event received, show text input
+1. Add checkbox column to table (leftmost column)
+2. Add `selectedUids` state to `SampleDetails` (`useState<Set<string>>`)
+3. Wire checkboxes: only show on rows in actionable states; "select all" checkbox in header
+4. Add bulk toolbar above progress bar (appears when `selectedUids.size > 0`)
+5. Implement sequential bulk submit and verify with progress counter
+6. Single `fetchSample` refresh after all operations complete
+
+**Verify:** Select multiple analyses, bulk submit, observe sequential processing and single refresh.
 
 ---
 
-## Docker Network Consideration
+## Key Integration Constraints
 
-The scale bridge connects to a physical device on the lab network. In Docker, the backend container needs network access to the scale's IP. The existing `docker-compose.yml` uses a custom bridge network. The scale is accessible via the host network — options:
+### SENAITE State Machine Constraints
 
-**Option A (recommended):** Add `SCALE_HOST` environment variable to `backend/.env`. Since the backend container is on the same LAN as the scale (not the Docker overlay network), use `network_mode: host` for the backend service, or configure the scale with a static IP reachable from the Docker bridge network.
+These are observed behaviors from the existing integration-service implementation — not SENAITE documentation. Treat as HIGH confidence for the specific SENAITE instance but verify during Step 2 testing:
 
-**Option B:** Use the Docker host's external IP (not `localhost`) to reach the scale from within the container.
+- `submit` transition only works when analysis is in `unassigned` state (the integration-service validates this explicitly at line 1084 in desktop.py)
+- Setting a `Result` value does not auto-submit — the transition must be fired explicitly
+- Verifying all analyses may auto-transition the parent sample to `to_be_verified` or higher (SENAITE workflow automation). This is why `fetchSample` after transitions is essential — it captures sample-level state changes the UI didn't initiate.
+- `to_be_verified` analyses can have their results changed (the result set step works on any non-locked state), but whether `submit` is re-triggerable from `to_be_verified` needs verification against the live instance.
 
-**Option C (simpler for lab deployment):** If the scale is on the same physical network as the server host, the Docker container can reach it via a static IP. Add the IP to `.env`:
+### No Parallel Writes to Same Sample
 
-```env
-SCALE_HOST=192.168.1.100
-SCALE_PORT=4001
-```
+As noted in the bulk flow: do not fire concurrent `transitionAnalysis` calls for analyses on the same sample. SENAITE's workflow automation (auto-transitions on the parent sample) can produce race conditions if multiple analysis transitions arrive simultaneously. Use sequential await chains in the bulk action loop.
 
-The scale bridge handles reconnection on startup. If the scale is off or unreachable, the bridge sets `status=disconnected` and the wizard runs in manual-entry mode.
+### Refresh After Transition Captures Sample-Level State
+
+After any analysis transition, the sample's own `review_state` may change (SENAITE auto-transitions). The full `fetchSample` refresh is the correct mechanism — it pulls the updated sample state and all updated analysis states in one call. Do not attempt to patch the local `data` object directly after transitions.
+
+### Result Editing Permissions by State
+
+Only allow result editing on analyses in states where SENAITE will accept a `Result` update. Safe states based on the integration-service implementation: `unassigned`, `assigned`. Analyses in `to_be_verified`, `verified`, or `published` should display results as read-only. If SENAITE does accept result updates in `to_be_verified` (retesting scenario), this can be unlocked in a follow-on task.
 
 ---
 
 ## Anti-Patterns to Avoid
 
-### Anti-Pattern 1: Per-Request Scale Connection
+### Parallel Bulk Writes
 
-**What goes wrong:** Opening a new TCP connection for each weighing SSE request. The Mettler Toledo balance may not handle rapid reconnects gracefully, and TCP setup latency will be visible to the user.
+**What goes wrong:** `Promise.all(selectedUids.map(uid => transitionAnalysis(uid, 'submit')))` — concurrent writes race in SENAITE's workflow engine, producing inconsistent parent sample state.
 
-**Instead:** Use the singleton `ScaleBridge` attached to `app.state`. One connection persists for the application lifetime.
+**Instead:** `for (const uid of selectedUids) { await transitionAnalysis(uid, transition) }`
 
-### Anti-Pattern 2: Storing Calculated Values in DB
+### Patching Local State Instead of Refreshing
 
-**What goes wrong:** Storing `dilution_factor`, `stock_concentration_ug_ml` etc. alongside raw weights. If the calculation formula changes, stored values become wrong and require data migration.
+**What goes wrong:** After a transition, manually updating `data.analyses[i].review_state = 'to_be_verified'` in local state. This misses sample-level state changes that SENAITE may have fired automatically.
 
-**Instead:** Store only raw measurements (`weight_mg` for each step). Recalculate everything on demand via `GET /wizard/sessions/{id}/calculations`. This matches the existing pattern in `HPLCAnalysis` and `hplc_processor.py`.
+**Instead:** Always call `fetchSample(sampleId)` after any mutation. The full refresh is fast (sub-second for the lookup endpoint) and guarantees consistency with SENAITE's actual state.
 
-### Anti-Pattern 3: Blocking asyncio with Scale TCP Read
+### Converting SampleDetails to TanStack Query Mid-Milestone
 
-**What goes wrong:** Using synchronous `socket.recv()` inside an async FastAPI endpoint. This blocks the event loop and prevents other requests from being served during the weight read.
+**What goes wrong:** The component is 1400+ lines. Refactoring state management mid-milestone dramatically increases scope and risk of regressions in unrelated features (COA editing, remarks, additional COAs).
 
-**Instead:** Use `asyncio.open_connection()` which gives `asyncio.StreamReader`/`asyncio.StreamWriter`. The scale bridge must be fully async. The `_lock` prevents concurrent commands to the scale without blocking the event loop.
+**Instead:** Use the existing `fetchSample` imperative refresh as the post-mutation mechanism. A TanStack Query migration is a valid future cleanup task, scoped separately.
 
-### Anti-Pattern 4: Updating Measurement Records In-Place
+### Combining Result Set and Transition in One Endpoint
 
-**What goes wrong:** When a tech re-weighs a step, overwriting the existing measurement record. Audit trail is lost.
+**What goes wrong:** A single "submit result" endpoint that sets value and fires `submit` transition in one call. This removes the lab tech's opportunity to set a value and review it before formally submitting for verification.
 
-**Instead:** On re-weigh, set `is_current=False` on the old record and insert a new record. The weighing history is preserved. Queries always filter `is_current=True` to get current values.
+**Instead:** Two explicit endpoints. The UI can offer a "Set & Submit" convenience button that calls them sequentially, but the backend stays intentionally decomposed.
 
-### Anti-Pattern 5: Scale State in Frontend
+### Using Integration-Service Endpoints from Accu-Mk1 Frontend
 
-**What goes wrong:** Frontend tracks whether the scale is connected and uses this as the source of truth.
+**What goes wrong:** Calling the integration-service's `POST /samples/{id}/results` from the Accu-Mk1 frontend. The integration-service uses API key auth (X-API-Key header), a different auth model than Accu-Mk1's JWT Bearer tokens. Additionally, that endpoint takes keywords (not UIDs) and does a keyword→UID lookup, adding an unnecessary round trip.
 
-**Instead:** Backend owns scale state. Frontend polls `GET /scale/status` (e.g., every 5 seconds). The frontend can cache the last known status for UI display, but never assumes the scale is connected.
-
-### Anti-Pattern 6: WebSockets for Weight Streaming
-
-**What goes wrong:** Adding WebSocket dependency when SSE already works for this use case. Increases complexity — WebSockets require ping/pong keepalive, connection management, and a different client pattern than the 4 existing SSE consumers.
-
-**Instead:** SSE via `StreamingResponse` with `ReadableStream` reader on the frontend. This is already proven in the codebase and sufficient for unidirectional weight push.
+**Instead:** Add new endpoints directly in `backend/main.py` that take UIDs and proxy to SENAITE. The integration-service is a reference implementation, not a dependency.
 
 ---
 
 ## Scalability Considerations
 
-This is a lab application with at most 2-3 simultaneous users. These are not cloud-scale concerns, but they affect correctness:
+This is a lab desktop application. Scalability concerns are about correctness, not load.
 
-| Concern | At 1-2 Lab Users | Notes |
-|---------|-----------------|-------|
-| Scale concurrency | No concurrent weighing — physical lab constraint (one balance) | The `asyncio.Lock()` on ScaleBridge enforces this technically |
-| Session isolation | Sessions are per-tech (operator_id FK) | No cross-session contamination |
-| DB write contention | SQLite with sync sessions — fine for 2-3 users | Existing pattern |
-| SSE connection lifetime | Each weighing step = one short-lived SSE connection (seconds) | No long-held connections unlike SharePoint import streams |
-| Scale reconnection | Auto-reconnect on startup; manual reconnect via `GET /scale/reconnect` endpoint (optional) | Should handle lab restarts |
+| Concern | Approach |
+|---------|----------|
+| SENAITE rate limiting | Not an observed issue at lab scale; sequential bulk operations naturally limit request rate |
+| Stale display after transition | Full `fetchSample` refresh after every mutation guarantees consistency |
+| Many analyses per sample | The analyses table already handles filtering; bulk actions apply only to selected rows |
+| Sample-level state divergence | `fetchSample` refresh is the single source of truth; no client-side state prediction |
 
 ---
 
 ## Sources
 
+All claims verified directly against the codebase on 2026-02-24.
+
 | Claim | Source | Confidence |
 |-------|--------|------------|
-| MT-SICS response format: `S S 100.05 mg\r\n` | Multiple MT-SICS reference manual search results, Node.js mt-sics library, community documentation | MEDIUM (PDFs couldn't be fetched directly; format confirmed by multiple independent sources) |
-| S command waits for stable; SI returns immediately | Official MT-SICS documentation (multiple PDFs referenced) + mettler_toledo_device_python README | HIGH |
-| Commands terminated with `\r\n` | Official MT-SICS docs + multiple sources | HIGH |
-| Do not send multiple commands without waiting for response | Official MT-SICS protocol specification | HIGH |
-| Status codes: S=stable, D=dynamic, I=not executable, +/- overload | Multiple MT-SICS reference manual sources | MEDIUM-HIGH |
-| Port 4001 as example | Node.js mt-sics library example | LOW (configurable — treat as default only) |
-| Ethernet TCP interface option exists for Excellence series | Official MT.com Ethernet interface documentation URL found (403 response) | MEDIUM |
-| SSE pattern (StreamingResponse + ReadableStream) | Codebase verified — 4 working endpoints | HIGH |
-| asyncio.Lock for serial command enforcement | Python docs + standard concurrent async pattern | HIGH |
-| Re-weigh audit via is_current flag | Standard immutable audit log pattern | HIGH (architectural best practice) |
+| `SenaiteAnalysis` missing `uid` field | `backend/main.py` line 5005 + `src/lib/api.ts` line 2016 | HIGH |
+| SENAITE two-step pattern: set Result then transition | `integration-service/app/adapters/senaite.py` lines 901-997 | HIGH |
+| Same httpx proxy pattern in `update_senaite_sample_fields` | `backend/main.py` lines 5760-5837 | HIGH |
+| `EditableField` optimistic update pattern with rollback | `src/components/dashboard/EditableField.tsx` lines 70-107 | HIGH |
+| `fetchSample` imperative refresh already used post-mutation | `SampleDetails.tsx` line 1167: `onAdded={() => fetchSample(data.sample_id)}` | HIGH |
+| `submit` transition validates `unassigned` state | `integration-service/app/api/desktop.py` lines 1084-1090 | HIGH |
+| Analysis UIDs available in SENAITE API response | `integration-service/app/adapters/senaite.py` line 882: `uid=item.get("uid", "")` | HIGH |
+| Accu-Mk1 backend uses JWT Bearer, not API key | `backend/main.py` + `backend/auth.py` pattern | HIGH |
+| Integration-service uses X-API-Key header | `integration-service/app/api/desktop.py` lines 45-71 | HIGH |

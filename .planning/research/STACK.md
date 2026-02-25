@@ -1,612 +1,289 @@
-# Technology Stack: v0.11.0 New Analysis Wizard
+# Technology Stack — Inline Analysis Editing + Workflow Transitions
 
 **Project:** Accu-Mk1
-**Milestone:** v0.11.0 — HPLC Sample Prep Wizard with scale integration
-**Researched:** 2026-02-19
-**Research mode:** Stack dimension (focused on three new concerns)
+**Milestone:** Inline result editing, row selection, bulk workflow actions in SampleDetails
+**Researched:** 2026-02-24
+**Research mode:** Stack dimension — focused on what is NEW for this capability
 
 ---
 
-## Summary of Additions
+## Verdict: No New Libraries Required
 
-The existing stack (FastAPI + SQLite + SQLAlchemy + React + shadcn/ui + JWT auth + httpx)
-handles everything except three new concerns. This is a deliberately minimal-addition
-milestone:
+The existing stack already contains every primitive needed. This milestone is an
+implementation task against existing dependencies, not a dependency acquisition task.
 
-| Concern | Solution | New dependency? |
-|---------|----------|-----------------|
-| MT-SICS balance communication over TCP | `asyncio` stdlib streams | No |
-| Stream live weight readings to frontend | `sse-starlette` | YES — one new package |
-| SENAITE sample lookup (GET only) | `httpx` (already installed) | No |
-| Wizard UI step state | Zustand (already installed) | No |
-
-The only net-new backend dependency is `sse-starlette`.
+Adding libraries for problems already solved by `@tanstack/react-table` and
+`@tanstack/react-query` would introduce duplication and conflict with the existing
+`DataTable` component.
 
 ---
 
-## 1. Mettler Toledo XSR105DU: Network Communication
+## Existing Stack Audit — What Each Library Provides
 
-### Protocol: MT-SICS over TCP
+### @tanstack/react-table — v8.21.3 (already installed)
 
-**MT-SICS (Mettler Toledo Standard Interface Command Set)** is the native protocol for
-all Mettler Toledo Excellence-line balances. Over the network, it runs as raw ASCII
-over a TCP socket — no HTTP, no REST, no MQTT. The balance acts as the TCP server;
-the Python backend connects as a TCP client.
+The existing `DataTable` component (`src/components/ui/data-table.tsx`) already uses
+this library. The analyses table in `SampleDetails.tsx` is currently a raw `<table>`
+element — it is NOT wired to TanStack Table. Migrating it opens all of v8's features
+at zero extra dependency cost.
 
-All commands are plain ASCII strings terminated with `\r\n` (CRLF). Responses are
-also `\r\n` terminated.
+TanStack Table v8 ships these capabilities natively:
 
-**Connection details:**
-- Transport: TCP (not UDP, not HTTP)
-- Default port: **4001**
-  - Source: Atlantis-Software Node.js MT-SICS library (`tcp://192.168.1.1:4001`)
-    and N3uron Mettler Toledo driver documentation
-  - The port is configurable on the balance via Menu > Communication > Interfaces >
-    Ethernet > Port. Verify the actual configured port before coding.
-- IP address: Must be statically assigned or DHCP-reserved. Add as env var `SCALE_IP`.
-- No login/auth step: connection is open, commands work immediately once TCP is established.
+| Capability | API surface | Notes |
+|---|---|---|
+| Row selection state | `RowSelectionState` (Record&lt;string, boolean&gt;) | Built into core |
+| Per-row selectability | `enableRowSelection: (row) => boolean` | Can restrict to `review_state === 'unassigned'` |
+| Checkbox column | `getIsSelected()`, `getToggleSelectedHandler()` | Standard column def pattern |
+| Select-all header | `table.getIsAllRowsSelected()`, `table.toggleAllRowsSelected()` | Header checkbox |
+| Read selected set | `table.getSelectedRowModel().rows` | Used by bulk action toolbar |
+| Inline cell editing | `meta.updateData(rowIndex, columnId, value)` | Official `tableMeta` pattern |
 
-**IMPORTANT hardware prerequisite:** The XSR105DU must have the optional Ethernet
-interface module installed. Ethernet is an add-on, not standard on all XSR units.
-If the balance has only USB/RS-232, a serial-to-network device server is required
-(adds latency and complexity). Confirm with the lab before building.
+Source: TanStack Table v8 Row Selection guide and Editable Data example (official docs).
 
-### MT-SICS Command Reference
+**Critical: `'use no memo'` requirement.** The existing `DataTable` already carries
+this directive (line 42 of `data-table.tsx`) plus the
+`// eslint-disable-next-line react-hooks/incompatible-library` comment on `useReactTable`.
+Any new component calling `useReactTable` must reproduce this exact pattern.
 
-| Command | Send (bytes) | Purpose | Returns when |
-|---------|-------------|---------|-------------|
-| `S` | `S\r\n` | Request stable weight (blocks) | Balance declares stable |
-| `SI` | `SI\r\n` | Request immediate weight | Immediately |
-| `SIR` | `SIR\r\n` | Start continuous immediate output | Balance sends at its own interval until stopped |
-| `@` | `@\r\n` | Reset / stop SIR continuous mode | Immediately |
-| `Z` | `Z\r\n` | Zero the balance | Immediately |
-| `T` | `T\r\n` | Tare the balance | Immediately |
-| `I1` | `I1\r\n` | Identify balance / MT-SICS level | Immediately (use for ping/health check) |
+This is a confirmed, ongoing incompatibility between TanStack Table v8 and the React
+Compiler. The React Compiler recognises `@tanstack/react-table` as a known incompatible
+library and skips memoisation of components using it, because `useReactTable` uses
+interior mutability (returns a mutable object whose methods change without the
+reference changing). The `'use no memo'` directive is the documented workaround.
+Source: github.com/facebook/react/issues/33057, github.com/TanStack/table/issues/6137.
 
-### Response Format
+### @tanstack/react-query — v5.90.12 (already installed)
 
-All `S` and `SI` responses follow this pattern:
+TanStack Query v5 `useMutation` handles optimistic updates for workflow transitions.
 
+**Two patterns available in v5:**
+
+**Pattern A — cache-based (for queries managed by TanStack Query):**
 ```
-S <STATUS> <sign><value> <unit>\r\n
-```
-
-Status characters:
-- `S` — **Stable** (reading is settled; this is the flag you check)
-- `D` — Dynamic (still moving/settling)
-- `+` — Overload
-- `-` — Underload
-- `I` — Balance busy
-
-Examples:
-```
-S S      1.2345 g\r\n    <- stable, value 1.2345g  (the good one)
-S D      1.2300 g\r\n    <- dynamic, still settling
-S S     -0.0002 g\r\n    <- stable, slight negative (near zero)
-S +\r\n                  <- overload
+onMutate → cancelQueries → getQueryData → setQueryData (optimistic) → return snapshot
+onError → setQueryData (rollback from snapshot)
+onSettled → invalidateQueries
 ```
 
-**Parsing:** Split on whitespace. `parts[0]` = command echo (`S`), `parts[1]` =
-status character, `parts[2]` = numeric value string, `parts[3]` = unit string.
-
-Error responses start with `ES` (syntax error), `EL` (logical error — e.g. balance
-not ready), or `ET` (transmission error).
-
-### Stable Weight Detection Strategy
-
-**Do NOT use the blocking `S` command for live streaming.** The `S` command blocks
-the socket until the balance itself declares stability, which can take 2-15 seconds
-on a vibrating lab bench. In an asyncio event loop this blocks everything.
-
-**Recommended pattern: poll `SI` at 300ms intervals, detect stability in software.**
-
-```python
-POLL_INTERVAL_S = 0.3       # 300ms between SI polls
-STABILITY_WINDOW = 5        # consecutive readings needed
-STABILITY_TOLERANCE_G = 0.0005  # 0.5mg — appropriate for XSR105 (0.1mg resolution)
-
-from collections import deque
-
-readings: deque[float] = deque(maxlen=STABILITY_WINDOW)
-
-def is_stable(readings: deque[float]) -> bool:
-    if len(readings) < STABILITY_WINDOW:
-        return False
-    return (max(readings) - min(readings)) <= STABILITY_TOLERANCE_G
+**Pattern B — UI-state-based (for data in useState, not a query cache):**
+```
+onMutate → snapshot local state → setLocalState (optimistic)
+onError → setLocalState (rollback from snapshot)
+onSettled → refetch manually if needed
 ```
 
-This gives software-confirmed stability: 5 consecutive readings within 0.5mg over
-1.5 seconds. The wizard UI shows the real-time value during settling, then shows
-a "STABLE" indicator when this condition is met, enabling the lab tech to click
-"Accept Weight".
+`SampleDetails.tsx` currently uses `useState` + manual `fetch` calls, not TanStack
+Query. **Pattern B is the correct match.** The existing `EditableField.tsx` already
+implements this exact approach at lines 80-107 (snapshot `previousValue`, call
+`onSaved?.(newValue)` optimistically, rollback via `onSaved?.(previousValue)` in
+catch). For bulk mutations, `useMutation` wraps the same logic with a cleaner API.
 
-Alternative: use `asyncio.wait_for(client.send_command("S"), timeout=10.0)` for a
-one-shot stable reading with a 10-second timeout. Use this for the "tare complete"
-confirmation step (simpler, no polling needed).
+Source: TanStack Query v5 Optimistic Updates guide (tanstack.com/query/v5/docs).
 
-### Python Implementation: asyncio TCP Client
+### shadcn/ui — existing components cover all UI needs
 
-Use `asyncio.open_connection()` from the standard library. No external package needed.
-This integrates naturally with FastAPI's uvicorn asyncio event loop.
+| UI need | Existing component | Already in project |
+|---|---|---|
+| Cell input while editing | `<Input>` | Yes — `src/components/ui/input.tsx` |
+| Save/Cancel buttons | `<Button>` | Yes |
+| Row selection checkbox | `<Checkbox>` | Yes — `src/components/ui/checkbox.tsx` |
+| Floating/sticky toolbar | Tailwind `sticky bottom-*` | Yes — utility classes |
+| Toast feedback on save | `sonner` v2.0.7 | Yes — `src/components/ui/sonner.tsx` |
+| Status badge | `<Badge>` | Yes |
 
-```python
-# backend/scale_client.py — reference skeleton
+The shadcn bulk-actions table block (shadcn.io/blocks/tables-bulk-actions) is a
+Pro (paid) component. It is not needed. The floating toolbar pattern it implements
+is a conditionally-rendered `div` with `position: sticky` — approximately 15 lines
+of Tailwind. Building it directly is faster than purchasing the block and integrating
+it.
 
-import asyncio
-from collections import deque
+### FastAPI backend — SENAITE adapter already has result submission
 
-SCALE_HOST = "192.168.x.x"  # from env SCALE_IP
-SCALE_PORT = 4001             # from env SCALE_PORT, default 4001
+The integration service already exposes:
 
+| Endpoint | Purpose |
+|---|---|
+| `GET /senaite/{sample_id}/analyses` | Fetch analyses with UID, keyword, review_state |
+| `POST /senaite/{sample_id}/results` | Submit results: sets Result field, then transitions to "submit" |
 
-class ScaleClient:
-    """Asyncio TCP client for Mettler Toledo MT-SICS communication."""
-
-    def __init__(self, host: str, port: int = 4001):
-        self.host = host
-        self.port = port
-        self._reader: asyncio.StreamReader | None = None
-        self._writer: asyncio.StreamWriter | None = None
-
-    async def connect(self) -> None:
-        self._reader, self._writer = await asyncio.open_connection(
-            self.host, self.port
-        )
-
-    async def send_command(self, cmd: str) -> str:
-        """Send a command and return the response line."""
-        self._writer.write(f"{cmd}\r\n".encode("ascii"))
-        await self._writer.drain()
-        response = await asyncio.wait_for(
-            self._reader.readuntil(b"\r\n"), timeout=5.0
-        )
-        return response.decode("ascii").strip()
-
-    async def get_weight_immediate(self) -> tuple[float | None, str, bool]:
-        """
-        Returns (value_grams, unit, is_stable).
-        Returns (None, "", False) on parse error or overload.
-        """
-        raw = await self.send_command("SI")
-        parts = raw.split()
-        if len(parts) < 4 or parts[0] != "S":
-            return None, "", False
-        status = parts[1]
-        if status in ("+", "-"):          # overload / underload
-            return None, "", False
-        try:
-            value = float(parts[2])
-        except ValueError:
-            return None, "", False
-        unit = parts[3] if len(parts) > 3 else "g"
-        return value, unit, (status == "S")
-
-    async def zero(self) -> bool:
-        raw = await self.send_command("Z")
-        return raw.startswith("Z A")
-
-    async def tare(self) -> bool:
-        raw = await self.send_command("T")
-        return raw.startswith("T A")
-
-    async def ping(self) -> bool:
-        """Health check — request balance identity."""
-        try:
-            raw = await self.send_command("I1")
-            return raw.startswith("I1 A")
-        except Exception:
-            return False
-
-    async def disconnect(self) -> None:
-        if self._writer:
-            self._writer.close()
-            await self._writer.wait_closed()
-```
-
-**Critical error handling:** `readuntil()` raises `asyncio.IncompleteReadError` if
-the TCP connection drops mid-read. The SSE stream generator must catch this and
-attempt reconnect with exponential backoff (start at 1s, cap at 30s).
+The SENAITE adapter's `submit_analysis_result` (senaite.py lines 901-996) already
+implements the two-step SENAITE workflow: POST `{"Result": value}` then POST
+`{"transition": "submit"}` against the same UID endpoint. This backend work is done.
 
 ---
 
-## 2. Streaming Scale Readings to Frontend
+## Architecture Decisions
 
-### Recommendation: SSE via sse-starlette (not WebSocket)
+### Decision 1: Migrate analyses table to TanStack Table — RECOMMENDED
 
-For this use case — server pushes weight readings, client never sends data via the
-stream — SSE is the correct tool:
+The current analyses table in `SampleDetails.tsx` (lines 1231-1281) is a raw
+`<table>` element. To add row selection checkboxes and per-cell edit state without
+turning the render method into a mess of local index-keyed state, TanStack Table's
+column definition model is the appropriate structure.
 
-| Factor | SSE | WebSocket |
-|--------|-----|-----------|
-| Direction | Server → client only | Bidirectional |
-| Our actual need | Server pushes weight | Client never sends via stream |
-| Reconnection | Browser handles automatically (built-in) | Must implement manually |
-| FastAPI integration | Async generator → `EventSourceResponse` | Separate `@app.websocket` with connection management |
-| Proxy/Docker compatibility | Plain HTTP — no upgrade handshake | WebSocket upgrade blocked by some proxies |
-| Complexity | Low | Higher |
+**Concretely:** Extract a new `AnalysesTable` component that calls `useReactTable`.
+The component must open with `'use no memo'`. Pass `data`, `sampleId`, and
+`onResultsChanged` as props. Keep `SampleDetails` as the data owner.
 
-WebSocket would only be warranted if the client needs to send tare/zero commands via
-the same persistent connection. In this wizard, tare and zero are separate REST POST
-calls — there is no need for bidirectional streaming.
+The existing `DataTable` component in `data-table.tsx` is the model for this —
+look at how it configures `useReactTable` and wraps the shadcn `Table` components.
+The new component will add `enableRowSelection` and `meta.updateData` on top of
+that existing pattern.
 
-### Library: sse-starlette
+Column definitions for the analyses table:
 
-**Package:** `sse-starlette`
-**Install:** `pip install sse-starlette`
-**Current version:** 2.x (last commit November 21, 2024 — actively maintained)
-**Source:** https://github.com/sysid/sse-starlette | https://pypi.org/project/sse-starlette/
-
-```python
-# backend/routers/scale.py — reference skeleton
-
-import asyncio
-import json
-import os
-from collections import deque
-from fastapi import APIRouter, Query
-from sse_starlette.sse import EventSourceResponse
-
-from scale_client import ScaleClient, is_stable
-from auth import verify_token_from_query  # see JWT/SSE note below
-
-router = APIRouter()
-
-SCALE_IP = os.getenv("SCALE_IP", "192.168.1.100")
-SCALE_PORT = int(os.getenv("SCALE_PORT", "4001"))
-POLL_INTERVAL = 0.3
-STABILITY_WINDOW = 5
-STABILITY_TOLERANCE_G = 0.0005
-
-
-@router.get("/api/scale/stream")
-async def scale_stream(token: str = Query(...)):
-    """
-    SSE endpoint: streams live weight readings to wizard frontend.
-    Auth via query param token (EventSource API does not support custom headers).
-    """
-    # Validate JWT from query param
-    user = verify_token_from_query(token)  # raises 401 if invalid
-
-    async def event_generator():
-        client = ScaleClient(host=SCALE_IP, port=SCALE_PORT)
-        readings: deque[float] = deque(maxlen=STABILITY_WINDOW)
-        try:
-            await client.connect()
-            while True:
-                value, unit, hw_stable = await client.get_weight_immediate()
-                if value is not None:
-                    readings.append(value)
-                    sw_stable = is_stable(readings)
-                    yield {
-                        "data": json.dumps({
-                            "weight": round(value, 5),
-                            "unit": unit,
-                            "stable": sw_stable,
-                            "hw_stable": hw_stable,
-                        })
-                    }
-                else:
-                    yield {"data": json.dumps({"error": "scale_not_ready"})}
-                await asyncio.sleep(POLL_INTERVAL)
-        except asyncio.IncompleteReadError:
-            yield {"data": json.dumps({"error": "scale_disconnected"})}
-        except Exception as e:
-            yield {"data": json.dumps({"error": str(e)})}
-        finally:
-            await client.disconnect()
-
-    return EventSourceResponse(event_generator(), ping=10)
-
-
-@router.post("/api/scale/tare")
-async def tare_scale(current_user=Depends(get_current_user)):
-    """Tare the balance. Standard JWT auth (not SSE)."""
-    client = ScaleClient(host=SCALE_IP, port=SCALE_PORT)
-    await client.connect()
-    ok = await client.tare()
-    await client.disconnect()
-    return {"ok": ok}
-
-
-@router.post("/api/scale/zero")
-async def zero_scale(current_user=Depends(get_current_user)):
-    """Zero the balance."""
-    client = ScaleClient(host=SCALE_IP, port=SCALE_PORT)
-    await client.connect()
-    ok = await client.zero()
-    await client.disconnect()
-    return {"ok": ok}
+```
+select     — Checkbox (only enabled when review_state === 'unassigned')
+analysis   — Analysis title (read-only, formatted via analyteNameMap)
+result     — Inline editable cell (Input in edit mode, value display otherwise)
+unit       — Read-only
+method     — Read-only
+instrument — Read-only
+analyst    — Read-only
+status     — StatusBadge (read-only)
+captured   — Formatted date (read-only)
 ```
 
-**Frontend EventSource pattern (React):**
+### Decision 2: Keep SampleDetails on useState, not TanStack Query — RECOMMENDED for this milestone
 
-```typescript
-// In wizard step component — each weighing step opens its own stream
+Migrating `SampleDetails` to `useQuery` is a worthwhile future improvement but is
+not required for this milestone. Migrating it now would be scope creep. The optimistic
+pattern in Pattern B (UI-state-based) works correctly with `useState`.
 
-useEffect(() => {
-  const token = getAccessToken(); // from auth store
-  const es = new EventSource(`/api/scale/stream?token=${token}`);
+### Decision 3: Row selection state in useState, not Zustand — REQUIRED by architecture rules
 
-  es.onmessage = (event) => {
-    const data = JSON.parse(event.data);
-    if (data.error) {
-      setScaleStatus({ connected: false, error: data.error });
-    } else {
-      setCurrentWeight({
-        value: data.weight,
-        unit: data.unit,
-        stable: data.stable,
-      });
-    }
-  };
+Row selection state is transient, component-scoped UI state. It does not persist
+between sessions and is not shared across components. Per AGENTS.md's state management
+onion: `useState` → Zustand → TanStack Query. Row selection belongs in `useState`
+local to `AnalysesTable`.
 
-  es.onerror = () => {
-    setScaleStatus({ connected: false, error: "connection_lost" });
-    es.close(); // browser will auto-retry after 3s unless closed
-  };
+Do NOT put `rowSelection` in `useUIStore`. The Zustand store is for global UI state
+shared across multiple components.
 
-  return () => es.close(); // cleanup on step unmount
-}, []);
+### Decision 4: Floating bulk toolbar — pure Tailwind, no library
+
+The toolbar renders only when `Object.keys(rowSelection).length > 0`. Sticky
+positioning at the bottom of the analyses card is sufficient. The toolbar calls
+`useMutation` to POST the selected analyses' results.
+
+Reference pattern:
+```tsx
+// Inside AnalysesTable, after the <table>
+{Object.keys(rowSelection).length > 0 && (
+  <div className="sticky bottom-4 z-10 mt-4 flex items-center justify-between gap-3
+                  px-4 py-2.5 rounded-lg border border-border bg-background shadow-lg">
+    <span className="text-sm text-muted-foreground">
+      {Object.keys(rowSelection).length} selected
+    </span>
+    <div className="flex items-center gap-2">
+      <Button
+        size="sm"
+        disabled={submitMutation.isPending}
+        onClick={handleBulkSubmit}
+      >
+        Submit Results
+      </Button>
+      <Button size="sm" variant="ghost" onClick={() => setRowSelection({})}>
+        Clear
+      </Button>
+    </div>
+  </div>
+)}
 ```
 
-### JWT Auth with SSE
+### Decision 5: Inline cell editing uses local draft state, not tableMeta.updateData
 
-The browser's `EventSource` API does not support custom request headers, making
-standard `Authorization: Bearer <token>` impossible. Solutions in order of preference:
+The tableMeta `updateData` pattern is designed for scenarios where the table itself
+is the data owner. In this app, `SampleDetails` owns the data (via `useState`).
 
-1. **Query param token** (recommended for this app): Pass JWT in `?token=<jwt>`.
-   Validate server-side. Short-lived tokens (existing 1h expiry) limit exposure.
-   The URL appears in server logs — acceptable for a LAN-only lab app.
+The correct pattern for cell-level inline editing matches what `EditableField.tsx`
+already does:
 
-2. **Pre-auth handshake**: Issue a one-time short-lived SSE token via a regular
-   POST, then use that token in the EventSource URL. More secure, more complex.
+1. Each editable cell maintains its own `editing: boolean` and `draft: string` in
+   local `useState`
+2. On save: call `POST /senaite/{sampleId}/results` via `useMutation`
+3. Optimistic update: call `onResultSaved(rowIndex, newValue)` callback before await
+4. On error: rollback via `onResultSaved(rowIndex, previousValue)` in `onError`
+5. `SampleDetails` propagates the update into its `data` state to keep the
+   table reactive
 
-3. **Cookie auth**: Switch the scale stream endpoint to cookie-based auth. Works
-   if the app's JWT is in a cookie (it isn't currently — it's a Bearer token).
-
-For this milestone, the query-param approach is the pragmatic choice. The app runs
-on a private lab LAN with HTTPS (via Docker/nginx), so log exposure is low risk.
-
-### Heartbeat / Proxy Keepalive
-
-`ping=10` sends an SSE comment (`:ping`) every 10 seconds. This prevents Docker's
-nginx proxy from closing idle connections. Also add `X-Accel-Buffering: no` to the
-response headers to disable nginx output buffering for SSE:
-
-```python
-return EventSourceResponse(
-    event_generator(),
-    ping=10,
-    headers={"X-Accel-Buffering": "no"},
-)
-```
+This is consistent with the existing `EditableField` / `EditableDataRow` pattern
+already used throughout `SampleDetails.tsx`.
 
 ---
 
-## 3. SENAITE REST API: Sample Lookup
+## Backend Gap: SenaiteAnalysis type lacks uid and keyword
 
-### Library
+**This is the primary blocker for result submission.**
 
-Use **`httpx`** — already in `requirements.txt` at `>=0.27.0`. No new dependency.
-The existing `sharepoint.py` uses `httpx.AsyncClient`, so the same pattern applies.
+The `SenaiteAnalysis` interface in `src/lib/api.ts` (line 2016) has `title`,
+`result`, `unit`, `method`, `instrument`, `analyst`, `due_date`, `review_state`,
+`sort_key`, `captured`, `retested` — but **no `uid` and no `keyword`**.
 
-### Endpoint
+The submit endpoint (`POST /senaite/{sample_id}/results`) requires the analysis
+`keyword` to route to the correct analysis UID on the backend.
 
-Base URL from existing env config: `http://<SENAITE_HOST>/senaite/@@API/senaite/v1`
+**Fix options:**
 
-**Search by system sample ID:**
-```
-GET /search?id=<SAMPLE_ID>&catalog=bika_catalog_analysisrequest_listing&complete=yes
-```
+1. **Enrich the existing `/wizard/senaite/lookup` response** to include `uid` and
+   `keyword` in each analysis item. The backend's `get_analyses_for_sample` method
+   already returns `AnalysisInfo` objects with both fields — they just need to be
+   surfaced through the lookup route. This is the cleaner option: single fetch,
+   no waterfall.
 
-**Search by client-assigned sample ID** (what the lab enters on sample submission):
-```
-GET /search?getClientSampleID=<ID>&catalog=bika_catalog_analysisrequest_listing&complete=yes
-```
+2. **Second fetch in `SampleDetails`** to `GET /senaite/{sampleId}/analyses` after
+   the main lookup, merging results by title. More requests, more complexity.
 
-Note: `getClientSampleID` must be indexed in your SENAITE installation's catalog.
-If it is not, the `id` search (system ID) is the reliable fallback. Verify by
-fetching one sample with `complete=yes` and checking what fields are present.
-
-**Direct access by UID:**
-```
-GET /v1/<uid>
-```
-
-**Pagination:** Results default to 25 per page. Add `&limit=1` for ID lookups.
-
-**Complete vs. metadata-only:** Without `complete=yes`, SENAITE returns only catalog
-metadata (lightweight). With `complete=yes`, returns full object fields. Always use
-`complete=yes` for the wizard's sample lookup (you need peptide name, declared
-weight, and other fields).
-
-### Authentication
-
-**SENAITE jsonapi only reliably supports cookie authentication.**
-(Source: official auth docs at https://senaitejsonapi.readthedocs.io/en/latest/auth.html)
-Basic Auth and other PAS plugins are documented as unreliable.
-
-Cookie auth flow:
-```
-GET /@@API/senaite/v1/login?__ac_name=<user>&__ac_password=<pass>
-```
-Response sets `__ac` session cookie for subsequent requests.
-
-```python
-# backend/senaite_client.py — reference skeleton
-
-import os
-import httpx
-
-SENAITE_URL = os.getenv("SENAITE_URL", "http://senaite:8080/senaite")
-SENAITE_USER = os.getenv("SENAITE_USERNAME", "admin")
-SENAITE_PASS = os.getenv("SENAITE_PASSWORD", "")
-API_BASE = f"{SENAITE_URL}/@@API/senaite/v1"
-
-
-class SenaiteClient:
-    """Async SENAITE client using cookie auth. Reuse across requests."""
-
-    def __init__(self):
-        self._client = httpx.AsyncClient(timeout=10.0)
-        self._authenticated = False
-
-    async def authenticate(self) -> None:
-        resp = await self._client.get(
-            f"{API_BASE}/login",
-            params={"__ac_name": SENAITE_USER, "__ac_password": SENAITE_PASS},
-        )
-        resp.raise_for_status()
-        self._authenticated = True
-
-    async def _ensure_auth(self) -> None:
-        if not self._authenticated:
-            await self.authenticate()
-
-    async def search_sample_by_id(self, sample_id: str) -> dict | None:
-        """Return full sample object by system ID, or None if not found."""
-        await self._ensure_auth()
-        resp = await self._client.get(
-            f"{API_BASE}/search",
-            params={
-                "id": sample_id,
-                "catalog": "bika_catalog_analysisrequest_listing",
-                "complete": "yes",
-                "limit": "1",
-            },
-        )
-        resp.raise_for_status()
-        items = resp.json().get("items", [])
-        return items[0] if items else None
-
-    async def close(self) -> None:
-        await self._client.aclose()
-```
-
-### Response Fields (with complete=yes)
-
-These fields are confirmed in official SENAITE jsonapi documentation:
-- `id` — system sample ID (e.g., `"WB-00012"`)
-- `uid` — internal UID
-- `review_state` — workflow state (e.g., `"sample_received"`, `"verified"`)
-- `title` — human-readable title
-- `getClientTitle` — client name
-- `getSampleTypeTitle` — sample type
-- `getDateSampled` — collection timestamp
-- `api_url` — canonical URL for this object
-
-Fields that depend on your SENAITE configuration (LOW confidence — verify against
-your actual instance):
-- Peptide name — likely a custom field, check for `getPeptide`, `Description`,
-  or custom analysis-level fields
-- Declared weight — check for `getDeclaredWeight` or a custom result field
-- Peptide sequence — may be in `Description` or a custom field
-
-**To discover available fields:** Fetch one known sample with `?complete=yes` and
-inspect the full response JSON. Build the field mapping from that inspection.
-
-### Session Reuse
-
-Create a single `SenaiteClient` instance at application startup (or as a FastAPI
-dependency with lifespan scope) and reuse it. Do not create a new httpx.AsyncClient
-per request — it wastes TCP connections and forces re-authentication.
+Recommendation: Option 1. Update the Python `/wizard/senaite/lookup` handler and
+the `SenaiteLookupResult` / `SenaiteAnalysis` TypeScript types together.
 
 ---
 
-## 4. Wizard UI State: Zustand
+## What NOT to Add
 
-No new library needed. Zustand is already installed and used throughout the project.
-
-**State belongs in Zustand because:** The wizard spans 5+ steps; data from early
-steps (SENAITE sample, weighings) is needed in later steps (dilution calculation,
-session save). This is cross-component persistent state within a session — the
-middle tier of the State Management Onion defined in AGENTS.md.
-
-**Pattern:**
-
-```typescript
-// Follow existing selector pattern — do NOT destructure from store
-
-// Store definition
-interface PrepWizardState {
-  currentStep: number;
-  sampleId: string | null;
-  senaiteRecord: SenaiteRecord | null;
-  weighings: Weighing[];
-  stockConcentrationMgMl: number | null;
-  dilution: DilutionResult | null;
-  // Actions
-  setStep: (step: number) => void;
-  setSenaiteRecord: (record: SenaiteRecord) => void;
-  recordWeighing: (w: Weighing) => void;
-  setStockConc: (conc: number) => void;
-  setDilution: (d: DilutionResult) => void;
-  reset: () => void;
-}
-
-// Usage in components — selector pattern (project rule)
-const currentStep = usePrepWizardStore(state => state.currentStep);
-const recordWeighing = usePrepWizardStore(state => state.recordWeighing);
-
-// In callbacks — getState() pattern (project rule)
-const handleAcceptWeight = () => {
-  const { recordWeighing } = usePrepWizardStore.getState();
-  recordWeighing({ step: 1, label: "Peptide", weightG: currentWeight.value });
-};
-```
-
-**Step navigation:** Drive with `currentStep` integer index. No URL routing changes
-needed — the wizard is a page within the existing app. The vertical step rail (left
-side, Stripe-style) maps step index to display status: completed, current, upcoming.
-
-**Per-step validation:** Use React Hook Form inside each step component for input
-validation (target concentration, total volume, etc.). On valid submission, the step
-dispatches to Zustand and increments `currentStep`.
-
-**Do not use TanStack Query for wizard state.** TanStack Query is for server data
-(SENAITE lookup, final session save). The in-progress weighing session is local UI
-state until the lab tech explicitly saves it.
+| Library | Why NOT |
+|---|---|
+| `react-hook-form` | Per-cell inline editing uses `useState` draft values. This is the existing `EditableField` pattern. No form layer is needed. |
+| `zod` | No schema validation layer needed for individual result values. The SENAITE backend validates on submission. |
+| Any step-wizard library | Not applicable to this milestone. |
+| `react-table-library` | Redundant — TanStack Table is installed and used. |
+| Floating UI / Popper | Not needed. The bulk action bar is sticky-positioned, not anchored to a reference element. |
+| `@dnd-kit/*` | No drag-and-drop in scope for this milestone. |
+| shadcn bulk-actions Pro block | The pattern is ~15 lines of Tailwind; the block is paywalled. |
 
 ---
 
 ## Complete Dependency Changes
 
-### Backend: requirements.txt
+### Frontend — no new packages
 
-**Add:**
-```
-sse-starlette>=2.1.0
-```
+No `npm install` needed.
 
-**No changes to:**
-- `asyncio` — stdlib, no installation needed
-- `httpx` — already present at `>=0.27.0`
-- `fastapi`, `uvicorn`, `sqlalchemy`, `pydantic` — no version changes needed
+### Backend — no new packages
 
-**Do NOT add:**
-- `pyserial` — not needed; XSR uses TCP
-- `mettler_toledo_device` (PyPI package) — serial-only, no TCP support
-- `websockets` or `python-socketio` — SSE is sufficient, WebSocket adds complexity
+No new pip packages needed. The `submit_analysis_result` endpoint is already
+implemented. Backend work is limited to enriching the existing lookup route to
+return `uid` and `keyword` per analysis.
 
-### Frontend: no new packages
+### New TypeScript types needed (changes to existing files)
 
-- `EventSource` is a native browser API (no library)
-- `Zustand` already installed
-- `shadcn/ui` components (Card, Button, Input, Progress) cover all wizard UI needs
-- No step-wizard library needed — build with shadcn/ui primitives + Zustand state
-
----
-
-## Environment Variables (New)
-
-```bash
-# .env additions for v0.11.0
-SCALE_IP=192.168.x.x        # Mettler Toledo XSR105DU IP address
-SCALE_PORT=4001              # MT-SICS TCP port (verify on balance)
-# SENAITE vars likely already exist — verify:
-SENAITE_URL=http://senaite:8080/senaite
-SENAITE_USERNAME=admin
-SENAITE_PASSWORD=<password>
+```typescript
+// src/lib/api.ts — extend SenaiteAnalysis
+export interface SenaiteAnalysis {
+  uid: string | null          // ADD — needed for result submission routing
+  keyword: string | null      // ADD — needed for submit endpoint
+  title: string
+  result: string | null
+  unit: string | null
+  method: string | null
+  instrument: string | null
+  analyst: string | null
+  due_date: string | null
+  review_state: string | null
+  sort_key: number | null
+  captured: string | null
+  retested: boolean
+}
 ```
 
 ---
@@ -614,59 +291,26 @@ SENAITE_PASSWORD=<password>
 ## Confidence Assessment
 
 | Area | Confidence | Basis |
-|------|------------|-------|
-| MT-SICS command set (S, SI, Z, T, @) | MEDIUM-HIGH | Multiple official MT-SICS reference manuals referenced; command set is stable and consistent across all sources. PDFs not directly parseable but command structure confirmed by working implementations. |
-| TCP port 4001 | MEDIUM | Confirmed by Atlantis-Software Node.js MT-SICS library examples. Official MT-SICS docs confirm port is configurable — 4001 is the documented default. Must verify on device. |
-| Response format `S <STATUS> <value> <unit>` | HIGH | Consistent across N3uron docs, MT-SICS supplement, and Node.js library. Status characters S/D/+/- well-documented. |
-| `asyncio.open_connection` for TCP | HIGH | Python stdlib, fully documented at docs.python.org. No uncertainty. |
-| `readuntil(b"\r\n")` for MT-SICS | HIGH | MT-SICS uses CRLF termination — confirmed by multiple sources. `readuntil` is correct approach. |
-| `sse-starlette` for SSE streaming | HIGH | Active library (Nov 2024), 351 commits, widely used with FastAPI. API confirmed from GitHub. |
-| SSE > WebSocket for one-way streaming | HIGH | Well-established principle; multiple 2024-2025 sources confirm. |
-| SENAITE /search endpoint | HIGH | Official readthedocs documentation. |
-| SENAITE cookie-auth requirement | HIGH | Explicitly stated in official SENAITE auth docs: "Currently only cookie authentication works." |
-| SENAITE `complete=yes` for full fields | HIGH | Official SENAITE jsonapi docs describe the two-step strategy. |
-| `getClientSampleID` as search index | LOW | Not confirmed in indexed catalog docs. Must verify against live instance. |
-| Peptide/declared weight field names | LOW | Custom SENAITE fields — cannot know without inspecting actual instance. |
-| Zustand for wizard state | HIGH | Already used in project. Pattern matches AGENTS.md architecture rules. |
-
----
-
-## Open Questions (Must Answer Before Building)
-
-1. **Does the XSR105DU have the Ethernet module installed?**
-   The Ethernet interface is an optional add-on for Excellence XSR balances.
-   If absent, TCP is impossible. Check with lab or inspect the back of the balance.
-
-2. **What TCP port is configured on this balance?**
-   On the balance display: Menu > Communication > Interface > Ethernet > Port.
-   Default is 4001, but it may have been changed.
-
-3. **What is the balance's IP address?**
-   Should be static or DHCP-reserved. Get from lab/IT before writing any code.
-
-4. **What SENAITE fields hold peptide name and declared weight?**
-   Fetch one sample with `?complete=yes` and log the full JSON response.
-   Build the field mapping from that inspection before wiring up the wizard.
-
-5. **Is `getClientSampleID` indexed in this SENAITE installation?**
-   If not, the wizard will use `id` (system ID) instead. This affects the UX
-   of the "enter sample ID" step — the lab tech may need to enter the SENAITE
-   system ID rather than their own numbering.
+|---|---|---|
+| TanStack Table row selection API | HIGH | Official docs, confirmed against installed v8.21.3 |
+| `'use no memo'` requirement | HIGH | GitHub issue confirmed, existing DataTable already handles it |
+| TanStack Query v5 useMutation optimistic pattern | HIGH | Official docs, consistent with EditableField.tsx existing pattern |
+| shadcn components sufficient for UI | HIGH | All components already in project, verified in source |
+| Backend submit endpoint exists | HIGH | Verified directly in integration-service/app/adapters/senaite.py and desktop.py |
+| uid/keyword missing from SenaiteAnalysis | HIGH | Verified by reading src/lib/api.ts line 2016 |
+| No new npm packages needed | HIGH | Cross-checked TanStack Table v8 feature list against all requirements |
 
 ---
 
 ## Sources
 
-- [Atlantis-Software mt-sics Node.js library](https://github.com/Atlantis-Software/mt-sics) — TCP port 4001, command list, connection pattern
-- [N3uron Mettler Toledo Client docs](https://docs.n3uron.com/docs/mettler-toledo-configuration) — TCP configuration, S command stable weight description
-- [MT-SICS Excellence Reference Manual (MT)](https://www.mt.com/dam/product_organizations/laboratory_weighing/WEIGHING_SOLUTIONS/PRODUCTS/MT-SICS/MANUALS/en/Excellence-SICS-BA-en-11780711D.pdf) — primary reference (403 at fetch time; structure known from supplement)
-- [MT-SICS Supplement 2024 (geass.com)](https://www.geass.com/wp-content/uploads/2024/12/MT-SICS.pdf) — PDF binary, content confirmed via cross-references
-- [janelia-python/mettler_toledo_device_python](https://github.com/janelia-python/mettler_toledo_device_python) — Python reference implementation (serial only, not usable directly)
-- [sse-starlette GitHub](https://github.com/sysid/sse-starlette) — API, EventSourceResponse, ping, anyio memory channel pattern
-- [sse-starlette PyPI](https://pypi.org/project/sse-starlette/) — version and maintenance status
-- [SENAITE jsonapi API docs](https://senaitejsonapi.readthedocs.io/en/latest/api.html) — search endpoint, catalog names, complete parameter
-- [SENAITE jsonapi Auth docs](https://senaitejsonapi.readthedocs.io/en/latest/auth.html) — cookie auth limitation explicitly documented
-- [SENAITE jsonapi Quickstart](https://senaitejsonapi.readthedocs.io/en/latest/quickstart.html) — base URL format, response structure
-- [WebSocket vs SSE 2025](https://potapov.me/en/make/websocket-sse-longpolling-realtime) — SSE vs WebSocket comparison
-- [Python asyncio streams docs](https://docs.python.org/3/library/asyncio-stream.html) — open_connection, StreamReader, readuntil
-- [Build with Matija — Zustand multi-step form](https://www.buildwithmatija.com/blog/master-multi-step-forms-build-a-dynamic-react-form-in-6-simple-steps) — Zustand wizard state pattern
+- TanStack Table v8 Row Selection guide: [https://tanstack.com/table/v8/docs/guide/row-selection](https://tanstack.com/table/v8/docs/guide/row-selection)
+- TanStack Table v8 Editable Data example: [https://tanstack.com/table/latest/docs/framework/react/examples/editable-data](https://tanstack.com/table/latest/docs/framework/react/examples/editable-data)
+- TanStack Query v5 Optimistic Updates: [https://tanstack.com/query/v5/docs/framework/react/guides/optimistic-updates](https://tanstack.com/query/v5/docs/framework/react/guides/optimistic-updates)
+- React Compiler / TanStack Table incompatibility: [https://github.com/facebook/react/issues/33057](https://github.com/facebook/react/issues/33057)
+- TanStack Table incompatible-library issue: [https://github.com/TanStack/table/issues/6137](https://github.com/TanStack/table/issues/6137)
+- shadcn bulk actions table block: [https://www.shadcn.io/blocks/tables-bulk-actions](https://www.shadcn.io/blocks/tables-bulk-actions)
+- Existing DataTable `'use no memo'` pattern: `src/components/ui/data-table.tsx` line 42 (verified by reading file)
+- Existing EditableField optimistic pattern: `src/components/dashboard/EditableField.tsx` lines 80-107 (verified by reading file)
+- SENAITE submit_analysis_result two-step pattern: `integration-service/app/adapters/senaite.py` lines 901-996 (verified by reading file)
+- SenaiteAnalysis type gap: `src/lib/api.ts` line 2016 (verified by reading file)

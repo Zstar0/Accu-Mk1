@@ -1,260 +1,179 @@
-# Feature Landscape: Sample Prep Wizard (v0.11.0)
+# Feature Landscape: Inline Result Editing and Workflow Transitions
 
-**Domain:** Guided lab workflow wizard — HPLC sample preparation with scale integration
-**Milestone type:** Subsequent (adding to existing lab app)
-**Researched:** 2026-02-19
+**Domain:** LIMS analysis result management — inline editing, state-based workflow actions, bulk operations
+**Milestone type:** Subsequent (adding to existing SENAITE desktop app)
+**Researched:** 2026-02-24
 
 ---
 
 ## Context
 
-This wizard guides a lab tech through 5 sequential steps to prepare a peptide sample for HPLC injection:
+The existing app has a read-only analyses table inside SampleDetails. Each analysis row shows its title, result value, unit, method, instrument, analyst, review state badge, and captured timestamp. The table already has per-state color tinting (left border accent) and status filter tabs (All / Verified / Pending).
 
-1. Sample lookup (SENAITE by ID)
-2. Enter target concentration and total volume
-3. Stock prep: weigh empty vial → add peptide → add diluent → weigh again → calculate stock concentration
-4. Dilution: weigh new vial → add calculated diluent → weigh → add calculated stock → weigh
-5. Review and confirm session record
+The backend already has:
+- `GET /explorer/samples/{id}/analyses` — returns analyses with uid, keyword, review_state, result, unit
+- `POST /explorer/samples/{id}/results` — sets Result + calls `transition: submit` on each; only works on `unassigned` state
 
-Scale integration: Mettler Toledo XSR105DU over TCP/IP using MT-SICS protocol. Backend polls the scale for a stable weight reading (`S` command over TCP port 8001, response `S S <value> <unit>\r\n`). Frontend receives the reading via SSE or WebSocket stream.
+The SENAITE API transition mechanism: `POST /update/{uid}` with body `{"transition": "verify"}`, `{"transition": "retract"}`, etc. Transition only fires if the analysis is in a valid prior state and the caller has permission.
+
+**SENAITE analysis state machine:**
+```
+unassigned → (set Result + submit) → to_be_verified → (verify) → verified → (published via sample)
+                                      to_be_verified → (retract) → unassigned
+                                      to_be_verified → (reject)  → rejected  [permanent]
+verified   → (retract) → unassigned  [in some SENAITE configs]
+```
 
 ---
 
 ## Table Stakes
 
-Features the wizard must have to be usable. Missing any of these = broken workflow.
+Features that a result entry screen must have. Without any of these the UI is either broken or requires falling back to the native SENAITE web UI — defeating the purpose.
 
 | Feature | Why Expected | Complexity | Notes |
 |---------|--------------|------------|-------|
-| **Vertical step sidebar (left) + content area (right)** | Standard two-column wizard layout; established pattern (Stripe, PatternFly, Google). Gives tech orientation at a glance. | Low | Step list fixed left, scrollable content right. Steps labeled with action nouns, not numbers alone. |
-| **Step completion gating (linear forward)** | Each step depends on prior data. Dilution calculation requires stock concentration from step 3. Tech cannot skip ahead. | Low | "Next" button disabled until step's required data is captured or confirmed. |
-| **Completed steps are revisitable via sidebar** | Techs must correct mistakes (e.g., re-read a weight). Forcing re-entry from step 1 is unacceptable. | Low | Clicking a completed step in the sidebar navigates back; data is preserved. Future (unvisited) steps remain locked. |
-| **Live weight display with stable indicator** | Lab tech needs to see whether the current reading is stable before accepting it. An unstable reading auto-accepted is a GMP violation. | Medium | Show live numeric value + animated "Stabilizing..." vs "Stable" badge. Only enable "Accept Weight" or auto-accept when scale reports stable (`S S` response, not `S D`). |
-| **Auto-accept stable weight** | Tech's hands are occupied placing vials. Requiring a button click while holding a vial causes errors. | Medium | When scale returns stable for N consecutive readings (e.g., 3 in a row), auto-accept. Show 3–5 second countdown so tech can intervene. |
-| **Calculated values shown inline (not hidden)** | Lab tech must verify computed values before proceeding. Hiding the formula = no auditability. | Low | Show formula, inputs, and result. E.g., "Stock conc = mass added / volume = 12.34 mg / 1.000 mL = 12.34 mg/mL". |
-| **SENAITE sample lookup by ID** | Sample data (peptide name, declared weight) must be pulled from LIMS. Manual entry introduces transcription errors. | Medium | Text input, search button, spinner, display returned sample fields. Show peptide name, batch/lot, declared purity. |
-| **Session autosave on every step advance** | Lab workflow is interrupted constantly. Power cycling, shifts, distractions. Losing 20 minutes of weighing data is unacceptable. | Medium | On "Next", persist current step data to DB before advancing. Draft record exists even for incomplete sessions. |
-| **Session resume from draft** | If tech navigates away or app crashes, they must be able to resume without re-weighing. | Medium | Load draft by session ID; restore to last completed step; prefill all captured data. |
-| **Scale offline/error state** | Scale is physically connected via LAN; network drops happen. Tech must know the scale is unavailable. | Medium | Show "Scale offline" banner with retry option. Allow manual weight entry as fallback. |
-| **SENAITE not found / error state** | Sample ID may be wrong, SENAITE may be unreachable. Fail clearly, don't silently pass. | Low | Show specific error: "No sample found for ID X" vs "SENAITE unreachable". |
-| **Confirm/accept button for each weighing step** | After auto-accept, tech should still be able to re-read. Provide an "Accept" affordance and a "Re-read" or "Clear" button. | Low | "Accept Weight" + "Re-read" buttons per weighing step. Auto-accept is a convenience, not a lock. |
-| **Session record written to DB on completion** | Audit trail. Lab must know every measurement, timestamp, and who performed the prep. | Medium | On wizard completion: write session record with all weights, calcs, timestamps, user ID. |
-| **Abandon / cancel wizard** | Tech must be able to exit without completing. Accidentally triggering session creation is wrong. | Low | "Cancel" accessible at any step. Show confirmation dialog. Draft persists; can be resumed or deleted. |
+| **Click-to-edit result value on unassigned rows** | Core purpose of the milestone. Unassigned analyses have no result yet; lab tech must enter one. | Medium | Click table cell → inline input appears. Same pattern as existing `EditableField` used on sample-level fields. Only renders for `unassigned` state. |
+| **Save on Enter / Cancel on Escape** | Keyboard conventions for inline editing. Every major data table (Airtable, Notion, Google Sheets) uses these bindings. | Low | Follows same `handleKeyDown` pattern already in `EditableField`. |
+| **Optimistic update with rollback** | Prevents UI jank on network latency. Click save → cell immediately shows new value → rolls back if API returns error. | Low | Already established pattern in `EditableField.save()`. Apply same pattern to analyses. |
+| **Per-row action menu (ellipsis or buttons) showing state-valid transitions** | After result is saved, analyst must be able to submit / verify / retract / reject. Actions must be contextual — only show what is valid for the current state. | Medium | Use a dropdown menu (shadcn `DropdownMenu`) per row. Compute available actions from `review_state`. Do not show a "verify" button on an unassigned row. |
+| **State-aware action availability** | Each action is only valid from specific states. Showing disabled or invalid actions causes confusion and mistakes. | Low | Map `review_state` → `allowedTransitions[]`. Drive button/menu item availability from this map. |
+| **Spinner / loading state during transition** | API calls to SENAITE take 200–800ms. Row must show a loading indicator while the transition is in-flight. | Low | Disable the row's action controls, show a spinner in place of the action menu. |
+| **Toast feedback on success and failure** | Lab tech must know whether their action succeeded. Silent failure is unacceptable in a GMP environment. | Low | `toast.success()` and `toast.error()` — already used throughout SampleDetails. |
+| **Row state refresh after transition** | After submit/verify/retract/reject, the row's `review_state` badge and available actions must reflect the new state. | Low | Local state update (`setData`) after confirmed API success. No full-page reload needed. |
+| **Sample-level state refresh after transitions affect all analyses** | When the last analysis is submitted/verified, the sample transitions to a new state (e.g., `sample_received` → `to_be_verified`). Header badge must update. | Medium | Re-fetch sample detail (or just the review_state field) after any workflow transition. Alternatively: use the response from the transition call which returns the new state. |
+| **Non-editable display for non-unassigned rows** | Verified, retracted, rejected rows must not be click-editable. Their result is locked by the LIMS. | Low | Conditional rendering: only unassigned rows render `EditableField`; others render plain text. |
+| **Result value validation before submit** | Attempting to submit an empty result to SENAITE will fail. Prevent the API call entirely. | Low | Disable save button if draft is empty. Show inline "Enter a result before submitting" message if tech tries to submit an unassigned row with no result set. |
+| **Checkbox column for bulk selection** | Required for batch operations (submit all, verify all). Users expect a checkbox column on actionable tables — established pattern from Gmail, Airtable, GitHub. | Medium | Indeterminate state for the header checkbox (some selected). Only selectable rows: those with valid transitions. |
+| **Floating bulk action toolbar** | When rows are selected, a docked toolbar appears showing batch actions. This is the standard pattern (Gmail, GitHub PR review, PatternFly Bulk Selection). | Medium | Fixed-position bar at bottom of table or top of viewport. Shows "N selected", bulk action buttons, and an "X" to deselect all. |
+| **Batch submit (all unassigned-with-results rows)** | Primary daily operation: analyst enters all results, then submits them all at once. Without batch submit, must click per-row N times. | Medium | Submit all selected unassigned rows that have result values. Skip rows without results with a per-row error. Return a summary toast: "5 submitted, 1 skipped (no result)". |
+| **Progress indicator for bulk operations** | Batch submit of 8 analyses may take 3–6 seconds. Tech needs to see it's working. | Low | Show a loading overlay or progress count in the floating toolbar: "Submitting 3/8...". |
+| **Error summary after bulk operation** | If 2 of 8 submit calls fail, the tech must know which ones and why. A single toast is insufficient. | Medium | After batch completes, show a summary toast or an expandable panel: "6 succeeded, 2 failed — [row names]". Rows with errors remain in their prior state. |
 
 ---
 
 ## Differentiators
 
-Features that elevate the wizard from functional to delightful. Not expected, but valued — especially in a daily-use lab tool.
+Features that go beyond functional to make this substantially better than the native SENAITE web UI. SENAITE's built-in result entry requires navigating to each analysis individually; this app can provide a unified, faster workflow.
 
 | Feature | Value Proposition | Complexity | Notes |
 |---------|-------------------|------------|-------|
-| **Step status icons in sidebar** | Completed steps show a checkmark, current step shows a dot or ring, locked steps are dimmed. Zero ambiguity about progress. | Low | Using Lucide icons: `CheckCircle2` (done), `Circle` (current), `Lock` (locked). Matches existing codebase icon usage. |
-| **Step subtitle in sidebar** | Sidebar shows not just step name but a summary of completed data. E.g., "Sample lookup — WB-0042 / Peptide-A" | Low | Reduces need to click back to verify. Collapsed summary is read-only. |
-| **Countdown timer before auto-accept** | 3-second countdown gives tech a chance to lift the vial or reject the reading before it's committed. | Low | Progress bar or counter: "Auto-accepting in 3...". Cancel button resets auto-accept. |
-| **Weight trend sparkline** | Show the last 5–10 weight readings as a tiny sparkline to visualize drift and settling. Lab techs recognize settling behavior. | Medium | SSE/WebSocket streams readings; frontend buffers last N values, renders mini chart. |
-| **Tare reminder** | Before each weighing step that requires a vial, prompt: "Ensure scale is tared / vial is on scale." | Low | Inline instruction card before the weight display activates. |
-| **Calculated result with formula toggle** | Show result by default; "Show formula" expander reveals C1V1 = C2V2 derivation or mass/volume calc. For verification by senior staff. | Low | shadcn `Collapsible` component — already in codebase. |
-| **Step completion timestamp** | Each completed step in the sidebar shows a timestamp. "Stock prep — completed 09:14 AM". | Low | Stored in session record; displayed in sidebar tooltip or subtitle. |
-| **GMP-compliant session record export** | After completion, offer PDF/CSV export of the session record (all inputs, outputs, timestamps, user). | High | Defer to v2 — high effort, but flag as a likely compliance requirement. |
-| **Keyboard navigation** | Tab to navigate between fields; Enter to advance when step is complete. Essential for tech who uses keyboard more than mouse while wearing gloves. | Medium | Aligns with PatternFly and WCAG guidance on wizard keyboard support. |
-| **Inline help text per step** | Short instruction below the step heading: what to do, what the system will capture. First-time tech orientation. | Low | shadcn `Label` with muted text. No modal required — inline is less disruptive. |
-| **Weight units display** | Show unit as returned by scale (e.g., `g`). Don't hardcode. XSR105DU returns unit in the response string. | Low | Parse from SICS response: `S S   0.0123 g`. Display alongside value. |
-| **Re-read with reason** | If tech clicks "Re-read" after accepting, optionally prompt for a brief reason (e.g., "Sample spilled"). Logged in session record. | Low | Simple optional text field. Defaults blank. Useful for GMP audit trail. |
+| **Keyboard navigation between editable cells** | Tab from one result field to the next without touching the mouse. A lab tech entering 8 results can complete entry in seconds. This is what Excel and Google Sheets feel like — SENAITE's native UI cannot do this. | Medium | On Tab key press inside an active result input, close current edit and open edit mode on the next editable row. Requires row refs or a focused-row state. |
+| **"Enter all results, then submit all" fast path** | Decouple result entry from the submit transition. Tech can enter all results without submitting, then use "Submit All" from the bulk toolbar. SENAITE's default workflow ties enter+submit together. | Low | Split into two actions: "Save Result" (sets value only, no transition) and a separate "Submit" action. The existing backend endpoint conflates these; a new backend endpoint is needed for save-only. |
+| **Transition confirmation for destructive actions** | Retract and reject are hard to undo. A confirmation dialog prevents accidental misclicks. | Low | shadcn `AlertDialog` before executing retract or reject. "This will retract [Analysis Name]. A new test will be required. Continue?" |
+| **Inline state transition justification (optional)** | Some labs require a reason when retracting. Optional reason field in the confirmation dialog, sent as a remark or logged locally. | Low | Text input in the retract/reject confirmation dialog. If provided, append to SENAITE Remarks field on the sample. |
+| **"Submit all with results" quick button** | A single prominent button: "Submit All With Results" — submits every unassigned row that already has a non-empty result value. No checkbox selection needed. | Low | Placed near the analysis section header. Disabled if no unassigned rows have results. Uses the existing POST /results endpoint. |
+| **Result value diff indicator** | When an analysis has been retracted and re-entered, the row shows the original value (from the retested flag) alongside the new value. Makes re-test visible without opening SENAITE. | High | Depends on SENAITE returning prior result on retested analyses. May require additional API field. Defer if SENAITE doesn't expose it. |
+| **Per-row status change animation** | When a transition completes, the row's state badge smoothly transitions to the new color (e.g., amber → cyan). Provides visual confirmation without reading text. | Low | CSS `transition` on badge background-color. The state badge color map already exists. |
+| **"Pending entry" row highlight** | Unassigned rows with no result yet are visually differentiated from unassigned rows that have a result saved. "Needs result" vs "Ready to submit." | Low | Different left-border tint or a subtle bg tint on rows where `review_state === 'unassigned' && !result`. |
+| **Bulk verify (for Lab Managers)** | Batch verify all to_be_verified analyses. Reduces the click count for verification from N clicks to 1. This is the workflow bottleneck in SENAITE. | Medium | Only available when user role has verify permission. Shown in bulk toolbar only when selected rows are all `to_be_verified`. |
 
 ---
 
 ## Anti-Features
 
-Features to explicitly NOT build in v0.11.0. Scope control.
+Features to explicitly NOT build in this milestone.
 
 | Anti-Feature | Why Avoid | What to Do Instead |
 |--------------|-----------|-------------------|
-| **Non-linear step jumping (full free navigation)** | This wizard has hard data dependencies: dilution calc requires stock conc, which requires weighing step 3. Allowing free-jump creates invalid states. | Lock future steps. Allow back-navigation to completed steps only. |
-| **Editable completed step data without invalidation** | If tech goes back and changes a weight that feeds into a calculation, downstream results become stale without recalculation. Complex to handle correctly. | When navigating back and editing, flag downstream steps as "needs reconfirmation" — but do NOT try to auto-recalculate silently. Force tech to re-advance through affected steps. Implement in v2 if needed. |
-| **Multiple simultaneous sessions** | One tech, one balance, one prep at a time. Managing concurrent sessions adds session selection UI, conflict resolution, and auth complexity. | One active session per user at a time. Draft is singular. |
-| **Auto-calculate dilution on the fly as tech types** | Target concentration and volume change as tech types; live recalculation is visually noisy and confusing mid-entry. | Calculate once, on step advance (when tech confirms inputs). Show formula and result. |
-| **Scale calibration or tare commands from the app** | The XSR105DU is a precision analytical balance. Calibration is SOP-controlled and should not be triggered from software. Tare is done manually by the tech at the instrument. | The app reads only. Send `S` or `SI` commands only. Do not send tare (`T`) or calibration commands. |
-| **Barcode scanner integration** | Useful, but adds hardware dependency and driver complexity. Not all workstations have scanners. | Manual text input with SENAITE search for v1. Barcode support deferred. |
-| **Email/notification on session completion** | No email infrastructure exists in this app. SENAITE integration pattern is pull, not push. | Write session to DB. Tech manually continues to HPLC injection. |
-| **Undo history within a step** | React form state handles undo for text fields. Weight readings are discrete accepted values, not a typed stream. Undo across steps is dangerous in a lab context. | Re-read button is the "undo" for weight steps. Back navigation is the "undo" for form steps. Explicit, not implicit. |
-| **Tutorial / onboarding overlay on first use** | Wizard itself is already guided. Overlay-on-top adds cognitive load and is often dismissed without reading. | Use inline instruction text on each step. No overlay. |
-| **Offline mode (no SENAITE, no scale)** | Without scale, you cannot do sample prep. Without SENAITE, you have no sample data. Full offline mode is not a valid lab scenario. | Handle transient outages gracefully (retry, manual fallback), but do not build a fully offline mode. |
-| **Results entry / purity calculation in this wizard** | The project description includes "results entry after HPLC run" as a target feature, but that is a different workflow that happens after injection. Mixing it into this wizard conflates two distinct lab activities. | Results entry is a separate post-run workflow. This wizard ends at "session ready for injection." |
-
----
-
-## Step-by-Step Behavior Specification
-
-### Step Locking / Unlocking Logic
-
-```
-LOCKED   = step not yet reachable (greyed, not clickable in sidebar)
-CURRENT  = active step (highlighted in sidebar, content shown)
-COMPLETE = step done (checkmark, clickable in sidebar to go back)
-
-Rules:
-- Step N+1 is LOCKED until Step N is COMPLETE
-- COMPLETE steps become clickable (back navigation)
-- Going back to a COMPLETE step does NOT lock steps after it
-  UNLESS the tech modifies data in that step (flag downstream as "needs reconfirm")
-- v0.11.0: If tech modifies a past step, require they re-advance through affected steps
-  (simple invalidation — no silent recalc)
-```
-
-### Step-Type Classification
-
-| Step | Type | Unlock Condition |
-|------|------|-----------------|
-| 1. Sample Lookup | User action + confirm | SENAITE returns valid sample; tech clicks "Use this sample" |
-| 2. Target Parameters | Form entry + confirm | Both target concentration and total volume entered (non-zero); tech clicks "Next" |
-| 3. Stock Prep (5 weighings) | Instrument reading x5 | All 5 weight readings accepted; stock concentration calculated; tech clicks "Confirm Stock Prep" |
-| 4. Dilution (3 weighings) | Instrument reading x3 | All 3 weight readings accepted; dilution verified; tech clicks "Confirm Dilution" |
-| 5. Review & Confirm | Review + confirm | Tech clicks "Complete Session" |
-
-### Weighing Step Sub-flow
-
-Each weighing point within steps 3 and 4 follows this pattern:
-
-```
-1. Display instruction: "Place empty vial on scale"
-2. Show live weight value (polling from backend SSE/WS)
-3. Show stability indicator: "Stabilizing..." → "Stable"
-4. Stable for 3 consecutive readings → start auto-accept countdown (3 sec)
-5. Tech can: (a) let it auto-accept, or (b) click "Accept Weight" immediately, or (c) click "Re-read" to clear
-6. On accept: value locked, instruction advances to next weighing point
-7. All weighing points complete → calculations shown → "Confirm" button active
-```
-
-### Scale Weight Display States
-
-| State | Visual | Description |
-|-------|--------|-------------|
-| Connecting | Spinner + "Connecting to scale..." | Initial TCP connection establishing |
-| Live / Unstable | Animated value + amber "Stabilizing" badge | `SI` reading coming in, balance in motion |
-| Stable | Value + green "Stable" badge + countdown | `S` command returned stable reading |
-| Auto-accepted | Locked value + checkmark | Weight committed to session |
-| Scale offline | Red banner + "Retry" | TCP connection failed or timed out |
-| Manual fallback | Input field + "Enter manually" | Tech overrides with keyboard entry |
-
-### Session Persistence Model
-
-```
-States:
-  draft     = in-progress wizard, incomplete
-  complete  = all steps done, session record written
-
-On each "Next":
-  → persist current step data to DB (upsert by session_id)
-  → advance to next step
-  → update current_step pointer
-
-On navigate away / close:
-  → draft persists silently (no confirmation needed)
-  → "Resume" banner shown on wizard entry if draft exists
-
-On "Cancel":
-  → confirmation dialog: "Discard this session?"
-  → Yes: delete draft, return to app
-  → No: stay in wizard
-
-On "Complete Session":
-  → write final record (status = complete, all measurements, calcs, user_id, timestamps)
-  → show success state
-  → return to app
-```
-
----
-
-## Error State Coverage
-
-| Scenario | Expected Behavior |
-|----------|------------------|
-| SENAITE unreachable | Show "Cannot connect to SENAITE" with retry button. Do not block — allow tech to enter sample data manually as fallback. |
-| SENAITE returns no match for ID | Show "No sample found for ID [X]". Tech can correct ID and retry. |
-| SENAITE returns multiple matches | Show disambiguation list with client, date, status. Tech selects correct sample. |
-| Scale offline at wizard start | Show "Scale offline" banner. Auto-retry every 10 seconds. Manual entry fallback available. |
-| Scale disconnects mid-step | Show inline error in the weight display area: "Scale disconnected — retrying..." Auto-retry. Current accepted weights are preserved. |
-| Scale returns unstable reading indefinitely | After 60 seconds without stable, show advisory: "Scale not stabilizing. Check for vibration or overload. Enter weight manually if needed." |
-| Weight outlier (>20% deviation from tare) | Flag as advisory, not hard block. Show: "Weight change larger than expected. Verify sample is correct." Tech must acknowledge before proceeding. |
-| Weight negative after tare | Show error: "Negative weight reading. Check vial is on scale and scale is tared." Block accept. |
-| Session DB write failure | Show error, allow retry. Do not lose the captured data — hold in frontend state until write succeeds. |
-| Navigating away with unsaved data | Browser/app close: autosave fires. Explicit navigation within the app: silent autosave, no confirmation popup (draft is preserved). |
+| **Editable fields for verified or published analyses** | SENAITE enforces this at the API level — PUT to a verified analysis returns an error. Building a UI affordance that always fails misleads the tech. | Show verified result as plain, unclickable text. If a verified result needs correction, the workflow is retract → re-enter. Make retract available via the action menu. |
+| **Free-form text justification required for every transition** | Requiring a justification on every submit/verify adds friction to the primary happy path. Most transitions don't need a reason. | Only prompt for justification on retract and reject, which are explicit exceptions. Submit and verify are routine. |
+| **Editable method, instrument, or analyst from this UI** | These fields are managed in SENAITE by lab managers through configuration, not by analysts during result entry. Allowing edit from here bypasses the governance model. | Show method/instrument/analyst as read-only columns. They are informational context for the result, not editable from result entry. |
+| **Automated publishing of samples** | Publishing is a sample-level transition with external consequences (triggers COA generation, notifies customer). It must never happen as a side-effect of result entry. | Keep the analysis workflow transitions scoped to the analysis level only. Sample publishing remains a separate, explicit action. |
+| **Real-time multi-user sync / presence** | Multiple analysts editing results simultaneously on the same sample is not a scenario in this lab. Adding WebSocket-based presence tracking is significant infrastructure for no real benefit. | Rely on standard TanStack Query polling. If two analysts open the same sample, the second will see stale data until they refresh. This is acceptable for the team size. |
+| **Undo history across transitions** | Once an analysis is submitted and transitions to `to_be_verified`, "undo" means calling retract — a deliberate action with traceability implications. Treating it like a text editor undo trivializes the audit trail. | Expose retract as an explicit menu action. Do not build an "undo" button. |
+| **Inline result entry for analyses in assigned state** | `assigned` means a worksheet has been assigned. Editing from the sample details view while a worksheet is open in SENAITE would create conflicts. | Show assigned analyses as read-only. Direct tech to SENAITE for worksheet-based result entry when `review_state === 'assigned'`. |
+| **Custom result validation rules (spec limits, reference ranges)** | SENAITE manages specification limits and out-of-spec flagging internally. Duplicating this logic in the frontend creates a divergence risk. | Show SENAITE's out-of-spec flags if they appear in the API response (e.g., `outofrange` field). Do not re-implement limit checking. |
+| **Full SENAITE workflow replacement** | This is a convenience overlay on SENAITE, not a replacement. Reject, retract, complex QC workflows involving worksheets and instrument imports remain in SENAITE's native UI. | Build the 80% daily case: enter results, submit, verify. For edge cases, provide the "Open in SENAITE" link already on the page. |
 
 ---
 
 ## Feature Dependencies
 
 ```
-Step 1 (Sample Lookup)
-  └── SENAITE JSON API integration (backend)
-  └── Sample ID input + search UI
+Inline result editing (click-to-edit result cell)
+  └── Existing: EditableField component (pattern to reuse or adapt)
+  └── Existing: POST /explorer/samples/{id}/results endpoint (submit combined)
+  └── NEW: POST or PATCH endpoint for save-result-only (no transition)
+  └── SenaiteAnalysis type in api.ts needs uid field for per-analysis calls
 
-Step 2 (Target Parameters)
-  └── Numeric inputs: target concentration (mg/mL), total volume (mL)
+Per-row action menu with workflow transitions
+  └── Analysis uid in SenaiteAnalysis type (currently missing — needs backend + frontend)
+  └── NEW: POST /explorer/analyses/{uid}/transition endpoint (backend)
+  └── state → allowedTransitions map (frontend logic)
+  └── shadcn DropdownMenu (already in codebase)
 
-Step 3 (Stock Prep)
-  └── Scale TCP polling (backend → SSE/WS → frontend)
-  └── Weight acceptance UI (live display + accept/re-read)
-  └── Calculation: stock_concentration = mass_peptide / volume_diluent_added
-  └── "mass_peptide" = (vial+peptide weight) - (empty vial weight)
-  └── "volume_diluent_added" = (vial+peptide+diluent weight) - (vial+peptide weight)
-        [uses density of diluent — typically 1.000 g/mL for water-based]
+Checkbox bulk selection
+  └── Local selection state (Set<string> of uids) in SampleDetails
+  └── Checkbox column in AnalysisRow (shadcn Checkbox component)
+  └── Indeterminate header checkbox (react ref control)
 
-Step 4 (Dilution)
-  └── Calculation from Step 2 + Step 3:
-        required_stock_volume = (C_target × V_total) / C_stock   [C1V1 = C2V2]
-        required_diluent_volume = V_total - required_stock_volume
-  └── Scale reading for 3 weighing points
-  └── Verification: actual added vs calculated
+Floating bulk action toolbar
+  └── Checkbox selection state (derives from above)
+  └── Fixed-position DOM element, z-index above table
+  └── Bulk transition logic: serial or parallel API calls per selected uid
 
-Step 5 (Review)
-  └── Read-only summary of all steps
-  └── DB write on confirm
+Sample-level state refresh
+  └── After any transition, re-fetch lookupSenaiteSample or just the review_state field
+  └── setData to update header badge
+
+Batch submit "Submit All With Results"
+  └── Filter analyses where review_state === 'unassigned' && result !== null
+  └── Existing POST /explorer/samples/{id}/results (already supports batch)
+
+Keyboard navigation between editable cells
+  └── rowRefs or ordered uid list
+  └── Tab handler that closes current edit and opens next
 ```
 
 ---
 
-## MVP Recommendation for v0.11.0
+## Backend Requirements (Integration Service)
 
-### Must-Build (Table Stakes — Wizard is broken without these)
+The existing `POST /explorer/samples/{id}/results` endpoint combines set-result + submit in one operation. The new milestone requires splitting this:
 
-1. Vertical step sidebar with 3 states: locked, current, complete
-2. Linear step gating — "Next" disabled until step complete
-3. Back navigation to completed steps (sidebar click)
-4. SENAITE sample lookup by ID (backend endpoint, frontend search UI)
-5. Scale live weight display with stable/unstable indicator
-6. Auto-accept stable weight with countdown (3 sec)
-7. "Accept Weight" and "Re-read" buttons per weighing point
-8. Inline calculated results (formula + result)
-9. Autosave on each step advance (draft persistence)
-10. Session resume from draft
-11. Scale offline state + manual entry fallback
-12. SENAITE not-found / unreachable error states
-13. Session record written to DB on completion
-14. Cancel wizard with confirmation
+| New Endpoint | Purpose | Notes |
+|--------------|---------|-------|
+| `PATCH /explorer/analyses/{uid}/result` | Set result value only, no transition | Calls SENAITE `POST /update/{uid}` with `{"Result": value}`. Returns new analysis state. |
+| `POST /explorer/analyses/{uid}/transition` | Execute a named transition | Calls SENAITE `POST /update/{uid}` with `{"transition": name}`. Returns new state. Body: `{"transition": "verify" \| "retract" \| "reject" \| "submit"}`. |
 
-### Build if Time Allows (Differentiators for v0.11.0)
+The `SenaiteAnalysis` data model in the backend needs `uid` exposed to the desktop API response (currently `AnalysisResponse` in desktop.py has `uid` — it's just missing from the frontend `SenaiteAnalysis` interface in api.ts and from the `lookupSenaiteSample` lookup path).
 
-1. Step status icons in sidebar (checkmark / dot / lock)
-2. Step subtitle showing captured data summary
-3. Countdown timer with cancel for auto-accept
-4. Tare reminder card before each weighing substep
-5. "Show formula" collapsible on calculated results
-6. Weight unit display from SICS response string
-7. Inline help text per step (what to do, what happens next)
-8. Keyboard navigation (Tab / Enter flow)
+---
 
-### Defer to v0.12.0 or Later
+## MVP Recommendation
 
-- Weight trend sparkline (requires buffered SSE stream UI)
-- Step completion timestamps in sidebar
-- GMP session record PDF/CSV export
-- Re-read with reason logging
-- Barcode scanner integration
-- Results entry / purity calculation post-run (separate workflow)
-- Editable completed step data with downstream invalidation
-- Weight outlier advisory (nice-to-have safety net)
+### Must-Build (Table Stakes — Core Result Management)
+
+1. Click-to-edit result value on `unassigned` rows (reuse EditableField pattern)
+2. Save on Enter, Cancel on Escape, disabled save on empty value
+3. Optimistic update with rollback on API error
+4. Per-row action dropdown with state-valid transitions (submit, verify, retract, reject)
+5. Spinner / loading state during transition; row controls disabled in-flight
+6. Toast feedback on every action (success and error)
+7. Row state badge update after successful transition
+8. Sample-level state badge refresh after transitions
+9. Non-editable display for non-unassigned rows
+10. Checkbox selection column (only on actionable rows)
+11. Floating bulk action toolbar with selection count
+12. Batch submit via existing endpoint (all selected unassigned+result rows)
+13. Progress indicator during batch operations
+14. Error summary after batch completes
+
+### Build If Time Allows (Differentiators)
+
+1. Confirmation dialog for retract and reject
+2. "Submit All With Results" single-click button above the table
+3. Per-row status change transition animation
+4. "Pending entry" highlight on unassigned rows with no result
+5. Keyboard Tab navigation between editable result cells
+
+### Defer to Later Milestone
+
+- Save-result-only without submit (requires new backend endpoint and rethinking current UX)
+- Inline justification on retract (needs remarks endpoint)
+- Bulk verify (needs verify permission detection)
+- Result diff indicator for retested analyses (needs SENAITE field research)
+- Keyboard navigation between cells (higher complexity, lower urgency)
 
 ---
 
@@ -262,49 +181,34 @@ Step 5 (Review)
 
 | Area | Confidence | Source |
 |------|------------|--------|
-| Wizard step navigation patterns | HIGH | NNG, PatternFly design guidelines, Eleken (verified against multiple authoritative sources) |
-| Stripe-style vertical step navigator behavior | HIGH | Stripe OnboardingView component docs (official) — 4 states: not-started, in-progress, blocked, complete; left sidebar + right content |
-| Scale MT-SICS protocol basics | MEDIUM | N3uron docs (confirmed S/SI commands and stable response concept); PDFs unreadable but multiple sources confirm TCP port 8001 and SICS command structure |
-| Scale UX waiting / stable indicator pattern | MEDIUM | WebSearch + NNG status visibility heuristic; no single authoritative lab-instrument-web-UI source; derived from established UX principles |
-| SENAITE JSON API search | HIGH | Official ReadTheDocs — search by ID with catalog param confirmed; `&complete=True` for full fields; Basic Auth |
-| Session persistence / draft state | HIGH | AppMaster article on save-and-resume wizards; corroborated by react-admin, Zustand persist middleware patterns |
-| Step locking logic | HIGH | PatternFly design guidelines (official) + NNG article — sequential locking is the recommended default |
-| HPLC dilution calculation (C1V1 = C2V2) | HIGH | Standard chemistry; confirmed in multiple chromatography forum and calculator sources |
-| Anti-feature reasoning | MEDIUM | Derived from wizard UX principles + domain knowledge of GMP/lab constraints; no single authoritative source for lab-specific anti-features |
+| SENAITE transition mechanism (`POST /update/{uid}` with `transition` key) | HIGH | Confirmed in existing `submit_analysis_result` implementation in senaite.py (lines 956–960) |
+| SENAITE analysis state machine (unassigned → to_be_verified → verified) | HIGH | Confirmed from senaite.py implementation and STATUS_COLORS map in SampleDetails.tsx |
+| Retract and reject as valid transitions | MEDIUM | Confirmed by SENAITE GitHub issue tracker and Bika LIMS documentation; exact valid prior states not fully documented |
+| Bulk action floating toolbar pattern | HIGH | Multiple authoritative UX sources: NN/g, PatternFly, eleken.co |
+| Inline editing UX conventions (Enter/Escape/optimistic update) | HIGH | Existing codebase establishes this pattern in EditableField.tsx; no ambiguity |
+| Backend uid field availability for analyses | HIGH | `AnalysisResponse` in desktop.py already returns `uid`; gap is frontend interface only |
+| "assigned" state restriction | MEDIUM | Logical inference from SENAITE worksheet model; not verified against specific API behavior |
+| Bulk verify permission scoping | LOW | Not researched; SENAITE permissions system not examined for this milestone |
 
 ---
 
 ## Sources
 
-### Wizard UX
+### SENAITE API and Workflow
 
-- [Wizards: Definition and Design Recommendations — NNG](https://www.nngroup.com/articles/wizards/)
-- [PatternFly Wizard Design Guidelines](https://www.patternfly.org/components/wizard/design-guidelines/)
-- [Wizard UI Pattern: When to Use It — Eleken](https://www.eleken.co/blog-posts/wizard-ui-pattern-explained)
-- [Wizard Design Pattern — UX Planet (Nick Babich)](https://uxplanet.org/wizard-design-pattern-8c86e14f2a38)
-- [Save-and-resume multi-step wizard patterns — AppMaster](https://appmaster.io/blog/save-and-resume-multi-step-wizard)
+- [SENAITE JSON API — CRUD and Transitions (ReadTheDocs)](https://senaitejsonapi.readthedocs.io/en/latest/crud.html) — confirms `transition` key in POST /update body
+- [SENAITE Analysis States — Bika LIMS Manual](https://www.bikalims.org/manual/workflow) — workflow overview
+- [Verify or Retract Analysis Results — Bika LIMS](https://www.bikalims.org/manual/workflow/images-ar-verification/verify-or-retract-analysis-results-in-bika-and-senaite/view)
+- Existing codebase: `integration-service/app/adapters/senaite.py` lines 901–997 — authoritative reference for the two-step submit pattern
+- Existing codebase: `integration-service/app/api/desktop.py` — `AnalysisResponse` schema, `submit_sample_results` endpoint
 
-### Stripe Wizard Reference
+### Inline Editing UX
 
-- [OnboardingView component — Stripe Apps SDK](https://docs.stripe.com/stripe-apps/components/onboardingview?app-sdk-version=9)
-- [Stripe Apps Patterns](https://docs.stripe.com/stripe-apps/patterns)
+- Existing codebase: `src/components/dashboard/EditableField.tsx` — established pattern for this app
 
-### Scale Integration
+### Bulk Actions and Data Tables
 
-- [MT-SICS Reference Manual (Excellence Balances) — Mettler Toledo](https://www.mt.com/dam/product_organizations/laboratory_weighing/WEIGHING_SOLUTIONS/PRODUCTS/MT-SICS/MANUALS/en/Excellence-SICS-BA-en-11780711D.pdf)
-- [Mettler Toledo Client Configuration — N3uron](https://docs.n3uron.com/docs/mettler-toledo-configuration)
-- [mt-sics Node.js library — Atlantis-Software (GitHub)](https://github.com/Atlantis-Software/mt-sics)
-
-### SENAITE
-
-- [SENAITE JSON API — ReadTheDocs](https://senaitejsonapi.readthedocs.io/en/latest/api.html)
-
-### React + shadcn Stepper
-
-- [Stepperize — shadcn template](https://www.shadcn.io/template/damianricobelli-stepperize)
-- [React Hook Form Multi-Step — Zustand + Zod + shadcn](https://www.buildwithmatija.com/blog/master-multi-step-forms-build-a-dynamic-react-form-in-6-simple-steps)
-
-### Multi-Step Form Patterns
-
-- [8 Best Multi-Step Form Examples 2025 — Webstacks](https://www.webstacks.com/blog/multi-step-form)
-- [Baymard: Back Button UX Expectations](https://baymard.com/blog/back-button-expectations)
+- [Bulk Action UX — Eleken](https://www.eleken.co/blog-posts/bulk-actions-ux) — floating toolbar pattern, 8 design guidelines
+- [PatternFly Bulk Selection Pattern](https://www.patternfly.org/patterns/bulk-selection/) — indeterminate checkbox, contextual toolbar
+- [Data Table Design UX Patterns — Pencil & Paper](https://www.pencilandpaper.io/articles/ux-pattern-analysis-enterprise-data-tables)
+- [Best Practices for Actions in Data Tables — UX World](https://uxdworld.com/best-practices-for-providing-actions-in-data-tables/)
