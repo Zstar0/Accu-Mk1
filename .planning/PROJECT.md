@@ -54,22 +54,24 @@ Streamlined morning workflow: import CSV → review batch → calculate purity �
 - **Logic principle**: Backend owns all scientific calculations — UI never parses files or calculates metrics
 - **Audit principle**: All imports and pushes must be idempotent, traceable, repeatable
 
-## Current State: v0.11.0 SHIPPED 2026-02-20
+## Current Milestone: v0.12.0 — Analysis Results & Workflow Actions
+
+**Goal:** Enable lab staff to manage SENAITE analysis results directly from the Sample Details page — inline editing of result values, and full workflow transitions (submit, verify, retract, reject) with both per-row actions and bulk operations via a modern UI.
+
+**Target features:**
+- Inline result value editing (click-to-edit cells for unassigned analyses)
+- Submit results to SENAITE (set value + trigger submit transition)
+- Verify submitted results (second-reviewer verification)
+- Retract results (pull back submitted/verified results for re-entry)
+- Reject results (permanently reject an analysis)
+- Per-row action menus (state-aware — only show valid transitions)
+- Checkbox bulk selection with floating toolbar for batch operations
+- Sample-level state refresh (progress bar, status badge update after transitions)
+- Backend endpoints proxying all transitions to SENAITE REST API
+
+## Previous State: v0.11.0 SHIPPED 2026-02-20
 
 The New Analysis Wizard is fully delivered. Lab techs can now run a complete sample prep workflow — SENAITE lookup → weighing steps → stock prep → dilution → HPLC results entry — all with scale integration and a full audit-trail session record in SQLite.
-
-**Shipped in v0.11.0:**
-- SENAITE sample lookup with auto-population (peptide, declared weight, analytes)
-- Stripe-style 5-step wizard UI with sequential locking and animated transitions
-- Mettler Toledo XSR105DU scale integration via MT-SICS TCP (SSE live streaming + stability detection)
-- Stock preparation workflow (4 weighing sub-steps + inline calculated outputs)
-- Dilution calculation (3 weighing sub-steps + computed target volumes)
-- Decimal arithmetic throughout (no float precision errors)
-- Session records persisted to SQLite with full measurement audit trail
-- Results entry (peak area → determined conc, dilution factor, peptide mass, purity %)
-- Analysis History tabs (HPLC Import + Sample Prep Wizard sessions)
-
-**Next Milestone:** _Not yet planned — run `/gsd:new-milestone` to start_
 
 ## Previous Milestone: v0.11.0 — New Analysis Wizard (COMPLETE)
 
@@ -119,4 +121,4 @@ The New Analysis Wizard is fully delivered. Lab techs can now run a complete sam
 | Backend port 8012 | Avoid conflicts with Docker services on 8008-8009 | v0.6.0 |
 
 ---
-*Last updated: 2026-02-19 after v0.11.0 milestone started*
+*Last updated: 2026-02-24 after v0.12.0 milestone started*
