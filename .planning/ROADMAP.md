@@ -58,12 +58,11 @@ Plans:
 4. Retract and reject show a confirmation dialog before executing; dismissing the dialog leaves the row unchanged
 5. While a transition is in-flight, the row shows a loading spinner and all action controls on that row are disabled — preventing double-submit
 
-**Plans:** TBD
+**Plans:** 2 plans in 2 waves
 
 Plans:
-- [ ] 07-01: ALLOWED_TRANSITIONS state machine constant + per-row action DropdownMenu (state-filtered)
-- [ ] 07-02: Submit, verify, retract, reject transition execution with per-row isPending state + AlertDialog for destructive actions
-- [ ] 07-03: REFR — fetchSample refresh after any transition; sample-level badge and progress bar update
+- [ ] 07-01-PLAN.md — API function + transition hook + ALLOWED_TRANSITIONS constants + Actions column DropdownMenu + AlertDialog for destructive actions
+- [ ] 07-02-PLAN.md — Silent sample refresh after transitions: refreshSample wiring in SampleDetails for badge/progress/counter updates
 
 ---
 
@@ -95,5 +94,5 @@ Plans:
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
 | 06. Data Foundation + Inline Editing | v0.12.0 | 4/4 | ✓ Complete | 2026-02-25 |
-| 07. Per-Row Workflow Transitions | v0.12.0 | 0/3 | Not started | - |
+| 07. Per-Row Workflow Transitions | v0.12.0 | 0/2 | Not started | - |
 | 08. Bulk Selection & Floating Toolbar | v0.12.0 | 0/3 | Not started | - |
