@@ -10,24 +10,24 @@ See: .planning/PROJECT.md (updated 2026-02-24)
 ## Current Position
 
 Phase: 06 of 08 (Data Foundation + Inline Editing)
-Plan: 0 of 4 in current phase
-Status: Ready to plan
-Last activity: 2026-02-24 — Roadmap created for v0.12.0
+Plan: 1 of 4 in current phase
+Status: In progress
+Last activity: 2026-02-25 — Completed 06-01-PLAN.md
 
-Progress: [░░░░░░░░░░] 0%
+Progress: [█░░░░░░░░░] 10%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 0 (this milestone)
-- Average duration: —
-- Total execution time: —
+- Total plans completed: 1 (this milestone)
+- Average duration: 1 min
+- Total execution time: 1 min
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| 06 | 0/4 | — | — |
+| 06 | 1/4 | 1 min | 1 min |
 | 07 | 0/3 | — | — |
 | 08 | 0/3 | — | — |
 
@@ -43,6 +43,9 @@ Progress: [░░░░░░░░░░] 0%
 - Component extraction (AnalysisTable) is mandatory before adding any new state — SampleDetails.tsx is 1400+ lines
 - Bulk operations must be sequential for...await (never Promise.all) to avoid SENAITE workflow race conditions
 - REFR-01/REFR-02 assigned to Phase 07 — sample refresh is triggered by per-row transitions, not just bulk
+- uid and keyword placed before title field as primary identifiers in SenaiteAnalysis model
+- Both uid/keyword nullable for backward compatibility with older cached responses
+- uid mapping uses dual fallback (uid/UID) and keyword mapping uses (Keyword/getKeyword) for SENAITE API casing
 
 ### Key Source Files
 
@@ -73,6 +76,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-02-24
-Stopped at: Roadmap created — ready to plan Phase 06
+Last session: 2026-02-25
+Stopped at: Completed 06-01-PLAN.md
 Resume file: None
