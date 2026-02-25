@@ -10,24 +10,24 @@ See: .planning/PROJECT.md (updated 2026-02-24)
 ## Current Position
 
 Phase: 06 of 08 (Data Foundation + Inline Editing)
-Plan: 2 of 4 in current phase
+Plan: 3 of 4 in current phase
 Status: In progress
-Last activity: 2026-02-25 — Completed 06-02-PLAN.md
+Last activity: 2026-02-25 — Completed 06-03-PLAN.md
 
-Progress: [██░░░░░░░░] 20%
+Progress: [███░░░░░░░] 30%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 2 (this milestone)
-- Average duration: 2 min
-- Total execution time: 3 min
+- Total plans completed: 3 (this milestone)
+- Average duration: 3 min
+- Total execution time: 7 min
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| 06 | 2/4 | 3 min | 2 min |
+| 06 | 3/4 | 7 min | 2 min |
 | 07 | 0/3 | — | — |
 | 08 | 0/3 | — | — |
 
@@ -48,11 +48,14 @@ Progress: [██░░░░░░░░] 20%
 - uid mapping uses dual fallback (uid/UID) and keyword mapping uses (Keyword/getKeyword) for SENAITE API casing
 - Result-set and transition are separate atomic endpoints — frontend controls the two-step workflow
 - EXPECTED_POST_STATES mapping validates post-transition review_state to catch SENAITE silent rejections (DATA-04)
+- StatusBadge and status constants exported from AnalysisTable.tsx for reuse (not a separate shared file)
+- verifiedCount/pendingCount independently computed in SampleDetails for header counters
 
 ### Key Source Files
 
 - `backend/main.py` — FastAPI app, all endpoints, SENAITE integration
-- `src/components/senaite/SampleDetails.tsx` — Sample Details page (analyses table lives here)
+- `src/components/senaite/SampleDetails.tsx` — Sample Details page (1055 lines, imports AnalysisTable)
+- `src/components/senaite/AnalysisTable.tsx` — Standalone analysis table with filter tabs, progress bar, row rendering
 - `src/lib/api.ts` — All API functions including SENAITE endpoints
 - `src/components/ui/data-table.tsx` — TanStack Table pattern with 'use no memo' directive (required for any new useReactTable call)
 - `integration-service/app/adapters/senaite.py` — SENAITE adapter (reference for API patterns)
@@ -79,5 +82,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-25
-Stopped at: Completed 06-02-PLAN.md
+Stopped at: Completed 06-03-PLAN.md
 Resume file: None
