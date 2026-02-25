@@ -2,6 +2,8 @@ import { useState, useEffect, useRef } from 'react'
 import { Activity, MoreHorizontal, Pencil } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { Spinner } from '@/components/ui/spinner'
+import { Checkbox } from '@/components/ui/checkbox'
+import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -21,6 +23,7 @@ import {
 import type { SenaiteAnalysis } from '@/lib/api'
 import { useAnalysisEditing, type UseAnalysisEditingReturn } from '@/hooks/use-analysis-editing'
 import { useAnalysisTransition, type UseAnalysisTransitionReturn } from '@/hooks/use-analysis-transition'
+import { useBulkAnalysisTransition } from '@/hooks/use-bulk-analysis-transition'
 
 // --- Status styling constants ---
 
@@ -290,11 +293,17 @@ function AnalysisRow({
   analyteNameMap,
   editing,
   transition,
+  selectedUids,
+  onToggleSelection,
+  isBulkProcessing,
 }: {
   analysis: SenaiteAnalysis
   analyteNameMap: Map<number, string>
   editing: UseAnalysisEditingReturn
   transition: UseAnalysisTransitionReturn
+  selectedUids: Set<string>
+  onToggleSelection: (uid: string) => void
+  isBulkProcessing: boolean
 }) {
   const rowTint = ROW_STATUS_STYLE[analysis.review_state ?? ''] ?? ''
   const { display, original } = formatAnalysisTitle(analysis.title, analyteNameMap)
@@ -307,6 +316,16 @@ function AnalysisRow({
 
   return (
     <tr className={`border-b border-border/50 hover:bg-muted/30 transition-colors ${rowTint}`}>
+      <td className="py-2.5 px-3">
+        {analysis.uid && (
+          <Checkbox
+            checked={selectedUids.has(analysis.uid)}
+            onCheckedChange={() => { if (analysis.uid) onToggleSelection(analysis.uid) }}
+            disabled={isBulkProcessing}
+            aria-label={`Select ${analysis.title}`}
+          />
+        )}
+      </td>
       <td className="py-2.5 px-3 text-sm text-foreground font-medium" title={wasRenamed ? original : undefined}>
         {display}
         {wasRenamed && (
@@ -386,8 +405,10 @@ interface AnalysisTableProps {
 
 export function AnalysisTable({ analyses, analyteNameMap, onResultSaved, onTransitionComplete }: AnalysisTableProps) {
   const [analysisFilter, setAnalysisFilter] = useState<'all' | 'verified' | 'pending'>('all')
+  const [bulkPendingConfirm, setBulkPendingConfirm] = useState<{ transition: string; count: number } | null>(null)
   const editing = useAnalysisEditing({ analyses, onResultSaved })
   const transition = useAnalysisTransition({ onTransitionComplete })
+  const bulk = useBulkAnalysisTransition({ onTransitionComplete })
 
   const verifiedCount = analyses.filter(
     a => a.review_state === 'verified' || a.review_state === 'published'
@@ -403,6 +424,30 @@ export function AnalysisTable({ analyses, analyteNameMap, onResultSaved, onTrans
       return a.review_state !== 'verified' && a.review_state !== 'published'
     return true
   })
+
+  // Header checkbox state — based on FILTERED analyses only
+  const selectableUids = filteredAnalyses
+    .map(a => a.uid)
+    .filter((uid): uid is string => !!uid)
+  const allSelected =
+    selectableUids.length > 0 && selectableUids.every(uid => bulk.selectedUids.has(uid))
+  const someSelected = selectableUids.some(uid => bulk.selectedUids.has(uid))
+  const headerChecked: boolean | 'indeterminate' =
+    allSelected ? true : someSelected ? 'indeterminate' : false
+
+  // Bulk available actions — intersection of ALLOWED_TRANSITIONS for all selected analyses
+  const selectedAnalyses = analyses.filter(a => a.uid && bulk.selectedUids.has(a.uid))
+  const bulkAvailableActions = (['submit', 'verify', 'retract', 'reject'] as const).filter(t =>
+    selectedAnalyses.length > 0 &&
+    selectedAnalyses.every(a =>
+      a.review_state !== null &&
+      a.review_state !== undefined &&
+      (ALLOWED_TRANSITIONS[a.review_state] ?? []).includes(t)
+    )
+  )
+
+  // Disable toolbar when any per-row transition is in-flight
+  const toolbarDisabled = transition.pendingUids.size > 0
 
   if (analyses.length === 0) return null
 
@@ -463,6 +508,57 @@ export function AnalysisTable({ analyses, analyteNameMap, onResultSaved, onTrans
         </div>
       </div>
 
+      {/* Bulk action toolbar — visible when any rows are selected */}
+      {bulk.selectedUids.size > 0 && (
+        <div className="flex items-center justify-between px-3 py-2 mb-2 rounded-lg bg-primary/5 border border-primary/20">
+          <div className="flex items-center gap-3">
+            <span className="text-sm font-medium text-foreground">
+              {bulk.selectedUids.size} selected
+            </span>
+            <button
+              onClick={bulk.clearSelection}
+              className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2 cursor-pointer"
+            >
+              Clear
+            </button>
+          </div>
+          <div className="flex items-center gap-2">
+            {bulk.isBulkProcessing && bulk.bulkProgress ? (
+              <div className="flex items-center gap-2">
+                <Spinner className="size-3.5" />
+                <span className="text-sm text-muted-foreground">
+                  {TRANSITION_LABELS[bulk.bulkProgress.transition] ?? bulk.bulkProgress.transition}ing{' '}
+                  {bulk.bulkProgress.current}/{bulk.bulkProgress.total}...
+                </span>
+              </div>
+            ) : (
+              bulkAvailableActions.map(t => (
+                <Button
+                  key={t}
+                  size="sm"
+                  variant={DESTRUCTIVE_TRANSITIONS.has(t) ? 'destructive' : 'default'}
+                  disabled={toolbarDisabled}
+                  onClick={() => {
+                    if (DESTRUCTIVE_TRANSITIONS.has(t)) {
+                      setBulkPendingConfirm({ transition: t, count: bulk.selectedUids.size })
+                    } else {
+                      void bulk.executeBulk([...bulk.selectedUids], t)
+                    }
+                  }}
+                >
+                  {TRANSITION_LABELS[t] ?? t} selected
+                </Button>
+              ))
+            )}
+            {bulkAvailableActions.length === 0 && !bulk.isBulkProcessing && (
+              <span className="text-xs text-muted-foreground italic">
+                No common actions for selection
+              </span>
+            )}
+          </div>
+        </div>
+      )}
+
       <div className="overflow-x-auto rounded-lg border border-border">
         <table className="w-full">
           <caption className="sr-only">
@@ -470,6 +566,20 @@ export function AnalysisTable({ analyses, analyteNameMap, onResultSaved, onTrans
           </caption>
           <thead>
             <tr className="border-b border-border bg-muted/40">
+              <th className="py-2 px-3 w-10">
+                <Checkbox
+                  checked={headerChecked}
+                  onCheckedChange={(checked) => {
+                    if (checked === true) {
+                      bulk.selectAll(selectableUids)
+                    } else {
+                      bulk.clearSelection()
+                    }
+                  }}
+                  disabled={bulk.isBulkProcessing || toolbarDisabled}
+                  aria-label="Select all analyses"
+                />
+              </th>
               <th className="py-2 px-3 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
                 Analysis
               </th>
@@ -508,12 +618,15 @@ export function AnalysisTable({ analyses, analyteNameMap, onResultSaved, onTrans
                   analyteNameMap={analyteNameMap}
                   editing={editing}
                   transition={transition}
+                  selectedUids={bulk.selectedUids}
+                  onToggleSelection={bulk.toggleSelection}
+                  isBulkProcessing={bulk.isBulkProcessing}
                 />
               ))
             ) : (
               <tr>
                 <td
-                  colSpan={9}
+                  colSpan={10}
                   className="py-8 text-center text-sm text-muted-foreground"
                 >
                   No {analysisFilter === 'all' ? '' : analysisFilter} analyses found
@@ -523,6 +636,7 @@ export function AnalysisTable({ analyses, analyteNameMap, onResultSaved, onTrans
           </tbody>
         </table>
 
+        {/* Per-row destructive transition confirmation */}
         <AlertDialog
           open={transition.pendingConfirm !== null}
           onOpenChange={(open) => {
@@ -556,6 +670,43 @@ export function AnalysisTable({ analyses, analyteNameMap, onResultSaved, onTrans
           </AlertDialogContent>
         </AlertDialog>
       </div>
+
+      {/* Bulk destructive transition confirmation */}
+      <AlertDialog
+        open={bulkPendingConfirm !== null}
+        onOpenChange={(open) => { if (!open) setBulkPendingConfirm(null) }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {bulkPendingConfirm?.transition === 'retract'
+                ? `Retract ${bulkPendingConfirm.count} analyses?`
+                : `Reject ${bulkPendingConfirm?.count} analyses?`}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {bulkPendingConfirm?.count} analyses will be{' '}
+              {bulkPendingConfirm?.transition === 'retract'
+                ? 'retracted back to unassigned state'
+                : 'permanently rejected'}
+              . This action cannot be undone from this application.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => {
+                if (bulkPendingConfirm) {
+                  void bulk.executeBulk([...bulk.selectedUids], bulkPendingConfirm.transition)
+                }
+                setBulkPendingConfirm(null)
+              }}
+            >
+              Confirm {bulkPendingConfirm?.transition}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Card>
   )
 }
