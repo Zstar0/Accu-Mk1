@@ -2128,6 +2128,25 @@ export async function setAnalysisResult(
   return response.json()
 }
 
+export async function transitionAnalysis(
+  uid: string,
+  transition: 'submit' | 'verify' | 'retract' | 'reject'
+): Promise<AnalysisResultResponse> {
+  const response = await fetch(
+    `${API_BASE_URL()}/wizard/senaite/analyses/${encodeURIComponent(uid)}/transition`,
+    {
+      method: 'POST',
+      headers: getBearerHeaders('application/json'),
+      body: JSON.stringify({ transition }),
+    }
+  )
+  if (!response.ok) {
+    const err = await response.json().catch(() => null)
+    throw new Error(err?.detail || `Transition failed: ${response.status}`)
+  }
+  return response.json()
+}
+
 export interface SenaiteSample {
   uid: string
   id: string
