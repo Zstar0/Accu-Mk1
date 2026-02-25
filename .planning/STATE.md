@@ -5,14 +5,14 @@
 See: .planning/PROJECT.md (updated 2026-02-24)
 
 **Core value:** Streamlined morning workflow: import CSV -> review batch -> calculate purity -> push to SENAITE. One operator, one workstation, no friction.
-**Current focus:** v0.12.0 -- Analysis Results & Workflow Actions -- Phase 07
+**Current focus:** v0.12.0 — Analysis Results & Workflow Actions — Phase 07
 
 ## Current Position
 
-Phase: 06 of 08 (Data Foundation + Inline Editing)
-Plan: 4 of 4 in current phase
-Status: Phase complete
-Last activity: 2026-02-25 -- Completed 06-04-PLAN.md
+Phase: 07 of 08 (Per-Row Workflow Transitions)
+Plan: 0 of 3 in current phase
+Status: Ready to plan
+Last activity: 2026-02-25 — Phase 06 verified and complete
 
 Progress: [████░░░░░░] 40%
 
@@ -87,5 +87,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-25
-Stopped at: Completed 06-04-PLAN.md (Phase 06 complete)
+Stopped at: Phase 06 verified and complete — ready to plan Phase 07
 Resume file: None

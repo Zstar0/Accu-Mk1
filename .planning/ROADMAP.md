@@ -10,7 +10,7 @@
 
 **Milestone Goal:** Enable lab staff to manage SENAITE analysis results directly from the Sample Details page — inline editing of result values, and full workflow transitions (submit, verify, retract, reject) with both per-row actions and bulk operations via a modern UI.
 
-- [ ] **Phase 06: Data Foundation + Inline Editing** — uid/keyword model, backend endpoints, AnalysisTable extraction, and click-to-edit result cells
+- [x] **Phase 06: Data Foundation + Inline Editing** ✅ — uid/keyword model, backend endpoints, AnalysisTable extraction, and click-to-edit result cells
 - [ ] **Phase 07: Per-Row Workflow Transitions** — state-aware action menus for all four transitions with sample-level refresh after each action
 - [ ] **Phase 08: Bulk Selection & Floating Toolbar** — checkbox selection, floating batch action toolbar, and sequential bulk processing
 
@@ -36,10 +36,10 @@
 **Plans:** 4 plans in 3 waves
 
 Plans:
-- [ ] 06-01-PLAN.md — Data model: uid/keyword on SenaiteAnalysis (backend Pydantic + frontend TypeScript + lookup route mapping)
-- [ ] 06-02-PLAN.md — Backend endpoints: POST /wizard/senaite/analyses/{uid}/result and /transition with EXPECTED_POST_STATES validation
-- [ ] 06-03-PLAN.md — Component extraction: AnalysisTable standalone component from SampleDetails.tsx
-- [ ] 06-04-PLAN.md — Inline editing: click-to-edit cells, Enter/Escape/Tab, optimistic update, rollback, toast feedback
+- [x] 06-01-PLAN.md — Data model: uid/keyword on SenaiteAnalysis (backend Pydantic + frontend TypeScript + lookup route mapping)
+- [x] 06-02-PLAN.md — Backend endpoints: POST /wizard/senaite/analyses/{uid}/result and /transition with EXPECTED_POST_STATES validation
+- [x] 06-03-PLAN.md — Component extraction: AnalysisTable standalone component from SampleDetails.tsx
+- [x] 06-04-PLAN.md — Inline editing: click-to-edit cells, Enter/Escape/Tab, optimistic update, rollback, toast feedback
 
 ---
 
@@ -94,6 +94,6 @@ Plans:
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
-| 06. Data Foundation + Inline Editing | v0.12.0 | 0/4 | Not started | - |
+| 06. Data Foundation + Inline Editing | v0.12.0 | 4/4 | ✓ Complete | 2026-02-25 |
 | 07. Per-Row Workflow Transitions | v0.12.0 | 0/3 | Not started | - |
 | 08. Bulk Selection & Floating Toolbar | v0.12.0 | 0/3 | Not started | - |

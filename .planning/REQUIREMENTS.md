@@ -9,22 +9,22 @@ Requirements for Analysis Results & Workflow Actions milestone. Each maps to roa
 
 ### Data Foundation
 
-- [ ] **DATA-01**: Analysis UID and keyword exposed in SenaiteAnalysis type (backend Pydantic model + frontend TypeScript interface)
-- [ ] **DATA-02**: Backend endpoint to set an analysis result value via SENAITE REST API (`POST /update/{uid}` with `{"Result": value}`)
-- [ ] **DATA-03**: Backend endpoint to trigger a workflow transition on an analysis via SENAITE REST API (`POST /update/{uid}` with `{"transition": name}`)
-- [ ] **DATA-04**: Backend verifies post-transition `review_state` in SENAITE response (not just HTTP status) to detect silent rejections
+- [x] **DATA-01**: Analysis UID and keyword exposed in SenaiteAnalysis type (backend Pydantic model + frontend TypeScript interface)
+- [x] **DATA-02**: Backend endpoint to set an analysis result value via SENAITE REST API (`POST /update/{uid}` with `{"Result": value}`)
+- [x] **DATA-03**: Backend endpoint to trigger a workflow transition on an analysis via SENAITE REST API (`POST /update/{uid}` with `{"transition": name}`)
+- [x] **DATA-04**: Backend verifies post-transition `review_state` in SENAITE response (not just HTTP status) to detect silent rejections
 
 ### Component Extraction
 
-- [ ] **COMP-01**: AnalysisTable extracted from SampleDetails.tsx as a standalone component with its own file
-- [ ] **COMP-02**: AnalysisTable receives analyses data and callbacks as props (clean interface, no direct SENAITE fetching inside)
+- [x] **COMP-01**: AnalysisTable extracted from SampleDetails.tsx as a standalone component with its own file
+- [x] **COMP-02**: AnalysisTable receives analyses data and callbacks as props (clean interface, no direct SENAITE fetching inside)
 
 ### Inline Editing
 
-- [ ] **EDIT-01**: User can click a result cell on an unassigned analysis to enter/edit the value inline
-- [ ] **EDIT-02**: Enter saves the value, Escape cancels edit, Tab moves to next editable cell
-- [ ] **EDIT-03**: Saving shows optimistic update immediately in the cell with rollback on SENAITE error
-- [ ] **EDIT-04**: Toast notification confirms successful save or shows error message on failure
+- [x] **EDIT-01**: User can click a result cell on an unassigned analysis to enter/edit the value inline
+- [x] **EDIT-02**: Enter saves the value, Escape cancels edit, Tab moves to next editable cell
+- [x] **EDIT-03**: Saving shows optimistic update immediately in the cell with rollback on SENAITE error
+- [x] **EDIT-04**: Toast notification confirms successful save or shows error message on failure
 
 ### Workflow Transitions
 
@@ -77,16 +77,16 @@ Deferred to later milestones.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| DATA-01 | Phase 06 | Pending |
-| DATA-02 | Phase 06 | Pending |
-| DATA-03 | Phase 06 | Pending |
-| DATA-04 | Phase 06 | Pending |
-| COMP-01 | Phase 06 | Pending |
-| COMP-02 | Phase 06 | Pending |
-| EDIT-01 | Phase 06 | Pending |
-| EDIT-02 | Phase 06 | Pending |
-| EDIT-03 | Phase 06 | Pending |
-| EDIT-04 | Phase 06 | Pending |
+| DATA-01 | Phase 06 | Complete |
+| DATA-02 | Phase 06 | Complete |
+| DATA-03 | Phase 06 | Complete |
+| DATA-04 | Phase 06 | Complete |
+| COMP-01 | Phase 06 | Complete |
+| COMP-02 | Phase 06 | Complete |
+| EDIT-01 | Phase 06 | Complete |
+| EDIT-02 | Phase 06 | Complete |
+| EDIT-03 | Phase 06 | Complete |
+| EDIT-04 | Phase 06 | Complete |
 | WKFL-01 | Phase 07 | Pending |
 | WKFL-02 | Phase 07 | Pending |
 | WKFL-03 | Phase 07 | Pending |
@@ -108,4 +108,4 @@ Deferred to later milestones.
 
 ---
 *Requirements defined: 2026-02-24*
-*Last updated: 2026-02-24 — traceability filled after roadmap creation*
+*Last updated: 2026-02-25 — Phase 06 requirements marked Complete*
