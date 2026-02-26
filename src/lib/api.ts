@@ -1328,6 +1328,36 @@ export async function updateAdditionalCOAConfig(
   return response.json()
 }
 
+// --- COA Actions ---
+
+export interface SampleCOAActionResponse {
+  success: boolean
+  message: string
+  verification_code: string | null
+}
+
+export async function generateSenaiteCOA(
+  sampleId: string
+): Promise<SampleCOAActionResponse> {
+  const response = await fetch(
+    `${API_BASE_URL()}/wizard/senaite/samples/${encodeURIComponent(sampleId)}/generate-coa`,
+    { method: 'POST', headers: getBearerHeaders() }
+  )
+  if (!response.ok) throw new Error(`COA generation failed: ${response.status}`)
+  return response.json()
+}
+
+export async function publishSenaiteCOA(
+  sampleId: string
+): Promise<SampleCOAActionResponse> {
+  const response = await fetch(
+    `${API_BASE_URL()}/wizard/senaite/samples/${encodeURIComponent(sampleId)}/publish-coa`,
+    { method: 'POST', headers: getBearerHeaders() }
+  )
+  if (!response.ok) throw new Error(`COA publish failed: ${response.status}`)
+  return response.json()
+}
+
 // --- HPLC Analysis API ---
 
 export interface HPLCPeak {
@@ -2013,11 +2043,17 @@ export interface SenaiteRemark {
   created: string | null
 }
 
+export interface SenaiteResultOption {
+  value: string
+  label: string
+}
+
 export interface SenaiteAnalysis {
   uid: string | null
   keyword: string | null
   title: string
   result: string | null
+  result_options: SenaiteResultOption[]  // always present from backend; [] if no predefined options
   unit: string | null
   method: string | null
   instrument: string | null
@@ -2027,6 +2063,14 @@ export interface SenaiteAnalysis {
   sort_key: number | null
   captured: string | null
   retested: boolean
+}
+
+export interface SenaiteAttachment {
+  uid: string
+  filename: string
+  content_type: string | null
+  attachment_type: string | null
+  download_url: string | null
 }
 
 export interface SenaiteLookupResult {
@@ -2047,6 +2091,7 @@ export interface SenaiteLookupResult {
   coa: SenaiteCOAInfo
   remarks: SenaiteRemark[]
   analyses: SenaiteAnalysis[]
+  attachments: SenaiteAttachment[]
   senaite_url: string | null
 }
 
@@ -2075,6 +2120,68 @@ export async function lookupSenaiteSample(
     throw new Error(err?.detail || `SENAITE lookup failed: ${response.status}`)
   }
   return response.json()
+}
+
+const _attachmentCache = new Map<string, string>()
+const _attachmentTextCache = new Map<string, string>()
+
+export async function fetchSenaiteAttachmentText(attachmentUid: string): Promise<string> {
+  const cached = _attachmentTextCache.get(attachmentUid)
+  if (cached) return cached
+
+  const response = await fetch(
+    `${API_BASE_URL()}/wizard/senaite/attachment/${encodeURIComponent(attachmentUid)}`,
+    { headers: getBearerHeaders() }
+  )
+  if (!response.ok) throw new Error(`Failed to fetch attachment: ${response.status}`)
+  const text = await response.text()
+  _attachmentTextCache.set(attachmentUid, text)
+  return text
+}
+
+export async function fetchSenaiteAttachmentUrl(
+  attachmentUid: string
+): Promise<string> {
+  const cached = _attachmentCache.get(attachmentUid)
+  if (cached) return cached
+
+  const response = await fetch(
+    `${API_BASE_URL()}/wizard/senaite/attachment/${encodeURIComponent(attachmentUid)}`,
+    { headers: getBearerHeaders() }
+  )
+  if (!response.ok) {
+    throw new Error(`Failed to fetch attachment: ${response.status}`)
+  }
+  const blob = await response.blob()
+  const url = URL.createObjectURL(blob)
+  _attachmentCache.set(attachmentUid, url)
+  return url
+}
+
+export type SenaiteAttachmentType = 'HPLC Graph' | 'Sample Image'
+
+export interface SenaiteUploadAttachmentResponse {
+  success: boolean
+  message: string
+}
+
+export async function uploadSenaiteAttachment(
+  sampleUid: string,
+  file: File,
+  attachmentType: SenaiteAttachmentType
+): Promise<SenaiteUploadAttachmentResponse> {
+  const form = new FormData()
+  form.append('file', file, file.name)
+  form.append('attachment_type', attachmentType)
+
+  const response = await fetch(
+    `${API_BASE_URL()}/wizard/senaite/samples/${encodeURIComponent(sampleUid)}/attachments`,
+    { method: 'POST', headers: getBearerHeaders(), body: form }
+  )
+  if (!response.ok) {
+    throw new Error(`Upload failed: ${response.status}`)
+  }
+  return response.json() as Promise<SenaiteUploadAttachmentResponse>
 }
 
 export interface SenaiteFieldUpdateResponse {
@@ -2130,7 +2237,7 @@ export async function setAnalysisResult(
 
 export async function transitionAnalysis(
   uid: string,
-  transition: 'submit' | 'verify' | 'retract' | 'reject'
+  transition: 'submit' | 'verify' | 'retract' | 'reject' | 'retest'
 ): Promise<AnalysisResultResponse> {
   const response = await fetch(
     `${API_BASE_URL()}/wizard/senaite/analyses/${encodeURIComponent(uid)}/transition`,

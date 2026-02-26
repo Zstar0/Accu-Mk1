@@ -5,6 +5,7 @@ Provides REST API for scientific calculations, database access, and audit loggin
 
 import json
 import os
+import re
 import secrets
 import subprocess
 import sys
@@ -13,7 +14,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional, Union
 
-from fastapi import FastAPI, Depends, HTTPException, Header, Request, status
+from fastapi import FastAPI, Depends, Form, HTTPException, Header, Request, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -4242,6 +4243,7 @@ import httpx
 
 INTEGRATION_SERVICE_URL = os.environ.get("INTEGRATION_SERVICE_URL", "http://host.docker.internal:8000")
 INTEGRATION_SERVICE_API_KEY = os.environ.get("ACCU_MK1_API_KEY", "")
+COA_BUILDER_URL = os.environ.get("COA_BUILDER_URL", "")
 
 
 async def _proxy_explorer_get(path: str) -> list[dict]:
@@ -4439,6 +4441,156 @@ async def get_chromatogram_signed_url(
         raise HTTPException(status_code=e.response.status_code, detail=e.response.text)
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Integration Service unavailable: {e}")
+
+
+# ── COA Actions ────────────────────────────────────────────────────
+
+
+class SampleCOAActionResponse(BaseModel):
+    success: bool
+    message: str
+    verification_code: str | None = None
+
+
+@app.post("/wizard/senaite/samples/{sample_id}/generate-coa")
+async def generate_sample_coa(
+    sample_id: str,
+    _current_user=Depends(get_current_user),
+):
+    """Trigger Accumark COA generation for a SENAITE sample via COA Builder.
+
+    Mirrors the SENAITE addon flow: call COA Builder, then immediately write
+    the verification code back to the SENAITE sample.
+    """
+    if not COA_BUILDER_URL:
+        return SampleCOAActionResponse(
+            success=False,
+            message="COA Builder not configured (COA_BUILDER_URL env var not set)",
+        )
+    try:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            resp = await client.post(f"{COA_BUILDER_URL}/process/{sample_id}")
+            resp.raise_for_status()
+            data = resp.json()
+    except httpx.TimeoutException:
+        return SampleCOAActionResponse(success=False, message="COA Builder request timed out (PDF generation can take up to 2 minutes)")
+    except httpx.HTTPStatusError as e:
+        try:
+            detail = e.response.json().get("detail", str(e.response.status_code))
+        except Exception:
+            detail = str(e.response.status_code)
+        return SampleCOAActionResponse(success=False, message=f"COA Builder error: {detail}")
+    except Exception as e:
+        return SampleCOAActionResponse(success=False, message=f"COA generation failed: {e}")
+
+    verification_code: str | None = data.get("verification_code")
+    generation_number: int | None = data.get("generation_number")
+    pdf_base64: str | None = data.get("pdf_base64")
+
+    # Attach PDF + verification code to SENAITE via the custom addon endpoint.
+    # This mirrors the full COAGeneratorView flow: saves VerificationCode field
+    # and creates an ARReport child object so the PDF appears in SENAITE's
+    # Reports tab.  Best-effort — generation already succeeded at this point.
+    if SENAITE_URL and pdf_base64:
+        try:
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(30.0, connect=5.0),
+                auth=httpx.BasicAuth(SENAITE_USER, SENAITE_PASSWORD),
+                follow_redirects=True,
+            ) as senaite_client:
+                await senaite_client.post(
+                    f"{SENAITE_URL}/senaite/@@accumark-attach-coa",
+                    json={
+                        "sample_id": sample_id,
+                        "pdf_base64": pdf_base64,
+                        "verification_code": verification_code or "",
+                    },
+                )
+        except Exception:
+            pass  # Non-fatal — COA is generated; SENAITE attach is best-effort
+
+    # Build a meaningful message from the COA Builder response
+    if verification_code and generation_number:
+        message = f"COA generation #{generation_number} complete — code: {verification_code}"
+    elif verification_code:
+        message = f"COA generated — code: {verification_code}"
+    else:
+        message = "COA generated (no verification code returned)"
+
+    return SampleCOAActionResponse(
+        success=True,
+        message=message,
+        verification_code=verification_code,
+    )
+
+
+@app.post("/wizard/senaite/samples/{sample_id}/publish-coa")
+async def publish_sample_coa(
+    sample_id: str,
+    _current_user=Depends(get_current_user),
+):
+    """Publish the latest draft Accumark COA for a SENAITE sample.
+
+    Proxies to Integration Service to mark the draft generation as published,
+    then writes the verification code back to SENAITE.
+    """
+    # 1. Tell integration service to publish the draft
+    try:
+        url = f"{INTEGRATION_SERVICE_URL}/explorer/samples/{sample_id}/publish-coa"
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(url, headers={"X-API-Key": INTEGRATION_SERVICE_API_KEY})
+            resp.raise_for_status()
+            data = resp.json()
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(status_code=e.response.status_code, detail=e.response.text)
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Integration Service unavailable: {e}")
+
+    if not data.get("success"):
+        return SampleCOAActionResponse(
+            success=False, message=data.get("message", "Publish failed")
+        )
+
+    verification_code: str | None = data.get("verification_code")
+
+    # 2. Update SENAITE: write verification code and publish the sample (best-effort)
+    if SENAITE_URL:
+        try:
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(30.0, connect=5.0),
+                auth=httpx.BasicAuth(SENAITE_USER, SENAITE_PASSWORD),
+                follow_redirects=True,
+            ) as client:
+                search_url = (
+                    f"{SENAITE_URL}/senaite/@@API/senaite/v1/search"
+                    f"?portal_type=AnalysisRequest&getId={sample_id}&complete=true"
+                )
+                search_resp = await client.get(search_url)
+                search_resp.raise_for_status()
+                items = search_resp.json().get("items", [])
+                if items:
+                    uid = items[0].get("uid")
+                    if uid:
+                        # Write verification code if available
+                        if verification_code:
+                            await client.post(
+                                f"{SENAITE_URL}/senaite/@@API/senaite/v1/update/{uid}",
+                                json={"VerificationCode": verification_code},
+                            )
+                        # Trigger SENAITE's "publish" workflow transition
+                        # This marks the AnalysisRequest as Published in SENAITE
+                        await client.post(
+                            f"{SENAITE_URL}/senaite/@@API/senaite/v1/update/{uid}",
+                            json={"transition": "publish"},
+                        )
+        except Exception:
+            pass  # Non-fatal — COA is published; SENAITE write is best-effort
+
+    return SampleCOAActionResponse(
+        success=True,
+        message=data.get("message", "COA published"),
+        verification_code=verification_code,
+    )
 
 
 # ── SharePoint Integration ─────────────────────────────────────────
@@ -5007,6 +5159,7 @@ class SenaiteAnalysis(BaseModel):
     keyword: Optional[str] = None
     title: str
     result: Optional[str] = None
+    result_options: list[dict] = []  # [{value: str, label: str}] for selection-type analyses
     unit: Optional[str] = None
     method: Optional[str] = None
     instrument: Optional[str] = None
@@ -5016,6 +5169,18 @@ class SenaiteAnalysis(BaseModel):
     sort_key: Optional[float] = None
     captured: Optional[str] = None
     retested: bool = False
+
+
+class SenaiteAttachment(BaseModel):
+    uid: str
+    filename: str
+    content_type: Optional[str] = None
+    attachment_type: Optional[str] = None  # e.g. "Sample Image", "HPLC Graph"
+    download_url: Optional[str] = None  # proxied through our backend
+
+
+# Cache SENAITE download URLs for attachment proxy (uid -> {download_url, content_type, filename})
+_attachment_download_cache: dict[str, dict[str, str]] = {}
 
 
 class SenaiteLookupResult(BaseModel):
@@ -5036,6 +5201,7 @@ class SenaiteLookupResult(BaseModel):
     coa: SenaiteCOAInfo = SenaiteCOAInfo()
     remarks: list[SenaiteRemark] = []
     analyses: list[SenaiteAnalysis] = []
+    attachments: list[SenaiteAttachment] = []
     senaite_url: Optional[str] = None  # e.g. "/clients/client-8/PB-0057"
 
 
@@ -5246,17 +5412,21 @@ async def lookup_senaite_sample(
                     # then fall back to raw numeric Result
                     raw_result = an_item.get("Result") or an_item.get("getResult") or an_item.get("result")
                     result_str: Optional[str] = None
+                    # Build result_options for selection-type analyses
+                    raw_options = an_item.get("ResultOptions") or an_item.get("getResultOptions") or []
+                    parsed_options: list[dict] = []
+                    if raw_options and isinstance(raw_options, list):
+                        for opt in raw_options:
+                            if isinstance(opt, dict) and opt.get("ResultValue") is not None:
+                                parsed_options.append({
+                                    "value": str(opt["ResultValue"]),
+                                    "label": str(opt.get("ResultText", opt["ResultValue"])),
+                                })
                     if raw_result not in (None, ""):
-                        # For selection-type analyses (e.g. Pos/Neg), map the
-                        # raw value through ResultOptions to get display text
-                        result_options = an_item.get("ResultOptions") or an_item.get("getResultOptions") or []
-                        if result_options and isinstance(result_options, list):
-                            for opt in result_options:
-                                if isinstance(opt, dict) and str(opt.get("ResultValue")) == str(raw_result):
-                                    result_str = str(opt.get("ResultText", raw_result))
-                                    break
-                        if result_str is None:
-                            result_str = str(raw_result)
+                        # For selection-type analyses, store the raw numeric value so
+                        # it can round-trip back to SENAITE correctly on save.
+                        # The frontend maps value → label for display.
+                        result_str = str(raw_result)
 
                     # Sort key: numeric priority for display ordering
                     raw_sort_key = an_item.get("SortKey") or an_item.get("getSortKey")
@@ -5308,6 +5478,7 @@ async def lookup_senaite_sample(
                         keyword=an_item.get("Keyword") or an_item.get("getKeyword") or None,
                         title=an_item.get("title") or an_item.get("Title") or str(an_item.get("id", "")),
                         result=result_str,
+                        result_options=parsed_options,
                         unit=an_item.get("Unit") or an_item.get("getUnit") or None,
                         method=method_title,
                         instrument=instrument_title,
@@ -5360,8 +5531,6 @@ async def lookup_senaite_sample(
                             if not senaite_analyses[idx].instrument:
                                 senaite_analyses[idx].instrument = "Manual"
 
-            # Filter out rejected/retracted analyses — SENAITE's default "Valid" view hides them
-            senaite_analyses = [a for a in senaite_analyses if a.review_state not in ("rejected", "retracted")]
             # Sort by sort_key, then title, then non-retested first to match SENAITE
             senaite_analyses.sort(key=lambda a: (
                 a.sort_key if a.sort_key is not None else float("inf"),
@@ -5371,6 +5540,52 @@ async def lookup_senaite_sample(
             print(f"[INFO] Fetched {len(senaite_analyses)} analyses for sample {sample_id}")
         except Exception as exc:
             print(f"[WARN] Failed to fetch analyses for {sample_id}: {exc}")
+
+        # Fetch sample-level attachments
+        senaite_attachments: list[SenaiteAttachment] = []
+        try:
+            raw_attachments = item.get("Attachment") or []
+            if isinstance(raw_attachments, list) and raw_attachments:
+                async with httpx.AsyncClient(
+                    timeout=SENAITE_TIMEOUT,
+                    auth=httpx.BasicAuth(SENAITE_USER, SENAITE_PASSWORD),
+                ) as att_client:
+                    for att_ref in raw_attachments:
+                        att_api_url = att_ref.get("api_url")
+                        att_uid = att_ref.get("uid")
+                        if not att_api_url or not att_uid:
+                            continue
+                        try:
+                            att_resp = await att_client.get(att_api_url)
+                            att_resp.raise_for_status()
+                            att_data = att_resp.json()
+                            att_item = att_data["items"][0] if "items" in att_data and att_data["items"] else att_data
+                            att_file = att_item.get("AttachmentFile") or {}
+                            filename = att_file.get("filename") or ""
+                            content_type = att_file.get("content_type") or ""
+                            att_type_title = att_item.get("AttachmentType") or att_item.get("getAttachmentType") or None
+                            if isinstance(att_type_title, dict):
+                                att_type_title = att_type_title.get("title") or att_type_title.get("Title") or None
+                            # Cache the SENAITE download URL for the proxy endpoint
+                            senaite_dl_url = att_file.get("download") or ""
+                            if senaite_dl_url:
+                                _attachment_download_cache[att_uid] = {
+                                    "download_url": senaite_dl_url,
+                                    "content_type": content_type or "application/octet-stream",
+                                    "filename": filename or "attachment",
+                                }
+                            senaite_attachments.append(SenaiteAttachment(
+                                uid=att_uid,
+                                filename=filename,
+                                content_type=content_type,
+                                attachment_type=att_type_title,
+                                download_url=f"/wizard/senaite/attachment/{att_uid}",
+                            ))
+                        except Exception as att_exc:
+                            print(f"[WARN] Failed to fetch attachment {att_uid}: {att_exc}")
+                print(f"[INFO] Fetched {len(senaite_attachments)} attachments for sample {sample_id}")
+        except Exception as exc:
+            print(f"[WARN] Failed to fetch attachments for {sample_id}: {exc}")
 
         return SenaiteLookupResult(
             sample_id=sample_id,
@@ -5390,6 +5605,7 @@ async def lookup_senaite_sample(
             coa=coa,
             remarks=senaite_remarks,
             analyses=senaite_analyses,
+            attachments=senaite_attachments,
             senaite_url=_senaite_path(item),
         )
 
@@ -5404,6 +5620,171 @@ async def lookup_senaite_sample(
     except Exception as exc:
         print(f"[WARN] SENAITE lookup error for {id}: {type(exc).__name__} {exc}")
         raise HTTPException(status_code=503, detail="SENAITE is currently unavailable \u2014 use manual entry")
+
+
+@app.get("/wizard/senaite/attachment/{uid}")
+async def get_senaite_attachment(
+    uid: str,
+    _current_user=Depends(get_current_user),
+):
+    """Proxy an attachment file from SENAITE, streaming it with correct content type."""
+    if SENAITE_URL is None:
+        raise HTTPException(status_code=503, detail="SENAITE not configured")
+
+    from starlette.responses import StreamingResponse
+
+    try:
+        cached = _attachment_download_cache.get(uid)
+
+        if cached:
+            # Use cached download URL from the lookup
+            download_url = cached["download_url"]
+            content_type = cached["content_type"]
+            filename = cached["filename"]
+        else:
+            # Fallback: fetch attachment metadata directly via api_url pattern
+            att_url = f"{SENAITE_URL}/senaite/@@API/senaite/v1/Attachment/{uid}"
+            async with httpx.AsyncClient(
+                timeout=SENAITE_TIMEOUT,
+                auth=httpx.BasicAuth(SENAITE_USER, SENAITE_PASSWORD),
+            ) as client:
+                meta_resp = await client.get(att_url)
+                meta_resp.raise_for_status()
+                meta_data = meta_resp.json()
+                # Response could be {items: [...]} or direct object
+                att_item = meta_data
+                if "items" in meta_data and meta_data["items"]:
+                    att_item = meta_data["items"][0]
+                att_file = att_item.get("AttachmentFile") or {}
+                download_url = att_file.get("download")
+                content_type = att_file.get("content_type") or "application/octet-stream"
+                filename = att_file.get("filename") or "attachment"
+
+        if not download_url:
+            raise HTTPException(status_code=404, detail="Attachment has no download URL")
+
+        async with httpx.AsyncClient(
+            timeout=SENAITE_TIMEOUT,
+            auth=httpx.BasicAuth(SENAITE_USER, SENAITE_PASSWORD),
+        ) as client:
+            file_resp = await client.get(download_url)
+            file_resp.raise_for_status()
+
+            return StreamingResponse(
+                iter([file_resp.content]),
+                media_type=content_type,
+                headers={"Content-Disposition": f'inline; filename="{filename}"'},
+            )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        print(f"[WARN] Failed to proxy attachment {uid}: {exc}")
+        raise HTTPException(status_code=503, detail="Failed to retrieve attachment")
+
+
+class SenaiteUploadAttachmentResponse(BaseModel):
+    success: bool
+    message: str
+
+
+@app.post(
+    "/wizard/senaite/samples/{sample_uid}/attachments",
+    response_model=SenaiteUploadAttachmentResponse,
+)
+async def upload_senaite_attachment(
+    sample_uid: str,
+    file: UploadFile,
+    attachment_type: str = Form(...),  # "HPLC Graph" or "Sample Image"
+    _current_user=Depends(get_current_user),
+):
+    """Upload a file attachment to a SENAITE sample.
+
+    Uses the Plone @@attachments_view/add form endpoint — same mechanism as
+    the intake wizard image upload. The attachment_type name is matched against
+    the options rendered in the sample page HTML to resolve its UID.
+    """
+    if SENAITE_URL is None:
+        return SenaiteUploadAttachmentResponse(success=False, message="SENAITE not configured")
+
+    try:
+        file_bytes = await file.read()
+        filename = file.filename or "attachment"
+        content_type = file.content_type or "application/octet-stream"
+
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(60.0, connect=10.0),
+            auth=httpx.BasicAuth(SENAITE_USER, SENAITE_PASSWORD),
+            follow_redirects=True,
+        ) as client:
+            # Step 1: Resolve the sample's Plone URL via REST API
+            api_url = f"{SENAITE_URL}/senaite/@@API/senaite/v1/analysisrequest/{sample_uid}"
+            meta_resp = await client.get(api_url)
+            meta_resp.raise_for_status()
+            meta_data = meta_resp.json()
+            items = meta_data.get("items", [])
+            if not items:
+                return SenaiteUploadAttachmentResponse(
+                    success=False, message="Sample not found in SENAITE"
+                )
+            sample_url = items[0].get("url") or items[0].get("absolute_url") or None
+            if not sample_url:
+                return SenaiteUploadAttachmentResponse(
+                    success=False, message="Could not resolve sample URL"
+                )
+
+            # Step 2: GET sample page to extract CSRF authenticator + attachment type UID
+            page_resp = await client.get(sample_url)
+            page_html = page_resp.text
+
+            auth_match = re.search(r'name="_authenticator"\s+value="([^"]+)"', page_html)
+            authenticator = auth_match.group(1) if auth_match else ""
+
+            # Find the UID for the requested attachment type name
+            type_pattern = re.compile(
+                r'<option\s+value="([^"]+)"[^>]*>\s*' + re.escape(attachment_type) + r'\s*</option>',
+                re.IGNORECASE,
+            )
+            type_match = type_pattern.search(page_html)
+            attachment_type_uid = type_match.group(1) if type_match else ""
+
+            # Step 3: POST to @@attachments_view/add
+            form_url = f"{sample_url}/@@attachments_view/add"
+            form_data = {
+                "submitted": "1",
+                "_authenticator": authenticator,
+                "AttachmentType": attachment_type_uid,
+                "Analysis": "",  # empty = "Attach to Sample"
+                "AttachmentKeys": "",
+                "RenderInReport:boolean": "True",
+                "RenderInReport:boolean:default": "False",
+                "addARAttachment": "Add Attachment",
+            }
+            files = {
+                "AttachmentFile_file": (filename, file_bytes, content_type),
+            }
+            headers = {
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Referer": sample_url,
+            }
+            att_resp = await client.post(
+                form_url,
+                data=form_data,
+                files=files,
+                headers=headers,
+            )
+            if att_resp.status_code in (200, 301, 302):
+                return SenaiteUploadAttachmentResponse(success=True, message="Attachment uploaded")
+            else:
+                return SenaiteUploadAttachmentResponse(
+                    success=False,
+                    message=f"SENAITE returned {att_resp.status_code}",
+                )
+
+    except httpx.TimeoutException:
+        return SenaiteUploadAttachmentResponse(success=False, message="SENAITE request timed out")
+    except Exception as e:
+        print(f"[WARN] Failed to upload attachment to sample {sample_uid}: {e}")
+        return SenaiteUploadAttachmentResponse(success=False, message=str(e))
 
 
 class SenaiteSampleItem(BaseModel):
@@ -5931,6 +6312,7 @@ EXPECTED_POST_STATES: dict[str, str] = {
     "verify": "verified",
     "retract": "unassigned",
     "reject": "rejected",
+    "retest": "verified",
 }
 
 

@@ -1,4 +1,4 @@
-import { useState, useEffect, useId } from 'react'
+import { useState, useEffect, useId, useRef } from 'react'
 import DOMPurify from 'dompurify'
 import {
   ChevronDown,
@@ -19,21 +19,57 @@ import {
   RefreshCw,
   Dna,
   Copy,
+  Paperclip,
+  ImageIcon,
+  Upload,
+  Maximize2,
   type LucideIcon,
 } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { ScrollArea } from '@/components/ui/scroll-area'
+import {
+  Dialog,
+  DialogContent,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { toast } from 'sonner'
 import {
   lookupSenaiteSample,
   updateSenaiteSampleFields,
   getSampleAdditionalCOAs,
   updateAdditionalCOAConfig,
+  fetchSenaiteAttachmentUrl,
+  fetchSenaiteAttachmentText,
+  uploadSenaiteAttachment,
+  getExplorerCOAGenerations,
+  generateSenaiteCOA,
+  publishSenaiteCOA,
   type SenaiteLookupResult,
+  type SenaiteAttachment,
+  type SenaiteAttachmentType,
   type AdditionalCOAConfig,
+  type ExplorerCOAGeneration,
 } from '@/lib/api'
+import {
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+} from 'recharts'
+import {
+  parseChromatogramCsv,
+  downsampleLTTB,
+} from '@/components/hplc/ChromatogramChart'
 import { Textarea } from '@/components/ui/textarea'
 import { Spinner } from '@/components/ui/spinner'
 import { useUIStore } from '@/store/ui-store'
@@ -42,6 +78,248 @@ import { EditableDataRow } from '@/components/dashboard/EditableField'
 import { AnalysisTable, StatusBadge } from '@/components/senaite/AnalysisTable'
 
 // --- Local helpers ---
+
+function AttachmentImage({ attachment }: { attachment: SenaiteAttachment }) {
+  const [src, setSrc] = useState<string | null>(null)
+  const [error, setError] = useState(false)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    if (!attachment.download_url) {
+      setError(true)
+      setLoading(false)
+      return
+    }
+    let cancelled = false
+    fetchSenaiteAttachmentUrl(attachment.uid)
+      .then(url => {
+        if (!cancelled) setSrc(url)
+      })
+      .catch(() => {
+        if (!cancelled) setError(true)
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => { cancelled = true }
+  }, [attachment.uid, attachment.download_url])
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center w-full h-48 rounded-lg bg-muted/40 border border-border/30">
+        <Spinner className="size-5" />
+      </div>
+    )
+  }
+
+  if (error || !src) {
+    return (
+      <div className="flex flex-col items-center justify-center gap-2 w-full h-48 rounded-lg bg-muted/40 border border-border/30">
+        <ImageIcon size={24} className="text-muted-foreground" />
+        <span className="text-xs text-muted-foreground">Failed to load image</span>
+      </div>
+    )
+  }
+
+  return (
+    <img
+      src={src}
+      alt={attachment.filename}
+      className="rounded-lg border border-border/30 max-h-40 w-auto object-contain"
+    />
+  )
+}
+
+const CHART_SLATE = '#94a3b8'
+const CHART_GRID = '#334155'
+const CHART_BLUE = '#60a5fa'
+
+function HplcAttachmentChart({ attachment }: { attachment: SenaiteAttachment }) {
+  const [chartData, setChartData] = useState<{ t: number; v: number }[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(false)
+  const [expanded, setExpanded] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    fetchSenaiteAttachmentText(attachment.uid)
+      .then(text => {
+        if (cancelled) return
+        const raw = parseChromatogramCsv(text)
+        const pts = downsampleLTTB(raw, 800)
+        if (pts.length > 0) {
+          setChartData(pts.map(([t, v]) => ({ t, v })))
+        } else {
+          setError(true)
+        }
+      })
+      .catch(() => { if (!cancelled) setError(true) })
+      .finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [attachment.uid])
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-52 rounded-lg bg-muted/40 border border-border/30">
+        <Spinner className="size-5" />
+      </div>
+    )
+  }
+  if (error || chartData.length === 0) {
+    return (
+      <div className="flex items-center justify-center h-52 rounded-lg bg-muted/40 border border-border/30">
+        <span className="text-xs text-muted-foreground">Failed to parse chromatogram</span>
+      </div>
+    )
+  }
+
+  const chartInner = (tall: boolean) => (
+    <LineChart data={chartData} margin={{ top: 8, right: 16, bottom: 20, left: tall ? 8 : 4 }}>
+      <CartesianGrid strokeDasharray="3 3" stroke={CHART_GRID} vertical={false} />
+      <XAxis
+        dataKey="t"
+        type="number"
+        domain={['dataMin', 'dataMax']}
+        tick={{ fontSize: tall ? 11 : 9, fill: CHART_SLATE }}
+        axisLine={{ stroke: CHART_GRID }}
+        tickLine={false}
+        tickFormatter={(v: number) => v.toFixed(1)}
+        label={{ value: 'min', position: 'insideBottom', offset: -10, style: { fontSize: tall ? 11 : 9, fill: CHART_SLATE } }}
+      />
+      <YAxis
+        tick={{ fontSize: tall ? 11 : 9, fill: CHART_SLATE }}
+        axisLine={false}
+        tickLine={false}
+        tickFormatter={(v: number) => v >= 1000 ? `${(v / 1000).toFixed(0)}k` : String(Math.round(v))}
+        width={tall ? 48 : 40}
+      />
+      <Tooltip
+        contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #475569', borderRadius: 6, fontSize: tall ? 12 : 10 }}
+        labelStyle={{ color: CHART_SLATE }}
+        itemStyle={{ color: '#e2e8f0' }}
+        labelFormatter={(v) => `${Number(v).toFixed(3)} min`}
+        formatter={(value) => [Number(value).toFixed(2), 'mAU']}
+      />
+      <Line dataKey="v" dot={false} stroke={CHART_BLUE} strokeWidth={tall ? 2 : 1.5} isAnimationActive={false} />
+    </LineChart>
+  )
+
+  return (
+    <>
+      <div className="relative h-52 w-full group">
+        <ResponsiveContainer width="100%" height="100%">
+          {chartInner(false)}
+        </ResponsiveContainer>
+        <button
+          onClick={() => setExpanded(true)}
+          className="absolute top-1.5 right-1.5 p-1 rounded bg-background/60 border border-border/40 text-muted-foreground opacity-0 group-hover:opacity-100 hover:text-foreground hover:bg-background/90 transition-all cursor-pointer"
+          aria-label="Expand chromatogram"
+          title="View full size"
+        >
+          <Maximize2 size={12} />
+        </button>
+      </div>
+
+      <Dialog open={expanded} onOpenChange={setExpanded}>
+        <DialogContent className="max-w-[90vw] sm:max-w-[90vw] w-[90vw]">
+          <DialogTitle className="text-sm font-medium truncate pr-6">
+            {attachment.filename}
+          </DialogTitle>
+          <div className="h-[60vh] w-full">
+            <ResponsiveContainer width="100%" height="100%">
+              {chartInner(true)}
+            </ResponsiveContainer>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </>
+  )
+}
+
+const ATTACHMENT_TYPES: SenaiteAttachmentType[] = ['HPLC Graph', 'Sample Image']
+
+const isHplcGraph = (a: SenaiteAttachment) =>
+  a.attachment_type === 'HPLC Graph' ||
+  a.filename?.toLowerCase().endsWith('.csv') === true
+
+const isRenderable = (a: SenaiteAttachment) =>
+  a.content_type?.startsWith('image/') || isHplcGraph(a)
+
+function AddAttachmentForm({
+  sampleUid,
+  onUploaded,
+}: {
+  sampleUid: string
+  onUploaded: () => void
+}) {
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const [file, setFile] = useState<File | null>(null)
+  const [attachmentType, setAttachmentType] = useState<SenaiteAttachmentType>('HPLC Graph')
+  const [isUploading, setIsUploading] = useState(false)
+
+  const handleUpload = async () => {
+    if (!file) return
+    setIsUploading(true)
+    try {
+      const result = await uploadSenaiteAttachment(sampleUid, file, attachmentType)
+      if (result.success) {
+        toast.success('Attachment uploaded')
+        setFile(null)
+        if (fileInputRef.current) fileInputRef.current.value = ''
+        onUploaded()
+      } else {
+        toast.error('Upload failed', { description: result.message })
+      }
+    } catch (err) {
+      toast.error('Upload failed', { description: err instanceof Error ? err.message : 'Unknown error' })
+    } finally {
+      setIsUploading(false)
+    }
+  }
+
+  return (
+    <div className="pt-3 border-t border-border/40" onClick={e => e.stopPropagation()}>
+      <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">Add Attachment</p>
+      <div className="flex items-center gap-2 flex-wrap">
+        <button
+          type="button"
+          onClick={() => fileInputRef.current?.click()}
+          disabled={isUploading}
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-md border border-border bg-muted/40 hover:bg-muted cursor-pointer transition-colors disabled:opacity-50"
+        >
+          <Paperclip size={13} />
+          {file ? file.name : 'Choose file'}
+        </button>
+        <input
+          ref={fileInputRef}
+          type="file"
+          className="hidden"
+          onChange={e => setFile(e.target.files?.[0] ?? null)}
+          disabled={isUploading}
+        />
+        <select
+          value={attachmentType}
+          onChange={e => setAttachmentType(e.target.value as SenaiteAttachmentType)}
+          disabled={isUploading}
+          className="h-8 text-sm px-2 rounded-md border border-input bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+        >
+          {ATTACHMENT_TYPES.map(t => (
+            <option key={t} value={t}>{t}</option>
+          ))}
+        </select>
+        <Button
+          size="sm"
+          onClick={handleUpload}
+          disabled={!file || isUploading}
+          className="h-8 gap-1.5"
+        >
+          {isUploading ? <Spinner className="size-3.5" /> : <Upload size={13} />}
+          Upload
+        </Button>
+      </div>
+    </div>
+  )
+}
 
 function DataRow({
   label,
@@ -57,13 +335,17 @@ function DataRow({
   return (
     <div className="flex items-baseline justify-between py-1.5 border-b border-border/50 last:border-0">
       <span className="text-xs text-muted-foreground shrink-0 min-w-28 mr-3">{label}</span>
-      <span
-        className={`text-sm text-right ${
-          emphasis ? 'font-semibold text-foreground' : 'text-foreground'
-        } ${mono ? 'font-mono' : ''}`}
-      >
-        {value || '—'}
-      </span>
+      <div className="flex items-center gap-1">
+        <span
+          className={`text-sm text-right ${
+            emphasis ? 'font-semibold text-foreground' : 'text-foreground'
+          } ${mono ? 'font-mono' : ''}`}
+        >
+          {value || '—'}
+        </span>
+        {/* Spacer matching the EditableField pencil icon size for column alignment */}
+        <span className="inline-block w-[11px] shrink-0" aria-hidden="true" />
+      </div>
     </div>
   )
 }
@@ -426,6 +708,11 @@ export function SampleDetails() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [additionalCoas, setAdditionalCoas] = useState<AdditionalCOAConfig[]>([])
+  const [coaGenerations, setCoaGenerations] = useState<ExplorerCOAGeneration[]>([])
+  const [isGeneratingCOA, setIsGeneratingCOA] = useState(false)
+  const [isPublishingCOA, setIsPublishingCOA] = useState(false)
+  const [showOlderImages, setShowOlderImages] = useState(false)
+  const [showOlderHplc, setShowOlderHplc] = useState(false)
 
   const fetchSample = (id: string) => {
     setLoading(true)
@@ -481,6 +768,20 @@ export function SampleDetails() {
     }
   }, [sampleId])
 
+  // Fetch COA generations to determine publish availability
+  useEffect(() => {
+    if (!sampleId) return
+    let cancelled = false
+
+    getExplorerCOAGenerations(sampleId, 10).then(gens => {
+      if (!cancelled) setCoaGenerations(gens)
+    }).catch(() => {})
+
+    return () => {
+      cancelled = true
+    }
+  }, [sampleId])
+
   if (!sampleId) {
     return (
       <div className="flex items-center justify-center h-full text-muted-foreground">
@@ -526,6 +827,51 @@ export function SampleDetails() {
     )
   }
 
+  const hasDraftCOA = coaGenerations.some(g => g.status === 'draft')
+
+  const handleGenerateCOA = async () => {
+    setIsGeneratingCOA(true)
+    try {
+      const result = await generateSenaiteCOA(sampleId)
+      if (result.success) {
+        toast.success(result.message || 'COA generation triggered')
+        // Populate verification code immediately from the response
+        if (result.verification_code) {
+          setData(prev =>
+            prev ? { ...prev, coa: { ...prev.coa, verification_code: result.verification_code } } : prev
+          )
+        }
+        // Silent refresh to pick up ARReport attachment and other SENAITE state changes
+        refreshSample(sampleId)
+        getExplorerCOAGenerations(sampleId, 10).then(setCoaGenerations).catch(() => {})
+      } else {
+        toast.error('COA generation failed', { description: result.message })
+      }
+    } catch (err) {
+      toast.error('COA generation failed', { description: err instanceof Error ? err.message : 'Unknown error' })
+    } finally {
+      setIsGeneratingCOA(false)
+    }
+  }
+
+  const handlePublishCOA = async () => {
+    setIsPublishingCOA(true)
+    try {
+      const result = await publishSenaiteCOA(sampleId)
+      if (result.success) {
+        toast.success('COA published')
+        refreshSample(sampleId)
+        getExplorerCOAGenerations(sampleId, 10).then(setCoaGenerations).catch(() => {})
+      } else {
+        toast.error('COA publish failed', { description: result.message })
+      }
+    } catch (err) {
+      toast.error('COA publish failed', { description: err instanceof Error ? err.message : 'Unknown error' })
+    } finally {
+      setIsPublishingCOA(false)
+    }
+  }
+
   const analyses = data.analyses ?? []
   const verifiedCount = analyses.filter(
     a => a.review_state === 'verified' || a.review_state === 'published'
@@ -543,10 +889,9 @@ export function SampleDetails() {
   }
 
   return (
-    <ScrollArea className="h-full">
-      <div className="max-w-6xl mx-auto px-6 py-6">
-        {/* Sticky Action Bar */}
-        <div className="flex items-center justify-between mb-6">
+    <div className="max-w-6xl mx-auto px-6 py-6">
+        {/* Breadcrumb — scrolls away with the page */}
+        <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-2">
             <Button
               variant="ghost"
@@ -560,21 +905,46 @@ export function SampleDetails() {
             <ChevronRight size={12} className="text-muted-foreground" />
             <span className="text-sm font-medium">{data.sample_id}</span>
           </div>
-          {data.senaite_url && senaiteBaseUrl && (
-            <a
-              href={`${senaiteBaseUrl}${data.senaite_url}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-colors cursor-pointer"
-            >
-              <ExternalLink size={13} />
-              Open in SENAITE
-            </a>
-          )}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-1.5 cursor-pointer"
+                disabled={isGeneratingCOA || isPublishingCOA}
+              >
+                {(isGeneratingCOA || isPublishingCOA) ? (
+                  <Loader2 size={13} className="animate-spin" />
+                ) : (
+                  <ChevronDown size={13} />
+                )}
+                Actions
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-52">
+              <DropdownMenuItem
+                onClick={handleGenerateCOA}
+                disabled={isGeneratingCOA}
+                className="cursor-pointer"
+              >
+                Generate Accumark COA
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={handlePublishCOA}
+                disabled={isPublishingCOA || !hasDraftCOA}
+                className="cursor-pointer"
+              >
+                Publish Accumark COA
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
 
-        {/* Header */}
-        <div className="flex items-start justify-between mb-6 gap-4 flex-wrap">
+        {/* Sticky header band — bleeds to container edges with -mx-6 px-6 */}
+        <div className="sticky -top-4 z-20 -mx-6 px-6 pt-4 pb-4 mb-6 backdrop-blur-md bg-background/85 border-b border-border/30 shadow-sm">
+
+          {/* Sample ID + counters + progress */}
+          <div className="flex items-start justify-between gap-x-4 gap-y-2 flex-wrap">
           <div className="flex items-center gap-4">
             <div className="flex items-center justify-center w-11 h-11 rounded-xl bg-gradient-to-br from-violet-600/20 to-violet-500/5 border border-violet-500/30 dark:border-violet-500/20">
               <FlaskConical size={20} className="text-violet-600 dark:text-violet-400" />
@@ -642,7 +1012,37 @@ export function SampleDetails() {
               </div>
             </div>
           )}
-        </div>
+
+          {/* Progress bar + legend — w-full forces wrap to bottom row */}
+          {analyses.length > 0 && (
+            <div className="w-full space-y-1.5">
+              <div className="h-1.5 bg-muted/60 rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-emerald-500/70 rounded-full transition-all duration-700"
+                  style={{ width: `${(verifiedCount / analyses.length) * 100}%` }}
+                />
+              </div>
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <span className="flex items-center gap-1.5 text-[11px] text-emerald-600 dark:text-emerald-400">
+                    <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-500/70" />
+                    {verifiedCount} Verified
+                  </span>
+                  <span className="flex items-center gap-1.5 text-[11px] text-amber-600 dark:text-amber-400">
+                    <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-500/70" />
+                    {pendingCount} Pending
+                  </span>
+                </div>
+                <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+                  <span>{Math.round((verifiedCount / analyses.length) * 100)}% complete</span>
+                  <span className="text-border">·</span>
+                  <span>{verifiedCount}/{analyses.length} verified</span>
+                </div>
+              </div>
+            </div>
+          )}
+          </div>{/* end: sample ID + counters + progress */}
+        </div>{/* end: sticky header band */}
 
         {/* Main Grid: 2-column layout — metadata left, analytes right */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
@@ -691,6 +1091,40 @@ export function SampleDetails() {
                       )
                     }
                   />
+                  {/* Verification Code — set by COA Builder after generation */}
+                  <div className="flex items-baseline justify-between py-1.5 border-b border-border/50 last:border-0">
+                    <span className="text-xs text-muted-foreground shrink-0 min-w-28 mr-3">Verification</span>
+                    <div className="flex items-center gap-1 min-w-0">
+                      {data.coa.verification_code ? (
+                        <span className="text-sm font-mono text-foreground truncate">
+                          {data.coa.verification_code}
+                        </span>
+                      ) : (
+                        <span className="text-sm text-muted-foreground">—</span>
+                      )}
+                      {data.coa.verification_code ? (
+                        <button
+                          onClick={() => {
+                            navigator.clipboard.writeText(data.coa.verification_code!)
+                            toast.success('Verification code copied')
+                          }}
+                          className="shrink-0 text-muted-foreground/40 hover:text-muted-foreground transition-colors cursor-pointer"
+                          aria-label="Copy verification code"
+                        >
+                          <Copy size={11} />
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => refreshSample(sampleId)}
+                          className="shrink-0 text-muted-foreground/40 hover:text-muted-foreground transition-colors cursor-pointer"
+                          aria-label="Refresh from SENAITE"
+                          title="Check if verification code has been set"
+                        >
+                          <RefreshCw size={11} />
+                        </button>
+                      )}
+                    </div>
+                  </div>
                 </div>
                 {data.profiles.length > 0 && (
                   <div className="mt-3 pt-3 border-t border-border">
@@ -1053,6 +1487,105 @@ export function SampleDetails() {
           </SectionHeader>
         </Card>
 
+        {/* Attachments */}
+        <Card className="p-4 mb-6">
+          <SectionHeader icon={Paperclip} title={`Attachments (${data.attachments?.length ?? 0})`}>
+            <div className="space-y-4">
+              {/* Renderable attachments — newest image + newest HPLC graph side by side */}
+              {(() => {
+                const allImages = (data.attachments ?? []).filter(a => a.content_type?.startsWith('image/'))
+                const allHplc = (data.attachments ?? []).filter(isHplcGraph)
+                const newestImage = allImages[allImages.length - 1]
+                const newestHplc = allHplc[allHplc.length - 1]
+                const olderImages = allImages.slice(0, -1)
+                const olderHplc = allHplc.slice(0, -1)
+                if (!newestImage && !newestHplc) return null
+
+                const renderItem = (attachment: SenaiteAttachment) => (
+                  <div key={attachment.uid} className="space-y-1.5">
+                    <div className="flex items-center gap-2">
+                      {attachment.content_type?.startsWith('image/')
+                        ? <ImageIcon size={13} className="text-muted-foreground shrink-0" />
+                        : <Paperclip size={13} className="text-muted-foreground shrink-0" />}
+                      <span className="text-xs font-medium text-foreground truncate">{attachment.filename}</span>
+                      {attachment.attachment_type && (
+                        <Badge variant="secondary" className="text-[10px] shrink-0">{attachment.attachment_type}</Badge>
+                      )}
+                    </div>
+                    {attachment.content_type?.startsWith('image/')
+                      ? <AttachmentImage attachment={attachment} />
+                      : <HplcAttachmentChart attachment={attachment} />}
+                  </div>
+                )
+
+                return (
+                  <div className="space-y-3">
+                    {/* Newest of each type side by side */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {newestImage && renderItem(newestImage)}
+                      {newestHplc && renderItem(newestHplc)}
+                    </div>
+                    {/* Older images */}
+                    {olderImages.length > 0 && (
+                      <div>
+                        <button
+                          type="button"
+                          onClick={e => { e.stopPropagation(); setShowOlderImages(v => !v) }}
+                          className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+                        >
+                          {showOlderImages ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
+                          {olderImages.length} older image{olderImages.length !== 1 ? 's' : ''}
+                        </button>
+                        {showOlderImages && (
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-2">
+                            {olderImages.map(renderItem)}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    {/* Older HPLC graphs */}
+                    {olderHplc.length > 0 && (
+                      <div>
+                        <button
+                          type="button"
+                          onClick={e => { e.stopPropagation(); setShowOlderHplc(v => !v) }}
+                          className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+                        >
+                          {showOlderHplc ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
+                          {olderHplc.length} older HPLC graph{olderHplc.length !== 1 ? 's' : ''}
+                        </button>
+                        {showOlderHplc && (
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-2">
+                            {olderHplc.map(renderItem)}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )
+              })()}
+              {/* Other file attachments (non-image, non-HPLC) */}
+              {data.attachments?.filter(a => !isRenderable(a)).map(attachment => (
+                <div key={attachment.uid} className="flex items-center gap-2 p-2 rounded-lg bg-muted/40 border border-border/30">
+                  <Paperclip size={14} className="text-muted-foreground shrink-0" />
+                  <span className="text-sm text-foreground truncate">{attachment.filename}</span>
+                  {attachment.attachment_type && (
+                    <Badge variant="secondary" className="text-[10px] shrink-0">
+                      {attachment.attachment_type}
+                    </Badge>
+                  )}
+                </div>
+              ))}
+              {data.sample_uid && (
+                <AddAttachmentForm
+                  sampleUid={data.sample_uid}
+                  onUploaded={() => fetchSample(data.sample_id)}
+                />
+              )}
+            </div>
+          </SectionHeader>
+        </Card>
+
         {/* Analyses Table */}
         <AnalysisTable
           analyses={analyses}
@@ -1072,8 +1605,7 @@ export function SampleDetails() {
           }}
           onTransitionComplete={() => refreshSample(data.sample_id)}
         />
-      </div>
-    </ScrollArea>
+    </div>
   )
 }
 
