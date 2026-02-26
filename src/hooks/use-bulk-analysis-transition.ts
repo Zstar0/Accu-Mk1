@@ -29,6 +29,7 @@ const TRANSITION_PAST_TENSE: Record<string, string> = {
   verify: 'verified',
   retract: 'retracted',
   reject: 'rejected',
+  retest: 'retested',
 }
 
 // --- Hook ---
@@ -73,7 +74,7 @@ export function useBulkAnalysisTransition({
         try {
           const response = await transitionAnalysis(
             uids[i]!,
-            transition as 'submit' | 'verify' | 'retract' | 'reject'
+            transition as 'submit' | 'verify' | 'retract' | 'reject' | 'retest'
           )
           if (response.success) succeeded.push(uids[i]!)
           else failed.push(uids[i]!)

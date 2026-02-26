@@ -1,10 +1,13 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import {
   RefreshCw,
   XCircle,
   Loader2,
   FlaskConical,
   ChevronRight,
+  ArrowUp,
+  ArrowDown,
+  ArrowUpDown,
 } from 'lucide-react'
 import {
   Card,
@@ -83,6 +86,42 @@ const TABS: Tab[] = [
   },
 ]
 
+// --- Column sorting ---
+
+type SortColumn = 'id' | 'client_order_number' | 'client_id' | 'sample_type' | 'date_received' | 'review_state'
+type SortDirection = 'asc' | 'desc'
+
+interface SortConfig {
+  column: SortColumn
+  direction: SortDirection
+}
+
+function compareSamples(a: SenaiteSample, b: SenaiteSample, config: SortConfig): number {
+  const { column, direction } = config
+  let cmp = 0
+
+  if (column === 'date_received') {
+    const da = a.date_received ? new Date(a.date_received).getTime() : 0
+    const db = b.date_received ? new Date(b.date_received).getTime() : 0
+    cmp = da - db
+  } else {
+    const va = (a[column] ?? '').toLowerCase()
+    const vb = (b[column] ?? '').toLowerCase()
+    cmp = va.localeCompare(vb, undefined, { numeric: true })
+  }
+
+  return direction === 'desc' ? -cmp : cmp
+}
+
+function SortIcon({ column, sort }: { column: SortColumn; sort: SortConfig }) {
+  if (sort.column !== column) {
+    return <ArrowUpDown className="h-3 w-3 text-muted-foreground/50" />
+  }
+  return sort.direction === 'asc'
+    ? <ArrowUp className="h-3 w-3" />
+    : <ArrowDown className="h-3 w-3" />
+}
+
 // --- Sample Table ---
 
 function SampleTable({
@@ -98,6 +137,26 @@ function SampleTable({
   error: string | null
   onSelectSample?: (sampleId: string) => void
 }) {
+  const navigateToOrderExplorer = useUIStore(state => state.navigateToOrderExplorer)
+  const [sort, setSort] = useState<SortConfig>({ column: 'date_received', direction: 'desc' })
+
+  const DEFAULT_SORT: SortConfig = { column: 'date_received', direction: 'desc' }
+
+  const toggleSort = (column: SortColumn) => {
+    setSort(prev => {
+      if (prev.column === column) {
+        return prev.direction === 'asc'
+          ? { column, direction: 'desc' }
+          : DEFAULT_SORT // third click resets to default
+      }
+      return { column, direction: 'asc' }
+    })
+  }
+
+  const sortedSamples = useMemo(() => {
+    return [...samples].sort((a, b) => compareSamples(a, b, sort))
+  }, [samples, sort])
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-12">
@@ -133,28 +192,60 @@ function SampleTable({
     )
   }
 
+  const columns: { key: SortColumn; label: string; className: string; cellClassName: string }[] = [
+    { key: 'id', label: 'Sample ID', className: 'w-32', cellClassName: 'font-mono text-sm' },
+    { key: 'client_order_number', label: 'Order #', className: 'w-36', cellClassName: 'text-sm text-muted-foreground' },
+    { key: 'client_id', label: 'Client', className: '', cellClassName: 'text-sm' },
+    { key: 'sample_type', label: 'Sample Type', className: '', cellClassName: 'text-sm text-muted-foreground' },
+    { key: 'date_received', label: 'Received', className: 'w-36', cellClassName: 'text-sm text-muted-foreground' },
+    { key: 'review_state', label: 'State', className: 'w-28 text-center', cellClassName: 'text-center' },
+  ]
+
   return (
     <div className="overflow-auto">
       <Table>
         <TableHeader>
           <TableRow>
-            <TableHead className="w-32">Sample ID</TableHead>
-            <TableHead className="w-36">Order #</TableHead>
-            <TableHead>Client</TableHead>
-            <TableHead>Sample Type</TableHead>
-            <TableHead className="w-36">Received</TableHead>
-            <TableHead className="w-28 text-center">State</TableHead>
+            {columns.map(col => (
+              <TableHead
+                key={col.key}
+                className={`${col.className} cursor-pointer select-none hover:text-foreground transition-colors`}
+                onClick={() => toggleSort(col.key)}
+              >
+                <span className="inline-flex items-center gap-1">
+                  {col.label}
+                  <SortIcon column={col.key} sort={sort} />
+                </span>
+              </TableHead>
+            ))}
           </TableRow>
         </TableHeader>
         <TableBody>
-          {samples.map(s => (
+          {sortedSamples.map(s => (
             <TableRow
               key={s.uid}
               className="hover:bg-muted/30 cursor-pointer"
               onClick={() => onSelectSample?.(s.id)}
             >
               <TableCell className="font-mono text-sm">{s.id}</TableCell>
-              <TableCell className="text-sm text-muted-foreground">{s.client_order_number ?? '—'}</TableCell>
+              <TableCell className="text-sm">
+                {s.client_order_number ? (
+                  <button
+                    type="button"
+                    className="text-blue-400 hover:text-blue-300 hover:underline transition-colors"
+                    onClick={e => {
+                      e.stopPropagation()
+                      // SENAITE stores "WP-1234" but the DB stores just "1234"
+                      const orderNum = s.client_order_number!.replace(/^WP-/i, '')
+                      navigateToOrderExplorer(orderNum)
+                    }}
+                  >
+                    {s.client_order_number}
+                  </button>
+                ) : (
+                  <span className="text-muted-foreground">—</span>
+                )}
+              </TableCell>
               <TableCell className="text-sm">{s.client_id ?? '—'}</TableCell>
               <TableCell className="text-sm text-muted-foreground">{s.sample_type ?? '—'}</TableCell>
               <TableCell className="text-sm text-muted-foreground">{formatDate(s.date_received)}</TableCell>

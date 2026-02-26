@@ -176,7 +176,7 @@ export function EditableField({
   return (
     <button
       onClick={startEditing}
-      className="group inline-flex items-center gap-1.5 max-w-full text-right cursor-pointer rounded-md px-1 -mx-1 py-0.5 -my-0.5 hover:bg-muted/60 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      className="group inline-flex items-center gap-1 max-w-full text-right cursor-pointer rounded-md px-1 -mx-1 py-0.5 -my-0.5 hover:bg-muted/60 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       aria-label={`Edit ${label}`}
     >
       <span
@@ -188,8 +188,8 @@ export function EditableField({
         {rendered}
       </span>
       <Pencil
-        size={12}
-        className="text-muted-foreground/0 group-hover:text-muted-foreground transition-colors shrink-0"
+        size={11}
+        className="text-muted-foreground/40 group-hover:text-muted-foreground transition-colors shrink-0"
       />
     </button>
   )
