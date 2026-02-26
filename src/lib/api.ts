@@ -801,6 +801,135 @@ export interface ExplorerOrder {
 }
 
 /**
+ * Typed view of the WooCommerce order payload stored from the incoming webhook.
+ */
+export interface OrderPayloadBilling {
+  company_name: string | null
+  first_name: string
+  last_name: string
+  email: string
+  phone: string | null
+  address_1: string | null
+  city: string | null
+  state: string | null
+  postcode: string | null
+  country: string
+}
+
+export interface OrderPayloadSample {
+  number: number
+  analytical_test: string
+  sample_identity: string
+  sample_weight: string
+  sample_name: string | null
+  lot_code: string | null
+  notes: string | null
+  services: Record<string, boolean>
+  prices: Record<string, number>
+  variance_value: string | number | null
+  package: string | null
+}
+
+export interface OrderPayload {
+  order_id: number
+  order_number: string
+  billing: OrderPayloadBilling
+  samples: OrderPayloadSample[]
+  submitted_at: string
+}
+
+/** Cast a raw payload dict to a typed OrderPayload, or null if missing. */
+export function parseOrderPayload(payload: Record<string, unknown> | null): OrderPayload | null {
+  if (!payload) return null
+  return payload as unknown as OrderPayload
+}
+
+/**
+ * WooCommerce order from the WC REST API (/wp-json/wc/v3/orders/{id}).
+ * Includes full financial breakdown unavailable in the webhook snapshot.
+ */
+export interface WooLineItem {
+  id: number
+  name: string
+  product_id: number
+  quantity: number
+  subtotal: string
+  total: string
+  sku: string
+  price: number
+}
+
+export interface WooCouponLine {
+  id: number
+  code: string
+  discount: string
+  discount_tax: string
+}
+
+export interface WooShippingLine {
+  id: number
+  method_title: string
+  total: string
+}
+
+export interface WooTaxLine {
+  id: number
+  label: string
+  tax_total: string
+  shipping_tax_total: string
+}
+
+export interface WooOrder {
+  id: number
+  number: string
+  status: string
+  date_created: string
+  discount_total: string
+  discount_tax: string
+  shipping_total: string
+  cart_tax: string
+  total: string
+  total_tax: string
+  billing: {
+    first_name: string
+    last_name: string
+    company: string
+    address_1: string
+    city: string
+    state: string
+    postcode: string
+    country: string
+    email: string
+    phone: string
+  }
+  payment_method_title: string
+  customer_note: string
+  line_items: WooLineItem[]
+  shipping_lines: WooShippingLine[]
+  coupon_lines: WooCouponLine[]
+  tax_lines: WooTaxLine[]
+}
+
+/**
+ * Fetch a WooCommerce order directly via the WC REST API proxy.
+ * Returns null if the order is not found.
+ */
+export async function getWooOrder(orderId: string): Promise<WooOrder | null> {
+  try {
+    const response = await fetch(
+      `${API_BASE_URL()}/woo/orders/${encodeURIComponent(orderId)}`,
+      { headers: getAuthHeaders() }
+    )
+    if (response.status === 404) return null
+    if (!response.ok) throw new Error(`WooCommerce order fetch failed: ${response.status}`)
+    return response.json()
+  } catch (error) {
+    console.error('Get WooCommerce order error:', error)
+    throw error
+  }
+}
+
+/**
  * Ingestion from Integration Service database.
  */
 export interface ExplorerIngestion {
@@ -861,6 +990,10 @@ export interface ExplorerCOAGeneration {
   created_at: string
   order_id: string | null
   order_number: string | null
+  /** Self-referential: null for primary COA, set for additional COAs */
+  parent_generation_id: string | null
+  /** Ingestion WP delivery status: pending | processing | uploaded | notified | partial | failed */
+  ingestion_status: string | null
 }
 
 /**
@@ -1020,6 +1153,25 @@ export async function getExplorerOrders(
     return response.json()
   } catch (error) {
     console.error('Get explorer orders error:', error)
+    throw error
+  }
+}
+
+/**
+ * Get a single order from Integration Service by its WordPress order ID.
+ * Returns null if not found.
+ */
+export async function getExplorerOrderById(orderId: string): Promise<ExplorerOrder | null> {
+  try {
+    const response = await fetch(
+      `${API_BASE_URL()}/explorer/orders/${encodeURIComponent(orderId)}`,
+      { headers: getAuthHeaders() }
+    )
+    if (response.status === 404) return null
+    if (!response.ok) throw new Error(`Get order failed: ${response.status}`)
+    return response.json()
+  } catch (error) {
+    console.error('Get order by ID error:', error)
     throw error
   }
 }
@@ -1280,6 +1432,8 @@ export interface AdditionalCOAConfig {
     chromatograph_background_url?: string
   }
   generation_id: string | null
+  verification_code: string | null
+  generation_number: number | null
 }
 
 /**
@@ -1336,6 +1490,15 @@ export interface SampleCOAActionResponse {
   verification_code: string | null
 }
 
+async function extractErrorMessage(response: Response, fallback: string): Promise<string> {
+  try {
+    const body = await response.json()
+    return body?.detail ?? body?.message ?? fallback
+  } catch {
+    return fallback
+  }
+}
+
 export async function generateSenaiteCOA(
   sampleId: string
 ): Promise<SampleCOAActionResponse> {
@@ -1343,7 +1506,7 @@ export async function generateSenaiteCOA(
     `${API_BASE_URL()}/wizard/senaite/samples/${encodeURIComponent(sampleId)}/generate-coa`,
     { method: 'POST', headers: getBearerHeaders() }
   )
-  if (!response.ok) throw new Error(`COA generation failed: ${response.status}`)
+  if (!response.ok) throw new Error(await extractErrorMessage(response, `COA generation failed: ${response.status}`))
   return response.json()
 }
 
@@ -1354,7 +1517,7 @@ export async function publishSenaiteCOA(
     `${API_BASE_URL()}/wizard/senaite/samples/${encodeURIComponent(sampleId)}/publish-coa`,
     { method: 'POST', headers: getBearerHeaders() }
   )
-  if (!response.ok) throw new Error(`COA publish failed: ${response.status}`)
+  if (!response.ok) throw new Error(await extractErrorMessage(response, `COA publish failed: ${response.status}`))
   return response.json()
 }
 
@@ -2056,7 +2219,11 @@ export interface SenaiteAnalysis {
   result_options: SenaiteResultOption[]  // always present from backend; [] if no predefined options
   unit: string | null
   method: string | null
+  method_uid: string | null
+  method_options: { uid: string; title: string }[]
   instrument: string | null
+  instrument_uid: string | null
+  instrument_options: { uid: string; title: string }[]
   analyst: string | null
   due_date: string | null
   review_state: string | null
@@ -2071,6 +2238,15 @@ export interface SenaiteAttachment {
   content_type: string | null
   attachment_type: string | null
   download_url: string | null
+}
+
+export interface SenaitePublishedCOA {
+  report_uid: string
+  filename: string
+  file_size_bytes: number | null
+  published_date: string | null
+  published_by: string | null
+  download_url: string
 }
 
 export interface SenaiteLookupResult {
@@ -2092,6 +2268,7 @@ export interface SenaiteLookupResult {
   remarks: SenaiteRemark[]
   analyses: SenaiteAnalysis[]
   attachments: SenaiteAttachment[]
+  published_coa: SenaitePublishedCOA | null
   senaite_url: string | null
 }
 
@@ -2156,6 +2333,16 @@ export async function fetchSenaiteAttachmentUrl(
   const url = URL.createObjectURL(blob)
   _attachmentCache.set(attachmentUid, url)
   return url
+}
+
+export async function fetchSenaiteReportUrl(reportUid: string): Promise<string> {
+  const response = await fetch(
+    `${API_BASE_URL()}/wizard/senaite/report/${encodeURIComponent(reportUid)}`,
+    { headers: getBearerHeaders() }
+  )
+  if (!response.ok) throw new Error(`Failed to fetch report: ${response.status}`)
+  const blob = await response.blob()
+  return URL.createObjectURL(blob)
 }
 
 export type SenaiteAttachmentType = 'HPLC Graph' | 'Sample Image'
@@ -2235,6 +2422,26 @@ export async function setAnalysisResult(
   return response.json()
 }
 
+export async function setAnalysisMethodInstrument(
+  uid: string,
+  methodUid: string | null,
+  instrumentUid: string | null
+): Promise<AnalysisResultResponse> {
+  const response = await fetch(
+    `${API_BASE_URL()}/wizard/senaite/analyses/${encodeURIComponent(uid)}/method-instrument`,
+    {
+      method: 'POST',
+      headers: getBearerHeaders('application/json'),
+      body: JSON.stringify({ method_uid: methodUid, instrument_uid: instrumentUid }),
+    }
+  )
+  if (!response.ok) {
+    const err = await response.json().catch(() => null)
+    throw new Error(err?.detail || `Set method/instrument failed: ${response.status}`)
+  }
+  return response.json()
+}
+
 export async function transitionAnalysis(
   uid: string,
   transition: 'submit' | 'verify' | 'retract' | 'reject' | 'retest'
@@ -2260,11 +2467,13 @@ export interface SenaiteSample {
   title: string
   client_id: string | null
   client_order_number: string | null
+  date_created: string | null
   date_received: string | null
   date_sampled: string | null
   review_state: string
   sample_type: string | null
   contact: string | null
+  verification_code: string | null
 }
 
 export interface SenaiteSamplesResponse {
@@ -2276,13 +2485,15 @@ export interface SenaiteSamplesResponse {
 export async function getSenaiteSamples(
   reviewState?: string,
   limit = 50,
-  bStart = 0
+  bStart = 0,
+  search?: string
 ): Promise<SenaiteSamplesResponse> {
   const params = new URLSearchParams({
     limit: String(limit),
     b_start: String(bStart),
   })
   if (reviewState) params.set('review_state', reviewState)
+  if (search) params.set('search', search)
   const response = await fetch(`${API_BASE_URL()}/senaite/samples?${params}`, {
     headers: getBearerHeaders(),
   })

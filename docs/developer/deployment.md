@@ -32,31 +32,33 @@ Internet
 
 ### What Lives on the Server
 
-| Path | Purpose | Managed By |
-|------|---------|------------|
-| `/root/accu-mk1/` | Application source code | `deploy.sh` (rsync) |
-| `/root/accu-mk1/backend/.env` | Backend secrets (DB creds, JWT, API keys) | Manual — **never overwritten by deploy** |
-| `/root/accu-mk1/docker-compose.yml` | Container orchestration | `deploy.sh` (rsync) |
-| `/root/accu-mk1/.env.docker` | Frontend env (VITE_API_URL) | `deploy.sh` (copies `.env.docker.prod`) |
-| `/etc/nginx/sites-enabled/accumk1-nginx.conf` | Host Nginx reverse proxy + SSL | Manual — lives outside repo |
-| `/etc/letsencrypt/` | SSL certificates (Let's Encrypt) | Certbot auto-renewal |
-| Docker volume `accu-mk1-data` | SQLite database | Persistent across deploys |
+| Path                                          | Purpose                                   | Managed By                               |
+| --------------------------------------------- | ----------------------------------------- | ---------------------------------------- |
+| `/root/accu-mk1/`                             | Application source code                   | `deploy.sh` (rsync)                      |
+| `/root/accu-mk1/backend/.env`                 | Backend secrets (DB creds, JWT, API keys) | Manual — **never overwritten by deploy** |
+| `/root/accu-mk1/docker-compose.yml`           | Container orchestration                   | `deploy.sh` (rsync)                      |
+| `/root/accu-mk1/.env.docker`                  | Frontend env (VITE_API_URL)               | `deploy.sh` (copies `.env.docker.prod`)  |
+| `/etc/nginx/sites-enabled/accumk1-nginx.conf` | Host Nginx reverse proxy + SSL            | Manual — lives outside repo              |
+| `/etc/letsencrypt/`                           | SSL certificates (Let's Encrypt)          | Certbot auto-renewal                     |
+| Docker volume `accu-mk1-data`                 | SQLite database                           | Persistent across deploys                |
 
 ### Environment Files — Two Files, Two Purposes
 
 There are **two separate env files** on the server. They serve completely different purposes:
 
-| File | Purpose | Contains | Overwritten by deploy? |
-|------|---------|----------|----------------------|
-| `.env.docker` | **Frontend** Vite build vars | `VITE_API_URL`, `VITE_WORDPRESS_URL`, `VITE_SENAITE_URL` | **Yes** — deploy.sh copies `.env.docker.prod` → `.env.docker` every deploy |
-| `backend/.env` | **Backend** secrets | DB credentials, JWT secret, API keys, SENAITE creds | **Never** — excluded from rsync, must be edited manually via SSH |
+| File           | Purpose                      | Contains                                                 | Overwritten by deploy?                                                     |
+| -------------- | ---------------------------- | -------------------------------------------------------- | -------------------------------------------------------------------------- |
+| `.env.docker`  | **Frontend** Vite build vars | `VITE_API_URL`, `VITE_WORDPRESS_URL`, `VITE_SENAITE_URL` | **Yes** — deploy.sh copies `.env.docker.prod` → `.env.docker` every deploy |
+| `backend/.env` | **Backend** secrets          | DB credentials, JWT secret, API keys, SENAITE creds      | **Never** — excluded from rsync, must be edited manually via SSH           |
 
 **`.env.docker`** (safe to overwrite):
+
 - Baked into the frontend JS bundle at Docker build time (`COPY .env.docker .env.production` in Dockerfile)
 - Source of truth is `.env.docker.prod` in the repo (committed, no secrets)
 - If wrong: frontend points to wrong API/SENAITE URLs — fix by redeploying or manually copying `.env.docker.prod`
 
 **`backend/.env`** (never overwrite):
+
 - Read at runtime by the FastAPI backend container
 - Contains production database credentials, JWT secret, API keys, SENAITE credentials
 - If lost: backend cannot connect to anything — restore from team password manager
@@ -114,6 +116,7 @@ bash scripts/deploy.sh --dry-run
 ```
 
 The script will:
+
 1. Prompt for SSH password
 2. Verify SSH connectivity and Docker
 3. Rsync source code (excluding secrets, node_modules, .git, src-tauri, etc.)
@@ -150,6 +153,7 @@ curl -s http://localhost:3100/api/health
 #### What Gets Synced (and What Doesn't)
 
 **Synced** (by rsync):
+
 - All source code, Dockerfiles, docker-compose.yml, nginx.conf (internal)
 - package.json, requirements.txt, config files
 
@@ -201,6 +205,8 @@ docker compose up -d --build
 ```
 
 #### Update Backend Environment Variables
+
+## # ALWAYS CHECK THE PRODCUTION ENV FILEs FIRST TO SEE IF WE NEED TO UPDATE IT. WE SHOULD NOT CHANGE THE PRODUCTION ENV FILEs UNLESS WE ABSOLUTELY MUST.
 
 ```bash
 ssh root@165.227.241.81
@@ -298,6 +304,7 @@ Updates are cryptographically signed — the app verifies the signature before i
 #### Step 1: Version Bump (Already Done If Following This Guide)
 
 Ensure these files have the new version:
+
 - `package.json` → `"version": "0.12.0"`
 - `src-tauri/tauri.conf.json` → `"version": "0.12.0"`
 
@@ -354,11 +361,11 @@ If you need to re-run the build without a new tag (e.g., a build failed due to C
 
 These must be configured in **Settings → Secrets and variables → Actions**:
 
-| Secret | Purpose |
-|--------|---------|
-| `TAURI_PRIVATE_KEY` | Signing key for update verification (content of `~/.tauri/myapp.key`) |
-| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Password for the signing key |
-| `GITHUB_TOKEN` | Automatic — provided by GitHub Actions |
+| Secret                               | Purpose                                                               |
+| ------------------------------------ | --------------------------------------------------------------------- |
+| `TAURI_PRIVATE_KEY`                  | Signing key for update verification (content of `~/.tauri/myapp.key`) |
+| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Password for the signing key                                          |
+| `GITHUB_TOKEN`                       | Automatic — provided by GitHub Actions                                |
 
 If the signing key is lost, you must generate a new one (`tauri signer generate -w ~/.tauri/myapp.key`), update the `pubkey` in `src-tauri/tauri.conf.json`, and update the GitHub secret. Users on old versions will NOT be able to auto-update — they'll need to manually download the new installer.
 
@@ -423,6 +430,7 @@ docker compose ps
 ```
 
 Common causes:
+
 - `backend/.env` is missing or has wrong values
 - Database migration needed (SQLAlchemy auto-creates tables, but schema changes may need manual intervention)
 - Port conflict (another service on 8012 or 3100)
@@ -460,6 +468,7 @@ docker compose restart backend
 ```
 
 The production `backend/.env` values are **not stored in the repo**. If they're lost, retrieve them from:
+
 - DigitalOcean Managed Database dashboard (DB credentials)
 - Team password manager (JWT_SECRET, API keys)
 - SENAITE admin panel (SENAITE credentials)

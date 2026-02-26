@@ -14,6 +14,7 @@ import {
   User,
   ExternalLink,
   Loader2,
+  X,
   XCircle,
   ArrowLeft,
   RefreshCw,
@@ -23,6 +24,8 @@ import {
   ImageIcon,
   Upload,
   Maximize2,
+  FileText,
+  Terminal,
   type LucideIcon,
 } from 'lucide-react'
 import { Card } from '@/components/ui/card'
@@ -48,14 +51,19 @@ import {
   fetchSenaiteAttachmentUrl,
   fetchSenaiteAttachmentText,
   uploadSenaiteAttachment,
+  fetchSenaiteReportUrl,
   getExplorerCOAGenerations,
+  getExplorerCOASignedUrl,
   generateSenaiteCOA,
   publishSenaiteCOA,
   type SenaiteLookupResult,
   type SenaiteAttachment,
   type SenaiteAttachmentType,
+  type SenaitePublishedCOA,
   type AdditionalCOAConfig,
   type ExplorerCOAGeneration,
+  type WooOrder,
+  getWooOrder,
 } from '@/lib/api'
 import {
   LineChart,
@@ -73,11 +81,353 @@ import {
 import { Textarea } from '@/components/ui/textarea'
 import { Spinner } from '@/components/ui/spinner'
 import { useUIStore } from '@/store/ui-store'
-import { getSenaiteUrl } from '@/lib/api-profiles'
+import { getSenaiteUrl, getWordpressUrl } from '@/lib/api-profiles'
+import { cn } from '@/lib/utils'
 import { EditableDataRow } from '@/components/dashboard/EditableField'
 import { AnalysisTable, StatusBadge } from '@/components/senaite/AnalysisTable'
 
+// --- COA Console ---
+
+type StepStatus = 'waiting' | 'running' | 'ok' | 'error'
+
+interface ConsoleStep {
+  id: string
+  label: string
+  status: StepStatus
+}
+
+interface COAConsoleState {
+  visible: boolean
+  title: string
+  steps: ConsoleStep[]
+  phase: 'running' | 'done' | 'error'
+  errorDetail?: string
+}
+
+interface StepDef {
+  id: string
+  label: string
+  /** ms from operation start when this step begins "running" */
+  delay: number
+}
+
+/**
+ * Map a backend error message to the step ID that most likely caused it.
+ * Returns the step index, or -1 if no match (fall through to running-step logic).
+ */
+function inferErrorStepIdx(errorDetail: string | undefined, steps: ConsoleStep[]): number {
+  if (!errorDetail) return -1
+  const msg = errorDetail.toLowerCase()
+  const find = (id: string) => steps.findIndex(s => s.id === id)
+
+  // generate-coa: COABuilder failures
+  if (msg.includes('coa builder') || msg.includes('coabuilder') || msg.includes('coa generation failed')) {
+    const i = find('coabuilder'); if (i >= 0) return i
+  }
+  // generate-coa: S3 upload failures
+  if (msg.includes('s3') || msg.includes('upload failed')) {
+    const i = find('s3'); if (i >= 0) return i
+  }
+  // generate-coa / publish: SENAITE attach or transition failures
+  if (msg.includes('senaite transition') || msg.includes('transition failed') || msg.includes('attach')) {
+    const i = find('senaite_tx') >= 0 ? find('senaite_tx') : find('attach')
+    if (i >= 0) return i
+  }
+  // publish: SENAITE unreachable (first step the backend checks)
+  if (msg.includes('senaite unreachable')) {
+    // Maps to the SENAITE transition step since that's the SENAITE-touching step in publish
+    const i = find('senaite_tx') >= 0 ? find('senaite_tx') : find('senaite')
+    if (i >= 0) return i
+  }
+  // publish: Integration Service down
+  if (msg.includes('integration service')) {
+    const i = find('primary') >= 0 ? find('primary') : find('draft')
+    if (i >= 0) return i
+  }
+  // publish: WordPress notification failure
+  if (msg.includes('wordpress') || msg.includes('wp-') || msg.includes('notify')) {
+    const i = find('wordpress'); if (i >= 0) return i
+  }
+
+  return -1
+}
+
+const GENERATE_STEPS: StepDef[] = [
+  { id: 'senaite',      label: 'Connecting to SENAITE',       delay: 0 },
+  { id: 'coabuilder',   label: 'Running COABuilder',          delay: 700 },
+  { id: 'verification', label: 'Reserving verification code', delay: 3800 },
+  { id: 's3',           label: 'Uploading PDF to S3',         delay: 4800 },
+  { id: 'attach',       label: 'Attaching to SENAITE',        delay: 6200 },
+]
+
+const PUBLISH_STEPS: StepDef[] = [
+  { id: 'draft',      label: 'Locating draft generation',  delay: 0 },
+  { id: 'primary',    label: 'Publishing primary COA',     delay: 500 },
+  { id: 'additional', label: 'Publishing additional COAs', delay: 1600 },
+  { id: 'wordpress',  label: 'Notifying WordPress',        delay: 2700 },
+  { id: 'senaite_tx', label: 'SENAITE transition',         delay: 3700 },
+]
+
+function COAConsole({
+  state,
+  onClose,
+}: {
+  state: COAConsoleState
+  onClose: () => void
+}) {
+  const [dotFrame, setDotFrame] = useState(0)
+
+  useEffect(() => {
+    if (state.phase !== 'running') return
+    const id = setInterval(() => setDotFrame(f => (f + 1) % 5), 280)
+    return () => clearInterval(id)
+  }, [state.phase])
+
+  if (!state.visible) return null
+
+  const dots = ['·', '··', '···', '····', '·····'][dotFrame]
+
+  return (
+    <div className="absolute right-0 top-full mt-2 z-50 w-[400px] rounded-lg overflow-hidden border border-zinc-800/80 shadow-2xl shadow-black/90 select-none">
+      {/* Title bar */}
+      <div className="bg-zinc-900 border-b border-zinc-800/80 px-3 py-2 flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2.5 min-w-0">
+          <div className="flex gap-1.5 shrink-0">
+            <div className={cn('w-2.5 h-2.5 rounded-full transition-colors', state.phase === 'error' ? 'bg-red-500' : 'bg-zinc-700')} />
+            <div className={cn('w-2.5 h-2.5 rounded-full transition-colors', state.phase === 'running' ? 'bg-amber-500/70 animate-pulse' : 'bg-zinc-700')} />
+            <div className={cn('w-2.5 h-2.5 rounded-full transition-colors', state.phase === 'done' ? 'bg-emerald-500' : 'bg-zinc-700')} />
+          </div>
+          <span className="text-[11px] text-zinc-500 font-mono truncate">
+            <span className="text-zinc-600">$</span> accumark {state.title}
+          </span>
+        </div>
+        {state.phase !== 'running' && (
+          <button
+            onClick={onClose}
+            className="shrink-0 text-zinc-600 hover:text-zinc-300 transition-colors text-[11px] font-mono leading-none"
+          >
+            ✕
+          </button>
+        )}
+      </div>
+
+      {/* Steps */}
+      <div className="bg-[#0d0d0d] px-3 py-3 space-y-2">
+        {state.steps.map(step => (
+          <div key={step.id} className="flex items-center gap-2 font-mono text-[11px] leading-tight">
+            {/* Gutter icon */}
+            <span className={cn('shrink-0 w-3 text-center', {
+              'text-zinc-700':   step.status === 'waiting',
+              'text-amber-400':  step.status === 'running',
+              'text-emerald-500': step.status === 'ok',
+              'text-red-500':    step.status === 'error',
+            })}>
+              {step.status === 'waiting' ? '·' :
+               step.status === 'running' ? '▶' :
+               step.status === 'ok'      ? '✓' : '✗'}
+            </span>
+            {/* Label */}
+            <span className={cn({
+              'text-zinc-700':  step.status === 'waiting',
+              'text-zinc-100':  step.status === 'running',
+              'text-zinc-500':  step.status === 'ok',
+              'text-red-400':   step.status === 'error',
+            })}>
+              {step.label}
+            </span>
+            {/* Dot fill */}
+            {step.status !== 'waiting' && (
+              <span className="flex-1 overflow-hidden whitespace-nowrap text-zinc-800">
+                {'·'.repeat(80)}
+              </span>
+            )}
+            {/* Status text */}
+            {step.status === 'running' && (
+              <span className="shrink-0 text-amber-400/80 w-12 text-right">{dots}</span>
+            )}
+            {step.status === 'ok' && (
+              <span className="shrink-0 text-emerald-500 font-bold w-12 text-right">OK</span>
+            )}
+            {step.status === 'error' && (
+              <span className="shrink-0 text-red-400 font-bold w-12 text-right">ERR</span>
+            )}
+          </div>
+        ))}
+
+        {/* Footer */}
+        <div className="pt-2 mt-1 border-t border-zinc-900 font-mono text-[10px]">
+          {state.phase === 'running' && (
+            <span className="text-amber-400/50">processing{dots}</span>
+          )}
+          {state.phase === 'done' && (
+            <span className="text-emerald-500/70">✓ completed successfully</span>
+          )}
+          {state.phase === 'error' && (
+            <span className="text-red-400/70">
+              ✗ {state.errorDetail ?? 'operation failed'}
+            </span>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // --- Local helpers ---
+
+function formatFileSize(bytes: number | null): string {
+  if (bytes == null) return '—'
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`
+}
+
+/** Derive a human-readable release status from the generation + ingestion records. */
+function coaReleaseStatus(gen: ExplorerCOAGeneration | null | undefined): {
+  label: string
+  color: 'amber' | 'emerald' | 'red' | 'zinc'
+  title: string
+} {
+  if (!gen) return { label: 'Generated', color: 'amber', title: 'COA saved to SENAITE — not yet published' }
+  if (gen.status === 'draft') return { label: 'Generated', color: 'amber', title: 'COA saved to SENAITE — not yet published' }
+  if (gen.status === 'superseded') return { label: 'Superseded', color: 'zinc', title: 'Replaced by a newer generation' }
+  // status === 'published' — check WP delivery
+  if (gen.ingestion_status === 'notified') return { label: 'Published', color: 'emerald', title: 'Customer notified via WordPress' }
+  if (gen.ingestion_status === 'partial') return { label: 'Published (WP failed)', color: 'red', title: 'Published in system but WordPress notification failed' }
+  if (gen.ingestion_status === 'uploaded') return { label: 'Published (pending notify)', color: 'amber', title: 'PDF uploaded — WordPress notification pending' }
+  // published with no ingestion record (desktop flow without WP order)
+  return { label: 'Published', color: 'emerald', title: 'Published in system' }
+}
+
+function PublishedCOACard({
+  coa,
+  sampleId,
+  verificationCode,
+  generation,
+  onRefresh,
+}: {
+  coa: SenaitePublishedCOA
+  sampleId: string
+  verificationCode: string | null | undefined
+  generation: ExplorerCOAGeneration | null | undefined
+  onRefresh: () => void
+}) {
+  const [loading, setLoading] = useState(false)
+  const release = coaReleaseStatus(generation)
+
+  const handleOpen = async () => {
+    setLoading(true)
+    try {
+      const url = await fetchSenaiteReportUrl(coa.report_uid)
+      window.open(url, '_blank')
+      // Revoke after enough time for the new tab to read the blob
+      setTimeout(() => URL.revokeObjectURL(url), 60_000)
+    } catch {
+      // toast already shown by api layer
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div className="flex items-start gap-3 p-3 rounded-lg bg-muted/40 border border-border/40">
+      <div className="flex items-center justify-center w-9 h-9 rounded-lg bg-red-500/10 border border-red-500/20 shrink-0 mt-0.5">
+        <FileText size={16} className="text-red-500 dark:text-red-400" />
+      </div>
+      <div className="flex-1 min-w-0 space-y-2">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="text-sm font-medium truncate">{sampleId} COA</span>
+            <span
+              title={release.title}
+              className={cn('shrink-0 text-[10px] font-medium px-1.5 py-0.5 rounded-full border', {
+                'bg-amber-500/10 text-amber-600 border-amber-500/30 dark:text-amber-400': release.color === 'amber',
+                'bg-emerald-500/10 text-emerald-600 border-emerald-500/30 dark:text-emerald-400': release.color === 'emerald',
+                'bg-red-500/10 text-red-500 border-red-500/30': release.color === 'red',
+                'bg-muted text-muted-foreground border-border/40': release.color === 'zinc',
+              })}
+            >
+              {release.label}
+            </span>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            {release.color === 'emerald' && verificationCode && (
+              <a
+                href={accuverifyUrl(verificationCode)}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2 transition-colors"
+              >
+                View Digital COA
+              </a>
+            )}
+            <button
+              onClick={handleOpen}
+              disabled={loading}
+              className="inline-flex items-center gap-1 px-2 py-1 text-xs rounded-md border border-border bg-background hover:bg-muted transition-colors disabled:opacity-50 cursor-pointer"
+            >
+              {loading ? <Loader2 size={11} className="animate-spin" /> : <ExternalLink size={11} />}
+              PDF
+            </button>
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-x-3 gap-y-1">
+          {coa.published_date && (
+            <>
+              <span className="text-[11px] text-muted-foreground">Published</span>
+              <span className="text-[11px]">{formatDate(coa.published_date)}</span>
+            </>
+          )}
+          {coa.published_by && (
+            <>
+              <span className="text-[11px] text-muted-foreground">Published by</span>
+              <span className="text-[11px]">{coa.published_by}</span>
+            </>
+          )}
+          <span className="text-[11px] text-muted-foreground">File size</span>
+          <span className="text-[11px]">{formatFileSize(coa.file_size_bytes)}</span>
+          <span className="text-[11px] text-muted-foreground">Verification Code</span>
+          <div className="flex items-center gap-1">
+            {verificationCode ? (
+              <>
+                <a
+                  href={accuverifyUrl(verificationCode)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-[11px] font-mono text-foreground hover:underline"
+                >
+                  {verificationCode}
+                </a>
+                <button
+                  onClick={() => {
+                    navigator.clipboard.writeText(verificationCode)
+                    toast.success('Verification code copied')
+                  }}
+                  className="shrink-0 text-muted-foreground/40 hover:text-muted-foreground transition-colors cursor-pointer"
+                  aria-label="Copy verification code"
+                >
+                  <Copy size={11} />
+                </button>
+              </>
+            ) : (
+              <>
+                <span className="text-[11px] text-muted-foreground">—</span>
+                <button
+                  onClick={onRefresh}
+                  className="shrink-0 text-muted-foreground/40 hover:text-muted-foreground transition-colors cursor-pointer"
+                  aria-label="Refresh from SENAITE"
+                  title="Check if verification code has been set"
+                >
+                  <RefreshCw size={11} />
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
 
 function AttachmentImage({ attachment }: { attachment: SenaiteAttachment }) {
   const [src, setSrc] = useState<string | null>(null)
@@ -458,6 +808,10 @@ function ProfileChip({ name }: { name: string }) {
 
 // StatusBadge and TabButton moved to AnalysisTable.tsx
 
+function accuverifyUrl(code: string): string {
+  return `${getWordpressUrl()}/accuverify/?accuverify_code=${encodeURIComponent(code)}`
+}
+
 function formatDate(dateStr: string | null | undefined): string {
   if (!dateStr) return '—'
   const d = new Date(dateStr)
@@ -566,12 +920,15 @@ function AddRemarkForm({
 
 function AdditionalCoaCard({
   coa,
+  sampleId,
   onUpdateState,
 }: {
   coa: AdditionalCOAConfig
+  sampleId: string
   onUpdateState: (field: keyof AdditionalCOAConfig['coa_info'], newValue: string | number | null) => void
 }) {
   const [open, setOpen] = useState(false)
+  const [downloading, setDownloading] = useState(false)
 
   const updateCoaField = (field: keyof AdditionalCOAConfig['coa_info']) =>
     async (newValue: string | number | null) => {
@@ -584,6 +941,19 @@ function AdditionalCoaCard({
     (newValue: string | number | null) => {
       onUpdateState(field, newValue)
     }
+
+  const handleDownload = async () => {
+    if (!coa.generation_number) return
+    setDownloading(true)
+    try {
+      const { url } = await getExplorerCOASignedUrl(sampleId, coa.generation_number)
+      window.open(url, '_blank')
+    } catch {
+      toast.error('Failed to open COA PDF')
+    } finally {
+      setDownloading(false)
+    }
+  }
 
   return (
     <div className="rounded-lg bg-muted/50 border border-border/30">
@@ -621,6 +991,58 @@ function AdditionalCoaCard({
       </button>
       {open && (
         <div className="px-2.5 pb-2.5 space-y-1">
+          {/* Verification code + PDF download */}
+          <div className="flex items-center justify-between py-1.5 border-b border-border/50">
+            <div className="flex items-center gap-1 min-w-0">
+              <span className="text-xs text-muted-foreground shrink-0 min-w-28 mr-3">Verification Code</span>
+              {coa.verification_code ? (
+                <>
+                  <a
+                    href={accuverifyUrl(coa.verification_code)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-sm font-mono text-foreground truncate hover:underline"
+                  >
+                    {coa.verification_code}
+                  </a>
+                  <button
+                    onClick={() => {
+                      navigator.clipboard.writeText(coa.verification_code!)
+                      toast.success('Verification code copied')
+                    }}
+                    className="shrink-0 text-muted-foreground/40 hover:text-muted-foreground transition-colors cursor-pointer ml-1"
+                    aria-label="Copy verification code"
+                  >
+                    <Copy size={11} />
+                  </button>
+                </>
+              ) : (
+                <span className="text-sm text-muted-foreground">—</span>
+              )}
+            </div>
+            <div className="flex items-center gap-2 shrink-0 ml-2">
+              {coa.status === 'published' && coa.verification_code && (
+                <a
+                  href={accuverifyUrl(coa.verification_code)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2 transition-colors"
+                >
+                  View Digital COA
+                </a>
+              )}
+              {coa.generation_number && (
+                <button
+                  onClick={handleDownload}
+                  disabled={downloading}
+                  className="inline-flex items-center gap-1 px-2 py-1 text-xs rounded-md border border-border bg-background hover:bg-muted transition-colors disabled:opacity-50 cursor-pointer"
+                >
+                  {downloading ? <Loader2 size={11} className="animate-spin" /> : <ExternalLink size={11} />}
+                  PDF
+                </button>
+              )}
+            </div>
+          </div>
           <EditableDataRow
             label="Company"
             value={coa.coa_info.company_name ?? null}
@@ -698,6 +1120,230 @@ function AdditionalCoaCard({
   )
 }
 
+// --- WooCommerce Order Flyout ---
+
+function formatUSD(amount: number): string {
+  return amount.toLocaleString('en-US', { style: 'currency', currency: 'USD' })
+}
+
+const WOO_STATUS_COLOR: Record<string, string> = {
+  completed: 'text-emerald-500',
+  processing: 'text-blue-400',
+  'on-hold': 'text-amber-400',
+  pending: 'text-zinc-400',
+  cancelled: 'text-red-400',
+  refunded: 'text-red-400',
+  failed: 'text-red-400',
+}
+
+function WooOrderFlyout({
+  order,
+  loading,
+  onClose,
+}: {
+  order: WooOrder | null
+  loading: boolean
+  onClose: () => void
+}) {
+  const subtotal = order?.line_items.reduce((s, i) => s + parseFloat(i.subtotal || '0'), 0) ?? 0
+  const discountTotal = parseFloat(order?.discount_total ?? '0')
+  const shippingTotal = parseFloat(order?.shipping_total ?? '0')
+  const taxTotal = parseFloat(order?.total_tax ?? '0')
+  const grandTotal = parseFloat(order?.total ?? '0')
+
+  return (
+    <>
+      {/* Backdrop */}
+      <div
+        className="fixed inset-0 bg-black/40 z-40"
+        onClick={onClose}
+        style={{ backdropFilter: 'blur(2px)', animation: 'wooFadeIn 0.2s ease-out' }}
+      />
+      {/* Panel */}
+      <div
+        className="fixed top-0 right-0 h-full w-full max-w-lg z-50 bg-background border-l border-border shadow-2xl overflow-y-auto flex flex-col"
+        style={{ animation: 'wooSlideIn 0.25s ease-out' }}
+      >
+        {/* Header */}
+        <div className="sticky top-0 z-10 flex items-center justify-between px-5 py-4 bg-background/95 border-b border-border backdrop-blur">
+          <div>
+            <div className="flex items-center gap-2">
+              <h3 className="text-sm font-semibold">Order #{order?.number ?? '…'}</h3>
+              {order?.status && (
+                <span className={cn('text-xs capitalize', WOO_STATUS_COLOR[order.status] ?? 'text-zinc-400')}>
+                  {order.status}
+                </span>
+              )}
+            </div>
+            {order?.date_created && (
+              <p className="text-xs text-muted-foreground">
+                {new Date(order.date_created).toLocaleDateString('en-US', {
+                  month: 'short', day: 'numeric', year: 'numeric',
+                })}
+                {order.payment_method_title ? ` · ${order.payment_method_title}` : ''}
+              </p>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-md p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        {/* Body */}
+        <div className="flex-1 p-5 space-y-5">
+          {loading && (
+            <div className="flex items-center justify-center py-16">
+              <Loader2 className="animate-spin text-muted-foreground" size={22} />
+            </div>
+          )}
+
+          {!loading && !order && (
+            <p className="text-sm text-muted-foreground text-center py-16">
+              Order not found in WooCommerce
+            </p>
+          )}
+
+          {!loading && order && (
+            <>
+              {/* Billing */}
+              <section>
+                <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-2">
+                  Customer
+                </p>
+                <div className="rounded-md border border-border p-3 space-y-0.5">
+                  {order.billing.company && (
+                    <p className="text-sm font-medium">{order.billing.company}</p>
+                  )}
+                  <p className="text-sm">
+                    {order.billing.first_name} {order.billing.last_name}
+                  </p>
+                  <p className="text-xs text-muted-foreground">{order.billing.email}</p>
+                  {order.billing.phone && (
+                    <p className="text-xs text-muted-foreground">{order.billing.phone}</p>
+                  )}
+                </div>
+              </section>
+
+              {/* Line items */}
+              {order.line_items.length > 0 && (
+                <section>
+                  <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-2">
+                    Items ({order.line_items.length})
+                  </p>
+                  <div className="rounded-md border border-border divide-y divide-border">
+                    {order.line_items.map(item => (
+                      <div key={item.id} className="flex items-start justify-between px-3 py-2.5 gap-3">
+                        <div className="min-w-0">
+                          <p className="text-sm leading-snug">{item.name}</p>
+                          {item.quantity > 1 && (
+                            <p className="text-xs text-muted-foreground">
+                              {item.quantity} × {formatUSD(item.price)}
+                            </p>
+                          )}
+                        </div>
+                        <span className="text-xs font-mono shrink-0 pt-0.5">
+                          {formatUSD(parseFloat(item.subtotal))}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              )}
+
+              {/* Order summary */}
+              <section>
+                <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-2">
+                  Summary
+                </p>
+                <div className="rounded-md border border-border p-3 space-y-1.5 text-xs">
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Subtotal</span>
+                    <span className="font-mono">{formatUSD(subtotal)}</span>
+                  </div>
+
+                  {/* Coupon lines */}
+                  {order.coupon_lines.map(c => (
+                    <div key={c.id} className="flex justify-between">
+                      <span className="text-emerald-500">
+                        Coupon:{' '}
+                        <span className="font-mono uppercase">{c.code}</span>
+                      </span>
+                      <span className="font-mono text-emerald-500">
+                        −{formatUSD(parseFloat(c.discount))}
+                      </span>
+                    </div>
+                  ))}
+
+                  {/* Flat discount (no coupon lines) */}
+                  {order.coupon_lines.length === 0 && discountTotal > 0 && (
+                    <div className="flex justify-between">
+                      <span className="text-emerald-500">Discount</span>
+                      <span className="font-mono text-emerald-500">−{formatUSD(discountTotal)}</span>
+                    </div>
+                  )}
+
+                  {/* Shipping */}
+                  {order.shipping_lines.map(s => (
+                    <div key={s.id} className="flex justify-between">
+                      <span className="text-muted-foreground">
+                        {s.method_title || 'Shipping'}
+                      </span>
+                      <span className="font-mono">
+                        {shippingTotal === 0 ? 'Free' : formatUSD(shippingTotal)}
+                      </span>
+                    </div>
+                  ))}
+
+                  {/* Tax */}
+                  {taxTotal > 0 && (
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Tax</span>
+                      <span className="font-mono">{formatUSD(taxTotal)}</span>
+                    </div>
+                  )}
+
+                  {/* Total */}
+                  <div className="flex justify-between text-sm font-semibold pt-2 border-t border-border">
+                    <span>Total</span>
+                    <span className="font-mono">{formatUSD(grandTotal)}</span>
+                  </div>
+                </div>
+              </section>
+
+              {/* Customer note */}
+              {order.customer_note && (
+                <section>
+                  <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-2">
+                    Customer Note
+                  </p>
+                  <p className="text-sm text-muted-foreground italic rounded-md border border-border p-3">
+                    {order.customer_note}
+                  </p>
+                </section>
+              )}
+            </>
+          )}
+        </div>
+      </div>
+
+      <style>{`
+        @keyframes wooSlideIn {
+          from { transform: translateX(100%); }
+          to { transform: translateX(0); }
+        }
+        @keyframes wooFadeIn {
+          from { opacity: 0; }
+          to { opacity: 1; }
+        }
+      `}</style>
+    </>
+  )
+}
+
 // --- Main Component ---
 
 export function SampleDetails() {
@@ -711,8 +1357,18 @@ export function SampleDetails() {
   const [coaGenerations, setCoaGenerations] = useState<ExplorerCOAGeneration[]>([])
   const [isGeneratingCOA, setIsGeneratingCOA] = useState(false)
   const [isPublishingCOA, setIsPublishingCOA] = useState(false)
+  const [coaConsole, setCoaConsole] = useState<COAConsoleState>({
+    visible: false,
+    title: '',
+    steps: [],
+    phase: 'running',
+  })
+  const consoleTimers = useRef<ReturnType<typeof setTimeout>[]>([])
   const [showOlderImages, setShowOlderImages] = useState(false)
   const [showOlderHplc, setShowOlderHplc] = useState(false)
+  const [wooOrderOpen, setWooOrderOpen] = useState(false)
+  const [wooOrderData, setWooOrderData] = useState<WooOrder | null>(null)
+  const [wooOrderLoading, setWooOrderLoading] = useState(false)
 
   const fetchSample = (id: string) => {
     setLoading(true)
@@ -729,6 +1385,22 @@ export function SampleDetails() {
     lookupSenaiteSample(id)
       .then(result => setData(result))
       .catch(e => toast.error('Refresh failed', { description: e instanceof Error ? e.message : String(e) }))
+  }
+
+  const openOrderFlyout = async () => {
+    const orderId = data?.client_order_number?.match(/\d+/)?.[0]
+    if (!orderId) return
+    setWooOrderOpen(true)
+    setWooOrderLoading(true)
+    try {
+      const order = await getWooOrder(orderId)
+      setWooOrderData(order)
+    } catch {
+      toast.error('Failed to load order details')
+      setWooOrderOpen(false)
+    } finally {
+      setWooOrderLoading(false)
+    }
   }
 
   useEffect(() => {
@@ -829,26 +1501,109 @@ export function SampleDetails() {
 
   const hasDraftCOA = coaGenerations.some(g => g.status === 'draft')
 
+  /** Kicks off the animated console and returns a `resolve(ok, errMsg?)` function. */
+  const startCOAConsole = (title: string, stepDefs: StepDef[]) => {
+    // Clear any pending timers from a previous run
+    consoleTimers.current.forEach(clearTimeout)
+    consoleTimers.current = []
+
+    const initial: ConsoleStep[] = stepDefs.map(s => ({ id: s.id, label: s.label, status: 'waiting' }))
+    setCoaConsole({ visible: true, title, steps: initial, phase: 'running' })
+
+    // Schedule each step becoming 'running' (and the previous one 'ok')
+    stepDefs.forEach((def, idx) => {
+      const t = setTimeout(() => {
+        setCoaConsole(prev => ({
+          ...prev,
+          steps: prev.steps.map((s, i) => {
+            if (i === idx) return { ...s, status: 'running' }
+            if (i === idx - 1 && s.status === 'running') return { ...s, status: 'ok' }
+            return s
+          }),
+        }))
+      }, def.delay)
+      consoleTimers.current.push(t)
+    })
+
+    // Returns a settle function — call when the API resolves
+    return (success: boolean, errorDetail?: string) => {
+      consoleTimers.current.forEach(clearTimeout)
+      consoleTimers.current = []
+
+      if (success) {
+        setCoaConsole(prev => ({
+          ...prev,
+          phase: 'done',
+          steps: prev.steps.map(s => ({ ...s, status: s.status === 'error' ? 'error' : 'ok' })),
+        }))
+        // Auto-dismiss after 4s on success
+        const t = setTimeout(() => setCoaConsole(prev => ({ ...prev, visible: false })), 4000)
+        consoleTimers.current.push(t)
+      } else {
+        setCoaConsole(prev => {
+          // Try to infer the actual failing step from the error message
+          const inferredIdx = inferErrorStepIdx(errorDetail, prev.steps)
+
+          if (inferredIdx >= 0) {
+            // Paint steps before the failure as OK, the failure step as ERR,
+            // and steps after as waiting (they never ran)
+            return {
+              ...prev,
+              phase: 'error',
+              errorDetail,
+              steps: prev.steps.map((s, i) => {
+                if (i < inferredIdx) return { ...s, status: 'ok' }
+                if (i === inferredIdx) return { ...s, status: 'error' }
+                return { ...s, status: 'waiting' }
+              }),
+            }
+          }
+
+          // Fallback: mark the running step as error; if none is running,
+          // mark the last non-waiting step so something always turns red
+          const hasRunning = prev.steps.some(s => s.status === 'running')
+          let lastActiveIdx = -1
+          if (!hasRunning) {
+            prev.steps.forEach((s, i) => { if (s.status !== 'waiting') lastActiveIdx = i })
+          }
+          return {
+            ...prev,
+            phase: 'error',
+            errorDetail,
+            steps: prev.steps.map((s, i) => {
+              if (s.status === 'running') return { ...s, status: 'error' }
+              if (!hasRunning && i === lastActiveIdx) return { ...s, status: 'error' }
+              return s
+            }),
+          }
+        })
+      }
+    }
+  }
+
   const handleGenerateCOA = async () => {
     setIsGeneratingCOA(true)
+    const settle = startCOAConsole(`generate-coa ${sampleId}`, GENERATE_STEPS)
     try {
       const result = await generateSenaiteCOA(sampleId)
       if (result.success) {
-        toast.success(result.message || 'COA generation triggered')
-        // Populate verification code immediately from the response
+        settle(true)
         if (result.verification_code) {
           setData(prev =>
             prev ? { ...prev, coa: { ...prev.coa, verification_code: result.verification_code } } : prev
           )
         }
-        // Silent refresh to pick up ARReport attachment and other SENAITE state changes
         refreshSample(sampleId)
         getExplorerCOAGenerations(sampleId, 10).then(setCoaGenerations).catch(() => {})
+        getSampleAdditionalCOAs(sampleId).then(setAdditionalCoas).catch(() => {})
       } else {
+        settle(false, result.message ?? 'Generation failed')
         toast.error('COA generation failed', { description: result.message })
       }
     } catch (err) {
-      toast.error('COA generation failed', { description: err instanceof Error ? err.message : 'Unknown error' })
+      const msg = err instanceof Error ? err.message : 'Unknown error'
+      settle(false, msg)
+      toast.error('COA generation failed', { description: msg })
     } finally {
       setIsGeneratingCOA(false)
     }
@@ -856,17 +1611,21 @@ export function SampleDetails() {
 
   const handlePublishCOA = async () => {
     setIsPublishingCOA(true)
+    const settle = startCOAConsole(`publish-coa ${sampleId}`, PUBLISH_STEPS)
     try {
       const result = await publishSenaiteCOA(sampleId)
       if (result.success) {
-        toast.success('COA published')
+        settle(true)
         refreshSample(sampleId)
         getExplorerCOAGenerations(sampleId, 10).then(setCoaGenerations).catch(() => {})
       } else {
+        settle(false, result.message ?? 'Publish failed')
         toast.error('COA publish failed', { description: result.message })
       }
     } catch (err) {
-      toast.error('COA publish failed', { description: err instanceof Error ? err.message : 'Unknown error' })
+      const msg = err instanceof Error ? err.message : 'Unknown error'
+      settle(false, msg)
+      toast.error('COA publish failed', { description: msg })
     } finally {
       setIsPublishingCOA(false)
     }
@@ -905,39 +1664,62 @@ export function SampleDetails() {
             <ChevronRight size={12} className="text-muted-foreground" />
             <span className="text-sm font-medium">{data.sample_id}</span>
           </div>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="outline"
-                size="sm"
-                className="gap-1.5 cursor-pointer"
-                disabled={isGeneratingCOA || isPublishingCOA}
-              >
-                {(isGeneratingCOA || isPublishingCOA) ? (
-                  <Loader2 size={13} className="animate-spin" />
-                ) : (
-                  <ChevronDown size={13} />
+          <div className="flex items-center gap-1.5">
+            <div className="relative">
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="gap-1.5 cursor-pointer"
+                    disabled={isGeneratingCOA || isPublishingCOA}
+                  >
+                    {(isGeneratingCOA || isPublishingCOA) ? (
+                      <Loader2 size={13} className="animate-spin" />
+                    ) : (
+                      <ChevronDown size={13} />
+                    )}
+                    Actions
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-52">
+                  <DropdownMenuItem
+                    onClick={handleGenerateCOA}
+                    disabled={isGeneratingCOA}
+                    className="cursor-pointer"
+                  >
+                    Generate Accumark COA
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onClick={handlePublishCOA}
+                    disabled={isPublishingCOA || !hasDraftCOA}
+                    className="cursor-pointer"
+                  >
+                    Publish Accumark COA
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+              <COAConsole
+                state={coaConsole}
+                onClose={() => setCoaConsole(prev => ({ ...prev, visible: false }))}
+              />
+            </div>
+            {/* Console re-open button — only visible after an operation has run */}
+            {coaConsole.title && !coaConsole.visible && (
+              <button
+                onClick={() => setCoaConsole(prev => ({ ...prev, visible: true }))}
+                className={cn(
+                  'flex items-center justify-center w-7 h-7 rounded-md border transition-colors cursor-pointer',
+                  coaConsole.phase === 'error'
+                    ? 'border-red-500/40 bg-red-500/10 text-red-400 hover:bg-red-500/20'
+                    : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500/20'
                 )}
-                Actions
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-52">
-              <DropdownMenuItem
-                onClick={handleGenerateCOA}
-                disabled={isGeneratingCOA}
-                className="cursor-pointer"
+                title="Show last operation log"
               >
-                Generate Accumark COA
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                onClick={handlePublishCOA}
-                disabled={isPublishingCOA || !hasDraftCOA}
-                className="cursor-pointer"
-              >
-                Publish Accumark COA
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+                <Terminal size={12} />
+              </button>
+            )}
+          </div>
         </div>
 
         {/* Sticky header band — bleeds to container edges with -mx-6 px-6 */}
@@ -1065,66 +1847,6 @@ export function SampleDetails() {
                     }
                   />
                   <DataRow label="Date Received" value={formatDate(data.date_received)} />
-                  <EditableDataRow
-                    label="Declared Qty"
-                    value={data.declared_weight_mg}
-                    senaiteField="DeclaredTotalQuantity"
-                    sampleUid={data.sample_uid ?? ''}
-                    type="number"
-                    mono
-                    emphasis
-                    suffix="mg"
-                    formatDisplay={v =>
-                      v != null ? (
-                        <span className="font-mono text-emerald-700 dark:text-emerald-400 font-semibold">
-                          {v} mg
-                        </span>
-                      ) : (
-                        '—'
-                      )
-                    }
-                    onSaved={v =>
-                      setData(prev =>
-                        prev
-                          ? { ...prev, declared_weight_mg: v != null ? Number(v) : null }
-                          : prev
-                      )
-                    }
-                  />
-                  {/* Verification Code — set by COA Builder after generation */}
-                  <div className="flex items-baseline justify-between py-1.5 border-b border-border/50 last:border-0">
-                    <span className="text-xs text-muted-foreground shrink-0 min-w-28 mr-3">Verification</span>
-                    <div className="flex items-center gap-1 min-w-0">
-                      {data.coa.verification_code ? (
-                        <span className="text-sm font-mono text-foreground truncate">
-                          {data.coa.verification_code}
-                        </span>
-                      ) : (
-                        <span className="text-sm text-muted-foreground">—</span>
-                      )}
-                      {data.coa.verification_code ? (
-                        <button
-                          onClick={() => {
-                            navigator.clipboard.writeText(data.coa.verification_code!)
-                            toast.success('Verification code copied')
-                          }}
-                          className="shrink-0 text-muted-foreground/40 hover:text-muted-foreground transition-colors cursor-pointer"
-                          aria-label="Copy verification code"
-                        >
-                          <Copy size={11} />
-                        </button>
-                      ) : (
-                        <button
-                          onClick={() => refreshSample(sampleId)}
-                          className="shrink-0 text-muted-foreground/40 hover:text-muted-foreground transition-colors cursor-pointer"
-                          aria-label="Refresh from SENAITE"
-                          title="Check if verification code has been set"
-                        >
-                          <RefreshCw size={11} />
-                        </button>
-                      )}
-                    </div>
-                  </div>
                 </div>
                 {data.profiles.length > 0 && (
                   <div className="mt-3 pt-3 border-t border-border">
@@ -1144,19 +1866,44 @@ export function SampleDetails() {
             <Card className="p-4">
               <SectionHeader icon={Hash} title="Order Details">
                 <div className="space-y-0">
-                  <EditableDataRow
-                    label="Order #"
-                    value={data.client_order_number}
-                    senaiteField="ClientOrderNumber"
-                    sampleUid={data.sample_uid ?? ''}
-                    mono
-                    emphasis
-                    onSaved={v =>
-                      setData(prev =>
-                        prev ? { ...prev, client_order_number: v as string | null } : prev
-                      )
-                    }
-                  />
+                  <div className="border-b border-border/50">
+                    <div className="[&>div]:border-0 [&>div]:pb-0">
+                      <EditableDataRow
+                        label="Order #"
+                        value={data.client_order_number}
+                        senaiteField="ClientOrderNumber"
+                        sampleUid={data.sample_uid ?? ''}
+                        mono
+                        emphasis
+                        onSaved={v =>
+                          setData(prev =>
+                            prev ? { ...prev, client_order_number: v as string | null } : prev
+                          )
+                        }
+                      />
+                    </div>
+                    {data.client_order_number && /\d+/.test(data.client_order_number) && (
+                      <div className="flex items-center justify-end gap-3 pb-1">
+                        <button
+                          type="button"
+                          onClick={openOrderFlyout}
+                          className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+                        >
+                          <Layers size={10} />
+                          View Order Details
+                        </button>
+                        <a
+                          href={`${getWordpressUrl()}/wp-admin/admin.php?page=wc-orders&action=edit&id=${data.client_order_number.match(/\d+/)?.[0]}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-blue-500 transition-colors"
+                        >
+                          <ExternalLink size={10} />
+                          View in WP Admin
+                        </a>
+                      </div>
+                    )}
+                  </div>
                   <EditableDataRow
                     label="Client Sample ID"
                     value={data.client_sample_id}
@@ -1195,116 +1942,6 @@ export function SampleDetails() {
                     }
                   />
                 </div>
-              </SectionHeader>
-            </Card>
-
-            {/* Additional COAs from Integration Service */}
-            {additionalCoas.length > 0 && (
-              <Card className="p-4">
-                <SectionHeader icon={Copy} title={`Additional COAs (${additionalCoas.length})`}>
-                  <div className="space-y-3">
-                    {additionalCoas.map(coa => (
-                      <AdditionalCoaCard
-                        key={coa.config_id}
-                        coa={coa}
-                        onUpdateState={(field, newValue) =>
-                          setAdditionalCoas(prev =>
-                            prev.map(c =>
-                              c.config_id === coa.config_id
-                                ? { ...c, coa_info: { ...c.coa_info, [field]: newValue as string | null } }
-                                : c
-                            )
-                          )
-                        }
-                      />
-                    ))}
-                  </div>
-                </SectionHeader>
-              </Card>
-            )}
-          </div>
-
-          {/* Right column: Analytes + COA Info stacked */}
-          <div className="space-y-4">
-            <Card className="p-4">
-              <SectionHeader icon={Layers} title="Analytes">
-                {data.analytes.length > 0 ? (
-                  <div className="space-y-3">
-                    {data.analytes.map((analyte) => {
-                      const displayName = analyteNameMap.get(analyte.slot_number) ?? analyte.raw_name
-                      const slot = analyte.slot_number
-                      return (
-                        <div
-                          key={slot}
-                          className="p-2.5 rounded-lg bg-muted/50 border border-border/30 space-y-1"
-                        >
-                          <div className="flex items-center gap-2 mb-1">
-                            <span className="font-mono text-xs px-1.5 py-0.5 rounded bg-muted text-muted-foreground">
-                              A{slot}
-                            </span>
-                            <span className="text-[11px] text-muted-foreground">
-                              Analyte {slot}
-                            </span>
-                          </div>
-                          <div className="[&>div]:border-0 [&>div]:py-1">
-                          <EditableDataRow
-                            label="Peptide"
-                            value={displayName}
-                            senaiteField={`Analyte${slot}Peptide`}
-                            sampleUid={data.sample_uid ?? ''}
-                            onSaved={v =>
-                              setData(prev => {
-                                if (!prev) return prev
-                                const updated = prev.analytes.map(a =>
-                                  a.slot_number === slot
-                                    ? { ...a, matched_peptide_name: (v as string) ?? a.matched_peptide_name }
-                                    : a
-                                )
-                                return { ...prev, analytes: updated }
-                              })
-                            }
-                          />
-                          <EditableDataRow
-                            label="Declared Qty"
-                            value={analyte.declared_quantity}
-                            senaiteField={`Analyte${slot}DeclaredQuantity`}
-                            sampleUid={data.sample_uid ?? ''}
-                            type="number"
-                            mono
-                            suffix="mg"
-                            onSaved={v =>
-                              setData(prev => {
-                                if (!prev) return prev
-                                const updated = prev.analytes.map(a =>
-                                  a.slot_number === slot
-                                    ? { ...a, declared_quantity: v != null ? Number(v) : null }
-                                    : a
-                                )
-                                return { ...prev, analytes: updated }
-                              })
-                            }
-                          />
-                          </div>
-                        </div>
-                      )
-                    })}
-                  </div>
-                ) : (
-                  <p className="text-sm text-muted-foreground">No analytes defined</p>
-                )}
-                {data.declared_weight_mg != null && (
-                  <div className="mt-3 pt-3 border-t border-border">
-                    <DataRow
-                      label="Total Declared Qty"
-                      value={
-                        <span className="font-mono text-amber-600 dark:text-amber-400 font-semibold">
-                          {data.declared_weight_mg} mg
-                        </span>
-                      }
-                      emphasis
-                    />
-                  </div>
-                )}
               </SectionHeader>
             </Card>
 
@@ -1351,11 +1988,23 @@ export function SampleDetails() {
                     }
                   />
                   <EditableDataRow
-                    label="Verification"
+                    label="Verification Code"
                     value={data.coa.verification_code}
                     senaiteField="VerificationCode"
                     sampleUid={data.sample_uid ?? ''}
                     mono
+                    formatDisplay={v =>
+                      v ? (
+                        <a
+                          href={accuverifyUrl(v as string)}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="font-mono hover:underline"
+                        >
+                          {v}
+                        </a>
+                      ) : '—'
+                    }
                     onSaved={v =>
                       setData(prev =>
                         prev
@@ -1439,6 +2088,135 @@ export function SampleDetails() {
                 </div>
               </SectionHeader>
             </Card>
+          </div>
+
+          {/* Right column: Generated COAs + Additional COAs + Analytes stacked */}
+          <div className="space-y-4">
+            {/* Generated COAs */}
+            <Card className="p-4">
+              <SectionHeader icon={FileText} title="Generated COAs">
+                {data.published_coa ? (
+                  <PublishedCOACard
+                    coa={data.published_coa}
+                    sampleId={data.sample_id}
+                    verificationCode={data.coa.verification_code}
+                    generation={coaGenerations.find(g => g.parent_generation_id == null && g.status !== 'superseded') ?? null}
+                    onRefresh={() => refreshSample(sampleId)}
+                  />
+                ) : (
+                  <p className="text-sm text-muted-foreground">No COA generated yet</p>
+                )}
+              </SectionHeader>
+            </Card>
+
+            {/* Additional COAs from Integration Service */}
+            {additionalCoas.length > 0 && (
+              <Card className="p-4">
+                <SectionHeader icon={Copy} title={`Additional COAs (${additionalCoas.length})`}>
+                  <div className="space-y-3">
+                    {additionalCoas.map(coa => (
+                      <AdditionalCoaCard
+                        key={coa.config_id}
+                        coa={coa}
+                        sampleId={data.sample_id}
+                        onUpdateState={(field, newValue) =>
+                          setAdditionalCoas(prev =>
+                            prev.map(c =>
+                              c.config_id === coa.config_id
+                                ? { ...c, coa_info: { ...c.coa_info, [field]: newValue as string | null } }
+                                : c
+                            )
+                          )
+                        }
+                      />
+                    ))}
+                  </div>
+                </SectionHeader>
+              </Card>
+            )}
+
+            <Card className="p-4">
+              <SectionHeader icon={Layers} title="Analytes">
+                {data.analytes.length > 0 ? (
+                  <div className="space-y-3">
+                    {data.analytes.map((analyte) => {
+                      const displayName = analyteNameMap.get(analyte.slot_number) ?? analyte.raw_name
+                      const slot = analyte.slot_number
+                      return (
+                        <div
+                          key={slot}
+                          className="p-2.5 rounded-lg bg-muted/50 border border-border/30 space-y-1"
+                        >
+                          <div className="flex items-center gap-2 mb-1">
+                            <span className="font-mono text-xs px-1.5 py-0.5 rounded bg-muted text-muted-foreground">
+                              A{slot}
+                            </span>
+                            <span className="text-[11px] text-muted-foreground">
+                              Analyte {slot}
+                            </span>
+                          </div>
+                          <div className="[&>div]:border-0 [&>div]:py-1">
+                          <EditableDataRow
+                            label="Peptide"
+                            value={displayName}
+                            senaiteField={`Analyte${slot}Peptide`}
+                            sampleUid={data.sample_uid ?? ''}
+                            onSaved={v =>
+                              setData(prev => {
+                                if (!prev) return prev
+                                const updated = prev.analytes.map(a =>
+                                  a.slot_number === slot
+                                    ? { ...a, matched_peptide_name: (v as string) ?? a.matched_peptide_name }
+                                    : a
+                                )
+                                return { ...prev, analytes: updated }
+                              })
+                            }
+                          />
+                          <EditableDataRow
+                            label="Declared Qty"
+                            value={analyte.declared_quantity}
+                            senaiteField={`Analyte${slot}DeclaredQuantity`}
+                            sampleUid={data.sample_uid ?? ''}
+                            type="number"
+                            mono
+                            suffix="mg"
+                            onSaved={v =>
+                              setData(prev => {
+                                if (!prev) return prev
+                                const updated = prev.analytes.map(a =>
+                                  a.slot_number === slot
+                                    ? { ...a, declared_quantity: v != null ? Number(v) : null }
+                                    : a
+                                )
+                                return { ...prev, analytes: updated }
+                              })
+                            }
+                          />
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                ) : (
+                  <p className="text-sm text-muted-foreground">No analytes defined</p>
+                )}
+                {data.declared_weight_mg != null && (
+                  <div className="mt-3 pt-3 border-t border-border">
+                    <DataRow
+                      label="Total Declared Qty"
+                      value={
+                        <span className="font-mono text-amber-600 dark:text-amber-400 font-semibold">
+                          {data.declared_weight_mg} mg
+                        </span>
+                      }
+                      emphasis
+                    />
+                  </div>
+                )}
+              </SectionHeader>
+            </Card>
+
           </div>
         </div>
 
@@ -1603,8 +2381,35 @@ export function SampleDetails() {
               }
             })
           }}
+          onMethodInstrumentSaved={(uid, field, newUid, newTitle) => {
+            setData(prev => {
+              if (!prev) return prev
+              return {
+                ...prev,
+                analyses: prev.analyses.map(a =>
+                  a.uid === uid
+                    ? field === 'method'
+                      ? { ...a, method: newTitle, method_uid: newUid }
+                      : { ...a, instrument: newTitle, instrument_uid: newUid }
+                    : a
+                ),
+              }
+            })
+          }}
           onTransitionComplete={() => refreshSample(data.sample_id)}
         />
+
+      {/* Woo Order flyout */}
+      {wooOrderOpen && (
+        <WooOrderFlyout
+          order={wooOrderData}
+          loading={wooOrderLoading}
+          onClose={() => {
+            setWooOrderOpen(false)
+            setWooOrderData(null)
+          }}
+        />
+      )}
     </div>
   )
 }

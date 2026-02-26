@@ -3,6 +3,7 @@ FastAPI backend for Accu-Mk1.
 Provides REST API for scientific calculations, database access, and audit logging.
 """
 
+import asyncio
 import json
 import os
 import re
@@ -4213,6 +4214,25 @@ def get_explorer_orders(
         )
 
 
+@app.get("/explorer/orders/{order_id}", response_model=ExplorerOrderResponse)
+async def get_explorer_order(order_id: str, _current_user=Depends(get_current_user)):
+    """Get a single order by WordPress order ID from Integration Service."""
+    import httpx as _httpx
+    url = f"{os.environ.get('INTEGRATION_SERVICE_URL', 'http://host.docker.internal:8000')}/explorer/orders/{order_id}"
+    api_key = os.environ.get("ACCU_MK1_API_KEY", "")
+    try:
+        async with _httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(url, headers={"X-API-Key": api_key})
+            if resp.status_code == 404:
+                raise HTTPException(status_code=404, detail=f"Order {order_id} not found")
+            resp.raise_for_status()
+            return resp.json()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Integration Service unavailable: {e}")
+
+
 @app.get("/explorer/orders/{order_id}/ingestions", response_model=list[ExplorerIngestionResponse])
 def get_order_ingestions(order_id: str, _current_user=Depends(get_current_user)):
     """
@@ -4321,6 +4341,41 @@ async def get_sample_additional_coas(sample_id: str, _current_user=Depends(get_c
         raise HTTPException(status_code=e.response.status_code, detail=e.response.text)
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Integration Service unavailable: {e}")
+
+
+# ── WooCommerce REST API Proxy ──────────────────────────────────────
+# Fetches live order data directly from WooCommerce, including full
+# financial breakdown (totals, discounts, coupons, shipping, tax).
+
+WC_CONSUMER_KEY = os.environ.get("WC_CONSUMER_KEY", "")
+WC_CONSUMER_SECRET = os.environ.get("WC_CONSUMER_SECRET", "")
+
+
+def _get_wp_host() -> str:
+    """Return WordPress host URL based on active environment."""
+    env = os.environ.get("INTEGRATION_DB_ENV", "local").lower()
+    if env == "production":
+        return os.environ.get("WORDPRESS_PROD_HOST", "https://accumarklabs.com")
+    return os.environ.get("WORDPRESS_LOCAL_HOST", "https://accumarklabs.local")
+
+
+@app.get("/woo/orders/{order_id}")
+async def get_woo_order(order_id: str, _current_user=Depends(get_current_user)):
+    """Fetch a WooCommerce order directly from the WP REST API."""
+    if not WC_CONSUMER_KEY or not WC_CONSUMER_SECRET:
+        raise HTTPException(status_code=503, detail="WooCommerce API credentials not configured")
+    url = f"{_get_wp_host()}/wp-json/wc/v3/orders/{order_id}"
+    try:
+        async with httpx.AsyncClient(timeout=15.0, verify=False) as client:
+            resp = await client.get(url, auth=(WC_CONSUMER_KEY, WC_CONSUMER_SECRET))
+            if resp.status_code == 404:
+                raise HTTPException(status_code=404, detail=f"WooCommerce order {order_id} not found")
+            resp.raise_for_status()
+            return resp.json()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"WooCommerce unavailable: {e}")
 
 
 class AdditionalCOAUpdateRequest(BaseModel):
@@ -4531,13 +4586,40 @@ async def publish_sample_coa(
 ):
     """Publish the latest draft Accumark COA for a SENAITE sample.
 
-    Proxies to Integration Service to mark the draft generation as published,
-    then writes the verification code back to SENAITE.
+    Order of operations:
+    1. Resolve SENAITE UID (fail fast before any state changes)
+    2. Publish in Integration Service (marks generation published, publishes additional COAs)
+    3. Write verification code to SENAITE
+    4. Transition SENAITE sample to published workflow state
     """
-    # 1. Tell integration service to publish the draft
+    # 1. Resolve SENAITE UID upfront so we fail before touching integration service state
+    senaite_uid: str | None = None
+    if SENAITE_URL:
+        try:
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(15.0, connect=5.0),
+                auth=httpx.BasicAuth(SENAITE_USER, SENAITE_PASSWORD),
+                follow_redirects=True,
+            ) as client:
+                search_url = (
+                    f"{SENAITE_URL}/senaite/@@API/senaite/v1/search"
+                    f"?portal_type=AnalysisRequest&getId={sample_id}&complete=true"
+                )
+                search_resp = await client.get(search_url)
+                search_resp.raise_for_status()
+                items = search_resp.json().get("items", [])
+                if items:
+                    senaite_uid = items[0].get("uid")
+        except Exception as e:
+            raise HTTPException(status_code=503, detail=f"SENAITE unreachable: {e}")
+
+        if not senaite_uid:
+            raise HTTPException(status_code=404, detail=f"Sample {sample_id} not found in SENAITE")
+
+    # 2. Publish in Integration Service (also publishes additional COAs)
     try:
         url = f"{INTEGRATION_SERVICE_URL}/explorer/samples/{sample_id}/publish-coa"
-        async with httpx.AsyncClient(timeout=15.0) as client:
+        async with httpx.AsyncClient(timeout=30.0) as client:
             resp = await client.post(url, headers={"X-API-Key": INTEGRATION_SERVICE_API_KEY})
             resp.raise_for_status()
             data = resp.json()
@@ -4553,38 +4635,32 @@ async def publish_sample_coa(
 
     verification_code: str | None = data.get("verification_code")
 
-    # 2. Update SENAITE: write verification code and publish the sample (best-effort)
-    if SENAITE_URL:
+    # 3 & 4. Write verification code and transition SENAITE workflow — guaranteed
+    if senaite_uid:
         try:
             async with httpx.AsyncClient(
                 timeout=httpx.Timeout(30.0, connect=5.0),
                 auth=httpx.BasicAuth(SENAITE_USER, SENAITE_PASSWORD),
                 follow_redirects=True,
             ) as client:
-                search_url = (
-                    f"{SENAITE_URL}/senaite/@@API/senaite/v1/search"
-                    f"?portal_type=AnalysisRequest&getId={sample_id}&complete=true"
+                if verification_code:
+                    code_resp = await client.post(
+                        f"{SENAITE_URL}/senaite/@@API/senaite/v1/update/{senaite_uid}",
+                        json={"VerificationCode": verification_code},
+                    )
+                    code_resp.raise_for_status()
+
+                transition_resp = await client.post(
+                    f"{SENAITE_URL}/senaite/@@API/senaite/v1/update/{senaite_uid}",
+                    json={"transition": "publish"},
                 )
-                search_resp = await client.get(search_url)
-                search_resp.raise_for_status()
-                items = search_resp.json().get("items", [])
-                if items:
-                    uid = items[0].get("uid")
-                    if uid:
-                        # Write verification code if available
-                        if verification_code:
-                            await client.post(
-                                f"{SENAITE_URL}/senaite/@@API/senaite/v1/update/{uid}",
-                                json={"VerificationCode": verification_code},
-                            )
-                        # Trigger SENAITE's "publish" workflow transition
-                        # This marks the AnalysisRequest as Published in SENAITE
-                        await client.post(
-                            f"{SENAITE_URL}/senaite/@@API/senaite/v1/update/{uid}",
-                            json={"transition": "publish"},
-                        )
-        except Exception:
-            pass  # Non-fatal — COA is published; SENAITE write is best-effort
+                transition_resp.raise_for_status()
+        except Exception as e:
+            # COA is published in our system — surface SENAITE failure clearly
+            raise HTTPException(
+                status_code=502,
+                detail=f"COA published in system but SENAITE transition failed: {e}",
+            )
 
     return SampleCOAActionResponse(
         success=True,
@@ -5162,7 +5238,11 @@ class SenaiteAnalysis(BaseModel):
     result_options: list[dict] = []  # [{value: str, label: str}] for selection-type analyses
     unit: Optional[str] = None
     method: Optional[str] = None
+    method_uid: Optional[str] = None  # UID for editing
+    method_options: list[dict] = []   # [{uid: str, title: str}] allowed methods for this analysis
     instrument: Optional[str] = None
+    instrument_uid: Optional[str] = None  # UID for editing
+    instrument_options: list[dict] = []   # [{uid: str, title: str}] allowed instruments for this analysis
     analyst: Optional[str] = None
     due_date: Optional[str] = None
     review_state: Optional[str] = None
@@ -5181,6 +5261,18 @@ class SenaiteAttachment(BaseModel):
 
 # Cache SENAITE download URLs for attachment proxy (uid -> {download_url, content_type, filename})
 _attachment_download_cache: dict[str, dict[str, str]] = {}
+
+# Cache SENAITE download URLs for ARReport PDF proxy (uid -> download_url)
+_report_download_cache: dict[str, str] = {}
+
+
+class SenaitePublishedCOA(BaseModel):
+    report_uid: str
+    filename: str
+    file_size_bytes: Optional[int] = None
+    published_date: Optional[str] = None
+    published_by: Optional[str] = None
+    download_url: str  # proxied through our backend
 
 
 class SenaiteLookupResult(BaseModel):
@@ -5202,6 +5294,7 @@ class SenaiteLookupResult(BaseModel):
     remarks: list[SenaiteRemark] = []
     analyses: list[SenaiteAnalysis] = []
     attachments: list[SenaiteAttachment] = []
+    published_coa: Optional[SenaitePublishedCOA] = None
     senaite_url: Optional[str] = None  # e.g. "/clients/client-8/PB-0057"
 
 
@@ -5407,6 +5500,8 @@ async def lookup_senaite_sample(
 
                 _inst_uid_to_indices: dict[str, list[int]] = {}
 
+                _svc_uid_to_indices: dict[str, list[int]] = {}
+
                 for an_item in an_data.get("items", []):
                     # Result: prefer formatted string for selection-type results,
                     # then fall back to raw numeric Result
@@ -5446,20 +5541,24 @@ async def lookup_senaite_sample(
 
                     # Method: getMethodTitle is a string, Method is an object ref
                     method_title = an_item.get("getMethodTitle") or None
-                    if not method_title:
-                        method_obj = an_item.get("Method")
-                        if isinstance(method_obj, dict) and method_obj.get("title"):
+                    method_uid_val = None
+                    method_obj = an_item.get("Method")
+                    if isinstance(method_obj, dict):
+                        method_uid_val = method_obj.get("uid") or None
+                        if not method_title and method_obj.get("title"):
                             method_title = method_obj["title"]
 
                     # Instrument: try getInstrumentTitle first, then Instrument object ref
                     instrument_title = an_item.get("getInstrumentTitle") or None
-                    instrument_uid = None
-                    if not instrument_title:
-                        instrument_obj = an_item.get("Instrument")
-                        if isinstance(instrument_obj, dict):
+                    instrument_uid_val = None
+                    instrument_uid = None  # used for deferred title resolution
+                    instrument_obj = an_item.get("Instrument")
+                    if isinstance(instrument_obj, dict):
+                        instrument_uid_val = instrument_obj.get("uid") or None
+                        if not instrument_title:
                             instrument_title = instrument_obj.get("title") or instrument_obj.get("Title") or None
-                            if not instrument_title and instrument_obj.get("uid"):
-                                instrument_uid = instrument_obj["uid"]
+                            if not instrument_title and instrument_uid_val:
+                                instrument_uid = instrument_uid_val
 
                     # Analyst: Analyst field is often None; getSubmittedBy has the user
                     analyst = an_item.get("Analyst") or an_item.get("getSubmittedBy") or None
@@ -5481,7 +5580,9 @@ async def lookup_senaite_sample(
                         result_options=parsed_options,
                         unit=an_item.get("Unit") or an_item.get("getUnit") or None,
                         method=method_title,
+                        method_uid=method_uid_val,
                         instrument=instrument_title,
+                        instrument_uid=instrument_uid_val,
                         analyst=analyst,
                         due_date=an_item.get("getDueDate") or an_item.get("DueDate") or None,
                         review_state=an_item.get("review_state") or None,
@@ -5489,11 +5590,17 @@ async def lookup_senaite_sample(
                         captured=str(captured) if captured else None,
                         retested=retested_val,
                     ))
-                    # Track indices that need instrument resolution
+                    # Track indices that need instrument UID resolution
                     if instrument_uid:
                         if instrument_uid not in _inst_uid_to_indices:
                             _inst_uid_to_indices[instrument_uid] = []
                         _inst_uid_to_indices[instrument_uid].append(len(senaite_analyses) - 1)
+                    # Track service UID → analysis indices for per-analysis method/instrument options
+                    svc_uid = an_item.get("getServiceUID") or (an_item.get("AnalysisService") or {}).get("uid") or None
+                    if svc_uid:
+                        if svc_uid not in _svc_uid_to_indices:
+                            _svc_uid_to_indices[svc_uid] = []
+                        _svc_uid_to_indices[svc_uid].append(len(senaite_analyses) - 1)
             # Resolve instrument UIDs → titles via batch API call
             if _inst_uid_to_indices:
                 try:
@@ -5530,6 +5637,96 @@ async def lookup_senaite_sample(
                         for idx in indices:
                             if not senaite_analyses[idx].instrument:
                                 senaite_analyses[idx].instrument = "Manual"
+
+            # Fetch AnalysisServices individually by UID to get per-analysis allowed methods/instruments
+            if _svc_uid_to_indices:
+                async def _fetch_one_service(client: httpx.AsyncClient, svc_uid: str) -> tuple[str, dict]:
+                    url = f"{SENAITE_URL}/senaite/@@API/senaite/v1/analysisservice/{svc_uid}"
+                    resp = await client.get(url)
+                    resp.raise_for_status()
+                    data = resp.json()
+                    items = data.get("items")
+                    svc_item = items[0] if items else data
+                    return svc_uid, svc_item
+
+                try:
+                    async with httpx.AsyncClient(
+                        timeout=SENAITE_TIMEOUT,
+                        auth=httpx.BasicAuth(SENAITE_USER, SENAITE_PASSWORD),
+                    ) as svc_client:
+                        svc_results = await asyncio.gather(
+                            *[_fetch_one_service(svc_client, uid) for uid in _svc_uid_to_indices],
+                            return_exceptions=True,
+                        )
+
+                    # Collect UIDs per service (titles not included by SENAITE in nested objects)
+                    # svc_uid → (method_uids, instrument_uids)
+                    _svc_method_uids: dict[str, list[str]] = {}
+                    _svc_instr_uids: dict[str, list[str]] = {}
+                    for result in svc_results:
+                        if isinstance(result, Exception):
+                            print(f"[WARN] Failed to fetch one AnalysisService: {result}")
+                            continue
+                        svc_uid, svc_item = result
+                        if svc_uid not in _svc_uid_to_indices:
+                            continue
+                        m_list = svc_item.get("Methods")
+                        m_uids = [m["uid"] for m in m_list if isinstance(m, dict) and m.get("uid")] if isinstance(m_list, list) else []
+                        i_list = svc_item.get("Instruments")
+                        i_uids = [i["uid"] for i in i_list if isinstance(i, dict) and i.get("uid")] if isinstance(i_list, list) else []
+                        _svc_method_uids[svc_uid] = m_uids
+                        _svc_instr_uids[svc_uid] = i_uids
+
+                    # Batch-resolve method titles
+                    all_m_uids = list({uid for uids in _svc_method_uids.values() for uid in uids})
+                    all_i_uids = list({uid for uids in _svc_instr_uids.values() for uid in uids})
+                    method_uid_to_title: dict[str, str] = {}
+                    instr_uid_to_title: dict[str, str] = {}
+
+                    async def _fetch_title(client: httpx.AsyncClient, kind: str, uid: str) -> tuple[str, str, str]:
+                        # kind = "method" or "instrument"
+                        resp = await client.get(f"{SENAITE_URL}/senaite/@@API/senaite/v1/{kind}/{uid}")
+                        resp.raise_for_status()
+                        data = resp.json()
+                        items = data.get("items")
+                        obj = items[0] if items else data
+                        title = obj.get("title") or obj.get("Title") or ""
+                        return kind, uid, title
+
+                    async with httpx.AsyncClient(
+                        timeout=SENAITE_TIMEOUT,
+                        auth=httpx.BasicAuth(SENAITE_USER, SENAITE_PASSWORD),
+                    ) as title_client:
+                        fetch_tasks = (
+                            [_fetch_title(title_client, "method", u) for u in all_m_uids] +
+                            [_fetch_title(title_client, "instrument", u) for u in all_i_uids]
+                        )
+                        title_results = await asyncio.gather(*fetch_tasks, return_exceptions=True)
+                        for tr in title_results:
+                            if isinstance(tr, Exception):
+                                print(f"[WARN] Failed to fetch title: {tr}")
+                                continue
+                            kind, uid, title = tr
+                            if uid and title:
+                                if kind == "method":
+                                    method_uid_to_title[uid] = title
+                                else:
+                                    instr_uid_to_title[uid] = title
+                    # Apply resolved titles to each analysis
+                    for svc_uid, m_uids in _svc_method_uids.items():
+                        parsed_methods = [
+                            {"uid": u, "title": method_uid_to_title[u]}
+                            for u in m_uids if u in method_uid_to_title
+                        ]
+                        parsed_instruments = [
+                            {"uid": u, "title": instr_uid_to_title[u]}
+                            for u in _svc_instr_uids.get(svc_uid, []) if u in instr_uid_to_title
+                        ]
+                        for idx in _svc_uid_to_indices[svc_uid]:
+                            senaite_analyses[idx].method_options = parsed_methods
+                            senaite_analyses[idx].instrument_options = parsed_instruments
+                except Exception as svc_exc:
+                    print(f"[WARN] Failed to fetch AnalysisService options: {svc_exc}")
 
             # Sort by sort_key, then title, then non-retested first to match SENAITE
             senaite_analyses.sort(key=lambda a: (
@@ -5587,6 +5784,65 @@ async def lookup_senaite_sample(
         except Exception as exc:
             print(f"[WARN] Failed to fetch attachments for {sample_id}: {exc}")
 
+        # Fetch published COA ARReport (PDF attached by Accumark COA Builder or SENAITE).
+        # SENAITE's catalog does not expose a reliable filter for ARReport by parent UID,
+        # so we fetch all reports (capped at 100) and filter by path prefix.
+        published_coa_report: Optional[SenaitePublishedCOA] = None
+        sample_path = item.get("path") or ""  # e.g. /senaite/clients/client-8/PB-0061
+        try:
+            report_url = f"{SENAITE_URL}/senaite/@@API/senaite/v1/ARReport"
+            async with httpx.AsyncClient(
+                timeout=SENAITE_TIMEOUT,
+                auth=httpx.BasicAuth(SENAITE_USER, SENAITE_PASSWORD),
+            ) as report_client:
+                r_resp = await report_client.get(report_url, params={
+                    "complete": "yes",
+                    "limit": "100",
+                })
+                r_resp.raise_for_status()
+                r_data = r_resp.json()
+                all_reports = r_data.get("items", [])
+                # Filter to reports belonging to this sample by path prefix
+                sample_prefix = sample_path.rstrip("/") + "/"
+                sample_reports = [
+                    r for r in all_reports
+                    if str(r.get("path", "")).startswith(sample_prefix)
+                ]
+                if sample_reports:
+                    # Pick the most recently created one
+                    sample_reports.sort(key=lambda r: r.get("created", ""), reverse=True)
+                    r = sample_reports[0]
+                    r_uid = r.get("uid") or r.get("UID") or ""
+                    pdf_info = r.get("Pdf") or {}
+                    pdf_filename = (pdf_info.get("filename") if isinstance(pdf_info, dict) else None) or f"{sample_id}_COA.pdf"
+                    pub_date = r.get("created") or None
+                    pub_by = r.get("Creator") or r.get("creator") or None
+                    pdf_dl_url = pdf_info.get("download") if isinstance(pdf_info, dict) else None
+                    if r_uid and pdf_dl_url:
+                        _report_download_cache[r_uid] = pdf_dl_url
+                    # Get file size via streaming GET headers (HEAD returns wrong Content-Length)
+                    pdf_size: Optional[int] = None
+                    if pdf_dl_url:
+                        try:
+                            async with report_client.stream("GET", pdf_dl_url) as size_resp:
+                                cl = size_resp.headers.get("content-length")
+                                if cl and cl.isdigit():
+                                    pdf_size = int(cl)
+                        except Exception:
+                            pass
+                    if r_uid:
+                        published_coa_report = SenaitePublishedCOA(
+                            report_uid=r_uid,
+                            filename=pdf_filename,
+                            file_size_bytes=pdf_size,
+                            published_date=str(pub_date) if pub_date else None,
+                            published_by=str(pub_by) if pub_by else None,
+                            download_url=f"/wizard/senaite/report/{r_uid}",
+                        )
+            print(f"[INFO] ARReport for {sample_id} (path={sample_path}): {'found' if published_coa_report else 'none'}")
+        except Exception as exc:
+            print(f"[WARN] Failed to fetch ARReport for {sample_id}: {exc}")
+
         return SenaiteLookupResult(
             sample_id=sample_id,
             sample_uid=sample_uid or None,
@@ -5606,6 +5862,7 @@ async def lookup_senaite_sample(
             remarks=senaite_remarks,
             analyses=senaite_analyses,
             attachments=senaite_attachments,
+            published_coa=published_coa_report,
             senaite_url=_senaite_path(item),
         )
 
@@ -5680,6 +5937,56 @@ async def get_senaite_attachment(
     except Exception as exc:
         print(f"[WARN] Failed to proxy attachment {uid}: {exc}")
         raise HTTPException(status_code=503, detail="Failed to retrieve attachment")
+
+
+@app.get("/wizard/senaite/report/{uid}")
+async def get_senaite_report(
+    uid: str,
+    _current_user=Depends(get_current_user),
+):
+    """Proxy an ARReport PDF from SENAITE."""
+    if SENAITE_URL is None:
+        raise HTTPException(status_code=503, detail="SENAITE not configured")
+
+    from starlette.responses import StreamingResponse
+
+    try:
+        download_url = _report_download_cache.get(uid)
+        if not download_url:
+            # Fallback: fetch ARReport metadata directly
+            report_api_url = f"{SENAITE_URL}/senaite/@@API/senaite/v1/ARReport/{uid}"
+            async with httpx.AsyncClient(
+                timeout=SENAITE_TIMEOUT,
+                auth=httpx.BasicAuth(SENAITE_USER, SENAITE_PASSWORD),
+            ) as client:
+                meta_resp = await client.get(report_api_url, params={"complete": "yes"})
+                meta_resp.raise_for_status()
+                meta_data = meta_resp.json()
+                r_item = meta_data
+                if "items" in meta_data and meta_data["items"]:
+                    r_item = meta_data["items"][0]
+                pdf_info = r_item.get("Pdf") or {}
+                download_url = pdf_info.get("download") if isinstance(pdf_info, dict) else None
+
+        if not download_url:
+            raise HTTPException(status_code=404, detail="Report PDF not found")
+
+        async with httpx.AsyncClient(
+            timeout=SENAITE_TIMEOUT,
+            auth=httpx.BasicAuth(SENAITE_USER, SENAITE_PASSWORD),
+        ) as client:
+            file_resp = await client.get(download_url)
+            file_resp.raise_for_status()
+            return StreamingResponse(
+                iter([file_resp.content]),
+                media_type="application/pdf",
+                headers={"Content-Disposition": f'inline; filename="COA.pdf"'},
+            )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        print(f"[WARN] Failed to proxy report {uid}: {exc}")
+        raise HTTPException(status_code=503, detail="Failed to retrieve report")
 
 
 class SenaiteUploadAttachmentResponse(BaseModel):
@@ -5793,11 +6100,13 @@ class SenaiteSampleItem(BaseModel):
     title: str
     client_id: Optional[str] = None
     client_order_number: Optional[str] = None
+    date_created: Optional[str] = None
     date_received: Optional[str] = None
     date_sampled: Optional[str] = None
     review_state: str
     sample_type: Optional[str] = None
     contact: Optional[str] = None
+    verification_code: Optional[str] = None
 
 
 class SenaiteSamplesResponse(BaseModel):
@@ -5811,6 +6120,7 @@ async def list_senaite_samples(
     review_state: Optional[str] = None,
     limit: int = 50,
     b_start: int = 0,
+    search: Optional[str] = None,
     _current_user=Depends(get_current_user),
 ):
     """
@@ -5827,7 +6137,9 @@ async def list_senaite_samples(
         raise HTTPException(status_code=503, detail="SENAITE not configured")
 
     url = f"{SENAITE_URL}/senaite/@@API/senaite/v1/AnalysisRequest"
-    params: dict = {"limit": limit, "b_start": b_start, "complete": "yes", "sort_on": "DateReceived", "sort_order": "descending"}
+    params: dict = {"limit": limit, "b_start": b_start, "complete": "yes", "sort_on": "created", "sort_order": "descending"}
+    if search:
+        params["SearchableText"] = f"{search}*"
 
     # SENAITE supports review_state:list for multiple states
     states = [s.strip() for s in review_state.split(",") if s.strip()] if review_state else []
@@ -5866,16 +6178,18 @@ async def list_senaite_samples(
                 title=str(it.get("title", "")),
                 client_id=it.get("getClientTitle") or it.get("ClientID") or it.get("getClientID") or None,
                 client_order_number=it.get("getClientOrderNumber") or it.get("ClientOrderNumber") or None,
+                date_created=it.get("created") or it.get("creation_date") or it.get("DateCreated") or it.get("getDateCreated") or None,
                 date_received=it.get("getDateReceived") or it.get("DateReceived") or None,
                 date_sampled=it.get("getDateSampled") or it.get("DateSampled") or None,
                 review_state=str(it.get("review_state", "")),
                 sample_type=it.get("getSampleTypeTitle") or it.get("SampleTypeTitle") or it.get("SampleType") or None,
                 contact=_extract_contact(it),
+                verification_code=it.get("VerificationCode") or it.get("getVerificationCode") or None,
             ))
 
         return SenaiteSamplesResponse(
             items=items,
-            total=data.get("total", len(items)),
+            total=data.get("count") or data.get("total") or len(items),
             b_start=b_start,
         )
 
@@ -6299,6 +6613,76 @@ async def set_analysis_result(
         return AnalysisResultResponse(
             success=False, message=f"Update error: {e}"
         )
+
+
+class AnalysisMethodInstrumentRequest(BaseModel):
+    method_uid: Optional[str] = None
+    instrument_uid: Optional[str] = None
+
+
+@app.post(
+    "/wizard/senaite/analyses/{uid}/method-instrument",
+    response_model=AnalysisResultResponse,
+)
+async def set_analysis_method_instrument(
+    uid: str,
+    req: AnalysisMethodInstrumentRequest,
+    _current_user=Depends(get_current_user),
+):
+    """Set Method and/or Instrument on a SENAITE analysis.
+
+    Proxies to SENAITE REST API: POST /update/{uid} with {Method: uid, Instrument: uid}.
+    Pass an empty string to clear a field, or omit to leave it unchanged.
+    """
+    if SENAITE_URL is None:
+        return AnalysisResultResponse(success=False, message="SENAITE not configured")
+
+    payload: dict = {}
+    if req.method_uid is not None:
+        payload["Method"] = req.method_uid
+    if req.instrument_uid is not None:
+        payload["Instrument"] = req.instrument_uid
+    if not payload:
+        return AnalysisResultResponse(success=False, message="No fields to update")
+
+    try:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(30.0, connect=5.0),
+            auth=httpx.BasicAuth(SENAITE_USER, SENAITE_PASSWORD),
+            follow_redirects=True,
+        ) as client:
+            update_url = f"{SENAITE_URL}/senaite/@@API/senaite/v1/update/{uid}"
+            resp = await client.post(update_url, json=payload)
+            resp.raise_for_status()
+            data = resp.json()
+            items = data.get("items", [])
+            if not items:
+                return AnalysisResultResponse(
+                    success=False,
+                    message="SENAITE returned no items — update may have failed",
+                )
+            item = items[0]
+            return AnalysisResultResponse(
+                success=True,
+                message="Updated",
+                new_review_state=item.get("review_state", ""),
+                keyword=item.get("Keyword", ""),
+            )
+
+    except httpx.TimeoutException:
+        return AnalysisResultResponse(success=False, message="SENAITE request timed out")
+    except httpx.HTTPStatusError as e:
+        detail = ""
+        try:
+            detail = e.response.text[:200]
+        except Exception:
+            pass
+        return AnalysisResultResponse(
+            success=False,
+            message=f"SENAITE returned {e.response.status_code}: {detail}".strip(),
+        )
+    except Exception as e:
+        return AnalysisResultResponse(success=False, message=f"Update error: {e}")
 
 
 class AnalysisTransitionRequest(BaseModel):

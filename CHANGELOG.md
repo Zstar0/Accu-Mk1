@@ -1,5 +1,28 @@
 # Changelog
 
+## v0.16.0 — 2026-02-26
+
+### Added
+
+- **Editable Method & Instrument in Analyses table** — pencil-to-edit UI on each analysis row for Method and Instrument fields; dropdowns are populated per-analysis from SENAITE's AnalysisService configuration so only the allowed options for that analysis type are shown
+- **`POST /wizard/senaite/analyses/{uid}/method-instrument`** backend endpoint — saves Method and Instrument selections directly to SENAITE
+- **WooCommerce order flyout on Sample Details** — "View Order Details" button opens an inline panel with the linked WooCommerce order (customer, line items, status, order notes) without leaving the page
+- **SENAITE Samples search bar** — filters the samples list in real time by sample ID, client, or verification code
+- **Samples pagination** — next/previous page controls with "X–Y of Z" count when results exceed one page
+- **Hide test samples toggle** — checkbox on the Samples dashboard to suppress the internal test client from the list
+
+### Changed
+
+- **Samples default sort** changed from Date Received to Date Created (descending)
+
+### Fixed
+
+- **nginx upload limit** raised to 50 MB (`client_max_body_size 50M`) to support HPLC CSV and chromatogram uploads
+- **Docker local WP routing** — added `accumarklabs.local` host alias to backend container so DevKinsta-hosted WooCommerce is reachable inside Docker
+- **WordPress URL** corrected in `.env.docker` to local dev domain
+
+---
+
 ## v0.15.0 — 2026-02-24
 
 ### Added

@@ -21,7 +21,9 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
+import { toast } from 'sonner'
 import type { SenaiteAnalysis } from '@/lib/api'
+import { setAnalysisMethodInstrument } from '@/lib/api'
 import { useAnalysisEditing, type UseAnalysisEditingReturn } from '@/hooks/use-analysis-editing'
 import { useAnalysisTransition, type UseAnalysisTransitionReturn } from '@/hooks/use-analysis-transition'
 import { useBulkAnalysisTransition } from '@/hooks/use-bulk-analysis-transition'
@@ -354,6 +356,137 @@ function EditableResultCell({
   )
 }
 
+// --- Editable method/instrument select cell ---
+
+function EditableSelectCell({
+  analysis,
+  field,
+  onSaved,
+}: {
+  analysis: SenaiteAnalysis
+  field: 'method' | 'instrument'
+  onSaved?: (uid: string | null, title: string | null) => void
+}) {
+  const options = field === 'method' ? (analysis.method_options ?? []) : (analysis.instrument_options ?? [])
+  const [isEditing, setIsEditing] = useState(false)
+  const [draft, setDraft] = useState('')
+  const [isSaving, setIsSaving] = useState(false)
+  const selectRef = useRef<HTMLSelectElement>(null)
+
+  const currentValue = field === 'method' ? analysis.method : analysis.instrument
+  const currentUid = field === 'method' ? analysis.method_uid : analysis.instrument_uid
+  const canEdit = !!analysis.uid && EDITABLE_STATES.has(analysis.review_state)
+
+  useEffect(() => {
+    if (isEditing && selectRef.current) {
+      selectRef.current.focus()
+    }
+  }, [isEditing])
+
+  function startEditing() {
+    setDraft(currentUid ?? '')
+    setIsEditing(true)
+  }
+
+  function cancelEditing() {
+    setIsEditing(false)
+  }
+
+  async function handleSave() {
+    if (!analysis.uid) return
+    setIsSaving(true)
+    try {
+      const selectedUid = draft || null
+      const response = await setAnalysisMethodInstrument(
+        analysis.uid,
+        field === 'method' ? selectedUid : null,
+        field === 'instrument' ? selectedUid : null,
+      )
+      if (!response.success) {
+        toast.error(`Failed to update ${field}`, { description: response.message })
+        return
+      }
+      const selectedTitle = options.find(o => o.uid === draft)?.title ?? null
+      onSaved?.(selectedUid, selectedTitle)
+      toast.success(`${field === 'method' ? 'Method' : 'Instrument'} updated`)
+      setIsEditing(false)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Unknown error'
+      toast.error(`Failed to update ${field}`, { description: msg })
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
+  if (isEditing) {
+    return (
+      <td className="py-1.5 px-3">
+        <div className="flex items-center gap-1.5">
+          <select
+            ref={selectRef}
+            value={draft}
+            onChange={e => setDraft(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === 'Escape') { e.preventDefault(); cancelEditing() }
+              if (e.key === 'Enter') { e.preventDefault(); void handleSave() }
+            }}
+            disabled={isSaving}
+            className="h-7 text-xs px-2 py-0 rounded-md border border-input bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-ring shrink-0 max-w-40"
+            aria-label={`Select ${field}`}
+          >
+            <option value="">— None —</option>
+            {options.map(opt => (
+              <option key={opt.uid} value={opt.uid}>{opt.title}</option>
+            ))}
+          </select>
+          <button
+            onClick={() => void handleSave()}
+            disabled={isSaving}
+            className="inline-flex items-center justify-center w-6 h-6 rounded-md text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-500/10 transition-colors cursor-pointer disabled:opacity-50 shrink-0"
+            aria-label="Save"
+          >
+            {isSaving ? <Spinner className="size-3.5" /> : <Check size={14} />}
+          </button>
+          <button
+            onClick={cancelEditing}
+            disabled={isSaving}
+            className="inline-flex items-center justify-center w-6 h-6 rounded-md text-muted-foreground hover:bg-muted transition-colors cursor-pointer disabled:opacity-50 shrink-0"
+            aria-label="Cancel"
+          >
+            <X size={14} />
+          </button>
+        </div>
+      </td>
+    )
+  }
+
+  if (canEdit) {
+    return (
+      <td className="py-2.5 px-3">
+        <button
+          onClick={startEditing}
+          className="group inline-flex items-center gap-1.5 cursor-pointer rounded-md px-1 -mx-1 py-0.5 -my-0.5 hover:bg-muted/60 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          aria-label={`Edit ${field} for ${analysis.title}`}
+        >
+          <span className={`text-xs ${currentValue ? 'text-muted-foreground' : 'text-muted-foreground/50 italic'}`}>
+            {currentValue || '\u2014'}
+          </span>
+          <Pencil
+            size={11}
+            className="text-muted-foreground/30 group-hover:text-muted-foreground transition-colors shrink-0"
+          />
+        </button>
+      </td>
+    )
+  }
+
+  return (
+    <td className="py-2.5 px-3 text-xs text-muted-foreground">
+      {currentValue || '\u2014'}
+    </td>
+  )
+}
+
 // --- History row (superseded retest entry) ---
 
 function HistoryRow({
@@ -424,6 +557,7 @@ function AnalysisRow({
   historyCount,
   isHistoryExpanded,
   onToggleHistory,
+  onMethodInstrumentSaved,
 }: {
   analysis: SenaiteAnalysis
   analyteNameMap: Map<number, string>
@@ -435,6 +569,7 @@ function AnalysisRow({
   historyCount?: number
   isHistoryExpanded?: boolean
   onToggleHistory?: () => void
+  onMethodInstrumentSaved?: (uid: string, field: 'method' | 'instrument', newUid: string | null, newTitle: string | null) => void
 }) {
   const rowTint = ROW_STATUS_STYLE[analysis.review_state ?? ''] ?? ''
   const { display, original } = formatAnalysisTitle(analysis.title, analyteNameMap)
@@ -491,8 +626,20 @@ function AnalysisRow({
           <span className="text-xs text-muted-foreground">No</span>
         )}
       </td>
-      <td className="py-2.5 px-3 text-xs text-muted-foreground">{analysis.method || '\u2014'}</td>
-      <td className="py-2.5 px-3 text-xs text-muted-foreground">{analysis.instrument || '\u2014'}</td>
+      <EditableSelectCell
+        analysis={analysis}
+        field="method"
+        onSaved={(newUid, newTitle) => {
+          if (analysis.uid) onMethodInstrumentSaved?.(analysis.uid, 'method', newUid, newTitle)
+        }}
+      />
+      <EditableSelectCell
+        analysis={analysis}
+        field="instrument"
+        onSaved={(newUid, newTitle) => {
+          if (analysis.uid) onMethodInstrumentSaved?.(analysis.uid, 'instrument', newUid, newTitle)
+        }}
+      />
       <td className="py-2.5 px-3 text-xs text-muted-foreground">{analysis.analyst || '\u2014'}</td>
       <td className="py-2.5 px-3">
         {analysis.review_state && <StatusBadge state={analysis.review_state} />}
@@ -603,9 +750,10 @@ interface AnalysisTableProps {
   analyteNameMap: Map<number, string>
   onResultSaved?: (uid: string, newResult: string, newReviewState: string | null) => void
   onTransitionComplete?: () => void
+  onMethodInstrumentSaved?: (uid: string, field: 'method' | 'instrument', newUid: string | null, newTitle: string | null) => void
 }
 
-export function AnalysisTable({ analyses, analyteNameMap, onResultSaved, onTransitionComplete }: AnalysisTableProps) {
+export function AnalysisTable({ analyses, analyteNameMap, onResultSaved, onTransitionComplete, onMethodInstrumentSaved }: AnalysisTableProps) {
   const [analysisFilter, setAnalysisFilter] = useState<'all' | 'verified' | 'pending' | 'invalid'>('all')
   const [sortConfig, setSortConfig] = useState<SortConfig | null>(null)
   const [bulkPendingConfirm, setBulkPendingConfirm] = useState<{ transition: string; count: number } | null>(null)
@@ -770,7 +918,7 @@ export function AnalysisTable({ analyses, analyteNameMap, onResultSaved, onTrans
       {/* Bulk action toolbar — fixed at browser bottom while table is visible */}
       {bulk.selectedUids.size > 0 && isCardVisible && (
         <div
-          className="fixed bottom-4 z-50 flex items-center justify-between px-4 py-2.5 rounded-lg bg-zinc-800 border border-zinc-600 shadow-xl"
+          className="fixed bottom-4 z-50 flex items-center justify-between px-4 py-2.5 rounded-lg bg-slate-900 border border-slate-500 shadow-xl"
           style={{
             left: sidebarOpen
               ? 'calc(50% + var(--sidebar-width) / 2)'
@@ -883,6 +1031,7 @@ export function AnalysisTable({ analyses, analyteNameMap, onResultSaved, onTrans
                       historyCount={group.history.length}
                       isHistoryExpanded={isExpanded}
                       onToggleHistory={() => toggleGroup(groupKey)}
+                      onMethodInstrumentSaved={onMethodInstrumentSaved}
                     />
                     {isExpanded && group.history.map(h => (
                       <HistoryRow
