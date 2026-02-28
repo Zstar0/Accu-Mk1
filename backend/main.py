@@ -5785,29 +5785,48 @@ async def lookup_senaite_sample(
             print(f"[WARN] Failed to fetch attachments for {sample_id}: {exc}")
 
         # Fetch published COA ARReport (PDF attached by Accumark COA Builder or SENAITE).
-        # SENAITE's catalog does not expose a reliable filter for ARReport by parent UID,
-        # so we fetch all reports (capped at 100) and filter by path prefix.
+        # Use path-constrained catalog search to only fetch ARReports under this specific
+        # sample, avoiding global scans that break on stale catalog entries (e.g. P-0028).
         published_coa_report: Optional[SenaitePublishedCOA] = None
         sample_path = item.get("path") or ""  # e.g. /senaite/clients/client-8/PB-0061
         try:
-            report_url = f"{SENAITE_URL}/senaite/@@API/senaite/v1/ARReport"
             async with httpx.AsyncClient(
                 timeout=SENAITE_TIMEOUT,
                 auth=httpx.BasicAuth(SENAITE_USER, SENAITE_PASSWORD),
             ) as report_client:
-                r_resp = await report_client.get(report_url, params={
-                    "complete": "yes",
-                    "limit": "100",
-                })
-                r_resp.raise_for_status()
-                r_data = r_resp.json()
-                all_reports = r_data.get("items", [])
-                # Filter to reports belonging to this sample by path prefix
-                sample_prefix = sample_path.rstrip("/") + "/"
-                sample_reports = [
-                    r for r in all_reports
-                    if str(r.get("path", "")).startswith(sample_prefix)
-                ]
+                sample_reports = []
+                # Strategy 1: Path-constrained catalog search (avoids stale brains)
+                search_url = f"{SENAITE_URL}/senaite/@@API/senaite/v1/search"
+                try:
+                    r_resp = await report_client.get(search_url, params={
+                        "portal_type": "ARReport",
+                        "path": sample_path,
+                        "depth": "1",
+                        "complete": "yes",
+                        "limit": "10",
+                    })
+                    r_resp.raise_for_status()
+                    r_data = r_resp.json()
+                    sample_reports = r_data.get("items", [])
+                except Exception as search_exc:
+                    print(f"[WARN] ARReport search failed, trying direct traversal: {search_exc}")
+                    # Strategy 2: Direct traversal into sample folder
+                    # The sample path is e.g. /senaite/clients/client-8/P-0233
+                    # Strip leading /senaite to get the API-relative path
+                    rel_path = sample_path.lstrip("/")
+                    if rel_path.startswith("senaite/"):
+                        rel_path = rel_path[len("senaite/"):]
+                    traverse_url = f"{SENAITE_URL}/senaite/@@API/senaite/v1/{rel_path}"
+                    try:
+                        t_resp = await report_client.get(traverse_url, params={"complete": "yes"})
+                        t_resp.raise_for_status()
+                        t_data = t_resp.json()
+                        # Check if the response contains child items of type ARReport
+                        for t_item in t_data.get("items", []):
+                            if t_item.get("portal_type") == "ARReport":
+                                sample_reports.append(t_item)
+                    except Exception as trav_exc:
+                        print(f"[WARN] ARReport traversal also failed: {trav_exc}")
                 if sample_reports:
                     # Pick the most recently created one
                     sample_reports.sort(key=lambda r: r.get("created", ""), reverse=True)

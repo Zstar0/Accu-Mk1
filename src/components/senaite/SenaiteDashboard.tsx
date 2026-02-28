@@ -294,8 +294,9 @@ export function SenaiteDashboard() {
     setError(null)
     try {
       if (searchQuery) {
-        // Fetch up to 500 items and filter client-side — avoids SENAITE tokenizer quirks
-        const result = await getSenaiteSamples(tab.reviewState, 500, 0)
+        // Fetch up to 500 items across ALL states and filter client-side.
+        // reviewState is intentionally omitted so published samples are also found.
+        const result = await getSenaiteSamples(undefined, 500, 0)
         const q = searchQuery.toLowerCase()
         const filtered = result.items.filter(s =>
           s.id.toLowerCase().includes(q) ||
