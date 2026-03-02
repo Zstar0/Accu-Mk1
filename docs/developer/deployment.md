@@ -16,14 +16,31 @@ Internet
         │
         ├─ Nginx (host) ──→ SSL termination, reverse proxy
         │
-        └─ Docker Compose
+        └─ Docker Compose (docker-compose.prod.yml)
             ├─ frontend (port 3100) ─ Nginx serving Vite static files
+            │     ├─ Image: ghcr.io/zstar0/accu-mk1-frontend:VERSION
             │     └─ /api/* proxied to backend
             └─ backend (port 8012) ─ FastAPI/Uvicorn
+                  ├─ Image: ghcr.io/zstar0/accu-mk1-backend:VERSION
                   ├─ SQLite (volume: accu-mk1-data)
                   ├─ Integration Service (senaite_default network)
                   ├─ PostgreSQL (DigitalOcean Managed DB)
                   └─ SENAITE LIMS (Docker network)
+```
+
+### Deploy Flow
+
+```
+Local machine                              Production server
+─────────────                              ─────────────────
+1. docker build --platform linux/amd64
+2. docker push → GHCR ──────────────→  3. docker pull from GHCR
+                                        4. docker compose up -d
+                                        5. Health check (10 retries)
+                                           ├─ Pass → update version tracking
+                                           └─ Fail → auto-rollback to previous
+6. Git tag + GitHub release (optional)
+7. New Relic deployment marker (optional)
 ```
 
 ---
@@ -32,69 +49,68 @@ Internet
 
 ### What Lives on the Server
 
-| Path                                          | Purpose                                   | Managed By                               |
-| --------------------------------------------- | ----------------------------------------- | ---------------------------------------- |
-| `/root/accu-mk1/`                             | Application source code                   | `deploy.sh` (rsync)                      |
-| `/root/accu-mk1/backend/.env`                 | Backend secrets (DB creds, JWT, API keys) | Manual — **never overwritten by deploy** |
-| `/root/accu-mk1/docker-compose.yml`           | Container orchestration                   | `deploy.sh` (rsync)                      |
-| `/root/accu-mk1/.env.docker`                  | Frontend env (VITE_API_URL)               | `deploy.sh` (copies `.env.docker.prod`)  |
-| `/etc/nginx/sites-enabled/accumk1-nginx.conf` | Host Nginx reverse proxy + SSL            | Manual — lives outside repo              |
-| `/etc/letsencrypt/`                           | SSL certificates (Let's Encrypt)          | Certbot auto-renewal                     |
-| Docker volume `accu-mk1-data`                 | SQLite database                           | Persistent across deploys                |
+| Path                                          | Purpose                                          | Managed By                               |
+| --------------------------------------------- | ------------------------------------------------ | ---------------------------------------- |
+| `/root/accu-mk1/docker-compose.prod.yml`      | Container orchestration (pulls from GHCR)        | `deploy.sh` (scp)                        |
+| `/root/accu-mk1/backend/.env`                 | Backend secrets (DB creds, JWT, API keys)        | Manual — **never overwritten by deploy** |
+| `/root/accu-mk1/.deploy/`                     | Version tracking (current, previous, deploy log) | `deploy.sh`                              |
+| `/etc/nginx/sites-enabled/accumk1-nginx.conf` | Host Nginx reverse proxy + SSL                   | Manual — lives outside repo              |
+| `/etc/letsencrypt/`                           | SSL certificates (Let's Encrypt)                 | Certbot auto-renewal                     |
+| Docker volume `accu-mk1-data`                 | SQLite database                                  | Persistent across deploys                |
+
+> **Note**: Source code is **not** stored on the server. The server only runs pre-built Docker images pulled from GHCR.
+
+### Image Registry
+
+All images are stored in GitHub Container Registry (GHCR):
+
+| Image    | Registry URL                       |
+| -------- | ---------------------------------- |
+| Frontend | `ghcr.io/zstar0/accu-mk1-frontend` |
+| Backend  | `ghcr.io/zstar0/accu-mk1-backend`  |
+
+Each image is tagged three ways: `VERSION` (e.g. `0.16.1`), `sha-ABCDEF` (git SHA), and `latest`.
 
 ### Environment Files — Two Files, Two Purposes
 
-There are **two separate env files** on the server. They serve completely different purposes:
-
-| File           | Purpose                      | Contains                                                 | Overwritten by deploy?                                                     |
-| -------------- | ---------------------------- | -------------------------------------------------------- | -------------------------------------------------------------------------- |
-| `.env.docker`  | **Frontend** Vite build vars | `VITE_API_URL`, `VITE_WORDPRESS_URL`, `VITE_SENAITE_URL` | **Yes** — deploy.sh copies `.env.docker.prod` → `.env.docker` every deploy |
-| `backend/.env` | **Backend** secrets          | DB credentials, JWT secret, API keys, SENAITE creds      | **Never** — excluded from rsync, must be edited manually via SSH           |
-
-**`.env.docker`** (safe to overwrite):
-
-- Baked into the frontend JS bundle at Docker build time (`COPY .env.docker .env.production` in Dockerfile)
-- Source of truth is `.env.docker.prod` in the repo (committed, no secrets)
-- If wrong: frontend points to wrong API/SENAITE URLs — fix by redeploying or manually copying `.env.docker.prod`
-
-**`backend/.env`** (never overwrite):
-
-- Read at runtime by the FastAPI backend container
-- Contains production database credentials, JWT secret, API keys, SENAITE credentials
-- If lost: backend cannot connect to anything — restore from team password manager
+| File              | Purpose                      | Contains                                                 | Overwritten by deploy?                      |
+| ----------------- | ---------------------------- | -------------------------------------------------------- | ------------------------------------------- |
+| `.env.production` | **Frontend** Vite build vars | `VITE_API_URL`, `VITE_WORDPRESS_URL`, `VITE_SENAITE_URL` | Baked into Docker image at build time       |
+| `backend/.env`    | **Backend** secrets          | DB credentials, JWT secret, API keys, SENAITE creds      | **Never** — must be edited manually via SSH |
 
 ### Critical Files That Must Not Be Overwritten
 
-These files exist only on the production server and contain environment-specific secrets. The deploy script is configured to **never sync them**, but you must be aware:
-
 1. **`backend/.env`** — Production database credentials, JWT secret, API keys, SENAITE credentials
-   - Excluded in `deploy.sh` rsync (`--exclude='backend/.env'`)
-   - Excluded in `.gitignore`
-   - If lost: backend cannot connect to Integration Service DB, SENAITE, or authenticate users
+   - Lives only on the server, excluded from Git
+   - If lost: backend cannot connect to anything — restore from team password manager
 
 2. **Docker volume `accu-mk1-data`** — SQLite database with users, audit logs, wizard sessions
-   - Lives in Docker-managed volume, not in the repo directory
-   - Survives container rebuilds and code deploys
-   - If lost: all local app data is gone (users, settings, audit trail)
+   - Survives container rebuilds and deploys
+   - If lost: all local app data is gone
 
 3. **Host Nginx config** (`/etc/nginx/sites-enabled/accumk1-nginx.conf`)
-   - Controls SSL, domain routing, proxy settings
-   - Lives outside the repo on the host filesystem
-   - The copy in `scripts/accumk1-nginx.conf` is a reference — it is NOT auto-deployed
+   - Reference copy in repo: `scripts/accumk1-nginx.conf` (NOT auto-deployed)
 
-4. **SSL certificates** (`/etc/letsencrypt/`)
-   - Managed by Certbot with auto-renewal
-   - Do not touch unless renewing or changing domains
+4. **SSL certificates** (`/etc/letsencrypt/`) — Managed by Certbot with auto-renewal
+
+### Prerequisites
+
+Before your first deploy, ensure:
+
+- [ ] Docker Desktop running locally
+- [ ] Logged into GHCR: `docker login ghcr.io -u YOUR_GITHUB_USERNAME` (use a PAT with `write:packages` scope)
+- [ ] SSH key set up: `ssh-copy-id root@165.227.241.81` (or provide password when prompted)
+- [ ] Production server logged into GHCR: `docker login ghcr.io` on the server (PAT with `read:packages` scope)
+- [ ] `backend/.env` exists on server with all production values
+- [ ] `gh` CLI installed for GitHub releases (optional): https://cli.github.com
 
 ### Pre-Deployment Checklist
-
-Before deploying to production:
 
 - [ ] Code compiles: `npx tsc --noEmit`
 - [ ] Version bumped in `package.json` and `src-tauri/tauri.conf.json`
 - [ ] `CHANGELOG.md` updated
 - [ ] Changes committed and pushed to `origin/master`
-- [ ] No `.env` files or credentials in the commit (`git diff --cached --name-only`)
+- [ ] No `.env` files or credentials in the commit
 - [ ] If backend `.env` variables changed: SSH in and update `backend/.env` manually first
 
 ### Deploy Process
@@ -102,72 +118,111 @@ Before deploying to production:
 #### Quick Deploy (Most Common)
 
 ```bash
-# Full deploy — frontend + backend
+# Full deploy — build, push, pull, restart
 bash scripts/deploy.sh
 
-# Backend only (faster — skips frontend rebuild)
+# Backend only (faster)
 bash scripts/deploy.sh --backend
 
 # Frontend only
 bash scripts/deploy.sh --frontend
 
-# Preview what will change without deploying
+# Preview what would happen without making changes
 bash scripts/deploy.sh --dry-run
+
+# Pull existing images on prod without rebuilding locally
+bash scripts/deploy.sh --skip-build
+
+# Skip git tag and GitHub release creation
+bash scripts/deploy.sh --skip-release
 ```
 
-The script will:
+#### What the Script Does
 
-1. Prompt for SSH password
-2. Verify SSH connectivity and Docker
-3. Rsync source code (excluding secrets, node_modules, .git, src-tauri, etc.)
-4. Copy `.env.docker.prod` → `.env.docker` on server (frontend env vars)
-5. Run `docker compose up -d --build` on the server
-6. Wait 3 seconds, then health-check `https://accumk1.valenceanalytical.com/api/health`
-7. Prune dangling Docker images
+1. **Pre-flight checks**:
+   - Docker running locally
+   - GHCR credentials configured (`~/.docker/config.json`)
+   - SSH connectivity (key-based auth preferred, sshpass fallback)
+   - Disk space on prod (≥2GB required)
+   - `backend/.env` exists on server
+   - Required env keys present (`DATABASE_URL`, `JWT_SECRET`)
+   - Shows current container state on prod
 
-#### If the Deploy Script Fails Mid-Way
+2. **Build & push** (local machine):
+   - `docker build --platform linux/amd64` for each service
+   - Tags: `VERSION`, `sha-GITSHA`, `latest`
+   - Pushes all tags to GHCR
 
-The script uses multiple SSH connections (rsync, scp, ssh). If the connection is flaky, it may succeed at syncing code but fail on later steps. If this happens, SSH in manually and finish:
+3. **Deploy** (production server):
+   - Saves current version to `.deploy/previous_version` (for rollback)
+   - Uploads `docker-compose.prod.yml` via scp
+   - Verifies GHCR auth on server
+   - `docker compose -f docker-compose.prod.yml pull`
+   - `docker compose -f docker-compose.prod.yml up -d --remove-orphans`
+
+4. **Health check** (10 retries, 3s interval):
+   - Checks `http://localhost:3100/api/health` on the server
+   - On success: updates `.deploy/current_version` and appends to `.deploy/deploy.log`
+   - On failure: **automatic rollback** to previous version
+
+5. **Post-deploy** (optional):
+   - Creates git tag `v$VERSION` and pushes to origin
+   - Creates GitHub release via `gh` CLI (uses `CHANGELOG.md` as release notes)
+   - Records New Relic deployment marker (if `NEW_RELIC_API_KEY` and `NEW_RELIC_ENTITY_GUID` are set)
+
+6. **Cleanup**: Prunes dangling Docker images on prod
+
+### Version Tracking
+
+The deploy script maintains a `.deploy/` directory on the server:
+
+```
+/root/accu-mk1/.deploy/
+├── current_version    # e.g. "0.16.1"
+├── previous_version   # e.g. "0.16.0" (for rollback)
+└── deploy.log         # Append-only history: "2026-03-02T18:30:00Z v0.16.1 sha:16ed299"
+```
+
+### Rollback
+
+#### Automatic (deploy script)
+
+If health checks fail after deploy, the script automatically:
+
+1. Reads `.deploy/previous_version`
+2. Pulls the previous version's images from GHCR
+3. Restarts containers with the previous version
+4. Checks health again
+
+#### Manual Rollback
 
 ```bash
+# Option 1: Redeploy previous version locally
+bash scripts/deploy.sh --skip-build
+# (after setting the desired version in package.json or .deploy/current_version)
+
+# Option 2: SSH in and roll back directly
 ssh root@165.227.241.81
 cd /root/accu-mk1
-
-# Check .env.docker has production values (VITE_API_URL=/api, not http://localhost)
-cat .env.docker
-
-# If it shows local/dev values, fix it:
-# cat > .env.docker << 'EOF'
-# # Production Docker build
-# VITE_API_URL=/api
-# VITE_WORDPRESS_URL=https://accumarklabs.com
-# VITE_SENAITE_URL=https://senaite.valenceanalytical.com
-# EOF
-
-# Rebuild and verify
-docker compose up -d --build
-sleep 3
-curl -s http://localhost:3100/api/health
+PREV=$(cat .deploy/previous_version)
+VERSION=$PREV docker compose -f docker-compose.prod.yml pull
+VERSION=$PREV docker compose -f docker-compose.prod.yml up -d --remove-orphans
+echo "$PREV" > .deploy/current_version
 ```
 
-#### What Gets Synced (and What Doesn't)
+### New Relic Integration
 
-**Synced** (by rsync):
+To enable New Relic deployment markers:
 
-- All source code, Dockerfiles, docker-compose.yml, nginx.conf (internal)
-- package.json, requirements.txt, config files
+```bash
+# Set these env vars before deploying
+export NEW_RELIC_API_KEY="NRAK-..."
+export NEW_RELIC_ENTITY_GUID="..."
 
-**Excluded** (never synced):
-| Exclusion | Reason |
-|-----------|--------|
-| `.git/` | Git history not needed on server |
-| `node_modules/` | Rebuilt inside Docker |
-| `backend/.env` | **Production secrets** |
-| `.env` | Root env (not used on server) |
-| `src-tauri/` | Desktop app only |
-| `data/`, `*.db`, `*.sqlite` | Local dev data |
-| `dist/` | Build artifacts (rebuilt on server) |
-| `docs/`, `.planning/`, `.claude/` | Dev-only |
+bash scripts/deploy.sh
+```
+
+Find your entity GUID: **New Relic → APM → your app → metadata → entityGuid**
 
 ### Manual Server Operations
 
@@ -182,52 +237,46 @@ cd /root/accu-mk1
 
 ```bash
 # All containers, follow mode
-docker compose logs -f
+VERSION=$(cat .deploy/current_version) docker compose -f docker-compose.prod.yml logs -f
 
 # Backend only, last 100 lines
-docker compose logs --tail 100 backend
-
-# Frontend (Nginx) only
-docker compose logs --tail 100 frontend
+VERSION=$(cat .deploy/current_version) docker compose -f docker-compose.prod.yml logs --tail 100 backend
 ```
 
 #### Restart Containers
 
 ```bash
-# Graceful restart (no rebuild)
-docker compose restart
+cd /root/accu-mk1
+VERSION=$(cat .deploy/current_version) docker compose -f docker-compose.prod.yml restart
 
 # Restart one service
-docker compose restart backend
-
-# Full rebuild (after manual code changes on server)
-docker compose up -d --build
+VERSION=$(cat .deploy/current_version) docker compose -f docker-compose.prod.yml restart backend
 ```
 
 #### Update Backend Environment Variables
 
-## # ALWAYS CHECK THE PRODCUTION ENV FILEs FIRST TO SEE IF WE NEED TO UPDATE IT. WE SHOULD NOT CHANGE THE PRODUCTION ENV FILEs UNLESS WE ABSOLUTELY MUST.
+> **ALWAYS CHECK THE PRODUCTION ENV FILES FIRST TO SEE IF WE NEED TO UPDATE IT. WE SHOULD NOT CHANGE THE PRODUCTION ENV FILES UNLESS WE ABSOLUTELY MUST.**
 
 ```bash
 ssh root@165.227.241.81
 nano /root/accu-mk1/backend/.env
 # Edit variables, save, then:
 cd /root/accu-mk1
-docker compose restart backend
+VERSION=$(cat .deploy/current_version) docker compose -f docker-compose.prod.yml restart backend
 ```
 
 #### Check Container Health
 
 ```bash
-docker compose ps
+VERSION=$(cat .deploy/current_version) docker compose -f docker-compose.prod.yml ps
 curl -s http://localhost:3100/api/health | python3 -m json.tool
 ```
 
 #### Database Backup
 
 ```bash
-# The SQLite database lives in a Docker volume
-docker compose exec backend cp /app/data/accu_mk1.db /app/data/backup-$(date +%Y%m%d).db
+VERSION=$(cat .deploy/current_version) docker compose -f docker-compose.prod.yml exec backend \
+  cp /app/data/accu_mk1.db /app/data/backup-$(date +%Y%m%d).db
 
 # Copy to local machine
 scp root@165.227.241.81:/root/accu-mk1/data/backup-*.db ./
@@ -235,51 +284,23 @@ scp root@165.227.241.81:/root/accu-mk1/data/backup-*.db ./
 
 ### Updating the Host Nginx Config
 
-The host Nginx config (`/etc/nginx/sites-enabled/accumk1-nginx.conf`) is separate from the Docker internal Nginx. To update it:
+The host Nginx config (`/etc/nginx/sites-enabled/accumk1-nginx.conf`) is separate from Docker. To update:
 
 ```bash
 ssh root@165.227.241.81
-
-# Edit the config
 nano /etc/nginx/sites-enabled/accumk1-nginx.conf
-
-# Test the config before reloading
-nginx -t
-
-# If test passes, reload
+nginx -t          # Test before reloading
 systemctl reload nginx
 ```
 
-A reference copy lives at `scripts/accumk1-nginx.conf` in the repo. Keep this in sync when you make host Nginx changes, but remember: deploy.sh does NOT push this file to the server.
+A reference copy lives at `scripts/accumk1-nginx.conf` in the repo. deploy.sh does NOT push this file.
 
 ### Updating SSL Certificates
-
-Certificates are managed by Certbot and auto-renew. To manually renew:
 
 ```bash
 ssh root@165.227.241.81
 certbot renew
 systemctl reload nginx
-```
-
-### Rollback
-
-If a deploy breaks production:
-
-```bash
-ssh root@165.227.241.81
-cd /root/accu-mk1
-
-# Check what changed
-git log --oneline -5  # (if git is available on server)
-
-# Option 1: Redeploy the previous version from local machine
-git checkout <previous-commit>
-bash scripts/deploy.sh
-
-# Option 2: Restart with existing code on server
-docker compose down
-docker compose up -d --build
 ```
 
 ---
@@ -305,14 +326,14 @@ Updates are cryptographically signed — the app verifies the signature before i
 
 Ensure these files have the new version:
 
-- `package.json` → `"version": "0.12.0"`
-- `src-tauri/tauri.conf.json` → `"version": "0.12.0"`
+- `package.json` → `"version": "0.16.1"`
+- `src-tauri/tauri.conf.json` → `"version": "0.16.1"`
 
 #### Step 2: Commit and Push
 
 ```bash
 git add -A
-git commit -m "chore: release v0.12.0"
+git commit -m "chore: release v0.16.1"
 git push origin master
 ```
 
@@ -321,9 +342,11 @@ git push origin master
 This triggers the GitHub Actions release workflow:
 
 ```bash
-git tag v0.12.0
-git push origin v0.12.0
+git tag v0.16.1
+git push origin v0.16.1
 ```
+
+> **Note**: If you used `deploy.sh` without `--skip-release`, the git tag was already created automatically.
 
 #### Step 4: Monitor the Build
 
@@ -337,59 +360,50 @@ git push origin v0.12.0
 The workflow creates a **draft release**. You must manually publish it:
 
 1. Go to **GitHub → Releases**
-2. Find the draft release for `v0.12.0`
-3. Review the attached artifacts:
-   - `Accu-Mk1_0.12.0_x64-setup.exe` + `.exe.sig` (Windows NSIS)
-   - `Accu-Mk1_0.12.0_x64.dmg` + `.app.tar.gz` + `.app.tar.gz.sig` (macOS)
-   - `Accu-Mk1_0.12.0_amd64.AppImage` + `.AppImage.sig` (Linux)
-   - `latest.json` (auto-updater manifest)
-4. Edit the release notes if desired (update the changelog section)
+2. Find the draft release
+3. Review the attached artifacts (`.exe`, `.dmg`, `.AppImage` + signatures + `latest.json`)
+4. Edit the release notes if desired
 5. Click **Publish release**
 
 Once published, all existing desktop app users will receive the update automatically on their next launch.
 
 #### Alternative: Manual Workflow Trigger
 
-If you need to re-run the build without a new tag (e.g., a build failed due to CI flakiness):
-
 1. Go to **GitHub → Actions → "Release Tauri Template App"**
 2. Click **Run workflow**
-3. Enter the version (e.g., `v0.12.0`)
+3. Enter the version (e.g., `v0.16.1`)
 4. Click **Run workflow**
 
 ### Required GitHub Secrets
 
-These must be configured in **Settings → Secrets and variables → Actions**:
+| Secret                               | Purpose                                |
+| ------------------------------------ | -------------------------------------- |
+| `TAURI_PRIVATE_KEY`                  | Signing key for update verification    |
+| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Password for the signing key           |
+| `GITHUB_TOKEN`                       | Automatic — provided by GitHub Actions |
 
-| Secret                               | Purpose                                                               |
-| ------------------------------------ | --------------------------------------------------------------------- |
-| `TAURI_PRIVATE_KEY`                  | Signing key for update verification (content of `~/.tauri/myapp.key`) |
-| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Password for the signing key                                          |
-| `GITHUB_TOKEN`                       | Automatic — provided by GitHub Actions                                |
-
-If the signing key is lost, you must generate a new one (`tauri signer generate -w ~/.tauri/myapp.key`), update the `pubkey` in `src-tauri/tauri.conf.json`, and update the GitHub secret. Users on old versions will NOT be able to auto-update — they'll need to manually download the new installer.
+If the signing key is lost, generate a new one (`tauri signer generate -w ~/.tauri/myapp.key`), update the `pubkey` in `src-tauri/tauri.conf.json`, and update the GitHub secret. Users on old versions will need to manually download the new installer.
 
 ---
 
 ## Part 3: Full Release Workflow (Both Web + Desktop)
 
-Here's the complete sequence for a production release:
-
 ```
 1. Finish development work
-2. npm run check:all                    # Lint, typecheck, format
+2. npx tsc --noEmit                       # Typecheck
 3. Bump version in package.json + tauri.conf.json
 4. Update CHANGELOG.md
-5. git add ... && git commit -m "chore: release v0.12.0"
-6. git push origin master               # Push code
+5. git add ... && git commit -m "chore: release v0.16.1"
+6. git push origin master
 
 ── Web Deploy ──
-7. bash scripts/deploy.sh               # Deploy to DigitalOcean
+7. bash scripts/deploy.sh                 # Build → push → pull → health check
+   (auto-creates git tag + GitHub release unless --skip-release)
 8. Verify: https://accumk1.valenceanalytical.com/api/health
 
 ── Desktop Release ──
-9. git tag v0.12.0                      # Create version tag
-10. git push origin v0.12.0              # Triggers GitHub Actions build
+9. git tag v0.16.1 (if not already created by deploy.sh)
+10. git push origin v0.16.1               # Triggers GitHub Actions build
 11. Wait for builds to complete (~15 min)
 12. Go to GitHub Releases → publish the draft
 13. Verify: existing desktop apps auto-update on next launch
@@ -405,69 +419,60 @@ Here's the complete sequence for a production release:
 
 ## Troubleshooting
 
-### Deploy Script Fails to Connect
+### Deploy Script Pre-flight Failures
 
-```
-✖ Cannot connect to 165.227.241.81
-```
-
-- Verify the droplet is running in DigitalOcean console
-- Check if the password is correct
-- Try `ssh root@165.227.241.81` manually to see the actual error
+| Error                      | Cause                                          | Fix                                                     |
+| -------------------------- | ---------------------------------------------- | ------------------------------------------------------- |
+| "Docker is not running"    | Docker Desktop not started                     | Start Docker Desktop                                    |
+| "Not logged into GHCR"     | No GHCR credentials in `~/.docker/config.json` | `docker login ghcr.io -u USERNAME` with PAT             |
+| "Cannot connect to server" | SSH key not configured or server down          | `ssh-copy-id root@165.227.241.81` or check DigitalOcean |
+| "Low disk space on prod"   | Less than 2GB free                             | SSH in and `docker system prune -a`                     |
+| "backend/.env missing"     | First deploy or file was deleted               | SSH in and create from `.env.example`                   |
+| "Missing env keys"         | Required vars not in `backend/.env`            | SSH in and add missing keys                             |
 
 ### Health Check Fails After Deploy
 
-```
-✖ Health check failed: FAILED
-```
+The script auto-rolls back, but to investigate:
 
 ```bash
-# SSH in and check logs
 ssh root@165.227.241.81
 cd /root/accu-mk1
-docker compose logs --tail 50 backend
-docker compose ps
+VERSION=$(cat .deploy/current_version) docker compose -f docker-compose.prod.yml logs --tail 50 backend
+VERSION=$(cat .deploy/current_version) docker compose -f docker-compose.prod.yml ps
 ```
 
 Common causes:
 
 - `backend/.env` is missing or has wrong values
-- Database migration needed (SQLAlchemy auto-creates tables, but schema changes may need manual intervention)
+- Database migration issue
 - Port conflict (another service on 8012 or 3100)
 
 ### Desktop Build Fails in GitHub Actions
 
 - Check the Actions tab for error logs
-- **Rust compilation errors**: Run `cargo check` locally in `src-tauri/`
-- **Missing secrets**: Verify `TAURI_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` are set
-- **Node errors**: Run `npm ci && npm run build` locally to reproduce
+- **Rust errors**: Run `cargo check` locally in `src-tauri/`
+- **Missing secrets**: Verify `TAURI_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`
+- **Node errors**: Run `npm ci && npm run build` locally
 
 ### Auto-Update Not Working for Users
 
 - Verify the release is **published** (not draft)
 - Check that `latest.json` is in the release assets
 - Verify the `pubkey` in `tauri.conf.json` matches the signing key used in CI
-- The endpoint URL must be: `https://github.com/Zstar0/Accu-Mk1/releases/latest/download/latest.json`
 
 ### Backend .env Was Accidentally Overwritten
-
-If someone manually copies or rsyncs the wrong file:
 
 ```bash
 ssh root@165.227.241.81
 cd /root/accu-mk1/backend
-
-# Check if .env has real production values
-cat .env | head -5
-
-# If it shows dev values, restore from .env.example and fill in production values
+cat .env | head -5  # Check if it has real production values
+# If dev values, restore and fill in production values:
 cp .env.example .env
 nano .env
-# Fill in production values, then restart
-docker compose restart backend
+VERSION=$(cat ../.deploy/current_version) docker compose -f ../docker-compose.prod.yml restart backend
 ```
 
-The production `backend/.env` values are **not stored in the repo**. If they're lost, retrieve them from:
+Production `backend/.env` values are **not stored in the repo**. If lost, retrieve from:
 
 - DigitalOcean Managed Database dashboard (DB credentials)
 - Team password manager (JWT_SECRET, API keys)
