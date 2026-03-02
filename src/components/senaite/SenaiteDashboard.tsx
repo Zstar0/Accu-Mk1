@@ -226,14 +226,7 @@ function SampleTable({
     )
   }
 
-  if (samples.length === 0) {
-    return (
-      <div className="flex flex-col items-center justify-center gap-2 py-12 text-muted-foreground">
-        <FlaskConical className="h-6 w-6" />
-        <p className="text-sm">No samples found</p>
-      </div>
-    )
-  }
+
 
   const columns: {
     key: SortColumn
@@ -321,7 +314,17 @@ function SampleTable({
           </TableRow>
         </TableHeader>
         <TableBody>
-          {sortedSamples.map(s => (
+          {sortedSamples.length === 0 ? (
+            <TableRow>
+              <TableCell colSpan={columns.length} className="text-center py-8">
+                <div className="flex flex-col items-center gap-2 text-muted-foreground">
+                  <FlaskConical className="h-5 w-5" />
+                  <p className="text-sm">No samples found</p>
+                </div>
+              </TableCell>
+            </TableRow>
+          ) : (
+            sortedSamples.map(s => (
             <TableRow
               key={s.uid}
               className="hover:bg-muted/30 cursor-pointer"
@@ -360,7 +363,8 @@ function SampleTable({
                 <StateBadge state={s.review_state} />
               </TableCell>
             </TableRow>
-          ))}
+            ))
+          )}
         </TableBody>
       </Table>
     </div>
@@ -503,6 +507,10 @@ export function SenaiteDashboard() {
       return
     }
 
+    // Require at least 2 characters before searching
+    const activeQuery = idQ || orderQ || verQ
+    if (activeQuery.length < 2) return
+
     searchTimerRef.current = setTimeout(() => {
       if (idQ) {
         loadTab(activeTab, 0, idQ)  // default: getId catalog
@@ -511,7 +519,7 @@ export function SenaiteDashboard() {
       } else if (verQ) {
         loadTab(activeTab, 0, verQ, 'verification_code')
       }
-    }, 350)
+    }, 800)
     return () => clearTimeout(searchTimerRef.current)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [columnFilters])
