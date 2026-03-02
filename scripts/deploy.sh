@@ -61,7 +61,56 @@ info()    { echo -e "${BLUE}ℹ${NC}  $*"; }
 success() { echo -e "${GREEN}✔${NC}  $*"; }
 warn()    { echo -e "${YELLOW}⚠${NC}  $*"; }
 error()   { echo -e "${RED}✖${NC}  $*" >&2; }
+
+# Step tracking — records completed steps for failure summary
+DEPLOY_STEPS=()
+step_done() { DEPLOY_STEPS+=("$1"); }
+DEPLOY_FAILED_STEP=""
+
+# Trap handler — prints status summary on ANY exit (error, Ctrl+C, etc.)
+print_deploy_status() {
+    local exit_code=$?
+    if [ $exit_code -ne 0 ] || [ -n "$DEPLOY_FAILED_STEP" ]; then
+        echo ""
+        echo -e "${BOLD}${RED}═══ Deploy Interrupted ═══${NC}"
+        echo ""
+        echo -e "  ${BOLD}Version:${NC}  ${VERSION:-unknown}"
+        echo -e "  ${BOLD}SHA:${NC}      ${GIT_SHA:-unknown}"
+        echo ""
+        echo -e "  ${BOLD}Completed steps:${NC}"
+        if [ ${#DEPLOY_STEPS[@]} -eq 0 ]; then
+            echo -e "    ${YELLOW}(none)${NC}"
+        else
+            for s in "${DEPLOY_STEPS[@]}"; do
+                echo -e "    ${GREEN}✔${NC}  $s"
+            done
+        fi
+        if [ -n "$DEPLOY_FAILED_STEP" ]; then
+            echo -e "    ${RED}✖${NC}  $DEPLOY_FAILED_STEP  ${RED}← FAILED${NC}"
+        fi
+        echo ""
+        echo -e "  ${CYAN}What to do:${NC}"
+        echo -e "    If images were pushed, the containers may already be running the new version."
+        echo -e "    Check:  ssh $REMOTE_USER@$REMOTE_HOST 'cd $REMOTE_DIR && docker compose -f docker-compose.prod.yml ps'"
+        echo -e "    Resume: bash scripts/deploy.sh --skip-build  (pulls and restarts)"
+        echo ""
+    fi
+}
+trap print_deploy_status EXIT
 header()  { echo -e "\n${BOLD}${CYAN}═══ $* ═══${NC}\n"; }
+
+# SSH multiplexing — one persistent connection reused by all commands
+SSH_SOCKET="/tmp/accu-mk1-deploy-$$"
+SSH_MUX_OPTS="-o ControlPath=$SSH_SOCKET"
+
+cleanup_ssh() {
+    if [ -S "$SSH_SOCKET" ] 2>/dev/null; then
+        ssh -o ControlPath="$SSH_SOCKET" -O exit "$REMOTE_USER@$REMOTE_HOST" 2>/dev/null || true
+    fi
+}
+# Chain cleanup into existing trap
+original_trap=$(trap -p EXIT | sed "s/trap -- '\(.*\)' EXIT/\1/")
+trap "cleanup_ssh; $original_trap" EXIT
 
 # SSH wrapper — tries key-based auth first, falls back to sshpass
 ssh_cmd() {
@@ -81,48 +130,64 @@ ssh_cmd() {
     fi
 }
 
-# Detect SSH auth method once at startup
+# Detect SSH auth method and open persistent multiplexed connection
 detect_ssh_auth() {
-    if ssh -o BatchMode=yes -o ConnectTimeout=5 "$REMOTE_USER@$REMOTE_HOST" true 2>/dev/null; then
+    if ssh -o BatchMode=yes -o ConnectTimeout=10 "$REMOTE_USER@$REMOTE_HOST" true 2>/dev/null; then
         SSH_METHOD="key"
-        return 0
-    fi
-
-    # No key auth — need password
-    if [ -z "${REMOTE_PASS:-}" ]; then
+    elif [ -z "${REMOTE_PASS:-}" ]; then
         read -sp "$(echo -e "${YELLOW}🔑 SSH password for ${REMOTE_USER}@${REMOTE_HOST}:${NC} ")" REMOTE_PASS
         echo ""
+        if command -v sshpass &>/dev/null; then
+            SSH_METHOD="sshpass"
+        else
+            error "No SSH key and sshpass not installed."
+            exit 1
+        fi
     fi
 
-    if command -v sshpass &>/dev/null; then
-        SSH_METHOD="sshpass"
+    # Open persistent ControlMaster connection (stays open for entire deploy)
+    info "Opening persistent SSH connection..."
+    if [ "$SSH_METHOD" = "key" ]; then
+        ssh -o StrictHostKeyChecking=no -o ConnectTimeout=30 \
+            -o ControlMaster=yes -o ControlPath="$SSH_SOCKET" -o ControlPersist=600 \
+            -o ServerAliveInterval=15 -o ServerAliveCountMax=40 \
+            -fN "$REMOTE_USER@$REMOTE_HOST"
     else
-        error "No SSH key and sshpass not installed."
-        error "Option 1 (recommended): ssh-copy-id $REMOTE_USER@$REMOTE_HOST"
-        error "Option 2: apt install sshpass"
-        exit 1
+        sshpass -p "$REMOTE_PASS" ssh -o StrictHostKeyChecking=no -o ConnectTimeout=30 \
+            -o ControlMaster=yes -o ControlPath="$SSH_SOCKET" -o ControlPersist=600 \
+            -o ServerAliveInterval=15 -o ServerAliveCountMax=40 \
+            -fN "$REMOTE_USER@$REMOTE_HOST"
     fi
 }
 
-# After auth detection, use the right method consistently
+# All SSH commands reuse the persistent multiplexed connection
 run_ssh() {
-    if [ "$SSH_METHOD" = "key" ]; then
-        ssh -o StrictHostKeyChecking=no \
-            -o ConnectTimeout=60 -o ServerAliveInterval=30 -o ServerAliveCountMax=20 \
-            "$REMOTE_USER@$REMOTE_HOST" "$@"
-    else
-        sshpass -p "$REMOTE_PASS" ssh -o StrictHostKeyChecking=no \
-            -o ConnectTimeout=60 -o ServerAliveInterval=30 -o ServerAliveCountMax=20 \
-            "$REMOTE_USER@$REMOTE_HOST" "$@"
-    fi
+    ssh -o StrictHostKeyChecking=no -o ControlPath="$SSH_SOCKET" \
+        "$REMOTE_USER@$REMOTE_HOST" "$@"
+}
+
+# SSH with retry — for critical deployment steps that must not fail on flaky SSH
+run_ssh_retry() {
+    local max_attempts=3
+    local attempt=1
+    local backoff=10
+    while [ $attempt -le $max_attempts ]; do
+        if run_ssh "$@"; then
+            return 0
+        fi
+        if [ $attempt -lt $max_attempts ]; then
+            warn "SSH command failed (attempt $attempt/$max_attempts) — retrying in ${backoff}s..."
+            sleep $backoff
+            backoff=$((backoff * 2))
+        fi
+        attempt=$((attempt + 1))
+    done
+    error "SSH command failed after $max_attempts attempts"
+    return 1
 }
 
 run_scp() {
-    if [ "$SSH_METHOD" = "key" ]; then
-        scp -o StrictHostKeyChecking=no -o ConnectTimeout=60 "$@"
-    else
-        sshpass -p "$REMOTE_PASS" scp -o StrictHostKeyChecking=no -o ConnectTimeout=60 "$@"
-    fi
+    scp -o StrictHostKeyChecking=no -o ControlPath="$SSH_SOCKET" "$@"
 }
 
 # ── Parse Arguments ─────────────────────────────────────────
@@ -263,6 +328,7 @@ if [ "$SKIP_BUILD" = false ]; then
             -f "$PROJECT_DIR/Dockerfile" \
             "$PROJECT_DIR"
         success "Frontend image built: $FRONTEND_IMAGE:$VERSION"
+        step_done "Frontend image built"
     fi
 
     if [ "$DEPLOY_BACKEND" = true ]; then
@@ -275,6 +341,7 @@ if [ "$SKIP_BUILD" = false ]; then
             -f "$PROJECT_DIR/backend/Dockerfile" \
             "$PROJECT_DIR/backend"
         success "Backend image built: $BACKEND_IMAGE:$VERSION"
+        step_done "Backend image built"
     fi
 
     header "Pushing to GHCR"
@@ -285,6 +352,7 @@ if [ "$SKIP_BUILD" = false ]; then
         docker push "$FRONTEND_IMAGE:sha-$GIT_SHA"
         docker push "$FRONTEND_IMAGE:latest"
         success "Frontend pushed to GHCR"
+        step_done "Frontend pushed to GHCR"
     fi
 
     if [ "$DEPLOY_BACKEND" = true ]; then
@@ -293,6 +361,7 @@ if [ "$SKIP_BUILD" = false ]; then
         docker push "$BACKEND_IMAGE:sha-$GIT_SHA"
         docker push "$BACKEND_IMAGE:latest"
         success "Backend pushed to GHCR"
+        step_done "Backend pushed to GHCR"
     fi
 else
     info "Skipping local build (--skip-build). Will pull existing images on prod."
@@ -312,6 +381,7 @@ info "Uploading production compose file..."
 run_scp "$PROJECT_DIR/docker-compose.prod.yml" \
     "$REMOTE_USER@$REMOTE_HOST:$REMOTE_DIR/docker-compose.prod.yml"
 success "Production compose file uploaded"
+step_done "Compose file uploaded"
 
 # ── Ensure GHCR auth on prod ─────────────────────────────
 # The prod server needs read access to pull images from GHCR
@@ -325,12 +395,18 @@ fi
 
 # ── Pull & Deploy ────────────────────────────────────────
 info "Pulling images on prod..."
-run_ssh "cd $REMOTE_DIR && VERSION=$VERSION docker compose -f docker-compose.prod.yml pull"
+DEPLOY_FAILED_STEP="Pull images on prod"
+run_ssh_retry "cd $REMOTE_DIR && VERSION=$VERSION docker compose -f docker-compose.prod.yml pull"
+DEPLOY_FAILED_STEP=""
 success "Images pulled on prod"
+step_done "Images pulled on prod"
 
 info "Starting containers..."
-run_ssh "cd $REMOTE_DIR && VERSION=$VERSION docker compose -f docker-compose.prod.yml up -d --remove-orphans"
+DEPLOY_FAILED_STEP="Start containers"
+run_ssh_retry "cd $REMOTE_DIR && VERSION=$VERSION docker compose -f docker-compose.prod.yml up -d --remove-orphans"
+DEPLOY_FAILED_STEP=""
 success "Containers started"
+step_done "Containers started"
 
 # ── Health Check with Retry ──────────────────────────────
 header "Health Check"
@@ -338,10 +414,13 @@ header "Health Check"
 HEALTH_OK=false
 for i in $(seq 1 $HEALTH_RETRIES); do
     sleep $HEALTH_INTERVAL
+    DEPLOY_FAILED_STEP="Health check (attempt $i/$HEALTH_RETRIES)"
     HEALTH=$(run_ssh "curl -sf http://localhost:3100/api/health 2>/dev/null" || echo "FAILED")
 
     if echo "$HEALTH" | grep -q '"status":"ok"'; then
+        DEPLOY_FAILED_STEP=""
         success "Health check passed (attempt $i/$HEALTH_RETRIES): $HEALTH"
+        step_done "Health check passed"
         HEALTH_OK=true
         break
     else
@@ -384,6 +463,7 @@ fi
 run_ssh "echo '$VERSION' > $REMOTE_DIR/.deploy/current_version"
 run_ssh "echo '$(date -u +%Y-%m-%dT%H:%M:%SZ) v$VERSION sha:$GIT_SHA' >> $REMOTE_DIR/.deploy/deploy.log"
 success "Version tracking updated"
+step_done "Version tracking updated"
 
 # ── Git Tag & GitHub Release ─────────────────────────────
 if [ "$SKIP_RELEASE" = false ]; then
@@ -464,6 +544,8 @@ info "Cleaning up dangling images on prod..."
 run_ssh "docker image prune -f 2>/dev/null" || true
 
 # ── Summary ──────────────────────────────────────────────
+DEPLOY_FAILED_STEP=""  # Clear so trap doesn't show failure
+step_done "Deploy complete"
 header "Deploy Complete ✔"
 echo -e "  ${BOLD}Version:${NC}  $VERSION"
 echo -e "  ${BOLD}SHA:${NC}      $GIT_SHA"
