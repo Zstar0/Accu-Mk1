@@ -31,7 +31,11 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { getSenaiteSamples, getSenaiteStatus, type SenaiteSample } from '@/lib/api'
+import {
+  getSenaiteSamples,
+  getSenaiteStatus,
+  type SenaiteSample,
+} from '@/lib/api'
 import { useUIStore } from '@/store/ui-store'
 import { StateBadge, formatDate } from '@/components/senaite/senaite-utils'
 import { Input } from '@/components/ui/input'
@@ -49,7 +53,8 @@ const TABS: Tab[] = [
   {
     id: 'open',
     label: 'All Open',
-    reviewState: 'sample_registered,sample_due,sample_received,to_be_verified,verified,waiting_for_addon_results,ready_for_review',
+    reviewState:
+      'sample_registered,sample_due,sample_received,to_be_verified,verified,waiting_for_addon_results,ready_for_review',
     description: 'All active samples not yet published',
   },
   {
@@ -92,7 +97,13 @@ const TABS: Tab[] = [
 
 // --- Column sorting ---
 
-type SortColumn = 'id' | 'client_order_number' | 'client_id' | 'verification_code' | 'date_created' | 'review_state'
+type SortColumn =
+  | 'id'
+  | 'client_order_number'
+  | 'client_id'
+  | 'verification_code'
+  | 'date_created'
+  | 'review_state'
 type SortDirection = 'asc' | 'desc'
 
 interface SortConfig {
@@ -100,7 +111,11 @@ interface SortConfig {
   direction: SortDirection
 }
 
-function compareSamples(a: SenaiteSample, b: SenaiteSample, config: SortConfig): number {
+function compareSamples(
+  a: SenaiteSample,
+  b: SenaiteSample,
+  config: SortConfig
+): number {
   const { column, direction } = config
   let cmp = 0
 
@@ -121,9 +136,11 @@ function SortIcon({ column, sort }: { column: SortColumn; sort: SortConfig }) {
   if (sort.column !== column) {
     return <ArrowUpDown className="h-3 w-3 text-muted-foreground/50" />
   }
-  return sort.direction === 'asc'
-    ? <ArrowUp className="h-3 w-3" />
-    : <ArrowDown className="h-3 w-3" />
+  return sort.direction === 'asc' ? (
+    <ArrowUp className="h-3 w-3" />
+  ) : (
+    <ArrowDown className="h-3 w-3" />
+  )
 }
 
 // --- Sample Table ---
@@ -145,8 +162,13 @@ function SampleTable({
   hideTestSamples: boolean
   onSelectSample?: (sampleId: string) => void
 }) {
-  const navigateToOrderExplorer = useUIStore(state => state.navigateToOrderExplorer)
-  const [sort, setSort] = useState<SortConfig>({ column: 'date_created', direction: 'desc' })
+  const navigateToOrderExplorer = useUIStore(
+    state => state.navigateToOrderExplorer
+  )
+  const [sort, setSort] = useState<SortConfig>({
+    column: 'date_created',
+    direction: 'desc',
+  })
 
   const toggleSort = (column: SortColumn) => {
     setSort(prev =>
@@ -200,13 +222,48 @@ function SampleTable({
     )
   }
 
-  const columns: { key: SortColumn; label: string; className: string; cellClassName: string }[] = [
-    { key: 'id', label: 'Sample ID', className: 'w-32', cellClassName: 'font-mono text-sm' },
-    { key: 'client_order_number', label: 'Order #', className: 'w-36', cellClassName: 'text-sm text-muted-foreground' },
-    { key: 'client_id', label: 'Client', className: '', cellClassName: 'text-sm' },
-    { key: 'verification_code', label: 'Verification Code', className: 'w-36', cellClassName: 'font-mono text-sm text-muted-foreground' },
-    { key: 'date_created', label: 'Created', className: 'w-36', cellClassName: 'text-sm text-muted-foreground' },
-    { key: 'review_state', label: 'State', className: 'w-28 text-center', cellClassName: 'text-center' },
+  const columns: {
+    key: SortColumn
+    label: string
+    className: string
+    cellClassName: string
+  }[] = [
+    {
+      key: 'id',
+      label: 'Sample ID',
+      className: 'w-32',
+      cellClassName: 'font-mono text-sm',
+    },
+    {
+      key: 'client_order_number',
+      label: 'Order #',
+      className: 'w-36',
+      cellClassName: 'text-sm text-muted-foreground',
+    },
+    {
+      key: 'client_id',
+      label: 'Client',
+      className: '',
+      cellClassName: 'text-sm',
+    },
+    {
+      key: 'verification_code',
+      label: 'Verification Code',
+      className: 'w-36',
+      cellClassName: 'font-mono text-sm text-muted-foreground',
+    },
+    {
+      key: 'date_created',
+      label: 'Created',
+      className: 'w-36',
+      cellClassName: 'text-sm text-muted-foreground',
+    },
+    {
+      key: 'review_state',
+      label: 'State',
+      className: 'w-28 text-center',
+      cellClassName: 'text-center',
+    },
   ]
 
   return (
@@ -244,7 +301,10 @@ function SampleTable({
                     onClick={e => {
                       e.stopPropagation()
                       // SENAITE stores "WP-1234" but the DB stores just "1234"
-                      const orderNum = s.client_order_number!.replace(/^WP-/i, '')
+                      const orderNum = s.client_order_number!.replace(
+                        /^WP-/i,
+                        ''
+                      )
                       navigateToOrderExplorer(orderNum)
                     }}
                   >
@@ -255,8 +315,12 @@ function SampleTable({
                 )}
               </TableCell>
               <TableCell className="text-sm">{s.client_id ?? '—'}</TableCell>
-              <TableCell className="font-mono text-sm text-muted-foreground">{s.verification_code ?? '—'}</TableCell>
-              <TableCell className="text-sm text-muted-foreground">{formatDate(s.date_created)}</TableCell>
+              <TableCell className="font-mono text-sm text-muted-foreground">
+                {s.verification_code ?? '—'}
+              </TableCell>
+              <TableCell className="text-sm text-muted-foreground">
+                {formatDate(s.date_created)}
+              </TableCell>
               <TableCell className="text-center">
                 <StateBadge state={s.review_state} />
               </TableCell>
@@ -278,46 +342,52 @@ export function SenaiteDashboard() {
   const [connected, setConnected] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [samplesByTab, setSamplesByTab] = useState<Record<string, SenaiteSample[]>>({})
+  const [samplesByTab, setSamplesByTab] = useState<
+    Record<string, SenaiteSample[]>
+  >({})
   const [totalsByTab, setTotalsByTab] = useState<Record<string, number>>({})
   const [pageByTab, setPageByTab] = useState<Record<string, number>>({})
   const [search, setSearch] = useState('')
   const [hideTestSamples, setHideTestSamples] = useState(true)
-  const [searchResults, setSearchResults] = useState<SenaiteSample[] | null>(null)
-  const searchTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const [searchResults, setSearchResults] = useState<SenaiteSample[] | null>(
+    null
+  )
+  const searchTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(
+    undefined
+  )
 
-  const loadTab = useCallback(async (tabId: string, page = 0, searchQuery = '') => {
-    const tab = TABS.find(t => t.id === tabId)
-    if (!tab) return
+  const loadTab = useCallback(
+    async (tabId: string, page = 0, searchQuery = '') => {
+      const tab = TABS.find(t => t.id === tabId)
+      if (!tab) return
 
-    setLoading(true)
-    setError(null)
-    try {
-      if (searchQuery) {
-        // Fetch up to 500 items across ALL states and filter client-side.
-        // reviewState is intentionally omitted so published samples are also found.
-        const result = await getSenaiteSamples(undefined, 500, 0)
-        const q = searchQuery.toLowerCase()
-        const filtered = result.items.filter(s =>
-          s.id.toLowerCase().includes(q) ||
-          (s.verification_code?.toLowerCase() ?? '').includes(q) ||
-          (s.client_order_number?.toLowerCase() ?? '').includes(q) ||
-          (s.client_id?.toLowerCase() ?? '').includes(q)
-        )
-        setSearchResults(filtered)
-      } else {
-        setSearchResults(null)
-        const result = await getSenaiteSamples(tab.reviewState, PAGE_SIZE, page * PAGE_SIZE)
-        setSamplesByTab(prev => ({ ...prev, [tabId]: result.items }))
-        setTotalsByTab(prev => ({ ...prev, [tabId]: result.total }))
-        setPageByTab(prev => ({ ...prev, [tabId]: page }))
+      setLoading(true)
+      setError(null)
+      try {
+        if (searchQuery) {
+          // Server-side search via SENAITE's SearchableText index.
+          // reviewState is intentionally omitted so published samples are also found.
+          const result = await getSenaiteSamples(undefined, 50, 0, searchQuery)
+          setSearchResults(result.items)
+        } else {
+          setSearchResults(null)
+          const result = await getSenaiteSamples(
+            tab.reviewState,
+            PAGE_SIZE,
+            page * PAGE_SIZE
+          )
+          setSamplesByTab(prev => ({ ...prev, [tabId]: result.items }))
+          setTotalsByTab(prev => ({ ...prev, [tabId]: result.total }))
+          setPageByTab(prev => ({ ...prev, [tabId]: page }))
+        }
+      } catch (e) {
+        setError(e instanceof Error ? e.message : 'Failed to load samples')
+      } finally {
+        setLoading(false)
       }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to load samples')
-    } finally {
-      setLoading(false)
-    }
-  }, [])
+    },
+    []
+  )
 
   const refresh = useCallback(async () => {
     setLoading(true)
@@ -357,14 +427,17 @@ export function SenaiteDashboard() {
           setPageByTab({ [activeTab]: 0 })
         }
       } catch (e) {
-        if (!cancelled) setError(e instanceof Error ? e.message : 'Failed to connect')
+        if (!cancelled)
+          setError(e instanceof Error ? e.message : 'Failed to connect')
       } finally {
         if (!cancelled) setLoading(false)
       }
     }
     init()
-    return () => { cancelled = true }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // Debounced server-side search — fires on every search change
@@ -389,8 +462,12 @@ export function SenaiteDashboard() {
   }
 
   const isSearching = searchResults !== null
-  const currentSamples = isSearching ? searchResults : (samplesByTab[activeTab] ?? [])
-  const currentTotal = isSearching ? searchResults.length : (totalsByTab[activeTab] ?? 0)
+  const currentSamples = isSearching
+    ? searchResults
+    : (samplesByTab[activeTab] ?? [])
+  const currentTotal = isSearching
+    ? searchResults.length
+    : (totalsByTab[activeTab] ?? 0)
   const currentPage = pageByTab[activeTab] ?? 0
   const totalPages = Math.ceil((totalsByTab[activeTab] ?? 0) / PAGE_SIZE)
   const currentTab = TABS.find(t => t.id === activeTab)!
@@ -402,7 +479,9 @@ export function SenaiteDashboard() {
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-bold tracking-tight">SENAITE</h1>
-            <p className="text-muted-foreground">Sample tracking and workflow status</p>
+            <p className="text-muted-foreground">
+              Sample tracking and workflow status
+            </p>
           </div>
           <Button
             variant="ghost"
@@ -411,7 +490,9 @@ export function SenaiteDashboard() {
             className="h-8 w-8"
             title="Refresh"
           >
-            <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
+            <RefreshCw
+              className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`}
+            />
           </Button>
         </div>
 
@@ -443,7 +524,9 @@ export function SenaiteDashboard() {
                   variant="ghost"
                   size="sm"
                   className="text-xs gap-1"
-                  onClick={() => window.open(`${window.location.origin}`, '_blank')}
+                  onClick={() =>
+                    window.open(`${window.location.origin}`, '_blank')
+                  }
                 >
                   Open SENAITE
                   <ChevronRight className="h-3 w-3" />
@@ -487,7 +570,10 @@ export function SenaiteDashboard() {
                   <TabsTrigger key={tab.id} value={tab.id} className="text-xs">
                     {tab.label}
                     {(totalsByTab[tab.id] ?? 0) > 0 && (
-                      <Badge variant="secondary" className="ml-1.5 h-4 px-1.5 text-[10px]">
+                      <Badge
+                        variant="secondary"
+                        className="ml-1.5 h-4 px-1.5 text-[10px]"
+                      >
                         {totalsByTab[tab.id]}
                       </Badge>
                     )}
@@ -510,7 +596,9 @@ export function SenaiteDashboard() {
             {connected && !loading && totalPages > 1 && !isSearching && (
               <div className="flex items-center justify-between mt-3 pt-3 border-t border-border/30">
                 <span className="text-xs text-muted-foreground">
-                  {currentPage * PAGE_SIZE + 1}–{Math.min((currentPage + 1) * PAGE_SIZE, currentTotal)} of {currentTotal}
+                  {currentPage * PAGE_SIZE + 1}–
+                  {Math.min((currentPage + 1) * PAGE_SIZE, currentTotal)} of{' '}
+                  {currentTotal}
                 </span>
                 <div className="flex items-center gap-1">
                   <Button

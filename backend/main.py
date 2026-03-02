@@ -6156,61 +6156,153 @@ async def list_senaite_samples(
         raise HTTPException(status_code=503, detail="SENAITE not configured")
 
     url = f"{SENAITE_URL}/senaite/@@API/senaite/v1/AnalysisRequest"
-    params: dict = {"limit": limit, "b_start": b_start, "complete": "yes", "sort_on": "created", "sort_order": "descending"}
-    if search:
-        params["SearchableText"] = f"{search}*"
+    base_params: dict = {"complete": "yes", "sort_on": "created", "sort_order": "descending"}
 
     # SENAITE supports review_state:list for multiple states
     states = [s.strip() for s in review_state.split(",") if s.strip()] if review_state else []
+
+    def _add_state_params(params: dict, states_list: list[str]) -> dict:
+        """Add review_state filter to params dict."""
+        if len(states_list) == 1:
+            return {**params, "review_state": states_list[0]}
+        return params
+
+    def _build_state_url(base_url: str, params: dict, states_list: list[str]) -> str | None:
+        """Build URL with multivalue review_state:list if needed."""
+        if len(states_list) > 1:
+            base_qs = "&".join(f"{k}={v}" for k, v in params.items())
+            state_qs = "&".join(f"review_state:list={s}" for s in states_list)
+            return f"{base_url}?{base_qs}&{state_qs}"
+        return None
+
+    def _extract_contact(item: dict) -> Optional[str]:
+        contact = item.get("contact")
+        if not contact:
+            return None
+        if isinstance(contact, dict):
+            return contact.get("title") or contact.get("id")
+        return str(contact)
+
+    def _item_to_model(it: dict) -> SenaiteSampleItem:
+        return SenaiteSampleItem(
+            uid=str(it.get("uid", "")),
+            id=str(it.get("id", "")),
+            title=str(it.get("title", "")),
+            client_id=it.get("getClientTitle") or it.get("ClientID") or it.get("getClientID") or None,
+            client_order_number=it.get("getClientOrderNumber") or it.get("ClientOrderNumber") or None,
+            date_created=it.get("created") or it.get("creation_date") or it.get("DateCreated") or it.get("getDateCreated") or None,
+            date_received=it.get("getDateReceived") or it.get("DateReceived") or None,
+            date_sampled=it.get("getDateSampled") or it.get("DateSampled") or None,
+            review_state=str(it.get("review_state", "")),
+            sample_type=it.get("getSampleTypeTitle") or it.get("SampleTypeTitle") or it.get("SampleType") or None,
+            contact=_extract_contact(it),
+            verification_code=it.get("VerificationCode") or it.get("getVerificationCode") or None,
+        )
 
     try:
         async with httpx.AsyncClient(
             timeout=SENAITE_TIMEOUT,
             auth=httpx.BasicAuth(SENAITE_USER, SENAITE_PASSWORD),
         ) as client:
-            if len(states) == 1:
-                resp = await client.get(url, params={**params, "review_state": states[0]})
-            elif len(states) > 1:
-                # Build multivalue query string manually for review_state:list
-                base_params = "&".join(f"{k}={v}" for k, v in params.items())
-                state_params = "&".join(f"review_state:list={s}" for s in states)
-                resp = await client.get(f"{url}?{base_params}&{state_params}")
+            if search:
+                # Multi-strategy search: fire parallel queries across different indexes
+                # to cover sample ID, WP order number, and exact ID matches.
+                import asyncio
+                search_term = search.strip()
+
+                async def _query(extra_params: dict) -> list[dict]:
+                    """Run a single SENAITE search query and return items."""
+                    params = {**base_params, "limit": limit, **extra_params}
+                    params = _add_state_params(params, states)
+                    multi_url = _build_state_url(url, params, states)
+                    try:
+                        if multi_url:
+                            resp = await client.get(multi_url)
+                        else:
+                            resp = await client.get(url, params=params)
+                        resp.raise_for_status()
+                        return resp.json().get("items", [])
+                    except Exception as exc:
+                        print(f"[DEBUG] Search strategy failed ({extra_params}): {exc}")
+                        return []
+
+                # SENAITE catalog limitations (tested Feb 2026):
+                # - getId: exact match only, no wildcards. Works perfectly.
+                # - getClientOrderNumber: BROKEN — returns all samples regardless of value.
+                # - SearchableText: tokenizes on hyphens, "P-0085" matches everything with "P".
+                #
+                # Strategy: exact getId match + broad fetch with client-side filtering.
+                search_lower = search_term.lower()
+
+                # Phase 1: Exact sample ID match via catalog (instant, precise)
+                exact_items = await _query({"getId": search_term})
+
+                # Phase 2: Fetch recent samples broadly and filter client-side
+                # This covers order numbers, client names, verification codes.
+                broad_params: dict = {**base_params, "limit": 500}
+                broad_params = _add_state_params(broad_params, states)
+                broad_url = _build_state_url(url, broad_params, states)
+                try:
+                    if broad_url:
+                        broad_resp = await client.get(broad_url)
+                    else:
+                        broad_resp = await client.get(url, params=broad_params)
+                    broad_resp.raise_for_status()
+                    broad_items = broad_resp.json().get("items", [])
+                except Exception:
+                    broad_items = []
+
+                # Client-side filter on the broad results
+                filtered_broad = [
+                    it for it in broad_items
+                    if search_lower in (it.get("id") or "").lower()
+                    or search_lower in (it.get("getClientOrderNumber") or it.get("ClientOrderNumber") or "").lower()
+                    or search_lower in (it.get("getClientTitle") or it.get("ClientID") or "").lower()
+                    or search_lower in (it.get("VerificationCode") or it.get("getVerificationCode") or "").lower()
+                ]
+
+                # Merge: exact match first, then filtered broad (deduplicated)
+                seen_uids: set[str] = set()
+                merged_items: list[dict] = []
+                for it in exact_items + filtered_broad:
+                    uid = str(it.get("uid", ""))
+                    if uid and uid not in seen_uids:
+                        seen_uids.add(uid)
+                        merged_items.append(it)
+
+                # Sort merged results by creation date descending
+                merged_items.sort(
+                    key=lambda x: x.get("created", "") or "",
+                    reverse=True,
+                )
+
+                items = [_item_to_model(it) for it in merged_items]
+                return SenaiteSamplesResponse(
+                    items=items,
+                    total=len(items),
+                    b_start=0,
+                )
+
             else:
-                resp = await client.get(url, params=params)
+                # Normal paginated listing (no search)
+                params = {**base_params, "limit": limit, "b_start": b_start}
+                params = _add_state_params(params, states)
+                multi_url = _build_state_url(url, params, states)
+                if multi_url:
+                    resp = await client.get(multi_url)
+                else:
+                    resp = await client.get(url, params=params)
 
-        resp.raise_for_status()
-        data = resp.json()
+            resp.raise_for_status()
+            data = resp.json()
 
-        def _extract_contact(item: dict) -> Optional[str]:
-            contact = item.get("contact")
-            if not contact:
-                return None
-            if isinstance(contact, dict):
-                return contact.get("title") or contact.get("id")
-            return str(contact)
+            items = [_item_to_model(it) for it in data.get("items", [])]
 
-        items = []
-        for it in data.get("items", []):
-            items.append(SenaiteSampleItem(
-                uid=str(it.get("uid", "")),
-                id=str(it.get("id", "")),
-                title=str(it.get("title", "")),
-                client_id=it.get("getClientTitle") or it.get("ClientID") or it.get("getClientID") or None,
-                client_order_number=it.get("getClientOrderNumber") or it.get("ClientOrderNumber") or None,
-                date_created=it.get("created") or it.get("creation_date") or it.get("DateCreated") or it.get("getDateCreated") or None,
-                date_received=it.get("getDateReceived") or it.get("DateReceived") or None,
-                date_sampled=it.get("getDateSampled") or it.get("DateSampled") or None,
-                review_state=str(it.get("review_state", "")),
-                sample_type=it.get("getSampleTypeTitle") or it.get("SampleTypeTitle") or it.get("SampleType") or None,
-                contact=_extract_contact(it),
-                verification_code=it.get("VerificationCode") or it.get("getVerificationCode") or None,
-            ))
-
-        return SenaiteSamplesResponse(
-            items=items,
-            total=data.get("count") or data.get("total") or len(items),
-            b_start=b_start,
-        )
+            return SenaiteSamplesResponse(
+                items=items,
+                total=data.get("count") or data.get("total") or len(items),
+                b_start=b_start,
+            )
 
     except HTTPException:
         raise
