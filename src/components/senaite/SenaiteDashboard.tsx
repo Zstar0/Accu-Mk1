@@ -8,9 +8,9 @@ import {
   ArrowUp,
   ArrowDown,
   ArrowUpDown,
-  Search,
   X,
   ChevronLeft,
+  Filter,
 } from 'lucide-react'
 import {
   Card,
@@ -38,7 +38,6 @@ import {
 } from '@/lib/api'
 import { useUIStore } from '@/store/ui-store'
 import { StateBadge, formatDate } from '@/components/senaite/senaite-utils'
-import { Input } from '@/components/ui/input'
 
 // --- Constants ---
 
@@ -147,6 +146,12 @@ function SortIcon({ column, sort }: { column: SortColumn; sort: SortConfig }) {
 
 const TEST_CLIENT_ID = 'forrest@valenceanalytical.com'
 
+interface ColumnFilters {
+  id: string
+  client_order_number: string
+  verification_code: string
+}
+
 function SampleTable({
   samples,
   loading,
@@ -154,6 +159,8 @@ function SampleTable({
   error,
   hideTestSamples,
   onSelectSample,
+  columnFilters,
+  onColumnFilterChange,
 }: {
   samples: SenaiteSample[]
   loading: boolean
@@ -161,6 +168,8 @@ function SampleTable({
   error: string | null
   hideTestSamples: boolean
   onSelectSample?: (sampleId: string) => void
+  columnFilters: ColumnFilters
+  onColumnFilterChange: (column: keyof ColumnFilters, value: string) => void
 }) {
   const navigateToOrderExplorer = useUIStore(
     state => state.navigateToOrderExplorer
@@ -178,9 +187,13 @@ function SampleTable({
     )
   }
 
+  // Client-side filtering: only hide test samples (column searches are now server-side)
   const filteredSamples = useMemo(() => {
-    if (!hideTestSamples) return samples
-    return samples.filter(s => s.client_id?.toLowerCase() !== TEST_CLIENT_ID)
+    let result = samples
+    if (hideTestSamples) {
+      result = result.filter(s => s.client_id?.toLowerCase() !== TEST_CLIENT_ID)
+    }
+    return result
   }, [samples, hideTestSamples])
 
   const sortedSamples = useMemo(() => {
@@ -266,6 +279,9 @@ function SampleTable({
     },
   ]
 
+  // Columns that support inline search
+  const filterableColumns: (keyof ColumnFilters)[] = ['id', 'client_order_number', 'verification_code']
+
   return (
     <div className="overflow-auto">
       <Table>
@@ -281,6 +297,25 @@ function SampleTable({
                   {col.label}
                   <SortIcon column={col.key} sort={sort} />
                 </span>
+              </TableHead>
+            ))}
+          </TableRow>
+          {/* Per-column filter inputs */}
+          <TableRow className="border-b-0 hover:bg-transparent">
+            {columns.map(col => (
+              <TableHead key={`filter-${col.key}`} className={`${col.className} py-1 px-2`}>
+                {filterableColumns.includes(col.key as keyof ColumnFilters) ? (
+                  <div className="relative">
+                    <Filter className="absolute left-1.5 top-1/2 -translate-y-1/2 h-3 w-3 text-muted-foreground/50 pointer-events-none" />
+                    <input
+                      value={columnFilters[col.key as keyof ColumnFilters]}
+                      onChange={e => onColumnFilterChange(col.key as keyof ColumnFilters, e.target.value)}
+                      placeholder={`Search…`}
+                      className="w-full h-6 pl-5 pr-1 text-xs bg-muted/30 border border-border/30 rounded focus:outline-none focus:ring-1 focus:ring-ring/50"
+                      onClick={e => e.stopPropagation()}
+                    />
+                  </div>
+                ) : null}
               </TableHead>
             ))}
           </TableRow>
@@ -347,7 +382,7 @@ export function SenaiteDashboard() {
   >({})
   const [totalsByTab, setTotalsByTab] = useState<Record<string, number>>({})
   const [pageByTab, setPageByTab] = useState<Record<string, number>>({})
-  const [search, setSearch] = useState('')
+  // sampleIdSearch is now managed inside columnFilters.id
   const [hideTestSamples, setHideTestSamples] = useState(true)
   const [searchResults, setSearchResults] = useState<SenaiteSample[] | null>(
     null
@@ -355,9 +390,19 @@ export function SenaiteDashboard() {
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(
     undefined
   )
+  const [columnFilters, setColumnFilters] = useState<ColumnFilters>({
+    id: '',
+    client_order_number: '',
+    verification_code: '',
+  })
+  const handleColumnFilterChange = useCallback((column: keyof ColumnFilters, value: string) => {
+    setColumnFilters(prev => ({ ...prev, [column]: value }))
+  }, [])
+  // Alias for backward compat with search logic
+  const sampleIdSearch = columnFilters.id
 
   const loadTab = useCallback(
-    async (tabId: string, page = 0, searchQuery = '') => {
+    async (tabId: string, _page = 0, searchQuery = '', searchField?: 'verification_code' | 'order_number') => {
       const tab = TABS.find(t => t.id === tabId)
       if (!tab) return
 
@@ -365,20 +410,22 @@ export function SenaiteDashboard() {
       setError(null)
       try {
         if (searchQuery) {
-          // Server-side search via SENAITE's SearchableText index.
-          // reviewState is intentionally omitted so published samples are also found.
-          const result = await getSenaiteSamples(undefined, 50, 0, searchQuery)
+          // Server-side search:
+          // - no searchField: Uses SENAITE's getId catalog index (sample ID)
+          // - verification_code: Postgres lookup → sample IDs → SENAITE getId
+          // - order_number: Postgres lookup → sample IDs → SENAITE getId
+          const result = await getSenaiteSamples(undefined, 50, 0, searchQuery, searchField)
           setSearchResults(result.items)
         } else {
           setSearchResults(null)
           const result = await getSenaiteSamples(
             tab.reviewState,
             PAGE_SIZE,
-            page * PAGE_SIZE
+            _page * PAGE_SIZE
           )
           setSamplesByTab(prev => ({ ...prev, [tabId]: result.items }))
           setTotalsByTab(prev => ({ ...prev, [tabId]: result.total }))
-          setPageByTab(prev => ({ ...prev, [tabId]: page }))
+          setPageByTab(prev => ({ ...prev, [tabId]: _page }))
         }
       } catch (e) {
         setError(e instanceof Error ? e.message : 'Failed to load samples')
@@ -440,25 +487,38 @@ export function SenaiteDashboard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // Debounced server-side search — fires on every search change
+  // Debounced server-side search — fires on any column filter change
   useEffect(() => {
     if (!connected) return
     clearTimeout(searchTimerRef.current)
-    const q = search.trim()
-    if (!q) {
+
+    // Determine which filter is active (priority: id > order > verification)
+    const idQ = columnFilters.id.trim()
+    const orderQ = columnFilters.client_order_number.trim()
+    const verQ = columnFilters.verification_code.trim()
+
+    if (!idQ && !orderQ && !verQ) {
+      // No filters active — reload normal tab data
       loadTab(activeTab, 0)
       return
     }
+
     searchTimerRef.current = setTimeout(() => {
-      loadTab(activeTab, 0, q)
+      if (idQ) {
+        loadTab(activeTab, 0, idQ)  // default: getId catalog
+      } else if (orderQ) {
+        loadTab(activeTab, 0, orderQ, 'order_number')
+      } else if (verQ) {
+        loadTab(activeTab, 0, verQ, 'verification_code')
+      }
     }, 350)
     return () => clearTimeout(searchTimerRef.current)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [search])
+  }, [columnFilters])
 
   const handleTabChange = (tabId: string) => {
     setActiveTab(tabId)
-    if (connected) loadTab(tabId, 0, search.trim())
+    if (connected) loadTab(tabId, 0, sampleIdSearch.trim())
   }
 
   const isSearching = searchResults !== null
@@ -471,6 +531,7 @@ export function SenaiteDashboard() {
   const currentPage = pageByTab[activeTab] ?? 0
   const totalPages = Math.ceil((totalsByTab[activeTab] ?? 0) / PAGE_SIZE)
   const currentTab = TABS.find(t => t.id === activeTab)!
+  const hasActiveFilters = sampleIdSearch.trim() !== '' || columnFilters.client_order_number !== '' || columnFilters.verification_code !== ''
 
   return (
     <ScrollArea className="h-full">
@@ -508,52 +569,50 @@ export function SenaiteDashboard() {
                 <CardDescription>
                   {!connected
                     ? 'Connect to SENAITE to view samples'
-                    : loading && search.trim()
-                      ? `Searching for "${search.trim()}"…`
+                    : loading && sampleIdSearch.trim()
+                      ? `Searching for "${sampleIdSearch.trim()}"…`
                       : isSearching
                         ? currentTotal > 0
-                          ? `${currentTotal} result${currentTotal !== 1 ? 's' : ''} for "${search.trim()}"`
-                          : `No results for "${search.trim()}"`
+                          ? `${currentTotal} result${currentTotal !== 1 ? 's' : ''} for "${sampleIdSearch.trim()}"`
+                          : `No results for "${sampleIdSearch.trim()}"`
                         : !loading && currentTotal > 0
                           ? `${currentTotal} sample${currentTotal !== 1 ? 's' : ''} — ${currentTab.description}`
                           : currentTab.description}
                 </CardDescription>
               </div>
-              {connected && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="text-xs gap-1"
-                  onClick={() =>
-                    window.open(`${window.location.origin}`, '_blank')
-                  }
-                >
-                  Open SENAITE
-                  <ChevronRight className="h-3 w-3" />
-                </Button>
-              )}
+              <div className="flex items-center gap-2">
+                {connected && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="text-xs gap-1"
+                    onClick={() =>
+                      window.open(`${window.location.origin}`, '_blank')
+                    }
+                  >
+                    Open SENAITE
+                    <ChevronRight className="h-3 w-3" />
+                  </Button>
+                )}
+              </div>
             </div>
           </CardHeader>
           <CardContent className="pt-0">
             <div className="flex items-center gap-3 mb-4">
-              <div className="relative flex-1">
-                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
-                <Input
-                  value={search}
-                  onChange={e => setSearch(e.target.value)}
-                  placeholder="Search by sample ID, client, or verification code…"
-                  className="pl-8 pr-8 h-8 text-sm"
-                />
-                {search && (
-                  <button
-                    onClick={() => setSearch('')}
-                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
-                    aria-label="Clear search"
-                  >
-                    <X className="h-3.5 w-3.5" />
-                  </button>
-                )}
-              </div>
+              {hasActiveFilters && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="text-xs gap-1 text-muted-foreground"
+                  onClick={() => {
+                    setColumnFilters({ id: '', client_order_number: '', verification_code: '' })
+                  }}
+                >
+                  <X className="h-3 w-3" />
+                  Clear all searches
+                </Button>
+              )}
+              <div className="flex-1" />
               <label className="flex items-center gap-1.5 text-xs text-muted-foreground whitespace-nowrap cursor-pointer select-none">
                 <input
                   type="checkbox"
@@ -589,6 +648,8 @@ export function SenaiteDashboard() {
                     error={error}
                     hideTestSamples={hideTestSamples}
                     onSelectSample={navigateToSample}
+                    columnFilters={columnFilters}
+                    onColumnFilterChange={handleColumnFilterChange}
                   />
                 </TabsContent>
               ))}

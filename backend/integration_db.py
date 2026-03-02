@@ -405,6 +405,76 @@ def fetch_access_logs_for_order(order_id: str) -> list[dict]:
             return [dict(row) for row in rows]
 
 
+def search_sample_ids_by_verification_code(search: str, limit: int = 50) -> list[str]:
+    """
+    Search for SENAITE sample IDs by verification code (ILIKE).
+
+    Searches both ingestions.verification_code and coa_generations.verification_code.
+
+    Args:
+        search: Partial or full verification code to search for
+        limit: Max results
+
+    Returns:
+        List of distinct sample_id strings (e.g. ["P-0085", "P-0102"])
+    """
+    query = """
+        SELECT DISTINCT sample_id FROM (
+            SELECT sample_id FROM ingestions
+              WHERE verification_code ILIKE %s AND sample_id IS NOT NULL
+            UNION
+            SELECT sample_id FROM coa_generations
+              WHERE verification_code ILIKE %s AND sample_id IS NOT NULL
+        ) combined
+        ORDER BY sample_id DESC
+        LIMIT %s
+    """
+    search_term = f"%{search}%"
+    with get_integration_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(query, [search_term, search_term, limit])
+            return [row[0] for row in cur.fetchall()]
+
+
+def search_sample_ids_by_order_number(search: str, limit: int = 50) -> list[str]:
+    """
+    Search for SENAITE sample IDs by WordPress order number (ILIKE).
+
+    Searches both:
+    - order_submissions.order_number / order_id (stores bare number like "3066")
+    - ingestions.order_ref (stores WP-prefixed like "WP-3066")
+
+    Args:
+        search: Partial or full order number to search for (e.g. "WP-3066" or "3066")
+        limit: Max results
+
+    Returns:
+        List of distinct sample_id strings (e.g. ["P-0085", "P-0102"])
+    """
+    query = """
+        SELECT DISTINCT sample_id FROM (
+            -- Search via order_submissions join
+            SELECT i.sample_id
+            FROM ingestions i
+            JOIN order_submissions o ON i.order_submission_id = o.id
+            WHERE (o.order_number ILIKE %s OR o.order_id ILIKE %s)
+              AND i.sample_id IS NOT NULL
+            UNION
+            -- Search via ingestions.order_ref (has WP- prefix)
+            SELECT sample_id
+            FROM ingestions
+            WHERE order_ref ILIKE %s AND sample_id IS NOT NULL
+        ) combined
+        ORDER BY sample_id DESC
+        LIMIT %s
+    """
+    search_term = f"%{search}%"
+    with get_integration_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(query, [search_term, search_term, search_term, limit])
+            return [row[0] for row in cur.fetchall()]
+
+
 def test_connection() -> dict:
     """Test the database connection. Returns status info."""
     config = get_connection_config()

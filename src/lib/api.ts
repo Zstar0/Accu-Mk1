@@ -2486,7 +2486,8 @@ export async function getSenaiteSamples(
   reviewState?: string,
   limit = 50,
   bStart = 0,
-  search?: string
+  search?: string,
+  searchField?: 'verification_code' | 'order_number'
 ): Promise<SenaiteSamplesResponse> {
   const params = new URLSearchParams({
     limit: String(limit),
@@ -2494,6 +2495,7 @@ export async function getSenaiteSamples(
   })
   if (reviewState) params.set('review_state', reviewState)
   if (search) params.set('search', search)
+  if (searchField) params.set('search_field', searchField)
   const response = await fetch(`${API_BASE_URL()}/senaite/samples?${params}`, {
     headers: getBearerHeaders(),
   })

@@ -6140,6 +6140,7 @@ async def list_senaite_samples(
     limit: int = 50,
     b_start: int = 0,
     search: Optional[str] = None,
+    search_field: Optional[str] = None,
     _current_user=Depends(get_current_user),
 ):
     """
@@ -6226,57 +6227,45 @@ async def list_senaite_samples(
                         print(f"[DEBUG] Search strategy failed ({extra_params}): {exc}")
                         return []
 
-                # SENAITE catalog limitations (tested Feb 2026):
-                # - getId: exact match only, no wildcards. Works perfectly.
+                # SENAITE catalog limitations (tested Mar 2026):
+                # - getId: exact match only, no wildcards. Works perfectly and instantly.
                 # - getClientOrderNumber: BROKEN — returns all samples regardless of value.
                 # - SearchableText: tokenizes on hyphens, "P-0085" matches everything with "P".
                 #
-                # Strategy: exact getId match + broad fetch with client-side filtering.
-                search_lower = search_term.lower()
+                # Strategy:
+                # - search_field=None (default): getId exact match for sample ID search
+                # - search_field=verification_code: Postgres lookup → sample IDs → getId
+                # - search_field=order_number: Postgres lookup → sample IDs → getId
 
-                # Phase 1: Exact sample ID match via catalog (instant, precise)
-                exact_items = await _query({"getId": search_term})
+                if search_field == "verification_code":
+                    from integration_db import search_sample_ids_by_verification_code
+                    sample_ids = search_sample_ids_by_verification_code(search_term, limit=50)
+                elif search_field == "order_number":
+                    from integration_db import search_sample_ids_by_order_number
+                    sample_ids = search_sample_ids_by_order_number(search_term, limit=50)
+                else:
+                    # Default: direct getId lookup (sample ID search)
+                    sample_ids = [search_term]
 
-                # Phase 2: Fetch recent samples broadly and filter client-side
-                # This covers order numbers, client names, verification codes.
-                broad_params: dict = {**base_params, "limit": 500}
-                broad_params = _add_state_params(broad_params, states)
-                broad_url = _build_state_url(url, broad_params, states)
-                try:
-                    if broad_url:
-                        broad_resp = await client.get(broad_url)
-                    else:
-                        broad_resp = await client.get(url, params=broad_params)
-                    broad_resp.raise_for_status()
-                    broad_items = broad_resp.json().get("items", [])
-                except Exception:
-                    broad_items = []
+                # Fetch each matching sample from SENAITE via getId
+                all_items: list[dict] = []
+                for sid in sample_ids:
+                    items_for_id = await _query({"getId": sid})
+                    all_items.extend(items_for_id)
 
-                # Client-side filter on the broad results
-                filtered_broad = [
-                    it for it in broad_items
-                    if search_lower in (it.get("id") or "").lower()
-                    or search_lower in (it.get("getClientOrderNumber") or it.get("ClientOrderNumber") or "").lower()
-                    or search_lower in (it.get("getClientTitle") or it.get("ClientID") or "").lower()
-                    or search_lower in (it.get("VerificationCode") or it.get("getVerificationCode") or "").lower()
-                ]
-
-                # Merge: exact match first, then filtered broad (deduplicated)
+                # Deduplicate by UID
                 seen_uids: set[str] = set()
-                merged_items: list[dict] = []
-                for it in exact_items + filtered_broad:
+                deduped: list[dict] = []
+                for it in all_items:
                     uid = str(it.get("uid", ""))
                     if uid and uid not in seen_uids:
                         seen_uids.add(uid)
-                        merged_items.append(it)
+                        deduped.append(it)
 
-                # Sort merged results by creation date descending
-                merged_items.sort(
-                    key=lambda x: x.get("created", "") or "",
-                    reverse=True,
-                )
+                # Sort by creation date descending
+                deduped.sort(key=lambda x: x.get("created", "") or "", reverse=True)
 
-                items = [_item_to_model(it) for it in merged_items]
+                items = [_item_to_model(it) for it in deduped]
                 return SenaiteSamplesResponse(
                     items=items,
                     total=len(items),

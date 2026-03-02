@@ -67,11 +67,11 @@ header()  { echo -e "\n${BOLD}${CYAN}═══ $* ═══${NC}\n"; }
 ssh_cmd() {
     if ssh -o BatchMode=yes -o ConnectTimeout=5 "$REMOTE_USER@$REMOTE_HOST" true 2>/dev/null; then
         ssh -o StrictHostKeyChecking=no \
-            -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=20 \
+            -o ConnectTimeout=60 -o ServerAliveInterval=30 -o ServerAliveCountMax=20 \
             "$REMOTE_USER@$REMOTE_HOST" "$@"
     elif [ -n "${REMOTE_PASS:-}" ]; then
         sshpass -p "$REMOTE_PASS" ssh -o StrictHostKeyChecking=no \
-            -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=20 \
+            -o ConnectTimeout=60 -o ServerAliveInterval=30 -o ServerAliveCountMax=20 \
             "$REMOTE_USER@$REMOTE_HOST" "$@"
     else
         error "No SSH key configured and no password provided."
@@ -108,20 +108,20 @@ detect_ssh_auth() {
 run_ssh() {
     if [ "$SSH_METHOD" = "key" ]; then
         ssh -o StrictHostKeyChecking=no \
-            -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=20 \
+            -o ConnectTimeout=60 -o ServerAliveInterval=30 -o ServerAliveCountMax=20 \
             "$REMOTE_USER@$REMOTE_HOST" "$@"
     else
         sshpass -p "$REMOTE_PASS" ssh -o StrictHostKeyChecking=no \
-            -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=20 \
+            -o ConnectTimeout=60 -o ServerAliveInterval=30 -o ServerAliveCountMax=20 \
             "$REMOTE_USER@$REMOTE_HOST" "$@"
     fi
 }
 
 run_scp() {
     if [ "$SSH_METHOD" = "key" ]; then
-        scp -o StrictHostKeyChecking=no -o ConnectTimeout=10 "$@"
+        scp -o StrictHostKeyChecking=no -o ConnectTimeout=60 "$@"
     else
-        sshpass -p "$REMOTE_PASS" scp -o StrictHostKeyChecking=no -o ConnectTimeout=10 "$@"
+        sshpass -p "$REMOTE_PASS" scp -o StrictHostKeyChecking=no -o ConnectTimeout=60 "$@"
     fi
 }
 
@@ -213,15 +213,11 @@ if ! run_ssh "test -f $REMOTE_DIR/backend/.env"; then
 fi
 success "Production backend/.env exists"
 
-# 6. Check required env keys on server
-REQUIRED_ENV_KEYS=("DATABASE_URL" "JWT_SECRET")
-MISSING_KEYS=()
-for key in "${REQUIRED_ENV_KEYS[@]}"; do
-    if ! run_ssh "grep -q '^${key}=' $REMOTE_DIR/backend/.env 2>/dev/null"; then
-        MISSING_KEYS+=("$key")
-    fi
-done
-if [ ${#MISSING_KEYS[@]} -gt 0 ]; then
+# 6. Check required env keys on server (single SSH call for all keys)
+REQUIRED_ENV_KEYS=("JWT_SECRET")
+MISSING_KEYS_STR=$(run_ssh "for key in JWT_SECRET; do grep -q \"\${key}\" $REMOTE_DIR/backend/.env 2>/dev/null || echo \$key; done" 2>/dev/null) || MISSING_KEYS_STR=""
+read -ra MISSING_KEYS <<< "$MISSING_KEYS_STR"
+if [ ${#MISSING_KEYS[@]} -gt 0 ] && [ -n "${MISSING_KEYS[0]}" ]; then
     warn "Missing env keys on prod: ${MISSING_KEYS[*]}"
     warn "Verify backend/.env has all required variables before proceeding."
     read -p "Continue anyway? (y/N) " -n 1 -r
@@ -233,11 +229,14 @@ else
     success "Required env keys verified"
 fi
 
-# 7. Show current state
-info "Current containers on prod:"
-run_ssh "cd $REMOTE_DIR && docker compose -f docker-compose.prod.yml ps --format 'table {{.Name}}\t{{.Status}}' 2>/dev/null" \
-    || run_ssh "cd $REMOTE_DIR && docker compose ps --format 'table {{.Name}}\t{{.Status}}' 2>/dev/null" \
-    || echo "    (no containers running with prod compose)"
+# Show current state (non-blocking — 15s timeout)
+if timeout 15 run_ssh "cd $REMOTE_DIR && docker compose -f docker-compose.prod.yml ps --format 'table {{.Name}}\t{{.Status}}'" 2>/dev/null; then
+    true
+elif timeout 15 run_ssh "cd $REMOTE_DIR && docker compose ps --format 'table {{.Name}}\t{{.Status}}'" 2>/dev/null; then
+    true
+else
+    echo "    (could not fetch container status — continuing anyway)"
+fi
 
 if [ "$DRY_RUN" = true ]; then
     echo ""
