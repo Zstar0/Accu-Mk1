@@ -1,19 +1,21 @@
 #!/usr/bin/env bash
 # ============================================================
-# Accu-Mk1 Deploy Script
+# Accu-Mk1 Deploy Script (v2 — Registry-Based)
 # ============================================================
-# Deploys the Accu-Mk1 frontend + backend to the production
-# DigitalOcean droplet via rsync + Docker Compose.
+# Builds Docker images locally, pushes to GHCR, then pulls
+# on the production server. No building on prod.
 #
 # Usage:
 #   bash scripts/deploy.sh              # Full deploy
 #   bash scripts/deploy.sh --dry-run    # Preview only
 #   bash scripts/deploy.sh --backend    # Backend only
 #   bash scripts/deploy.sh --frontend   # Frontend only
+#   bash scripts/deploy.sh --skip-build # Pull existing images on prod (no local build)
 #
 # Prerequisites:
-#   - sshpass installed (apt install sshpass / brew install sshpass)
-#   - SSH access to the production server
+#   - Docker logged into GHCR: docker login ghcr.io
+#   - SSH key configured for the production server
+#     (fallback: sshpass if SSH key not available)
 # ============================================================
 
 set -euo pipefail
@@ -24,6 +26,26 @@ REMOTE_HOST="165.227.241.81"
 REMOTE_DIR="/root/accu-mk1"
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 VERSION=$(grep '"version"' "$PROJECT_DIR/package.json" | head -1 | sed 's/.*: "\(.*\)".*/\1/')
+GIT_SHA=$(git -C "$PROJECT_DIR" rev-parse --short HEAD 2>/dev/null || echo "unknown")
+
+# GHCR image names
+REGISTRY="ghcr.io/zstar0"
+FRONTEND_IMAGE="$REGISTRY/accu-mk1-frontend"
+BACKEND_IMAGE="$REGISTRY/accu-mk1-backend"
+
+# Health check configuration
+HEALTH_URL="https://accumk1.valenceanalytical.com/api/health"
+HEALTH_RETRIES=10
+HEALTH_INTERVAL=3
+
+# Minimum free disk space on prod (in KB) — 2GB
+MIN_DISK_KB=2097152
+
+# New Relic Change Tracking
+# To find your entity GUID: New Relic → APM → your app → metadata → entityGuid
+# Leave empty to skip New Relic markers
+NEW_RELIC_API_KEY="${NEW_RELIC_API_KEY:-}"
+NEW_RELIC_ENTITY_GUID="${NEW_RELIC_ENTITY_GUID:-}"
 
 # Colors
 RED='\033[0;31m'
@@ -31,7 +53,7 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 CYAN='\033[0;36m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 BOLD='\033[1m'
 
 # ── Helpers ─────────────────────────────────────────────────
@@ -41,39 +63,92 @@ warn()    { echo -e "${YELLOW}⚠${NC}  $*"; }
 error()   { echo -e "${RED}✖${NC}  $*" >&2; }
 header()  { echo -e "\n${BOLD}${CYAN}═══ $* ═══${NC}\n"; }
 
+# SSH wrapper — tries key-based auth first, falls back to sshpass
 ssh_cmd() {
-    sshpass -p "$REMOTE_PASS" ssh -o StrictHostKeyChecking=no \
-        -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=20 \
-        "$REMOTE_USER@$REMOTE_HOST" "$@"
+    if ssh -o BatchMode=yes -o ConnectTimeout=5 "$REMOTE_USER@$REMOTE_HOST" true 2>/dev/null; then
+        ssh -o StrictHostKeyChecking=no \
+            -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=20 \
+            "$REMOTE_USER@$REMOTE_HOST" "$@"
+    elif [ -n "${REMOTE_PASS:-}" ]; then
+        sshpass -p "$REMOTE_PASS" ssh -o StrictHostKeyChecking=no \
+            -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=20 \
+            "$REMOTE_USER@$REMOTE_HOST" "$@"
+    else
+        error "No SSH key configured and no password provided."
+        error "Set up SSH keys:  ssh-copy-id $REMOTE_USER@$REMOTE_HOST"
+        error "Or provide password:  REMOTE_PASS=xxx bash scripts/deploy.sh"
+        exit 1
+    fi
 }
 
-scp_cmd() {
-    sshpass -p "$REMOTE_PASS" scp -o StrictHostKeyChecking=no \
-        -o ConnectTimeout=10 "$@"
+# Detect SSH auth method once at startup
+detect_ssh_auth() {
+    if ssh -o BatchMode=yes -o ConnectTimeout=5 "$REMOTE_USER@$REMOTE_HOST" true 2>/dev/null; then
+        SSH_METHOD="key"
+        return 0
+    fi
+
+    # No key auth — need password
+    if [ -z "${REMOTE_PASS:-}" ]; then
+        read -sp "$(echo -e "${YELLOW}🔑 SSH password for ${REMOTE_USER}@${REMOTE_HOST}:${NC} ")" REMOTE_PASS
+        echo ""
+    fi
+
+    if command -v sshpass &>/dev/null; then
+        SSH_METHOD="sshpass"
+    else
+        error "No SSH key and sshpass not installed."
+        error "Option 1 (recommended): ssh-copy-id $REMOTE_USER@$REMOTE_HOST"
+        error "Option 2: apt install sshpass"
+        exit 1
+    fi
 }
 
-rsync_cmd() {
-    sshpass -p "$REMOTE_PASS" rsync "$@"
+# After auth detection, use the right method consistently
+run_ssh() {
+    if [ "$SSH_METHOD" = "key" ]; then
+        ssh -o StrictHostKeyChecking=no \
+            -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=20 \
+            "$REMOTE_USER@$REMOTE_HOST" "$@"
+    else
+        sshpass -p "$REMOTE_PASS" ssh -o StrictHostKeyChecking=no \
+            -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=20 \
+            "$REMOTE_USER@$REMOTE_HOST" "$@"
+    fi
+}
+
+run_scp() {
+    if [ "$SSH_METHOD" = "key" ]; then
+        scp -o StrictHostKeyChecking=no -o ConnectTimeout=10 "$@"
+    else
+        sshpass -p "$REMOTE_PASS" scp -o StrictHostKeyChecking=no -o ConnectTimeout=10 "$@"
+    fi
 }
 
 # ── Parse Arguments ─────────────────────────────────────────
 DRY_RUN=false
 DEPLOY_FRONTEND=true
 DEPLOY_BACKEND=true
+SKIP_BUILD=false
+SKIP_RELEASE=false
 
 for arg in "$@"; do
     case $arg in
-        --dry-run)    DRY_RUN=true ;;
-        --frontend)   DEPLOY_BACKEND=false ;;
-        --backend)    DEPLOY_FRONTEND=false ;;
+        --dry-run)     DRY_RUN=true ;;
+        --frontend)    DEPLOY_BACKEND=false ;;
+        --backend)     DEPLOY_FRONTEND=false ;;
+        --skip-build)  SKIP_BUILD=true ;;
+        --skip-release) SKIP_RELEASE=true ;;
         --help|-h)
             echo "Usage: bash scripts/deploy.sh [OPTIONS]"
             echo ""
             echo "Options:"
-            echo "  --dry-run     Preview rsync without making changes"
-            echo "  --frontend    Deploy frontend only"
-            echo "  --backend     Deploy backend only"
-            echo "  --help        Show this help"
+            echo "  --dry-run      Preview what would happen without making changes"
+            echo "  --frontend     Deploy frontend only"
+            echo "  --backend      Deploy backend only"
+            echo "  --skip-build   Skip local build, just pull existing images on prod"
+            echo "  --skip-release Skip git tag and GitHub release creation"
+            echo "  --help         Show this help"
             exit 0
             ;;
         *)
@@ -84,153 +159,324 @@ for arg in "$@"; do
 done
 
 # ── Pre-flight Checks ──────────────────────────────────────
-header "Accu-Mk1 Deploy v${VERSION}"
+header "Accu-Mk1 Deploy v${VERSION} (${GIT_SHA})"
 
-# Check for sshpass
-if ! command -v sshpass &> /dev/null; then
-    error "sshpass is required. Install with: apt install sshpass"
-    exit 1
-fi
-
-# Get password (prompt once, reuse everywhere)
-if [ -z "${REMOTE_PASS:-}" ]; then
-    read -sp "$(echo -e "${YELLOW}🔑 SSH password for ${REMOTE_USER}@${REMOTE_HOST}:${NC} ")" REMOTE_PASS
-    echo ""
-fi
-
-# Verify SSH connection
-info "Testing SSH connection..."
-if ! ssh_cmd "echo ok" &>/dev/null; then
-    error "Cannot connect to ${REMOTE_HOST}. Check credentials."
-    exit 1
-fi
-success "SSH connection verified"
-
-# Check Docker on remote
-REMOTE_DOCKER=$(ssh_cmd "docker --version 2>/dev/null" || echo "not found")
-info "Remote Docker: $REMOTE_DOCKER"
-
-# ── Pre-deploy: Capture current state ──────────────────────
-header "Pre-deploy Checks"
-
-RUNNING_CONTAINERS=$(ssh_cmd "cd $REMOTE_DIR && docker compose ps --format '{{.Name}} {{.Status}}' 2>/dev/null" || echo "none")
-info "Current containers:"
-echo "$RUNNING_CONTAINERS" | sed 's/^/    /'
-
-# ── Rsync Source Code ──────────────────────────────────────
-header "Syncing Source Code"
-
-RSYNC_EXCLUDES=(
-    --exclude='.git/'
-    --exclude='node_modules/'
-    --exclude='.venv/'
-    --exclude='__pycache__/'
-    --exclude='dist/'
-    --exclude='data/'
-    --exclude='*.db'
-    --exclude='*.sqlite'
-    --exclude='backend/.env'
-    --exclude='.env'
-    --exclude='src-tauri/'
-    --exclude='ReportFiles/'
-    --exclude='test-data/'
-    --exclude='.planning/'
-    --exclude='.agent/'
-    --exclude='.claude/'
-    --exclude='.gemini/'
-    --exclude='.ast-grep/'
-    --exclude='.playwright-mcp/'
-    --exclude='.vscode/'
-    --exclude='.gsd/'
-    --exclude='docs/'
-    --exclude='*.tar'
-    --exclude='*.tar.gz'
-)
-
-RSYNC_FLAGS="-avz --delete"
 if [ "$DRY_RUN" = true ]; then
-    RSYNC_FLAGS="$RSYNC_FLAGS --dry-run"
     warn "DRY RUN — no changes will be made"
 fi
 
-info "Syncing from: $PROJECT_DIR/"
-info "Syncing to:   $REMOTE_USER@$REMOTE_HOST:$REMOTE_DIR/"
+# 1. Check Docker is running locally
+if ! docker info &>/dev/null; then
+    error "Docker is not running. Start Docker Desktop and try again."
+    exit 1
+fi
+success "Local Docker running"
 
-rsync_cmd $RSYNC_FLAGS \
-    "${RSYNC_EXCLUDES[@]}" \
-    -e "ssh -o StrictHostKeyChecking=no" \
-    "$PROJECT_DIR/" \
-    "$REMOTE_USER@$REMOTE_HOST:$REMOTE_DIR/"
+# 2. Check GHCR login
+if ! docker pull "$FRONTEND_IMAGE:probe-auth-test" 2>&1 | grep -q "denied\|not found\|manifest unknown"; then
+    # If we get something other than denied/not found, login might have issues
+    true
+fi
+# Better check: try to inspect the credential store
+if ! grep -q "ghcr.io" ~/.docker/config.json 2>/dev/null; then
+    warn "Not logged into GHCR. Run:  docker login ghcr.io -u YOUR_GITHUB_USERNAME"
+    warn "Use a Personal Access Token (classic) with write:packages scope as the password."
+    error "GHCR authentication required."
+    exit 1
+fi
+success "GHCR credentials found"
 
-success "Source code synced"
+# 3. Check SSH connectivity
+info "Testing SSH connection..."
+detect_ssh_auth
+if ! run_ssh "echo ok" &>/dev/null; then
+    error "Cannot connect to ${REMOTE_HOST}. Check credentials."
+    exit 1
+fi
+success "SSH connection verified (method: $SSH_METHOD)"
+
+# 4. Check disk space on prod
+DISK_AVAIL=$(run_ssh "df --output=avail / | tail -1 | tr -d ' '")
+if [ "$DISK_AVAIL" -lt "$MIN_DISK_KB" ]; then
+    DISK_GB=$(echo "scale=1; $DISK_AVAIL / 1048576" | bc)
+    error "Low disk space on prod: ${DISK_GB}GB available (need ≥2GB)"
+    exit 1
+fi
+DISK_GB=$(echo "scale=1; $DISK_AVAIL / 1048576" | bc 2>/dev/null || echo "$((DISK_AVAIL / 1048576))")
+success "Disk space on prod: ${DISK_GB}GB available"
+
+# 5. Verify backend .env exists on server
+if ! run_ssh "test -f $REMOTE_DIR/backend/.env"; then
+    error "backend/.env missing on production server!"
+    error "SSH in and create it: ssh $REMOTE_USER@$REMOTE_HOST"
+    exit 1
+fi
+success "Production backend/.env exists"
+
+# 6. Check required env keys on server
+REQUIRED_ENV_KEYS=("DATABASE_URL" "JWT_SECRET")
+MISSING_KEYS=()
+for key in "${REQUIRED_ENV_KEYS[@]}"; do
+    if ! run_ssh "grep -q '^${key}=' $REMOTE_DIR/backend/.env 2>/dev/null"; then
+        MISSING_KEYS+=("$key")
+    fi
+done
+if [ ${#MISSING_KEYS[@]} -gt 0 ]; then
+    warn "Missing env keys on prod: ${MISSING_KEYS[*]}"
+    warn "Verify backend/.env has all required variables before proceeding."
+    read -p "Continue anyway? (y/N) " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        exit 1
+    fi
+else
+    success "Required env keys verified"
+fi
+
+# 7. Show current state
+info "Current containers on prod:"
+run_ssh "cd $REMOTE_DIR && docker compose -f docker-compose.prod.yml ps --format 'table {{.Name}}\t{{.Status}}' 2>/dev/null" \
+    || run_ssh "cd $REMOTE_DIR && docker compose ps --format 'table {{.Name}}\t{{.Status}}' 2>/dev/null" \
+    || echo "    (no containers running with prod compose)"
 
 if [ "$DRY_RUN" = true ]; then
-    warn "Dry run complete. No containers were rebuilt."
+    echo ""
+    info "Would build and push:"
+    [ "$DEPLOY_FRONTEND" = true ] && info "  $FRONTEND_IMAGE:$VERSION"
+    [ "$DEPLOY_BACKEND" = true ]  && info "  $BACKEND_IMAGE:$VERSION"
+    info "Then pull and restart on $REMOTE_HOST"
+    warn "Dry run complete. No changes were made."
     exit 0
 fi
 
-# ── Upload production .env.docker ──────────────────────────
-if [ "$DEPLOY_FRONTEND" = true ] && [ -f "$PROJECT_DIR/.env.docker.prod" ]; then
-    info "Uploading production .env.docker..."
-    scp_cmd "$PROJECT_DIR/.env.docker.prod" \
-        "$REMOTE_USER@$REMOTE_HOST:$REMOTE_DIR/.env.docker"
-    success "Production .env.docker uploaded"
-fi
+# ── Build & Push Images ───────────────────────────────────
+if [ "$SKIP_BUILD" = false ]; then
+    header "Building Images"
 
-# ── Build & Deploy Containers ──────────────────────────────
-header "Building & Deploying"
+    if [ "$DEPLOY_FRONTEND" = true ]; then
+        info "Building frontend image..."
+        docker build \
+            --platform linux/amd64 \
+            --build-arg ENV_FILE=.env.production \
+            -t "$FRONTEND_IMAGE:$VERSION" \
+            -t "$FRONTEND_IMAGE:sha-$GIT_SHA" \
+            -t "$FRONTEND_IMAGE:latest" \
+            -f "$PROJECT_DIR/Dockerfile" \
+            "$PROJECT_DIR"
+        success "Frontend image built: $FRONTEND_IMAGE:$VERSION"
+    fi
 
-BUILD_TARGETS=""
-if [ "$DEPLOY_FRONTEND" = true ] && [ "$DEPLOY_BACKEND" = true ]; then
-    BUILD_TARGETS=""  # Build all
-    info "Building: frontend + backend"
-elif [ "$DEPLOY_FRONTEND" = true ]; then
-    BUILD_TARGETS="frontend"
-    info "Building: frontend only"
-elif [ "$DEPLOY_BACKEND" = true ]; then
-    BUILD_TARGETS="backend"
-    info "Building: backend only"
-fi
+    if [ "$DEPLOY_BACKEND" = true ]; then
+        info "Building backend image..."
+        docker build \
+            --platform linux/amd64 \
+            -t "$BACKEND_IMAGE:$VERSION" \
+            -t "$BACKEND_IMAGE:sha-$GIT_SHA" \
+            -t "$BACKEND_IMAGE:latest" \
+            -f "$PROJECT_DIR/backend/Dockerfile" \
+            "$PROJECT_DIR/backend"
+        success "Backend image built: $BACKEND_IMAGE:$VERSION"
+    fi
 
-info "Running docker compose up --build..."
-ssh_cmd "cd $REMOTE_DIR && docker compose up -d --build $BUILD_TARGETS 2>&1"
-success "Containers rebuilt and started"
+    header "Pushing to GHCR"
 
-# ── Post-deploy Verification ──────────────────────────────
-header "Verification"
+    if [ "$DEPLOY_FRONTEND" = true ]; then
+        info "Pushing frontend images..."
+        docker push "$FRONTEND_IMAGE:$VERSION"
+        docker push "$FRONTEND_IMAGE:sha-$GIT_SHA"
+        docker push "$FRONTEND_IMAGE:latest"
+        success "Frontend pushed to GHCR"
+    fi
 
-# Wait a moment for containers to stabilize
-sleep 3
-
-# Check container status
-info "Container status:"
-ssh_cmd "cd $REMOTE_DIR && docker compose ps --format 'table {{.Name}}\t{{.Status}}\t{{.Ports}}'"
-
-# Health check
-info "Health check..."
-HEALTH=$(ssh_cmd "curl -sf http://localhost:3100/api/health 2>/dev/null" || echo "FAILED")
-
-if echo "$HEALTH" | grep -q '"status":"ok"'; then
-    success "Health check passed: $HEALTH"
+    if [ "$DEPLOY_BACKEND" = true ]; then
+        info "Pushing backend images..."
+        docker push "$BACKEND_IMAGE:$VERSION"
+        docker push "$BACKEND_IMAGE:sha-$GIT_SHA"
+        docker push "$BACKEND_IMAGE:latest"
+        success "Backend pushed to GHCR"
+    fi
 else
-    error "Health check failed: $HEALTH"
-    warn "Check logs with: ssh $REMOTE_USER@$REMOTE_HOST 'cd $REMOTE_DIR && docker compose logs --tail 50'"
+    info "Skipping local build (--skip-build). Will pull existing images on prod."
+fi
+
+# ── Pre-deploy: Backup version tracking ───────────────────
+header "Deploying to Production"
+
+# Ensure deploy tracking directory exists
+run_ssh "mkdir -p $REMOTE_DIR/.deploy"
+
+# Save previous version
+run_ssh "cat $REMOTE_DIR/.deploy/current_version 2>/dev/null > $REMOTE_DIR/.deploy/previous_version || true"
+
+# ── Upload production compose file ────────────────────────
+info "Uploading production compose file..."
+run_scp "$PROJECT_DIR/docker-compose.prod.yml" \
+    "$REMOTE_USER@$REMOTE_HOST:$REMOTE_DIR/docker-compose.prod.yml"
+success "Production compose file uploaded"
+
+# ── Ensure GHCR auth on prod ─────────────────────────────
+# The prod server needs read access to pull images from GHCR
+if ! run_ssh "grep -q 'ghcr.io' ~/.docker/config.json 2>/dev/null"; then
+    warn "Production server not logged into GHCR."
+    warn "SSH in and run:  docker login ghcr.io -u YOUR_GITHUB_USERNAME"
+    warn "Use a PAT with read:packages scope."
+    error "Cannot pull images without GHCR auth on prod."
     exit 1
 fi
 
-# ── Cleanup old Docker images ─────────────────────────────
-info "Cleaning up dangling images..."
-ssh_cmd "docker image prune -f 2>/dev/null" || true
+# ── Pull & Deploy ────────────────────────────────────────
+info "Pulling images on prod..."
+run_ssh "cd $REMOTE_DIR && VERSION=$VERSION docker compose -f docker-compose.prod.yml pull"
+success "Images pulled on prod"
 
-# ── Summary ───────────────────────────────────────────────
+info "Starting containers..."
+run_ssh "cd $REMOTE_DIR && VERSION=$VERSION docker compose -f docker-compose.prod.yml up -d --remove-orphans"
+success "Containers started"
+
+# ── Health Check with Retry ──────────────────────────────
+header "Health Check"
+
+HEALTH_OK=false
+for i in $(seq 1 $HEALTH_RETRIES); do
+    sleep $HEALTH_INTERVAL
+    HEALTH=$(run_ssh "curl -sf http://localhost:3100/api/health 2>/dev/null" || echo "FAILED")
+
+    if echo "$HEALTH" | grep -q '"status":"ok"'; then
+        success "Health check passed (attempt $i/$HEALTH_RETRIES): $HEALTH"
+        HEALTH_OK=true
+        break
+    else
+        if [ "$i" -lt "$HEALTH_RETRIES" ]; then
+            warn "Health check attempt $i/$HEALTH_RETRIES: $HEALTH — retrying in ${HEALTH_INTERVAL}s..."
+        else
+            error "Health check attempt $i/$HEALTH_RETRIES: $HEALTH"
+        fi
+    fi
+done
+
+# ── Auto-Rollback on Failure ─────────────────────────────
+if [ "$HEALTH_OK" = false ]; then
+    error "Health check failed after $HEALTH_RETRIES attempts!"
+
+    PREV_VERSION=$(run_ssh "cat $REMOTE_DIR/.deploy/previous_version 2>/dev/null" || echo "")
+    if [ -n "$PREV_VERSION" ] && [ "$PREV_VERSION" != "$VERSION" ]; then
+        warn "Rolling back to previous version: $PREV_VERSION"
+        run_ssh "cd $REMOTE_DIR && VERSION=$PREV_VERSION docker compose -f docker-compose.prod.yml pull && VERSION=$PREV_VERSION docker compose -f docker-compose.prod.yml up -d --remove-orphans"
+
+        # Check rollback health
+        sleep 5
+        ROLLBACK_HEALTH=$(run_ssh "curl -sf http://localhost:3100/api/health 2>/dev/null" || echo "FAILED")
+        if echo "$ROLLBACK_HEALTH" | grep -q '"status":"ok"'; then
+            warn "Rollback successful. Running version: $PREV_VERSION"
+            warn "Investigate what went wrong with v${VERSION} before redeploying."
+        else
+            error "Rollback also failed! Manual intervention required."
+            error "SSH in: ssh $REMOTE_USER@$REMOTE_HOST"
+        fi
+    else
+        error "No previous version to rollback to. Manual intervention required."
+        error "SSH in: ssh $REMOTE_USER@$REMOTE_HOST"
+        error "Logs:   cd $REMOTE_DIR && docker compose -f docker-compose.prod.yml logs --tail 50"
+    fi
+    exit 1
+fi
+
+# ── Update Version Tracking ─────────────────────────────
+run_ssh "echo '$VERSION' > $REMOTE_DIR/.deploy/current_version"
+run_ssh "echo '$(date -u +%Y-%m-%dT%H:%M:%SZ) v$VERSION sha:$GIT_SHA' >> $REMOTE_DIR/.deploy/deploy.log"
+success "Version tracking updated"
+
+# ── Git Tag & GitHub Release ─────────────────────────────
+if [ "$SKIP_RELEASE" = false ]; then
+    header "Git Tag & GitHub Release"
+
+    # Check if tag already exists
+    if git -C "$PROJECT_DIR" rev-parse "v$VERSION" >/dev/null 2>&1; then
+        warn "Git tag v$VERSION already exists — skipping tag creation"
+    else
+        info "Creating git tag v$VERSION..."
+        git -C "$PROJECT_DIR" tag -a "v$VERSION" -m "Release v$VERSION"
+        git -C "$PROJECT_DIR" push origin "v$VERSION"
+        success "Git tag v$VERSION pushed"
+    fi
+
+    # Create GitHub release
+    if command -v gh &>/dev/null; then
+        # Check if release already exists
+        if gh release view "v$VERSION" --repo Zstar0/Accu-Mk1 &>/dev/null 2>&1; then
+            warn "GitHub release v$VERSION already exists — skipping"
+        else
+            info "Creating GitHub release v$VERSION..."
+            RELEASE_NOTES="## Deploy v$VERSION\n\n"
+            RELEASE_NOTES+="- **SHA**: $GIT_SHA\n"
+            RELEASE_NOTES+="- **Images**: \`$FRONTEND_IMAGE:$VERSION\`, \`$BACKEND_IMAGE:$VERSION\`\n"
+            RELEASE_NOTES+="- **Server**: $REMOTE_HOST\n"
+
+            # Use CHANGELOG.md if it exists
+            if [ -f "$PROJECT_DIR/CHANGELOG.md" ]; then
+                gh release create "v$VERSION" \
+                    --repo Zstar0/Accu-Mk1 \
+                    --title "v$VERSION" \
+                    --notes-file "$PROJECT_DIR/CHANGELOG.md" \
+                    2>/dev/null && success "GitHub release created" \
+                    || warn "GitHub release creation failed (non-fatal)"
+            else
+                echo -e "$RELEASE_NOTES" | gh release create "v$VERSION" \
+                    --repo Zstar0/Accu-Mk1 \
+                    --title "v$VERSION" \
+                    --notes-file - \
+                    2>/dev/null && success "GitHub release created" \
+                    || warn "GitHub release creation failed (non-fatal)"
+            fi
+        fi
+    else
+        warn "gh CLI not found — skipping GitHub release. Install: https://cli.github.com"
+    fi
+else
+    info "Skipping git tag and release (--skip-release)"
+fi
+
+# ── New Relic Deployment Marker ──────────────────────────
+if [ -n "$NEW_RELIC_API_KEY" ] && [ -n "$NEW_RELIC_ENTITY_GUID" ]; then
+    header "New Relic Deployment Marker"
+    info "Recording deployment in New Relic..."
+
+    TIMESTAMP=$(date +%s)000  # milliseconds
+    NR_DESCRIPTION="Deploy v$VERSION (sha:$GIT_SHA) to $REMOTE_HOST"
+
+    NR_RESPONSE=$(curl -s -X POST "https://api.newrelic.com/graphql" \
+        -H "Content-Type: application/json" \
+        -H "API-Key: $NEW_RELIC_API_KEY" \
+        -d "{\"query\": \"mutation { changeTrackingCreateDeployment(deployment: { version: \\\"$VERSION\\\", entityGuid: \\\"$NEW_RELIC_ENTITY_GUID\\\", timestamp: $TIMESTAMP, description: \\\"$NR_DESCRIPTION\\\", commit: \\\"$GIT_SHA\\\" }) { deploymentId } }\"}") || true
+
+    if echo "$NR_RESPONSE" | grep -q 'deploymentId'; then
+        DEPLOY_ID=$(echo "$NR_RESPONSE" | grep -o '"deploymentId":"[^"]*"' | cut -d'"' -f4)
+        success "New Relic deployment marker created: $DEPLOY_ID"
+    else
+        warn "New Relic marker failed (non-fatal): $NR_RESPONSE"
+    fi
+else
+    info "New Relic not configured — skipping deployment marker"
+    info "Set NEW_RELIC_API_KEY and NEW_RELIC_ENTITY_GUID to enable"
+fi
+
+# ── Cleanup ──────────────────────────────────────────────
+info "Cleaning up dangling images on prod..."
+run_ssh "docker image prune -f 2>/dev/null" || true
+
+# ── Summary ──────────────────────────────────────────────
 header "Deploy Complete ✔"
 echo -e "  ${BOLD}Version:${NC}  $VERSION"
+echo -e "  ${BOLD}SHA:${NC}      $GIT_SHA"
+echo -e "  ${BOLD}Images:${NC}   $FRONTEND_IMAGE:$VERSION"
+echo -e "            $BACKEND_IMAGE:$VERSION"
 echo -e "  ${BOLD}URL:${NC}      https://accumk1.valenceanalytical.com"
 echo -e "  ${BOLD}API:${NC}      https://accumk1.valenceanalytical.com/api/health"
 echo -e "  ${BOLD}Server:${NC}   $REMOTE_HOST"
 echo ""
 echo -e "  ${CYAN}Useful commands:${NC}"
-echo -e "    ${BOLD}Logs:${NC}     ssh $REMOTE_USER@$REMOTE_HOST 'cd $REMOTE_DIR && docker compose logs -f'"
-echo -e "    ${BOLD}Restart:${NC}  ssh $REMOTE_USER@$REMOTE_HOST 'cd $REMOTE_DIR && docker compose restart'"
-echo -e "    ${BOLD}Status:${NC}   ssh $REMOTE_USER@$REMOTE_HOST 'cd $REMOTE_DIR && docker compose ps'"
+echo -e "    ${BOLD}Logs:${NC}     ssh $REMOTE_USER@$REMOTE_HOST 'cd $REMOTE_DIR && VERSION=$VERSION docker compose -f docker-compose.prod.yml logs -f'"
+echo -e "    ${BOLD}Restart:${NC}  ssh $REMOTE_USER@$REMOTE_HOST 'cd $REMOTE_DIR && VERSION=$VERSION docker compose -f docker-compose.prod.yml restart'"
+echo -e "    ${BOLD}Status:${NC}   ssh $REMOTE_USER@$REMOTE_HOST 'cd $REMOTE_DIR && VERSION=$VERSION docker compose -f docker-compose.prod.yml ps'"
+echo -e "    ${BOLD}Rollback:${NC} bash scripts/deploy.sh --skip-build  (after: echo 'PREV_VER' > .deploy/current_version on prod)"
 echo ""

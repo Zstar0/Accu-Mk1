@@ -1,0 +1,50 @@
+# ============================================================
+# Accu-Mk1 — Production Docker Compose (Image-Based)
+# ============================================================
+# This file pulls pre-built images from GHCR. No building on prod.
+#
+# Usage:
+#   VERSION=0.16.0 docker compose -f docker-compose.prod.yml up -d
+#
+# For local development with build, use docker-compose.yml instead.
+# ============================================================
+
+services:
+  # --- Frontend (Vite + Nginx) ---
+  frontend:
+    container_name: accu-mk1-frontend
+    image: ghcr.io/zstar0/accu-mk1-frontend:${VERSION:?VERSION is required}
+    ports:
+      - '3100:80'
+    depends_on:
+      - backend
+    restart: unless-stopped
+    networks:
+      - accu-mk1
+
+  # --- Backend (FastAPI + Uvicorn) ---
+  backend:
+    container_name: accu-mk1-backend
+    image: ghcr.io/zstar0/accu-mk1-backend:${VERSION:?VERSION is required}
+    env_file:
+      - ./backend/.env
+    volumes:
+      # Persist SQLite database across container restarts
+      - accu-mk1-data:/app/data
+    ports:
+      - '8012:8012'
+    restart: unless-stopped
+    networks:
+      - accu-mk1
+      - senaite_default # Connect to Integration Service network
+
+networks:
+  accu-mk1:
+    name: accu-mk1
+    driver: bridge
+  senaite_default:
+    external: true # Integration Service lives on this network
+
+volumes:
+  accu-mk1-data:
+    name: accu-mk1-data
