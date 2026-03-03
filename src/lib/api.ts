@@ -2180,6 +2180,94 @@ export async function completeWizardSession(
   }
 }
 
+// --- Sample Preps API ---
+
+export interface SamplePrep {
+  id: number
+  sample_id: string                   // SP-YYYYMMDD-NNNN
+  wizard_session_id: number | null
+  peptide_id: number
+  peptide_name: string | null
+  peptide_abbreviation: string | null
+  senaite_sample_id: string | null
+  declared_weight_mg: number | null
+  target_conc_ug_ml: number | null
+  target_total_vol_ul: number | null
+  stock_vial_empty_mg: number | null
+  stock_vial_loaded_mg: number | null
+  stock_conc_ug_ml: number | null
+  required_diluent_vol_ul: number | null
+  required_stock_vol_ul: number | null
+  dil_vial_empty_mg: number | null
+  dil_vial_with_diluent_mg: number | null
+  dil_vial_final_mg: number | null
+  actual_conc_ug_ml: number | null
+  actual_diluent_vol_ul: number | null
+  actual_stock_vol_ul: number | null
+  actual_total_vol_ul: number | null
+  status: string
+  notes: string | null
+  created_at: string
+  updated_at: string
+}
+
+export async function createSamplePrep(
+  wizardSessionId: number,
+  notes?: string
+): Promise<SamplePrep> {
+  const response = await fetch(`${API_BASE_URL()}/sample-preps`, {
+    method: 'POST',
+    headers: getBearerHeaders('application/json'),
+    body: JSON.stringify({ wizard_session_id: wizardSessionId, notes }),
+  })
+  if (!response.ok) {
+    const text = await response.text()
+    throw new Error(`Create sample prep failed: ${response.status} ${text}`)
+  }
+  return response.json()
+}
+
+export async function listSamplePreps(params?: {
+  search?: string
+  limit?: number
+  offset?: number
+}): Promise<SamplePrep[]> {
+  const qs = new URLSearchParams()
+  if (params?.search) qs.set('search', params.search)
+  if (params?.limit != null) qs.set('limit', String(params.limit))
+  if (params?.offset != null) qs.set('offset', String(params.offset))
+  const response = await fetch(
+    `${API_BASE_URL()}/sample-preps${qs.toString() ? '?' + qs : ''}`,
+    { headers: getBearerHeaders() }
+  )
+  if (!response.ok) throw new Error(`List sample preps failed: ${response.status}`)
+  return response.json()
+}
+
+export async function getSamplePrep(id: number): Promise<SamplePrep> {
+  const response = await fetch(`${API_BASE_URL()}/sample-preps/${id}`, {
+    headers: getBearerHeaders(),
+  })
+  if (!response.ok) throw new Error(`Get sample prep ${id} failed: ${response.status}`)
+  return response.json()
+}
+
+export async function updateSamplePrep(
+  id: number,
+  data: Partial<Pick<SamplePrep,
+    | 'senaite_sample_id' | 'declared_weight_mg' | 'target_conc_ug_ml'
+    | 'target_total_vol_ul' | 'status' | 'notes'
+  >>
+): Promise<SamplePrep> {
+  const response = await fetch(`${API_BASE_URL()}/sample-preps/${id}`, {
+    method: 'PATCH',
+    headers: getBearerHeaders(),
+    body: JSON.stringify(data),
+  })
+  if (!response.ok) throw new Error(`Update sample prep ${id} failed: ${response.status}`)
+  return response.json()
+}
+
 // --- SENAITE Lookup API ---
 
 export interface SenaiteAnalyte {

@@ -161,12 +161,12 @@ export function Step3Dilution() {
             <span className="flex h-6 w-6 items-center justify-center rounded-full bg-primary text-primary-foreground text-xs font-bold">
               1
             </span>
-            Empty Dilution Vial Weight
+            Empty Autosample Vial + cap Weight
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
           <p className="text-sm text-muted-foreground">
-            Weigh the empty dilution vial with cap.
+            Weigh the empty autosample vial with cap.
           </p>
           {error3a && (
             <Alert variant="destructive">
@@ -195,7 +195,7 @@ export function Step3Dilution() {
           ) : (
             <WeightInput
               stepKey="dil_vial_empty_mg"
-              label="Empty dilution vial + cap weight (mg)"
+              label="Empty Autosample vial + cap weight (mg)"
               onAccept={handleAccept3a}
             />
           )}

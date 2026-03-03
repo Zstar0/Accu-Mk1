@@ -43,6 +43,26 @@ export function HPLCOverview() {
           </CardContent>
         </Card>
 
+        <Card
+          className="cursor-pointer transition-colors hover:bg-muted/50"
+          onClick={() => navigateTo('hplc-analysis', 'sample-preps')}
+        >
+          <CardHeader>
+            <div className="flex items-center gap-2">
+              <Microscope className="h-5 w-5 text-primary" />
+              <CardTitle className="text-base">Sample Preps</CardTitle>
+            </div>
+            <CardDescription>
+              View and manage saved HPLC sample preparation records.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Button variant="ghost" size="sm" className="gap-1 p-0">
+              Open preps <ArrowRight className="h-4 w-4" />
+            </Button>
+          </CardContent>
+        </Card>
+
         <Card className="opacity-60">
           <CardHeader>
             <CardTitle className="text-base">Peptide Config</CardTitle>

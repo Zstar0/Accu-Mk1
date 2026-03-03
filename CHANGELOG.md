@@ -1,5 +1,34 @@
 # Changelog
 
+## v0.17.0 — 2026-03-03
+
+### Added
+
+- **Sample Preps** — new section in HPLC Analysis for saving and managing HPLC sample preparation records
+  - Accessible from the left sidebar ("Sample Preps" under HPLC Analysis) and the HPLC Overview card
+  - Sample prep records are persisted to the Integration-Services PostgreSQL database in a new `sample_preps` table
+  - Sample IDs follow the `SP-YYYYMMDD-NNNN` format consistent with the rest of the integration DB
+  - All wizard data is captured flat: declared weight, target params, all balance readings, and all derived concentrations/volumes
+  - **Inline status selector** on each row — change status without opening the record; auto-saves to backend on change
+  - Four statuses: 🔵 Awaiting HPLC · 🟢 Completed · 🟡 On Hold · 🟣 Review
+  - **Click any row** to be taken back into the HPLC wizard at Step 3 (Dilution) pre-loaded with that session's data for review or re-weighing
+  - Search bar filters by sample ID, SENAITE ID, or peptide
+  - "New Prep" button navigates directly to the wizard
+  - New Postgres-backed CRUD helpers in `integration_db.py`: `ensure_sample_preps_table`, `create_sample_prep`, `list_sample_preps`, `get_sample_prep`, `update_sample_prep`
+  - New API endpoints: `POST /sample-preps`, `GET /sample-preps`, `GET /sample-preps/{id}`, `PATCH /sample-preps/{id}`
+- **HPLC Wizard refinements**
+  - Step 1 renamed to **"Peptide Vial Weight"**; declared weight input relabelled to "Sample Vial + cap + peptide (mg)"
+  - Step 2 "Add Diluent" description updated to "Add 2000mL (enough to dissolve). Diluent volume will be calculated after vial weights are recorded."
+  - Step 3.1 (first Dilution sub-step) renamed to **"Empty Autosample Vial + cap Weight"** with updated description and input label
+  - Steps 4 (Results) and 5 (Summary) hidden from the wizard sidebar — visible step count is now 1–3
+  - Final step's "Next Step" button replaced with **"Save Sample Prep"** — calls `POST /sample-preps` and navigates to the Sample Preps list on success, with spinner and error handling
+
+### Infrastructure
+
+- `ensure_sample_preps_table()` auto-migrates the new table on first API call — no migration script required
+
+---
+
 ## v0.16.2 — 2026-03-02
 
 ### Added

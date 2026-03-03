@@ -5197,6 +5197,174 @@ async def complete_wizard_session(
     return _build_session_response(session, db)
 
 
+# ─── Sample Preps API ──────────────────────────────────────────────────────────
+
+class SamplePrepCreateRequest(BaseModel):
+    """Save a completed wizard session as a sample prep record in the integration DB."""
+    wizard_session_id: int
+    notes: Optional[str] = None
+
+
+class SamplePrepUpdateRequest(BaseModel):
+    """PATCH fields on an existing sample prep."""
+    senaite_sample_id: Optional[str] = None
+    declared_weight_mg: Optional[float] = None
+    target_conc_ug_ml: Optional[float] = None
+    target_total_vol_ul: Optional[float] = None
+    stock_vial_empty_mg: Optional[float] = None
+    stock_vial_loaded_mg: Optional[float] = None
+    stock_conc_ug_ml: Optional[float] = None
+    required_diluent_vol_ul: Optional[float] = None
+    required_stock_vol_ul: Optional[float] = None
+    dil_vial_empty_mg: Optional[float] = None
+    dil_vial_with_diluent_mg: Optional[float] = None
+    dil_vial_final_mg: Optional[float] = None
+    actual_conc_ug_ml: Optional[float] = None
+    actual_diluent_vol_ul: Optional[float] = None
+    actual_stock_vol_ul: Optional[float] = None
+    actual_total_vol_ul: Optional[float] = None
+    status: Optional[str] = None
+    notes: Optional[str] = None
+
+
+@app.post("/sample-preps", status_code=201)
+async def create_sample_prep_endpoint(
+    body: SamplePrepCreateRequest,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """
+    Save a wizard session as a sample prep into the Integration-Services Postgres DB.
+    Loads the wizard session by id, pulls all measurements + derived calculations,
+    and writes a flat record to sample_preps.
+    """
+    from integration_db import ensure_sample_preps_table, create_sample_prep
+
+    # Load wizard session
+    session = db.execute(
+        select(WizardSession).where(WizardSession.id == body.wizard_session_id)
+    ).scalar_one_or_none()
+    if not session:
+        raise HTTPException(status_code=404, detail=f"Wizard session {body.wizard_session_id} not found")
+
+    # Build inline calculations (reuse existing helper)
+    response = _build_session_response(session, db)
+    calcs = response.calculations or {}
+
+    # Current measurements keyed by step_key
+    current = {m.step_key: m.weight_mg for m in session.measurements if m.is_current}
+
+    data = {
+        "wizard_session_id": session.id,
+        "peptide_id": session.peptide_id,
+        "peptide_name": session.peptide.name if session.peptide else None,
+        "peptide_abbreviation": session.peptide.abbreviation if session.peptide else None,
+        "senaite_sample_id": session.sample_id_label,
+        "declared_weight_mg": float(session.declared_weight_mg) if session.declared_weight_mg else None,
+        "target_conc_ug_ml": float(session.target_conc_ug_ml) if session.target_conc_ug_ml else None,
+        "target_total_vol_ul": float(session.target_total_vol_ul) if session.target_total_vol_ul else None,
+        # Step 2 measurements
+        "stock_vial_empty_mg": current.get("stock_vial_empty_mg"),
+        "stock_vial_loaded_mg": current.get("stock_vial_loaded_mg"),
+        # Step 2 derived
+        "stock_conc_ug_ml": calcs.get("stock_conc_ug_ml"),
+        "required_diluent_vol_ul": calcs.get("required_diluent_vol_ul"),
+        "required_stock_vol_ul": calcs.get("required_stock_vol_ul"),
+        # Step 3 measurements
+        "dil_vial_empty_mg": current.get("dil_vial_empty_mg"),
+        "dil_vial_with_diluent_mg": current.get("dil_vial_with_diluent_mg"),
+        "dil_vial_final_mg": current.get("dil_vial_final_mg"),
+        # Step 3 derived
+        "actual_conc_ug_ml": calcs.get("actual_conc_ug_ml"),
+        "actual_diluent_vol_ul": calcs.get("actual_diluent_vol_ul"),
+        "actual_stock_vol_ul": calcs.get("actual_stock_vol_ul"),
+        "actual_total_vol_ul": calcs.get("actual_total_vol_ul"),
+        "status": "awaiting_hplc",
+        "notes": body.notes,
+    }
+
+    try:
+        ensure_sample_preps_table()
+        row = create_sample_prep(data)
+        # Serialize datetime fields
+        for k in ("created_at", "updated_at"):
+            if row.get(k) and hasattr(row[k], "isoformat"):
+                row[k] = row[k].isoformat()
+        return row
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save sample prep: {e}")
+
+
+@app.get("/sample-preps")
+async def list_sample_preps_endpoint(
+    search: Optional[str] = None,
+    limit: int = 100,
+    offset: int = 0,
+    _current_user=Depends(get_current_user),
+):
+    """List sample preps from the integration DB (newest first)."""
+    from integration_db import ensure_sample_preps_table, list_sample_preps
+
+    try:
+        ensure_sample_preps_table()
+        rows = list_sample_preps(search=search, limit=limit, offset=offset)
+        for row in rows:
+            for k in ("created_at", "updated_at"):
+                if row.get(k) and hasattr(row[k], "isoformat"):
+                    row[k] = row[k].isoformat()
+        return rows
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to list sample preps: {e}")
+
+
+@app.get("/sample-preps/{sample_prep_id}")
+async def get_sample_prep_endpoint(
+    sample_prep_id: int,
+    _current_user=Depends(get_current_user),
+):
+    """Fetch a single sample prep by id."""
+    from integration_db import ensure_sample_preps_table, get_sample_prep
+
+    try:
+        ensure_sample_preps_table()
+        row = get_sample_prep(sample_prep_id)
+        if not row:
+            raise HTTPException(status_code=404, detail=f"Sample prep {sample_prep_id} not found")
+        for k in ("created_at", "updated_at"):
+            if row.get(k) and hasattr(row[k], "isoformat"):
+                row[k] = row[k].isoformat()
+        return row
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch sample prep: {e}")
+
+
+@app.patch("/sample-preps/{sample_prep_id}")
+async def update_sample_prep_endpoint(
+    sample_prep_id: int,
+    body: SamplePrepUpdateRequest,
+    _current_user=Depends(get_current_user),
+):
+    """Update fields on a sample prep."""
+    from integration_db import ensure_sample_preps_table, update_sample_prep
+
+    try:
+        ensure_sample_preps_table()
+        row = update_sample_prep(sample_prep_id, body.model_dump(exclude_none=True))
+        if not row:
+            raise HTTPException(status_code=404, detail=f"Sample prep {sample_prep_id} not found")
+        for k in ("created_at", "updated_at"):
+            if row.get(k) and hasattr(row[k], "isoformat"):
+                row[k] = row[k].isoformat()
+        return row
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to update sample prep: {e}")
+
+
+
 # ─── SENAITE Integration (Phase 5) ────────────────────────────────────────────
 
 # -- SENAITE Integration -----------------------------------------------

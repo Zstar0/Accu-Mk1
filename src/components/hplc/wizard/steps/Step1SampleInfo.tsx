@@ -21,10 +21,12 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import {
   getPeptides,
   createWizardSession,
+  updateWizardSession,
   getSenaiteStatus,
   lookupSenaiteSample,
   type PeptideRecord,
   type SenaiteLookupResult,
+  type WizardSessionResponse,
 } from '@/lib/api'
 import { useWizardStore } from '@/store/wizard-store'
 
@@ -109,72 +111,14 @@ export function Step1SampleInfo() {
     }
   }, [])
 
-  // If session already exists — show read-only summary (UNCHANGED)
+  // If session already exists — show read-only summary with editable target fields
   if (session !== null) {
     const peptide = peptides.find(p => p.id === session.peptide_id)
     return (
-      <Card>
-        <CardHeader>
-          <CardTitle>Sample Information</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="rounded-md border border-green-500/30 bg-green-50/50 dark:bg-green-950/20 p-4 space-y-3">
-            <div className="grid grid-cols-2 gap-3 text-sm">
-              <div>
-                <span className="text-muted-foreground">Peptide</span>
-                <p className="font-medium">
-                  {peptide
-                    ? `${peptide.name} (${peptide.abbreviation})`
-                    : `Peptide ID ${session.peptide_id}`}
-                </p>
-              </div>
-              <div>
-                <span className="text-muted-foreground">Sample ID</span>
-                <p className="font-medium">
-                  {session.sample_id_label ?? '—'}
-                </p>
-              </div>
-              <div>
-                <span className="text-muted-foreground">Declared Weight</span>
-                <p className="font-medium">
-                  {session.declared_weight_mg != null
-                    ? `${session.declared_weight_mg.toFixed(2)} mg`
-                    : '—'}
-                </p>
-              </div>
-              <div>
-                <span className="text-muted-foreground">
-                  Target Concentration
-                </span>
-                <p className="font-medium">
-                  {session.target_conc_ug_ml != null
-                    ? `${session.target_conc_ug_ml.toFixed(1)} ug/mL`
-                    : '—'}
-                </p>
-              </div>
-              <div>
-                <span className="text-muted-foreground">
-                  Target Total Volume
-                </span>
-                <p className="font-medium">
-                  {session.target_total_vol_ul != null
-                    ? `${session.target_total_vol_ul.toFixed(1)} uL`
-                    : '—'}
-                </p>
-              </div>
-              <div>
-                <span className="text-muted-foreground">Session ID</span>
-                <p className="font-mono text-xs text-muted-foreground">
-                  #{session.id}
-                </p>
-              </div>
-            </div>
-          </div>
-          <p className="text-sm text-muted-foreground">
-            Session created. Proceed to Stock Prep.
-          </p>
-        </CardContent>
-      </Card>
+      <EditableSessionSummary
+        session={session}
+        peptide={peptide}
+      />
     )
   }
 
@@ -331,7 +275,7 @@ export function Step1SampleInfo() {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Sample Information</CardTitle>
+        <CardTitle>Peptide Vial Weight</CardTitle>
       </CardHeader>
       <CardContent>
         {peptideError && (
@@ -491,7 +435,7 @@ export function Step1SampleInfo() {
 
                 {/* Declared Weight */}
                 <div className="space-y-1.5">
-                  <Label htmlFor="declared-weight">Declared Weight (mg)</Label>
+                  <Label htmlFor="declared-weight">Sample Vial + cap + peptide (mg)</Label>
                   <Input
                     id="declared-weight"
                     type="number"
@@ -537,7 +481,7 @@ export function Step1SampleInfo() {
 
             {/* Declared Weight */}
             <div className="space-y-1.5">
-              <Label htmlFor="declared-weight">Declared Weight (mg)</Label>
+              <Label htmlFor="declared-weight">Sample Vial + cap + peptide (mg)</Label>
               <Input
                 id="declared-weight"
                 type="number"
@@ -562,6 +506,156 @@ export function Step1SampleInfo() {
             </Button>
           </form>
         )}
+      </CardContent>
+    </Card>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Sub-component: editable summary shown when returning to Step 1
+// ---------------------------------------------------------------------------
+
+function EditableSessionSummary({
+  session,
+  peptide,
+}: {
+  session: WizardSessionResponse
+  peptide: PeptideRecord | undefined
+}) {
+  const [conc, setConc] = useState(
+    session.target_conc_ug_ml != null ? String(session.target_conc_ug_ml) : ''
+  )
+  const [vol, setVol] = useState(
+    session.target_total_vol_ul != null ? String(session.target_total_vol_ul) : ''
+  )
+  const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
+  const [saved, setSaved] = useState(false)
+
+  const isDirty =
+    conc !== (session.target_conc_ug_ml != null ? String(session.target_conc_ug_ml) : '') ||
+    vol !== (session.target_total_vol_ul != null ? String(session.target_total_vol_ul) : '')
+
+  async function handleSave(e: React.FormEvent) {
+    e.preventDefault()
+    const concParsed = parseFloat(conc)
+    const volParsed = parseFloat(vol)
+    if (isNaN(concParsed) || isNaN(volParsed) || concParsed <= 0 || volParsed <= 0) {
+      setSaveError('Please enter valid values for both fields.')
+      return
+    }
+    setSaving(true)
+    setSaveError(null)
+    setSaved(false)
+    try {
+      const updated = await updateWizardSession(session.id, {
+        target_conc_ug_ml: concParsed,
+        target_total_vol_ul: volParsed,
+      })
+      useWizardStore.getState().updateSession(updated)
+      setSaved(true)
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : 'Failed to save')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Peptide Vial Weight</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {/* Read-only fields */}
+        <div className="rounded-md border border-green-500/30 bg-green-50/50 dark:bg-green-950/20 p-4">
+          <div className="grid grid-cols-2 gap-3 text-sm">
+            <div>
+              <span className="text-muted-foreground">Peptide</span>
+              <p className="font-medium">
+                {peptide
+                  ? `${peptide.name} (${peptide.abbreviation})`
+                  : `Peptide ID ${session.peptide_id}`}
+              </p>
+            </div>
+            <div>
+              <span className="text-muted-foreground">Sample ID</span>
+              <p className="font-medium">{session.sample_id_label ?? '—'}</p>
+            </div>
+            <div>
+              <span className="text-muted-foreground">Sample Vial + cap + peptide</span>
+              <p className="font-medium">
+                {session.declared_weight_mg != null
+                  ? `${session.declared_weight_mg.toFixed(2)} mg`
+                  : '—'}
+              </p>
+            </div>
+            <div>
+              <span className="text-muted-foreground">Session ID</span>
+              <p className="font-mono text-xs text-muted-foreground">#{session.id}</p>
+            </div>
+          </div>
+        </div>
+
+        {/* Editable target fields */}
+        <form onSubmit={handleSave} className="space-y-3">
+          <p className="text-xs text-muted-foreground">
+            You can update the target parameters below.
+          </p>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label htmlFor="edit-target-conc">
+                Target Concentration (ug/mL){' '}
+                <span className="text-destructive">*</span>
+              </Label>
+              <Input
+                id="edit-target-conc"
+                type="number"
+                step="0.1"
+                placeholder="e.g. 1200"
+                value={conc}
+                onChange={e => { setConc(e.target.value); setSaved(false) }}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="edit-target-vol">
+                Target Total Volume (uL){' '}
+                <span className="text-destructive">*</span>
+              </Label>
+              <Input
+                id="edit-target-vol"
+                type="number"
+                step="0.1"
+                placeholder="e.g. 1500"
+                value={vol}
+                onChange={e => { setVol(e.target.value); setSaved(false) }}
+              />
+            </div>
+          </div>
+
+          {saveError && (
+            <Alert variant="destructive">
+              <AlertDescription>{saveError}</AlertDescription>
+            </Alert>
+          )}
+
+          <Button
+            type="submit"
+            disabled={saving || !isDirty}
+            size="sm"
+          >
+            {saving ? (
+              <>
+                <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+                Saving...
+              </>
+            ) : saved ? (
+              'Saved ✓'
+            ) : (
+              'Save Changes'
+            )}
+          </Button>
+        </form>
       </CardContent>
     </Card>
   )

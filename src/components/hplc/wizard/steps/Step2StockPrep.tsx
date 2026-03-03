@@ -15,9 +15,6 @@ import { useWizardStore } from '@/store/wizard-store'
 export function Step2StockPrep() {
   const session = useWizardStore(state => state.session)
 
-  // Local state: peptide transfer confirmation (transient UI state)
-  const [transferConfirmed, setTransferConfirmed] = useState(false)
-
   // Local error state per sub-step
   const [error2a, setError2a] = useState<string | null>(null)
   const [error2d, setError2d] = useState<string | null>(null)
@@ -47,21 +44,16 @@ export function Step2StockPrep() {
   )
 
   // Transfer confirmed = either local state OR loaded vial already measured (implies transfer happened)
-  const transferDone = transferConfirmed || meas2d != null
-
   // Sub-step 2a: done if measurement exists and not re-weighing
   const step2aDone = meas2a != null && !reweigh2a
-  // Sub-step 2b: locked until 2a done; confirmed/done if transferDone
-  const step2bLocked = !step2aDone
-  // Sub-step 2c + 2d: locked until transfer confirmed
-  const step2cdLocked = !transferDone
+  // Sub-steps 2c + 2d: locked until 2a done
+  const step2cdLocked = !step2aDone
 
   // Step 2d done if measurement exists and not re-weighing
   const step2dDone = meas2d != null && !reweigh2d
 
   const sessionId = session.id
   const calcs = session.calculations
-  const requiredDiluentVol = calcs?.required_diluent_vol_ul
 
   async function handleAccept2a(value: number, source: 'scale' | 'manual') {
     setError2a(null)
@@ -97,7 +89,7 @@ export function Step2StockPrep() {
     }
   }
 
-  const allComplete = step2aDone && transferDone && step2dDone
+  const allComplete = step2aDone && step2dDone
 
   return (
     <div className="space-y-4">
@@ -155,36 +147,6 @@ export function Step2StockPrep() {
         </CardContent>
       </Card>
 
-      {/* Sub-step 2b: Peptide transfer confirmation */}
-      <Card className={step2bLocked ? 'opacity-50' : undefined}>
-        <CardHeader>
-          <CardTitle className="text-base flex items-center gap-2">
-            <span className="flex h-6 w-6 items-center justify-center rounded-full bg-primary text-primary-foreground text-xs font-bold">
-              2
-            </span>
-            Peptide Transfer
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <p className="text-sm text-muted-foreground">
-            Transfer the peptide sample to the vial.
-          </p>
-          {transferDone ? (
-            <div className="flex items-center gap-2 rounded-md border border-green-500/30 bg-green-50/50 dark:bg-green-950/20 p-3">
-              <CheckCircle2 className="h-4 w-4 text-green-600" />
-              <span className="text-sm font-medium">Peptide transferred</span>
-            </div>
-          ) : (
-            <Button
-              onClick={() => setTransferConfirmed(true)}
-              disabled={step2bLocked}
-            >
-              I have transferred the peptide
-            </Button>
-          )}
-        </CardContent>
-      </Card>
-
       {/* Sub-step 2c: Display required diluent volume */}
       <Card className={step2cdLocked ? 'opacity-50' : undefined}>
         <CardHeader>
@@ -195,20 +157,13 @@ export function Step2StockPrep() {
             Add Diluent
           </CardTitle>
         </CardHeader>
-        <CardContent>
-          {requiredDiluentVol != null ? (
-            <p className="text-sm font-medium">
-              Add{' '}
-              <span className="font-bold text-primary">
-                {requiredDiluentVol.toFixed(1)} uL
-              </span>{' '}
-              of diluent to the vial.
-            </p>
-          ) : (
-            <p className="text-sm text-muted-foreground">
-              Diluent volume will be calculated after vial weights are recorded.
-            </p>
-          )}
+        <CardContent className="space-y-2">
+          <p className="text-sm font-medium">
+            Add 2000mL (enough to dissolve)
+          </p>
+          <p className="text-sm text-muted-foreground">
+            Diluent volume will be calculated after vial weights are recorded.
+          </p>
         </CardContent>
       </Card>
 

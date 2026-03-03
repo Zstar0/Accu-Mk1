@@ -8,11 +8,10 @@ export type StepId = 1 | 2 | 3 | 4 | 5
 export type StepState = 'not-started' | 'in-progress' | 'complete' | 'locked'
 
 export const WIZARD_STEPS: { id: StepId; label: string }[] = [
-  { id: 1, label: 'Sample Info' },
+  { id: 1, label: 'Peptide Vial Weight' },
   { id: 2, label: 'Stock Prep' },
   { id: 3, label: 'Dilution' },
-  { id: 4, label: 'Results' },
-  { id: 5, label: 'Summary' },
+  // Steps 4 (Results) and 5 (Summary) hidden until HPLC results workflow is ready
 ]
 
 // --- Pure derivation function ---
@@ -34,7 +33,7 @@ export function deriveStepStates(
     return 'not-started'
   })()
 
-  // Step 2: locked if no session or target params missing; complete if stock_conc calculated
+  // Step 2 (Stock Prep): locked if no session or target params missing; complete if stock_conc calculated
   const step2: StepState = (() => {
     if (
       session === null ||
@@ -48,7 +47,7 @@ export function deriveStepStates(
     return 'not-started'
   })()
 
-  // Step 3: locked if no stock_conc calculation; complete if actual_conc calculated
+  // Step 3 (Dilution): locked if no stock_conc; complete if actual_conc calculated
   const step3: StepState = (() => {
     if (calcs?.stock_conc_ug_ml == null) {
       return currentStep === 3 ? 'in-progress' : 'locked'
@@ -58,7 +57,7 @@ export function deriveStepStates(
     return 'not-started'
   })()
 
-  // Step 4: locked if no actual_conc calculation; complete if determined_conc calculated
+  // Step 4 (Results): locked if no actual_conc; complete if determined_conc calculated
   const step4: StepState = (() => {
     if (calcs?.actual_conc_ug_ml == null) {
       return currentStep === 4 ? 'in-progress' : 'locked'
@@ -68,7 +67,7 @@ export function deriveStepStates(
     return 'not-started'
   })()
 
-  // Step 5: locked if no determined_conc; complete if session is 'completed'
+  // Step 5 (Summary): locked if no determined_conc; complete if session is 'completed'
   const step5: StepState = (() => {
     if (calcs?.determined_conc_ug_ml == null) {
       return currentStep === 5 ? 'in-progress' : 'locked'
@@ -172,7 +171,8 @@ export const useWizardStore = create<WizardStoreState>()(
 
       canAdvance: () => {
         const { currentStep, stepStates } = get()
-        if (currentStep === 5) return false
+        // Steps 4 and 5 are hidden for now — max navigable step is 3
+        if (currentStep >= 3) return false
         const nextStep = (currentStep + 1) as StepId
         return stepStates[nextStep] !== 'locked'
       },

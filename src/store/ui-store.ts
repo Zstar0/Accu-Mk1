@@ -9,7 +9,7 @@ export type DashboardSubSection = 'orders' | 'analytics'
 export type SenaiteSubSection = 'samples' | 'event-log' | 'sample-details'
 export type IntakeSubSection = 'receive-sample'
 export type LabOperationsSubSection = 'chromatographs' | 'sample-intake'
-export type HPLCAnalysisSubSection = 'overview' | 'new-analysis' | 'import-analysis' | 'peptide-config' | 'analysis-history'
+export type HPLCAnalysisSubSection = 'overview' | 'new-analysis' | 'import-analysis' | 'peptide-config' | 'analysis-history' | 'sample-preps'
 export type AccuMarkToolsSubSection = 'overview' | 'order-explorer' | 'coa-explorer'
 export type AccountSubSection = 'change-password' | 'user-management'
 export type ActiveSubSection = DashboardSubSection | SenaiteSubSection | IntakeSubSection | LabOperationsSubSection | HPLCAnalysisSubSection | AccuMarkToolsSubSection | AccountSubSection
@@ -26,6 +26,7 @@ interface UIState {
   peptideConfigTargetId: number | null
   orderExplorerTargetOrderId: string | null
   sampleDetailsTargetId: string | null
+  samplePrepTargetId: number | null
   updateVersion: string | null
   updateReady: boolean
 
@@ -44,6 +45,7 @@ interface UIState {
   navigateToPeptide: (peptideId: number) => void
   navigateToOrderExplorer: (orderId?: string) => void
   navigateToSample: (sampleId: string) => void
+  navigateToSamplePrep: (prepId: number) => void
   setUpdateVersion: (version: string | null) => void
   setUpdateReady: (ready: boolean) => void
 }
@@ -62,6 +64,7 @@ export const useUIStore = create<UIState>()(
       peptideConfigTargetId: null,
       orderExplorerTargetOrderId: null,
       sampleDetailsTargetId: null,
+      samplePrepTargetId: null,
       updateVersion: null,
       updateReady: false,
 
@@ -163,6 +166,18 @@ export const useUIStore = create<UIState>()(
           }),
           undefined,
           'navigateToSample'
+        ),
+
+      navigateToSamplePrep: (prepId) =>
+        set(
+          state => ({
+            activeSection: 'hplc-analysis',
+            activeSubSection: 'sample-preps',
+            samplePrepTargetId: prepId,
+            navigationKey: state.navigationKey + 1,
+          }),
+          undefined,
+          'navigateToSamplePrep'
         ),
 
       setUpdateVersion: (version) =>
