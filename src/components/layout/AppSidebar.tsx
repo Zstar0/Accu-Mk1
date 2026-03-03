@@ -32,11 +32,8 @@ import {
   SidebarFooter,
   SidebarHeader,
 } from '@/components/ui/sidebar'
-import {
-  useUIStore,
-  type ActiveSection,
-  type ActiveSubSection,
-} from '@/store/ui-store'
+import { useUIStore, type ActiveSection, type ActiveSubSection } from '@/store/ui-store'
+import { useWizardStore } from '@/store/wizard-store'
 import { useAuthStore } from '@/store/auth-store'
 import { logout } from '@/lib/auth-api'
 
@@ -188,9 +185,12 @@ export function AppSidebar() {
                                   >
                                     <button
                                       type="button"
-                                      onClick={() =>
+                                      onClick={() => {
+                                        if (item.id === 'hplc-analysis' && subItem.id === 'new-analysis') {
+                                          useWizardStore.getState().resetWizard()
+                                        }
                                         navigateTo(item.id, subItem.id)
-                                      }
+                                      }}
                                     >
                                       <span>{subItem.label}</span>
                                     </button>

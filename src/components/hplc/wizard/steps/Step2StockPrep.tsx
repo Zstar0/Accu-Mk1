@@ -106,12 +106,12 @@ export function Step2StockPrep() {
             <span className="flex h-6 w-6 items-center justify-center rounded-full bg-primary text-primary-foreground text-xs font-bold">
               1
             </span>
-            Empty Vial Weight
+            Peptide Sample + Septum
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
           <p className="text-sm text-muted-foreground">
-            Weigh the empty sample vial with cap.
+            Weigh the peptide sample vial with septum.
           </p>
           {error2a && (
             <Alert variant="destructive">
@@ -140,7 +140,7 @@ export function Step2StockPrep() {
           ) : (
             <WeightInput
               stepKey="stock_vial_empty_mg"
-              label="Empty vial + cap weight (mg)"
+              label="Peptide Sample + Septum weight (mg)"
               onAccept={handleAccept2a}
             />
           )}
@@ -159,7 +159,7 @@ export function Step2StockPrep() {
         </CardHeader>
         <CardContent className="space-y-2">
           <p className="text-sm font-medium">
-            Add 2000mL (enough to dissolve)
+            Add 2000µL (enough to dissolve)
           </p>
           <p className="text-sm text-muted-foreground">
             Diluent volume will be calculated after vial weights are recorded.
