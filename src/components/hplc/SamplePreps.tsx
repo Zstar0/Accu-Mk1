@@ -1,9 +1,9 @@
 import { useState, useEffect, useCallback } from 'react'
-import { ClipboardList, Search, Plus, RefreshCw, ChevronRight, Loader2 } from 'lucide-react'
+import { ClipboardList, Search, Plus, RefreshCw, ChevronRight, Loader2, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Alert, AlertDescription } from '@/components/ui/alert'
-import { listSamplePreps, getWizardSession, updateSamplePrep, type SamplePrep } from '@/lib/api'
+import { listSamplePreps, getWizardSession, updateSamplePrep, deleteSamplePrep, type SamplePrep } from '@/lib/api'
 import { useUIStore } from '@/store/ui-store'
 import { useWizardStore } from '@/store/wizard-store'
 
@@ -39,6 +39,8 @@ export function SamplePreps() {
   const [searchInput, setSearchInput] = useState('')
   const [openingId, setOpeningId] = useState<number | null>(null)
   const [updatingStatusId, setUpdatingStatusId] = useState<number | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<SamplePrep | null>(null)
+  const [deleting, setDeleting] = useState(false)
 
   const load = useCallback(async (q?: string) => {
     setLoading(true)
@@ -91,6 +93,27 @@ export function SamplePreps() {
       setError(err instanceof Error ? err.message : 'Failed to update status')
     } finally {
       setUpdatingStatusId(null)
+    }
+  }
+
+  async function confirmDelete() {
+    if (!deleteTarget) return
+    setDeleting(true)
+    try {
+      await deleteSamplePrep(deleteTarget.id)
+      setPreps(prev => prev.filter(p => p.id !== deleteTarget.id))
+      setDeleteTarget(null)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Failed to delete sample prep'
+      // 404 means it's already gone — remove from UI and close modal silently
+      if (msg.includes('404')) {
+        setPreps(prev => prev.filter(p => p.id !== deleteTarget.id))
+        setDeleteTarget(null)
+      } else {
+        setError(msg)
+      }
+    } finally {
+      setDeleting(false)
     }
   }
 
@@ -159,7 +182,7 @@ export function SamplePreps() {
                 <th className="px-4 py-3 text-right font-medium text-muted-foreground">Actual Conc.</th>
                 <th className="px-4 py-3 text-left font-medium text-muted-foreground">Status</th>
                 <th className="px-4 py-3 text-left font-medium text-muted-foreground">Created</th>
-                <th className="px-4 py-3"></th>
+                <th className="px-4 py-3 w-20 text-right font-medium text-muted-foreground">Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -233,10 +256,19 @@ export function SamplePreps() {
                       </div>
                     </td>
                     <td className="px-4 py-3 text-muted-foreground text-xs">{fmtDate(prep.created_at)}</td>
-                    <td className="px-4 py-3">
-                      {openingId === prep.id
-                        ? <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-                        : <ChevronRight className="h-4 w-4 text-muted-foreground" />}
+                    <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
+                      <div className="flex items-center justify-end gap-1">
+                        {openingId === prep.id
+                          ? <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                          : <ChevronRight className="h-4 w-4 text-muted-foreground" />}
+                        <button
+                          title="Delete sample prep"
+                          className="ml-1 p-1 rounded text-muted-foreground hover:text-red-500 hover:bg-red-500/10 transition-colors"
+                          onClick={e => { e.stopPropagation(); setDeleteTarget(prep) }}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))
@@ -249,6 +281,43 @@ export function SamplePreps() {
       <p className="text-xs text-muted-foreground">
         {!loading && `${preps.length} record${preps.length !== 1 ? 's' : ''} shown`}
       </p>
+
+      {/* Delete confirmation modal */}
+      {deleteTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="bg-background border rounded-xl shadow-2xl p-6 max-w-sm w-full mx-4">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="shrink-0 w-10 h-10 rounded-full bg-red-500/15 flex items-center justify-center">
+                <Trash2 className="h-5 w-5 text-red-500" />
+              </div>
+              <div>
+                <h2 className="font-semibold text-base">Delete Sample Prep?</h2>
+                <p className="text-sm text-muted-foreground">This action cannot be undone.</p>
+              </div>
+            </div>
+            <p className="text-sm mb-6">
+              You are about to permanently delete{' '}
+              <span className="font-mono font-semibold">{deleteTarget.sample_id}</span>.
+            </p>
+            <div className="flex gap-3 justify-end">
+              <Button
+                variant="outline"
+                onClick={() => setDeleteTarget(null)}
+                disabled={deleting}
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="destructive"
+                onClick={confirmDelete}
+                disabled={deleting}
+              >
+                {deleting ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Deleting…</> : 'Delete'}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

@@ -5365,6 +5365,26 @@ async def update_sample_prep_endpoint(
 
 
 
+@app.delete("/sample-preps/{sample_prep_id}", status_code=204)
+async def delete_sample_prep_endpoint(
+    sample_prep_id: int,
+    _current_user=Depends(get_current_user),
+):
+    """Permanently delete a sample prep record."""
+    from integration_db import ensure_sample_preps_table, delete_sample_prep
+
+    try:
+        ensure_sample_preps_table()
+        deleted = delete_sample_prep(sample_prep_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail=f"Sample prep {sample_prep_id} not found")
+        return Response(status_code=204)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to delete sample prep: {e}")
+
+
 # ─── SENAITE Integration (Phase 5) ────────────────────────────────────────────
 
 # -- SENAITE Integration -----------------------------------------------

@@ -700,3 +700,19 @@ def update_sample_prep(sample_prep_id: int, data: dict) -> Optional[dict]:
             row = cur.fetchone()
         conn.commit()
     return dict(row) if row else None
+
+
+def delete_sample_prep(sample_prep_id: int) -> bool:
+    """
+    Delete a sample prep by id.
+    Returns True if a row was deleted, False if not found.
+    """
+    with get_integration_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM sample_preps WHERE id = %s RETURNING id",
+                [sample_prep_id],
+            )
+            deleted = cur.fetchone() is not None
+        conn.commit()
+    return deleted

@@ -2261,11 +2261,19 @@ export async function updateSamplePrep(
 ): Promise<SamplePrep> {
   const response = await fetch(`${API_BASE_URL()}/sample-preps/${id}`, {
     method: 'PATCH',
-    headers: getBearerHeaders(),
+    headers: getBearerHeaders('application/json'),
     body: JSON.stringify(data),
   })
   if (!response.ok) throw new Error(`Update sample prep ${id} failed: ${response.status}`)
   return response.json()
+}
+
+export async function deleteSamplePrep(id: number): Promise<void> {
+  const response = await fetch(`${API_BASE_URL()}/sample-preps/${id}`, {
+    method: 'DELETE',
+    headers: getBearerHeaders(),
+  })
+  if (!response.ok) throw new Error(`Delete sample prep ${id} failed: ${response.status}`)
 }
 
 // --- SENAITE Lookup API ---
