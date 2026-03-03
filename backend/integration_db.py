@@ -577,7 +577,7 @@ def _generate_sample_id(cur) -> str:
         [prefix + "%"],
     )
     row = cur.fetchone()
-    seq = (int(row[0].split("-")[-1]) + 1) if row else 1
+    seq = (int(row['sample_id'].split("-")[-1]) + 1) if row else 1
     return f"{prefix}{seq:04d}"
 
 
