@@ -514,7 +514,7 @@ CREATE TABLE IF NOT EXISTS sample_preps (
     wizard_session_id   INTEGER,
 
     -- Step 1: Sample info
-    peptide_id          INTEGER     NOT NULL,
+    peptide_id          INTEGER,
     peptide_name        VARCHAR(200),
     peptide_abbreviation VARCHAR(50),
     senaite_sample_id   VARCHAR(200),               -- e.g. P-0085 from SENAITE
@@ -543,7 +543,7 @@ CREATE TABLE IF NOT EXISTS sample_preps (
     actual_total_vol_ul     DOUBLE PRECISION,
 
     -- Status
-    status          VARCHAR(30)  NOT NULL DEFAULT 'in_progress',
+    status          VARCHAR(30)  NOT NULL DEFAULT 'awaiting_hplc',
     notes           TEXT,
 
     -- Timestamps (consistent with the rest of the integration DB)
