@@ -241,7 +241,7 @@ export function Step1SampleInfo() {
       {/* Target Concentration */}
       <div className="space-y-1.5">
         <Label htmlFor="target-conc">
-          Target Concentration (ug/mL){' '}
+          Target Concentration (µg/mL){' '}
           <span className="text-destructive">*</span>
         </Label>
         <Input
@@ -257,7 +257,7 @@ export function Step1SampleInfo() {
       {/* Target Total Volume */}
       <div className="space-y-1.5">
         <Label htmlFor="target-vol">
-          Target Total Volume (uL){' '}
+          Target Total Volume (µL){' '}
           <span className="text-destructive">*</span>
         </Label>
         <Input
@@ -605,7 +605,7 @@ function EditableSessionSummary({
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
               <Label htmlFor="edit-target-conc">
-                Target Concentration (ug/mL){' '}
+                Target Concentration (µg/mL){' '}
                 <span className="text-destructive">*</span>
               </Label>
               <Input
@@ -619,7 +619,7 @@ function EditableSessionSummary({
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="edit-target-vol">
-                Target Total Volume (uL){' '}
+                Target Total Volume (µL){' '}
                 <span className="text-destructive">*</span>
               </Label>
               <Input

@@ -101,7 +101,7 @@ export function Step5Summary() {
               <span className="text-muted-foreground">Target Concentration</span>
               <p className="font-medium font-mono">
                 {session.target_conc_ug_ml != null
-                  ? `${session.target_conc_ug_ml} ug/mL`
+                  ? `${session.target_conc_ug_ml} µg/mL`
                   : '—'}
               </p>
             </div>
@@ -109,7 +109,7 @@ export function Step5Summary() {
               <span className="text-muted-foreground">Target Total Volume</span>
               <p className="font-medium font-mono">
                 {session.target_total_vol_ul != null
-                  ? `${session.target_total_vol_ul} uL`
+                  ? `${session.target_total_vol_ul} µL`
                   : '—'}
               </p>
             </div>
@@ -153,7 +153,7 @@ export function Step5Summary() {
             <div className="border-t pt-3 flex items-center justify-between text-sm">
               <span className="text-muted-foreground">Stock Concentration</span>
               <span className="font-medium font-mono">
-                {calcs.stock_conc_ug_ml.toFixed(2)} ug/mL
+                {calcs.stock_conc_ug_ml.toFixed(2)} µg/mL
               </span>
             </div>
           )}
@@ -202,7 +202,7 @@ export function Step5Summary() {
                     Actual Concentration
                   </span>
                   <span className="font-medium font-mono">
-                    {calcs.actual_conc_ug_ml.toFixed(2)} ug/mL
+                    {calcs.actual_conc_ug_ml.toFixed(2)} µg/mL
                   </span>
                 </div>
               )}
@@ -212,7 +212,7 @@ export function Step5Summary() {
                     Actual Diluent Volume
                   </span>
                   <span className="font-medium font-mono">
-                    {calcs.actual_diluent_vol_ul.toFixed(1)} uL
+                    {calcs.actual_diluent_vol_ul.toFixed(1)} µL
                   </span>
                 </div>
               )}
@@ -222,7 +222,7 @@ export function Step5Summary() {
                     Actual Stock Volume
                   </span>
                   <span className="font-medium font-mono">
-                    {calcs.actual_stock_vol_ul.toFixed(1)} uL
+                    {calcs.actual_stock_vol_ul.toFixed(1)} µL
                   </span>
                 </div>
               )}
@@ -250,7 +250,7 @@ export function Step5Summary() {
                   Determined Concentration
                 </span>
                 <p className="font-medium font-mono">
-                  {calcs.determined_conc_ug_ml.toFixed(2)} ug/mL
+                  {calcs.determined_conc_ug_ml.toFixed(2)} µg/mL
                 </p>
               </div>
             )}

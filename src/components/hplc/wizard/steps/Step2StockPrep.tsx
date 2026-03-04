@@ -232,7 +232,7 @@ export function Step2StockPrep() {
                     Stock Concentration
                   </span>
                   <p className="font-medium font-mono">
-                    {calcs.stock_conc_ug_ml.toFixed(2)} ug/mL
+                    {calcs.stock_conc_ug_ml.toFixed(2)} µg/mL
                   </p>
                 </div>
               )}
@@ -242,7 +242,7 @@ export function Step2StockPrep() {
                     Required Stock Volume
                   </span>
                   <p className="font-medium font-mono">
-                    {calcs.required_stock_vol_ul.toFixed(1)} uL
+                    {calcs.required_stock_vol_ul.toFixed(1)} µL
                   </p>
                 </div>
               )}
@@ -252,7 +252,7 @@ export function Step2StockPrep() {
                     Required Diluent Volume
                   </span>
                   <p className="font-medium font-mono">
-                    {calcs.required_diluent_vol_ul.toFixed(1)} uL
+                    {calcs.required_diluent_vol_ul.toFixed(1)} µL
                   </p>
                 </div>
               )}

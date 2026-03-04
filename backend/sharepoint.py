@@ -25,7 +25,7 @@ SHAREPOINT_HOSTNAME = os.getenv("SHAREPOINT_HOSTNAME", "valenceanalytical.sharep
 SHAREPOINT_SITE_PATH = os.getenv("SHAREPOINT_SITE_PATH", "")  # e.g. "sites/CommunicationSite" or empty for root
 SHAREPOINT_DOC_LIBRARY = os.getenv("SHAREPOINT_DOC_LIBRARY", "Documents")
 SHAREPOINT_PEPTIDES_PATH = os.getenv("SHAREPOINT_PEPTIDES_PATH", "Analytical/Lab Reports/Purity and Quantity (HPLC)/Peptides")
-SHAREPOINT_LIMS_CSV_PATH = os.getenv("SHAREPOINT_LIMS_CSV_PATH", "Analytical/Lab Reports/Purity and Quantity (HPLC)/LIMS CSVs (Chromatogram CSV and Peak Area CSV)")
+SHAREPOINT_LIMS_CSV_PATH = os.getenv("SHAREPOINT_LIMS_CSV_PATH", "Analytical/LIMS CSVs and Endotoxin")
 
 GRAPH_BASE_URL = "https://graph.microsoft.com/v1.0"
 GRAPH_SCOPES = ["https://graph.microsoft.com/.default"]
@@ -209,6 +209,50 @@ async def list_folder(path: str = "") -> list[dict]:
 async def list_lims_folder(path: str = "") -> list[dict]:
     """List children in the LIMS CSVs root."""
     return await _list_folder_at_root(SHAREPOINT_LIMS_CSV_PATH, path)
+
+
+async def list_folder_by_id(folder_id: str) -> list[dict]:
+    """List the children of a SharePoint folder using its Graph item ID.
+
+    Useful when you have an item ID from a previous browse/scan rather than a path.
+    Returns the same dict shape as _list_folder_at_root.
+    """
+    drive_id = await _get_drive_id()
+    url = f"{GRAPH_BASE_URL}/drives/{drive_id}/items/{folder_id}/children"
+    params = {
+        "$select": "id,name,size,createdDateTime,lastModifiedDateTime,folder,file,webUrl",
+        "$top": "200",
+    }
+
+    items = []
+    retried_auth = False
+    async with httpx.AsyncClient() as client:
+        while url:
+            resp = await client.get(url, headers=_headers(), params=params)
+            if resp.status_code == 401 and not retried_auth:
+                _invalidate_token()
+                retried_auth = True
+                resp = await client.get(url, headers=_headers(), params=params)
+            resp.raise_for_status()
+            data = resp.json()
+
+            for item in data.get("value", []):
+                items.append({
+                    "id": item["id"],
+                    "name": item["name"],
+                    "type": "folder" if "folder" in item else "file",
+                    "size": item.get("size", 0),
+                    "created": item.get("createdDateTime"),
+                    "last_modified": item.get("lastModifiedDateTime"),
+                    "web_url": item.get("webUrl"),
+                    "child_count": item.get("folder", {}).get("childCount", 0) if "folder" in item else None,
+                    "mime_type": item.get("file", {}).get("mimeType") if "file" in item else None,
+                })
+
+            url = data.get("@odata.nextLink")
+            params = {}
+
+    return items
 
 
 async def search_sample_folder(sample_id: str) -> Optional[dict]:

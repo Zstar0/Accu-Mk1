@@ -38,7 +38,12 @@ import { CalibrationPanel } from './CalibrationPanel'
 import {
   getPeptides,
   deletePeptide,
+  getMethods,
+  getInstruments,
+  updatePeptide,
   type PeptideRecord,
+  type HplcMethod,
+  type Instrument,
 } from '@/lib/api'
 import { getApiBaseUrl } from '@/lib/config'
 import { getAuthToken } from '@/store/auth-store'
@@ -80,6 +85,11 @@ export function PeptideConfig() {
   const [showAddForm, setShowAddForm] = useState(false)
   const [filterMode, setFilterMode] = useState<'all' | 'has_cal' | 'no_cal'>('all')
 
+  // Methods + instruments for the method selector in slide-out
+  const [allMethods, setAllMethods] = useState<HplcMethod[]>([])
+  const [allInstruments, setAllInstruments] = useState<Instrument[]>([])
+  const [savingMethodId, setSavingMethodId] = useState(false)
+
   // Streaming seed state
   const [seeding, setSeeding] = useState(false)
   const [seedLogs, setSeedLogs] = useState<LogLine[]>([])
@@ -105,6 +115,8 @@ export function PeptideConfig() {
 
   useEffect(() => {
     loadPeptides()
+    getMethods().then(setAllMethods).catch(console.error)
+    getInstruments().then(setAllInstruments).catch(console.error)
   }, [loadPeptides])
 
   // Open flyout if navigated here with a target peptide ID
@@ -558,6 +570,7 @@ export function PeptideConfig() {
                   <TableHeader>
                     <TableRow>
                       <TableHead>Peptide</TableHead>
+                      <TableHead>Method</TableHead>
                       <TableHead className="text-right">Ref RT</TableHead>
                       <TableHead>Active Standard</TableHead>
                       <TableHead className="text-right">Run Date</TableHead>
@@ -586,6 +599,19 @@ export function PeptideConfig() {
                                 {p.name}
                               </span>
                             </div>
+                          </TableCell>
+                          <TableCell>
+                            {p.methods.length > 0 ? (
+                              <div className="flex flex-wrap gap-1">
+                                {p.methods.map(m => (
+                                  <Badge key={m.id} variant="outline" className="text-xs">
+                                    {m.name}{m.instrument ? ` (${m.instrument.name})` : ''}
+                                  </Badge>
+                                ))}
+                              </div>
+                            ) : (
+                              <span className="text-xs text-muted-foreground">—</span>
+                            )}
                           </TableCell>
                           <TableCell className="text-right font-mono text-sm">
                             {p.reference_rt != null
@@ -692,7 +718,75 @@ export function PeptideConfig() {
                 </button>
               </div>
               {/* Panel content */}
-              <div className="p-5">
+              <div className="p-5 space-y-6">
+                {/* Method assignment per instrument */}
+                <div className="rounded-lg border border-zinc-800 p-4 space-y-3">
+                  <h4 className="text-sm font-semibold text-muted-foreground">Methods</h4>
+                  {allInstruments.map(inst => {
+                    const methodsForInst = allMethods.filter(m => m.instrument_id === inst.id)
+                    const assigned = selectedPeptide.methods.find(m => m.instrument_id === inst.id)
+                    return (
+                      <div key={inst.id} className="space-y-1.5">
+                        <div className="flex items-center justify-between">
+                          <label className="text-xs font-medium text-muted-foreground">{inst.name}</label>
+                          {assigned && (
+                            <button
+                              type="button"
+                              className="text-xs text-primary hover:underline"
+                              onClick={() => useUIStore.getState().navigateToMethod(assigned.id)}
+                            >
+                              View Method
+                            </button>
+                          )}
+                        </div>
+                        <select
+                          className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                          value={assigned?.id ?? ''}
+                          disabled={savingMethodId}
+                          onChange={async (e) => {
+                            const newMethodId = e.target.value ? parseInt(e.target.value, 10) : null
+                            // Build new method_ids: keep assignments for other instruments, update this one
+                            const otherMethodIds = selectedPeptide.methods
+                              .filter(m => m.instrument_id !== inst.id)
+                              .map(m => m.id)
+                            const methodIds = newMethodId
+                              ? [...otherMethodIds, newMethodId]
+                              : otherMethodIds
+                            setSavingMethodId(true)
+                            try {
+                              await updatePeptide(selectedPeptide.id, { method_ids: methodIds })
+                              await loadPeptides()
+                              getMethods().then(setAllMethods).catch(console.error)
+                            } catch {
+                              setError('Failed to update method')
+                            } finally {
+                              setSavingMethodId(false)
+                            }
+                          }}
+                        >
+                          <option value="">No method assigned</option>
+                          {methodsForInst.map(m => (
+                            <option key={m.id} value={m.id}>{m.name}</option>
+                          ))}
+                        </select>
+                        {/* Show method details inline when assigned */}
+                        {assigned && (() => {
+                          const m = allMethods.find(x => x.id === assigned.id)
+                          if (!m) return null
+                          return (
+                            <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs text-muted-foreground mt-1">
+                              {m.size_peptide && <div><span className="font-medium">Size:</span> {m.size_peptide}</div>}
+                              {m.starting_organic_pct != null && <div><span className="font-medium">Organic:</span> {m.starting_organic_pct}%</div>}
+                              {m.temperature_mct_c != null && <div><span className="font-medium">MCT Temp:</span> {m.temperature_mct_c}°C</div>}
+                              {m.dissolution && <div><span className="font-medium">Dissolution:</span> {m.dissolution}</div>}
+                            </div>
+                          )
+                        })()}
+                      </div>
+                    )
+                  })}
+                </div>
+
                 <CalibrationPanel
                   peptide={selectedPeptide}
                   onUpdated={loadPeptides}

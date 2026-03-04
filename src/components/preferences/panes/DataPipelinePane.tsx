@@ -6,9 +6,11 @@ import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Spinner } from '@/components/ui/spinner'
 import { SettingsField, SettingsSection } from '../shared/SettingsComponents'
+import { Loader2, RefreshCw } from 'lucide-react'
 import {
   getSettings,
   updateSetting,
+  syncInstruments,
   type Setting,
   type ColumnMappings,
 } from '@/lib/api'
@@ -187,6 +189,13 @@ export function DataPipelinePane() {
         </SettingsField>
       </SettingsSection>
 
+      <SettingsSection title="Senaite Instruments">
+        <p className="text-sm text-muted-foreground mb-3">
+          Sync instrument definitions from Senaite LIMS. New instruments will be added; existing instruments are preserved.
+        </p>
+        <SyncInstrumentsButton />
+      </SettingsSection>
+
       <div className="flex justify-end">
         <Button
           onClick={handleSave}
@@ -197,6 +206,43 @@ export function DataPipelinePane() {
             : t('preferences.dataPipeline.saveSettings')}
         </Button>
       </div>
+    </div>
+  )
+}
+
+function SyncInstrumentsButton() {
+  const [syncing, setSyncing] = useState(false)
+  const [result, setResult] = useState<string | null>(null)
+
+  const handleSync = async () => {
+    setSyncing(true)
+    setResult(null)
+    try {
+      const res = await syncInstruments()
+      setResult(`Synced: ${res.created} new instrument(s) added, ${res.total} total`)
+      toast.success(`Instruments synced — ${res.created} new, ${res.total} total`)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Sync failed'
+      setResult(msg)
+      toast.error(msg)
+    } finally {
+      setSyncing(false)
+    }
+  }
+
+  return (
+    <div className="space-y-2">
+      <Button variant="outline" onClick={handleSync} disabled={syncing}>
+        {syncing ? (
+          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+        ) : (
+          <RefreshCw className="mr-2 h-4 w-4" />
+        )}
+        {syncing ? 'Syncing...' : 'Sync Instruments'}
+      </Button>
+      {result && (
+        <p className="text-xs text-muted-foreground">{result}</p>
+      )}
     </div>
   )
 }

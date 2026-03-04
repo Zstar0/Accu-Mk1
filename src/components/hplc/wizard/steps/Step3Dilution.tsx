@@ -135,7 +135,7 @@ export function Step3Dilution() {
                     Required Diluent Volume
                   </span>
                   <p className="font-medium font-mono">
-                    {requiredDiluentVol.toFixed(1)} uL
+                    {requiredDiluentVol.toFixed(1)} µL
                   </p>
                 </div>
               )}
@@ -145,7 +145,7 @@ export function Step3Dilution() {
                     Required Stock Volume
                   </span>
                   <p className="font-medium font-mono">
-                    {requiredStockVol.toFixed(1)} uL
+                    {requiredStockVol.toFixed(1)} µL
                   </p>
                 </div>
               )}
@@ -161,12 +161,12 @@ export function Step3Dilution() {
             <span className="flex h-6 w-6 items-center justify-center rounded-full bg-primary text-primary-foreground text-xs font-bold">
               1
             </span>
-            Empty Autosample Vial + cap Weight
+            Empty Autosampler vial + cap Weight
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
           <p className="text-sm text-muted-foreground">
-            Weigh the empty autosample vial with cap.
+            Weigh the empty Autosampler vial with cap.
           </p>
           {error3a && (
             <Alert variant="destructive">
@@ -195,7 +195,7 @@ export function Step3Dilution() {
           ) : (
             <WeightInput
               stepKey="dil_vial_empty_mg"
-              label="Empty Autosample vial + cap weight (mg)"
+              label="Empty Autosampler vial + cap weight (mg)"
               onAccept={handleAccept3a}
             />
           )}
@@ -218,7 +218,7 @@ export function Step3Dilution() {
               <>
                 Add{' '}
                 <span className="font-semibold">
-                  {requiredDiluentVol.toFixed(1)} uL
+                  {requiredDiluentVol.toFixed(1)} µL
                 </span>{' '}
                 of diluent, then re-weigh the vial.
               </>
@@ -277,7 +277,7 @@ export function Step3Dilution() {
               <>
                 Add{' '}
                 <span className="font-semibold">
-                  {requiredStockVol.toFixed(1)} uL
+                  {requiredStockVol.toFixed(1)} µL
                 </span>{' '}
                 of stock solution, then weigh the final vial.
               </>
@@ -336,7 +336,7 @@ export function Step3Dilution() {
                     Actual Diluent Added
                   </span>
                   <p className="font-medium font-mono">
-                    {calcs.actual_diluent_vol_ul.toFixed(1)} uL
+                    {calcs.actual_diluent_vol_ul.toFixed(1)} µL
                   </p>
                 </div>
               )}
@@ -346,7 +346,7 @@ export function Step3Dilution() {
                     Actual Stock Added
                   </span>
                   <p className="font-medium font-mono">
-                    {calcs.actual_stock_vol_ul.toFixed(1)} uL
+                    {calcs.actual_stock_vol_ul.toFixed(1)} µL
                   </p>
                 </div>
               )}
@@ -356,7 +356,7 @@ export function Step3Dilution() {
                     Actual Concentration
                   </span>
                   <p className="font-medium font-mono">
-                    {calcs.actual_conc_ug_ml.toFixed(2)} ug/mL
+                    {calcs.actual_conc_ug_ml.toFixed(2)} µg/mL
                   </p>
                 </div>
               )}

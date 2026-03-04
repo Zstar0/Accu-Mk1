@@ -9,7 +9,7 @@ export type DashboardSubSection = 'orders' | 'analytics'
 export type SenaiteSubSection = 'samples' | 'event-log' | 'sample-details'
 export type IntakeSubSection = 'receive-sample'
 export type LabOperationsSubSection = 'chromatographs' | 'sample-intake'
-export type HPLCAnalysisSubSection = 'overview' | 'new-analysis' | 'import-analysis' | 'peptide-config' | 'analysis-history' | 'sample-preps'
+export type HPLCAnalysisSubSection = 'overview' | 'new-analysis' | 'import-analysis' | 'instruments' | 'methods' | 'peptide-config' | 'analysis-history' | 'sample-preps'
 export type AccuMarkToolsSubSection = 'overview' | 'order-explorer' | 'coa-explorer'
 export type AccountSubSection = 'change-password' | 'user-management'
 export type ActiveSubSection = DashboardSubSection | SenaiteSubSection | IntakeSubSection | LabOperationsSubSection | HPLCAnalysisSubSection | AccuMarkToolsSubSection | AccountSubSection
@@ -27,6 +27,7 @@ interface UIState {
   orderExplorerTargetOrderId: string | null
   sampleDetailsTargetId: string | null
   samplePrepTargetId: number | null
+  methodsTargetId: number | null
   updateVersion: string | null
   updateReady: boolean
 
@@ -46,6 +47,7 @@ interface UIState {
   navigateToOrderExplorer: (orderId?: string) => void
   navigateToSample: (sampleId: string) => void
   navigateToSamplePrep: (prepId: number) => void
+  navigateToMethod: (methodId: number) => void
   setUpdateVersion: (version: string | null) => void
   setUpdateReady: (ready: boolean) => void
 }
@@ -65,6 +67,7 @@ export const useUIStore = create<UIState>()(
       orderExplorerTargetOrderId: null,
       sampleDetailsTargetId: null,
       samplePrepTargetId: null,
+      methodsTargetId: null,
       updateVersion: null,
       updateReady: false,
 
@@ -178,6 +181,18 @@ export const useUIStore = create<UIState>()(
           }),
           undefined,
           'navigateToSamplePrep'
+        ),
+
+      navigateToMethod: (methodId) =>
+        set(
+          state => ({
+            activeSection: 'hplc-analysis',
+            activeSubSection: 'methods',
+            methodsTargetId: methodId,
+            navigationKey: state.navigationKey + 1,
+          }),
+          undefined,
+          'navigateToMethod'
         ),
 
       setUpdateVersion: (version) =>

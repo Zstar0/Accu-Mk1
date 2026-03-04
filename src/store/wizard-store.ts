@@ -47,9 +47,12 @@ export function deriveStepStates(
     return 'not-started'
   })()
 
-  // Step 3 (Dilution): locked if no stock_conc; complete if actual_conc calculated
+  // Step 3 (Dilution): locked until both stock vial measurements are recorded
   const step3: StepState = (() => {
-    if (calcs?.stock_conc_ug_ml == null) {
+    const hasMeasurements = (keys: string[]) =>
+      keys.every(key => session?.measurements?.some(m => m.step_key === key && m.is_current))
+    const stockReady = hasMeasurements(['stock_vial_empty_mg', 'stock_vial_loaded_mg'])
+    if (!stockReady) {
       return currentStep === 3 ? 'in-progress' : 'locked'
     }
     if (currentStep === 3) return 'in-progress'
@@ -57,9 +60,12 @@ export function deriveStepStates(
     return 'not-started'
   })()
 
-  // Step 4 (Results): locked if no actual_conc; complete if determined_conc calculated
+  // Step 4 (Results): locked until all dilution measurements are recorded
   const step4: StepState = (() => {
-    if (calcs?.actual_conc_ug_ml == null) {
+    const dilReady = session?.measurements?.some(m => m.step_key === 'dil_vial_empty_mg' && m.is_current) &&
+      session?.measurements?.some(m => m.step_key === 'dil_vial_with_diluent_mg' && m.is_current) &&
+      session?.measurements?.some(m => m.step_key === 'dil_vial_final_mg' && m.is_current)
+    if (!dilReady) {
       return currentStep === 4 ? 'in-progress' : 'locked'
     }
     if (currentStep === 4) return 'in-progress'

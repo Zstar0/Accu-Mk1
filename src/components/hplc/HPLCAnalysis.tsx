@@ -6,6 +6,8 @@ import { CreateAnalysis } from './CreateAnalysis'
 import { PeptideConfig } from './PeptideConfig'
 import { AnalysisHistory } from './AnalysisHistory'
 import { SamplePreps } from './SamplePreps'
+import { MethodsPage } from './MethodsPage'
+import { InstrumentsPage } from './InstrumentsPage'
 
 export function HPLCAnalysis() {
   const activeSubSection = useUIStore(
@@ -17,6 +19,10 @@ export function HPLCAnalysis() {
       return <NewAnalysis />
     case 'new-analysis':
       return <CreateAnalysis />
+    case 'instruments':
+      return <InstrumentsPage />
+    case 'methods':
+      return <MethodsPage />
     case 'peptide-config':
       return <PeptideConfig />
     case 'analysis-history':

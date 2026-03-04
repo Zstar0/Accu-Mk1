@@ -5,7 +5,7 @@ Uses SQLAlchemy 2.0 style with mapped_column.
 
 from datetime import datetime
 from typing import Optional
-from sqlalchemy import String, Text, Float, Boolean, DateTime, ForeignKey, JSON
+from sqlalchemy import String, Text, Float, Integer, Boolean, DateTime, ForeignKey, JSON, Column, Table, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from database import Base
@@ -114,10 +114,73 @@ class Result(Base):
         return f"<Result(id={self.id}, calculation_type='{self.calculation_type}')>"
 
 
+class Instrument(Base):
+    """
+    Laboratory instrument synced from Senaite.
+    Each instrument can be associated with multiple HPLC methods.
+    """
+    __tablename__ = "instruments"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(200), nullable=False, unique=True)
+    senaite_id: Mapped[Optional[str]] = mapped_column(String(200), nullable=True, unique=True)
+    senaite_uid: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    instrument_type: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)  # "HPLC"
+    brand: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)  # "Agilent"
+    model: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)  # "1290", "1260"
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def __repr__(self) -> str:
+        return f"<Instrument(id={self.id}, name='{self.name}')>"
+
+
+# M2M junction: peptide <-> method (one method per instrument per peptide, enforced at app level)
+peptide_methods = Table(
+    "peptide_methods",
+    Base.metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("peptide_id", Integer, ForeignKey("peptides.id", ondelete="CASCADE"), nullable=False),
+    Column("method_id", Integer, ForeignKey("hplc_methods.id", ondelete="CASCADE"), nullable=False),
+    UniqueConstraint("peptide_id", "method_id", name="uq_peptide_method"),
+)
+
+
+class HplcMethod(Base):
+    """
+    HPLC analytical method definition.
+    Stores instrument settings and run parameters that apply to groups of peptides.
+    Methods are sourced from Senaite but metadata is stored locally.
+    """
+    __tablename__ = "hplc_methods"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(200), nullable=False, unique=True)
+    senaite_id: Mapped[Optional[str]] = mapped_column(String(200), nullable=True, unique=True)
+    instrument_id: Mapped[Optional[int]] = mapped_column(ForeignKey("instruments.id"), nullable=True)
+    size_peptide: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)  # "Extremely Polar", "3-9 (Very Polar)", etc.
+    starting_organic_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)  # Starting organic amount %
+    temperature_mct_c: Mapped[Optional[float]] = mapped_column(Float, nullable=True)  # Mobile column temperature °C
+    dissolution: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)  # e.g. "100% Water", "100 Water w/ 0.1% TFA"
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationships
+    instrument: Mapped[Optional["Instrument"]] = relationship("Instrument")
+    peptides: Mapped[list["Peptide"]] = relationship("Peptide", secondary=peptide_methods, back_populates="methods")
+
+    def __repr__(self) -> str:
+        return f"<HplcMethod(id={self.id}, name='{self.name}')>"
+
+
 class Peptide(Base):
     """
     Peptide reference data for HPLC analysis.
     Stores expected retention time, tolerance, and diluent density.
+    Each peptide can be assigned one method per instrument.
     """
     __tablename__ = "peptides"
 
@@ -132,6 +195,7 @@ class Peptide(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     # Relationships
+    methods: Mapped[list["HplcMethod"]] = relationship("HplcMethod", secondary=peptide_methods, back_populates="peptides")
     calibration_curves: Mapped[list["CalibrationCurve"]] = relationship(
         "CalibrationCurve", back_populates="peptide", cascade="all, delete-orphan"
     )

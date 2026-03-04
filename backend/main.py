@@ -18,11 +18,11 @@ from typing import Optional, Union
 from fastapi import FastAPI, Depends, Form, HTTPException, Header, Request, Response, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import select, desc, delete, func
 
 from database import get_db, init_db
-from models import AuditLog, Settings, Job, Sample, Result, Peptide, CalibrationCurve, HPLCAnalysis, User, SharePointFileCache, WizardSession, WizardMeasurement
+from models import AuditLog, Settings, Job, Sample, Result, Instrument, HplcMethod, Peptide, CalibrationCurve, HPLCAnalysis, User, SharePointFileCache, WizardSession, WizardMeasurement, peptide_methods
 from auth import (
     get_current_user, require_admin, create_access_token,
     verify_password, get_password_hash, seed_admin_user,
@@ -1286,6 +1286,109 @@ async def parse_hplc_peakdata(request: HPLCParseBrowserRequest, _current_user=De
 
 # --- Peptide & Calibration Endpoints ---
 
+# ─── HPLC Method schemas ───
+
+# ─── Instrument schemas ───
+
+class InstrumentBrief(BaseModel):
+    """Minimal instrument info embedded in method responses."""
+    id: int
+    name: str
+    model: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
+class InstrumentResponse(BaseModel):
+    """Full instrument response."""
+    id: int
+    name: str
+    senaite_id: Optional[str] = None
+    senaite_uid: Optional[str] = None
+    instrument_type: Optional[str] = None
+    brand: Optional[str] = None
+    model: Optional[str] = None
+    active: bool
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+# ─── HPLC Method schemas ───
+
+class MethodCreate(BaseModel):
+    """Schema for creating an HPLC method."""
+    name: str
+    senaite_id: Optional[str] = None
+    instrument_id: Optional[int] = None
+    size_peptide: Optional[str] = None
+    starting_organic_pct: Optional[float] = None
+    temperature_mct_c: Optional[float] = None
+    dissolution: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class MethodUpdate(BaseModel):
+    """Schema for updating an HPLC method."""
+    name: Optional[str] = None
+    senaite_id: Optional[str] = None
+    instrument_id: Optional[int] = None
+    size_peptide: Optional[str] = None
+    starting_organic_pct: Optional[float] = None
+    temperature_mct_c: Optional[float] = None
+    dissolution: Optional[str] = None
+    notes: Optional[str] = None
+    active: Optional[bool] = None
+
+
+class PeptideBrief(BaseModel):
+    """Minimal peptide info for method responses."""
+    id: int
+    name: str
+    abbreviation: str
+
+    class Config:
+        from_attributes = True
+
+
+class MethodBrief(BaseModel):
+    """Minimal method info for peptide responses."""
+    id: int
+    name: str
+    senaite_id: Optional[str] = None
+    instrument_id: Optional[int] = None
+    instrument: Optional[InstrumentBrief] = None
+
+    class Config:
+        from_attributes = True
+
+
+class MethodResponse(BaseModel):
+    """Full HPLC method response with common peptides."""
+    id: int
+    name: str
+    senaite_id: Optional[str] = None
+    instrument_id: Optional[int] = None
+    instrument: Optional[InstrumentBrief] = None
+    size_peptide: Optional[str] = None
+    starting_organic_pct: Optional[float] = None
+    temperature_mct_c: Optional[float] = None
+    dissolution: Optional[str] = None
+    notes: Optional[str] = None
+    active: bool
+    created_at: datetime
+    updated_at: datetime
+    common_peptides: list[PeptideBrief] = []
+
+    class Config:
+        from_attributes = True
+
+
+# ─── Peptide schemas ───
+
 class PeptideCreate(BaseModel):
     """Schema for creating a peptide."""
     name: str
@@ -1303,6 +1406,7 @@ class PeptideUpdate(BaseModel):
     rt_tolerance: Optional[float] = None
     diluent_density: Optional[float] = None
     active: Optional[bool] = None
+    method_ids: Optional[list[int]] = None  # Set all method assignments (one per instrument)
 
 
 class CalibrationCurveResponse(BaseModel):
@@ -1358,6 +1462,7 @@ class PeptideResponse(BaseModel):
     active: bool
     created_at: datetime
     updated_at: datetime
+    methods: list[MethodBrief] = []
     active_calibration: Optional[CalibrationCurveResponse] = None
     calibration_summary: list[InstrumentSummary] = []
 
@@ -1399,17 +1504,173 @@ def _get_active_calibration(db: Session, peptide_id: int) -> Optional[Calibratio
     return None
 
 
+def _instrument_to_brief(instrument) -> Optional[InstrumentBrief]:
+    """Convert Instrument model to brief response."""
+    if instrument is None:
+        return None
+    return InstrumentBrief.model_validate(instrument)
+
+
+def _method_to_brief(method: HplcMethod) -> MethodBrief:
+    """Convert HplcMethod model to brief response with instrument."""
+    brief = MethodBrief(
+        id=method.id,
+        name=method.name,
+        senaite_id=method.senaite_id,
+        instrument_id=method.instrument_id,
+        instrument=_instrument_to_brief(method.instrument),
+    )
+    return brief
+
+
 def _peptide_to_response(db: Session, peptide: Peptide) -> PeptideResponse:
-    """Convert Peptide model to response with active calibration."""
+    """Convert Peptide model to response with active calibration and methods."""
     resp = PeptideResponse.model_validate(peptide)
     resp.active_calibration = _get_active_calibration(db, peptide.id)
+    resp.methods = [_method_to_brief(m) for m in peptide.methods]
     return resp
 
+
+def _method_to_response(method: HplcMethod) -> MethodResponse:
+    """Convert HplcMethod model to response with common peptides and instrument."""
+    resp = MethodResponse.model_validate(method)
+    resp.instrument = _instrument_to_brief(method.instrument)
+    resp.common_peptides = [PeptideBrief.model_validate(p) for p in method.peptides]
+    return resp
+
+
+# ─── Instrument Endpoints ───
+
+@app.get("/instruments", response_model=list[InstrumentResponse])
+async def get_instruments(db: Session = Depends(get_db), _current_user=Depends(get_current_user)):
+    """Get all instruments."""
+    instruments = db.execute(select(Instrument).order_by(Instrument.name)).scalars().all()
+    return [InstrumentResponse.model_validate(i) for i in instruments]
+
+
+@app.post("/instruments/sync")
+async def sync_instruments(db: Session = Depends(get_db), _current_user=Depends(get_current_user)):
+    """Sync instruments from Senaite. Adds new instruments, does not overwrite existing."""
+    import httpx as _httpx
+
+    if not SENAITE_URL:
+        raise HTTPException(400, "SENAITE_URL not configured")
+
+    try:
+        resp = _httpx.get(
+            f"{SENAITE_URL}/senaite/@@API/senaite/v1/instrument",
+            auth=_httpx.BasicAuth(SENAITE_USER, SENAITE_PASSWORD),
+            timeout=SENAITE_TIMEOUT,
+            params={"limit": 100},
+        )
+        resp.raise_for_status()
+    except Exception as e:
+        raise HTTPException(502, f"Failed to reach Senaite: {e}")
+
+    items = resp.json().get("items", [])
+    created = 0
+    for item in items:
+        senaite_id = item.get("id")
+        if not senaite_id:
+            continue
+        # Skip if already exists
+        existing = db.execute(select(Instrument).where(Instrument.senaite_id == senaite_id)).scalar_one_or_none()
+        if existing:
+            continue
+        # Extract instrument type and manufacturer from nested objects
+        inst_type = None
+        brand = None
+        if isinstance(item.get("InstrumentType"), dict):
+            inst_type = item["InstrumentType"].get("title")
+        if isinstance(item.get("Manufacturer"), dict):
+            brand = item["Manufacturer"].get("title")
+        instrument = Instrument(
+            name=item.get("title", senaite_id),
+            senaite_id=senaite_id,
+            senaite_uid=item.get("uid"),
+            instrument_type=inst_type,
+            brand=brand,
+            model=item.get("Model"),
+        )
+        db.add(instrument)
+        created += 1
+
+    db.commit()
+    total = db.execute(select(func.count()).select_from(Instrument)).scalar()
+    return {"created": created, "total": total}
+
+
+# ─── HPLC Method Endpoints ───
+
+@app.get("/hplc/methods", response_model=list[MethodResponse])
+async def get_methods(db: Session = Depends(get_db), _current_user=Depends(get_current_user)):
+    """Get all HPLC methods with their common peptides and instrument."""
+    methods = db.execute(
+        select(HplcMethod)
+        .options(joinedload(HplcMethod.instrument), joinedload(HplcMethod.peptides))
+        .order_by(HplcMethod.name)
+    ).scalars().unique().all()
+    return [_method_to_response(m) for m in methods]
+
+
+@app.post("/hplc/methods", response_model=MethodResponse, status_code=201)
+async def create_method(data: MethodCreate, db: Session = Depends(get_db), _current_user=Depends(get_current_user)):
+    """Create a new HPLC method."""
+    existing = db.execute(select(HplcMethod).where(HplcMethod.name == data.name)).scalar_one_or_none()
+    if existing:
+        raise HTTPException(400, f"Method with name '{data.name}' already exists")
+
+    if data.senaite_id:
+        dup = db.execute(select(HplcMethod).where(HplcMethod.senaite_id == data.senaite_id)).scalar_one_or_none()
+        if dup:
+            raise HTTPException(400, f"Method with Senaite ID '{data.senaite_id}' already exists")
+
+    method = HplcMethod(**data.model_dump())
+    db.add(method)
+    db.commit()
+    db.refresh(method)
+    return _method_to_response(method)
+
+
+@app.put("/hplc/methods/{method_id}", response_model=MethodResponse)
+async def update_method(method_id: int, data: MethodUpdate, db: Session = Depends(get_db), _current_user=Depends(get_current_user)):
+    """Update an HPLC method."""
+    method = db.execute(select(HplcMethod).where(HplcMethod.id == method_id)).scalar_one_or_none()
+    if not method:
+        raise HTTPException(404, f"Method {method_id} not found")
+
+    for field, value in data.model_dump(exclude_unset=True).items():
+        setattr(method, field, value)
+
+    db.commit()
+    db.refresh(method)
+    return _method_to_response(method)
+
+
+@app.delete("/hplc/methods/{method_id}")
+async def delete_method(method_id: int, db: Session = Depends(get_db), _current_user=Depends(get_current_user)):
+    """Delete an HPLC method. Junction rows cascade-delete automatically."""
+    method = db.execute(select(HplcMethod).where(HplcMethod.id == method_id)).scalar_one_or_none()
+    if not method:
+        raise HTTPException(404, f"Method {method_id} not found")
+
+    db.delete(method)
+    db.commit()
+    return {"message": f"Method '{method.name}' deleted"}
+
+
+# ─── Peptide Endpoints ───
 
 @app.get("/peptides", response_model=list[PeptideResponse])
 async def get_peptides(db: Session = Depends(get_db), _current_user=Depends(get_current_user)):
     """Get all peptides with their active calibration curves and per-instrument summary."""
-    peptides = db.execute(select(Peptide).order_by(Peptide.abbreviation)).scalars().all()
+    peptides = db.execute(
+        select(Peptide)
+        .options(
+            joinedload(Peptide.methods).joinedload(HplcMethod.instrument),
+        )
+        .order_by(Peptide.abbreviation)
+    ).scalars().unique().all()
 
     # Batch 1: per-instrument curve counts for all peptides in one query
     summary_rows = db.execute(
@@ -1442,6 +1703,7 @@ async def get_peptides(db: Session = Depends(get_db), _current_user=Depends(get_
         resp = PeptideResponse.model_validate(p)
         resp.active_calibration = active_cal_map.get(p.id)
         resp.calibration_summary = sorted(summary_map.get(p.id, []), key=lambda x: x.instrument)
+        resp.methods = [_method_to_brief(m) for m in p.methods]
         results.append(resp)
     return results
 
@@ -1486,13 +1748,37 @@ async def wipe_all_peptides(db: Session = Depends(get_db), _current_user=Depends
 
 @app.put("/peptides/{peptide_id}", response_model=PeptideResponse)
 async def update_peptide(peptide_id: int, data: PeptideUpdate, db: Session = Depends(get_db), _current_user=Depends(get_current_user)):
-    """Update a peptide."""
-    peptide = db.execute(select(Peptide).where(Peptide.id == peptide_id)).scalar_one_or_none()
+    """Update a peptide. method_ids sets all method assignments (one per instrument)."""
+    peptide = db.execute(
+        select(Peptide).options(joinedload(Peptide.methods).joinedload(HplcMethod.instrument))
+        .where(Peptide.id == peptide_id)
+    ).scalars().unique().one_or_none()
     if not peptide:
         raise HTTPException(404, f"Peptide {peptide_id} not found")
 
-    for field, value in data.model_dump(exclude_unset=True).items():
+    update_data = data.model_dump(exclude_unset=True)
+    method_ids = update_data.pop("method_ids", None)
+
+    # Update scalar fields
+    for field, value in update_data.items():
         setattr(peptide, field, value)
+
+    # Update method assignments if provided
+    if method_ids is not None:
+        if method_ids:
+            methods = db.execute(
+                select(HplcMethod).options(joinedload(HplcMethod.instrument))
+                .where(HplcMethod.id.in_(method_ids))
+            ).scalars().unique().all()
+            if len(methods) != len(method_ids):
+                raise HTTPException(400, "One or more method IDs not found")
+            # Enforce one method per instrument
+            instrument_ids = [m.instrument_id for m in methods if m.instrument_id is not None]
+            if len(instrument_ids) != len(set(instrument_ids)):
+                raise HTTPException(400, "Cannot assign multiple methods for the same instrument")
+            peptide.methods = list(methods)
+        else:
+            peptide.methods = []
 
     db.commit()
     db.refresh(peptide)
@@ -4754,6 +5040,30 @@ async def sharepoint_download(
         raise HTTPException(status_code=502, detail=f"SharePoint download error: {e}")
 
 
+@app.get("/sharepoint/folder-by-id/{folder_id}/chrom-files")
+async def sharepoint_folder_chrom_files(
+    folder_id: str,
+    _current_user=Depends(get_current_user),
+):
+    """
+    List chromatogram CSV files (dx_dad1a) in a SharePoint folder given its item ID.
+    Used by the HPLC flyout to self-discover chrom files from the scan match folder
+    when the original scan didn't include them.
+    """
+    try:
+        items = await sp.list_folder_by_id(folder_id)
+        chrom = [
+            {"id": it["id"], "name": it["name"], "type": "file", "size": it.get("size", 0)}
+            for it in items
+            if it["type"] == "file"
+            and it["name"].lower().endswith(".csv")
+            and "dx_dad1a" in it["name"].lower()
+        ]
+        return {"files": chrom}
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"SharePoint error: {e}")
+
+
 @app.post("/sharepoint/download-batch")
 async def sharepoint_download_batch(
     file_ids: list[str],
@@ -5317,6 +5627,124 @@ async def list_sample_preps_endpoint(
         raise HTTPException(status_code=500, detail=f"Failed to list sample preps: {e}")
 
 
+@app.get("/sample-preps/scan-hplc")
+async def scan_sample_preps_hplc(_current_user=Depends(get_current_user)):
+    """
+    Scan the LIMS SharePoint folder for HPLC data matching each sample prep.
+    Streams Server-Sent Events: log, progress, match, done, error events.
+    Must be defined before /sample-preps/{id} to avoid route shadowing.
+    """
+    import json as _json
+    from starlette.responses import StreamingResponse as _SR
+    from integration_db import ensure_sample_preps_table, list_sample_preps as _list_preps
+
+    async def _generate():
+        def ev(etype: str, data: dict) -> str:
+            return f"event: {etype}\ndata: {_json.dumps(data)}\n\n"
+
+        try:
+            yield ev("log", {"msg": "Initialising sample preps...", "level": "dim"})
+            ensure_sample_preps_table()
+
+            yield ev("log", {"msg": "Fetching sample preps...", "level": "info"})
+            all_preps = _list_preps(limit=500)
+            preps = [p for p in all_preps if p.get("senaite_sample_id")]
+
+            if not preps:
+                yield ev("log", {"msg": "No preps with SENAITE IDs found.", "level": "warn"})
+                yield ev("done", {"matches": []})
+                return
+
+            yield ev("log", {"msg": f"{len(preps)} prep(s) with SENAITE IDs to scan", "level": "info"})
+            yield ev("progress", {"current": 0, "total": len(preps)})
+
+            # List LIMS SharePoint root
+            yield ev("log", {"msg": "Listing LIMS SharePoint root folder...", "level": "info"})
+            try:
+                root_items = await sp.list_lims_folder("")
+            except Exception as sp_err:
+                yield ev("error", {"msg": f"SharePoint error: {sp_err}"})
+                return
+
+            root_folders = [item for item in root_items if item["type"] == "folder"]
+            yield ev("log", {"msg": f"{len(root_folders)} folder(s) found in LIMS root", "level": "dim"})
+
+            matches = []
+            for i, prep in enumerate(preps):
+                sid = prep["senaite_sample_id"]
+                yield ev("progress", {"current": i, "total": len(preps)})
+
+                # Match folders prefixed by the sample ID (e.g. "P-0248 Peptide Name")
+                matching = [
+                    f for f in root_folders
+                    if f["name"] == sid
+                    or f["name"].startswith(sid + " ")
+                    or f["name"].startswith(sid + "_")
+                ]
+
+                if not matching:
+                    yield ev("log", {"msg": f"{sid}: no folder found", "level": "dim"})
+                    continue
+
+                folder = matching[0]
+                yield ev("log", {"msg": f"{sid}: found '{folder['name']}', checking for CSVs...", "level": "info"})
+
+                try:
+                    contents = await sp.list_lims_folder(folder["name"])
+                except Exception:
+                    yield ev("log", {"msg": f"{sid}: could not list folder contents", "level": "warn"})
+                    continue
+
+                peak_files = [
+                    c for c in contents
+                    if c["type"] == "file" and "_PeakData" in c["name"] and c["name"].endswith(".csv")
+                ]
+                chrom_files = [
+                    c for c in contents
+                    if c["type"] == "file" and c["name"].endswith(".csv")
+                    and "dx_dad1a" in c["name"].lower()
+                ]
+
+                if peak_files:
+                    match_data = {
+                        "prep_id": prep["id"],
+                        "senaite_sample_id": sid,
+                        "folder_name": folder["name"],
+                        "folder_id": folder.get("id"),
+                        "peak_files": peak_files,
+                        "chrom_files": chrom_files,
+                    }
+                    matches.append(match_data)
+                    yield ev("match", match_data)
+                    yield ev("log", {
+                        "msg": f"{sid}: ✓ {len(peak_files)} PeakData, {len(chrom_files)} chromatogram file(s)",
+                        "level": "success",
+                    })
+                else:
+                    yield ev("log", {"msg": f"{sid}: folder found but no PeakData CSVs", "level": "warn"})
+
+            yield ev("progress", {"current": len(preps), "total": len(preps)})
+            total_matches = len(matches)
+            yield ev("log", {
+                "msg": f"Scan complete — {total_matches} match(es) found",
+                "level": "success" if total_matches else "warn",
+            })
+            yield ev("done", {"matches": matches})
+
+        except Exception as exc:
+            yield ev("error", {"msg": f"Scan failed: {exc}"})
+
+    return _SR(
+        _generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
+
+
 @app.get("/sample-preps/{sample_prep_id}")
 async def get_sample_prep_endpoint(
     sample_prep_id: int,
@@ -5508,18 +5936,39 @@ def _strip_method_suffix(name: str) -> str:
 
 
 def _fuzzy_match_peptide(stripped_name: str, peptides: list) -> Optional[tuple]:
-    """Case-insensitive substring match of stripped analyte name against local peptides.
+    """Case-insensitive match of stripped analyte name against local peptides.
+
+    Priority order to avoid false positives on blend names:
+      1. Exact normalized match (ignoring hyphens and spaces)
+      2. Substring match — only against non-blend peptides (no '+' in name)
+      3. Abbreviation exact match
 
     Returns (peptide.id, peptide.name) if a match is found, else None.
-    Normalizes hyphens and spaces so "BPC-157" matches "BPC157".
     """
     needle = stripped_name.lower()
     needle_norm = needle.replace("-", "").replace(" ", "")
+
+    # Pass 1: exact normalized match (handles BPC-157 ↔ BPC157 etc.)
     for peptide in peptides:
+        hay_norm = peptide.name.lower().replace("-", "").replace(" ", "")
+        if needle_norm == hay_norm:
+            return (peptide.id, peptide.name)
+
+    # Pass 2: substring match — skip blend names (containing '+') to prevent
+    # "Semaglutide" matching "Cagrilinitide + Semaglutide"
+    for peptide in peptides:
+        if "+" in peptide.name:
+            continue
         hay = peptide.name.lower()
         hay_norm = hay.replace("-", "").replace(" ", "")
         if needle in hay or needle_norm in hay_norm:
             return (peptide.id, peptide.name)
+
+    # Pass 3: abbreviation exact match
+    for peptide in peptides:
+        if peptide.abbreviation and needle == peptide.abbreviation.lower():
+            return (peptide.id, peptide.name)
+
     return None
 
 
@@ -5546,6 +5995,33 @@ async def _fetch_senaite_sample(sample_id: str) -> dict:
 async def get_senaite_status(_current_user=Depends(get_current_user)):
     """Return whether SENAITE integration is enabled (SENAITE_URL env var is set)."""
     return SenaiteStatusResponse(enabled=SENAITE_URL is not None)
+
+
+@app.get("/wizard/senaite/raw-fields/{sample_id}")
+async def get_senaite_raw_fields(
+    sample_id: str,
+    _current_user=Depends(get_current_user),
+):
+    """
+    Return the raw SENAITE API fields for a sample — useful for diagnosing what
+    Analyte1Peptide, SampleType, Profiles, etc. actually contain.
+    """
+    if SENAITE_URL is None:
+        raise HTTPException(status_code=503, detail="SENAITE not configured")
+    sample_id = sample_id.strip().upper()
+    data = await _fetch_senaite_sample(sample_id)
+    if data.get("count", 0) == 0:
+        raise HTTPException(status_code=404, detail=f"Sample {sample_id} not found")
+    item = data["items"][0]
+    keys = [
+        "id", "title", "SampleType", "getSampleTypeTitle",
+        "Analyte1Peptide", "Analyte2Peptide", "Analyte3Peptide", "Analyte4Peptide",
+        "Analyte1DeclaredQuantity", "Analyte2DeclaredQuantity",
+        "Analyte3DeclaredQuantity", "Analyte4DeclaredQuantity",
+        "DeclaredTotalQuantity", "getProfilesTitleStr", "ProfilesTitleStr",
+        "review_state", "getClientTitle",
+    ]
+    return {k: item.get(k) for k in keys}
 
 
 @app.get("/wizard/senaite/lookup", response_model=SenaiteLookupResult)

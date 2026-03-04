@@ -134,7 +134,7 @@ export function Step4Results() {
                     Determined Concentration
                   </span>
                   <p className="font-medium font-mono">
-                    {calcs.determined_conc_ug_ml.toFixed(2)} ug/mL
+                    {calcs.determined_conc_ug_ml.toFixed(2)} µg/mL
                   </p>
                 </div>
               )}

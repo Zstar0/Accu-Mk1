@@ -225,7 +225,7 @@ function QuantityChart({ trace }: { trace: QuantityTrace }) {
                 axisLine={{ stroke: CHART_GRID }}
                 tickLine={{ stroke: CHART_GRID }}
                 label={{
-                  value: 'Concentration (ug/mL)',
+                  value: 'Concentration (µg/mL)',
                   position: 'insideBottom',
                   offset: -10,
                   style: { fontSize: 10, fill: CHART_SLATE },
@@ -250,7 +250,7 @@ function QuantityChart({ trace }: { trace: QuantityTrace }) {
                   Number(value).toFixed(2),
                   name === 'area' ? 'Sample Area' : 'Calibration',
                 ]}
-                labelFormatter={(label) => `Conc: ${Number(label).toFixed(2)} ug/mL`}
+                labelFormatter={(label) => `Conc: ${Number(label).toFixed(2)} µg/mL`}
                 contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #475569', borderRadius: 6 }}
                 labelStyle={{ color: CHART_SLATE }}
                 itemStyle={{ color: '#e2e8f0' }}
@@ -284,11 +284,11 @@ function QuantityChart({ trace }: { trace: QuantityTrace }) {
           </div>
           <div className="flex justify-between">
             <span className="text-muted-foreground">Conc = (Area - {intercept.toFixed(2)}) / {slope.toFixed(4)}</span>
-            <span>{trace.concentration_ug_ml.toFixed(2)} ug/mL</span>
+            <span>{trace.concentration_ug_ml.toFixed(2)} µg/mL</span>
           </div>
           <div className="flex justify-between">
             <span className="text-muted-foreground">Undiluted = Conc &times; DF ({trace.dilution_factor.toFixed(2)}&times;)</span>
-            <span>{trace.undiluted_concentration_ug_ml.toFixed(2)} ug/mL</span>
+            <span>{trace.undiluted_concentration_ug_ml.toFixed(2)} µg/mL</span>
           </div>
           <div className="flex justify-between border-t border-border pt-1 font-semibold">
             <span>Mass = Undiluted &times; Stock ({trace.stock_volume_ml.toFixed(4)} mL) / 1000</span>
@@ -391,9 +391,9 @@ function IdentityVisual({ trace }: { trace: IdentityTrace }) {
 
 function DilutionBreakdown({ trace }: { trace: DilutionTrace }) {
   const rows: [string, string, string][] = [
-    ['Diluent mass', `${trace.diluent_mass_mg.toFixed(2)} mg`, `${trace.diluent_vol_ul.toFixed(1)} uL`],
-    ['Sample mass', `${trace.sample_mass_mg.toFixed(2)} mg`, `${trace.sample_vol_ul.toFixed(1)} uL`],
-    ['Total volume', '', `${trace.total_vol_ul.toFixed(1)} uL`],
+    ['Diluent mass', `${trace.diluent_mass_mg.toFixed(2)} mg`, `${trace.diluent_vol_ul.toFixed(1)} µL`],
+    ['Sample mass', `${trace.sample_mass_mg.toFixed(2)} mg`, `${trace.sample_vol_ul.toFixed(1)} µL`],
+    ['Total volume', '', `${trace.total_vol_ul.toFixed(1)} µL`],
   ]
 
   return (
@@ -466,18 +466,18 @@ export function CalculationVisuals({ trace }: CalculationVisualsProps) {
   const parsed = trace as unknown as CalculationTrace
 
   return (
-    <div className="grid gap-4 sm:grid-cols-2">
-      {isPurityTrace(parsed.purity) && (
-        <PurityChart trace={parsed.purity} />
+    <div className="flex flex-col gap-4">
+      {isDilutionTrace(parsed.dilution) && (
+        <DilutionBreakdown trace={parsed.dilution} />
       )}
       {isQuantityTrace(parsed.quantity) && (
         <QuantityChart trace={parsed.quantity} />
       )}
+      {isPurityTrace(parsed.purity) && (
+        <PurityChart trace={parsed.purity} />
+      )}
       {isIdentityTrace(parsed.identity) && (
         <IdentityVisual trace={parsed.identity} />
-      )}
-      {isDilutionTrace(parsed.dilution) && (
-        <DilutionBreakdown trace={parsed.dilution} />
       )}
     </div>
   )

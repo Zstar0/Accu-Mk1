@@ -635,7 +635,11 @@ def list_sample_preps(
             id, sample_id, wizard_session_id,
             peptide_id, peptide_name, peptide_abbreviation, senaite_sample_id,
             declared_weight_mg, target_conc_ug_ml, target_total_vol_ul,
-            stock_conc_ug_ml, actual_conc_ug_ml,
+            stock_vial_empty_mg, stock_vial_loaded_mg, stock_conc_ug_ml,
+            required_diluent_vol_ul, required_stock_vol_ul,
+            dil_vial_empty_mg, dil_vial_with_diluent_mg, dil_vial_final_mg,
+            actual_conc_ug_ml, actual_diluent_vol_ul,
+            actual_stock_vol_ul, actual_total_vol_ul,
             status, notes, created_at, updated_at
         FROM sample_preps
     """

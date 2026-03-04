@@ -1615,6 +1615,73 @@ export interface InstrumentSummary {
   curve_count: number
 }
 
+// ─── Instrument types ───
+
+export interface Instrument {
+  id: number
+  name: string
+  senaite_id: string | null
+  senaite_uid: string | null
+  instrument_type: string | null
+  brand: string | null
+  model: string | null
+  active: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface InstrumentBrief {
+  id: number
+  name: string
+  model: string | null
+}
+
+// ─── HPLC Method types ───
+
+export interface PeptideBrief {
+  id: number
+  name: string
+  abbreviation: string
+}
+
+export interface MethodBrief {
+  id: number
+  name: string
+  senaite_id: string | null
+  instrument_id: number | null
+  instrument: InstrumentBrief | null
+}
+
+export interface HplcMethod {
+  id: number
+  name: string
+  senaite_id: string | null
+  instrument_id: number | null
+  instrument: InstrumentBrief | null
+  size_peptide: string | null
+  starting_organic_pct: number | null
+  temperature_mct_c: number | null
+  dissolution: string | null
+  notes: string | null
+  active: boolean
+  created_at: string
+  updated_at: string
+  common_peptides: PeptideBrief[]
+}
+
+export interface HplcMethodInput {
+  name: string
+  senaite_id?: string | null
+  instrument_id?: number | null
+  size_peptide?: string | null
+  starting_organic_pct?: number | null
+  temperature_mct_c?: number | null
+  dissolution?: string | null
+  notes?: string | null
+}
+
+// ─── Peptide types ───
+
 export interface PeptideRecord {
   id: number
   name: string
@@ -1625,6 +1692,7 @@ export interface PeptideRecord {
   active: boolean
   created_at: string
   updated_at: string
+  methods: MethodBrief[]
   active_calibration: CalibrationCurve | null
   calibration_summary: InstrumentSummary[]
 }
@@ -1682,7 +1750,7 @@ export async function createPeptide(
 
 export async function updatePeptide(
   peptideId: number,
-  data: Partial<PeptideCreateInput & { active: boolean }>
+  data: Partial<PeptideCreateInput & { active: boolean; method_ids: number[] }>
 ): Promise<PeptideRecord> {
   try {
     const response = await fetch(`${API_BASE_URL()}/peptides/${peptideId}`, {
@@ -1714,6 +1782,76 @@ export async function deletePeptide(peptideId: number): Promise<void> {
     throw error
   }
 }
+
+// ─── Instrument CRUD ───
+
+export async function getInstruments(): Promise<Instrument[]> {
+  const response = await fetch(`${API_BASE_URL()}/instruments`, {
+    headers: getBearerHeaders(),
+  })
+  if (!response.ok) throw new Error(`Get instruments failed: ${response.status}`)
+  return response.json()
+}
+
+export async function syncInstruments(): Promise<{ created: number; total: number }> {
+  const response = await fetch(`${API_BASE_URL()}/instruments/sync`, {
+    method: 'POST',
+    headers: getBearerHeaders(),
+  })
+  if (!response.ok) {
+    const err = await response.json().catch(() => null)
+    throw new Error(err?.detail || `Sync instruments failed: ${response.status}`)
+  }
+  return response.json()
+}
+
+// ─── HPLC Method CRUD ───
+
+export async function getMethods(): Promise<HplcMethod[]> {
+  const response = await fetch(`${API_BASE_URL()}/hplc/methods`, {
+    headers: getBearerHeaders(),
+  })
+  if (!response.ok) throw new Error(`Get methods failed: ${response.status}`)
+  return response.json()
+}
+
+export async function createMethod(
+  data: HplcMethodInput
+): Promise<HplcMethod> {
+  const response = await fetch(`${API_BASE_URL()}/hplc/methods`, {
+    method: 'POST',
+    headers: getBearerHeaders('application/json'),
+    body: JSON.stringify(data),
+  })
+  if (!response.ok) {
+    const err = await response.json().catch(() => null)
+    throw new Error(err?.detail || `Create method failed: ${response.status}`)
+  }
+  return response.json()
+}
+
+export async function updateMethod(
+  methodId: number,
+  data: Partial<HplcMethodInput & { active: boolean }>
+): Promise<HplcMethod> {
+  const response = await fetch(`${API_BASE_URL()}/hplc/methods/${methodId}`, {
+    method: 'PUT',
+    headers: getBearerHeaders('application/json'),
+    body: JSON.stringify(data),
+  })
+  if (!response.ok) throw new Error(`Update method failed: ${response.status}`)
+  return response.json()
+}
+
+export async function deleteMethod(methodId: number): Promise<void> {
+  const response = await fetch(`${API_BASE_URL()}/hplc/methods/${methodId}`, {
+    method: 'DELETE',
+    headers: getBearerHeaders(),
+  })
+  if (!response.ok) throw new Error(`Delete method failed: ${response.status}`)
+}
+
+// ─── Calibration CRUD ───
 
 export async function getCalibrations(
   peptideId: number
@@ -2276,6 +2414,80 @@ export async function deleteSamplePrep(id: number): Promise<void> {
   if (!response.ok) throw new Error(`Delete sample prep ${id} failed: ${response.status}`)
 }
 
+// --- HPLC Scan ---
+
+export interface HplcScanMatch {
+  prep_id: number
+  senaite_sample_id: string
+  folder_name: string
+  folder_id: string
+  peak_files: SharePointItem[]
+  chrom_files: SharePointItem[]
+}
+
+export interface HplcScanLogLine {
+  msg: string
+  level: 'info' | 'dim' | 'warn' | 'success' | 'error'
+}
+
+/**
+ * Opens a fetch-based SSE stream to GET /sample-preps/scan-hplc.
+ * Returns a cancel function. Calls onDone/onError when finished.
+ */
+export function scanSamplePrepsHplc(opts: {
+  onLog: (line: HplcScanLogLine) => void
+  onMatch: (match: HplcScanMatch) => void
+  onProgress: (current: number, total: number) => void
+  onDone: (matches: HplcScanMatch[]) => void
+  onError: (msg: string) => void
+}): () => void {
+  const abortController = new AbortController()
+
+  ;(async () => {
+    try {
+      const response = await fetch(
+        `${API_BASE_URL()}/sample-preps/scan-hplc`,
+        { headers: getBearerHeaders(), signal: abortController.signal }
+      )
+      if (!response.ok) {
+        opts.onError(`Scan request failed: ${response.status}`)
+        return
+      }
+      const reader = response.body!.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        const parts = buffer.split('\n\n')
+        buffer = parts.pop() ?? ''
+        for (const part of parts) {
+          let eventType = 'message', dataStr = ''
+          for (const line of part.split('\n')) {
+            if (line.startsWith('event: ')) eventType = line.slice(7).trim()
+            else if (line.startsWith('data: ')) dataStr = line.slice(6).trim()
+          }
+          if (!dataStr) continue
+          try {
+            const data = JSON.parse(dataStr)
+            if (eventType === 'log')      opts.onLog(data)
+            else if (eventType === 'match')    opts.onMatch(data)
+            else if (eventType === 'progress') opts.onProgress(data.current, data.total)
+            else if (eventType === 'done')  { opts.onDone(data.matches); return }
+            else if (eventType === 'error') { opts.onError(data.msg); return }
+          } catch { /* ignore malformed SSE chunks */ }
+        }
+      }
+    } catch (err) {
+      if ((err as Error).name !== 'AbortError')
+        opts.onError(err instanceof Error ? err.message : 'SSE connection error')
+    }
+  })()
+
+  return () => abortController.abort()
+}
+
 // --- SENAITE Lookup API ---
 
 export interface SenaiteAnalyte {
@@ -2694,6 +2906,16 @@ export async function browseSharePoint(
     throw new Error(`SharePoint browse failed: ${response.status} — ${detail}`)
   }
   return response.json()
+}
+
+export async function getFolderChromFiles(folderId: string): Promise<SharePointItem[]> {
+  const response = await fetch(
+    `${API_BASE_URL()}/sharepoint/folder-by-id/${encodeURIComponent(folderId)}/chrom-files`,
+    { headers: getBearerHeaders() }
+  )
+  if (!response.ok) throw new Error(`Chrom file lookup failed: ${response.status}`)
+  const data = await response.json()
+  return data.files as SharePointItem[]
 }
 
 export async function downloadSharePointFiles(
