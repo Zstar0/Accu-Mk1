@@ -5548,7 +5548,7 @@ async def create_sample_prep_endpoint(
     Loads the wizard session by id, pulls all measurements + derived calculations,
     and writes a flat record to sample_preps.
     """
-    from integration_db import ensure_sample_preps_table, create_sample_prep
+    from mk1_db import ensure_sample_preps_table, create_sample_prep
 
     # Load wizard session
     session = db.execute(
@@ -5613,7 +5613,7 @@ async def list_sample_preps_endpoint(
     _current_user=Depends(get_current_user),
 ):
     """List sample preps from the integration DB (newest first)."""
-    from integration_db import ensure_sample_preps_table, list_sample_preps
+    from mk1_db import ensure_sample_preps_table, list_sample_preps
 
     try:
         ensure_sample_preps_table()
@@ -5636,7 +5636,7 @@ async def scan_sample_preps_hplc(_current_user=Depends(get_current_user)):
     """
     import json as _json
     from starlette.responses import StreamingResponse as _SR
-    from integration_db import ensure_sample_preps_table, list_sample_preps as _list_preps
+    from mk1_db import ensure_sample_preps_table, list_sample_preps as _list_preps
 
     async def _generate():
         def ev(etype: str, data: dict) -> str:
@@ -5751,7 +5751,7 @@ async def get_sample_prep_endpoint(
     _current_user=Depends(get_current_user),
 ):
     """Fetch a single sample prep by id."""
-    from integration_db import ensure_sample_preps_table, get_sample_prep
+    from mk1_db import ensure_sample_preps_table, get_sample_prep
 
     try:
         ensure_sample_preps_table()
@@ -5775,7 +5775,7 @@ async def update_sample_prep_endpoint(
     _current_user=Depends(get_current_user),
 ):
     """Update fields on a sample prep."""
-    from integration_db import ensure_sample_preps_table, update_sample_prep
+    from mk1_db import ensure_sample_preps_table, update_sample_prep
 
     try:
         ensure_sample_preps_table()
@@ -5799,7 +5799,7 @@ async def delete_sample_prep_endpoint(
     _current_user=Depends(get_current_user),
 ):
     """Permanently delete a sample prep record."""
-    from integration_db import ensure_sample_preps_table, delete_sample_prep
+    from mk1_db import ensure_sample_preps_table, delete_sample_prep
 
     try:
         ensure_sample_preps_table()

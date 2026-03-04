@@ -33,9 +33,6 @@ services:
       dockerfile: Dockerfile
     env_file:
       - ./backend/.env
-    volumes:
-      # Persist SQLite database across container restarts
-      - accu-mk1-data:/app/data
     ports:
       - "8012:8012"
     extra_hosts:
@@ -53,6 +50,3 @@ networks:
   senaite_default:
     external: true  # Integration Service lives on this network
 
-volumes:
-  accu-mk1-data:
-    name: accu-mk1-data

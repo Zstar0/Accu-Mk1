@@ -1,12 +1,18 @@
 """
-SQLite database setup using SQLAlchemy 2.0.
-Database file stored at ./data/accu-mk1.db relative to working directory.
+PostgreSQL database setup using SQLAlchemy 2.0.
+Connects to accumark_mk1 database on the shared PostgreSQL server.
 """
 
 import os
-from pathlib import Path
 from sqlalchemy import create_engine
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
+
+# Load .env file if python-dotenv is available
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
 
 class Base(DeclarativeBase):
@@ -14,20 +20,18 @@ class Base(DeclarativeBase):
     pass
 
 
-def get_database_path() -> Path:
-    """Get the database file path, creating data directory if needed."""
-    data_dir = Path("./data")
-    data_dir.mkdir(parents=True, exist_ok=True)
-    return data_dir / "accu-mk1.db"
+def get_database_url() -> str:
+    """Build PostgreSQL connection URL from environment variables."""
+    host = os.environ.get("MK1_DB_HOST", "localhost")
+    port = os.environ.get("MK1_DB_PORT", "5432")
+    name = os.environ.get("MK1_DB_NAME", "accumark_mk1")
+    user = os.environ.get("MK1_DB_USER", "postgres")
+    password = os.environ.get("MK1_DB_PASSWORD", "accumark_dev_secret")
+    return f"postgresql+psycopg2://{user}:{password}@{host}:{port}/{name}"
 
 
-# Create engine with SQLite
-DATABASE_URL = f"sqlite:///{get_database_path()}"
-engine = create_engine(
-    DATABASE_URL,
-    connect_args={"check_same_thread": False},  # Required for SQLite with FastAPI
-    echo=False,
-)
+DATABASE_URL = get_database_url()
+engine = create_engine(DATABASE_URL, pool_pre_ping=True, echo=False)
 
 # Session maker for dependency injection
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -48,49 +52,5 @@ def get_db():
 def init_db():
     """Initialize database tables."""
     # Import models to register them with Base
-    import models
+    import models  # noqa: F401
     Base.metadata.create_all(bind=engine)
-
-    # Migrations: add new columns to existing tables
-    from sqlalchemy import text
-    with engine.connect() as conn:
-        # Add source_path column to calibration_curves (added Feb 2026)
-        try:
-            conn.execute(text("ALTER TABLE calibration_curves ADD COLUMN source_path VARCHAR(1000)"))
-            conn.commit()
-        except Exception:
-            pass  # Column already exists
-        try:
-            conn.execute(text("ALTER TABLE calibration_curves ADD COLUMN source_date DATETIME"))
-            conn.commit()
-        except Exception:
-            pass  # Column already exists
-        try:
-            conn.execute(text("ALTER TABLE calibration_curves ADD COLUMN sharepoint_url VARCHAR(2000)"))
-            conn.commit()
-        except Exception:
-            pass  # Column already exists
-        # Standard metadata columns (added Feb 2026)
-        new_cols = [
-            "ALTER TABLE calibration_curves ADD COLUMN instrument VARCHAR(10)",
-            "ALTER TABLE calibration_curves ADD COLUMN vendor VARCHAR(100)",
-            "ALTER TABLE calibration_curves ADD COLUMN lot_number VARCHAR(100)",
-            "ALTER TABLE calibration_curves ADD COLUMN batch_number VARCHAR(100)",
-            "ALTER TABLE calibration_curves ADD COLUMN cap_color VARCHAR(50)",
-            "ALTER TABLE calibration_curves ADD COLUMN run_date DATETIME",
-            "ALTER TABLE calibration_curves ADD COLUMN standard_weight_mg FLOAT",
-            "ALTER TABLE calibration_curves ADD COLUMN stock_concentration_ug_ml FLOAT",
-            "ALTER TABLE calibration_curves ADD COLUMN diluent VARCHAR(200)",
-            "ALTER TABLE calibration_curves ADD COLUMN column_type VARCHAR(200)",
-            "ALTER TABLE calibration_curves ADD COLUMN wavelength_nm FLOAT",
-            "ALTER TABLE calibration_curves ADD COLUMN flow_rate_ml_min FLOAT",
-            "ALTER TABLE calibration_curves ADD COLUMN injection_volume_ul FLOAT",
-            "ALTER TABLE calibration_curves ADD COLUMN operator VARCHAR(100)",
-            "ALTER TABLE calibration_curves ADD COLUMN notes TEXT",
-        ]
-        for sql in new_cols:
-            try:
-                conn.execute(text(sql))
-                conn.commit()
-            except Exception:
-                pass  # Column already exists

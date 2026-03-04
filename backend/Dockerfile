@@ -17,9 +17,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY . .
 
-# Create data directory for SQLite persistence
-RUN mkdir -p /app/data
-
 EXPOSE 8012
 
 # Run with uvicorn — 0.0.0.0 so Docker can route traffic in

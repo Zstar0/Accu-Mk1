@@ -304,7 +304,7 @@ class SharePointFileCache(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     source_path: Mapped[str] = mapped_column(String(1000), unique=True, nullable=False)
-    peptide_abbreviation: Mapped[str] = mapped_column(String(50), nullable=False)
+    peptide_abbreviation: Mapped[str] = mapped_column(String(100), nullable=False)
     produced_calibration: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
