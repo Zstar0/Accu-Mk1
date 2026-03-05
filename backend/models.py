@@ -277,8 +277,8 @@ class CalibrationCurve(Base):
     )
     # Per-curve parameters (moved from Peptide)
     reference_rt: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    rt_tolerance: Mapped[float] = mapped_column(Float, default=0.5)
-    diluent_density: Mapped[float] = mapped_column(Float, default=997.1)  # mg/mL for water
+    rt_tolerance: Mapped[Optional[float]] = mapped_column(Float, nullable=True, default=0.5)
+    diluent_density: Mapped[Optional[float]] = mapped_column(Float, nullable=True, default=997.1)  # mg/mL for water
     slope: Mapped[float] = mapped_column(Float, nullable=False)
     intercept: Mapped[float] = mapped_column(Float, nullable=False)
     r_squared: Mapped[float] = mapped_column(Float, nullable=False)

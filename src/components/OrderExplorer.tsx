@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Search,
@@ -36,6 +36,7 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card'
+import { Checkbox } from '@/components/ui/checkbox'
 import { DataTable } from '@/components/ui/data-table'
 import { PayloadPanel } from '@/components/PayloadPanel'
 import { OrderDetailPanel } from '@/components/explorer/OrderDetailPanel'
@@ -158,6 +159,14 @@ function SampleIdCell({
   )
 }
 
+const TEST_EMAILS = ['forrestp@outlook.com', 'forrest@valenceanalytical.com']
+
+function getOrderEmail(order: ExplorerOrder): string | null {
+  const p = order.payload as Record<string, unknown> | null
+  if (!p?.billing || typeof p.billing !== 'object') return null
+  return ((p.billing as Record<string, unknown>).email as string) ?? null
+}
+
 const PAGE_SIZE = 50
 
 const STATUS_OPTIONS = [
@@ -176,6 +185,7 @@ export function OrderExplorer() {
   const [searchTerm, setSearchTerm] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState('all')
+  const [hideTestOrders, setHideTestOrders] = useState(true)
   const [page, setPage] = useState(0)
   const [selectedOrder, setSelectedOrder] = useState<ExplorerOrder | null>(null)
 
@@ -253,6 +263,15 @@ export function OrderExplorer() {
       ),
     enabled: status?.connected === true,
   })
+
+  const filteredOrders = useMemo(() => {
+    if (!orders) return orders
+    if (!hideTestOrders) return orders
+    return orders.filter(o => {
+      const email = getOrderEmail(o)?.toLowerCase()
+      return !email || !TEST_EMAILS.includes(email)
+    })
+  }, [orders, hideTestOrders])
 
   // Handle search with debounce
   const handleSearchChange = (value: string) => {
@@ -411,7 +430,7 @@ export function OrderExplorer() {
     },
   ]
 
-  const hasNextPage = orders && orders.length === PAGE_SIZE
+  const hasNextPage = filteredOrders && filteredOrders.length === PAGE_SIZE
   const hasPrevPage = page > 0
 
   return (
@@ -515,6 +534,13 @@ export function OrderExplorer() {
               </option>
             ))}
           </select>
+          <label className="flex items-center gap-2 text-sm text-muted-foreground whitespace-nowrap cursor-pointer">
+            <Checkbox
+              checked={hideTestOrders}
+              onCheckedChange={checked => setHideTestOrders(checked === true)}
+            />
+            Hide test orders
+          </label>
         </div>
       )}
 
@@ -526,8 +552,8 @@ export function OrderExplorer() {
               <div>
                 <CardTitle className="text-lg">Orders</CardTitle>
                 <CardDescription>
-                  {orders
-                    ? `${orders.length} orders${orders.length === PAGE_SIZE ? '+' : ''}`
+                  {filteredOrders
+                    ? `${filteredOrders.length} orders${filteredOrders.length === PAGE_SIZE ? '+' : ''}`
                     : 'Loading...'}
                   {statusFilter !== 'all' && ` (filtered: ${statusFilter})`}.
                   Click to view details.
@@ -574,7 +600,7 @@ export function OrderExplorer() {
               </div>
             )}
 
-            {orders && orders.length === 0 && !ordersLoading && (
+            {filteredOrders && filteredOrders.length === 0 && !ordersLoading && (
               <div className="text-muted-foreground py-8 text-center">
                 {debouncedSearch
                   ? 'No orders match your search'
@@ -582,11 +608,11 @@ export function OrderExplorer() {
               </div>
             )}
 
-            {orders && orders.length > 0 && (
+            {filteredOrders && filteredOrders.length > 0 && (
               <div className="max-h-[850px] overflow-auto">
                 <DataTable
                   columns={ordersColumns}
-                  data={orders}
+                  data={filteredOrders}
                   onRowClick={handleOrderClick}
                   selectedRowId={selectedOrder?.order_id}
                   getRowId={row => row.order_id}

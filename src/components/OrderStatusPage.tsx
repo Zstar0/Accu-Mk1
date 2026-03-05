@@ -28,6 +28,7 @@ import { useUIStore } from '@/store/ui-store'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 import {
   Card,
   CardContent,
@@ -92,6 +93,14 @@ function formatProcessingTime(
   if (minutes > 0) return `${minutes}m ${seconds % 60}s`
   if (seconds > 0) return `${seconds}s`
   return `${ms}ms`
+}
+
+const TEST_EMAILS = ['forrestp@outlook.com', 'forrest@valenceanalytical.com']
+
+function getOrderEmail(order: ExplorerOrder): string | null {
+  const p = order.payload as Record<string, unknown> | null
+  if (!p?.billing || typeof p.billing !== 'object') return null
+  return ((p.billing as Record<string, unknown>).email as string) ?? null
 }
 
 // --- Sub-components ---
@@ -340,10 +349,9 @@ function OrderRow({
 
 // --- Main component ---
 
-const OPEN_STATUSES = ['pending', 'processing', 'partial_failure']
-
 export function OrderStatusPage() {
   const [showAll, setShowAll] = useState(false)
+  const [hideTestOrders, setHideTestOrders] = useState(true)
   const [envName, setEnvName] = useState(() => getActiveEnvironmentName())
   const [isRefreshing, setIsRefreshing] = useState(false)
   const wordpressHost = getWordpressUrl()
@@ -375,12 +383,18 @@ export function OrderStatusPage() {
     staleTime: 30_000,
   })
 
-  // Filter to open orders or show all
+  // Filter to open orders or show all, and optionally hide test orders
   const orders = useMemo(() => {
     if (!allOrders) return []
-    if (showAll) return allOrders
-    return allOrders.filter(o => OPEN_STATUSES.includes(o.status))
-  }, [allOrders, showAll])
+    let filtered = showAll ? allOrders : allOrders.filter(o => !o.completed_at)
+    if (hideTestOrders) {
+      filtered = filtered.filter(o => {
+        const email = getOrderEmail(o)?.toLowerCase()
+        return !email || !TEST_EMAILS.includes(email)
+      })
+    }
+    return filtered
+  }, [allOrders, showAll, hideTestOrders])
 
   // Collect all unique sample IDs from displayed orders (skip failed/empty ones)
   const sampleIds = useMemo(() => {
@@ -450,9 +464,17 @@ export function OrderStatusPage() {
     return count
   }, [orders, sampleLookupMap])
 
-  const openCount = allOrders
-    ? allOrders.filter(o => OPEN_STATUSES.includes(o.status)).length
-    : 0
+  const openCount = useMemo(() => {
+    if (!allOrders) return 0
+    let filtered = allOrders.filter(o => !o.completed_at)
+    if (hideTestOrders) {
+      filtered = filtered.filter(o => {
+        const email = getOrderEmail(o)?.toLowerCase()
+        return !email || !TEST_EMAILS.includes(email)
+      })
+    }
+    return filtered.length
+  }, [allOrders, hideTestOrders])
 
   const handleRefresh = async () => {
     setIsRefreshing(true)
@@ -559,6 +581,14 @@ export function OrderStatusPage() {
               </Badge>
             )}
           </Button>
+
+          <label className="flex items-center gap-2 text-sm text-muted-foreground whitespace-nowrap cursor-pointer ml-1">
+            <Checkbox
+              checked={hideTestOrders}
+              onCheckedChange={checked => setHideTestOrders(checked === true)}
+            />
+            Hide test orders
+          </label>
 
           {attentionCount > 0 && (
             <div className="flex items-center gap-1.5 text-sm text-amber-500 ml-2">
