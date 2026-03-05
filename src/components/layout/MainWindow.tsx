@@ -43,7 +43,9 @@ export function MainWindow() {
   useHashNavigation()
 
   useEffect(() => {
-    getVersion().then(setAppVersion).catch(() => {})
+    getVersion()
+      .then(setAppVersion)
+      .catch(() => setAppVersion(__APP_VERSION__))
   }, [])
 
   // Track active environment and backend status

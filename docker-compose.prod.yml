@@ -29,7 +29,7 @@ services:
     env_file:
       - ./backend/.env
     volumes:
-      # Persist SQLite database across container restarts
+      # Legacy SQLite data — kept for migration access; new data lives in PostgreSQL
       - accu-mk1-data:/app/data
     ports:
       - '8012:8012'

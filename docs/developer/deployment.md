@@ -22,9 +22,9 @@ Internet
             │     └─ /api/* proxied to backend
             └─ backend (port 8012) ─ FastAPI/Uvicorn
                   ├─ Image: ghcr.io/zstar0/accu-mk1-backend:VERSION
-                  ├─ SQLite (volume: accu-mk1-data)
+                  ├─ PostgreSQL accumark_mk1 (DigitalOcean Managed DB)
+                  ├─ PostgreSQL accumark_integration (DigitalOcean Managed DB)
                   ├─ Integration Service (senaite_default network)
-                  ├─ PostgreSQL (DigitalOcean Managed DB)
                   └─ SENAITE LIMS (Docker network)
 ```
 
@@ -56,7 +56,6 @@ Local machine                              Production server
 | `/root/accu-mk1/.deploy/`                     | Version tracking (current, previous, deploy log) | `deploy.sh`                              |
 | `/etc/nginx/sites-enabled/accumk1-nginx.conf` | Host Nginx reverse proxy + SSL                   | Manual — lives outside repo              |
 | `/etc/letsencrypt/`                           | SSL certificates (Let's Encrypt)                 | Certbot auto-renewal                     |
-| Docker volume `accu-mk1-data`                 | SQLite database                                  | Persistent across deploys                |
 
 > **Note**: Source code is **not** stored on the server. The server only runs pre-built Docker images pulled from GHCR.
 
@@ -84,9 +83,9 @@ Each image is tagged three ways: `VERSION` (e.g. `0.16.1`), `sha-ABCDEF` (git SH
    - Lives only on the server, excluded from Git
    - If lost: backend cannot connect to anything — restore from team password manager
 
-2. **Docker volume `accu-mk1-data`** — SQLite database with users, audit logs, wizard sessions
-   - Survives container rebuilds and deploys
-   - If lost: all local app data is gone
+2. **PostgreSQL `accumark_mk1` database** (DigitalOcean Managed DB) — users, audit logs, peptides, calibration curves, wizard sessions
+   - Managed by DigitalOcean with automatic backups
+   - Connection configured via `MK1_DB_*` env vars in `backend/.env`
 
 3. **Host Nginx config** (`/etc/nginx/sites-enabled/accumk1-nginx.conf`)
    - Reference copy in repo: `scripts/accumk1-nginx.conf` (NOT auto-deployed)
@@ -145,7 +144,7 @@ bash scripts/deploy.sh --skip-release
    - SSH connectivity (key-based auth preferred, sshpass fallback)
    - Disk space on prod (≥2GB required)
    - `backend/.env` exists on server
-   - Required env keys present (`DATABASE_URL`, `JWT_SECRET`)
+   - Required env keys present (`MK1_DB_HOST`, `JWT_SECRET`)
    - Shows current container state on prod
 
 2. **Build & push** (local machine):
@@ -274,12 +273,24 @@ curl -s http://localhost:3100/api/health | python3 -m json.tool
 
 #### Database Backup
 
+The `accumark_mk1` database is on DigitalOcean Managed PostgreSQL with automatic daily backups. For manual backups:
+
 ```bash
-VERSION=$(cat .deploy/current_version) docker compose -f docker-compose.prod.yml exec backend \
-  cp /app/data/accu_mk1.db /app/data/backup-$(date +%Y%m%d).db
+# Dump from the managed database (run from the server or locally with psql access)
+ssh root@165.227.241.81
+docker exec accu-mk1-backend python -c "
+import subprocess, os
+subprocess.run([
+    'pg_dump', '-h', os.environ['MK1_DB_HOST'],
+    '-p', os.environ['MK1_DB_PORT'],
+    '-U', os.environ['MK1_DB_USER'],
+    '-d', os.environ['MK1_DB_NAME'],
+    '-f', '/app/data/backup-accumark_mk1.sql'
+], env={**os.environ, 'PGPASSWORD': os.environ['MK1_DB_PASSWORD']})
+"
 
 # Copy to local machine
-scp root@165.227.241.81:/root/accu-mk1/data/backup-*.db ./
+scp root@165.227.241.81:/root/accu-mk1/data/backup-accumark_mk1.sql ./
 ```
 
 ### Updating the Host Nginx Config

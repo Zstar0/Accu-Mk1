@@ -279,8 +279,8 @@ fi
 success "Production backend/.env exists"
 
 # 6. Check required env keys on server (single SSH call for all keys)
-REQUIRED_ENV_KEYS=("JWT_SECRET")
-MISSING_KEYS_STR=$(run_ssh "for key in JWT_SECRET; do grep -q \"\${key}\" $REMOTE_DIR/backend/.env 2>/dev/null || echo \$key; done" 2>/dev/null) || MISSING_KEYS_STR=""
+REQUIRED_ENV_KEYS=("JWT_SECRET" "MK1_DB_HOST" "MK1_DB_PASSWORD")
+MISSING_KEYS_STR=$(run_ssh "for key in JWT_SECRET MK1_DB_HOST MK1_DB_PASSWORD; do grep -q \"\${key}\" $REMOTE_DIR/backend/.env 2>/dev/null || echo \$key; done" 2>/dev/null) || MISSING_KEYS_STR=""
 read -ra MISSING_KEYS <<< "$MISSING_KEYS_STR"
 if [ ${#MISSING_KEYS[@]} -gt 0 ] && [ -n "${MISSING_KEYS[0]}" ]; then
     warn "Missing env keys on prod: ${MISSING_KEYS[*]}"
@@ -335,6 +335,7 @@ if [ "$SKIP_BUILD" = false ]; then
         info "Building backend image..."
         docker build \
             --platform linux/amd64 \
+            --build-arg APP_VERSION="$VERSION" \
             -t "$BACKEND_IMAGE:$VERSION" \
             -t "$BACKEND_IMAGE:sha-$GIT_SHA" \
             -t "$BACKEND_IMAGE:latest" \

@@ -15,6 +15,19 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional, Union
 
+# App version: prefer APP_VERSION env var (set by Docker build-arg),
+# fall back to reading package.json (works in local dev).
+def _read_app_version() -> str:
+    if v := os.environ.get("APP_VERSION"):
+        return v
+    try:
+        pkg = Path(__file__).resolve().parent.parent / "package.json"
+        return json.loads(pkg.read_text())["version"]
+    except Exception:
+        return "0.0.0"
+
+APP_VERSION = _read_app_version()
+
 from fastapi import FastAPI, Depends, Form, HTTPException, Header, Request, Response, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -314,7 +327,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Accu-Mk1 Backend",
     description="Backend API for lab purity calculations and SENAITE integration",
-    version="0.1.0",
+    version=APP_VERSION,
     lifespan=lifespan,
 )
 
@@ -347,7 +360,7 @@ file_watcher = FileWatcher()
 @app.get("/health", response_model=HealthResponse)
 async def health_check():
     """Health check endpoint to verify backend is running."""
-    return HealthResponse(status="ok", version="0.1.0")
+    return HealthResponse(status="ok", version=APP_VERSION)
 
 
 # --- Auth Endpoints ---
