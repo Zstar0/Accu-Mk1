@@ -583,7 +583,7 @@ export function OrderExplorer() {
             )}
 
             {orders && orders.length > 0 && (
-              <div className="max-h-[300px] overflow-auto">
+              <div className="max-h-[850px] overflow-auto">
                 <DataTable
                   columns={ordersColumns}
                   data={orders}

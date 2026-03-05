@@ -7,6 +7,11 @@ import {
   Clock,
   FileSpreadsheet,
   ExternalLink,
+  Pencil,
+  Check,
+  X,
+  Trash2,
+  Cloud,
 } from 'lucide-react'
 import {
   Card,
@@ -17,6 +22,15 @@ import {
 } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import {
   Table,
   TableBody,
@@ -28,25 +42,32 @@ import {
 import { CalibrationChart } from './CalibrationChart'
 import {
   getCalibrations,
+  updateCalibration,
+  deleteCalibration,
   type PeptideRecord,
   type CalibrationCurve,
+  type AnalyteResponse,
 } from '@/lib/api'
 import { getApiBaseUrl } from '@/lib/config'
 import { getAuthToken } from '@/store/auth-store'
+import { toast } from 'sonner'
 
 interface CalibrationPanelProps {
   peptide: PeptideRecord
   onUpdated: () => void
+  instrumentFilter: string
+  onImport?: () => void
 }
 
 export function CalibrationPanel({
   peptide,
   onUpdated,
+  instrumentFilter,
+  onImport,
 }: CalibrationPanelProps) {
   const [allCalibrations, setAllCalibrations] = useState<CalibrationCurve[]>([])
   const [loading, setLoading] = useState(true)
   const [expandedId, setExpandedId] = useState<number | null>(null)
-  const [instrumentFilter, setInstrumentFilter] = useState<string>('1290')
 
   // Load all calibrations for this peptide
   const loadCalibrations = useCallback(async () => {
@@ -70,13 +91,6 @@ export function CalibrationPanel({
     loadCalibrations()
   }, [loadCalibrations])
 
-  // Instruments in preferred order: 1290, 1260, unknown
-  const instrumentOrder = ['1290', '1260', 'unknown']
-  const instruments = instrumentOrder.filter(inst =>
-    allCalibrations.some(c => (c.instrument ?? 'unknown') === inst)
-  )
-  const showFilter = instruments.length > 1
-
   const filteredCals = instrumentFilter === 'all'
     ? allCalibrations
     : allCalibrations.filter(c => (c.instrument ?? 'unknown') === instrumentFilter)
@@ -97,53 +111,15 @@ export function CalibrationPanel({
               {peptide.name}
             </CardDescription>
           </div>
+          {onImport && (
+            <Button variant="outline" size="sm" onClick={onImport} className="gap-1.5">
+              <Cloud className="h-3.5 w-3.5" />
+              Add Curve
+            </Button>
+          )}
         </div>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
-        {/* Peptide details */}
-        <div className="grid grid-cols-3 gap-4 rounded-md bg-muted/50 p-3 text-sm">
-          <div>
-            <span className="text-muted-foreground">Reference RT</span>
-            <p className="font-mono font-medium">
-              {peptide.reference_rt != null
-                ? `${peptide.reference_rt.toFixed(3)} min`
-                : 'Not set'}
-            </p>
-          </div>
-          <div>
-            <span className="text-muted-foreground">RT Tolerance</span>
-            <p className="font-mono font-medium">
-              ±{peptide.rt_tolerance.toFixed(2)} min
-            </p>
-          </div>
-          <div>
-            <span className="text-muted-foreground">Diluent Density</span>
-            <p className="font-mono font-medium">
-              {peptide.diluent_density.toFixed(1)} mg/mL
-            </p>
-          </div>
-        </div>
-
-        {/* Instrument filter — only shown when multiple instruments exist */}
-        {!loading && showFilter && (
-          <div className="flex items-center gap-1.5">
-            <span className="text-xs text-muted-foreground">Instrument:</span>
-            {instruments.map(inst => (
-              <button
-                key={inst}
-                onClick={() => setInstrumentFilter(inst)}
-                className={`px-2 py-0.5 rounded text-xs font-mono border transition-colors ${
-                  instrumentFilter === inst
-                    ? 'bg-primary text-primary-foreground border-primary'
-                    : 'border-border text-muted-foreground hover:text-foreground hover:border-foreground/40'
-                }`}
-              >
-                {inst === 'all' ? 'All' : inst}
-              </button>
-            ))}
-          </div>
-        )}
-
         {loading ? (
           <div className="flex items-center gap-2 py-6 text-sm text-muted-foreground justify-center">
             <Loader2 className="h-4 w-4 animate-spin" />
@@ -166,6 +142,7 @@ export function CalibrationPanel({
                 }
                 onSetActive={undefined}
                 peptideId={peptide.id}
+                analytes={peptide.analytes}
                 onUpdated={() => {
                   loadCalibrations()
                   onUpdated()
@@ -205,6 +182,7 @@ export function CalibrationPanel({
                       }
                     }}
                     peptideId={peptide.id}
+                    analytes={peptide.analytes}
                     onUpdated={() => {
                       loadCalibrations()
                       onUpdated()
@@ -234,12 +212,16 @@ function CalibrationRow({
   isExpanded,
   onToggle,
   onSetActive,
+  peptideId,
+  analytes,
+  onUpdated,
 }: {
   calibration: CalibrationCurve
   isExpanded: boolean
   onToggle: () => void
   onSetActive: (() => void) | undefined
   peptideId: number
+  analytes: AnalyteResponse[]
   onUpdated: () => void
 }) {
   const data = calibration.standard_data
@@ -249,6 +231,67 @@ function CalibrationRow({
     day: 'numeric',
     year: 'numeric',
   })
+
+  // Edit state
+  const [editing, setEditing] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [editRt, setEditRt] = useState('')
+  const [editTolerance, setEditTolerance] = useState('')
+  const [editDensity, setEditDensity] = useState('')
+  const [editInstrument, setEditInstrument] = useState('')
+  const [editAnalyteId, setEditAnalyteId] = useState('')
+
+  const linkedAnalyte = analytes.find(a => a.id === calibration.peptide_analyte_id)
+
+  const startEditing = () => {
+    setEditRt(calibration.reference_rt != null ? String(calibration.reference_rt) : '')
+    setEditTolerance(String(calibration.rt_tolerance))
+    setEditDensity(String(calibration.diluent_density))
+    setEditInstrument(calibration.instrument ?? '')
+    setEditAnalyteId(calibration.peptide_analyte_id != null ? String(calibration.peptide_analyte_id) : '')
+    setEditing(true)
+  }
+
+  const cancelEditing = () => {
+    setEditing(false)
+  }
+
+  const handleSave = async () => {
+    setSaving(true)
+    try {
+      await updateCalibration(peptideId, calibration.id, {
+        reference_rt: editRt ? parseFloat(editRt) : null,
+        rt_tolerance: editTolerance ? parseFloat(editTolerance) : undefined,
+        diluent_density: editDensity ? parseFloat(editDensity) : undefined,
+        instrument: editInstrument || null,
+        peptide_analyte_id: editAnalyteId ? parseInt(editAnalyteId, 10) : null,
+      })
+      setEditing(false)
+      toast.success('Calibration updated')
+      onUpdated()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Save failed')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const [deleting, setDeleting] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState(false)
+
+  const handleDelete = async () => {
+    setDeleting(true)
+    try {
+      await deleteCalibration(peptideId, calibration.id)
+      toast.success('Calibration deleted')
+      onUpdated()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Delete failed')
+    } finally {
+      setDeleting(false)
+      setConfirmDelete(false)
+    }
+  }
 
   return (
     <div className={`rounded-md border ${calibration.is_active ? 'border-primary/40 bg-primary/5' : 'border-border bg-card'}`}>
@@ -283,6 +326,27 @@ function CalibrationRow({
               <span>R² = {calibration.r_squared.toFixed(6)}</span>
               <span>•</span>
               <span>{dateStr}</span>
+              {linkedAnalyte && (
+                <>
+                  <span>•</span>
+                  <span>{linkedAnalyte.peptide_name || linkedAnalyte.service_title}</span>
+                </>
+              )}
+              {(calibration.source_sample_id || linkedAnalyte?.sample_id) && (() => {
+                const sampleId = calibration.source_sample_id || linkedAnalyte?.sample_id
+                return (
+                  <>
+                    <span>•</span>
+                    <a
+                      href={`/#senaite/sample-details?id=${sampleId}`}
+                      className="font-mono hover:text-primary transition-colors"
+                      onClick={e => e.stopPropagation()}
+                    >
+                      {sampleId}
+                    </a>
+                  </>
+                )
+              })()}
             </div>
             {calibration.source_filename && (
               <div className="text-xs text-muted-foreground mt-0.5">
@@ -309,7 +373,7 @@ function CalibrationRow({
             )}
           </div>
         </div>
-        <div className="flex items-center gap-2 shrink-0">
+        <div className="flex items-center gap-1 shrink-0">
           {onSetActive && (
             <Button
               variant="ghost"
@@ -324,6 +388,39 @@ function CalibrationRow({
               Set Active
             </Button>
           )}
+          {confirmDelete ? (
+            <div className="flex items-center gap-1" onClick={e => e.stopPropagation()}>
+              <Button
+                variant="destructive"
+                size="sm"
+                className="text-xs h-7 px-2"
+                onClick={handleDelete}
+                disabled={deleting}
+              >
+                {deleting ? <Loader2 className="h-3 w-3 animate-spin" /> : 'Delete'}
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="text-xs h-7 px-1.5"
+                onClick={() => setConfirmDelete(false)}
+              >
+                <X className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+          ) : (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7 text-muted-foreground hover:text-destructive"
+              onClick={e => {
+                e.stopPropagation()
+                setConfirmDelete(true)
+              }}
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </Button>
+          )}
           {isExpanded ? (
             <ChevronUp className="h-4 w-4 text-muted-foreground" />
           ) : (
@@ -335,6 +432,154 @@ function CalibrationRow({
       {/* Expanded detail */}
       {isExpanded && (
         <div className="px-4 pb-4 flex flex-col gap-4 border-t pt-4">
+          {/* Curve metadata — view or edit */}
+          {editing ? (
+            <div className="rounded-md bg-muted/50 p-4 space-y-3">
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-sm font-medium">Edit Curve Settings</span>
+                <div className="flex items-center gap-1">
+                  <Button variant="ghost" size="sm" className="h-7 px-2" onClick={cancelEditing} disabled={saving}>
+                    <X className="h-3.5 w-3.5 mr-1" />
+                    Cancel
+                  </Button>
+                  <Button size="sm" className="h-7 px-2" onClick={handleSave} disabled={saving}>
+                    {saving ? <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" /> : <Check className="h-3.5 w-3.5 mr-1" />}
+                    Save
+                  </Button>
+                </div>
+              </div>
+              <div className="grid grid-cols-3 gap-3">
+                <div className="space-y-1">
+                  <Label className="text-xs">Reference RT (min)</Label>
+                  <Input
+                    value={editRt}
+                    onChange={e => setEditRt(e.target.value)}
+                    placeholder="e.g., 3.520"
+                    className="h-8 text-sm font-mono"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">RT Tolerance (min)</Label>
+                  <Input
+                    value={editTolerance}
+                    onChange={e => setEditTolerance(e.target.value)}
+                    placeholder="e.g., 0.50"
+                    className="h-8 text-sm font-mono"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">Diluent Density (mg/mL)</Label>
+                  <Input
+                    value={editDensity}
+                    onChange={e => setEditDensity(e.target.value)}
+                    placeholder="e.g., 997.1"
+                    className="h-8 text-sm font-mono"
+                  />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <Label className="text-xs">Instrument</Label>
+                  <Select value={editInstrument} onValueChange={setEditInstrument}>
+                    <SelectTrigger className="h-8 text-sm">
+                      <SelectValue placeholder="Select..." />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="1290">Agilent 1290</SelectItem>
+                      <SelectItem value="1260">Agilent 1260</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">Analyte</Label>
+                  <Select value={editAnalyteId} onValueChange={setEditAnalyteId}>
+                    <SelectTrigger className="h-8 text-sm">
+                      <SelectValue placeholder="None" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {analytes.map(a => (
+                        <SelectItem key={a.id} value={String(a.id)}>
+                          Slot {a.slot}: {a.peptide_name || a.service_title}
+                          {a.sample_id ? ` (${a.sample_id})` : ''}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="rounded-md bg-muted/50 p-3">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Curve Settings</span>
+                <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-1.5 text-sm">
+                    <span className="text-muted-foreground text-xs">Analyte</span>
+                    <span className="font-semibold text-base">
+                      {linkedAnalyte
+                        ? (linkedAnalyte.peptide_name || linkedAnalyte.service_title || `#${linkedAnalyte.analysis_service_id}`)
+                        : '—'}
+                    </span>
+                  </div>
+                  <span className="text-muted-foreground/40">|</span>
+                  <div className="flex items-center gap-1.5 text-sm">
+                    <span className="text-muted-foreground text-xs">Sample</span>
+                    {(calibration.source_sample_id || linkedAnalyte?.sample_id) ? (
+                      <a
+                        href={`/#senaite/sample-details?id=${calibration.source_sample_id || linkedAnalyte?.sample_id}`}
+                        className="font-mono font-semibold text-base hover:text-primary transition-colors"
+                      >
+                        {calibration.source_sample_id || linkedAnalyte?.sample_id}
+                      </a>
+                    ) : (
+                      <span className="font-mono font-semibold text-base">—</span>
+                    )}
+                  </div>
+                  <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" onClick={startEditing}>
+                    <Pencil className="h-3 w-3 mr-1" />
+                    Edit
+                  </Button>
+                </div>
+              </div>
+              <div className="grid grid-cols-5 gap-4 text-sm">
+                <div>
+                  <span className="text-muted-foreground text-xs">Reference RT</span>
+                  <p className="font-mono font-medium">
+                    {calibration.reference_rt != null
+                      ? `${calibration.reference_rt.toFixed(3)} min`
+                      : 'Not set'}
+                  </p>
+                </div>
+                <div>
+                  <span className="text-muted-foreground text-xs">RT Tolerance</span>
+                  <p className="font-mono font-medium">
+                    ±{calibration.rt_tolerance.toFixed(2)} min
+                  </p>
+                </div>
+                <div>
+                  <span className="text-muted-foreground text-xs">Diluent Density</span>
+                  <p className="font-mono font-medium">
+                    {calibration.diluent_density.toFixed(1)} mg/mL
+                  </p>
+                </div>
+                <div>
+                  <span className="text-muted-foreground text-xs">Instrument</span>
+                  <p className="font-mono font-medium">
+                    {calibration.instrument ?? '—'}
+                  </p>
+                </div>
+                <div>
+                  <span className="text-muted-foreground text-xs">Source Date</span>
+                  <p className="font-mono font-medium">
+                    {calibration.source_date
+                      ? new Date(calibration.source_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+                      : '—'}
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Chart */}
           {data && data.concentrations.length > 0 && (
             <CalibrationChart

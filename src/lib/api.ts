@@ -1581,6 +1581,10 @@ export async function parseHPLCFiles(
 export interface CalibrationCurve {
   id: number
   peptide_id: number
+  peptide_analyte_id: number | null
+  reference_rt: number | null
+  rt_tolerance: number
+  diluent_density: number
   slope: number
   intercept: number
   r_squared: number
@@ -1592,6 +1596,7 @@ export interface CalibrationCurve {
   is_active: boolean
   created_at: string
   // Standard identification metadata
+  source_sample_id: string | null
   instrument: string | null
   vendor: string | null
   lot_number: string | null
@@ -1682,27 +1687,38 @@ export interface HplcMethodInput {
 
 // ─── Peptide types ───
 
+export interface AnalyteInput {
+  slot: number
+  analysis_service_id: number
+  sample_id?: string | null
+}
+
+export interface AnalyteResponse {
+  id: number
+  slot: number
+  analysis_service_id: number
+  sample_id: string | null
+  peptide_name: string | null
+  service_title: string | null
+}
+
 export interface PeptideRecord {
   id: number
   name: string
   abbreviation: string
-  reference_rt: number | null
-  rt_tolerance: number
-  diluent_density: number
   active: boolean
   created_at: string
   updated_at: string
   methods: MethodBrief[]
   active_calibration: CalibrationCurve | null
   calibration_summary: InstrumentSummary[]
+  analytes: AnalyteResponse[]
 }
 
 export interface PeptideCreateInput {
   name: string
   abbreviation: string
-  reference_rt?: number | null
-  rt_tolerance?: number
-  diluent_density?: number
+  analytes?: AnalyteInput[]
 }
 
 export interface CalibrationDataInput {
@@ -1805,6 +1821,47 @@ export async function syncInstruments(): Promise<{ created: number; total: numbe
   return response.json()
 }
 
+// ─── Analysis Services ───
+
+export interface AnalysisServiceRecord {
+  id: number
+  title: string
+  keyword: string | null
+  category: string | null
+  unit: string | null
+  methods: { uid: string; title: string }[] | null
+  peptide_name: string | null
+  senaite_id: string | null
+  senaite_uid: string | null
+  active: boolean
+  created_at: string
+  updated_at: string
+}
+
+export async function getAnalysisServices(opts?: { search?: string; category?: string }): Promise<AnalysisServiceRecord[]> {
+  const searchParams = new URLSearchParams()
+  if (opts?.search) searchParams.set('search', opts.search)
+  if (opts?.category) searchParams.set('category', opts.category)
+  const qs = searchParams.toString()
+  const response = await fetch(`${API_BASE_URL()}/analysis-services${qs ? `?${qs}` : ''}`, {
+    headers: getBearerHeaders(),
+  })
+  if (!response.ok) throw new Error(`Get analysis services failed: ${response.status}`)
+  return response.json()
+}
+
+export async function syncAnalysisServices(): Promise<{ created: number; total: number }> {
+  const response = await fetch(`${API_BASE_URL()}/analysis-services/sync`, {
+    method: 'POST',
+    headers: getBearerHeaders(),
+  })
+  if (!response.ok) {
+    const err = await response.json().catch(() => null)
+    throw new Error(err?.detail || `Sync analysis services failed: ${response.status}`)
+  }
+  return response.json()
+}
+
 // ─── HPLC Method CRUD ───
 
 export async function getMethods(): Promise<HplcMethod[]> {
@@ -1894,6 +1951,51 @@ export async function createCalibration(
   } catch (error) {
     console.error('Create calibration error:', error)
     throw error
+  }
+}
+
+export interface CalibrationCurveUpdateInput {
+  reference_rt?: number | null
+  rt_tolerance?: number
+  diluent_density?: number
+  instrument?: string | null
+  peptide_analyte_id?: number | null
+}
+
+export async function updateCalibration(
+  peptideId: number,
+  calibrationId: number,
+  data: CalibrationCurveUpdateInput
+): Promise<CalibrationCurve> {
+  const response = await fetch(
+    `${API_BASE_URL()}/peptides/${peptideId}/calibrations/${calibrationId}`,
+    {
+      method: 'PATCH',
+      headers: getBearerHeaders('application/json'),
+      body: JSON.stringify(data),
+    }
+  )
+  if (!response.ok) {
+    const err = await response.json().catch(() => null)
+    throw new Error(err?.detail || `Update calibration failed: ${response.status}`)
+  }
+  return response.json()
+}
+
+export async function deleteCalibration(
+  peptideId: number,
+  calibrationId: number
+): Promise<void> {
+  const response = await fetch(
+    `${API_BASE_URL()}/peptides/${peptideId}/calibrations/${calibrationId}`,
+    {
+      method: 'DELETE',
+      headers: getBearerHeaders(),
+    }
+  )
+  if (!response.ok && response.status !== 204) {
+    const err = await response.json().catch(() => null)
+    throw new Error(err?.detail || `Delete calibration failed: ${response.status}`)
   }
 }
 
@@ -2027,6 +2129,27 @@ export async function seedPeptides(): Promise<SeedPeptidesResult> {
     console.error('Seed peptides error:', error)
     throw error
   }
+}
+
+// --- Seed Peptides from Analysis Services ---
+
+export interface SeedFromServicesResult {
+  created: number
+  skipped: number
+  total_services: number
+  message: string
+}
+
+export async function seedPeptidesFromServices(): Promise<SeedFromServicesResult> {
+  const response = await fetch(`${API_BASE_URL()}/peptides/seed-from-services`, {
+    method: 'POST',
+    headers: getBearerHeaders(),
+  })
+  if (!response.ok) {
+    const text = await response.text()
+    throw new Error(text || `Seed failed: ${response.status}`)
+  }
+  return response.json()
 }
 
 // --- HPLC Analysis History API ---
@@ -2166,7 +2289,8 @@ export async function createWizardSession(data: {
       body: JSON.stringify(data),
     })
     if (!response.ok) {
-      throw new Error(`Create wizard session failed: ${response.status}`)
+      const body = await response.json().catch(() => null)
+      throw new Error(body?.detail || `Create wizard session failed: ${response.status}`)
     }
     return response.json()
   } catch (error) {

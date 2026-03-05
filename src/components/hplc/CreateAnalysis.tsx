@@ -28,6 +28,7 @@ export function CreateAnalysis() {
   const session = useWizardStore(state => state.session)
   const navigateTo = useUIStore(state => state.navigateTo)
   const stepStates = useWizardStore(state => state.stepStates)
+  const senaiteResult = useWizardStore(state => state.senaiteResult)
 
   // canAdvance drives the "Next Step" button on steps 1 & 2
   const canAdvance = useWizardStore(state => state.canAdvance())
@@ -82,6 +83,56 @@ export function CreateAnalysis() {
 
       {/* Right content — step panel */}
       <div className="flex flex-1 flex-col overflow-y-auto">
+
+        {/* Persistent SENAITE reference card — shown on all steps once a lookup was done */}
+        {senaiteResult && (
+          <div className="mx-6 mt-5 rounded-md border border-blue-500/30 bg-blue-50/50 dark:bg-blue-950/20 p-4 space-y-2">
+            <p className="text-sm font-medium text-blue-700 dark:text-blue-300">
+              Sample found in SENAITE
+            </p>
+            <div className="grid grid-cols-2 gap-3 text-sm">
+              <div>
+                <span className="text-muted-foreground">Sample ID</span>
+                <p className="font-medium">{senaiteResult.sample_id}</p>
+              </div>
+              <div>
+                <span className="text-muted-foreground">Declared Weight</span>
+                <p className="font-medium">
+                  {senaiteResult.declared_weight_mg != null
+                    ? `${senaiteResult.declared_weight_mg} mg`
+                    : '—'}
+                </p>
+              </div>
+            </div>
+            {senaiteResult.analytes.length > 0 && (
+              <div>
+                <span className="text-sm text-muted-foreground">Analytes</span>
+                <ul className="mt-1 space-y-0.5">
+                  {senaiteResult.analytes.map((a, i) => (
+                    <li key={i} className="text-sm flex items-center gap-2">
+                      <span
+                        className={
+                          a.matched_peptide_id !== null
+                            ? 'text-green-600 dark:text-green-400'
+                            : 'text-muted-foreground'
+                        }
+                      >
+                        {a.matched_peptide_id !== null ? '✓' : '○'}
+                      </span>
+                      <span>{a.raw_name}</span>
+                      {a.matched_peptide_name && (
+                        <span className="text-muted-foreground text-xs">
+                          → {a.matched_peptide_name}
+                        </span>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        )}
+
         <div className="flex-1 p-6">
           <WizardStepPanel stepId={currentStep}>
             {renderCurrentStep(currentStep)}

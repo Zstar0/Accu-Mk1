@@ -5,7 +5,7 @@ Uses SQLAlchemy 2.0 style with mapped_column.
 
 from datetime import datetime
 from typing import Optional
-from sqlalchemy import String, Text, Float, Integer, Boolean, DateTime, ForeignKey, JSON, Column, Table, UniqueConstraint
+from sqlalchemy import String, Text, Float, Integer, Boolean, DateTime, ForeignKey, JSON, Column, Table, UniqueConstraint, CheckConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from database import Base
@@ -136,6 +136,30 @@ class Instrument(Base):
         return f"<Instrument(id={self.id}, name='{self.name}')>"
 
 
+class AnalysisService(Base):
+    """
+    Senaite Analysis Service — master list of lab tests.
+    Synced from Senaite's AnalysisService portal type.
+    """
+    __tablename__ = "analysis_services"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    title: Mapped[str] = mapped_column(String(300), nullable=False)  # "BPC157 – Purity (HPLC)"
+    keyword: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)  # "BPC157-PURITY"
+    category: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)  # "HPLC"
+    unit: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)  # "%", "mg", "EU/mL"
+    methods: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)  # [{uid, title}, ...]
+    peptide_name: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)  # derived: "AICAR"
+    senaite_id: Mapped[Optional[str]] = mapped_column(String(200), nullable=True, unique=True)
+    senaite_uid: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def __repr__(self) -> str:
+        return f"<AnalysisService(id={self.id}, title='{self.title}')>"
+
+
 # M2M junction: peptide <-> method (one method per instrument per peptide, enforced at app level)
 peptide_methods = Table(
     "peptide_methods",
@@ -179,17 +203,14 @@ class HplcMethod(Base):
 class Peptide(Base):
     """
     Peptide reference data for HPLC analysis.
-    Stores expected retention time, tolerance, and diluent density.
     Each peptide can be assigned one method per instrument.
+    Per-curve parameters (reference_rt, rt_tolerance, diluent_density) live on CalibrationCurve.
     """
     __tablename__ = "peptides"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     abbreviation: Mapped[str] = mapped_column(String(50), nullable=False, unique=True)
-    reference_rt: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    rt_tolerance: Mapped[float] = mapped_column(Float, default=0.5)
-    diluent_density: Mapped[float] = mapped_column(Float, default=997.1)  # mg/mL for water
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -199,9 +220,45 @@ class Peptide(Base):
     calibration_curves: Mapped[list["CalibrationCurve"]] = relationship(
         "CalibrationCurve", back_populates="peptide", cascade="all, delete-orphan"
     )
+    analytes: Mapped[list["PeptideAnalyte"]] = relationship(
+        "PeptideAnalyte", back_populates="peptide", cascade="all, delete-orphan",
+        order_by="PeptideAnalyte.slot",
+    )
 
     def __repr__(self) -> str:
         return f"<Peptide(id={self.id}, abbreviation='{self.abbreviation}')>"
+
+
+class PeptideAnalyte(Base):
+    """
+    Junction row connecting a Peptide Standard to one AnalysisService.
+    Each peptide has up to 4 analyte slots (slot 1-4).
+    sample_id is the Senaite sample ID for the standard reference vial.
+    """
+    __tablename__ = "peptide_analytes"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    peptide_id: Mapped[int] = mapped_column(
+        ForeignKey("peptides.id", ondelete="CASCADE"), nullable=False
+    )
+    analysis_service_id: Mapped[int] = mapped_column(
+        ForeignKey("analysis_services.id", ondelete="CASCADE"), nullable=False
+    )
+    sample_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    slot: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("peptide_id", "slot", name="uq_peptide_analyte_slot"),
+        CheckConstraint("slot >= 1 AND slot <= 4", name="ck_peptide_analyte_slot_range"),
+    )
+
+    peptide: Mapped["Peptide"] = relationship("Peptide", back_populates="analytes")
+    analysis_service: Mapped["AnalysisService"] = relationship("AnalysisService")
+
+    def __repr__(self) -> str:
+        return f"<PeptideAnalyte(peptide_id={self.peptide_id}, slot={self.slot})>"
 
 
 class CalibrationCurve(Base):
@@ -214,6 +271,13 @@ class CalibrationCurve(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     peptide_id: Mapped[int] = mapped_column(ForeignKey("peptides.id"), nullable=False)
+    peptide_analyte_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("peptide_analytes.id", ondelete="SET NULL"), nullable=True
+    )
+    # Per-curve parameters (moved from Peptide)
+    reference_rt: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    rt_tolerance: Mapped[float] = mapped_column(Float, default=0.5)
+    diluent_density: Mapped[float] = mapped_column(Float, default=997.1)  # mg/mL for water
     slope: Mapped[float] = mapped_column(Float, nullable=False)
     intercept: Mapped[float] = mapped_column(Float, nullable=False)
     r_squared: Mapped[float] = mapped_column(Float, nullable=False)
@@ -226,6 +290,7 @@ class CalibrationCurve(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     # --- Standard identification metadata (Phase 1: populated from filename/path on import) ---
+    source_sample_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)  # Senaite sample ID (e.g. "P-0111")
     instrument: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)    # "1260" or "1290"
     vendor: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)       # Cayman, Targetmol, HYB, etc.
     lot_number: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)   # Vendor lot # (e.g. "27262", "#63162")
@@ -246,6 +311,7 @@ class CalibrationCurve(Base):
 
     # Relationships
     peptide: Mapped["Peptide"] = relationship("Peptide", back_populates="calibration_curves")
+    analyte: Mapped[Optional["PeptideAnalyte"]] = relationship("PeptideAnalyte")
 
     def __repr__(self) -> str:
         return f"<CalibrationCurve(id={self.id}, peptide_id={self.peptide_id}, slope={self.slope})>"

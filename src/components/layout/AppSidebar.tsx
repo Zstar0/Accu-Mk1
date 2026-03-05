@@ -95,9 +95,10 @@ const navItems: NavItem[] = [
       { id: 'import-analysis', label: 'Import Analysis' },
       { id: 'instruments', label: 'Instruments' },
       { id: 'methods', label: 'Methods' },
-      { id: 'peptide-config', label: 'Peptide Standards' },
+      { id: 'peptide-config', label: 'Peptides' },
       { id: 'analysis-history', label: 'History' },
       { id: 'sample-preps', label: 'Sample Preps' },
+      { id: 'analysis-services', label: 'Analysis Services' },
     ],
   },
   {

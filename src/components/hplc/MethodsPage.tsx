@@ -19,6 +19,12 @@ import {
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
 import { Label } from '@/components/ui/label'
 import {
   Table,
@@ -41,11 +47,13 @@ import {
 
 export function MethodsPage() {
   const [methods, setMethods] = useState<HplcMethod[]>([])
+  const [allInstruments, setAllInstruments] = useState<Instrument[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [selectedId, setSelectedId] = useState<number | null>(null)
   const [showAddForm, setShowAddForm] = useState(false)
   const [searchInput, setSearchInput] = useState('')
+  const [instrumentTab, setInstrumentTab] = useState<string>('1290')
 
   // Delete confirmation
   const [deleteTarget, setDeleteTarget] = useState<HplcMethod | null>(null)
@@ -66,6 +74,7 @@ export function MethodsPage() {
 
   useEffect(() => {
     load()
+    getInstruments().then(setAllInstruments).catch(console.error)
   }, [load])
 
   // Handle target navigation (e.g. from peptide page "View Method" link)
@@ -80,8 +89,14 @@ export function MethodsPage() {
 
   const selectedMethod = methods.find(m => m.id === selectedId) ?? null
 
-  // Client-side filtering (small dataset)
+  // Find the active instrument object for tab filtering
+  const activeInstrument = allInstruments.find(i => i.model === instrumentTab)
+
+  // Client-side filtering: instrument tab + search
   const filtered = methods.filter(m => {
+    // Instrument tab filter
+    if (activeInstrument && m.instrument_id !== activeInstrument.id) return false
+    // Text search
     if (!searchInput) return true
     const q = searchInput.toLowerCase()
     return (
@@ -148,15 +163,40 @@ export function MethodsPage() {
         />
       )}
 
-      {/* Search */}
-      <div className="relative max-w-sm">
-        <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-        <Input
-          placeholder="Search methods..."
-          value={searchInput}
-          onChange={e => setSearchInput(e.target.value)}
-          className="pl-9"
-        />
+      {/* Search + Instrument tabs */}
+      <div className="flex items-center justify-between">
+        <div className="relative max-w-sm">
+          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            placeholder="Search methods..."
+            value={searchInput}
+            onChange={e => setSearchInput(e.target.value)}
+            className="pl-9"
+          />
+        </div>
+        <div className="flex items-center gap-0 border-b border-zinc-800">
+          <span className="text-xs font-medium text-muted-foreground mr-3 uppercase tracking-wider">Instrument</span>
+          {allInstruments.map(inst => {
+            const isActive = instrumentTab === inst.model
+            return (
+              <button
+                key={inst.id}
+                type="button"
+                onClick={() => setInstrumentTab(inst.model ?? '')}
+                className={`relative px-4 py-2 text-sm font-medium transition-colors ${
+                  isActive
+                    ? 'text-foreground'
+                    : 'text-muted-foreground hover:text-foreground/80'
+                }`}
+              >
+                {inst.name}
+                {isActive && (
+                  <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary rounded-t" />
+                )}
+              </button>
+            )
+          })}
+        </div>
       </div>
 
       {/* Table */}
@@ -165,7 +205,6 @@ export function MethodsPage() {
           <TableHeader>
             <TableRow>
               <TableHead>Method</TableHead>
-              <TableHead>Instrument</TableHead>
               <TableHead>Size Peptide</TableHead>
               <TableHead>Organic %</TableHead>
               <TableHead>Dissolution</TableHead>
@@ -176,13 +215,13 @@ export function MethodsPage() {
           <TableBody>
             {loading ? (
               <TableRow>
-                <TableCell colSpan={7} className="py-8 text-center">
+                <TableCell colSpan={6} className="py-8 text-center">
                   <Loader2 className="mx-auto h-5 w-5 animate-spin text-muted-foreground" />
                 </TableCell>
               </TableRow>
             ) : filtered.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={7} className="py-8 text-center text-muted-foreground">
+                <TableCell colSpan={6} className="py-8 text-center text-muted-foreground">
                   {methods.length === 0
                     ? 'No methods yet. Click "New Method" to create one.'
                     : 'No methods match your search.'}
@@ -205,7 +244,6 @@ export function MethodsPage() {
                       )}
                     </div>
                   </TableCell>
-                  <TableCell>{m.instrument?.name ?? '—'}</TableCell>
                   <TableCell>
                     {m.size_peptide ? (
                       <span className="text-sm">{m.size_peptide}</span>
@@ -220,7 +258,29 @@ export function MethodsPage() {
                     <span className="text-sm">{m.dissolution ?? '—'}</span>
                   </TableCell>
                   <TableCell>
-                    <Badge variant="secondary">{m.common_peptides.length}</Badge>
+                    {m.common_peptides.length > 0 ? (
+                      <TooltipProvider delayDuration={200}>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Badge variant="secondary" className="cursor-default">
+                              {m.common_peptides.length}
+                            </Badge>
+                          </TooltipTrigger>
+                          <TooltipContent side="left" className="max-w-xs">
+                            <div className="space-y-1">
+                              {m.common_peptides.map(p => (
+                                <div key={p.id} className="text-xs">
+                                  <span className="font-medium">{p.abbreviation}</span>
+                                  <span className="text-muted-foreground ml-1">({p.name})</span>
+                                </div>
+                              ))}
+                            </div>
+                          </TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
+                    ) : (
+                      <Badge variant="secondary" className="opacity-50">0</Badge>
+                    )}
                   </TableCell>
                   <TableCell>
                     <div className="flex items-center gap-1">

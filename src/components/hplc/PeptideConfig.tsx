@@ -24,7 +24,24 @@ import {
 } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { ScrollArea } from '@/components/ui/scroll-area'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import {
   Table,
   TableBody,
@@ -41,9 +58,11 @@ import {
   getMethods,
   getInstruments,
   updatePeptide,
+  lookupSenaiteSample,
   type PeptideRecord,
   type HplcMethod,
   type Instrument,
+  type AnalyteResponse,
 } from '@/lib/api'
 import { getApiBaseUrl } from '@/lib/config'
 import { getAuthToken } from '@/store/auth-store'
@@ -89,6 +108,18 @@ export function PeptideConfig() {
   const [allMethods, setAllMethods] = useState<HplcMethod[]>([])
   const [allInstruments, setAllInstruments] = useState<Instrument[]>([])
   const [savingMethodId, setSavingMethodId] = useState(false)
+
+  // Flyout instrument tab — controls which instrument's curves + methods are shown
+  const [flyoutInstrument, setFlyoutInstrument] = useState<string>('1290')
+
+  // Resync dialog state
+  const [resyncTarget, setResyncTarget] = useState<PeptideRecord | null>(null)
+  const [resyncAnalyteId, setResyncAnalyteId] = useState<string>('')
+  const [resyncSampleId, setResyncSampleId] = useState('')
+  const [resyncSampleValidating, setResyncSampleValidating] = useState(false)
+  const [resyncSampleValid, setResyncSampleValid] = useState<boolean | null>(null)
+  const [resyncInstrument, setResyncInstrument] = useState<string>('1290')
+  const resyncDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // Streaming seed state
   const [seeding, setSeeding] = useState(false)
@@ -262,7 +293,47 @@ export function PeptideConfig() {
     setSeeding(false)
   }, [])
 
-  const handleResyncPeptide = useCallback(async (peptideId: number) => {
+  const openResyncDialog = useCallback((peptide: PeptideRecord, clearSampleId = false) => {
+    setResyncTarget(peptide)
+    // Pre-select first analyte if available
+    const firstAnalyte = peptide.analytes?.[0]
+    setResyncAnalyteId(firstAnalyte ? String(firstAnalyte.id) : '')
+    setResyncSampleId(clearSampleId ? '' : (firstAnalyte?.sample_id || ''))
+    setResyncSampleValid(null)
+    setResyncSampleValidating(false)
+    setResyncInstrument('1290')
+  }, [])
+
+  const closeResyncDialog = useCallback(() => {
+    setResyncTarget(null)
+    setResyncAnalyteId('')
+    setResyncSampleId('')
+    setResyncSampleValid(null)
+    setResyncSampleValidating(false)
+    setResyncInstrument('1290')
+    if (resyncDebounceRef.current) clearTimeout(resyncDebounceRef.current)
+  }, [])
+
+  const handleResyncSampleIdChange = useCallback((value: string) => {
+    setResyncSampleId(value)
+    setResyncSampleValid(null)
+    setResyncSampleValidating(false)
+    if (resyncDebounceRef.current) clearTimeout(resyncDebounceRef.current)
+    if (!value.trim()) return
+    resyncDebounceRef.current = setTimeout(async () => {
+      setResyncSampleValidating(true)
+      try {
+        await lookupSenaiteSample(value.trim())
+        setResyncSampleValid(true)
+      } catch {
+        setResyncSampleValid(false)
+      } finally {
+        setResyncSampleValidating(false)
+      }
+    }, 600)
+  }, [])
+
+  const handleResyncPeptide = useCallback(async (peptideId: number, analyteId?: number, sampleId?: string, instrument?: string) => {
     setSeeding(true)
     setSeedLogs([])
     setSeedProgress(null)
@@ -275,7 +346,13 @@ export function PeptideConfig() {
 
     try {
       const token = getAuthToken()
-      const response = await fetch(`${getApiBaseUrl()}/hplc/peptides/${peptideId}/resync/stream`, {
+      const params = new URLSearchParams()
+      if (analyteId) params.set('analyte_id', String(analyteId))
+      if (sampleId) params.set('sample_id', sampleId)
+      if (instrument) params.set('instrument', instrument)
+      const qs = params.toString()
+      const url = `${getApiBaseUrl()}/hplc/peptides/${peptideId}/resync/stream${qs ? `?${qs}` : ''}`
+      const response = await fetch(url, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
         signal: controller.signal,
       })
@@ -346,6 +423,15 @@ export function PeptideConfig() {
     }
   }, [loadPeptides])
 
+  const handleResyncSubmit = useCallback(() => {
+    if (!resyncTarget) return
+    const analyteId = resyncAnalyteId ? parseInt(resyncAnalyteId, 10) : undefined
+    const sampleId = resyncSampleId.trim() || undefined
+    const instrument = resyncInstrument || undefined
+    closeResyncDialog()
+    handleResyncPeptide(resyncTarget.id, analyteId, sampleId, instrument)
+  }, [resyncTarget, resyncAnalyteId, resyncSampleId, resyncInstrument, closeResyncDialog, handleResyncPeptide])
+
   const selectedPeptide = peptides.find(p => p.id === selectedId) ?? null
 
   const filteredPeptides = peptides.filter(p => {
@@ -373,10 +459,10 @@ export function PeptideConfig() {
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-bold tracking-tight">
-              Peptide Standards
+              Peptides
             </h1>
             <p className="text-muted-foreground">
-              Manage peptide standard curves — vendor, lot, instrument, and calibration data.
+              Manage peptides — analytes, methods, and calibration curves.
             </p>
           </div>
           <div className="flex gap-2">
@@ -395,7 +481,7 @@ export function PeptideConfig() {
             </Button>
             <Button onClick={() => setShowAddForm(true)} className="gap-2">
               <Plus className="h-4 w-4" />
-              Add Peptide
+              Add New Peptide
             </Button>
           </div>
         </div>
@@ -511,16 +597,15 @@ export function PeptideConfig() {
           </Card>
         )}
 
-        {/* Add peptide form */}
-        {showAddForm && (
-          <PeptideForm
-            onSaved={() => {
-              setShowAddForm(false)
-              loadPeptides()
-            }}
-            onCancel={() => setShowAddForm(false)}
-          />
-        )}
+        {/* Add peptide form (Sheet overlay) */}
+        <PeptideForm
+          open={showAddForm}
+          onSaved={() => {
+            setShowAddForm(false)
+            loadPeptides()
+          }}
+          onClose={() => setShowAddForm(false)}
+        />
 
         <div>
           {/* Peptide List - Full Width */}
@@ -528,7 +613,7 @@ export function PeptideConfig() {
             <CardHeader>
               <div className="flex items-center justify-between">
                 <div>
-                  <CardTitle className="text-base">Peptide Standards</CardTitle>
+                  <CardTitle className="text-base">Peptides</CardTitle>
                   <CardDescription>
                     {filteredPeptides.length} of {peptides.length} peptide{peptides.length !== 1 ? 's' : ''}
                     {filterMode !== 'all' && ' (filtered)'}
@@ -614,8 +699,8 @@ export function PeptideConfig() {
                             )}
                           </TableCell>
                           <TableCell className="text-right font-mono text-sm">
-                            {p.reference_rt != null
-                              ? `${p.reference_rt.toFixed(3)} min`
+                            {p.active_calibration?.reference_rt != null
+                              ? `${p.active_calibration.reference_rt.toFixed(3)} min`
                               : '—'}
                           </TableCell>
                           <TableCell>
@@ -654,7 +739,7 @@ export function PeptideConfig() {
                                 title="Re-sync from SharePoint"
                                 onClick={e => {
                                   e.stopPropagation()
-                                  handleResyncPeptide(p.id)
+                                  openResyncDialog(p)
                                 }}
                                 disabled={seeding}
                                 className="rounded p-1 text-muted-foreground hover:text-blue-400 disabled:opacity-30"
@@ -698,103 +783,274 @@ export function PeptideConfig() {
             />
             {/* Sidebar Panel */}
             <div
-              className="fixed top-0 right-0 h-full w-full max-w-3xl z-50 bg-zinc-950 border-l border-zinc-800 shadow-2xl overflow-y-auto"
+              className="fixed top-0 right-0 h-full w-full max-w-7xl z-50 bg-zinc-950 border-l border-zinc-800 shadow-2xl overflow-y-auto"
               style={{
                 animation: 'slideInRight 0.25s ease-out',
               }}
             >
               {/* Sticky header */}
-              <div className="sticky top-0 z-10 flex items-center justify-between px-5 py-4 bg-zinc-950/95 border-b border-zinc-800 backdrop-blur">
-                <div>
-                  <h3 className="text-base font-semibold">{selectedPeptide.abbreviation}</h3>
-                  <p className="text-xs text-muted-foreground">{selectedPeptide.name}</p>
+              <div className="sticky top-0 z-10 bg-zinc-950/95 border-b border-zinc-800 backdrop-blur">
+                <div className="flex items-center justify-between px-5 pt-4 pb-3">
+                  <div>
+                    <h3 className="text-base font-semibold">{selectedPeptide.abbreviation}</h3>
+                    <p className="text-xs text-muted-foreground">{selectedPeptide.name}</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedId(null)}
+                    className="rounded-md p-1.5 text-muted-foreground hover:text-foreground hover:bg-zinc-800 transition-colors"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => setSelectedId(null)}
-                  className="rounded-md p-1.5 text-muted-foreground hover:text-foreground hover:bg-zinc-800 transition-colors"
-                >
-                  <X className="h-4 w-4" />
-                </button>
-              </div>
-              {/* Panel content */}
-              <div className="p-5 space-y-6">
-                {/* Method assignment per instrument */}
-                <div className="rounded-lg border border-zinc-800 p-4 space-y-3">
-                  <h4 className="text-sm font-semibold text-muted-foreground">Methods</h4>
+                {/* Instrument tabs */}
+                <div className="flex items-center gap-0 px-5 pb-0">
+                  <span className="text-xs font-medium text-muted-foreground mr-3 uppercase tracking-wider">Instrument</span>
                   {allInstruments.map(inst => {
-                    const methodsForInst = allMethods.filter(m => m.instrument_id === inst.id)
-                    const assigned = selectedPeptide.methods.find(m => m.instrument_id === inst.id)
+                    const isActive = flyoutInstrument === inst.model
                     return (
-                      <div key={inst.id} className="space-y-1.5">
-                        <div className="flex items-center justify-between">
-                          <label className="text-xs font-medium text-muted-foreground">{inst.name}</label>
-                          {assigned && (
-                            <button
-                              type="button"
-                              className="text-xs text-primary hover:underline"
-                              onClick={() => useUIStore.getState().navigateToMethod(assigned.id)}
-                            >
-                              View Method
-                            </button>
-                          )}
-                        </div>
-                        <select
-                          className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                          value={assigned?.id ?? ''}
-                          disabled={savingMethodId}
-                          onChange={async (e) => {
-                            const newMethodId = e.target.value ? parseInt(e.target.value, 10) : null
-                            // Build new method_ids: keep assignments for other instruments, update this one
-                            const otherMethodIds = selectedPeptide.methods
-                              .filter(m => m.instrument_id !== inst.id)
-                              .map(m => m.id)
-                            const methodIds = newMethodId
-                              ? [...otherMethodIds, newMethodId]
-                              : otherMethodIds
-                            setSavingMethodId(true)
-                            try {
-                              await updatePeptide(selectedPeptide.id, { method_ids: methodIds })
-                              await loadPeptides()
-                              getMethods().then(setAllMethods).catch(console.error)
-                            } catch {
-                              setError('Failed to update method')
-                            } finally {
-                              setSavingMethodId(false)
-                            }
-                          }}
-                        >
-                          <option value="">No method assigned</option>
-                          {methodsForInst.map(m => (
-                            <option key={m.id} value={m.id}>{m.name}</option>
-                          ))}
-                        </select>
-                        {/* Show method details inline when assigned */}
-                        {assigned && (() => {
-                          const m = allMethods.find(x => x.id === assigned.id)
-                          if (!m) return null
-                          return (
-                            <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs text-muted-foreground mt-1">
-                              {m.size_peptide && <div><span className="font-medium">Size:</span> {m.size_peptide}</div>}
-                              {m.starting_organic_pct != null && <div><span className="font-medium">Organic:</span> {m.starting_organic_pct}%</div>}
-                              {m.temperature_mct_c != null && <div><span className="font-medium">MCT Temp:</span> {m.temperature_mct_c}°C</div>}
-                              {m.dissolution && <div><span className="font-medium">Dissolution:</span> {m.dissolution}</div>}
-                            </div>
-                          )
-                        })()}
-                      </div>
+                      <button
+                        key={inst.id}
+                        type="button"
+                        onClick={() => setFlyoutInstrument(inst.model ?? '')}
+                        className={`relative px-4 py-2 text-sm font-medium transition-colors ${
+                          isActive
+                            ? 'text-foreground'
+                            : 'text-muted-foreground hover:text-foreground/80'
+                        }`}
+                      >
+                        {inst.name}
+                        {isActive && (
+                          <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary rounded-t" />
+                        )}
+                      </button>
                     )
                   })}
+                  <button
+                    type="button"
+                    onClick={() => setFlyoutInstrument('unknown')}
+                    className={`relative px-4 py-2 text-sm font-medium transition-colors ${
+                      flyoutInstrument === 'unknown'
+                        ? 'text-amber-400'
+                        : 'text-muted-foreground hover:text-foreground/80'
+                    }`}
+                  >
+                    Unknown
+                    {flyoutInstrument === 'unknown' && (
+                      <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-amber-400 rounded-t" />
+                    )}
+                  </button>
+                </div>
+              </div>
+              {/* Panel content — two-column layout */}
+              <div className="p-5 flex gap-6">
+                {/* Left column: Methods */}
+                <div className="w-96 shrink-0">
+                  <div className="rounded-lg border border-zinc-800 p-4 space-y-3 sticky top-18.25">
+                    <h4 className="text-sm font-semibold text-muted-foreground">Method</h4>
+                    {flyoutInstrument === 'unknown' && (
+                      <div className="text-xs text-muted-foreground py-3 space-y-2">
+                        <p>Curves with no instrument assigned.</p>
+                        <p>Use the <span className="font-medium text-foreground">Edit</span> button on each curve to assign an instrument.</p>
+                      </div>
+                    )}
+                    {allInstruments.filter(inst => inst.model === flyoutInstrument).map(inst => {
+                      const methodsForInst = allMethods.filter(m => m.instrument_id === inst.id)
+                      const assigned = selectedPeptide.methods.find(m => m.instrument_id === inst.id)
+                      return (
+                        <div key={inst.id} className="space-y-1.5">
+                          <div className="flex items-center justify-between">
+                            <label className="text-xs font-medium text-muted-foreground">{inst.name}</label>
+                            {assigned && (
+                              <button
+                                type="button"
+                                className="text-xs text-primary hover:underline"
+                                onClick={() => useUIStore.getState().navigateToMethod(assigned.id)}
+                              >
+                                View Method
+                              </button>
+                            )}
+                          </div>
+                          <select
+                            className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                            value={assigned?.id ?? ''}
+                            disabled={savingMethodId}
+                            onChange={async (e) => {
+                              const newMethodId = e.target.value ? parseInt(e.target.value, 10) : null
+                              const otherMethodIds = selectedPeptide.methods
+                                .filter(m => m.instrument_id !== inst.id)
+                                .map(m => m.id)
+                              const methodIds = newMethodId
+                                ? [...otherMethodIds, newMethodId]
+                                : otherMethodIds
+                              setSavingMethodId(true)
+                              try {
+                                await updatePeptide(selectedPeptide.id, { method_ids: methodIds })
+                                await loadPeptides()
+                                getMethods().then(setAllMethods).catch(console.error)
+                              } catch {
+                                setError('Failed to update method')
+                              } finally {
+                                setSavingMethodId(false)
+                              }
+                            }}
+                          >
+                            <option value="">No method assigned</option>
+                            {methodsForInst.map(m => (
+                              <option key={m.id} value={m.id}>{m.name}</option>
+                            ))}
+                          </select>
+                          {assigned && (() => {
+                            const m = allMethods.find(x => x.id === assigned.id)
+                            if (!m) return null
+                            return (
+                              <div className="mt-3 space-y-3">
+                                <div className="text-sm font-medium">{m.name}</div>
+                                {m.senaite_id && (
+                                  <div className="text-xs text-muted-foreground font-mono">{m.senaite_id}</div>
+                                )}
+                                <div className="grid grid-cols-2 gap-x-4 gap-y-2.5 text-xs">
+                                  <div>
+                                    <span className="text-muted-foreground">Instrument</span>
+                                    <p className="font-medium mt-0.5">{inst.name}</p>
+                                  </div>
+                                  <div>
+                                    <span className="text-muted-foreground">Size Peptide</span>
+                                    <p className="font-medium mt-0.5">{m.size_peptide ?? '—'}</p>
+                                  </div>
+                                  <div>
+                                    <span className="text-muted-foreground">Starting Organic</span>
+                                    <p className="font-medium mt-0.5">{m.starting_organic_pct != null ? `${m.starting_organic_pct}%` : '—'}</p>
+                                  </div>
+                                  <div>
+                                    <span className="text-muted-foreground">MCT Temp</span>
+                                    <p className="font-medium mt-0.5">{m.temperature_mct_c != null ? `${m.temperature_mct_c}°C` : '—'}</p>
+                                  </div>
+                                  <div>
+                                    <span className="text-muted-foreground">Dissolution</span>
+                                    <p className="font-medium mt-0.5">{m.dissolution ?? '—'}</p>
+                                  </div>
+                                </div>
+                                {m.notes && (
+                                  <div className="text-xs">
+                                    <span className="text-muted-foreground">Notes:</span>
+                                    <p className="mt-0.5 text-muted-foreground/80 italic">{m.notes}</p>
+                                  </div>
+                                )}
+                                {m.common_peptides.length > 0 && (
+                                  <div className="text-xs border-t border-zinc-800 pt-2">
+                                    <span className="text-muted-foreground">Common Peptides ({m.common_peptides.length})</span>
+                                    <div className="flex flex-wrap gap-1.5 mt-1.5">
+                                      {m.common_peptides.map(cp => (
+                                        <Badge key={cp.id} variant="outline" className="text-[10px] font-normal">
+                                          {cp.abbreviation}
+                                        </Badge>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            )
+                          })()}
+                        </div>
+                      )
+                    })}
+                  </div>
                 </div>
 
-                <CalibrationPanel
-                  peptide={selectedPeptide}
-                  onUpdated={loadPeptides}
-                />
+                {/* Right column: Calibration Curves */}
+                <div className="flex-1 min-w-0">
+                  <CalibrationPanel
+                    peptide={selectedPeptide}
+                    onUpdated={loadPeptides}
+                    instrumentFilter={flyoutInstrument}
+                    onImport={() => openResyncDialog(selectedPeptide, true)}
+                  />
+                </div>
               </div>
             </div>
           </>
         )}
+
+        {/* Resync dialog — pick analyte + sample ID before importing */}
+        <Dialog open={!!resyncTarget} onOpenChange={v => { if (!v) closeResyncDialog() }}>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>Import Curves — {resyncTarget?.abbreviation}</DialogTitle>
+              <DialogDescription>
+                Select the analyte and enter the Senaite sample ID for this import.
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="flex flex-col gap-4 py-2">
+              <div className="space-y-2">
+                <Label>Analyte</Label>
+                <Select value={resyncAnalyteId} onValueChange={setResyncAnalyteId}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select analyte..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {resyncTarget?.analytes?.map((a: AnalyteResponse) => (
+                      <SelectItem key={a.id} value={String(a.id)}>
+                        Slot {a.slot}: {a.peptide_name || a.service_title || `Service #${a.analysis_service_id}`}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="space-y-2">
+                <Label>Sample ID</Label>
+                <div className="relative">
+                  <Input
+                    placeholder="e.g., P-0203"
+                    value={resyncSampleId}
+                    onChange={e => handleResyncSampleIdChange(e.target.value)}
+                    className="pr-8"
+                  />
+                  <div className="absolute right-2 top-1/2 -translate-y-1/2">
+                    {resyncSampleValidating && (
+                      <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                    )}
+                    {!resyncSampleValidating && resyncSampleValid === true && (
+                      <CheckCircle2 className="h-4 w-4 text-green-500" />
+                    )}
+                    {!resyncSampleValidating && resyncSampleValid === false && (
+                      <XCircle className="h-4 w-4 text-red-500" />
+                    )}
+                  </div>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  The Senaite sample ID for the standard reference vial.
+                </p>
+              </div>
+
+              <div className="space-y-2">
+                <Label>Instrument</Label>
+                <Select value={resyncInstrument} onValueChange={setResyncInstrument}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select instrument..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="1290">Agilent 1290</SelectItem>
+                    <SelectItem value="1260">Agilent 1260</SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">
+                  Which HPLC instrument produced this data.
+                </p>
+              </div>
+            </div>
+
+            <DialogFooter>
+              <Button variant="outline" onClick={closeResyncDialog}>Cancel</Button>
+              <Button onClick={handleResyncSubmit} disabled={!resyncAnalyteId}>
+                <Cloud className="mr-2 h-4 w-4" />
+                Import
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
         {/* Keyframe animations */}
         <style>{`

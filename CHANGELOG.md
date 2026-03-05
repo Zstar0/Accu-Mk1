@@ -1,5 +1,42 @@
 # Changelog
 
+## v0.19.0 — 2026-03-05
+
+### HPLC Flyout Redesign
+
+- **Single-page scrollable layout** — replaced multi-step wizard with a two-column flyout (1360px wide); left column shows results + data, right column shows sticky Calculation Trace
+- **Auto-run analysis** — analysis runs automatically when data file + calibration are loaded; removed manual "Run Analysis" button
+- **Consolidated chromatogram** — single chromatogram with peak table directly below; removed duplicate chart
+- **`hideTrace` prop on AnalysisResults** — calculation trace can be hidden from the results card when rendered externally in the right column
+
+### Senaite Results Submission
+
+- **New `SenaiteResultsView` component** — second view in the HPLC flyout for submitting computed results to Senaite LIMS
+- **"Submit Results" button** — navigates from analysis view to Senaite submission step
+- **Sample ID selector** — load any Senaite sample by ID (needed for testing where local dev samples differ from SharePoint data files)
+- **Auto-fill from HPLC** — matches computed purity, quantity, and identity values to Senaite analysis rows by title keyword; supports generic ("Peptide Purity (HPLC)", "Peptide Total Quantity") and per-analyte ("KPV Purity", "BPC-157 - Identity (HPLC)") naming conventions
+- **One-click fill** — "Fill N results" button writes all matched values to Senaite via `setAnalysisResult` API with optimistic local updates and toast feedback
+
+### Peptide & Calibration Management
+
+- Enhanced `PeptideConfig` and `PeptideForm` with instrument tabs and expanded configuration options
+- Improved `CalibrationPanel` with additional calibration curve management features
+- Updated `MethodPanel` and `MethodsPage` with refined method management UI
+
+### Backend
+
+- Expanded HPLC backend endpoints and models
+- Added SharePoint integration helpers
+
+### Other
+
+- New `CreateAnalysis` and `AnalysisServicesPage` components
+- `DataPipelinePane` additions in preferences
+- Sidebar and store updates for new navigation flows
+- Wizard step improvements
+
+---
+
 ## v0.18.0 — 2026-03-03
 
 ### Added

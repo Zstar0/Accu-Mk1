@@ -290,6 +290,28 @@ async def search_sample_folder(sample_id: str) -> Optional[dict]:
     return None
 
 
+async def find_lims_sample_folder(sample_id: str) -> Optional[dict]:
+    """
+    Find a sample folder in the LIMS CSV root by sample ID prefix.
+
+    Folders are named like "P-0111 BPC-157" — we match on the sample ID prefix
+    (e.g. "P-0111") case-insensitively.
+
+    Returns:
+        Dict with keys: id, name, path  — or None if not found
+    """
+    folders = await list_lims_folder("")
+    sid = sample_id.strip().upper()
+    for f in folders:
+        if f["type"] == "folder" and f["name"].upper().startswith(sid):
+            return {
+                "id": f["id"],
+                "name": f["name"],
+                "path": f["name"],
+            }
+    return None
+
+
 async def download_file(item_id: str) -> tuple[bytes, str]:
     """
     Download a file by its Graph API item ID.

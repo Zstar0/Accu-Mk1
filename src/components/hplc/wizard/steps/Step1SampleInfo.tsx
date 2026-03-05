@@ -53,6 +53,7 @@ export function Step1SampleInfo() {
   const [activeTab, setActiveTab] = useState<'lookup' | 'manual'>('manual')
 
   // Lookup state
+  const setSenaiteResult = useWizardStore(state => state.setSenaiteResult)
   const [lookupId, setLookupId] = useState('')
   const [lookupLoading, setLookupLoading] = useState(false)
   const [lookupError, setLookupError] = useState<string | null>(null)
@@ -187,6 +188,7 @@ export function Step1SampleInfo() {
     try {
       const result = await lookupSenaiteSample(lookupId.trim())
       setLookupResult(result)
+      setSenaiteResult(result)  // persist to store so other steps can show it
       // Auto-populate fields from SENAITE data
       setSampleIdLabel(result.sample_id)
       if (result.declared_weight_mg != null) {

@@ -1,14 +1,18 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { Loader2, Save, X, Pencil, FlaskConical } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useUIStore } from '@/store/ui-store'
+import { toast } from 'sonner'
 import {
   updateMethod,
+  updatePeptide,
   getInstruments,
+  getPeptides,
   type HplcMethod,
   type PeptideBrief,
+  type PeptideRecord,
   type Instrument,
 } from '@/lib/api'
 
@@ -22,10 +26,56 @@ export function MethodPanel({ method, onUpdated }: MethodPanelProps) {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [instruments, setInstruments] = useState<Instrument[]>([])
+  const [allPeptides, setAllPeptides] = useState<PeptideRecord[]>([])
+  const [assigningPeptide, setAssigningPeptide] = useState(false)
+
+  const loadPeptides = useCallback(() => {
+    getPeptides().then(setAllPeptides).catch(console.error)
+  }, [])
 
   useEffect(() => {
     getInstruments().then(setInstruments).catch(console.error)
-  }, [])
+    loadPeptides()
+  }, [loadPeptides])
+
+  // Peptides not yet assigned to this method
+  const unassignedPeptides = allPeptides.filter(
+    p => !method.common_peptides.some(cp => cp.id === p.id)
+  )
+
+  const handleAssignPeptide = async (peptideId: number) => {
+    const peptide = allPeptides.find(p => p.id === peptideId)
+    if (!peptide) return
+    setAssigningPeptide(true)
+    try {
+      const existingMethodIds = peptide.methods.map(m => m.id)
+      await updatePeptide(peptideId, { method_ids: [...existingMethodIds, method.id] })
+      toast.success(`Assigned ${peptide.abbreviation}`)
+      loadPeptides()
+      onUpdated()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to assign peptide')
+    } finally {
+      setAssigningPeptide(false)
+    }
+  }
+
+  const handleUnassignPeptide = async (peptideId: number) => {
+    const peptide = allPeptides.find(p => p.id === peptideId)
+    if (!peptide) return
+    setAssigningPeptide(true)
+    try {
+      const newMethodIds = peptide.methods.filter(m => m.id !== method.id).map(m => m.id)
+      await updatePeptide(peptideId, { method_ids: newMethodIds })
+      toast.success(`Unassigned ${peptide.abbreviation}`)
+      loadPeptides()
+      onUpdated()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to unassign peptide')
+    } finally {
+      setAssigningPeptide(false)
+    }
+  }
 
   // Editable fields
   const [name, setName] = useState(method.name)
@@ -229,27 +279,66 @@ export function MethodPanel({ method, onUpdated }: MethodPanelProps) {
 
       {/* Common Peptides section */}
       <div className="border-t pt-4">
-        <h4 className="mb-3 text-sm font-semibold text-muted-foreground">
-          Common Peptides ({method.common_peptides.length})
-        </h4>
-        {method.common_peptides.length === 0 ? (
+        <div className="flex items-center justify-between mb-3">
+          <h4 className="text-sm font-semibold text-muted-foreground">
+            Assigned Peptides ({method.common_peptides.length})
+          </h4>
+        </div>
+        {method.common_peptides.length === 0 && !editing ? (
           <p className="text-sm text-muted-foreground">
-            No peptides assigned to this method yet. Assign a method from the Peptide Standards page.
+            No peptides assigned to this method yet.
           </p>
         ) : (
           <div className="flex flex-wrap gap-2">
             {method.common_peptides.map((p: PeptideBrief) => (
-              <button
+              <div
                 key={p.id}
-                type="button"
-                onClick={() => useUIStore.getState().navigateToPeptide(p.id)}
-                className="inline-flex items-center gap-1.5 rounded-md border bg-muted/50 px-2.5 py-1 text-sm transition-colors hover:bg-muted"
+                className="inline-flex items-center gap-1.5 rounded-md border bg-muted/50 px-2.5 py-1 text-sm"
               >
-                <FlaskConical className="h-3 w-3 text-muted-foreground" />
-                <span className="font-medium">{p.abbreviation}</span>
-                <span className="text-muted-foreground">({p.name})</span>
-              </button>
+                <button
+                  type="button"
+                  onClick={() => useUIStore.getState().navigateToPeptide(p.id)}
+                  className="inline-flex items-center gap-1.5 transition-colors hover:text-primary"
+                >
+                  <FlaskConical className="h-3 w-3 text-muted-foreground" />
+                  <span className="font-medium">{p.abbreviation}</span>
+                  <span className="text-muted-foreground">({p.name})</span>
+                </button>
+                {editing && (
+                  <button
+                    type="button"
+                    onClick={() => handleUnassignPeptide(p.id)}
+                    disabled={assigningPeptide}
+                    className="ml-1 rounded p-0.5 text-muted-foreground hover:text-destructive transition-colors"
+                    title={`Unassign ${p.abbreviation}`}
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                )}
+              </div>
             ))}
+          </div>
+        )}
+        {/* Add peptide dropdown — only in edit mode */}
+        {editing && unassignedPeptides.length > 0 && (
+          <div className="mt-3 flex items-center gap-2">
+            <select
+              className="flex h-8 flex-1 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              defaultValue=""
+              disabled={assigningPeptide}
+              onChange={e => {
+                if (e.target.value) {
+                  handleAssignPeptide(parseInt(e.target.value, 10))
+                  e.target.value = ''
+                }
+              }}
+            >
+              <option value="" disabled>Add peptide...</option>
+              {unassignedPeptides.map(p => (
+                <option key={p.id} value={p.id}>{p.abbreviation} — {p.name}</option>
+              ))}
+            </select>
+            {assigningPeptide && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
           </div>
         )}
       </div>

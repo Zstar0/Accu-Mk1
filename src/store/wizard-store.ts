@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { devtools } from 'zustand/middleware'
-import type { WizardSessionResponse } from '@/lib/api'
+import type { WizardSessionResponse, SenaiteLookupResult } from '@/lib/api'
 
 // --- Types ---
 
@@ -96,12 +96,16 @@ interface WizardStoreState {
   loading: boolean
   error: string | null
 
+  // SENAITE lookup result — persisted so it can be shown on all steps
+  senaiteResult: SenaiteLookupResult | null
+
   // Actions
   startSession: (session: WizardSessionResponse) => void
   updateSession: (session: WizardSessionResponse) => void
   setCurrentStep: (step: StepId) => void
   setLoading: (loading: boolean) => void
   setError: (error: string | null) => void
+  setSenaiteResult: (result: SenaiteLookupResult | null) => void
   resetWizard: () => void
 
   // Navigation helper
@@ -118,6 +122,7 @@ export const useWizardStore = create<WizardStoreState>()(
       stepStates: deriveStepStates(null, 1),
       loading: false,
       error: null,
+      senaiteResult: null,
 
       startSession: session =>
         set(
@@ -162,6 +167,9 @@ export const useWizardStore = create<WizardStoreState>()(
       setError: error =>
         set({ error }, undefined, 'setError'),
 
+      setSenaiteResult: result =>
+        set({ senaiteResult: result }, undefined, 'setSenaiteResult'),
+
       resetWizard: () =>
         set(
           {
@@ -170,6 +178,7 @@ export const useWizardStore = create<WizardStoreState>()(
             stepStates: deriveStepStates(null, 1),
             loading: false,
             error: null,
+            senaiteResult: null,
           },
           undefined,
           'resetWizard'

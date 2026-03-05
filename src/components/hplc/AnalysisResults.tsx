@@ -23,9 +23,10 @@ import { ChromatogramChart, type ChromatogramTrace } from './ChromatogramChart'
 interface AnalysisResultsProps {
   result: HPLCAnalysisResult
   chromatograms?: ChromatogramTrace[]
+  hideTrace?: boolean
 }
 
-export function AnalysisResults({ result, chromatograms }: AnalysisResultsProps) {
+export function AnalysisResults({ result, chromatograms, hideTrace }: AnalysisResultsProps) {
   const [traceOpen, setTraceOpen] = useState(true)
   const [traceView, setTraceView] = useState<'visual' | 'json'>('visual')
   const navigateToPeptide = useUIStore(state => state.navigateToPeptide)
@@ -155,7 +156,7 @@ export function AnalysisResults({ result, chromatograms }: AnalysisResultsProps)
       )}
 
       {/* Calculation Trace */}
-      {result.calculation_trace && (
+      {!hideTrace && result.calculation_trace && (
         <Card>
           <CardHeader className="pb-0">
             <div className="flex items-center justify-between">

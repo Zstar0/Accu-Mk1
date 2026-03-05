@@ -142,7 +142,7 @@ export function AnalyticsDashboard() {
                           </div>
                         </TableCell>
                         <TableCell className="text-right font-mono text-sm">
-                          {p.reference_rt != null ? `${p.reference_rt.toFixed(3)} min` : '—'}
+                          {p.active_calibration?.reference_rt != null ? `${p.active_calibration.reference_rt.toFixed(3)} min` : '—'}
                         </TableCell>
                         <TableCell className="text-center">
                           <Badge variant="outline" className="text-xs border-yellow-600/50 text-yellow-500">

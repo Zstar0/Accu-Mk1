@@ -22,7 +22,7 @@ from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import select, desc, delete, func
 
 from database import get_db, init_db
-from models import AuditLog, Settings, Job, Sample, Result, Instrument, HplcMethod, Peptide, CalibrationCurve, HPLCAnalysis, User, SharePointFileCache, WizardSession, WizardMeasurement, peptide_methods
+from models import AuditLog, Settings, Job, Sample, Result, Instrument, AnalysisService, HplcMethod, Peptide, PeptideAnalyte, CalibrationCurve, HPLCAnalysis, User, SharePointFileCache, WizardSession, WizardMeasurement, peptide_methods
 from auth import (
     get_current_user, require_admin, create_access_token,
     verify_password, get_password_hash, seed_admin_user,
@@ -1317,6 +1317,27 @@ class InstrumentResponse(BaseModel):
         from_attributes = True
 
 
+# ─── Analysis Service schemas ───
+
+class AnalysisServiceResponse(BaseModel):
+    """Full analysis service response."""
+    id: int
+    title: str
+    keyword: Optional[str] = None
+    category: Optional[str] = None
+    unit: Optional[str] = None
+    methods: Optional[list] = None
+    peptide_name: Optional[str] = None
+    senaite_id: Optional[str] = None
+    senaite_uid: Optional[str] = None
+    active: bool
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
 # ─── HPLC Method schemas ───
 
 class MethodCreate(BaseModel):
@@ -1389,30 +1410,50 @@ class MethodResponse(BaseModel):
 
 # ─── Peptide schemas ───
 
+class AnalyteInput(BaseModel):
+    """One analyte slot for peptide create/update."""
+    slot: int
+    analysis_service_id: int
+    sample_id: Optional[str] = None
+
+
+class AnalyteResponse(BaseModel):
+    """Analyte slot in peptide response — includes denormalized service fields."""
+    id: int
+    slot: int
+    analysis_service_id: int
+    sample_id: Optional[str] = None
+    peptide_name: Optional[str] = None
+    service_title: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
 class PeptideCreate(BaseModel):
     """Schema for creating a peptide."""
     name: str
     abbreviation: str
-    reference_rt: Optional[float] = None
-    rt_tolerance: float = 0.5
-    diluent_density: float = 997.1
+    analytes: list[AnalyteInput] = []
 
 
 class PeptideUpdate(BaseModel):
     """Schema for updating a peptide."""
     name: Optional[str] = None
     abbreviation: Optional[str] = None
-    reference_rt: Optional[float] = None
-    rt_tolerance: Optional[float] = None
-    diluent_density: Optional[float] = None
     active: Optional[bool] = None
     method_ids: Optional[list[int]] = None  # Set all method assignments (one per instrument)
+    analytes: Optional[list[AnalyteInput]] = None
 
 
 class CalibrationCurveResponse(BaseModel):
     """Schema for calibration curve response."""
     id: int
     peptide_id: int
+    peptide_analyte_id: Optional[int] = None
+    reference_rt: Optional[float] = None
+    rt_tolerance: float = 0.5
+    diluent_density: float = 997.1
     slope: float
     intercept: float
     r_squared: float
@@ -1424,6 +1465,7 @@ class CalibrationCurveResponse(BaseModel):
     is_active: bool
     created_at: datetime
     # Standard identification metadata
+    source_sample_id: Optional[str] = None
     instrument: Optional[str] = None
     vendor: Optional[str] = None
     lot_number: Optional[str] = None
@@ -1456,15 +1498,13 @@ class PeptideResponse(BaseModel):
     id: int
     name: str
     abbreviation: str
-    reference_rt: Optional[float]
-    rt_tolerance: float
-    diluent_density: float
     active: bool
     created_at: datetime
     updated_at: datetime
     methods: list[MethodBrief] = []
     active_calibration: Optional[CalibrationCurveResponse] = None
     calibration_summary: list[InstrumentSummary] = []
+    analytes: list[AnalyteResponse] = []
 
     class Config:
         from_attributes = True
@@ -1523,11 +1563,28 @@ def _method_to_brief(method: HplcMethod) -> MethodBrief:
     return brief
 
 
+def _build_analyte_responses(analytes) -> list[AnalyteResponse]:
+    """Convert PeptideAnalyte ORM objects to AnalyteResponse dicts."""
+    results = []
+    for a in analytes:
+        svc = a.analysis_service
+        results.append(AnalyteResponse(
+            id=a.id,
+            slot=a.slot,
+            analysis_service_id=a.analysis_service_id,
+            sample_id=a.sample_id,
+            peptide_name=svc.peptide_name if svc else None,
+            service_title=svc.title if svc else None,
+        ))
+    return results
+
+
 def _peptide_to_response(db: Session, peptide: Peptide) -> PeptideResponse:
-    """Convert Peptide model to response with active calibration and methods."""
+    """Convert Peptide model to response with active calibration, methods, and analytes."""
     resp = PeptideResponse.model_validate(peptide)
     resp.active_calibration = _get_active_calibration(db, peptide.id)
     resp.methods = [_method_to_brief(m) for m in peptide.methods]
+    resp.analytes = _build_analyte_responses(peptide.analytes)
     return resp
 
 
@@ -1600,6 +1657,137 @@ async def sync_instruments(db: Session = Depends(get_db), _current_user=Depends(
     return {"created": created, "total": total}
 
 
+# ─── Analysis Service Endpoints ───
+
+
+def _extract_peptide_name(title: str) -> Optional[str]:
+    """Derive peptide name from analysis service title.
+    'AICAR – Identity (HPLC)' → 'AICAR'
+    'BPC157 – Purity (HPLC)' → 'BPC157'
+    """
+    import re
+    match = re.match(r'^(.+?)\s*[–\-]\s*(?:Purity|Identity|Quantity)\b', title)
+    return match.group(1).strip() if match else None
+
+
+@app.get("/analysis-services", response_model=list[AnalysisServiceResponse])
+async def get_analysis_services(
+    search: Optional[str] = None,
+    category: Optional[str] = None,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """List all analysis services. Optional search by title, keyword, or category. Optional exact category filter."""
+    query = select(AnalysisService).order_by(AnalysisService.title)
+    if category:
+        query = query.where(AnalysisService.category == category)
+    if search:
+        q = f"%{search}%"
+        query = query.where(
+            AnalysisService.title.ilike(q)
+            | AnalysisService.keyword.ilike(q)
+            | AnalysisService.category.ilike(q)
+            | AnalysisService.peptide_name.ilike(q)
+        )
+    services = db.execute(query).scalars().all()
+    return [AnalysisServiceResponse.model_validate(s) for s in services]
+
+
+@app.post("/analysis-services/sync")
+async def sync_analysis_services(db: Session = Depends(get_db), _current_user=Depends(get_current_user)):
+    """Sync analysis services from Senaite. Adds new services, does not overwrite existing."""
+    import httpx as _httpx
+
+    if not SENAITE_URL:
+        raise HTTPException(400, "SENAITE_URL not configured")
+
+    try:
+        resp = _httpx.get(
+            f"{SENAITE_URL}/senaite/@@API/senaite/v1/search",
+            auth=_httpx.BasicAuth(SENAITE_USER, SENAITE_PASSWORD),
+            timeout=SENAITE_TIMEOUT,
+            params={"portal_type": "AnalysisService", "limit": 500, "complete": "true"},
+        )
+        resp.raise_for_status()
+    except Exception as e:
+        raise HTTPException(502, f"Failed to reach Senaite: {e}")
+
+    items = resp.json().get("items", [])
+
+    # Pre-fetch category UID → title map (Category field is a reference, not a string)
+    category_map: dict[str, str] = {}
+    try:
+        cat_resp = _httpx.get(
+            f"{SENAITE_URL}/senaite/@@API/senaite/v1/search",
+            auth=_httpx.BasicAuth(SENAITE_USER, SENAITE_PASSWORD),
+            timeout=SENAITE_TIMEOUT,
+            params={"portal_type": "AnalysisCategory", "limit": 200},
+        )
+        cat_resp.raise_for_status()
+        for cat_item in cat_resp.json().get("items", []):
+            if cat_item.get("uid") and cat_item.get("title"):
+                category_map[cat_item["uid"]] = cat_item["title"]
+    except Exception:
+        pass  # Non-fatal — categories will just be None
+
+    created = 0
+    updated = 0
+    for item in items:
+        senaite_id = item.get("id")
+        if not senaite_id:
+            continue
+
+        title = item.get("title", senaite_id)
+
+        # Resolve category title via UID lookup
+        category = None
+        cat = item.get("Category")
+        if isinstance(cat, dict):
+            category = category_map.get(cat.get("uid", ""))
+        elif isinstance(cat, str):
+            category = cat
+        if not category:
+            cat_title = item.get("getCategoryTitle")
+            if isinstance(cat_title, str):
+                category = cat_title
+
+        # Extract methods list
+        raw_methods = item.get("Methods") or item.get("getMethods") or []
+        methods_list = []
+        if isinstance(raw_methods, list):
+            for m in raw_methods:
+                if isinstance(m, dict):
+                    methods_list.append({"uid": m.get("uid", ""), "title": m.get("title", "")})
+
+        existing = db.execute(
+            select(AnalysisService).where(AnalysisService.senaite_id == senaite_id)
+        ).scalar_one_or_none()
+
+        if existing:
+            # Back-fill category if it was missing
+            if not existing.category and category:
+                existing.category = category
+                updated += 1
+            continue
+
+        svc = AnalysisService(
+            title=title,
+            keyword=item.get("getKeyword") or item.get("Keyword"),
+            category=category,
+            unit=item.get("getUnit") or item.get("Unit"),
+            methods=methods_list if methods_list else None,
+            peptide_name=_extract_peptide_name(title),
+            senaite_id=senaite_id,
+            senaite_uid=item.get("uid"),
+        )
+        db.add(svc)
+        created += 1
+
+    db.commit()
+    total = db.execute(select(func.count()).select_from(AnalysisService)).scalar()
+    return {"created": created, "total": total}
+
+
 # ─── HPLC Method Endpoints ───
 
 @app.get("/hplc/methods", response_model=list[MethodResponse])
@@ -1668,6 +1856,7 @@ async def get_peptides(db: Session = Depends(get_db), _current_user=Depends(get_
         select(Peptide)
         .options(
             joinedload(Peptide.methods).joinedload(HplcMethod.instrument),
+            joinedload(Peptide.analytes).joinedload(PeptideAnalyte.analysis_service),
         )
         .order_by(Peptide.abbreviation)
     ).scalars().unique().all()
@@ -1704,6 +1893,7 @@ async def get_peptides(db: Session = Depends(get_db), _current_user=Depends(get_
         resp.active_calibration = active_cal_map.get(p.id)
         resp.calibration_summary = sorted(summary_map.get(p.id, []), key=lambda x: x.instrument)
         resp.methods = [_method_to_brief(m) for m in p.methods]
+        resp.analytes = _build_analyte_responses(p.analytes)
         results.append(resp)
     return results
 
@@ -1721,11 +1911,19 @@ async def create_peptide(data: PeptideCreate, db: Session = Depends(get_db), _cu
     peptide = Peptide(
         name=data.name,
         abbreviation=data.abbreviation,
-        reference_rt=data.reference_rt,
-        rt_tolerance=data.rt_tolerance,
-        diluent_density=data.diluent_density,
     )
     db.add(peptide)
+    db.flush()  # Get peptide.id without committing
+
+    # Create analyte slot rows
+    for a in data.analytes:
+        db.add(PeptideAnalyte(
+            peptide_id=peptide.id,
+            analysis_service_id=a.analysis_service_id,
+            sample_id=a.sample_id,
+            slot=a.slot,
+        ))
+
     db.commit()
     db.refresh(peptide)
     return _peptide_to_response(db, peptide)
@@ -1746,11 +1944,84 @@ async def wipe_all_peptides(db: Session = Depends(get_db), _current_user=Depends
     }
 
 
+@app.post("/peptides/seed-from-services")
+async def seed_peptides_from_services(
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """
+    Seed the Peptides list from Analysis Services.
+    Creates one peptide per unique peptide_name found in services with
+    category 'Peptide Identity' and title containing 'Identity (HPLC)'.
+    Each matching service is linked as an analyte (slots 1-4).
+    Existing peptides (by abbreviation) are skipped.
+    """
+    # 1. Query matching analysis services
+    services = db.execute(
+        select(AnalysisService)
+        .where(AnalysisService.category == "Peptide Identity")
+        .where(AnalysisService.title.contains("Identity (HPLC)"))
+        .where(AnalysisService.active == True)
+        .order_by(AnalysisService.title)
+    ).scalars().all()
+
+    if not services:
+        return {"created": 0, "skipped": 0, "message": "No matching analysis services found"}
+
+    # 2. Group services by peptide_name
+    from collections import defaultdict
+    grouped: dict[str, list] = defaultdict(list)
+    for svc in services:
+        pname = (svc.peptide_name or "").strip()
+        if pname:
+            grouped[pname].append(svc)
+
+    # 3. Get existing peptide abbreviations
+    existing_abbrs = set(
+        row[0] for row in db.execute(select(Peptide.abbreviation)).all()
+    )
+
+    created = 0
+    skipped = 0
+    for pname, svcs in sorted(grouped.items()):
+        abbr = pname.upper()
+        if abbr in existing_abbrs:
+            skipped += 1
+            continue
+
+        # Create the peptide
+        peptide = Peptide(name=pname, abbreviation=abbr)
+        db.add(peptide)
+        db.flush()
+
+        # Link services as analytes (max 4 slots)
+        for slot_idx, svc in enumerate(svcs[:4], start=1):
+            db.add(PeptideAnalyte(
+                peptide_id=peptide.id,
+                analysis_service_id=svc.id,
+                slot=slot_idx,
+            ))
+
+        created += 1
+        existing_abbrs.add(abbr)
+
+    db.commit()
+    return {
+        "created": created,
+        "skipped": skipped,
+        "total_services": len(services),
+        "message": f"Created {created} peptide(s), skipped {skipped} existing",
+    }
+
+
 @app.put("/peptides/{peptide_id}", response_model=PeptideResponse)
 async def update_peptide(peptide_id: int, data: PeptideUpdate, db: Session = Depends(get_db), _current_user=Depends(get_current_user)):
     """Update a peptide. method_ids sets all method assignments (one per instrument)."""
     peptide = db.execute(
-        select(Peptide).options(joinedload(Peptide.methods).joinedload(HplcMethod.instrument))
+        select(Peptide).options(
+            joinedload(Peptide.methods).joinedload(HplcMethod.instrument),
+            joinedload(Peptide.analytes).joinedload(PeptideAnalyte.analysis_service),
+        )
         .where(Peptide.id == peptide_id)
     ).scalars().unique().one_or_none()
     if not peptide:
@@ -1758,10 +2029,22 @@ async def update_peptide(peptide_id: int, data: PeptideUpdate, db: Session = Dep
 
     update_data = data.model_dump(exclude_unset=True)
     method_ids = update_data.pop("method_ids", None)
+    analytes_data = update_data.pop("analytes", None)
 
     # Update scalar fields
     for field, value in update_data.items():
         setattr(peptide, field, value)
+
+    # Update analyte slots if provided (delete-and-replace)
+    if analytes_data is not None:
+        db.execute(delete(PeptideAnalyte).where(PeptideAnalyte.peptide_id == peptide.id))
+        for a in analytes_data:
+            db.add(PeptideAnalyte(
+                peptide_id=peptide.id,
+                analysis_service_id=a["analysis_service_id"],
+                sample_id=a.get("sample_id"),
+                slot=a["slot"],
+            ))
 
     # Update method assignments if provided
     if method_ids is not None:
@@ -1896,15 +2179,74 @@ async def activate_calibration(
     # Activate the target
     target.is_active = True
 
-    # Update peptide's reference RT from this curve's RT data
-    if target.standard_data and target.standard_data.get("rts"):
+    # Update curve's reference RT from its own RT data if not already set
+    if target.reference_rt is None and target.standard_data and target.standard_data.get("rts"):
         rts = target.standard_data["rts"]
         if rts:
-            peptide.reference_rt = round(sum(rts) / len(rts), 4)
+            target.reference_rt = round(sum(rts) / len(rts), 4)
 
     db.commit()
     db.refresh(target)
     return _cal_to_response(target)
+
+
+class CalibrationCurveUpdate(BaseModel):
+    """Partial update schema for a calibration curve."""
+    reference_rt: Optional[float] = None
+    rt_tolerance: Optional[float] = None
+    diluent_density: Optional[float] = None
+    instrument: Optional[str] = None
+    peptide_analyte_id: Optional[int] = None
+
+    class Config:
+        from_attributes = True
+
+
+@app.patch("/peptides/{peptide_id}/calibrations/{calibration_id}", response_model=CalibrationCurveResponse)
+async def update_calibration(
+    peptide_id: int,
+    calibration_id: int,
+    body: CalibrationCurveUpdate,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Partial update of a calibration curve's editable fields."""
+    target = db.execute(
+        select(CalibrationCurve)
+        .where(CalibrationCurve.id == calibration_id)
+        .where(CalibrationCurve.peptide_id == peptide_id)
+    ).scalar_one_or_none()
+    if not target:
+        raise HTTPException(404, f"Calibration {calibration_id} not found for peptide {peptide_id}")
+
+    updates = body.model_dump(exclude_unset=True)
+    for field, value in updates.items():
+        setattr(target, field, value)
+
+    db.commit()
+    db.refresh(target)
+    return _cal_to_response(target)
+
+
+@app.delete("/peptides/{peptide_id}/calibrations/{calibration_id}", status_code=204)
+async def delete_calibration(
+    peptide_id: int,
+    calibration_id: int,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Delete a single calibration curve."""
+    target = db.execute(
+        select(CalibrationCurve)
+        .where(CalibrationCurve.id == calibration_id)
+        .where(CalibrationCurve.peptide_id == peptide_id)
+    ).scalar_one_or_none()
+    if not target:
+        raise HTTPException(404, f"Calibration {calibration_id} not found for peptide {peptide_id}")
+
+    db.delete(target)
+    db.commit()
+    return Response(status_code=204)
 
 
 # --- Full HPLC Analysis Endpoint ---
@@ -1982,14 +2324,14 @@ async def run_hplc_analysis(
         if not cal:
             raise HTTPException(400, f"No active calibration curve for peptide '{peptide.abbreviation}'")
 
-    # Resolve reference RT: prefer peptide setting, fall back to calibration standard RTs
-    ref_rt = peptide.reference_rt
+    # Resolve reference RT: prefer curve setting, fall back to calibration standard RTs
+    ref_rt = cal.reference_rt
     if ref_rt is None and cal.standard_data:
         cal_rts = cal.standard_data.get("rts", [])
         if cal_rts:
             ref_rt = round(sum(cal_rts) / len(cal_rts), 4)
-            # Persist so future analyses don't need this fallback
-            peptide.reference_rt = ref_rt
+            # Persist on the curve so future analyses don't need this fallback
+            cal.reference_rt = ref_rt
             db.flush()
 
     # Build analysis input
@@ -2005,8 +2347,8 @@ async def run_hplc_analysis(
         calibration=CalibrationParams(slope=cal.slope, intercept=cal.intercept),
         peptide=PeptideParams(
             reference_rt=ref_rt,
-            rt_tolerance=peptide.rt_tolerance,
-            diluent_density=peptide.diluent_density,
+            rt_tolerance=cal.rt_tolerance,
+            diluent_density=cal.diluent_density,
         ),
     )
 
@@ -2506,6 +2848,94 @@ def _try_extract_calibration(ws, filename: str, max_rows: int = 25) -> dict | No
     return None
 
 
+def _parse_peakdata_csv(data: bytes, filename: str) -> dict | None:
+    """
+    Parse a PeakData CSV file exported from the HPLC instrument.
+
+    Expected format:
+        Height,Area,Area%,Peak Begin Time,Peak End Time,RT [min]
+        505.4477,7268.6459,98.0781,3.314,4.205,3.477
+        9.8865,142.4372,1.9219,4.205,4.967,4.292
+        Sum,7411.0831,,,,
+
+    Returns the dominant peak (highest Area%) as:
+        {"area": float, "rt": float, "height": float}
+    or None if no valid peaks found.
+    """
+    import csv
+    from io import StringIO
+
+    try:
+        text = data.decode("utf-8", errors="replace")
+        reader = csv.DictReader(StringIO(text))
+
+        best_peak = None
+        best_area_pct = -1.0
+
+        for row in reader:
+            # Skip the "Sum" row
+            height_str = (row.get("Height") or "").strip()
+            if not height_str or height_str.lower() == "sum":
+                continue
+
+            try:
+                area = float(row.get("Area", 0))
+                area_pct = float(row.get("Area%", 0))
+                rt = float(row.get("RT [min]", 0))
+                height = float(height_str)
+            except (ValueError, TypeError):
+                continue
+
+            if area > 0 and area_pct > best_area_pct:
+                best_area_pct = area_pct
+                best_peak = {"area": area, "rt": rt, "height": height}
+
+        return best_peak
+    except Exception as e:
+        print(f"[WARN] Failed to parse PeakData CSV {filename}: {e}")
+        return None
+
+
+def _build_curve_from_peakdata_csvs(files: list[tuple[str, bytes, str]]) -> dict | None:
+    """
+    Build a calibration curve from multiple PeakData CSV files.
+
+    Args:
+        files: List of (concentration_str, file_bytes, filename) tuples
+
+    Returns:
+        dict with keys: concentrations, areas, rts
+        or None if fewer than 3 valid data points
+    """
+    concentrations = []
+    areas = []
+    rts = []
+
+    for conc_str, data, filename in files:
+        try:
+            conc = float(conc_str)
+        except ValueError:
+            continue
+
+        peak = _parse_peakdata_csv(data, filename)
+        if not peak or peak["area"] <= 0:
+            continue
+
+        concentrations.append(conc)
+        areas.append(peak["area"])
+        if peak["rt"] > 0:
+            rts.append(peak["rt"])
+
+    if len(concentrations) < 3:
+        return None
+
+    return {
+        "concentrations": concentrations,
+        "areas": areas,
+        "rts": rts,
+    }
+
+
 def _parse_calibration_excel_bytes(data: bytes, filename: str) -> dict | None:
     """Parse calibration data from Excel file bytes (downloaded from SharePoint)."""
     import openpyxl
@@ -2674,9 +3104,6 @@ async def seed_peptides_from_sharepoint(
                 peptide = Peptide(
                     name=folder_name,
                     abbreviation=abbreviation,
-                    reference_rt=ref_rt,
-                    rt_tolerance=0.5,
-                    diluent_density=997.1,
                 )
                 db.add(peptide)
                 db.flush()
@@ -2747,11 +3174,11 @@ async def seed_peptides_from_sharepoint(
                 db.flush()
                 new_cals_for_peptide[-1].is_active = True
                 log(f"  ✓ Active: {new_cals_for_peptide[-1].source_filename}")
-                # Update reference RT from active curve
+                # Set reference RT on the active curve from its own RT data
                 active_data = new_cals_for_peptide[-1].standard_data
                 if active_data and active_data.get("rts"):
-                    peptide.reference_rt = round(sum(active_data["rts"]) / len(active_data["rts"]), 4)
-                    log(f"  Updated reference RT: {peptide.reference_rt}")
+                    new_cals_for_peptide[-1].reference_rt = round(sum(active_data["rts"]) / len(active_data["rts"]), 4)
+                    log(f"  Updated reference RT: {new_cals_for_peptide[-1].reference_rt}")
 
             if not parsed_cals and is_new:
                 no_cal_data.append(folder_name)
@@ -2936,18 +3363,9 @@ async def seed_peptides_stream(
                 is_new = peptide is None
 
                 if is_new:
-                    ref_rt = None
-                    if parsed_cals:
-                        last_cal = parsed_cals[-1]
-                        if last_cal.get("rts"):
-                            ref_rt = round(sum(last_cal["rts"]) / len(last_cal["rts"]), 4)
-
                     peptide = Peptide(
                         name=folder_name,
                         abbreviation=abbreviation,
-                        reference_rt=ref_rt,
-                        rt_tolerance=0.5,
-                        diluent_density=997.1,
                     )
                     db.add(peptide)
                     db.flush()
@@ -3024,12 +3442,12 @@ async def seed_peptides_stream(
                         "message": f"  ✓ Active: {new_cals_for_peptide[-1].source_filename}",
                         "level": "success",
                     })
-                    # Update reference RT from active curve
+                    # Set reference RT on the active curve from its own RT data
                     active_data = new_cals_for_peptide[-1].standard_data
                     if active_data and active_data.get("rts"):
-                        peptide.reference_rt = round(sum(active_data["rts"]) / len(active_data["rts"]), 4)
+                        new_cals_for_peptide[-1].reference_rt = round(sum(active_data["rts"]) / len(active_data["rts"]), 4)
                         yield send_event("log", {
-                            "message": f"  Updated reference RT: {peptide.reference_rt}",
+                            "message": f"  Updated reference RT: {new_cals_for_peptide[-1].reference_rt}",
                             "level": "success",
                         })
 
@@ -3325,14 +3743,15 @@ async def import_standards_stream(
     _current_user=Depends(get_current_user),
 ):
     """
-    Incremental import of peptide standard curves from SharePoint.
+    Incremental import of peptide standard curves from LIMS CSV PeakData files.
 
-    - Loads already-processed file paths from CalibrationCurve.source_path and SharePointFileCache.
-    - Scans SharePoint Peptides folder for _Std_/STD_ files only.
-    - Skips files already seen in previous imports.
-    - For new files: finds or creates Peptide records, adds CalibrationCurve records.
+    Scans the LIMS CSVs SharePoint folder for *_Std_*_PeakData.csv files,
+    groups them by sample ID, builds calibration curves from each group.
+
+    - Loads already-processed folder keys from SharePointFileCache.
+    - Skips folders already seen in previous imports.
+    - For new folders: finds or creates Peptide records, adds CalibrationCurve records.
     - Re-evaluates is_active for any peptide that received new curves.
-    - Adds all processed files to SharePointFileCache so they are skipped next time.
     """
     from starlette.responses import StreamingResponse
     import sharepoint as sp
@@ -3347,13 +3766,6 @@ async def import_standards_stream(
                 print(f"[{data.get('level','info').upper()}] {data.get('message','')}", file=sys.stderr)
             return f"event: {event_type}\ndata: {json.dumps(data)}\n\n"
 
-        skip_folder_names = {"Templates", "Blends", "_Templates", "Archive",
-                              "1_SampleName_Std_GreenCap_Cayman_YearMonthDay_template",
-                              "Organic_synthesis_Checks"}
-        skip_file_fragments = ["DAD1A", "YearMonthDay", "template", "Template",
-                                "Master sheet", "Calibration_Curve_Template", "P-###"]
-
-        new_peptides = 0
         new_curves = 0
         skipped_cached = 0
         skipped_no_data = 0
@@ -3361,8 +3773,8 @@ async def import_standards_stream(
         errors = []
 
         try:
-            # ── 1. Load already-processed paths ────────────────────────────────────
-            yield send_event("log", {"message": "Loading known file paths...", "level": "info"})
+            # ── 1. Load already-processed cache keys ───────────────────────────────
+            yield send_event("log", {"message": "Loading known cache keys...", "level": "info"})
             known_paths: set[str] = set()
 
             existing_paths = db.execute(
@@ -3373,177 +3785,230 @@ async def import_standards_stream(
             cache_paths = db.execute(select(SharePointFileCache.source_path)).scalars().all()
             known_paths.update(p for p in cache_paths if p)
 
-            yield send_event("log", {"message": f"Skipping {len(known_paths)} already-processed files", "level": "info"})
+            yield send_event("log", {"message": f"Skipping {len(known_paths)} already-processed entries", "level": "info"})
 
-            # ── 2. List peptide folders ─────────────────────────────────────────────
-            yield send_event("log", {"message": "Scanning SharePoint Peptides folder...", "level": "info"})
-            peptide_folders = await sp.list_folder("")
-            peptide_dirs = [f for f in peptide_folders
-                            if f["type"] == "folder" and f["name"] not in skip_folder_names]
-            total = len(peptide_dirs)
-            yield send_event("log", {"message": f"Found {total} peptide folders", "level": "info"})
-            yield send_event("progress", {"current": 0, "total": total, "phase": "scanning"})
+            # ── 2. Scan LIMS CSV folders for Std_ PeakData files ───────────────────
+            yield send_event("log", {"message": "Scanning LIMS CSVs for Std_ PeakData...", "level": "heading"})
+            await asyncio.sleep(0)
 
-            # ── 3. Process each peptide folder ─────────────────────────────────────
-            for idx, folder in enumerate(sorted(peptide_dirs, key=lambda f: f["name"]), 1):
-                folder_name = folder["name"]
-                yield send_event("progress", {"current": idx, "total": total, "phase": folder_name})
+            try:
+                lims_top = await sp.list_lims_folder("")
+                lims_dirs = [f for f in lims_top if f["type"] == "folder"]
+            except Exception as e:
+                yield send_event("log", {"message": f"  [ERROR] listing LIMS root: {e}", "level": "error"})
+                errors.append(f"LIMS root: {e}")
+                lims_dirs = []
+
+            lims_total = len(lims_dirs)
+            yield send_event("log", {"message": f"Found {lims_total} LIMS sample folders", "level": "info"})
+
+            # Matches: P-0111_Std_100_PeakData.csv, P-0111_Std_1_PeakData.csv, etc.
+            # Pattern: {SampleID}_Std_{Concentration}[_optional]_PeakData.csv
+            # Note: .dx_DAD1A.CSV files are raw chromatogram data and NOT parseable
+            std_peakdata_re = re.compile(
+                r"^(.+?)_Std_(\d+(?:\.\d+)?)_.*PeakData\.csv$", re.IGNORECASE
+            )
+
+            for lims_idx, lims_dir in enumerate(sorted(lims_dirs, key=lambda f: f["name"]), 1):
+                dir_name = lims_dir["name"]
+                cache_key = f"lims-std:{dir_name}"
+
+                yield send_event("progress", {"current": lims_idx, "total": lims_total, "phase": f"LIMS: {dir_name}"})
                 await asyncio.sleep(0)
 
+                # Already processed this folder?
+                if cache_key in known_paths:
+                    skipped_cached += 1
+                    continue
+
+                # Parse folder: "P-0111 BPC-157" → peptide_abbr = "BPC-157"
+                parts = dir_name.split(" ", 1)
+                if len(parts) < 2:
+                    known_paths.add(cache_key)
+                    db.merge(SharePointFileCache(
+                        source_path=cache_key, peptide_abbreviation=dir_name, produced_calibration=False,
+                    ))
+                    continue
+                peptide_abbr = parts[1].strip()
+
+                # Recursively list all CSVs in this sample folder
                 try:
-                    all_xlsx = await sp.list_files_recursive(
-                        folder_name, extensions=[".xlsx"], root="peptides",
+                    all_csvs = await sp.list_files_recursive(
+                        dir_name, extensions=[".csv"], root="lims",
                     )
                 except Exception as e:
-                    yield send_event("log", {"message": f"  [ERROR] listing {folder_name}: {e}", "level": "error"})
-                    errors.append(f"{folder_name}: {e}")
+                    yield send_event("log", {"message": f"  [ERROR] listing {dir_name}: {e}", "level": "error"})
+                    errors.append(f"LIMS {dir_name}: {e}")
                     continue
 
-                # Filter out temp files and known non-data fragments
-                std_files = []
-                for item in all_xlsx:
-                    fn = item["name"]
-                    if fn.startswith("~$"):
-                        continue
-                    if any(frag in fn for frag in skip_file_fragments):
-                        continue
-                    std_files.append(item)
+                # Group Std_ PeakData files by sample ID
+                by_sample: dict[str, list[tuple[str, dict]]] = {}
+                for csv_item in all_csvs:
+                    m_csv = std_peakdata_re.match(csv_item["name"])
+                    if m_csv:
+                        sid_key = m_csv.group(1)
+                        conc_val = m_csv.group(2)
+                        by_sample.setdefault(sid_key, []).append((conc_val, csv_item))
 
-                # Always ensure a Peptide stub exists for every folder
-                peptide = db.execute(
-                    select(Peptide).where(Peptide.abbreviation == folder_name)
+                known_paths.add(cache_key)
+
+                if not by_sample:
+                    db.merge(SharePointFileCache(
+                        source_path=cache_key, peptide_abbreviation=peptide_abbr, produced_calibration=False,
+                    ))
+                    continue
+
+                total_std_files = sum(len(v) for v in by_sample.values())
+                yield send_event("log", {
+                    "message": f"── {dir_name}  ({total_std_files} Std_ file(s) across {len(by_sample)} sample(s))",
+                    "level": "info",
+                })
+
+                # Match to existing peptide — skip if not found
+                lims_peptide = db.execute(
+                    select(Peptide).where(func.lower(Peptide.abbreviation) == peptide_abbr.lower())
                 ).scalar_one_or_none()
-                if not peptide:
-                    peptide = Peptide(name=folder_name, abbreviation=folder_name)
-                    db.add(peptide)
-                    db.flush()
-                    new_peptides += 1
-
-                # Partition into new vs already-cached
-                new_files = []
-                for item in std_files:
-                    item_path = item.get("path", "")
-                    if item_path in known_paths:
-                        skipped_cached += 1
-                    else:
-                        new_files.append(item)
-
-                if not new_files:
+                if not lims_peptide:
+                    yield send_event("log", {"message": f"  [SKIP] No peptide '{peptide_abbr}' in database", "level": "dim"})
+                    db.merge(SharePointFileCache(
+                        source_path=cache_key, peptide_abbreviation=peptide_abbr, produced_calibration=False,
+                    ))
                     continue
 
-                yield send_event("log", {"message": f"── {folder_name}  ({len(new_files)} new file(s))", "level": "info"})
+                # Auto-link to slot 1 analyte if available
+                lims_first_analyte = db.execute(
+                    select(PeptideAnalyte).where(
+                        PeptideAnalyte.peptide_id == lims_peptide.id,
+                        PeptideAnalyte.slot == 1,
+                    )
+                ).scalar_one_or_none()
 
-                # Seed fingerprint set from existing curves for this peptide
-                seen_fingerprints: set = set()
-                for row in db.execute(
+                # Seed fingerprints from existing curves for dedup
+                lims_fps: set = set()
+                for fp_row in db.execute(
                     select(CalibrationCurve.standard_data, CalibrationCurve.instrument)
-                    .where(CalibrationCurve.peptide_id == peptide.id)
+                    .where(CalibrationCurve.peptide_id == lims_peptide.id)
                 ).all():
-                    if row.standard_data and "areas" in row.standard_data:
-                        inst = row.instrument or "unknown"
-                        seen_fingerprints.add(
-                            (inst, tuple(sorted(round(a, 1) for a in row.standard_data["areas"])))
+                    if fp_row.standard_data and "areas" in fp_row.standard_data:
+                        fp_inst = fp_row.instrument or "unknown"
+                        lims_fps.add(
+                            (fp_inst, tuple(sorted(round(a, 1) for a in fp_row.standard_data["areas"])))
                         )
 
-                folder_new_curves = 0
+                folder_lims_new = 0
 
-                for item in new_files:
-                    fn = item["name"]
-                    item_path = item.get("path", "")
-                    item_id = item["id"]
-                    known_paths.add(item_path)  # prevent double-processing within this run
+                for sid_key, conc_items in by_sample.items():
+                    # Download all PeakData CSVs for this sample
+                    csv_tuples: list[tuple[str, bytes, str]] = []
+                    file_dates: list[str] = []
+                    for conc_str, csv_item in sorted(conc_items, key=lambda x: float(x[0])):
+                        fn = csv_item["name"]
+                        try:
+                            file_bytes, _ = await sp.download_file(csv_item["id"])
+                            csv_tuples.append((conc_str, file_bytes, fn))
+                            if csv_item.get("last_modified"):
+                                file_dates.append(csv_item["last_modified"])
+                            yield send_event("log", {"message": f"  Downloaded {fn} (Std {conc_str} µg/mL)", "level": "info"})
+                        except Exception as e:
+                            yield send_event("log", {"message": f"  [SKIP] {fn}: download failed ({e})", "level": "warn"})
 
-                    try:
-                        file_bytes, _ = await sp.download_file(item_id)
-                    except Exception as e:
-                        yield send_event("log", {"message": f"  [SKIP] {fn}: download failed ({e})", "level": "warn"})
-                        db.merge(SharePointFileCache(
-                            source_path=item_path, peptide_abbreviation=folder_name, produced_calibration=False
-                        ))
-                        skipped_no_data += 1
-                        continue
-
-                    cal = _parse_calibration_excel_bytes(file_bytes, fn)
-                    db.merge(SharePointFileCache(
-                        source_path=item_path, peptide_abbreviation=folder_name, produced_calibration=bool(cal)
-                    ))
-
+                    cal = _build_curve_from_peakdata_csvs(csv_tuples)
                     if not cal:
-                        yield send_event("log", {"message": f"  [SKIP] {fn}: no parseable curve data", "level": "dim"})
+                        yield send_event("log", {"message": f"  [SKIP] {sid_key}: not enough data points", "level": "dim"})
                         skipped_no_data += 1
                         continue
 
-                    meta = _parse_filename_metadata(fn, item_path)
-                    instrument = meta["instrument"]
-                    fp = (instrument, tuple(sorted(round(a, 1) for a in cal["areas"])))
-                    if fp in seen_fingerprints:
-                        yield send_event("log", {"message": f"  [DUP]  {fn}", "level": "dim"})
+                    # Detect instrument: try path first, then Senaite lookup
+                    inst_detected = None
+                    sample_path = conc_items[0][1].get("path", "") if conc_items else ""
+                    if "1260" in sample_path:
+                        inst_detected = "1260"
+                    elif "1290" in sample_path:
+                        inst_detected = "1290"
+                    else:
+                        yield send_event("log", {"message": f"  Looking up instrument for {sid_key} via SENAITE...", "level": "dim"})
+                        inst_detected = await _resolve_instrument_from_senaite(sid_key)
+                        if inst_detected:
+                            yield send_event("log", {"message": f"  Instrument from SENAITE: {inst_detected}", "level": "info"})
+                        else:
+                            yield send_event("log", {"message": f"  [WARN] No instrument found for {sid_key}", "level": "warn"})
+
+                    fp_key = (inst_detected or "unknown", tuple(sorted(round(a, 1) for a in cal["areas"])))
+                    if fp_key in lims_fps:
+                        yield send_event("log", {"message": f"  [DUP] {sid_key}", "level": "dim"})
                         skipped_dup += 1
                         continue
-                    seen_fingerprints.add(fp)
+                    lims_fps.add(fp_key)
 
                     try:
                         regression = calculate_calibration_curve(cal["concentrations"], cal["areas"])
                     except Exception as e:
-                        yield send_event("log", {"message": f"  [ERROR] {fn}: regression failed ({e})", "level": "error"})
-                        errors.append(f"{fn}: {e}")
+                        yield send_event("log", {"message": f"  [ERROR] {sid_key}: regression failed ({e})", "level": "error"})
+                        errors.append(f"LIMS {sid_key}: {e}")
                         continue
 
-                    curve = CalibrationCurve(
-                        peptide_id=peptide.id,
+                    avg_rt = round(sum(cal["rts"]) / len(cal["rts"]), 4) if cal["rts"] else None
+                    earliest_date = min(file_dates) if file_dates else None
+
+                    lims_curve = CalibrationCurve(
+                        peptide_id=lims_peptide.id,
+                        peptide_analyte_id=lims_first_analyte.id if lims_first_analyte else None,
                         slope=regression["slope"],
                         intercept=regression["intercept"],
                         r_squared=regression["r_squared"],
-                        standard_data={"concentrations": cal["concentrations"], "areas": cal["areas"], "rts": cal.get("rts", [])},
-                        source_filename=fn,
-                        source_path=item_path,
-                        sharepoint_url=item.get("webUrl"),
-                        source_date=item.get("lastModified"),
+                        standard_data={
+                            "concentrations": cal["concentrations"],
+                            "areas": cal["areas"],
+                            "rts": cal["rts"],
+                        },
+                        source_filename=f"{sid_key}_PeakData (LIMS CSV)",
+                        source_path=f"{dir_name}/{sid_key}",
+                        source_date=earliest_date,
+                        source_sample_id=sid_key,
                         is_active=False,
-                        instrument=meta["instrument"],
-                        vendor=meta["vendor"],
-                        lot_number=meta["lot_number"],
-                        batch_number=meta["batch_number"],
-                        cap_color=meta["cap_color"],
-                        run_date=meta["run_date"],
+                        reference_rt=avg_rt,
+                        instrument=inst_detected,
                     )
-                    db.add(curve)
-                    folder_new_curves += 1
+                    db.add(lims_curve)
+                    folder_lims_new += 1
                     new_curves += 1
+
                     yield send_event("log", {
-                        "message": f"  [OK]   {fn} ({instrument or '?'}, {meta['vendor'] or '?'}, R²={regression['r_squared']:.4f})",
+                        "message": f"  [OK] {sid_key}: R²={regression['r_squared']:.4f} ({len(cal['concentrations'])} pts, {inst_detected or '?'})",
                         "level": "info",
                     })
 
+                db.merge(SharePointFileCache(
+                    source_path=cache_key, peptide_abbreviation=peptide_abbr,
+                    produced_calibration=(folder_lims_new > 0),
+                ))
                 db.flush()
 
                 # Re-evaluate is_active for this peptide if new curves were added
-                if folder_new_curves > 0:
-                    all_curves = db.execute(
-                        select(CalibrationCurve).where(CalibrationCurve.peptide_id == peptide.id)
+                if folder_lims_new > 0:
+                    lims_all = db.execute(
+                        select(CalibrationCurve).where(CalibrationCurve.peptide_id == lims_peptide.id)
                     ).scalars().all()
-                    for c in all_curves:
+                    for c in lims_all:
                         c.is_active = False
-                    by_instrument: dict[str, list] = {}
-                    for c in all_curves:
-                        by_instrument.setdefault(c.instrument or "unknown", []).append(c)
-                    for inst_curves in by_instrument.values():
+                    by_inst: dict[str, list] = {}
+                    for c in lims_all:
+                        by_inst.setdefault(c.instrument or "unknown", []).append(c)
+                    for inst_curves in by_inst.values():
                         newest = max(inst_curves, key=lambda c: (c.run_date or c.source_date or c.created_at))
                         newest.is_active = True
 
             db.commit()
 
             yield send_event("log", {"message": "\n✓ Import complete", "level": "info"})
-            yield send_event("log", {"message": f"  {new_peptides} new peptides", "level": "info"})
             yield send_event("log", {"message": f"  {new_curves} new curves imported", "level": "info"})
-            yield send_event("log", {"message": f"  {skipped_cached} files already cached (skipped)", "level": "info"})
-            yield send_event("log", {"message": f"  {skipped_no_data} files skipped (no data)", "level": "info"})
+            yield send_event("log", {"message": f"  {skipped_cached} already cached (skipped)", "level": "info"})
+            yield send_event("log", {"message": f"  {skipped_no_data} skipped (no data)", "level": "info"})
             yield send_event("log", {"message": f"  {skipped_dup} duplicates skipped", "level": "info"})
             if errors:
                 yield send_event("log", {"message": f"  {len(errors)} errors", "level": "warn"})
             yield send_event("done", {
                 "success": True,
-                "new_peptides": new_peptides,
                 "new_curves": new_curves,
                 "skipped_cached": skipped_cached,
                 "skipped_no_data": skipped_no_data,
@@ -3565,12 +4030,19 @@ async def import_standards_stream(
 @app.get("/hplc/peptides/{peptide_id}/resync/stream")
 async def resync_peptide_stream(
     peptide_id: int,
+    analyte_id: Optional[int] = None,
+    sample_id: Optional[str] = None,
+    instrument: Optional[str] = None,
     db: Session = Depends(get_db),
     _current_user=Depends(get_current_user),
 ):
     """
     SSE streaming re-sync of a single peptide from SharePoint.
     Clears the file cache for this peptide so all files are re-downloaded and re-parsed.
+
+    Optional query params:
+      analyte_id — PeptideAnalyte ID to link new curves to
+      sample_id — Senaite sample ID to save on the analyte record
     """
     from starlette.responses import StreamingResponse
     import sharepoint as sp
@@ -3582,7 +4054,23 @@ async def resync_peptide_stream(
     if not peptide:
         raise HTTPException(status_code=404, detail="Peptide not found")
 
+    # Resolve analyte and persist sample_id if provided
+    resolved_analyte_id: Optional[int] = None
+    if analyte_id:
+        analyte = db.execute(
+            select(PeptideAnalyte).where(
+                PeptideAnalyte.id == analyte_id,
+                PeptideAnalyte.peptide_id == peptide_id,
+            )
+        ).scalar_one_or_none()
+        if analyte:
+            resolved_analyte_id = analyte.id
+            if sample_id and sample_id.strip():
+                analyte.sample_id = sample_id.strip()
+                db.commit()
+
     abbreviation = peptide.abbreviation
+    requested_instrument = (instrument or "").strip() or None
 
     async def event_generator():
         import re
@@ -3596,21 +4084,18 @@ async def resync_peptide_stream(
             payload = json.dumps(data)
             return f"event: {event_type}\ndata: {payload}\n\n"
 
-        skip_file_fragments = ["DAD1A", "YearMonthDay", "template", "Template",
-                                "Master sheet", "Calibration_Curve_Template", "P-###"]
-
         calibrations_added = 0
 
         try:
             yield send_event("log", {"message": f"Re-syncing {abbreviation}...", "level": "heading"})
             await asyncio.sleep(0)
 
-            # 1. Clear file cache + existing curves for this peptide (full re-import)
-            deleted_cache = db.execute(
-                delete(SharePointFileCache).where(SharePointFileCache.peptide_abbreviation == abbreviation)
-            )
+            # 1. Clear existing curves for this peptide (full re-import)
             deleted_curves = db.execute(
                 delete(CalibrationCurve).where(CalibrationCurve.peptide_id == peptide.id)
+            )
+            deleted_cache = db.execute(
+                delete(SharePointFileCache).where(SharePointFileCache.peptide_abbreviation == abbreviation)
             )
             db.flush()
             yield send_event("log", {
@@ -3618,123 +4103,239 @@ async def resync_peptide_stream(
                 "level": "info",
             })
 
-            # 2. List all xlsx files in the peptide's SharePoint folder (parser filters non-calibration files)
-            yield send_event("log", {"message": "Scanning SharePoint for calibration files...", "level": "info"})
-            std_files = []
-            try:
-                all_xlsx = await sp.list_files_recursive(
-                    abbreviation, extensions=[".xlsx"], root="peptides",
-                )
-                for item in all_xlsx:
-                    fn = item["name"]
-                    if fn.startswith("~$"):
-                        continue
-                    if any(frag in fn for frag in skip_file_fragments):
-                        continue
-                    std_files.append(item)
-                yield send_event("log", {"message": f"Found {len(std_files)} standard file(s)", "level": "info"})
-                yield send_event("progress", {"current": 0, "total": len(std_files), "phase": "downloading"})
-            except Exception as e:
-                yield send_event("log", {"message": f"[ERROR] File listing failed: {e}", "level": "error"})
-                yield send_event("done", {"success": False, "error": str(e)})
-                return
-
-            # 3. Download, parse, and create curves with full metadata
-            seen_fingerprints: set = set()
             new_curves: list[CalibrationCurve] = []
 
-            for idx, item in enumerate(sorted(std_files, key=lambda f: f["name"])):
-                fn = item["name"]
-                item_path = item.get("path", "")
-                item_id = item["id"]
+            # ── Branch: LIMS CSV PeakData pipeline (sample_id provided) ──
+            if sample_id and sample_id.strip():
+                sid = sample_id.strip()
+                yield send_event("log", {"message": f"Searching LIMS CSV folder for sample {sid}...", "level": "info"})
 
-                yield send_event("progress", {"current": idx + 1, "total": len(std_files), "phase": f"Downloading {fn}"})
+                folder = await sp.find_lims_sample_folder(sid)
+                if not folder:
+                    yield send_event("log", {"message": f"[ERROR] No LIMS folder found for sample ID '{sid}'", "level": "error"})
+                    yield send_event("done", {"success": False, "error": f"LIMS folder not found for {sid}"})
+                    return
 
-                try:
-                    file_bytes, _ = await sp.download_file(item_id)
-                except Exception as e:
-                    yield send_event("log", {"message": f"  [SKIP] {fn}: download failed ({e})", "level": "warn"})
-                    db.merge(SharePointFileCache(
-                        source_path=item_path, peptide_abbreviation=abbreviation, produced_calibration=False
-                    ))
-                    continue
+                yield send_event("log", {"message": f"Found folder: {folder['name']}", "level": "info"})
 
-                cal = _parse_calibration_excel_bytes(file_bytes, fn)
-                db.merge(SharePointFileCache(
-                    source_path=item_path, peptide_abbreviation=abbreviation, produced_calibration=bool(cal)
-                ))
+                # Recursively list all CSVs (Std_ files may be in subfolders)
+                all_files = await sp.list_files_recursive(
+                    folder["path"], extensions=[".csv"], root="lims",
+                )
+                peakdata_pattern = re.compile(
+                    rf"^{re.escape(sid)}_Std_(\d+(?:\.\d+)?)_.*PeakData\.csv$", re.IGNORECASE
+                )
 
+                peakdata_files = []
+                for item in all_files:
+                    m = peakdata_pattern.match(item["name"])
+                    if m:
+                        peakdata_files.append((m.group(1), item))
+
+                if not peakdata_files:
+                    yield send_event("log", {"message": f"[ERROR] No PeakData CSV files found matching {sid}_Std_*_PeakData.csv", "level": "error"})
+                    yield send_event("done", {"success": False, "error": "No PeakData CSVs found"})
+                    return
+
+                yield send_event("log", {"message": f"Found {len(peakdata_files)} PeakData CSV file(s)", "level": "info"})
+                yield send_event("progress", {"current": 0, "total": len(peakdata_files), "phase": "downloading"})
+
+                # Download all PeakData CSVs
+                csv_tuples: list[tuple[str, bytes, str]] = []
+                file_dates: list[str] = []
+                for idx, (conc_str, item) in enumerate(sorted(peakdata_files, key=lambda x: float(x[0]))):
+                    fn = item["name"]
+                    yield send_event("progress", {"current": idx + 1, "total": len(peakdata_files), "phase": f"Downloading {fn}"})
+                    try:
+                        file_bytes, _ = await sp.download_file(item["id"])
+                        csv_tuples.append((conc_str, file_bytes, fn))
+                        if item.get("last_modified"):
+                            file_dates.append(item["last_modified"])
+                        yield send_event("log", {"message": f"  Downloaded {fn} (Std {conc_str} µg/mL)", "level": "info"})
+                    except Exception as e:
+                        yield send_event("log", {"message": f"  [SKIP] {fn}: download failed ({e})", "level": "warn"})
+
+                # Build curve from PeakData CSVs
+                cal = _build_curve_from_peakdata_csvs(csv_tuples)
                 if not cal:
-                    yield send_event("log", {"message": f"  [SKIP] {fn}: no parseable curve data", "level": "dim"})
-                    continue
+                    yield send_event("log", {"message": "[ERROR] Not enough valid data points to build curve (need >= 3)", "level": "error"})
+                    yield send_event("done", {"success": False, "error": "Fewer than 3 valid data points"})
+                    return
 
-                meta = _parse_filename_metadata(fn, item_path)
-                instrument = meta["instrument"]
-                fp = (instrument, tuple(sorted(round(a, 1) for a in cal["areas"])))
-                if fp in seen_fingerprints:
-                    yield send_event("log", {"message": f"  [DUP]  {fn}", "level": "dim"})
-                    continue
-                seen_fingerprints.add(fp)
+                yield send_event("log", {
+                    "message": f"Built curve from {len(cal['concentrations'])} data points",
+                    "level": "info",
+                })
 
+                # Run regression
                 try:
                     regression = calculate_calibration_curve(cal["concentrations"], cal["areas"])
                 except Exception as e:
-                    yield send_event("log", {"message": f"  [ERROR] {fn}: regression failed ({e})", "level": "error"})
-                    continue
+                    yield send_event("log", {"message": f"[ERROR] Regression failed: {e}", "level": "error"})
+                    yield send_event("done", {"success": False, "error": f"Regression failed: {e}"})
+                    return
+
+                # Compute average RT
+                avg_rt = round(sum(cal["rts"]) / len(cal["rts"]), 4) if cal["rts"] else None
+
+                # Use earliest file modification date as source_date
+                earliest_date = min(file_dates) if file_dates else None
 
                 curve = CalibrationCurve(
                     peptide_id=peptide.id,
+                    peptide_analyte_id=resolved_analyte_id,
                     slope=regression["slope"],
                     intercept=regression["intercept"],
                     r_squared=regression["r_squared"],
-                    standard_data={"concentrations": cal["concentrations"], "areas": cal["areas"], "rts": cal.get("rts", [])},
-                    source_filename=fn,
-                    source_path=item_path,
-                    sharepoint_url=item.get("webUrl"),
-                    source_date=item.get("lastModified"),
-                    is_active=False,
-                    instrument=meta["instrument"],
-                    vendor=meta["vendor"],
-                    lot_number=meta["lot_number"],
-                    batch_number=meta["batch_number"],
-                    cap_color=meta["cap_color"],
-                    run_date=meta["run_date"],
+                    standard_data={
+                        "concentrations": cal["concentrations"],
+                        "areas": cal["areas"],
+                        "rts": cal["rts"],
+                    },
+                    source_filename=f"{sid}_PeakData (LIMS CSV)",
+                    source_path=folder["path"],
+                    source_date=earliest_date,
+                    source_sample_id=sid,
+                    is_active=True,
+                    reference_rt=avg_rt,
+                    instrument=requested_instrument,
                 )
                 db.add(curve)
                 new_curves.append(curve)
-                calibrations_added += 1
+                calibrations_added = 1
+
                 yield send_event("log", {
-                    "message": f"  [OK]   {fn} ({instrument or '?'}, {meta['vendor'] or '?'}, R²={regression['r_squared']:.4f})",
+                    "message": f"  [OK] Curve: R²={regression['r_squared']:.6f}, slope={regression['slope']:.4f}, intercept={regression['intercept']:.4f}",
                     "level": "success",
                 })
+                if avg_rt:
+                    yield send_event("log", {"message": f"  Reference RT: {avg_rt} min", "level": "success"})
 
-            db.flush()
+                # Log each data point
+                for i, (c, a) in enumerate(zip(cal["concentrations"], cal["areas"])):
+                    rt_str = f", RT={cal['rts'][i]:.3f}" if i < len(cal["rts"]) else ""
+                    yield send_event("log", {"message": f"    Std {c} µg/mL → Area {a:.2f}{rt_str}", "level": "dim"})
 
-            # 4. Set active: newest per instrument by run_date
-            if new_curves:
-                by_instrument: dict[str, list] = {}
-                for c in new_curves:
-                    by_instrument.setdefault(c.instrument or "unknown", []).append(c)
-                for inst_curves in by_instrument.values():
-                    newest = max(inst_curves, key=lambda c: (c.run_date or c.source_date or c.created_at))
-                    newest.is_active = True
+            # ── Fallback: Legacy xlsx pipeline (no sample_id) ──
+            else:
+                skip_file_fragments = ["DAD1A", "YearMonthDay", "template", "Template",
+                                        "Master sheet", "Calibration_Curve_Template", "P-###"]
+
+                yield send_event("log", {"message": "Scanning SharePoint for calibration files...", "level": "info"})
+                std_files = []
+                try:
+                    all_xlsx = await sp.list_files_recursive(
+                        abbreviation, extensions=[".xlsx"], root="peptides",
+                    )
+                    for item in all_xlsx:
+                        fn = item["name"]
+                        if fn.startswith("~$"):
+                            continue
+                        if any(frag in fn for frag in skip_file_fragments):
+                            continue
+                        std_files.append(item)
+                    yield send_event("log", {"message": f"Found {len(std_files)} standard file(s)", "level": "info"})
+                    yield send_event("progress", {"current": 0, "total": len(std_files), "phase": "downloading"})
+                except Exception as e:
+                    yield send_event("log", {"message": f"[ERROR] File listing failed: {e}", "level": "error"})
+                    yield send_event("done", {"success": False, "error": str(e)})
+                    return
+
+                seen_fingerprints: set = set()
+
+                for idx, item in enumerate(sorted(std_files, key=lambda f: f["name"])):
+                    fn = item["name"]
+                    item_path = item.get("path", "")
+                    item_id = item["id"]
+
+                    yield send_event("progress", {"current": idx + 1, "total": len(std_files), "phase": f"Downloading {fn}"})
+
+                    try:
+                        file_bytes, _ = await sp.download_file(item_id)
+                    except Exception as e:
+                        yield send_event("log", {"message": f"  [SKIP] {fn}: download failed ({e})", "level": "warn"})
+                        db.merge(SharePointFileCache(
+                            source_path=item_path, peptide_abbreviation=abbreviation, produced_calibration=False
+                        ))
+                        continue
+
+                    cal = _parse_calibration_excel_bytes(file_bytes, fn)
+                    db.merge(SharePointFileCache(
+                        source_path=item_path, peptide_abbreviation=abbreviation, produced_calibration=bool(cal)
+                    ))
+
+                    if not cal:
+                        yield send_event("log", {"message": f"  [SKIP] {fn}: no parseable curve data", "level": "dim"})
+                        continue
+
+                    meta = _parse_filename_metadata(fn, item_path)
+                    instrument = meta["instrument"]
+                    fp = (instrument, tuple(sorted(round(a, 1) for a in cal["areas"])))
+                    if fp in seen_fingerprints:
+                        yield send_event("log", {"message": f"  [DUP]  {fn}", "level": "dim"})
+                        continue
+                    seen_fingerprints.add(fp)
+
+                    try:
+                        regression = calculate_calibration_curve(cal["concentrations"], cal["areas"])
+                    except Exception as e:
+                        yield send_event("log", {"message": f"  [ERROR] {fn}: regression failed ({e})", "level": "error"})
+                        continue
+
+                    curve = CalibrationCurve(
+                        peptide_id=peptide.id,
+                        peptide_analyte_id=resolved_analyte_id,
+                        slope=regression["slope"],
+                        intercept=regression["intercept"],
+                        r_squared=regression["r_squared"],
+                        standard_data={"concentrations": cal["concentrations"], "areas": cal["areas"], "rts": cal.get("rts", [])},
+                        source_filename=fn,
+                        source_path=item_path,
+                        sharepoint_url=item.get("webUrl"),
+                        source_date=item.get("lastModified"),
+                        is_active=False,
+                        instrument=meta["instrument"],
+                        vendor=meta["vendor"],
+                        lot_number=meta["lot_number"],
+                        batch_number=meta["batch_number"],
+                        cap_color=meta["cap_color"],
+                        run_date=meta["run_date"],
+                    )
+                    db.add(curve)
+                    new_curves.append(curve)
+                    calibrations_added += 1
                     yield send_event("log", {
-                        "message": f"  ✓ Active ({newest.instrument or '?'}): {newest.source_filename}",
+                        "message": f"  [OK]   {fn} ({instrument or '?'}, {meta['vendor'] or '?'}, R²={regression['r_squared']:.4f})",
                         "level": "success",
                     })
 
-                # Update reference RT from the active curve (prefer 1290 > 1260 > unknown)
-                priority_order = ["1290", "1260", "unknown"]
-                active_for_rt = None
-                for inst_key in priority_order:
-                    group = by_instrument.get(inst_key)
-                    if group:
-                        active_for_rt = max(group, key=lambda c: (c.run_date or c.source_date or c.created_at))
-                        break
-                if active_for_rt and active_for_rt.standard_data and active_for_rt.standard_data.get("rts"):
-                    rts = active_for_rt.standard_data["rts"]
-                    peptide.reference_rt = round(sum(rts) / len(rts), 4)
-                    yield send_event("log", {"message": f"  Updated reference RT: {peptide.reference_rt}", "level": "success"})
+                db.flush()
+
+                # Set active: newest per instrument by run_date
+                if new_curves:
+                    by_instrument: dict[str, list] = {}
+                    for c in new_curves:
+                        by_instrument.setdefault(c.instrument or "unknown", []).append(c)
+                    for inst_curves in by_instrument.values():
+                        newest = max(inst_curves, key=lambda c: (c.run_date or c.source_date or c.created_at))
+                        newest.is_active = True
+                        yield send_event("log", {
+                            "message": f"  ✓ Active ({newest.instrument or '?'}): {newest.source_filename}",
+                            "level": "success",
+                        })
+
+                    # Update reference RT from the active curve (prefer 1290 > 1260 > unknown)
+                    priority_order = ["1290", "1260", "unknown"]
+                    active_for_rt = None
+                    for inst_key in priority_order:
+                        group = by_instrument.get(inst_key)
+                        if group:
+                            active_for_rt = max(group, key=lambda c: (c.run_date or c.source_date or c.created_at))
+                            break
+                    if active_for_rt and active_for_rt.standard_data and active_for_rt.standard_data.get("rts"):
+                        rts = active_for_rt.standard_data["rts"]
+                        active_for_rt.reference_rt = round(sum(rts) / len(rts), 4)
+                        yield send_event("log", {"message": f"  Updated reference RT: {active_for_rt.reference_rt}", "level": "success"})
 
             db.commit()
             yield send_event("refresh", {})
@@ -5205,7 +5806,8 @@ def _build_session_response(session: WizardSession, db: Session) -> WizardSessio
     if all(v is not None for v in [declared, stock_empty, stock_loaded]):
         try:
             from calculations.wizard import calc_stock_prep
-            density = Decimal(str(session.peptide.diluent_density))
+            _dd = session.calibration_curve.diluent_density if session.calibration_curve else 997.1
+            density = Decimal(str(_dd))
             sp = calc_stock_prep(
                 Decimal(str(declared)),
                 Decimal(str(stock_empty)),
@@ -5244,7 +5846,8 @@ def _build_session_response(session: WizardSession, db: Session) -> WizardSessio
     if stock_conc_d is not None and all(v is not None for v in [dil_empty, dil_diluent, dil_final]):
         try:
             from calculations.wizard import calc_actual_dilution
-            density = Decimal(str(session.peptide.diluent_density))
+            _dd2 = session.calibration_curve.diluent_density if session.calibration_curve else 997.1
+            density = Decimal(str(_dd2))
             ad = calc_actual_dilution(
                 stock_conc_d,
                 Decimal(str(dil_empty)),
@@ -5690,18 +6293,20 @@ async def scan_sample_preps_hplc(_current_user=Depends(get_current_user)):
                 yield ev("log", {"msg": f"{sid}: found '{folder['name']}', checking for CSVs...", "level": "info"})
 
                 try:
-                    contents = await sp.list_lims_folder(folder["name"])
+                    all_csvs = await sp.list_files_recursive(
+                        folder["name"], extensions=[".csv"], root="lims",
+                    )
                 except Exception:
                     yield ev("log", {"msg": f"{sid}: could not list folder contents", "level": "warn"})
                     continue
 
                 peak_files = [
-                    c for c in contents
-                    if c["type"] == "file" and "_PeakData" in c["name"] and c["name"].endswith(".csv")
+                    c for c in all_csvs
+                    if "_PeakData" in c["name"] and c["name"].endswith(".csv")
                 ]
                 chrom_files = [
-                    c for c in contents
-                    if c["type"] == "file" and c["name"].endswith(".csv")
+                    c for c in all_csvs
+                    if c["name"].lower().endswith(".csv")
                     and "dx_dad1a" in c["name"].lower()
                 ]
 
@@ -5969,6 +6574,67 @@ def _fuzzy_match_peptide(stripped_name: str, peptides: list) -> Optional[tuple]:
         if peptide.abbreviation and needle == peptide.abbreviation.lower():
             return (peptide.id, peptide.name)
 
+    return None
+
+
+async def _resolve_instrument_from_senaite(sample_id: str) -> Optional[str]:
+    """
+    Look up the instrument model for a sample via SENAITE.
+
+    Strategy:
+      1. Query the search endpoint for Analysis objects by getRequestID
+      2. Check each analysis for instrument title containing "1290" or "1260"
+
+    Returns:
+        "1290", "1260", or None if SENAITE is unavailable or no instrument found.
+    """
+    if SENAITE_URL is None:
+        print(f"[INST] SENAITE_URL is None — skipping instrument lookup for {sample_id}")
+        return None
+
+    sid = sample_id.strip().upper()
+    try:
+        # Use the search endpoint (proven to work for catalog queries)
+        search_url = f"{SENAITE_URL}/senaite/@@API/senaite/v1/search"
+        async with httpx.AsyncClient(
+            timeout=SENAITE_TIMEOUT,
+            auth=httpx.BasicAuth(SENAITE_USER, SENAITE_PASSWORD),
+        ) as client:
+            resp = await client.get(search_url, params={
+                "portal_type": "Analysis",
+                "getRequestID": sid,
+                "limit": "20",
+            })
+            resp.raise_for_status()
+            items = resp.json().get("items", [])
+            print(f"[INST] {sid}: search returned {len(items)} analyses")
+
+            for an in items:
+                # Try getInstrumentTitle first (catalog metadata)
+                title = an.get("getInstrumentTitle") or ""
+                # Fall back to nested Instrument object
+                if not title:
+                    inst_obj = an.get("Instrument")
+                    if isinstance(inst_obj, dict):
+                        title = inst_obj.get("title") or inst_obj.get("Title") or ""
+                # Fall back to InstrumentTitle string field
+                if not title:
+                    title = an.get("InstrumentTitle") or ""
+                if title:
+                    print(f"[INST] {sid}: found instrument title '{title}'")
+                    if "1290" in title:
+                        return "1290"
+                    if "1260" in title:
+                        return "1260"
+
+            # If search returned analyses but none had instruments, log it
+            if items:
+                print(f"[INST] {sid}: {len(items)} analyses found but none had instrument titles")
+            else:
+                print(f"[INST] {sid}: no analyses found via search endpoint")
+
+    except Exception as e:
+        print(f"[INST] {sid}: SENAITE query failed: {e}")
     return None
 
 

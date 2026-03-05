@@ -48,7 +48,7 @@ export function AdvancedPane() {
       <SettingsSection title="HPLC Standards">
         <SettingsField
           label="Wipe Standards"
-          description="Delete all existing peptide standards and calibration curves. Use Import Standards on the Peptide Standards page afterward to re-import from SharePoint."
+          description="Delete all existing peptides and calibration curves. Use Import Standards on the Peptides page afterward to re-import from SharePoint."
         >
           <AlertDialog>
             <AlertDialogTrigger asChild>
@@ -70,7 +70,7 @@ export function AdvancedPane() {
               <AlertDialogHeader>
                 <AlertDialogTitle className="flex items-center gap-2">
                   <AlertTriangle className="h-5 w-5 text-destructive" />
-                  Wipe all peptide standards?
+                  Wipe all peptides?
                 </AlertDialogTitle>
                 <AlertDialogDescription>
                   This will permanently delete all peptide records and calibration
@@ -79,7 +79,7 @@ export function AdvancedPane() {
                   <br />
                   <br />
                   You can re-import from SharePoint afterward using{' '}
-                  <strong>Import Standards</strong> on the Peptide Standards page.
+                  <strong>Import Standards</strong> on the Peptides page.
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>

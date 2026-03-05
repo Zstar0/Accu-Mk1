@@ -11,6 +11,8 @@ import {
   getSettings,
   updateSetting,
   syncInstruments,
+  syncAnalysisServices,
+  seedPeptidesFromServices,
   type Setting,
   type ColumnMappings,
 } from '@/lib/api'
@@ -196,6 +198,20 @@ export function DataPipelinePane() {
         <SyncInstrumentsButton />
       </SettingsSection>
 
+      <SettingsSection title="Senaite Analysis Services">
+        <p className="text-sm text-muted-foreground mb-3">
+          Sync analysis service definitions from Senaite LIMS. New services will be added; existing services are preserved.
+        </p>
+        <SyncAnalysisServicesButton />
+      </SettingsSection>
+
+      <SettingsSection title="Seed Peptides">
+        <p className="text-sm text-muted-foreground mb-3">
+          Auto-create peptides from synced Analysis Services. Creates one peptide per unique Identity (HPLC) service. Existing peptides are skipped.
+        </p>
+        <SeedPeptidesButton />
+      </SettingsSection>
+
       <div className="flex justify-end">
         <Button
           onClick={handleSave}
@@ -239,6 +255,80 @@ function SyncInstrumentsButton() {
           <RefreshCw className="mr-2 h-4 w-4" />
         )}
         {syncing ? 'Syncing...' : 'Sync Instruments'}
+      </Button>
+      {result && (
+        <p className="text-xs text-muted-foreground">{result}</p>
+      )}
+    </div>
+  )
+}
+
+function SyncAnalysisServicesButton() {
+  const [syncing, setSyncing] = useState(false)
+  const [result, setResult] = useState<string | null>(null)
+
+  const handleSync = async () => {
+    setSyncing(true)
+    setResult(null)
+    try {
+      const res = await syncAnalysisServices()
+      setResult(`Synced: ${res.created} new service(s) added, ${res.total} total`)
+      toast.success(`Analysis services synced — ${res.created} new, ${res.total} total`)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Sync failed'
+      setResult(msg)
+      toast.error(msg)
+    } finally {
+      setSyncing(false)
+    }
+  }
+
+  return (
+    <div className="space-y-2">
+      <Button variant="outline" onClick={handleSync} disabled={syncing}>
+        {syncing ? (
+          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+        ) : (
+          <RefreshCw className="mr-2 h-4 w-4" />
+        )}
+        {syncing ? 'Syncing...' : 'Sync Analysis Services'}
+      </Button>
+      {result && (
+        <p className="text-xs text-muted-foreground">{result}</p>
+      )}
+    </div>
+  )
+}
+
+function SeedPeptidesButton() {
+  const [seeding, setSeeding] = useState(false)
+  const [result, setResult] = useState<string | null>(null)
+
+  const handleSeed = async () => {
+    setSeeding(true)
+    setResult(null)
+    try {
+      const res = await seedPeptidesFromServices()
+      setResult(res.message)
+      toast.success(res.message)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Seed failed'
+      setResult(msg)
+      toast.error(msg)
+    } finally {
+      setSeeding(false)
+    }
+  }
+
+  return (
+    <div className="space-y-2">
+      <Button variant="outline" onClick={handleSeed} disabled={seeding}>
+        {seeding ? (
+          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+        ) : (
+          <RefreshCw className="mr-2 h-4 w-4" />
+        )}
+        {seeding ? 'Seeding...' : 'Seed Peptides'}
       </Button>
       {result && (
         <p className="text-xs text-muted-foreground">{result}</p>

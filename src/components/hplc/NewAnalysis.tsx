@@ -1226,7 +1226,7 @@ export function NewAnalysis() {
                 )}
                 <WeightsForm
                   weights={weights}
-                  diluentDensity={selectedPeptide?.diluent_density ?? 997.1}
+                  diluentDensity={selectedPeptide?.active_calibration?.diluent_density ?? 997.1}
                   onChange={setWeights}
                 />
               </CardContent>
@@ -1334,7 +1334,7 @@ function CurveSelector({
   if (allCalibrations.length === 0) {
     return (
       <p className="text-sm text-destructive">
-        This peptide has no calibration curves. Add one in Peptide Standards first.
+        This peptide has no calibration curves. Add one in the Peptides page first.
       </p>
     )
   }
