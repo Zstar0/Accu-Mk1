@@ -37,6 +37,16 @@ import {
   CardTitle,
 } from '@/components/ui/card'
 
+// --- Senaite sequential fetch queue ---
+// Serializes lookups so only one hits Senaite at a time (single-threaded Zope)
+let _senaiteQueue: Promise<void> = Promise.resolve()
+
+function enqueueSenaiteLookup(id: string) {
+  const task = _senaiteQueue.then(() => lookupSenaiteSample(id))
+  _senaiteQueue = task.then(Function.prototype as () => void, Function.prototype as () => void)
+  return task
+}
+
 // --- Analysis state helpers ---
 
 type AnalysisStateCounts = {
@@ -415,12 +425,12 @@ export function OrderStatusPage() {
     return ids
   }, [orders])
 
-  // Batch-fetch sample details from SENAITE
+  // Fetch sample details from SENAITE — serialized to avoid overwhelming Zope
   const sampleQueries = useQueries({
     queries: sampleIds.map(id => ({
       queryKey: ['senaite', 'lookup', id],
-      queryFn: () => lookupSenaiteSample(id),
-      staleTime: 60_000,
+      queryFn: () => enqueueSenaiteLookup(id),
+      staleTime: 15 * 60_000,
       retry: 1,
     })),
   })
