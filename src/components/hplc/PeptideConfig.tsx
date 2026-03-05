@@ -14,6 +14,8 @@ import {
   Copy,
   Filter,
   RefreshCw,
+  Folder,
+  ArrowLeft,
 } from 'lucide-react'
 import {
   Card,
@@ -59,10 +61,13 @@ import {
   getInstruments,
   updatePeptide,
   lookupSenaiteSample,
+  browseSharePoint,
+  createCalibration,
   type PeptideRecord,
   type HplcMethod,
   type Instrument,
   type AnalyteResponse,
+  type SharePointItem,
 } from '@/lib/api'
 import { getApiBaseUrl } from '@/lib/config'
 import { getAuthToken } from '@/store/auth-store'
@@ -119,6 +124,18 @@ export function PeptideConfig() {
   const [resyncSampleValidating, setResyncSampleValidating] = useState(false)
   const [resyncSampleValid, setResyncSampleValid] = useState<boolean | null>(null)
   const [resyncInstrument, setResyncInstrument] = useState<string>('1290')
+  const [resyncMode, setResyncMode] = useState<'sample' | 'folder' | 'manual'>('sample')
+  const [manualRows, setManualRows] = useState<{ conc: string; area: string; rt: string }[]>([
+    { conc: '', area: '', rt: '' }, { conc: '', area: '', rt: '' }, { conc: '', area: '', rt: '' },
+  ])
+  const [manualSubmitting, setManualSubmitting] = useState(false)
+  const [manualNotes, setManualNotes] = useState('')
+  const [resyncFolderPath, setResyncFolderPath] = useState('')
+  const [resyncFolderName, setResyncFolderName] = useState('')
+  const [folderRoot, setFolderRoot] = useState<'lims' | 'peptides'>('lims')
+  const [folderItems, setFolderItems] = useState<SharePointItem[]>([])
+  const [folderLoading, setFolderLoading] = useState(false)
+  const [folderBrowsePath, setFolderBrowsePath] = useState('')
   const resyncDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // Streaming seed state
@@ -302,6 +319,15 @@ export function PeptideConfig() {
     setResyncSampleValid(null)
     setResyncSampleValidating(false)
     setResyncInstrument('1290')
+    setResyncMode('sample')
+    setResyncFolderPath('')
+    setResyncFolderName('')
+    setFolderRoot('lims')
+    setFolderItems([])
+    setFolderBrowsePath('')
+    setManualRows([{ conc: '', area: '', rt: '' }, { conc: '', area: '', rt: '' }, { conc: '', area: '', rt: '' }])
+    setManualSubmitting(false)
+    setManualNotes('')
   }, [])
 
   const closeResyncDialog = useCallback(() => {
@@ -311,6 +337,14 @@ export function PeptideConfig() {
     setResyncSampleValid(null)
     setResyncSampleValidating(false)
     setResyncInstrument('1290')
+    setResyncMode('sample')
+    setResyncFolderPath('')
+    setResyncFolderName('')
+    setFolderRoot('lims')
+    setFolderItems([])
+    setFolderBrowsePath('')
+    setManualRows([{ conc: '', area: '', rt: '' }, { conc: '', area: '', rt: '' }, { conc: '', area: '', rt: '' }])
+    setManualSubmitting(false)
     if (resyncDebounceRef.current) clearTimeout(resyncDebounceRef.current)
   }, [])
 
@@ -333,7 +367,20 @@ export function PeptideConfig() {
     }, 600)
   }, [])
 
-  const handleResyncPeptide = useCallback(async (peptideId: number, analyteId?: number, sampleId?: string, instrument?: string) => {
+  const loadBrowseFolder = useCallback(async (path: string, root: 'lims' | 'peptides' = folderRoot) => {
+    setFolderLoading(true)
+    try {
+      const result = await browseSharePoint(path, root)
+      setFolderItems(result.items)
+      setFolderBrowsePath(path)
+    } catch {
+      setFolderItems([])
+    } finally {
+      setFolderLoading(false)
+    }
+  }, [folderRoot])
+
+  const handleResyncPeptide = useCallback(async (peptideId: number, analyteId?: number, sampleId?: string, instrument?: string, folderPath?: string, folderRootParam?: string) => {
     setSeeding(true)
     setSeedLogs([])
     setSeedProgress(null)
@@ -349,6 +396,8 @@ export function PeptideConfig() {
       const params = new URLSearchParams()
       if (analyteId) params.set('analyte_id', String(analyteId))
       if (sampleId) params.set('sample_id', sampleId)
+      if (folderPath) params.set('folder_path', folderPath)
+      if (folderRootParam) params.set('folder_root', folderRootParam)
       if (instrument) params.set('instrument', instrument)
       const qs = params.toString()
       const url = `${getApiBaseUrl()}/hplc/peptides/${peptideId}/resync/stream${qs ? `?${qs}` : ''}`
@@ -426,11 +475,48 @@ export function PeptideConfig() {
   const handleResyncSubmit = useCallback(() => {
     if (!resyncTarget) return
     const analyteId = resyncAnalyteId ? parseInt(resyncAnalyteId, 10) : undefined
-    const sampleId = resyncSampleId.trim() || undefined
+    const sampleId = resyncMode === 'sample' ? (resyncSampleId.trim() || undefined) : undefined
+    const folderPath = resyncMode === 'folder' ? (resyncFolderPath || undefined) : undefined
+    const rootParam = resyncMode === 'folder' ? folderRoot : undefined
     const instrument = resyncInstrument || undefined
     closeResyncDialog()
-    handleResyncPeptide(resyncTarget.id, analyteId, sampleId, instrument)
-  }, [resyncTarget, resyncAnalyteId, resyncSampleId, resyncInstrument, closeResyncDialog, handleResyncPeptide])
+    handleResyncPeptide(resyncTarget.id, analyteId, sampleId, instrument, folderPath, rootParam)
+  }, [resyncTarget, resyncAnalyteId, resyncMode, resyncSampleId, resyncFolderPath, folderRoot, resyncInstrument, closeResyncDialog, handleResyncPeptide])
+
+  const handleManualSubmit = useCallback(async () => {
+    if (!resyncTarget) return
+    const validRows = manualRows.filter(r => r.conc.trim() && r.area.trim())
+    if (validRows.length < 3) return
+
+    const concentrations = validRows.map(r => parseFloat(r.conc))
+    const areas = validRows.map(r => parseFloat(r.area))
+    if (concentrations.some(isNaN) || areas.some(isNaN)) return
+
+    // Collect RTs if any were entered
+    const rts = validRows
+      .map(r => r.rt.trim() ? parseFloat(r.rt) : NaN)
+      .filter(v => !isNaN(v))
+    const hasRts = rts.length === validRows.length // only include if all rows have RT
+
+    setManualSubmitting(true)
+    try {
+      await createCalibration(resyncTarget.id, {
+        concentrations,
+        areas,
+        rts: hasRts ? rts : undefined,
+        source_filename: 'Manual entry',
+        analyte_id: resyncAnalyteId ? parseInt(resyncAnalyteId, 10) : undefined,
+        instrument: resyncInstrument || undefined,
+        notes: manualNotes.trim() || undefined,
+      })
+      closeResyncDialog()
+      await loadPeptides()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Manual calibration failed')
+    } finally {
+      setManualSubmitting(false)
+    }
+  }, [resyncTarget, manualRows, manualNotes, resyncAnalyteId, resyncInstrument, closeResyncDialog, loadPeptides])
 
   const selectedPeptide = peptides.find(p => p.id === selectedId) ?? null
 
@@ -974,11 +1060,11 @@ export function PeptideConfig() {
 
         {/* Resync dialog — pick analyte + sample ID before importing */}
         <Dialog open={!!resyncTarget} onOpenChange={v => { if (!v) closeResyncDialog() }}>
-          <DialogContent className="sm:max-w-md">
+          <DialogContent className="sm:max-w-lg">
             <DialogHeader>
               <DialogTitle>Import Curves — {resyncTarget?.abbreviation}</DialogTitle>
               <DialogDescription>
-                Select the analyte and enter the Senaite sample ID for this import.
+                Select the analyte and provide the data source for this import.
               </DialogDescription>
             </DialogHeader>
 
@@ -999,31 +1085,330 @@ export function PeptideConfig() {
                 </Select>
               </div>
 
+              {/* Mode toggle */}
               <div className="space-y-2">
-                <Label>Sample ID</Label>
-                <div className="relative">
-                  <Input
-                    placeholder="e.g., P-0203"
-                    value={resyncSampleId}
-                    onChange={e => handleResyncSampleIdChange(e.target.value)}
-                    className="pr-8"
-                  />
-                  <div className="absolute right-2 top-1/2 -translate-y-1/2">
-                    {resyncSampleValidating && (
-                      <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-                    )}
-                    {!resyncSampleValidating && resyncSampleValid === true && (
-                      <CheckCircle2 className="h-4 w-4 text-green-500" />
-                    )}
-                    {!resyncSampleValidating && resyncSampleValid === false && (
-                      <XCircle className="h-4 w-4 text-red-500" />
-                    )}
+                <Label>Data Source</Label>
+                <div className="flex gap-1.5">
+                  <Button
+                    size="sm"
+                    variant={resyncMode === 'sample' ? 'default' : 'outline'}
+                    onClick={() => setResyncMode('sample')}
+                    className="flex-1 h-7 text-xs"
+                  >
+                    Sample ID
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant={resyncMode === 'folder' ? 'default' : 'outline'}
+                    onClick={() => {
+                      setResyncMode('folder')
+                      if (folderItems.length === 0 && !folderLoading) loadBrowseFolder('')
+                    }}
+                    className="flex-1 h-7 text-xs"
+                  >
+                    Browse Folder
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant={resyncMode === 'manual' ? 'default' : 'outline'}
+                    onClick={() => setResyncMode('manual')}
+                    className="flex-1 h-7 text-xs"
+                  >
+                    Manual Entry
+                  </Button>
+                </div>
+              </div>
+
+              {resyncMode === 'manual' ? (
+                <div className="space-y-2">
+                  <Label>Standard Data Points (min 3)</Label>
+                  <div className="border rounded-md overflow-hidden">
+                    <div className="grid grid-cols-[2fr_2fr_1fr_auto] gap-0 text-xs font-medium text-muted-foreground bg-muted/50 border-b">
+                      <div className="px-2 py-1.5">Conc (µg/mL)</div>
+                      <div className="px-2 py-1.5">Peak Area</div>
+                      <div className="px-2 py-1.5">RT (min)</div>
+                      <div className="w-8" />
+                    </div>
+                    <ScrollArea className="max-h-[200px]">
+                      {manualRows.map((row, i) => (
+                        <div key={i} className="grid grid-cols-[2fr_2fr_1fr_auto] gap-0 border-b last:border-0">
+                          <Input
+                            type="number"
+                            placeholder="e.g., 250"
+                            value={row.conc}
+                            onChange={e => {
+                              setManualRows(prev => prev.map((r, j) =>
+                                j === i ? { conc: e.target.value, area: r.area, rt: r.rt } : r
+                              ))
+                            }}
+                            className="h-8 rounded-none border-0 border-r text-sm focus-visible:ring-0 focus-visible:ring-offset-0"
+                          />
+                          <Input
+                            type="number"
+                            placeholder="e.g., 12345.6"
+                            value={row.area}
+                            onChange={e => {
+                              setManualRows(prev => prev.map((r, j) =>
+                                j === i ? { conc: r.conc, area: e.target.value, rt: r.rt } : r
+                              ))
+                            }}
+                            className="h-8 rounded-none border-0 border-r text-sm focus-visible:ring-0 focus-visible:ring-offset-0"
+                          />
+                          <Input
+                            type="number"
+                            step="0.01"
+                            placeholder="opt."
+                            value={row.rt}
+                            onChange={e => {
+                              setManualRows(prev => prev.map((r, j) =>
+                                j === i ? { conc: r.conc, area: r.area, rt: e.target.value } : r
+                              ))
+                            }}
+                            className="h-8 rounded-none border-0 border-r text-sm focus-visible:ring-0 focus-visible:ring-offset-0"
+                          />
+                          <button
+                            onClick={() => {
+                              if (manualRows.length <= 3) return
+                              setManualRows(manualRows.filter((_, j) => j !== i))
+                            }}
+                            disabled={manualRows.length <= 3}
+                            className="w-8 flex items-center justify-center text-muted-foreground hover:text-destructive disabled:opacity-30"
+                          >
+                            <X className="h-3 w-3" />
+                          </button>
+                        </div>
+                      ))}
+                    </ScrollArea>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 text-xs"
+                    onClick={() => setManualRows([...manualRows, { conc: '', area: '', rt: '' }])}
+                  >
+                    <Plus className="mr-1 h-3 w-3" />
+                    Add Row
+                  </Button>
+                  <div className="space-y-1 pt-1">
+                    <Label className="text-xs">Notes (optional)</Label>
+                    <textarea
+                      value={manualNotes}
+                      onChange={e => setManualNotes(e.target.value)}
+                      placeholder="e.g., Light blue cap #63162, lot 27262"
+                      rows={2}
+                      className="w-full rounded-md border bg-transparent px-3 py-2 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring resize-none"
+                    />
                   </div>
                 </div>
-                <p className="text-xs text-muted-foreground">
-                  The Senaite sample ID for the standard reference vial.
-                </p>
-              </div>
+              ) : resyncMode === 'sample' ? (
+                <div className="space-y-2">
+                  <Label>Sample ID</Label>
+                  <div className="relative">
+                    <Input
+                      placeholder="e.g., P-0203"
+                      value={resyncSampleId}
+                      onChange={e => handleResyncSampleIdChange(e.target.value)}
+                      className="pr-8"
+                    />
+                    <div className="absolute right-2 top-1/2 -translate-y-1/2">
+                      {resyncSampleValidating && (
+                        <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                      )}
+                      {!resyncSampleValidating && resyncSampleValid === true && (
+                        <CheckCircle2 className="h-4 w-4 text-green-500" />
+                      )}
+                      {!resyncSampleValidating && resyncSampleValid === false && (
+                        <XCircle className="h-4 w-4 text-red-500" />
+                      )}
+                    </div>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    The Senaite sample ID for the standard reference vial.
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  <Label>SharePoint Folder</Label>
+                  {/* Root toggle */}
+                  <div className="flex gap-1">
+                    <Button
+                      size="sm"
+                      variant={folderRoot === 'lims' ? 'default' : 'outline'}
+                      className="h-7 text-xs flex-1"
+                      onClick={() => {
+                        if (folderRoot !== 'lims') {
+                          setFolderRoot('lims')
+                          setResyncFolderPath('')
+                          setResyncFolderName('')
+                          loadBrowseFolder('', 'lims')
+                        }
+                      }}
+                    >
+                      LIMS CSVs
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant={folderRoot === 'peptides' ? 'default' : 'outline'}
+                      className="h-7 text-xs flex-1"
+                      onClick={() => {
+                        if (folderRoot !== 'peptides') {
+                          setFolderRoot('peptides')
+                          setResyncFolderPath('')
+                          setResyncFolderName('')
+                          loadBrowseFolder('', 'peptides')
+                        }
+                      }}
+                    >
+                      Peptides
+                    </Button>
+                  </div>
+                  {resyncFolderPath ? (
+                    <div className="p-2.5 rounded-md border border-primary/50 bg-primary/5 flex items-center justify-between">
+                      <div className="flex items-center gap-2 text-sm min-w-0">
+                        <Folder className="h-4 w-4 text-amber-500 shrink-0" />
+                        <span className="font-mono text-xs truncate">{resyncFolderName}</span>
+                      </div>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="shrink-0 ml-2 h-7 text-xs"
+                        onClick={() => {
+                          setResyncFolderPath('')
+                          setResyncFolderName('')
+                          loadBrowseFolder('')
+                        }}
+                      >
+                        Change
+                      </Button>
+                    </div>
+                  ) : (
+                    <div className="border rounded-md overflow-hidden">
+                      {/* Breadcrumbs */}
+                      <div className="flex items-center gap-1 px-2 py-1.5 text-xs bg-muted/50 border-b flex-wrap">
+                        {(() => {
+                          const rootLabel = folderRoot === 'lims' ? 'LIMS CSVs' : 'Peptides'
+                          const crumbs = [{ label: rootLabel, path: '' }] as { label: string; path: string }[]
+                          if (folderBrowsePath) {
+                            const parts = folderBrowsePath.split('/')
+                            let acc = ''
+                            for (const part of parts) {
+                              acc = acc ? `${acc}/${part}` : part
+                              crumbs.push({ label: part, path: acc })
+                            }
+                          }
+                          return crumbs.map((bc, i) => (
+                            <span key={bc.path} className="flex items-center gap-1">
+                              {i > 0 && <ChevronRight className="h-3 w-3 text-muted-foreground" />}
+                              <button
+                                onClick={() => loadBrowseFolder(bc.path)}
+                                disabled={folderLoading}
+                                className={`hover:underline ${i === crumbs.length - 1 ? 'text-foreground font-medium' : 'text-muted-foreground'}`}
+                              >
+                                {bc.label}
+                              </button>
+                            </span>
+                          ))
+                        })()}
+                      </div>
+
+                      {/* Folder list */}
+                      {folderLoading ? (
+                        <div className="flex items-center justify-center py-6 text-muted-foreground text-sm">
+                          <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                          Loading...
+                        </div>
+                      ) : (
+                        <ScrollArea className="h-[200px]">
+                          <div className="p-1">
+                            {/* Back button */}
+                            {folderBrowsePath && (
+                              <button
+                                onClick={() => {
+                                  const parent = folderBrowsePath.split('/').slice(0, -1).join('/')
+                                  loadBrowseFolder(parent)
+                                }}
+                                className="flex items-center gap-2 w-full px-2 py-1.5 rounded hover:bg-accent text-sm text-muted-foreground"
+                              >
+                                <ArrowLeft className="h-3.5 w-3.5" />
+                                <span>Back</span>
+                              </button>
+                            )}
+
+                            {/* Folders */}
+                            {folderItems
+                              .filter(i => i.type === 'folder')
+                              .sort((a, b) => a.name.localeCompare(b.name))
+                              .map(item => (
+                                <button
+                                  key={item.id}
+                                  onClick={() => {
+                                    const newPath = folderBrowsePath ? `${folderBrowsePath}/${item.name}` : item.name
+                                    loadBrowseFolder(newPath)
+                                  }}
+                                  className="flex items-center gap-2 w-full px-2 py-1.5 rounded hover:bg-accent text-sm group"
+                                >
+                                  <Folder className="h-3.5 w-3.5 text-amber-500 shrink-0" />
+                                  <span className="truncate text-left flex-1">{item.name}</span>
+                                  <ChevronRight className="h-3 w-3 text-muted-foreground opacity-0 group-hover:opacity-100" />
+                                </button>
+                              ))}
+
+                            {/* Files (dimmed, non-interactive) */}
+                            {folderItems
+                              .filter(i => i.type === 'file')
+                              .sort((a, b) => a.name.localeCompare(b.name))
+                              .map(item => (
+                                <div
+                                  key={item.id}
+                                  className="flex items-center gap-2 px-2 py-1 text-xs text-muted-foreground"
+                                >
+                                  <span className="truncate">{item.name}</span>
+                                </div>
+                              ))}
+
+                            {folderItems.length === 0 && (
+                              <div className="text-center py-6 text-muted-foreground text-sm">
+                                This folder is empty
+                              </div>
+                            )}
+                          </div>
+                        </ScrollArea>
+                      )}
+
+                      {/* Select button when PeakData CSVs found */}
+                      {(() => {
+                        const peakDataFiles = folderItems.filter(
+                          i => i.type === 'file' && /PeakData\.csv$/i.test(i.name)
+                        )
+                        if (peakDataFiles.length === 0 || folderLoading) return null
+                        return (
+                          <div className="px-2 py-2 border-t bg-muted/30 flex items-center justify-between">
+                            <span className="text-xs text-muted-foreground">
+                              {peakDataFiles.length} PeakData CSV{peakDataFiles.length !== 1 ? 's' : ''} found
+                            </span>
+                            <Button
+                              size="sm"
+                              variant="secondary"
+                              className="h-7 text-xs"
+                              onClick={() => {
+                                const name = folderBrowsePath.split('/').pop() || 'LIMS CSVs'
+                                setResyncFolderPath(folderBrowsePath)
+                                setResyncFolderName(name)
+                              }}
+                            >
+                              <CheckCircle2 className="mr-1 h-3 w-3" />
+                              Select this folder
+                            </Button>
+                          </div>
+                        )
+                      })()}
+                    </div>
+                  )}
+                  <p className="text-xs text-muted-foreground">
+                    Browse the LIMS CSVs folder to find Std PeakData files.
+                  </p>
+                </div>
+              )}
 
               <div className="space-y-2">
                 <Label>Instrument</Label>
@@ -1044,10 +1429,29 @@ export function PeptideConfig() {
 
             <DialogFooter>
               <Button variant="outline" onClick={closeResyncDialog}>Cancel</Button>
-              <Button onClick={handleResyncSubmit} disabled={!resyncAnalyteId}>
-                <Cloud className="mr-2 h-4 w-4" />
-                Import
-              </Button>
+              {resyncMode === 'manual' ? (
+                <Button
+                  onClick={handleManualSubmit}
+                  disabled={
+                    !resyncAnalyteId
+                    || manualSubmitting
+                    || manualRows.filter(r => r.conc.trim() && r.area.trim()).length < 3
+                  }
+                >
+                  {manualSubmitting
+                    ? <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    : <CheckCircle2 className="mr-2 h-4 w-4" />}
+                  Create Curve
+                </Button>
+              ) : (
+                <Button
+                  onClick={handleResyncSubmit}
+                  disabled={!resyncAnalyteId || (resyncMode === 'folder' && !resyncFolderPath)}
+                >
+                  <Cloud className="mr-2 h-4 w-4" />
+                  Import
+                </Button>
+              )}
             </DialogFooter>
           </DialogContent>
         </Dialog>

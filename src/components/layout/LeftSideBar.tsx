@@ -1,7 +1,7 @@
 import { cn } from '@/lib/utils'
 import { useUIStore, type ActiveSection } from '@/store/ui-store'
 import { Button } from '@/components/ui/button'
-import { FlaskConical, Wrench } from 'lucide-react'
+import { Wrench } from 'lucide-react'
 
 interface NavItem {
   id: ActiveSection
@@ -10,7 +10,6 @@ interface NavItem {
 }
 
 const navItems: NavItem[] = [
-  { id: 'lab-operations', label: 'Lab Operations', icon: FlaskConical },
   { id: 'accumark-tools', label: 'AccuMark Tools', icon: Wrench },
 ]
 

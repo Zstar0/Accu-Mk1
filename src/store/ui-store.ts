@@ -2,17 +2,16 @@ import { create } from 'zustand'
 import { devtools } from 'zustand/middleware'
 
 // Navigation sections for main content area
-export type ActiveSection = 'dashboard' | 'senaite' | 'intake' | 'lab-operations' | 'hplc-analysis' | 'accumark-tools' | 'account'
+export type ActiveSection = 'dashboard' | 'senaite' | 'lims' | 'hplc-analysis' | 'accumark-tools' | 'account'
 
 // Sub-sections within each main section
 export type DashboardSubSection = 'orders' | 'analytics'
-export type SenaiteSubSection = 'samples' | 'event-log' | 'sample-details'
-export type IntakeSubSection = 'receive-sample'
-export type LabOperationsSubSection = 'chromatographs' | 'sample-intake'
-export type HPLCAnalysisSubSection = 'overview' | 'new-analysis' | 'import-analysis' | 'instruments' | 'methods' | 'peptide-config' | 'analysis-history' | 'sample-preps' | 'analysis-services'
-export type AccuMarkToolsSubSection = 'overview' | 'order-explorer' | 'coa-explorer'
-export type AccountSubSection = 'change-password' | 'user-management'
-export type ActiveSubSection = DashboardSubSection | SenaiteSubSection | IntakeSubSection | LabOperationsSubSection | HPLCAnalysisSubSection | AccuMarkToolsSubSection | AccountSubSection
+export type SenaiteSubSection = 'samples' | 'event-log' | 'sample-details' | 'receive-sample'
+export type LIMSSubSection = 'instruments' | 'methods' | 'peptide-config' | 'analysis-services'
+export type HPLCAnalysisSubSection = 'overview' | 'new-analysis' | 'import-analysis' | 'analysis-history' | 'sample-preps'
+export type AccuMarkToolsSubSection = 'overview' | 'order-explorer' | 'order-status' | 'coa-explorer' | 'chromatographs'
+export type AccountSubSection = 'profile' | 'user-management'
+export type ActiveSubSection = DashboardSubSection | SenaiteSubSection | LIMSSubSection | HPLCAnalysisSubSection | AccuMarkToolsSubSection | AccountSubSection
 
 interface UIState {
   leftSidebarVisible: boolean
@@ -138,7 +137,7 @@ export const useUIStore = create<UIState>()(
       navigateToPeptide: peptideId =>
         set(
           state => ({
-            activeSection: 'hplc-analysis',
+            activeSection: 'lims',
             activeSubSection: 'peptide-config',
             peptideConfigTargetId: peptideId,
             navigationKey: state.navigationKey + 1,
@@ -186,7 +185,7 @@ export const useUIStore = create<UIState>()(
       navigateToMethod: (methodId) =>
         set(
           state => ({
-            activeSection: 'hplc-analysis',
+            activeSection: 'lims',
             activeSubSection: 'methods',
             methodsTargetId: methodId,
             navigationKey: state.navigationKey + 1,

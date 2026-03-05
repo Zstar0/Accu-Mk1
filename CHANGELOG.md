@@ -1,5 +1,52 @@
 # Changelog
 
+## v0.20.0 — 2026-03-05
+
+### Per-User Senaite Authentication
+
+- **Senaite credentials on Profile page** — users can store their Senaite password so write operations (field updates, result submissions, workflow transitions, COA publishing) are attributed to their own Senaite account instead of the admin user
+- **Encrypted storage** — Senaite passwords are encrypted at rest using Fernet symmetric encryption keyed off `JWT_SECRET`; each environment has its own encryption key
+- **Validate-before-save** — the backend authenticates against Senaite before storing credentials; wrong passwords are rejected immediately
+- **Admin fallback** — if a user has no stored credentials (or decryption fails), write operations transparently fall back to the admin Senaite account
+- **8 write operations updated** — `generate_sample_coa`, `publish_sample_coa`, `upload_senaite_attachment`, `update_senaite_sample_fields`, `set_analysis_result`, `set_analysis_method_instrument`, `transition_analysis`, `receive_senaite_sample`
+- **Lightweight migration system** — `database.py` now runs `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` on startup before `create_all()`, solving the SQLAlchemy limitation where `create_all()` doesn't add columns to existing tables
+
+### Profile Page
+
+- **New Account → Profile page** — replaces the standalone Change Password page; consolidates user-specific settings in one place
+- **Change Password section** — same functionality as before, now in a card layout
+- **Senaite Integration section** — password input with verify/save flow, "Credentials configured" status with Remove/Update buttons
+
+### Navigation Restructure
+
+- **Analysis section** — renamed from "SENAITE"; now includes Samples, Receive Sample, and Event Log
+- **LIMS section** (new) — Instruments, Methods, Peptides, and Analysis Services moved here from HPLC Analysis for better logical grouping
+- **HPLC Automation** — renamed from "HPLC Analysis"; now focused on workflow: Overview, New Analysis, Import Analysis, History, Sample Preps
+
+### Calibration Improvements
+
+- **Import via SharePoint folder browser** — new "Browse Folder" mode in the peptide resync dialog; navigate SharePoint directories to pick a folder containing calibration CSVs
+- **Manual entry mode** — enter calibration data points (concentration, area, RT) directly without a file
+- **Notes field on calibration curves** — editable notes in the calibration edit form; displayed in the read-only view
+
+### Blend Sample Prep Support
+
+- **Per-analyte analysis in HPLC flyout** — blend peptides (e.g., "KPV + BPC-157") show analyte tabs; each analyte runs against its own calibration curve
+- **Aggregated Senaite auto-fill** — `SenaiteResultsView` merges results from all analyte runs; per-analyte matches (e.g., "KPV Purity") are prioritized over generic matches ("Peptide Purity")
+
+### Order Explorer
+
+- **Slideout detail panel** — order details now open in a full-height sidebar panel with backdrop blur instead of an inline expansion
+- **Order Status page** — new page for tracking order fulfillment status
+
+### Backend
+
+- **Senaite concurrency limiter** — frontend caps in-flight Senaite requests to 3 concurrent to avoid overwhelming the server
+- **CalibrationDataInput** expanded — now accepts `rts`, `analyte_id`, `instrument`, and `notes` fields
+- **`senaite_configured` flag** on user responses — frontend knows whether a user has stored Senaite credentials
+
+---
+
 ## v0.19.0 — 2026-03-05
 
 ### HPLC Flyout Redesign

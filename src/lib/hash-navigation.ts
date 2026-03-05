@@ -11,7 +11,7 @@
  * Sub-sections that carry a target ID:
  *  - dashboard/sample-details   → sampleDetailsTargetId
  *  - accumark-tools/order-explorer → orderExplorerTargetOrderId
- *  - hplc-analysis/peptide-config  → peptideConfigTargetId
+ *  - lims/peptide-config            → peptideConfigTargetId
  */
 
 import { useEffect } from 'react'
@@ -20,8 +20,7 @@ import { useUIStore, type ActiveSection, type ActiveSubSection } from '@/store/u
 const VALID_SECTIONS = new Set<string>([
   'dashboard',
   'senaite',
-  'intake',
-  'lab-operations',
+  'lims',
   'hplc-analysis',
   'accumark-tools',
   'account',

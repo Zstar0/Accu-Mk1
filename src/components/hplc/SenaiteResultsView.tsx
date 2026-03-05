@@ -48,7 +48,7 @@ function isRelevantAnalysis(name: string, peptide: string): boolean {
 }
 
 /**
- * Build a list of Senaite analyses that can be auto-filled from the HPLC result.
+ * Build a list of Senaite analyses that can be auto-filled from a single HPLC result.
  */
 function buildAutoFillMappings(
   result: HPLCAnalysisResult,
@@ -107,15 +107,40 @@ function buildAutoFillMappings(
   return mappings
 }
 
+/**
+ * Aggregate auto-fill mappings from multiple HPLC results (blend support).
+ * Per-analyte matches (e.g. "KPV Purity") are claimed first; generic matches
+ * (e.g. "Peptide Purity") only fill if unclaimed.
+ */
+function buildAllAutoFillMappings(
+  results: HPLCAnalysisResult[],
+  analyses: SenaiteAnalysis[],
+): AutoFillMapping[] {
+  const allMappings: AutoFillMapping[] = []
+  const claimed = new Set<string>()
+
+  for (const result of results) {
+    const mappings = buildAutoFillMappings(result, analyses)
+    for (const m of mappings) {
+      const uid = m.analysis.uid ?? ''
+      if (!claimed.has(uid)) {
+        claimed.add(uid)
+        allMappings.push(m)
+      }
+    }
+  }
+  return allMappings
+}
+
 // ── Component ─────────────────────────────────────────────────────────────────
 
 interface Props {
   prep: SamplePrep
-  result: HPLCAnalysisResult
+  results: HPLCAnalysisResult[]
   onBack: () => void
 }
 
-export function SenaiteResultsView({ prep, result, onBack }: Props) {
+export function SenaiteResultsView({ prep, results, onBack }: Props) {
   const [sampleIdInput, setSampleIdInput] = useState(
     prep.senaite_sample_id ?? '',
   )
@@ -173,7 +198,7 @@ export function SenaiteResultsView({ prep, result, onBack }: Props) {
   const pendingCount = analyses.length - verifiedCount
 
   // Auto-fill mappings
-  const autoFillMappings = senaiteData ? buildAutoFillMappings(result, analyses) : []
+  const autoFillMappings = senaiteData ? buildAllAutoFillMappings(results, analyses) : []
 
   // ── Auto-fill handler ───────────────────────────────────────────────────────
 
@@ -387,7 +412,9 @@ export function SenaiteResultsView({ prep, result, onBack }: Props) {
                 <div className="flex items-center gap-2">
                   <Zap size={15} className="text-amber-600 dark:text-amber-400" />
                   <span className="text-sm font-medium">
-                    Auto-fill from {result.peptide_abbreviation} analysis
+                    Auto-fill from {results.length === 1
+                      ? `${results[0]?.peptide_abbreviation} analysis`
+                      : `${results.length} analyte analyses`}
                   </span>
                 </div>
                 <Button

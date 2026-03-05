@@ -1724,7 +1724,11 @@ export interface PeptideCreateInput {
 export interface CalibrationDataInput {
   concentrations: number[]
   areas: number[]
+  rts?: number[]
   source_filename?: string
+  analyte_id?: number
+  instrument?: string
+  notes?: string
 }
 
 export async function getPeptides(): Promise<PeptideRecord[]> {
@@ -1960,6 +1964,7 @@ export interface CalibrationCurveUpdateInput {
   diluent_density?: number
   instrument?: string | null
   peptide_analyte_id?: number | null
+  notes?: string | null
 }
 
 export async function updateCalibration(
@@ -2717,18 +2722,53 @@ export async function getSenaiteStatus(): Promise<SenaiteStatusResponse> {
   return response.json()
 }
 
+// Concurrency limiter — caps in-flight SENAITE requests to avoid overwhelming the server.
+function createConcurrencyLimiter(maxConcurrent: number) {
+  let active = 0
+  const queue: (() => void)[] = []
+
+  return async function <T>(fn: () => Promise<T>): Promise<T> {
+    if (active >= maxConcurrent) {
+      await new Promise<void>(resolve => queue.push(resolve))
+    }
+    active++
+    try {
+      return await fn()
+    } finally {
+      active--
+      const next = queue.shift()
+      if (next) next()
+    }
+  }
+}
+
+const senaiteLimiter = createConcurrencyLimiter(3)
+
 export async function lookupSenaiteSample(
   sampleId: string
 ): Promise<SenaiteLookupResult> {
-  const response = await fetch(
-    `${API_BASE_URL()}/wizard/senaite/lookup?id=${encodeURIComponent(sampleId)}`,
-    { headers: getBearerHeaders() }
-  )
-  if (!response.ok) {
-    const err = await response.json().catch(() => null)
-    throw new Error(err?.detail || `SENAITE lookup failed: ${response.status}`)
-  }
-  return response.json()
+  return senaiteLimiter(async () => {
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 15_000)
+    try {
+      const response = await fetch(
+        `${API_BASE_URL()}/wizard/senaite/lookup?id=${encodeURIComponent(sampleId)}`,
+        { headers: getBearerHeaders(), signal: controller.signal }
+      )
+      if (!response.ok) {
+        const err = await response.json().catch(() => null)
+        throw new Error(err?.detail || `SENAITE lookup failed: ${response.status}`)
+      }
+      return response.json()
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        throw new Error(`SENAITE lookup timed out for ${sampleId}`)
+      }
+      throw error
+    } finally {
+      clearTimeout(timeout)
+    }
+  })
 }
 
 const _attachmentCache = new Map<string, string>()

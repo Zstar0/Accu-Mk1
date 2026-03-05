@@ -597,29 +597,62 @@ export function OrderExplorer() {
         </Card>
       )}
 
-      {/* Order detail panel (tabbed) */}
+      {/* Order detail slideout */}
       {selectedOrder && (
-        <OrderDetailPanel
-          order={selectedOrder}
-          wordpressHost={getWordpressUrl()}
-          onClose={() => setSelectedOrder(null)}
-          onViewPayload={order =>
-            setSelectedPayload({
-              payload: order.payload,
-              sampleId: order.order_id,
-            })
-          }
-        />
+        <>
+          {/* Backdrop */}
+          <div
+            className="fixed inset-0 bg-black/40 z-40"
+            onClick={() => {
+              setSelectedOrder(null)
+              setSelectedPayload(null)
+            }}
+            style={{
+              backdropFilter: 'blur(2px)',
+              animation: 'fadeIn 0.2s ease-out',
+            }}
+          />
+          {/* Sidebar Panel */}
+          <div
+            className="fixed top-0 right-0 h-full w-full max-w-5xl z-50 bg-zinc-950 border-l border-zinc-800 shadow-2xl overflow-y-auto p-6"
+            style={{
+              animation: 'slideInRight 0.25s ease-out',
+            }}
+          >
+            {selectedPayload ? (
+              <PayloadPanel
+                payload={selectedPayload.payload}
+                orderId={selectedPayload.sampleId}
+                onClose={() => setSelectedPayload(null)}
+              />
+            ) : (
+              <OrderDetailPanel
+                order={selectedOrder}
+                wordpressHost={getWordpressUrl()}
+                onClose={() => setSelectedOrder(null)}
+                onViewPayload={order =>
+                  setSelectedPayload({
+                    payload: order.payload,
+                    sampleId: order.order_id,
+                  })
+                }
+              />
+            )}
+          </div>
+        </>
       )}
 
-      {/* Payload panel */}
-      {selectedPayload && (
-        <PayloadPanel
-          payload={selectedPayload.payload}
-          orderId={selectedPayload.sampleId}
-          onClose={() => setSelectedPayload(null)}
-        />
-      )}
+      {/* Animations */}
+      <style>{`
+        @keyframes slideInRight {
+          from { transform: translateX(100%); }
+          to   { transform: translateX(0); }
+        }
+        @keyframes fadeIn {
+          from { opacity: 0; }
+          to   { opacity: 1; }
+        }
+      `}</style>
     </div>
   )
 }

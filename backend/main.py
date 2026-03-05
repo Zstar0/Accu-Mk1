@@ -27,6 +27,7 @@ from auth import (
     get_current_user, require_admin, create_access_token,
     verify_password, get_password_hash, seed_admin_user,
     UserCreate, UserRead, UserUpdate, PasswordChange, TokenResponse,
+    SenaiteCredentials,
 )
 from parsers import parse_txt_file
 from parsers.peakdata_csv_parser import parse_hplc_files, calculate_purity
@@ -373,14 +374,14 @@ async def login(
     access_token = create_access_token(data={"sub": str(user.id)})
     return TokenResponse(
         access_token=access_token,
-        user=UserRead.model_validate(user),
+        user=_user_to_read(user),
     )
 
 
 @app.get("/auth/me", response_model=UserRead)
 async def get_me(current_user=Depends(get_current_user)):
     """Get current authenticated user info."""
-    return UserRead.model_validate(current_user)
+    return _user_to_read(current_user)
 
 
 @app.put("/auth/change-password")
@@ -401,6 +402,50 @@ async def change_password(
     return {"message": "Password changed successfully"}
 
 
+# --- Senaite Credentials ---
+
+@app.put("/auth/senaite-credentials")
+async def set_senaite_credentials(
+    data: SenaiteCredentials,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Store the user's Senaite password (encrypted). Validates against Senaite first."""
+    if not SENAITE_URL:
+        raise HTTPException(400, "Senaite integration is not configured")
+    try:
+        async with httpx.AsyncClient(timeout=SENAITE_TIMEOUT) as client:
+            auth_url = f"{SENAITE_URL}/senaite/@@API/senaite/v1/auth"
+            print(f"[INFO] Validating Senaite credentials for {current_user.email}")
+            resp = await client.get(
+                auth_url,
+                auth=httpx.BasicAuth(current_user.email, data.password),
+            )
+            print(f"[INFO] Senaite auth response: {resp.status_code}")
+            if resp.status_code == 401:
+                raise HTTPException(400, "Senaite authentication failed — check your password")
+            resp.raise_for_status()
+    except httpx.RequestError as e:
+        raise HTTPException(502, f"Cannot reach Senaite: {e}")
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(502, f"Senaite returned error: {e.response.status_code}")
+
+    current_user.senaite_password_encrypted = _encrypt_senaite_password(data.password)
+    db.commit()
+    return {"message": "Senaite credentials saved", "senaite_configured": True}
+
+
+@app.delete("/auth/senaite-credentials")
+async def clear_senaite_credentials(
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Clear the user's stored Senaite password."""
+    current_user.senaite_password_encrypted = None
+    db.commit()
+    return {"message": "Senaite credentials cleared", "senaite_configured": False}
+
+
 # --- Admin User Management ---
 
 @app.get("/auth/users", response_model=list[UserRead])
@@ -410,7 +455,7 @@ async def list_users(
 ):
     """List all users (admin only)."""
     users = db.query(User).order_by(User.created_at.desc()).all()
-    return [UserRead.model_validate(u) for u in users]
+    return [_user_to_read(u) for u in users]
 
 
 @app.post("/auth/users", response_model=UserRead)
@@ -439,7 +484,7 @@ async def create_user(
     db.add(user)
     db.commit()
     db.refresh(user)
-    return UserRead.model_validate(user)
+    return _user_to_read(user)
 
 
 @app.put("/auth/users/{user_id}", response_model=UserRead)
@@ -470,7 +515,7 @@ async def update_user(
 
     db.commit()
     db.refresh(user)
-    return UserRead.model_validate(user)
+    return _user_to_read(user)
 
 
 @app.post("/auth/users/{user_id}/reset-password")
@@ -1514,7 +1559,11 @@ class CalibrationDataInput(BaseModel):
     """Schema for manual calibration data entry."""
     concentrations: list[float]
     areas: list[float]
+    rts: Optional[list[float]] = None
     source_filename: Optional[str] = None
+    analyte_id: Optional[int] = None
+    instrument: Optional[str] = None
+    notes: Optional[str] = None
 
 
 def _cal_to_response(cal: CalibrationCurve) -> CalibrationCurveResponse:
@@ -2127,17 +2176,45 @@ async def create_calibration(
     for cal in active_cals:
         cal.is_active = False
 
+    # Resolve analyte if provided
+    resolved_analyte_id: Optional[int] = None
+    if data.analyte_id:
+        analyte = db.execute(
+            select(PeptideAnalyte).where(
+                PeptideAnalyte.id == data.analyte_id,
+                PeptideAnalyte.peptide_id == peptide_id,
+            )
+        ).scalar_one_or_none()
+        if analyte:
+            resolved_analyte_id = analyte.id
+
+    # Build standard_data with optional RTs
+    std_data: dict = {
+        "concentrations": data.concentrations,
+        "areas": data.areas,
+    }
+    if data.rts:
+        std_data["rts"] = data.rts
+
+    # Compute reference RT from provided RTs
+    avg_rt = None
+    if data.rts and len(data.rts) > 0:
+        avg_rt = round(sum(data.rts) / len(data.rts), 4)
+
     # Create new active curve
+    from datetime import datetime, timezone
     curve = CalibrationCurve(
         peptide_id=peptide_id,
+        peptide_analyte_id=resolved_analyte_id,
         slope=regression["slope"],
         intercept=regression["intercept"],
         r_squared=regression["r_squared"],
-        standard_data={
-            "concentrations": data.concentrations,
-            "areas": data.areas,
-        },
-        source_filename=data.source_filename,
+        standard_data=std_data,
+        source_filename=data.source_filename or "Manual entry",
+        source_date=datetime.now(timezone.utc).isoformat(),
+        instrument=data.instrument,
+        reference_rt=avg_rt,
+        notes=data.notes,
         is_active=True,
     )
     db.add(curve)
@@ -2197,6 +2274,7 @@ class CalibrationCurveUpdate(BaseModel):
     diluent_density: Optional[float] = None
     instrument: Optional[str] = None
     peptide_analyte_id: Optional[int] = None
+    notes: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -4032,6 +4110,8 @@ async def resync_peptide_stream(
     peptide_id: int,
     analyte_id: Optional[int] = None,
     sample_id: Optional[str] = None,
+    folder_path: Optional[str] = None,
+    folder_root: Optional[str] = None,
     instrument: Optional[str] = None,
     db: Session = Depends(get_db),
     _current_user=Depends(get_current_user),
@@ -4212,6 +4292,108 @@ async def resync_peptide_stream(
                     yield send_event("log", {"message": f"  Reference RT: {avg_rt} min", "level": "success"})
 
                 # Log each data point
+                for i, (c, a) in enumerate(zip(cal["concentrations"], cal["areas"])):
+                    rt_str = f", RT={cal['rts'][i]:.3f}" if i < len(cal["rts"]) else ""
+                    yield send_event("log", {"message": f"    Std {c} µg/mL → Area {a:.2f}{rt_str}", "level": "dim"})
+
+            # ── Branch: Folder path scan (folder_path provided, no sample_id) ──
+            elif folder_path and folder_path.strip():
+                fpath = folder_path.strip()
+                folder_name = fpath.rsplit("/", 1)[-1] if "/" in fpath else fpath
+                yield send_event("log", {"message": f"Scanning folder: {fpath}...", "level": "info"})
+
+                scan_root = folder_root if folder_root in ("lims", "peptides") else "lims"
+                all_files = await sp.list_files_recursive(fpath, extensions=[".csv"], root=scan_root)
+
+                # Match any *_Std_{concentration}_*_PeakData.csv (any sample ID prefix)
+                std_pattern = re.compile(
+                    r"^(.+?)_Std_(\d+(?:\.\d+)?)_.*PeakData\.csv$", re.IGNORECASE
+                )
+
+                peakdata_files = []
+                for item in all_files:
+                    m = std_pattern.match(item["name"])
+                    if m:
+                        peakdata_files.append((m.group(2), item))  # (concentration_str, item)
+
+                if not peakdata_files:
+                    yield send_event("log", {"message": "[ERROR] No *_Std_*_PeakData.csv files found in folder", "level": "error"})
+                    yield send_event("done", {"success": False, "error": "No Std PeakData CSVs found in folder"})
+                    return
+
+                yield send_event("log", {"message": f"Found {len(peakdata_files)} Std PeakData file(s)", "level": "info"})
+                yield send_event("progress", {"current": 0, "total": len(peakdata_files), "phase": "downloading"})
+
+                csv_tuples: list[tuple[str, bytes, str]] = []
+                file_dates: list[str] = []
+                for idx, (conc_str, item) in enumerate(sorted(peakdata_files, key=lambda x: float(x[0]))):
+                    fn = item["name"]
+                    yield send_event("progress", {"current": idx + 1, "total": len(peakdata_files), "phase": f"Downloading {fn}"})
+                    try:
+                        file_bytes, _ = await sp.download_file(item["id"])
+                        csv_tuples.append((conc_str, file_bytes, fn))
+                        if item.get("last_modified"):
+                            file_dates.append(item["last_modified"])
+                        yield send_event("log", {"message": f"  Downloaded {fn} (Std {conc_str} µg/mL)", "level": "info"})
+                    except Exception as e:
+                        yield send_event("log", {"message": f"  [SKIP] {fn}: download failed ({e})", "level": "warn"})
+
+                # Build curve from PeakData CSVs
+                cal = _build_curve_from_peakdata_csvs(csv_tuples)
+                if not cal:
+                    yield send_event("log", {"message": "[ERROR] Not enough valid data points to build curve (need >= 3)", "level": "error"})
+                    yield send_event("done", {"success": False, "error": "Fewer than 3 valid data points"})
+                    return
+
+                yield send_event("log", {
+                    "message": f"Built curve from {len(cal['concentrations'])} data points",
+                    "level": "info",
+                })
+
+                # Run regression
+                try:
+                    regression = calculate_calibration_curve(cal["concentrations"], cal["areas"])
+                except Exception as e:
+                    yield send_event("log", {"message": f"[ERROR] Regression failed: {e}", "level": "error"})
+                    yield send_event("done", {"success": False, "error": f"Regression failed: {e}"})
+                    return
+
+                # Compute average RT
+                avg_rt = round(sum(cal["rts"]) / len(cal["rts"]), 4) if cal["rts"] else None
+
+                # Use earliest file modification date as source_date
+                earliest_date = min(file_dates) if file_dates else None
+
+                curve = CalibrationCurve(
+                    peptide_id=peptide.id,
+                    peptide_analyte_id=resolved_analyte_id,
+                    slope=regression["slope"],
+                    intercept=regression["intercept"],
+                    r_squared=regression["r_squared"],
+                    standard_data={
+                        "concentrations": cal["concentrations"],
+                        "areas": cal["areas"],
+                        "rts": cal["rts"],
+                    },
+                    source_filename=f"{folder_name}_PeakData (folder scan)",
+                    source_path=fpath,
+                    source_date=earliest_date,
+                    source_sample_id=None,
+                    is_active=True,
+                    reference_rt=avg_rt,
+                    instrument=requested_instrument,
+                )
+                db.add(curve)
+                new_curves.append(curve)
+                calibrations_added = 1
+
+                yield send_event("log", {
+                    "message": f"  [OK] Curve: R²={regression['r_squared']:.6f}, slope={regression['slope']:.4f}, intercept={regression['intercept']:.4f}",
+                    "level": "success",
+                })
+                if avg_rt:
+                    yield send_event("log", {"message": f"  Reference RT: {avg_rt} min", "level": "success"})
+
                 for i, (c, a) in enumerate(zip(cal["concentrations"], cal["areas"])):
                     rt_str = f", RT={cal['rts'][i]:.3f}" if i < len(cal["rts"]) else ""
                     yield send_event("log", {"message": f"    Std {c} µg/mL → Area {a:.2f}{rt_str}", "level": "dim"})
@@ -5397,7 +5579,7 @@ class SampleCOAActionResponse(BaseModel):
 @app.post("/wizard/senaite/samples/{sample_id}/generate-coa")
 async def generate_sample_coa(
     sample_id: str,
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     """Trigger Accumark COA generation for a SENAITE sample via COA Builder.
 
@@ -5437,7 +5619,7 @@ async def generate_sample_coa(
         try:
             async with httpx.AsyncClient(
                 timeout=httpx.Timeout(30.0, connect=5.0),
-                auth=httpx.BasicAuth(SENAITE_USER, SENAITE_PASSWORD),
+                auth=_get_senaite_auth(current_user),
                 follow_redirects=True,
             ) as senaite_client:
                 await senaite_client.post(
@@ -5469,7 +5651,7 @@ async def generate_sample_coa(
 @app.post("/wizard/senaite/samples/{sample_id}/publish-coa")
 async def publish_sample_coa(
     sample_id: str,
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     """Publish the latest draft Accumark COA for a SENAITE sample.
 
@@ -5485,7 +5667,7 @@ async def publish_sample_coa(
         try:
             async with httpx.AsyncClient(
                 timeout=httpx.Timeout(15.0, connect=5.0),
-                auth=httpx.BasicAuth(SENAITE_USER, SENAITE_PASSWORD),
+                auth=_get_senaite_auth(current_user),
                 follow_redirects=True,
             ) as client:
                 search_url = (
@@ -5527,7 +5709,7 @@ async def publish_sample_coa(
         try:
             async with httpx.AsyncClient(
                 timeout=httpx.Timeout(30.0, connect=5.0),
-                auth=httpx.BasicAuth(SENAITE_USER, SENAITE_PASSWORD),
+                auth=_get_senaite_auth(current_user),
                 follow_redirects=True,
             ) as client:
                 if verification_code:
@@ -6425,6 +6607,45 @@ SENAITE_URL = os.environ.get("SENAITE_URL")          # None = disabled
 SENAITE_USER = os.environ.get("SENAITE_USER", "")
 SENAITE_PASSWORD = os.environ.get("SENAITE_PASSWORD", "")
 SENAITE_TIMEOUT = httpx.Timeout(30.0, connect=10.0)
+
+# ── Senaite per-user credential helpers ──────────────────────────────────────
+
+import base64
+import hashlib
+from cryptography.fernet import Fernet
+from auth import SECRET_KEY as _JWT_SECRET
+
+def _get_fernet() -> Fernet:
+    """Derive a Fernet key from JWT_SECRET for encrypting Senaite passwords."""
+    key_bytes = hashlib.sha256(_JWT_SECRET.encode()).digest()
+    return Fernet(base64.urlsafe_b64encode(key_bytes))
+
+def _encrypt_senaite_password(plain: str) -> str:
+    return _get_fernet().encrypt(plain.encode()).decode()
+
+def _decrypt_senaite_password(encrypted: str) -> str:
+    return _get_fernet().decrypt(encrypted.encode()).decode()
+
+def _get_senaite_auth(user=None) -> httpx.BasicAuth:
+    """Return BasicAuth for Senaite — user's own credentials if available, else admin."""
+    if user and getattr(user, "senaite_password_encrypted", None):
+        try:
+            pwd = _decrypt_senaite_password(user.senaite_password_encrypted)
+            return httpx.BasicAuth(user.email, pwd)
+        except Exception:
+            pass  # Fall through to admin
+    return httpx.BasicAuth(SENAITE_USER, SENAITE_PASSWORD)
+
+def _user_to_read(user) -> UserRead:
+    """Convert User model to UserRead schema with senaite_configured."""
+    return UserRead(
+        id=user.id,
+        email=user.email,
+        role=user.role,
+        is_active=user.is_active,
+        created_at=user.created_at,
+        senaite_configured=user.senaite_password_encrypted is not None,
+    )
 
 
 class SenaiteAnalyte(BaseModel):
@@ -7351,7 +7572,7 @@ async def upload_senaite_attachment(
     sample_uid: str,
     file: UploadFile,
     attachment_type: str = Form(...),  # "HPLC Graph" or "Sample Image"
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     """Upload a file attachment to a SENAITE sample.
 
@@ -7369,7 +7590,7 @@ async def upload_senaite_attachment(
 
         async with httpx.AsyncClient(
             timeout=httpx.Timeout(60.0, connect=10.0),
-            auth=httpx.BasicAuth(SENAITE_USER, SENAITE_PASSWORD),
+            auth=_get_senaite_auth(current_user),
             follow_redirects=True,
         ) as client:
             # Step 1: Resolve the sample's Plone URL via REST API
@@ -7652,7 +7873,7 @@ class SenaiteReceiveSampleResponse(BaseModel):
 )
 async def receive_senaite_sample(
     req: SenaiteReceiveSampleRequest,
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     """Check-in / receive a sample in SENAITE.
 
@@ -7687,7 +7908,7 @@ async def receive_senaite_sample(
     try:
         async with httpx.AsyncClient(
             timeout=httpx.Timeout(30.0, connect=5.0),
-            auth=httpx.BasicAuth(SENAITE_USER, SENAITE_PASSWORD),
+            auth=_get_senaite_auth(current_user),
             follow_redirects=True,
         ) as client:
             # Fetch sample via JSON API to get physical path
@@ -7893,7 +8114,7 @@ class SenaiteFieldUpdateResponse(BaseModel):
 async def update_senaite_sample_fields(
     uid: str,
     req: SenaiteFieldUpdateRequest,
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     """Update one or more fields on a SENAITE sample via the JSON API."""
     if SENAITE_URL is None:
@@ -7909,7 +8130,7 @@ async def update_senaite_sample_fields(
     try:
         async with httpx.AsyncClient(
             timeout=httpx.Timeout(30.0, connect=5.0),
-            auth=httpx.BasicAuth(SENAITE_USER, SENAITE_PASSWORD),
+            auth=_get_senaite_auth(current_user),
             follow_redirects=True,
         ) as client:
             update_url = (
@@ -7987,7 +8208,7 @@ class AnalysisResultResponse(BaseModel):
 async def set_analysis_result(
     uid: str,
     req: AnalysisResultRequest,
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     """Set the Result value on a SENAITE analysis.
 
@@ -8002,7 +8223,7 @@ async def set_analysis_result(
     try:
         async with httpx.AsyncClient(
             timeout=httpx.Timeout(30.0, connect=5.0),
-            auth=httpx.BasicAuth(SENAITE_USER, SENAITE_PASSWORD),
+            auth=_get_senaite_auth(current_user),
             follow_redirects=True,
         ) as client:
             update_url = (
@@ -8057,7 +8278,7 @@ class AnalysisMethodInstrumentRequest(BaseModel):
 async def set_analysis_method_instrument(
     uid: str,
     req: AnalysisMethodInstrumentRequest,
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     """Set Method and/or Instrument on a SENAITE analysis.
 
@@ -8078,7 +8299,7 @@ async def set_analysis_method_instrument(
     try:
         async with httpx.AsyncClient(
             timeout=httpx.Timeout(30.0, connect=5.0),
-            auth=httpx.BasicAuth(SENAITE_USER, SENAITE_PASSWORD),
+            auth=_get_senaite_auth(current_user),
             follow_redirects=True,
         ) as client:
             update_url = f"{SENAITE_URL}/senaite/@@API/senaite/v1/update/{uid}"
@@ -8137,7 +8358,7 @@ EXPECTED_POST_STATES: dict[str, str] = {
 async def transition_analysis(
     uid: str,
     req: AnalysisTransitionRequest,
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     """Trigger a workflow transition on a SENAITE analysis.
 
@@ -8160,7 +8381,7 @@ async def transition_analysis(
     try:
         async with httpx.AsyncClient(
             timeout=httpx.Timeout(30.0, connect=5.0),
-            auth=httpx.BasicAuth(SENAITE_USER, SENAITE_PASSWORD),
+            auth=_get_senaite_auth(current_user),
             follow_redirects=True,
         ) as client:
             update_url = (

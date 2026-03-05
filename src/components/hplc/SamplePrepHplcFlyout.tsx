@@ -7,7 +7,7 @@
  * are loaded. Changing the calibration curve re-runs analysis.
  */
 
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import {
   Sheet,
   SheetContent,
@@ -121,6 +121,10 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
   const [result, setResult] = useState<HPLCAnalysisResult | null>(null)
   const [runError, setRunError] = useState<string | null>(null)
 
+  // Blend support — per-analyte results
+  const [activeAnalyte, setActiveAnalyte] = useState<string | null>(null)
+  const [analyteResults, setAnalyteResults] = useState<Map<string, HPLCAnalysisResult>>(new Map())
+
   // View toggle
   const [view, setView] = useState<'analysis' | 'results'>('analysis')
 
@@ -134,6 +138,8 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
       setChangingCurve(false)
       setResult(null)
       setRunError(null)
+      setActiveAnalyte(null)
+      setAnalyteResults(new Map())
       setView('analysis')
     }
   }, [open, prep.id])
@@ -204,47 +210,91 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
     if (open) loadCalibrations()
   }, [open, loadCalibrations])
 
+  // ── Blend detection ────────────────────────────────────────────────────────
+
+  const blendPeptides = useMemo(
+    () => parseResult?.detected_peptides ?? [],
+    [parseResult?.detected_peptides],
+  )
+  const isBlend = blendPeptides.length > 1
+
   // ── Run analysis (auto-triggered) ──────────────────────────────────────────
 
-  const runAnalysis = useCallback(async () => {
+  const runAllAnalyses = useCallback(async () => {
     if (!parseResult || !prep.peptide_id || !selectedCalId) return
     setRunning(true)
     setRunError(null)
+
+    const weights = {
+      stock_vial_empty:                 prep.stock_vial_empty_mg   ?? 0,
+      stock_vial_with_diluent:          prep.stock_vial_loaded_mg  ?? 0,
+      dil_vial_empty:                   prep.dil_vial_empty_mg     ?? 0,
+      dil_vial_with_diluent:            prep.dil_vial_with_diluent_mg ?? 0,
+      dil_vial_with_diluent_and_sample: prep.dil_vial_final_mg     ?? 0,
+    }
+
+    const peptides = isBlend ? blendPeptides : [null as string | null]
+    const results = new Map<string, HPLCAnalysisResult>()
+
     try {
-      const res = await runHPLCAnalysis({
-        sample_id_label: prep.senaite_sample_id ?? prep.sample_id,
-        peptide_id: prep.peptide_id,
-        calibration_curve_id: selectedCalId,
-        weights: {
-          stock_vial_empty:                 prep.stock_vial_empty_mg   ?? 0,
-          stock_vial_with_diluent:          prep.stock_vial_loaded_mg  ?? 0,
-          dil_vial_empty:                   prep.dil_vial_empty_mg     ?? 0,
-          dil_vial_with_diluent:            prep.dil_vial_with_diluent_mg ?? 0,
-          dil_vial_with_diluent_and_sample: prep.dil_vial_final_mg     ?? 0,
-        },
-        injections: parseResult.injections as unknown as Record<string, unknown>[],
-      })
-      setResult(res)
+      for (const label of peptides) {
+        const filteredInj = label
+          ? parseResult.injections.filter(inj => inj.peptide_label === label)
+          : parseResult.injections
+
+        const res = await runHPLCAnalysis({
+          sample_id_label: prep.senaite_sample_id ?? prep.sample_id,
+          peptide_id: prep.peptide_id,
+          calibration_curve_id: selectedCalId,
+          weights,
+          injections: filteredInj as unknown as Record<string, unknown>[],
+        })
+
+        results.set(label ?? '__single__', res)
+      }
+
+      setAnalyteResults(results)
+
+      if (!isBlend) {
+        setResult(results.get('__single__') ?? null)
+      } else {
+        const firstLabel = blendPeptides[0]
+        setResult(firstLabel ? results.get(firstLabel) ?? null : null)
+        setActiveAnalyte(firstLabel ?? null)
+      }
       scrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' })
     } catch (e) {
       setRunError(e instanceof Error ? e.message : 'Analysis failed')
     } finally {
       setRunning(false)
     }
-  }, [parseResult, prep, selectedCalId])
+  }, [parseResult, prep, selectedCalId, isBlend, blendPeptides])
 
   // Auto-run when peak data + calibration are both ready
   useEffect(() => {
     if (parseResult && selectedCalId && prep.peptide_id && !result && !running && !runError) {
-      runAnalysis()
+      runAllAnalyses()
     }
-  }, [parseResult, selectedCalId, prep.peptide_id, result, running, runError, runAnalysis])
+  }, [parseResult, selectedCalId, prep.peptide_id, result, running, runError, runAllAnalyses])
 
   // ── Derived ─────────────────────────────────────────────────────────────────
 
   const injections = parseResult?.injections ?? []
-  const activeInjData = injections[activeInj]
   const selectedCal = calibrations.find(c => c.id === selectedCalId)
+
+  // For blends, show only the active analyte's injections
+  const displayInjections = isBlend && activeAnalyte
+    ? injections.filter(inj => inj.peptide_label === activeAnalyte)
+    : injections
+  const activeInjData = displayInjections[activeInj]
+
+  // Switch analyte tab
+  const handleAnalyteChange = useCallback((label: string) => {
+    setActiveAnalyte(label)
+    setActiveInj(0)
+    const r = analyteResults.get(label)
+    if (r) setResult(r)
+  }, [analyteResults])
 
   // ─── Render ─────────────────────────────────────────────────────────────────
 
@@ -274,6 +324,31 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
 
         {view === 'analysis' ? (
           <>
+            {/* Analyte tabs for blends */}
+            {isBlend && blendPeptides.length > 1 && result && (
+              <div className="px-6 pt-4 pb-0">
+                <div className="flex gap-1.5">
+                  {blendPeptides.map(label => (
+                    <button
+                      key={label}
+                      onClick={() => handleAnalyteChange(label)}
+                      className={cn(
+                        'px-3 py-1.5 text-xs font-medium rounded-md border transition-colors',
+                        activeAnalyte === label
+                          ? 'bg-primary text-primary-foreground border-primary'
+                          : 'bg-background border-border hover:bg-muted',
+                      )}
+                    >
+                      {label}
+                      {analyteResults.has(label) && (
+                        <CheckCircle2 size={12} className="ml-1.5 inline" />
+                      )}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
             <div className="flex gap-6 px-6 py-5">
               {/* ════ Left column — results + data ════════════════════════ */}
               <div className="flex-1 min-w-0 space-y-5">
@@ -281,7 +356,9 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
                 {running && (
                   <div className="flex flex-col items-center gap-3 py-8">
                     <Spinner className="size-6" />
-                    <p className="text-sm text-muted-foreground">Running analysis…</p>
+                    <p className="text-sm text-muted-foreground">
+                      Running analysis{isBlend ? ` (${blendPeptides.length} analytes)` : ''}…
+                    </p>
                   </div>
                 )}
                 {result && (
@@ -289,9 +366,9 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
                     <AnalysisResults result={result} chromatograms={chromTraces} hideTrace />
 
                     {/* Peak table right under the chromatogram */}
-                    {injections.length > 1 && (
+                    {displayInjections.length > 1 && (
                       <InjectionTabs
-                        injections={injections}
+                        injections={displayInjections}
                         active={activeInj}
                         onSelect={setActiveInj}
                       />
@@ -300,7 +377,7 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
                       <div>
                         <p className="text-sm font-semibold mb-2">
                           Peak Data
-                          {injections.length > 1 && (
+                          {displayInjections.length > 1 && (
                             <span className="ml-1 font-normal text-muted-foreground text-xs">
                               — {activeInjData.injection_name}
                             </span>
@@ -372,7 +449,7 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
                                   ? 'border-primary/50 bg-primary/5'
                                   : 'border-border hover:border-border/80 hover:bg-muted/40',
                               )}
-                              onClick={() => { setSelectedCalId(cal.id); setChangingCurve(false); setResult(null); setRunError(null) }}
+                              onClick={() => { setSelectedCalId(cal.id); setChangingCurve(false); setResult(null); setAnalyteResults(new Map()); setRunError(null) }}
                             >
                               <div className="space-y-0.5 min-w-0">
                                 <p className="text-sm font-medium truncate">
@@ -480,7 +557,7 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
         ) : result ? (
           <SenaiteResultsView
             prep={prep}
-            result={result}
+            results={isBlend ? [...analyteResults.values()] : [result]}
             onBack={() => setView('analysis')}
           />
         ) : null}

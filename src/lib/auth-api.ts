@@ -157,3 +157,30 @@ export async function resetUserPassword(
   }
   return response.json()
 }
+
+// --- Senaite credentials ---
+
+export async function setSenaitePassword(password: string): Promise<void> {
+  const response = await fetch(`${API_BASE_URL()}/auth/senaite-credentials`, {
+    method: 'PUT',
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ password }),
+  })
+  if (!response.ok) {
+    const body = await response.json().catch(() => null)
+    throw new Error(body?.detail || 'Failed to save Senaite credentials')
+  }
+  // Refresh user to update senaite_configured flag
+  await fetchCurrentUser()
+}
+
+export async function clearSenaitePassword(): Promise<void> {
+  const response = await fetch(`${API_BASE_URL()}/auth/senaite-credentials`, {
+    method: 'DELETE',
+    headers: getAuthHeaders(),
+  })
+  if (!response.ok) {
+    await handleAuthError(response)
+  }
+  await fetchCurrentUser()
+}

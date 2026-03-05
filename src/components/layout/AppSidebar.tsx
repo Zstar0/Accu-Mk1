@@ -1,5 +1,6 @@
 import {
   ChevronRight,
+  Database,
   FlaskConical,
   Microscope,
   Wrench,
@@ -9,7 +10,6 @@ import {
   LogOut,
   LayoutDashboard,
   RefreshCw,
-  ClipboardList,
 } from 'lucide-react'
 import { relaunch } from '@tauri-apps/plugin-process'
 import {
@@ -62,43 +62,35 @@ const navItems: NavItem[] = [
   },
   {
     id: 'senaite',
-    label: 'SENAITE',
+    label: 'Analysis',
     icon: FlaskConical,
     subItems: [
       { id: 'samples', label: 'Samples' },
+      { id: 'receive-sample', label: 'Receive Sample' },
       { id: 'event-log', label: 'Event Log' },
     ],
   },
   {
-    id: 'intake',
-    label: 'Intake',
-    icon: ClipboardList,
+    id: 'lims',
+    label: 'LIMS',
+    icon: Database,
     subItems: [
-      { id: 'receive-sample', label: 'Receive Sample' },
-    ],
-  },
-  {
-    id: 'lab-operations',
-    label: 'Lab Operations',
-    icon: FlaskConical,
-    subItems: [
-      { id: 'chromatographs', label: 'Chromatographs' },
+      { id: 'instruments', label: 'Instruments' },
+      { id: 'methods', label: 'Methods' },
+      { id: 'peptide-config', label: 'Peptides' },
+      { id: 'analysis-services', label: 'Analysis Services' },
     ],
   },
   {
     id: 'hplc-analysis',
-    label: 'HPLC Analysis',
+    label: 'HPLC Automation',
     icon: Microscope,
     subItems: [
       { id: 'overview', label: 'Overview' },
       { id: 'new-analysis', label: 'New Analysis' },
       { id: 'import-analysis', label: 'Import Analysis' },
-      { id: 'instruments', label: 'Instruments' },
-      { id: 'methods', label: 'Methods' },
-      { id: 'peptide-config', label: 'Peptides' },
       { id: 'analysis-history', label: 'History' },
       { id: 'sample-preps', label: 'Sample Preps' },
-      { id: 'analysis-services', label: 'Analysis Services' },
     ],
   },
   {
@@ -108,7 +100,9 @@ const navItems: NavItem[] = [
     subItems: [
       { id: 'overview', label: 'Overview' },
       { id: 'order-explorer', label: 'Order Explorer' },
+      { id: 'order-status', label: 'Order Status' },
       { id: 'coa-explorer', label: 'COA Explorer' },
+      { id: 'chromatographs', label: 'Chromatographs' },
     ],
   },
   {
@@ -116,7 +110,7 @@ const navItems: NavItem[] = [
     label: 'Account',
     icon: Users,
     subItems: [
-      { id: 'change-password', label: 'Change Password' },
+      { id: 'profile', label: 'Profile' },
       { id: 'user-management', label: 'User Management', adminOnly: true },
     ],
   },

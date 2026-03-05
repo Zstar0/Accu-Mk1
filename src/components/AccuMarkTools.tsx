@@ -1,6 +1,7 @@
 import { useUIStore } from '@/store/ui-store'
 import type { AccuMarkToolsSubSection } from '@/store/ui-store'
 import { OrderExplorer } from '@/components/OrderExplorer'
+import { OrderStatusPage } from '@/components/OrderStatusPage'
 import { COAExplorer } from '@/components/COAExplorer'
 
 /**
@@ -15,6 +16,8 @@ export function AccuMarkTools() {
   switch (activeSubSection) {
     case 'coa-explorer':
       return <COAExplorer />
+    case 'order-status':
+      return <OrderStatusPage />
     case 'order-explorer':
     default:
       return <OrderExplorer />

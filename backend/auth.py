@@ -63,6 +63,7 @@ class UserRead(BaseModel):
     role: str
     is_active: bool
     created_at: datetime
+    senaite_configured: bool = False
 
     class Config:
         from_attributes = True
@@ -75,6 +76,9 @@ class UserUpdate(BaseModel):
 class PasswordChange(BaseModel):
     current_password: str
     new_password: str
+
+class SenaiteCredentials(BaseModel):
+    password: str
 
 class TokenResponse(BaseModel):
     access_token: str

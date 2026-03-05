@@ -7,6 +7,7 @@ export interface AuthUser {
   role: string
   is_active: boolean
   created_at: string
+  senaite_configured: boolean
 }
 
 interface AuthState {

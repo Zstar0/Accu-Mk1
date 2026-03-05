@@ -240,6 +240,7 @@ function CalibrationRow({
   const [editDensity, setEditDensity] = useState('')
   const [editInstrument, setEditInstrument] = useState('')
   const [editAnalyteId, setEditAnalyteId] = useState('')
+  const [editNotes, setEditNotes] = useState('')
 
   const linkedAnalyte = analytes.find(a => a.id === calibration.peptide_analyte_id)
 
@@ -249,6 +250,7 @@ function CalibrationRow({
     setEditDensity(String(calibration.diluent_density))
     setEditInstrument(calibration.instrument ?? '')
     setEditAnalyteId(calibration.peptide_analyte_id != null ? String(calibration.peptide_analyte_id) : '')
+    setEditNotes(calibration.notes ?? '')
     setEditing(true)
   }
 
@@ -265,6 +267,7 @@ function CalibrationRow({
         diluent_density: editDensity ? parseFloat(editDensity) : undefined,
         instrument: editInstrument || null,
         peptide_analyte_id: editAnalyteId ? parseInt(editAnalyteId, 10) : null,
+        notes: editNotes.trim() || null,
       })
       setEditing(false)
       toast.success('Calibration updated')
@@ -507,6 +510,16 @@ function CalibrationRow({
                   </Select>
                 </div>
               </div>
+              <div className="space-y-1">
+                <Label className="text-xs">Notes</Label>
+                <textarea
+                  value={editNotes}
+                  onChange={e => setEditNotes(e.target.value)}
+                  placeholder="Optional notes about this curve..."
+                  className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 min-h-15 resize-y"
+                  rows={2}
+                />
+              </div>
             </div>
           ) : (
             <div className="rounded-md bg-muted/50 p-3">
@@ -577,6 +590,12 @@ function CalibrationRow({
                   </p>
                 </div>
               </div>
+              {calibration.notes && (
+                <div className="mt-2 pt-2 border-t border-border/50">
+                  <span className="text-muted-foreground text-xs">Notes</span>
+                  <p className="text-sm mt-0.5 whitespace-pre-wrap">{calibration.notes}</p>
+                </div>
+              )}
             </div>
           )}
 

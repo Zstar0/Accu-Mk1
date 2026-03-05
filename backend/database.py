@@ -53,4 +53,24 @@ def init_db():
     """Initialize database tables."""
     # Import models to register them with Base
     import models  # noqa: F401
+    # Run column migrations before create_all so ORM mappings match the DB schema
+    _run_migrations()
     Base.metadata.create_all(bind=engine)
+
+
+def _run_migrations():
+    """Run lightweight ALTER TABLE migrations for new columns on existing tables.
+
+    Uses IF NOT EXISTS so these are safe to re-run on every startup.
+    """
+    from sqlalchemy import text
+    migrations = [
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS senaite_password_encrypted TEXT",
+    ]
+    try:
+        with engine.connect() as conn:
+            for sql in migrations:
+                conn.execute(text(sql))
+            conn.commit()
+    except Exception:
+        pass  # Table may not exist yet on first run — create_all handles it
