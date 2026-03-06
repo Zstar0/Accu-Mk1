@@ -628,10 +628,10 @@ function CalibrationRow({
                     <TableRow key={i}>
                       <TableCell className="font-mono text-xs">{i + 1}</TableCell>
                       <TableCell className="text-right font-mono">
-                        {conc.toFixed(2)}
+                        {conc.toFixed(4)}
                       </TableCell>
                       <TableCell className="text-right font-mono">
-                        {data.areas[i] != null ? data.areas[i].toFixed(3) : '—'}
+                        {data.areas[i] != null ? data.areas[i].toFixed(4) : '—'}
                       </TableCell>
                     </TableRow>
                   ))}

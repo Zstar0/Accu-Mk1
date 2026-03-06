@@ -2707,6 +2707,7 @@ export interface SenaiteLookupResult {
   attachments: SenaiteAttachment[]
   published_coa: SenaitePublishedCOA | null
   senaite_url: string | null
+  cached_at: string | null
 }
 
 export interface SenaiteStatusResponse {
@@ -2743,6 +2744,14 @@ function createConcurrencyLimiter(maxConcurrent: number) {
 }
 
 const senaiteLimiter = createConcurrencyLimiter(3)
+
+export async function clearSenaiteLookupCache(): Promise<void> {
+  const response = await fetch(
+    `${API_BASE_URL()}/wizard/senaite/lookup-cache`,
+    { method: 'DELETE', headers: getBearerHeaders() }
+  )
+  if (!response.ok) throw new Error('Failed to clear Senaite cache')
+}
 
 export async function lookupSenaiteSample(
   sampleId: string

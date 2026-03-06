@@ -6751,6 +6751,7 @@ class SenaiteLookupResult(BaseModel):
     attachments: list[SenaiteAttachment] = []
     published_coa: Optional[SenaitePublishedCOA] = None
     senaite_url: Optional[str] = None  # e.g. "/clients/client-8/PB-0057"
+    cached_at: Optional[str] = None  # ISO timestamp when this result was cached
 
 
 class SenaiteStatusResponse(BaseModel):
@@ -6924,6 +6925,21 @@ async def get_senaite_raw_fields(
     return {k: item.get(k) for k in keys}
 
 
+# ── Senaite lookup cache (shared across all users) ─────────────────
+_senaite_lookup_cache: dict[str, tuple[float, SenaiteLookupResult]] = {}  # id → (timestamp, result)
+_SENAITE_LOOKUP_TTL = 15 * 60  # 15 minutes
+
+
+@app.delete("/wizard/senaite/lookup-cache")
+async def clear_senaite_lookup_cache(
+    _current_user=Depends(get_current_user),
+):
+    """Clear the server-side Senaite lookup cache so next lookups fetch fresh data."""
+    count = len(_senaite_lookup_cache)
+    _senaite_lookup_cache.clear()
+    return {"cleared": count}
+
+
 @app.get("/wizard/senaite/lookup", response_model=SenaiteLookupResult)
 async def lookup_senaite_sample(
     id: str,
@@ -6932,6 +6948,7 @@ async def lookup_senaite_sample(
 ):
     """
     Look up a sample in SENAITE by ID and return structured analyte data.
+    Results are cached server-side for 15 minutes across all users.
 
     Returns:
         SenaiteLookupResult with sample_id, declared_weight_mg, and analytes list.
@@ -6945,6 +6962,14 @@ async def lookup_senaite_sample(
 
     # SENAITE sample IDs are always uppercase (e.g. PB-0056) — normalize
     id = id.strip().upper()
+
+    # Check server-side cache
+    import time as _time
+    cached = _senaite_lookup_cache.get(id)
+    if cached:
+        ts, result = cached
+        if _time.time() - ts < _SENAITE_LOOKUP_TTL:
+            return result
 
     try:
         data = await _fetch_senaite_sample(id)
@@ -7426,7 +7451,9 @@ async def lookup_senaite_sample(
         except Exception as exc:
             print(f"[WARN] Failed to fetch ARReport for {sample_id}: {exc}")
 
-        return SenaiteLookupResult(
+        from datetime import datetime, timezone
+        now_iso = datetime.now(timezone.utc).isoformat()
+        result = SenaiteLookupResult(
             sample_id=sample_id,
             sample_uid=sample_uid or None,
             client=item.get("getClientTitle") or item.get("ClientTitle") or None,
@@ -7447,7 +7474,10 @@ async def lookup_senaite_sample(
             attachments=senaite_attachments,
             published_coa=published_coa_report,
             senaite_url=_senaite_path(item),
+            cached_at=now_iso,
         )
+        _senaite_lookup_cache[id] = (_time.time(), result)
+        return result
 
     except HTTPException:
         raise

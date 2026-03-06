@@ -8,6 +8,7 @@ import {
   RefreshCw,
   XCircle,
   AlertCircle,
+  Clock,
 } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
@@ -15,6 +16,7 @@ import {
   getExplorerStatus,
   getExplorerOrders,
   lookupSenaiteSample,
+  clearSenaiteLookupCache,
   type ExplorerOrder,
   type SenaiteLookupResult,
   type SenaiteAnalysis,
@@ -36,6 +38,17 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card'
+
+// --- Relative time formatter ---
+function formatRelativeTime(isoStr: string): string {
+  const diff = Date.now() - new Date(isoStr).getTime()
+  const seconds = Math.floor(diff / 1000)
+  if (seconds < 60) return 'just now'
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return `${minutes}m ago`
+  const hours = Math.floor(minutes / 60)
+  return `${hours}h ago`
+}
 
 // --- Senaite sequential fetch queue ---
 // Serializes lookups so only one hits Senaite at a time (single-threaded Zope)
@@ -292,10 +305,10 @@ function OrderRow({
           <ExternalLink className="h-3 w-3" />
         </a>
       </td>
-      <td className="py-3 px-3 max-w-[160px]">
+      <td className="py-3 px-3">
         {email ? (
-          <span className="text-sm truncate block" title={email}>
-            {email.split('@')[0]}@...
+          <span className="text-sm block" title={email}>
+            {email}
           </span>
         ) : (
           <span className="text-muted-foreground">{'\u2014'}</span>
@@ -363,7 +376,6 @@ export function OrderStatusPage() {
   const [showAll, setShowAll] = useState(false)
   const [hideTestOrders, setHideTestOrders] = useState(true)
   const [envName, setEnvName] = useState(() => getActiveEnvironmentName())
-  const [isRefreshing, setIsRefreshing] = useState(false)
   const wordpressHost = getWordpressUrl()
   const queryClient = useQueryClient()
 
@@ -474,6 +486,16 @@ export function OrderStatusPage() {
     return count
   }, [orders, sampleLookupMap])
 
+  // Oldest cached_at from settled queries — shows when data was last fetched from Senaite
+  const lastUpdated = useMemo(() => {
+    let oldest: string | null = null
+    for (const q of sampleQueries) {
+      const ts = q.data?.cached_at
+      if (ts && (!oldest || ts < oldest)) oldest = ts
+    }
+    return oldest
+  }, [sampleQueries])
+
   const openCount = useMemo(() => {
     if (!allOrders) return 0
     let filtered = allOrders.filter(o => !o.completed_at)
@@ -486,13 +508,14 @@ export function OrderStatusPage() {
     return filtered.length
   }, [allOrders, hideTestOrders])
 
+  // True while any senaite lookup is actively fetching
+  const isRefreshing = sampleQueries.some(q => q.isFetching)
+
   const handleRefresh = async () => {
-    setIsRefreshing(true)
-    await Promise.all([
-      queryClient.invalidateQueries({ queryKey: ['explorer'] }),
-      queryClient.invalidateQueries({ queryKey: ['senaite', 'lookup'] }),
-    ])
-    setIsRefreshing(false)
+    // Clear server-side cache, then invalidate all client queries
+    await clearSenaiteLookupCache().catch(Function.prototype as () => void)
+    queryClient.invalidateQueries({ queryKey: ['explorer'] })
+    queryClient.removeQueries({ queryKey: ['senaite', 'lookup'] })
   }
 
   return (
@@ -515,6 +538,13 @@ export function OrderStatusPage() {
           <Badge variant="outline" className="text-xs">
             {envName}
           </Badge>
+
+          {lastUpdated && (
+            <span className="flex items-center gap-1 text-xs text-muted-foreground" title={new Date(lastUpdated).toLocaleString()}>
+              <Clock className="h-3 w-3" />
+              Updated {formatRelativeTime(lastUpdated)}
+            </span>
+          )}
 
           <Button
             variant="outline"
