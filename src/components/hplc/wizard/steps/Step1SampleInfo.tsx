@@ -18,6 +18,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Badge } from '@/components/ui/badge'
 import {
   getPeptides,
   createWizardSession,
@@ -206,33 +207,53 @@ export function Step1SampleInfo() {
     }
   }
 
+  // Resolve selected peptide for blend detection
+  const selectedPeptide = peptideId !== null ? peptides.find(p => p.id === peptideId) : null
+
   // Shared peptide dropdown (used in both tabs)
   const peptideDropdown = (
-    <div className="space-y-1.5">
-      <Label htmlFor="peptide-select">
-        Peptide <span className="text-destructive">*</span>
-      </Label>
-      {loadingPeptides ? (
-        <div className="flex items-center gap-2 text-sm text-muted-foreground">
-          <Loader2 className="h-4 w-4 animate-spin" />
-          Loading peptides...
-        </div>
-      ) : (
-        <Select
-          value={peptideId !== null ? String(peptideId) : ''}
-          onValueChange={val => setPeptideId(Number(val))}
-        >
-          <SelectTrigger id="peptide-select">
-            <SelectValue placeholder="Select peptide..." />
-          </SelectTrigger>
-          <SelectContent>
-            {peptides.map(p => (
-              <SelectItem key={p.id} value={String(p.id)}>
-                {p.name} ({p.abbreviation})
-              </SelectItem>
+    <div className="space-y-2">
+      <div className="space-y-1.5">
+        <Label htmlFor="peptide-select">
+          Peptide <span className="text-destructive">*</span>
+        </Label>
+        {loadingPeptides ? (
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            Loading peptides...
+          </div>
+        ) : (
+          <Select
+            value={peptideId !== null ? String(peptideId) : ''}
+            onValueChange={val => setPeptideId(Number(val))}
+          >
+            <SelectTrigger id="peptide-select">
+              <SelectValue placeholder="Select peptide..." />
+            </SelectTrigger>
+            <SelectContent>
+              {peptides.map(p => (
+                <SelectItem key={p.id} value={String(p.id)}>
+                  {p.name} ({p.abbreviation})
+                  {p.is_blend ? ' · Blend' : ''}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
+      </div>
+      {selectedPeptide?.is_blend && selectedPeptide.components.length > 0 && (
+        <div className="rounded-md border border-blue-500/20 bg-blue-50/50 dark:bg-blue-950/15 p-3 space-y-2">
+          <p className="text-xs font-medium text-blue-700 dark:text-blue-300">
+            Blend — {selectedPeptide.components.length} component peptides
+          </p>
+          <div className="flex flex-wrap gap-1.5">
+            {selectedPeptide.components.map(c => (
+              <Badge key={c.id} variant="secondary" className="text-xs">
+                {c.abbreviation}
+              </Badge>
             ))}
-          </SelectContent>
-        </Select>
+          </div>
+        </div>
       )}
     </div>
   )
@@ -578,7 +599,19 @@ function EditableSessionSummary({
                 {peptide
                   ? `${peptide.name} (${peptide.abbreviation})`
                   : `Peptide ID ${session.peptide_id}`}
+                {peptide?.is_blend && (
+                  <Badge variant="outline" className="ml-2 text-[10px]">Blend</Badge>
+                )}
               </p>
+              {peptide?.is_blend && peptide.components.length > 0 && (
+                <div className="flex flex-wrap gap-1 mt-1">
+                  {peptide.components.map(c => (
+                    <Badge key={c.id} variant="secondary" className="text-[10px]">
+                      {c.abbreviation}
+                    </Badge>
+                  ))}
+                </div>
+              )}
             </div>
             <div>
               <span className="text-muted-foreground">Sample ID</span>

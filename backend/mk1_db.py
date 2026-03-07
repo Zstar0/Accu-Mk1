@@ -111,6 +111,9 @@ def ensure_sample_preps_table() -> None:
     with get_mk1_db() as conn:
         with conn.cursor() as cur:
             cur.execute(_SAMPLE_PREPS_DDL)
+            # Blend support columns (added after initial DDL)
+            cur.execute("ALTER TABLE sample_preps ADD COLUMN IF NOT EXISTS is_blend BOOLEAN DEFAULT FALSE")
+            cur.execute("ALTER TABLE sample_preps ADD COLUMN IF NOT EXISTS components_json JSONB")
         conn.commit()
 
 
@@ -149,6 +152,7 @@ def create_sample_prep(data: dict) -> dict:
         "dil_vial_empty_mg", "dil_vial_with_diluent_mg", "dil_vial_final_mg",
         "actual_conc_ug_ml", "actual_diluent_vol_ul", "actual_stock_vol_ul",
         "actual_total_vol_ul", "status", "notes",
+        "is_blend", "components_json",
     ]
     with get_mk1_db() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:

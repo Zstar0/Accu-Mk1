@@ -213,8 +213,11 @@ def parse_peakdata_csv(filename: str, content: str) -> InjectionData:
     if not peaks:
         raise ValueError(f"No peaks found in {filename}")
 
-    # Mark first peak as solvent front
-    peaks[0].is_solvent_front = True
+    # Mark first peak as solvent front — but only when there are multiple
+    # peaks. If there's only one peak it *is* the analyte peak, not the
+    # solvent front (common for early-eluting peptides like GHK-Cu).
+    if len(peaks) > 1:
+        peaks[0].is_solvent_front = True
 
     # Find main peak (highest Area% excluding solvent front)
     main_idx = -1

@@ -1,8 +1,10 @@
 import { useState, useEffect } from 'react'
-import { Loader2 } from 'lucide-react'
+import { Loader2, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Switch } from '@/components/ui/switch'
+import { Badge } from '@/components/ui/badge'
 import {
   Sheet,
   SheetContent,
@@ -21,8 +23,10 @@ import {
 import {
   createPeptide,
   getAnalysisServices,
+  getPeptides,
   type AnalysisServiceRecord,
   type AnalyteInput,
+  type PeptideRecord,
 } from '@/lib/api'
 
 interface PeptideFormProps {
@@ -44,6 +48,9 @@ export function PeptideForm({ open, onSaved, onClose }: PeptideFormProps) {
   const [abbreviation, setAbbreviation] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [isBlend, setIsBlend] = useState(false)
+  const [selectedComponents, setSelectedComponents] = useState<PeptideRecord[]>([])
+  const [existingPeptides, setExistingPeptides] = useState<PeptideRecord[]>([])
 
   // Analyte slots (1-4)
   const [slots, setSlots] = useState<AnalyteSlot[]>([
@@ -61,9 +68,15 @@ export function PeptideForm({ open, onSaved, onClose }: PeptideFormProps) {
   useEffect(() => {
     if (!open) return
     setLoadingServices(true)
-    getAnalysisServices({ category: 'Peptide Identity' })
-      .then(all => all.filter(s => s.title.includes('Identity (HPLC)')))
-      .then(setServices)
+    Promise.all([
+      getAnalysisServices({ category: 'Peptide Identity' })
+        .then(all => all.filter(s => s.title.includes('Identity (HPLC)'))),
+      getPeptides(),
+    ])
+      .then(([svcs, peptides]) => {
+        setServices(svcs)
+        setExistingPeptides(peptides.filter(p => !p.is_blend))
+      })
       .catch(console.error)
       .finally(() => setLoadingServices(false))
   }, [open])
@@ -76,6 +89,8 @@ export function PeptideForm({ open, onSaved, onClose }: PeptideFormProps) {
       setSlots([{ ...EMPTY_SLOT }, { ...EMPTY_SLOT }, { ...EMPTY_SLOT }, { ...EMPTY_SLOT }])
       setError(null)
       setSaving(false)
+      setIsBlend(false)
+      setSelectedComponents([])
     }
   }, [open])
 
@@ -101,7 +116,9 @@ export function PeptideForm({ open, onSaved, onClose }: PeptideFormProps) {
       await createPeptide({
         name: name.trim(),
         abbreviation: abbreviation.trim().toUpperCase(),
-        analytes,
+        analytes: isBlend ? [] : analytes,
+        is_blend: isBlend,
+        component_ids: isBlend ? selectedComponents.map(c => c.id) : undefined,
       })
       onSaved()
     } catch (err) {
@@ -146,46 +163,114 @@ export function PeptideForm({ open, onSaved, onClose }: PeptideFormProps) {
             </div>
           </div>
 
-          {/* Analyte Slots */}
-          <div className="space-y-3">
-            <Label className="text-sm font-semibold">Analytes</Label>
-            <p className="text-xs text-muted-foreground">
-              Link up to 4 analysis services (Peptide Identity).
-            </p>
-            {loadingServices ? (
-              <div className="flex items-center gap-2 py-3 text-sm text-muted-foreground">
-                <Loader2 className="h-4 w-4 animate-spin" />
-                Loading analysis services...
-              </div>
-            ) : (
-              <div className="space-y-3">
-                {slots.map((slot, i) => (
-                  <div key={i} className="flex items-center gap-3">
-                    <span className="flex items-center justify-center h-9 w-7 shrink-0 rounded bg-zinc-800 text-xs font-mono text-zinc-400">
-                      {i + 1}
-                    </span>
-                    <div className="flex-1 min-w-0">
-                      <Select
-                        value={slot.analysis_service_id}
-                        onValueChange={v => updateSlot(i, { analysis_service_id: v })}
-                      >
-                        <SelectTrigger className="w-full">
-                          <SelectValue placeholder="Select analysis service..." />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {services.map(svc => (
-                            <SelectItem key={svc.id} value={String(svc.id)}>
-                              {svc.peptide_name || svc.title}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
+          {/* Blend Toggle */}
+          <div className="flex items-center gap-3">
+            <Switch
+              id="is-blend"
+              checked={isBlend}
+              onCheckedChange={setIsBlend}
+            />
+            <Label htmlFor="is-blend" className="text-sm cursor-pointer">
+              This is a blend (groups other peptides)
+            </Label>
           </div>
+
+          {/* Component Peptide Picker — only for blends */}
+          {isBlend && (
+            <div className="space-y-3">
+              <Label className="text-sm font-semibold">Component Peptides</Label>
+              <p className="text-xs text-muted-foreground">
+                Select the individual peptides that make up this blend.
+              </p>
+              <Select
+                value=""
+                onValueChange={v => {
+                  const pep = existingPeptides.find(p => p.id === parseInt(v, 10))
+                  if (pep && !selectedComponents.some(c => c.id === pep.id)) {
+                    setSelectedComponents(prev => [...prev, pep])
+                  }
+                }}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Add a component peptide..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {existingPeptides
+                    .filter(p => !selectedComponents.some(c => c.id === p.id))
+                    .map(p => (
+                      <SelectItem key={p.id} value={String(p.id)}>
+                        {p.abbreviation} — {p.name}
+                      </SelectItem>
+                    ))}
+                </SelectContent>
+              </Select>
+              {selectedComponents.length > 0 && (
+                <div className="flex flex-wrap gap-2">
+                  {selectedComponents.map(comp => (
+                    <Badge key={comp.id} variant="secondary" className="gap-1 pr-1">
+                      {comp.abbreviation}
+                      <button
+                        type="button"
+                        onClick={() => setSelectedComponents(prev => prev.filter(c => c.id !== comp.id))}
+                        className="ml-1 rounded-full hover:bg-background/50 p-0.5"
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </Badge>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Analyte Slots — hidden for blends (auto-derived from components) */}
+          {!isBlend && (
+            <div className="space-y-3">
+              <Label className="text-sm font-semibold">Analytes</Label>
+              <p className="text-xs text-muted-foreground">
+                Link up to 4 analysis services (Peptide Identity).
+              </p>
+              {loadingServices ? (
+                <div className="flex items-center gap-2 py-3 text-sm text-muted-foreground">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Loading analysis services...
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {slots.map((slot, i) => (
+                    <div key={i} className="flex items-center gap-3">
+                      <span className="flex items-center justify-center h-9 w-7 shrink-0 rounded bg-zinc-800 text-xs font-mono text-zinc-400">
+                        {i + 1}
+                      </span>
+                      <div className="flex-1 min-w-0">
+                        <Select
+                          value={slot.analysis_service_id}
+                          onValueChange={v => updateSlot(i, { analysis_service_id: v })}
+                        >
+                          <SelectTrigger className="w-full">
+                            <SelectValue placeholder="Select analysis service..." />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {services.map(svc => (
+                              <SelectItem key={svc.id} value={String(svc.id)}>
+                                {svc.peptide_name || svc.title}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {isBlend && selectedComponents.length > 0 && (
+            <p className="text-xs text-muted-foreground">
+              Analyte services will be auto-linked from each component peptide.
+            </p>
+          )}
 
           {error && (
             <p className="text-sm text-destructive">{error}</p>

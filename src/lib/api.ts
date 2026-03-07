@@ -1691,6 +1691,7 @@ export interface AnalyteInput {
   slot: number
   analysis_service_id: number
   sample_id?: string | null
+  component_peptide_id?: number | null
 }
 
 export interface AnalyteResponse {
@@ -1700,6 +1701,14 @@ export interface AnalyteResponse {
   sample_id: string | null
   peptide_name: string | null
   service_title: string | null
+  component_peptide_id: number | null
+  component_abbreviation: string | null
+}
+
+export interface ComponentBrief {
+  id: number
+  name: string
+  abbreviation: string
 }
 
 export interface PeptideRecord {
@@ -1707,19 +1716,29 @@ export interface PeptideRecord {
   name: string
   abbreviation: string
   active: boolean
+  is_blend: boolean
   created_at: string
   updated_at: string
   methods: MethodBrief[]
   active_calibration: CalibrationCurve | null
   calibration_summary: InstrumentSummary[]
   analytes: AnalyteResponse[]
+  components: ComponentBrief[]
 }
 
 export interface PeptideCreateInput {
   name: string
   abbreviation: string
   analytes?: AnalyteInput[]
+  is_blend?: boolean
+  component_ids?: number[]
 }
+
+export type BlendCalibrationData = Record<string, {
+  peptide_id: number
+  name: string
+  calibrations: CalibrationCurve[]
+}>
 
 export interface CalibrationDataInput {
   concentrations: number[]
@@ -1930,6 +1949,19 @@ export async function getCalibrations(
     console.error('Get calibrations error:', error)
     throw error
   }
+}
+
+export async function getBlendCalibrations(
+  peptideId: number
+): Promise<BlendCalibrationData> {
+  const response = await fetch(
+    `${API_BASE_URL()}/peptides/${peptideId}/blend-calibrations`,
+    { headers: getBearerHeaders() }
+  )
+  if (!response.ok) {
+    throw new Error(`Get blend calibrations failed: ${response.status}`)
+  }
+  return response.json()
 }
 
 export async function createCalibration(
@@ -2474,6 +2506,8 @@ export interface SamplePrep {
   actual_total_vol_ul: number | null
   status: string
   notes: string | null
+  is_blend: boolean
+  components_json: ComponentBrief[] | null
   created_at: string
   updated_at: string
 }

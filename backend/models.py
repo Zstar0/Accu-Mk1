@@ -201,11 +201,24 @@ class HplcMethod(Base):
         return f"<HplcMethod(id={self.id}, name='{self.name}')>"
 
 
+# M2M junction: blend peptide <-> component peptides
+blend_components = Table(
+    "blend_components",
+    Base.metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("blend_id", Integer, ForeignKey("peptides.id", ondelete="CASCADE"), nullable=False),
+    Column("component_id", Integer, ForeignKey("peptides.id", ondelete="CASCADE"), nullable=False),
+    Column("display_order", Integer, default=0),
+    UniqueConstraint("blend_id", "component_id", name="uq_blend_component"),
+)
+
+
 class Peptide(Base):
     """
     Peptide reference data for HPLC analysis.
     Each peptide can be assigned one method per instrument.
     Per-curve parameters (reference_rt, rt_tolerance, diluent_density) live on CalibrationCurve.
+    Blends (is_blend=True) group other peptides via blend_components junction table.
     """
     __tablename__ = "peptides"
 
@@ -213,6 +226,7 @@ class Peptide(Base):
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     abbreviation: Mapped[str] = mapped_column(String(50), nullable=False, unique=True)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
+    is_blend: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -224,6 +238,14 @@ class Peptide(Base):
     analytes: Mapped[list["PeptideAnalyte"]] = relationship(
         "PeptideAnalyte", back_populates="peptide", cascade="all, delete-orphan",
         order_by="PeptideAnalyte.slot",
+        foreign_keys="[PeptideAnalyte.peptide_id]",
+    )
+    components: Mapped[list["Peptide"]] = relationship(
+        "Peptide",
+        secondary=blend_components,
+        primaryjoin="Peptide.id == blend_components.c.blend_id",
+        secondaryjoin="Peptide.id == blend_components.c.component_id",
+        order_by="blend_components.c.display_order",
     )
 
     def __repr__(self) -> str:
@@ -247,6 +269,9 @@ class PeptideAnalyte(Base):
     )
     sample_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     slot: Mapped[int] = mapped_column(Integer, nullable=False)
+    component_peptide_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("peptides.id", ondelete="SET NULL"), nullable=True
+    )
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
@@ -255,8 +280,9 @@ class PeptideAnalyte(Base):
         CheckConstraint("slot >= 1 AND slot <= 4", name="ck_peptide_analyte_slot_range"),
     )
 
-    peptide: Mapped["Peptide"] = relationship("Peptide", back_populates="analytes")
+    peptide: Mapped["Peptide"] = relationship("Peptide", back_populates="analytes", foreign_keys=[peptide_id])
     analysis_service: Mapped["AnalysisService"] = relationship("AnalysisService")
+    component_peptide: Mapped[Optional["Peptide"]] = relationship("Peptide", foreign_keys=[component_peptide_id])
 
     def __repr__(self) -> str:
         return f"<PeptideAnalyte(peptide_id={self.peptide_id}, slot={self.slot})>"

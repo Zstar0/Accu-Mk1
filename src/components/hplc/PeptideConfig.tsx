@@ -54,6 +54,7 @@ import {
 } from '@/components/ui/table'
 import { PeptideForm } from './PeptideForm'
 import { CalibrationPanel } from './CalibrationPanel'
+import { BlendCalibrationPanel } from './BlendCalibrationPanel'
 import {
   getPeptides,
   deletePeptide,
@@ -107,7 +108,7 @@ export function PeptideConfig() {
   const [error, setError] = useState<string | null>(null)
   const [selectedId, setSelectedId] = useState<number | null>(null)
   const [showAddForm, setShowAddForm] = useState(false)
-  const [filterMode, setFilterMode] = useState<'all' | 'has_cal' | 'no_cal'>('all')
+  const [filterMode, setFilterMode] = useState<'all' | 'has_cal' | 'no_cal' | 'blends' | 'singles'>('all')
 
   // Methods + instruments for the method selector in slide-out
   const [allMethods, setAllMethods] = useState<HplcMethod[]>([])
@@ -523,10 +524,13 @@ export function PeptideConfig() {
   const filteredPeptides = peptides.filter(p => {
     if (filterMode === 'has_cal') return !!p.active_calibration
     if (filterMode === 'no_cal') return !p.active_calibration
+    if (filterMode === 'blends') return p.is_blend
+    if (filterMode === 'singles') return !p.is_blend
     return true
   })
 
   const noCalsCount = peptides.filter(p => !p.active_calibration).length
+  const blendsCount = peptides.filter(p => p.is_blend).length
 
   const logLevelClass = (level: string) => {
     switch (level) {
@@ -715,6 +719,8 @@ export function PeptideConfig() {
                     <option value="all">All</option>
                     <option value="has_cal">Has Calibration</option>
                     <option value="no_cal">No Calibration{noCalsCount > 0 ? ` (${noCalsCount})` : ''}</option>
+                    {blendsCount > 0 && <option value="blends">Blends ({blendsCount})</option>}
+                    {blendsCount > 0 && <option value="singles">Singles</option>}
                   </select>
                 </div>
               </div>
@@ -766,6 +772,11 @@ export function PeptideConfig() {
                               <span className="font-medium">
                                 {p.abbreviation}
                               </span>
+                              {p.is_blend && (
+                                <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
+                                  Blend
+                                </Badge>
+                              )}
                               <span className="text-xs text-muted-foreground">
                                 {p.name}
                               </span>
@@ -878,8 +889,20 @@ export function PeptideConfig() {
               <div className="sticky top-0 z-10 bg-zinc-950/95 border-b border-zinc-800 backdrop-blur">
                 <div className="flex items-center justify-between px-5 pt-4 pb-3">
                   <div>
-                    <h3 className="text-base font-semibold">{selectedPeptide.abbreviation}</h3>
-                    <p className="text-xs text-muted-foreground">{selectedPeptide.name}</p>
+                    <div className="flex items-center gap-2">
+                      <h3 className="text-base font-semibold">{selectedPeptide.abbreviation}</h3>
+                      {selectedPeptide.is_blend && (
+                        <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
+                          Blend
+                        </Badge>
+                      )}
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      {selectedPeptide.name}
+                      {selectedPeptide.is_blend && selectedPeptide.components.length > 0 && (
+                        <span> — {selectedPeptide.components.map(c => c.abbreviation).join(', ')}</span>
+                      )}
+                    </p>
                   </div>
                   <button
                     type="button"
@@ -1046,12 +1069,22 @@ export function PeptideConfig() {
 
                 {/* Right column: Calibration Curves */}
                 <div className="flex-1 min-w-0">
-                  <CalibrationPanel
-                    peptide={selectedPeptide}
-                    onUpdated={loadPeptides}
-                    instrumentFilter={flyoutInstrument}
-                    onImport={() => openResyncDialog(selectedPeptide, true)}
-                  />
+                  {selectedPeptide.is_blend ? (
+                    <BlendCalibrationPanel
+                      peptide={selectedPeptide}
+                      instrumentFilter={flyoutInstrument}
+                      onNavigateToComponent={(compId) => {
+                        setSelectedId(compId)
+                      }}
+                    />
+                  ) : (
+                    <CalibrationPanel
+                      peptide={selectedPeptide}
+                      onUpdated={loadPeptides}
+                      instrumentFilter={flyoutInstrument}
+                      onImport={() => openResyncDialog(selectedPeptide, true)}
+                    />
+                  )}
                 </div>
               </div>
             </div>

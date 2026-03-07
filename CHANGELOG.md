@@ -1,5 +1,41 @@
 # Changelog
 
+## v0.21.0 — 2026-03-06
+
+### Blend Peptides
+
+- **Blend peptide data model** — `is_blend` flag on peptides, `blend_components` junction table (many-to-many), component peptides linked with display order
+- **Auto-derived analytes** — creating/editing a blend auto-generates analyte slots from each component peptide's primary analyte; manual analyte selection hidden for blends
+- **Blend creation form** — "This is a blend" toggle in PeptideForm; multi-select component picker; shows auto-linked analyte info
+- **Sidebar indicators** — blend peptides show a "Blend" badge in the peptide list
+
+### Blend HPLC Processing
+
+- **Per-component calibration curves** — HPLC flyout loads calibration curves for each component peptide independently
+- **Label-to-component fuzzy matching** — parsed HPLC filename labels (BPC, GHK, TB500(17-23)) are matched to DB component abbreviations (BPC-157, GHK-CU, TB500 (17-23 FRAGMENT)) via 3-tier matching: exact → prefix → first-word prefix
+- **Per-analyte analysis** — each component runs against its own calibration curve; analyte tabs show per-component results
+- **Per-analyte chromatograms** — chromatogram traces filtered by active analyte label; blanks excluded
+
+### Sample Prep Wizard — Blend Support
+
+- **Blend info card in Step 1** — when a blend peptide is selected, shows component badges and blend indicator
+- **Component calibration validation** — wizard session creation checks component peptides for active calibration curves (blends don't have their own)
+- **Blend metadata on sample preps** — `is_blend` and `components_json` columns stored on sample_preps for downstream HPLC processing
+
+### Debug Console
+
+- **Terminal overlay in HPLC flyout** — terminal icon in the header opens a dark terminal-style overlay (matching ScanConsole aesthetic) with full diagnostic readout
+- **Per-analyte diagnostics** — shows SharePoint files, parsed injections with peak-level detail (RT, area, area%, height, main peak markers), calibration curve info, weights, analysis results, and calculation trace
+- **Color-coded output** — errors in red, warnings in amber, success in emerald; error messages in calculation trace auto-detected and highlighted
+- **Keyboard dismiss** — Escape key or X button closes the overlay
+
+### Bug Fixes
+
+- **Solvent front false positive** — peak parser no longer marks the only peak as solvent front; fixes early-eluting peptides (e.g., GHK-Cu at RT 1.2) returning null purity/quantity
+- **Wizard session creation for blends** — fixed "No active calibration curve found" error by checking component peptides instead of the blend itself
+
+---
+
 ## v0.20.0 — 2026-03-05
 
 ### Per-User Senaite Authentication

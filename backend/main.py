@@ -35,7 +35,7 @@ from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import select, desc, delete, func
 
 from database import get_db, init_db
-from models import AuditLog, Settings, Job, Sample, Result, Instrument, AnalysisService, HplcMethod, Peptide, PeptideAnalyte, CalibrationCurve, HPLCAnalysis, User, SharePointFileCache, WizardSession, WizardMeasurement, peptide_methods
+from models import AuditLog, Settings, Job, Sample, Result, Instrument, AnalysisService, HplcMethod, Peptide, PeptideAnalyte, CalibrationCurve, HPLCAnalysis, User, SharePointFileCache, WizardSession, WizardMeasurement, peptide_methods, blend_components
 from auth import (
     get_current_user, require_admin, create_access_token,
     verify_password, get_password_hash, seed_admin_user,
@@ -1473,6 +1473,7 @@ class AnalyteInput(BaseModel):
     slot: int
     analysis_service_id: int
     sample_id: Optional[str] = None
+    component_peptide_id: Optional[int] = None
 
 
 class AnalyteResponse(BaseModel):
@@ -1483,6 +1484,18 @@ class AnalyteResponse(BaseModel):
     sample_id: Optional[str] = None
     peptide_name: Optional[str] = None
     service_title: Optional[str] = None
+    component_peptide_id: Optional[int] = None
+    component_abbreviation: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
+class ComponentBrief(BaseModel):
+    """Brief component peptide info for blend responses."""
+    id: int
+    name: str
+    abbreviation: str
 
     class Config:
         from_attributes = True
@@ -1493,6 +1506,8 @@ class PeptideCreate(BaseModel):
     name: str
     abbreviation: str
     analytes: list[AnalyteInput] = []
+    is_blend: bool = False
+    component_ids: list[int] = []
 
 
 class PeptideUpdate(BaseModel):
@@ -1502,6 +1517,7 @@ class PeptideUpdate(BaseModel):
     active: Optional[bool] = None
     method_ids: Optional[list[int]] = None  # Set all method assignments (one per instrument)
     analytes: Optional[list[AnalyteInput]] = None
+    component_ids: Optional[list[int]] = None
 
 
 class CalibrationCurveResponse(BaseModel):
@@ -1557,12 +1573,14 @@ class PeptideResponse(BaseModel):
     name: str
     abbreviation: str
     active: bool
+    is_blend: bool = False
     created_at: datetime
     updated_at: datetime
     methods: list[MethodBrief] = []
     active_calibration: Optional[CalibrationCurveResponse] = None
     calibration_summary: list[InstrumentSummary] = []
     analytes: list[AnalyteResponse] = []
+    components: list[ComponentBrief] = []
 
     class Config:
         from_attributes = True
@@ -1630,6 +1648,7 @@ def _build_analyte_responses(analytes) -> list[AnalyteResponse]:
     results = []
     for a in analytes:
         svc = a.analysis_service
+        comp = a.component_peptide
         results.append(AnalyteResponse(
             id=a.id,
             slot=a.slot,
@@ -1637,16 +1656,20 @@ def _build_analyte_responses(analytes) -> list[AnalyteResponse]:
             sample_id=a.sample_id,
             peptide_name=svc.peptide_name if svc else None,
             service_title=svc.title if svc else None,
+            component_peptide_id=a.component_peptide_id,
+            component_abbreviation=comp.abbreviation if comp else None,
         ))
     return results
 
 
 def _peptide_to_response(db: Session, peptide: Peptide) -> PeptideResponse:
-    """Convert Peptide model to response with active calibration, methods, and analytes."""
+    """Convert Peptide model to response with active calibration, methods, analytes, and components."""
     resp = PeptideResponse.model_validate(peptide)
     resp.active_calibration = _get_active_calibration(db, peptide.id)
     resp.methods = [_method_to_brief(m) for m in peptide.methods]
     resp.analytes = _build_analyte_responses(peptide.analytes)
+    if peptide.is_blend:
+        resp.components = [ComponentBrief.model_validate(c) for c in peptide.components]
     return resp
 
 
@@ -1919,6 +1942,8 @@ async def get_peptides(db: Session = Depends(get_db), _current_user=Depends(get_
         .options(
             joinedload(Peptide.methods).joinedload(HplcMethod.instrument),
             joinedload(Peptide.analytes).joinedload(PeptideAnalyte.analysis_service),
+            joinedload(Peptide.analytes).joinedload(PeptideAnalyte.component_peptide),
+            joinedload(Peptide.components),
         )
         .order_by(Peptide.abbreviation)
     ).scalars().unique().all()
@@ -1956,6 +1981,17 @@ async def get_peptides(db: Session = Depends(get_db), _current_user=Depends(get_
         resp.calibration_summary = sorted(summary_map.get(p.id, []), key=lambda x: x.instrument)
         resp.methods = [_method_to_brief(m) for m in p.methods]
         resp.analytes = _build_analyte_responses(p.analytes)
+        if p.is_blend:
+            resp.components = [ComponentBrief.model_validate(c) for c in p.components]
+            # Aggregate calibration summaries from component peptides
+            blend_summary: dict[str, int] = {}
+            for comp in p.components:
+                for s in summary_map.get(comp.id, []):
+                    blend_summary[s.instrument] = blend_summary.get(s.instrument, 0) + s.curve_count
+            resp.calibration_summary = sorted(
+                [InstrumentSummary(instrument=k, curve_count=v) for k, v in blend_summary.items()],
+                key=lambda x: x.instrument,
+            )
         results.append(resp)
     return results
 
@@ -1973,18 +2009,53 @@ async def create_peptide(data: PeptideCreate, db: Session = Depends(get_db), _cu
     peptide = Peptide(
         name=data.name,
         abbreviation=data.abbreviation,
+        is_blend=data.is_blend,
     )
     db.add(peptide)
     db.flush()  # Get peptide.id without committing
 
-    # Create analyte slot rows
-    for a in data.analytes:
-        db.add(PeptideAnalyte(
-            peptide_id=peptide.id,
-            analysis_service_id=a.analysis_service_id,
-            sample_id=a.sample_id,
-            slot=a.slot,
-        ))
+    # Link blend components and auto-create analyte slots from components
+    if data.is_blend and data.component_ids:
+        components = db.execute(
+            select(Peptide).where(Peptide.id.in_(data.component_ids))
+        ).scalars().all()
+        if any(c.is_blend for c in components):
+            raise HTTPException(400, "Blends cannot contain other blends")
+        # Preserve requested order
+        comp_map = {c.id: c for c in components}
+        slot_num = 1
+        for order, comp_id in enumerate(data.component_ids):
+            db.execute(blend_components.insert().values(
+                blend_id=peptide.id, component_id=comp_id, display_order=order,
+            ))
+            # Auto-create analyte slot from component's slot-1 analyte
+            comp = comp_map.get(comp_id)
+            if comp:
+                comp_analyte = db.execute(
+                    select(PeptideAnalyte).where(
+                        PeptideAnalyte.peptide_id == comp_id,
+                        PeptideAnalyte.slot == 1,
+                    )
+                ).scalar_one_or_none()
+                if comp_analyte:
+                    db.add(PeptideAnalyte(
+                        peptide_id=peptide.id,
+                        analysis_service_id=comp_analyte.analysis_service_id,
+                        sample_id=comp_analyte.sample_id,
+                        slot=slot_num,
+                        component_peptide_id=comp_id,
+                    ))
+                    slot_num += 1
+    else:
+        # Create analyte slot rows (non-blend)
+        for a in data.analytes:
+            db.add(PeptideAnalyte(
+                peptide_id=peptide.id,
+                analysis_service_id=a.analysis_service_id,
+                sample_id=a.sample_id,
+                slot=a.slot,
+                component_peptide_id=a.component_peptide_id,
+            ))
 
     db.commit()
     db.refresh(peptide)
@@ -2083,6 +2154,8 @@ async def update_peptide(peptide_id: int, data: PeptideUpdate, db: Session = Dep
         select(Peptide).options(
             joinedload(Peptide.methods).joinedload(HplcMethod.instrument),
             joinedload(Peptide.analytes).joinedload(PeptideAnalyte.analysis_service),
+            joinedload(Peptide.analytes).joinedload(PeptideAnalyte.component_peptide),
+            joinedload(Peptide.components),
         )
         .where(Peptide.id == peptide_id)
     ).scalars().unique().one_or_none()
@@ -2092,13 +2165,48 @@ async def update_peptide(peptide_id: int, data: PeptideUpdate, db: Session = Dep
     update_data = data.model_dump(exclude_unset=True)
     method_ids = update_data.pop("method_ids", None)
     analytes_data = update_data.pop("analytes", None)
+    component_ids = update_data.pop("component_ids", None)
 
     # Update scalar fields
     for field, value in update_data.items():
         setattr(peptide, field, value)
 
-    # Update analyte slots if provided (delete-and-replace)
-    if analytes_data is not None:
+    # Update blend components if provided (delete-and-replace); auto-rebuild analytes
+    if component_ids is not None:
+        db.execute(blend_components.delete().where(blend_components.c.blend_id == peptide.id))
+        # Also rebuild analyte slots from components
+        db.execute(delete(PeptideAnalyte).where(PeptideAnalyte.peptide_id == peptide.id))
+        if component_ids:
+            components = db.execute(
+                select(Peptide).where(Peptide.id.in_(component_ids))
+            ).scalars().all()
+            if any(c.is_blend for c in components):
+                raise HTTPException(400, "Blends cannot contain other blends")
+            comp_map = {c.id: c for c in components}
+            slot_num = 1
+            for order, comp_id in enumerate(component_ids):
+                db.execute(blend_components.insert().values(
+                    blend_id=peptide.id, component_id=comp_id, display_order=order,
+                ))
+                comp = comp_map.get(comp_id)
+                if comp:
+                    comp_analyte = db.execute(
+                        select(PeptideAnalyte).where(
+                            PeptideAnalyte.peptide_id == comp_id,
+                            PeptideAnalyte.slot == 1,
+                        )
+                    ).scalar_one_or_none()
+                    if comp_analyte:
+                        db.add(PeptideAnalyte(
+                            peptide_id=peptide.id,
+                            analysis_service_id=comp_analyte.analysis_service_id,
+                            sample_id=comp_analyte.sample_id,
+                            slot=slot_num,
+                            component_peptide_id=comp_id,
+                        ))
+                        slot_num += 1
+    elif analytes_data is not None:
+        # Update analyte slots if provided (delete-and-replace) — non-blend only
         db.execute(delete(PeptideAnalyte).where(PeptideAnalyte.peptide_id == peptide.id))
         for a in analytes_data:
             db.add(PeptideAnalyte(
@@ -2106,6 +2214,7 @@ async def update_peptide(peptide_id: int, data: PeptideUpdate, db: Session = Dep
                 analysis_service_id=a["analysis_service_id"],
                 sample_id=a.get("sample_id"),
                 slot=a["slot"],
+                component_peptide_id=a.get("component_peptide_id"),
             ))
 
     # Update method assignments if provided
@@ -2156,6 +2265,41 @@ async def get_calibrations(peptide_id: int, db: Session = Depends(get_db), _curr
     )
     cals = db.execute(stmt).scalars().all()
     return [_cal_to_response(c) for c in cals]
+
+
+@app.get("/peptides/{peptide_id}/blend-calibrations")
+async def get_blend_calibrations(peptide_id: int, db: Session = Depends(get_db), _current_user=Depends(get_current_user)):
+    """Get calibration curves for all component peptides of a blend, grouped by component."""
+    peptide = db.execute(
+        select(Peptide).options(joinedload(Peptide.components))
+        .where(Peptide.id == peptide_id)
+    ).scalars().unique().one_or_none()
+    if not peptide:
+        raise HTTPException(404, f"Peptide {peptide_id} not found")
+    if not peptide.is_blend:
+        raise HTTPException(400, "Not a blend peptide")
+
+    result = {}
+    comp_ids = [c.id for c in peptide.components]
+    if comp_ids:
+        cals = db.execute(
+            select(CalibrationCurve)
+            .where(CalibrationCurve.peptide_id.in_(comp_ids))
+            .order_by(desc(CalibrationCurve.created_at))
+        ).scalars().all()
+        # Group by component
+        cal_map: dict[int, list] = {cid: [] for cid in comp_ids}
+        for cal in cals:
+            cal_map[cal.peptide_id].append(_cal_to_response(cal))
+
+        for comp in peptide.components:
+            result[comp.abbreviation] = {
+                "peptide_id": comp.id,
+                "name": comp.name,
+                "calibrations": cal_map.get(comp.id, []),
+            }
+
+    return result
 
 
 @app.post("/peptides/{peptide_id}/calibrations", response_model=CalibrationCurveResponse, status_code=201)
@@ -6124,18 +6268,42 @@ async def create_wizard_session(
     if not peptide:
         raise HTTPException(status_code=404, detail=f"Peptide {data.peptide_id} not found")
 
-    cal = db.execute(
-        select(CalibrationCurve)
-        .where(CalibrationCurve.peptide_id == data.peptide_id)
-        .where(CalibrationCurve.is_active == True)
-        .order_by(desc(CalibrationCurve.created_at))
-        .limit(1)
-    ).scalar_one_or_none()
-    if not cal:
-        raise HTTPException(
-            status_code=400,
-            detail=f"No active calibration curve found for peptide {data.peptide_id}. Activate a calibration curve before starting a session."
-        )
+    cal = None
+    if peptide.is_blend:
+        # For blends, find an active calibration from any component peptide
+        component_ids = [
+            row.component_id for row in db.execute(
+                select(blend_components.c.component_id)
+                .where(blend_components.c.blend_id == peptide.id)
+                .order_by(blend_components.c.display_order)
+            ).all()
+        ]
+        if component_ids:
+            cal = db.execute(
+                select(CalibrationCurve)
+                .where(CalibrationCurve.peptide_id.in_(component_ids))
+                .where(CalibrationCurve.is_active == True)
+                .order_by(desc(CalibrationCurve.created_at))
+                .limit(1)
+            ).scalar_one_or_none()
+        if not cal:
+            raise HTTPException(
+                status_code=400,
+                detail="No active calibration curves found for any component peptide in this blend."
+            )
+    else:
+        cal = db.execute(
+            select(CalibrationCurve)
+            .where(CalibrationCurve.peptide_id == data.peptide_id)
+            .where(CalibrationCurve.is_active == True)
+            .order_by(desc(CalibrationCurve.created_at))
+            .limit(1)
+        ).scalar_one_or_none()
+        if not cal:
+            raise HTTPException(
+                status_code=400,
+                detail=f"No active calibration curve found for peptide {data.peptide_id}. Activate a calibration curve before starting a session."
+            )
 
     if data.declared_weight_mg is not None and not (0 < data.declared_weight_mg < 5000):
         raise HTTPException(status_code=422, detail="declared_weight_mg must be between 0 and 5000 mg")
@@ -6390,6 +6558,21 @@ async def create_sample_prep_endpoint(
         "status": "awaiting_hplc",
         "notes": body.notes,
     }
+
+    # Blend support: include component info so HPLC flyout can load per-component curves
+    peptide = session.peptide
+    if peptide and peptide.is_blend:
+        data["is_blend"] = True
+        comps = db.execute(
+            select(Peptide).join(
+                blend_components, blend_components.c.component_id == Peptide.id
+            ).where(blend_components.c.blend_id == peptide.id)
+            .order_by(blend_components.c.display_order)
+        ).scalars().all()
+        data["components_json"] = json.dumps([
+            {"id": c.id, "name": c.name, "abbreviation": c.abbreviation}
+            for c in comps
+        ])
 
     try:
         ensure_sample_preps_table()
