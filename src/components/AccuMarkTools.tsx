@@ -3,6 +3,7 @@ import type { AccuMarkToolsSubSection } from '@/store/ui-store'
 import { OrderExplorer } from '@/components/OrderExplorer'
 import { OrderStatusPage } from '@/components/OrderStatusPage'
 import { COAExplorer } from '@/components/COAExplorer'
+import { DigitalCOA } from '@/components/DigitalCOA'
 
 /**
  * AccuMark Tools section - debugging and utility tools.
@@ -16,6 +17,8 @@ export function AccuMarkTools() {
   switch (activeSubSection) {
     case 'coa-explorer':
       return <COAExplorer />
+    case 'digital-coa':
+      return <DigitalCOA />
     case 'order-status':
       return <OrderStatusPage />
     case 'order-explorer':
