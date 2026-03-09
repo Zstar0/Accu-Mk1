@@ -418,6 +418,8 @@ interface KanbanSampleItem {
   sampleId: string
   orderId: string | number
   email: string | null
+  createdAt: string
+  completedAt: string | null
   colKey: string
   count: number
   lookup: SenaiteLookupResult | undefined
@@ -505,25 +507,32 @@ function KanbanSampleCard({
       </div>
       {/* Row 2: secondary metadata — clearly separated from analysis state */}
       {(showOrder || item.lookup) && (
-        <div className="flex items-center gap-1 mt-0.5">
-          {showOrder && (
-            <button
-              type="button"
-              className="text-[10px] text-muted-foreground/50 font-mono leading-none hover:text-primary hover:underline cursor-pointer transition-colors"
-              onClick={() => navigateToOrderExplorer(String(item.orderId))}
-            >
-              #{item.orderId}
-            </button>
-          )}
-          {item.lookup && (
-            <>
-              {showOrder && <span className="text-muted-foreground/30 text-[10px]">·</span>}
-              {/* "LIMS:" prefix makes clear this is the sample's overall SENAITE state, not the column state */}
-              <span className="text-[10px] text-muted-foreground/50 leading-none">
-                LIMS: {sampleStateLabel(item.lookup.review_state)}
-              </span>
-            </>
-          )}
+        <div className="flex items-center justify-between gap-1 mt-0.5">
+          <div className="flex items-center gap-1">
+            {showOrder && (
+              <button
+                type="button"
+                className="text-[10px] text-muted-foreground/50 font-mono leading-none hover:text-primary hover:underline cursor-pointer transition-colors"
+                onClick={() => navigateToOrderExplorer(String(item.orderId))}
+              >
+                #{item.orderId}
+              </button>
+            )}
+            {item.lookup && (
+              <>
+                {showOrder && <span className="text-muted-foreground/30 text-[10px]">·</span>}
+                <span className="text-[10px] text-muted-foreground/50 leading-none">
+                  Sample: {sampleStateLabel(item.lookup.review_state)}
+                </span>
+              </>
+            )}
+          </div>
+          <span className={cn(
+            'text-[10px] font-mono leading-none tabular-nums',
+            item.completedAt ? 'text-green-600/70' : 'text-amber-500/70'
+          )}>
+            {formatProcessingTime(item.createdAt, item.completedAt)}
+          </span>
         </div>
       )}
     </div>
@@ -561,6 +570,8 @@ function KanbanView({
               sampleId: entry.senaite_id,
               orderId: order.order_id,
               email,
+              createdAt: order.created_at,
+              completedAt: order.completed_at,
               colKey: col.key,
               count: 0,
               lookup: undefined,
@@ -579,6 +590,8 @@ function KanbanView({
               sampleId: entry.senaite_id,
               orderId: order.order_id,
               email,
+              createdAt: order.created_at,
+              completedAt: order.completed_at,
               colKey: col.key,
               count,
               lookup: lq.data,
@@ -877,7 +890,7 @@ export function OrderStatusPage() {
       })
     }
     // Apply kanban sort when in grouped kanban mode
-    if (orderFilters.viewMode === 'kanban' && orderFilters.groupByOrder) {
+    if (orderFilters.viewMode === 'kanban') {
       const dir = orderFilters.kanbanSortDir === 'asc' ? 1 : -1
       result = [...result].sort((a, b) => {
         if (orderFilters.kanbanSort === 'order_id') {
@@ -1073,8 +1086,8 @@ export function OrderStatusPage() {
                     <Layers className="h-3.5 w-3.5" />
                     By Order
                   </button>
-                  {/* Sort controls — only useful in grouped mode */}
-                  {orderFilters.groupByOrder && (
+                  {/* Sort controls */}
+                  {(
                     <div className="flex items-center gap-0.5 border border-border rounded-md overflow-hidden">
                       {([
                         { key: 'order_id', label: 'Order ID' },
