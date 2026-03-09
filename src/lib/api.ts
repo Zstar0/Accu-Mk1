@@ -798,6 +798,7 @@ export interface ExplorerOrder {
   created_at: string
   updated_at: string
   completed_at: string | null
+  wp_order_status: string | null
 }
 
 /**

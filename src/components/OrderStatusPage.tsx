@@ -87,6 +87,7 @@ function groupAnalysisStates(analyses: SenaiteAnalysis[]): AnalysisStateCounts {
     if (state === 'assigned') counts.assigned++
     else if (state === 'to_be_verified') counts.to_verify++
     else if (state === 'verified' || state === 'published') counts.verified++
+    else if (state === 'rejected' || state === 'cancelled' || state === 'invalid') { /* terminal — skip */ }
     else counts.pending++ // registered, unassigned, etc.
   }
   return counts
@@ -803,7 +804,7 @@ export function OrderStatusPage() {
   // Filter to open orders or show all, and optionally hide test orders + text filters
   const orders = useMemo(() => {
     if (!allOrders) return []
-    let filtered = showAll ? allOrders : allOrders.filter(o => !o.completed_at)
+    let filtered = showAll ? allOrders : allOrders.filter(o => o.wp_order_status !== 'complete')
     if (orderFilters.hideTestOrders) {
       filtered = filtered.filter(o => {
         const email = getOrderEmail(o)?.toLowerCase()
@@ -934,7 +935,7 @@ export function OrderStatusPage() {
 
   const openCount = useMemo(() => {
     if (!allOrders) return 0
-    let filtered = allOrders.filter(o => !o.completed_at)
+    let filtered = allOrders.filter(o => o.wp_order_status !== 'complete')
     if (orderFilters.hideTestOrders) {
       filtered = filtered.filter(o => {
         const email = getOrderEmail(o)?.toLowerCase()
@@ -1248,19 +1249,6 @@ export function OrderStatusPage() {
                     : `${filteredOrders.length} order${filteredOrders.length !== 1 ? 's' : ''} displayed`}
                 </CardDescription>
               </div>
-              {/* Kanban column header labels */}
-              {orderFilters.viewMode === 'kanban' && !ordersLoading && (
-                <div className="flex items-center gap-4 text-xs text-muted-foreground">
-                  {(orderFilters.activeStates.length > 0
-                    ? KANBAN_COLUMNS.filter(c => orderFilters.activeStates.includes(c.key))
-                    : KANBAN_COLUMNS
-                  ).map(col => (
-                    <span key={col.key} className="font-semibold uppercase tracking-wide">
-                      {col.label}
-                    </span>
-                  ))}
-                </div>
-              )}
             </div>
           </CardHeader>
           <CardContent>

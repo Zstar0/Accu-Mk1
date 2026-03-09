@@ -148,7 +148,8 @@ def fetch_orders(
             sample_results,
             created_at,
             updated_at,
-            completed_at
+            completed_at,
+            wp_order_status
         FROM order_submissions
     """
     params: list = []

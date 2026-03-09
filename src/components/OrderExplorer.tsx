@@ -426,7 +426,7 @@ export function OrderExplorer() {
           <span
             className={cn(
               'font-mono text-sm',
-              order.completed_at ? 'text-green-600' : 'text-yellow-600'
+              order.wp_order_status === 'complete' ? 'text-green-600' : 'text-yellow-600'
             )}
           >
             {formatProcessingTime(order.created_at, order.completed_at)}

@@ -132,7 +132,7 @@ function buildOrderChart(orders: ExplorerOrder[]): DayBucket[] {
     if (bucket) {
       bucket.total++
       if (order.status === 'failed' || order.status === 'partial_failure') bucket.failed++
-      else if (order.completed_at) bucket.completed++
+      else if (order.wp_order_status === 'complete') bucket.completed++
       else bucket.pending++
     }
   }
@@ -184,9 +184,9 @@ export function OrderDashboard() {
 
   // Derived data — filter out test orders
   const realOrders = orders.filter(o => !isTestOrder(o))
-  const outstandingOrders = realOrders.filter(o => !o.completed_at && o.status !== 'failed' && o.status !== 'partial_failure')
+  const outstandingOrders = realOrders.filter(o => o.wp_order_status !== 'complete' && o.status !== 'failed' && o.status !== 'partial_failure')
   const failedOrders = realOrders.filter(o => o.status === 'failed' || o.status === 'partial_failure')
-  const completedOrders = realOrders.filter(o => !!o.completed_at)
+  const completedOrders = realOrders.filter(o => o.wp_order_status === 'complete')
   const chartData = useMemo(() => buildOrderChart(realOrders), [realOrders])
 
   // Stats
