@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.23.0 — 2026-03-08
+
+### Order Status — Analysis State Filters & Persistent Filter State
+
+- **Analysis state filter strip** — new button row above the Status Matrix: **Active** (clear all) | **Pending** | **Assigned** | **To Verify** | **Verified**; single-select, filters the Sample Details column within each order
+- **Sample-level filtering** — when a filter is active, only sample cards matching that analysis state are shown within each order row; orders with no matching samples are hidden entirely
+- **Text filters** — Order ID, Email, and Sample ID text inputs for quick lookup
+- **Persistent filter state** — all filter settings (active state, text inputs, Hide Test Orders checkbox) are saved to `localStorage` and restored on next visit
+
+---
+
 ## v0.22.0 — 2026-03-08
 
 ### Analysis Table — Identity (HPLC) Result Handling

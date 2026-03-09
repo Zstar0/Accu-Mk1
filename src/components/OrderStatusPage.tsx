@@ -31,6 +31,7 @@ import { useUIStore } from '@/store/ui-store'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
+import { Input } from '@/components/ui/input'
 import {
   Card,
   CardContent,
@@ -255,10 +256,29 @@ function SampleCard({
 
 // --- Order row ---
 
+function sampleMatchesAnalysisFilter(
+  senaiteId: string,
+  activeStates: string[],
+  sampleLookupMap: Map<string, { data?: SenaiteLookupResult; isLoading: boolean; isError: boolean }>
+): boolean {
+  if (activeStates.length === 0) return true
+  const lookup = sampleLookupMap.get(senaiteId)
+  if (!lookup?.data) return true // still loading — keep visible
+  const counts = groupAnalysisStates(lookup.data.analyses)
+  return activeStates.some(state => {
+    if (state === 'pending') return counts.pending > 0
+    if (state === 'assigned') return counts.assigned > 0
+    if (state === 'to_verify') return counts.to_verify > 0
+    if (state === 'verified') return counts.verified > 0
+    return false
+  })
+}
+
 function OrderRow({
   order,
   wordpressHost,
   sampleLookupMap,
+  activeAnalysisStates,
 }: {
   order: ExplorerOrder
   wordpressHost: string
@@ -270,6 +290,7 @@ function OrderRow({
       isError: boolean
     }
   >
+  activeAnalysisStates: string[]
 }) {
   const wpUrl = `${wordpressHost}/wp-admin/post.php?post=${order.order_id}&action=edit`
 
@@ -280,6 +301,11 @@ function OrderRow({
         integrationStatus: val.status,
       }))
     : []
+
+  const visibleSampleEntries = sampleEntries.filter(s => {
+    if (s.integrationStatus === 'failed' || !s.senaiteId) return activeAnalysisStates.length === 0
+    return sampleMatchesAnalysisFilter(s.senaiteId, activeAnalysisStates, sampleLookupMap)
+  })
 
   const hasAttention = sampleEntries.some(s => {
     const lookup = sampleLookupMap.get(s.senaiteId)
@@ -332,11 +358,13 @@ function OrderRow({
         </span>
       </td>
       <td className="py-3 px-3">
-        {sampleEntries.length === 0 ? (
-          <span className="text-muted-foreground text-xs">No samples</span>
+        {visibleSampleEntries.length === 0 ? (
+          <span className="text-muted-foreground text-xs">
+            {sampleEntries.length === 0 ? 'No samples' : 'No matching samples'}
+          </span>
         ) : (
           <div className="flex flex-wrap gap-2 max-w-[1060px]">
-            {sampleEntries.map(s => {
+            {visibleSampleEntries.map(s => {
               // Sample never created in SENAITE (integration failure)
               if (s.integrationStatus === 'failed' || !s.senaiteId) {
                 return (
@@ -371,12 +399,65 @@ function OrderRow({
   )
 }
 
+// --- Sample state filter config ---
+
+const ANALYSIS_STATE_BUTTONS = [
+  { key: 'pending', label: 'Pending' },
+  { key: 'assigned', label: 'Assigned' },
+  { key: 'to_verify', label: 'To Verify' },
+  { key: 'verified', label: 'Verified' },
+] as const
+
+// --- localStorage filter state ---
+
+const FILTERS_LS_KEY = 'order-status-filters'
+
+interface OrderFilters {
+  activeStates: string[]
+  sampleIdFilter: string
+  emailFilter: string
+  orderIdFilter: string
+  hideTestOrders: boolean
+}
+
+function loadOrderFilters(): OrderFilters {
+  try {
+    const raw = localStorage.getItem(FILTERS_LS_KEY)
+    if (raw) return JSON.parse(raw) as OrderFilters
+  } catch {
+    // ignore parse errors
+  }
+  return { activeStates: [], sampleIdFilter: '', emailFilter: '', orderIdFilter: '', hideTestOrders: true }
+}
+
+function saveOrderFilters(f: OrderFilters) {
+  try {
+    localStorage.setItem(FILTERS_LS_KEY, JSON.stringify(f))
+  } catch {
+    // ignore quota errors
+  }
+}
+
 // --- Main component ---
 
 export function OrderStatusPage() {
   const [showAll, setShowAll] = useState(false)
-  const [hideTestOrders, setHideTestOrders] = useState(true)
   const [envName, setEnvName] = useState(() => getActiveEnvironmentName())
+  const [orderFilters, setOrderFilters] = useState<OrderFilters>(loadOrderFilters)
+
+  const updateFilters = (partial: Partial<OrderFilters>) => {
+    setOrderFilters(prev => {
+      const next = { ...prev, ...partial }
+      saveOrderFilters(next)
+      return next
+    })
+  }
+
+  const toggleState = (key: string) => {
+    updateFilters({
+      activeStates: orderFilters.activeStates[0] === key ? [] : [key],
+    })
+  }
   const wordpressHost = getWordpressUrl()
   const queryClient = useQueryClient()
 
@@ -406,18 +487,34 @@ export function OrderStatusPage() {
     staleTime: 30_000,
   })
 
-  // Filter to open orders or show all, and optionally hide test orders
+  // Filter to open orders or show all, and optionally hide test orders + text filters
   const orders = useMemo(() => {
     if (!allOrders) return []
     let filtered = showAll ? allOrders : allOrders.filter(o => !o.completed_at)
-    if (hideTestOrders) {
+    if (orderFilters.hideTestOrders) {
       filtered = filtered.filter(o => {
         const email = getOrderEmail(o)?.toLowerCase()
         return !email || !TEST_EMAILS.includes(email)
       })
     }
+    const { orderIdFilter, emailFilter, sampleIdFilter } = orderFilters
+    if (orderIdFilter.trim()) {
+      const q = orderIdFilter.trim().toLowerCase()
+      filtered = filtered.filter(o => String(o.order_id).toLowerCase().includes(q))
+    }
+    if (emailFilter.trim()) {
+      const q = emailFilter.trim().toLowerCase()
+      filtered = filtered.filter(o => (getOrderEmail(o)?.toLowerCase() ?? '').includes(q))
+    }
+    if (sampleIdFilter.trim()) {
+      const q = sampleIdFilter.trim().toLowerCase()
+      filtered = filtered.filter(o => {
+        if (!o.sample_results) return false
+        return Object.values(o.sample_results).some(v => v.senaite_id?.toLowerCase().includes(q))
+      })
+    }
     return filtered
-  }, [allOrders, showAll, hideTestOrders])
+  }, [allOrders, showAll, orderFilters])
 
   // Collect all unique sample IDs from displayed orders (skip failed/empty ones)
   const sampleIds = useMemo(() => {
@@ -468,6 +565,17 @@ export function OrderStatusPage() {
     return map
   }, [sampleIds, sampleQueries])
 
+  // Hide orders where no samples match the active analysis state filter
+  const filteredOrders = useMemo(() => {
+    if (orderFilters.activeStates.length === 0) return orders
+    return orders.filter(o => {
+      if (!o.sample_results) return false
+      return Object.values(o.sample_results).some(v =>
+        v.senaite_id && sampleMatchesAnalysisFilter(v.senaite_id, orderFilters.activeStates, sampleLookupMap)
+      )
+    })
+  }, [orders, orderFilters.activeStates, sampleLookupMap])
+
   // Count orders needing attention (have samples with to_verify analyses)
   const attentionCount = useMemo(() => {
     let count = 0
@@ -500,14 +608,14 @@ export function OrderStatusPage() {
   const openCount = useMemo(() => {
     if (!allOrders) return 0
     let filtered = allOrders.filter(o => !o.completed_at)
-    if (hideTestOrders) {
+    if (orderFilters.hideTestOrders) {
       filtered = filtered.filter(o => {
         const email = getOrderEmail(o)?.toLowerCase()
         return !email || !TEST_EMAILS.includes(email)
       })
     }
     return filtered.length
-  }, [allOrders, hideTestOrders])
+  }, [allOrders, orderFilters])
 
   // True while any senaite lookup is actively fetching
   const isRefreshing = sampleQueries.some(q => q.isFetching)
@@ -597,47 +705,116 @@ export function OrderStatusPage() {
 
       {/* Filter controls */}
       {status?.connected && (
-        <div className="flex items-center gap-3">
-          <Button
-            variant={showAll ? 'outline' : 'default'}
-            size="sm"
-            onClick={() => setShowAll(false)}
-          >
-            Open Orders
-            {!ordersLoading && (
-              <Badge variant="secondary" className="ml-1.5">
-                {openCount}
-              </Badge>
-            )}
-          </Button>
-          <Button
-            variant={showAll ? 'default' : 'outline'}
-            size="sm"
-            onClick={() => setShowAll(true)}
-          >
-            All Orders
-            {!ordersLoading && allOrders && (
-              <Badge variant="secondary" className="ml-1.5">
-                {allOrders.length}
-              </Badge>
-            )}
-          </Button>
+        <div className="flex flex-col gap-2">
+          {/* Row 1: Open/All + hide test + attention */}
+          <div className="flex items-center gap-3">
+            <Button
+              variant={showAll ? 'outline' : 'default'}
+              size="sm"
+              onClick={() => setShowAll(false)}
+            >
+              Open Orders
+              {!ordersLoading && (
+                <Badge variant="secondary" className="ml-1.5">
+                  {openCount}
+                </Badge>
+              )}
+            </Button>
+            <Button
+              variant={showAll ? 'default' : 'outline'}
+              size="sm"
+              onClick={() => setShowAll(true)}
+            >
+              All Orders
+              {!ordersLoading && allOrders && (
+                <Badge variant="secondary" className="ml-1.5">
+                  {allOrders.length}
+                </Badge>
+              )}
+            </Button>
 
-          <label className="flex items-center gap-2 text-sm text-muted-foreground whitespace-nowrap cursor-pointer ml-1">
-            <Checkbox
-              checked={hideTestOrders}
-              onCheckedChange={checked => setHideTestOrders(checked === true)}
+            <label className="flex items-center gap-2 text-sm text-muted-foreground whitespace-nowrap cursor-pointer ml-1">
+              <Checkbox
+                checked={orderFilters.hideTestOrders}
+                onCheckedChange={checked => updateFilters({ hideTestOrders: checked === true })}
+              />
+              Hide test orders
+            </label>
+
+            {attentionCount > 0 && (
+              <div className="flex items-center gap-1.5 text-sm text-amber-500 ml-2">
+                <AlertTriangle className="h-4 w-4" />
+                {attentionCount} order{attentionCount !== 1 ? 's' : ''} need
+                {attentionCount === 1 ? 's' : ''} attention
+              </div>
+            )}
+          </div>
+
+          {/* Row 2: Sample state toggles */}
+          <div className="flex flex-wrap items-center gap-1.5">
+            {/* Active = no state filters (show all) */}
+            <button
+              type="button"
+              onClick={() => updateFilters({ activeStates: [] })}
+              className={cn(
+                'rounded-md px-3 py-1 text-xs font-medium border transition-colors',
+                orderFilters.activeStates.length === 0
+                  ? 'bg-foreground text-background border-foreground'
+                  : 'bg-transparent text-muted-foreground border-border hover:border-foreground/40 hover:text-foreground'
+              )}
+            >
+              Active
+            </button>
+            {ANALYSIS_STATE_BUTTONS.map(btn => {
+              const active = orderFilters.activeStates.includes(btn.key)
+              return (
+                <button
+                  key={btn.key}
+                  type="button"
+                  onClick={() => toggleState(btn.key)}
+                  className={cn(
+                    'rounded-md px-3 py-1 text-xs font-medium border transition-colors',
+                    active
+                      ? 'bg-foreground text-background border-foreground'
+                      : 'bg-transparent text-muted-foreground border-border hover:border-foreground/40 hover:text-foreground'
+                  )}
+                >
+                  {btn.label}
+                </button>
+              )
+            })}
+          </div>
+
+          {/* Row 3: Text filters */}
+          <div className="flex flex-wrap items-center gap-2">
+            <Input
+              placeholder="Order ID"
+              value={orderFilters.orderIdFilter}
+              onChange={e => updateFilters({ orderIdFilter: e.target.value })}
+              className="h-7 w-32 text-xs"
             />
-            Hide test orders
-          </label>
-
-          {attentionCount > 0 && (
-            <div className="flex items-center gap-1.5 text-sm text-amber-500 ml-2">
-              <AlertTriangle className="h-4 w-4" />
-              {attentionCount} order{attentionCount !== 1 ? 's' : ''} need
-              {attentionCount === 1 ? 's' : ''} attention
-            </div>
-          )}
+            <Input
+              placeholder="Email"
+              value={orderFilters.emailFilter}
+              onChange={e => updateFilters({ emailFilter: e.target.value })}
+              className="h-7 w-48 text-xs"
+            />
+            <Input
+              placeholder="Sample ID"
+              value={orderFilters.sampleIdFilter}
+              onChange={e => updateFilters({ sampleIdFilter: e.target.value })}
+              className="h-7 w-32 text-xs"
+            />
+            {(orderFilters.orderIdFilter || orderFilters.emailFilter || orderFilters.sampleIdFilter) && (
+              <button
+                type="button"
+                onClick={() => updateFilters({ orderIdFilter: '', emailFilter: '', sampleIdFilter: '' })}
+                className="text-xs text-muted-foreground hover:text-foreground underline"
+              >
+                Clear
+              </button>
+            )}
+          </div>
         </div>
       )}
 
@@ -649,7 +826,7 @@ export function OrderStatusPage() {
             <CardDescription>
               {ordersLoading
                 ? 'Loading orders...'
-                : `${orders.length} order${orders.length !== 1 ? 's' : ''} displayed`}
+                : `${filteredOrders.length} order${filteredOrders.length !== 1 ? 's' : ''} displayed`}
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -667,13 +844,13 @@ export function OrderStatusPage() {
               </div>
             )}
 
-            {orders && orders.length === 0 && !ordersLoading && (
+            {filteredOrders.length === 0 && !ordersLoading && (
               <div className="text-muted-foreground py-8 text-center">
                 {showAll ? 'No orders found' : 'No open orders'}
               </div>
             )}
 
-            {orders && orders.length > 0 && (
+            {filteredOrders.length > 0 && (
               <div className="overflow-auto max-h-[850px]">
                 <table className="w-full text-sm">
                   <thead className="sticky top-0 z-10 bg-card border-b">
@@ -697,12 +874,13 @@ export function OrderStatusPage() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border/50">
-                    {orders.map(order => (
+                    {filteredOrders.map(order => (
                       <OrderRow
                         key={order.id}
                         order={order}
                         wordpressHost={wordpressHost}
                         sampleLookupMap={sampleLookupMap}
+                        activeAnalysisStates={orderFilters.activeStates}
                       />
                     ))}
                   </tbody>
