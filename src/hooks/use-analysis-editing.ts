@@ -17,7 +17,8 @@ export interface UseAnalysisEditingReturn {
   cancelEditing: () => void
   setDraft: (value: string) => void
   handleKeyDown: (e: React.KeyboardEvent, uid: string) => void
-  save: (uid: string) => Promise<void>
+  /** Pass valueOverride to save a specific value instead of the current draft (used by autoEdit inline inputs). */
+  save: (uid: string, valueOverride?: string) => Promise<void>
   /** Ref guard — exposed so onBlur can check before cancelling */
   savePendingRef: React.RefObject<boolean>
 }
@@ -52,15 +53,16 @@ export function useAnalysisEditing({
   }, [])
 
   const save = useCallback(
-    async (uid: string) => {
+    async (uid: string, valueOverride?: string) => {
       if (savePendingRef.current) return
       savePendingRef.current = true
       setIsSaving(true)
+      const valueToSave = valueOverride !== undefined ? valueOverride : draft.trim()
 
       try {
-        const response = await setAnalysisResult(uid, draft.trim())
+        const response = await setAnalysisResult(uid, valueToSave)
         if (response.success) {
-          onResultSaved?.(uid, draft.trim(), response.new_review_state)
+          onResultSaved?.(uid, valueToSave, response.new_review_state)
           toast.success('Result saved')
           cancelEditing()
         } else {

@@ -250,6 +250,9 @@ function EditableResultCell({
   const selectRef = useRef<HTMLSelectElement>(null)
   const isEditing = editing.editingUid === analysis.uid
   const canEdit = !!analysis.uid && EDITABLE_STATES.has(analysis.review_state)
+  // autoEdit: always show input when there's no result yet (no click needed)
+  const autoEdit = canEdit && !analysis.result && !isEditing
+  const [autoValue, setAutoValue] = useState('')
   const options = analysis.result_options ?? []
   const hasOptions = options.length > 0
   const displayLabel = conformsValue
@@ -268,6 +271,87 @@ function EditableResultCell({
     }
   }, [isEditing, hasOptions])
 
+  // Save on blur unless the cancel button received focus.
+  // If draft is empty: save (to clear) when there was a prior value, otherwise just cancel.
+  const handleBlur = (e: React.FocusEvent) => {
+    if ((e.relatedTarget as HTMLElement)?.dataset.cancel) return
+    if (!analysis.uid || editing.isSaving) return
+    if (editing.draft.trim() || analysis.result) {
+      void editing.save(analysis.uid)
+    } else {
+      editing.cancelEditing()
+    }
+  }
+
+  // autoEdit mode: inline input always visible when no result yet
+  if (autoEdit) {
+    const handleAutoSave = () => {
+      if (analysis.uid && autoValue.trim()) void editing.save(analysis.uid, autoValue.trim())
+    }
+    const handleAutoKeyDown = (e: React.KeyboardEvent) => {
+      if (e.key === 'Enter') { e.preventDefault(); handleAutoSave() }
+      if (e.key === 'Escape') { e.preventDefault(); setAutoValue('') }
+    }
+    const autoInputClass = "h-7 text-sm px-2 py-0 rounded-md border border-input bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-ring shrink-0"
+    return (
+      <td className="py-1.5 px-3">
+        <div className="flex items-center gap-1.5">
+          {conformsValue ? (
+            <select
+              value={autoValue}
+              onChange={e => { setAutoValue(e.target.value); if (e.target.value && analysis.uid) void editing.save(analysis.uid, e.target.value) }}
+              disabled={editing.isSaving}
+              className={autoInputClass}
+              aria-label={`Select result for ${analysis.title}`}
+            >
+              <option value="">— Select —</option>
+              <option value={conformsValue}>Conforms</option>
+              <option value="Does_Not_Conform">Does Not Conform</option>
+            </select>
+          ) : hasOptions ? (
+            <select
+              value={autoValue}
+              onChange={e => { setAutoValue(e.target.value); if (e.target.value && analysis.uid) void editing.save(analysis.uid, e.target.value) }}
+              disabled={editing.isSaving}
+              className={autoInputClass}
+              aria-label={`Select result for ${analysis.title}`}
+            >
+              <option value="">— Select —</option>
+              {options.map(opt => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))}
+            </select>
+          ) : (
+            <Input
+              ref={inputRef}
+              type="text"
+              value={autoValue}
+              onChange={e => setAutoValue(e.target.value)}
+              onKeyDown={handleAutoKeyDown}
+              onBlur={handleAutoSave}
+              disabled={editing.isSaving}
+              className="h-7 text-sm font-mono px-2 py-1 w-28 shrink-0"
+              placeholder="—"
+              aria-label={`Edit result for ${analysis.title}`}
+            />
+          )}
+          {analysis.unit && analysis.unit.toLowerCase() !== 'text' && (
+            <span className="text-xs text-muted-foreground shrink-0">{analysis.unit}</span>
+          )}
+          {autoValue && (
+            <button
+              onClick={() => setAutoValue('')}
+              className="inline-flex items-center justify-center w-6 h-6 rounded-md text-muted-foreground hover:bg-muted transition-colors cursor-pointer shrink-0"
+              aria-label="Clear"
+            >
+              <X size={14} />
+            </button>
+          )}
+        </div>
+      </td>
+    )
+  }
+
   // Editing mode: identity dropdown, options dropdown, or free-text input
   if (isEditing) {
     return (
@@ -282,6 +366,7 @@ function EditableResultCell({
                 if (e.key === 'Escape') { e.preventDefault(); editing.cancelEditing() }
                 if (e.key === 'Enter') { e.preventDefault(); if (analysis.uid) void editing.save(analysis.uid) }
               }}
+              onBlur={handleBlur}
               disabled={editing.isSaving}
               className="h-7 text-sm px-2 py-0 rounded-md border border-input bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-ring shrink-0"
               aria-label={`Select result for ${analysis.title}`}
@@ -299,6 +384,7 @@ function EditableResultCell({
                 if (e.key === 'Escape') { e.preventDefault(); editing.cancelEditing() }
                 if (e.key === 'Enter') { e.preventDefault(); if (analysis.uid) void editing.save(analysis.uid) }
               }}
+              onBlur={handleBlur}
               disabled={editing.isSaving}
               className="h-7 text-sm px-2 py-0 rounded-md border border-input bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-ring shrink-0"
               aria-label={`Select result for ${analysis.title}`}
@@ -315,6 +401,7 @@ function EditableResultCell({
               value={editing.draft}
               onChange={e => editing.setDraft(e.target.value)}
               onKeyDown={e => { if (analysis.uid) editing.handleKeyDown(e, analysis.uid) }}
+              onBlur={handleBlur}
               disabled={editing.isSaving}
               className="h-7 text-sm font-mono px-2 py-1 w-28 shrink-0"
               aria-label={`Edit result for ${analysis.title}`}
@@ -332,10 +419,17 @@ function EditableResultCell({
             {editing.isSaving ? <Spinner className="size-3.5" /> : <Check size={14} />}
           </button>
           <button
-            onClick={editing.cancelEditing}
+            data-cancel
+            onClick={() => {
+              editing.setDraft('')
+              // Re-focus input so subsequent blur correctly triggers save/cancel
+              setTimeout(() => {
+                selectRef.current?.focus() ?? inputRef.current?.focus()
+              }, 0)
+            }}
             disabled={editing.isSaving}
             className="inline-flex items-center justify-center w-6 h-6 rounded-md text-muted-foreground hover:bg-muted transition-colors cursor-pointer disabled:opacity-50 shrink-0"
-            aria-label="Cancel"
+            aria-label="Clear"
           >
             <X size={14} />
           </button>
@@ -527,9 +621,8 @@ function HistoryRow({
 }) {
   const { display, original } = formatAnalysisTitle(analysis.title, analyteNameMap)
   const wasRenamed = display !== original
-  const slotMatch = analysis.title.match(/^Analyte\s+(\d)/i)
-  const conformsValue = /Identity\s*\(HPLC\)/i.test(analysis.title) && slotMatch
-    ? (analyteNameMap.get(parseInt(slotMatch[1]!, 10)) ?? null)
+  const conformsValue = /Identity\s*\(HPLC\)/i.test(display)
+    ? (display.match(/^(.+?)\s*[-–]\s*Identity\s*\(HPLC\)/i)?.[1]?.trim() ?? null)
     : null
   const resultLabel = conformsValue
     ? resolveIdentityLabel(analysis.result, conformsValue)
@@ -610,9 +703,8 @@ function AnalysisRow({
   const rowTint = ROW_STATUS_STYLE[analysis.review_state ?? ''] ?? ''
   const { display, original } = formatAnalysisTitle(analysis.title, analyteNameMap)
   const wasRenamed = display !== original
-  const slotMatch = analysis.title.match(/^Analyte\s+(\d)/i)
-  const conformsValue = /Identity\s*\(HPLC\)/i.test(analysis.title) && slotMatch
-    ? (analyteNameMap.get(parseInt(slotMatch[1]!, 10)) ?? null)
+  const conformsValue = /Identity\s*\(HPLC\)/i.test(display)
+    ? (display.match(/^(.+?)\s*[-–]\s*Identity\s*\(HPLC\)/i)?.[1]?.trim() ?? null)
     : null
   const allowedTransitions =
     analysis.uid && analysis.review_state
