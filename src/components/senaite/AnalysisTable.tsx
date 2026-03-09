@@ -229,12 +229,22 @@ function resolveResultLabel(result: string | null, options: SenaiteAnalysis['res
   return result
 }
 
+/** Maps stored identity result values to human-readable labels. */
+function resolveIdentityLabel(result: string | null, conformsValue: string): string | null {
+  if (!result) return null
+  if (result === conformsValue) return 'Conforms'
+  if (result === 'Does_Not_Conform') return 'Does Not Conform'
+  return result
+}
+
 function EditableResultCell({
   analysis,
   editing,
+  conformsValue = null,
 }: {
   analysis: SenaiteAnalysis
   editing: UseAnalysisEditingReturn
+  conformsValue?: string | null
 }) {
   const inputRef = useRef<HTMLInputElement>(null)
   const selectRef = useRef<HTMLSelectElement>(null)
@@ -242,7 +252,9 @@ function EditableResultCell({
   const canEdit = !!analysis.uid && EDITABLE_STATES.has(analysis.review_state)
   const options = analysis.result_options ?? []
   const hasOptions = options.length > 0
-  const displayLabel = resolveResultLabel(analysis.result, options)
+  const displayLabel = conformsValue
+    ? resolveIdentityLabel(analysis.result, conformsValue)
+    : resolveResultLabel(analysis.result, options)
 
   // Auto-focus when entering edit mode
   useEffect(() => {
@@ -256,12 +268,29 @@ function EditableResultCell({
     }
   }, [isEditing, hasOptions])
 
-  // Editing mode: dropdown for selection-type, text input for free-text
+  // Editing mode: identity dropdown, options dropdown, or free-text input
   if (isEditing) {
     return (
       <td className="py-1.5 px-3">
         <div className="flex items-center gap-1.5">
-          {hasOptions ? (
+          {conformsValue ? (
+            <select
+              ref={selectRef}
+              value={editing.draft}
+              onChange={e => editing.setDraft(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Escape') { e.preventDefault(); editing.cancelEditing() }
+                if (e.key === 'Enter') { e.preventDefault(); if (analysis.uid) void editing.save(analysis.uid) }
+              }}
+              disabled={editing.isSaving}
+              className="h-7 text-sm px-2 py-0 rounded-md border border-input bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-ring shrink-0"
+              aria-label={`Select result for ${analysis.title}`}
+            >
+              <option value="">— Select —</option>
+              <option value={conformsValue}>Conforms</option>
+              <option value="Does_Not_Conform">Does Not Conform</option>
+            </select>
+          ) : hasOptions ? (
             <select
               ref={selectRef}
               value={editing.draft}
@@ -498,6 +527,13 @@ function HistoryRow({
 }) {
   const { display, original } = formatAnalysisTitle(analysis.title, analyteNameMap)
   const wasRenamed = display !== original
+  const slotMatch = analysis.title.match(/^Analyte\s+(\d)/i)
+  const conformsValue = /Identity\s*\(HPLC\)/i.test(analysis.title) && slotMatch
+    ? (analyteNameMap.get(parseInt(slotMatch[1]!, 10)) ?? null)
+    : null
+  const resultLabel = conformsValue
+    ? resolveIdentityLabel(analysis.result, conformsValue)
+    : resolveResultLabel(analysis.result, analysis.result_options ?? [])
   return (
     <tr className="border-b border-border/20 bg-muted/10">
       <td className="py-1.5 px-3" />
@@ -513,7 +549,7 @@ function HistoryRow({
       </td>
       <td className="py-1.5 px-3">
         <span className="text-xs font-mono text-muted-foreground/60 line-through">
-          {resolveResultLabel(analysis.result, analysis.result_options ?? []) || '\u2014'}
+          {resultLabel || '\u2014'}
         </span>
         {analysis.unit && analysis.unit.toLowerCase() !== 'text' && (
           <span className="text-xs text-muted-foreground/50 ml-1">{analysis.unit}</span>
@@ -574,6 +610,10 @@ function AnalysisRow({
   const rowTint = ROW_STATUS_STYLE[analysis.review_state ?? ''] ?? ''
   const { display, original } = formatAnalysisTitle(analysis.title, analyteNameMap)
   const wasRenamed = display !== original
+  const slotMatch = analysis.title.match(/^Analyte\s+(\d)/i)
+  const conformsValue = /Identity\s*\(HPLC\)/i.test(analysis.title) && slotMatch
+    ? (analyteNameMap.get(parseInt(slotMatch[1]!, 10)) ?? null)
+    : null
   const allowedTransitions =
     analysis.uid && analysis.review_state
       ? (ALLOWED_TRANSITIONS[analysis.review_state] ?? []).filter(
@@ -616,7 +656,7 @@ function AnalysisRow({
           )}
         </div>
       </td>
-      <EditableResultCell analysis={analysis} editing={editing} />
+      <EditableResultCell analysis={analysis} editing={editing} conformsValue={conformsValue} />
       <td className="py-2.5 px-3 text-center">
         {analysis.retested ? (
           <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-medium bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-400">

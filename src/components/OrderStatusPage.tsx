@@ -55,7 +55,8 @@ function formatRelativeTime(isoStr: string): string {
 let _senaiteQueue: Promise<void> = Promise.resolve()
 
 function enqueueSenaiteLookup(id: string) {
-  const task = _senaiteQueue.then(() => lookupSenaiteSample(id))
+  // Order Status page opts into the 15-min cache (noCache=false) to avoid hammering Zope.
+  const task = _senaiteQueue.then(() => lookupSenaiteSample(id, false))
   _senaiteQueue = task.then(Function.prototype as () => void, Function.prototype as () => void)
   return task
 }

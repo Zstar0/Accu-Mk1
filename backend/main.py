@@ -7126,12 +7126,16 @@ async def clear_senaite_lookup_cache(
 @app.get("/wizard/senaite/lookup", response_model=SenaiteLookupResult)
 async def lookup_senaite_sample(
     id: str,
+    no_cache: bool = True,
     db: Session = Depends(get_db),
     _current_user=Depends(get_current_user),
 ):
     """
     Look up a sample in SENAITE by ID and return structured analyte data.
-    Results are cached server-side for 15 minutes across all users.
+
+    By default (no_cache=true) always fetches fresh from SENAITE.
+    Pass ?no_cache=false to use the 15-minute server-side cache
+    (only the Order Status page should do this, to avoid hammering Zope).
 
     Returns:
         SenaiteLookupResult with sample_id, declared_weight_mg, and analytes list.
@@ -7146,13 +7150,14 @@ async def lookup_senaite_sample(
     # SENAITE sample IDs are always uppercase (e.g. PB-0056) — normalize
     id = id.strip().upper()
 
-    # Check server-side cache
+    # Check server-side cache (skipped when no_cache=true)
     import time as _time
-    cached = _senaite_lookup_cache.get(id)
-    if cached:
-        ts, result = cached
-        if _time.time() - ts < _SENAITE_LOOKUP_TTL:
-            return result
+    if not no_cache:
+        cached = _senaite_lookup_cache.get(id)
+        if cached:
+            ts, result = cached
+            if _time.time() - ts < _SENAITE_LOOKUP_TTL:
+                return result
 
     try:
         data = await _fetch_senaite_sample(id)

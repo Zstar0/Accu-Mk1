@@ -2788,14 +2788,16 @@ export async function clearSenaiteLookupCache(): Promise<void> {
 }
 
 export async function lookupSenaiteSample(
-  sampleId: string
+  sampleId: string,
+  /** Pass false to use the 15-min server-side cache. Only Order Status page should do this. */
+  noCache = true
 ): Promise<SenaiteLookupResult> {
   return senaiteLimiter(async () => {
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(), 15_000)
     try {
       const response = await fetch(
-        `${API_BASE_URL()}/wizard/senaite/lookup?id=${encodeURIComponent(sampleId)}`,
+        `${API_BASE_URL()}/wizard/senaite/lookup?id=${encodeURIComponent(sampleId)}&no_cache=${noCache}`,
         { headers: getBearerHeaders(), signal: controller.signal }
       )
       if (!response.ok) {
