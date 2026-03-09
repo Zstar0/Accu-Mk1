@@ -417,6 +417,7 @@ const KANBAN_COLUMNS: KanbanCol[] = [
 interface KanbanSampleItem {
   sampleId: string
   orderId: string | number
+  email: string | null
   colKey: string
   count: number
   lookup: SenaiteLookupResult | undefined
@@ -482,17 +483,22 @@ function KanbanSampleCard({
 
   return (
     <div className="rounded border border-border/50 bg-card px-2 py-1 hover:border-border transition-colors cursor-pointer">
-      {/* Row 1: sample ID (left) + count pill (right) */}
+      {/* Row 1: sample ID + email (left) + count pill (right) */}
       <div className="flex items-center justify-between gap-2">
-        <button
-          type="button"
-          className="text-[11px] font-mono font-semibold text-primary hover:underline leading-none cursor-pointer"
-          onClick={() => navigateToSample(item.sampleId)}
-        >
-          {item.sampleId}
-        </button>
+        <div className="flex items-center gap-1.5 min-w-0">
+          <button
+            type="button"
+            className="text-[11px] font-mono font-semibold text-primary hover:underline leading-none cursor-pointer shrink-0"
+            onClick={() => navigateToSample(item.sampleId)}
+          >
+            {item.sampleId}
+          </button>
+          {item.email && (
+            <span className="text-[10px] text-muted-foreground/60 leading-none truncate">{item.email}</span>
+          )}
+        </div>
         {/* Count pill: "17 to verify" — makes the number self-explanatory */}
-        <span className={cn('inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-semibold tabular-nums leading-none', pillClass)}>
+        <span className={cn('inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-semibold tabular-nums leading-none shrink-0', pillClass)}>
           {item.count}
           <span className="font-normal opacity-80">{countLabel}</span>
         </span>
@@ -545,15 +551,16 @@ function KanbanView({
     const items: KanbanSampleItem[] = []
     for (const order of orders) {
       if (!order.sample_results) continue
+      const email = getOrderEmail(order)
       for (const entry of Object.values(order.sample_results)) {
         if (!entry.senaite_id || entry.status === 'failed') continue
         const lq = sampleLookupMap.get(entry.senaite_id)
         if (lq?.isLoading) {
-          // Show a loading placeholder in every visible col
           for (const col of visibleCols) {
             items.push({
               sampleId: entry.senaite_id,
               orderId: order.order_id,
+              email,
               colKey: col.key,
               count: 0,
               lookup: undefined,
@@ -571,6 +578,7 @@ function KanbanView({
             items.push({
               sampleId: entry.senaite_id,
               orderId: order.order_id,
+              email,
               colKey: col.key,
               count,
               lookup: lq.data,
