@@ -1,5 +1,24 @@
 # Changelog
 
+## v0.24.0 — 2026-03-08
+
+### Order Status — Kanban Board View
+
+- **Kanban view** — new view toggle (Table / Kanban) persisted to localStorage; Kanban shows four columns: Pending, Assigned, To Verify, Verified
+- **Sample cards duplicate across columns** — a sample with both pending and to-verify analyses appears in both columns, each card showing the count for that specific state (e.g. "17 to verify")
+- **Group by Order mode** — swimlane per order with header showing order ID, email, and processing time; samples distributed into columns within each swimlane
+- **Flat mode** — columns of sample cards with order reference on each card
+- **Card clarity improvements** — count shown as a labeled pill ("17 to verify") with column-color background; sample SENAITE state shown as "LIMS: Received" to distinguish from analysis state
+- **Kanban sort** — when in Group by Order mode, sort by Order ID or Outstanding time (oldest first by default); click active sort to toggle direction
+- **Analysis state filter hidden in Kanban** — switching to Kanban clears and hides the filter strip since columns already show all states
+- **Order number links to Order Explorer** — clicking an order number in a Kanban card navigates to Order Explorer and auto-opens the flyout for that order
+
+### Order Explorer
+
+- **Hide test orders persisted** — checkbox state saved to localStorage
+
+---
+
 ## v0.23.0 — 2026-03-08
 
 ### Order Status — Analysis State Filters & Persistent Filter State

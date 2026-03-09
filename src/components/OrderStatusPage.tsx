@@ -9,6 +9,10 @@ import {
   XCircle,
   AlertCircle,
   Clock,
+  LayoutList,
+  Columns3,
+  Layers,
+  ArrowUpDown,
 } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
@@ -399,6 +403,280 @@ function OrderRow({
   )
 }
 
+// --- Kanban types & components ---
+
+type KanbanCol = { key: string; label: string; countKey: keyof AnalysisStateCounts }
+
+const KANBAN_COLUMNS: KanbanCol[] = [
+  { key: 'pending', label: 'Pending', countKey: 'pending' },
+  { key: 'assigned', label: 'Assigned', countKey: 'assigned' },
+  { key: 'to_verify', label: 'To Verify', countKey: 'to_verify' },
+  { key: 'verified', label: 'Verified', countKey: 'verified' },
+]
+
+interface KanbanSampleItem {
+  sampleId: string
+  orderId: string | number
+  colKey: string
+  count: number
+  lookup: SenaiteLookupResult | undefined
+  isLoading: boolean
+  isError: boolean
+}
+
+// Human-readable label for the count in each column
+const COL_COUNT_LABEL: Record<string, string> = {
+  pending: 'pending',
+  assigned: 'assigned',
+  to_verify: 'to verify',
+  verified: 'verified',
+}
+
+// Tailwind classes for count pill background per column
+const COL_PILL_CLASS: Record<string, string> = {
+  pending: 'bg-muted/60 text-muted-foreground',
+  assigned: 'bg-blue-500/15 text-blue-400',
+  to_verify: 'bg-amber-500/15 text-amber-400',
+  verified: 'bg-green-500/15 text-green-500',
+}
+
+// Plain text label for SENAITE sample state — avoids badge confusion with column state
+function sampleStateLabel(state: string | null): string {
+  const s = state?.toLowerCase() ?? ''
+  const map: Record<string, string> = {
+    received: 'Received',
+    sample_received: 'Received',
+    to_be_verified: 'To be verified',
+    verified: 'Verified',
+    published: 'Published',
+    registered: 'Registered',
+    sample_registered: 'Registered',
+    invalid: 'Invalid',
+    rejected: 'Rejected',
+    cancelled: 'Cancelled',
+  }
+  return map[s] ?? (state ?? 'Unknown')
+}
+
+function KanbanSampleCard({
+  item,
+  showOrder,
+}: {
+  item: KanbanSampleItem
+  showOrder: boolean
+}) {
+  const navigateToSample = useUIStore(state => state.navigateToSample)
+  const navigateToOrderExplorer = useUIStore(state => state.navigateToOrderExplorer)
+
+  if (item.isLoading) {
+    return (
+      <div className="rounded border border-border/50 bg-muted/20 px-2 py-1 flex items-center gap-1.5 text-muted-foreground">
+        <RefreshCw className="h-2.5 w-2.5 animate-spin shrink-0" />
+        <span className="font-mono text-[11px]">{item.sampleId}</span>
+      </div>
+    )
+  }
+
+  const pillClass = COL_PILL_CLASS[item.colKey] ?? 'bg-muted/60 text-muted-foreground'
+  const countLabel = COL_COUNT_LABEL[item.colKey] ?? ''
+
+  return (
+    <div className="rounded border border-border/50 bg-card px-2 py-1 hover:border-border transition-colors cursor-pointer">
+      {/* Row 1: sample ID (left) + count pill (right) */}
+      <div className="flex items-center justify-between gap-2">
+        <button
+          type="button"
+          className="text-[11px] font-mono font-semibold text-primary hover:underline leading-none cursor-pointer"
+          onClick={() => navigateToSample(item.sampleId)}
+        >
+          {item.sampleId}
+        </button>
+        {/* Count pill: "17 to verify" — makes the number self-explanatory */}
+        <span className={cn('inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-semibold tabular-nums leading-none', pillClass)}>
+          {item.count}
+          <span className="font-normal opacity-80">{countLabel}</span>
+        </span>
+      </div>
+      {/* Row 2: secondary metadata — clearly separated from analysis state */}
+      {(showOrder || item.lookup) && (
+        <div className="flex items-center gap-1 mt-0.5">
+          {showOrder && (
+            <button
+              type="button"
+              className="text-[10px] text-muted-foreground/50 font-mono leading-none hover:text-primary hover:underline cursor-pointer transition-colors"
+              onClick={() => navigateToOrderExplorer(String(item.orderId))}
+            >
+              #{item.orderId}
+            </button>
+          )}
+          {item.lookup && (
+            <>
+              {showOrder && <span className="text-muted-foreground/30 text-[10px]">·</span>}
+              {/* "LIMS:" prefix makes clear this is the sample's overall SENAITE state, not the column state */}
+              <span className="text-[10px] text-muted-foreground/50 leading-none">
+                LIMS: {sampleStateLabel(item.lookup.review_state)}
+              </span>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function KanbanView({
+  orders,
+  sampleLookupMap,
+  groupByOrder,
+  activeStates,
+}: {
+  orders: ExplorerOrder[]
+  sampleLookupMap: Map<string, { data?: SenaiteLookupResult; isLoading: boolean; isError: boolean }>
+  groupByOrder: boolean
+  activeStates: string[]
+}) {
+  // Determine which columns to show — all if no filter, else just the active one
+  const visibleCols = activeStates.length > 0
+    ? KANBAN_COLUMNS.filter(c => activeStates.includes(c.key))
+    : KANBAN_COLUMNS
+
+  // Build all kanban items: one item per (sample, col) where count > 0
+  const allItems = useMemo(() => {
+    const items: KanbanSampleItem[] = []
+    for (const order of orders) {
+      if (!order.sample_results) continue
+      for (const entry of Object.values(order.sample_results)) {
+        if (!entry.senaite_id || entry.status === 'failed') continue
+        const lq = sampleLookupMap.get(entry.senaite_id)
+        if (lq?.isLoading) {
+          // Show a loading placeholder in every visible col
+          for (const col of visibleCols) {
+            items.push({
+              sampleId: entry.senaite_id,
+              orderId: order.order_id,
+              colKey: col.key,
+              count: 0,
+              lookup: undefined,
+              isLoading: true,
+              isError: false,
+            })
+          }
+          continue
+        }
+        if (!lq?.data) continue
+        const counts = groupAnalysisStates(lq.data.analyses)
+        for (const col of visibleCols) {
+          const count = counts[col.countKey]
+          if (count > 0) {
+            items.push({
+              sampleId: entry.senaite_id,
+              orderId: order.order_id,
+              colKey: col.key,
+              count,
+              lookup: lq.data,
+              isLoading: false,
+              isError: false,
+            })
+          }
+        }
+      }
+    }
+    return items
+  }, [orders, sampleLookupMap, visibleCols])
+
+  if (!groupByOrder) {
+    // Flat Kanban — just columns of sample cards
+    return (
+      <div
+        className="grid gap-3 min-w-0"
+        style={{ gridTemplateColumns: `repeat(${visibleCols.length}, minmax(180px, 1fr))` }}
+      >
+        {visibleCols.map(col => {
+          const colItems = allItems.filter(i => i.colKey === col.key)
+          return (
+            <div key={col.key} className="flex flex-col gap-2 min-w-0">
+              <div className="flex items-center justify-between px-1 pb-1 border-b border-border/50">
+                <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+                  {col.label}
+                </span>
+                <Badge variant="secondary" className="text-xs tabular-nums">
+                  {colItems.filter(i => !i.isLoading).length}
+                </Badge>
+              </div>
+              <div className="flex flex-col gap-1">
+                {colItems.length === 0 && (
+                  <div className="text-xs text-muted-foreground/50 text-center py-4">Empty</div>
+                )}
+                {colItems.map(item => (
+                  <KanbanSampleCard
+                    key={`${item.sampleId}-${item.colKey}`}
+                    item={item}
+                    showOrder={true}
+                  />
+                ))}
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    )
+  }
+
+  // Grouped by order — swimlane per order
+  return (
+    <div className="flex flex-col gap-4">
+      {orders.map(order => {
+        const orderItems = allItems.filter(i => i.orderId === order.order_id)
+        if (orderItems.length === 0 && activeStates.length > 0) return null
+        const email = getOrderEmail(order)
+
+        return (
+          <div key={order.id} className="rounded-lg border border-border/50 overflow-hidden">
+            {/* Swimlane header */}
+            <div className="flex items-center gap-3 px-3 py-2 bg-muted/30 border-b border-border/50">
+              <a
+                href={`${window.location.href.split('#')[0]}`}
+                className="font-mono text-sm font-semibold text-primary hover:underline"
+              >
+                #{order.order_id}
+              </a>
+              {email && <span className="text-xs text-muted-foreground">{email}</span>}
+              <span className="text-xs text-muted-foreground ml-auto">
+                {order.samples_delivered}/{order.samples_expected} samples · {formatProcessingTime(order.created_at, order.completed_at)}
+              </span>
+            </div>
+
+            {/* Columns grid */}
+            <div
+              className="grid gap-0 divide-x divide-border/30"
+              style={{ gridTemplateColumns: `repeat(${visibleCols.length}, 1fr)` }}
+            >
+              {visibleCols.map(col => {
+                const colItems = orderItems.filter(i => i.colKey === col.key)
+                return (
+                  <div key={col.key} className="p-1.5 flex flex-col gap-1 min-w-[150px]">
+                    {colItems.length === 0 ? (
+                      <div className="text-xs text-muted-foreground/30 text-center py-2">—</div>
+                    ) : (
+                      colItems.map(item => (
+                        <KanbanSampleCard
+                          key={`${item.sampleId}-${item.colKey}`}
+                          item={item}
+                          showOrder={false}
+                        />
+                      ))
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 // --- Sample state filter config ---
 
 const ANALYSIS_STATE_BUTTONS = [
@@ -418,6 +696,10 @@ interface OrderFilters {
   emailFilter: string
   orderIdFilter: string
   hideTestOrders: boolean
+  viewMode: 'table' | 'kanban'
+  groupByOrder: boolean
+  kanbanSort: 'order_id' | 'processing_time'
+  kanbanSortDir: 'asc' | 'desc'
 }
 
 function loadOrderFilters(): OrderFilters {
@@ -427,7 +709,17 @@ function loadOrderFilters(): OrderFilters {
   } catch {
     // ignore parse errors
   }
-  return { activeStates: [], sampleIdFilter: '', emailFilter: '', orderIdFilter: '', hideTestOrders: true }
+  return {
+    activeStates: [],
+    sampleIdFilter: '',
+    emailFilter: '',
+    orderIdFilter: '',
+    hideTestOrders: true,
+    viewMode: 'table',
+    groupByOrder: true,
+    kanbanSort: 'processing_time',
+    kanbanSortDir: 'desc',
+  }
 }
 
 function saveOrderFilters(f: OrderFilters) {
@@ -567,14 +859,28 @@ export function OrderStatusPage() {
 
   // Hide orders where no samples match the active analysis state filter
   const filteredOrders = useMemo(() => {
-    if (orderFilters.activeStates.length === 0) return orders
-    return orders.filter(o => {
-      if (!o.sample_results) return false
-      return Object.values(o.sample_results).some(v =>
-        v.senaite_id && sampleMatchesAnalysisFilter(v.senaite_id, orderFilters.activeStates, sampleLookupMap)
-      )
-    })
-  }, [orders, orderFilters.activeStates, sampleLookupMap])
+    let result = orders
+    if (orderFilters.activeStates.length > 0) {
+      result = result.filter(o => {
+        if (!o.sample_results) return false
+        return Object.values(o.sample_results).some(v =>
+          v.senaite_id && sampleMatchesAnalysisFilter(v.senaite_id, orderFilters.activeStates, sampleLookupMap)
+        )
+      })
+    }
+    // Apply kanban sort when in grouped kanban mode
+    if (orderFilters.viewMode === 'kanban' && orderFilters.groupByOrder) {
+      const dir = orderFilters.kanbanSortDir === 'asc' ? 1 : -1
+      result = [...result].sort((a, b) => {
+        if (orderFilters.kanbanSort === 'order_id') {
+          return dir * a.order_id.localeCompare(b.order_id, undefined, { numeric: true })
+        }
+        // processing_time: sort by created_at (oldest = longest outstanding)
+        return dir * (new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
+      })
+    }
+    return result
+  }, [orders, orderFilters, sampleLookupMap])
 
   // Count orders needing attention (have samples with to_verify analyses)
   const attentionCount = useMemo(() => {
@@ -706,8 +1012,8 @@ export function OrderStatusPage() {
       {/* Filter controls */}
       {status?.connected && (
         <div className="flex flex-col gap-2">
-          {/* Row 1: Open/All + hide test + attention */}
-          <div className="flex items-center gap-3">
+          {/* Row 1: Open/All + hide test + view toggle + attention */}
+          <div className="flex items-center gap-3 flex-wrap">
             <Button
               variant={showAll ? 'outline' : 'default'}
               size="sm"
@@ -741,8 +1047,96 @@ export function OrderStatusPage() {
               Hide test orders
             </label>
 
+            {/* View toggle */}
+            <div className="flex items-center gap-1 ml-auto">
+              {orderFilters.viewMode === 'kanban' && (
+                <>
+                  <button
+                    type="button"
+                    title="Group by order"
+                    onClick={() => updateFilters({ groupByOrder: !orderFilters.groupByOrder })}
+                    className={cn(
+                      'flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium border transition-colors',
+                      orderFilters.groupByOrder
+                        ? 'bg-foreground text-background border-foreground'
+                        : 'bg-transparent text-muted-foreground border-border hover:border-foreground/40 hover:text-foreground'
+                    )}
+                  >
+                    <Layers className="h-3.5 w-3.5" />
+                    By Order
+                  </button>
+                  {/* Sort controls — only useful in grouped mode */}
+                  {orderFilters.groupByOrder && (
+                    <div className="flex items-center gap-0.5 border border-border rounded-md overflow-hidden">
+                      {([
+                        { key: 'order_id', label: 'Order ID' },
+                        { key: 'processing_time', label: 'Outstanding' },
+                      ] as const).map(opt => {
+                        const isActive = orderFilters.kanbanSort === opt.key
+                        return (
+                          <button
+                            key={opt.key}
+                            type="button"
+                            onClick={() => {
+                              if (isActive) {
+                                updateFilters({ kanbanSortDir: orderFilters.kanbanSortDir === 'asc' ? 'desc' : 'asc' })
+                              } else {
+                                updateFilters({
+                                  kanbanSort: opt.key,
+                                  kanbanSortDir: opt.key === 'processing_time' ? 'desc' : 'asc',
+                                })
+                              }
+                            }}
+                            className={cn(
+                              'flex items-center gap-1 px-2 py-1 text-xs font-medium transition-colors',
+                              isActive
+                                ? 'bg-foreground text-background'
+                                : 'bg-transparent text-muted-foreground hover:text-foreground'
+                            )}
+                          >
+                            {opt.label}
+                            {isActive && (
+                              <ArrowUpDown className="h-3 w-3 opacity-70" />
+                            )}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  )}
+                </>
+              )}
+              <button
+                type="button"
+                title="Table view"
+                onClick={() => updateFilters({ viewMode: 'table' })}
+                className={cn(
+                  'flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium border transition-colors',
+                  orderFilters.viewMode === 'table'
+                    ? 'bg-foreground text-background border-foreground'
+                    : 'bg-transparent text-muted-foreground border-border hover:border-foreground/40 hover:text-foreground'
+                )}
+              >
+                <LayoutList className="h-3.5 w-3.5" />
+                Table
+              </button>
+              <button
+                type="button"
+                title="Kanban view"
+                onClick={() => updateFilters({ viewMode: 'kanban', activeStates: [] })}
+                className={cn(
+                  'flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium border transition-colors',
+                  orderFilters.viewMode === 'kanban'
+                    ? 'bg-foreground text-background border-foreground'
+                    : 'bg-transparent text-muted-foreground border-border hover:border-foreground/40 hover:text-foreground'
+                )}
+              >
+                <Columns3 className="h-3.5 w-3.5" />
+                Kanban
+              </button>
+            </div>
+
             {attentionCount > 0 && (
-              <div className="flex items-center gap-1.5 text-sm text-amber-500 ml-2">
+              <div className="flex items-center gap-1.5 text-sm text-amber-500">
                 <AlertTriangle className="h-4 w-4" />
                 {attentionCount} order{attentionCount !== 1 ? 's' : ''} need
                 {attentionCount === 1 ? 's' : ''} attention
@@ -750,8 +1144,8 @@ export function OrderStatusPage() {
             )}
           </div>
 
-          {/* Row 2: Sample state toggles */}
-          <div className="flex flex-wrap items-center gap-1.5">
+          {/* Row 2: Sample state toggles — hidden in Kanban (columns already show all states) */}
+          {orderFilters.viewMode === 'table' && <div className="flex flex-wrap items-center gap-1.5">
             {/* Active = no state filters (show all) */}
             <button
               type="button"
@@ -783,7 +1177,7 @@ export function OrderStatusPage() {
                 </button>
               )
             })}
-          </div>
+          </div>}
 
           {/* Row 3: Text filters */}
           <div className="flex flex-wrap items-center gap-2">
@@ -818,16 +1212,35 @@ export function OrderStatusPage() {
         </div>
       )}
 
-      {/* Status matrix */}
+      {/* Status matrix / Kanban */}
       {status?.connected && (
         <Card>
           <CardHeader className="pb-3">
-            <CardTitle className="text-lg">Status Matrix</CardTitle>
-            <CardDescription>
-              {ordersLoading
-                ? 'Loading orders...'
-                : `${filteredOrders.length} order${filteredOrders.length !== 1 ? 's' : ''} displayed`}
-            </CardDescription>
+            <div className="flex items-center justify-between">
+              <div>
+                <CardTitle className="text-lg">
+                  {orderFilters.viewMode === 'kanban' ? 'Kanban Board' : 'Status Matrix'}
+                </CardTitle>
+                <CardDescription>
+                  {ordersLoading
+                    ? 'Loading orders...'
+                    : `${filteredOrders.length} order${filteredOrders.length !== 1 ? 's' : ''} displayed`}
+                </CardDescription>
+              </div>
+              {/* Kanban column header labels */}
+              {orderFilters.viewMode === 'kanban' && !ordersLoading && (
+                <div className="flex items-center gap-4 text-xs text-muted-foreground">
+                  {(orderFilters.activeStates.length > 0
+                    ? KANBAN_COLUMNS.filter(c => orderFilters.activeStates.includes(c.key))
+                    : KANBAN_COLUMNS
+                  ).map(col => (
+                    <span key={col.key} className="font-semibold uppercase tracking-wide">
+                      {col.label}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
           </CardHeader>
           <CardContent>
             {ordersLoading && (
@@ -850,26 +1263,16 @@ export function OrderStatusPage() {
               </div>
             )}
 
-            {filteredOrders.length > 0 && (
+            {filteredOrders.length > 0 && orderFilters.viewMode === 'table' && (
               <div className="overflow-auto max-h-[850px]">
                 <table className="w-full text-sm">
                   <thead className="sticky top-0 z-10 bg-card border-b">
                     <tr className="text-left text-muted-foreground">
-                      <th className="py-2 px-3 font-medium whitespace-nowrap">
-                        Order ID
-                      </th>
-                      <th className="py-2 px-3 font-medium whitespace-nowrap">
-                        Email
-                      </th>
-                      <th className="py-2 px-3 font-medium whitespace-nowrap">
-                        Samples
-                      </th>
-                      <th className="py-2 px-3 font-medium whitespace-nowrap">
-                        Created
-                      </th>
-                      <th className="py-2 px-3 font-medium whitespace-nowrap">
-                        Processing Time
-                      </th>
+                      <th className="py-2 px-3 font-medium whitespace-nowrap">Order ID</th>
+                      <th className="py-2 px-3 font-medium whitespace-nowrap">Email</th>
+                      <th className="py-2 px-3 font-medium whitespace-nowrap">Samples</th>
+                      <th className="py-2 px-3 font-medium whitespace-nowrap">Created</th>
+                      <th className="py-2 px-3 font-medium whitespace-nowrap">Processing Time</th>
                       <th className="py-2 px-3 font-medium">Sample Details</th>
                     </tr>
                   </thead>
@@ -885,6 +1288,17 @@ export function OrderStatusPage() {
                     ))}
                   </tbody>
                 </table>
+              </div>
+            )}
+
+            {filteredOrders.length > 0 && orderFilters.viewMode === 'kanban' && (
+              <div className="overflow-auto max-h-[850px]">
+                <KanbanView
+                  orders={filteredOrders}
+                  sampleLookupMap={sampleLookupMap}
+                  groupByOrder={orderFilters.groupByOrder}
+                  activeStates={orderFilters.activeStates}
+                />
               </div>
             )}
           </CardContent>

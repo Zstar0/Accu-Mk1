@@ -185,7 +185,9 @@ export function OrderExplorer() {
   const [searchTerm, setSearchTerm] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState('all')
-  const [hideTestOrders, setHideTestOrders] = useState(true)
+  const [hideTestOrders, setHideTestOrders] = useState(
+    () => localStorage.getItem('order-explorer-hide-test') !== 'false'
+  )
   const [page, setPage] = useState(0)
   const [selectedOrder, setSelectedOrder] = useState<ExplorerOrder | null>(null)
 
@@ -200,17 +202,20 @@ export function OrderExplorer() {
   } | null>(null)
   const queryClient = useQueryClient()
 
-  // Cross-navigation: consume target order ID from COA Explorer
+  // Cross-navigation: consume target order ID from COA Explorer / Kanban
+  const [pendingAutoOpenOrderId, setPendingAutoOpenOrderId] = useState<string | null>(null)
   const orderExplorerTargetOrderId = useUIStore(state => state.orderExplorerTargetOrderId)
   useEffect(() => {
     if (orderExplorerTargetOrderId) {
       setSearchTerm(orderExplorerTargetOrderId)
       setDebouncedSearch(orderExplorerTargetOrderId)
       setPage(0)
+      setPendingAutoOpenOrderId(orderExplorerTargetOrderId)
       // Clear the target so it doesn't re-trigger
       useUIStore.setState({ orderExplorerTargetOrderId: null })
     }
   }, [orderExplorerTargetOrderId])
+
 
   // Listen for environment changes (admin override)
   useEffect(() => {
@@ -272,6 +277,16 @@ export function OrderExplorer() {
       return !email || !TEST_EMAILS.includes(email)
     })
   }, [orders, hideTestOrders])
+
+  // Auto-open flyout once orders arrive for the pending target
+  useEffect(() => {
+    if (!pendingAutoOpenOrderId || !filteredOrders) return
+    const match = filteredOrders.find(o => o.order_id === pendingAutoOpenOrderId)
+    if (match) {
+      setSelectedOrder(match)
+      setPendingAutoOpenOrderId(null)
+    }
+  }, [filteredOrders, pendingAutoOpenOrderId])
 
   // Handle search with debounce
   const handleSearchChange = (value: string) => {
@@ -537,7 +552,11 @@ export function OrderExplorer() {
           <label className="flex items-center gap-2 text-sm text-muted-foreground whitespace-nowrap cursor-pointer">
             <Checkbox
               checked={hideTestOrders}
-              onCheckedChange={checked => setHideTestOrders(checked === true)}
+              onCheckedChange={checked => {
+                const val = checked === true
+                setHideTestOrders(val)
+                localStorage.setItem('order-explorer-hide-test', String(val))
+              }}
             />
             Hide test orders
           </label>
