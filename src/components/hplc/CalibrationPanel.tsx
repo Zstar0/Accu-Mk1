@@ -57,6 +57,8 @@ interface CalibrationPanelProps {
   onUpdated: () => void
   instrumentFilter: string
   onImport?: () => void
+  /** Increment to force a re-fetch of calibrations (e.g. after creating a new curve). */
+  refreshKey?: number
 }
 
 export function CalibrationPanel({
@@ -64,10 +66,16 @@ export function CalibrationPanel({
   onUpdated,
   instrumentFilter,
   onImport,
+  refreshKey,
 }: CalibrationPanelProps) {
   const [allCalibrations, setAllCalibrations] = useState<CalibrationCurve[]>([])
   const [loading, setLoading] = useState(true)
   const [expandedId, setExpandedId] = useState<number | null>(null)
+
+  // Reset expanded state when switching to a different peptide
+  useEffect(() => {
+    setExpandedId(null)
+  }, [peptide.id])
 
   // Load all calibrations for this peptide
   const loadCalibrations = useCallback(async () => {
@@ -75,9 +83,9 @@ export function CalibrationPanel({
       setLoading(true)
       const cals = await getCalibrations(peptide.id)
       setAllCalibrations(cals)
-      // Auto-expand the active one
-      const active = cals.find(c => c.is_active)
-      if (active && expandedId === null) {
+      // Auto-expand the active curve (or first if none active)
+      const active = cals.find(c => c.is_active) ?? cals[0]
+      if (active) {
         setExpandedId(active.id)
       }
     } catch (err) {
@@ -89,7 +97,7 @@ export function CalibrationPanel({
 
   useEffect(() => {
     loadCalibrations()
-  }, [loadCalibrations])
+  }, [loadCalibrations, refreshKey])
 
   const filteredCals = instrumentFilter === 'all'
     ? allCalibrations

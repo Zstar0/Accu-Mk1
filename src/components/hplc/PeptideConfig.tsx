@@ -140,6 +140,7 @@ export function PeptideConfig() {
   const resyncDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // Streaming seed state
+  const [calRefreshKey, setCalRefreshKey] = useState(0)
   const [seeding, setSeeding] = useState(false)
   const [seedLogs, setSeedLogs] = useState<LogLine[]>([])
   const [seedProgress, setSeedProgress] = useState<SeedProgress | null>(null)
@@ -303,6 +304,7 @@ export function PeptideConfig() {
       setSeeding(false)
       abortRef.current = null
       await loadPeptides()
+      setCalRefreshKey(k => k + 1)
     }
   }, [loadPeptides])
 
@@ -470,6 +472,7 @@ export function PeptideConfig() {
       setSeeding(false)
       abortRef.current = null
       await loadPeptides()
+      setCalRefreshKey(k => k + 1)
     }
   }, [loadPeptides])
 
@@ -512,6 +515,7 @@ export function PeptideConfig() {
       })
       closeResyncDialog()
       await loadPeptides()
+      setCalRefreshKey(k => k + 1)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Manual calibration failed')
     } finally {
@@ -1083,6 +1087,7 @@ export function PeptideConfig() {
                       onUpdated={loadPeptides}
                       instrumentFilter={flyoutInstrument}
                       onImport={() => openResyncDialog(selectedPeptide, true)}
+                      refreshKey={calRefreshKey}
                     />
                   )}
                 </div>
