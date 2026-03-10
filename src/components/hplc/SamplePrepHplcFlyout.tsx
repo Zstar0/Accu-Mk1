@@ -95,7 +95,7 @@ function WeightRow({ label, value }: { label: string; value: number | null }) {
 
 // ─── Debug Console ────────────────────────────────────────────────────────────
 
-type DebugLevel = 'info' | 'dim' | 'warn' | 'success' | 'error'
+type DebugLevel = 'info' | 'dim' | 'warn' | 'success' | 'error' | 'formula' | 'formula-dim'
 
 interface DebugLine {
   level: DebugLevel
@@ -244,36 +244,129 @@ function buildDebugLines({
     ? analyteResults.get(activeAnalyte)
     : result
 
+  // ── Formulas section — show equations with actual values ──
+  if (currentResult?.calculation_trace) {
+    const t = currentResult.calculation_trace as Record<string, Record<string, unknown>>
+    const dil = t.dilution ?? {}
+    const qty = t.quantity ?? {}
+    const pur = t.purity ?? {}
+    const ident = t.identity ?? {}
+
+    const fmt = (v: unknown, dp = 4) => v != null ? Number(v).toFixed(dp) : '?'
+
+    push('dim', '')
+    push('formula', '─── Formulas (values from this run) ───')
+
+    // Dilution factor
+    push('dim', '')
+    push('formula', '1. Dilution Factor')
+    push('formula-dim', `   diluent_mass  = dil_w_diluent − dil_empty`)
+    push('formula', `                 = ${fmt(prep.dil_vial_with_diluent_mg, 2)} − ${fmt(prep.dil_vial_empty_mg, 2)} = ${fmt(dil.diluent_mass_mg)} mg`)
+    push('formula-dim', `   diluent_vol   = (diluent_mass / density) × 1000`)
+    push('formula', `                 = ${fmt(dil.diluent_vol_ul)} µL`)
+    push('formula-dim', `   sample_mass   = dil_final − dil_w_diluent`)
+    push('formula', `                 = ${fmt(prep.dil_vial_final_mg, 2)} − ${fmt(prep.dil_vial_with_diluent_mg, 2)} = ${fmt(dil.sample_mass_mg)} mg`)
+    push('formula-dim', `   sample_vol    = (sample_mass / density) × 1000`)
+    push('formula', `                 = ${fmt(dil.sample_vol_ul)} µL`)
+    push('formula-dim', `   total_vol     = diluent_vol + sample_vol`)
+    push('formula', `                 = ${fmt(dil.total_vol_ul)} µL`)
+    push('formula-dim', `   DF            = total_vol / sample_vol`)
+    push('formula', `                 = ${fmt(dil.dilution_factor, 6)}`)
+
+    // Stock volume
+    push('dim', '')
+    push('formula', '2. Stock Volume')
+    push('formula-dim', `   stock_mass    = stock_loaded − stock_empty`)
+    push('formula', `                 = ${fmt(prep.stock_vial_loaded_mg, 2)} − ${fmt(prep.stock_vial_empty_mg, 2)} = ${fmt(dil.stock_mass_mg)} mg`)
+    push('formula-dim', `   stock_vol     = stock_mass / density`)
+    push('formula', `                 = ${fmt(dil.stock_volume_ml, 6)} mL`)
+
+    // Purity
+    push('dim', '')
+    push('formula', '3. Purity')
+    const purVals = pur.individual_values as number[] | undefined
+    if (purVals && purVals.length > 0) {
+      push('formula-dim', `   main_peak_area%  per injection:`)
+      const purNames = (pur.injection_names ?? []) as string[]
+      purVals.forEach((v, i) => push('formula', `     ${purNames[i] ?? `inj[${i}]`}: ${Number(v).toFixed(2)}%`))
+      push('formula-dim', `   purity         = avg(main_peak_area%)`)
+      push('formula', `                 = ${fmt(pur.purity_percent, 2)}%`)
+      if (pur.rsd_percent != null) {
+        push('formula-dim', `   RSD            = ${fmt(pur.rsd_percent, 2)}%`)
+      }
+    } else {
+      push('warn', `   No main peaks found for purity`)
+    }
+
+    // Quantity
+    push('dim', '')
+    push('formula', '4. Quantity')
+    const qtyAreas = qty.individual_areas as number[] | undefined
+    if (qtyAreas && qtyAreas.length > 0) {
+      push('formula', `   main_peak_areas: [${qtyAreas.map(a => Number(a).toFixed(1)).join(', ')}]`)
+      push('formula-dim', `   avg_area       = ${fmt(qty.avg_main_peak_area)}`)
+      push('formula-dim', `   Conc           = (avg_area − intercept) / slope`)
+      push('formula', `                 = (${fmt(qty.avg_main_peak_area)} − ${fmt(qty.calibration_intercept)}) / ${fmt(qty.calibration_slope)}`)
+      push('formula', `                 = ${fmt(qty.concentration_ug_ml)} µg/mL`)
+      push('formula-dim', `   undiluted_conc = Conc × DF`)
+      push('formula', `                 = ${fmt(qty.concentration_ug_ml)} × ${fmt(qty.dilution_factor, 6)}`)
+      push('formula', `                 = ${fmt(qty.undiluted_concentration_ug_ml)} µg/mL`)
+      push('formula-dim', `   mass           = undiluted_conc × stock_vol`)
+      push('formula', `                 = ${fmt(qty.undiluted_concentration_ug_ml)} × ${fmt(qty.stock_volume_ml, 6)}`)
+      push('formula', `                 = ${fmt(qty.mass_ug)} µg`)
+      push('formula-dim', `   quantity       = mass / 1000`)
+      push('formula', `                 = ${fmt(qty.quantity_mg)} mg`)
+    } else {
+      push('warn', `   No main peak areas found for quantity`)
+    }
+
+    // Identity
+    push('dim', '')
+    push('formula', '5. Identity')
+    if (ident.conforms != null) {
+      const indivRts = (ident.individual_rts ?? []) as number[]
+      if (indivRts.length > 0) {
+        push('formula', `   sample RTs:    [${indivRts.map(r => Number(r).toFixed(3)).join(', ')}]`)
+      }
+      push('formula-dim', `   avg_sample_RT  = ${fmt(ident.sample_rt, 3)}`)
+      push('formula-dim', `   reference_RT   = ${fmt(ident.reference_rt, 3)}`)
+      push('formula-dim', `   tolerance      = ±${fmt(ident.rt_tolerance, 3)} min`)
+      push('formula-dim', `   |delta|        = |${fmt(ident.sample_rt, 3)} − ${fmt(ident.reference_rt, 3)}| = ${fmt(ident.rt_delta, 3)}`)
+      push(
+        ident.conforms ? 'success' : 'error',
+        `   result         = ${Number(ident.rt_delta) <= Number(ident.rt_tolerance) ? 'CONFORMS' : 'DOES NOT CONFORM'} (${fmt(ident.rt_delta, 3)} ${Number(ident.rt_delta) <= Number(ident.rt_tolerance) ? '≤' : '>'} ${fmt(ident.rt_tolerance, 3)})`,
+      )
+    } else if (ident.error) {
+      push('warn', `   ${ident.error}`)
+    } else {
+      push('formula-dim', `   No identity data`)
+    }
+  }
+
   if (currentResult) {
     push('dim', '')
-    push('dim', '─── Analysis Results ───')
+    push('dim', '─── Analysis Results (Summary) ───')
     push('success', `Purity: ${currentResult.purity_percent != null ? `${currentResult.purity_percent.toFixed(2)}%` : 'N/A'}`)
     push('success', `Quantity: ${currentResult.quantity_mg != null ? `${currentResult.quantity_mg.toFixed(4)} mg` : 'N/A'}`)
     push('success', `Identity: ${currentResult.identity_conforms != null ? (currentResult.identity_conforms ? 'CONFORMS' : 'DOES NOT CONFORM') : 'N/A'}`)
-    push('dim', `  avg_main_peak_area: ${currentResult.avg_main_peak_area ?? 'null'}`)
-    push('dim', `  concentration_ug_ml: ${currentResult.concentration_ug_ml ?? 'null'}`)
-    push('dim', `  dilution_factor: ${currentResult.dilution_factor ?? 'null'}`)
-    push('dim', `  stock_volume_ml: ${currentResult.stock_volume_ml ?? 'null'}`)
-    push('dim', `  identity_rt_delta: ${currentResult.identity_rt_delta ?? 'null'}`)
 
     if (currentResult.calculation_trace) {
       const trace = currentResult.calculation_trace
       push('dim', '')
-      push('dim', '─── Calculation Trace ───')
+      push('formula', '─── Raw Calculation Trace ───')
       const printObj = (obj: Record<string, unknown>, indent: number) => {
         for (const [key, val] of Object.entries(obj)) {
           const pad = '  '.repeat(indent)
           if (val == null) {
             push('warn', `${pad}${key}: null`)
           } else if (typeof val === 'object' && !Array.isArray(val)) {
-            push('dim', `${pad}${key}:`)
+            push('formula', `${pad}${key}:`)
             printObj(val as Record<string, unknown>, indent + 1)
           } else if (Array.isArray(val)) {
-            push('dim', `${pad}${key}: [${val.map(v => String(v)).join(', ')}]`)
+            push('formula-dim', `${pad}${key}: [${val.map(v => String(v)).join(', ')}]`)
           } else {
-            // Color error keys red, null-valued results as warnings
             const isErrorKey = key === 'error' || (typeof val === 'string' && /no |not found|fail|missing/i.test(String(val)))
-            push(isErrorKey ? 'error' : 'dim', `${pad}${key}: ${val}`)
+            push(isErrorKey ? 'error' : 'formula-dim', `${pad}${key}: ${val}`)
           }
         }
       }
@@ -300,11 +393,13 @@ function buildDebugLines({
 }
 
 const debugColorForLevel = (level: DebugLevel) => ({
-  info:    'text-zinc-300',
-  dim:     'text-zinc-600',
-  warn:    'text-amber-400',
-  success: 'text-emerald-400',
-  error:   'text-red-400',
+  info:        'text-zinc-300',
+  dim:         'text-zinc-600',
+  warn:        'text-amber-400',
+  success:     'text-emerald-400',
+  error:       'text-red-400',
+  'formula':     'text-cyan-300',
+  'formula-dim': 'text-cyan-700',
 })[level]
 
 function DebugConsole({ lines, onClose }: { lines: DebugLine[]; onClose: () => void }) {
@@ -498,15 +593,20 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
   )
 
   // For blends: map parsed short labels → component objects via prefix match
-  // e.g. "BPC" matches "BPC-157", "GHK" matches "GHK-CU"
+  // e.g. "BPC157" matches "BPC-157", "GHK" matches "GHK-CU"
   const labelToComponent = useMemo(() => {
     if (!isBlend) return new Map<string, typeof blendComponents[0]>()
     const map = new Map<string, typeof blendComponents[0]>()
+    // Normalize: strip dashes/hyphens/spaces for comparison
+    const norm = (s: string) => s.toUpperCase().replace(/[-\s]/g, '')
     for (const label of parsedLabels) {
       const upper = label.toUpperCase()
-      // Try exact match first, then prefix/contains match
+      const normalized = norm(label)
+      // Try exact match, then normalized match, then prefix/contains
       const comp = blendComponents.find(c => c.abbreviation.toUpperCase() === upper)
-        ?? blendComponents.find(c => c.abbreviation.toUpperCase().startsWith(upper))
+        ?? blendComponents.find(c => norm(c.abbreviation) === normalized)
+        ?? blendComponents.find(c => norm(c.abbreviation).startsWith(normalized))
+        ?? blendComponents.find(c => normalized.startsWith(norm(c.abbreviation)))
         ?? blendComponents.find(c => upper.startsWith(c.abbreviation.toUpperCase().split(' ')[0] ?? ''))
       if (comp) map.set(label, comp)
     }
@@ -632,9 +732,12 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
       if (!hasMultipleAnalytes && !isBlend) {
         setResult(results.get('__single__') ?? null)
       } else {
-        const firstLabel = blendPeptides[0]
-        setResult(firstLabel ? results.get(firstLabel) ?? null : null)
-        setActiveAnalyte(firstLabel ?? null)
+        // Pick the first label that actually has a result (not all labels may
+        // have matched a component / produced results)
+        const firstWithResult = blendPeptides.find(l => results.has(l)) ?? null
+        const fallbackResult = firstWithResult !== null ? (results.get(firstWithResult) ?? null) : null
+        setResult(fallbackResult)
+        setActiveAnalyte(firstWithResult ?? blendPeptides[0] ?? null)
       }
       scrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' })
     } catch (e) {

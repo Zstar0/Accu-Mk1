@@ -420,6 +420,29 @@ export function Step1SampleInfo() {
                 {/* Peptide override dropdown (shown after lookup) */}
                 {lookupResult && peptideDropdown}
 
+                {/* Declared Weight — editable override of SENAITE value */}
+                {lookupResult && (
+                  <div className="space-y-1.5">
+                    <Label htmlFor="declared-weight-override">
+                      Declared Weight (mg)
+                    </Label>
+                    <Input
+                      id="declared-weight-override"
+                      type="number"
+                      step="0.01"
+                      placeholder="e.g. 10.00"
+                      value={declaredWeightMg}
+                      onChange={e => setDeclaredWeightMg(e.target.value)}
+                    />
+                    {lookupResult.declared_weight_mg != null &&
+                      declaredWeightMg !== String(lookupResult.declared_weight_mg) && (
+                        <p className="text-xs text-amber-600 dark:text-amber-400">
+                          SENAITE value: {lookupResult.declared_weight_mg} mg (overridden)
+                        </p>
+                      )}
+                  </div>
+                )}
+
                 {/* Target fields (below summary card) */}
                 {lookupResult && targetFields}
 
