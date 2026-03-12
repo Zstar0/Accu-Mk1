@@ -2,24 +2,22 @@ import { useState } from 'react'
 import { Loader2, CheckCircle2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Alert, AlertDescription } from '@/components/ui/alert'
-import { useWizardStore, type StepId } from '@/store/wizard-store'
+import { useWizardStore, type WizardStep } from '@/store/wizard-store'
 import { useUIStore } from '@/store/ui-store'
 import { WizardStepList } from './wizard/WizardStepList'
 import { WizardStepPanel } from './wizard/WizardStepPanel'
+import { WizardInfoPanel } from './wizard/WizardInfoPanel'
 import { Step1SampleInfo } from './wizard/steps/Step1SampleInfo'
 import { Step2StockPrep } from './wizard/steps/Step2StockPrep'
 import { Step3Dilution } from './wizard/steps/Step3Dilution'
-import { Step4Results } from './wizard/steps/Step4Results'
-import { Step5Summary } from './wizard/steps/Step5Summary'
 import { createSamplePrep } from '@/lib/api'
 
-function renderCurrentStep(currentStep: StepId): React.ReactNode {
-  switch (currentStep) {
-    case 1: return <Step1SampleInfo />
-    case 2: return <Step2StockPrep />
-    case 3: return <Step3Dilution />
-    case 4: return <Step4Results />
-    case 5: return <Step5Summary />
+function renderStep(step: WizardStep | undefined): React.ReactNode {
+  if (!step) return null
+  switch (step.type) {
+    case 'sample-info': return <Step1SampleInfo />
+    case 'stock-prep': return <Step2StockPrep vialNumber={step.vialNumber} />
+    case 'dilution': return <Step3Dilution vialNumber={step.vialNumber} />
   }
 }
 
@@ -28,27 +26,39 @@ export function CreateAnalysis() {
   const session = useWizardStore(state => state.session)
   const navigateTo = useUIStore(state => state.navigateTo)
   const stepStates = useWizardStore(state => state.stepStates)
-  const senaiteResult = useWizardStore(state => state.senaiteResult)
+  const wizardSteps = useWizardStore(state => state.wizardSteps)
 
-  // canAdvance drives the "Next Step" button on steps 1 & 2
+  // canAdvance drives the "Next Step" button
   const canAdvance = useWizardStore(state => state.canAdvance())
 
-  // Step 3 is saveable when all dilution measurements are recorded
-  // (i.e. step 4 is no longer locked in the derived states)
-  const step3Done = stepStates[4] !== 'locked'
+  // Current step metadata
+  const currentStepDef = wizardSteps.find(s => s.id === currentStep)
+  const lastStep = wizardSteps[wizardSteps.length - 1]
+  const isLastStep = lastStep ? currentStep === lastStep.id : false
 
-  // Save state for step 3
+  // Last step is saveable when it's complete (dilution done)
+  const lastStepDone = isLastStep && stepStates[currentStep] === 'in-progress' &&
+    lastStep?.type === 'dilution' &&
+    session?.measurements?.some(m => m.step_key === 'dil_vial_final_mg' && m.is_current && m.vial_number === lastStep.vialNumber)
+
+  // Save state
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [saved, setSaved] = useState(false)
 
   function handleBack() {
-    useWizardStore.getState().setCurrentStep((currentStep - 1) as StepId)
+    const idx = wizardSteps.findIndex(s => s.id === currentStep)
+    if (idx > 0) {
+      useWizardStore.getState().setCurrentStep(wizardSteps[idx - 1]?.id ?? 1)
+    }
   }
 
   function handleNext() {
-    // Steps 1 & 2 — just advance
-    useWizardStore.getState().setCurrentStep((currentStep + 1) as StepId)
+    const idx = wizardSteps.findIndex(s => s.id === currentStep)
+    const next = wizardSteps[idx + 1]
+    if (next) {
+      useWizardStore.getState().setCurrentStep(next.id)
+    }
   }
 
   async function handleSave() {
@@ -69,116 +79,79 @@ export function CreateAnalysis() {
     }
   }
 
-  const isStep3 = currentStep === 3
+  // Info panel is shown once a session is created (past Step 1)
+  const showInfoPanel = session !== null
 
   return (
-    <div className="flex h-full">
-      {/* Left sidebar — step list */}
-      <div className="w-64 shrink-0 border-r p-4">
-        <h2 className="mb-4 text-sm font-semibold text-muted-foreground uppercase tracking-wider">
-          New Analysis
-        </h2>
-        <WizardStepList />
+    <div className="flex h-full flex-col">
+      {/* Top bar — horizontal step navigation */}
+      <div className="shrink-0 border-b bg-background">
+        <div className="flex items-center justify-between px-4">
+          <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider shrink-0">
+            New Analysis
+          </h2>
+          <WizardStepList />
+        </div>
       </div>
 
-      {/* Right content — step panel */}
-      <div className="flex flex-1 flex-col overflow-y-auto">
+      {/* Main content: left info panel + right step content */}
+      <div className="flex flex-1 min-h-0">
+        {/* Left info panel — 30% width, shown after session created */}
+        {showInfoPanel && (
+          <div className="w-[30%] shrink-0 border-r overflow-y-auto bg-muted/20">
+            <WizardInfoPanel />
+          </div>
+        )}
 
-        {/* Persistent SENAITE reference card — shown on all steps once a lookup was done */}
-        {senaiteResult && (
-          <div className="mx-6 mt-5 rounded-md border border-blue-500/30 bg-blue-50/50 dark:bg-blue-950/20 p-4 space-y-2">
-            <p className="text-sm font-medium text-blue-700 dark:text-blue-300">
-              Sample found in SENAITE
-            </p>
-            <div className="grid grid-cols-2 gap-3 text-sm">
-              <div>
-                <span className="text-muted-foreground">Sample ID</span>
-                <p className="font-medium">{senaiteResult.sample_id}</p>
-              </div>
-              <div>
-                <span className="text-muted-foreground">Declared Weight</span>
-                <p className="font-medium">
-                  {senaiteResult.declared_weight_mg != null
-                    ? `${senaiteResult.declared_weight_mg} mg`
-                    : '—'}
-                </p>
-              </div>
+        {/* Right content — step panel */}
+        <div className="flex flex-1 flex-col min-w-0 overflow-y-auto">
+          <div className="flex-1 p-6">
+            <WizardStepPanel stepId={currentStep}>
+              {renderStep(currentStepDef)}
+            </WizardStepPanel>
+          </div>
+
+          {/* Save error */}
+          {saveError && (
+            <div className="px-6 pb-2">
+              <Alert variant="destructive">
+                <AlertDescription>{saveError}</AlertDescription>
+              </Alert>
             </div>
-            {senaiteResult.analytes.length > 0 && (
-              <div>
-                <span className="text-sm text-muted-foreground">Analytes</span>
-                <ul className="mt-1 space-y-0.5">
-                  {senaiteResult.analytes.map((a, i) => (
-                    <li key={i} className="text-sm flex items-center gap-2">
-                      <span
-                        className={
-                          a.matched_peptide_id !== null
-                            ? 'text-green-600 dark:text-green-400'
-                            : 'text-muted-foreground'
-                        }
-                      >
-                        {a.matched_peptide_id !== null ? '✓' : '○'}
-                      </span>
-                      <span>{a.raw_name}</span>
-                      {a.matched_peptide_name && (
-                        <span className="text-muted-foreground text-xs">
-                          → {a.matched_peptide_name}
-                        </span>
-                      )}
-                    </li>
-                  ))}
-                </ul>
-              </div>
+          )}
+
+          {/* Navigation footer */}
+          <div className="flex items-center justify-between border-t p-4 shrink-0">
+            <Button
+              variant="outline"
+              onClick={handleBack}
+              disabled={currentStep === 1 || saving}
+            >
+              Back
+            </Button>
+
+            {isLastStep ? (
+              <Button
+                onClick={handleSave}
+                disabled={!lastStepDone || saving || saved}
+              >
+                {saving ? (
+                  <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Saving…</>
+                ) : saved ? (
+                  <><CheckCircle2 className="h-4 w-4 mr-2 text-green-400" />Saved!</>
+                ) : (
+                  'Save Sample Prep'
+                )}
+              </Button>
+            ) : (
+              <Button
+                onClick={handleNext}
+                disabled={!canAdvance}
+              >
+                Next Step
+              </Button>
             )}
           </div>
-        )}
-
-        <div className="flex-1 p-6">
-          <WizardStepPanel stepId={currentStep}>
-            {renderCurrentStep(currentStep)}
-          </WizardStepPanel>
-        </div>
-
-        {/* Save error */}
-        {saveError && (
-          <div className="px-6 pb-2">
-            <Alert variant="destructive">
-              <AlertDescription>{saveError}</AlertDescription>
-            </Alert>
-          </div>
-        )}
-
-        {/* Navigation footer */}
-        <div className="flex items-center justify-between border-t p-4">
-          <Button
-            variant="outline"
-            onClick={handleBack}
-            disabled={currentStep === 1 || saving}
-          >
-            Back
-          </Button>
-
-          {isStep3 ? (
-            <Button
-              onClick={handleSave}
-              disabled={!step3Done || saving || saved}
-            >
-              {saving ? (
-                <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Saving…</>
-              ) : saved ? (
-                <><CheckCircle2 className="h-4 w-4 mr-2 text-green-400" />Saved!</>
-              ) : (
-                'Save Sample Prep'
-              )}
-            </Button>
-          ) : (
-            <Button
-              onClick={handleNext}
-              disabled={!canAdvance}
-            >
-              Next Step
-            </Button>
-          )}
         </div>
       </div>
     </div>

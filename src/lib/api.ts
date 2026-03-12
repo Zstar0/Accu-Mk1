@@ -1710,6 +1710,7 @@ export interface ComponentBrief {
   id: number
   name: string
   abbreviation: string
+  vial_number?: number
 }
 
 export interface PeptideRecord {
@@ -1718,6 +1719,7 @@ export interface PeptideRecord {
   abbreviation: string
   active: boolean
   is_blend: boolean
+  prep_vial_count: number
   created_at: string
   updated_at: string
   methods: MethodBrief[]
@@ -1790,7 +1792,12 @@ export async function createPeptide(
 
 export async function updatePeptide(
   peptideId: number,
-  data: Partial<PeptideCreateInput & { active: boolean; method_ids: number[] }>
+  data: Partial<PeptideCreateInput & {
+    active: boolean
+    method_ids: number[]
+    prep_vial_count: number
+    component_vial_assignments: Record<string, number>
+  }>
 ): Promise<PeptideRecord> {
   try {
     const response = await fetch(`${API_BASE_URL()}/peptides/${peptideId}`, {
@@ -2278,8 +2285,15 @@ export interface WizardMeasurementResponse {
   step_key: string
   weight_mg: number
   source: string
+  vial_number: number
   is_current: boolean
   recorded_at: string
+}
+
+export interface VialParams {
+  declared_weight_mg: number | null
+  target_conc_ug_ml: number | null
+  target_total_vol_ul: number | null
 }
 
 export interface WizardSessionResponse {
@@ -2297,6 +2311,8 @@ export interface WizardSessionResponse {
   completed_at: string | null
   measurements: WizardMeasurementResponse[]
   calculations: Record<string, number> | null
+  vial_params: Record<string, VialParams> | null
+  vial_calculations: Record<string, Record<string, number>> | null
 }
 
 export interface WizardSessionListItem {
@@ -2319,6 +2335,7 @@ export async function createWizardSession(data: {
   declared_weight_mg?: number
   target_conc_ug_ml?: number
   target_total_vol_ul?: number
+  vial_params?: Record<string, VialParams>
 }): Promise<WizardSessionResponse> {
   try {
     const response = await fetch(`${API_BASE_URL()}/wizard/sessions`, {
@@ -2397,7 +2414,7 @@ export async function listWizardSessions(params?: {
  */
 export async function recordWizardMeasurement(
   sessionId: number,
-  data: { step_key: string; weight_mg: number; source: string }
+  data: { step_key: string; weight_mg: number; source: string; vial_number?: number }
 ): Promise<WizardSessionResponse> {
   try {
     const response = await fetch(
@@ -2431,6 +2448,7 @@ export async function updateWizardSession(
     target_conc_ug_ml?: number
     target_total_vol_ul?: number
     peak_area?: number
+    vial_params?: Record<string, VialParams>
   }
 ): Promise<WizardSessionResponse> {
   try {
@@ -2482,6 +2500,27 @@ export async function completeWizardSession(
 
 // --- Sample Preps API ---
 
+export interface VialData {
+  vial_number: number
+  component_ids: number[]
+  component_abbreviations: string[]
+  declared_weight_mg: number | null
+  target_conc_ug_ml: number | null
+  target_total_vol_ul: number | null
+  stock_vial_empty_mg: number | null
+  stock_vial_loaded_mg: number | null
+  stock_conc_ug_ml: number | null
+  required_diluent_vol_ul: number | null
+  required_stock_vol_ul: number | null
+  dil_vial_empty_mg: number | null
+  dil_vial_with_diluent_mg: number | null
+  dil_vial_final_mg: number | null
+  actual_conc_ug_ml: number | null
+  actual_diluent_vol_ul: number | null
+  actual_stock_vol_ul: number | null
+  actual_total_vol_ul: number | null
+}
+
 export interface SamplePrep {
   id: number
   sample_id: string                   // SP-YYYYMMDD-NNNN
@@ -2509,6 +2548,7 @@ export interface SamplePrep {
   notes: string | null
   is_blend: boolean
   components_json: ComponentBrief[] | null
+  vial_data: VialData[] | null
   created_at: string
   updated_at: string
 }

@@ -12,56 +12,59 @@ import { WeightInput } from '@/components/hplc/WeightInput'
 import { recordWizardMeasurement } from '@/lib/api'
 import { useWizardStore } from '@/store/wizard-store'
 
-export function Step3Dilution() {
+export function Step3Dilution({ vialNumber = 1 }: { vialNumber?: number }) {
   const session = useWizardStore(state => state.session)
-
-  // Local error state per sub-step
-  const [error3a, setError3a] = useState<string | null>(null)
-  const [error3b, setError3b] = useState<string | null>(null)
-  const [error3c, setError3c] = useState<string | null>(null)
-
-  // Re-weigh reset flags (local UI state)
-  const [reweigh3a, setReweigh3a] = useState(false)
-  const [reweigh3b, setReweigh3b] = useState(false)
-  const [reweigh3c, setReweigh3c] = useState(false)
 
   if (!session) {
     return (
       <Card>
         <CardContent className="pt-6">
           <p className="text-muted-foreground">
-            Complete Steps 1 and 2 to begin dilution.
+            Complete previous steps to begin dilution.
           </p>
         </CardContent>
       </Card>
     )
   }
 
-  const calcs = session.calculations
-  const requiredDiluentVol = calcs?.required_diluent_vol_ul
-  const requiredStockVol = calcs?.required_stock_vol_ul
+  return <DilutionVial session={session} vialNumber={vialNumber} />
+}
 
-  // Derive sub-step completion from session measurements (same pattern as Step 2)
+/** Single-vial dilution flow */
+function DilutionVial({ session, vialNumber }: {
+  session: NonNullable<ReturnType<typeof useWizardStore.getState>['session']>
+  vialNumber: number
+}) {
+  const [error3a, setError3a] = useState<string | null>(null)
+  const [error3b, setError3b] = useState<string | null>(null)
+  const [error3c, setError3c] = useState<string | null>(null)
+  const [reweigh3a, setReweigh3a] = useState(false)
+  const [reweigh3b, setReweigh3b] = useState(false)
+  const [reweigh3c, setReweigh3c] = useState(false)
+
   const meas3a = session.measurements.find(
-    m => m.step_key === 'dil_vial_empty_mg' && m.is_current
+    m => m.step_key === 'dil_vial_empty_mg' && m.is_current && m.vial_number === vialNumber
   )
   const meas3b = session.measurements.find(
-    m => m.step_key === 'dil_vial_with_diluent_mg' && m.is_current
+    m => m.step_key === 'dil_vial_with_diluent_mg' && m.is_current && m.vial_number === vialNumber
   )
   const meas3c = session.measurements.find(
-    m => m.step_key === 'dil_vial_final_mg' && m.is_current
+    m => m.step_key === 'dil_vial_final_mg' && m.is_current && m.vial_number === vialNumber
   )
 
-  // Sub-step states: done = measurement exists and not re-weighing
   const step3aDone = meas3a != null && !reweigh3a
   const step3bDone = meas3b != null && !reweigh3b
   const step3cDone = meas3c != null && !reweigh3c
-
-  // Locking: each sub-step requires previous to be done
   const step3bLocked = !step3aDone
   const step3cLocked = !step3bDone
 
   const sessionId = session.id
+  const calcs = vialNumber === 1
+    ? session.calculations
+    : session.vial_calculations?.[String(vialNumber)] ?? null
+
+  const requiredDiluentVol = calcs?.required_diluent_vol_ul
+  const requiredStockVol = calcs?.required_stock_vol_ul
 
   async function handleAccept3a(value: number, source: 'scale' | 'manual') {
     setError3a(null)
@@ -70,6 +73,7 @@ export function Step3Dilution() {
         step_key: 'dil_vial_empty_mg',
         weight_mg: value,
         source,
+        vial_number: vialNumber,
       })
       useWizardStore.getState().updateSession(response)
       setReweigh3a(false)
@@ -87,6 +91,7 @@ export function Step3Dilution() {
         step_key: 'dil_vial_with_diluent_mg',
         weight_mg: value,
         source,
+        vial_number: vialNumber,
       })
       useWizardStore.getState().updateSession(response)
       setReweigh3b(false)
@@ -104,6 +109,7 @@ export function Step3Dilution() {
         step_key: 'dil_vial_final_mg',
         weight_mg: value,
         source,
+        vial_number: vialNumber,
       })
       useWizardStore.getState().updateSession(response)
       setReweigh3c(false)
@@ -178,10 +184,10 @@ export function Step3Dilution() {
               <div className="flex items-center gap-2">
                 <CheckCircle2 className="h-4 w-4 text-green-600" />
                 <span className="text-sm font-medium">
-                  {meas3a!.weight_mg.toFixed(2)} mg
+                  {meas3a?.weight_mg.toFixed(2)} mg
                 </span>
                 <span className="text-xs text-muted-foreground">
-                  (via {meas3a!.source})
+                  (via {meas3a?.source})
                 </span>
               </div>
               <Button
@@ -236,10 +242,10 @@ export function Step3Dilution() {
               <div className="flex items-center gap-2">
                 <CheckCircle2 className="h-4 w-4 text-green-600" />
                 <span className="text-sm font-medium">
-                  {meas3b!.weight_mg.toFixed(2)} mg
+                  {meas3b?.weight_mg.toFixed(2)} mg
                 </span>
                 <span className="text-xs text-muted-foreground">
-                  (via {meas3b!.source})
+                  (via {meas3b?.source})
                 </span>
               </div>
               <Button
@@ -295,10 +301,10 @@ export function Step3Dilution() {
               <div className="flex items-center gap-2">
                 <CheckCircle2 className="h-4 w-4 text-green-600" />
                 <span className="text-sm font-medium">
-                  {meas3c!.weight_mg.toFixed(2)} mg
+                  {meas3c?.weight_mg.toFixed(2)} mg
                 </span>
                 <span className="text-xs text-muted-foreground">
-                  (via {meas3c!.source})
+                  (via {meas3c?.source})
                 </span>
               </div>
               <Button

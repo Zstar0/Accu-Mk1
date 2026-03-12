@@ -209,6 +209,7 @@ blend_components = Table(
     Column("blend_id", Integer, ForeignKey("peptides.id", ondelete="CASCADE"), nullable=False),
     Column("component_id", Integer, ForeignKey("peptides.id", ondelete="CASCADE"), nullable=False),
     Column("display_order", Integer, default=0),
+    Column("vial_number", Integer, default=1),
     UniqueConstraint("blend_id", "component_id", name="uq_blend_component"),
 )
 
@@ -227,6 +228,7 @@ class Peptide(Base):
     abbreviation: Mapped[str] = mapped_column(String(50), nullable=False, unique=True)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     is_blend: Mapped[bool] = mapped_column(Boolean, default=False)
+    prep_vial_count: Mapped[int] = mapped_column(Integer, default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -433,7 +435,7 @@ class WizardSession(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     peptide_id: Mapped[int] = mapped_column(ForeignKey("peptides.id"), nullable=False)
-    calibration_curve_id: Mapped[Optional[int]] = mapped_column(ForeignKey("calibration_curves.id"), nullable=True)
+    calibration_curve_id: Mapped[Optional[int]] = mapped_column(ForeignKey("calibration_curves.id", ondelete="SET NULL"), nullable=True)
     status: Mapped[str] = mapped_column(String(50), default="in_progress", nullable=False)
 
     # Step 1: Sample info
@@ -443,6 +445,10 @@ class WizardSession(Base):
     # Step 1b: Target dilution parameters (manually entered)
     target_conc_ug_ml: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     target_total_vol_ul: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+
+    # Multi-vial: per-vial target params (declared_weight, target_conc, target_vol per vial)
+    # Keyed by vial number string: {"1": {...}, "2": {...}}
+    vial_params: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
 
     # Step 4: HPLC results (entered after instrument run)
     peak_area: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
@@ -485,6 +491,7 @@ class WizardMeasurement(Base):
     step_key: Mapped[str] = mapped_column(String(50), nullable=False)
     weight_mg: Mapped[float] = mapped_column(Float, nullable=False)
     source: Mapped[str] = mapped_column(String(20), default="manual", nullable=False)
+    vial_number: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     is_current: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     recorded_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 

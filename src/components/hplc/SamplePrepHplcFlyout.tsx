@@ -678,7 +678,7 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
     setRunning(true)
     setRunError(null)
 
-    const weights = {
+    const defaultWeights = {
       stock_vial_empty:                 prep.stock_vial_empty_mg   ?? 0,
       stock_vial_with_diluent:          prep.stock_vial_loaded_mg  ?? 0,
       dil_vial_empty:                   prep.dil_vial_empty_mg     ?? 0,
@@ -698,6 +698,23 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
             inj => inj.peptide_label === label
           )
           if (filteredInj.length === 0) continue
+
+          // Per-vial weight routing: find this component's vial in vial_data
+          let weights = defaultWeights
+          if (prep.vial_data && prep.vial_data.length > 0) {
+            const compBrief = blendComponents.find(c => c.id === comp.id)
+            const vialNum = compBrief?.vial_number ?? 1
+            const vial = prep.vial_data.find(v => v.vial_number === vialNum)
+            if (vial) {
+              weights = {
+                stock_vial_empty:                 vial.stock_vial_empty_mg   ?? 0,
+                stock_vial_with_diluent:          vial.stock_vial_loaded_mg  ?? 0,
+                dil_vial_empty:                   vial.dil_vial_empty_mg     ?? 0,
+                dil_vial_with_diluent:            vial.dil_vial_with_diluent_mg ?? 0,
+                dil_vial_with_diluent_and_sample: vial.dil_vial_final_mg     ?? 0,
+              }
+            }
+          }
 
           const res = await runHPLCAnalysis({
             sample_id_label: prep.senaite_sample_id ?? prep.sample_id,
@@ -720,7 +737,7 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
             sample_id_label: prep.senaite_sample_id ?? prep.sample_id,
             peptide_id: prep.peptide_id,
             calibration_curve_id: selectedCalId ?? 0,
-            weights,
+            weights: defaultWeights,
             injections: filteredInj as unknown as Record<string, unknown>[],
           })
           results.set(label ?? '__single__', res)
@@ -745,7 +762,7 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
     } finally {
       setRunning(false)
     }
-  }, [parseResult, prep, selectedCalId, isBlend, hasMultipleAnalytes, blendPeptides, labelToComponent, componentSelectedCalIds, allBlendCalsReady])
+  }, [parseResult, prep, selectedCalId, isBlend, hasMultipleAnalytes, blendPeptides, labelToComponent, blendComponents, componentSelectedCalIds, allBlendCalsReady])
 
   // Auto-run when peak data + calibration are both ready
   useEffect(() => {

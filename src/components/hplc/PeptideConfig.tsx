@@ -102,6 +102,110 @@ interface SeedDonePayload {
   error?: string
 }
 
+function PrepVialsSection({ peptide, onUpdated }: { peptide: PeptideRecord; onUpdated: () => void }) {
+  const [vialCount, setVialCount] = useState(peptide.prep_vial_count ?? 1)
+  const [assignments, setAssignments] = useState<Record<string, number>>(() => {
+    const map: Record<string, number> = {}
+    for (const c of peptide.components) {
+      map[String(c.id)] = c.vial_number ?? 1
+    }
+    return map
+  })
+  const [saving, setSaving] = useState(false)
+
+  // Sync when peptide changes
+  useEffect(() => {
+    setVialCount(peptide.prep_vial_count ?? 1)
+    const map: Record<string, number> = {}
+    for (const c of peptide.components) {
+      map[String(c.id)] = c.vial_number ?? 1
+    }
+    setAssignments(map)
+  }, [peptide.id, peptide.prep_vial_count, peptide.components])
+
+  async function handleSave() {
+    setSaving(true)
+    try {
+      await updatePeptide(peptide.id, {
+        prep_vial_count: vialCount,
+        component_vial_assignments: assignments,
+      })
+      onUpdated()
+    } catch {
+      // Error handled by caller
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const hasChanges = vialCount !== (peptide.prep_vial_count ?? 1) ||
+    peptide.components.some(c => (assignments[String(c.id)] ?? 1) !== (c.vial_number ?? 1))
+
+  // Validation: every vial 1..N must have at least one component
+  const vialHasComponent = new Set(Object.values(assignments))
+  const allVialsAssigned = vialCount === 1 || Array.from({ length: vialCount }, (_, i) => i + 1).every(v => vialHasComponent.has(v))
+
+  return (
+    <div className="rounded-lg border border-zinc-800 p-4 space-y-3 mt-4">
+      <h4 className="text-sm font-semibold text-muted-foreground">Prep Vials</h4>
+      <div className="space-y-1.5">
+        <label className="text-xs font-medium text-muted-foreground">Number of Vials</label>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline" size="icon" className="h-8 w-8"
+            disabled={vialCount <= 1}
+            onClick={() => setVialCount(v => Math.max(1, v - 1))}
+          >−</Button>
+          <span className="text-sm font-medium w-6 text-center">{vialCount}</span>
+          <Button
+            variant="outline" size="icon" className="h-8 w-8"
+            onClick={() => setVialCount(v => v + 1)}
+          >+</Button>
+        </div>
+      </div>
+
+      {vialCount > 1 && (
+        <div className="space-y-2">
+          <label className="text-xs font-medium text-muted-foreground">Vial Assignments</label>
+          {peptide.components.map(c => (
+            <div key={c.id} className="flex items-center justify-between gap-3">
+              <Badge variant="secondary" className="text-xs shrink-0">{c.abbreviation}</Badge>
+              <Select
+                value={String(assignments[String(c.id)] ?? 1)}
+                onValueChange={val => setAssignments(prev => ({ ...prev, [String(c.id)]: Number(val) }))}
+              >
+                <SelectTrigger className="h-8 w-24">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {Array.from({ length: vialCount }, (_, i) => i + 1).map(v => (
+                    <SelectItem key={v} value={String(v)}>Vial {v}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          ))}
+          {!allVialsAssigned && (
+            <p className="text-xs text-amber-500">Every vial must have at least one component assigned.</p>
+          )}
+        </div>
+      )}
+
+      {hasChanges && (
+        <Button
+          size="sm" className="w-full"
+          disabled={saving || (vialCount > 1 && !allVialsAssigned)}
+          onClick={handleSave}
+        >
+          {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" /> : null}
+          Save Vial Config
+        </Button>
+      )}
+    </div>
+  )
+}
+
+
 export function PeptideConfig() {
   const [peptides, setPeptides] = useState<PeptideRecord[]>([])
   const [loading, setLoading] = useState(true)
@@ -1069,6 +1173,14 @@ export function PeptideConfig() {
                       )
                     })}
                   </div>
+
+                  {/* Prep Vials section — blends only */}
+                  {selectedPeptide.is_blend && selectedPeptide.components.length > 0 && (
+                    <PrepVialsSection
+                      peptide={selectedPeptide}
+                      onUpdated={loadPeptides}
+                    />
+                  )}
                 </div>
 
                 {/* Right column: Calibration Curves */}

@@ -32,7 +32,7 @@ from fastapi import FastAPI, Depends, Form, HTTPException, Header, Request, Resp
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import select, desc, delete, func
+from sqlalchemy import select, desc, delete, update, func
 
 from database import get_db, init_db
 from models import AuditLog, Settings, Job, Sample, Result, Instrument, AnalysisService, HplcMethod, Peptide, PeptideAnalyte, CalibrationCurve, HPLCAnalysis, User, SharePointFileCache, WizardSession, WizardMeasurement, peptide_methods, blend_components
@@ -1496,6 +1496,7 @@ class ComponentBrief(BaseModel):
     id: int
     name: str
     abbreviation: str
+    vial_number: int = 1
 
     class Config:
         from_attributes = True
@@ -1515,9 +1516,11 @@ class PeptideUpdate(BaseModel):
     name: Optional[str] = None
     abbreviation: Optional[str] = None
     active: Optional[bool] = None
+    prep_vial_count: Optional[int] = None
     method_ids: Optional[list[int]] = None  # Set all method assignments (one per instrument)
     analytes: Optional[list[AnalyteInput]] = None
     component_ids: Optional[list[int]] = None
+    component_vial_assignments: Optional[dict[str, int]] = None  # {"component_id": vial_number}
 
 
 class CalibrationCurveResponse(BaseModel):
@@ -1574,6 +1577,7 @@ class PeptideResponse(BaseModel):
     abbreviation: str
     active: bool
     is_blend: bool = False
+    prep_vial_count: int = 1
     created_at: datetime
     updated_at: datetime
     methods: list[MethodBrief] = []
@@ -1669,8 +1673,22 @@ def _peptide_to_response(db: Session, peptide: Peptide) -> PeptideResponse:
     resp.methods = [_method_to_brief(m) for m in peptide.methods]
     resp.analytes = _build_analyte_responses(peptide.analytes)
     if peptide.is_blend:
-        resp.components = [ComponentBrief.model_validate(c) for c in peptide.components]
+        resp.components = _build_component_briefs(db, peptide.id)
     return resp
+
+
+def _build_component_briefs(db: Session, blend_id: int) -> list[ComponentBrief]:
+    """Build ComponentBrief list with vial_number from blend_components junction table."""
+    rows = db.execute(
+        select(Peptide, blend_components.c.vial_number)
+        .join(blend_components, blend_components.c.component_id == Peptide.id)
+        .where(blend_components.c.blend_id == blend_id)
+        .order_by(blend_components.c.display_order)
+    ).all()
+    return [
+        ComponentBrief(id=p.id, name=p.name, abbreviation=p.abbreviation, vial_number=vn or 1)
+        for p, vn in rows
+    ]
 
 
 def _method_to_response(method: HplcMethod) -> MethodResponse:
@@ -1982,7 +2000,7 @@ async def get_peptides(db: Session = Depends(get_db), _current_user=Depends(get_
         resp.methods = [_method_to_brief(m) for m in p.methods]
         resp.analytes = _build_analyte_responses(p.analytes)
         if p.is_blend:
-            resp.components = [ComponentBrief.model_validate(c) for c in p.components]
+            resp.components = _build_component_briefs(db, p.id)
             # Aggregate calibration summaries from component peptides
             blend_summary: dict[str, int] = {}
             for comp in p.components:
@@ -2166,10 +2184,28 @@ async def update_peptide(peptide_id: int, data: PeptideUpdate, db: Session = Dep
     method_ids = update_data.pop("method_ids", None)
     analytes_data = update_data.pop("analytes", None)
     component_ids = update_data.pop("component_ids", None)
+    vial_assignments = update_data.pop("component_vial_assignments", None)
 
-    # Update scalar fields
+    # Update scalar fields (includes prep_vial_count if provided)
     for field, value in update_data.items():
         setattr(peptide, field, value)
+
+    # Update vial assignments for blend components (without replacing components)
+    if vial_assignments is not None and component_ids is None:
+        for comp_id_str, vial_num in vial_assignments.items():
+            db.execute(
+                blend_components.update()
+                .where(blend_components.c.blend_id == peptide.id)
+                .where(blend_components.c.component_id == int(comp_id_str))
+                .values(vial_number=vial_num)
+            )
+        # If vial count was reset to 1, normalize all to vial 1
+        if update_data.get("prep_vial_count") == 1:
+            db.execute(
+                blend_components.update()
+                .where(blend_components.c.blend_id == peptide.id)
+                .values(vial_number=1)
+            )
 
     # Update blend components if provided (delete-and-replace); auto-rebuild analytes
     if component_ids is not None:
@@ -2479,6 +2515,12 @@ async def delete_calibration(
     if not target:
         raise HTTPException(404, f"Calibration {calibration_id} not found for peptide {peptide_id}")
 
+    # Nullify FK references in wizard_sessions before deleting
+    db.execute(
+        update(WizardSession)
+        .where(WizardSession.calibration_curve_id == calibration_id)
+        .values(calibration_curve_id=None)
+    )
     db.delete(target)
     db.commit()
     return Response(status_code=204)
@@ -6048,6 +6090,7 @@ class WizardSessionCreate(BaseModel):
     declared_weight_mg: Optional[float] = None  # mg; must be > 0 and < 5000 if provided
     target_conc_ug_ml: Optional[float] = None
     target_total_vol_ul: Optional[float] = None
+    vial_params: Optional[dict] = None  # Multi-vial: {"1": {declared_weight_mg, target_conc, target_vol}, ...}
 
 
 class WizardSessionUpdate(BaseModel):
@@ -6064,6 +6107,7 @@ class WizardMeasurementCreate(BaseModel):
     step_key: str  # Must be one of VALID_STEP_KEYS
     weight_mg: float  # Raw balance reading in milligrams
     source: str = "manual"  # 'manual' | 'scale'
+    vial_number: int = 1  # Which vial this measurement belongs to (multi-vial blends)
 
 
 class WizardMeasurementResponse(BaseModel):
@@ -6073,6 +6117,7 @@ class WizardMeasurementResponse(BaseModel):
     step_key: str
     weight_mg: float
     source: str
+    vial_number: int = 1
     is_current: bool
     recorded_at: datetime
 
@@ -6100,6 +6145,8 @@ class WizardSessionResponse(BaseModel):
     completed_at: Optional[datetime]
     measurements: list[WizardMeasurementResponse] = []
     calculations: Optional[dict] = None  # Populated by _build_session_response()
+    vial_params: Optional[dict] = None  # Per-vial target params (multi-vial blends)
+    vial_calculations: Optional[dict] = None  # Per-vial calculations keyed by vial number
 
     class Config:
         from_attributes = True
@@ -6131,8 +6178,12 @@ def _build_session_response(session: WizardSession, db: Session) -> WizardSessio
     """
     from decimal import Decimal
 
-    # Collect current measurements keyed by step_key
-    current = {m.step_key: m.weight_mg for m in session.measurements if m.is_current}
+    # Collect current measurements keyed by step_key (vial 1 / single-vial backward compat)
+    current = {
+        m.step_key: m.weight_mg
+        for m in session.measurements
+        if m.is_current and m.vial_number == 1
+    }
 
     calcs: dict = {}
 
@@ -6231,6 +6282,73 @@ def _build_session_response(session: WizardSession, db: Session) -> WizardSessio
     # Build current measurements list (only is_current=True)
     current_measurements = [m for m in session.measurements if m.is_current]
 
+    # Per-vial calculations (multi-vial blends)
+    vial_calcs: dict | None = None
+    if session.vial_params and len(session.vial_params) > 1:
+        from calculations.wizard import calc_stock_prep, calc_required_volumes, calc_actual_dilution
+        vial_calcs = {}
+        _dd = session.calibration_curve.diluent_density if session.calibration_curve else 997.1
+        density = Decimal(str(_dd))
+
+        for vial_key, vparams in session.vial_params.items():
+            vn = int(vial_key)
+            vcurrent = {
+                m.step_key: m.weight_mg
+                for m in session.measurements
+                if m.is_current and m.vial_number == vn
+            }
+            vc: dict = {}
+            v_declared = vparams.get("declared_weight_mg")
+            v_stock_empty = vcurrent.get("stock_vial_empty_mg")
+            v_stock_loaded = vcurrent.get("stock_vial_loaded_mg")
+            v_stock_conc_d = None
+
+            if all(v is not None for v in [v_declared, v_stock_empty, v_stock_loaded]):
+                try:
+                    sp = calc_stock_prep(
+                        Decimal(str(v_declared)), Decimal(str(v_stock_empty)),
+                        Decimal(str(v_stock_loaded)), density,
+                    )
+                    v_stock_conc_d = sp["stock_conc_ug_ml"]
+                    vc["diluent_added_ml"] = float(sp["total_diluent_added_ml"])
+                    vc["stock_conc_ug_ml"] = float(sp["stock_conc_ug_ml"])
+                except Exception:
+                    pass
+
+            v_target_conc = vparams.get("target_conc_ug_ml")
+            v_target_vol = vparams.get("target_total_vol_ul")
+            if v_stock_conc_d is not None and v_target_conc and v_target_vol:
+                try:
+                    rv = calc_required_volumes(
+                        v_stock_conc_d, Decimal(str(v_target_conc)), Decimal(str(v_target_vol)),
+                    )
+                    vc["required_stock_vol_ul"] = float(rv["required_stock_vol_ul"])
+                    vc["required_diluent_vol_ul"] = float(rv["required_diluent_vol_ul"])
+                except Exception:
+                    pass
+
+            v_dil_empty = vcurrent.get("dil_vial_empty_mg")
+            v_dil_diluent = vcurrent.get("dil_vial_with_diluent_mg")
+            v_dil_final = vcurrent.get("dil_vial_final_mg")
+            if v_stock_conc_d is not None and all(v is not None for v in [v_dil_empty, v_dil_diluent, v_dil_final]):
+                try:
+                    ad = calc_actual_dilution(
+                        v_stock_conc_d, Decimal(str(v_dil_empty)),
+                        Decimal(str(v_dil_diluent)), Decimal(str(v_dil_final)), density,
+                    )
+                    vc["actual_diluent_vol_ul"] = float(ad["actual_diluent_vol_ul"])
+                    vc["actual_stock_vol_ul"] = float(ad["actual_stock_vol_ul"])
+                    vc["actual_total_vol_ul"] = float(ad["actual_total_vol_ul"])
+                    vc["actual_conc_ug_ml"] = float(ad["actual_conc_ug_ml"])
+                except Exception:
+                    pass
+
+            if vc:
+                vial_calcs[vial_key] = vc
+
+        if not vial_calcs:
+            vial_calcs = None
+
     return WizardSessionResponse(
         id=session.id,
         peptide_id=session.peptide_id,
@@ -6248,6 +6366,8 @@ def _build_session_response(session: WizardSession, db: Session) -> WizardSessio
             WizardMeasurementResponse.model_validate(m) for m in current_measurements
         ],
         calculations=calcs if calcs else None,
+        vial_params=session.vial_params,
+        vial_calculations=vial_calcs,
     )
 
 
@@ -6316,6 +6436,7 @@ async def create_wizard_session(
         declared_weight_mg=data.declared_weight_mg,
         target_conc_ug_ml=data.target_conc_ug_ml,
         target_total_vol_ul=data.target_total_vol_ul,
+        vial_params=data.vial_params,
     )
     db.add(session)
     db.commit()
@@ -6424,11 +6545,12 @@ async def record_measurement(
     if data.source not in ("manual", "scale"):
         raise HTTPException(status_code=422, detail="source must be 'manual' or 'scale'")
 
-    # Mark existing current measurement for this step as superseded
+    # Mark existing current measurement for this step+vial as superseded
     old = db.execute(
         select(WizardMeasurement)
         .where(WizardMeasurement.session_id == session_id)
         .where(WizardMeasurement.step_key == data.step_key)
+        .where(WizardMeasurement.vial_number == data.vial_number)
         .where(WizardMeasurement.is_current == True)
     ).scalar_one_or_none()
     if old:
@@ -6440,6 +6562,7 @@ async def record_measurement(
         step_key=data.step_key,
         weight_mg=data.weight_mg,
         source=data.source,
+        vial_number=data.vial_number,
         is_current=True,
     )
     db.add(new_m)
@@ -6528,8 +6651,12 @@ async def create_sample_prep_endpoint(
     response = _build_session_response(session, db)
     calcs = response.calculations or {}
 
-    # Current measurements keyed by step_key
-    current = {m.step_key: m.weight_mg for m in session.measurements if m.is_current}
+    # Current measurements keyed by step_key (vial 1 for backward compat)
+    current = {
+        m.step_key: m.weight_mg
+        for m in session.measurements
+        if m.is_current and m.vial_number == 1
+    }
 
     data = {
         "wizard_session_id": session.id,
@@ -6564,16 +6691,49 @@ async def create_sample_prep_endpoint(
     peptide = session.peptide
     if peptide and peptide.is_blend:
         data["is_blend"] = True
-        comps = db.execute(
-            select(Peptide).join(
-                blend_components, blend_components.c.component_id == Peptide.id
-            ).where(blend_components.c.blend_id == peptide.id)
+        comp_rows = db.execute(
+            select(Peptide, blend_components.c.vial_number)
+            .join(blend_components, blend_components.c.component_id == Peptide.id)
+            .where(blend_components.c.blend_id == peptide.id)
             .order_by(blend_components.c.display_order)
-        ).scalars().all()
+        ).all()
         data["components_json"] = json.dumps([
-            {"id": c.id, "name": c.name, "abbreviation": c.abbreviation}
-            for c in comps
+            {"id": c.id, "name": c.name, "abbreviation": c.abbreviation, "vial_number": vn or 1}
+            for c, vn in comp_rows
         ])
+
+        # Build vial_data for multi-vial blends
+        if response.vial_calculations:
+            vial_data_list = []
+            for vial_key, vc in response.vial_calculations.items():
+                vn = int(vial_key)
+                vp = (session.vial_params or {}).get(vial_key, {})
+                v_current = {
+                    m.step_key: m.weight_mg
+                    for m in session.measurements
+                    if m.is_current and m.vial_number == vn
+                }
+                vial_data_list.append({
+                    "vial_number": vn,
+                    "component_ids": [c.id for c, cvn in comp_rows if (cvn or 1) == vn],
+                    "component_abbreviations": [c.abbreviation for c, cvn in comp_rows if (cvn or 1) == vn],
+                    "declared_weight_mg": vp.get("declared_weight_mg"),
+                    "target_conc_ug_ml": vp.get("target_conc_ug_ml"),
+                    "target_total_vol_ul": vp.get("target_total_vol_ul"),
+                    "stock_vial_empty_mg": v_current.get("stock_vial_empty_mg"),
+                    "stock_vial_loaded_mg": v_current.get("stock_vial_loaded_mg"),
+                    "stock_conc_ug_ml": vc.get("stock_conc_ug_ml"),
+                    "required_diluent_vol_ul": vc.get("required_diluent_vol_ul"),
+                    "required_stock_vol_ul": vc.get("required_stock_vol_ul"),
+                    "dil_vial_empty_mg": v_current.get("dil_vial_empty_mg"),
+                    "dil_vial_with_diluent_mg": v_current.get("dil_vial_with_diluent_mg"),
+                    "dil_vial_final_mg": v_current.get("dil_vial_final_mg"),
+                    "actual_conc_ug_ml": vc.get("actual_conc_ug_ml"),
+                    "actual_diluent_vol_ul": vc.get("actual_diluent_vol_ul"),
+                    "actual_stock_vol_ul": vc.get("actual_stock_vol_ul"),
+                    "actual_total_vol_ul": vc.get("actual_total_vol_ul"),
+                })
+            data["vial_data"] = json.dumps(vial_data_list)
 
     try:
         ensure_sample_preps_table()

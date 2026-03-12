@@ -82,6 +82,7 @@ export function BlendCalibrationPanel({
         calibration_summary: [],
         analytes: [] as AnalyteResponse[],
         components: [],
+        prep_vial_count: 1,
       }
     : null
 

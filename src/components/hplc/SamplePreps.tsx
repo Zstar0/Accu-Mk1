@@ -226,7 +226,7 @@ export function SamplePreps() {
     setOpeningId(prep.id)
     try {
       const session = await getWizardSession(prep.wizard_session_id)
-      useWizardStore.getState().startSession(session)
+      useWizardStore.getState().startSession(session, prep.components_json ?? [])
       useWizardStore.getState().setCurrentStep(3)
       navigateTo('hplc-analysis', 'new-analysis')
     } catch (err) {

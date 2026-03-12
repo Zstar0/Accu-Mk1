@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import {
   ChevronRight,
   Database,
@@ -117,6 +118,25 @@ const navItems: NavItem[] = [
   },
 ]
 
+const SIDEBAR_EXPANDED_KEY = 'sidebar-expanded-sections'
+
+function loadExpandedSections(): Record<string, boolean> {
+  try {
+    const stored = localStorage.getItem(SIDEBAR_EXPANDED_KEY)
+    if (stored) return JSON.parse(stored)
+  } catch { /* ignore */ }
+  // Default: all sections expanded
+  const defaults: Record<string, boolean> = {}
+  for (const item of navItems) defaults[item.id] = true
+  return defaults
+}
+
+function saveExpandedSections(state: Record<string, boolean>) {
+  try {
+    localStorage.setItem(SIDEBAR_EXPANDED_KEY, JSON.stringify(state))
+  } catch { /* ignore */ }
+}
+
 export function AppSidebar() {
   const activeSection = useUIStore(state => state.activeSection)
   const activeSubSection = useUIStore(state => state.activeSubSection)
@@ -126,6 +146,15 @@ export function AppSidebar() {
   const updateReady = useUIStore(state => state.updateReady)
   const user = useAuthStore(state => state.user)
   const isAdmin = user?.role === 'admin'
+  const [expandedSections, setExpandedSections] = useState(loadExpandedSections)
+
+  const toggleSection = (sectionId: string, open: boolean) => {
+    setExpandedSections(prev => {
+      const next = { ...prev, [sectionId]: open }
+      saveExpandedSections(next)
+      return next
+    })
+  }
 
   return (
     <Sidebar collapsible="icon">
@@ -156,7 +185,8 @@ export function AppSidebar() {
                     <Collapsible
                       key={item.id}
                       asChild
-                      defaultOpen={isActive}
+                      open={expandedSections[item.id] ?? true}
+                      onOpenChange={(open) => toggleSection(item.id, open)}
                       className="group/collapsible"
                     >
                       <SidebarMenuItem>

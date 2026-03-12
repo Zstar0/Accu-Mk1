@@ -12,16 +12,8 @@ import { WeightInput } from '@/components/hplc/WeightInput'
 import { recordWizardMeasurement } from '@/lib/api'
 import { useWizardStore } from '@/store/wizard-store'
 
-export function Step2StockPrep() {
+export function Step2StockPrep({ vialNumber = 1 }: { vialNumber?: number }) {
   const session = useWizardStore(state => state.session)
-
-  // Local error state per sub-step
-  const [error2a, setError2a] = useState<string | null>(null)
-  const [error2d, setError2d] = useState<string | null>(null)
-
-  // Re-weigh reset flags (local UI state)
-  const [reweigh2a, setReweigh2a] = useState(false)
-  const [reweigh2d, setReweigh2d] = useState(false)
 
   if (!session) {
     return (
@@ -35,25 +27,34 @@ export function Step2StockPrep() {
     )
   }
 
-  // Derive sub-step completion from session measurements
+  return <StockPrepVial session={session} vialNumber={vialNumber} />
+}
+
+/** Single-vial stock prep flow */
+function StockPrepVial({ session, vialNumber }: {
+  session: NonNullable<ReturnType<typeof useWizardStore.getState>['session']>
+  vialNumber: number
+}) {
+  const [error2a, setError2a] = useState<string | null>(null)
+  const [error2d, setError2d] = useState<string | null>(null)
+  const [reweigh2a, setReweigh2a] = useState(false)
+  const [reweigh2d, setReweigh2d] = useState(false)
+
   const meas2a = session.measurements.find(
-    m => m.step_key === 'stock_vial_empty_mg' && m.is_current
+    m => m.step_key === 'stock_vial_empty_mg' && m.is_current && m.vial_number === vialNumber
   )
   const meas2d = session.measurements.find(
-    m => m.step_key === 'stock_vial_loaded_mg' && m.is_current
+    m => m.step_key === 'stock_vial_loaded_mg' && m.is_current && m.vial_number === vialNumber
   )
 
-  // Transfer confirmed = either local state OR loaded vial already measured (implies transfer happened)
-  // Sub-step 2a: done if measurement exists and not re-weighing
   const step2aDone = meas2a != null && !reweigh2a
-  // Sub-steps 2c + 2d: locked until 2a done
   const step2cdLocked = !step2aDone
-
-  // Step 2d done if measurement exists and not re-weighing
   const step2dDone = meas2d != null && !reweigh2d
 
   const sessionId = session.id
-  const calcs = session.calculations
+  const calcs = vialNumber === 1
+    ? session.calculations
+    : session.vial_calculations?.[String(vialNumber)] ?? null
 
   async function handleAccept2a(value: number, source: 'scale' | 'manual') {
     setError2a(null)
@@ -62,6 +63,7 @@ export function Step2StockPrep() {
         step_key: 'stock_vial_empty_mg',
         weight_mg: value,
         source,
+        vial_number: vialNumber,
       })
       useWizardStore.getState().updateSession(response)
       setReweigh2a(false)
@@ -79,6 +81,7 @@ export function Step2StockPrep() {
         step_key: 'stock_vial_loaded_mg',
         weight_mg: value,
         source,
+        vial_number: vialNumber,
       })
       useWizardStore.getState().updateSession(response)
       setReweigh2d(false)
@@ -123,10 +126,10 @@ export function Step2StockPrep() {
               <div className="flex items-center gap-2">
                 <CheckCircle2 className="h-4 w-4 text-green-600" />
                 <span className="text-sm font-medium">
-                  {meas2a!.weight_mg.toFixed(2)} mg
+                  {meas2a?.weight_mg.toFixed(2)} mg
                 </span>
                 <span className="text-xs text-muted-foreground">
-                  (via {meas2a!.source})
+                  (via {meas2a?.source})
                 </span>
               </div>
               <Button
@@ -191,10 +194,10 @@ export function Step2StockPrep() {
               <div className="flex items-center gap-2">
                 <CheckCircle2 className="h-4 w-4 text-green-600" />
                 <span className="text-sm font-medium">
-                  {meas2d!.weight_mg.toFixed(2)} mg
+                  {meas2d?.weight_mg.toFixed(2)} mg
                 </span>
                 <span className="text-xs text-muted-foreground">
-                  (via {meas2d!.source})
+                  (via {meas2d?.source})
                 </span>
               </div>
               <Button

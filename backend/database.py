@@ -68,6 +68,21 @@ def _run_migrations():
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS senaite_password_encrypted TEXT",
         "ALTER TABLE peptides ADD COLUMN IF NOT EXISTS is_blend BOOLEAN DEFAULT FALSE",
         "ALTER TABLE peptide_analytes ADD COLUMN IF NOT EXISTS component_peptide_id INTEGER REFERENCES peptides(id) ON DELETE SET NULL",
+        # Multi-vial blend support
+        "ALTER TABLE peptides ADD COLUMN IF NOT EXISTS prep_vial_count INTEGER DEFAULT 1",
+        "ALTER TABLE wizard_sessions ADD COLUMN IF NOT EXISTS vial_params JSONB",
+        "ALTER TABLE wizard_measurements ADD COLUMN IF NOT EXISTS vial_number INTEGER DEFAULT 1",
+        "ALTER TABLE blend_components ADD COLUMN IF NOT EXISTS vial_number INTEGER DEFAULT 1",
+        # Fix FK constraint: allow cascade SET NULL when calibration curve is deleted
+        """DO $$ BEGIN
+            IF EXISTS (SELECT 1 FROM information_schema.table_constraints
+                       WHERE constraint_name = 'wizard_sessions_calibration_curve_id_fkey'
+                       AND table_name = 'wizard_sessions') THEN
+                ALTER TABLE wizard_sessions DROP CONSTRAINT wizard_sessions_calibration_curve_id_fkey;
+                ALTER TABLE wizard_sessions ADD CONSTRAINT wizard_sessions_calibration_curve_id_fkey
+                    FOREIGN KEY (calibration_curve_id) REFERENCES calibration_curves(id) ON DELETE SET NULL;
+            END IF;
+        END $$""",
     ]
     try:
         with engine.connect() as conn:

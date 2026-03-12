@@ -114,6 +114,7 @@ def ensure_sample_preps_table() -> None:
             # Blend support columns (added after initial DDL)
             cur.execute("ALTER TABLE sample_preps ADD COLUMN IF NOT EXISTS is_blend BOOLEAN DEFAULT FALSE")
             cur.execute("ALTER TABLE sample_preps ADD COLUMN IF NOT EXISTS components_json JSONB")
+            cur.execute("ALTER TABLE sample_preps ADD COLUMN IF NOT EXISTS vial_data JSONB")
         conn.commit()
 
 

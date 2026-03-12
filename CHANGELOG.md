@@ -1,5 +1,37 @@
 # Changelog
 
+## v0.25.0 — 2026-03-12
+
+### Multi-Vial Blend Prep Support
+
+- **Multi-vial sample prep wizard** — blend peptides with `prep_vial_count > 1` generate per-vial Stock Prep and Dilution steps in the wizard
+- **Per-vial target parameters** — each vial has its own declared weight, target concentration, and target volume stored in `vial_params` JSONB
+- **Per-vial measurements** — stock prep and dilution measurements tracked per vial number
+- **Per-vial calculations** — backend computes stock_conc, required_volumes, and actual_conc independently per vial via `vial_calculations`
+- **Peptide config — Prep Vials section** — configure vial count and assign blend components to vials from the Peptide Config page
+- **Wizard info panel** — new left-hand panel (30% width) showing SENAITE sample data, context-aware vial details, and method cards with all fields (instrument, SENAITE ID, size peptide, starting organic %, MCT temp, dissolution, notes)
+- **Context-aware vial details** — info panel switches between "Vial 1 Details" / "Vial 2 Details" based on active wizard step, showing assigned analytes and per-vial targets
+- **Blend method priority** — direct methods on the blend peptide take priority; component-level method matching is fallback only
+- **Smarter SENAITE auto-detection** — multi-analyte SENAITE lookups search for an exact blend match before falling back to single peptide selection
+- **Per-analyte declared quantities** — SENAITE card shows declared_quantity next to each analyte
+- **Horizontal step navigation** — wizard steps moved from left sidebar to horizontal top bar for better use of screen space
+
+### Fixes
+
+- **Next Step button** — fixed permanent disable caused by chained display states in `deriveStepStates`; now checks session data directly for step prerequisites
+- **Methods missing when editing** — `selectedPeptide` now set in the store when returning to Step 1 with an existing session
+- **Editable session summary** — multi-vial sessions show per-vial declared weights and editable per-vial target fields when navigating back to Step 1
+
+### Backend
+
+- Added `prep_vial_count` column on peptides, `vial_number` on blend_components and wizard_measurements
+- Added `vial_params` JSONB on wizard sessions, `vial_data` JSONB on sample preps
+- Peptide update endpoint accepts `prep_vial_count` and component vial assignments
+- Wizard session endpoints accept and return `vial_params` and `vial_calculations`
+- `updateWizardSession` accepts `vial_params` for per-vial target edits
+
+---
+
 ## v0.24.0 — 2026-03-08
 
 ### Order Status — Kanban Board View

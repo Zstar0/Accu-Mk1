@@ -45,6 +45,9 @@ export function Step1SampleInfo() {
   const [targetConcUgMl, setTargetConcUgMl] = useState('')
   const [targetTotalVolUl, setTargetTotalVolUl] = useState('')
 
+  // Multi-vial state: per-vial declared weight, target conc, target vol
+  const [vialParamsState, setVialParamsState] = useState<Record<string, { declaredWeight: string; targetConc: string; targetVol: string }>>({})
+
   const [submitting, setSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState<string | null>(null)
 
@@ -113,21 +116,95 @@ export function Step1SampleInfo() {
     }
   }, [])
 
+  // Multi-vial helpers (must be before early return)
+  const isMultiVial = (peptides.find(p => p.id === peptideId)?.prep_vial_count ?? 1) > 1
+  const vialCount = peptides.find(p => p.id === peptideId)?.prep_vial_count ?? 1
+  const selectedPeptideForVials = peptideId !== null ? peptides.find(p => p.id === peptideId) : null
+
+  function getVialParam(vial: number, field: 'declaredWeight' | 'targetConc' | 'targetVol'): string {
+    return vialParamsState[String(vial)]?.[field] ?? ''
+  }
+  function setVialParam(vial: number, field: 'declaredWeight' | 'targetConc' | 'targetVol', value: string) {
+    setVialParamsState(prev => ({
+      ...prev,
+      [String(vial)]: {
+        declaredWeight: prev[String(vial)]?.declaredWeight ?? '',
+        targetConc: prev[String(vial)]?.targetConc ?? '',
+        targetVol: prev[String(vial)]?.targetVol ?? '',
+        [field]: value,
+      },
+    }))
+  }
+
+  // Initialize vial params when peptide changes to multi-vial
+  useEffect(() => {
+    if (!isMultiVial) return
+    setVialParamsState(prev => {
+      const next = { ...prev }
+      for (let v = 1; v <= vialCount; v++) {
+        if (!next[String(v)]) {
+          next[String(v)] = { declaredWeight: '', targetConc: '', targetVol: '' }
+        }
+      }
+      return next
+    })
+  }, [isMultiVial, vialCount, peptideId])
+
+  // Auto-populate per-vial declared weights from SENAITE analyte declared_quantity
+  useEffect(() => {
+    if (!isMultiVial || !selectedPeptideForVials || !lookupResult) return
+    const newState: Record<string, { declaredWeight: string; targetConc: string; targetVol: string }> = {}
+    for (let v = 1; v <= vialCount; v++) {
+      const compsInVial = selectedPeptideForVials.components.filter(c => (c.vial_number ?? 1) === v)
+      let totalDeclared = 0
+      let found = false
+      for (const comp of compsInVial) {
+        const analyte = lookupResult.analytes.find(a => a.matched_peptide_id === comp.id)
+        if (analyte?.declared_quantity != null) {
+          totalDeclared += analyte.declared_quantity
+          found = true
+        }
+      }
+      newState[String(v)] = {
+        declaredWeight: found ? String(totalDeclared) : '',
+        targetConc: '',
+        targetVol: '',
+      }
+    }
+    setVialParamsState(newState)
+  }, [lookupResult, isMultiVial, vialCount, peptideId, selectedPeptideForVials])
+
   // If session already exists — show read-only summary with editable target fields
+  // Also ensure selectedPeptide is set in the store so the info panel shows methods
+  const sessionPeptide = session !== null ? peptides.find(p => p.id === session.peptide_id) : undefined
+  useEffect(() => {
+    if (!sessionPeptide) return
+    const current = useWizardStore.getState().selectedPeptide
+    if (current?.id !== sessionPeptide.id) {
+      useWizardStore.getState().setSelectedPeptide(sessionPeptide)
+    }
+  }, [sessionPeptide])
+
   if (session !== null) {
-    const peptide = peptides.find(p => p.id === session.peptide_id)
     return (
       <EditableSessionSummary
         session={session}
-        peptide={peptide}
+        peptide={sessionPeptide}
       />
     )
   }
 
+  // For multi-vial: all vials must have target conc + vol filled
+  const multiVialReady = isMultiVial
+    ? Array.from({ length: vialCount }, (_, i) => i + 1).every(v => {
+        const vp = vialParamsState[String(v)]
+        return vp && vp.targetConc.trim() !== '' && vp.targetVol.trim() !== ''
+      })
+    : true
+
   const canSubmit =
     peptideId !== null &&
-    targetConcUgMl.trim() !== '' &&
-    targetTotalVolUl.trim() !== '' &&
+    (isMultiVial ? multiVialReady : (targetConcUgMl.trim() !== '' && targetTotalVolUl.trim() !== '')) &&
     !submitting
 
   async function handleSubmit(e: React.FormEvent) {
@@ -142,17 +219,45 @@ export function Step1SampleInfo() {
         peptide_id: peptideId,
       }
       if (sampleIdLabel.trim()) data.sample_id_label = sampleIdLabel.trim()
-      if (declaredWeightMg.trim()) {
-        const parsed = parseFloat(declaredWeightMg)
-        if (!isNaN(parsed)) data.declared_weight_mg = parsed
+
+      if (isMultiVial) {
+        // Multi-vial: send vial_params, use vial 1 values for backward-compat flat fields
+        const vialParams: Record<string, { declared_weight_mg: number | null; target_conc_ug_ml: number | null; target_total_vol_ul: number | null }> = {}
+        for (let v = 1; v <= vialCount; v++) {
+          const vp = vialParamsState[String(v)]
+          if (!vp) continue
+          const dw = parseFloat(vp.declaredWeight)
+          const tc = parseFloat(vp.targetConc)
+          const tv = parseFloat(vp.targetVol)
+          vialParams[String(v)] = {
+            declared_weight_mg: isNaN(dw) ? null : dw,
+            target_conc_ug_ml: isNaN(tc) ? null : tc,
+            target_total_vol_ul: isNaN(tv) ? null : tv,
+          }
+        }
+        data.vial_params = vialParams
+        // Flat fields from vial 1 for backward compat
+        const v1 = vialParams['1']
+        if (v1) {
+          if (v1.declared_weight_mg != null) data.declared_weight_mg = v1.declared_weight_mg
+          if (v1.target_conc_ug_ml != null) data.target_conc_ug_ml = v1.target_conc_ug_ml
+          if (v1.target_total_vol_ul != null) data.target_total_vol_ul = v1.target_total_vol_ul
+        }
+      } else {
+        // Single vial: existing behavior
+        if (declaredWeightMg.trim()) {
+          const parsed = parseFloat(declaredWeightMg)
+          if (!isNaN(parsed)) data.declared_weight_mg = parsed
+        }
+        const concParsed = parseFloat(targetConcUgMl)
+        if (!isNaN(concParsed)) data.target_conc_ug_ml = concParsed
+        const volParsed = parseFloat(targetTotalVolUl)
+        if (!isNaN(volParsed)) data.target_total_vol_ul = volParsed
       }
-      const concParsed = parseFloat(targetConcUgMl)
-      if (!isNaN(concParsed)) data.target_conc_ug_ml = concParsed
-      const volParsed = parseFloat(targetTotalVolUl)
-      if (!isNaN(volParsed)) data.target_total_vol_ul = volParsed
 
       const response = await createWizardSession(data)
-      useWizardStore.getState().startSession(response)
+      const selectedPeptideComponents = selectedPeptide?.components ?? []
+      useWizardStore.getState().startSession(response, selectedPeptideComponents, selectedPeptide ?? undefined)
       useWizardStore.getState().setCurrentStep(2)
     } catch (err) {
       setSubmitError(
@@ -195,10 +300,26 @@ export function Step1SampleInfo() {
       if (result.declared_weight_mg != null) {
         setDeclaredWeightMg(String(result.declared_weight_mg))
       }
-      // Auto-select first matched peptide (first match wins)
-      const firstMatch = result.analytes.find(a => a.matched_peptide_id !== null)
-      if (firstMatch?.matched_peptide_id != null) {
-        setPeptideId(firstMatch.matched_peptide_id)
+      // Auto-select peptide: try blend match first, then single peptide
+      const matchedIds = result.analytes
+        .filter(a => a.matched_peptide_id !== null)
+        .map(a => a.matched_peptide_id as number)
+
+      if (matchedIds.length > 1) {
+        // Multiple analytes matched — look for a blend whose components match exactly
+        const matchedSet = new Set(matchedIds)
+        const blendMatch = peptides.find(p =>
+          p.is_blend &&
+          p.components.length === matchedSet.size &&
+          p.components.every(c => matchedSet.has(c.id))
+        )
+        if (blendMatch) {
+          setPeptideId(blendMatch.id)
+        }
+        // If no blend match, leave dropdown empty for manual selection
+      } else if (matchedIds.length === 1) {
+        // Single analyte — select it directly (could be a standalone peptide)
+        setPeptideId(matchedIds[0] as number)
       }
     } catch (err) {
       setLookupError(err instanceof Error ? err.message : 'Lookup failed')
@@ -294,6 +415,61 @@ export function Step1SampleInfo() {
       </div>
     </>
   )
+
+  // Per-vial fields for multi-vial blends
+  const perVialFields = isMultiVial && selectedPeptide ? (
+    <div className="space-y-4">
+      {Array.from({ length: vialCount }, (_, i) => i + 1).map(v => {
+        const compsInVial = selectedPeptide.components.filter(c => (c.vial_number ?? 1) === v)
+        const label = compsInVial.map(c => c.abbreviation).join(', ') || `Vial ${v}`
+        return (
+          <div key={v} className="rounded-md border border-zinc-700 p-3 space-y-3">
+            <div className="flex items-center gap-2">
+              <Badge variant="outline" className="text-xs">Vial {v}</Badge>
+              <span className="text-xs text-muted-foreground">{label}</span>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor={`vial-${v}-weight`}>Declared Weight (mg)</Label>
+              <Input
+                id={`vial-${v}-weight`}
+                type="number"
+                step="0.01"
+                placeholder="e.g. 10.00"
+                value={getVialParam(v, 'declaredWeight')}
+                onChange={e => setVialParam(v, 'declaredWeight', e.target.value)}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor={`vial-${v}-conc`}>
+                Target Concentration (µg/mL) <span className="text-destructive">*</span>
+              </Label>
+              <Input
+                id={`vial-${v}-conc`}
+                type="number"
+                step="0.1"
+                placeholder="e.g. 1200"
+                value={getVialParam(v, 'targetConc')}
+                onChange={e => setVialParam(v, 'targetConc', e.target.value)}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor={`vial-${v}-vol`}>
+                Target Total Volume (µL) <span className="text-destructive">*</span>
+              </Label>
+              <Input
+                id={`vial-${v}-vol`}
+                type="number"
+                step="0.1"
+                placeholder="e.g. 1200"
+                value={getVialParam(v, 'targetVol')}
+                onChange={e => setVialParam(v, 'targetVol', e.target.value)}
+              />
+            </div>
+          </div>
+        )
+      })}
+    </div>
+  ) : null
 
   return (
     <Card>
@@ -420,31 +596,34 @@ export function Step1SampleInfo() {
                 {/* Peptide override dropdown (shown after lookup) */}
                 {lookupResult && peptideDropdown}
 
-                {/* Declared Weight — editable override of SENAITE value */}
-                {lookupResult && (
-                  <div className="space-y-1.5">
-                    <Label htmlFor="declared-weight-override">
-                      Declared Weight (mg)
-                    </Label>
-                    <Input
-                      id="declared-weight-override"
-                      type="number"
-                      step="0.01"
-                      placeholder="e.g. 10.00"
-                      value={declaredWeightMg}
-                      onChange={e => setDeclaredWeightMg(e.target.value)}
-                    />
-                    {lookupResult.declared_weight_mg != null &&
-                      declaredWeightMg !== String(lookupResult.declared_weight_mg) && (
-                        <p className="text-xs text-amber-600 dark:text-amber-400">
-                          SENAITE value: {lookupResult.declared_weight_mg} mg (overridden)
-                        </p>
-                      )}
-                  </div>
-                )}
-
-                {/* Target fields (below summary card) */}
-                {lookupResult && targetFields}
+                {/* Declared Weight + Target fields — single-vial or per-vial */}
+                {lookupResult && isMultiVial ? (
+                  perVialFields
+                ) : lookupResult ? (
+                  <>
+                    {/* Declared Weight — editable override of SENAITE value */}
+                    <div className="space-y-1.5">
+                      <Label htmlFor="declared-weight-override">
+                        Declared Weight (mg)
+                      </Label>
+                      <Input
+                        id="declared-weight-override"
+                        type="number"
+                        step="0.01"
+                        placeholder="e.g. 10.00"
+                        value={declaredWeightMg}
+                        onChange={e => setDeclaredWeightMg(e.target.value)}
+                      />
+                      {lookupResult.declared_weight_mg != null &&
+                        declaredWeightMg !== String(lookupResult.declared_weight_mg) && (
+                          <p className="text-xs text-amber-600 dark:text-amber-400">
+                            SENAITE value: {lookupResult.declared_weight_mg} mg (overridden)
+                          </p>
+                        )}
+                    </div>
+                    {targetFields}
+                  </>
+                ) : null}
 
                 {lookupResult && (
                   <Button type="submit" disabled={!canSubmit} className="w-full">
@@ -479,20 +658,23 @@ export function Step1SampleInfo() {
                   />
                 </div>
 
-                {/* Declared Weight */}
-                <div className="space-y-1.5">
-                  <Label htmlFor="declared-weight">Sample Vial + cap + peptide (mg)</Label>
-                  <Input
-                    id="declared-weight"
-                    type="number"
-                    step="0.01"
-                    placeholder="e.g. 10.00"
-                    value={declaredWeightMg}
-                    onChange={e => setDeclaredWeightMg(e.target.value)}
-                  />
-                </div>
-
-                {targetFields}
+                {/* Declared Weight + Target fields — single or multi-vial */}
+                {isMultiVial ? perVialFields : (
+                  <>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="declared-weight">Sample Vial + cap + peptide (mg)</Label>
+                      <Input
+                        id="declared-weight"
+                        type="number"
+                        step="0.01"
+                        placeholder="e.g. 10.00"
+                        value={declaredWeightMg}
+                        onChange={e => setDeclaredWeightMg(e.target.value)}
+                      />
+                    </div>
+                    {targetFields}
+                  </>
+                )}
 
                 <Button type="submit" disabled={!canSubmit} className="w-full">
                   {submitting ? (
@@ -525,20 +707,23 @@ export function Step1SampleInfo() {
               />
             </div>
 
-            {/* Declared Weight */}
-            <div className="space-y-1.5">
-              <Label htmlFor="declared-weight">Sample Vial + cap + peptide (mg)</Label>
-              <Input
-                id="declared-weight"
-                type="number"
-                step="0.01"
-                placeholder="e.g. 10.00"
-                value={declaredWeightMg}
-                onChange={e => setDeclaredWeightMg(e.target.value)}
-              />
-            </div>
-
-            {targetFields}
+            {/* Declared Weight + Target fields — single or multi-vial */}
+            {isMultiVial ? perVialFields : (
+              <>
+                <div className="space-y-1.5">
+                  <Label htmlFor="declared-weight">Sample Vial + cap + peptide (mg)</Label>
+                  <Input
+                    id="declared-weight"
+                    type="number"
+                    step="0.01"
+                    placeholder="e.g. 10.00"
+                    value={declaredWeightMg}
+                    onChange={e => setDeclaredWeightMg(e.target.value)}
+                  />
+                </div>
+                {targetFields}
+              </>
+            )}
 
             <Button type="submit" disabled={!canSubmit} className="w-full">
               {submitting ? (
@@ -568,43 +753,118 @@ function EditableSessionSummary({
   session: WizardSessionResponse
   peptide: PeptideRecord | undefined
 }) {
+  const vialParamsMap = session.vial_params ?? {}
+  const vialKeys = Object.keys(vialParamsMap).sort()
+  const isMultiVial = vialKeys.length > 1
+
+  // Single-vial editable state
   const [conc, setConc] = useState(
     session.target_conc_ug_ml != null ? String(session.target_conc_ug_ml) : ''
   )
   const [vol, setVol] = useState(
     session.target_total_vol_ul != null ? String(session.target_total_vol_ul) : ''
   )
+
+  // Multi-vial editable state
+  const [vialEdits, setVialEdits] = useState<Record<string, { conc: string; vol: string }>>(() => {
+    if (!isMultiVial) return {}
+    const init: Record<string, { conc: string; vol: string }> = {}
+    for (const key of vialKeys) {
+      const vp = vialParamsMap[key]
+      init[key] = {
+        conc: vp?.target_conc_ug_ml != null ? String(vp.target_conc_ug_ml) : '',
+        vol: vp?.target_total_vol_ul != null ? String(vp.target_total_vol_ul) : '',
+      }
+    }
+    return init
+  })
+
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [saved, setSaved] = useState(false)
 
-  const isDirty =
-    conc !== (session.target_conc_ug_ml != null ? String(session.target_conc_ug_ml) : '') ||
-    vol !== (session.target_total_vol_ul != null ? String(session.target_total_vol_ul) : '')
+  const isDirty = isMultiVial
+    ? vialKeys.some(key => {
+        const vp = vialParamsMap[key]
+        const edit = vialEdits[key]
+        return (
+          edit?.conc !== (vp?.target_conc_ug_ml != null ? String(vp.target_conc_ug_ml) : '') ||
+          edit?.vol !== (vp?.target_total_vol_ul != null ? String(vp.target_total_vol_ul) : '')
+        )
+      })
+    : conc !== (session.target_conc_ug_ml != null ? String(session.target_conc_ug_ml) : '') ||
+      vol !== (session.target_total_vol_ul != null ? String(session.target_total_vol_ul) : '')
 
   async function handleSave(e: React.FormEvent) {
     e.preventDefault()
-    const concParsed = parseFloat(conc)
-    const volParsed = parseFloat(vol)
-    if (isNaN(concParsed) || isNaN(volParsed) || concParsed <= 0 || volParsed <= 0) {
-      setSaveError('Please enter valid values for both fields.')
-      return
+
+    if (isMultiVial) {
+      // Build updated vial_params
+      const updatedVialParams: Record<string, { declared_weight_mg: number | null; target_conc_ug_ml: number | null; target_total_vol_ul: number | null }> = {}
+      for (const key of vialKeys) {
+        const edit = vialEdits[key]
+        const existing = vialParamsMap[key]
+        const concParsed = parseFloat(edit?.conc ?? '')
+        const volParsed = parseFloat(edit?.vol ?? '')
+        if (isNaN(concParsed) || isNaN(volParsed) || concParsed <= 0 || volParsed <= 0) {
+          setSaveError(`Please enter valid values for Vial ${key}.`)
+          return
+        }
+        updatedVialParams[key] = {
+          declared_weight_mg: existing?.declared_weight_mg ?? null,
+          target_conc_ug_ml: concParsed,
+          target_total_vol_ul: volParsed,
+        }
+      }
+      setSaving(true)
+      setSaveError(null)
+      setSaved(false)
+      try {
+        // Update with vial 1 flat values for backward compat + full vial_params
+        const v1 = updatedVialParams['1']
+        const updated = await updateWizardSession(session.id, {
+          target_conc_ug_ml: v1?.target_conc_ug_ml ?? undefined,
+          target_total_vol_ul: v1?.target_total_vol_ul ?? undefined,
+          vial_params: updatedVialParams,
+        })
+        useWizardStore.getState().updateSession(updated)
+        setSaved(true)
+      } catch (err) {
+        setSaveError(err instanceof Error ? err.message : 'Failed to save')
+      } finally {
+        setSaving(false)
+      }
+    } else {
+      const concParsed = parseFloat(conc)
+      const volParsed = parseFloat(vol)
+      if (isNaN(concParsed) || isNaN(volParsed) || concParsed <= 0 || volParsed <= 0) {
+        setSaveError('Please enter valid values for both fields.')
+        return
+      }
+      setSaving(true)
+      setSaveError(null)
+      setSaved(false)
+      try {
+        const updated = await updateWizardSession(session.id, {
+          target_conc_ug_ml: concParsed,
+          target_total_vol_ul: volParsed,
+        })
+        useWizardStore.getState().updateSession(updated)
+        setSaved(true)
+      } catch (err) {
+        setSaveError(err instanceof Error ? err.message : 'Failed to save')
+      } finally {
+        setSaving(false)
+      }
     }
-    setSaving(true)
-    setSaveError(null)
+  }
+
+  function setVialEdit(key: string, field: 'conc' | 'vol', value: string) {
+    setVialEdits(prev => ({
+      ...prev,
+      [key]: { conc: '', vol: '', ...prev[key], [field]: value },
+    }))
     setSaved(false)
-    try {
-      const updated = await updateWizardSession(session.id, {
-        target_conc_ug_ml: concParsed,
-        target_total_vol_ul: volParsed,
-      })
-      useWizardStore.getState().updateSession(updated)
-      setSaved(true)
-    } catch (err) {
-      setSaveError(err instanceof Error ? err.message : 'Failed to save')
-    } finally {
-      setSaving(false)
-    }
   }
 
   return (
@@ -614,7 +874,7 @@ function EditableSessionSummary({
       </CardHeader>
       <CardContent className="space-y-4">
         {/* Read-only fields */}
-        <div className="rounded-md border border-green-500/30 bg-green-50/50 dark:bg-green-950/20 p-4">
+        <div className="rounded-md border border-green-500/30 bg-green-50/50 dark:bg-green-950/20 p-4 space-y-3">
           <div className="grid grid-cols-2 gap-3 text-sm">
             <div>
               <span className="text-muted-foreground">Peptide</span>
@@ -631,6 +891,9 @@ function EditableSessionSummary({
                   {peptide.components.map(c => (
                     <Badge key={c.id} variant="secondary" className="text-[10px]">
                       {c.abbreviation}
+                      {isMultiVial && c.vial_number != null && (
+                        <span className="ml-1 opacity-60">V{c.vial_number}</span>
+                      )}
                     </Badge>
                   ))}
                 </div>
@@ -640,19 +903,43 @@ function EditableSessionSummary({
               <span className="text-muted-foreground">Sample ID</span>
               <p className="font-medium">{session.sample_id_label ?? '—'}</p>
             </div>
-            <div>
-              <span className="text-muted-foreground">Sample Vial + cap + peptide</span>
-              <p className="font-medium">
-                {session.declared_weight_mg != null
-                  ? `${session.declared_weight_mg.toFixed(2)} mg`
-                  : '—'}
-              </p>
-            </div>
+            {!isMultiVial && (
+              <div>
+                <span className="text-muted-foreground">Declared Weight</span>
+                <p className="font-medium">
+                  {session.declared_weight_mg != null
+                    ? `${session.declared_weight_mg.toFixed(2)} mg`
+                    : '—'}
+                </p>
+              </div>
+            )}
             <div>
               <span className="text-muted-foreground">Session ID</span>
               <p className="font-mono text-xs text-muted-foreground">#{session.id}</p>
             </div>
           </div>
+
+          {/* Per-vial read-only declared weights */}
+          {isMultiVial && (
+            <div className="space-y-2 border-t border-green-500/20 pt-3">
+              {vialKeys.map(key => {
+                const vp = vialParamsMap[key]
+                const vialNum = Number(key)
+                const comps = peptide?.components.filter(c => (c.vial_number ?? 1) === vialNum) ?? []
+                return (
+                  <div key={key} className="flex items-center gap-3 text-sm">
+                    <Badge variant="outline" className="text-[10px] shrink-0">Vial {key}</Badge>
+                    <span className="text-xs text-muted-foreground truncate">
+                      {comps.map(c => c.abbreviation).join(', ') || '—'}
+                    </span>
+                    <span className="ml-auto text-xs font-mono shrink-0">
+                      {vp?.declared_weight_mg != null ? `${vp.declared_weight_mg} mg` : '—'}
+                    </span>
+                  </div>
+                )
+              })}
+            </div>
+          )}
         </div>
 
         {/* Editable target fields */}
@@ -660,36 +947,85 @@ function EditableSessionSummary({
           <p className="text-xs text-muted-foreground">
             You can update the target parameters below.
           </p>
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1.5">
-              <Label htmlFor="edit-target-conc">
-                Target Concentration (µg/mL){' '}
-                <span className="text-destructive">*</span>
-              </Label>
-              <Input
-                id="edit-target-conc"
-                type="number"
-                step="0.1"
-                placeholder="e.g. 1200"
-                value={conc}
-                onChange={e => { setConc(e.target.value); setSaved(false) }}
-              />
+
+          {isMultiVial ? (
+            <div className="space-y-4">
+              {vialKeys.map(key => {
+                const vialNum = Number(key)
+                const comps = peptide?.components.filter(c => (c.vial_number ?? 1) === vialNum) ?? []
+                const edit = vialEdits[key]
+                return (
+                  <div key={key} className="rounded-md border border-zinc-700 p-3 space-y-3">
+                    <div className="flex items-center gap-2">
+                      <Badge variant="outline" className="text-xs">Vial {key}</Badge>
+                      <span className="text-xs text-muted-foreground">
+                        {comps.map(c => c.abbreviation).join(', ')}
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="space-y-1.5">
+                        <Label htmlFor={`edit-v${key}-conc`}>
+                          Target Conc. (µg/mL) <span className="text-destructive">*</span>
+                        </Label>
+                        <Input
+                          id={`edit-v${key}-conc`}
+                          type="number"
+                          step="0.1"
+                          placeholder="e.g. 1200"
+                          value={edit?.conc ?? ''}
+                          onChange={e => setVialEdit(key, 'conc', e.target.value)}
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label htmlFor={`edit-v${key}-vol`}>
+                          Target Vol. (µL) <span className="text-destructive">*</span>
+                        </Label>
+                        <Input
+                          id={`edit-v${key}-vol`}
+                          type="number"
+                          step="0.1"
+                          placeholder="e.g. 1500"
+                          value={edit?.vol ?? ''}
+                          onChange={e => setVialEdit(key, 'vol', e.target.value)}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                )
+              })}
             </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="edit-target-vol">
-                Target Total Volume (µL){' '}
-                <span className="text-destructive">*</span>
-              </Label>
-              <Input
-                id="edit-target-vol"
-                type="number"
-                step="0.1"
-                placeholder="e.g. 1500"
-                value={vol}
-                onChange={e => { setVol(e.target.value); setSaved(false) }}
-              />
+          ) : (
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="edit-target-conc">
+                  Target Concentration (µg/mL){' '}
+                  <span className="text-destructive">*</span>
+                </Label>
+                <Input
+                  id="edit-target-conc"
+                  type="number"
+                  step="0.1"
+                  placeholder="e.g. 1200"
+                  value={conc}
+                  onChange={e => { setConc(e.target.value); setSaved(false) }}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="edit-target-vol">
+                  Target Total Volume (µL){' '}
+                  <span className="text-destructive">*</span>
+                </Label>
+                <Input
+                  id="edit-target-vol"
+                  type="number"
+                  step="0.1"
+                  placeholder="e.g. 1500"
+                  value={vol}
+                  onChange={e => { setVol(e.target.value); setSaved(false) }}
+                />
+              </div>
             </div>
-          </div>
+          )}
 
           {saveError && (
             <Alert variant="destructive">
