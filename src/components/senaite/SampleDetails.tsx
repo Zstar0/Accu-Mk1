@@ -64,6 +64,7 @@ import {
   type ExplorerCOAGeneration,
   type WooOrder,
   getWooOrder,
+  fetchChromatogramLttb,
 } from '@/lib/api'
 import {
   LineChart,
@@ -583,6 +584,185 @@ function HplcAttachmentChart({ attachment }: { attachment: SenaiteAttachment }) 
         </DialogContent>
       </Dialog>
     </>
+  )
+}
+
+/** Renders an LTTB-compressed chromatogram fetched via the backend proxy. */
+function LttbJsonChart({ verificationCode, resolution, label }: { verificationCode: string; resolution: '5k' | '10k'; label: string }) {
+  const [chartData, setChartData] = useState<{ t: number; v: number }[]>([])
+  const [peaks, setPeaks] = useState<{ retention_time: number; height: number; area_percent: number }[]>([])
+  const [meta, setMeta] = useState<{ points: number; source_points: number } | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(false)
+  const [expanded, setExpanded] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    setError(false)
+    fetchChromatogramLttb(verificationCode, resolution)
+      .then(json => {
+        if (cancelled) return
+        const pts = json.x.map((t, i) => ({ t, v: json.y[i] ?? 0 }))
+        setChartData(pts)
+        setPeaks(json.peaks ?? [])
+        setMeta(json.points && json.source_points ? { points: json.points, source_points: json.source_points } : null)
+      })
+      .catch(() => { if (!cancelled) setError(true) })
+      .finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [verificationCode, resolution])
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-52 rounded-lg bg-muted/40 border border-border/30">
+        <Spinner className="size-5" />
+      </div>
+    )
+  }
+  if (error || chartData.length === 0) {
+    return (
+      <div className="flex items-center justify-center h-52 rounded-lg bg-muted/40 border border-border/30">
+        <span className="text-xs text-muted-foreground">Failed to load {label} data</span>
+      </div>
+    )
+  }
+
+  const chartInner = (tall: boolean) => (
+    <LineChart data={chartData} margin={{ top: 8, right: 16, bottom: 20, left: tall ? 8 : 4 }}>
+      <CartesianGrid strokeDasharray="3 3" stroke={CHART_GRID} vertical={false} />
+      <XAxis
+        dataKey="t" type="number" domain={['dataMin', 'dataMax']}
+        tick={{ fontSize: tall ? 11 : 9, fill: CHART_SLATE }}
+        axisLine={{ stroke: CHART_GRID }} tickLine={false}
+        tickFormatter={(v: number) => v.toFixed(1)}
+        label={{ value: 'min', position: 'insideBottom', offset: -10, style: { fontSize: tall ? 11 : 9, fill: CHART_SLATE } }}
+      />
+      <YAxis
+        tick={{ fontSize: tall ? 11 : 9, fill: CHART_SLATE }}
+        axisLine={false} tickLine={false}
+        tickFormatter={(v: number) => v >= 1000 ? `${(v / 1000).toFixed(0)}k` : String(Math.round(v))}
+        width={tall ? 48 : 40}
+      />
+      <Tooltip
+        contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #475569', borderRadius: 6, fontSize: tall ? 12 : 10 }}
+        labelStyle={{ color: CHART_SLATE }} itemStyle={{ color: '#e2e8f0' }}
+        labelFormatter={(v) => `${Number(v).toFixed(3)} min`}
+        formatter={(value) => [Number(value).toFixed(2), 'mAU']}
+      />
+      <Line dataKey="v" dot={false} stroke={CHART_BLUE} strokeWidth={tall ? 2 : 1.5} isAnimationActive={false} />
+    </LineChart>
+  )
+
+  return (
+    <>
+      <div className="relative h-52 w-full group">
+        <ResponsiveContainer width="100%" height="100%">
+          {chartInner(false)}
+        </ResponsiveContainer>
+        <button
+          onClick={() => setExpanded(true)}
+          className="absolute top-1.5 right-1.5 p-1 rounded bg-background/60 border border-border/40 text-muted-foreground opacity-0 group-hover:opacity-100 hover:text-foreground hover:bg-background/90 transition-all cursor-pointer"
+          aria-label="Expand chromatogram" title="View full size"
+        >
+          <Maximize2 size={12} />
+        </button>
+        {meta && (
+          <span className="absolute bottom-1.5 left-1.5 text-[9px] text-muted-foreground/60">
+            {meta.points.toLocaleString()} pts (from {meta.source_points.toLocaleString()})
+          </span>
+        )}
+      </div>
+
+      {/* Peak table */}
+      {peaks.length > 0 && (
+        <div className="mt-1.5">
+          <table className="w-full text-[10px] text-muted-foreground">
+            <thead>
+              <tr className="border-b border-border/30">
+                <th className="text-left py-0.5 font-medium">RT (min)</th>
+                <th className="text-right py-0.5 font-medium">Height</th>
+                <th className="text-right py-0.5 font-medium">Area %</th>
+              </tr>
+            </thead>
+            <tbody>
+              {peaks.map((p, i) => (
+                <tr key={i} className="border-b border-border/20">
+                  <td className="py-0.5">{p.retention_time.toFixed(3)}</td>
+                  <td className="text-right py-0.5">{p.height.toFixed(1)}</td>
+                  <td className="text-right py-0.5">{p.area_percent.toFixed(1)}%</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <Dialog open={expanded} onOpenChange={setExpanded}>
+        <DialogContent className="max-w-[90vw] sm:max-w-[90vw] w-[90vw]">
+          <DialogTitle className="text-sm font-medium truncate pr-6">
+            {label}
+          </DialogTitle>
+          <div className="h-[60vh] w-full">
+            <ResponsiveContainer width="100%" height="100%">
+              {chartInner(true)}
+            </ResponsiveContainer>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </>
+  )
+}
+
+type ChromatogramTab = 'raw' | '5k' | '10k'
+
+/** Tabbed chromatogram viewer: Raw CSV, LTTB 5k, LTTB 10k */
+function TabbedChromatogramChart({
+  attachment,
+  verificationCode,
+  has5k,
+  has10k,
+}: {
+  attachment: SenaiteAttachment
+  verificationCode: string | null
+  has5k: boolean
+  has10k: boolean
+}) {
+  const hasTabs = !!(has5k || has10k)
+  const [activeTab, setActiveTab] = useState<ChromatogramTab>('raw')
+
+  const tabs: { key: ChromatogramTab; label: string; available: boolean }[] = [
+    { key: 'raw', label: 'Raw CSV', available: true },
+    { key: '5k', label: 'LTTB 5k', available: has5k },
+    { key: '10k', label: 'LTTB 10k', available: has10k },
+  ]
+
+  return (
+    <div>
+      {hasTabs && (
+        <div className="flex gap-1 mb-2">
+          {tabs.filter(t => t.available).map(t => (
+            <button
+              key={t.key}
+              type="button"
+              onClick={() => setActiveTab(t.key)}
+              className={cn(
+                'px-2 py-0.5 text-[10px] rounded-md border transition-colors cursor-pointer',
+                activeTab === t.key
+                  ? 'bg-primary/10 border-primary/30 text-primary font-medium'
+                  : 'bg-muted/40 border-border/30 text-muted-foreground hover:text-foreground hover:bg-muted/60',
+              )}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {activeTab === 'raw' && <HplcAttachmentChart attachment={attachment} />}
+      {activeTab === '5k' && verificationCode && <LttbJsonChart verificationCode={verificationCode} resolution="5k" label="LTTB 5k" />}
+      {activeTab === '10k' && verificationCode && <LttbJsonChart verificationCode={verificationCode} resolution="10k" label="LTTB 10k" />}
+    </div>
   )
 }
 
@@ -2292,7 +2472,17 @@ export function SampleDetails() {
                     </div>
                     {attachment.content_type?.startsWith('image/')
                       ? <AttachmentImage attachment={attachment} />
-                      : <HplcAttachmentChart attachment={attachment} />}
+                      : (() => {
+                          const activeGen = coaGenerations.find(g => g.parent_generation_id == null && g.status !== 'superseded')
+                          return (
+                            <TabbedChromatogramChart
+                              attachment={attachment}
+                              verificationCode={activeGen?.verification_code ?? null}
+                              has5k={!!activeGen?.chromatogram_5k_url}
+                              has10k={!!activeGen?.chromatogram_10k_url}
+                            />
+                          )
+                        })()}
                   </div>
                 )
 

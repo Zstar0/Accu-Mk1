@@ -5373,11 +5373,15 @@ class ExplorerCOAGenerationResponse(BaseModel):
     anchor_status: str
     anchor_tx_hash: Optional[str] = None
     chromatogram_s3_key: Optional[str] = None
+    chromatogram_5k_url: Optional[str] = None
+    chromatogram_10k_url: Optional[str] = None
     published_at: Optional[datetime] = None
     superseded_at: Optional[datetime] = None
     created_at: datetime
     order_id: Optional[str] = None
     order_number: Optional[str] = None
+    parent_generation_id: Optional[str] = None
+    ingestion_status: Optional[str] = None
 
 
 class ExplorerSampleEventResponse(BaseModel):
@@ -5767,6 +5771,31 @@ async def get_chromatogram_signed_url(
         raise HTTPException(status_code=503, detail=f"Integration Service unavailable: {e}")
 
 
+@app.get("/explorer/chromatogram-lttb/{verification_code}/{resolution}")
+async def get_chromatogram_lttb(
+    verification_code: str,
+    resolution: str,
+    _current_user=Depends(get_current_user),
+):
+    """Proxy LTTB chromatogram JSON from Integration Service (avoids S3 CORS)."""
+    if resolution not in ("5k", "10k"):
+        raise HTTPException(status_code=400, detail="Resolution must be '5k' or '10k'")
+    try:
+        url = f"{INTEGRATION_SERVICE_URL}/explorer/chromatogram-lttb/{verification_code}/{resolution}"
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(url, headers={"X-API-Key": INTEGRATION_SERVICE_API_KEY})
+            resp.raise_for_status()
+            return Response(
+                content=resp.content,
+                media_type="application/json",
+                headers={"Cache-Control": "private, max-age=300"},
+            )
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(status_code=e.response.status_code, detail=e.response.text)
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Integration Service unavailable: {e}")
+
+
 # ── COA Actions ────────────────────────────────────────────────────
 
 
@@ -5834,12 +5863,24 @@ async def generate_sample_coa(
             pass  # Non-fatal — COA is generated; SENAITE attach is best-effort
 
     # Build a meaningful message from the COA Builder response
+    warnings = data.get("warnings", [])
     if verification_code and generation_number:
         message = f"COA generation #{generation_number} complete — code: {verification_code}"
     elif verification_code:
         message = f"COA generated — code: {verification_code}"
     else:
-        message = "COA generated (no verification code returned)"
+        message = "COA generated but verification code failed — Integration Service error"
+
+    # Surface partial failures: PDF was generated but S3/verification failed
+    if not verification_code:
+        warn_detail = "; ".join(warnings) if warnings else "Integration Service may be unavailable"
+        return SampleCOAActionResponse(
+            success=False,
+            message=f"S3 upload failed: {warn_detail}",
+        )
+
+    if warnings:
+        message += f" (warnings: {'; '.join(warnings)})"
 
     return SampleCOAActionResponse(
         success=True,

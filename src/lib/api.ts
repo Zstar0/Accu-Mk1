@@ -986,6 +986,8 @@ export interface ExplorerCOAGeneration {
   anchor_status: string
   anchor_tx_hash: string | null
   chromatogram_s3_key: string | null
+  chromatogram_5k_url: string | null
+  chromatogram_10k_url: string | null
   published_at: string | null
   superseded_at: string | null
   created_at: string
@@ -1456,6 +1458,21 @@ export async function getSampleAdditionalCOAs(
   } catch {
     return []
   }
+}
+
+/**
+ * Fetch LTTB-compressed chromatogram JSON via backend proxy.
+ */
+export async function fetchChromatogramLttb(
+  verificationCode: string,
+  resolution: '5k' | '10k',
+): Promise<{ x: number[]; y: number[]; peaks?: any[]; points?: number; source_points?: number }> {
+  const response = await fetch(
+    `${API_BASE_URL()}/explorer/chromatogram-lttb/${encodeURIComponent(verificationCode)}/${resolution}`,
+    { headers: getAuthHeaders() },
+  )
+  if (!response.ok) throw new Error(`LTTB fetch failed: ${response.status}`)
+  return response.json()
 }
 
 export interface AdditionalCOAUpdateResponse {
