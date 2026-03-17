@@ -10,28 +10,28 @@ See: .planning/PROJECT.md (updated 2026-03-16)
 ## Current Position
 
 Phase: 10 of 12 (Auto-Create Curve from Standard)
-Plan: 2 of 3 in current phase
-Status: In progress
-Last activity: 2026-03-17 — Completed 10-02-PLAN.md
+Plan: 3 of 3 in current phase (awaiting human verification checkpoint)
+Status: In progress — checkpoint gate
+Last activity: 2026-03-17 — Completed 10-03-PLAN.md auto tasks (2/3), awaiting checkpoint
 
 Progress: [██░░░░░░░░] 20%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 3 (v0.26.0)
+- Total plans completed: 4 (v0.26.0)
 - Average duration: ~5 min
-- Total execution time: ~0.25 hours
+- Total execution time: ~0.3 hours
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
 | 09 | 1/2 | ~6 min | ~6 min |
-| 10 | 2/3 | ~9 min | ~4.5 min |
+| 10 | 3/3 | ~14 min | ~4.7 min |
 
 **Recent Trend:**
-- Last 5 plans: 09-01 (~6 min), 10-01 (~4 min), 10-02 (~5 min)
+- Last 5 plans: 09-01 (~6 min), 10-01 (~4 min), 10-02 (~5 min), 10-03 (~5 min)
 - Trend: stable/fast
 
 ## Accumulated Context
@@ -52,13 +52,17 @@ Progress: [██░░░░░░░░] 20%
 - Standard wizard uses separate buildStandardWizardSteps (1 stock + N dilutions), production flow untouched
 - Concentration levels sorted descending for serial dilution order, minimum 3 enforced
 - Standard-dilution steps reuse Step3Dilution component (same measurement flow per vial)
+- Vial-to-injection mapping uses sorted index position (vial_number ascending, injection name natural sort)
+- Client-side regression is preview only — backend computes authoritative values
+- Standard branch in flyout is purely additive — non-standard flow unchanged
 
 ### Key Source Files
 
 - `backend/models.py` — CalibrationCurve model, WizardSession, WizardMeasurement
 - `backend/main.py` — All endpoints, SENAITE integration, HPLC analysis, wizard sessions
 - `backend/calculations/hplc_processor.py` — HPLC calculation engine
-- `src/components/hplc/SamplePrepHplcFlyout.tsx` — HPLC processing flyout
+- `src/components/hplc/SamplePrepHplcFlyout.tsx` — HPLC processing flyout (+ standard detection)
+- `src/components/hplc/StandardCurveReview.tsx` — Standard curve preview + creation UI
 - `src/components/hplc/SamplePreps.tsx` — Sample preps table
 - `src/components/hplc/wizard/steps/Step1SampleInfo.tsx` — Wizard step 1 (+ concentration editor for standards)
 - `src/components/hplc/CreateAnalysis.tsx` — Wizard step routing (renderStep + navigation)
@@ -76,5 +80,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-03-17
-Stopped at: Completed 10-02-PLAN.md (standard wizard step builder + concentration editor)
+Stopped at: 10-03-PLAN.md checkpoint gate (auto tasks done, human-verify pending)
 Resume file: None
