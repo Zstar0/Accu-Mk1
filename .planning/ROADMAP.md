@@ -42,11 +42,11 @@
 3. CalibrationCurve table in the database includes source_sample_id, chromatogram_data, source_sharepoint_folder, manufacturer, and notes columns (verified via DB inspection or API schema)
 4. Standard preps flow through stock prep, dilution, and measurement wizard steps identically to production preps — no steps skipped or altered
 
-**Plans:** TBD
+**Plans:** 2 plans
 
 Plans:
-- [ ] 09-01: CalibrationCurve schema migration (5 new fields) + backend model update
-- [ ] 09-02: Standard toggle in wizard Step 1 (is_standard, manufacturer, notes) + persistence through wizard + list badge and filter
+- [ ] 09-01-PLAN.md — Schema migrations (CalibrationCurve + WizardSession + sample_preps) and API/type updates
+- [ ] 09-02-PLAN.md — Standard toggle in wizard Step 1, list badge, and filter dropdown
 
 ---
 
