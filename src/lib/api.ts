@@ -2018,6 +2018,39 @@ export async function createCalibration(
   }
 }
 
+export interface StandardCalibrationInput {
+  sample_prep_id: string
+  concentrations: number[]
+  areas: number[]
+  rts?: number[]
+  chromatogram_data?: { times: number[]; signals: number[] }
+  source_sharepoint_folder?: string
+  vendor?: string
+  notes?: string
+  instrument?: string
+}
+
+export async function createCalibrationFromStandard(
+  peptideId: number,
+  data: StandardCalibrationInput
+): Promise<CalibrationCurve> {
+  const response = await fetch(
+    `${API_BASE_URL()}/peptides/${peptideId}/calibrations/from-standard`,
+    {
+      method: 'POST',
+      headers: getBearerHeaders('application/json'),
+      body: JSON.stringify(data),
+    }
+  )
+  if (!response.ok) {
+    const err = await response.json().catch(() => null)
+    throw new Error(
+      err?.detail || `Create calibration from standard failed: ${response.status}`
+    )
+  }
+  return response.json()
+}
+
 export interface CalibrationCurveUpdateInput {
   reference_rt?: number | null
   rt_tolerance?: number
