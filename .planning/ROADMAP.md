@@ -45,8 +45,8 @@
 **Plans:** 2 plans
 
 Plans:
-- [ ] 09-01-PLAN.md — Schema migrations (CalibrationCurve + WizardSession + sample_preps) and API/type updates
-- [ ] 09-02-PLAN.md — Standard toggle in wizard Step 1, list badge, and filter dropdown
+- [x] 09-01-PLAN.md — Schema migrations (CalibrationCurve + WizardSession + sample_preps) and API/type updates
+- [x] 09-02-PLAN.md — Standard toggle in wizard Step 1, list badge, and filter dropdown
 
 ---
 
@@ -64,10 +64,12 @@ Plans:
 3. The auto-created curve contains chromatogram_data (times + signals from DAD1A CSV) and links back to the source sample prep ID and SharePoint folder
 4. Manufacturer and notes from the standard prep metadata are carried onto the new curve record
 
-**Plans:** TBD
+**Plans:** 3 plans
 
 Plans:
-- [ ] 10-01: Auto-create CalibrationCurve on standard HPLC completion (trigger logic, field population, provenance linking)
+- [ ] 10-01-PLAN.md — Backend endpoint POST /peptides/{id}/calibrations/from-standard with full provenance
+- [ ] 10-02-PLAN.md — Wizard standard mode: configurable concentration levels, multi-dilution step builder
+- [ ] 10-03-PLAN.md — HPLC flyout standard detection, curve preview, and confirm-to-create flow
 
 ---
 
@@ -119,6 +121,6 @@ Plans:
 | 07. Per-Row Workflow Transitions | v0.12.0 | 2/2 | Complete | 2026-02-25 |
 | 08. Bulk Selection & Floating Toolbar | v0.12.0 | 2/2 | Complete | 2026-02-25 |
 | 09. Data Model + Standard Prep Flag | v0.26.0 | 2/2 | Complete | 2026-03-16 |
-| 10. Auto-Create Curve from Standard | v0.26.0 | 0/1 | Not started | - |
+| 10. Auto-Create Curve from Standard | v0.26.0 | 0/3 | Not started | - |
 | 11. Backfill Existing Curves | v0.26.0 | 0/1 | Not started | - |
 | 12. Chromatogram Overlay | v0.26.0 | 0/1 | Not started | - |
