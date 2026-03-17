@@ -2,89 +2,112 @@
 
 ## Completed Milestones
 
-- **v0.11.0 — New Analysis Wizard** ✅ SHIPPED 2026-02-20 — 5 phases, 9 plans, guided sample prep wizard with Mettler Toledo scale integration and SENAITE sample lookup. [Archive →](milestones/v0.11.0-new-analysis-wizard.md)
+- **v0.11.0 — New Analysis Wizard** SHIPPED 2026-02-20 — 5 phases, 9 plans, guided sample prep wizard with Mettler Toledo scale integration and SENAITE sample lookup. [Archive -->](milestones/v0.11.0-new-analysis-wizard.md)
+
+<details>
+<summary>v0.12.0 — Analysis Results & Workflow Actions — SHIPPED 2026-02-25</summary>
+
+- [x] **Phase 06: Data Foundation + Inline Editing** — uid/keyword model, backend endpoints, AnalysisTable extraction, and click-to-edit result cells
+- [x] **Phase 07: Per-Row Workflow Transitions** — state-aware action menus for all four transitions with sample-level refresh after each action
+- [x] **Phase 08: Bulk Selection & Floating Toolbar** — checkbox selection, floating batch action toolbar, and sequential bulk processing
+
+</details>
 
 ## Current Milestone
 
-### v0.12.0 — Analysis Results & Workflow Actions (In Progress)
+### v0.26.0 — Standard Sample Preps & Calibration Curve Chromatograms
 
-**Milestone Goal:** Enable lab staff to manage SENAITE analysis results directly from the Sample Details page — inline editing of result values, and full workflow transitions (submit, verify, retract, reject) with both per-row actions and bulk operations via a modern UI.
+**Milestone Goal:** Let lab staff prepare standards through the same wizard as production samples, auto-generate calibration curves from standard HPLC results, backfill existing curves with chromatogram data, and visually overlay standard vs sample chromatograms during HPLC processing.
 
-- [x] **Phase 06: Data Foundation + Inline Editing** ✅ — uid/keyword model, backend endpoints, AnalysisTable extraction, and click-to-edit result cells
-- [x] **Phase 07: Per-Row Workflow Transitions** ✅ — state-aware action menus for all four transitions with sample-level refresh after each action
-- [x] **Phase 08: Bulk Selection & Floating Toolbar** ✅ — checkbox selection, floating batch action toolbar, and sequential bulk processing
+- [ ] **Phase 09: Data Model + Standard Prep Flag** — schema additions for CalibrationCurve, standard toggle + metadata in wizard, standard badge + filter in list
+- [ ] **Phase 10: Auto-Create Curve from Standard** — HPLC completion on a standard triggers automatic calibration curve creation with full provenance
+- [ ] **Phase 11: Backfill Existing Curves** — edit existing curves to link Sample ID, fetch chromatogram from SharePoint, edit manufacturer/notes
+- [ ] **Phase 12: Chromatogram Overlay** — render standard reference trace alongside sample trace in HPLC flyout
 
 ---
 
 ## Phase Details
 
-### Phase 06: Data Foundation + Inline Editing
+### Phase 09: Data Model + Standard Prep Flag
 
-**Goal:** Lab staff can enter analysis result values inline from the Sample Details page, with the data model and component structure in place to support all subsequent workflow work.
+**Goal:** Lab staff can prepare a standard sample through the wizard with manufacturer and notes metadata, see it badged in the list, and the CalibrationCurve model has all fields needed for downstream automation.
 
-**Depends on:** Phase 05 (v0.11.0 — SENAITE sample lookup delivered)
+**Depends on:** Phase 08 (v0.12.0 milestone complete)
 
-**Requirements:** DATA-01, DATA-02, DATA-03, DATA-04, COMP-01, COMP-02, EDIT-01, EDIT-02, EDIT-03, EDIT-04
+**Requirements:** STDP-01, STDP-02, STDP-03, STDP-04, STDP-05, CURV-01, CURV-02, CURV-03, CURV-04, CURV-05
 
 **Success Criteria** (what must be TRUE when this phase completes):
-1. Each analysis row in Sample Details exposes its UID; network tab shows uid present in the lookup response
-2. Swagger UI can call the result and transition endpoints against a live SENAITE instance and get meaningful responses
-3. The analyses table renders from a standalone AnalysisTable component — SampleDetails.tsx no longer contains analysis rendering logic inline
-4. User can click a result cell on an unassigned analysis, type a value, press Enter to save, and see the cell update immediately with a success toast
-5. User can press Escape to cancel an edit with no change persisted; a failed save rolls back the cell to its previous value with an error toast
+1. User can toggle "Standard" in wizard Step 1; toggling reveals manufacturer and notes fields that persist through all wizard steps and are saved on the sample prep record
+2. Sample Preps list shows a visible "Standard" badge on standard preps; user can filter the list to show only standards or only production preps
+3. CalibrationCurve table in the database includes source_sample_id, chromatogram_data, source_sharepoint_folder, manufacturer, and notes columns (verified via DB inspection or API schema)
+4. Standard preps flow through stock prep, dilution, and measurement wizard steps identically to production preps — no steps skipped or altered
 
-**Plans:** 4 plans in 3 waves
+**Plans:** TBD
 
 Plans:
-- [x] 06-01-PLAN.md — Data model: uid/keyword on SenaiteAnalysis (backend Pydantic + frontend TypeScript + lookup route mapping)
-- [x] 06-02-PLAN.md — Backend endpoints: POST /wizard/senaite/analyses/{uid}/result and /transition with EXPECTED_POST_STATES validation
-- [x] 06-03-PLAN.md — Component extraction: AnalysisTable standalone component from SampleDetails.tsx
-- [x] 06-04-PLAN.md — Inline editing: click-to-edit cells, Enter/Escape/Tab, optimistic update, rollback, toast feedback
+- [ ] 09-01: CalibrationCurve schema migration (5 new fields) + backend model update
+- [ ] 09-02: Standard toggle in wizard Step 1 (is_standard, manufacturer, notes) + persistence through wizard + list badge and filter
 
 ---
 
-### Phase 07: Per-Row Workflow Transitions
+### Phase 10: Auto-Create Curve from Standard
 
-**Goal:** Lab staff can execute any valid workflow transition (submit, verify, retract, reject) on individual analysis rows, with the sample-level status badge and progress bar reflecting the change immediately.
+**Goal:** When HPLC processing completes on a standard sample prep, the system automatically creates a calibration curve with calculated values, chromatogram data, and full provenance linkage — no manual curve entry needed.
 
-**Depends on:** Phase 06
+**Depends on:** Phase 09
 
-**Requirements:** WKFL-01, WKFL-02, WKFL-03, WKFL-04, WKFL-05, WKFL-06, WKFL-07, REFR-01, REFR-02
+**Requirements:** AUTO-01, AUTO-02, AUTO-03, AUTO-04, AUTO-05, AUTO-06
 
 **Success Criteria** (what must be TRUE when this phase completes):
-1. Each analysis row shows a dropdown menu that only surfaces transitions valid for its current state — an unassigned row never shows "Verify", a verified row never shows "Submit"
-2. User can submit an unassigned analysis with a result value and watch the row badge change to to_be_verified without a page reload
-3. User can verify a to_be_verified analysis; the row badge updates and the sample-level progress bar and status badge reflect the change
-4. Retract and reject show a confirmation dialog before executing; dismissing the dialog leaves the row unchanged
-5. While a transition is in-flight, the row shows a loading spinner and all action controls on that row are disabled — preventing double-submit
+1. After running Process HPLC on a standard prep, a new CalibrationCurve row exists for the matching peptide without the user creating it manually
+2. The auto-created curve contains slope, intercept, r_squared, and reference_rt values derived from the standard's HPLC analysis
+3. The auto-created curve contains chromatogram_data (times + signals from DAD1A CSV) and links back to the source sample prep ID and SharePoint folder
+4. Manufacturer and notes from the standard prep metadata are carried onto the new curve record
 
-**Plans:** 2 plans in 2 waves
+**Plans:** TBD
 
 Plans:
-- [x] 07-01-PLAN.md — API function + transition hook + ALLOWED_TRANSITIONS constants + Actions column DropdownMenu + AlertDialog for destructive actions
-- [x] 07-02-PLAN.md — Silent sample refresh after transitions: refreshSample wiring in SampleDetails for badge/progress/counter updates
+- [ ] 10-01: Auto-create CalibrationCurve on standard HPLC completion (trigger logic, field population, provenance linking)
 
 ---
 
-### Phase 08: Bulk Selection & Floating Toolbar
+### Phase 11: Backfill Existing Curves
 
-**Goal:** Lab staff can select multiple analyses at once and apply batch actions, making the common "submit all results" morning workflow a single operation instead of N individual clicks.
+**Goal:** Lab staff can retroactively enrich existing calibration curves by linking a Sample ID (which triggers chromatogram fetch from SharePoint) and editing manufacturer/notes metadata.
 
-**Depends on:** Phase 07
+**Depends on:** Phase 10
 
-**Requirements:** BULK-01, BULK-02, BULK-03, BULK-04
+**Requirements:** BKFL-01, BKFL-02, BKFL-03
 
 **Success Criteria** (what must be TRUE when this phase completes):
-1. User can check one or more analysis rows; a floating toolbar appears showing the selection count and available batch action buttons
-2. Batch action buttons in the toolbar only show actions valid for ALL selected analyses — selecting a mix of unassigned and verified rows hides "Submit" from the toolbar
-3. User can trigger "Submit selected" and watch a progress counter ("Submitting 2/5...") advance through each analysis sequentially, with a final summary toast ("3 submitted, 1 failed")
-4. After bulk operations complete, the sample-level progress bar and status badge reflect the aggregate result with a single refresh
+1. User can open an existing calibration curve's edit form, set or change the source Sample ID, and save — the curve record updates with the linked sample prep ID
+2. When a source Sample ID is saved, the system locates the corresponding DAD1A chromatogram in SharePoint and populates chromatogram_data on the curve automatically
+3. User can edit manufacturer and notes fields on any existing calibration curve and see the changes persist
 
-**Plans:** 2 plans in 2 waves
+**Plans:** TBD
 
 Plans:
-- [x] 08-01-PLAN.md — Checkbox indeterminate visual + useBulkAnalysisTransition hook (selection state, sequential bulk processing, summary toast)
-- [x] 08-02-PLAN.md — Checkbox column, floating toolbar, state-aware batch buttons, progress counter, destructive bulk confirmation in AnalysisTable
+- [ ] 11-01: Curve edit form (Sample ID link, manufacturer, notes) + SharePoint chromatogram auto-fetch on save
+
+---
+
+### Phase 12: Chromatogram Overlay
+
+**Goal:** During HPLC processing, the flyout displays the active calibration curve's standard chromatogram as a reference trace underneath the sample's chromatogram, enabling direct visual comparison on a shared time axis.
+
+**Depends on:** Phase 11
+
+**Requirements:** CHRO-01, CHRO-02, CHRO-03, CHRO-04
+
+**Success Criteria** (what must be TRUE when this phase completes):
+1. When opening the HPLC flyout for a sample that has an active calibration curve with chromatogram_data, two traces appear on the chart instead of one
+2. The standard trace renders in a distinct style (dashed or lighter) clearly distinguishable from the sample trace (solid)
+3. Both traces share the same time axis — zooming or panning affects both traces together, and peaks at the same retention time visually align
+
+**Plans:** TBD
+
+Plans:
+- [ ] 12-01: Load curve chromatogram_data in HPLC flyout + dual-trace rendering with synchronized axis
 
 ---
 
@@ -92,6 +115,10 @@ Plans:
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
-| 06. Data Foundation + Inline Editing | v0.12.0 | 4/4 | ✓ Complete | 2026-02-25 |
-| 07. Per-Row Workflow Transitions | v0.12.0 | 2/2 | ✓ Complete | 2026-02-25 |
-| 08. Bulk Selection & Floating Toolbar | v0.12.0 | 2/2 | ✓ Complete | 2026-02-25 |
+| 06. Data Foundation + Inline Editing | v0.12.0 | 4/4 | Complete | 2026-02-25 |
+| 07. Per-Row Workflow Transitions | v0.12.0 | 2/2 | Complete | 2026-02-25 |
+| 08. Bulk Selection & Floating Toolbar | v0.12.0 | 2/2 | Complete | 2026-02-25 |
+| 09. Data Model + Standard Prep Flag | v0.26.0 | 0/2 | Not started | - |
+| 10. Auto-Create Curve from Standard | v0.26.0 | 0/1 | Not started | - |
+| 11. Backfill Existing Curves | v0.26.0 | 0/1 | Not started | - |
+| 12. Chromatogram Overlay | v0.26.0 | 0/1 | Not started | - |

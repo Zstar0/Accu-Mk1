@@ -1,111 +1,102 @@
-# Requirements: Accu-Mk1 v0.12.0
+# Requirements: Accu-Mk1 v0.26.0
 
-**Defined:** 2026-02-24
+**Defined:** 2026-03-16
 **Core Value:** Streamlined morning workflow: import CSV, review batch, calculate purity, push to SENAITE. One operator, one workstation, no friction.
 
-## v0.12.0 Requirements
+## v0.26.0 Requirements
 
-Requirements for Analysis Results & Workflow Actions milestone. Each maps to roadmap phases.
+Requirements for Standard Sample Preps & Calibration Curve Chromatograms milestone.
 
-### Data Foundation
+### Standard Sample Prep
 
-- [x] **DATA-01**: Analysis UID and keyword exposed in SenaiteAnalysis type (backend Pydantic model + frontend TypeScript interface)
-- [x] **DATA-02**: Backend endpoint to set an analysis result value via SENAITE REST API (`POST /update/{uid}` with `{"Result": value}`)
-- [x] **DATA-03**: Backend endpoint to trigger a workflow transition on an analysis via SENAITE REST API (`POST /update/{uid}` with `{"transition": name}`)
-- [x] **DATA-04**: Backend verifies post-transition `review_state` in SENAITE response (not just HTTP status) to detect silent rejections
+- [ ] **STDP-01**: User can mark a sample prep as "Standard" during New Analysis wizard Step 1
+- [ ] **STDP-02**: When marked as Standard, user can enter manufacturer name (e.g., "Cayman", "NxGen")
+- [ ] **STDP-03**: When marked as Standard, user can enter free-text notes for the standard
+- [ ] **STDP-04**: Standard preps flow through the same wizard steps as production preps (stock prep, dilution, measurements)
+- [ ] **STDP-05**: Sample Preps list shows a "Standard" badge on standard preps and supports filtering by standard vs production
 
-### Component Extraction
+### Calibration Curve Schema
 
-- [x] **COMP-01**: AnalysisTable extracted from SampleDetails.tsx as a standalone component with its own file
-- [x] **COMP-02**: AnalysisTable receives analyses data and callbacks as props (clean interface, no direct SENAITE fetching inside)
+- [ ] **CURV-01**: CalibrationCurve model includes source_sample_id field (links to the standard SamplePrep that built it)
+- [ ] **CURV-02**: CalibrationCurve model includes chromatogram_data field (JSON: times[] + signals[] from DAD1A CSV)
+- [ ] **CURV-03**: CalibrationCurve model includes source_sharepoint_folder field (path to .rslt data)
+- [ ] **CURV-04**: CalibrationCurve model includes manufacturer field (vendor who supplied the standard)
+- [ ] **CURV-05**: CalibrationCurve model includes notes field (free-text per curve)
 
-### Inline Editing
+### Auto-Create Curve from Standard
 
-- [x] **EDIT-01**: User can click a result cell on an unassigned analysis to enter/edit the value inline
-- [x] **EDIT-02**: Enter saves the value, Escape cancels edit, Tab moves to next editable cell
-- [x] **EDIT-03**: Saving shows optimistic update immediately in the cell with rollback on SENAITE error
-- [x] **EDIT-04**: Toast notification confirms successful save or shows error message on failure
+- [ ] **AUTO-01**: When Process HPLC completes on a standard sample prep, system auto-creates a new CalibrationCurve for the matching peptide
+- [ ] **AUTO-02**: Auto-created curve is populated with slope, intercept, r_squared from the standard's analysis results
+- [ ] **AUTO-03**: Auto-created curve stores reference_rt from the standard's main peak retention time
+- [ ] **AUTO-04**: Auto-created curve stores chromatogram_data from the DAD1A CSV trace
+- [ ] **AUTO-05**: Auto-created curve links source_sample_id and source_sharepoint_folder from the standard prep
+- [ ] **AUTO-06**: Auto-created curve carries manufacturer and notes from the standard sample prep metadata
 
-### Workflow Transitions
+### Backfill Existing Curves
 
-- [x] **WKFL-01**: Each analysis row shows a state-aware action menu with only valid transitions for that analysis's current state
-- [x] **WKFL-02**: User can submit an unassigned analysis (sets result value + triggers submit transition in one action)
-- [x] **WKFL-03**: User can verify a to_be_verified analysis (triggers verify transition)
-- [x] **WKFL-04**: User can retract a to_be_verified or verified analysis (triggers retract transition)
-- [x] **WKFL-05**: User can reject a to_be_verified analysis (triggers reject transition)
-- [x] **WKFL-06**: Retract and reject display a confirmation dialog before executing the transition
-- [x] **WKFL-07**: Per-row loading spinner during transition execution (disables other actions on that row)
+- [ ] **BKFL-01**: User can edit an existing calibration curve to add/change source_sample_id (Sample ID link)
+- [ ] **BKFL-02**: When a source_sample_id is set and saved, system locates the corresponding chromatogram data in SharePoint and stores it
+- [ ] **BKFL-03**: User can edit manufacturer and notes on existing calibration curves
 
-### Bulk Operations
+### Chromatogram Overlay
 
-- [x] **BULK-01**: Checkbox column for selecting multiple analyses in the table
-- [x] **BULK-02**: Floating toolbar appears when rows are selected, showing selection count + batch action buttons
-- [x] **BULK-03**: Batch actions are state-aware (only show actions valid for ALL selected analyses)
-- [x] **BULK-04**: Bulk operations process analyses sequentially with per-item success/failure reporting via toast
-
-### Sample State Refresh
-
-- [x] **REFR-01**: After any analysis transition, re-fetch the parent sample to reflect updated progress bar and status badge
-- [x] **REFR-02**: Sample-level auto-transitions (e.g. all analyses submitted -> sample moves to to_be_verified) are visible immediately after refresh
+- [ ] **CHRO-01**: During Process HPLC, the flyout loads the active calibration curve's chromatogram_data (if available)
+- [ ] **CHRO-02**: Standard chromatogram trace rendered as a background/reference trace (lighter/dashed style)
+- [ ] **CHRO-03**: Sample chromatogram trace rendered as the primary trace (solid style) overlaid on the standard
+- [ ] **CHRO-04**: Both traces share a synchronized time axis for direct visual comparison
 
 ## Future Requirements
 
 Deferred to later milestones.
 
-### Result Entry Enhancements
+### Identity Enhancements
 
-- **EDIT-05**: Save result value without submitting (draft mode for entering results over time)
-- **EDIT-06**: Interim/partial result fields support
-- **EDIT-07**: Remarks/comments per analysis result
-
-### Advanced Workflow
-
-- **WKFL-08**: Retest transition (creates new analysis, marks old as retested)
-- **WKFL-09**: Role-based transition visibility (only show "Verify" to users with verify permission)
+- **IDEN-01**: Relative Retention Time (RRT) calculation for method-independent identity checks
+- **IDEN-02**: Method-locked calibration curve matching (enforce same HPLC method between standard and sample)
+- **IDEN-03**: UV spectral matching from DAD data for compound confirmation
 
 ## Out of Scope
 
 | Feature | Reason |
 |---------|--------|
-| Direct SENAITE UI embedding (iframe) | Defeats purpose of building native UX |
-| Real-time multi-user sync | Single-operator workflow; refresh-on-action sufficient |
-| Analysis creation/deletion | SENAITE manages analysis lifecycle; we only edit results and transition states |
-| Instrument result auto-import | Separate workflow (HPLC import wizard); this milestone is manual entry + transitions |
-| Email notifications on transitions | No email infrastructure in v1 |
+| Blend-specific calibration standards | Standards are single-peptide only; blends use per-component curves |
+| RRT calculation | Future enhancement; manual visual comparison sufficient for now |
+| Method field on calibration curves | Useful but not blocking; defer to identity enhancements milestone |
+| Auto-publish curves | Newly created curves should require manual activation |
 
 ## Traceability
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| DATA-01 | Phase 06 | Complete |
-| DATA-02 | Phase 06 | Complete |
-| DATA-03 | Phase 06 | Complete |
-| DATA-04 | Phase 06 | Complete |
-| COMP-01 | Phase 06 | Complete |
-| COMP-02 | Phase 06 | Complete |
-| EDIT-01 | Phase 06 | Complete |
-| EDIT-02 | Phase 06 | Complete |
-| EDIT-03 | Phase 06 | Complete |
-| EDIT-04 | Phase 06 | Complete |
-| WKFL-01 | Phase 07 | Complete |
-| WKFL-02 | Phase 07 | Complete |
-| WKFL-03 | Phase 07 | Complete |
-| WKFL-04 | Phase 07 | Complete |
-| WKFL-05 | Phase 07 | Complete |
-| WKFL-06 | Phase 07 | Complete |
-| WKFL-07 | Phase 07 | Complete |
-| REFR-01 | Phase 07 | Complete |
-| REFR-02 | Phase 07 | Complete |
-| BULK-01 | Phase 08 | Complete |
-| BULK-02 | Phase 08 | Complete |
-| BULK-03 | Phase 08 | Complete |
-| BULK-04 | Phase 08 | Complete |
+| STDP-01 | Phase 09 | Pending |
+| STDP-02 | Phase 09 | Pending |
+| STDP-03 | Phase 09 | Pending |
+| STDP-04 | Phase 09 | Pending |
+| STDP-05 | Phase 09 | Pending |
+| CURV-01 | Phase 09 | Pending |
+| CURV-02 | Phase 09 | Pending |
+| CURV-03 | Phase 09 | Pending |
+| CURV-04 | Phase 09 | Pending |
+| CURV-05 | Phase 09 | Pending |
+| AUTO-01 | Phase 10 | Pending |
+| AUTO-02 | Phase 10 | Pending |
+| AUTO-03 | Phase 10 | Pending |
+| AUTO-04 | Phase 10 | Pending |
+| AUTO-05 | Phase 10 | Pending |
+| AUTO-06 | Phase 10 | Pending |
+| BKFL-01 | Phase 11 | Pending |
+| BKFL-02 | Phase 11 | Pending |
+| BKFL-03 | Phase 11 | Pending |
+| CHRO-01 | Phase 12 | Pending |
+| CHRO-02 | Phase 12 | Pending |
+| CHRO-03 | Phase 12 | Pending |
+| CHRO-04 | Phase 12 | Pending |
 
 **Coverage:**
-- v0.12.0 requirements: 23 total
+- v0.26.0 requirements: 23 total
 - Mapped to phases: 23
 - Unmapped: 0
 
 ---
-*Requirements defined: 2026-02-24*
-*Last updated: 2026-02-25 — Phase 08 requirements marked Complete (all v0.12.0 requirements complete)*
+*Requirements defined: 2026-03-16*
+*Last updated: 2026-03-16 after roadmap creation*

@@ -54,20 +54,21 @@ Streamlined morning workflow: import CSV → review batch → calculate purity �
 - **Logic principle**: Backend owns all scientific calculations — UI never parses files or calculates metrics
 - **Audit principle**: All imports and pushes must be idempotent, traceable, repeatable
 
-## Current Milestone: v0.12.0 — Analysis Results & Workflow Actions
+## Current Milestone: v0.26.0 — Standard Sample Preps & Calibration Curve Chromatograms
 
-**Goal:** Enable lab staff to manage SENAITE analysis results directly from the Sample Details page — inline editing of result values, and full workflow transitions (submit, verify, retract, reject) with both per-row actions and bulk operations via a modern UI.
+**Goal:** Enable lab techs to run reference standards through the normal sample prep and HPLC workflow, automatically generating calibration curves with chromatogram data, then overlay standard vs sample chromatograms during production HPLC processing for visual identity confirmation.
 
 **Target features:**
-- Inline result value editing (click-to-edit cells for unassigned analyses)
-- Submit results to SENAITE (set value + trigger submit transition)
-- Verify submitted results (second-reviewer verification)
-- Retract results (pull back submitted/verified results for re-entry)
-- Reject results (permanently reject an analysis)
-- Per-row action menus (state-aware — only show valid transitions)
-- Checkbox bulk selection with floating toolbar for batch operations
-- Sample-level state refresh (progress bar, status badge update after transitions)
-- Backend endpoints proxying all transitions to SENAITE REST API
+- Mark sample preps as "Standard" (Cayman/vendor reference standards)
+- Standards flow through normal wizard (stock prep, dilution, HPLC)
+- Auto-create calibration curve from standard HPLC results (slope, intercept, reference_rt, chromatogram trace)
+- CalibrationCurve schema additions: source_sample_id, chromatogram_data, manufacturer, notes
+- Backfill existing curves with Sample ID to locate historical chromatogram data
+- Chromatogram overlay in Process HPLC flyout (standard trace vs sample trace)
+
+## Previous Milestone: v0.12.0 — Analysis Results & Workflow Actions (COMPLETE)
+
+**Delivered:** Inline result editing, per-row workflow transitions (submit/verify/retract/reject), bulk selection with floating toolbar, sample-level state refresh. All 23 requirements complete.
 
 ## Previous State: v0.11.0 SHIPPED 2026-02-20
 
