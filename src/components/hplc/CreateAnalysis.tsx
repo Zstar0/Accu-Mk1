@@ -18,6 +18,7 @@ function renderStep(step: WizardStep | undefined): React.ReactNode {
     case 'sample-info': return <Step1SampleInfo />
     case 'stock-prep': return <Step2StockPrep vialNumber={step.vialNumber} />
     case 'dilution': return <Step3Dilution vialNumber={step.vialNumber} />
+    case 'standard-dilution': return <Step3Dilution vialNumber={step.vialNumber} />
   }
 }
 

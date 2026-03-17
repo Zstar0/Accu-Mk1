@@ -60,6 +60,9 @@ export function Step1SampleInfo() {
   const [isStandard, setIsStandard] = useState(false)
   const [manufacturer, setManufacturer] = useState('')
   const [standardNotes, setStandardNotes] = useState('')
+  const [standardConcentrations, setLocalConcentrations] = useState<string[]>(
+    ['1000', '500', '250', '100', '10', '1']
+  )
 
   // Multi-vial state: per-vial → per-analyte declared weight, target conc, target vol
   const [vialAnalyteState, setVialAnalyteState] = useState<VialAnalyteStateMap>({})
@@ -227,9 +230,16 @@ export function Step1SampleInfo() {
       })
     : true
 
+  // Standards use concentration levels instead of target conc/vol fields
+  const standardReady = isStandard
+    ? standardConcentrations.filter(s => { const n = parseFloat(s); return !isNaN(n) && n > 0 }).length >= 3
+    : true
+
   const canSubmit =
     peptideId !== null &&
-    (isMultiAnalyte ? multiVialReady : (targetConcUgMl.trim() !== '' && targetTotalVolUl.trim() !== '')) &&
+    (isStandard
+      ? standardReady
+      : (isMultiAnalyte ? multiVialReady : (targetConcUgMl.trim() !== '' && targetTotalVolUl.trim() !== ''))) &&
     !submitting
 
   async function handleSubmit(e: React.FormEvent) {
@@ -250,9 +260,30 @@ export function Step1SampleInfo() {
         data.is_standard = true
         if (manufacturer.trim()) data.manufacturer = manufacturer.trim()
         if (standardNotes.trim()) data.standard_notes = standardNotes.trim()
+
+        // Build standard vial_params from concentration levels
+        const validConcs = standardConcentrations
+          .map(s => parseFloat(s))
+          .filter(n => !isNaN(n) && n > 0)
+
+        if (validConcs.length < 3) {
+          setSubmitError('At least 3 valid concentration levels are required for standards.')
+          setSubmitting(false)
+          return
+        }
+
+        const stdVialParams: Record<string, VialParams> = {}
+        validConcs.forEach((conc, i) => {
+          stdVialParams[String(i + 1)] = {
+            declared_weight_mg: null,
+            target_conc_ug_ml: conc,
+            target_total_vol_ul: 1000, // Default total volume
+          }
+        })
+        data.vial_params = stdVialParams
       }
 
-      if (isMultiAnalyte) {
+      if (!isStandard && isMultiAnalyte) {
         // Blend: build per-analyte params within each vial
         const vialParams: Record<string, {
           declared_weight_mg: number | null
@@ -478,6 +509,58 @@ export function Step1SampleInfo() {
               value={standardNotes}
               onChange={e => setStandardNotes(e.target.value)}
             />
+          </div>
+
+          {/* Concentration levels editor */}
+          <div className="space-y-2">
+            <Label className="text-sm font-medium">Concentration Levels (ug/mL)</Label>
+            <div className="flex flex-wrap gap-2">
+              {[...standardConcentrations]
+                .map((val, idx) => ({ val, idx }))
+                .sort((a, b) => {
+                  const na = parseFloat(a.val) || 0
+                  const nb = parseFloat(b.val) || 0
+                  return nb - na
+                })
+                .map(({ val, idx }) => (
+                  <div key={idx} className="flex items-center gap-1">
+                    <Input
+                      type="number"
+                      step="0.1"
+                      className="w-24 h-8 text-sm"
+                      value={val}
+                      onChange={e => {
+                        setLocalConcentrations(prev => {
+                          const next = [...prev]
+                          next[idx] = e.target.value
+                          return next
+                        })
+                      }}
+                    />
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="h-8 w-8 p-0 text-muted-foreground hover:text-destructive"
+                      disabled={standardConcentrations.length <= 3}
+                      onClick={() => {
+                        setLocalConcentrations(prev => prev.filter((_, i) => i !== idx))
+                      }}
+                    >
+                      X
+                    </Button>
+                  </div>
+                ))}
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-7 text-xs"
+              onClick={() => setLocalConcentrations(prev => [...prev, ''])}
+            >
+              Add Level
+            </Button>
           </div>
         </div>
       )}
@@ -709,10 +792,10 @@ export function Step1SampleInfo() {
                 {/* Peptide override dropdown (shown after lookup) */}
                 {lookupResult && peptideDropdown}
 
-                {/* Declared Weight + Target fields — single-vial or per-vial */}
-                {lookupResult && isMultiAnalyte ? (
+                {/* Declared Weight + Target fields — hidden for standards (uses concentration levels) */}
+                {lookupResult && !isStandard && isMultiAnalyte ? (
                   perVialFields
-                ) : lookupResult ? (
+                ) : lookupResult && !isStandard ? (
                   <>
                     {/* Declared Weight — editable override of SENAITE value */}
                     <div className="space-y-1.5">
@@ -774,8 +857,8 @@ export function Step1SampleInfo() {
                   />
                 </div>
 
-                {/* Declared Weight + Target fields — single or multi-vial */}
-                {isMultiAnalyte ? perVialFields : (
+                {/* Declared Weight + Target fields — hidden for standards (uses concentration levels) */}
+                {!isStandard && (isMultiAnalyte ? perVialFields : (
                   <>
                     <div className="space-y-1.5">
                       <Label htmlFor="declared-weight">Sample Vial + cap + peptide (mg)</Label>
@@ -790,7 +873,7 @@ export function Step1SampleInfo() {
                     </div>
                     {targetFields}
                   </>
-                )}
+                ))}
 
                 <Button type="submit" disabled={!canSubmit} className="w-full">
                   {submitting ? (
@@ -826,8 +909,8 @@ export function Step1SampleInfo() {
               />
             </div>
 
-            {/* Declared Weight + Target fields — single or multi-vial */}
-            {isMultiAnalyte ? perVialFields : (
+            {/* Declared Weight + Target fields — hidden for standards (uses concentration levels) */}
+            {!isStandard && (isMultiAnalyte ? perVialFields : (
               <>
                 <div className="space-y-1.5">
                   <Label htmlFor="declared-weight">Sample Vial + cap + peptide (mg)</Label>
@@ -842,7 +925,7 @@ export function Step1SampleInfo() {
                 </div>
                 {targetFields}
               </>
-            )}
+            ))}
 
             <Button type="submit" disabled={!canSubmit} className="w-full">
               {submitting ? (
