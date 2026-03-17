@@ -338,6 +338,10 @@ class CalibrationCurve(Base):
     operator: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)             # Who ran the standard
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)                       # Free-form notes
 
+    # --- Phase 09: Chromatogram storage ---
+    chromatogram_data: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)           # {times: number[], signals: number[]} from DAD1A CSV
+    source_sharepoint_folder: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)  # SharePoint folder path
+
     # Relationships
     peptide: Mapped["Peptide"] = relationship("Peptide", back_populates="calibration_curves")
     analyte: Mapped[Optional["PeptideAnalyte"]] = relationship("PeptideAnalyte")
@@ -441,6 +445,11 @@ class WizardSession(Base):
     # Step 1: Sample info
     sample_id_label: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
     declared_weight_mg: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+
+    # Phase 09: Standard prep metadata
+    is_standard: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    manufacturer: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    standard_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     # Step 1b: Target dilution parameters (manually entered)
     target_conc_ug_ml: Mapped[Optional[float]] = mapped_column(Float, nullable=True)

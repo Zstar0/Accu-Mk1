@@ -115,6 +115,10 @@ def ensure_sample_preps_table() -> None:
             cur.execute("ALTER TABLE sample_preps ADD COLUMN IF NOT EXISTS is_blend BOOLEAN DEFAULT FALSE")
             cur.execute("ALTER TABLE sample_preps ADD COLUMN IF NOT EXISTS components_json JSONB")
             cur.execute("ALTER TABLE sample_preps ADD COLUMN IF NOT EXISTS vial_data JSONB")
+            # Phase 09: Standard prep metadata
+            cur.execute("ALTER TABLE sample_preps ADD COLUMN IF NOT EXISTS is_standard BOOLEAN DEFAULT FALSE")
+            cur.execute("ALTER TABLE sample_preps ADD COLUMN IF NOT EXISTS manufacturer VARCHAR(200)")
+            cur.execute("ALTER TABLE sample_preps ADD COLUMN IF NOT EXISTS standard_notes TEXT")
         conn.commit()
 
 

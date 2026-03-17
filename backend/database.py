@@ -73,6 +73,13 @@ def _run_migrations():
         "ALTER TABLE wizard_sessions ADD COLUMN IF NOT EXISTS vial_params JSONB",
         "ALTER TABLE wizard_measurements ADD COLUMN IF NOT EXISTS vial_number INTEGER DEFAULT 1",
         "ALTER TABLE blend_components ADD COLUMN IF NOT EXISTS vial_number INTEGER DEFAULT 1",
+        # Phase 09: CalibrationCurve chromatogram storage
+        "ALTER TABLE calibration_curves ADD COLUMN IF NOT EXISTS chromatogram_data JSON",
+        "ALTER TABLE calibration_curves ADD COLUMN IF NOT EXISTS source_sharepoint_folder VARCHAR(1000)",
+        # Phase 09: Standard prep metadata on wizard sessions
+        "ALTER TABLE wizard_sessions ADD COLUMN IF NOT EXISTS is_standard BOOLEAN DEFAULT FALSE",
+        "ALTER TABLE wizard_sessions ADD COLUMN IF NOT EXISTS manufacturer VARCHAR(200)",
+        "ALTER TABLE wizard_sessions ADD COLUMN IF NOT EXISTS standard_notes TEXT",
         # Fix FK constraint: allow cascade SET NULL when calibration curve is deleted
         """DO $$ BEGIN
             IF EXISTS (SELECT 1 FROM information_schema.table_constraints
