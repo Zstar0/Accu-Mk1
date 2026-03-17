@@ -68,16 +68,16 @@ Deferred to later milestones.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| STDP-01 | Phase 09 | Pending |
-| STDP-02 | Phase 09 | Pending |
-| STDP-03 | Phase 09 | Pending |
-| STDP-04 | Phase 09 | Pending |
-| STDP-05 | Phase 09 | Pending |
-| CURV-01 | Phase 09 | Pending |
-| CURV-02 | Phase 09 | Pending |
-| CURV-03 | Phase 09 | Pending |
-| CURV-04 | Phase 09 | Pending |
-| CURV-05 | Phase 09 | Pending |
+| STDP-01 | Phase 09 | Complete |
+| STDP-02 | Phase 09 | Complete |
+| STDP-03 | Phase 09 | Complete |
+| STDP-04 | Phase 09 | Complete |
+| STDP-05 | Phase 09 | Complete |
+| CURV-01 | Phase 09 | Complete |
+| CURV-02 | Phase 09 | Complete |
+| CURV-03 | Phase 09 | Complete |
+| CURV-04 | Phase 09 | Complete |
+| CURV-05 | Phase 09 | Complete |
 | AUTO-01 | Phase 10 | Pending |
 | AUTO-02 | Phase 10 | Pending |
 | AUTO-03 | Phase 10 | Pending |

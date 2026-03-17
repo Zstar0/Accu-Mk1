@@ -19,7 +19,7 @@
 
 **Milestone Goal:** Let lab staff prepare standards through the same wizard as production samples, auto-generate calibration curves from standard HPLC results, backfill existing curves with chromatogram data, and visually overlay standard vs sample chromatograms during HPLC processing.
 
-- [ ] **Phase 09: Data Model + Standard Prep Flag** — schema additions for CalibrationCurve, standard toggle + metadata in wizard, standard badge + filter in list
+- [x] **Phase 09: Data Model + Standard Prep Flag** — schema additions for CalibrationCurve, standard toggle + metadata in wizard, standard badge + filter in list
 - [ ] **Phase 10: Auto-Create Curve from Standard** — HPLC completion on a standard triggers automatic calibration curve creation with full provenance
 - [ ] **Phase 11: Backfill Existing Curves** — edit existing curves to link Sample ID, fetch chromatogram from SharePoint, edit manufacturer/notes
 - [ ] **Phase 12: Chromatogram Overlay** — render standard reference trace alongside sample trace in HPLC flyout
@@ -118,7 +118,7 @@ Plans:
 | 06. Data Foundation + Inline Editing | v0.12.0 | 4/4 | Complete | 2026-02-25 |
 | 07. Per-Row Workflow Transitions | v0.12.0 | 2/2 | Complete | 2026-02-25 |
 | 08. Bulk Selection & Floating Toolbar | v0.12.0 | 2/2 | Complete | 2026-02-25 |
-| 09. Data Model + Standard Prep Flag | v0.26.0 | 0/2 | Not started | - |
+| 09. Data Model + Standard Prep Flag | v0.26.0 | 2/2 | Complete | 2026-03-16 |
 | 10. Auto-Create Curve from Standard | v0.26.0 | 0/1 | Not started | - |
 | 11. Backfill Existing Curves | v0.26.0 | 0/1 | Not started | - |
 | 12. Chromatogram Overlay | v0.26.0 | 0/1 | Not started | - |

@@ -30,6 +30,7 @@ import {
   type VialParams,
   type WizardSessionResponse,
 } from '@/lib/api'
+import { Switch } from '@/components/ui/switch'
 import { useWizardStore } from '@/store/wizard-store'
 
 interface AnalyteParamLocal {
@@ -434,29 +435,26 @@ export function Step1SampleInfo() {
     </div>
   )
 
-  // Standard prep toggle + conditional metadata fields
+  // Standard sample toggle + conditional metadata fields
   const standardFields = (
     <div className="space-y-3">
       <div className="flex items-center gap-2">
-        <input
-          type="checkbox"
+        <Switch
           id="is-standard"
           checked={isStandard}
-          onChange={e => {
-            setIsStandard(e.target.checked)
-            if (!e.target.checked) {
+          onCheckedChange={checked => {
+            setIsStandard(checked)
+            if (!checked) {
               setManufacturer('')
               setStandardNotes('')
             }
-            // Clear blend selection when toggling standard on
-            if (e.target.checked && selectedPeptide?.is_blend) {
+            if (checked && selectedPeptide?.is_blend) {
               setPeptideId(null)
             }
           }}
-          className="h-4 w-4 rounded border-zinc-600 bg-zinc-800 text-amber-500 focus:ring-amber-500/30"
         />
         <Label htmlFor="is-standard" className="text-sm font-medium">
-          Standard Prep
+          Standard Sample
         </Label>
       </div>
       {isStandard && (
@@ -616,6 +614,9 @@ export function Step1SampleInfo() {
             {/* SENAITE Lookup Tab */}
             <TabsContent value="lookup">
               <form onSubmit={handleSubmit} className="space-y-4">
+                {/* Standard sample toggle — always visible at top */}
+                {standardFields}
+
                 {/* Search field */}
                 <div className="space-y-1.5">
                   <Label htmlFor="senaite-id">SENAITE Sample ID</Label>
@@ -708,9 +709,6 @@ export function Step1SampleInfo() {
                 {/* Peptide override dropdown (shown after lookup) */}
                 {lookupResult && peptideDropdown}
 
-                {/* Standard toggle (shown after lookup) */}
-                {lookupResult && standardFields}
-
                 {/* Declared Weight + Target fields — single-vial or per-vial */}
                 {lookupResult && isMultiAnalyte ? (
                   perVialFields
@@ -758,6 +756,9 @@ export function Step1SampleInfo() {
             {/* Manual Entry Tab */}
             <TabsContent value="manual">
               <form onSubmit={handleSubmit} className="space-y-4">
+                {/* Standard sample toggle — first */}
+                {standardFields}
+
                 {/* Peptide dropdown */}
                 {peptideDropdown}
 
@@ -772,9 +773,6 @@ export function Step1SampleInfo() {
                     onChange={e => setSampleIdLabel(e.target.value)}
                   />
                 </div>
-
-                {/* Standard toggle */}
-                {standardFields}
 
                 {/* Declared Weight + Target fields — single or multi-vial */}
                 {isMultiAnalyte ? perVialFields : (
@@ -810,6 +808,9 @@ export function Step1SampleInfo() {
         ) : (
           // Manual entry only when SENAITE is disabled
           <form onSubmit={handleSubmit} className="space-y-4">
+            {/* Standard sample toggle — first */}
+            {standardFields}
+
             {/* Peptide dropdown */}
             {peptideDropdown}
 
@@ -824,9 +825,6 @@ export function Step1SampleInfo() {
                 onChange={e => setSampleIdLabel(e.target.value)}
               />
             </div>
-
-            {/* Standard toggle */}
-            {standardFields}
 
             {/* Declared Weight + Target fields — single or multi-vial */}
             {isMultiAnalyte ? perVialFields : (
@@ -1061,6 +1059,18 @@ function EditableSessionSummary({
       <CardContent className="space-y-4">
         {/* Read-only fields */}
         <div className="rounded-md border border-green-500/30 bg-green-50/50 dark:bg-green-950/20 p-4 space-y-3">
+          {/* Standard sample indicator */}
+          {session.is_standard && (
+            <div className="flex items-center gap-2 mb-2">
+              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30">
+                Standard Sample
+              </span>
+              {session.manufacturer && (
+                <span className="text-xs text-muted-foreground">{session.manufacturer}</span>
+              )}
+            </div>
+          )}
+
           <div className="grid grid-cols-2 gap-3 text-sm">
             <div>
               <span className="text-muted-foreground">Peptide</span>
