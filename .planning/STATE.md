@@ -10,28 +10,28 @@ See: .planning/PROJECT.md (updated 2026-03-16)
 ## Current Position
 
 Phase: 09 of 12 (Data Model + Standard Prep Flag)
-Plan: 0 of 2 in current phase
-Status: Ready to plan
-Last activity: 2026-03-16 — Roadmap created for v0.26.0
+Plan: 1 of 2 in current phase
+Status: In progress
+Last activity: 2026-03-16 — Completed 09-01-PLAN.md
 
-Progress: [░░░░░░░░░░] 0%
+Progress: [██░░░░░░░░] 20%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 0 (v0.26.0)
-- Average duration: -
-- Total execution time: 0 hours
+- Total plans completed: 1 (v0.26.0)
+- Average duration: ~6 min
+- Total execution time: ~0.1 hours
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| - | - | - | - |
+| 09 | 1/2 | ~6 min | ~6 min |
 
 **Recent Trend:**
-- Last 5 plans: -
-- Trend: -
+- Last 5 plans: 09-01 (~6 min)
+- Trend: starting
 
 ## Accumulated Context
 
@@ -44,6 +44,8 @@ Progress: [░░░░░░░░░░] 0%
 - Manufacturer and notes fields added per curve for provenance tracking
 - Sample chromatogram already displayed in HPLC flyout; standard overlay is the new addition
 - Per-analyte prep data does NOT affect HPLC processing pipeline
+- Used `standard_notes` (not `notes`) on WizardSession to avoid collision with SamplePrep.notes
+- `is_standard` defaults to FALSE on all tables (existing data = production preps)
 
 ### Key Source Files
 
@@ -66,5 +68,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-03-16
-Stopped at: Roadmap created for v0.26.0 (4 phases, 5 plans)
+Stopped at: Completed 09-01-PLAN.md (data model + API + TypeScript types)
 Resume file: None
