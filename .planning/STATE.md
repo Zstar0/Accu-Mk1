@@ -9,29 +9,30 @@ See: .planning/PROJECT.md (updated 2026-03-16)
 
 ## Current Position
 
-Phase: 09 of 12 (Data Model + Standard Prep Flag)
-Plan: 1 of 2 in current phase
+Phase: 10 of 12 (Auto-Create Curve from Standard)
+Plan: 1 of 3 in current phase
 Status: In progress
-Last activity: 2026-03-16 — Completed 09-01-PLAN.md
+Last activity: 2026-03-17 — Completed 10-01-PLAN.md
 
 Progress: [██░░░░░░░░] 20%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 1 (v0.26.0)
-- Average duration: ~6 min
-- Total execution time: ~0.1 hours
+- Total plans completed: 2 (v0.26.0)
+- Average duration: ~5 min
+- Total execution time: ~0.2 hours
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
 | 09 | 1/2 | ~6 min | ~6 min |
+| 10 | 1/3 | ~4 min | ~4 min |
 
 **Recent Trend:**
-- Last 5 plans: 09-01 (~6 min)
-- Trend: starting
+- Last 5 plans: 09-01 (~6 min), 10-01 (~4 min)
+- Trend: stable/fast
 
 ## Accumulated Context
 
@@ -46,6 +47,8 @@ Progress: [██░░░░░░░░] 20%
 - Per-analyte prep data does NOT affect HPLC processing pipeline
 - Used `standard_notes` (not `notes`) on WizardSession to avoid collision with SamplePrep.notes
 - `is_standard` defaults to FALSE on all tables (existing data = production preps)
+- Query sample_preps by sample_id string (not integer id) for standard validation — HPLC flyout uses prep identifiers like "P-0136"
+- Used `_cal_to_response()` wrapper in from-standard endpoint for SharePoint URL resolution
 
 ### Key Source Files
 
@@ -67,6 +70,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-16
-Stopped at: Completed 09-01-PLAN.md (data model + API + TypeScript types)
+Last session: 2026-03-17
+Stopped at: Completed 10-01-PLAN.md (backend endpoint + frontend API function)
 Resume file: None
