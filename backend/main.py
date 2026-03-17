@@ -1604,6 +1604,19 @@ class CalibrationDataInput(BaseModel):
     notes: Optional[str] = None
 
 
+class StandardCalibrationInput(BaseModel):
+    """Input for auto-creating calibration curve from standard HPLC processing."""
+    sample_prep_id: str                        # e.g. "P-0136" — the standard prep
+    concentrations: list[float]                # ug/mL per dilution level
+    areas: list[float]                         # Peak areas per dilution level
+    rts: Optional[list[float]] = None          # Retention times per dilution level
+    chromatogram_data: Optional[dict] = None   # {times: [], signals: []} from DAD1A CSV
+    source_sharepoint_folder: Optional[str] = None  # SharePoint folder path
+    vendor: Optional[str] = None               # Manufacturer from standard prep metadata
+    notes: Optional[str] = None                # Notes from standard prep metadata
+    instrument: Optional[str] = None           # HPLC instrument identifier
+
+
 def _cal_to_response(cal: CalibrationCurve) -> CalibrationCurveResponse:
     """Convert CalibrationCurve model to response with SharePoint URL."""
     resp = CalibrationCurveResponse.model_validate(cal)
@@ -2417,6 +2430,94 @@ async def create_calibration(
     db.commit()
     db.refresh(curve)
     return curve
+
+
+@app.post("/peptides/{peptide_id}/calibrations/from-standard", response_model=CalibrationCurveResponse, status_code=201)
+async def create_calibration_from_standard(
+    peptide_id: int,
+    data: StandardCalibrationInput,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """
+    Auto-create a calibration curve from standard HPLC processing results.
+
+    Receives computed concentration/area/RT data from standard processing,
+    validates the source sample prep is a standard, computes regression,
+    and creates a fully-linked CalibrationCurve with provenance fields.
+    """
+    # 1. Validate peptide exists
+    peptide = db.execute(select(Peptide).where(Peptide.id == peptide_id)).scalar_one_or_none()
+    if not peptide:
+        raise HTTPException(404, f"Peptide {peptide_id} not found")
+
+    # 2. Validate sample_prep_id exists and is a standard
+    from mk1_db import ensure_sample_preps_table, get_mk1_db
+    from psycopg2.extras import RealDictCursor
+    ensure_sample_preps_table()
+    with get_mk1_db() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                "SELECT id, sample_id, is_standard FROM sample_preps WHERE sample_id = %s",
+                [data.sample_prep_id],
+            )
+            prep_row = cur.fetchone()
+    if not prep_row:
+        raise HTTPException(400, f"Sample prep '{data.sample_prep_id}' not found")
+    if not prep_row.get("is_standard"):
+        raise HTTPException(400, f"Sample prep '{data.sample_prep_id}' is not a standard")
+
+    # 3. Calculate regression
+    try:
+        regression = calculate_calibration_curve(data.concentrations, data.areas)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+    # 4. Deactivate existing active curves for this peptide
+    active_cals = db.execute(
+        select(CalibrationCurve)
+        .where(CalibrationCurve.peptide_id == peptide_id)
+        .where(CalibrationCurve.is_active == True)
+    ).scalars().all()
+    for cal in active_cals:
+        cal.is_active = False
+
+    # 5. Compute reference RT from provided RTs
+    avg_rt = None
+    if data.rts and len(data.rts) > 0:
+        avg_rt = round(sum(data.rts) / len(data.rts), 4)
+
+    # 6. Build standard_data dict
+    std_data: dict = {
+        "concentrations": data.concentrations,
+        "areas": data.areas,
+    }
+    if data.rts:
+        std_data["rts"] = data.rts
+
+    # 7. Create CalibrationCurve with full provenance
+    from datetime import datetime, timezone
+    curve = CalibrationCurve(
+        peptide_id=peptide_id,
+        slope=regression["slope"],
+        intercept=regression["intercept"],
+        r_squared=regression["r_squared"],
+        standard_data=std_data,
+        reference_rt=avg_rt,
+        source_sample_id=data.sample_prep_id,
+        chromatogram_data=data.chromatogram_data,
+        source_sharepoint_folder=data.source_sharepoint_folder,
+        vendor=data.vendor,
+        notes=data.notes,
+        instrument=data.instrument,
+        source_filename=f"Standard: {data.sample_prep_id}",
+        source_date=datetime.now(timezone.utc).isoformat(),
+        is_active=True,
+    )
+    db.add(curve)
+    db.commit()
+    db.refresh(curve)
+    return _cal_to_response(curve)
 
 
 @app.post("/peptides/{peptide_id}/calibrations/{calibration_id}/activate", response_model=CalibrationCurveResponse)
