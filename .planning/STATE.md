@@ -10,28 +10,28 @@ See: .planning/PROJECT.md (updated 2026-03-16)
 ## Current Position
 
 Phase: 10 of 12 (Auto-Create Curve from Standard)
-Plan: 1 of 3 in current phase
+Plan: 2 of 3 in current phase
 Status: In progress
-Last activity: 2026-03-17 — Completed 10-01-PLAN.md
+Last activity: 2026-03-17 — Completed 10-02-PLAN.md
 
 Progress: [██░░░░░░░░] 20%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 2 (v0.26.0)
+- Total plans completed: 3 (v0.26.0)
 - Average duration: ~5 min
-- Total execution time: ~0.2 hours
+- Total execution time: ~0.25 hours
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
 | 09 | 1/2 | ~6 min | ~6 min |
-| 10 | 1/3 | ~4 min | ~4 min |
+| 10 | 2/3 | ~9 min | ~4.5 min |
 
 **Recent Trend:**
-- Last 5 plans: 09-01 (~6 min), 10-01 (~4 min)
+- Last 5 plans: 09-01 (~6 min), 10-01 (~4 min), 10-02 (~5 min)
 - Trend: stable/fast
 
 ## Accumulated Context
@@ -49,6 +49,9 @@ Progress: [██░░░░░░░░] 20%
 - `is_standard` defaults to FALSE on all tables (existing data = production preps)
 - Query sample_preps by sample_id string (not integer id) for standard validation — HPLC flyout uses prep identifiers like "P-0136"
 - Used `_cal_to_response()` wrapper in from-standard endpoint for SharePoint URL resolution
+- Standard wizard uses separate buildStandardWizardSteps (1 stock + N dilutions), production flow untouched
+- Concentration levels sorted descending for serial dilution order, minimum 3 enforced
+- Standard-dilution steps reuse Step3Dilution component (same measurement flow per vial)
 
 ### Key Source Files
 
@@ -57,7 +60,9 @@ Progress: [██░░░░░░░░] 20%
 - `backend/calculations/hplc_processor.py` — HPLC calculation engine
 - `src/components/hplc/SamplePrepHplcFlyout.tsx` — HPLC processing flyout
 - `src/components/hplc/SamplePreps.tsx` — Sample preps table
-- `src/components/hplc/wizard/steps/Step1SampleInfo.tsx` — Wizard step 1
+- `src/components/hplc/wizard/steps/Step1SampleInfo.tsx` — Wizard step 1 (+ concentration editor for standards)
+- `src/components/hplc/CreateAnalysis.tsx` — Wizard step routing (renderStep + navigation)
+- `src/store/wizard-store.ts` — Wizard state, step builders, unlock/complete logic
 - `src/lib/api.ts` — All TypeScript types and API functions
 
 ### Blockers/Concerns
@@ -71,5 +76,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-03-17
-Stopped at: Completed 10-01-PLAN.md (backend endpoint + frontend API function)
+Stopped at: Completed 10-02-PLAN.md (standard wizard step builder + concentration editor)
 Resume file: None
