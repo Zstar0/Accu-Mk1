@@ -48,6 +48,7 @@ import {
 import { AnalysisResults } from '@/components/hplc/AnalysisResults'
 import { CalculationVisuals } from '@/components/hplc/CalculationVisuals'
 import { SenaiteResultsView } from '@/components/hplc/SenaiteResultsView'
+import { StandardCurveReview } from '@/components/hplc/StandardCurveReview'
 
 // ─── Injection tabs ───────────────────────────────────────────────────────────
 
@@ -501,6 +502,9 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
   // View toggle
   const [view, setView] = useState<'analysis' | 'results'>('analysis')
 
+  // Standard curve creation success
+  const [standardCurveCreated, setStandardCurveCreated] = useState(false)
+
   // Debug console overlay
   const [showDebug, setShowDebug] = useState(false)
 
@@ -528,6 +532,7 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
       setComponentCals(new Map())
       setComponentSelectedCalIds(new Map())
       setView('analysis')
+      setStandardCurveCreated(false)
       setShowDebug(false)
     }
   }, [open, prep.id])
@@ -577,6 +582,10 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
   useEffect(() => {
     if (open) loadPeakData()
   }, [open, loadPeakData])
+
+  // ── Standard detection ─────────────────────────────────────────────────────
+
+  const isStandard = prep.is_standard === true
 
   // ── Blend detection ────────────────────────────────────────────────────────
 
@@ -817,6 +826,64 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
     }
   }, [analyteResults, isBlend, labelToComponent, componentCals, componentSelectedCalIds])
 
+  // ── Standard curve data extraction ─────────────────────────────────────────
+  // For standard preps: map vial_data concentrations to injection peak areas/RTs.
+  // Each vial in vial_data corresponds to one concentration level. Injections are
+  // matched by index order (sorted by injection name).
+
+  const standardCurveData = useMemo(() => {
+    if (!isStandard || !parseResult || !prep.vial_data || prep.vial_data.length === 0) {
+      return null
+    }
+
+    // Sort vials by vial_number (ascending = lowest concentration first for standard dilutions)
+    const sortedVials = [...prep.vial_data].sort((a, b) => a.vial_number - b.vial_number)
+
+    // Get injections sorted by name for consistent ordering
+    const sortedInjections = [...parseResult.injections].sort((a, b) =>
+      a.injection_name.localeCompare(b.injection_name, undefined, { numeric: true })
+    )
+
+    const concentrations: number[] = []
+    const areas: number[] = []
+    const rts: number[] = []
+
+    // Match vials to injections by position
+    const count = Math.min(sortedVials.length, sortedInjections.length)
+    for (let i = 0; i < count; i++) {
+      const vial = sortedVials[i]
+      const inj = sortedInjections[i]
+      if (!vial || !inj) continue
+
+      const conc = vial.target_conc_ug_ml
+      if (conc == null || conc <= 0) continue
+
+      // Extract main peak area and RT
+      const mainPeak = inj.main_peak_index >= 0 && inj.main_peak_index < inj.peaks.length
+        ? inj.peaks[inj.main_peak_index]
+        : null
+
+      if (mainPeak) {
+        concentrations.push(conc)
+        areas.push(mainPeak.area)
+        rts.push(mainPeak.retention_time)
+      }
+    }
+
+    return concentrations.length > 0 ? { concentrations, areas, rts } : null
+  }, [isStandard, parseResult, prep.vial_data])
+
+  // Extract first valid chromatogram trace for standard curve provenance
+  const standardChromData = useMemo(() => {
+    if (!isStandard || chromTraces.length === 0) return undefined
+    const first = chromTraces[0]
+    if (!first || first.points.length === 0) return undefined
+    return {
+      times: first.points.map(p => p[0]),
+      signals: first.points.map(p => p[1]),
+    }
+  }, [isStandard, chromTraces])
+
   // ─── Render ─────────────────────────────────────────────────────────────────
 
   return (
@@ -840,6 +907,19 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
                 {match.folder_name}
               </p>
             </div>
+            {isStandard && (
+              <Badge
+                variant="outline"
+                className={cn(
+                  'text-[10px] shrink-0',
+                  standardCurveCreated
+                    ? 'border-emerald-500/40 text-emerald-600 dark:text-emerald-400'
+                    : 'border-amber-500/40 text-amber-600 dark:text-amber-400',
+                )}
+              >
+                {standardCurveCreated ? 'Curve Created' : 'Standard'}
+              </Badge>
+            )}
             <button
               onClick={() => setShowDebug(v => !v)}
               className={cn(
@@ -966,6 +1046,25 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
                 {/* Content after data loaded */}
                 {!loading && parseResult && (
                   <>
+                    {/* ── Standard curve review (replaces weights + calibration for standards) ── */}
+                    {isStandard && standardCurveData && (
+                      <StandardCurveReview
+                        peptideId={prep.peptide_id}
+                        samplePrepId={prep.senaite_sample_id ?? prep.sample_id}
+                        concentrations={standardCurveData.concentrations}
+                        areas={standardCurveData.areas}
+                        rts={standardCurveData.rts}
+                        chromatogramData={standardChromData}
+                        sharepointFolder={match.folder_name}
+                        vendor={prep.manufacturer ?? undefined}
+                        notes={prep.standard_notes ?? undefined}
+                        onCurveCreated={() => setStandardCurveCreated(true)}
+                      />
+                    )}
+
+                    {/* ── Normal (non-standard) flow: weights + calibration ── */}
+                    {!isStandard && (
+                    <>
                     {/* Weights from prep */}
                     <div>
                       <p className="text-sm font-semibold mb-3">Sample Prep Weights</p>
@@ -1073,6 +1172,8 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
                         </div>
                       ) : null}
                     </div>
+                    </>
+                    )}
 
                     {runError && (
                       <div className="flex items-start gap-2 p-3 rounded-md border border-destructive/30 bg-destructive/5">
