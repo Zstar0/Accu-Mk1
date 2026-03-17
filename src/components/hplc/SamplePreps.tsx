@@ -182,6 +182,7 @@ export function SamplePreps() {
   const [updatingStatusId, setUpdatingStatusId] = useState<number | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<SamplePrep | null>(null)
   const [deleting, setDeleting] = useState(false)
+  const [standardFilter, setStandardFilter] = useState<'all' | 'standard' | 'production'>('all')
 
   // Scan state
   const [scanPhase, setScanPhase] = useState<ScanPhase>('idle')
@@ -199,14 +200,18 @@ export function SamplePreps() {
     setLoading(true)
     setError(null)
     try {
-      const data = await listSamplePreps({ search: q || undefined, limit: 100 })
+      const data = await listSamplePreps({
+        search: q || undefined,
+        is_standard: standardFilter === 'all' ? undefined : standardFilter === 'standard',
+        limit: 100,
+      })
       setPreps(data)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load sample preps')
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [standardFilter])
 
   useEffect(() => { load() }, [load])
 
@@ -352,16 +357,27 @@ export function SamplePreps() {
         />
       )}
 
-      {/* Search */}
-      <div className="relative max-w-sm">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-        <Input
-          id="sample-preps-search"
-          placeholder="Search by ID, SENAITE ID, peptide…"
-          className="pl-9"
-          value={searchInput}
-          onChange={e => setSearchInput(e.target.value)}
-        />
+      {/* Search + filter */}
+      <div className="flex items-center gap-3">
+        <div className="relative max-w-sm flex-1">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          <Input
+            id="sample-preps-search"
+            placeholder="Search by ID, SENAITE ID, peptide…"
+            className="pl-9"
+            value={searchInput}
+            onChange={e => setSearchInput(e.target.value)}
+          />
+        </div>
+        <select
+          value={standardFilter}
+          onChange={e => setStandardFilter(e.target.value as 'all' | 'standard' | 'production')}
+          className="rounded-md border border-zinc-700 bg-zinc-800 px-2 py-1.5 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+        >
+          <option value="all">All Preps</option>
+          <option value="standard">Standards Only</option>
+          <option value="production">Production Only</option>
+        </select>
       </div>
 
       {error && (
@@ -415,9 +431,16 @@ export function SamplePreps() {
                     >
                       <td className="px-4 py-3 font-mono font-medium">{prep.senaite_sample_id ?? '—'}</td>
                       <td className="px-4 py-3">
-                        {prep.peptide_abbreviation
-                          ? <span className="font-medium">{prep.peptide_abbreviation}</span>
-                          : <span className="text-muted-foreground">—</span>}
+                        <div className="flex items-center gap-1.5">
+                          {prep.peptide_abbreviation
+                            ? <span className="font-medium">{prep.peptide_abbreviation}</span>
+                            : <span className="text-muted-foreground">—</span>}
+                          {prep.is_standard && (
+                            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30">
+                              STD
+                            </span>
+                          )}
+                        </div>
                       </td>
                       <td className="px-4 py-3 text-right font-mono">{fmtNum(prep.declared_weight_mg, 2, 'mg')}</td>
                       <td className="px-4 py-3 text-right font-mono">{fmtNum(prep.target_conc_ug_ml, 1, 'µg/mL')}</td>
