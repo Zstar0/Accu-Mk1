@@ -158,6 +158,7 @@ def create_sample_prep(data: dict) -> dict:
         "actual_conc_ug_ml", "actual_diluent_vol_ul", "actual_stock_vol_ul",
         "actual_total_vol_ul", "status", "notes",
         "is_blend", "components_json",
+        "is_standard", "manufacturer", "standard_notes",
     ]
     with get_mk1_db() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
@@ -180,26 +181,32 @@ def create_sample_prep(data: dict) -> dict:
 
 def list_sample_preps(
     search: Optional[str] = None,
+    is_standard: Optional[bool] = None,
     limit: int = 100,
     offset: int = 0,
 ) -> list[dict]:
     """
     List sample preps from accumark_mk1, ordered newest-first.
     Optional search matches sample_id, senaite_sample_id, or peptide_name.
+    Optional is_standard filter limits to standard or non-standard preps.
     """
     query = """
         SELECT *
         FROM sample_preps
     """
     params: list = []
+    conditions: list[str] = []
     if search:
-        query += """
-            WHERE sample_id        ILIKE %s
-               OR senaite_sample_id ILIKE %s
-               OR peptide_name      ILIKE %s
-        """
+        conditions.append(
+            "(sample_id ILIKE %s OR senaite_sample_id ILIKE %s OR peptide_name ILIKE %s)"
+        )
         term = f"%{search}%"
         params.extend([term, term, term])
+    if is_standard is not None:
+        conditions.append("is_standard = %s")
+        params.append(is_standard)
+    if conditions:
+        query += " WHERE " + " AND ".join(conditions)
     query += " ORDER BY created_at DESC LIMIT %s OFFSET %s"
     params.extend([limit, offset])
 

@@ -1559,6 +1559,9 @@ class CalibrationCurveResponse(BaseModel):
     injection_volume_ul: Optional[float] = None
     operator: Optional[str] = None
     notes: Optional[str] = None
+    # Phase 09: Chromatogram storage
+    chromatogram_data: Optional[dict] = None
+    source_sharepoint_folder: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -6132,6 +6135,10 @@ class WizardSessionCreate(BaseModel):
     target_conc_ug_ml: Optional[float] = None
     target_total_vol_ul: Optional[float] = None
     vial_params: Optional[dict] = None  # Multi-vial: {"1": {declared_weight_mg, target_conc, target_vol}, ...}
+    # Phase 09: Standard prep metadata
+    is_standard: Optional[bool] = None
+    manufacturer: Optional[str] = None
+    standard_notes: Optional[str] = None
 
 
 class WizardSessionUpdate(BaseModel):
@@ -6141,6 +6148,10 @@ class WizardSessionUpdate(BaseModel):
     target_conc_ug_ml: Optional[float] = None
     target_total_vol_ul: Optional[float] = None
     peak_area: Optional[float] = None
+    # Phase 09: Standard prep metadata
+    is_standard: Optional[bool] = None
+    manufacturer: Optional[str] = None
+    standard_notes: Optional[str] = None
 
 
 class WizardMeasurementCreate(BaseModel):
@@ -6188,6 +6199,10 @@ class WizardSessionResponse(BaseModel):
     calculations: Optional[dict] = None  # Populated by _build_session_response()
     vial_params: Optional[dict] = None  # Per-vial target params (multi-vial blends)
     vial_calculations: Optional[dict] = None  # Per-vial calculations keyed by vial number
+    # Phase 09: Standard prep metadata
+    is_standard: bool = False
+    manufacturer: Optional[str] = None
+    standard_notes: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -6320,13 +6335,64 @@ def _build_session_response(session: WizardSession, db: Session) -> WizardSessio
         except Exception:
             pass
 
+    # Per-analyte calculations for single-vial sessions
+    # Check vial_params["1"] for analyte_params (or if only 1 vial in multi-vial)
+    _sv_aparams = None
+    if session.vial_params and len(session.vial_params) == 1:
+        _sv_vp = list(session.vial_params.values())[0]
+        _sv_aparams = _sv_vp.get("analyte_params") if isinstance(_sv_vp, dict) else None
+    elif session.vial_params and "1" in session.vial_params:
+        _sv_vp = session.vial_params["1"]
+        _sv_aparams = _sv_vp.get("analyte_params") if isinstance(_sv_vp, dict) else None
+
+    if _sv_aparams and isinstance(_sv_aparams, dict) and "diluent_added_ml" in calcs:
+        from calculations.wizard import calc_stock_conc_per_analyte, calc_actual_conc_per_analyte
+        sv_diluent_ml = Decimal(str(calcs["diluent_added_ml"]))
+        sv_analyte_calcs: dict = {}
+        for a_key, a_params in _sv_aparams.items():
+            ac: dict = {}
+            a_decl = a_params.get("declared_weight_mg")
+            a_sc_d = None
+            if a_decl and sv_diluent_ml:
+                try:
+                    a_sc_d = calc_stock_conc_per_analyte(Decimal(str(a_decl)), sv_diluent_ml)
+                    ac["stock_conc_ug_ml"] = float(a_sc_d)
+                except Exception:
+                    pass
+            a_tc = a_params.get("target_conc_ug_ml")
+            a_tv = a_params.get("target_total_vol_ul")
+            if a_sc_d is not None and a_tc and a_tv:
+                try:
+                    from calculations.wizard import calc_required_volumes as _crv
+                    arv = _crv(a_sc_d, Decimal(str(a_tc)), Decimal(str(a_tv)))
+                    ac["required_stock_vol_ul"] = float(arv["required_stock_vol_ul"])
+                    ac["required_diluent_vol_ul"] = float(arv["required_diluent_vol_ul"])
+                except Exception:
+                    pass
+            if a_sc_d is not None and "actual_stock_vol_ul" in calcs and "actual_total_vol_ul" in calcs:
+                try:
+                    a_act = calc_actual_conc_per_analyte(
+                        a_sc_d, Decimal(str(calcs["actual_stock_vol_ul"])),
+                        Decimal(str(calcs["actual_total_vol_ul"])),
+                    )
+                    ac["actual_conc_ug_ml"] = float(a_act)
+                except Exception:
+                    pass
+            if ac:
+                sv_analyte_calcs[a_key] = ac
+        if sv_analyte_calcs:
+            calcs["analyte_calculations"] = sv_analyte_calcs
+
     # Build current measurements list (only is_current=True)
     current_measurements = [m for m in session.measurements if m.is_current]
 
     # Per-vial calculations (multi-vial blends)
     vial_calcs: dict | None = None
     if session.vial_params and len(session.vial_params) > 1:
-        from calculations.wizard import calc_stock_prep, calc_required_volumes, calc_actual_dilution
+        from calculations.wizard import (
+            calc_stock_prep, calc_required_volumes, calc_actual_dilution,
+            calc_stock_conc_per_analyte, calc_actual_conc_per_analyte,
+        )
         vial_calcs = {}
         _dd = session.calibration_curve.diluent_density if session.calibration_curve else 997.1
         density = Decimal(str(_dd))
@@ -6343,6 +6409,7 @@ def _build_session_response(session: WizardSession, db: Session) -> WizardSessio
             v_stock_empty = vcurrent.get("stock_vial_empty_mg")
             v_stock_loaded = vcurrent.get("stock_vial_loaded_mg")
             v_stock_conc_d = None
+            v_diluent_ml_d = None  # shared diluent volume for per-analyte calcs
 
             if all(v is not None for v in [v_declared, v_stock_empty, v_stock_loaded]):
                 try:
@@ -6351,6 +6418,7 @@ def _build_session_response(session: WizardSession, db: Session) -> WizardSessio
                         Decimal(str(v_stock_loaded)), density,
                     )
                     v_stock_conc_d = sp["stock_conc_ug_ml"]
+                    v_diluent_ml_d = sp["total_diluent_added_ml"]
                     vc["diluent_added_ml"] = float(sp["total_diluent_added_ml"])
                     vc["stock_conc_ug_ml"] = float(sp["stock_conc_ug_ml"])
                 except Exception:
@@ -6384,6 +6452,58 @@ def _build_session_response(session: WizardSession, db: Session) -> WizardSessio
                 except Exception:
                     pass
 
+            # --- Per-analyte calculations (when analyte_params provided) ---
+            analyte_params = vparams.get("analyte_params")
+            if analyte_params and isinstance(analyte_params, dict) and v_diluent_ml_d is not None:
+                analyte_calcs: dict = {}
+
+                for analyte_key, aparams in analyte_params.items():
+                    ac: dict = {}
+                    a_declared = aparams.get("declared_weight_mg")
+
+                    # Per-analyte stock concentration
+                    a_stock_conc_d = None
+                    if a_declared and v_diluent_ml_d:
+                        try:
+                            a_stock_conc_d = calc_stock_conc_per_analyte(
+                                Decimal(str(a_declared)), v_diluent_ml_d,
+                            )
+                            ac["stock_conc_ug_ml"] = float(a_stock_conc_d)
+                        except Exception:
+                            pass
+
+                    # Per-analyte required volumes (reference — not physically independent)
+                    a_target_conc = aparams.get("target_conc_ug_ml")
+                    a_target_vol = aparams.get("target_total_vol_ul")
+                    if a_stock_conc_d is not None and a_target_conc and a_target_vol:
+                        try:
+                            arv = calc_required_volumes(
+                                a_stock_conc_d, Decimal(str(a_target_conc)),
+                                Decimal(str(a_target_vol)),
+                            )
+                            ac["required_stock_vol_ul"] = float(arv["required_stock_vol_ul"])
+                            ac["required_diluent_vol_ul"] = float(arv["required_diluent_vol_ul"])
+                        except Exception:
+                            pass
+
+                    # Per-analyte actual concentration (shared dilution factor)
+                    if a_stock_conc_d is not None and "actual_stock_vol_ul" in vc and "actual_total_vol_ul" in vc:
+                        try:
+                            a_actual = calc_actual_conc_per_analyte(
+                                a_stock_conc_d,
+                                Decimal(str(vc["actual_stock_vol_ul"])),
+                                Decimal(str(vc["actual_total_vol_ul"])),
+                            )
+                            ac["actual_conc_ug_ml"] = float(a_actual)
+                        except Exception:
+                            pass
+
+                    if ac:
+                        analyte_calcs[analyte_key] = ac
+
+                if analyte_calcs:
+                    vc["analyte_calculations"] = analyte_calcs
+
             if vc:
                 vial_calcs[vial_key] = vc
 
@@ -6409,6 +6529,9 @@ def _build_session_response(session: WizardSession, db: Session) -> WizardSessio
         calculations=calcs if calcs else None,
         vial_params=session.vial_params,
         vial_calculations=vial_calcs,
+        is_standard=session.is_standard,
+        manufacturer=session.manufacturer,
+        standard_notes=session.standard_notes,
     )
 
 
@@ -6478,6 +6601,9 @@ async def create_wizard_session(
         target_conc_ug_ml=data.target_conc_ug_ml,
         target_total_vol_ul=data.target_total_vol_ul,
         vial_params=data.vial_params,
+        is_standard=data.is_standard if data.is_standard is not None else False,
+        manufacturer=data.manufacturer,
+        standard_notes=data.standard_notes,
     )
     db.add(session)
     db.commit()
@@ -6726,6 +6852,10 @@ async def create_sample_prep_endpoint(
         "actual_total_vol_ul": calcs.get("actual_total_vol_ul"),
         "status": "awaiting_hplc",
         "notes": body.notes,
+        # Phase 09: Standard prep metadata
+        "is_standard": session.is_standard,
+        "manufacturer": session.manufacturer,
+        "standard_notes": session.standard_notes,
     }
 
     # Blend support: include component info so HPLC flyout can load per-component curves
@@ -6754,7 +6884,29 @@ async def create_sample_prep_endpoint(
                     for m in session.measurements
                     if m.is_current and m.vial_number == vn
                 }
-                vial_data_list.append({
+                # Build per-analyte data snapshot for this vial
+                vial_analyte_data = None
+                a_calcs = vc.get("analyte_calculations")
+                a_params = vp.get("analyte_params") if isinstance(vp, dict) else None
+                if a_calcs and a_params:
+                    vial_analyte_data = []
+                    for a_key, a_calc in a_calcs.items():
+                        ap = a_params.get(a_key, {})
+                        # Resolve component_id from abbreviation
+                        comp_match = next((c for c, cvn in comp_rows if c.abbreviation == a_key), None)
+                        vial_analyte_data.append({
+                            "component_id": comp_match.id if comp_match else None,
+                            "abbreviation": a_key,
+                            "declared_weight_mg": ap.get("declared_weight_mg"),
+                            "target_conc_ug_ml": ap.get("target_conc_ug_ml"),
+                            "target_total_vol_ul": ap.get("target_total_vol_ul"),
+                            "stock_conc_ug_ml": a_calc.get("stock_conc_ug_ml"),
+                            "required_stock_vol_ul": a_calc.get("required_stock_vol_ul"),
+                            "required_diluent_vol_ul": a_calc.get("required_diluent_vol_ul"),
+                            "actual_conc_ug_ml": a_calc.get("actual_conc_ug_ml"),
+                        })
+
+                vd_entry = {
                     "vial_number": vn,
                     "component_ids": [c.id for c, cvn in comp_rows if (cvn or 1) == vn],
                     "component_abbreviations": [c.abbreviation for c, cvn in comp_rows if (cvn or 1) == vn],
@@ -6773,7 +6925,10 @@ async def create_sample_prep_endpoint(
                     "actual_diluent_vol_ul": vc.get("actual_diluent_vol_ul"),
                     "actual_stock_vol_ul": vc.get("actual_stock_vol_ul"),
                     "actual_total_vol_ul": vc.get("actual_total_vol_ul"),
-                })
+                }
+                if vial_analyte_data:
+                    vd_entry["analyte_data"] = vial_analyte_data
+                vial_data_list.append(vd_entry)
             data["vial_data"] = json.dumps(vial_data_list)
 
     try:
@@ -6791,6 +6946,7 @@ async def create_sample_prep_endpoint(
 @app.get("/sample-preps")
 async def list_sample_preps_endpoint(
     search: Optional[str] = None,
+    is_standard: Optional[bool] = None,
     limit: int = 100,
     offset: int = 0,
     _current_user=Depends(get_current_user),
@@ -6800,7 +6956,7 @@ async def list_sample_preps_endpoint(
 
     try:
         ensure_sample_preps_table()
-        rows = list_sample_preps(search=search, limit=limit, offset=offset)
+        rows = list_sample_preps(search=search, is_standard=is_standard, limit=limit, offset=offset)
         for row in rows:
             for k in ("created_at", "updated_at"):
                 if row.get(k) and hasattr(row[k], "isoformat"):

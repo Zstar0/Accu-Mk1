@@ -1631,6 +1631,9 @@ export interface CalibrationCurve {
   injection_volume_ul: number | null
   operator: string | null
   notes: string | null
+  // Phase 09: Chromatogram storage
+  chromatogram_data: { times: number[]; signals: number[] } | null
+  source_sharepoint_folder: string | null
 }
 
 export interface InstrumentSummary {
@@ -2307,10 +2310,17 @@ export interface WizardMeasurementResponse {
   recorded_at: string
 }
 
+export interface AnalyteParams {
+  declared_weight_mg: number | null
+  target_conc_ug_ml: number | null
+  target_total_vol_ul: number | null
+}
+
 export interface VialParams {
   declared_weight_mg: number | null
   target_conc_ug_ml: number | null
   target_total_vol_ul: number | null
+  analyte_params?: Record<string, AnalyteParams>
 }
 
 export interface WizardSessionResponse {
@@ -2327,9 +2337,13 @@ export interface WizardSessionResponse {
   updated_at: string
   completed_at: string | null
   measurements: WizardMeasurementResponse[]
-  calculations: Record<string, number> | null
+  calculations: (Record<string, number> & { analyte_calculations?: Record<string, Record<string, number>> }) | null
   vial_params: Record<string, VialParams> | null
-  vial_calculations: Record<string, Record<string, number>> | null
+  vial_calculations: Record<string, Record<string, number> & { analyte_calculations?: Record<string, Record<string, number>> }> | null
+  // Phase 09: Standard prep metadata
+  is_standard: boolean
+  manufacturer: string | null
+  standard_notes: string | null
 }
 
 export interface WizardSessionListItem {
@@ -2353,6 +2367,9 @@ export async function createWizardSession(data: {
   target_conc_ug_ml?: number
   target_total_vol_ul?: number
   vial_params?: Record<string, VialParams>
+  is_standard?: boolean
+  manufacturer?: string
+  standard_notes?: string
 }): Promise<WizardSessionResponse> {
   try {
     const response = await fetch(`${API_BASE_URL()}/wizard/sessions`, {
@@ -2466,6 +2483,9 @@ export async function updateWizardSession(
     target_total_vol_ul?: number
     peak_area?: number
     vial_params?: Record<string, VialParams>
+    is_standard?: boolean
+    manufacturer?: string
+    standard_notes?: string
   }
 ): Promise<WizardSessionResponse> {
   try {
@@ -2517,6 +2537,18 @@ export async function completeWizardSession(
 
 // --- Sample Preps API ---
 
+export interface AnalyteData {
+  component_id: number | null
+  abbreviation: string
+  declared_weight_mg: number | null
+  target_conc_ug_ml: number | null
+  target_total_vol_ul: number | null
+  stock_conc_ug_ml: number | null
+  required_stock_vol_ul: number | null
+  required_diluent_vol_ul: number | null
+  actual_conc_ug_ml: number | null
+}
+
 export interface VialData {
   vial_number: number
   component_ids: number[]
@@ -2536,6 +2568,7 @@ export interface VialData {
   actual_diluent_vol_ul: number | null
   actual_stock_vol_ul: number | null
   actual_total_vol_ul: number | null
+  analyte_data?: AnalyteData[]
 }
 
 export interface SamplePrep {
@@ -2566,6 +2599,10 @@ export interface SamplePrep {
   is_blend: boolean
   components_json: ComponentBrief[] | null
   vial_data: VialData[] | null
+  // Phase 09: Standard prep metadata
+  is_standard: boolean
+  manufacturer: string | null
+  standard_notes: string | null
   created_at: string
   updated_at: string
 }
@@ -2588,11 +2625,13 @@ export async function createSamplePrep(
 
 export async function listSamplePreps(params?: {
   search?: string
+  is_standard?: boolean
   limit?: number
   offset?: number
 }): Promise<SamplePrep[]> {
   const qs = new URLSearchParams()
   if (params?.search) qs.set('search', params.search)
+  if (params?.is_standard != null) qs.set('is_standard', String(params.is_standard))
   if (params?.limit != null) qs.set('limit', String(params.limit))
   if (params?.offset != null) qs.set('offset', String(params.offset))
   const response = await fetch(
