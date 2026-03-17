@@ -6,7 +6,7 @@ import type { WizardSessionResponse, SenaiteLookupResult, ComponentBrief, Peptid
 
 export type StepId = number
 export type StepState = 'not-started' | 'in-progress' | 'complete' | 'locked'
-export type StepType = 'sample-info' | 'stock-prep' | 'dilution'
+export type StepType = 'sample-info' | 'stock-prep' | 'dilution' | 'standard-dilution'
 
 export interface WizardStep {
   id: StepId
@@ -32,6 +32,30 @@ export function buildWizardSteps(vialCount: number): WizardStep[] {
     steps.push({ id: id++, type: 'stock-prep', label: `Stock Prep${suffix}`, vialNumber: v })
     steps.push({ id: id++, type: 'dilution', label: `Dilution${suffix}`, vialNumber: v })
   }
+  return steps
+}
+
+/**
+ * Builds wizard steps for standard preps: 1 stock + N dilution steps.
+ * All dilutions share the ONE stock prep (vial_number=1 for stock measurements).
+ * Each dilution has its own vial_number for measurement tracking.
+ */
+export function buildStandardWizardSteps(concentrations: number[]): WizardStep[] {
+  const steps: WizardStep[] = [
+    { id: 1, type: 'sample-info', label: 'Sample Info', vialNumber: 1 },
+    { id: 2, type: 'stock-prep', label: 'Stock Prep', vialNumber: 1 },
+  ]
+  let id = 3
+  // Sort concentrations descending (highest first = serial dilution order)
+  const sorted = [...concentrations].sort((a, b) => b - a)
+  sorted.forEach((conc, i) => {
+    steps.push({
+      id: id++,
+      type: 'standard-dilution',
+      label: `Dilution \u2014 ${conc} \u00b5g/mL`,
+      vialNumber: i + 1, // Each dilution is a separate physical vial
+    })
+  })
   return steps
 }
 
@@ -69,7 +93,10 @@ function isStepDataComplete(
       return calcs?.stock_conc_ug_ml != null
     case 'dilution':
       return calcs?.actual_conc_ug_ml != null
+    case 'standard-dilution':
+      return calcs?.actual_conc_ug_ml != null
   }
+  return false
 }
 
 /**
@@ -107,6 +134,21 @@ function isStepUnlocked(
         vialHasMeasurement(session, 'stock_vial_empty_mg', v) &&
         vialHasMeasurement(session, 'stock_vial_loaded_mg', v)
       )
+    }
+
+    case 'standard-dilution': {
+      if (!session) return false
+      // First standard-dilution unlocks when stock prep is complete (vial 1 stock measurements)
+      const isFirstStdDil = !steps.slice(0, idx).some(s => s.type === 'standard-dilution')
+      if (isFirstStdDil) {
+        // Stock prep complete = vial 1 has stock measurements
+        return (
+          vialHasMeasurement(session, 'stock_vial_empty_mg', 1) &&
+          vialHasMeasurement(session, 'stock_vial_loaded_mg', 1)
+        )
+      }
+      // Subsequent standard-dilution steps unlock when previous step's data is complete
+      return isStepDataComplete(session, prevStep)
     }
 
     default:
@@ -175,6 +217,8 @@ interface WizardStoreState {
   resetWizard: () => void
   /** Rebuild step list when vial count is known (called from Step1 on session create) */
   setVialCount: (count: number) => void
+  /** Rebuild step list for standard mode with new concentration levels */
+  setStandardConcentrations: (concentrations: number[]) => void
 
   // Navigation helper
   canAdvance: () => boolean
@@ -198,10 +242,28 @@ export const useWizardStore = create<WizardStoreState>()(
       selectedPeptide: null,
 
       startSession: (session, components, peptide) => {
-        const vialCount = session.vial_params
-          ? Object.keys(session.vial_params).length
-          : 1
-        const steps = buildWizardSteps(vialCount)
+        let steps: WizardStep[]
+        if (session.is_standard) {
+          // Standard mode: extract concentration values from vial_params
+          const vialParams = session.vial_params
+          let concentrations: number[]
+          if (vialParams && Object.keys(vialParams).length > 0) {
+            concentrations = Object.values(vialParams)
+              .map(vp => vp.target_conc_ug_ml)
+              .filter((v): v is number => v != null && v > 0)
+          } else {
+            concentrations = [] // empty — will be set via setStandardConcentrations
+          }
+          if (concentrations.length === 0) {
+            concentrations = [1000, 500, 250, 100, 10, 1]
+          }
+          steps = buildStandardWizardSteps(concentrations)
+        } else {
+          const vialCount = session.vial_params
+            ? Object.keys(session.vial_params).length
+            : 1
+          steps = buildWizardSteps(vialCount)
+        }
         set(
           {
             session,
@@ -284,6 +346,19 @@ export const useWizardStore = create<WizardStoreState>()(
           },
           undefined,
           'setVialCount'
+        )
+      },
+
+      setStandardConcentrations: (concentrations: number[]) => {
+        const steps = buildStandardWizardSteps(concentrations)
+        const { session, currentStep } = get()
+        set(
+          {
+            wizardSteps: steps,
+            stepStates: deriveStepStates(session, currentStep, steps),
+          },
+          undefined,
+          'setStandardConcentrations'
         )
       },
 

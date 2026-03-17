@@ -38,7 +38,7 @@ export function CreateAnalysis() {
 
   // Last step is saveable when it's complete (dilution done)
   const lastStepDone = isLastStep && stepStates[currentStep] === 'in-progress' &&
-    lastStep?.type === 'dilution' &&
+    (lastStep?.type === 'dilution' || lastStep?.type === 'standard-dilution') &&
     session?.measurements?.some(m => m.step_key === 'dil_vial_final_mg' && m.is_current && m.vial_number === lastStep.vialNumber)
 
   // Save state
