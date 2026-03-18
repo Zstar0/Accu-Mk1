@@ -541,6 +541,26 @@ function CalibrationRow({
                   </Select>
                 </div>
               </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <Label className="text-xs">Source Sample ID</Label>
+                  <Input
+                    value={editSourceSampleId}
+                    onChange={e => setEditSourceSampleId(e.target.value)}
+                    placeholder="e.g., P-0111"
+                    className="h-8 text-sm font-mono"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">Vendor</Label>
+                  <Input
+                    value={editVendor}
+                    onChange={e => setEditVendor(e.target.value)}
+                    placeholder="e.g., Cayman, Targetmol"
+                    className="h-8 text-sm"
+                  />
+                </div>
+              </div>
               <div className="space-y-1">
                 <Label className="text-xs">Notes</Label>
                 <textarea
