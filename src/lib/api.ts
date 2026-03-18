@@ -1616,6 +1616,7 @@ export interface CalibrationCurve {
   // Standard identification metadata
   source_sample_id: string | null
   instrument: string | null
+  instrument_id: number | null
   vendor: string | null
   lot_number: string | null
   batch_number: string | null
@@ -1638,6 +1639,7 @@ export interface CalibrationCurve {
 
 export interface InstrumentSummary {
   instrument: string // "1260", "1290", or "unknown"
+  instrument_id: number | null
   curve_count: number
 }
 
@@ -2056,6 +2058,7 @@ export interface CalibrationCurveUpdateInput {
   rt_tolerance?: number
   diluent_density?: number
   instrument?: string | null
+  instrument_id?: number | null
   peptide_analyte_id?: number | null
   notes?: string | null
 }
@@ -2113,6 +2116,12 @@ export interface HPLCAnalyzeRequest {
   calibration_curve_id?: number
   weights: HPLCWeightsInput
   injections: Record<string, unknown>[]
+  // Phase 10.5: provenance fields
+  sample_prep_id?: number
+  instrument_id?: number
+  source_sharepoint_folder?: string
+  chromatogram_data?: { times: number[]; signals: number[] }
+  run_group_id?: string
 }
 
 export interface HPLCAnalysisResult {
@@ -2129,6 +2138,14 @@ export interface HPLCAnalysisResult {
   avg_main_peak_area: number | null
   concentration_ug_ml: number | null
   calculation_trace: Record<string, unknown> | null
+  // Phase 10.5: provenance fields
+  calibration_curve_id: number | null
+  sample_prep_id: number | null
+  instrument_id: number | null
+  source_sharepoint_folder: string | null
+  chromatogram_data: { times: number[]; signals: number[] } | null
+  run_group_id: string | null
+  raw_data: Record<string, unknown> | null
   created_at: string
 }
 
@@ -2150,6 +2167,23 @@ export async function runHPLCAnalysis(
     console.error('HPLC analysis error:', error)
     throw error
   }
+}
+
+/**
+ * Get all HPLC analyses for a sample prep, most recent first.
+ */
+export async function getHPLCAnalysesBySamplePrep(
+  samplePrepId: number
+): Promise<HPLCAnalysisResult[]> {
+  const response = await fetch(
+    `${API_BASE_URL()}/hplc/analyses/by-sample-prep/${samplePrepId}`,
+    { headers: getBearerHeaders() }
+  )
+  if (!response.ok) {
+    const err = await response.json().catch(() => null)
+    throw new Error(err?.detail || `Failed to fetch analyses: ${response.status}`)
+  }
+  return response.json()
 }
 
 // --- HPLC Weight Extraction API ---
@@ -2377,6 +2411,8 @@ export interface WizardSessionResponse {
   is_standard: boolean
   manufacturer: string | null
   standard_notes: string | null
+  instrument_name: string | null
+  instrument_id: number | null
 }
 
 export interface WizardSessionListItem {
@@ -2403,6 +2439,8 @@ export async function createWizardSession(data: {
   is_standard?: boolean
   manufacturer?: string
   standard_notes?: string
+  instrument_name?: string
+  instrument_id?: number
 }): Promise<WizardSessionResponse> {
   try {
     const response = await fetch(`${API_BASE_URL()}/wizard/sessions`, {
@@ -2519,6 +2557,8 @@ export async function updateWizardSession(
     is_standard?: boolean
     manufacturer?: string
     standard_notes?: string
+    instrument_name?: string
+    instrument_id?: number
   }
 ): Promise<WizardSessionResponse> {
   try {
@@ -2636,6 +2676,7 @@ export interface SamplePrep {
   is_standard: boolean
   manufacturer: string | null
   standard_notes: string | null
+  instrument_name: string | null
   created_at: string
   updated_at: string
 }
@@ -2688,6 +2729,7 @@ export async function updateSamplePrep(
   data: Partial<Pick<SamplePrep,
     | 'senaite_sample_id' | 'declared_weight_mg' | 'target_conc_ug_ml'
     | 'target_total_vol_ul' | 'status' | 'notes'
+    | 'instrument_name' | 'manufacturer' | 'standard_notes'
   >>
 ): Promise<SamplePrep> {
   const response = await fetch(`${API_BASE_URL()}/sample-preps/${id}`, {
