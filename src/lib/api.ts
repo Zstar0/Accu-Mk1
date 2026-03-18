@@ -2061,6 +2061,8 @@ export interface CalibrationCurveUpdateInput {
   instrument_id?: number | null
   peptide_analyte_id?: number | null
   notes?: string | null
+  source_sample_id?: string | null
+  vendor?: string | null
 }
 
 export async function updateCalibration(
