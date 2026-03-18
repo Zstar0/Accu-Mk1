@@ -641,6 +641,12 @@ function CalibrationRow({
                   </p>
                 </div>
               </div>
+              {calibration.vendor && (
+                <div className="mt-2 pt-2 border-t border-border/50">
+                  <span className="text-muted-foreground text-xs">Vendor</span>
+                  <p className="text-sm mt-0.5 font-medium">{calibration.vendor}</p>
+                </div>
+              )}
               {calibration.notes && (
                 <div className="mt-2 pt-2 border-t border-border/50">
                   <span className="text-muted-foreground text-xs">Notes</span>
