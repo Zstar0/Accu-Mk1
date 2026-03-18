@@ -10,17 +10,17 @@ See: .planning/PROJECT.md (updated 2026-03-16)
 ## Current Position
 
 Phase: 11 of 12 (Backfill Existing Curves)
-Plan: 1 of ? in current phase (in progress)
+Plan: 2 of ? in current phase (in progress)
 Status: In progress
-Last activity: 2026-03-18 — Completed 11-01-PLAN.md (extended PATCH endpoint + TS interface for backfill)
+Last activity: 2026-03-18 — Completed 11-02-PLAN.md (CalibrationRow edit form + vendor/source_sample_id fields)
 
-Progress: [████░░░░░░] 35%
+Progress: [████░░░░░░] 37%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 6 (v0.26.0)
-- Average duration: ~5 min
+- Total plans completed: 7 (v0.26.0)
+- Average duration: ~4.7 min
 - Total execution time: ~0.5 hours
 
 **By Phase:**
@@ -30,10 +30,10 @@ Progress: [████░░░░░░] 35%
 | 09 | 1/2 | ~6 min | ~6 min |
 | 10 | 3/3 | ~14 min | ~4.7 min |
 | 10.5 | 2/2 | ~10 min | ~5 min |
-| 11 | 1/? | ~2 min | ~2 min |
+| 11 | 2/? | ~4 min | ~2 min |
 
 **Recent Trend:**
-- Last 5 plans: 10-02 (~5 min), 10-03 (~5 min), 10.5-01 (~5 min), 10.5-02 (~5 min), 11-01 (~2 min)
+- Last 5 plans: 10-03 (~5 min), 10.5-01 (~5 min), 10.5-02 (~5 min), 11-01 (~2 min), 11-02 (~2 min)
 - Trend: stable/fast
 
 ## Accumulated Context
@@ -67,6 +67,8 @@ Progress: [████░░░░░░] 35%
 - DB-first flyout load: loadingSaved guard in loadPeakData handles race between async DB check and SharePoint effect
 - Chromatogram backfill auto-fetch is best-effort: PATCH succeeds even if SharePoint is unreachable; warning logged on failure
 - Only fetch chromatogram when source_sample_id actually changes (skip no-op updates on repeated PATCHes)
+- vendor displayed below stats grid in view mode (not inline in header) — consistent with notes pattern, header already crowded
+- source_sample_id already rendered in header row Sample field — Task 3 only added vendor conditional block, no duplication
 
 ### Key Source Files
 
@@ -96,5 +98,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-03-18
-Stopped at: Completed 11-01-PLAN.md (phase 11 in progress — plan 1 done)
+Stopped at: Completed 11-02-PLAN.md (phase 11 in progress — plan 2 done)
 Resume file: None
