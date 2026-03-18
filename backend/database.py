@@ -80,6 +80,30 @@ def _run_migrations():
         "ALTER TABLE wizard_sessions ADD COLUMN IF NOT EXISTS is_standard BOOLEAN DEFAULT FALSE",
         "ALTER TABLE wizard_sessions ADD COLUMN IF NOT EXISTS manufacturer VARCHAR(200)",
         "ALTER TABLE wizard_sessions ADD COLUMN IF NOT EXISTS standard_notes TEXT",
+        "ALTER TABLE wizard_sessions ADD COLUMN IF NOT EXISTS instrument_name VARCHAR(200)",
+        # Instrument FK columns on calibration_curves and wizard_sessions
+        "ALTER TABLE calibration_curves ADD COLUMN IF NOT EXISTS instrument_id INTEGER REFERENCES instruments(id)",
+        "ALTER TABLE calibration_curves ALTER COLUMN instrument TYPE VARCHAR(100)",
+        "ALTER TABLE wizard_sessions ADD COLUMN IF NOT EXISTS instrument_id INTEGER REFERENCES instruments(id)",
+        # Backfill instrument_id on existing calibration_curves by matching stored instrument string
+        # Matches on exact name first, then falls back to model substring match
+        """
+        UPDATE calibration_curves cc
+        SET instrument_id = i.id
+        FROM instruments i
+        WHERE cc.instrument_id IS NULL
+          AND cc.instrument IS NOT NULL
+          AND (cc.instrument = i.name OR cc.instrument ILIKE '%' || i.model || '%')
+        """,
+        # Backfill instrument_id on wizard_sessions from instrument_name
+        """
+        UPDATE wizard_sessions ws
+        SET instrument_id = i.id
+        FROM instruments i
+        WHERE ws.instrument_id IS NULL
+          AND ws.instrument_name IS NOT NULL
+          AND (ws.instrument_name = i.name OR ws.instrument_name ILIKE '%' || i.model || '%')
+        """,
         # Fix FK constraint: allow cascade SET NULL when calibration curve is deleted
         """DO $$ BEGIN
             IF EXISTS (SELECT 1 FROM information_schema.table_constraints
@@ -90,6 +114,13 @@ def _run_migrations():
                     FOREIGN KEY (calibration_curve_id) REFERENCES calibration_curves(id) ON DELETE SET NULL;
             END IF;
         END $$""",
+        # Phase 10.5: HPLC results provenance columns
+        "ALTER TABLE hplc_analyses ADD COLUMN IF NOT EXISTS calibration_curve_id INTEGER REFERENCES calibration_curves(id) ON DELETE SET NULL",
+        "ALTER TABLE hplc_analyses ADD COLUMN IF NOT EXISTS sample_prep_id INTEGER",
+        "ALTER TABLE hplc_analyses ADD COLUMN IF NOT EXISTS instrument_id INTEGER REFERENCES instruments(id)",
+        "ALTER TABLE hplc_analyses ADD COLUMN IF NOT EXISTS source_sharepoint_folder VARCHAR(1000)",
+        "ALTER TABLE hplc_analyses ADD COLUMN IF NOT EXISTS chromatogram_data JSON",
+        "ALTER TABLE hplc_analyses ADD COLUMN IF NOT EXISTS run_group_id VARCHAR(200)",
     ]
     try:
         with engine.connect() as conn:

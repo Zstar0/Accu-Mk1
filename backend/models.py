@@ -320,7 +320,8 @@ class CalibrationCurve(Base):
 
     # --- Standard identification metadata (Phase 1: populated from filename/path on import) ---
     source_sample_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)  # Senaite sample ID (e.g. "P-0111")
-    instrument: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)    # "1260" or "1290"
+    instrument: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)   # kept for legacy/display
+    instrument_id: Mapped[Optional[int]] = mapped_column(ForeignKey("instruments.id"), nullable=True)
     vendor: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)       # Cayman, Targetmol, HYB, etc.
     lot_number: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)   # Vendor lot # (e.g. "27262", "#63162")
     batch_number: Mapped[Optional[str]] = mapped_column(String(100), nullable=True) # Secondary batch code (e.g. "T20561L")
@@ -345,6 +346,7 @@ class CalibrationCurve(Base):
     # Relationships
     peptide: Mapped["Peptide"] = relationship("Peptide", back_populates="calibration_curves")
     analyte: Mapped[Optional["PeptideAnalyte"]] = relationship("PeptideAnalyte")
+    instrument_obj: Mapped[Optional["Instrument"]] = relationship("Instrument", foreign_keys="[CalibrationCurve.instrument_id]")
 
     def __repr__(self) -> str:
         return f"<CalibrationCurve(id={self.id}, peptide_id={self.peptide_id}, slope={self.slope})>"
@@ -386,8 +388,19 @@ class HPLCAnalysis(Base):
     status: Mapped[str] = mapped_column(String(50), default="completed")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
+    # Phase 10.5: Provenance fields
+    calibration_curve_id: Mapped[Optional[int]] = mapped_column(ForeignKey("calibration_curves.id", ondelete="SET NULL"), nullable=True)
+    # NOTE: sample_prep_id is plain INTEGER — sample_preps lives in a separate database (accumark_mk1), no FK possible
+    sample_prep_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    instrument_id: Mapped[Optional[int]] = mapped_column(ForeignKey("instruments.id"), nullable=True)
+    source_sharepoint_folder: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
+    chromatogram_data: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)  # {times: number[], signals: number[]}
+    run_group_id: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+
     # Relationships
     peptide: Mapped["Peptide"] = relationship("Peptide")
+    calibration_curve: Mapped[Optional["CalibrationCurve"]] = relationship("CalibrationCurve", foreign_keys="[HPLCAnalysis.calibration_curve_id]")
+    instrument_obj: Mapped[Optional["Instrument"]] = relationship("Instrument", foreign_keys="[HPLCAnalysis.instrument_id]")
 
     def __repr__(self) -> str:
         return f"<HPLCAnalysis(id={self.id}, sample='{self.sample_id_label}', purity={self.purity_percent})>"
@@ -450,6 +463,8 @@ class WizardSession(Base):
     is_standard: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     manufacturer: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
     standard_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    instrument_name: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    instrument_id: Mapped[Optional[int]] = mapped_column(ForeignKey("instruments.id"), nullable=True)
 
     # Step 1b: Target dilution parameters (manually entered)
     target_conc_ug_ml: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
@@ -473,6 +488,7 @@ class WizardSession(Base):
     )
     peptide: Mapped["Peptide"] = relationship("Peptide")
     calibration_curve: Mapped[Optional["CalibrationCurve"]] = relationship("CalibrationCurve")
+    instrument_obj: Mapped[Optional["Instrument"]] = relationship("Instrument", foreign_keys="[WizardSession.instrument_id]")
 
     def __repr__(self) -> str:
         return f"<WizardSession(id={self.id}, status='{self.status}')>"
