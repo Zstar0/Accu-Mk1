@@ -2619,6 +2619,8 @@ class CalibrationCurveUpdate(BaseModel):
     instrument_id: Optional[int] = None
     peptide_analyte_id: Optional[int] = None
     notes: Optional[str] = None
+    source_sample_id: Optional[str] = None
+    vendor: Optional[str] = None
 
     class Config:
         from_attributes = True
