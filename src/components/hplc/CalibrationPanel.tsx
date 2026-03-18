@@ -42,11 +42,13 @@ import {
 import { CalibrationChart } from './CalibrationChart'
 import {
   getCalibrations,
+  getInstruments,
   updateCalibration,
   deleteCalibration,
   type PeptideRecord,
   type CalibrationCurve,
   type AnalyteResponse,
+  type Instrument,
 } from '@/lib/api'
 import { getApiBaseUrl } from '@/lib/config'
 import { getAuthToken } from '@/store/auth-store'
@@ -71,6 +73,12 @@ export function CalibrationPanel({
   const [allCalibrations, setAllCalibrations] = useState<CalibrationCurve[]>([])
   const [loading, setLoading] = useState(true)
   const [expandedId, setExpandedId] = useState<number | null>(null)
+  const [instruments, setInstruments] = useState<Instrument[]>([])
+
+  // Load instruments once
+  useEffect(() => {
+    getInstruments().then(setInstruments).catch(console.error)
+  }, [])
 
   // Reset expanded state when switching to a different peptide
   useEffect(() => {
@@ -101,7 +109,9 @@ export function CalibrationPanel({
 
   const filteredCals = instrumentFilter === 'all'
     ? allCalibrations
-    : allCalibrations.filter(c => (c.instrument ?? 'unknown') === instrumentFilter)
+    : instrumentFilter === 'unknown'
+      ? allCalibrations.filter(c => c.instrument_id == null)
+      : allCalibrations.filter(c => c.instrument_id === Number(instrumentFilter))
 
   const activeCals = filteredCals.filter(c => c.is_active)
   const inactiveCals = filteredCals.filter(c => !c.is_active)
@@ -151,6 +161,7 @@ export function CalibrationPanel({
                 onSetActive={undefined}
                 peptideId={peptide.id}
                 analytes={peptide.analytes}
+                instruments={instruments}
                 onUpdated={() => {
                   loadCalibrations()
                   onUpdated()
@@ -191,6 +202,7 @@ export function CalibrationPanel({
                     }}
                     peptideId={peptide.id}
                     analytes={peptide.analytes}
+                    instruments={instruments}
                     onUpdated={() => {
                       loadCalibrations()
                       onUpdated()
@@ -222,6 +234,7 @@ function CalibrationRow({
   onSetActive,
   peptideId,
   analytes,
+  instruments,
   onUpdated,
 }: {
   calibration: CalibrationCurve
@@ -230,6 +243,7 @@ function CalibrationRow({
   onSetActive: (() => void) | undefined
   peptideId: number
   analytes: AnalyteResponse[]
+  instruments: Instrument[]
   onUpdated: () => void
 }) {
   const data = calibration.standard_data
@@ -246,9 +260,11 @@ function CalibrationRow({
   const [editRt, setEditRt] = useState('')
   const [editTolerance, setEditTolerance] = useState('')
   const [editDensity, setEditDensity] = useState('')
-  const [editInstrument, setEditInstrument] = useState('')
+  const [editInstrumentId, setEditInstrumentId] = useState('')
   const [editAnalyteId, setEditAnalyteId] = useState('')
   const [editNotes, setEditNotes] = useState('')
+  const [editSourceSampleId, setEditSourceSampleId] = useState('')
+  const [editVendor, setEditVendor] = useState('')
 
   const linkedAnalyte = analytes.find(a => a.id === calibration.peptide_analyte_id)
 
@@ -256,9 +272,11 @@ function CalibrationRow({
     setEditRt(calibration.reference_rt != null ? String(calibration.reference_rt) : '')
     setEditTolerance(String(calibration.rt_tolerance))
     setEditDensity(String(calibration.diluent_density))
-    setEditInstrument(calibration.instrument ?? '')
+    setEditInstrumentId(calibration.instrument_id != null ? String(calibration.instrument_id) : '')
     setEditAnalyteId(calibration.peptide_analyte_id != null ? String(calibration.peptide_analyte_id) : '')
     setEditNotes(calibration.notes ?? '')
+    setEditSourceSampleId(calibration.source_sample_id ?? '')
+    setEditVendor(calibration.vendor ?? '')
     setEditing(true)
   }
 
@@ -273,9 +291,11 @@ function CalibrationRow({
         reference_rt: editRt ? parseFloat(editRt) : null,
         rt_tolerance: editTolerance ? parseFloat(editTolerance) : undefined,
         diluent_density: editDensity ? parseFloat(editDensity) : undefined,
-        instrument: editInstrument || null,
+        instrument_id: editInstrumentId ? parseInt(editInstrumentId, 10) : null,
         peptide_analyte_id: editAnalyteId ? parseInt(editAnalyteId, 10) : null,
         notes: editNotes.trim() || null,
+        source_sample_id: editSourceSampleId.trim() || null,
+        vendor: editVendor.trim() || null,
       })
       setEditing(false)
       toast.success('Calibration updated')
@@ -491,13 +511,16 @@ function CalibrationRow({
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1">
                   <Label className="text-xs">Instrument</Label>
-                  <Select value={editInstrument} onValueChange={setEditInstrument}>
+                  <Select value={editInstrumentId} onValueChange={setEditInstrumentId}>
                     <SelectTrigger className="h-8 text-sm">
                       <SelectValue placeholder="Select..." />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="1290">Agilent 1290</SelectItem>
-                      <SelectItem value="1260">Agilent 1260</SelectItem>
+                      {instruments.map(inst => (
+                        <SelectItem key={inst.id} value={String(inst.id)}>
+                          {inst.name}
+                        </SelectItem>
+                      ))}
                     </SelectContent>
                   </Select>
                 </div>
