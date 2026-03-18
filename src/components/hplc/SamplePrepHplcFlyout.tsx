@@ -32,6 +32,8 @@ import {
   getCalibrations,
   runHPLCAnalysis,
   getFolderChromFiles,
+  getHPLCAnalysesBySamplePrep,
+  updateSamplePrep,
   type SamplePrep,
   type HplcScanMatch,
   type CalibrationCurve,
@@ -141,6 +143,7 @@ function buildDebugLines({
   push('info', `Sample ID: ${prep.senaite_sample_id ?? prep.sample_id}`)
   push('info', `Peptide: ${prep.peptide_name ?? prep.peptide_abbreviation ?? `#${prep.peptide_id}`}`)
   push('info', `Type: ${isBlend ? 'Blend' : 'Single'}`)
+  push('info', `is_standard (DB): ${prep.is_standard}`)
 
   if (isBlend && blendComponents.length > 0) {
     push('dim', `Components: ${blendComponents.map(c => c.abbreviation).join(', ')}`)
@@ -508,6 +511,10 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
   // Debug console overlay
   const [showDebug, setShowDebug] = useState(false)
 
+  // Saved results from DB (loaded on flyout open)
+  const [savedResults, setSavedResults] = useState<HPLCAnalysisResult[] | null>(null)
+  const [loadingSaved, setLoadingSaved] = useState(false)
+
   useEffect(() => {
     if (!showDebug) return
     const handler = (e: KeyboardEvent) => {
@@ -517,7 +524,7 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
     return () => window.removeEventListener('keydown', handler, true)
   }, [showDebug])
 
-  // Reset state on open
+  // Reset state on open + async DB check for saved results
   useEffect(() => {
     if (open) {
       setParseResult(null)
@@ -534,6 +541,29 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
       setView('analysis')
       setStandardCurveCreated(false)
       setShowDebug(false)
+      setSavedResults(null)
+
+      // Async DB check — load saved results before SharePoint scan
+      ;(async () => {
+        setLoadingSaved(true)
+        try {
+          const saved = await getHPLCAnalysesBySamplePrep(prep.id)
+          if (saved.length > 0) {
+            setSavedResults(saved)
+            const resMap = new Map<string, HPLCAnalysisResult>()
+            for (const s of saved) {
+              resMap.set(s.peptide_abbreviation ?? '__single__', s)
+            }
+            setAnalyteResults(resMap)
+            const firstKey = resMap.keys().next().value ?? '__single__'
+            setResult(resMap.get(firstKey) ?? null)
+          }
+        } catch {
+          // DB check failed — savedResults stays null, SharePoint flow proceeds
+        } finally {
+          setLoadingSaved(false)
+        }
+      })()
     }
   }, [open, prep.id])
 
@@ -541,6 +571,8 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
 
   const loadPeakData = useCallback(async () => {
     if (parseResult) return
+    if (savedResults) return      // skip SharePoint scan when DB results loaded
+    if (loadingSaved) return      // skip while DB check still in progress
     setLoading(true)
     setParseError(null)
     try {
@@ -577,7 +609,7 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
     } finally {
       setLoading(false)
     }
-  }, [match, parseResult])
+  }, [match, parseResult, savedResults, loadingSaved])
 
   useEffect(() => {
     if (open) loadPeakData()
@@ -687,6 +719,17 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
     setRunning(true)
     setRunError(null)
 
+    // Phase 10.5: provenance — shared across all API calls in this run
+    const runGroupId = crypto.randomUUID()
+    // Convert ChromatogramTrace[] → { times, signals } for persistence
+    const firstTrace = chromTraces[0]
+    const chromData = firstTrace != null
+      ? {
+          times:   firstTrace.points.map(p => p[0]),
+          signals: firstTrace.points.map(p => p[1]),
+        }
+      : undefined
+
     const defaultWeights = {
       stock_vial_empty:                 prep.stock_vial_empty_mg   ?? 0,
       stock_vial_with_diluent:          prep.stock_vial_loaded_mg  ?? 0,
@@ -731,6 +774,12 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
             calibration_curve_id: calId,
             weights,
             injections: filteredInj as unknown as Record<string, unknown>[],
+            // Phase 10.5: provenance
+            sample_prep_id: prep.id,
+            instrument_id: undefined,
+            source_sharepoint_folder: match.folder_name,
+            chromatogram_data: chromData,
+            run_group_id: runGroupId,
           })
           results.set(label, res)
         }
@@ -748,6 +797,12 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
             calibration_curve_id: selectedCalId ?? 0,
             weights: defaultWeights,
             injections: filteredInj as unknown as Record<string, unknown>[],
+            // Phase 10.5: provenance
+            sample_prep_id: prep.id,
+            instrument_id: undefined,
+            source_sharepoint_folder: match.folder_name,
+            chromatogram_data: chromData,
+            run_group_id: runGroupId,
           })
           results.set(label ?? '__single__', res)
         }
@@ -765,21 +820,31 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
         setResult(fallbackResult)
         setActiveAnalyte(firstWithResult ?? blendPeptides[0] ?? null)
       }
+
+      // Phase 10.5: auto-update sample prep status to hplc_complete
+      try {
+        await updateSamplePrep(prep.id, { status: 'hplc_complete' })
+      } catch {
+        // Non-blocking — don't fail the analysis if status update fails
+        console.warn('Failed to update sample prep status to hplc_complete')
+      }
+
       scrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' })
     } catch (e) {
       setRunError(e instanceof Error ? e.message : 'Analysis failed')
     } finally {
       setRunning(false)
     }
-  }, [parseResult, prep, selectedCalId, isBlend, hasMultipleAnalytes, blendPeptides, labelToComponent, blendComponents, componentSelectedCalIds, allBlendCalsReady])
+  }, [parseResult, prep, selectedCalId, isBlend, hasMultipleAnalytes, blendPeptides, labelToComponent, blendComponents, componentSelectedCalIds, allBlendCalsReady, chromTraces, match.folder_name])
 
   // Auto-run when peak data + calibration are both ready
   useEffect(() => {
+    if (isStandard) return // Standards create calibration curves — don't auto-run analysis
     const calsReady = isBlend ? allBlendCalsReady : !!selectedCalId
     if (parseResult && calsReady && prep.peptide_id && !result && !running && !runError) {
       runAllAnalyses()
     }
-  }, [parseResult, selectedCalId, allBlendCalsReady, isBlend, prep.peptide_id, result, running, runError, runAllAnalyses])
+  }, [isStandard, parseResult, selectedCalId, allBlendCalsReady, isBlend, prep.peptide_id, result, running, runError, runAllAnalyses])
 
   // ── Derived ─────────────────────────────────────────────────────────────────
 
@@ -827,19 +892,19 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
   }, [analyteResults, isBlend, labelToComponent, componentCals, componentSelectedCalIds])
 
   // ── Standard curve data extraction ─────────────────────────────────────────
-  // For standard preps: map vial_data concentrations to injection peak areas/RTs.
-  // Each vial in vial_data corresponds to one concentration level. Injections are
-  // matched by index order (sorted by injection name).
+  // For standard preps: map concentrations to injection peak areas/RTs.
+  //
+  // Primary path: vial_data has per-vial target concentrations. Sort vials by
+  // target_conc ascending so they align with injections sorted numerically
+  // (injection filenames contain the concentration, e.g. _Std_1000_PeakData).
+  //
+  // Fallback path: vial_data missing (prep saved before multi-vial support).
+  // Extract concentration directly from each injection filename's numeric suffix.
 
   const standardCurveData = useMemo(() => {
-    if (!isStandard || !parseResult || !prep.vial_data || prep.vial_data.length === 0) {
-      return null
-    }
+    if (!isStandard || !parseResult) return null
 
-    // Sort vials by vial_number (ascending = lowest concentration first for standard dilutions)
-    const sortedVials = [...prep.vial_data].sort((a, b) => a.vial_number - b.vial_number)
-
-    // Get injections sorted by name for consistent ordering
+    // Always sort injections numerically by name (lowest conc first)
     const sortedInjections = [...parseResult.injections].sort((a, b) =>
       a.injection_name.localeCompare(b.injection_name, undefined, { numeric: true })
     )
@@ -848,25 +913,44 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
     const areas: number[] = []
     const rts: number[] = []
 
-    // Match vials to injections by position
-    const count = Math.min(sortedVials.length, sortedInjections.length)
-    for (let i = 0; i < count; i++) {
-      const vial = sortedVials[i]
-      const inj = sortedInjections[i]
-      if (!vial || !inj) continue
+    if (prep.vial_data && prep.vial_data.length > 0) {
+      // Primary: sort vials by target_conc ascending to match injection order
+      const sortedVials = [...prep.vial_data].sort(
+        (a, b) => (a.target_conc_ug_ml ?? 0) - (b.target_conc_ug_ml ?? 0)
+      )
 
-      const conc = vial.target_conc_ug_ml
-      if (conc == null || conc <= 0) continue
-
-      // Extract main peak area and RT
-      const mainPeak = inj.main_peak_index >= 0 && inj.main_peak_index < inj.peaks.length
-        ? inj.peaks[inj.main_peak_index]
-        : null
-
-      if (mainPeak) {
-        concentrations.push(conc)
-        areas.push(mainPeak.area)
-        rts.push(mainPeak.retention_time)
+      const count = Math.min(sortedVials.length, sortedInjections.length)
+      for (let i = 0; i < count; i++) {
+        const vial = sortedVials[i]
+        const inj = sortedInjections[i]
+        if (!vial || !inj) continue
+        const conc = vial.target_conc_ug_ml
+        if (conc == null || conc <= 0) continue
+        const mainPeak = inj.main_peak_index >= 0 && inj.main_peak_index < inj.peaks.length
+          ? inj.peaks[inj.main_peak_index]
+          : null
+        if (mainPeak) {
+          concentrations.push(conc)
+          areas.push(mainPeak.area)
+          rts.push(mainPeak.retention_time)
+        }
+      }
+    } else {
+      // Fallback: extract concentration from injection filename
+      // e.g. "P-0136_Std_1000_PeakData" → 1000
+      for (const inj of sortedInjections) {
+        const match = inj.injection_name.match(/_(\d+(?:\.\d+)?)_?PeakData/i)
+          ?? inj.injection_name.match(/(\d+(?:\.\d+)?)(?:[^0-9]|$)/)
+        const conc = match?.[1] != null ? parseFloat(match[1]) : null
+        if (conc == null || conc <= 0) continue
+        const mainPeak = inj.main_peak_index >= 0 && inj.main_peak_index < inj.peaks.length
+          ? inj.peaks[inj.main_peak_index]
+          : null
+        if (mainPeak) {
+          concentrations.push(conc)
+          areas.push(mainPeak.area)
+          rts.push(mainPeak.retention_time)
+        }
       }
     }
 
@@ -988,6 +1072,32 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
             <div className="flex gap-6 px-6 py-5">
               {/* ════ Left column — results + data ════════════════════════ */}
               <div className="flex-1 min-w-0 space-y-5">
+
+                {/* Re-run banner — shown when results were loaded from DB */}
+                {savedResults && !running && (
+                  <div className="flex items-center justify-between gap-3 px-4 py-3 rounded-lg border border-teal-500/30 bg-teal-500/5">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <CheckCircle2 size={14} className="text-teal-500 shrink-0" />
+                      <p className="text-xs text-teal-700 dark:text-teal-400 truncate">
+                        Results loaded from previous run
+                      </p>
+                    </div>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="shrink-0 h-7 text-xs border border-teal-500/30 hover:bg-teal-500/10 hover:text-teal-600"
+                      onClick={() => {
+                        setSavedResults(null)
+                        setResult(null)
+                        setAnalyteResults(new Map())
+                        loadPeakData()
+                      }}
+                    >
+                      Re-run Analysis
+                    </Button>
+                  </div>
+                )}
+
                 {/* Analysis results */}
                 {running && (
                   <div className="flex flex-col items-center gap-3 py-8">
@@ -997,7 +1107,7 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
                     </p>
                   </div>
                 )}
-                {result && (
+                {!isStandard && result && (
                   <>
                     <AnalysisResults result={result} chromatograms={displayChromTraces} hideTrace />
 
@@ -1047,6 +1157,19 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
                 {!loading && parseResult && (
                   <>
                     {/* ── Standard curve review (replaces weights + calibration for standards) ── */}
+                    {isStandard && !standardCurveData && (
+                      <div className="flex items-start gap-3 p-4 rounded-lg border border-amber-500/30 bg-amber-500/5">
+                        <AlertTriangle size={16} className="text-amber-500 mt-0.5 shrink-0" />
+                        <div className="space-y-1 text-sm">
+                          <p className="font-medium text-amber-700 dark:text-amber-400">Could not extract concentration data</p>
+                          <p className="text-muted-foreground text-xs">
+                            No concentration values found in injection filenames or no main peaks identified.
+                            Expected filenames like <code className="font-mono bg-muted px-1 rounded">_1000_PeakData.csv</code>.
+                            Open the debug console (terminal icon) to see what was parsed.
+                          </p>
+                        </div>
+                      </div>
+                    )}
                     {isStandard && standardCurveData && (
                       <StandardCurveReview
                         peptideId={prep.peptide_id}
@@ -1058,6 +1181,7 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
                         sharepointFolder={match.folder_name}
                         vendor={prep.manufacturer ?? undefined}
                         notes={prep.standard_notes ?? undefined}
+                        instrument={prep.instrument_name ?? undefined}
                         onCurveCreated={() => setStandardCurveCreated(true)}
                       />
                     )}
@@ -1186,7 +1310,7 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
               </div>
 
               {/* ════ Right column — Calculation Trace ════════════════════ */}
-              {result?.calculation_trace && (
+              {!isStandard && result?.calculation_trace && (
                 <div className="w-100 shrink-0 sticky top-0 self-start space-y-4">
                   <CalculationVisuals trace={result.calculation_trace} />
                   <details className="group">
@@ -1201,8 +1325,8 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
               )}
             </div>
 
-            {/* Submit Results button */}
-            {result && (
+            {/* Submit Results button — not applicable for standards */}
+            {!isStandard && result && (
               <div className="px-6 pb-6 pt-4 border-t border-border/60 flex justify-end">
                 <Button onClick={() => setView('results')} className="gap-2">
                   Submit Results

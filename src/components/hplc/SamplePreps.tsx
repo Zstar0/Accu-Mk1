@@ -32,10 +32,11 @@ import { SamplePrepHplcFlyout } from './SamplePrepHplcFlyout'
 // ─── Status definitions ───────────────────────────────────────────────────────
 
 const STATUSES: { value: string; label: string; cls: string }[] = [
-  { value: 'awaiting_hplc', label: 'Awaiting HPLC', cls: 'bg-blue-600 text-white' },
-  { value: 'completed',     label: 'Completed',     cls: 'bg-green-600 text-white' },
-  { value: 'on_hold',       label: 'On Hold',       cls: 'bg-amber-500 text-white' },
-  { value: 'review',        label: 'Review',        cls: 'bg-purple-600 text-white' },
+  { value: 'awaiting_hplc',  label: 'Awaiting HPLC',  cls: 'bg-blue-600 text-white' },
+  { value: 'hplc_complete',  label: 'HPLC Complete',  cls: 'bg-teal-600 text-white' },
+  { value: 'completed',      label: 'Completed',      cls: 'bg-green-600 text-white' },
+  { value: 'on_hold',        label: 'On Hold',        cls: 'bg-amber-500 text-white' },
+  { value: 'review',         label: 'Review',         cls: 'bg-purple-600 text-white' },
 ]
 
 function fmtDate(iso: string) {
@@ -232,7 +233,7 @@ export function SamplePreps() {
     try {
       const session = await getWizardSession(prep.wizard_session_id)
       useWizardStore.getState().startSession(session, prep.components_json ?? [])
-      useWizardStore.getState().setCurrentStep(3)
+      useWizardStore.getState().setCurrentStep(1)
       navigateTo('hplc-analysis', 'new-analysis')
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load wizard session')
@@ -459,10 +460,11 @@ export function SamplePreps() {
                             className="appearance-none rounded-full px-2 py-0.5 text-xs font-medium border-0 cursor-pointer focus:outline-none focus:ring-1 focus:ring-primary"
                             style={{
                               backgroundColor:
-                                prep.status === 'awaiting_hplc' ? 'rgb(37 99 235)'
-                                : prep.status === 'completed'    ? 'rgb(22 163 74)'
-                                : prep.status === 'on_hold'      ? 'rgb(245 158 11)'
-                                : prep.status === 'review'       ? 'rgb(147 51 234)'
+                                prep.status === 'awaiting_hplc'  ? 'rgb(37 99 235)'
+                                : prep.status === 'hplc_complete' ? 'rgb(13 148 136)'
+                                : prep.status === 'completed'     ? 'rgb(22 163 74)'
+                                : prep.status === 'on_hold'       ? 'rgb(245 158 11)'
+                                : prep.status === 'review'        ? 'rgb(147 51 234)'
                                 : 'transparent',
                               color: 'white',
                             }}
