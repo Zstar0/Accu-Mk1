@@ -1544,6 +1544,7 @@ class CalibrationCurveResponse(BaseModel):
     # Standard identification metadata
     source_sample_id: Optional[str] = None
     instrument: Optional[str] = None
+    instrument_id: Optional[int] = None
     vendor: Optional[str] = None
     lot_number: Optional[str] = None
     batch_number: Optional[str] = None
@@ -1570,6 +1571,7 @@ class CalibrationCurveResponse(BaseModel):
 class InstrumentSummary(BaseModel):
     """Per-instrument calibration curve count for a peptide."""
     instrument: str  # "1260", "1290", or "unknown"
+    instrument_id: Optional[int] = None
     curve_count: int
 
 
@@ -1601,6 +1603,7 @@ class CalibrationDataInput(BaseModel):
     source_filename: Optional[str] = None
     analyte_id: Optional[int] = None
     instrument: Optional[str] = None
+    instrument_id: Optional[int] = None
     notes: Optional[str] = None
 
 
@@ -1986,15 +1989,22 @@ async def get_peptides(db: Session = Depends(get_db), _current_user=Depends(get_
     summary_rows = db.execute(
         select(
             CalibrationCurve.peptide_id,
-            func.coalesce(CalibrationCurve.instrument, "unknown").label("instrument"),
+            CalibrationCurve.instrument_id,
+            func.coalesce(Instrument.model, CalibrationCurve.instrument, "unknown").label("instrument"),
             func.count().label("curve_count"),
         )
-        .group_by(CalibrationCurve.peptide_id, func.coalesce(CalibrationCurve.instrument, "unknown"))
+        .outerjoin(Instrument, CalibrationCurve.instrument_id == Instrument.id)
+        .group_by(
+            CalibrationCurve.peptide_id,
+            CalibrationCurve.instrument_id,
+            Instrument.model,
+            CalibrationCurve.instrument,
+        )
     ).all()
     summary_map: dict[int, list[InstrumentSummary]] = {}
     for row in summary_rows:
         summary_map.setdefault(row.peptide_id, []).append(
-            InstrumentSummary(instrument=row.instrument, curve_count=row.curve_count)
+            InstrumentSummary(instrument=row.instrument, instrument_id=row.instrument_id, curve_count=row.curve_count)
         )
 
     # Batch 2: all active calibration curves in one query, keep first per peptide
@@ -2018,12 +2028,13 @@ async def get_peptides(db: Session = Depends(get_db), _current_user=Depends(get_
         if p.is_blend:
             resp.components = _build_component_briefs(db, p.id)
             # Aggregate calibration summaries from component peptides
-            blend_summary: dict[str, int] = {}
+            blend_summary: dict[tuple, int] = {}
             for comp in p.components:
                 for s in summary_map.get(comp.id, []):
-                    blend_summary[s.instrument] = blend_summary.get(s.instrument, 0) + s.curve_count
+                    key = (s.instrument_id, s.instrument)
+                    blend_summary[key] = blend_summary.get(key, 0) + s.curve_count
             resp.calibration_summary = sorted(
-                [InstrumentSummary(instrument=k, curve_count=v) for k, v in blend_summary.items()],
+                [InstrumentSummary(instrument=inst, instrument_id=iid, curve_count=cnt) for (iid, inst), cnt in blend_summary.items()],
                 key=lambda x: x.instrument,
             )
         results.append(resp)
@@ -2410,6 +2421,18 @@ async def create_calibration(
     if data.rts and len(data.rts) > 0:
         avg_rt = round(sum(data.rts) / len(data.rts), 4)
 
+    # Resolve instrument_id → name (or vice versa) for the curve
+    resolved_instrument_name = data.instrument
+    resolved_instrument_id = data.instrument_id
+    if resolved_instrument_id and not resolved_instrument_name:
+        inst = db.execute(select(Instrument).where(Instrument.id == resolved_instrument_id)).scalar_one_or_none()
+        if inst:
+            resolved_instrument_name = inst.name
+    elif resolved_instrument_name and not resolved_instrument_id:
+        inst = db.execute(select(Instrument).where(Instrument.name == resolved_instrument_name)).scalar_one_or_none()
+        if inst:
+            resolved_instrument_id = inst.id
+
     # Create new active curve
     from datetime import datetime, timezone
     curve = CalibrationCurve(
@@ -2421,7 +2444,8 @@ async def create_calibration(
         standard_data=std_data,
         source_filename=data.source_filename or "Manual entry",
         source_date=datetime.now(timezone.utc).isoformat(),
-        instrument=data.instrument,
+        instrument=resolved_instrument_name,
+        instrument_id=resolved_instrument_id,
         reference_rt=avg_rt,
         notes=data.notes,
         is_active=True,
@@ -2458,22 +2482,42 @@ async def create_calibration_from_standard(
     with get_mk1_db() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(
-                "SELECT id, sample_id, is_standard FROM sample_preps WHERE sample_id = %s",
-                [data.sample_prep_id],
+                "SELECT id, sample_id, is_standard, instrument_name FROM sample_preps WHERE sample_id = %s OR senaite_sample_id = %s",
+                [data.sample_prep_id, data.sample_prep_id],
             )
             prep_row = cur.fetchone()
     if not prep_row:
         raise HTTPException(400, f"Sample prep '{data.sample_prep_id}' not found")
     if not prep_row.get("is_standard"):
         raise HTTPException(400, f"Sample prep '{data.sample_prep_id}' is not a standard")
+    # Use instrument from request, falling back to what's stored on the sample prep
+    resolved_instrument_name = data.instrument or prep_row.get("instrument_name")
+    # Resolve to instrument_id FK
+    resolved_instrument_id = None
+    if resolved_instrument_name:
+        inst_row = db.execute(
+            select(Instrument).where(Instrument.name == resolved_instrument_name)
+        ).scalar_one_or_none()
+        if inst_row:
+            resolved_instrument_id = inst_row.id
+            resolved_instrument_name = inst_row.name  # normalize
 
-    # 3. Calculate regression
+    # 3. Resolve analyte — use first PeptideAnalyte for this peptide
+    first_analyte = db.execute(
+        select(PeptideAnalyte)
+        .where(PeptideAnalyte.peptide_id == peptide_id)
+        .order_by(PeptideAnalyte.slot)
+        .limit(1)
+    ).scalar_one_or_none()
+    resolved_analyte_id = first_analyte.id if first_analyte else None
+
+    # 4. Calculate regression
     try:
         regression = calculate_calibration_curve(data.concentrations, data.areas)
     except ValueError as e:
         raise HTTPException(400, str(e))
 
-    # 4. Deactivate existing active curves for this peptide
+    # 5. Deactivate existing active curves for this peptide
     active_cals = db.execute(
         select(CalibrationCurve)
         .where(CalibrationCurve.peptide_id == peptide_id)
@@ -2482,12 +2526,12 @@ async def create_calibration_from_standard(
     for cal in active_cals:
         cal.is_active = False
 
-    # 5. Compute reference RT from provided RTs
+    # 6. Compute reference RT from provided RTs
     avg_rt = None
     if data.rts and len(data.rts) > 0:
         avg_rt = round(sum(data.rts) / len(data.rts), 4)
 
-    # 6. Build standard_data dict
+    # 7. Build standard_data dict
     std_data: dict = {
         "concentrations": data.concentrations,
         "areas": data.areas,
@@ -2495,10 +2539,11 @@ async def create_calibration_from_standard(
     if data.rts:
         std_data["rts"] = data.rts
 
-    # 7. Create CalibrationCurve with full provenance
+    # 8. Create CalibrationCurve with full provenance
     from datetime import datetime, timezone
     curve = CalibrationCurve(
         peptide_id=peptide_id,
+        peptide_analyte_id=resolved_analyte_id,
         slope=regression["slope"],
         intercept=regression["intercept"],
         r_squared=regression["r_squared"],
@@ -2509,7 +2554,8 @@ async def create_calibration_from_standard(
         source_sharepoint_folder=data.source_sharepoint_folder,
         vendor=data.vendor,
         notes=data.notes,
-        instrument=data.instrument,
+        instrument=resolved_instrument_name,
+        instrument_id=resolved_instrument_id,
         source_filename=f"Standard: {data.sample_prep_id}",
         source_date=datetime.now(timezone.utc).isoformat(),
         is_active=True,
@@ -2570,6 +2616,7 @@ class CalibrationCurveUpdate(BaseModel):
     rt_tolerance: Optional[float] = None
     diluent_density: Optional[float] = None
     instrument: Optional[str] = None
+    instrument_id: Optional[int] = None
     peptide_analyte_id: Optional[int] = None
     notes: Optional[str] = None
 
@@ -2595,6 +2642,15 @@ async def update_calibration(
         raise HTTPException(404, f"Calibration {calibration_id} not found for peptide {peptide_id}")
 
     updates = body.model_dump(exclude_unset=True)
+
+    # When instrument_id is set, resolve the instrument name for the legacy string field
+    if "instrument_id" in updates and updates["instrument_id"] is not None:
+        inst = db.execute(
+            select(Instrument).where(Instrument.id == updates["instrument_id"])
+        ).scalar_one_or_none()
+        if inst:
+            updates["instrument"] = inst.name
+
     for field, value in updates.items():
         setattr(target, field, value)
 
@@ -2648,6 +2704,12 @@ class HPLCAnalyzeRequest(BaseModel):
     calibration_curve_id: Optional[int] = None  # If provided, use this specific curve
     weights: HPLCWeightsInput
     injections: list[dict]  # Parsed injection data from /hplc/parse-files
+    # Provenance fields (Phase 10.5)
+    sample_prep_id: Optional[int] = None
+    instrument_id: Optional[int] = None
+    source_sharepoint_folder: Optional[str] = None
+    chromatogram_data: Optional[dict] = None
+    run_group_id: Optional[str] = None
 
 
 class HPLCAnalysisResponse(BaseModel):
@@ -2665,7 +2727,42 @@ class HPLCAnalysisResponse(BaseModel):
     avg_main_peak_area: Optional[float]
     concentration_ug_ml: Optional[float]
     calculation_trace: Optional[dict]
+    raw_data: Optional[dict] = None
     created_at: datetime
+    # Provenance fields (Phase 10.5)
+    calibration_curve_id: Optional[int] = None
+    sample_prep_id: Optional[int] = None
+    instrument_id: Optional[int] = None
+    source_sharepoint_folder: Optional[str] = None
+    chromatogram_data: Optional[dict] = None
+    run_group_id: Optional[str] = None
+
+
+def _analysis_to_response(analysis: "HPLCAnalysis", peptide_abbreviation: str) -> "HPLCAnalysisResponse":
+    """Convert an HPLCAnalysis ORM object to an HPLCAnalysisResponse."""
+    return HPLCAnalysisResponse(
+        id=analysis.id,
+        sample_id_label=analysis.sample_id_label,
+        peptide_id=analysis.peptide_id,
+        peptide_abbreviation=peptide_abbreviation,
+        purity_percent=analysis.purity_percent,
+        quantity_mg=analysis.quantity_mg,
+        identity_conforms=analysis.identity_conforms,
+        identity_rt_delta=analysis.identity_rt_delta,
+        dilution_factor=analysis.dilution_factor,
+        stock_volume_ml=analysis.stock_volume_ml,
+        avg_main_peak_area=analysis.avg_main_peak_area,
+        concentration_ug_ml=analysis.concentration_ug_ml,
+        calculation_trace=analysis.calculation_trace,
+        raw_data=analysis.raw_data,
+        created_at=analysis.created_at,
+        calibration_curve_id=analysis.calibration_curve_id,
+        sample_prep_id=analysis.sample_prep_id,
+        instrument_id=analysis.instrument_id,
+        source_sharepoint_folder=analysis.source_sharepoint_folder,
+        chromatogram_data=analysis.chromatogram_data,
+        run_group_id=analysis.run_group_id,
+    )
 
 
 @app.post("/hplc/analyze", response_model=HPLCAnalysisResponse, status_code=201)
@@ -2755,6 +2852,13 @@ async def run_hplc_analysis(
         identity_rt_delta=result.get("identity_rt_delta"),
         calculation_trace=result.get("calculation_trace"),
         raw_data={"injections": request.injections},
+        # Phase 10.5: Provenance fields
+        calibration_curve_id=cal.id,
+        sample_prep_id=request.sample_prep_id,
+        instrument_id=request.instrument_id,
+        source_sharepoint_folder=request.source_sharepoint_folder,
+        chromatogram_data=request.chromatogram_data,
+        run_group_id=request.run_group_id,
     )
     db.add(analysis)
 
@@ -2774,22 +2878,7 @@ async def run_hplc_analysis(
     db.commit()
     db.refresh(analysis)
 
-    return HPLCAnalysisResponse(
-        id=analysis.id,
-        sample_id_label=analysis.sample_id_label,
-        peptide_id=peptide.id,
-        peptide_abbreviation=peptide.abbreviation,
-        purity_percent=analysis.purity_percent,
-        quantity_mg=analysis.quantity_mg,
-        identity_conforms=analysis.identity_conforms,
-        identity_rt_delta=analysis.identity_rt_delta,
-        dilution_factor=analysis.dilution_factor,
-        stock_volume_ml=analysis.stock_volume_ml,
-        avg_main_peak_area=analysis.avg_main_peak_area,
-        concentration_ug_ml=analysis.concentration_ug_ml,
-        calculation_trace=analysis.calculation_trace,
-        created_at=analysis.created_at,
-    )
+    return _analysis_to_response(analysis, peptide.abbreviation)
 
 
 # --- HPLC Analysis History Endpoints ---
@@ -2865,6 +2954,32 @@ async def get_hplc_analyses(
     return HPLCAnalysisListResponse(items=items, total=total)
 
 
+@app.get("/hplc/analyses/by-sample-prep/{sample_prep_id}", response_model=list[HPLCAnalysisResponse])
+async def get_analyses_by_sample_prep(
+    sample_prep_id: int,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """
+    Return all HPLC analyses recorded for a given sample_prep_id.
+
+    Ordered newest-first. Returns empty list if none found.
+    NOTE: Registered before /{analysis_id} routes to prevent FastAPI treating
+    the literal segment "by-sample-prep" as an integer path parameter.
+    """
+    analyses = db.execute(
+        select(HPLCAnalysis)
+        .where(HPLCAnalysis.sample_prep_id == sample_prep_id)
+        .order_by(desc(HPLCAnalysis.created_at))
+    ).scalars().all()
+
+    result = []
+    for a in analyses:
+        peptide = db.execute(select(Peptide).where(Peptide.id == a.peptide_id)).scalar_one_or_none()
+        result.append(_analysis_to_response(a, peptide.abbreviation if peptide else "?"))
+    return result
+
+
 @app.delete("/hplc/analyses/{analysis_id}")
 async def delete_hplc_analysis(analysis_id: int, db: Session = Depends(get_db), _current_user=Depends(get_current_user)):
     """Delete an HPLC analysis and its related audit log entries."""
@@ -2904,22 +3019,7 @@ async def get_hplc_analysis(analysis_id: int, db: Session = Depends(get_db), _cu
         select(Peptide).where(Peptide.id == analysis.peptide_id)
     ).scalar_one_or_none()
 
-    return HPLCAnalysisResponse(
-        id=analysis.id,
-        sample_id_label=analysis.sample_id_label,
-        peptide_id=analysis.peptide_id,
-        peptide_abbreviation=peptide.abbreviation if peptide else "?",
-        purity_percent=analysis.purity_percent,
-        quantity_mg=analysis.quantity_mg,
-        identity_conforms=analysis.identity_conforms,
-        identity_rt_delta=analysis.identity_rt_delta,
-        dilution_factor=analysis.dilution_factor,
-        stock_volume_ml=analysis.stock_volume_ml,
-        avg_main_peak_area=analysis.avg_main_peak_area,
-        concentration_ug_ml=analysis.concentration_ug_ml,
-        calculation_trace=analysis.calculation_trace,
-        created_at=analysis.created_at,
-    )
+    return _analysis_to_response(analysis, peptide.abbreviation if peptide else "?")
 
 
 # --- Peptide Seed from Lab Folder ---
@@ -6221,6 +6321,7 @@ async def sharepoint_download_batch(
 
 VALID_STEP_KEYS = {
     "stock_vial_empty_mg",
+    "stock_vial_with_peptide_mg",  # Standards only: vial+cap+peptide aliquot, before diluent
     "stock_vial_loaded_mg",
     "dil_vial_empty_mg",
     "dil_vial_with_diluent_mg",
@@ -6240,6 +6341,8 @@ class WizardSessionCreate(BaseModel):
     is_standard: Optional[bool] = None
     manufacturer: Optional[str] = None
     standard_notes: Optional[str] = None
+    instrument_name: Optional[str] = None
+    instrument_id: Optional[int] = None
 
 
 class WizardSessionUpdate(BaseModel):
@@ -6249,10 +6352,13 @@ class WizardSessionUpdate(BaseModel):
     target_conc_ug_ml: Optional[float] = None
     target_total_vol_ul: Optional[float] = None
     peak_area: Optional[float] = None
+    vial_params: Optional[dict] = None
     # Phase 09: Standard prep metadata
     is_standard: Optional[bool] = None
     manufacturer: Optional[str] = None
     standard_notes: Optional[str] = None
+    instrument_name: Optional[str] = None
+    instrument_id: Optional[int] = None
 
 
 class WizardMeasurementCreate(BaseModel):
@@ -6304,6 +6410,8 @@ class WizardSessionResponse(BaseModel):
     is_standard: bool = False
     manufacturer: Optional[str] = None
     standard_notes: Optional[str] = None
+    instrument_name: Optional[str] = None
+    instrument_id: Optional[int] = None
 
     class Config:
         from_attributes = True
@@ -6344,27 +6452,39 @@ def _build_session_response(session: WizardSession, db: Session) -> WizardSessio
 
     calcs: dict = {}
 
-    # Stage 1: Stock Prep — requires declared_weight + 2 vial weights
+    # Stage 1: Stock Prep
+    # Production: needs declared_weight + empty + loaded
+    # Standard:   needs empty + with_peptide + loaded (declared not required)
     stock_empty = current.get("stock_vial_empty_mg")
+    stock_with_peptide = current.get("stock_vial_with_peptide_mg")
     stock_loaded = current.get("stock_vial_loaded_mg")
     declared = session.declared_weight_mg
+    is_standard = session.is_standard
+
+    can_calc = (
+        (is_standard and all(v is not None for v in [stock_empty, stock_with_peptide, stock_loaded])) or
+        (not is_standard and all(v is not None for v in [declared, stock_empty, stock_loaded]))
+    )
 
     stock_conc_d = None  # Decimal — used in subsequent stages
 
-    if all(v is not None for v in [declared, stock_empty, stock_loaded]):
+    if can_calc:
         try:
             from calculations.wizard import calc_stock_prep
             _dd = session.calibration_curve.diluent_density if session.calibration_curve else 997.1
             density = Decimal(str(_dd))
             sp = calc_stock_prep(
-                Decimal(str(declared)),
+                Decimal(str(declared)) if declared is not None else None,
                 Decimal(str(stock_empty)),
                 Decimal(str(stock_loaded)),
                 density,
+                Decimal(str(stock_with_peptide)) if stock_with_peptide is not None else None,
             )
             stock_conc_d = sp["stock_conc_ug_ml"]
             calcs["diluent_added_ml"] = float(sp["total_diluent_added_ml"])
             calcs["stock_conc_ug_ml"] = float(sp["stock_conc_ug_ml"])
+            if is_standard:
+                calcs["actual_peptide_mg"] = float(sp["actual_peptide_mg"])
         except Exception:
             pass  # Partial session — skip this stage
 
@@ -6498,7 +6618,7 @@ def _build_session_response(session: WizardSession, db: Session) -> WizardSessio
         _dd = session.calibration_curve.diluent_density if session.calibration_curve else 997.1
         density = Decimal(str(_dd))
 
-        for vial_key, vparams in session.vial_params.items():
+        for vial_key, vparams in sorted(session.vial_params.items(), key=lambda x: int(x[0])):
             vn = int(vial_key)
             vcurrent = {
                 m.step_key: m.weight_mg
@@ -6508,22 +6628,39 @@ def _build_session_response(session: WizardSession, db: Session) -> WizardSessio
             vc: dict = {}
             v_declared = vparams.get("declared_weight_mg")
             v_stock_empty = vcurrent.get("stock_vial_empty_mg")
+            v_stock_with_peptide = vcurrent.get("stock_vial_with_peptide_mg")
             v_stock_loaded = vcurrent.get("stock_vial_loaded_mg")
             v_stock_conc_d = None
             v_diluent_ml_d = None  # shared diluent volume for per-analyte calcs
 
-            if all(v is not None for v in [v_declared, v_stock_empty, v_stock_loaded]):
-                try:
-                    sp = calc_stock_prep(
-                        Decimal(str(v_declared)), Decimal(str(v_stock_empty)),
-                        Decimal(str(v_stock_loaded)), density,
-                    )
-                    v_stock_conc_d = sp["stock_conc_ug_ml"]
-                    v_diluent_ml_d = sp["total_diluent_added_ml"]
-                    vc["diluent_added_ml"] = float(sp["total_diluent_added_ml"])
-                    vc["stock_conc_ug_ml"] = float(sp["stock_conc_ug_ml"])
-                except Exception:
-                    pass
+            # Standard serial dilutions: vials 2+ use previous vial's actual_conc as stock
+            if is_standard and vn > 1:
+                prev_vc = vial_calcs.get(str(vn - 1), {})
+                prev_actual = prev_vc.get("actual_conc_ug_ml")
+                if prev_actual is not None:
+                    v_stock_conc_d = Decimal(str(prev_actual))
+            else:
+                v_can_calc = (
+                    (is_standard and all(v is not None for v in [v_stock_empty, v_stock_with_peptide, v_stock_loaded])) or
+                    (not is_standard and all(v is not None for v in [v_declared, v_stock_empty, v_stock_loaded]))
+                )
+                if v_can_calc:
+                    try:
+                        sp = calc_stock_prep(
+                            Decimal(str(v_declared)) if v_declared is not None else None,
+                            Decimal(str(v_stock_empty)),
+                            Decimal(str(v_stock_loaded)),
+                            density,
+                            Decimal(str(v_stock_with_peptide)) if v_stock_with_peptide is not None else None,
+                        )
+                        v_stock_conc_d = sp["stock_conc_ug_ml"]
+                        v_diluent_ml_d = sp["total_diluent_added_ml"]
+                        vc["diluent_added_ml"] = float(sp["total_diluent_added_ml"])
+                        vc["stock_conc_ug_ml"] = float(sp["stock_conc_ug_ml"])
+                        if is_standard:
+                            vc["actual_peptide_mg"] = float(sp["actual_peptide_mg"])
+                    except Exception:
+                        pass
 
             v_target_conc = vparams.get("target_conc_ug_ml")
             v_target_vol = vparams.get("target_total_vol_ul")
@@ -6633,6 +6770,8 @@ def _build_session_response(session: WizardSession, db: Session) -> WizardSessio
         is_standard=session.is_standard,
         manufacturer=session.manufacturer,
         standard_notes=session.standard_notes,
+        instrument_name=session.instrument_name,
+        instrument_id=session.instrument_id,
     )
 
 
@@ -6655,48 +6794,50 @@ async def create_wizard_session(
         raise HTTPException(status_code=404, detail=f"Peptide {data.peptide_id} not found")
 
     cal = None
-    if peptide.is_blend:
-        # For blends, find an active calibration from any component peptide
-        component_ids = [
-            row.component_id for row in db.execute(
-                select(blend_components.c.component_id)
-                .where(blend_components.c.blend_id == peptide.id)
-                .order_by(blend_components.c.display_order)
-            ).all()
-        ]
-        if component_ids:
+    # Standards are creating the curve — skip calibration requirement
+    if not data.is_standard:
+        if peptide.is_blend:
+            # For blends, find an active calibration from any component peptide
+            component_ids = [
+                row.component_id for row in db.execute(
+                    select(blend_components.c.component_id)
+                    .where(blend_components.c.blend_id == peptide.id)
+                    .order_by(blend_components.c.display_order)
+                ).all()
+            ]
+            if component_ids:
+                cal = db.execute(
+                    select(CalibrationCurve)
+                    .where(CalibrationCurve.peptide_id.in_(component_ids))
+                    .where(CalibrationCurve.is_active == True)
+                    .order_by(desc(CalibrationCurve.created_at))
+                    .limit(1)
+                ).scalar_one_or_none()
+            if not cal:
+                raise HTTPException(
+                    status_code=400,
+                    detail="No active calibration curves found for any component peptide in this blend."
+                )
+        else:
             cal = db.execute(
                 select(CalibrationCurve)
-                .where(CalibrationCurve.peptide_id.in_(component_ids))
+                .where(CalibrationCurve.peptide_id == data.peptide_id)
                 .where(CalibrationCurve.is_active == True)
                 .order_by(desc(CalibrationCurve.created_at))
                 .limit(1)
             ).scalar_one_or_none()
-        if not cal:
-            raise HTTPException(
-                status_code=400,
-                detail="No active calibration curves found for any component peptide in this blend."
-            )
-    else:
-        cal = db.execute(
-            select(CalibrationCurve)
-            .where(CalibrationCurve.peptide_id == data.peptide_id)
-            .where(CalibrationCurve.is_active == True)
-            .order_by(desc(CalibrationCurve.created_at))
-            .limit(1)
-        ).scalar_one_or_none()
-        if not cal:
-            raise HTTPException(
-                status_code=400,
-                detail=f"No active calibration curve found for peptide {data.peptide_id}. Activate a calibration curve before starting a session."
-            )
+            if not cal:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"No active calibration curve found for peptide {data.peptide_id}. Activate a calibration curve before starting a session."
+                )
 
     if data.declared_weight_mg is not None and not (0 < data.declared_weight_mg < 5000):
         raise HTTPException(status_code=422, detail="declared_weight_mg must be between 0 and 5000 mg")
 
     session = WizardSession(
         peptide_id=data.peptide_id,
-        calibration_curve_id=cal.id,
+        calibration_curve_id=cal.id if cal else None,
         sample_id_label=data.sample_id_label,
         declared_weight_mg=data.declared_weight_mg,
         target_conc_ug_ml=data.target_conc_ug_ml,
@@ -6705,6 +6846,8 @@ async def create_wizard_session(
         is_standard=data.is_standard if data.is_standard is not None else False,
         manufacturer=data.manufacturer,
         standard_notes=data.standard_notes,
+        instrument_name=data.instrument_name,
+        instrument_id=data.instrument_id,
     )
     db.add(session)
     db.commit()
@@ -6772,16 +6915,35 @@ async def update_wizard_session(
     if session.status == "completed":
         raise HTTPException(status_code=400, detail="Cannot update a completed session")
 
+    from sqlalchemy.orm.attributes import flag_modified
+
     update_data = data.model_dump(exclude_unset=True)
     if "declared_weight_mg" in update_data and update_data["declared_weight_mg"] is not None:
         if not (0 < update_data["declared_weight_mg"] < 5000):
             raise HTTPException(status_code=422, detail="declared_weight_mg must be between 0 and 5000 mg")
+
+    if "vial_params" in update_data and update_data["vial_params"] is not None:
+        session.vial_params = update_data.pop("vial_params")
+        flag_modified(session, "vial_params")
 
     for field, value in update_data.items():
         setattr(session, field, value)
 
     db.commit()
     db.refresh(session)
+
+    # Sync standard metadata to the linked sample_prep row (if any)
+    std_meta_fields = {"instrument_name", "instrument_id", "manufacturer", "standard_notes"}
+    if std_meta_fields & set(update_data.keys()):
+        from mk1_db import get_mk1_db, update_sample_prep as _update_sp
+        with get_mk1_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT id FROM sample_preps WHERE wizard_session_id = %s", [session_id])
+                sp_row = cur.fetchone()
+        if sp_row:
+            sync_data = {k: update_data[k] for k in std_meta_fields if k in update_data}
+            _update_sp(sp_row[0], sync_data)
+
     return _build_session_response(session, db)
 
 
@@ -6957,6 +7119,7 @@ async def create_sample_prep_endpoint(
         "is_standard": session.is_standard,
         "manufacturer": session.manufacturer,
         "standard_notes": session.standard_notes,
+        "instrument_name": session.instrument_name,
     }
 
     # Blend support: include component info so HPLC flyout can load per-component curves
@@ -7034,7 +7197,23 @@ async def create_sample_prep_endpoint(
 
     try:
         ensure_sample_preps_table()
-        row = create_sample_prep(data)
+        # Idempotency: if a sample prep already exists for this session, update it
+        from mk1_db import get_mk1_db as _get_mk1_db, update_sample_prep as _update_sp
+        from psycopg2.extras import RealDictCursor as _RDC
+        existing_id = None
+        with _get_mk1_db() as _conn:
+            with _conn.cursor(cursor_factory=_RDC) as _cur:
+                _cur.execute(
+                    "SELECT id FROM sample_preps WHERE wizard_session_id = %s",
+                    [body.wizard_session_id],
+                )
+                _existing = _cur.fetchone()
+                if _existing:
+                    existing_id = _existing["id"]
+        if existing_id:
+            row = _update_sp(existing_id, data)
+        else:
+            row = create_sample_prep(data)
         # Serialize datetime fields
         for k in ("created_at", "updated_at"):
             if row.get(k) and hasattr(row[k], "isoformat"):
