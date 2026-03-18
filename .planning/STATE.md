@@ -9,10 +9,10 @@ See: .planning/PROJECT.md (updated 2026-03-16)
 
 ## Current Position
 
-Phase: 10 of 12 (Auto-Create Curve from Standard)
-Plan: 3 of 3 in current phase (awaiting human verification checkpoint)
-Status: In progress — checkpoint gate
-Last activity: 2026-03-17 — Completed 10-03-PLAN.md auto tasks (2/3), awaiting checkpoint
+Phase: 10.5 of 12 (HPLC Results Persistence)
+Plan: 1 of 2 in current phase (complete)
+Status: In progress
+Last activity: 2026-03-18 — Completed 10.5-01-PLAN.md (schema migration + endpoint augmentation)
 
 Progress: [██░░░░░░░░] 20%
 
@@ -55,6 +55,10 @@ Progress: [██░░░░░░░░] 20%
 - Vial-to-injection mapping uses sorted index position (vial_number ascending, injection name natural sort)
 - Client-side regression is preview only — backend computes authoritative values
 - Standard branch in flyout is purely additive — non-standard flow unchanged
+- sample_prep_id on hplc_analyses is plain INTEGER (no FK) — sample_preps lives in separate accumark_mk1 DB
+- calibration_curve_id on hplc_analyses persisted from resolved cal.id, not from request — guarantees correctness
+- FastAPI route ordering: static-segment routes must be registered before parameterized routes to prevent literal-as-integer matching
+- _analysis_to_response() helper introduced in main.py for HPLCAnalysis ORM → HPLCAnalysisResponse conversion
 
 ### Key Source Files
 
@@ -69,6 +73,10 @@ Progress: [██░░░░░░░░] 20%
 - `src/store/wizard-store.ts` — Wizard state, step builders, unlock/complete logic
 - `src/lib/api.ts` — All TypeScript types and API functions
 
+### Roadmap Evolution
+
+- Phase 10.5 inserted after Phase 10: HPLC Results Persistence (URGENT) — existing `hplc_analyses` table stores partial results but missing calibration_curve_id, sample_prep_id, chromatogram traces, instrument, blend run grouping, and flyout reload path. Enriching this enables result comparison and audit before continuing to chromatogram overlay work.
+
 ### Blockers/Concerns
 
 None.
@@ -79,6 +87,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-17
-Stopped at: 10-03-PLAN.md checkpoint gate (auto tasks done, human-verify pending)
+Last session: 2026-03-18
+Stopped at: Completed 10.5-01-PLAN.md (all tasks done)
 Resume file: None
