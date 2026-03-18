@@ -2653,6 +2653,43 @@ async def update_calibration(
         if inst:
             updates["instrument"] = inst.name
 
+    # When source_sample_id is set/changed, auto-fetch chromatogram from SharePoint
+    new_sample_id = updates.get("source_sample_id")
+    if new_sample_id and new_sample_id != target.source_sample_id:
+        try:
+            import sharepoint as sp
+            sample_files = await sp.get_sample_files(new_sample_id)
+            if sample_files and sample_files.get("chromatogram_files"):
+                chrom_file = sample_files["chromatogram_files"][0]  # First DAD1A file
+                content_bytes, filename = await sp.download_file(chrom_file["id"])
+                csv_text = content_bytes.decode("utf-8", errors="replace")
+                # Parse simple CSV: each line is "time,absorbance" (no header)
+                times = []
+                signals = []
+                for line in csv_text.splitlines():
+                    line = line.strip()
+                    if not line:
+                        continue
+                    parts = line.split(",", 1)
+                    if len(parts) != 2:
+                        continue
+                    try:
+                        t = float(parts[0])
+                        s = float(parts[1])
+                        times.append(t)
+                        signals.append(s)
+                    except ValueError:
+                        continue
+                if times:
+                    updates["chromatogram_data"] = {"times": times, "signals": signals}
+                    updates["source_sharepoint_folder"] = sample_files["sample"]["path"]
+        except Exception as e:
+            # Chromatogram fetch is best-effort — log and continue
+            import logging
+            logging.getLogger(__name__).warning(
+                f"Chromatogram auto-fetch failed for sample '{new_sample_id}': {e}"
+            )
+
     for field, value in updates.items():
         setattr(target, field, value)
 
