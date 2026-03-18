@@ -10,18 +10,18 @@ See: .planning/PROJECT.md (updated 2026-03-16)
 ## Current Position
 
 Phase: 10.5 of 12 (HPLC Results Persistence)
-Plan: 1 of 2 in current phase (complete)
-Status: In progress
-Last activity: 2026-03-18 — Completed 10.5-01-PLAN.md (schema migration + endpoint augmentation)
+Plan: 2 of 2 in current phase (complete)
+Status: Phase complete
+Last activity: 2026-03-18 — Completed 10.5-02-PLAN.md (frontend provenance wiring + DB reload)
 
-Progress: [██░░░░░░░░] 20%
+Progress: [███░░░░░░░] 30%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 4 (v0.26.0)
+- Total plans completed: 6 (v0.26.0)
 - Average duration: ~5 min
-- Total execution time: ~0.3 hours
+- Total execution time: ~0.5 hours
 
 **By Phase:**
 
@@ -29,9 +29,10 @@ Progress: [██░░░░░░░░] 20%
 |-------|-------|-------|----------|
 | 09 | 1/2 | ~6 min | ~6 min |
 | 10 | 3/3 | ~14 min | ~4.7 min |
+| 10.5 | 2/2 | ~10 min | ~5 min |
 
 **Recent Trend:**
-- Last 5 plans: 09-01 (~6 min), 10-01 (~4 min), 10-02 (~5 min), 10-03 (~5 min)
+- Last 5 plans: 10-01 (~4 min), 10-02 (~5 min), 10-03 (~5 min), 10.5-01 (~5 min), 10.5-02 (~5 min)
 - Trend: stable/fast
 
 ## Accumulated Context
@@ -59,6 +60,10 @@ Progress: [██░░░░░░░░] 20%
 - calibration_curve_id on hplc_analyses persisted from resolved cal.id, not from request — guarantees correctness
 - FastAPI route ordering: static-segment routes must be registered before parameterized routes to prevent literal-as-integer matching
 - _analysis_to_response() helper introduced in main.py for HPLCAnalysis ORM → HPLCAnalysisResponse conversion
+- instrument_id passed as undefined from frontend — SamplePrep interface only has instrument_name; update when backend exposes instrument_id on /sample-preps response
+- chromatogram_data persisted from chromTraces[0] only — shared injection set across blend analytes, one trace is correct
+- Status update to hplc_complete is non-blocking (try/catch + console.warn) — analysis result must not fail due to status write
+- DB-first flyout load: loadingSaved guard in loadPeakData handles race between async DB check and SharePoint effect
 
 ### Key Source Files
 
@@ -88,5 +93,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-03-18
-Stopped at: Completed 10.5-01-PLAN.md (all tasks done)
+Stopped at: Completed 10.5-02-PLAN.md (phase 10.5 complete)
 Resume file: None
