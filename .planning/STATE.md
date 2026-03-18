@@ -9,12 +9,12 @@ See: .planning/PROJECT.md (updated 2026-03-16)
 
 ## Current Position
 
-Phase: 10.5 of 12 (HPLC Results Persistence)
-Plan: 2 of 2 in current phase (complete)
-Status: Phase complete
-Last activity: 2026-03-18 — Completed 10.5-02-PLAN.md (frontend provenance wiring + DB reload)
+Phase: 11 of 12 (Backfill Existing Curves)
+Plan: 1 of ? in current phase (in progress)
+Status: In progress
+Last activity: 2026-03-18 — Completed 11-01-PLAN.md (extended PATCH endpoint + TS interface for backfill)
 
-Progress: [███░░░░░░░] 30%
+Progress: [████░░░░░░] 35%
 
 ## Performance Metrics
 
@@ -30,9 +30,10 @@ Progress: [███░░░░░░░] 30%
 | 09 | 1/2 | ~6 min | ~6 min |
 | 10 | 3/3 | ~14 min | ~4.7 min |
 | 10.5 | 2/2 | ~10 min | ~5 min |
+| 11 | 1/? | ~2 min | ~2 min |
 
 **Recent Trend:**
-- Last 5 plans: 10-01 (~4 min), 10-02 (~5 min), 10-03 (~5 min), 10.5-01 (~5 min), 10.5-02 (~5 min)
+- Last 5 plans: 10-02 (~5 min), 10-03 (~5 min), 10.5-01 (~5 min), 10.5-02 (~5 min), 11-01 (~2 min)
 - Trend: stable/fast
 
 ## Accumulated Context
@@ -64,6 +65,8 @@ Progress: [███░░░░░░░] 30%
 - chromatogram_data persisted from chromTraces[0] only — shared injection set across blend analytes, one trace is correct
 - Status update to hplc_complete is non-blocking (try/catch + console.warn) — analysis result must not fail due to status write
 - DB-first flyout load: loadingSaved guard in loadPeakData handles race between async DB check and SharePoint effect
+- Chromatogram backfill auto-fetch is best-effort: PATCH succeeds even if SharePoint is unreachable; warning logged on failure
+- Only fetch chromatogram when source_sample_id actually changes (skip no-op updates on repeated PATCHes)
 
 ### Key Source Files
 
@@ -93,5 +96,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-03-18
-Stopped at: Completed 10.5-02-PLAN.md (phase 10.5 complete)
+Stopped at: Completed 11-01-PLAN.md (phase 11 in progress — plan 1 done)
 Resume file: None
