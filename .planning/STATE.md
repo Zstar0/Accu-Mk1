@@ -5,16 +5,16 @@
 See: .planning/PROJECT.md (updated 2026-03-16)
 
 **Core value:** Streamlined morning workflow: import CSV -> review batch -> calculate purity -> push to SENAITE. One operator, one workstation, no friction.
-**Current focus:** v0.26.0 — Standard Sample Preps & Calibration Curve Chromatograms
+**Current focus:** v0.27.0 — Method-Aware Identity Check
 
 ## Current Position
 
-Phase: 12 of 12 (Chromatogram Overlay)
-Plan: 2 of 2 in current phase (PHASE COMPLETE)
-Status: Phase complete — v0.26.0 feature complete
-Last activity: 2026-03-18 — Completed 12-02-PLAN.md (standard chromatogram overlay wired into SamplePrepHplcFlyout)
+Phase: 13 of 13 (Method-Aware Identity Check)
+Plan: 1 of ? in current phase (In progress)
+Status: In progress
+Last activity: 2026-03-19 — Completed 13-01-PLAN.md (_std_ PeakData detection + StandardInjection parser + HPLCParseResponse.standard_injections)
 
-Progress: [██████████] 100% (phase 12)
+Progress: [██████████░] phase 13 in progress
 
 ## Performance Metrics
 
@@ -32,9 +32,10 @@ Progress: [██████████] 100% (phase 12)
 | 10.5 | 2/2 | ~10 min | ~5 min |
 | 11 | 2/? | ~4 min | ~2 min |
 | 12 | 2/2 | ~5 min | ~2.5 min |
+| 13 | 1/? | ~6 min | ~6 min |
 
 **Recent Trend:**
-- Last 5 plans: 11-01 (~2 min), 11-02 (~2 min), 12-01 (~2 min), 12-02 (~3 min)
+- Last 5 plans: 11-02 (~2 min), 12-01 (~2 min), 12-02 (~3 min), 13-01 (~6 min)
 - Trend: stable/fast
 
 ## Accumulated Context
@@ -77,6 +78,10 @@ Progress: [██████████] 100% (phase 12)
 - Standard trace prepended at index 0 in displayChromTraces — Recharts renders in order, standard behind sample traces
 - selectedCal in displayChromTraces dependency array — blend analyte tab switches update standard trace automatically
 - chromatogram_data cast to Record<string, unknown> in flyout — bridges TS interface (old shape) vs runtime multi-conc format
+- Standard injection files detected by _std_ in filename (case-insensitive) — never mixed into sample injections list
+- Analyte label extracted between _std_ and _PeakData in filename — supports hyphenated labels (TB17-23)
+- Source sample ID stripped at first _Inj_ in "Sample name:" metadata line — produces bare ID (P-0111)
+- standard_injections defaults to [] on HPLCParseResponse — backward compatible API addition
 
 ### Key Source Files
 
@@ -91,6 +96,7 @@ Progress: [██████████] 100% (phase 12)
 - `src/store/wizard-store.ts` — Wizard state, step builders, unlock/complete logic
 - `src/lib/api.ts` — All TypeScript types and API functions
 - `src/components/hplc/ChromatogramChart.tsx` — ChromatogramTrace interface, downsampleLTTB, parseChromatogramCsv, extractStandardTrace, ChromatogramChart
+- `backend/parsers/peakdata_csv_parser.py` — StandardInjection dataclass, _is_standard_injection, parse_standard_injection, separate standard_injections list in HPLCParseResult
 
 ### Roadmap Evolution
 
@@ -106,6 +112,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-18
-Stopped at: Completed 12-02-PLAN.md (phase 12 complete — v0.26.0 feature complete)
+Last session: 2026-03-19
+Stopped at: Completed 13-01-PLAN.md (standard injection detection and parsing in place)
 Resume file: None
