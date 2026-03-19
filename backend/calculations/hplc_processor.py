@@ -33,6 +33,9 @@ class PeptideParams:
     reference_rt: Optional[float]
     rt_tolerance: float
     diluent_density: float  # mg/mL
+    # Phase 13: standard injection RT override
+    standard_injection_rt: Optional[float] = None
+    standard_injection_source: Optional[str] = None  # e.g. "P-0111"
 
 
 @dataclass
@@ -194,9 +197,25 @@ def calculate_identity(
 
     CONFORMS if |avg_sample_RT - reference_RT| <= tolerance.
 
-    Returns identity result with RT comparison details.
+    Phase 13: Prefers standard_injection_rt when available (same-method comparison,
+    delta ~0.02 min). Falls back to calibration curve reference_rt when not provided
+    (may be from a different method, delta can exceed 6 min causing false failures).
+
+    Returns identity result with RT comparison details and reference source tracking.
     """
-    if peptide.reference_rt is None:
+    # Phase 13: prefer standard injection RT over calibration curve reference RT
+    effective_rt = (
+        peptide.standard_injection_rt
+        if peptide.standard_injection_rt is not None
+        else peptide.reference_rt
+    )
+    reference_source = (
+        "standard_injection"
+        if peptide.standard_injection_rt is not None
+        else "calibration_curve"
+    )
+
+    if effective_rt is None:
         return {
             "conforms": None,
             "error": "No reference RT set for this peptide",
@@ -213,16 +232,20 @@ def calculate_identity(
         return {"conforms": None, "error": "No main peak RTs found"}
 
     avg_rt = sum(rts) / len(rts)
-    delta = abs(avg_rt - peptide.reference_rt)
+    delta = abs(avg_rt - effective_rt)
     conforms = delta <= peptide.rt_tolerance
 
     return {
         "conforms": conforms,
         "sample_rt": round(avg_rt, 4),
-        "reference_rt": peptide.reference_rt,
+        "reference_rt": effective_rt,  # The RT actually used for comparison
         "rt_delta": round(delta, 4),
         "rt_tolerance": peptide.rt_tolerance,
         "individual_rts": [round(rt, 4) for rt in rts],
+        # Phase 13: source tracking
+        "reference_source": reference_source,
+        "reference_source_id": peptide.standard_injection_source,
+        "calibration_curve_rt": peptide.reference_rt,  # Always included for audit
     }
 
 
