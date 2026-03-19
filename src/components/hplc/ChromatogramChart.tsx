@@ -22,6 +22,13 @@ export interface ChromatogramTrace {
   name: string
   /** Downsampled [time, absorbance] pairs */
   points: [number, number][]
+  /** Optional visual style overrides for this trace */
+  style?: {
+    /** Render as dashed line */
+    dashed?: boolean
+    /** Opacity 0-1 (default 1) */
+    opacity?: number
+  }
 }
 
 interface ChromatogramChartProps {
@@ -266,7 +273,9 @@ export function ChromatogramChart({
                   key={trace.name}
                   dataKey={trace.name}
                   stroke={TRACE_COLORS[i % TRACE_COLORS.length]}
-                  strokeWidth={1.5}
+                  strokeWidth={trace.style?.dashed ? 1 : 1.5}
+                  strokeDasharray={trace.style?.dashed ? '6 3' : undefined}
+                  strokeOpacity={trace.style?.opacity ?? 1}
                   dot={false}
                   type="monotone"
                   isAnimationActive={false}
