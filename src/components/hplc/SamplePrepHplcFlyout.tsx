@@ -515,6 +515,8 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
   // Saved results from DB (loaded on flyout open)
   const [savedResults, setSavedResults] = useState<HPLCAnalysisResult[] | null>(null)
   const [loadingSaved, setLoadingSaved] = useState(false)
+  // Ref guard — synchronous, prevents race between DB check and SharePoint scan effects
+  const dbCheckActiveRef = useRef(false)
 
   useEffect(() => {
     if (!showDebug) return
@@ -544,6 +546,10 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
       setShowDebug(false)
       setSavedResults(null)
 
+      // Set ref SYNCHRONOUSLY so the SharePoint effect (which fires in the same
+      // commit cycle) sees it immediately — state updates won't be visible yet
+      dbCheckActiveRef.current = true
+
       // Async DB check — load saved results before SharePoint scan
       ;(async () => {
         setLoadingSaved(true)
@@ -563,6 +569,7 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
           // DB check failed — savedResults stays null, SharePoint flow proceeds
         } finally {
           setLoadingSaved(false)
+          dbCheckActiveRef.current = false
         }
       })()
     }
@@ -572,8 +579,9 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
 
   const loadPeakData = useCallback(async () => {
     if (parseResult) return
-    if (savedResults) return      // skip SharePoint scan when DB results loaded
-    if (loadingSaved) return      // skip while DB check still in progress
+    if (savedResults) return              // skip SharePoint scan when DB results loaded
+    if (loadingSaved) return              // skip while DB check still in progress (state)
+    if (dbCheckActiveRef.current) return  // skip during DB check (ref — synchronous guard)
     setLoading(true)
     setParseError(null)
     try {
@@ -598,6 +606,13 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
         peakFiles.map(d => ({ filename: d.filename, content: d.content }))
       )
       setParseResult(parsed)
+
+      if (parsed.standard_injections?.length) {
+        console.log(
+          `[HPLC] Found ${parsed.standard_injections.length} standard injection(s):`,
+          parsed.standard_injections.map(si => `${si.analyte_label} RT=${si.main_peak_rt} (${si.source_sample_id})`)
+        )
+      }
 
       const traces: ChromatogramTrace[] = chromFiles.map(d => {
         const raw = parseChromatogramCsv(d.content)
@@ -629,28 +644,49 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
   )
 
   // Parsed HPLC labels (short names from filenames, e.g. "BPC", "TB500(17-23)")
-  const parsedLabels = useMemo(
-    () => parseResult?.detected_peptides ?? [],
-    [parseResult?.detected_peptides],
-  )
+  // When loading from DB (no parseResult), derive labels from saved results abbreviations
+  const parsedLabels = useMemo(() => {
+    if (parseResult?.detected_peptides?.length) return parseResult.detected_peptides
+    // Fallback: use saved results' peptide_abbreviation as tab labels
+    if (savedResults && savedResults.length > 1) {
+      return savedResults.map(s => s.peptide_abbreviation).filter(Boolean) as string[]
+    }
+    return []
+  }, [parseResult?.detected_peptides, savedResults])
 
-  // For blends: map parsed short labels → component objects via prefix match
-  // e.g. "BPC157" matches "BPC-157", "GHK" matches "GHK-CU"
+  // For blends: map parsed short labels → component objects
+  // Checks: abbreviation, name, and hplc_aliases (stored on peptide record)
   const labelToComponent = useMemo(() => {
     if (!isBlend) return new Map<string, typeof blendComponents[0]>()
     const map = new Map<string, typeof blendComponents[0]>()
-    // Normalize: strip dashes/hyphens/spaces for comparison
-    const norm = (s: string) => s.toUpperCase().replace(/[-\s]/g, '')
+    const norm = (s: string) => s.toUpperCase().replace(/[-\s()]/g, '')
+
     for (const label of parsedLabels) {
-      const upper = label.toUpperCase()
       const normalized = norm(label)
-      // Try exact match, then normalized match, then prefix/contains
-      const comp = blendComponents.find(c => c.abbreviation.toUpperCase() === upper)
-        ?? blendComponents.find(c => norm(c.abbreviation) === normalized)
-        ?? blendComponents.find(c => norm(c.abbreviation).startsWith(normalized))
+
+      // 1. Check hplc_aliases first (exact match, user-curated — most reliable)
+      const aliasMatch = blendComponents.find(c =>
+        c.hplc_aliases?.some(a => norm(a) === normalized)
+      )
+      if (aliasMatch) { map.set(label, aliasMatch); continue }
+
+      // 2. Exact abbreviation match (normalized)
+      const abbrMatch = blendComponents.find(c => norm(c.abbreviation) === normalized)
+      if (abbrMatch) { map.set(label, abbrMatch); continue }
+
+      // 3. Name match (normalized)
+      const nameMatch = blendComponents.find(c => norm(c.name) === normalized)
+      if (nameMatch) { map.set(label, nameMatch); continue }
+
+      // 4. Prefix/contains on abbreviation
+      const prefixMatch = blendComponents.find(c => norm(c.abbreviation).startsWith(normalized))
         ?? blendComponents.find(c => normalized.startsWith(norm(c.abbreviation)))
-        ?? blendComponents.find(c => upper.startsWith(c.abbreviation.toUpperCase().split(' ')[0] ?? ''))
-      if (comp) map.set(label, comp)
+      if (prefixMatch) { map.set(label, prefixMatch); continue }
+
+      // 5. Prefix/contains on name
+      const namePrefix = blendComponents.find(c => norm(c.name).includes(normalized))
+        ?? blendComponents.find(c => normalized.includes(norm(c.name)))
+      if (namePrefix) { map.set(label, namePrefix); continue }
     }
     return map
   }, [isBlend, blendComponents, parsedLabels])
@@ -739,6 +775,17 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
       dil_vial_with_diluent_and_sample: prep.dil_vial_final_mg     ?? 0,
     }
 
+    // Phase 13: build standard injection RT lookup from parse result
+    const stdInjRts: Record<string, { rt: number; source_sample_id: string }> | undefined =
+      parseResult.standard_injections && parseResult.standard_injections.length > 0
+        ? Object.fromEntries(
+            parseResult.standard_injections.map(si => [
+              si.analyte_label,
+              { rt: si.main_peak_rt, source_sample_id: si.source_sample_id },
+            ])
+          )
+        : undefined
+
     const results = new Map<string, HPLCAnalysisResult>()
 
     try {
@@ -781,6 +828,8 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
             source_sharepoint_folder: match.folder_name,
             chromatogram_data: chromData,
             run_group_id: runGroupId,
+            // Phase 13: standard injection RTs for same-method identity check
+            standard_injection_rts: stdInjRts,
           })
           results.set(label, res)
         }
@@ -804,6 +853,8 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
             source_sharepoint_folder: match.folder_name,
             chromatogram_data: chromData,
             run_group_id: runGroupId,
+            // Phase 13: standard injection RTs for same-method identity check
+            standard_injection_rts: stdInjRts,
           })
           results.set(label ?? '__single__', res)
         }
@@ -859,25 +910,44 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
   const activeInjData = displayInjections[activeInj]
 
   // For blends: filter chromatogram traces to the active analyte
-  // Chrom filenames contain analyte labels, e.g. "PB-0051_Inj_1_GHK.dx_DAD1A"
-  // or combined "PB-0051_Inj_1_KPV_BPC_TB500.dx_DAD1A"
+  // Uses alias-aware matching: checks trace filename against the component's
+  // abbreviation, name, and hplc_aliases (e.g. "BPC" in filename matches "BPC-157" component)
   const displayChromTraces = useMemo(() => {
-    // Start with sample traces, filtered by active analyte if needed
     let sampleTraces: ChromatogramTrace[]
     if (!activeAnalyte || !hasMultipleAnalytes) {
       sampleTraces = chromTraces
     } else {
-      // Exclude blanks, then keep traces whose name contains the active label
-      const upper = activeAnalyte.toUpperCase()
+      // Build a set of tokens to match for the active analyte's component
+      const comp = labelToComponent.get(activeAnalyte)
+      const matchTokens: string[] = [activeAnalyte.toUpperCase()]
+      if (comp) {
+        // Add all known identifiers for this component (normalized, no dashes/spaces)
+        const norm = (s: string) => s.toUpperCase().replace(/[-\s()]/g, '')
+        matchTokens.push(norm(comp.abbreviation))
+        matchTokens.push(norm(comp.name))
+        if (comp.hplc_aliases) {
+          for (const alias of comp.hplc_aliases) matchTokens.push(norm(alias))
+        }
+        // Also add raw abbreviation parts (e.g. "BPC" from "BPC-157")
+        const abbrParts = comp.abbreviation.toUpperCase().split(/[-\s()]+/).filter(Boolean)
+        for (const part of abbrParts) {
+          if (part.length >= 3) matchTokens.push(part)
+        }
+      }
+
       const filtered = chromTraces.filter(t => {
         const n = t.name.toUpperCase()
-        if (n.includes('BLANK')) return false
-        return n.includes(upper)
+        if (n.includes('BLANK') || n.includes('REQUIL')) return false
+        // Check if any match token appears in the trace filename
+        return matchTokens.some(token => n.includes(token))
       })
-      // If no specific match, fall back to all non-blank traces
+
       sampleTraces = filtered.length > 0
         ? filtered
-        : chromTraces.filter(t => !t.name.toUpperCase().includes('BLANK'))
+        : chromTraces.filter(t => {
+            const n = t.name.toUpperCase()
+            return !n.includes('BLANK') && !n.includes('REQUIL')
+          })
     }
 
     // Prepend standard reference trace from the active calibration curve (if available)
@@ -894,7 +964,7 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
     }
 
     return sampleTraces
-  }, [chromTraces, activeAnalyte, hasMultipleAnalytes, selectedCal])
+  }, [chromTraces, activeAnalyte, hasMultipleAnalytes, selectedCal, labelToComponent])
 
   // Switch analyte tab — also swap displayed calibrations for blends
   const handleAnalyteChange = useCallback((label: string) => {
@@ -1108,10 +1178,18 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
                       size="sm"
                       className="shrink-0 h-7 text-xs border border-teal-500/30 hover:bg-teal-500/10 hover:text-teal-600"
                       onClick={() => {
+                        // Clear all state so the SharePoint scan re-triggers
                         setSavedResults(null)
                         setResult(null)
+                        setRunError(null)
                         setAnalyteResults(new Map())
-                        loadPeakData()
+                        setParseResult(null)
+                        setChromTraces([])
+                        setActiveAnalyte(null)
+                        setActiveInj(0)
+                        dbCheckActiveRef.current = false  // allow SharePoint scan
+                        // loadPeakData will re-fire via useEffect since parseResult is now null
+                        // and savedResults is null — both guards cleared
                       }}
                     >
                       Re-run Analysis

@@ -1568,11 +1568,20 @@ export interface HPLCPurity {
   error?: string
 }
 
+export interface StandardInjection {
+  analyte_label: string
+  main_peak_rt: number
+  main_peak_area_pct: number
+  source_sample_id: string
+  filename: string
+}
+
 export interface HPLCParseResult {
   injections: HPLCInjection[]
   purity: HPLCPurity
   errors: string[]
   detected_peptides: string[]
+  standard_injections: StandardInjection[]
 }
 
 export async function parseHPLCFiles(
@@ -1733,6 +1742,7 @@ export interface ComponentBrief {
   name: string
   abbreviation: string
   vial_number?: number
+  hplc_aliases?: string[] | null
 }
 
 export interface PeptideRecord {
@@ -1742,6 +1752,7 @@ export interface PeptideRecord {
   active: boolean
   is_blend: boolean
   prep_vial_count: number
+  hplc_aliases?: string[] | null
   created_at: string
   updated_at: string
   methods: MethodBrief[]
@@ -2124,6 +2135,8 @@ export interface HPLCAnalyzeRequest {
   source_sharepoint_folder?: string
   chromatogram_data?: { times: number[]; signals: number[] }
   run_group_id?: string
+  // Phase 13: standard injection RT lookup for same-method identity check
+  standard_injection_rts?: Record<string, { rt: number; source_sample_id: string }>
 }
 
 export interface HPLCAnalysisResult {
@@ -2149,6 +2162,9 @@ export interface HPLCAnalysisResult {
   run_group_id: string | null
   raw_data: Record<string, unknown> | null
   created_at: string
+  // Phase 13: identity reference source
+  identity_reference_source: string | null
+  identity_reference_source_id: string | null
 }
 
 export async function runHPLCAnalysis(
