@@ -10,9 +10,9 @@ See: .planning/PROJECT.md (updated 2026-03-16)
 ## Current Position
 
 Phase: 13 of 13 (Method-Aware Identity Check)
-Plan: 1 of ? in current phase (In progress)
+Plan: 2 of ? in current phase (In progress)
 Status: In progress
-Last activity: 2026-03-19 — Completed 13-01-PLAN.md (_std_ PeakData detection + StandardInjection parser + HPLCParseResponse.standard_injections)
+Last activity: 2026-03-19 — Completed 13-02-PLAN.md (identity calculation layer: standard injection RT preference + alias-aware matching + reference source tracking)
 
 Progress: [██████████░] phase 13 in progress
 
@@ -32,10 +32,10 @@ Progress: [██████████░] phase 13 in progress
 | 10.5 | 2/2 | ~10 min | ~5 min |
 | 11 | 2/? | ~4 min | ~2 min |
 | 12 | 2/2 | ~5 min | ~2.5 min |
-| 13 | 1/? | ~6 min | ~6 min |
+| 13 | 2/? | ~9 min | ~4.5 min |
 
 **Recent Trend:**
-- Last 5 plans: 11-02 (~2 min), 12-01 (~2 min), 12-02 (~3 min), 13-01 (~6 min)
+- Last 5 plans: 12-01 (~2 min), 12-02 (~3 min), 13-01 (~6 min), 13-02 (~3 min)
 - Trend: stable/fast
 
 ## Accumulated Context
@@ -82,6 +82,11 @@ Progress: [██████████░] phase 13 in progress
 - Analyte label extracted between _std_ and _PeakData in filename — supports hyphenated labels (TB17-23)
 - Source sample ID stripped at first _Inj_ in "Sample name:" metadata line — produces bare ID (P-0111)
 - standard_injections defaults to [] on HPLCParseResponse — backward compatible API addition
+- standard_injection_rt takes priority over reference_rt in calculate_identity — eliminates cross-method RT delta (~6+ min false failures)
+- calibration_curve_rt always included in identity trace for audit, even when overridden by standard injection RT
+- Alias-aware matching normalizes labels (strip non-alphanumeric, uppercase) and checks peptide.hplc_aliases — handles "BPC157" matching "BPC-157"
+- identity_reference_source and identity_reference_source_id extracted from calculation_trace.identity in _analysis_to_response — no new DB columns
+- standard_injection_rts request format: {"BPC157": {"rt": 10.165, "source_sample_id": "P-0111"}}
 
 ### Key Source Files
 
@@ -113,5 +118,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-03-19
-Stopped at: Completed 13-01-PLAN.md (standard injection detection and parsing in place)
+Stopped at: Completed 13-02-PLAN.md (identity calculation layer: standard injection RT preference + alias-aware matching)
 Resume file: None
