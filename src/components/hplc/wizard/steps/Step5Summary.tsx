@@ -157,6 +157,19 @@ export function Step5Summary() {
               </span>
             </div>
           )}
+          {calcs?.analyte_calculations && (
+            <div className="space-y-1 mt-2">
+              <p className="text-xs text-muted-foreground">Per-Analyte</p>
+              {Object.entries(calcs.analyte_calculations).map(([aKey, ac]) => (
+                <div key={aKey} className="flex items-center justify-between text-xs ml-2">
+                  <span className="text-muted-foreground">{aKey}</span>
+                  <span className="font-mono">
+                    {ac.stock_conc_ug_ml != null ? `${ac.stock_conc_ug_ml.toFixed(2)} µg/mL` : '—'}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
         </CardContent>
       </Card>
 
@@ -224,6 +237,19 @@ export function Step5Summary() {
                   <span className="font-medium font-mono">
                     {calcs.actual_stock_vol_ul.toFixed(1)} µL
                   </span>
+                </div>
+              )}
+              {calcs?.analyte_calculations && (
+                <div className="space-y-1 mt-2">
+                  <p className="text-xs text-muted-foreground">Per-Analyte Actual Concentrations</p>
+                  {Object.entries(calcs.analyte_calculations).map(([aKey, ac]) => (
+                    <div key={aKey} className="flex items-center justify-between text-xs ml-2">
+                      <span className="text-muted-foreground">{aKey}</span>
+                      <span className="font-mono">
+                        {ac.actual_conc_ug_ml != null ? `${ac.actual_conc_ug_ml.toFixed(2)} µg/mL` : '—'}
+                      </span>
+                    </div>
+                  ))}
                 </div>
               )}
             </div>

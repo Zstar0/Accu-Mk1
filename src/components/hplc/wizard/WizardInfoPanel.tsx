@@ -182,33 +182,69 @@ function VialDetailsCard({
         </div>
       )}
 
-      {/* Target parameters */}
-      <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
-        {session.sample_id_label && (
-          <div>
-            <span className="text-muted-foreground">Sample ID</span>
-            <p className="font-medium">{session.sample_id_label}</p>
-          </div>
-        )}
-        {targetConc != null && (
-          <div>
-            <span className="text-muted-foreground">Target Conc.</span>
-            <p className="font-medium font-mono">{targetConc} µg/mL</p>
-          </div>
-        )}
-        {targetVol != null && (
-          <div>
-            <span className="text-muted-foreground">Target Vol.</span>
-            <p className="font-medium font-mono">{targetVol} µL</p>
-          </div>
-        )}
-        {declaredWt != null && (
-          <div>
-            <span className="text-muted-foreground">Declared Wt.</span>
-            <p className="font-medium font-mono">{declaredWt} mg</p>
-          </div>
-        )}
-      </div>
+      {/* Target parameters — per-analyte when available, per-vial fallback */}
+      {vialParams?.analyte_params ? (
+        <div className="space-y-2 text-xs">
+          {session.sample_id_label && (
+            <div>
+              <span className="text-muted-foreground">Sample ID</span>
+              <p className="font-medium">{session.sample_id_label}</p>
+            </div>
+          )}
+          {Object.entries(vialParams.analyte_params).map(([aKey, ap]) => (
+            <div key={aKey} className="rounded border border-zinc-700/50 p-1.5 space-y-0.5">
+              <p className="font-medium text-muted-foreground">{aKey}</p>
+              <div className="grid grid-cols-3 gap-1">
+                {ap.declared_weight_mg != null && (
+                  <div>
+                    <span className="text-muted-foreground text-[10px]">Decl.</span>
+                    <p className="font-mono">{ap.declared_weight_mg} mg</p>
+                  </div>
+                )}
+                {ap.target_conc_ug_ml != null && (
+                  <div>
+                    <span className="text-muted-foreground text-[10px]">Conc.</span>
+                    <p className="font-mono">{ap.target_conc_ug_ml}</p>
+                  </div>
+                )}
+                {ap.target_total_vol_ul != null && (
+                  <div>
+                    <span className="text-muted-foreground text-[10px]">Vol.</span>
+                    <p className="font-mono">{ap.target_total_vol_ul} µL</p>
+                  </div>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
+          {session.sample_id_label && (
+            <div>
+              <span className="text-muted-foreground">Sample ID</span>
+              <p className="font-medium">{session.sample_id_label}</p>
+            </div>
+          )}
+          {targetConc != null && (
+            <div>
+              <span className="text-muted-foreground">Target Conc.</span>
+              <p className="font-medium font-mono">{targetConc} µg/mL</p>
+            </div>
+          )}
+          {targetVol != null && (
+            <div>
+              <span className="text-muted-foreground">Target Vol.</span>
+              <p className="font-medium font-mono">{targetVol} µL</p>
+            </div>
+          )}
+          {declaredWt != null && (
+            <div>
+              <span className="text-muted-foreground">Declared Wt.</span>
+              <p className="font-medium font-mono">{declaredWt} mg</p>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }

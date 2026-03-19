@@ -21,6 +21,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Badge } from '@/components/ui/badge'
 import {
   getPeptides,
+  getInstruments,
   createWizardSession,
   updateWizardSession,
   getSenaiteStatus,
@@ -29,6 +30,7 @@ import {
   type SenaiteLookupResult,
   type VialParams,
   type WizardSessionResponse,
+  type Instrument,
 } from '@/lib/api'
 import { Switch } from '@/components/ui/switch'
 import { useWizardStore } from '@/store/wizard-store'
@@ -60,6 +62,8 @@ export function Step1SampleInfo() {
   const [isStandard, setIsStandard] = useState(false)
   const [manufacturer, setManufacturer] = useState('')
   const [standardNotes, setStandardNotes] = useState('')
+  const [instrumentId, setInstrumentId] = useState<string>('')
+  const [instruments, setInstruments] = useState<Instrument[]>([])
   const [standardConcentrations, setLocalConcentrations] = useState<string[]>(
     ['1000', '500', '250', '100', '10', '1']
   )
@@ -129,6 +133,7 @@ export function Step1SampleInfo() {
 
     loadPeptides()
     checkSenaiteStatus()
+    getInstruments().then(data => { if (!cancelled) setInstruments(data) }).catch(_e => { /* non-critical */ })
 
     return () => {
       cancelled = true
@@ -260,6 +265,7 @@ export function Step1SampleInfo() {
         data.is_standard = true
         if (manufacturer.trim()) data.manufacturer = manufacturer.trim()
         if (standardNotes.trim()) data.standard_notes = standardNotes.trim()
+        if (instrumentId) data.instrument_id = Number(instrumentId)
 
         // Build standard vial_params from concentration levels
         const validConcs = standardConcentrations
@@ -277,7 +283,7 @@ export function Step1SampleInfo() {
           stdVialParams[String(i + 1)] = {
             declared_weight_mg: null,
             target_conc_ug_ml: conc,
-            target_total_vol_ul: 1000, // Default total volume
+            target_total_vol_ul: 1500, // Default total volume
           }
         })
         data.vial_params = stdVialParams
@@ -342,7 +348,6 @@ export function Step1SampleInfo() {
       const response = await createWizardSession(data)
       const selectedPeptideComponents = selectedPeptide?.components ?? []
       useWizardStore.getState().startSession(response, selectedPeptideComponents, selectedPeptide ?? undefined)
-      useWizardStore.getState().setCurrentStep(2)
     } catch (err) {
       setSubmitError(
         err instanceof Error ? err.message : 'Failed to create session'
@@ -499,6 +504,21 @@ export function Step1SampleInfo() {
               value={manufacturer}
               onChange={e => setManufacturer(e.target.value)}
             />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="instrument-name">Instrument</Label>
+            <Select value={instrumentId} onValueChange={setInstrumentId}>
+              <SelectTrigger id="instrument-name">
+                <SelectValue placeholder="Select instrument…" />
+              </SelectTrigger>
+              <SelectContent>
+                {instruments.map(inst => (
+                  <SelectItem key={inst.id} value={String(inst.id)}>
+                    {inst.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="standard-notes">Standard Notes</Label>
@@ -962,7 +982,14 @@ function EditableSessionSummary({
   const hasAnalyteParams = vialKeys.some(k => !!vialParamsMap[k]?.analyte_params)
   const isMultiAnalyte = isMultiVial || hasAnalyteParams
 
-  // Single-vial editable state
+  // Declared weight — single field for the whole session (all vials share it)
+  const initialDeclared =
+    session.declared_weight_mg != null
+      ? String(session.declared_weight_mg)
+      : vialKeys[0] != null
+        ? String(vialParamsMap[vialKeys[0]]?.declared_weight_mg ?? '')
+        : ''
+  const [declared, setDeclared] = useState(initialDeclared)
   const [conc, setConc] = useState(
     session.target_conc_ug_ml != null ? String(session.target_conc_ug_ml) : ''
   )
@@ -996,12 +1023,44 @@ function EditableSessionSummary({
     return init
   })
 
+  // Standard metadata — editable when session.is_standard
+  const [editInstrumentId, setEditInstrumentId] = useState(
+    session.instrument_id != null ? String(session.instrument_id) : ''
+  )
+  const [editManufacturer, setEditManufacturer] = useState(session.manufacturer ?? '')
+  const [editStandardNotes, setEditStandardNotes] = useState(session.standard_notes ?? '')
+  const [instruments, setInstruments] = useState<Instrument[]>([])
+  useEffect(() => {
+    if (!session.is_standard) return
+    getInstruments().then(setInstruments).catch(_e => { /* non-critical */ })
+  }, [session.is_standard])
+
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [saved, setSaved] = useState(false)
 
+  async function saveMetaField(field: 'instrument_name' | 'manufacturer' | 'standard_notes', value: string) {
+    try {
+      const updated = await updateWizardSession(session.id, { [field]: value || undefined })
+      useWizardStore.getState().updateSession(updated)
+    } catch {
+      // silent — non-critical meta field
+    }
+  }
+
+  async function saveInstrumentId(idStr: string) {
+    try {
+      const id = idStr ? Number(idStr) : undefined
+      const updated = await updateWizardSession(session.id, { instrument_id: id })
+      useWizardStore.getState().updateSession(updated)
+    } catch {
+      // silent — non-critical meta field
+    }
+  }
+
   const isDirty = isMultiAnalyte
-    ? vialKeys.some(key => {
+    ? declared !== initialDeclared ||
+      vialKeys.some(key => {
         const vp = vialParamsMap[key]
         const vialEdits = analyteEdits[key] ?? {}
         const ap = vp?.analyte_params
@@ -1021,7 +1080,8 @@ function EditableSessionSummary({
           edit?.vol !== (vp?.target_total_vol_ul != null ? String(vp.target_total_vol_ul) : '')
         )
       })
-    : conc !== (session.target_conc_ug_ml != null ? String(session.target_conc_ug_ml) : '') ||
+    : declared !== (session.declared_weight_mg != null ? String(session.declared_weight_mg) : '') ||
+      conc !== (session.target_conc_ug_ml != null ? String(session.target_conc_ug_ml) : '') ||
       vol !== (session.target_total_vol_ul != null ? String(session.target_total_vol_ul) : '')
 
   async function handleSave(e: React.FormEvent) {
@@ -1035,10 +1095,14 @@ function EditableSessionSummary({
         const vialEditsMap = analyteEdits[key] ?? {}
         const existingAP = existing?.analyte_params
 
+        const sharedDeclared = parseFloat(declared)
+        const newDeclaredVal = !isNaN(sharedDeclared) && sharedDeclared > 0
+          ? sharedDeclared
+          : existing?.declared_weight_mg ?? null
+
         if (existingAP) {
-          // Per-analyte path
+          // Per-analyte path — keep individual analyte declared weights, update vial total
           const newAP: Record<string, { declared_weight_mg: number | null; target_conc_ug_ml: number | null; target_total_vol_ul: number | null }> = {}
-          let totalDeclared = 0
           let firstConc: number | null = null
           let firstVol: number | null = null
           for (const [aKey, aParams] of Object.entries(existingAP)) {
@@ -1054,12 +1118,11 @@ function EditableSessionSummary({
               target_conc_ug_ml: concParsed,
               target_total_vol_ul: volParsed,
             }
-            if (aParams.declared_weight_mg != null) totalDeclared += aParams.declared_weight_mg
             if (firstConc === null) firstConc = concParsed
             if (firstVol === null) firstVol = volParsed
           }
           updatedVialParams[key] = {
-            declared_weight_mg: totalDeclared > 0 ? totalDeclared : existing?.declared_weight_mg ?? null,
+            declared_weight_mg: newDeclaredVal,
             target_conc_ug_ml: firstConc,
             target_total_vol_ul: firstVol,
             analyte_params: newAP,
@@ -1074,7 +1137,7 @@ function EditableSessionSummary({
             return
           }
           updatedVialParams[key] = {
-            declared_weight_mg: existing?.declared_weight_mg ?? null,
+            declared_weight_mg: newDeclaredVal,
             target_conc_ug_ml: concParsed,
             target_total_vol_ul: volParsed,
           }
@@ -1085,10 +1148,17 @@ function EditableSessionSummary({
       setSaved(false)
       try {
         const v1 = updatedVialParams['1']
+        const declaredFinal = parseFloat(declared)
         const updated = await updateWizardSession(session.id, {
+          ...(!isNaN(declaredFinal) && declaredFinal > 0 ? { declared_weight_mg: declaredFinal } : {}),
           target_conc_ug_ml: v1?.target_conc_ug_ml ?? undefined,
           target_total_vol_ul: v1?.target_total_vol_ul ?? undefined,
           vial_params: updatedVialParams,
+          ...(session.is_standard ? {
+            instrument_id: editInstrumentId ? Number(editInstrumentId) : undefined,
+            manufacturer: editManufacturer || undefined,
+            standard_notes: editStandardNotes || undefined,
+          } : {}),
         })
         useWizardStore.getState().updateSession(updated)
         setSaved(true)
@@ -1098,6 +1168,7 @@ function EditableSessionSummary({
         setSaving(false)
       }
     } else {
+      const declaredParsed = parseFloat(declared)
       const concParsed = parseFloat(conc)
       const volParsed = parseFloat(vol)
       if (isNaN(concParsed) || isNaN(volParsed) || concParsed <= 0 || volParsed <= 0) {
@@ -1109,8 +1180,14 @@ function EditableSessionSummary({
       setSaved(false)
       try {
         const updated = await updateWizardSession(session.id, {
+          ...(!isNaN(declaredParsed) && declaredParsed > 0 ? { declared_weight_mg: declaredParsed } : {}),
           target_conc_ug_ml: concParsed,
           target_total_vol_ul: volParsed,
+          ...(session.is_standard ? {
+            instrument_id: editInstrumentId ? Number(editInstrumentId) : undefined,
+            manufacturer: editManufacturer || undefined,
+            standard_notes: editStandardNotes || undefined,
+          } : {}),
         })
         useWizardStore.getState().updateSession(updated)
         setSaved(true)
@@ -1142,15 +1219,49 @@ function EditableSessionSummary({
       <CardContent className="space-y-4">
         {/* Read-only fields */}
         <div className="rounded-md border border-green-500/30 bg-green-50/50 dark:bg-green-950/20 p-4 space-y-3">
-          {/* Standard sample indicator */}
+          {/* Standard sample indicator + editable metadata */}
           {session.is_standard && (
-            <div className="flex items-center gap-2 mb-2">
+            <div className="mb-3 space-y-3">
               <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30">
                 Standard Sample
               </span>
-              {session.manufacturer && (
-                <span className="text-xs text-muted-foreground">{session.manufacturer}</span>
-              )}
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <Label htmlFor="edit-instrument" className="text-xs">Instrument</Label>
+                  <Select value={editInstrumentId} onValueChange={v => { setEditInstrumentId(v); setSaved(false); saveInstrumentId(v) }}>
+                    <SelectTrigger id="edit-instrument" className="h-8 text-xs">
+                      <SelectValue placeholder="Select instrument…" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {instruments.map(inst => (
+                        <SelectItem key={inst.id} value={String(inst.id)}>{inst.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor="edit-manufacturer" className="text-xs">Manufacturer</Label>
+                  <Input
+                    id="edit-manufacturer"
+                    className="h-8 text-xs"
+                    placeholder="e.g. Bachem"
+                    value={editManufacturer}
+                    onChange={e => { setEditManufacturer(e.target.value); setSaved(false) }}
+                    onBlur={e => saveMetaField('manufacturer', e.target.value)}
+                  />
+                </div>
+                <div className="col-span-2 space-y-1">
+                  <Label htmlFor="edit-standard-notes" className="text-xs">Standard Notes</Label>
+                  <Input
+                    id="edit-standard-notes"
+                    className="h-8 text-xs"
+                    placeholder="Optional notes"
+                    value={editStandardNotes}
+                    onChange={e => { setEditStandardNotes(e.target.value); setSaved(false) }}
+                    onBlur={e => saveMetaField('standard_notes', e.target.value)}
+                  />
+                </div>
+              </div>
             </div>
           )}
 
@@ -1240,6 +1351,19 @@ function EditableSessionSummary({
             You can update the target parameters below.
           </p>
 
+          {/* Declared weight — shared across all vials */}
+          <div className="space-y-1.5">
+            <Label htmlFor="edit-declared-weight">Declared Weight (mg)</Label>
+            <Input
+              id="edit-declared-weight"
+              type="number"
+              step="0.01"
+              placeholder="e.g. 50.00"
+              value={declared}
+              onChange={e => { setDeclared(e.target.value); setSaved(false) }}
+            />
+          </div>
+
           {isMultiAnalyte ? (
             <div className="space-y-4">
               {vialKeys.map(key => {
@@ -1299,35 +1423,35 @@ function EditableSessionSummary({
             </div>
           ) : (
             <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1.5">
-                <Label htmlFor="edit-target-conc">
-                  Target Concentration (µg/mL){' '}
-                  <span className="text-destructive">*</span>
-                </Label>
-                <Input
-                  id="edit-target-conc"
-                  type="number"
-                  step="0.1"
-                  placeholder="e.g. 1200"
-                  value={conc}
-                  onChange={e => { setConc(e.target.value); setSaved(false) }}
-                />
+                <div className="space-y-1.5">
+                  <Label htmlFor="edit-target-conc">
+                    Target Concentration (µg/mL){' '}
+                    <span className="text-destructive">*</span>
+                  </Label>
+                  <Input
+                    id="edit-target-conc"
+                    type="number"
+                    step="0.1"
+                    placeholder="e.g. 1200"
+                    value={conc}
+                    onChange={e => { setConc(e.target.value); setSaved(false) }}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="edit-target-vol">
+                    Target Total Volume (µL){' '}
+                    <span className="text-destructive">*</span>
+                  </Label>
+                  <Input
+                    id="edit-target-vol"
+                    type="number"
+                    step="0.1"
+                    placeholder="e.g. 1500"
+                    value={vol}
+                    onChange={e => { setVol(e.target.value); setSaved(false) }}
+                  />
+                </div>
               </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="edit-target-vol">
-                  Target Total Volume (µL){' '}
-                  <span className="text-destructive">*</span>
-                </Label>
-                <Input
-                  id="edit-target-vol"
-                  type="number"
-                  step="0.1"
-                  placeholder="e.g. 1500"
-                  value={vol}
-                  onChange={e => { setVol(e.target.value); setSaved(false) }}
-                />
-              </div>
-            </div>
           )}
 
           {saveError && (

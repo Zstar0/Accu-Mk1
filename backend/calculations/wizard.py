@@ -13,27 +13,33 @@ Four calculation stages map to the 5-step wizard:
 """
 
 from decimal import Decimal, getcontext
+from typing import Optional
 
 # 28-digit precision — sufficient for all chained wizard calculations
 getcontext().prec = 28
 
 
 def calc_stock_prep(
-    declared_weight_mg: Decimal,
+    declared_weight_mg: Optional[Decimal],
     stock_vial_empty_mg: Decimal,
     stock_vial_loaded_mg: Decimal,
     diluent_density: Decimal,
+    stock_vial_with_peptide_mg: Optional[Decimal] = None,
 ) -> dict:
     """
     Stage 1: Calculate stock preparation values.
 
-    Args:
-        declared_weight_mg:  Supplier-declared peptide weight (mg). Text input by tech.
-        stock_vial_empty_mg: Empty stock vial + cap weight (mg). Balance reading.
-        stock_vial_loaded_mg: Stock vial weight after adding diluent (mg). Balance reading.
-        diluent_density:     Diluent density (mg/mL). From Peptide.diluent_density.
+    Two modes:
+      Production (stock_vial_with_peptide_mg=None):
+        - Uses declared_weight_mg as the peptide mass
+        - diluent_mass = loaded - empty
+      Standard (stock_vial_with_peptide_mg provided):
+        - Uses measured aliquot weight: actual_peptide_mg = with_peptide - empty
+        - diluent_mass = loaded - with_peptide
+        - declared_weight_mg is ignored
 
     Returns dict with Decimal values:
+        actual_peptide_mg:      Peptide mass used for concentration (declared or measured)
         diluent_mass_mg:        Mass of diluent added to stock vial (mg)
         total_diluent_added_ml: Volume of diluent added (mL)
         stock_conc_ug_ml:       Stock solution concentration (µg/mL)
@@ -41,10 +47,21 @@ def calc_stock_prep(
     Verified against lab Excel: declared=50mg, empty=5501.68mg, loaded=8505.75mg ->
         diluent_mass=3004.07mg, total_diluent=3.0128mL, stock_conc=16595.82µg/mL
     """
-    diluent_mass_mg = stock_vial_loaded_mg - stock_vial_empty_mg
+    if stock_vial_with_peptide_mg is not None:
+        # Standard mode: measure the actual aliquot added
+        actual_peptide_mg = stock_vial_with_peptide_mg - stock_vial_empty_mg
+        diluent_mass_mg = stock_vial_loaded_mg - stock_vial_with_peptide_mg
+    elif declared_weight_mg is not None:
+        # Production mode: trust the supplier declaration
+        actual_peptide_mg = declared_weight_mg
+        diluent_mass_mg = stock_vial_loaded_mg - stock_vial_empty_mg
+    else:
+        raise ValueError("Either declared_weight_mg or stock_vial_with_peptide_mg must be provided")
+
     total_diluent_added_ml = diluent_mass_mg / diluent_density
-    stock_conc_ug_ml = (declared_weight_mg * Decimal("1000")) / total_diluent_added_ml
+    stock_conc_ug_ml = (actual_peptide_mg * Decimal("1000")) / total_diluent_added_ml
     return {
+        "actual_peptide_mg": actual_peptide_mg,
         "diluent_mass_mg": diluent_mass_mg,
         "total_diluent_added_ml": total_diluent_added_ml,
         "stock_conc_ug_ml": stock_conc_ug_ml,
@@ -124,6 +141,49 @@ def calc_actual_dilution(
         "actual_total_vol_ul": actual_total_vol_ul,
         "actual_conc_ug_ml": actual_conc_ug_ml,
     }
+
+
+def calc_stock_conc_per_analyte(
+    analyte_declared_mg: Decimal,
+    total_diluent_added_ml: Decimal,
+) -> Decimal:
+    """
+    Per-analyte stock concentration from shared diluent volume.
+
+    When multiple analytes share a vial, each has its own declared weight
+    but they dissolve into the same diluent volume.  This gives each
+    analyte its own stock concentration.
+
+    Args:
+        analyte_declared_mg:   Declared weight of this analyte (mg).
+        total_diluent_added_ml: Shared diluent volume from calc_stock_prep (mL).
+
+    Returns:
+        Stock concentration for this analyte (µg/mL) as Decimal.
+    """
+    return (analyte_declared_mg * Decimal("1000")) / total_diluent_added_ml
+
+
+def calc_actual_conc_per_analyte(
+    analyte_stock_conc_ug_ml: Decimal,
+    actual_stock_vol_ul: Decimal,
+    actual_total_vol_ul: Decimal,
+) -> Decimal:
+    """
+    Per-analyte actual concentration after shared dilution.
+
+    All analytes in a vial share one physical dilution (same stock aliquot
+    volume and total volume), but each has a different stock concentration.
+
+    Args:
+        analyte_stock_conc_ug_ml: This analyte's stock concentration (µg/mL).
+        actual_stock_vol_ul:      Shared actual stock volume pipetted (µL).
+        actual_total_vol_ul:      Shared actual total solution volume (µL).
+
+    Returns:
+        Actual concentration for this analyte (µg/mL) as Decimal.
+    """
+    return analyte_stock_conc_ug_ml * actual_stock_vol_ul / actual_total_vol_ul
 
 
 def calc_results(

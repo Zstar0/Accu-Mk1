@@ -35,20 +35,28 @@ function StockPrepVial({ session, vialNumber }: {
   session: NonNullable<ReturnType<typeof useWizardStore.getState>['session']>
   vialNumber: number
 }) {
+  const isStandard = session.is_standard
+
   const [error2a, setError2a] = useState<string | null>(null)
+  const [error2b, setError2b] = useState<string | null>(null)
   const [error2d, setError2d] = useState<string | null>(null)
   const [reweigh2a, setReweigh2a] = useState(false)
+  const [reweigh2b, setReweigh2b] = useState(false)
   const [reweigh2d, setReweigh2d] = useState(false)
 
   const meas2a = session.measurements.find(
     m => m.step_key === 'stock_vial_empty_mg' && m.is_current && m.vial_number === vialNumber
+  )
+  const meas2b = session.measurements.find(
+    m => m.step_key === 'stock_vial_with_peptide_mg' && m.is_current && m.vial_number === vialNumber
   )
   const meas2d = session.measurements.find(
     m => m.step_key === 'stock_vial_loaded_mg' && m.is_current && m.vial_number === vialNumber
   )
 
   const step2aDone = meas2a != null && !reweigh2a
-  const step2cdLocked = !step2aDone
+  const step2bDone = !isStandard || (meas2b != null && !reweigh2b)
+  const step2cdLocked = !step2aDone || !step2bDone
   const step2dDone = meas2d != null && !reweigh2d
 
   const sessionId = session.id
@@ -74,6 +82,24 @@ function StockPrepVial({ session, vialNumber }: {
     }
   }
 
+  async function handleAccept2b(value: number, source: 'scale' | 'manual') {
+    setError2b(null)
+    try {
+      const response = await recordWizardMeasurement(sessionId, {
+        step_key: 'stock_vial_with_peptide_mg',
+        weight_mg: value,
+        source,
+        vial_number: vialNumber,
+      })
+      useWizardStore.getState().updateSession(response)
+      setReweigh2b(false)
+    } catch (err) {
+      setError2b(
+        err instanceof Error ? err.message : 'Failed to record measurement'
+      )
+    }
+  }
+
   async function handleAccept2d(value: number, source: 'scale' | 'manual') {
     setError2d(null)
     try {
@@ -92,7 +118,7 @@ function StockPrepVial({ session, vialNumber }: {
     }
   }
 
-  const allComplete = step2aDone && step2dDone
+  const allComplete = step2aDone && step2bDone && step2dDone
 
   return (
     <div className="space-y-4">
@@ -149,6 +175,62 @@ function StockPrepVial({ session, vialNumber }: {
           )}
         </CardContent>
       </Card>
+
+      {/* Sub-step 2b: Vial + peptide weight — standards only */}
+      {isStandard && (
+        <Card className={step2aDone ? undefined : 'opacity-50'}>
+          <CardHeader>
+            <CardTitle className="text-base flex items-center gap-2">
+              <span className="flex h-6 w-6 items-center justify-center rounded-full bg-primary text-primary-foreground text-xs font-bold">
+                2
+              </span>
+              Vial + Peptide Weight
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <p className="text-sm text-muted-foreground">
+              Add the peptide aliquot to the stock vial, then weigh the vial + cap + peptide.
+            </p>
+            {error2b && (
+              <Alert variant="destructive">
+                <AlertDescription>{error2b}</AlertDescription>
+              </Alert>
+            )}
+            {step2bDone ? (
+              <div className="flex items-center justify-between rounded-md border border-green-500/30 bg-green-50/50 dark:bg-green-950/20 p-3">
+                <div className="flex items-center gap-2">
+                  <CheckCircle2 className="h-4 w-4 text-green-600" />
+                  <span className="text-sm font-medium">
+                    {meas2b?.weight_mg.toFixed(2)} mg
+                  </span>
+                  <span className="text-xs text-muted-foreground">
+                    (via {meas2b?.source})
+                  </span>
+                  {meas2a && meas2b && (
+                    <span className="text-xs text-muted-foreground ml-2">
+                      · aliquot: {(meas2b.weight_mg - meas2a.weight_mg).toFixed(2)} mg
+                    </span>
+                  )}
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setReweigh2b(true)}
+                  disabled={!step2aDone}
+                >
+                  Re-weigh
+                </Button>
+              </div>
+            ) : (
+              <WeightInput
+                stepKey="stock_vial_with_peptide_mg"
+                label="Vial + cap + peptide weight (mg)"
+                onAccept={handleAccept2b}
+              />
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       {/* Sub-step 2c: Display required diluent volume */}
       <Card className={step2cdLocked ? 'opacity-50' : undefined}>
@@ -227,7 +309,7 @@ function StockPrepVial({ session, vialNumber }: {
               Stock Preparation Complete
             </CardTitle>
           </CardHeader>
-          <CardContent>
+          <CardContent className="space-y-4">
             <div className="grid grid-cols-1 gap-2 sm:grid-cols-3 text-sm">
               {calcs.stock_conc_ug_ml != null && (
                 <div>
@@ -236,6 +318,16 @@ function StockPrepVial({ session, vialNumber }: {
                   </span>
                   <p className="font-medium font-mono">
                     {calcs.stock_conc_ug_ml.toFixed(2)} µg/mL
+                  </p>
+                </div>
+              )}
+              {calcs.diluent_added_ml != null && (
+                <div>
+                  <span className="text-muted-foreground">
+                    Actual Diluent Added
+                  </span>
+                  <p className="font-medium font-mono">
+                    {(calcs.diluent_added_ml * 1000).toFixed(1)} µL
                   </p>
                 </div>
               )}
@@ -260,6 +352,41 @@ function StockPrepVial({ session, vialNumber }: {
                 </div>
               )}
             </div>
+
+            {/* Per-analyte stock concentrations */}
+            {calcs.analyte_calculations && (
+              <div className="border-t border-green-500/20 pt-3">
+                <p className="text-xs font-medium text-muted-foreground mb-2">Per-Analyte Stock Concentrations</p>
+                <div className="rounded-md border border-zinc-700 overflow-hidden">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-zinc-700 text-xs text-muted-foreground">
+                        <th className="text-start p-2">Analyte</th>
+                        <th className="text-end p-2">Stock Conc.</th>
+                        <th className="text-end p-2">Req. Stock Vol.</th>
+                        <th className="text-end p-2">Req. Diluent Vol.</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {Object.entries(calcs.analyte_calculations).map(([aKey, ac]) => (
+                        <tr key={aKey} className="border-b border-zinc-700/50 last:border-0">
+                          <td className="p-2 text-xs font-medium">{aKey}</td>
+                          <td className="p-2 text-end font-mono text-xs">
+                            {ac.stock_conc_ug_ml != null ? `${ac.stock_conc_ug_ml.toFixed(2)} µg/mL` : '—'}
+                          </td>
+                          <td className="p-2 text-end font-mono text-xs">
+                            {ac.required_stock_vol_ul != null ? `${ac.required_stock_vol_ul.toFixed(1)} µL` : '—'}
+                          </td>
+                          <td className="p-2 text-end font-mono text-xs">
+                            {ac.required_diluent_vol_ul != null ? `${ac.required_diluent_vol_ul.toFixed(1)} µL` : '—'}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
           </CardContent>
         </Card>
       )}

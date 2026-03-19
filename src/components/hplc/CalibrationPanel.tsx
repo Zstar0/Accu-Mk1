@@ -40,6 +40,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { CalibrationChart } from './CalibrationChart'
+import { ChromatogramChart, downsampleLTTB, type ChromatogramTrace } from './ChromatogramChart'
 import {
   getCalibrations,
   getInstruments,
@@ -215,6 +216,116 @@ export function CalibrationPanel({
         )}
       </CardContent>
     </Card>
+  )
+}
+
+
+// ─── Standard Chromatogram Viewer ────────────────────────────────────────────
+
+function StandardChromatogramViewer({
+  chromData,
+  sampleId,
+  referenceRt,
+}: {
+  chromData: Record<string, unknown>
+  sampleId: string | null
+  referenceRt: number | null
+}) {
+  // Detect format: old single-trace {times, signals} vs new multi-conc {"1": {times, signals}, ...}
+  const isSingleTrace = Array.isArray((chromData as Record<string, unknown>).times)
+
+  const concEntries: { label: string; sortKey: number; times: number[]; signals: number[] }[] = []
+
+  if (isSingleTrace) {
+    const d = chromData as { times: number[]; signals: number[] }
+    concEntries.push({ label: 'Standard', sortKey: 0, times: d.times, signals: d.signals })
+  } else {
+    for (const [key, val] of Object.entries(chromData)) {
+      const v = val as { times?: number[]; signals?: number[] }
+      if (v?.times?.length) {
+        const num = parseFloat(key)
+        concEntries.push({
+          label: `${key} µg/mL`,
+          sortKey: isNaN(num) ? 0 : num,
+          times: v.times,
+          signals: v.signals ?? [],
+        })
+      }
+    }
+    concEntries.sort((a, b) => b.sortKey - a.sortKey) // highest conc first
+  }
+
+  const [selectedConc, setSelectedConc] = useState<string | 'all'>(
+    concEntries.length > 1 ? 'all' : (concEntries[0]?.label ?? 'all')
+  )
+
+  if (concEntries.length === 0) return null
+
+  // Build traces for current selection
+  const traces: ChromatogramTrace[] = []
+  if (selectedConc === 'all') {
+    for (const entry of concEntries) {
+      const raw: [number, number][] = entry.times.map((t, i) => [t, entry.signals[i] ?? 0])
+      traces.push({ name: entry.label, points: downsampleLTTB(raw, 5000) })
+    }
+  } else {
+    const entry = concEntries.find(e => e.label === selectedConc)
+    if (entry) {
+      const raw: [number, number][] = entry.times.map((t, i) => [t, entry.signals[i] ?? 0])
+      traces.push({ name: entry.label, points: downsampleLTTB(raw, 5000) })
+    }
+  }
+
+  const showTabs = concEntries.length > 1
+
+  return (
+    <div>
+      <p className="mb-2 text-sm font-medium">
+        Standard Chromatogram
+        {sampleId && (
+          <span className="text-muted-foreground font-normal ml-2">{sampleId}</span>
+        )}
+      </p>
+      <div className={showTabs ? 'flex gap-3' : ''}>
+        {/* Vertical concentration tabs */}
+        {showTabs && (
+          <div className="flex flex-col gap-0.5 shrink-0 pt-1">
+            <button
+              type="button"
+              onClick={() => setSelectedConc('all')}
+              className={`px-2.5 py-1 text-xs font-medium rounded-md border transition-colors text-left ${
+                selectedConc === 'all'
+                  ? 'bg-primary text-primary-foreground border-primary'
+                  : 'text-muted-foreground border-transparent hover:text-foreground hover:bg-accent/50'
+              }`}
+            >
+              All
+            </button>
+            {concEntries.map(entry => (
+              <button
+                key={entry.label}
+                type="button"
+                onClick={() => setSelectedConc(entry.label)}
+                className={`px-2.5 py-1 text-xs font-mono rounded-md border transition-colors text-left whitespace-nowrap ${
+                  selectedConc === entry.label
+                    ? 'bg-primary text-primary-foreground border-primary'
+                    : 'text-muted-foreground border-transparent hover:text-foreground hover:bg-accent/50'
+                }`}
+              >
+                {entry.label}
+              </button>
+            ))}
+          </div>
+        )}
+        {/* Chart */}
+        <div className="flex-1 min-w-0">
+          <ChromatogramChart
+            traces={traces}
+            peakRTs={referenceRt != null ? [referenceRt] : undefined}
+          />
+        </div>
+      </div>
+    </div>
   )
 }
 
@@ -665,6 +776,13 @@ function CalibrationRow({
               intercept={calibration.intercept}
             />
           )}
+
+          {/* Standard chromatogram (from linked sample or backfill) */}
+          {calibration.chromatogram_data && <StandardChromatogramViewer
+            chromData={calibration.chromatogram_data}
+            sampleId={calibration.source_sample_id}
+            referenceRt={calibration.reference_rt}
+          />}
 
           {/* Standard data table */}
           {data && data.concentrations.length > 0 && (

@@ -40,6 +40,7 @@ import {
   type HPLCParseResult,
   type HPLCInjection,
   type HPLCAnalysisResult,
+  type ComponentBrief,
 } from '@/lib/api'
 import { PeakTable } from '@/components/hplc/PeakTable'
 import {
@@ -127,8 +128,8 @@ function buildDebugLines({
   parseResult: HPLCParseResult | null
   activeAnalyte: string | null
   isBlend: boolean
-  labelToComponent: Map<string, { id: number; name: string; abbreviation: string }>
-  blendComponents: { id: number; name: string; abbreviation: string }[]
+  labelToComponent: Map<string, ComponentBrief>
+  blendComponents: ComponentBrief[]
   calibrations: CalibrationCurve[]
   selectedCal: CalibrationCurve | undefined
   componentCals: Map<number, CalibrationCurve[]>
@@ -171,13 +172,31 @@ function buildDebugLines({
   if (isBlend) {
     push('dim', '')
     push('dim', '─── Label → Component Mapping ───')
+    const norm = (s: string) => s.toUpperCase().replace(/[-\s()]/g, '')
     for (const label of parseResult.detected_peptides) {
       const comp = labelToComponent.get(label)
       if (comp) {
         push('success', `${label} → ${comp.abbreviation} (id:${comp.id})`)
       } else {
-        push('error', `${label} → NO MATCH`)
+        push('error', `${label} (normalized: "${norm(label)}") → NO MATCH`)
+        // Show what was checked against
+        for (const c of blendComponents) {
+          const aliases = c.hplc_aliases
+          push('warn', `  vs ${c.abbreviation} (norm: "${norm(c.abbreviation)}", aliases: ${aliases?.length ? aliases.join(', ') : 'none'})`)
+        }
       }
+    }
+
+    // Standard injections
+    if (parseResult.standard_injections?.length) {
+      push('dim', '')
+      push('dim', '─── Standard Injections ───')
+      for (const si of parseResult.standard_injections) {
+        push('info', `${si.analyte_label}: RT=${si.main_peak_rt.toFixed(3)} min (Area%=${si.main_peak_area_pct.toFixed(1)}%) source=${si.source_sample_id}`)
+      }
+    } else {
+      push('dim', '')
+      push('warn', '─── Standard Injections: NONE FOUND ───')
     }
   }
 
@@ -238,11 +257,28 @@ function buildDebugLines({
   push('dim', '─── Weights ───')
   const wt = (label: string, val: number | null) =>
     push(val != null ? 'info' : 'warn', `${label}: ${val != null ? `${val.toFixed(2)} mg` : 'MISSING'}`)
-  wt('Stock vial empty', prep.stock_vial_empty_mg)
-  wt('Stock vial loaded', prep.stock_vial_loaded_mg)
-  wt('Dil vial empty', prep.dil_vial_empty_mg)
-  wt('Dil vial + diluent', prep.dil_vial_with_diluent_mg)
-  wt('Dil vial final', prep.dil_vial_final_mg)
+
+  if (isBlend && prep.vial_data && prep.vial_data.length > 0) {
+    // Show per-vial weights for blends
+    for (const vd of prep.vial_data) {
+      const compNames = vd.component_abbreviations?.join(', ') ?? `Vial ${vd.vial_number}`
+      push('dim', `Vial ${vd.vial_number} (${compNames}):`)
+      wt('  Stock vial empty', vd.stock_vial_empty_mg)
+      wt('  Stock vial loaded', vd.stock_vial_loaded_mg)
+      wt('  Dil vial empty', vd.dil_vial_empty_mg)
+      wt('  Dil vial + diluent', vd.dil_vial_with_diluent_mg)
+      wt('  Dil vial final', vd.dil_vial_final_mg)
+    }
+  } else {
+    if (isBlend && (!prep.vial_data || prep.vial_data.length === 0)) {
+      push('warn', 'No per-vial weight data — using top-level weights for all analytes')
+    }
+    wt('Stock vial empty', prep.stock_vial_empty_mg)
+    wt('Stock vial loaded', prep.stock_vial_loaded_mg)
+    wt('Dil vial empty', prep.dil_vial_empty_mg)
+    wt('Dil vial + diluent', prep.dil_vial_with_diluent_mg)
+    wt('Dil vial final', prep.dil_vial_final_mg)
+  }
 
   // Results
   const currentResult = isBlend && activeAnalyte
@@ -554,16 +590,24 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
       ;(async () => {
         setLoadingSaved(true)
         try {
-          const saved = await getHPLCAnalysesBySamplePrep(prep.id)
-          if (saved.length > 0) {
+          const allSaved = await getHPLCAnalysesBySamplePrep(prep.id)
+          if (allSaved.length > 0) {
+            // Filter to latest run group only (most recent run_group_id, or most recent created_at)
+            const latestGroupId = allSaved[0]?.run_group_id
+            const saved = latestGroupId
+              ? allSaved.filter(s => s.run_group_id === latestGroupId)
+              : allSaved.slice(0, 1) // no group — just take the most recent single result
+
             setSavedResults(saved)
             const resMap = new Map<string, HPLCAnalysisResult>()
             for (const s of saved) {
-              resMap.set(s.peptide_abbreviation ?? '__single__', s)
+              const key = s.peptide_abbreviation ?? '__single__'
+              if (!resMap.has(key)) resMap.set(key, s) // deduplicate by abbreviation
             }
             setAnalyteResults(resMap)
             const firstKey = resMap.keys().next().value ?? '__single__'
             setResult(resMap.get(firstKey) ?? null)
+            if (resMap.size > 1) setActiveAnalyte(firstKey)
           }
         } catch {
           // DB check failed — savedResults stays null, SharePoint flow proceeds
@@ -579,9 +623,13 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
 
   const loadPeakData = useCallback(async () => {
     if (parseResult) return
-    if (savedResults) return              // skip SharePoint scan when DB results loaded
+    // Wait for DB check to complete before deciding whether to load SharePoint
     if (loadingSaved) return              // skip while DB check still in progress (state)
     if (dbCheckActiveRef.current) return  // skip during DB check (ref — synchronous guard)
+    // NOTE: we no longer skip SharePoint when savedResults exist —
+    // we still need the parsed data for chromatogram + peak table display.
+    // The auto-run analysis effect is gated separately and won't re-analyze
+    // when result is already set from saved data.
     setLoading(true)
     setParseError(null)
     try {
@@ -625,7 +673,7 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
     } finally {
       setLoading(false)
     }
-  }, [match, parseResult, savedResults, loadingSaved])
+  }, [match, parseResult, loadingSaved])
 
   useEffect(() => {
     if (open) loadPeakData()
@@ -647,9 +695,10 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
   // When loading from DB (no parseResult), derive labels from saved results abbreviations
   const parsedLabels = useMemo(() => {
     if (parseResult?.detected_peptides?.length) return parseResult.detected_peptides
-    // Fallback: use saved results' peptide_abbreviation as tab labels
-    if (savedResults && savedResults.length > 1) {
-      return savedResults.map(s => s.peptide_abbreviation).filter(Boolean) as string[]
+    // Fallback: use saved results' peptide_abbreviation as tab labels (deduplicated)
+    if (savedResults && savedResults.length > 0) {
+      const unique = [...new Set(savedResults.map(s => s.peptide_abbreviation).filter(Boolean))]
+      if (unique.length > 0) return unique as string[]
     }
     return []
   }, [parseResult?.detected_peptides, savedResults])
@@ -668,26 +717,35 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
       const aliasMatch = blendComponents.find(c =>
         c.hplc_aliases?.some(a => norm(a) === normalized)
       )
-      if (aliasMatch) { map.set(label, aliasMatch); continue }
+      if (aliasMatch) { map.set(label, aliasMatch); console.log(`[HPLC] Label "${label}" → ${aliasMatch.abbreviation} (via alias)`); continue }
 
       // 2. Exact abbreviation match (normalized)
       const abbrMatch = blendComponents.find(c => norm(c.abbreviation) === normalized)
-      if (abbrMatch) { map.set(label, abbrMatch); continue }
+      if (abbrMatch) { map.set(label, abbrMatch); console.log(`[HPLC] Label "${label}" → ${abbrMatch.abbreviation} (exact abbrev)`); continue }
 
       // 3. Name match (normalized)
       const nameMatch = blendComponents.find(c => norm(c.name) === normalized)
-      if (nameMatch) { map.set(label, nameMatch); continue }
+      if (nameMatch) { map.set(label, nameMatch); console.log(`[HPLC] Label "${label}" → ${nameMatch.abbreviation} (name match)`); continue }
 
       // 4. Prefix/contains on abbreviation
       const prefixMatch = blendComponents.find(c => norm(c.abbreviation).startsWith(normalized))
         ?? blendComponents.find(c => normalized.startsWith(norm(c.abbreviation)))
-      if (prefixMatch) { map.set(label, prefixMatch); continue }
+      if (prefixMatch) { map.set(label, prefixMatch); console.log(`[HPLC] Label "${label}" → ${prefixMatch.abbreviation} (prefix)`); continue }
 
       // 5. Prefix/contains on name
       const namePrefix = blendComponents.find(c => norm(c.name).includes(normalized))
         ?? blendComponents.find(c => normalized.includes(norm(c.name)))
-      if (namePrefix) { map.set(label, namePrefix); continue }
+      if (namePrefix) { map.set(label, namePrefix); console.log(`[HPLC] Label "${label}" → ${namePrefix.abbreviation} (name prefix)`); continue }
+
+      // No match found — log warning with full detail
+      console.warn(`[HPLC] Label "${label}" (normalized: "${normalized}") — NO MATCH. Components:`,
+        blendComponents.map(c => ({
+          abbrev: c.abbreviation,
+          hplc_aliases: c.hplc_aliases,
+          keys: Object.keys(c),
+        })))
     }
+    console.log(`[HPLC] labelToComponent: ${map.size}/${parsedLabels.length} labels matched`)
     return map
   }, [isBlend, blendComponents, parsedLabels])
 

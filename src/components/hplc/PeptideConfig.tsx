@@ -220,7 +220,7 @@ export function PeptideConfig() {
   const [savingMethodId, setSavingMethodId] = useState(false)
 
   // Flyout instrument tab — controls which instrument's curves + methods are shown
-  const [flyoutInstrument, setFlyoutInstrument] = useState<string>('1290')
+  const [flyoutInstrument, setFlyoutInstrument] = useState<string>('all')
 
   // Resync dialog state
   const [resyncTarget, setResyncTarget] = useState<PeptideRecord | null>(null)
@@ -228,7 +228,7 @@ export function PeptideConfig() {
   const [resyncSampleId, setResyncSampleId] = useState('')
   const [resyncSampleValidating, setResyncSampleValidating] = useState(false)
   const [resyncSampleValid, setResyncSampleValid] = useState<boolean | null>(null)
-  const [resyncInstrument, setResyncInstrument] = useState<string>('1290')
+  const [resyncInstrument, setResyncInstrument] = useState<string>('all')
   const [resyncMode, setResyncMode] = useState<'sample' | 'folder' | 'manual'>('sample')
   const [manualRows, setManualRows] = useState<{ conc: string; area: string; rt: string }[]>([
     { conc: '', area: '', rt: '' }, { conc: '', area: '', rt: '' }, { conc: '', area: '', rt: '' },
@@ -273,6 +273,9 @@ export function PeptideConfig() {
     getInstruments().then(setAllInstruments).catch(console.error)
   }, [loadPeptides])
 
+  // Subscribe to navigationKey so we re-run when navigateToPeptide is called
+  const navigationKey = useUIStore(state => state.navigationKey)
+
   // Open flyout if navigated here with a target peptide ID
   useEffect(() => {
     const targetId = useUIStore.getState().peptideConfigTargetId
@@ -280,11 +283,14 @@ export function PeptideConfig() {
       const match = peptides.find(p => p.id === targetId)
       if (match) {
         setSelectedId(targetId)
+        // Force CalibrationPanel to re-fetch — covers the case where the user
+        // was already viewing this peptide when a new curve was created
+        setCalRefreshKey(k => k + 1)
       }
       // Clear the target so it doesn't re-trigger
       useUIStore.setState({ peptideConfigTargetId: null })
     }
-  }, [peptides])
+  }, [peptides, navigationKey])
 
   // Smart auto-scroll: only scroll if user was already at/near the bottom
   useEffect(() => {
@@ -425,7 +431,7 @@ export function PeptideConfig() {
     setResyncSampleId(clearSampleId ? '' : (firstAnalyte?.sample_id || ''))
     setResyncSampleValid(null)
     setResyncSampleValidating(false)
-    setResyncInstrument('1290')
+    setResyncInstrument('all')
     setResyncMode('sample')
     setResyncFolderPath('')
     setResyncFolderName('')
@@ -443,7 +449,7 @@ export function PeptideConfig() {
     setResyncSampleId('')
     setResyncSampleValid(null)
     setResyncSampleValidating(false)
-    setResyncInstrument('1290')
+    setResyncInstrument('all')
     setResyncMode('sample')
     setResyncFolderPath('')
     setResyncFolderName('')
@@ -586,10 +592,14 @@ export function PeptideConfig() {
     const sampleId = resyncMode === 'sample' ? (resyncSampleId.trim() || undefined) : undefined
     const folderPath = resyncMode === 'folder' ? (resyncFolderPath || undefined) : undefined
     const rootParam = resyncMode === 'folder' ? folderRoot : undefined
-    const instrument = resyncInstrument || undefined
+    // Resolve instrument name from ID for the backend string field
+    const instObj = resyncInstrument && resyncInstrument !== 'all'
+      ? allInstruments.find(i => String(i.id) === resyncInstrument)
+      : undefined
+    const instrument = instObj?.name || undefined
     closeResyncDialog()
     handleResyncPeptide(resyncTarget.id, analyteId, sampleId, instrument, folderPath, rootParam)
-  }, [resyncTarget, resyncAnalyteId, resyncMode, resyncSampleId, resyncFolderPath, folderRoot, resyncInstrument, closeResyncDialog, handleResyncPeptide])
+  }, [resyncTarget, resyncAnalyteId, resyncMode, resyncSampleId, resyncFolderPath, folderRoot, resyncInstrument, allInstruments, closeResyncDialog, handleResyncPeptide])
 
   const handleManualSubmit = useCallback(async () => {
     if (!resyncTarget) return
@@ -608,13 +618,17 @@ export function PeptideConfig() {
 
     setManualSubmitting(true)
     try {
+      // Resolve instrument name from ID for the backend string field
+      const instObj = resyncInstrument && resyncInstrument !== 'all'
+        ? allInstruments.find(i => String(i.id) === resyncInstrument)
+        : undefined
       await createCalibration(resyncTarget.id, {
         concentrations,
         areas,
         rts: hasRts ? rts : undefined,
         source_filename: 'Manual entry',
         analyte_id: resyncAnalyteId ? parseInt(resyncAnalyteId, 10) : undefined,
-        instrument: resyncInstrument || undefined,
+        instrument: instObj?.name || undefined,
         notes: manualNotes.trim() || undefined,
       })
       closeResyncDialog()
@@ -1024,12 +1038,12 @@ export function PeptideConfig() {
                 <div className="flex items-center gap-0 px-5 pb-0">
                   <span className="text-xs font-medium text-muted-foreground mr-3 uppercase tracking-wider">Instrument</span>
                   {allInstruments.map(inst => {
-                    const isActive = flyoutInstrument === inst.model
+                    const isActive = flyoutInstrument === String(inst.id)
                     return (
                       <button
                         key={inst.id}
                         type="button"
-                        onClick={() => setFlyoutInstrument(inst.model ?? '')}
+                        onClick={() => setFlyoutInstrument(String(inst.id))}
                         className={`relative px-4 py-2 text-sm font-medium transition-colors ${
                           isActive
                             ? 'text-foreground'
@@ -1071,7 +1085,7 @@ export function PeptideConfig() {
                         <p>Use the <span className="font-medium text-foreground">Edit</span> button on each curve to assign an instrument.</p>
                       </div>
                     )}
-                    {allInstruments.filter(inst => inst.model === flyoutInstrument).map(inst => {
+                    {allInstruments.filter(inst => String(inst.id) === flyoutInstrument).map(inst => {
                       const methodsForInst = allMethods.filter(m => m.instrument_id === inst.id)
                       const assigned = selectedPeptide.methods.find(m => m.instrument_id === inst.id)
                       return (
@@ -1567,8 +1581,10 @@ export function PeptideConfig() {
                     <SelectValue placeholder="Select instrument..." />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="1290">Agilent 1290</SelectItem>
-                    <SelectItem value="1260">Agilent 1260</SelectItem>
+                    <SelectItem value="all">— None / Unknown —</SelectItem>
+                    {allInstruments.map(inst => (
+                      <SelectItem key={inst.id} value={String(inst.id)}>{inst.name}</SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
                 <p className="text-xs text-muted-foreground">

@@ -32,6 +32,16 @@ Requirements for Standard Sample Preps & Calibration Curve Chromatograms milesto
 - [ ] **AUTO-05**: Auto-created curve links source_sample_id and source_sharepoint_folder from the standard prep
 - [ ] **AUTO-06**: Auto-created curve carries manufacturer and notes from the standard sample prep metadata
 
+### HPLC Results Persistence
+
+- [ ] **HRES-01**: hplc_analyses stores calibration_curve_id (FK) identifying which curve was used for the analysis
+- [ ] **HRES-02**: hplc_analyses stores sample_prep_id linking back to the sample_preps record in accumark_mk1
+- [ ] **HRES-03**: hplc_analyses stores instrument_id (FK) and source_sharepoint_folder for full provenance
+- [ ] **HRES-04**: hplc_analyses stores chromatogram trace data (times[] + signals[] JSON) so charts render without re-scanning SharePoint
+- [ ] **HRES-05**: Blend runs use a run_group_id to link all per-analyte analysis rows from a single Process HPLC session
+- [ ] **HRES-06**: Reopening Process HPLC for a sample prep with saved results loads them from DB (no SharePoint re-scan), with option to re-run
+- [ ] **HRES-07**: Sample prep status updates to hplc_complete when results are persisted, and results are accessible from the sample preps list
+
 ### Backfill Existing Curves
 
 - [ ] **BKFL-01**: User can edit an existing calibration curve to add/change source_sample_id (Sample ID link)
@@ -44,6 +54,19 @@ Requirements for Standard Sample Preps & Calibration Curve Chromatograms milesto
 - [ ] **CHRO-02**: Standard chromatogram trace rendered as a background/reference trace (lighter/dashed style)
 - [ ] **CHRO-03**: Sample chromatogram trace rendered as the primary trace (solid style) overlaid on the standard
 - [ ] **CHRO-04**: Both traces share a synchronized time axis for direct visual comparison
+
+### Same-Method Identity Check
+
+- [ ] **METH-01**: HPLC file parser detects `_std_` peak data files in .rslt folders and parses them as standard reference injections
+- [ ] **METH-02**: Each standard injection's main peak RT is extracted and matched to the corresponding analyte
+- [ ] **METH-03**: Identity check uses standard injection RT (same method) when available, falls back to calibration curve reference_rt when not
+- [ ] **METH-04**: Identity section displays which reference source was used (standard injection vs calibration curve) and the source sample ID
+
+### RT Check Chromatogram Comparison
+
+- [ ] **RTCK-01**: Identity section shows side-by-side chromatogram comparison — standard trace with peak RT annotation next to sample trace with peak RT annotation
+- [ ] **RTCK-02**: Standard injection DAD1A chromatograms (`_std_*.dx_DAD1A.CSV`) are loaded and displayed alongside sample chromatograms
+- [ ] **RTCK-03**: Comparison view shows RT delta between standard and sample main peaks for tech confirmation
 
 ## Future Requirements
 
@@ -84,17 +107,31 @@ Deferred to later milestones.
 | AUTO-04 | Phase 10 | Pending |
 | AUTO-05 | Phase 10 | Pending |
 | AUTO-06 | Phase 10 | Pending |
-| BKFL-01 | Phase 11 | Pending |
-| BKFL-02 | Phase 11 | Pending |
-| BKFL-03 | Phase 11 | Pending |
-| CHRO-01 | Phase 12 | Pending |
-| CHRO-02 | Phase 12 | Pending |
-| CHRO-03 | Phase 12 | Pending |
-| CHRO-04 | Phase 12 | Pending |
+| HRES-01 | Phase 10.5 | Complete |
+| HRES-02 | Phase 10.5 | Complete |
+| HRES-03 | Phase 10.5 | Complete |
+| HRES-04 | Phase 10.5 | Complete |
+| HRES-05 | Phase 10.5 | Complete |
+| HRES-06 | Phase 10.5 | Complete |
+| HRES-07 | Phase 10.5 | Complete |
+| BKFL-01 | Phase 11 | Complete |
+| BKFL-02 | Phase 11 | Complete |
+| BKFL-03 | Phase 11 | Complete |
+| CHRO-01 | Phase 12 | Complete |
+| CHRO-02 | Phase 12 | Complete |
+| CHRO-03 | Phase 12 | Complete |
+| CHRO-04 | Phase 12 | Complete |
+| METH-01 | Phase 13 | Complete |
+| METH-02 | Phase 13 | Complete |
+| METH-03 | Phase 13 | Complete |
+| METH-04 | Phase 13 | Complete |
+| RTCK-01 | Phase 14 | Pending |
+| RTCK-02 | Phase 14 | Pending |
+| RTCK-03 | Phase 14 | Pending |
 
 **Coverage:**
-- v0.26.0 requirements: 23 total
-- Mapped to phases: 23
+- v0.26.0 requirements: 37 total
+- Mapped to phases: 37
 - Unmapped: 0
 
 ---

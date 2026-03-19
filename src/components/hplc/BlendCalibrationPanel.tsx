@@ -92,9 +92,11 @@ export function BlendCalibrationPanel({
       <div className="flex items-center gap-2 flex-wrap">
         {componentKeys.map(abbr => {
           const comp = data[abbr]
-          const curveCount = comp?.calibrations.filter(
-            c => instrumentFilter === 'all' || (c.instrument ?? 'unknown') === instrumentFilter
-          ).length
+          const curveCount = comp?.calibrations.filter(c => {
+            if (instrumentFilter === 'all') return true
+            if (instrumentFilter === 'unknown') return c.instrument_id == null
+            return c.instrument_id === Number(instrumentFilter)
+          }).length
           return (
             <Button
               key={abbr}

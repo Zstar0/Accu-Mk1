@@ -229,6 +229,7 @@ class Peptide(Base):
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     is_blend: Mapped[bool] = mapped_column(Boolean, default=False)
     prep_vial_count: Mapped[int] = mapped_column(Integer, default=1)
+    hplc_aliases: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)  # ["TB17-23", "TB4"] — alternate names used in HPLC filenames
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

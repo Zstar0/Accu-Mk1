@@ -66,6 +66,26 @@ function DilutionVial({ session, vialNumber }: {
   const requiredDiluentVol = calcs?.required_diluent_vol_ul
   const requiredStockVol = calcs?.required_stock_vol_ul
 
+  // Serial dilution instructions for standards
+  const isStandard = session.is_standard === true
+  const vialParams = session.vial_params ?? {}
+
+  // Get this vial's target concentration and the previous vial's concentration
+  const thisVialConc = vialParams[String(vialNumber)]?.target_conc_ug_ml ?? null
+  const thisVialVol = vialParams[String(vialNumber)]?.target_total_vol_ul ?? 1500
+
+  // For serial dilution: source is the previous vial (or stock for vial 1)
+  const isFirstDilution = vialNumber === 1
+  const prevVialConc = isFirstDilution
+    ? (calcs?.stock_conc_ug_ml ?? null) // First dilution pulls from stock
+    : (vialParams[String(vialNumber - 1)]?.target_conc_ug_ml ?? null)
+
+  // C1*V1 = C2*V2 → V1 = (C2 * V2) / C1
+  const serialPullVol = (thisVialConc && prevVialConc && prevVialConc > 0)
+    ? (thisVialConc * thisVialVol) / prevVialConc
+    : null
+  const serialDiluentVol = serialPullVol != null ? thisVialVol - serialPullVol : null
+
   async function handleAccept3a(value: number, source: 'scale' | 'manual') {
     setError3a(null)
     try {
@@ -130,8 +150,48 @@ function DilutionVial({ session, vialNumber }: {
         the previous one is complete.
       </p>
 
-      {/* Target volumes display */}
-      {(requiredDiluentVol != null || requiredStockVol != null) && (
+      {/* Serial dilution instructions for standards */}
+      {isStandard && thisVialConc != null && serialPullVol != null && serialDiluentVol != null && (
+        <Card className="border-amber-500/30 bg-amber-500/5">
+          <CardContent className="pt-4 space-y-2">
+            <p className="text-sm font-semibold text-amber-600 dark:text-amber-400">
+              Serial Dilution — Target: {thisVialConc} µg/mL
+            </p>
+            <div className="text-sm space-y-1.5">
+              <div className="flex items-start gap-2">
+                <span className="flex h-5 w-5 items-center justify-center rounded-full bg-amber-500/20 text-amber-600 dark:text-amber-400 text-xs font-bold shrink-0 mt-0.5">1</span>
+                <p>
+                  Pull <span className="font-mono font-semibold">{serialPullVol.toFixed(1)} µL</span> from{' '}
+                  {isFirstDilution
+                    ? <span className="font-medium">Stock Solution</span>
+                    : <span className="font-medium">Vial {vialNumber - 1} ({prevVialConc} µg/mL)</span>
+                  }
+                </p>
+              </div>
+              {serialDiluentVol > 0 && (
+                <div className="flex items-start gap-2">
+                  <span className="flex h-5 w-5 items-center justify-center rounded-full bg-amber-500/20 text-amber-600 dark:text-amber-400 text-xs font-bold shrink-0 mt-0.5">2</span>
+                  <p>
+                    Add <span className="font-mono font-semibold">{serialDiluentVol.toFixed(1)} µL</span> diluent to reach{' '}
+                    <span className="font-mono">{thisVialVol} µL</span> total volume
+                  </p>
+                </div>
+              )}
+              {serialDiluentVol <= 0 && (
+                <div className="flex items-start gap-2">
+                  <span className="flex h-5 w-5 items-center justify-center rounded-full bg-green-500/20 text-green-600 dark:text-green-400 text-xs font-bold shrink-0 mt-0.5">2</span>
+                  <p className="text-green-600 dark:text-green-400">
+                    No additional diluent needed — pull volume equals target volume
+                  </p>
+                </div>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Target volumes display (non-standard) */}
+      {!isStandard && (requiredDiluentVol != null || requiredStockVol != null) && (
         <Card className="border-blue-500/30 bg-blue-50/30 dark:bg-blue-950/10">
           <CardContent className="pt-4">
             <div className="grid grid-cols-2 gap-3 text-sm">
@@ -367,6 +427,33 @@ function DilutionVial({ session, vialNumber }: {
                 </div>
               )}
             </div>
+
+            {/* Per-analyte actual concentrations */}
+            {calcs.analyte_calculations && (
+              <div className="border-t border-green-500/20 pt-3 mt-4">
+                <p className="text-xs font-medium text-muted-foreground mb-2">Per-Analyte Actual Concentrations</p>
+                <div className="rounded-md border border-zinc-700 overflow-hidden">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-zinc-700 text-xs text-muted-foreground">
+                        <th className="text-start p-2">Analyte</th>
+                        <th className="text-end p-2">Actual Conc.</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {Object.entries(calcs.analyte_calculations).map(([aKey, ac]) => (
+                        <tr key={aKey} className="border-b border-zinc-700/50 last:border-0">
+                          <td className="p-2 text-xs font-medium">{aKey}</td>
+                          <td className="p-2 text-end font-mono text-xs">
+                            {ac.actual_conc_ug_ml != null ? `${ac.actual_conc_ug_ml.toFixed(2)} µg/mL` : '—'}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
           </CardContent>
         </Card>
       )}

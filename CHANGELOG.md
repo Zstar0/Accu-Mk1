@@ -1,5 +1,67 @@
 # Changelog
 
+## v0.26.0 — 2026-03-19
+
+### Standard Sample Preps & Calibration Curves
+
+- **Standard sample prep toggle** — wizard Step 1 has a "Standard Sample" switch that reveals manufacturer, instrument, and concentration level fields; standard preps flow through the same wizard steps as production
+- **Standard badge + filter** — sample preps list shows a visible "Standard" badge; filter dropdown supports standard vs production
+- **Auto-create calibration curve from standard** — Process HPLC on a standard prep shows a curve preview with chart, data table, and regression; "Create Calibration Curve" button generates a fully-linked curve with provenance
+- **Standard chromatogram on curves** — calibration curve expanded view shows the standard's chromatogram with per-concentration tabs (1, 10, 100, 250, 500, 1000 µg/mL) and an "All" overlay option
+
+### HPLC Results Persistence
+
+- **Full provenance on analysis results** — `hplc_analyses` now stores `calibration_curve_id`, `sample_prep_id`, `instrument_id`, `source_sharepoint_folder`, `chromatogram_data`, and `run_group_id`
+- **Blend run grouping** — per-analyte analysis rows from the same Process HPLC session share a `run_group_id` UUID
+- **DB-first flyout reload** — reopening Process HPLC loads saved results instantly from DB, then loads SharePoint data in the background for chromatogram + peak table detail
+- **Re-run Analysis** — banner with button to clear saved results and re-scan SharePoint for a fresh analysis
+- **`hplc_complete` status** — sample prep status auto-updates after successful analysis; teal badge in list
+
+### Calibration Curve Backfill
+
+- **Source Sample ID + Vendor fields** — edit form on calibration curves includes Source Sample ID and Vendor inputs
+- **SharePoint chromatogram auto-fetch** — when a Source Sample ID is saved, backend auto-fetches DAD1A chromatogram files from SharePoint (LIMS CSV folder) and stores them on the curve
+- **Multi-concentration storage** — chromatogram data stored keyed by concentration level for per-level viewing
+
+### Chromatogram Overlay
+
+- **Standard trace overlay** — Process HPLC flyout renders the active calibration curve's standard chromatogram as a dashed, semi-transparent reference trace behind the sample's solid trace
+- **Per-trace styling** — `ChromatogramTrace` supports optional `style` field (dashed, opacity) for visual distinction
+- **`extractStandardTrace` helper** — handles both old single-trace and new multi-concentration chromatogram formats; picks highest concentration for best visual reference
+
+### Same-Method Identity Check
+
+- **Standard injection detection** — parser detects `_std_` PeakData files in .rslt folders and extracts main peak RT per analyte
+- **Same-method RT comparison** — identity check uses standard injection RT (same HPLC method) when available, falling back to calibration curve reference_rt
+- **Reference source display** — identity card shows "Ref: Standard injection (P-0111)" or "Ref: Calibration curve" so techs know which reference was used
+- **Alias-aware analyte matching** — `hplc_aliases` field on peptides enables matching chromatogram filename labels (e.g., "TB17-23") to peptide records (e.g., "TB500 (17-23 FRAGMENT)")
+
+### Instrument FK Relationships
+
+- **Proper `instrument_id` FK** on `CalibrationCurve`, `WizardSession`, and `hplc_analyses` — replaces raw string instrument fields
+- **Dynamic instrument dropdowns** — CalibrationPanel edit form, wizard Step 1, and PeptideConfig flyout all load instruments from DB instead of hardcoded values
+- **Backfill migration** — existing curves and sessions auto-populated with `instrument_id` from name matching at startup
+
+### Fixes
+
+- **Sample prep duplication** — wizard `setCurrentStep(0)` fixed to `setCurrentStep(1)`; `POST /sample-preps` is now idempotent (checks `wizard_session_id` before creating)
+- **Calibration curve filter mismatch** — `CalibrationPanel` filter changed from exact string match to ID-based comparison; default `flyoutInstrument` changed from hardcoded `'1290'` to `'all'`
+- **Per-vial weights in blend analysis** — flyout routes each blend component to the correct vial's dilution measurements from `vial_data`
+- **DB reload race condition** — `dbCheckActiveRef` (synchronous ref) prevents SharePoint scan from firing before DB check completes
+- **Blend chromatogram filtering** — alias-aware trace filtering matches filenames like `_BPC_TB17-23.dx_DAD1A.CSV` to the correct analyte tabs
+- **SharePoint search** — `search_sample_folder` now checks LIMS CSV folder first (where HPLC machines dump raw data), then falls back to Peptides/Raw Data tree
+
+### Backend
+
+- Schema migrations for `instrument_id` on calibration_curves, wizard_sessions, hplc_analyses
+- `GET /hplc/analyses/by-sample-prep/{id}` endpoint for flyout reload
+- `_analysis_to_response()` helper eliminates response construction duplication
+- PATCH calibration endpoint accepts `source_sample_id`, `vendor`; auto-fetches chromatogram from SharePoint
+- Standard injection parser with `StandardInjection` dataclass and `StandardInjectionResponse` API model
+- Identity calculation tracks `reference_source`, `reference_source_id`, `calibration_curve_rt` in trace
+
+---
+
 ## v0.25.0 — 2026-03-12
 
 ### Multi-Vial Blend Prep Support

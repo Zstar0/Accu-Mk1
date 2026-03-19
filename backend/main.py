@@ -7240,7 +7240,8 @@ async def create_sample_prep_endpoint(
             .order_by(blend_components.c.display_order)
         ).all()
         data["components_json"] = json.dumps([
-            {"id": c.id, "name": c.name, "abbreviation": c.abbreviation, "vial_number": vn or 1}
+            {"id": c.id, "name": c.name, "abbreviation": c.abbreviation, "vial_number": vn or 1,
+             "hplc_aliases": c.hplc_aliases}
             for c, vn in comp_rows
         ])
 

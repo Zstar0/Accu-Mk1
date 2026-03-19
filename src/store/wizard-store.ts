@@ -96,7 +96,6 @@ function isStepDataComplete(
     case 'standard-dilution':
       return calcs?.actual_conc_ug_ml != null
   }
-  return false
 }
 
 /**
@@ -114,15 +113,21 @@ function isStepUnlocked(
 
   switch (step.type) {
     case 'stock-prep': {
-      // Need session with target params
+      if (!session) return false
+      // Standards use vial_params for concentrations, not flat target fields
+      if (session.is_standard) {
+        // Just need session to exist (sample-info done)
+        if (step.vialNumber === 1) return true
+        return isStepDataComplete(session, prevStep)
+      }
+      // Production preps need target params
       if (
-        !session ||
         session.target_conc_ug_ml === null ||
         session.target_total_vol_ul === null
       ) return false
       // For vial 1: just need session (sample-info done)
       // For vial N>1: previous vial's dilution must be complete
-      if (step.vialNumber === 1) return session !== null
+      if (step.vialNumber === 1) return true
       return isStepDataComplete(session, prevStep)
     }
 
@@ -138,12 +143,12 @@ function isStepUnlocked(
 
     case 'standard-dilution': {
       if (!session) return false
-      // First standard-dilution unlocks when stock prep is complete (vial 1 stock measurements)
+      // First standard-dilution unlocks when stock prep is complete (all 3 vial weights recorded)
       const isFirstStdDil = !steps.slice(0, idx).some(s => s.type === 'standard-dilution')
       if (isFirstStdDil) {
-        // Stock prep complete = vial 1 has stock measurements
         return (
           vialHasMeasurement(session, 'stock_vial_empty_mg', 1) &&
+          vialHasMeasurement(session, 'stock_vial_with_peptide_mg', 1) &&
           vialHasMeasurement(session, 'stock_vial_loaded_mg', 1)
         )
       }

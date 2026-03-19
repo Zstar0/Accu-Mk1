@@ -73,6 +73,31 @@ Plans:
 
 ---
 
+### Phase 10.5: HPLC Results Persistence (INSERTED)
+
+**Goal:** Enrich the existing `hplc_analyses` table with full provenance and context so every Process HPLC run produces a complete, reloadable record — including calibration curve used, sample prep link, chromatogram traces, instrument, source files, and blend run grouping.
+
+**Depends on:** Phase 10
+
+**Requirements:** HRES-01, HRES-02, HRES-03, HRES-04, HRES-05, HRES-06, HRES-07
+
+**Success Criteria** (what must be TRUE when this phase completes):
+1. Each `hplc_analyses` row stores the `calibration_curve_id`, `sample_prep_id`, `instrument_id`, and `source_sharepoint_folder` used for that analysis run
+2. Chromatogram trace data (times + signals from parsed .ch files) is stored per analysis so the chart can be re-rendered without re-scanning SharePoint
+3. Blend runs produce a `run_group_id` that links all per-analyte analysis rows from the same Process HPLC session, enabling grouped retrieval
+4. Reopening Process HPLC for a sample prep that has saved results loads them from the DB instantly (no SharePoint re-scan), with an option to re-run
+5. The full calculation trace, peak detection data, and injection-level details are persisted so results can be audited and compared across runs
+6. Saved results are retrievable via API by sample_prep_id, enabling downstream comparison tooling (e.g., our results vs lab results)
+7. Sample prep status transitions from `awaiting_hplc` to `hplc_complete` when results are saved, and the results are visible from the sample preps list
+
+**Plans:** 2 plans
+
+Plans:
+- [x] 10.5-01-PLAN.md — Backend: schema migration, model enrichment, endpoint augmentation, new GET by sample_prep_id
+- [x] 10.5-02-PLAN.md — Frontend: API types, flyout provenance passing, run_group_id, DB reload, status auto-update
+
+---
+
 ### Phase 11: Backfill Existing Curves
 
 **Goal:** Lab staff can retroactively enrich existing calibration curves by linking a Sample ID (which triggers chromatogram fetch from SharePoint) and editing manufacturer/notes metadata.
@@ -86,10 +111,11 @@ Plans:
 2. When a source Sample ID is saved, the system locates the corresponding DAD1A chromatogram in SharePoint and populates chromatogram_data on the curve automatically
 3. User can edit manufacturer and notes fields on any existing calibration curve and see the changes persist
 
-**Plans:** TBD
+**Plans:** 2 plans
 
 Plans:
-- [ ] 11-01: Curve edit form (Sample ID link, manufacturer, notes) + SharePoint chromatogram auto-fetch on save
+- [x] 11-01-PLAN.md — Backend: extend PATCH schema + chromatogram auto-fetch on source_sample_id change
+- [x] 11-02-PLAN.md — Frontend: Source Sample ID + Vendor fields in CalibrationRow edit/view
 
 ---
 
@@ -109,7 +135,51 @@ Plans:
 **Plans:** TBD
 
 Plans:
-- [ ] 12-01: Load curve chromatogram_data in HPLC flyout + dual-trace rendering with synchronized axis
+- [x] 12-01-PLAN.md — ChromatogramChart: per-trace styling (dashed/opacity) + extractStandardTrace helper
+- [x] 12-02-PLAN.md — Flyout: prepend standard trace to displayChromTraces + visual checkpoint
+
+---
+
+### Phase 13: Same-Method Identity Check from Standard Injections
+
+**Goal:** Detect standard injection files (`_std_` in filename) in the .rslt folder, extract their main peak RTs, and use those as the identity reference instead of the calibration curve's reference_rt (which may be from a different method). This gives accurate same-method RT comparison for blends.
+
+**Depends on:** Phase 12
+
+**Requirements:** METH-01, METH-02, METH-03, METH-04
+
+**Success Criteria** (what must be TRUE when this phase completes):
+1. The HPLC file parser detects `_std_` peak data files in the .rslt folder and parses them as standard reference injections
+2. For each analyte, the identity check uses the standard injection's main peak RT (same method) when available, falling back to calibration curve reference_rt when no standard injection exists
+3. Identity results for blends show correct CONFORMS/DOES NOT CONFORM based on same-method RT comparison (e.g., BPC-157 delta 0.019 min → Conforms, not 6.6 min → Does Not Conform)
+4. The standard injection RT and source are displayed in the Identity section so the tech can see which reference was used
+
+**Plans:** TBD
+
+Plans:
+- [x] 13-01-PLAN.md — Parse _std_ files, extract standard injection RTs, expose in API
+- [x] 13-02-PLAN.md — Identity calculation uses std RT when available, alias matching, source tracking
+- [x] 13-03-PLAN.md — Frontend types, flyout wiring, identity card reference source display
+
+---
+
+### Phase 14: RT Check Chromatogram Comparison
+
+**Goal:** Provide a side-by-side chromatogram comparison view in the HPLC flyout for identity verification — showing the standard's chromatogram next to the sample's chromatogram with peak annotations, matching how the lab techs currently compare RT Check PDFs.
+
+**Depends on:** Phase 13
+
+**Requirements:** RTCK-01, RTCK-02, RTCK-03
+
+**Success Criteria** (what must be TRUE when this phase completes):
+1. The identity section in the HPLC flyout shows a side-by-side chromatogram comparison: standard trace (with peak RT annotation) next to sample trace (with peak RT annotation)
+2. Standard injection DAD1A chromatograms (`_std_*.dx_DAD1A.CSV`) are loaded and displayed alongside sample chromatograms
+3. The comparison view shows the RT delta between the standard and sample main peaks, enabling the tech to visually confirm identity
+
+**Plans:** TBD
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 14 to break down)
 
 ---
 
@@ -122,5 +192,8 @@ Plans:
 | 08. Bulk Selection & Floating Toolbar | v0.12.0 | 2/2 | Complete | 2026-02-25 |
 | 09. Data Model + Standard Prep Flag | v0.26.0 | 2/2 | Complete | 2026-03-16 |
 | 10. Auto-Create Curve from Standard | v0.26.0 | 0/3 | Not started | - |
-| 11. Backfill Existing Curves | v0.26.0 | 0/1 | Not started | - |
-| 12. Chromatogram Overlay | v0.26.0 | 0/1 | Not started | - |
+| 10.5 HPLC Results Persistence | v0.26.0 | 2/2 | Complete | 2026-03-18 |
+| 11. Backfill Existing Curves | v0.26.0 | 2/2 | Complete | 2026-03-18 |
+| 12. Chromatogram Overlay | v0.26.0 | 2/2 | Complete | 2026-03-18 |
+| 13. Same-Method Identity Check | v0.26.0 | 3/3 | Complete | 2026-03-19 |
+| 14. RT Check Chromatogram Comparison | v0.26.0 | 0/? | Not started | - |

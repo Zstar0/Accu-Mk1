@@ -257,19 +257,26 @@ async def list_folder_by_id(folder_id: str) -> list[dict]:
 
 async def search_sample_folder(sample_id: str) -> Optional[dict]:
     """
-    Search for a sample folder (e.g., P-0142) within the Peptides tree.
+    Search for a sample folder by sample ID.
 
-    Scans each peptide subfolder's "Raw Data" directory for a match.
+    Search order:
+    1. LIMS CSVs and Endotoxin folder (where HPLC machines dump raw data)
+    2. Peptides/{peptide}/Raw Data tree (legacy organized data)
 
     Returns:
-        Dict with keys: path, name, peptide_folder, id  — or None
+        Dict with keys: path, name, peptide_folder (if found in Peptides), id  — or None
     """
-    # List peptide folders (e.g., AOD-9604, BPC-157, etc.)
+    # 1. Check LIMS CSV folder first — this is where HPLC machines dump raw data
+    lims_result = await find_lims_sample_folder(sample_id)
+    if lims_result:
+        lims_result["root"] = "lims"
+        return lims_result
+
+    # 2. Fall back to Peptides/{peptide}/Raw Data tree
     peptide_folders = await list_folder("")
     peptide_dirs = [f for f in peptide_folders if f["type"] == "folder"]
 
     for peptide_dir in peptide_dirs:
-        # Check for "Raw Data" subfolder
         try:
             raw_data_items = await list_folder(f"{peptide_dir['name']}/Raw Data")
         except httpx.HTTPStatusError as e:
@@ -277,7 +284,6 @@ async def search_sample_folder(sample_id: str) -> Optional[dict]:
                 continue
             raise
 
-        # Search for matching sample folder
         for item in raw_data_items:
             if item["type"] == "folder" and sample_id.upper() in item["name"].upper():
                 return {
@@ -431,7 +437,8 @@ async def get_sample_files(sample_id: str) -> Optional[dict]:
     if not sample:
         return None
 
-    all_files = await list_files_recursive(sample["path"], extensions=[".csv", ".xlsx"])
+    file_root = sample.get("root", "peptides")
+    all_files = await list_files_recursive(sample["path"], extensions=[".csv", ".xlsx"], root=file_root)
 
     peak_data = []
     chromatograms = []

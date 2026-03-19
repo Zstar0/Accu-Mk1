@@ -119,6 +119,8 @@ def ensure_sample_preps_table() -> None:
             cur.execute("ALTER TABLE sample_preps ADD COLUMN IF NOT EXISTS is_standard BOOLEAN DEFAULT FALSE")
             cur.execute("ALTER TABLE sample_preps ADD COLUMN IF NOT EXISTS manufacturer VARCHAR(200)")
             cur.execute("ALTER TABLE sample_preps ADD COLUMN IF NOT EXISTS standard_notes TEXT")
+            cur.execute("ALTER TABLE sample_preps ADD COLUMN IF NOT EXISTS instrument_name VARCHAR(200)")
+            cur.execute("ALTER TABLE sample_preps ADD COLUMN IF NOT EXISTS instrument_id INTEGER")
         conn.commit()
 
 
@@ -158,7 +160,7 @@ def create_sample_prep(data: dict) -> dict:
         "actual_conc_ug_ml", "actual_diluent_vol_ul", "actual_stock_vol_ul",
         "actual_total_vol_ul", "status", "notes",
         "is_blend", "components_json",
-        "is_standard", "manufacturer", "standard_notes",
+        "is_standard", "manufacturer", "standard_notes", "instrument_name", "instrument_id",
     ]
     with get_mk1_db() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
@@ -237,6 +239,8 @@ def update_sample_prep(sample_prep_id: int, data: dict) -> Optional[dict]:
         "dil_vial_empty_mg", "dil_vial_with_diluent_mg", "dil_vial_final_mg",
         "actual_conc_ug_ml", "actual_diluent_vol_ul", "actual_stock_vol_ul",
         "actual_total_vol_ul", "status", "notes",
+        "instrument_name", "instrument_id", "manufacturer", "standard_notes",
+        "is_standard", "is_blend", "components_json", "vial_data",
     }
     updates = {k: v for k, v in data.items() if k in allowed}
     if not updates:
