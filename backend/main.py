@@ -1282,12 +1282,22 @@ class PurityResponse(BaseModel):
     error: Optional[str] = None
 
 
+class StandardInjectionResponse(BaseModel):
+    """Standard injection reference data parsed from _std_ files."""
+    analyte_label: str
+    main_peak_rt: float
+    main_peak_area_pct: float
+    source_sample_id: str
+    filename: str
+
+
 class HPLCParseResponse(BaseModel):
     """Response from parsing HPLC files."""
     injections: list[InjectionResponse]
     purity: PurityResponse
     errors: list[str]
     detected_peptides: list[str] = []
+    standard_injections: list[StandardInjectionResponse] = []
 
 
 @app.post("/hplc/parse-files", response_model=HPLCParseResponse)
@@ -1334,11 +1344,24 @@ async def parse_hplc_peakdata(request: HPLCParseBrowserRequest, _current_user=De
         inj.peptide_label for inj in result.injections if inj.peptide_label
     ))
 
+    # Map standard injections to response model
+    std_inj_resp = [
+        StandardInjectionResponse(
+            analyte_label=si.analyte_label,
+            main_peak_rt=si.main_peak_rt,
+            main_peak_area_pct=si.main_peak_area_pct,
+            source_sample_id=si.source_sample_id,
+            filename=si.filename,
+        )
+        for si in result.standard_injections
+    ]
+
     return HPLCParseResponse(
         injections=injections_resp,
         purity=PurityResponse(**purity),
         errors=result.errors,
         detected_peptides=detected_peptides,
+        standard_injections=std_inj_resp,
     )
 
 
@@ -1497,6 +1520,7 @@ class ComponentBrief(BaseModel):
     name: str
     abbreviation: str
     vial_number: int = 1
+    hplc_aliases: Optional[list[str]] = None
 
     class Config:
         from_attributes = True
@@ -1583,6 +1607,7 @@ class PeptideResponse(BaseModel):
     active: bool
     is_blend: bool = False
     prep_vial_count: int = 1
+    hplc_aliases: Optional[list[str]] = None
     created_at: datetime
     updated_at: datetime
     methods: list[MethodBrief] = []
@@ -1705,7 +1730,7 @@ def _build_component_briefs(db: Session, blend_id: int) -> list[ComponentBrief]:
         .order_by(blend_components.c.display_order)
     ).all()
     return [
-        ComponentBrief(id=p.id, name=p.name, abbreviation=p.abbreviation, vial_number=vn or 1)
+        ComponentBrief(id=p.id, name=p.name, abbreviation=p.abbreviation, vial_number=vn or 1, hplc_aliases=p.hplc_aliases)
         for p, vn in rows
     ]
 
@@ -2660,28 +2685,39 @@ async def update_calibration(
             import sharepoint as sp
             sample_files = await sp.get_sample_files(new_sample_id)
             if sample_files and sample_files.get("chromatogram_files"):
-                chrom_file = sample_files["chromatogram_files"][0]  # First DAD1A file
-                content_bytes, filename = await sp.download_file(chrom_file["id"])
-                csv_text = content_bytes.decode("utf-8", errors="replace")
-                # Parse simple CSV: each line is "time,absorbance" (no header)
-                times = []
-                signals = []
-                for line in csv_text.splitlines():
-                    line = line.strip()
-                    if not line:
+                import re as _re
+                chrom_by_conc: dict[str, dict] = {}
+                for chrom_file in sample_files["chromatogram_files"]:
+                    fname = chrom_file["name"]
+                    # Skip blanks
+                    if "blank" in fname.lower():
                         continue
-                    parts = line.split(",", 1)
-                    if len(parts) != 2:
-                        continue
+                    # Extract concentration from filename like P-0309_Std_250.dx_DAD1A.CSV
+                    conc_match = _re.search(r'_Std_(\d+)\.', fname)
+                    conc_label = conc_match.group(1) if conc_match else fname.split(".")[0]
                     try:
-                        t = float(parts[0])
-                        s = float(parts[1])
-                        times.append(t)
-                        signals.append(s)
-                    except ValueError:
-                        continue
-                if times:
-                    updates["chromatogram_data"] = {"times": times, "signals": signals}
+                        content_bytes, _ = await sp.download_file(chrom_file["id"])
+                        csv_text = content_bytes.decode("utf-8", errors="replace")
+                        times = []
+                        signals = []
+                        for line in csv_text.splitlines():
+                            line = line.strip()
+                            if not line:
+                                continue
+                            parts = line.split(",", 1)
+                            if len(parts) != 2:
+                                continue
+                            try:
+                                times.append(float(parts[0]))
+                                signals.append(float(parts[1]))
+                            except ValueError:
+                                continue
+                        if times:
+                            chrom_by_conc[conc_label] = {"times": times, "signals": signals}
+                    except Exception:
+                        continue  # skip individual file failures
+                if chrom_by_conc:
+                    updates["chromatogram_data"] = chrom_by_conc
                     updates["source_sharepoint_folder"] = sample_files["sample"]["path"]
         except Exception as e:
             # Chromatogram fetch is best-effort — log and continue
