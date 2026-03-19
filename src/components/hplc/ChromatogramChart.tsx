@@ -139,6 +139,64 @@ export function parseChromatogramCsv(csv: string): [number, number][] {
   return points
 }
 
+/**
+ * Extract a styled reference trace from a calibration curve's chromatogram_data.
+ *
+ * Handles two formats:
+ *   - Old single-trace: { times: number[], signals: number[] }
+ *   - Multi-concentration: { "1": { times, signals }, "10": { times, signals }, ... }
+ *
+ * For multi-concentration, picks the highest concentration by default
+ * (largest numeric key — highest conc has tallest peaks, best visual reference).
+ *
+ * Returns a ChromatogramTrace styled as dashed + 40% opacity for background rendering,
+ * or null if the data is empty/invalid.
+ */
+export function extractStandardTrace(
+  chromData: Record<string, unknown>,
+  label?: string,
+): ChromatogramTrace | null {
+  let times: number[] | undefined
+  let signals: number[] | undefined
+  let traceName = label ?? 'Standard'
+
+  // Detect format: old single-trace has top-level `times` array
+  const maybeSingle = chromData as { times?: unknown; signals?: unknown }
+  if (Array.isArray(maybeSingle.times)) {
+    times = maybeSingle.times as number[]
+    signals = (maybeSingle.signals ?? []) as number[]
+  } else {
+    // Multi-concentration: keys are concentration values
+    let bestKey: string | null = null
+    let bestConc = -Infinity
+    for (const key of Object.keys(chromData)) {
+      const num = parseFloat(key)
+      if (!isNaN(num) && num > bestConc) {
+        const entry = chromData[key] as { times?: number[]; signals?: number[] } | undefined
+        if (entry?.times?.length) {
+          bestConc = num
+          bestKey = key
+        }
+      }
+    }
+    if (bestKey) {
+      const entry = chromData[bestKey] as { times: number[]; signals: number[] }
+      times = entry.times
+      signals = entry.signals ?? []
+      traceName = label ?? `Std ${bestKey} µg/mL`
+    }
+  }
+
+  if (!times || times.length === 0) return null
+
+  const raw: [number, number][] = times.map((t, i) => [t, signals![i] ?? 0])
+  return {
+    name: traceName,
+    points: downsampleLTTB(raw, 5000),
+    style: { dashed: true, opacity: 0.4 },
+  }
+}
+
 export function ChromatogramChart({
   traces,
   peakRTs,
