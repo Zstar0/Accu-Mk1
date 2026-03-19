@@ -2785,6 +2785,9 @@ class HPLCAnalyzeRequest(BaseModel):
     source_sharepoint_folder: Optional[str] = None
     chromatogram_data: Optional[dict] = None
     run_group_id: Optional[str] = None
+    # Phase 13: standard injection reference RTs keyed by analyte label
+    # Format: {"BPC157": {"rt": 10.165, "source_sample_id": "P-0111"}, ...}
+    standard_injection_rts: Optional[dict[str, dict]] = None
 
 
 class HPLCAnalysisResponse(BaseModel):
@@ -2811,10 +2814,14 @@ class HPLCAnalysisResponse(BaseModel):
     source_sharepoint_folder: Optional[str] = None
     chromatogram_data: Optional[dict] = None
     run_group_id: Optional[str] = None
+    # Phase 13: identity reference source
+    identity_reference_source: Optional[str] = None      # "standard_injection" or "calibration_curve"
+    identity_reference_source_id: Optional[str] = None  # e.g. "P-0111" for standard injection
 
 
 def _analysis_to_response(analysis: "HPLCAnalysis", peptide_abbreviation: str) -> "HPLCAnalysisResponse":
     """Convert an HPLCAnalysis ORM object to an HPLCAnalysisResponse."""
+    identity_trace = (analysis.calculation_trace or {}).get("identity", {})
     return HPLCAnalysisResponse(
         id=analysis.id,
         sample_id_label=analysis.sample_id_label,
@@ -2837,6 +2844,9 @@ def _analysis_to_response(analysis: "HPLCAnalysis", peptide_abbreviation: str) -
         source_sharepoint_folder=analysis.source_sharepoint_folder,
         chromatogram_data=analysis.chromatogram_data,
         run_group_id=analysis.run_group_id,
+        # Phase 13: identity reference source (extracted from calculation_trace)
+        identity_reference_source=identity_trace.get("reference_source"),
+        identity_reference_source_id=identity_trace.get("reference_source_id"),
     )
 
 
@@ -2887,6 +2897,26 @@ async def run_hplc_analysis(
             cal.reference_rt = ref_rt
             db.flush()
 
+    # Phase 13: Resolve standard injection RT for this analyte using alias-aware matching
+    # Standard files use labels like "BPC157" but peptide abbreviation is "BPC-157".
+    # Normalize both by stripping non-alphanumeric chars, then also check hplc_aliases.
+    std_injection_rt: Optional[float] = None
+    std_injection_source: Optional[str] = None
+    if request.standard_injection_rts:
+        def _normalize_label(s: str) -> str:
+            return re.sub(r"[^a-zA-Z0-9]", "", s).upper()
+
+        peptide_abbr_norm = _normalize_label(peptide.abbreviation)
+        peptide_aliases = getattr(peptide, "hplc_aliases", None) or []
+        alias_norms = {_normalize_label(a) for a in peptide_aliases}
+
+        for label, std_info in request.standard_injection_rts.items():
+            label_norm = _normalize_label(label)
+            if label_norm == peptide_abbr_norm or label_norm in alias_norms:
+                std_injection_rt = std_info.get("rt")
+                std_injection_source = std_info.get("source_sample_id")
+                break
+
     # Build analysis input
     analysis_input = AnalysisInput(
         injections=request.injections,
@@ -2902,6 +2932,8 @@ async def run_hplc_analysis(
             reference_rt=ref_rt,
             rt_tolerance=cal.rt_tolerance,
             diluent_density=cal.diluent_density,
+            standard_injection_rt=std_injection_rt,
+            standard_injection_source=std_injection_source,
         ),
     )
 
