@@ -10,11 +10,11 @@ See: .planning/PROJECT.md (updated 2026-03-16)
 ## Current Position
 
 Phase: 12 of 12 (Chromatogram Overlay)
-Plan: 1 of ? in current phase (in progress)
-Status: In progress
-Last activity: 2026-03-18 — Completed 12-01-PLAN.md (ChromatogramTrace style extension + extractStandardTrace helper)
+Plan: 2 of 2 in current phase (PHASE COMPLETE)
+Status: Phase complete — v0.26.0 feature complete
+Last activity: 2026-03-18 — Completed 12-02-PLAN.md (standard chromatogram overlay wired into SamplePrepHplcFlyout)
 
-Progress: [█████░░░░░] 42%
+Progress: [██████████] 100% (phase 12)
 
 ## Performance Metrics
 
@@ -31,10 +31,10 @@ Progress: [█████░░░░░] 42%
 | 10 | 3/3 | ~14 min | ~4.7 min |
 | 10.5 | 2/2 | ~10 min | ~5 min |
 | 11 | 2/? | ~4 min | ~2 min |
-| 12 | 1/? | ~2 min | ~2 min |
+| 12 | 2/2 | ~5 min | ~2.5 min |
 
 **Recent Trend:**
-- Last 5 plans: 10.5-01 (~5 min), 10.5-02 (~5 min), 11-01 (~2 min), 11-02 (~2 min), 12-01 (~2 min)
+- Last 5 plans: 11-01 (~2 min), 11-02 (~2 min), 12-01 (~2 min), 12-02 (~3 min)
 - Trend: stable/fast
 
 ## Accumulated Context
@@ -74,6 +74,9 @@ Progress: [█████░░░░░] 42%
 - extractStandardTrace picks highest concentration key for multi-conc calibration data (tallest peaks = best alignment reference)
 - extractStandardTrace returns null (not throws) for empty/invalid chromatogram_data — callers skip cleanly
 - Style hardcoded in extractStandardTrace (dashed + 0.4 opacity) — visual hierarchy enforced at extraction point, not left to callers
+- Standard trace prepended at index 0 in displayChromTraces — Recharts renders in order, standard behind sample traces
+- selectedCal in displayChromTraces dependency array — blend analyte tab switches update standard trace automatically
+- chromatogram_data cast to Record<string, unknown> in flyout — bridges TS interface (old shape) vs runtime multi-conc format
 
 ### Key Source Files
 
@@ -104,5 +107,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-03-18
-Stopped at: Completed 12-01-PLAN.md (phase 12 started — plan 1 done)
+Stopped at: Completed 12-02-PLAN.md (phase 12 complete — v0.26.0 feature complete)
 Resume file: None
