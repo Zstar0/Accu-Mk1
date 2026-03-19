@@ -45,6 +45,7 @@ import { PeakTable } from '@/components/hplc/PeakTable'
 import {
   parseChromatogramCsv,
   downsampleLTTB,
+  extractStandardTrace,
   type ChromatogramTrace,
 } from '@/components/hplc/ChromatogramChart'
 import { AnalysisResults } from '@/components/hplc/AnalysisResults'
@@ -861,19 +862,39 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
   // Chrom filenames contain analyte labels, e.g. "PB-0051_Inj_1_GHK.dx_DAD1A"
   // or combined "PB-0051_Inj_1_KPV_BPC_TB500.dx_DAD1A"
   const displayChromTraces = useMemo(() => {
-    if (!activeAnalyte || !hasMultipleAnalytes) return chromTraces
-    // Exclude blanks, then keep traces whose name contains the active label
-    const upper = activeAnalyte.toUpperCase()
-    const filtered = chromTraces.filter(t => {
-      const n = t.name.toUpperCase()
-      if (n.includes('BLANK')) return false
-      return n.includes(upper)
-    })
-    // If no specific match, fall back to all non-blank traces
-    return filtered.length > 0
-      ? filtered
-      : chromTraces.filter(t => !t.name.toUpperCase().includes('BLANK'))
-  }, [chromTraces, activeAnalyte, hasMultipleAnalytes])
+    // Start with sample traces, filtered by active analyte if needed
+    let sampleTraces: ChromatogramTrace[]
+    if (!activeAnalyte || !hasMultipleAnalytes) {
+      sampleTraces = chromTraces
+    } else {
+      // Exclude blanks, then keep traces whose name contains the active label
+      const upper = activeAnalyte.toUpperCase()
+      const filtered = chromTraces.filter(t => {
+        const n = t.name.toUpperCase()
+        if (n.includes('BLANK')) return false
+        return n.includes(upper)
+      })
+      // If no specific match, fall back to all non-blank traces
+      sampleTraces = filtered.length > 0
+        ? filtered
+        : chromTraces.filter(t => !t.name.toUpperCase().includes('BLANK'))
+    }
+
+    // Prepend standard reference trace from the active calibration curve (if available)
+    // Cast chromatogram_data to Record<string, unknown> because the runtime format
+    // may be multi-concentration (keyed by conc level) even though the TS type
+    // only declares the old single-trace shape.
+    if (selectedCal?.chromatogram_data) {
+      const stdTrace = extractStandardTrace(
+        selectedCal.chromatogram_data as unknown as Record<string, unknown>,
+      )
+      if (stdTrace) {
+        return [stdTrace, ...sampleTraces]
+      }
+    }
+
+    return sampleTraces
+  }, [chromTraces, activeAnalyte, hasMultipleAnalytes, selectedCal])
 
   // Switch analyte tab — also swap displayed calibrations for blends
   const handleAnalyteChange = useCallback((label: string) => {
