@@ -111,10 +111,25 @@ export function AnalysisResults({ result, chromatograms, hideTrace }: AnalysisRe
               )}
             </div>
             {result.identity_rt_delta != null ? (
-              <p className="mt-1 text-xs text-muted-foreground">
-                RT delta: {result.identity_rt_delta.toFixed(4)} min | Peptide:{' '}
-                {result.peptide_abbreviation}
-              </p>
+              <div className="mt-1 space-y-0.5">
+                <p className="text-xs text-muted-foreground">
+                  RT delta: {result.identity_rt_delta.toFixed(4)} min
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {result.identity_reference_source === 'standard_injection' ? (
+                    <>
+                      Ref: Standard injection
+                      {result.identity_reference_source_id && (
+                        <span className="font-mono ml-1">({result.identity_reference_source_id})</span>
+                      )}
+                    </>
+                  ) : (
+                    <>Ref: Calibration curve</>
+                  )}
+                  {' | '}
+                  {result.peptide_abbreviation}
+                </p>
+              </div>
             ) : result.identity_conforms == null && (
               <button
                 type="button"
