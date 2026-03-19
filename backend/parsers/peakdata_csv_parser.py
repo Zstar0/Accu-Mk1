@@ -38,10 +38,21 @@ class InjectionData:
 
 
 @dataclass
+class StandardInjection:
+    """Parsed standard injection reference data."""
+    analyte_label: str        # e.g. "BPC157", "GHK", "TB17-23"
+    main_peak_rt: float       # RT of highest Area% peak
+    main_peak_area_pct: float # Area% of the main peak
+    source_sample_id: str     # e.g. "P-0111" from "Sample name:" metadata
+    filename: str             # original filename for audit
+
+
+@dataclass
 class HPLCParseResult:
     """Result of parsing a set of HPLC PeakData files."""
     injections: list[InjectionData]
     errors: list[str] = field(default_factory=list)
+    standard_injections: list[StandardInjection] = field(default_factory=list)
 
 
 def _extract_injection_info(filename: str) -> tuple[str, str]:
@@ -246,6 +257,93 @@ def parse_peakdata_csv(filename: str, content: str) -> InjectionData:
     )
 
 
+def _is_standard_injection(filename: str) -> bool:
+    """Return True if the filename indicates a standard injection (_std_ pattern)."""
+    return '_std_' in filename.lower()
+
+
+def _extract_standard_info(filename: str) -> tuple[str, str]:
+    """
+    Extract analyte label from a standard injection filename.
+
+    The analyte label is the part between '_std_' and '_PeakData' (case-insensitive).
+
+    Examples:
+        'PB-0065_Inj_1_std_BPC157_PeakData.csv' -> ('BPC157', '')
+        'PB-0065_Inj_1_std_GHK_PeakData.csv'    -> ('GHK', '')
+        'PB-0065_Inj_1_std_TB17-23_PeakData.csv' -> ('TB17-23', '')
+
+    Returns:
+        (analyte_label, '') — second element reserved for future use.
+    """
+    name = filename.rsplit('.', 1)[0]
+    lower = name.lower()
+    std_idx = lower.find('_std_')
+    if std_idx < 0:
+        return name, ""
+
+    after_std = name[std_idx + 5:]  # skip "_std_"
+    # Remove trailing "_PeakData" (case-insensitive)
+    pd_idx = after_std.lower().find('_peakdata')
+    if pd_idx >= 0:
+        after_std = after_std[:pd_idx]
+
+    return after_std, ""
+
+
+def _extract_source_sample_id(content: str) -> str:
+    """
+    Extract source sample ID from the metadata lines of a PeakData CSV.
+
+    Looks for a line starting with 'Sample name:' and strips the injection
+    suffix to return just the sample ID.
+
+    Example: 'Sample name:,P-0111_Inj_1' -> 'P-0111'
+    Returns empty string if not found.
+    """
+    for line in content.split('\n'):
+        stripped = line.strip()
+        if stripped.lower().startswith('sample name:'):
+            parts = stripped.split(',', 1)
+            if len(parts) < 2:
+                return ""
+            raw = parts[1].strip()
+            # Strip injection suffix: everything from first "_Inj_" onwards
+            inj_idx = raw.lower().find('_inj_')
+            if inj_idx >= 0:
+                return raw[:inj_idx]
+            return raw
+    return ""
+
+
+def parse_standard_injection(filename: str, content: str) -> StandardInjection:
+    """
+    Parse a standard injection PeakData CSV file.
+
+    Reuses parse_peakdata_csv to handle the identical CSV format, then
+    extracts the analyte label and source sample ID from filename/metadata.
+    """
+    injection = parse_peakdata_csv(filename, content)
+
+    main_peak_rt = 0.0
+    main_peak_area_pct = 0.0
+    if injection.main_peak_index >= 0:
+        peak = injection.peaks[injection.main_peak_index]
+        main_peak_rt = peak.retention_time
+        main_peak_area_pct = peak.area_percent
+
+    analyte_label, _ = _extract_standard_info(filename)
+    source_sample_id = _extract_source_sample_id(content)
+
+    return StandardInjection(
+        analyte_label=analyte_label,
+        main_peak_rt=main_peak_rt,
+        main_peak_area_pct=main_peak_area_pct,
+        source_sample_id=source_sample_id,
+        filename=filename,
+    )
+
+
 def parse_hplc_files(files: list[dict]) -> HPLCParseResult:
     """
     Parse multiple HPLC PeakData files.
@@ -257,6 +355,7 @@ def parse_hplc_files(files: list[dict]) -> HPLCParseResult:
         HPLCParseResult with all injections and any errors
     """
     injections: list[InjectionData] = []
+    standard_injections: list[StandardInjection] = []
     errors: list[str] = []
 
     for file_info in files:
@@ -264,15 +363,23 @@ def parse_hplc_files(files: list[dict]) -> HPLCParseResult:
         content = file_info.get('content', '')
 
         try:
-            injection = parse_peakdata_csv(filename, content)
-            injections.append(injection)
+            if _is_standard_injection(filename):
+                std_inj = parse_standard_injection(filename, content)
+                standard_injections.append(std_inj)
+            else:
+                injection = parse_peakdata_csv(filename, content)
+                injections.append(injection)
         except ValueError as e:
             errors.append(str(e))
 
     # Sort injections by name for consistent ordering
     injections.sort(key=lambda inj: inj.injection_name)
 
-    return HPLCParseResult(injections=injections, errors=errors)
+    return HPLCParseResult(
+        injections=injections,
+        errors=errors,
+        standard_injections=standard_injections,
+    )
 
 
 def calculate_purity(injections: list[InjectionData]) -> dict:
