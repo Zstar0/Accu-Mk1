@@ -9,17 +9,17 @@ See: .planning/PROJECT.md (updated 2026-03-16)
 
 ## Current Position
 
-Phase: 11 of 12 (Backfill Existing Curves)
-Plan: 2 of ? in current phase (in progress)
+Phase: 12 of 12 (Chromatogram Overlay)
+Plan: 1 of ? in current phase (in progress)
 Status: In progress
-Last activity: 2026-03-18 — Completed 11-02-PLAN.md (CalibrationRow edit form + vendor/source_sample_id fields)
+Last activity: 2026-03-18 — Completed 12-01-PLAN.md (ChromatogramTrace style extension + extractStandardTrace helper)
 
-Progress: [████░░░░░░] 37%
+Progress: [█████░░░░░] 42%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 7 (v0.26.0)
+- Total plans completed: 8 (v0.26.0)
 - Average duration: ~4.7 min
 - Total execution time: ~0.5 hours
 
@@ -31,9 +31,10 @@ Progress: [████░░░░░░] 37%
 | 10 | 3/3 | ~14 min | ~4.7 min |
 | 10.5 | 2/2 | ~10 min | ~5 min |
 | 11 | 2/? | ~4 min | ~2 min |
+| 12 | 1/? | ~2 min | ~2 min |
 
 **Recent Trend:**
-- Last 5 plans: 10-03 (~5 min), 10.5-01 (~5 min), 10.5-02 (~5 min), 11-01 (~2 min), 11-02 (~2 min)
+- Last 5 plans: 10.5-01 (~5 min), 10.5-02 (~5 min), 11-01 (~2 min), 11-02 (~2 min), 12-01 (~2 min)
 - Trend: stable/fast
 
 ## Accumulated Context
@@ -69,6 +70,10 @@ Progress: [████░░░░░░] 37%
 - Only fetch chromatogram when source_sample_id actually changes (skip no-op updates on repeated PATCHes)
 - vendor displayed below stats grid in view mode (not inline in header) — consistent with notes pattern, header already crowded
 - source_sample_id already rendered in header row Sample field — Task 3 only added vendor conditional block, no duplication
+- ChromatogramTrace optional style field: dashed traces get strokeWidth 1 vs 1.5 for visual hierarchy; strokeDasharray "6 3"
+- extractStandardTrace picks highest concentration key for multi-conc calibration data (tallest peaks = best alignment reference)
+- extractStandardTrace returns null (not throws) for empty/invalid chromatogram_data — callers skip cleanly
+- Style hardcoded in extractStandardTrace (dashed + 0.4 opacity) — visual hierarchy enforced at extraction point, not left to callers
 
 ### Key Source Files
 
@@ -82,6 +87,7 @@ Progress: [████░░░░░░] 37%
 - `src/components/hplc/CreateAnalysis.tsx` — Wizard step routing (renderStep + navigation)
 - `src/store/wizard-store.ts` — Wizard state, step builders, unlock/complete logic
 - `src/lib/api.ts` — All TypeScript types and API functions
+- `src/components/hplc/ChromatogramChart.tsx` — ChromatogramTrace interface, downsampleLTTB, parseChromatogramCsv, extractStandardTrace, ChromatogramChart
 
 ### Roadmap Evolution
 
@@ -98,5 +104,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-03-18
-Stopped at: Completed 11-02-PLAN.md (phase 11 in progress — plan 2 done)
+Stopped at: Completed 12-01-PLAN.md (phase 12 started — plan 1 done)
 Resume file: None
