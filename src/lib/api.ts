@@ -2137,6 +2137,9 @@ export interface HPLCAnalyzeRequest {
   run_group_id?: string
   // Phase 13: standard injection RT lookup for same-method identity check
   standard_injection_rts?: Record<string, { rt: number; source_sample_id: string }>
+  // Phase 13.5: Audit trail
+  debug_log?: { level: string; msg: string }[]
+  source_files?: { filename: string; content: string; sha256: string }[]
 }
 
 export interface HPLCAnalysisResult {
@@ -2165,6 +2168,8 @@ export interface HPLCAnalysisResult {
   // Phase 13: identity reference source
   identity_reference_source: string | null
   identity_reference_source_id: string | null
+  // Phase 13.5: Audit trail
+  debug_log: { level: string; msg: string }[] | null
 }
 
 export async function runHPLCAnalysis(
@@ -2185,6 +2190,17 @@ export async function runHPLCAnalysis(
     console.error('HPLC analysis error:', error)
     throw error
   }
+}
+
+/**
+ * Compute SHA256 hex digest of a string using Web Crypto API.
+ */
+export async function sha256Hex(text: string): Promise<string> {
+  const data = new TextEncoder().encode(text)
+  const hash = await crypto.subtle.digest('SHA-256', data)
+  return Array.from(new Uint8Array(hash))
+    .map(b => b.toString(16).padStart(2, '0'))
+    .join('')
 }
 
 /**
