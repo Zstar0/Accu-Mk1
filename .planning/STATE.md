@@ -10,11 +10,11 @@ See: .planning/PROJECT.md (updated 2026-03-16)
 ## Current Position
 
 Phase: 13.5 of 13.5 (HPLC Audit Trail + Debug Persistence)
-Plan: 2 of ? in current phase (In progress)
-Status: In progress
-Last activity: 2026-03-19 — Completed 13.5-02-PLAN.md (buildDebugLines() warning lines for 5 silent fallback categories)
+Plan: 3 of 3 in current phase (Phase complete)
+Status: Phase complete
+Last activity: 2026-03-20 — Completed 13.5-03-PLAN.md (frontend audit trail wiring: source files + SHA256 + debug log persistence)
 
-Progress: [██████████░] phase 13.5 in progress
+Progress: [███████████] phase 13.5 complete
 
 ## Performance Metrics
 
@@ -33,6 +33,7 @@ Progress: [██████████░] phase 13.5 in progress
 | 11 | 2/? | ~4 min | ~2 min |
 | 12 | 2/2 | ~5 min | ~2.5 min |
 | 13 | 3/? | ~14 min | ~4.7 min |
+| 13.5 | 3/3 | ~15 min | ~5 min |
 
 **Recent Trend:**
 - Last 5 plans: 12-02 (~3 min), 13-01 (~6 min), 13-02 (~3 min), 13-03 (~5 min)
@@ -88,6 +89,10 @@ Progress: [██████████░] phase 13.5 in progress
 - Chromatogram availability debug section not gated on isBlend — single-peptide preps also get the missing-chrom warning
 - Vial weight missing-component check only activates when vial_data is non-empty — broader "no per-vial data" warning covers the empty case
 - buildDebugLines() accepts optional parseError param; SharePoint download errors appear at top of debug console
+- debug_log built BEFORE analysis loop (preAnalysisDebugLog) — captures prep/parse/cal state, no PATCH endpoint needed
+- source_files includes full content + SHA256 — backend can verify integrity without re-fetching SharePoint
+- DB-reload rendering: savedResults[0].debug_log cast as DebugLine[] (level string values always valid from backend)
+- downloadedFilesRef useRef not useState — file archive doesn't need to trigger re-renders
 
 ### Key Source Files
 
@@ -119,6 +124,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-19
-Stopped at: Completed 13.5-02-PLAN.md (buildDebugLines() warning lines for 5 silent fallback categories)
+Last session: 2026-03-20
+Stopped at: Completed 13.5-03-PLAN.md (frontend audit trail wiring — phase 13.5 complete)
 Resume file: None
