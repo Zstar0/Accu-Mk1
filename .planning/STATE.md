@@ -9,12 +9,12 @@ See: .planning/PROJECT.md (updated 2026-03-16)
 
 ## Current Position
 
-Phase: 13 of 13 (Method-Aware Identity Check)
-Plan: 3 of ? in current phase (In progress)
+Phase: 13.5 of 13.5 (HPLC Audit Trail + Debug Persistence)
+Plan: 2 of ? in current phase (In progress)
 Status: In progress
-Last activity: 2026-03-19 — Completed 13-03-PLAN.md (TypeScript types + flyout wire-through + identity card reference source display)
+Last activity: 2026-03-19 — Completed 13.5-02-PLAN.md (buildDebugLines() warning lines for 5 silent fallback categories)
 
-Progress: [██████████░] phase 13 in progress
+Progress: [██████████░] phase 13.5 in progress
 
 ## Performance Metrics
 
@@ -114,6 +114,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-19
-Stopped at: Completed 13-03-PLAN.md (TypeScript types + flyout wire-through + identity card reference source display)
+Last session: 2026-03-20
+Stopped at: Completed 13.5-01-PLAN.md (debug_log column + source file archive in raw_data)
 Resume file: None
