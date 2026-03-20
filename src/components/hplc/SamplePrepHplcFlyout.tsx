@@ -122,6 +122,7 @@ function buildDebugLines({
   result,
   analyteResults,
   injections,
+  parseError,
 }: {
   prep: SamplePrep
   match: HplcScanMatch
@@ -137,9 +138,15 @@ function buildDebugLines({
   result: HPLCAnalysisResult | null
   analyteResults: Map<string, HPLCAnalysisResult>
   injections: HPLCInjection[]
+  parseError?: string | null
 }): DebugLine[] {
   const lines: DebugLine[] = []
   const push = (level: DebugLevel, msg: string) => lines.push({ level, msg })
+
+  // 5. SharePoint download errors
+  if (parseError) {
+    push('warn', `SharePoint download error: ${parseError}`)
+  }
 
   push('dim', '─── Sample Prep ───')
   push('info', `Sample ID: ${prep.senaite_sample_id ?? prep.sample_id}`)
@@ -198,6 +205,16 @@ function buildDebugLines({
       push('dim', '')
       push('warn', '─── Standard Injections: NONE FOUND ───')
     }
+
+    // 1. Warn for each blend component with no matching standard injection
+    for (const [label, comp] of labelToComponent.entries()) {
+      const hasStdInj = parseResult.standard_injections?.some(
+        si => si.analyte_label === label
+      )
+      if (!hasStdInj) {
+        push('warn', `No standard injection found for ${comp.abbreviation} (label: ${label}) — identity will use calibration curve RT`)
+      }
+    }
   }
 
   // Show detail for the active analyte (or single peptide)
@@ -222,6 +239,15 @@ function buildDebugLines({
         )
       })
     })
+  }
+
+  // 2. Missing chromatogram CSV files
+  push('dim', '')
+  push('dim', '─── Chromatogram Availability ───')
+  if (match.chrom_files.length === 0) {
+    push('warn', 'No chromatogram CSV files found in SharePoint folder')
+  } else {
+    push('info', `Chromatogram files: ${match.chrom_files.length}`)
   }
 
   push('dim', '')
@@ -268,6 +294,17 @@ function buildDebugLines({
       wt('  Dil vial empty', vd.dil_vial_empty_mg)
       wt('  Dil vial + diluent', vd.dil_vial_with_diluent_mg)
       wt('  Dil vial final', vd.dil_vial_final_mg)
+    }
+    // 4. Warn for blend components with no matching vial weight entry
+    if (labelToComponent.size > 0) {
+      for (const [label, comp] of labelToComponent.entries()) {
+        const compBrief = blendComponents.find(c => c.id === comp.id)
+        const vialNum = compBrief?.vial_number ?? 1
+        const hasVial = prep.vial_data.some(v => v.vial_number === vialNum)
+        if (!hasVial) {
+          push('warn', `No vial weight data for ${comp.abbreviation} (label: ${label}, expected vial ${vialNum})`)
+        }
+      }
     }
   } else {
     if (isBlend && (!prep.vial_data || prep.vial_data.length === 0)) {
@@ -381,6 +418,13 @@ function buildDebugLines({
       push('warn', `   ${ident.error}`)
     } else {
       push('formula-dim', `   No identity data`)
+    }
+
+    // 3. Identity reference source: warn if calibration curve fallback, confirm if standard injection
+    if (currentResult?.identity_reference_source === 'calibration_curve') {
+      push('warn', `Identity RT reference from calibration curve (no standard injection available)`)
+    } else if (currentResult?.identity_reference_source === 'standard_injection') {
+      push('success', `Identity RT reference from standard injection (${currentResult.identity_reference_source_id ?? 'unknown'})`)
     }
   }
 
@@ -1186,6 +1230,7 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
               result,
               analyteResults,
               injections,
+              parseError,
             })}
             onClose={() => setShowDebug(false)}
           />
