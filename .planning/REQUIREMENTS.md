@@ -62,6 +62,12 @@ Requirements for Standard Sample Preps & Calibration Curve Chromatograms milesto
 - [ ] **METH-03**: Identity check uses standard injection RT (same method) when available, falls back to calibration curve reference_rt when not
 - [ ] **METH-04**: Identity section displays which reference source was used (standard injection vs calibration curve) and the source sample ID
 
+### HPLC Audit Trail & Debug Persistence
+
+- [ ] **AUDT-01**: hplc_analyses stores debug_log (JSON array of {level, msg}) capturing the full processing context — renderable on DB reload
+- [ ] **AUDT-02**: hplc_analyses raw_data includes source file contents (peak data CSVs, standard injection CSVs, chromatogram CSVs) and SHA256 checksums for audit proof
+- [ ] **AUDT-03**: Debug panel shows visible warnings for missing standard injections, missing chromatograms, label matching failures, missing vial data, and SharePoint errors
+
 ### RT Check Chromatogram Comparison
 
 - [ ] **RTCK-01**: Identity section shows side-by-side chromatogram comparison — standard trace with peak RT annotation next to sample trace with peak RT annotation
@@ -125,6 +131,9 @@ Deferred to later milestones.
 | METH-02 | Phase 13 | Complete |
 | METH-03 | Phase 13 | Complete |
 | METH-04 | Phase 13 | Complete |
+| AUDT-01 | Phase 13.5 | Complete |
+| AUDT-02 | Phase 13.5 | Complete |
+| AUDT-03 | Phase 13.5 | Complete |
 | RTCK-01 | Phase 14 | Pending |
 | RTCK-02 | Phase 14 | Pending |
 | RTCK-03 | Phase 14 | Pending |

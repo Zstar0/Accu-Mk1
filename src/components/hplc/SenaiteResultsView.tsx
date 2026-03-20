@@ -7,7 +7,7 @@
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { ArrowLeft, FlaskConical, AlertTriangle, Zap, Check, X, Loader2 } from 'lucide-react'
+import { ArrowLeft, FlaskConical, AlertTriangle, Zap, Check, X, Loader2, CheckCircle2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
@@ -26,7 +26,7 @@ import { AnalysisTable, StatusBadge } from '@/components/senaite/AnalysisTable'
 // ── Auto-fill mapping ─────────────────────────────────────────────────────────
 
 /** States where we can write a result value. */
-const FILLABLE_STATES = new Set<string | null>(['unassigned', null])
+const FILLABLE_STATES = new Set<string | null>(['unassigned', 'assigned', null])
 
 interface AutoFillMapping {
   analysis: SenaiteAnalysis
@@ -324,6 +324,99 @@ export function SenaiteResultsView({ prep, results, onBack }: Props) {
           </Button>
         </div>
       </div>
+
+      {/* HPLC Results Summary */}
+      {results.length > 0 && (
+        <div className="px-6 pt-5 pb-4 border-b border-border/60">
+          <div className="rounded-lg border border-border bg-card p-4 space-y-3">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-semibold">HPLC Results Summary</h3>
+              <span className="text-xs text-muted-foreground">
+                {results.length} analyte{results.length !== 1 ? 's' : ''}
+              </span>
+            </div>
+
+            <div className="rounded-md border border-border overflow-hidden">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="bg-muted/50 border-b border-border">
+                    <th className="text-left px-3 py-2 font-medium text-muted-foreground">Analyte</th>
+                    <th className="text-right px-3 py-2 font-medium text-muted-foreground">Purity</th>
+                    <th className="text-right px-3 py-2 font-medium text-muted-foreground">Quantity</th>
+                    <th className="text-center px-3 py-2 font-medium text-muted-foreground">Identity</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {results.map((r, i) => (
+                    <tr key={i} className="border-b border-border/50 last:border-0">
+                      <td className="px-3 py-2 font-medium">
+                        {r.peptide_abbreviation ?? `Analyte ${i + 1}`}
+                      </td>
+                      <td className="px-3 py-2 text-right font-mono">
+                        {r.purity_percent != null ? `${r.purity_percent.toFixed(2)}%` : '—'}
+                      </td>
+                      <td className="px-3 py-2 text-right font-mono">
+                        {r.quantity_mg != null ? `${r.quantity_mg.toFixed(2)} mg` : '—'}
+                      </td>
+                      <td className="px-3 py-2 text-center">
+                        {r.identity_conforms === true ? (
+                          <span className="inline-flex items-center gap-1 text-xs font-medium text-emerald-600 dark:text-emerald-400">
+                            <CheckCircle2 size={12} />
+                            Conforms
+                          </span>
+                        ) : r.identity_conforms === false ? (
+                          <span className="inline-flex items-center gap-1 text-xs font-medium text-destructive">
+                            <AlertTriangle size={12} />
+                            Does Not Conform
+                          </span>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">—</span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {results.length > 1 && (() => {
+              const totalQty = results.reduce((sum, r) => sum + (r.quantity_mg ?? 0), 0)
+              const weightedPuritySum = results.reduce(
+                (sum, r) => sum + (r.quantity_mg ?? 0) * (r.purity_percent ?? 0), 0
+              )
+              const blendPurity = totalQty > 0 ? weightedPuritySum / totalQty : 0
+              const blendIdentity = results.every(r => r.identity_conforms === true)
+
+              return (
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between px-3 py-2 rounded-md bg-muted/30 border border-border/50">
+                    <span className="text-sm font-medium">Blend Purity</span>
+                    <span className="text-sm font-mono font-semibold">{blendPurity.toFixed(2)}%</span>
+                  </div>
+                  <div className="flex items-center justify-between px-3 py-2 rounded-md bg-muted/30 border border-border/50">
+                    <span className="text-sm font-medium">Peptide Total Quantity</span>
+                    <span className="text-sm font-mono font-semibold">{totalQty.toFixed(2)} mg</span>
+                  </div>
+                  <div className="flex items-center justify-between px-3 py-2 rounded-md bg-muted/30 border border-border/50">
+                    <span className="text-sm font-medium">Blend Identity</span>
+                    {blendIdentity ? (
+                      <span className="inline-flex items-center gap-1 text-sm font-medium text-emerald-600 dark:text-emerald-400">
+                        <CheckCircle2 size={14} />
+                        Conforms
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 text-sm font-medium text-destructive">
+                        <AlertTriangle size={14} />
+                        Does Not Conform
+                      </span>
+                    )}
+                  </div>
+                </div>
+              )
+            })()}
+          </div>
+        </div>
+      )}
 
       {/* Error */}
       {error && (

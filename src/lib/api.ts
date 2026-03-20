@@ -1829,6 +1829,7 @@ export async function updatePeptide(
     active: boolean
     method_ids: number[]
     prep_vial_count: number
+    hplc_aliases: string[] | null
     component_vial_assignments: Record<string, number>
   }>
 ): Promise<PeptideRecord> {
@@ -2790,6 +2791,7 @@ export interface HplcScanMatch {
   senaite_sample_id: string
   folder_name: string
   folder_id: string
+  folder_web_url?: string | null
   peak_files: SharePointItem[]
   chrom_files: SharePointItem[]
 }

@@ -1541,6 +1541,7 @@ class PeptideUpdate(BaseModel):
     abbreviation: Optional[str] = None
     active: Optional[bool] = None
     prep_vial_count: Optional[int] = None
+    hplc_aliases: Optional[list[str]] = None  # Alternate names used in HPLC filenames
     method_ids: Optional[list[int]] = None  # Set all method assignments (one per instrument)
     analytes: Optional[list[AnalyteInput]] = None
     component_ids: Optional[list[int]] = None
@@ -7456,6 +7457,7 @@ async def scan_sample_preps_hplc(_current_user=Depends(get_current_user)):
                         "senaite_sample_id": sid,
                         "folder_name": folder["name"],
                         "folder_id": folder.get("id"),
+                        "folder_web_url": folder.get("web_url"),
                         "peak_files": peak_files,
                         "chrom_files": chrom_files,
                     }

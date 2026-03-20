@@ -206,6 +206,94 @@ function PrepVialsSection({ peptide, onUpdated }: { peptide: PeptideRecord; onUp
 }
 
 
+function HplcAliasesSection({ peptide, onUpdated }: { peptide: PeptideRecord; onUpdated: () => void }) {
+  const [aliases, setAliases] = useState<string[]>(peptide.hplc_aliases ?? [])
+  const [newAlias, setNewAlias] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    setAliases(peptide.hplc_aliases ?? [])
+  }, [peptide.id, peptide.hplc_aliases])
+
+  const save = async (updated: string[]) => {
+    setSaving(true)
+    try {
+      await updatePeptide(peptide.id, { hplc_aliases: updated.length > 0 ? updated : null })
+      setAliases(updated)
+      onUpdated()
+    } catch {
+      // revert
+      setAliases(peptide.hplc_aliases ?? [])
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const addAlias = () => {
+    const trimmed = newAlias.trim()
+    if (!trimmed || aliases.includes(trimmed)) return
+    const updated = [...aliases, trimmed]
+    setNewAlias('')
+    save(updated)
+  }
+
+  const removeAlias = (alias: string) => {
+    save(aliases.filter(a => a !== alias))
+  }
+
+  return (
+    <div className="rounded-lg border border-zinc-800 p-4 space-y-3">
+      <h4 className="text-sm font-semibold text-muted-foreground">HPLC File Aliases</h4>
+      <p className="text-xs text-muted-foreground">
+        Alternate names used in HPLC chromatogram filenames to match this peptide.
+        e.g., &quot;TB17-23&quot; for &quot;TB500 (17-23 FRAGMENT)&quot;
+      </p>
+
+      {aliases.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {aliases.map(alias => (
+            <span
+              key={alias}
+              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-zinc-800 border border-zinc-700 text-xs font-mono"
+            >
+              {alias}
+              <button
+                type="button"
+                onClick={() => removeAlias(alias)}
+                disabled={saving}
+                className="text-muted-foreground hover:text-destructive transition-colors ml-0.5"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+
+      <div className="flex gap-2">
+        <Input
+          value={newAlias}
+          onChange={e => setNewAlias(e.target.value)}
+          onKeyDown={e => e.key === 'Enter' && addAlias()}
+          placeholder="Add alias (e.g., TB17-23)"
+          className="h-8 text-sm font-mono flex-1"
+          disabled={saving}
+        />
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={addAlias}
+          disabled={saving || !newAlias.trim()}
+          className="h-8 shrink-0"
+        >
+          Add
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+
 export function PeptideConfig() {
   const [peptides, setPeptides] = useState<PeptideRecord[]>([])
   const [loading, setLoading] = useState(true)
@@ -218,6 +306,9 @@ export function PeptideConfig() {
   const [allMethods, setAllMethods] = useState<HplcMethod[]>([])
   const [allInstruments, setAllInstruments] = useState<Instrument[]>([])
   const [savingMethodId, setSavingMethodId] = useState(false)
+
+  // Flyout section tab — top-level switch between instrument view and aliases
+  const [flyoutSection, setFlyoutSection] = useState<'instruments' | 'aliases'>('instruments')
 
   // Flyout instrument tab — controls which instrument's curves + methods are shown
   const [flyoutInstrument, setFlyoutInstrument] = useState<string>('all')
@@ -1034,46 +1125,93 @@ export function PeptideConfig() {
                     <X className="h-4 w-4" />
                   </button>
                 </div>
-                {/* Instrument tabs */}
+                {/* Section tabs: Instruments | File Aliases */}
                 <div className="flex items-center gap-0 px-5 pb-0">
-                  <span className="text-xs font-medium text-muted-foreground mr-3 uppercase tracking-wider">Instrument</span>
-                  {allInstruments.map(inst => {
-                    const isActive = flyoutInstrument === String(inst.id)
-                    return (
-                      <button
-                        key={inst.id}
-                        type="button"
-                        onClick={() => setFlyoutInstrument(String(inst.id))}
-                        className={`relative px-4 py-2 text-sm font-medium transition-colors ${
-                          isActive
-                            ? 'text-foreground'
-                            : 'text-muted-foreground hover:text-foreground/80'
-                        }`}
-                      >
-                        {inst.name}
-                        {isActive && (
-                          <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary rounded-t" />
-                        )}
-                      </button>
-                    )
-                  })}
                   <button
                     type="button"
-                    onClick={() => setFlyoutInstrument('unknown')}
+                    onClick={() => setFlyoutSection('instruments')}
                     className={`relative px-4 py-2 text-sm font-medium transition-colors ${
-                      flyoutInstrument === 'unknown'
-                        ? 'text-amber-400'
+                      flyoutSection === 'instruments'
+                        ? 'text-foreground'
                         : 'text-muted-foreground hover:text-foreground/80'
                     }`}
                   >
-                    Unknown
-                    {flyoutInstrument === 'unknown' && (
-                      <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-amber-400 rounded-t" />
+                    Instruments
+                    {flyoutSection === 'instruments' && (
+                      <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary rounded-t" />
                     )}
                   </button>
+                  <button
+                    type="button"
+                    onClick={() => setFlyoutSection('aliases')}
+                    className={`relative px-4 py-2 text-sm font-medium transition-colors ${
+                      flyoutSection === 'aliases'
+                        ? 'text-foreground'
+                        : 'text-muted-foreground hover:text-foreground/80'
+                    }`}
+                  >
+                    File Aliases
+                    {selectedPeptide.hplc_aliases && selectedPeptide.hplc_aliases.length > 0 && (
+                      <span className="ml-1.5 inline-flex items-center justify-center h-4 min-w-4 px-1 rounded-full bg-primary/20 text-[10px] font-semibold text-primary">
+                        {selectedPeptide.hplc_aliases.length}
+                      </span>
+                    )}
+                    {flyoutSection === 'aliases' && (
+                      <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary rounded-t" />
+                    )}
+                  </button>
+
+                  {/* Instrument sub-tabs — only visible when instruments section active */}
+                  {flyoutSection === 'instruments' && (
+                    <>
+                      <span className="text-border mx-2">|</span>
+                      {allInstruments.map(inst => {
+                        const isActive = flyoutInstrument === String(inst.id)
+                        return (
+                          <button
+                            key={inst.id}
+                            type="button"
+                            onClick={() => setFlyoutInstrument(String(inst.id))}
+                            className={`relative px-3 py-2 text-xs font-medium transition-colors ${
+                              isActive
+                                ? 'text-foreground'
+                                : 'text-muted-foreground hover:text-foreground/80'
+                            }`}
+                          >
+                            {inst.name}
+                            {isActive && (
+                              <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary/60 rounded-t" />
+                            )}
+                          </button>
+                        )
+                      })}
+                      <button
+                        type="button"
+                        onClick={() => setFlyoutInstrument('unknown')}
+                        className={`relative px-3 py-2 text-xs font-medium transition-colors ${
+                          flyoutInstrument === 'unknown'
+                            ? 'text-amber-400'
+                            : 'text-muted-foreground hover:text-foreground/80'
+                        }`}
+                      >
+                        Unknown
+                        {flyoutInstrument === 'unknown' && (
+                          <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-amber-400 rounded-t" />
+                        )}
+                      </button>
+                    </>
+                  )}
                 </div>
               </div>
-              {/* Panel content — two-column layout */}
+              {/* Panel content */}
+              {flyoutSection === 'aliases' ? (
+                <div className="p-5">
+                  <HplcAliasesSection
+                    peptide={selectedPeptide}
+                    onUpdated={loadPeptides}
+                  />
+                </div>
+              ) : (
               <div className="p-5 flex gap-6">
                 {/* Left column: Methods */}
                 <div className="w-96 shrink-0">
@@ -1195,6 +1333,7 @@ export function PeptideConfig() {
                       onUpdated={loadPeptides}
                     />
                   )}
+
                 </div>
 
                 {/* Right column: Calibration Curves */}
@@ -1218,6 +1357,7 @@ export function PeptideConfig() {
                   )}
                 </div>
               </div>
+              )}
             </div>
           </>
         )}

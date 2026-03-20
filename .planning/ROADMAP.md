@@ -163,6 +163,28 @@ Plans:
 
 ---
 
+### Phase 13.5: HPLC Audit Trail & Debug Persistence (INSERTED)
+
+**Goal:** Persist the full debug log and source file contents for every HPLC analysis run so results are reproducible, auditable, and debuggable without re-scanning SharePoint. Surface warnings visibly in the debug panel for silent fallbacks and missing data.
+
+**Depends on:** Phase 13
+
+**Requirements:** AUDT-01, AUDT-02, AUDT-03
+
+**Success Criteria** (what must be TRUE when this phase completes):
+1. Each hplc_analyses row stores the full debug log (array of level/msg objects) in a `debug_log` JSON field, renderable on DB reload
+2. The `raw_data` JSON field includes the raw CSV content and SHA256 checksums for all source files used (peak data, standard injections, chromatograms)
+3. The debug panel shows visible warnings for: missing standard injections (fallback to cal curve), missing chromatogram traces, label matching failures, missing vial weight data, and SharePoint errors
+
+**Plans:** TBD
+
+Plans:
+- [x] 13.5-01-PLAN.md — Backend: debug_log column + source_files in raw_data
+- [x] 13.5-02-PLAN.md — Frontend: warning lines in debug panel for all silent fallbacks
+- [x] 13.5-03-PLAN.md — Frontend: SHA256 util, file retention, pass-through, DB reload rendering
+
+---
+
 ### Phase 14: RT Check Chromatogram Comparison
 
 **Goal:** Provide a side-by-side chromatogram comparison view in the HPLC flyout for identity verification — showing the standard's chromatogram next to the sample's chromatogram with peak annotations, matching how the lab techs currently compare RT Check PDFs.
@@ -196,4 +218,5 @@ Plans:
 | 11. Backfill Existing Curves | v0.26.0 | 2/2 | Complete | 2026-03-18 |
 | 12. Chromatogram Overlay | v0.26.0 | 2/2 | Complete | 2026-03-18 |
 | 13. Same-Method Identity Check | v0.26.0 | 3/3 | Complete | 2026-03-19 |
+| 13.5 HPLC Audit Trail & Debug | v0.26.0 | 3/3 | Complete | 2026-03-19 |
 | 14. RT Check Chromatogram Comparison | v0.26.0 | 0/? | Not started | - |

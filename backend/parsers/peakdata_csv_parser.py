@@ -258,8 +258,34 @@ def parse_peakdata_csv(filename: str, content: str) -> InjectionData:
 
 
 def _is_standard_injection(filename: str) -> bool:
-    """Return True if the filename indicates a standard injection (_std_ pattern)."""
-    return '_std_' in filename.lower()
+    """
+    Return True if the filename indicates a standard injection reference file.
+
+    Standard injection files: PB-0065_Inj_1_std_BPC157_PeakData.csv
+      Pattern: _Inj_N_std_{AnalyteName}_PeakData
+
+    NOT standard injections (standard prep concentration files):
+      P-0136_Std_1_PeakData.csv, P-0136_Std_1000_PeakData.csv
+      Pattern: _Std_{Number}_PeakData (concentration level, not injection reference)
+    """
+    import re
+    lower = filename.lower()
+    # Must have _std_ somewhere in the filename
+    if '_std_' not in lower:
+        return False
+    # If preceded by _inj_N → definitely a standard injection reference
+    if re.search(r'_inj_\d+_std_', lower):
+        return True
+    # Check what follows _std_: if it's a number followed by _ or _PeakData, it's a concentration level
+    m = re.search(r'_std_([^_]+)_', lower)
+    if m:
+        label_after_std = m.group(1)
+        # Purely numeric = concentration level (Std_1000, Std_250), not a standard injection
+        if label_after_std.isdigit():
+            return False
+        # Non-numeric = analyte name (std_BPC157, std_GHK), IS a standard injection
+        return True
+    return False
 
 
 def _extract_standard_info(filename: str) -> tuple[str, str]:

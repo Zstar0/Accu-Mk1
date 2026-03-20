@@ -99,11 +99,12 @@ const ROW_STATUS_STYLE: Record<string, string> = {
 }
 
 /** States where an analysis result cell is editable. */
-const EDITABLE_STATES = new Set<string | null>(['unassigned', null])
+const EDITABLE_STATES = new Set<string | null>(['unassigned', 'assigned', null])
 
 /** Maps review_state to valid transition action names. */
 const ALLOWED_TRANSITIONS: Record<string, readonly string[]> = {
   unassigned: ['submit', 'reject'],
+  assigned: ['submit', 'reject'],
   to_be_verified: ['retest', 'verify', 'retract', 'reject'],
 }
 

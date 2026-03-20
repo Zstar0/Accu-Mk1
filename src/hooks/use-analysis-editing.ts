@@ -24,7 +24,7 @@ export interface UseAnalysisEditingReturn {
 }
 
 /** States that indicate an analysis is editable (result can be set). */
-const EDITABLE_STATES = new Set<string | null>(['unassigned', null])
+const EDITABLE_STATES = new Set<string | null>(['unassigned', 'assigned', null])
 
 function isEditable(a: SenaiteAnalysis): boolean {
   return !!a.uid && EDITABLE_STATES.has(a.review_state)

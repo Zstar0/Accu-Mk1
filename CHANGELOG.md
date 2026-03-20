@@ -1,5 +1,45 @@
 # Changelog
 
+## v0.26.1 — 2026-03-20
+
+### HPLC Audit Trail & Debug Persistence
+
+- **Debug log persisted to DB** — `debug_log` JSON column on `hplc_analyses` captures the full processing context (sample prep, parse results, calibration selection, warnings) for every analysis run
+- **Source file archival** — raw CSV contents + SHA256 checksums stored in `raw_data` for audit proof and offline reproduction
+- **Debug panel warnings** — visible amber warnings for missing standard injections, unmatched analytes, missing chromatograms, missing vial data, identity fallbacks, and SharePoint errors
+- **Warnings banner on flyout** — critical issues surfaced prominently above analysis results with action links
+- **Add Alias modal** — unmatched analyte warnings have an "Add as alias" button that opens a modal with peptide dropdown to save the alias immediately
+- **SharePoint folder links** — missing data warnings link directly to the SharePoint .rslt folder for investigation
+- **`sha256Hex` utility** — browser-native Web Crypto SHA256 for file checksums (no dependencies)
+
+### SENAITE Results Summary
+
+- **Results summary card** — SENAITE submission page shows per-analyte purity, quantity, and identity at a glance before submitting
+- **Blend purity calculation** — mass-weighted average of component purities: `Σ(qty × purity) / Σ(qty)`
+- **Blend identity** — all analytes must conform for blend to conform
+- **Peptide Total Quantity** — sum of all analyte quantities
+
+### HPLC File Aliases
+
+- **Aliases tab on peptide flyout** — new "File Aliases" tab alongside Instruments for managing alternate HPLC filename labels per peptide
+- **Add/remove alias tags** — type an alias, press Enter, changes save immediately to DB
+- **Live alias enrichment** — flyout loads current aliases from live peptide records, not stale `components_json` snapshots
+- **`hplc_aliases` on PeptideUpdate** — backend accepts alias updates via PUT endpoint
+
+### Fixes
+
+- **Standard prep file detection** — `_is_standard_injection()` now distinguishes standard injection refs (`_Inj_1_std_BPC157_`) from standard prep concentration files (`_Std_1000_`) by checking if the part after `_std_` is numeric
+- **DB reload tab stability** — saved results labels persist during background SharePoint load instead of flickering to filename labels
+- **DB reload latest run only** — filters to most recent `run_group_id` instead of showing all historical runs as duplicate tabs
+- **DB reload active analyte** — `setActiveAnalyte` called on DB load so blend tabs are interactive immediately
+- **Warnings gated on fresh runs** — parse-dependent warnings (unmatched analytes, missing std injections) only show during fresh analysis, not when loading saved results from DB
+- **Per-vial weight routing** — blend analysis uses correct vial weights from `vial_data` per component
+- **SharePoint search LIMS-first** — `search_sample_folder` checks LIMS CSV folder before Peptides/Raw Data tree
+- **Blend chromatogram filtering** — alias-aware trace matching for filenames like `_BPC_TB17-23.dx_DAD1A.CSV`
+- **Chromatogram auto-fetch multi-concentration** — backfill stores all DAD1A files keyed by concentration, not just the first one
+
+---
+
 ## v0.26.0 — 2026-03-19
 
 ### Standard Sample Preps & Calibration Curves

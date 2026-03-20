@@ -17,6 +17,19 @@ import {
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Spinner } from '@/components/ui/spinner'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { cn } from '@/lib/utils'
 import {
   CheckCircle2,
@@ -24,6 +37,8 @@ import {
   AlertTriangle,
   ArrowRight,
   Terminal,
+  ExternalLink,
+  Plus,
   X,
 } from 'lucide-react'
 import {
@@ -42,6 +57,9 @@ import {
   type HPLCInjection,
   type HPLCAnalysisResult,
   type ComponentBrief,
+  type PeptideRecord,
+  getPeptides,
+  updatePeptide,
 } from '@/lib/api'
 import { PeakTable } from '@/components/hplc/PeakTable'
 import {
@@ -595,6 +613,12 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
   // Debug console overlay
   const [showDebug, setShowDebug] = useState(false)
 
+  // Add-alias modal state
+  const [aliasModalLabel, setAliasModalLabel] = useState<string | null>(null)
+  const [aliasModalPeptideId, setAliasModalPeptideId] = useState<string>('')
+  const [aliasModalPeptides, setAliasModalPeptides] = useState<PeptideRecord[]>([])
+  const [aliasModalSaving, setAliasModalSaving] = useState(false)
+
   // Saved results from DB (loaded on flyout open)
   const [savedResults, setSavedResults] = useState<HPLCAnalysisResult[] | null>(null)
   const [loadingSaved, setLoadingSaved] = useState(false)
@@ -736,20 +760,45 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
   // ── Blend detection ────────────────────────────────────────────────────────
 
   const isBlend = prep.is_blend && (prep.components_json?.length ?? 0) > 0
-  const blendComponents = useMemo(
-    () => prep.components_json ?? [],
-    [prep.components_json],
+
+  // Blend components — enriched with live hplc_aliases from peptide records
+  const [liveAliasMap, setLiveAliasMap] = useState<Map<number, string[]>>(new Map())
+  useEffect(() => {
+    if (!isBlend || !open) return
+    // Fetch live peptide data to get current aliases (components_json may be stale)
+    getPeptides().then(peps => {
+      const map = new Map<number, string[]>()
+      for (const p of peps) {
+        if (p.hplc_aliases?.length) map.set(p.id, p.hplc_aliases)
+      }
+      setLiveAliasMap(map)
+    }).catch(() => { /* non-critical */ })
+  }, [isBlend, open])
+
+  const blendComponents = useMemo(() => {
+    const comps = prep.components_json ?? []
+    // Merge live aliases into components (covers stale components_json)
+    if (liveAliasMap.size === 0) return comps
+    return comps.map(c => ({
+      ...c,
+      hplc_aliases: liveAliasMap.get(c.id) ?? c.hplc_aliases ?? null,
+    }))
+  }, [prep.components_json, liveAliasMap],
   )
 
   // Parsed HPLC labels (short names from filenames, e.g. "BPC", "TB500(17-23)")
   // When loading from DB (no parseResult), derive labels from saved results abbreviations
+  // When saved results exist, prefer DB labels even after SharePoint loads — they match
+  // the analyteResults map keys. Only switch to parseResult labels when no saved results
+  // (fresh run or after Re-run clears savedResults).
   const parsedLabels = useMemo(() => {
-    if (parseResult?.detected_peptides?.length) return parseResult.detected_peptides
-    // Fallback: use saved results' peptide_abbreviation as tab labels (deduplicated)
+    // If we have saved results, use their abbreviations as tab labels (stable, matches map keys)
     if (savedResults && savedResults.length > 0) {
       const unique = [...new Set(savedResults.map(s => s.peptide_abbreviation).filter(Boolean))]
       if (unique.length > 0) return unique as string[]
     }
+    // Otherwise use parseResult labels (fresh run from SharePoint)
+    if (parseResult?.detected_peptides?.length) return parseResult.detected_peptides
     return []
   }, [parseResult?.detected_peptides, savedResults])
 
@@ -1252,9 +1301,7 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
         {showDebug && (
           <DebugConsole
             lines={
-              // Prefer persisted debug log from DB (stable, captured at analysis time)
-              (savedResults?.[0]?.debug_log as DebugLine[] | undefined)
-              ?? buildDebugLines({
+              buildDebugLines({
                 prep,
                 match,
                 parseResult,
@@ -1339,6 +1386,115 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
                     </Button>
                   </div>
                 )}
+
+                {/* Processing warnings banner — surface critical issues with action links */}
+                {(() => {
+                  const spUrl = match.folder_web_url ?? null
+                  const warns: { msg: string; action?: React.ReactNode }[] = []
+
+                  // Unmatched analytes — offer to add alias (only on fresh runs, not DB reload)
+                  if (isBlend && !savedResults && parseResult?.detected_peptides) {
+                    for (const label of parseResult.detected_peptides) {
+                      if (!labelToComponent.has(label)) {
+                        warns.push({
+                          msg: `Analyte "${label}" could not be matched to a blend component — skipped`,
+                          action: (
+                            <button
+                              type="button"
+                              className="inline-flex items-center gap-1 text-xs font-medium text-amber-300 hover:text-amber-200 underline underline-offset-2"
+                              onClick={async () => {
+                                setAliasModalLabel(label)
+                                setAliasModalPeptideId('')
+                                setAliasModalSaving(false)
+                                try {
+                                  const peps = await getPeptides()
+                                  setAliasModalPeptides(peps.filter(p => !p.is_blend))
+                                } catch { /* non-critical */ }
+                              }}
+                            >
+                              <Plus size={11} />
+                              Add &quot;{label}&quot; as alias
+                            </button>
+                          ),
+                        })
+                      }
+                    }
+                  }
+
+                  // Missing standard injections (fresh runs only)
+                  if (isBlend && !savedResults && parseResult && labelToComponent.size > 0) {
+                    const stdLabels = new Set(parseResult.standard_injections?.map(si => si.analyte_label) ?? [])
+                    if (stdLabels.size === 0 && labelToComponent.size > 0) {
+                      warns.push({
+                        msg: 'No standard injection files found — identity uses calibration curve RT (may be from a different method)',
+                        action: spUrl ? (
+                          <a href={spUrl} target="_blank" rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 text-xs font-medium text-amber-300 hover:text-amber-200 underline underline-offset-2">
+                            <ExternalLink size={11} />
+                            Open SharePoint folder
+                          </a>
+                        ) : undefined,
+                      })
+                    } else {
+                      for (const [label, comp] of labelToComponent.entries()) {
+                        if (!stdLabels.has(label)) {
+                          warns.push({
+                            msg: `No standard injection for ${comp.abbreviation} — identity uses calibration curve RT`,
+                            action: spUrl ? (
+                              <a href={spUrl} target="_blank" rel="noopener noreferrer"
+                                className="inline-flex items-center gap-1 text-xs font-medium text-amber-300 hover:text-amber-200 underline underline-offset-2">
+                                <ExternalLink size={11} />
+                                Open folder
+                              </a>
+                            ) : undefined,
+                          })
+                        }
+                      }
+                    }
+                  }
+
+                  // Missing vial data
+                  if (isBlend && (!prep.vial_data || prep.vial_data.length === 0) && blendComponents.some(c => (c.vial_number ?? 1) > 1)) {
+                    warns.push({ msg: 'No per-vial weight data — using same weights for all analytes (quantities may be incorrect)' })
+                  }
+
+                  // Identity fallbacks
+                  if (result && analyteResults.size > 0) {
+                    for (const [, r] of analyteResults.entries()) {
+                      if (r.identity_reference_source === 'calibration_curve' && r.identity_conforms === false) {
+                        warns.push({
+                          msg: `${r.peptide_abbreviation} identity DOES NOT CONFORM — reference RT from calibration curve (different method?)`,
+                          action: spUrl ? (
+                            <a href={spUrl} target="_blank" rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1 text-xs font-medium text-amber-300 hover:text-amber-200 underline underline-offset-2">
+                              <ExternalLink size={11} />
+                              Check std injections in folder
+                            </a>
+                          ) : undefined,
+                        })
+                      }
+                    }
+                  }
+
+                  if (warns.length === 0) return null
+
+                  return (
+                    <div className="px-4 py-3 rounded-lg border border-amber-500/30 bg-amber-500/5 space-y-2">
+                      <div className="flex items-center gap-2">
+                        <AlertTriangle size={14} className="text-amber-500 shrink-0" />
+                        <p className="text-xs font-medium text-amber-700 dark:text-amber-400">
+                          {warns.length} warning{warns.length !== 1 ? 's' : ''}
+                        </p>
+                      </div>
+                      {warns.map((w, i) => (
+                        <div key={i} className="flex items-start justify-between gap-3 pl-5">
+                          <p className="text-xs text-amber-600 dark:text-amber-400/80">{w.msg}</p>
+                          {w.action && <div className="shrink-0">{w.action}</div>}
+                        </div>
+                      ))}
+                    </div>
+                  )
+                })()}
 
                 {/* Analysis results */}
                 {running && (
@@ -1585,6 +1741,71 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
           />
         ) : null}
       </SheetContent>
+
+      {/* Add Alias modal */}
+      <Dialog open={aliasModalLabel !== null} onOpenChange={v => { if (!v) setAliasModalLabel(null) }}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Add File Alias</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <p className="text-sm text-muted-foreground">
+              Add <span className="font-mono font-medium text-foreground">{aliasModalLabel}</span> as
+              an HPLC file alias so it matches during blend processing.
+            </p>
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">Select peptide</label>
+              <Select value={aliasModalPeptideId} onValueChange={setAliasModalPeptideId}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Choose a peptide..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {aliasModalPeptides.map(p => (
+                    <SelectItem key={p.id} value={String(p.id)}>
+                      {p.abbreviation}
+                      {p.hplc_aliases?.length ? (
+                        <span className="text-muted-foreground ml-2">
+                          ({p.hplc_aliases.join(', ')})
+                        </span>
+                      ) : null}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button variant="ghost" size="sm" onClick={() => setAliasModalLabel(null)}>
+                Cancel
+              </Button>
+              <Button
+                size="sm"
+                disabled={!aliasModalPeptideId || aliasModalSaving}
+                onClick={async () => {
+                  if (!aliasModalPeptideId || !aliasModalLabel) return
+                  setAliasModalSaving(true)
+                  try {
+                    const pep = aliasModalPeptides.find(p => String(p.id) === aliasModalPeptideId)
+                    const existing = pep?.hplc_aliases ?? []
+                    if (!existing.includes(aliasModalLabel)) {
+                      await updatePeptide(parseInt(aliasModalPeptideId, 10), {
+                        hplc_aliases: [...existing, aliasModalLabel],
+                      })
+                    }
+                    setAliasModalLabel(null)
+                  } catch (e) {
+                    console.error('Failed to add alias:', e)
+                  } finally {
+                    setAliasModalSaving(false)
+                  }
+                }}
+              >
+                {aliasModalSaving ? <Spinner className="size-3 mr-1" /> : <Plus size={14} className="mr-1" />}
+                Add Alias
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </Sheet>
   )
 }
