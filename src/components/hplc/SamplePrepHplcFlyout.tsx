@@ -34,6 +34,7 @@ import {
   getFolderChromFiles,
   getHPLCAnalysesBySamplePrep,
   updateSamplePrep,
+  sha256Hex,
   type SamplePrep,
   type HplcScanMatch,
   type CalibrationCurve,
@@ -556,6 +557,8 @@ interface Props {
 
 export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null)
+  // Phase 13.5: Archive downloaded file contents for audit trail
+  const downloadedFilesRef = useRef<{ filename: string; content: string }[]>([])
 
   // Preview
   const [loading, setLoading] = useState(false)
@@ -689,6 +692,9 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
       const allFiles = [...match.peak_files, ...chromItems]
       const ids = allFiles.map(f => f.id)
       const downloaded = await downloadSharePointFiles(ids)
+
+      // Phase 13.5: Archive all downloaded files for source-file audit trail
+      downloadedFilesRef.current = downloaded.map(d => ({ filename: d.filename, content: d.content }))
 
       const peakFileNames = new Set(match.peak_files.map(f => f.name))
       const peakFiles   = downloaded.filter(d => peakFileNames.has(d.filename))
@@ -890,6 +896,30 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
 
     const results = new Map<string, HPLCAnalysisResult>()
 
+    // Phase 13.5: Compute SHA256 checksums for source file audit trail
+    const sourceFiles = downloadedFilesRef.current.length > 0
+      ? await Promise.all(
+          downloadedFilesRef.current.map(async f => ({
+            filename: f.filename,
+            content: f.content,
+            sha256: await sha256Hex(f.content),
+          }))
+        )
+      : undefined
+
+    // Phase 13.5: Build pre-analysis debug log (captures prep, parse, calibration state
+    // before any results exist — this is exactly what you need for post-hoc debugging)
+    const preAnalysisDebugLog = buildDebugLines({
+      prep, match, parseResult, activeAnalyte: blendPeptides[0] ?? null,
+      isBlend, labelToComponent, blendComponents,
+      calibrations, selectedCal: calibrations.find(c => c.id === selectedCalId),
+      componentCals, componentSelectedCalIds,
+      result: null,
+      analyteResults: new Map(),
+      injections: parseResult.injections,
+      parseError,
+    })
+
     try {
       if (isBlend) {
         // Run analysis per component using parsed label → component mapping
@@ -932,6 +962,9 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
             run_group_id: runGroupId,
             // Phase 13: standard injection RTs for same-method identity check
             standard_injection_rts: stdInjRts,
+            // Phase 13.5: audit trail
+            debug_log: preAnalysisDebugLog,
+            source_files: sourceFiles,
           })
           results.set(label, res)
         }
@@ -957,6 +990,9 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
             run_group_id: runGroupId,
             // Phase 13: standard injection RTs for same-method identity check
             standard_injection_rts: stdInjRts,
+            // Phase 13.5: audit trail
+            debug_log: preAnalysisDebugLog,
+            source_files: sourceFiles,
           })
           results.set(label ?? '__single__', res)
         }
@@ -989,7 +1025,7 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
     } finally {
       setRunning(false)
     }
-  }, [parseResult, prep, selectedCalId, isBlend, hasMultipleAnalytes, blendPeptides, labelToComponent, blendComponents, componentSelectedCalIds, allBlendCalsReady, chromTraces, match.folder_name])
+  }, [parseResult, prep, selectedCalId, isBlend, hasMultipleAnalytes, blendPeptides, labelToComponent, blendComponents, componentSelectedCalIds, allBlendCalsReady, chromTraces, match, calibrations, componentCals, parseError])
 
   // Auto-run when peak data + calibration are both ready
   useEffect(() => {
@@ -1215,23 +1251,27 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
         {/* Debug console overlay */}
         {showDebug && (
           <DebugConsole
-            lines={buildDebugLines({
-              prep,
-              match,
-              parseResult,
-              activeAnalyte,
-              isBlend,
-              labelToComponent,
-              blendComponents,
-              calibrations,
-              selectedCal,
-              componentCals,
-              componentSelectedCalIds,
-              result,
-              analyteResults,
-              injections,
-              parseError,
-            })}
+            lines={
+              // Prefer persisted debug log from DB (stable, captured at analysis time)
+              (savedResults?.[0]?.debug_log as DebugLine[] | undefined)
+              ?? buildDebugLines({
+                prep,
+                match,
+                parseResult,
+                activeAnalyte,
+                isBlend,
+                labelToComponent,
+                blendComponents,
+                calibrations,
+                selectedCal,
+                componentCals,
+                componentSelectedCalIds,
+                result,
+                analyteResults,
+                injections,
+                parseError,
+              })
+            }
             onClose={() => setShowDebug(false)}
           />
         )}
