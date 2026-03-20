@@ -123,6 +123,8 @@ def _run_migrations():
         "ALTER TABLE hplc_analyses ADD COLUMN IF NOT EXISTS run_group_id VARCHAR(200)",
         # Peptide HPLC aliases — alternate names used in chromatogram filenames
         "ALTER TABLE peptides ADD COLUMN IF NOT EXISTS hplc_aliases JSON",
+        # Phase 13.5: Debug log persistence for audit trail
+        "ALTER TABLE hplc_analyses ADD COLUMN IF NOT EXISTS debug_log JSON",
     ]
     try:
         with engine.connect() as conn:

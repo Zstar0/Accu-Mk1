@@ -397,6 +397,7 @@ class HPLCAnalysis(Base):
     source_sharepoint_folder: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
     chromatogram_data: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)  # {times: number[], signals: number[]}
     run_group_id: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    debug_log: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)  # [{level, msg}] full debug log for audit trail
 
     # Relationships
     peptide: Mapped["Peptide"] = relationship("Peptide")
