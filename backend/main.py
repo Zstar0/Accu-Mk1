@@ -2788,6 +2788,9 @@ class HPLCAnalyzeRequest(BaseModel):
     # Phase 13: standard injection reference RTs keyed by analyte label
     # Format: {"BPC157": {"rt": 10.165, "source_sample_id": "P-0111"}, ...}
     standard_injection_rts: Optional[dict[str, dict]] = None
+    # Phase 13.5: Audit trail — debug log and source file archive
+    debug_log: Optional[list[dict]] = None  # [{level: str, msg: str}] from frontend buildDebugLines()
+    source_files: Optional[list[dict]] = None  # [{filename: str, content: str, sha256: str}] archived source files
 
 
 class HPLCAnalysisResponse(BaseModel):
@@ -2817,6 +2820,8 @@ class HPLCAnalysisResponse(BaseModel):
     # Phase 13: identity reference source
     identity_reference_source: Optional[str] = None      # "standard_injection" or "calibration_curve"
     identity_reference_source_id: Optional[str] = None  # e.g. "P-0111" for standard injection
+    # Phase 13.5: Audit trail
+    debug_log: Optional[list[dict]] = None
 
 
 def _analysis_to_response(analysis: "HPLCAnalysis", peptide_abbreviation: str) -> "HPLCAnalysisResponse":
@@ -2847,6 +2852,8 @@ def _analysis_to_response(analysis: "HPLCAnalysis", peptide_abbreviation: str) -
         # Phase 13: identity reference source (extracted from calculation_trace)
         identity_reference_source=identity_trace.get("reference_source"),
         identity_reference_source_id=identity_trace.get("reference_source_id"),
+        # Phase 13.5: Audit trail
+        debug_log=analysis.debug_log,
     )
 
 
@@ -2958,7 +2965,16 @@ async def run_hplc_analysis(
         identity_conforms=result.get("identity_conforms"),
         identity_rt_delta=result.get("identity_rt_delta"),
         calculation_trace=result.get("calculation_trace"),
-        raw_data={"injections": request.injections},
+        raw_data={
+            "injections": request.injections,
+            **({"source_files": request.source_files} if request.source_files else {}),
+            **({"file_manifest": [
+                {"filename": f["filename"], "sha256": f["sha256"], "size": len(f.get("content", ""))}
+                for f in request.source_files
+            ]} if request.source_files else {}),
+        },
+        # Phase 13.5: Audit trail
+        debug_log=request.debug_log,
         # Phase 10.5: Provenance fields
         calibration_curve_id=cal.id,
         sample_prep_id=request.sample_prep_id,
