@@ -83,6 +83,11 @@ Progress: [██████████░] phase 13.5 in progress
 - standard_injections defaults to [] on HPLCParseResponse — backward compatible API addition
 - stdInjRts is undefined (not empty object) when no standard injections present — backend receives no field, uses calibration curve path unchanged
 - identity_reference_source_id displayed in font-mono to distinguish sample IDs from prose text in identity card
+- Silent fallback documentation pattern: every code path that falls back silently now emits a warn-level debug line explaining the fallback
+- Per-component standard injection check iterates labelToComponent entries (not blendComponents) — only resolved/matched labels have meaning
+- Chromatogram availability debug section not gated on isBlend — single-peptide preps also get the missing-chrom warning
+- Vial weight missing-component check only activates when vial_data is non-empty — broader "no per-vial data" warning covers the empty case
+- buildDebugLines() accepts optional parseError param; SharePoint download errors appear at top of debug console
 
 ### Key Source Files
 
@@ -114,6 +119,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-20
-Stopped at: Completed 13.5-01-PLAN.md (debug_log column + source file archive in raw_data)
+Last session: 2026-03-19
+Stopped at: Completed 13.5-02-PLAN.md (buildDebugLines() warning lines for 5 silent fallback categories)
 Resume file: None
