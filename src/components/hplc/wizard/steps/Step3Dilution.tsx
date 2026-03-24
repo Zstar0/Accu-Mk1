@@ -292,6 +292,15 @@ function DilutionVial({ session, vialNumber }: {
               'Add the required diluent, then re-weigh the vial.'
             )}
           </p>
+          {requiredDiluentVol != null && requiredDiluentVol > 1000 && (
+            <div className="flex items-center gap-2 px-3 py-2 rounded-md bg-blue-500/5 border border-blue-500/20 text-xs">
+              <span className="text-blue-600 dark:text-blue-400 font-medium">Pipette tip:</span>
+              <span className="font-mono text-blue-600 dark:text-blue-400">
+                2 &times; {(requiredDiluentVol / 2).toFixed(1)} µL
+              </span>
+              <span className="text-muted-foreground">(split into two additions)</span>
+            </div>
+          )}
           {error3b && (
             <Alert variant="destructive">
               <AlertDescription>{error3b}</AlertDescription>
@@ -404,6 +413,11 @@ function DilutionVial({ session, vialNumber }: {
                   <p className="font-medium font-mono">
                     {calcs.actual_diluent_vol_ul.toFixed(1)} µL
                   </p>
+                  {meas3b && meas3a && (
+                    <p className="text-[10px] text-muted-foreground font-mono mt-0.5">
+                      = ({meas3b.weight_mg} − {meas3a.weight_mg}) / 997.1 × 1000
+                    </p>
+                  )}
                 </div>
               )}
               {calcs.actual_stock_vol_ul != null && (
@@ -414,6 +428,11 @@ function DilutionVial({ session, vialNumber }: {
                   <p className="font-medium font-mono">
                     {calcs.actual_stock_vol_ul.toFixed(1)} µL
                   </p>
+                  {meas3c && meas3b && (
+                    <p className="text-[10px] text-muted-foreground font-mono mt-0.5">
+                      = ({meas3c.weight_mg} − {meas3b.weight_mg}) / 997.1 × 1000
+                    </p>
+                  )}
                 </div>
               )}
               {calcs.actual_conc_ug_ml != null && (
@@ -424,6 +443,11 @@ function DilutionVial({ session, vialNumber }: {
                   <p className="font-medium font-mono">
                     {calcs.actual_conc_ug_ml.toFixed(2)} µg/mL
                   </p>
+                  {calcs.stock_conc_ug_ml != null && calcs.actual_stock_vol_ul != null && calcs.actual_diluent_vol_ul != null && (
+                    <p className="text-[10px] text-muted-foreground font-mono mt-0.5">
+                      = {calcs.stock_conc_ug_ml.toFixed(2)} × {calcs.actual_stock_vol_ul.toFixed(1)} / ({calcs.actual_diluent_vol_ul.toFixed(1)} + {calcs.actual_stock_vol_ul.toFixed(1)})
+                    </p>
+                  )}
                 </div>
               )}
             </div>

@@ -311,16 +311,6 @@ function StockPrepVial({ session, vialNumber }: {
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="grid grid-cols-1 gap-2 sm:grid-cols-3 text-sm">
-              {calcs.stock_conc_ug_ml != null && (
-                <div>
-                  <span className="text-muted-foreground">
-                    Stock Concentration
-                  </span>
-                  <p className="font-medium font-mono">
-                    {calcs.stock_conc_ug_ml.toFixed(2)} µg/mL
-                  </p>
-                </div>
-              )}
               {calcs.diluent_added_ml != null && (
                 <div>
                   <span className="text-muted-foreground">
@@ -329,6 +319,32 @@ function StockPrepVial({ session, vialNumber }: {
                   <p className="font-medium font-mono">
                     {(calcs.diluent_added_ml * 1000).toFixed(1)} µL
                   </p>
+                  {meas2d && meas2a && (
+                    <p className="text-[10px] text-muted-foreground font-mono mt-0.5">
+                      {isStandard && meas2b
+                        ? `= (${meas2d.weight_mg} − ${meas2b.weight_mg}) / 997.1`
+                        : `= (${meas2d.weight_mg} − ${meas2a.weight_mg}) / 997.1`
+                      } × 1000
+                    </p>
+                  )}
+                </div>
+              )}
+              {calcs.stock_conc_ug_ml != null && (
+                <div>
+                  <span className="text-muted-foreground">
+                    Stock Concentration
+                  </span>
+                  <p className="font-medium font-mono">
+                    {calcs.stock_conc_ug_ml.toFixed(2)} µg/mL
+                  </p>
+                  {calcs.diluent_added_ml != null && (
+                    <p className="text-[10px] text-muted-foreground font-mono mt-0.5">
+                      {isStandard && meas2b && meas2a
+                        ? `= (${(meas2b.weight_mg - meas2a.weight_mg).toFixed(2)} mg × 1000) / ${calcs.diluent_added_ml.toFixed(4)} mL`
+                        : `= (${session.declared_weight_mg ?? '?'} mg × 1000) / ${calcs.diluent_added_ml.toFixed(4)} mL`
+                      }
+                    </p>
+                  )}
                 </div>
               )}
               {calcs.required_stock_vol_ul != null && (
@@ -339,6 +355,11 @@ function StockPrepVial({ session, vialNumber }: {
                   <p className="font-medium font-mono">
                     {calcs.required_stock_vol_ul.toFixed(1)} µL
                   </p>
+                  {calcs.stock_conc_ug_ml != null && (
+                    <p className="text-[10px] text-muted-foreground font-mono mt-0.5">
+                      = {session.target_total_vol_ul ?? '?'} × ({session.target_conc_ug_ml ?? '?'} / {calcs.stock_conc_ug_ml.toFixed(2)})
+                    </p>
+                  )}
                 </div>
               )}
               {calcs.required_diluent_vol_ul != null && (
@@ -349,6 +370,11 @@ function StockPrepVial({ session, vialNumber }: {
                   <p className="font-medium font-mono">
                     {calcs.required_diluent_vol_ul.toFixed(1)} µL
                   </p>
+                  {calcs.required_stock_vol_ul != null && (
+                    <p className="text-[10px] text-muted-foreground font-mono mt-0.5">
+                      = {session.target_total_vol_ul ?? '?'} − {calcs.required_stock_vol_ul.toFixed(1)}
+                    </p>
+                  )}
                 </div>
               )}
             </div>
