@@ -2104,6 +2104,25 @@ export async function updateCalibration(
   return response.json()
 }
 
+/** Fetch a single calibration curve with full data (including chromatogram_data). */
+export async function getCalibration(
+  peptideId: number,
+  calibrationId: number,
+): Promise<CalibrationCurve> {
+  const response = await fetch(
+    `${API_BASE_URL()}/peptides/${peptideId}/calibrations/${calibrationId}`,
+    {
+      method: 'GET',
+      headers: getBearerHeaders(),
+    }
+  )
+  if (!response.ok) {
+    const err = await response.json().catch(() => null)
+    throw new Error(err?.detail || `Fetch calibration failed: ${response.status}`)
+  }
+  return response.json()
+}
+
 export async function deleteCalibration(
   peptideId: number,
   calibrationId: number

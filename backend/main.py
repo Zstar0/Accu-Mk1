@@ -2632,6 +2632,23 @@ async def create_calibration_from_standard(
     return _cal_to_response(curve)
 
 
+@app.get("/peptides/{peptide_id}/calibrations/{calibration_id}", response_model=CalibrationCurveResponse)
+async def get_calibration(
+    peptide_id: int,
+    calibration_id: int,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Get a single calibration curve with full data (including chromatogram_data)."""
+    cal = db.execute(
+        select(CalibrationCurve)
+        .where(CalibrationCurve.id == calibration_id, CalibrationCurve.peptide_id == peptide_id)
+    ).scalar_one_or_none()
+    if not cal:
+        raise HTTPException(status_code=404, detail="Calibration not found")
+    return _cal_to_response(cal)  # include_blobs=True (default) — full data
+
+
 @app.post("/peptides/{peptide_id}/calibrations/{calibration_id}/activate", response_model=CalibrationCurveResponse)
 async def activate_calibration(
     peptide_id: int,

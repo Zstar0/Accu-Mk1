@@ -43,6 +43,7 @@ import { CalibrationChart } from './CalibrationChart'
 import { ChromatogramChart, downsampleLTTB, type ChromatogramTrace } from './ChromatogramChart'
 import {
   getCalibrations,
+  getCalibration,
   getInstruments,
   updateCalibration,
   deleteCalibration,
@@ -358,6 +359,20 @@ function CalibrationRow({
   onUpdated: () => void
 }) {
   const data = calibration.standard_data
+  const [chromData, setChromData] = useState<Record<string, unknown> | null>(calibration.chromatogram_data as Record<string, unknown> | null)
+
+  // Lazy-load chromatogram_data when expanded (stripped from list response for performance)
+  useEffect(() => {
+    if (!isExpanded || chromData) return
+    let cancelled = false
+    getCalibration(peptideId, calibration.id).then(full => {
+      if (!cancelled && full.chromatogram_data) {
+        setChromData(full.chromatogram_data as Record<string, unknown>)
+      }
+    }).catch(() => { /* non-critical */ })
+    return () => { cancelled = true }
+  }, [isExpanded, chromData, peptideId, calibration.id])
+
   const displayDate = calibration.source_date || calibration.created_at
   const dateStr = new Date(displayDate).toLocaleDateString('en-US', {
     month: 'short',
@@ -948,8 +963,8 @@ function CalibrationRow({
           )}
 
           {/* Standard chromatogram (from linked sample or backfill) — below data table */}
-          {calibration.chromatogram_data && <StandardChromatogramViewer
-            chromData={calibration.chromatogram_data}
+          {chromData && <StandardChromatogramViewer
+            chromData={chromData}
             sampleId={calibration.source_sample_id}
             referenceRt={calibration.reference_rt}
           />}
