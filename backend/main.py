@@ -4851,12 +4851,47 @@ async def resync_peptide_stream(
                     instrument=requested_instrument,
                     instrument_id=requested_instrument_id,
                 )
+
+                # Fetch chromatogram DAD1A files for the curve (best-effort)
+                chrom_pattern_sid = re.compile(
+                    rf"^{re.escape(sid)}_Std_(\d+(?:\.\d+)?)[\._].*DAD1A\.CSV$", re.IGNORECASE
+                )
+                chrom_by_conc: dict[str, dict] = {}
+                for item in all_files:
+                    cm = chrom_pattern_sid.match(item["name"])
+                    if cm:
+                        conc_label = cm.group(1)
+                        try:
+                            content_bytes, _ = await sp.download_file(item["id"])
+                            csv_text = content_bytes.decode("utf-8", errors="replace")
+                            times, signals = [], []
+                            for cline in csv_text.splitlines():
+                                cline = cline.strip()
+                                if not cline:
+                                    continue
+                                parts = cline.split(",", 1)
+                                if len(parts) != 2:
+                                    continue
+                                try:
+                                    times.append(float(parts[0]))
+                                    signals.append(float(parts[1]))
+                                except ValueError:
+                                    continue
+                            if times:
+                                chrom_by_conc[conc_label] = {"times": times, "signals": signals}
+                        except Exception:
+                            pass  # best-effort
+                if chrom_by_conc:
+                    curve.chromatogram_data = chrom_by_conc
+                    curve.source_sharepoint_folder = folder["path"]
+
                 db.add(curve)
                 new_curves.append(curve)
                 calibrations_added = 1
 
+                chrom_msg = f", {len(chrom_by_conc)} chromatogram(s)" if chrom_by_conc else ""
                 yield send_event("log", {
-                    "message": f"  [OK] Curve: R²={regression['r_squared']:.6f}, slope={regression['slope']:.4f}, intercept={regression['intercept']:.4f}",
+                    "message": f"  [OK] Curve: R²={regression['r_squared']:.6f}, slope={regression['slope']:.4f}, intercept={regression['intercept']:.4f}{chrom_msg}",
                     "level": "success",
                 })
                 if avg_rt:
@@ -4955,12 +4990,47 @@ async def resync_peptide_stream(
                     instrument=requested_instrument,
                     instrument_id=requested_instrument_id,
                 )
+
+                # Fetch chromatogram DAD1A files from the same folder (best-effort)
+                chrom_pattern_folder = re.compile(
+                    r".*_Std_(\d+(?:\.\d+)?)[\._].*DAD1A\.CSV$", re.IGNORECASE
+                )
+                folder_chrom: dict[str, dict] = {}
+                for item in all_files:
+                    cm = chrom_pattern_folder.match(item["name"])
+                    if cm:
+                        conc_label = cm.group(1)
+                        try:
+                            content_bytes, _ = await sp.download_file(item["id"])
+                            csv_text = content_bytes.decode("utf-8", errors="replace")
+                            times, signals = [], []
+                            for cline in csv_text.splitlines():
+                                cline = cline.strip()
+                                if not cline:
+                                    continue
+                                parts = cline.split(",", 1)
+                                if len(parts) != 2:
+                                    continue
+                                try:
+                                    times.append(float(parts[0]))
+                                    signals.append(float(parts[1]))
+                                except ValueError:
+                                    continue
+                            if times:
+                                folder_chrom[conc_label] = {"times": times, "signals": signals}
+                        except Exception:
+                            pass  # best-effort
+                if folder_chrom:
+                    curve.chromatogram_data = folder_chrom
+                    curve.source_sharepoint_folder = fpath
+
                 db.add(curve)
                 new_curves.append(curve)
                 calibrations_added = 1
 
+                chrom_msg = f", {len(folder_chrom)} chromatogram(s)" if folder_chrom else ""
                 yield send_event("log", {
-                    "message": f"  [OK] Curve: R²={regression['r_squared']:.6f}, slope={regression['slope']:.4f}, intercept={regression['intercept']:.4f}",
+                    "message": f"  [OK] Curve: R²={regression['r_squared']:.6f}, slope={regression['slope']:.4f}, intercept={regression['intercept']:.4f}{chrom_msg}",
                     "level": "success",
                 })
                 if avg_rt:

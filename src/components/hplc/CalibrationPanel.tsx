@@ -823,13 +823,6 @@ function CalibrationRow({
             />
           )}
 
-          {/* Standard chromatogram (from linked sample or backfill) */}
-          {calibration.chromatogram_data && <StandardChromatogramViewer
-            chromData={calibration.chromatogram_data}
-            sampleId={calibration.source_sample_id}
-            referenceRt={calibration.reference_rt}
-          />}
-
           {/* Standard data table */}
           {data && data.concentrations.length > 0 && (
             <div>
@@ -953,6 +946,13 @@ function CalibrationRow({
               )}
             </div>
           )}
+
+          {/* Standard chromatogram (from linked sample or backfill) — below data table */}
+          {calibration.chromatogram_data && <StandardChromatogramViewer
+            chromData={calibration.chromatogram_data}
+            sampleId={calibration.source_sample_id}
+            referenceRt={calibration.reference_rt}
+          />}
         </div>
       )}
     </div>
