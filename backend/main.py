@@ -1661,9 +1661,29 @@ def _resolve_instrument(db: Session, name: Optional[str] = None, inst_id: Option
     return name, inst_id
 
 
-def _cal_to_response(cal: CalibrationCurve) -> CalibrationCurveResponse:
-    """Convert CalibrationCurve model to response with SharePoint URL."""
-    resp = CalibrationCurveResponse.model_validate(cal)
+def _cal_to_response(cal: CalibrationCurve, include_blobs: bool = True) -> CalibrationCurveResponse:
+    """Convert CalibrationCurve model to response with SharePoint URL.
+
+    Set include_blobs=False to skip loading large JSON fields (chromatogram_data, standard_data)
+    for list views where they're not needed.
+    """
+    if not include_blobs:
+        # Build response without loading deferred chromatogram_data (3+ MB per curve)
+        # standard_data is included (small — just arrays of numbers for the chart/table)
+        resp = CalibrationCurveResponse(
+            id=cal.id, peptide_id=cal.peptide_id, peptide_analyte_id=cal.peptide_analyte_id,
+            reference_rt=cal.reference_rt, rt_tolerance=cal.rt_tolerance, diluent_density=cal.diluent_density,
+            slope=cal.slope, intercept=cal.intercept, r_squared=cal.r_squared,
+            standard_data=cal.standard_data, chromatogram_data=None,
+            source_filename=cal.source_filename, source_path=cal.source_path,
+            source_date=cal.source_date, sharepoint_url=cal.sharepoint_url,
+            is_active=cal.is_active, created_at=cal.created_at,
+            source_sample_id=cal.source_sample_id, vendor=cal.vendor,
+            instrument=cal.instrument, instrument_id=cal.instrument_id,
+            notes=cal.notes,
+        )
+    else:
+        resp = CalibrationCurveResponse.model_validate(cal)
     # Prefer stored webUrl from Graph API; fall back to computed URL for legacy records
     if cal.sharepoint_url:
         resp.sharepoint_url = cal.sharepoint_url
@@ -2049,15 +2069,18 @@ async def get_peptides(db: Session = Depends(get_db), _current_user=Depends(get_
         )
 
     # Batch 2: all active calibration curves in one query, keep first per peptide
+    # Defer chromatogram_data (3+ MB each) — not needed for peptide list view
+    from sqlalchemy.orm import defer
     active_cals = db.execute(
         select(CalibrationCurve)
+        .options(defer(CalibrationCurve.chromatogram_data))
         .where(CalibrationCurve.is_active == True)
         .order_by(CalibrationCurve.peptide_id, desc(CalibrationCurve.created_at))
     ).scalars().all()
     active_cal_map: dict[int, CalibrationCurveResponse] = {}
     for cal in active_cals:
         if cal.peptide_id not in active_cal_map:
-            active_cal_map[cal.peptide_id] = _cal_to_response(cal)
+            active_cal_map[cal.peptide_id] = _cal_to_response(cal, include_blobs=False)
 
     results = []
     for p in peptides:
@@ -2362,13 +2385,15 @@ async def get_calibrations(peptide_id: int, db: Session = Depends(get_db), _curr
     if not peptide:
         raise HTTPException(404, f"Peptide {peptide_id} not found")
 
+    from sqlalchemy.orm import defer
     stmt = (
         select(CalibrationCurve)
+        .options(defer(CalibrationCurve.chromatogram_data))
         .where(CalibrationCurve.peptide_id == peptide_id)
         .order_by(desc(CalibrationCurve.created_at))
     )
     cals = db.execute(stmt).scalars().all()
-    return [_cal_to_response(c) for c in cals]
+    return [_cal_to_response(c, include_blobs=False) for c in cals]
 
 
 @app.get("/peptides/{peptide_id}/blend-calibrations")
