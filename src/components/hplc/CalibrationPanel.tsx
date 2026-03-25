@@ -380,6 +380,32 @@ function CalibrationRow({
 
   const linkedAnalyte = analytes.find(a => a.id === calibration.peptide_analyte_id)
 
+  // Live regression from edit state (or fallback to saved values)
+  const liveReg = (() => {
+    if (!editing || !editStdData) return { slope: calibration.slope, intercept: calibration.intercept, r2: calibration.r_squared }
+    const xs: number[] = [], ys: number[] = []
+    const esd = editStdData
+    esd.concs.forEach((c: string, i: number) => {
+      if (esd.excluded.has(i)) return
+      const x = parseFloat(c), y = parseFloat(esd.areas[i] ?? '0')
+      if (!isNaN(x) && !isNaN(y)) { xs.push(x); ys.push(y) }
+    })
+    if (xs.length < 2) return { slope: calibration.slope, intercept: calibration.intercept, r2: calibration.r_squared }
+    const n = xs.length
+    const sx = xs.reduce((a, b) => a + b, 0)
+    const sy = ys.reduce((a, b) => a + b, 0)
+    const sxy = xs.reduce((a, x, i) => a + x * (ys[i] ?? 0), 0)
+    const sxx = xs.reduce((a, x) => a + x * x, 0)
+    const slope = (n * sxy - sx * sy) / (n * sxx - sx * sx)
+    const intercept = (sy - slope * sx) / n
+    // R² calculation
+    const yMean = sy / n
+    const ssTot = ys.reduce((a, y) => a + (y - yMean) ** 2, 0)
+    const ssRes = ys.reduce((a, y, i) => a + (y - (slope * xs[i]! + intercept)) ** 2, 0)
+    const r2 = ssTot > 0 ? 1 - ssRes / ssTot : 0
+    return { slope, intercept, r2 }
+  })()
+
   const startEditing = () => {
     setEditRt(calibration.reference_rt != null ? String(calibration.reference_rt) : '')
     setEditTolerance(String(calibration.rt_tolerance))
@@ -480,11 +506,11 @@ function CalibrationRow({
                 </Badge>
               )}
               <span className="font-mono text-sm truncate">
-                y = {calibration.slope.toFixed(4)}x + {calibration.intercept.toFixed(4)}
+                y = {liveReg.slope.toFixed(4)}x + {liveReg.intercept.toFixed(4)}
               </span>
             </div>
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
-              <span>R² = {calibration.r_squared.toFixed(6)}</span>
+              <span>R² = {liveReg.r2.toFixed(6)}</span>
               <span>•</span>
               <span>{dateStr}</span>
               {linkedAnalyte && (
@@ -786,40 +812,16 @@ function CalibrationRow({
             </div>
           )}
 
-          {/* Chart — live regression when editing */}
-          {data && data.concentrations.length > 0 && (() => {
-            let chartSlope = calibration.slope
-            let chartIntercept = calibration.intercept
-            if (editing && editStdData) {
-              // Client-side least-squares regression from included points
-              const xs: number[] = []
-              const ys: number[] = []
-              const esd = editStdData
-              esd.concs.forEach((c: string, i: number) => {
-                if (esd.excluded.has(i)) return
-                const x = parseFloat(c), y = parseFloat(esd.areas[i] ?? '0')
-                if (!isNaN(x) && !isNaN(y)) { xs.push(x); ys.push(y) }
-              })
-              if (xs.length >= 2) {
-                const n = xs.length
-                const sx = xs.reduce((a, b) => a + b, 0)
-                const sy = ys.reduce((a, b) => a + b, 0)
-                const sxy = xs.reduce((a, x, i) => a + x * (ys[i] ?? 0), 0)
-                const sxx = xs.reduce((a, x) => a + x * x, 0)
-                chartSlope = (n * sxy - sx * sy) / (n * sxx - sx * sx)
-                chartIntercept = (sy - chartSlope * sx) / n
-              }
-            }
-            return (
-              <CalibrationChart
-                concentrations={editing && editStdData ? editStdData.concs.map(c => parseFloat(c) || 0) : data.concentrations}
-                areas={editing && editStdData ? editStdData.areas.map(a => parseFloat(a) || 0) : data.areas}
-                slope={chartSlope}
-                intercept={chartIntercept}
-                excludedIndices={editing && editStdData ? Array.from(editStdData.excluded) : data.excluded_indices}
-              />
-            )
-          })()}
+          {/* Chart — uses liveReg for live regression during editing */}
+          {data && data.concentrations.length > 0 && (
+            <CalibrationChart
+              concentrations={editing && editStdData ? editStdData.concs.map(c => parseFloat(c) || 0) : data.concentrations}
+              areas={editing && editStdData ? editStdData.areas.map(a => parseFloat(a) || 0) : data.areas}
+              slope={liveReg.slope}
+              intercept={liveReg.intercept}
+              excludedIndices={editing && editStdData ? Array.from(editStdData.excluded) : data.excluded_indices}
+            />
+          )}
 
           {/* Standard chromatogram (from linked sample or backfill) */}
           {calibration.chromatogram_data && <StandardChromatogramViewer
