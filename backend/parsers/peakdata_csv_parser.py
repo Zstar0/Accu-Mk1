@@ -35,6 +35,8 @@ class InjectionData:
     total_area: float
     main_peak_index: int = -1
     peptide_label: str = ""
+    source_sample_id: str = ""  # extracted from "Sample name:" metadata inside the CSV
+    filename: str = ""          # original filename for audit
 
 
 @dataclass
@@ -53,6 +55,7 @@ class HPLCParseResult:
     injections: list[InjectionData]
     errors: list[str] = field(default_factory=list)
     standard_injections: list[StandardInjection] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
 
 
 def _extract_injection_info(filename: str) -> tuple[str, str]:
@@ -258,6 +261,7 @@ def parse_peakdata_csv(filename: str, content: str) -> InjectionData:
         total_area = sum(p.area for p in peaks)
 
     injection_name, peptide_label = _extract_injection_info(filename)
+    source_sample_id = _extract_source_sample_id(content)
 
     return InjectionData(
         injection_name=injection_name,
@@ -265,6 +269,8 @@ def parse_peakdata_csv(filename: str, content: str) -> InjectionData:
         total_area=total_area,
         main_peak_index=main_idx,
         peptide_label=peptide_label,
+        source_sample_id=source_sample_id,
+        filename=filename,
     )
 
 
@@ -406,6 +412,18 @@ def parse_hplc_files(files: list[dict]) -> HPLCParseResult:
     injections: list[InjectionData] = []
     standard_injections: list[StandardInjection] = []
     errors: list[str] = []
+    warnings: list[str] = []
+
+    # Extract expected sample ID from the first filename (e.g., "PB-0071" from "PB-0071_Inj_1_...")
+    expected_sample_id = ""
+    for file_info in files:
+        fn = file_info.get('filename', '')
+        # Sample ID is the prefix before first _Inj_ or _Std_
+        import re as _re
+        m = _re.match(r'^(P[A-Z]?-\d+)', fn)
+        if m:
+            expected_sample_id = m.group(1)
+            break
 
     for file_info in files:
         filename = file_info.get('filename', 'unknown')
@@ -418,6 +436,19 @@ def parse_hplc_files(files: list[dict]) -> HPLCParseResult:
             else:
                 injection = parse_peakdata_csv(filename, content)
                 injections.append(injection)
+
+                # Validate: does the internal "Sample name" match the expected sample ID?
+                if expected_sample_id and injection.source_sample_id:
+                    if injection.source_sample_id.upper() != expected_sample_id.upper():
+                        label = injection.peptide_label or injection.injection_name
+                        warnings.append(
+                            f"File \"{filename}\" contains data for {injection.source_sample_id}, "
+                            f"not {expected_sample_id} — wrong file in folder? "
+                            f"(analyte: {label}, area: {injection.peaks[injection.main_peak_index].area:.1f})"
+                            if injection.main_peak_index >= 0 else
+                            f"File \"{filename}\" contains data for {injection.source_sample_id}, "
+                            f"not {expected_sample_id} — wrong file in folder?"
+                        )
         except ValueError as e:
             errors.append(str(e))
 
@@ -428,6 +459,7 @@ def parse_hplc_files(files: list[dict]) -> HPLCParseResult:
         injections=injections,
         errors=errors,
         standard_injections=standard_injections,
+        warnings=warnings,
     )
 
 

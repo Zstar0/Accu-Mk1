@@ -1580,6 +1580,7 @@ export interface HPLCParseResult {
   injections: HPLCInjection[]
   purity: HPLCPurity
   errors: string[]
+  warnings: string[]
   detected_peptides: string[]
   standard_injections: StandardInjection[]
 }

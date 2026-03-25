@@ -1296,6 +1296,7 @@ class HPLCParseResponse(BaseModel):
     injections: list[InjectionResponse]
     purity: PurityResponse
     errors: list[str]
+    warnings: list[str] = []
     detected_peptides: list[str] = []
     standard_injections: list[StandardInjectionResponse] = []
 
@@ -1360,6 +1361,7 @@ async def parse_hplc_peakdata(request: HPLCParseBrowserRequest, _current_user=De
         injections=injections_resp,
         purity=PurityResponse(**purity),
         errors=result.errors,
+        warnings=result.warnings,
         detected_peptides=detected_peptides,
         standard_injections=std_inj_resp,
     )

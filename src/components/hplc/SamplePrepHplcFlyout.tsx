@@ -1476,6 +1476,22 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
                     }
                   }
 
+                  // Parser-level warnings (e.g. file contains wrong sample data)
+                  if (parseResult?.warnings?.length) {
+                    for (const w of parseResult.warnings) {
+                      warns.push({
+                        msg: w,
+                        action: spUrl ? (
+                          <a href={spUrl} target="_blank" rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 text-xs font-medium text-red-300 hover:text-red-200 underline underline-offset-2">
+                            <ExternalLink size={11} />
+                            Check files in folder
+                          </a>
+                        ) : undefined,
+                      })
+                    }
+                  }
+
                   if (warns.length === 0) return null
 
                   return (
