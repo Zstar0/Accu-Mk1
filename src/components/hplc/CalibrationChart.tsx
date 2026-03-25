@@ -13,12 +13,14 @@ import {
 const CHART_BLUE = '#60a5fa'
 const CHART_SLATE = '#94a3b8'
 const CHART_GRID = '#334155'
+const CHART_EXCLUDED = '#475569'
 
 interface CalibrationChartProps {
   concentrations: number[]
   areas: number[]
   slope: number
   intercept: number
+  excludedIndices?: number[]
 }
 
 export function CalibrationChart({
@@ -26,16 +28,22 @@ export function CalibrationChart({
   areas,
   slope,
   intercept,
+  excludedIndices,
 }: CalibrationChartProps) {
-  // Scatter data points
-  const scatterData = concentrations.map((conc, i) => ({
-    conc,
-    area: areas[i],
-  }))
+  const excluded = new Set(excludedIndices ?? [])
 
-  // Regression line: two endpoints spanning the data range
-  const minConc = Math.min(...concentrations)
-  const maxConc = Math.max(...concentrations)
+  // Separate included vs excluded scatter points
+  const includedData = concentrations
+    .map((conc, i) => ({ conc, area: areas[i] }))
+    .filter((_, i) => !excluded.has(i))
+  const excludedData = concentrations
+    .map((conc, i) => ({ conc, area: areas[i] }))
+    .filter((_, i) => excluded.has(i))
+
+  // Regression line from included points only
+  const incConcs = concentrations.filter((_, i) => !excluded.has(i))
+  const minConc = incConcs.length > 0 ? Math.min(...incConcs) : Math.min(...concentrations)
+  const maxConc = incConcs.length > 0 ? Math.max(...incConcs) : Math.max(...concentrations)
   const lineData = [
     { conc: minConc, fit: slope * minConc + intercept },
     { conc: maxConc, fit: slope * maxConc + intercept },
@@ -79,7 +87,7 @@ export function CalibrationChart({
           <Tooltip
             formatter={(value, name) => [
               typeof value === 'number' ? value.toFixed(2) : String(value ?? ''),
-              name === 'area' ? 'Area' : 'Fit',
+              name === 'area' ? 'Area' : name === 'excludedArea' ? 'Area (excluded)' : 'Fit',
             ]}
             labelFormatter={label =>
               `Conc: ${typeof label === 'number' ? label.toFixed(2) : String(label)}`
@@ -88,8 +96,22 @@ export function CalibrationChart({
             labelStyle={{ color: CHART_SLATE }}
             itemStyle={{ color: '#e2e8f0' }}
           />
+          {/* Excluded points — hollow, dimmed */}
+          {excludedData.length > 0 && (
+            <Scatter
+              data={excludedData}
+              dataKey="area"
+              fill="transparent"
+              stroke={CHART_EXCLUDED}
+              strokeWidth={1.5}
+              r={4}
+              name="excludedArea"
+              strokeDasharray="2 2"
+            />
+          )}
+          {/* Included points — solid blue */}
           <Scatter
-            data={scatterData}
+            data={includedData}
             dataKey="area"
             fill={CHART_BLUE}
             stroke="#ffffff"

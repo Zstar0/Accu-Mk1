@@ -789,10 +789,11 @@ function CalibrationRow({
           {/* Chart */}
           {data && data.concentrations.length > 0 && (
             <CalibrationChart
-              concentrations={data.concentrations}
-              areas={data.areas}
+              concentrations={editing && editStdData ? editStdData.concs.map(c => parseFloat(c) || 0) : data.concentrations}
+              areas={editing && editStdData ? editStdData.areas.map(a => parseFloat(a) || 0) : data.areas}
               slope={calibration.slope}
               intercept={calibration.intercept}
+              excludedIndices={editing && editStdData ? Array.from(editStdData.excluded) : data.excluded_indices}
             />
           )}
 
