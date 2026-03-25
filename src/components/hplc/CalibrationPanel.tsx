@@ -843,6 +843,7 @@ function CalibrationRow({
                     <TableHead className="w-12">#</TableHead>
                     <TableHead className="text-right">Conc (µg/mL)</TableHead>
                     <TableHead className="text-right">Area</TableHead>
+                    {editing && <TableHead className="w-8"></TableHead>}
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -907,11 +908,49 @@ function CalibrationRow({
                             data.areas[i] != null ? data.areas[i].toFixed(4) : '—'
                           )}
                         </TableCell>
+                        {editing && editStdData && (
+                          <TableCell className="p-1">
+                            <button
+                              type="button"
+                              className="w-5 h-5 rounded text-xs flex items-center justify-center cursor-pointer text-zinc-500 hover:text-red-400 hover:bg-red-950/30 transition-colors"
+                              onClick={() => {
+                                const nextConcs = editStdData.concs.filter((_, j) => j !== i)
+                                const nextAreas = editStdData.areas.filter((_, j) => j !== i)
+                                // Shift excluded indices down for indices above the deleted row
+                                const nextExcluded = new Set<number>()
+                                for (const idx of editStdData.excluded) {
+                                  if (idx < i) nextExcluded.add(idx)
+                                  else if (idx > i) nextExcluded.add(idx - 1)
+                                  // idx === i is deleted, skip
+                                }
+                                setEditStdData({ concs: nextConcs, areas: nextAreas, excluded: nextExcluded })
+                              }}
+                              title="Delete this data point"
+                            >
+                              ×
+                            </button>
+                          </TableCell>
+                        )}
                       </TableRow>
                     )
                   })}
                 </TableBody>
               </Table>
+              {editing && editStdData && (
+                <button
+                  type="button"
+                  className="mt-2 text-xs text-blue-400 hover:text-blue-300 cursor-pointer flex items-center gap-1"
+                  onClick={() => {
+                    setEditStdData({
+                      ...editStdData,
+                      concs: [...editStdData.concs, ''],
+                      areas: [...editStdData.areas, ''],
+                    })
+                  }}
+                >
+                  + Add data point
+                </button>
+              )}
             </div>
           )}
         </div>
