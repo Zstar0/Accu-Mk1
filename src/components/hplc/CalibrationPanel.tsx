@@ -376,6 +376,7 @@ function CalibrationRow({
   const [editNotes, setEditNotes] = useState('')
   const [editSourceSampleId, setEditSourceSampleId] = useState('')
   const [editVendor, setEditVendor] = useState('')
+  const [editStdData, setEditStdData] = useState<{concs: string[], areas: string[], excluded: Set<number>} | null>(null)
 
   const linkedAnalyte = analytes.find(a => a.id === calibration.peptide_analyte_id)
 
@@ -388,6 +389,15 @@ function CalibrationRow({
     setEditNotes(calibration.notes ?? '')
     setEditSourceSampleId(calibration.source_sample_id ?? '')
     setEditVendor(calibration.vendor ?? '')
+    if (data && data.concentrations.length > 0) {
+      setEditStdData({
+        concs: data.concentrations.map(c => String(c)),
+        areas: data.areas.map(a => String(a)),
+        excluded: new Set(data.excluded_indices ?? []),
+      })
+    } else {
+      setEditStdData(null)
+    }
     setEditing(true)
   }
 
@@ -398,7 +408,7 @@ function CalibrationRow({
   const handleSave = async () => {
     setSaving(true)
     try {
-      await updateCalibration(peptideId, calibration.id, {
+      const updatePayload: Parameters<typeof updateCalibration>[2] = {
         reference_rt: editRt ? parseFloat(editRt) : null,
         rt_tolerance: editTolerance ? parseFloat(editTolerance) : undefined,
         diluent_density: editDensity ? parseFloat(editDensity) : undefined,
@@ -407,7 +417,16 @@ function CalibrationRow({
         notes: editNotes.trim() || null,
         source_sample_id: editSourceSampleId.trim() || null,
         vendor: editVendor.trim() || null,
-      })
+      }
+      if (editStdData) {
+        updatePayload.standard_data = {
+          concentrations: editStdData.concs.map(c => parseFloat(c) || 0),
+          areas: editStdData.areas.map(a => parseFloat(a) || 0),
+          rts: data?.rts ?? [],
+          excluded_indices: Array.from(editStdData.excluded),
+        }
+      }
+      await updateCalibration(peptideId, calibration.id, updatePayload)
       setEditing(false)
       toast.success('Calibration updated')
       onUpdated()
@@ -788,28 +807,82 @@ function CalibrationRow({
           {data && data.concentrations.length > 0 && (
             <div>
               <p className="mb-2 text-sm font-medium">
-                Standard Data ({data.concentrations.length} points)
+                Standard Data ({data.concentrations.length} points{data.excluded_indices?.length ? `, ${data.excluded_indices.length} excluded` : ''})
               </p>
               <Table>
                 <TableHeader>
                   <TableRow>
+                    <TableHead className="w-8"></TableHead>
                     <TableHead className="w-12">#</TableHead>
                     <TableHead className="text-right">Conc (µg/mL)</TableHead>
                     <TableHead className="text-right">Area</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {data.concentrations.map((conc, i) => (
-                    <TableRow key={i}>
-                      <TableCell className="font-mono text-xs">{i + 1}</TableCell>
-                      <TableCell className="text-right font-mono">
-                        {conc.toFixed(4)}
-                      </TableCell>
-                      <TableCell className="text-right font-mono">
-                        {data.areas[i] != null ? data.areas[i].toFixed(4) : '—'}
-                      </TableCell>
-                    </TableRow>
-                  ))}
+                  {(editing && editStdData ? editStdData.concs : data.concentrations.map(String)).map((_, i) => {
+                    const isExcluded = editing
+                      ? editStdData?.excluded.has(i) ?? false
+                      : data.excluded_indices?.includes(i) ?? false
+                    return (
+                      <TableRow key={i} className={isExcluded ? 'opacity-40' : ''}>
+                        <TableCell className="p-1">
+                          {editing ? (
+                            <button
+                              type="button"
+                              className={`w-5 h-5 rounded border text-xs flex items-center justify-center cursor-pointer transition-colors ${
+                                isExcluded
+                                  ? 'border-zinc-600 bg-zinc-800 text-zinc-500'
+                                  : 'border-green-500/50 bg-green-950/30 text-green-400'
+                              }`}
+                              onClick={() => {
+                                if (!editStdData) return
+                                const next = new Set(editStdData.excluded)
+                                if (next.has(i)) next.delete(i)
+                                else next.add(i)
+                                setEditStdData({ ...editStdData, excluded: next })
+                              }}
+                              title={isExcluded ? 'Include this point' : 'Exclude this point'}
+                            >
+                              {isExcluded ? '—' : '✓'}
+                            </button>
+                          ) : (
+                            isExcluded ? <span className="text-xs text-zinc-600">—</span> : null
+                          )}
+                        </TableCell>
+                        <TableCell className="font-mono text-xs">{i + 1}</TableCell>
+                        <TableCell className="text-right font-mono">
+                          {editing && editStdData ? (
+                            <input
+                              className="w-24 bg-transparent border-b border-zinc-700 text-right font-mono text-sm px-1 focus:outline-none focus:border-blue-500"
+                              value={editStdData.concs[i]}
+                              onChange={e => {
+                                const next = [...editStdData.concs]
+                                next[i] = e.target.value
+                                setEditStdData({ ...editStdData, concs: next })
+                              }}
+                            />
+                          ) : (
+                            data.concentrations[i]?.toFixed(4)
+                          )}
+                        </TableCell>
+                        <TableCell className="text-right font-mono">
+                          {editing && editStdData ? (
+                            <input
+                              className="w-24 bg-transparent border-b border-zinc-700 text-right font-mono text-sm px-1 focus:outline-none focus:border-blue-500"
+                              value={editStdData.areas[i]}
+                              onChange={e => {
+                                const next = [...editStdData.areas]
+                                next[i] = e.target.value
+                                setEditStdData({ ...editStdData, areas: next })
+                              }}
+                            />
+                          ) : (
+                            data.areas[i] != null ? data.areas[i].toFixed(4) : '—'
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    )
+                  })}
                 </TableBody>
               </Table>
             </div>

@@ -1615,7 +1615,7 @@ export interface CalibrationCurve {
   slope: number
   intercept: number
   r_squared: number
-  standard_data: { concentrations: number[]; areas: number[] } | null
+  standard_data: { concentrations: number[]; areas: number[]; rts?: number[]; excluded_indices?: number[] } | null
   source_filename: string | null
   source_path: string | null
   source_date: string | null
@@ -2075,6 +2075,12 @@ export interface CalibrationCurveUpdateInput {
   notes?: string | null
   source_sample_id?: string | null
   vendor?: string | null
+  standard_data?: {
+    concentrations: number[]
+    areas: number[]
+    rts?: number[]
+    excluded_indices?: number[]
+  } | null
 }
 
 export async function updateCalibration(

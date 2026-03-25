@@ -1646,6 +1646,19 @@ class StandardCalibrationInput(BaseModel):
     instrument: Optional[str] = None           # HPLC instrument identifier
 
 
+def _resolve_instrument(db: Session, name: Optional[str] = None, inst_id: Optional[int] = None) -> tuple[Optional[str], Optional[int]]:
+    """Resolve instrument name ↔ ID. Returns (name, id) tuple."""
+    if inst_id and not name:
+        inst = db.execute(select(Instrument).where(Instrument.id == inst_id)).scalar_one_or_none()
+        if inst:
+            return inst.name, inst.id
+    elif name and not inst_id:
+        inst = db.execute(select(Instrument).where(Instrument.name == name)).scalar_one_or_none()
+        if inst:
+            return inst.name, inst.id
+    return name, inst_id
+
+
 def _cal_to_response(cal: CalibrationCurve) -> CalibrationCurveResponse:
     """Convert CalibrationCurve model to response with SharePoint URL."""
     resp = CalibrationCurveResponse.model_validate(cal)
@@ -2647,6 +2660,7 @@ class CalibrationCurveUpdate(BaseModel):
     notes: Optional[str] = None
     source_sample_id: Optional[str] = None
     vendor: Optional[str] = None
+    standard_data: Optional[dict] = None  # {concentrations, areas, rts?, excluded_indices?}
 
     class Config:
         from_attributes = True
@@ -2726,6 +2740,30 @@ async def update_calibration(
             logging.getLogger(__name__).warning(
                 f"Chromatogram auto-fetch failed for sample '{new_sample_id}': {e}"
             )
+
+    # When standard_data is updated, recalculate regression from non-excluded points
+    if "standard_data" in updates and updates["standard_data"]:
+        from calculations.calibration import calculate_calibration_curve as _calc_curve
+        sd = updates["standard_data"]
+        concs = sd.get("concentrations", [])
+        areas = sd.get("areas", [])
+        excluded = set(sd.get("excluded_indices", []))
+        # Filter to only included points
+        inc_concs = [c for i, c in enumerate(concs) if i not in excluded]
+        inc_areas = [a for i, a in enumerate(areas) if i not in excluded]
+        if len(inc_concs) >= 2:
+            try:
+                reg = _calc_curve(inc_concs, inc_areas)
+                updates["slope"] = reg["slope"]
+                updates["intercept"] = reg["intercept"]
+                updates["r_squared"] = reg["r_squared"]
+            except Exception:
+                pass  # Keep existing regression if recalc fails
+        # Recalculate reference_rt from non-excluded RTs
+        rts = sd.get("rts", [])
+        inc_rts = [r for i, r in enumerate(rts) if i not in excluded and i < len(rts)]
+        if inc_rts:
+            updates["reference_rt"] = round(sum(inc_rts) / len(inc_rts), 4)
 
     for field, value in updates.items():
         setattr(target, field, value)
@@ -4271,8 +4309,9 @@ async def rebuild_standards_stream(
                         sharepoint_url=item.get("webUrl"),
                         source_date=item.get("lastModified"),
                         is_active=False,  # set active after all curves loaded
-                        # Metadata from filename
+                        # Metadata from filename — resolve instrument_id
                         instrument=meta["instrument"],
+                        instrument_id=_resolve_instrument(db, name=meta["instrument"])[1] if meta["instrument"] else None,
                         vendor=meta["vendor"],
                         lot_number=meta["lot_number"],
                         batch_number=meta["batch_number"],
@@ -4573,6 +4612,7 @@ async def import_standards_stream(
                         is_active=False,
                         reference_rt=avg_rt,
                         instrument=inst_detected,
+                        instrument_id=_resolve_instrument(db, name=inst_detected)[1] if inst_detected else None,
                     )
                     db.add(lims_curve)
                     folder_lims_new += 1
@@ -4678,6 +4718,9 @@ async def resync_peptide_stream(
 
     abbreviation = peptide.abbreviation
     requested_instrument = (instrument or "").strip() or None
+    requested_instrument_id: Optional[int] = None
+    if requested_instrument:
+        _, requested_instrument_id = _resolve_instrument(db, name=requested_instrument)
 
     async def event_generator():
         import re
@@ -4806,6 +4849,7 @@ async def resync_peptide_stream(
                     is_active=True,
                     reference_rt=avg_rt,
                     instrument=requested_instrument,
+                    instrument_id=requested_instrument_id,
                 )
                 db.add(curve)
                 new_curves.append(curve)
@@ -4909,6 +4953,7 @@ async def resync_peptide_stream(
                     is_active=True,
                     reference_rt=avg_rt,
                     instrument=requested_instrument,
+                    instrument_id=requested_instrument_id,
                 )
                 db.add(curve)
                 new_curves.append(curve)
@@ -5004,6 +5049,7 @@ async def resync_peptide_stream(
                         source_date=item.get("lastModified"),
                         is_active=False,
                         instrument=meta["instrument"],
+                        instrument_id=_resolve_instrument(db, name=meta["instrument"])[1] if meta["instrument"] else None,
                         vendor=meta["vendor"],
                         lot_number=meta["lot_number"],
                         batch_number=meta["batch_number"],
