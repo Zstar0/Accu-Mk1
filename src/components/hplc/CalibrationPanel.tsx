@@ -786,16 +786,40 @@ function CalibrationRow({
             </div>
           )}
 
-          {/* Chart */}
-          {data && data.concentrations.length > 0 && (
-            <CalibrationChart
-              concentrations={editing && editStdData ? editStdData.concs.map(c => parseFloat(c) || 0) : data.concentrations}
-              areas={editing && editStdData ? editStdData.areas.map(a => parseFloat(a) || 0) : data.areas}
-              slope={calibration.slope}
-              intercept={calibration.intercept}
-              excludedIndices={editing && editStdData ? Array.from(editStdData.excluded) : data.excluded_indices}
-            />
-          )}
+          {/* Chart — live regression when editing */}
+          {data && data.concentrations.length > 0 && (() => {
+            let chartSlope = calibration.slope
+            let chartIntercept = calibration.intercept
+            if (editing && editStdData) {
+              // Client-side least-squares regression from included points
+              const xs: number[] = []
+              const ys: number[] = []
+              const esd = editStdData
+              esd.concs.forEach((c: string, i: number) => {
+                if (esd.excluded.has(i)) return
+                const x = parseFloat(c), y = parseFloat(esd.areas[i] ?? '0')
+                if (!isNaN(x) && !isNaN(y)) { xs.push(x); ys.push(y) }
+              })
+              if (xs.length >= 2) {
+                const n = xs.length
+                const sx = xs.reduce((a, b) => a + b, 0)
+                const sy = ys.reduce((a, b) => a + b, 0)
+                const sxy = xs.reduce((a, x, i) => a + x * (ys[i] ?? 0), 0)
+                const sxx = xs.reduce((a, x) => a + x * x, 0)
+                chartSlope = (n * sxy - sx * sy) / (n * sxx - sx * sx)
+                chartIntercept = (sy - chartSlope * sx) / n
+              }
+            }
+            return (
+              <CalibrationChart
+                concentrations={editing && editStdData ? editStdData.concs.map(c => parseFloat(c) || 0) : data.concentrations}
+                areas={editing && editStdData ? editStdData.areas.map(a => parseFloat(a) || 0) : data.areas}
+                slope={chartSlope}
+                intercept={chartIntercept}
+                excludedIndices={editing && editStdData ? Array.from(editStdData.excluded) : data.excluded_indices}
+              />
+            )
+          })()}
 
           {/* Standard chromatogram (from linked sample or backfill) */}
           {calibration.chromatogram_data && <StandardChromatogramViewer
