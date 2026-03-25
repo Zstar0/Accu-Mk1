@@ -74,20 +74,31 @@ def _extract_injection_info(filename: str) -> tuple[str, str]:
     parts = name.split('_')
 
     # Look for Inj_N pattern and any peptide label between Inj_N and PeakData
+    # or after PeakData (two naming conventions)
     for i, part in enumerate(parts):
         if part == 'Inj' and i + 1 < len(parts):
             inj_num = parts[i + 1]
-            # Check for peptide label: parts between Inj_N and PeakData
+            # Convention 1: label BEFORE PeakData
             # e.g. PB-0053_Inj_1_BPC_PeakData → peptide_label = "BPC"
-            peptide_parts = []
+            peptide_parts_before = []
+            peakdata_idx = None
             for j in range(i + 2, len(parts)):
                 if parts[j].lower() == 'peakdata':
+                    peakdata_idx = j
                     break
-                peptide_parts.append(parts[j])
+                peptide_parts_before.append(parts[j])
 
-            if peptide_parts:
-                peptide_label = '_'.join(peptide_parts)
+            if peptide_parts_before:
+                peptide_label = '_'.join(peptide_parts_before)
                 return f"{peptide_label}_Inj_{inj_num}", peptide_label
+
+            # Convention 2: label AFTER PeakData
+            # e.g. PB-0071_Inj_1_PeakData_Tesamorelin → peptide_label = "Tesamorelin"
+            if peakdata_idx is not None and peakdata_idx + 1 < len(parts):
+                peptide_parts_after = parts[peakdata_idx + 1:]
+                if peptide_parts_after:
+                    peptide_label = '_'.join(peptide_parts_after)
+                    return f"{peptide_label}_Inj_{inj_num}", peptide_label
 
             return f"Inj_{inj_num}", ""
 
@@ -309,10 +320,22 @@ def _extract_standard_info(filename: str) -> tuple[str, str]:
         return name, ""
 
     after_std = name[std_idx + 5:]  # skip "_std_"
-    # Remove trailing "_PeakData" (case-insensitive)
+
+    # Convention 1: _std_{AnalyteName}_PeakData → remove trailing _PeakData
     pd_idx = after_std.lower().find('_peakdata')
-    if pd_idx >= 0:
+    if pd_idx > 0:
+        # PeakData is after the label: e.g. "BPC157_PeakData" → "BPC157"
         after_std = after_std[:pd_idx]
+        return after_std, ""
+
+    # Convention 2: _Std_PeakData_{AnalyteName} → label is after PeakData_
+    if after_std.lower().startswith('peakdata_') and len(after_std) > 9:
+        label = after_std[9:]  # skip "PeakData_"
+        return label, ""
+
+    # Convention 3: _Std_PeakData only (no label)
+    if after_std.lower() in ('peakdata', ''):
+        return after_std, ""
 
     return after_std, ""
 
