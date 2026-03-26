@@ -7026,6 +7026,19 @@ def _build_session_response(session: WizardSession, db: Session) -> WizardSessio
                 if analyte_calcs:
                     vc["analyte_calculations"] = analyte_calcs
 
+                    # For blends: override vial-level required volumes with the MAX
+                    # across per-analyte requirements (all analytes share one pipette)
+                    max_stock = max(
+                        (ac.get("required_stock_vol_ul", 0) for ac in analyte_calcs.values()),
+                        default=0,
+                    )
+                    if max_stock > 0:
+                        vc["required_stock_vol_ul"] = max_stock
+                        if v_target_vol:
+                            vc["required_diluent_vol_ul"] = float(
+                                Decimal(str(v_target_vol)) - Decimal(str(max_stock))
+                            )
+
             if vc:
                 vial_calcs[vial_key] = vc
 

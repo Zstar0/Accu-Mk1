@@ -355,11 +355,29 @@ function StockPrepVial({ session, vialNumber }: {
                   <p className="font-medium font-mono">
                     {calcs.required_stock_vol_ul.toFixed(1)} µL
                   </p>
-                  {calcs.stock_conc_ug_ml != null && (
-                    <p className="text-[10px] text-muted-foreground font-mono mt-0.5">
-                      = {session.target_total_vol_ul ?? '?'} × ({session.target_conc_ug_ml ?? '?'} / {calcs.stock_conc_ug_ml.toFixed(2)})
-                    </p>
-                  )}
+                  {(() => {
+                    // For blends: show formula using per-analyte stock conc (the one that drives the max)
+                    const analyteCalcs = calcs.analyte_calculations
+                    if (analyteCalcs) {
+                      const maxEntry = Object.entries(analyteCalcs as Record<string, { stock_conc_ug_ml?: number; required_stock_vol_ul?: number }>)
+                        .filter(([, ac]) => ac.required_stock_vol_ul != null)
+                        .sort(([, a], [, b]) => (b.required_stock_vol_ul ?? 0) - (a.required_stock_vol_ul ?? 0))[0]
+                      if (maxEntry) {
+                        const [, ac] = maxEntry
+                        const aConc = ac.stock_conc_ug_ml
+                        return aConc != null ? (
+                          <p className="text-[10px] text-muted-foreground font-mono mt-0.5">
+                            = {session.target_total_vol_ul ?? '?'} × ({session.target_conc_ug_ml ?? '?'} / {aConc.toFixed(2)}) <span className="text-green-400/60">per-analyte</span>
+                          </p>
+                        ) : null
+                      }
+                    }
+                    return calcs.stock_conc_ug_ml != null ? (
+                      <p className="text-[10px] text-muted-foreground font-mono mt-0.5">
+                        = {session.target_total_vol_ul ?? '?'} × ({session.target_conc_ug_ml ?? '?'} / {calcs.stock_conc_ug_ml.toFixed(2)})
+                      </p>
+                    ) : null
+                  })()}
                 </div>
               )}
               {calcs.required_diluent_vol_ul != null && (
