@@ -36,11 +36,12 @@ export function WizardInfoPanel() {
         senaiteResult={senaiteResult}
       />
 
-      {/* Methods */}
+      {/* Methods — filtered to selected instrument when standard prep has one */}
       {selectedPeptide && (
         <MethodsSection
           peptide={selectedPeptide}
           blendComponents={blendComponents}
+          instrumentId={session.instrument_id ?? undefined}
         />
       )}
     </div>
@@ -256,9 +257,11 @@ function VialDetailsCard({
 function MethodsSection({
   peptide,
   blendComponents,
+  instrumentId,
 }: {
   peptide: NonNullable<ReturnType<typeof useWizardStore.getState>['selectedPeptide']>
   blendComponents: ReturnType<typeof useWizardStore.getState>['blendComponents']
+  instrumentId?: number
 }) {
   const [methods, setMethods] = useState<HplcMethod[]>([])
   const [loading, setLoading] = useState(false)
@@ -266,7 +269,7 @@ function MethodsSection({
   const isBlend = peptide.is_blend && blendComponents.length > 0
 
   // Fetch methods — match by peptide's own methods OR by component peptide IDs
-  // (a method's common_peptides lists which peptides use it)
+  // When instrumentId is set (standard preps), filter to only that instrument's method
   useEffect(() => {
     let cancelled = false
     setLoading(true)
@@ -277,27 +280,24 @@ function MethodsSection({
 
         // Direct method IDs from the peptide record (e.g. KLOW has its own method)
         const directMethodIds = new Set(peptide.methods.map(m => m.id))
-        const directMatches = allMethods.filter(m => directMethodIds.has(m.id))
+        let matched = allMethods.filter(m => directMethodIds.has(m.id))
 
         // If the blend has direct methods, prefer those exclusively.
         // Only fall back to component-level matching if no direct methods exist.
-        if (directMatches.length > 0) {
-          setMethods(directMatches)
-          return
-        }
-
-        // For blends without direct methods: find methods whose common_peptides
-        // include any component peptide
-        if (isBlend) {
+        if (matched.length === 0 && isBlend) {
           const componentIds = new Set(blendComponents.map(c => c.id))
-          const componentMatches = allMethods.filter(m =>
+          matched = allMethods.filter(m =>
             m.common_peptides?.some(p => componentIds.has(p.id))
           )
-          setMethods(componentMatches)
-          return
         }
 
-        setMethods([])
+        // Filter to selected instrument when specified (standard preps pick an instrument in Step 1)
+        if (instrumentId != null && matched.length > 1) {
+          const filtered = matched.filter(m => m.instrument_id === instrumentId)
+          if (filtered.length > 0) matched = filtered
+        }
+
+        setMethods(matched)
       })
       .catch(console.error)
       .finally(() => {
@@ -305,7 +305,7 @@ function MethodsSection({
       })
 
     return () => { cancelled = true }
-  }, [peptide.methods, blendComponents, isBlend])
+  }, [peptide.methods, blendComponents, isBlend, instrumentId])
 
   if (!loading && methods.length === 0) return null
 

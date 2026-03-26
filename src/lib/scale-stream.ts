@@ -19,6 +19,49 @@ export interface ScaleStreamState {
 export const STABILITY_THRESHOLD = 5
 export const STABILITY_TOLERANCE_MG = 0.5
 
+/** Local scale agent running on the lab machine */
+const LOCAL_SCALE_AGENT_URL = 'http://localhost:8765'
+
+/**
+ * Check if the local scale agent is reachable.
+ * Returns the base URL to use for scale endpoints, or null if unavailable.
+ */
+export async function discoverScaleUrl(): Promise<{ url: string; source: 'local' | 'remote' } | null> {
+  // Try local agent first (no auth needed)
+  try {
+    const res = await fetch(`${LOCAL_SCALE_AGENT_URL}/scale/status`, {
+      signal: AbortSignal.timeout(1500),
+    })
+    if (res.ok) {
+      const data = (await res.json()) as { status: string }
+      if (data.status !== 'disabled') {
+        return { url: LOCAL_SCALE_AGENT_URL, source: 'local' }
+      }
+    }
+  } catch {
+    // Local agent not running — fall through
+  }
+
+  // Fall back to DO backend
+  try {
+    const token = getAuthToken()
+    const res = await fetch(`${getApiBaseUrl()}/scale/status`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      signal: AbortSignal.timeout(3000),
+    })
+    if (res.ok) {
+      const data = (await res.json()) as { status: string }
+      if (data.status !== 'disabled') {
+        return { url: getApiBaseUrl(), source: 'remote' }
+      }
+    }
+  } catch {
+    // DO backend scale also unavailable
+  }
+
+  return null
+}
+
 const initialState: ScaleStreamState = {
   reading: null,
   error: null,
@@ -27,7 +70,7 @@ const initialState: ScaleStreamState = {
   isStable: false,
 }
 
-export function useScaleStream(active: boolean): ScaleStreamState & { stop: () => void } {
+export function useScaleStream(active: boolean, scaleUrl?: string): ScaleStreamState & { stop: () => void } {
   const [state, setState] = useState<ScaleStreamState>(initialState)
   const abortRef = useRef<AbortController | null>(null)
   const windowRef = useRef<number[]>([])
@@ -41,7 +84,7 @@ export function useScaleStream(active: boolean): ScaleStreamState & { stop: () =
   }, [])
 
   useEffect(() => {
-    if (!active) {
+    if (!active || !scaleUrl) {
       stop()
       return
     }
@@ -54,8 +97,9 @@ export function useScaleStream(active: boolean): ScaleStreamState & { stop: () =
 
     async function run() {
       try {
-        const token = getAuthToken()
-        const response = await fetch(`${getApiBaseUrl()}/scale/weight/stream`, {
+        const isLocal = scaleUrl === LOCAL_SCALE_AGENT_URL
+        const token = !isLocal ? getAuthToken() : null
+        const response = await fetch(`${scaleUrl}/scale/weight/stream`, {
           headers: token ? { Authorization: `Bearer ${token}` } : {},
           signal: controller.signal,
         })

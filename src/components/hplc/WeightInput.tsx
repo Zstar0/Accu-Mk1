@@ -5,9 +5,7 @@ import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Skeleton } from '@/components/ui/skeleton'
-import { getApiBaseUrl } from '@/lib/config'
-import { getAuthToken } from '@/store/auth-store'
-import { useScaleStream } from '@/lib/scale-stream'
+import { useScaleStream, discoverScaleUrl } from '@/lib/scale-stream'
 
 export interface WeightInputProps {
   /** Measurement step key, e.g. "stock_vial_empty_mg" */
@@ -22,32 +20,23 @@ type ScaleMode = 'loading' | 'scale' | 'manual'
 
 export function WeightInput({ stepKey: _stepKey, label, onAccept }: WeightInputProps) {
   const [scaleMode, setScaleMode] = useState<ScaleMode>('loading')
+  const [scaleUrl, setScaleUrl] = useState<string | undefined>()
   const [streamActive, setStreamActive] = useState(false)
   const [manualValue, setManualValue] = useState('')
 
-  // Determine scale vs manual mode on mount
+  // Discover scale: try local agent first, then DO backend, else manual
   useEffect(() => {
     let cancelled = false
 
     async function checkScaleStatus() {
-      try {
-        const token = getAuthToken()
-        const response = await fetch(`${getApiBaseUrl()}/scale/status`, {
-          headers: token ? { Authorization: `Bearer ${token}` } : {},
-        })
-        if (cancelled) return
+      const result = await discoverScaleUrl()
+      if (cancelled) return
 
-        if (!response.ok) {
-          setScaleMode('manual')
-          return
-        }
-
-        const data = (await response.json()) as { status: string }
-        if (cancelled) return
-
-        setScaleMode(data.status === 'disabled' ? 'manual' : 'scale')
-      } catch {
-        if (!cancelled) setScaleMode('manual')
+      if (result) {
+        setScaleUrl(result.url)
+        setScaleMode('scale')
+      } else {
+        setScaleMode('manual')
       }
     }
 
@@ -58,7 +47,7 @@ export function WeightInput({ stepKey: _stepKey, label, onAccept }: WeightInputP
     }
   }, [])
 
-  const { reading, isStable, error, streaming, stop } = useScaleStream(streamActive)
+  const { reading, isStable, error, streaming, stop } = useScaleStream(streamActive, scaleUrl)
 
   function handleAcceptScale() {
     if (!reading) return
