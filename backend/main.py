@@ -6893,7 +6893,11 @@ def _build_session_response(session: WizardSession, db: Session) -> WizardSessio
 
     # Per-vial calculations (multi-vial blends)
     vial_calcs: dict | None = None
-    if session.vial_params and len(session.vial_params) > 1:
+    # Run vial calculations when: multiple vials OR any vial has analyte_params (blend in single vial)
+    _has_analyte_params = session.vial_params and any(
+        v.get("analyte_params") for v in session.vial_params.values()
+    ) if session.vial_params else False
+    if session.vial_params and (len(session.vial_params) > 1 or _has_analyte_params):
         from calculations.wizard import (
             calc_stock_prep, calc_required_volumes, calc_actual_dilution,
             calc_stock_conc_per_analyte, calc_actual_conc_per_analyte,
