@@ -59,9 +59,9 @@ function DilutionVial({ session, vialNumber }: {
   const step3cLocked = !step3bDone
 
   const sessionId = session.id
-  const calcs = vialNumber === 1
-    ? session.calculations
-    : session.vial_calculations?.[String(vialNumber)] ?? null
+  // Prefer vial_calculations (has per-analyte overrides for blends) over top-level calculations
+  const calcs = session.vial_calculations?.[String(vialNumber)]
+    ?? (vialNumber === 1 ? session.calculations : null)
 
   const requiredDiluentVol = calcs?.required_diluent_vol_ul
   const requiredStockVol = calcs?.required_stock_vol_ul

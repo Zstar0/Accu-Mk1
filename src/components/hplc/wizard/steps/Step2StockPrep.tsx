@@ -60,9 +60,9 @@ function StockPrepVial({ session, vialNumber }: {
   const step2dDone = meas2d != null && !reweigh2d
 
   const sessionId = session.id
-  const calcs = vialNumber === 1
-    ? session.calculations
-    : session.vial_calculations?.[String(vialNumber)] ?? null
+  // Prefer vial_calculations (has per-analyte overrides for blends) over top-level calculations
+  const calcs = session.vial_calculations?.[String(vialNumber)]
+    ?? (vialNumber === 1 ? session.calculations : null)
 
   async function handleAccept2a(value: number, source: 'scale' | 'manual') {
     setError2a(null)
