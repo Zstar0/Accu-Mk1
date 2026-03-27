@@ -700,10 +700,53 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
     // Wait for DB check to complete before deciding whether to load SharePoint
     if (loadingSaved) return              // skip while DB check still in progress (state)
     if (dbCheckActiveRef.current) return  // skip during DB check (ref — synchronous guard)
-    // NOTE: we no longer skip SharePoint when savedResults exist —
-    // we still need the parsed data for chromatogram + peak table display.
-    // The auto-run analysis effect is gated separately and won't re-analyze
-    // when result is already set from saved data.
+
+    // History mode: no SharePoint files — reconstruct from stored analysis data
+    const isHistoryMode = match.peak_files.length === 0 && !match.folder_id
+    if (isHistoryMode && savedResults && savedResults.length > 0) {
+      setLoading(true)
+      try {
+        // Reconstruct injections from raw_data
+        const allInjections: HPLCInjection[] = []
+        for (const sr of savedResults) {
+          const rawInj = (sr.raw_data as Record<string, unknown>)?.injections
+          if (Array.isArray(rawInj)) {
+            allInjections.push(...(rawInj as HPLCInjection[]))
+          }
+        }
+        if (allInjections.length > 0) {
+          setParseResult({
+            injections: allInjections,
+            purity: { purity_percent: null, individual_values: [], injection_names: [], rsd_percent: null },
+            errors: [],
+            warnings: [],
+            detected_peptides: [],
+            standard_injections: [],
+          })
+        }
+
+        // Reconstruct chromatogram traces from stored chromatogram_data
+        const traces: ChromatogramTrace[] = []
+        for (const sr of savedResults) {
+          const cd = sr.chromatogram_data
+          if (cd?.times && cd?.signals) {
+            const points: [number, number][] = cd.times.map((t: number, i: number) => [t, cd.signals[i] ?? 0])
+            traces.push({
+              name: sr.peptide_abbreviation ?? sr.sample_id_label,
+              points,
+            })
+          }
+        }
+        setChromTraces(traces)
+      } catch (e) {
+        setParseError(e instanceof Error ? e.message : 'Failed to load stored HPLC data')
+      } finally {
+        setLoading(false)
+      }
+      return
+    }
+
+    // Live mode: download from SharePoint
     setLoading(true)
     setParseError(null)
     try {
@@ -750,7 +793,7 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
     } finally {
       setLoading(false)
     }
-  }, [match, parseResult, loadingSaved])
+  }, [match, parseResult, loadingSaved, savedResults])
 
   useEffect(() => {
     if (open) loadPeakData()
@@ -1061,14 +1104,6 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
         const fallbackResult = firstWithResult !== null ? (results.get(firstWithResult) ?? null) : null
         setResult(fallbackResult)
         setActiveAnalyte(firstWithResult ?? blendPeptides[0] ?? null)
-      }
-
-      // Phase 10.5: auto-update sample prep status to hplc_complete
-      try {
-        await updateSamplePrep(prep.id, { status: 'hplc_complete' })
-      } catch {
-        // Non-blocking — don't fail the analysis if status update fails
-        console.warn('Failed to update sample prep status to hplc_complete')
       }
 
       scrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' })
@@ -1613,7 +1648,11 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
                         vendor={prep.manufacturer ?? undefined}
                         notes={prep.standard_notes ?? undefined}
                         instrument={prep.instrument_name ?? undefined}
-                        onCurveCreated={() => setStandardCurveCreated(true)}
+                        onCurveCreated={() => {
+                          setStandardCurveCreated(true)
+                          updateSamplePrep(prep.id, { status: 'curve_created' }).catch(_e => { /* non-blocking */ })
+                          prep.status = 'curve_created'
+                        }}
                       />
                     )}
 
@@ -1771,6 +1810,7 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
             prep={prep}
             results={isBlend || hasMultipleAnalytes ? [...analyteResults.values()] : [result]}
             onBack={() => setView('analysis')}
+            onComplete={() => { prep.status = 'hplc_complete' }}
           />
         ) : null}
       </SheetContent>

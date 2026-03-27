@@ -16,6 +16,7 @@ import { toast } from 'sonner'
 import {
   lookupSenaiteSample,
   setAnalysisResult,
+  updateSamplePrep,
   type SamplePrep,
   type HPLCAnalysisResult,
   type SenaiteLookupResult,
@@ -138,9 +139,10 @@ interface Props {
   prep: SamplePrep
   results: HPLCAnalysisResult[]
   onBack: () => void
+  onComplete?: () => void
 }
 
-export function SenaiteResultsView({ prep, results, onBack }: Props) {
+export function SenaiteResultsView({ prep, results, onBack, onComplete }: Props) {
   const [sampleIdInput, setSampleIdInput] = useState(
     prep.senaite_sample_id ?? '',
   )
@@ -568,6 +570,11 @@ export function SenaiteResultsView({ prep, results, onBack }: Props) {
             onTransitionComplete={handleTransitionComplete}
             onMethodInstrumentSaved={handleMethodInstrumentSaved}
           />
+
+          {/* Complete HPLC button */}
+          {prep.status !== 'hplc_complete' && prep.status !== 'completed' && (
+            <CompleteHplcButton prepId={prep.id} onComplete={onComplete} />
+          )}
         </div>
       )}
 
@@ -578,6 +585,59 @@ export function SenaiteResultsView({ prep, results, onBack }: Props) {
           <p className="text-sm">Enter a Sample ID above and press Load</p>
         </div>
       )}
+    </div>
+  )
+}
+
+function CompleteHplcButton({ prepId, onComplete }: { prepId: number; onComplete?: () => void }) {
+  const [completing, setCompleting] = useState(false)
+  const [done, setDone] = useState(false)
+
+  async function handleComplete() {
+    setCompleting(true)
+    try {
+      await updateSamplePrep(prepId, { status: 'hplc_complete' })
+      setDone(true)
+      toast.success('Sample prep marked as HPLC Complete')
+      onComplete?.()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to complete')
+    } finally {
+      setCompleting(false)
+    }
+  }
+
+  if (done) {
+    return (
+      <div className="flex items-center justify-center gap-2 py-4 text-sm text-green-500">
+        <CheckCircle2 size={16} />
+        HPLC Complete
+      </div>
+    )
+  }
+
+  return (
+    <div className="border-t border-border/50 pt-4 mt-4">
+      <Button
+        onClick={handleComplete}
+        disabled={completing}
+        className="w-full bg-teal-600 hover:bg-teal-700 text-white"
+      >
+        {completing ? (
+          <>
+            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            Completing...
+          </>
+        ) : (
+          <>
+            <Check className="mr-2 h-4 w-4" />
+            Mark HPLC Complete
+          </>
+        )}
+      </Button>
+      <p className="text-[10px] text-muted-foreground text-center mt-1.5">
+        Confirms HPLC processing is done for this sample prep
+      </p>
     </div>
   )
 }

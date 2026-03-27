@@ -1,5 +1,27 @@
 # Changelog
 
+## v0.27.3 — 2026-03-27
+
+### Sample Prep Workflow
+
+- **Manual HPLC Complete**: Status no longer auto-set after analysis — user clicks "Mark HPLC Complete" button on the SENAITE results page
+- **Curve Created status**: Standard preps auto-set to `curve_created` when calibration curve is created
+- **Completed preps filter**: Sample Preps list hides `hplc_complete`, `completed`, and `curve_created` preps
+
+### History Page
+
+- **Production/Standards tabs**: Split completed preps into separate tabs
+- **Flyout integration**: Clicking a history prep opens the same Process HPLC flyout
+- **History mode**: Flyout loads chromatograms and peak data from stored analysis records instead of re-downloading from SharePoint
+- **Removed legacy tabs**: HPLC Import and Sample Prep Wizard tabs removed
+- **Removed Import Analysis**: Sidebar nav item removed
+
+### Fixes
+
+- **Standard file warnings**: `P-0136_Std_100_PeakData.csv` no longer triggers "wrong file in folder" warnings
+
+---
+
 ## v0.27.2 — 2026-03-27
 
 ### Order Status — Kanban Enhancements

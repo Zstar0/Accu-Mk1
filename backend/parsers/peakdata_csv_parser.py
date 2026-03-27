@@ -438,7 +438,10 @@ def parse_hplc_files(files: list[dict]) -> HPLCParseResult:
                 injections.append(injection)
 
                 # Validate: does the internal "Sample name" match the expected sample ID?
-                if expected_sample_id and injection.source_sample_id:
+                # Skip check for standard concentration files (P-0136_Std_100 → expected P-0136)
+                import re as _re
+                _is_std_conc = bool(_re.search(r'_Std_\d+', filename))
+                if expected_sample_id and injection.source_sample_id and not _is_std_conc:
                     if injection.source_sample_id.upper() != expected_sample_id.upper():
                         label = injection.peptide_label or injection.injection_name
                         warnings.append(

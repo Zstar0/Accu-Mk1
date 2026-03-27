@@ -34,6 +34,7 @@ import { SamplePrepHplcFlyout } from './SamplePrepHplcFlyout'
 const STATUSES: { value: string; label: string; cls: string }[] = [
   { value: 'awaiting_hplc',  label: 'Awaiting HPLC',  cls: 'bg-blue-600 text-white' },
   { value: 'hplc_complete',  label: 'HPLC Complete',  cls: 'bg-teal-600 text-white' },
+  { value: 'curve_created',  label: 'Curve Created',  cls: 'bg-emerald-600 text-white' },
   { value: 'completed',      label: 'Completed',      cls: 'bg-green-600 text-white' },
   { value: 'on_hold',        label: 'On Hold',        cls: 'bg-amber-500 text-white' },
   { value: 'review',         label: 'Review',         cls: 'bg-purple-600 text-white' },
@@ -206,7 +207,8 @@ export function SamplePreps() {
         is_standard: standardFilter === 'all' ? undefined : standardFilter === 'standard',
         limit: 100,
       })
-      setPreps(data)
+      // Hide completed preps — they show on the History page
+      setPreps(data.filter(p => !['hplc_complete', 'completed', 'curve_created'].includes(p.status)))
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load sample preps')
     } finally {
@@ -463,6 +465,7 @@ export function SamplePreps() {
                               backgroundColor:
                                 prep.status === 'awaiting_hplc'  ? 'rgb(37 99 235)'
                                 : prep.status === 'hplc_complete' ? 'rgb(13 148 136)'
+                                : prep.status === 'curve_created' ? 'rgb(5 150 105)'
                                 : prep.status === 'completed'     ? 'rgb(22 163 74)'
                                 : prep.status === 'on_hold'       ? 'rgb(245 158 11)'
                                 : prep.status === 'review'        ? 'rgb(147 51 234)'

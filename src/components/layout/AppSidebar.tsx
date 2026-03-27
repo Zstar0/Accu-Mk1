@@ -89,7 +89,6 @@ const navItems: NavItem[] = [
     subItems: [
       { id: 'overview', label: 'Overview' },
       { id: 'new-analysis', label: 'New Analysis' },
-      { id: 'import-analysis', label: 'Import Analysis' },
       { id: 'analysis-history', label: 'History' },
       { id: 'sample-preps', label: 'Sample Preps' },
     ],
