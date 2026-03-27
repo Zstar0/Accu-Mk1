@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.27.1 — 2026-03-27
+
+### Order Status Page Improvements
+
+- **New filter states**: Sample Due, Ready for Review, Published, Waiting Addon, Received — covers the full SENAITE sample lifecycle
+- **Tooltips on filter buttons**: Hover to see what each state means in the SENAITE workflow
+- **Count badges on filters**: Each filter button shows how many samples match that state
+- **Progress column**: Replaced "Samples 0/7" with a progress bar showing verified analyses out of total
+- **Left border state indicator**: Color-coded left border on each row shows the order's earliest (most behind) sample state
+- **Dimmed completed orders**: Rows where all samples are verified/published fade to 45% opacity
+- **Time since received**: Sample cards show color-coded processing time (white <24h, amber 24-48h, red >48h) with hover text explaining the goal
+- **Sample Details page**: Same color-coded time-since-received display in the header
+- **Kanban cards**: Same time and hover text on kanban board sample items
+
+---
+
 ## v0.27.0 — 2026-03-27
 
 ### User Tracking & Audit Trail
