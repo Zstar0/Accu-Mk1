@@ -13,6 +13,7 @@ import {
   Columns3,
   Layers,
   ArrowUpDown,
+  ListTree,
 } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
@@ -600,6 +601,7 @@ interface KanbanSampleItem {
   lookup: SenaiteLookupResult | undefined
   isLoading: boolean
   isError: boolean
+  analysisServices?: string[]  // names of analyses matching this column's state
 }
 
 // Human-readable label for the count in each column
@@ -628,6 +630,55 @@ const COL_PILL_CLASS: Record<string, string> = {
   published: 'bg-purple-500/15 text-purple-400',
 }
 
+// Map column key → analysis review_states that belong in that column
+const COL_ANALYSIS_STATES: Record<string, string[]> = {
+  assigned: ['assigned'],
+  to_verify: ['to_be_verified'],
+  verified: ['verified'],
+  published: ['published'],
+  pending: ['registered', 'unassigned', 'sample_registered'],
+}
+
+const COMPLETED_ANALYSIS_STATES = new Set(['verified', 'published', 'rejected', 'cancelled', 'invalid', 'retracted'])
+
+function buildAnalyteNameMap(lookup: SenaiteLookupResult | undefined): Map<number, string> {
+  const map = new Map<number, string>()
+  if (!lookup?.analytes) return map
+  for (const analyte of lookup.analytes) {
+    const displayName = analyte.matched_peptide_name ?? analyte.raw_name.replace(/\s*-\s*[^-]+\([^)]+\)\s*$/, '')
+    map.set(analyte.slot_number, displayName)
+  }
+  return map
+}
+
+function formatAnalysisTitle(title: string, nameMap: Map<number, string>): string {
+  const match = title.match(/^Analyte\s+(\d)\s*(.*)/i)
+  if (match?.[1]) {
+    const slot = parseInt(match[1], 10)
+    const suffix = match[2] ?? ''
+    const peptideName = nameMap.get(slot)
+    if (peptideName) return `${peptideName} ${suffix}`.trim()
+  }
+  return title
+}
+
+function getAnalysisServicesForCol(analyses: SenaiteAnalysis[], colKey: string, lookup?: SenaiteLookupResult): string[] {
+  const nameMap = buildAnalyteNameMap(lookup)
+  const format = (a: SenaiteAnalysis) => formatAnalysisTitle(a.title, nameMap)
+
+  // For waiting_for_addon and ready_for_review: show analyses that are NOT completed (the outstanding ones)
+  if (colKey === 'waiting_for_addon' || colKey === 'ready_for_review') {
+    return analyses
+      .filter(a => !COMPLETED_ANALYSIS_STATES.has(a.review_state?.toLowerCase() ?? ''))
+      .map(format)
+  }
+  const states = COL_ANALYSIS_STATES[colKey]
+  if (!states) return []
+  return analyses
+    .filter(a => states.includes(a.review_state?.toLowerCase() ?? ''))
+    .map(format)
+}
+
 // Plain text label for SENAITE sample state — avoids badge confusion with column state
 function sampleStateLabel(state: string | null): string {
   const s = state?.toLowerCase() ?? ''
@@ -652,9 +703,11 @@ function sampleStateLabel(state: string | null): string {
 function KanbanSampleCard({
   item,
   showOrder,
+  showAnalysisServices,
 }: {
   item: KanbanSampleItem
   showOrder: boolean
+  showAnalysisServices: boolean
 }) {
   const navigateToSample = useUIStore(state => state.navigateToSample)
   const navigateToOrderExplorer = useUIStore(state => state.navigateToOrderExplorer)
@@ -670,6 +723,19 @@ function KanbanSampleCard({
 
   const pillClass = COL_PILL_CLASS[item.colKey] ?? 'bg-muted/60 text-muted-foreground'
   const countLabel = COL_COUNT_LABEL[item.colKey] ?? ''
+
+  // Unique analysts assigned to analyses in this column
+  const analysts = (() => {
+    if (!item.lookup) return []
+    const colStates = COL_ANALYSIS_STATES[item.colKey]
+    const relevant = colStates
+      ? item.lookup.analyses.filter(a => colStates.includes(a.review_state?.toLowerCase() ?? ''))
+      : item.colKey === 'waiting_for_addon' || item.colKey === 'ready_for_review'
+      ? item.lookup.analyses.filter(a => !COMPLETED_ANALYSIS_STATES.has(a.review_state?.toLowerCase() ?? ''))
+      : []
+    const names = new Set(relevant.map(a => a.analyst).filter((n): n is string => !!n))
+    return Array.from(names)
+  })()
 
   return (
     <div className="rounded border border-border/50 bg-card px-2 py-1 hover:border-border transition-colors cursor-pointer">
@@ -693,6 +759,15 @@ function KanbanSampleCard({
           <span className="font-normal opacity-80">{countLabel}</span>
         </span>
       </div>
+      {/* Analysts */}
+      {analysts.length > 0 && (
+        <div className="flex items-center gap-1 mt-0.5">
+          <span className="text-[10px] text-muted-foreground/50">Tech:</span>
+          <span className="text-[10px] text-muted-foreground/80 truncate">
+            {analysts.join(', ')}
+          </span>
+        </div>
+      )}
       {/* Row 2: secondary metadata — clearly separated from analysis state */}
       {(showOrder || item.lookup) && (
         <div className="flex items-center justify-between gap-1 mt-0.5">
@@ -741,6 +816,15 @@ function KanbanSampleCard({
           )}
         </div>
       )}
+      {showAnalysisServices && item.colKey !== 'published' && item.analysisServices && item.analysisServices.length > 0 && (
+        <div className="mt-1 pt-1 border-t border-border/30">
+          {item.analysisServices.map((name, i) => (
+            <div key={i} className="text-[10px] text-muted-foreground/70 leading-relaxed truncate">
+              {name}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }
@@ -750,11 +834,13 @@ function KanbanView({
   sampleLookupMap,
   groupByOrder,
   activeStates,
+  showAnalysisServices,
 }: {
   orders: ExplorerOrder[]
   sampleLookupMap: Map<string, { data?: SenaiteLookupResult; isLoading: boolean; isError: boolean }>
   groupByOrder: boolean
   activeStates: string[]
+  showAnalysisServices: boolean
 }) {
   // Determine which columns to show — all if no filter, else just the active one
   const visibleCols = activeStates.length > 0
@@ -803,6 +889,7 @@ function KanbanView({
               lookup: lq.data,
               isLoading: false,
               isError: false,
+              analysisServices: getAnalysisServicesForCol(lq.data.analyses, col.key, lq.data),
             })
           }
         }
@@ -839,6 +926,7 @@ function KanbanView({
                     key={`${item.sampleId}-${item.colKey}`}
                     item={item}
                     showOrder={true}
+                    showAnalysisServices={showAnalysisServices}
                   />
                 ))}
               </div>
@@ -890,6 +978,7 @@ function KanbanView({
                           key={`${item.sampleId}-${item.colKey}`}
                           item={item}
                           showOrder={false}
+                          showAnalysisServices={showAnalysisServices}
                         />
                       ))
                     )}
@@ -930,6 +1019,7 @@ interface OrderFilters {
   hideTestOrders: boolean
   viewMode: 'table' | 'kanban'
   groupByOrder: boolean
+  showAnalysisServices: boolean
   kanbanSort: 'order_id' | 'processing_time'
   kanbanSortDir: 'asc' | 'desc'
 }
@@ -949,6 +1039,7 @@ function loadOrderFilters(): OrderFilters {
     hideTestOrders: true,
     viewMode: 'table',
     groupByOrder: true,
+    showAnalysisServices: false,
     kanbanSort: 'processing_time',
     kanbanSortDir: 'desc',
   }
@@ -1314,6 +1405,20 @@ export function OrderStatusPage() {
                     <Layers className="h-3.5 w-3.5" />
                     By Order
                   </button>
+                  <button
+                    type="button"
+                    title="Show analysis services in each card"
+                    onClick={() => updateFilters({ showAnalysisServices: !orderFilters.showAnalysisServices })}
+                    className={cn(
+                      'flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium border transition-colors',
+                      orderFilters.showAnalysisServices
+                        ? 'bg-foreground text-background border-foreground'
+                        : 'bg-transparent text-muted-foreground border-border hover:border-foreground/40 hover:text-foreground'
+                    )}
+                  >
+                    <ListTree className="h-3.5 w-3.5" />
+                    Services
+                  </button>
                   {/* Sort controls */}
                   {(
                     <div className="flex items-center gap-0.5 border border-border rounded-md overflow-hidden">
@@ -1545,6 +1650,7 @@ export function OrderStatusPage() {
                   sampleLookupMap={sampleLookupMap}
                   groupByOrder={orderFilters.groupByOrder}
                   activeStates={orderFilters.activeStates}
+                  showAnalysisServices={orderFilters.showAnalysisServices}
                 />
               </div>
             )}

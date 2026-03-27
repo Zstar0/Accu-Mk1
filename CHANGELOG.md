@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.27.2 — 2026-03-27
+
+### Order Status — Kanban Enhancements
+
+- **"Services" toggle**: Expand kanban cards to show individual analysis service names per column state
+- **Analyte name rewriting**: "Analyte 1 (Purity)" displays as "BPC-157 (Purity)" using the same logic as Sample Details
+- **Waiting Addon services**: Shows outstanding (incomplete) analyses — Endotoxin, Sterility, etc.
+- **Tech display on cards**: Shows assigned analyst(s) on each kanban card (e.g. "Tech: Forrest")
+- **Retracted analyses excluded**: No longer counted as "Pending" in state counts and progress bars
+- **Published column**: Skips service expansion (not useful for completed items)
+
+---
+
 ## v0.27.1 — 2026-03-27
 
 ### Order Status Page Improvements
