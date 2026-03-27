@@ -98,7 +98,7 @@ function groupAnalysisStates(analyses: SenaiteAnalysis[], sampleReviewState?: st
     else if (state === 'to_be_verified') counts.to_verify++
     else if (state === 'published') counts.published++
     else if (state === 'verified') counts.verified++
-    else if (state === 'rejected' || state === 'cancelled' || state === 'invalid') { /* terminal — skip */ }
+    else if (state === 'rejected' || state === 'cancelled' || state === 'invalid' || state === 'retracted') { /* terminal — skip */ }
     else counts.pending++ // registered, unassigned, etc.
   }
   // Sample-level states
@@ -400,7 +400,7 @@ function getOrderProgress(
     if (!lookup?.data) continue
     for (const a of lookup.data.analyses) {
       const s = a.review_state?.toLowerCase()
-      if (s === 'rejected' || s === 'cancelled' || s === 'invalid') continue
+      if (s === 'rejected' || s === 'cancelled' || s === 'invalid' || s === 'retracted') continue
       total++
       if (s === 'verified' || s === 'published') done++
     }
