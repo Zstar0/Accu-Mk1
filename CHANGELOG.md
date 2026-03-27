@@ -1,5 +1,36 @@
 # Changelog
 
+## v0.27.0 — 2026-03-27
+
+### User Tracking & Audit Trail
+
+- **Sample Preps**: Record `created_by` and `updated_by` (user ID + email) on every create/update
+- **HPLC Analysis**: Record `processed_by` on every analysis run
+- **Peptides**: Record `created_by` and `updated_by` on create/update
+- **Calibration Curves**: Record `created_by` and `updated_by` on create/update/activate
+- **Backfill**: Older records without `created_by` are automatically backfilled on first edit
+
+### Instrument Selection
+
+- Instrument selector now available for **all** sample preps (previously standard-only)
+- Wizard resolves `instrument_id` → `instrument_name` on session create and update
+- HPLC analysis calls now pass the sample prep's instrument ID to the analysis record
+- Methods panel in wizard filters to the selected instrument
+
+### UI Enhancements
+
+- **Wizard info panel**: Shows lab tech (logged-in user) and instrument throughout all wizard steps
+- **HPLC flyout**: Shows lab tech and instrument context at the top of the Process HPLC sheet
+- **Sample Preps list**: Added "Created By" column
+- **Calibration Curves**: Shows "Created By" and "Last Edited By" in curve detail view
+
+### Fixes
+
+- Fixed stale SENAITE result persisting when opening a different sample prep in the wizard
+- Fixed `_cal_to_response` not including user tracking fields in list views
+
+---
+
 ## v0.26.1 — 2026-03-20
 
 ### HPLC Audit Trail & Debug Persistence

@@ -276,6 +276,8 @@ export const useWizardStore = create<WizardStoreState>()(
             stepStates: deriveStepStates(session, get().currentStep, steps),
             blendComponents: components ?? [],
             selectedPeptide: peptide ?? null,
+            senaiteResult: null,
+            error: null,
           },
           undefined,
           'startSession'

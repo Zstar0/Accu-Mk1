@@ -72,6 +72,8 @@ import { AnalysisResults } from '@/components/hplc/AnalysisResults'
 import { CalculationVisuals } from '@/components/hplc/CalculationVisuals'
 import { SenaiteResultsView } from '@/components/hplc/SenaiteResultsView'
 import { StandardCurveReview } from '@/components/hplc/StandardCurveReview'
+import { useAuthStore } from '@/store/auth-store'
+import { User, Cpu } from 'lucide-react'
 
 // ─── Injection tabs ───────────────────────────────────────────────────────────
 
@@ -575,6 +577,7 @@ interface Props {
 
 export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null)
+  const authUser = useAuthStore(state => state.user)
   // Phase 13.5: Archive downloaded file contents for audit trail
   const downloadedFilesRef = useRef<{ filename: string; content: string }[]>([])
 
@@ -1005,7 +1008,7 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
             injections: filteredInj as unknown as Record<string, unknown>[],
             // Phase 10.5: provenance
             sample_prep_id: prep.id,
-            instrument_id: undefined,
+            instrument_id: prep.instrument_id ?? undefined,
             source_sharepoint_folder: match.folder_name,
             chromatogram_data: chromData,
             run_group_id: runGroupId,
@@ -1033,7 +1036,7 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
             injections: filteredInj as unknown as Record<string, unknown>[],
             // Phase 10.5: provenance
             sample_prep_id: prep.id,
-            instrument_id: undefined,
+            instrument_id: prep.instrument_id ?? undefined,
             source_sharepoint_folder: match.folder_name,
             chromatogram_data: chromData,
             run_group_id: runGroupId,
@@ -1296,6 +1299,20 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
             </button>
           </div>
         </SheetHeader>
+
+        {/* Lab tech & instrument context */}
+        <div className="mx-6 mt-4 rounded-lg border border-border/60 bg-muted/30 p-3 space-y-2">
+          <div className="flex items-center gap-2 text-xs">
+            <User className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+            <span className="text-muted-foreground">Tech:</span>
+            <span className="font-medium truncate">{authUser?.email ?? '—'}</span>
+          </div>
+          <div className="flex items-center gap-2 text-xs">
+            <Cpu className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+            <span className="text-muted-foreground">Instrument:</span>
+            <span className="font-medium truncate">{prep.instrument_name ?? '—'}</span>
+          </div>
+        </div>
 
         {/* Debug console overlay */}
         {showDebug && (

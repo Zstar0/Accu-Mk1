@@ -400,6 +400,7 @@ export function SamplePreps() {
                 <th className="px-4 py-3 text-right font-medium text-muted-foreground">Actual Conc.</th>
                 <th className="px-4 py-3 text-left font-medium text-muted-foreground">Status</th>
                 <th className="px-4 py-3 text-left font-medium text-muted-foreground">Created</th>
+                <th className="px-4 py-3 text-left font-medium text-muted-foreground">Created By</th>
                 <th className="px-4 py-3 text-right font-medium text-muted-foreground">Actions</th>
               </tr>
             </thead>
@@ -479,6 +480,7 @@ export function SamplePreps() {
                       </td>
 
                       <td className="px-4 py-3 text-muted-foreground text-xs">{fmtDate(prep.created_at)}</td>
+                      <td className="px-4 py-3 text-muted-foreground text-xs">{prep.created_by_email ?? '—'}</td>
 
                       {/* Actions */}
                       <td className="px-4 py-3" onClick={e => e.stopPropagation()}>

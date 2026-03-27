@@ -1645,6 +1645,11 @@ export interface CalibrationCurve {
   // Phase 09: Chromatogram storage
   chromatogram_data: { times: number[]; signals: number[] } | null
   source_sharepoint_folder: string | null
+  // User tracking
+  created_by_user_id: number | null
+  created_by_email: string | null
+  updated_by_user_id: number | null
+  updated_by_email: string | null
 }
 
 export interface InstrumentSummary {
@@ -2738,8 +2743,14 @@ export interface SamplePrep {
   manufacturer: string | null
   standard_notes: string | null
   instrument_name: string | null
+  instrument_id: number | null
   created_at: string
   updated_at: string
+  // User tracking
+  created_by_user_id: number | null
+  created_by_email: string | null
+  updated_by_user_id: number | null
+  updated_by_email: string | null
 }
 
 export async function createSamplePrep(

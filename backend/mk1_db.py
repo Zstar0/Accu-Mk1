@@ -121,6 +121,11 @@ def ensure_sample_preps_table() -> None:
             cur.execute("ALTER TABLE sample_preps ADD COLUMN IF NOT EXISTS standard_notes TEXT")
             cur.execute("ALTER TABLE sample_preps ADD COLUMN IF NOT EXISTS instrument_name VARCHAR(200)")
             cur.execute("ALTER TABLE sample_preps ADD COLUMN IF NOT EXISTS instrument_id INTEGER")
+            # User tracking
+            cur.execute("ALTER TABLE sample_preps ADD COLUMN IF NOT EXISTS created_by_user_id INTEGER")
+            cur.execute("ALTER TABLE sample_preps ADD COLUMN IF NOT EXISTS created_by_email VARCHAR(320)")
+            cur.execute("ALTER TABLE sample_preps ADD COLUMN IF NOT EXISTS updated_by_user_id INTEGER")
+            cur.execute("ALTER TABLE sample_preps ADD COLUMN IF NOT EXISTS updated_by_email VARCHAR(320)")
         conn.commit()
 
 
@@ -161,6 +166,7 @@ def create_sample_prep(data: dict) -> dict:
         "actual_total_vol_ul", "status", "notes",
         "is_blend", "components_json",
         "is_standard", "manufacturer", "standard_notes", "instrument_name", "instrument_id",
+        "created_by_user_id", "created_by_email", "updated_by_user_id", "updated_by_email",
     ]
     with get_mk1_db() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
@@ -241,6 +247,8 @@ def update_sample_prep(sample_prep_id: int, data: dict) -> Optional[dict]:
         "actual_total_vol_ul", "status", "notes",
         "instrument_name", "instrument_id", "manufacturer", "standard_notes",
         "is_standard", "is_blend", "components_json", "vial_data",
+        "created_by_user_id", "created_by_email",
+        "updated_by_user_id", "updated_by_email",
     }
     updates = {k: v for k, v in data.items() if k in allowed}
     if not updates:

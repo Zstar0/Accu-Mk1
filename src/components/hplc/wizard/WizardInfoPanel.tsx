@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
-import { FlaskConical, Loader2, Beaker } from 'lucide-react'
+import { FlaskConical, Loader2, Beaker, User, Cpu } from 'lucide-react'
 import { useWizardStore } from '@/store/wizard-store'
+import { useAuthStore } from '@/store/auth-store'
 import { getMethods, type HplcMethod } from '@/lib/api'
 
 /** Left-hand info panel shown during the wizard after peptide selection. */
@@ -20,8 +21,13 @@ export function WizardInfoPanel() {
   const activeVial = currentStepDef?.vialNumber ?? 1
   const isMultiVial = blendComponents.some(c => c.vial_number != null && c.vial_number > 1)
 
+  const user = useAuthStore(state => state.user)
+
   return (
     <div className="flex flex-col gap-4 overflow-y-auto p-4">
+      {/* Lab tech & instrument context */}
+      <SessionContextCard user={user} instrumentName={session.instrument_name} />
+
       {/* SENAITE Sample Info */}
       {senaiteResult && <SenaiteCard senaiteResult={senaiteResult} />}
 
@@ -36,7 +42,7 @@ export function WizardInfoPanel() {
         senaiteResult={senaiteResult}
       />
 
-      {/* Methods — filtered to selected instrument when standard prep has one */}
+      {/* Methods — filtered to selected instrument */}
       {selectedPeptide && (
         <MethodsSection
           peptide={selectedPeptide}
@@ -44,6 +50,33 @@ export function WizardInfoPanel() {
           instrumentId={session.instrument_id ?? undefined}
         />
       )}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Session context — lab tech + instrument
+// ---------------------------------------------------------------------------
+
+function SessionContextCard({
+  user,
+  instrumentName,
+}: {
+  user: { email: string; role: string } | null
+  instrumentName: string | null
+}) {
+  return (
+    <div className="rounded-lg border border-border/60 bg-muted/30 p-3 space-y-2">
+      <div className="flex items-center gap-2 text-xs">
+        <User className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+        <span className="text-muted-foreground">Tech:</span>
+        <span className="font-medium truncate">{user?.email ?? '—'}</span>
+      </div>
+      <div className="flex items-center gap-2 text-xs">
+        <Cpu className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+        <span className="text-muted-foreground">Instrument:</span>
+        <span className="font-medium truncate">{instrumentName ?? '—'}</span>
+      </div>
     </div>
   )
 }
@@ -291,8 +324,8 @@ function MethodsSection({
           )
         }
 
-        // Filter to selected instrument when specified (standard preps pick an instrument in Step 1)
-        if (instrumentId != null && matched.length > 1) {
+        // Filter to selected instrument when specified (picked in Step 1)
+        if (instrumentId != null) {
           const filtered = matched.filter(m => m.instrument_id === instrumentId)
           if (filtered.length > 0) matched = filtered
         }

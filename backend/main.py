@@ -1590,6 +1590,11 @@ class CalibrationCurveResponse(BaseModel):
     # Phase 09: Chromatogram storage
     chromatogram_data: Optional[dict] = None
     source_sharepoint_folder: Optional[str] = None
+    # User tracking
+    created_by_user_id: Optional[int] = None
+    created_by_email: Optional[str] = None
+    updated_by_user_id: Optional[int] = None
+    updated_by_email: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -1681,6 +1686,8 @@ def _cal_to_response(cal: CalibrationCurve, include_blobs: bool = True) -> Calib
             source_sample_id=cal.source_sample_id, vendor=cal.vendor,
             instrument=cal.instrument, instrument_id=cal.instrument_id,
             notes=cal.notes,
+            created_by_user_id=cal.created_by_user_id, created_by_email=cal.created_by_email,
+            updated_by_user_id=cal.updated_by_user_id, updated_by_email=cal.updated_by_email,
         )
     else:
         resp = CalibrationCurveResponse.model_validate(cal)
@@ -2106,7 +2113,7 @@ async def get_peptides(db: Session = Depends(get_db), _current_user=Depends(get_
 
 
 @app.post("/peptides", response_model=PeptideResponse, status_code=201)
-async def create_peptide(data: PeptideCreate, db: Session = Depends(get_db), _current_user=Depends(get_current_user)):
+async def create_peptide(data: PeptideCreate, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     """Create a new peptide."""
     # Check uniqueness
     existing = db.execute(
@@ -2119,6 +2126,10 @@ async def create_peptide(data: PeptideCreate, db: Session = Depends(get_db), _cu
         name=data.name,
         abbreviation=data.abbreviation,
         is_blend=data.is_blend,
+        created_by_user_id=current_user.id,
+        created_by_email=current_user.email,
+        updated_by_user_id=current_user.id,
+        updated_by_email=current_user.email,
     )
     db.add(peptide)
     db.flush()  # Get peptide.id without committing
@@ -2257,7 +2268,7 @@ async def seed_peptides_from_services(
 
 
 @app.put("/peptides/{peptide_id}", response_model=PeptideResponse)
-async def update_peptide(peptide_id: int, data: PeptideUpdate, db: Session = Depends(get_db), _current_user=Depends(get_current_user)):
+async def update_peptide(peptide_id: int, data: PeptideUpdate, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     """Update a peptide. method_ids sets all method assignments (one per instrument)."""
     peptide = db.execute(
         select(Peptide).options(
@@ -2280,6 +2291,13 @@ async def update_peptide(peptide_id: int, data: PeptideUpdate, db: Session = Dep
     # Update scalar fields (includes prep_vial_count if provided)
     for field, value in update_data.items():
         setattr(peptide, field, value)
+
+    # User tracking — stamp updated_by, backfill created_by if missing
+    peptide.updated_by_user_id = current_user.id
+    peptide.updated_by_email = current_user.email
+    if not peptide.created_by_user_id:
+        peptide.created_by_user_id = current_user.id
+        peptide.created_by_email = current_user.email
 
     # Update vial assignments for blend components (without replacing components)
     if vial_assignments is not None and component_ids is None:
@@ -2436,7 +2454,7 @@ async def create_calibration(
     peptide_id: int,
     data: CalibrationDataInput,
     db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     """
     Create a calibration curve from concentration/area pairs.
@@ -2515,6 +2533,10 @@ async def create_calibration(
         reference_rt=avg_rt,
         notes=data.notes,
         is_active=True,
+        created_by_user_id=current_user.id,
+        created_by_email=current_user.email,
+        updated_by_user_id=current_user.id,
+        updated_by_email=current_user.email,
     )
     db.add(curve)
     db.commit()
@@ -2527,7 +2549,7 @@ async def create_calibration_from_standard(
     peptide_id: int,
     data: StandardCalibrationInput,
     db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     """
     Auto-create a calibration curve from standard HPLC processing results.
@@ -2625,6 +2647,10 @@ async def create_calibration_from_standard(
         source_filename=f"Standard: {data.sample_prep_id}",
         source_date=datetime.now(timezone.utc).isoformat(),
         is_active=True,
+        created_by_user_id=current_user.id,
+        created_by_email=current_user.email,
+        updated_by_user_id=current_user.id,
+        updated_by_email=current_user.email,
     )
     db.add(curve)
     db.commit()
@@ -2654,7 +2680,7 @@ async def activate_calibration(
     peptide_id: int,
     calibration_id: int,
     db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     """
     Set a specific calibration curve as the active one for a peptide.
@@ -2681,6 +2707,11 @@ async def activate_calibration(
 
     # Activate the target
     target.is_active = True
+    target.updated_by_user_id = current_user.id
+    target.updated_by_email = current_user.email
+    if not target.created_by_user_id:
+        target.created_by_user_id = current_user.id
+        target.created_by_email = current_user.email
 
     # Update curve's reference RT from its own RT data if not already set
     if target.reference_rt is None and target.standard_data and target.standard_data.get("rts"):
@@ -2716,7 +2747,7 @@ async def update_calibration(
     calibration_id: int,
     body: CalibrationCurveUpdate,
     db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     """Partial update of a calibration curve's editable fields."""
     target = db.execute(
@@ -2811,6 +2842,13 @@ async def update_calibration(
 
     for field, value in updates.items():
         setattr(target, field, value)
+
+    # User tracking
+    target.updated_by_user_id = current_user.id
+    target.updated_by_email = current_user.email
+    if not target.created_by_user_id:
+        target.created_by_user_id = current_user.id
+        target.created_by_email = current_user.email
 
     db.commit()
     db.refresh(target)
@@ -2944,7 +2982,7 @@ def _analysis_to_response(analysis: "HPLCAnalysis", peptide_abbreviation: str) -
 async def run_hplc_analysis(
     request: HPLCAnalyzeRequest,
     db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     """
     Run a complete HPLC analysis: purity + quantity + identity.
@@ -3065,6 +3103,9 @@ async def run_hplc_analysis(
         source_sharepoint_folder=request.source_sharepoint_folder,
         chromatogram_data=request.chromatogram_data,
         run_group_id=request.run_group_id,
+        # User tracking
+        processed_by_user_id=current_user.id,
+        processed_by_email=current_user.email,
     )
     db.add(analysis)
 
@@ -7136,6 +7177,14 @@ async def create_wizard_session(
     if data.declared_weight_mg is not None and not (0 < data.declared_weight_mg < 5000):
         raise HTTPException(status_code=422, detail="declared_weight_mg must be between 0 and 5000 mg")
 
+    # Resolve instrument_id → instrument_name if only ID was provided
+    resolved_inst_name = data.instrument_name
+    resolved_inst_id = data.instrument_id
+    if resolved_inst_id and not resolved_inst_name:
+        inst = db.execute(select(Instrument).where(Instrument.id == resolved_inst_id)).scalar_one_or_none()
+        if inst:
+            resolved_inst_name = inst.name
+
     session = WizardSession(
         peptide_id=data.peptide_id,
         calibration_curve_id=cal.id if cal else None,
@@ -7147,8 +7196,8 @@ async def create_wizard_session(
         is_standard=data.is_standard if data.is_standard is not None else False,
         manufacturer=data.manufacturer,
         standard_notes=data.standard_notes,
-        instrument_name=data.instrument_name,
-        instrument_id=data.instrument_id,
+        instrument_name=resolved_inst_name,
+        instrument_id=resolved_inst_id,
     )
     db.add(session)
     db.commit()
@@ -7219,6 +7268,13 @@ async def update_wizard_session(
     from sqlalchemy.orm.attributes import flag_modified
 
     update_data = data.model_dump(exclude_unset=True)
+
+    # Resolve instrument_id → instrument_name if only ID was provided
+    if "instrument_id" in update_data and update_data["instrument_id"] and "instrument_name" not in update_data:
+        inst = db.execute(select(Instrument).where(Instrument.id == update_data["instrument_id"])).scalar_one_or_none()
+        if inst:
+            update_data["instrument_name"] = inst.name
+
     if "declared_weight_mg" in update_data and update_data["declared_weight_mg"] is not None:
         if not (0 < update_data["declared_weight_mg"] < 5000):
             raise HTTPException(status_code=422, detail="declared_weight_mg must be between 0 and 5000 mg")
@@ -7362,7 +7418,7 @@ class SamplePrepUpdateRequest(BaseModel):
 async def create_sample_prep_endpoint(
     body: SamplePrepCreateRequest,
     db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     """
     Save a wizard session as a sample prep into the Integration-Services Postgres DB.
@@ -7421,6 +7477,11 @@ async def create_sample_prep_endpoint(
         "manufacturer": session.manufacturer,
         "standard_notes": session.standard_notes,
         "instrument_name": session.instrument_name,
+        # User tracking
+        "created_by_user_id": current_user.id,
+        "created_by_email": current_user.email,
+        "updated_by_user_id": current_user.id,
+        "updated_by_email": current_user.email,
     }
 
     # Blend support: include component info so HPLC flyout can load per-component curves
@@ -7696,14 +7757,23 @@ async def get_sample_prep_endpoint(
 async def update_sample_prep_endpoint(
     sample_prep_id: int,
     body: SamplePrepUpdateRequest,
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     """Update fields on a sample prep."""
     from mk1_db import ensure_sample_preps_table, update_sample_prep
 
     try:
         ensure_sample_preps_table()
-        row = update_sample_prep(sample_prep_id, body.model_dump(exclude_none=True))
+        update_data = body.model_dump(exclude_none=True)
+        update_data["updated_by_user_id"] = current_user.id
+        update_data["updated_by_email"] = current_user.email
+        # Backfill created_by if missing (pre-tracking records)
+        from mk1_db import get_sample_prep as _get_sp
+        existing = _get_sp(sample_prep_id)
+        if existing and not existing.get("created_by_user_id"):
+            update_data["created_by_user_id"] = current_user.id
+            update_data["created_by_email"] = current_user.email
+        row = update_sample_prep(sample_prep_id, update_data)
         if not row:
             raise HTTPException(status_code=404, detail=f"Sample prep {sample_prep_id} not found")
         for k in ("created_at", "updated_at"):

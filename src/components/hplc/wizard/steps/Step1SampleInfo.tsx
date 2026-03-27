@@ -259,13 +259,13 @@ export function Step1SampleInfo() {
         peptide_id: peptideId,
       }
       if (sampleIdLabel.trim()) data.sample_id_label = sampleIdLabel.trim()
+      if (instrumentId) data.instrument_id = Number(instrumentId)
 
       // Standard prep metadata
       if (isStandard) {
         data.is_standard = true
         if (manufacturer.trim()) data.manufacturer = manufacturer.trim()
         if (standardNotes.trim()) data.standard_notes = standardNotes.trim()
-        if (instrumentId) data.instrument_id = Number(instrumentId)
 
         // Build standard vial_params from concentration levels
         const validConcs = standardConcentrations
@@ -493,6 +493,23 @@ export function Step1SampleInfo() {
           Standard Sample
         </Label>
       </div>
+      {/* Instrument selector — always visible */}
+      <div className="space-y-1.5">
+        <Label htmlFor="instrument-name">Instrument</Label>
+        <Select value={instrumentId} onValueChange={setInstrumentId}>
+          <SelectTrigger id="instrument-name">
+            <SelectValue placeholder="Select instrument…" />
+          </SelectTrigger>
+          <SelectContent>
+            {instruments.map(inst => (
+              <SelectItem key={inst.id} value={String(inst.id)}>
+                {inst.name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+
       {isStandard && (
         <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-3 space-y-3">
           <div className="space-y-1.5">
@@ -504,21 +521,6 @@ export function Step1SampleInfo() {
               value={manufacturer}
               onChange={e => setManufacturer(e.target.value)}
             />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="instrument-name">Instrument</Label>
-            <Select value={instrumentId} onValueChange={setInstrumentId}>
-              <SelectTrigger id="instrument-name">
-                <SelectValue placeholder="Select instrument…" />
-              </SelectTrigger>
-              <SelectContent>
-                {instruments.map(inst => (
-                  <SelectItem key={inst.id} value={String(inst.id)}>
-                    {inst.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="standard-notes">Standard Notes</Label>
@@ -1023,7 +1025,7 @@ function EditableSessionSummary({
     return init
   })
 
-  // Standard metadata — editable when session.is_standard
+  // Session metadata
   const [editInstrumentId, setEditInstrumentId] = useState(
     session.instrument_id != null ? String(session.instrument_id) : ''
   )
@@ -1031,9 +1033,8 @@ function EditableSessionSummary({
   const [editStandardNotes, setEditStandardNotes] = useState(session.standard_notes ?? '')
   const [instruments, setInstruments] = useState<Instrument[]>([])
   useEffect(() => {
-    if (!session.is_standard) return
     getInstruments().then(setInstruments).catch(_e => { /* non-critical */ })
-  }, [session.is_standard])
+  }, [])
 
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
@@ -1154,8 +1155,8 @@ function EditableSessionSummary({
           target_conc_ug_ml: v1?.target_conc_ug_ml ?? undefined,
           target_total_vol_ul: v1?.target_total_vol_ul ?? undefined,
           vial_params: updatedVialParams,
+          instrument_id: editInstrumentId ? Number(editInstrumentId) : undefined,
           ...(session.is_standard ? {
-            instrument_id: editInstrumentId ? Number(editInstrumentId) : undefined,
             manufacturer: editManufacturer || undefined,
             standard_notes: editStandardNotes || undefined,
           } : {}),
@@ -1183,8 +1184,8 @@ function EditableSessionSummary({
           ...(!isNaN(declaredParsed) && declaredParsed > 0 ? { declared_weight_mg: declaredParsed } : {}),
           target_conc_ug_ml: concParsed,
           target_total_vol_ul: volParsed,
+          instrument_id: editInstrumentId ? Number(editInstrumentId) : undefined,
           ...(session.is_standard ? {
-            instrument_id: editInstrumentId ? Number(editInstrumentId) : undefined,
             manufacturer: editManufacturer || undefined,
             standard_notes: editStandardNotes || undefined,
           } : {}),
@@ -1217,6 +1218,21 @@ function EditableSessionSummary({
         <CardTitle>Peptide Vial Weight</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
+        {/* Instrument selector — always visible */}
+        <div className="space-y-1">
+          <Label htmlFor="edit-instrument" className="text-xs">Instrument</Label>
+          <Select value={editInstrumentId} onValueChange={v => { setEditInstrumentId(v); setSaved(false); saveInstrumentId(v) }}>
+            <SelectTrigger id="edit-instrument" className="h-8 text-xs">
+              <SelectValue placeholder="Select instrument…" />
+            </SelectTrigger>
+            <SelectContent>
+              {instruments.map(inst => (
+                <SelectItem key={inst.id} value={String(inst.id)}>{inst.name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+
         {/* Read-only fields */}
         <div className="rounded-md border border-green-500/30 bg-green-50/50 dark:bg-green-950/20 p-4 space-y-3">
           {/* Standard sample indicator + editable metadata */}
@@ -1226,19 +1242,6 @@ function EditableSessionSummary({
                 Standard Sample
               </span>
               <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1">
-                  <Label htmlFor="edit-instrument" className="text-xs">Instrument</Label>
-                  <Select value={editInstrumentId} onValueChange={v => { setEditInstrumentId(v); setSaved(false); saveInstrumentId(v) }}>
-                    <SelectTrigger id="edit-instrument" className="h-8 text-xs">
-                      <SelectValue placeholder="Select instrument…" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {instruments.map(inst => (
-                        <SelectItem key={inst.id} value={String(inst.id)}>{inst.name}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
                 <div className="space-y-1">
                   <Label htmlFor="edit-manufacturer" className="text-xs">Manufacturer</Label>
                   <Input
@@ -1250,7 +1253,7 @@ function EditableSessionSummary({
                     onBlur={e => saveMetaField('manufacturer', e.target.value)}
                   />
                 </div>
-                <div className="col-span-2 space-y-1">
+                <div className="space-y-1">
                   <Label htmlFor="edit-standard-notes" className="text-xs">Standard Notes</Label>
                   <Input
                     id="edit-standard-notes"

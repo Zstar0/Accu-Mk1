@@ -233,6 +233,12 @@ class Peptide(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
+    # User tracking
+    created_by_user_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    created_by_email: Mapped[Optional[str]] = mapped_column(String(320), nullable=True)
+    updated_by_user_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    updated_by_email: Mapped[Optional[str]] = mapped_column(String(320), nullable=True)
+
     # Relationships
     methods: Mapped[list["HplcMethod"]] = relationship("HplcMethod", secondary=peptide_methods, back_populates="peptides")
     calibration_curves: Mapped[list["CalibrationCurve"]] = relationship(
@@ -344,6 +350,12 @@ class CalibrationCurve(Base):
     chromatogram_data: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)           # {times: number[], signals: number[]} from DAD1A CSV
     source_sharepoint_folder: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)  # SharePoint folder path
 
+    # User tracking
+    created_by_user_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    created_by_email: Mapped[Optional[str]] = mapped_column(String(320), nullable=True)
+    updated_by_user_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    updated_by_email: Mapped[Optional[str]] = mapped_column(String(320), nullable=True)
+
     # Relationships
     peptide: Mapped["Peptide"] = relationship("Peptide", back_populates="calibration_curves")
     analyte: Mapped[Optional["PeptideAnalyte"]] = relationship("PeptideAnalyte")
@@ -398,6 +410,10 @@ class HPLCAnalysis(Base):
     chromatogram_data: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)  # {times: number[], signals: number[]}
     run_group_id: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
     debug_log: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)  # [{level, msg}] full debug log for audit trail
+
+    # User tracking
+    processed_by_user_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    processed_by_email: Mapped[Optional[str]] = mapped_column(String(320), nullable=True)
 
     # Relationships
     peptide: Mapped["Peptide"] = relationship("Peptide")

@@ -824,6 +824,22 @@ function CalibrationRow({
                   <p className="text-sm mt-0.5 whitespace-pre-wrap">{calibration.notes}</p>
                 </div>
               )}
+              {(calibration.created_by_email || calibration.updated_by_email) && (
+                <div className="mt-2 pt-2 border-t border-border/50 flex gap-4">
+                  {calibration.created_by_email && (
+                    <div>
+                      <span className="text-muted-foreground text-xs">Created By</span>
+                      <p className="text-xs mt-0.5 font-medium">{calibration.created_by_email}</p>
+                    </div>
+                  )}
+                  {calibration.updated_by_email && calibration.updated_by_email !== calibration.created_by_email && (
+                    <div>
+                      <span className="text-muted-foreground text-xs">Last Edited By</span>
+                      <p className="text-xs mt-0.5 font-medium">{calibration.updated_by_email}</p>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
 

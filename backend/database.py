@@ -125,6 +125,17 @@ def _run_migrations():
         "ALTER TABLE peptides ADD COLUMN IF NOT EXISTS hplc_aliases JSON",
         # Phase 13.5: Debug log persistence for audit trail
         "ALTER TABLE hplc_analyses ADD COLUMN IF NOT EXISTS debug_log JSON",
+        # User tracking columns
+        "ALTER TABLE peptides ADD COLUMN IF NOT EXISTS created_by_user_id INTEGER",
+        "ALTER TABLE peptides ADD COLUMN IF NOT EXISTS created_by_email VARCHAR(320)",
+        "ALTER TABLE peptides ADD COLUMN IF NOT EXISTS updated_by_user_id INTEGER",
+        "ALTER TABLE peptides ADD COLUMN IF NOT EXISTS updated_by_email VARCHAR(320)",
+        "ALTER TABLE calibration_curves ADD COLUMN IF NOT EXISTS created_by_user_id INTEGER",
+        "ALTER TABLE calibration_curves ADD COLUMN IF NOT EXISTS created_by_email VARCHAR(320)",
+        "ALTER TABLE calibration_curves ADD COLUMN IF NOT EXISTS updated_by_user_id INTEGER",
+        "ALTER TABLE calibration_curves ADD COLUMN IF NOT EXISTS updated_by_email VARCHAR(320)",
+        "ALTER TABLE hplc_analyses ADD COLUMN IF NOT EXISTS processed_by_user_id INTEGER",
+        "ALTER TABLE hplc_analyses ADD COLUMN IF NOT EXISTS processed_by_email VARCHAR(320)",
     ]
     try:
         with engine.connect() as conn:
