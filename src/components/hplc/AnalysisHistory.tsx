@@ -10,7 +10,6 @@ import { Badge } from '@/components/ui/badge'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import {
   listSamplePreps,
-  getHPLCAnalysesBySamplePrep,
   type SamplePrep,
   type HplcScanMatch,
 } from '@/lib/api'
@@ -70,20 +69,11 @@ function CompletedSamplePreps({ filter }: { filter: 'production' | 'standard' })
     return () => { cancelled = true }
   }, [filter])
 
-  async function openPrep(prep: SamplePrep) {
-    // Build a stub match from stored analysis data so the flyout can open
-    let folderName = prep.senaite_sample_id ?? prep.sample_id
-    try {
-      const results = await getHPLCAnalysesBySamplePrep(prep.id)
-      if (results.length > 0 && results[0]!.source_sharepoint_folder) {
-        folderName = results[0]!.source_sharepoint_folder
-      }
-    } catch { /* use fallback folder name */ }
-
+  function openPrep(prep: SamplePrep) {
     const match: HplcScanMatch = {
       prep_id: prep.id,
       senaite_sample_id: prep.senaite_sample_id ?? prep.sample_id,
-      folder_name: folderName,
+      folder_name: prep.senaite_sample_id ?? prep.sample_id,
       folder_id: '',
       peak_files: [],
       chrom_files: [],
@@ -176,6 +166,7 @@ function CompletedSamplePreps({ filter }: { filter: 'production' | 'standard' })
         onClose={() => { setFlyoutPrep(null); setFlyoutMatch(null) }}
         prep={flyoutPrep}
         match={flyoutMatch}
+        readOnly
       />
     )}
     </>

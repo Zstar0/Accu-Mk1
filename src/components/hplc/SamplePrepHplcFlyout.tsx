@@ -73,7 +73,7 @@ import { CalculationVisuals } from '@/components/hplc/CalculationVisuals'
 import { SenaiteResultsView } from '@/components/hplc/SenaiteResultsView'
 import { StandardCurveReview } from '@/components/hplc/StandardCurveReview'
 import { useAuthStore } from '@/store/auth-store'
-import { User, Cpu } from 'lucide-react'
+import { User, Cpu, Calendar } from 'lucide-react'
 
 // ─── Injection tabs ───────────────────────────────────────────────────────────
 
@@ -115,6 +115,127 @@ function WeightRow({ label, value }: { label: string; value: number | null }) {
           ? `${value.toFixed(2)} mg`
           : <span className="text-muted-foreground">—</span>}
       </span>
+    </div>
+  )
+}
+
+function CalcRow({ label, value, unit }: { label: string; value: number | null | undefined; unit: string }) {
+  return (
+    <div className="flex items-center justify-between py-1.5 text-xs">
+      <span className="text-muted-foreground">{label}</span>
+      <span className="font-mono font-medium">
+        {value != null ? `${value.toFixed(2)} ${unit}` : '—'}
+      </span>
+    </div>
+  )
+}
+
+function PrepDetailsSection({ prep }: { prep: SamplePrep }) {
+  const isBlend = prep.is_blend && prep.vial_data && prep.vial_data.length > 0
+
+  return (
+    <div className="px-6 py-4 space-y-4">
+      <p className="text-sm font-semibold">Sample Prep Details</p>
+
+      {/* Sample info */}
+      <div className="rounded-md border border-border/60 p-3 space-y-1.5">
+        <div className="flex items-center justify-between text-xs">
+          <span className="text-muted-foreground">Sample ID</span>
+          <span className="font-mono font-medium">{prep.sample_id}</span>
+        </div>
+        {prep.senaite_sample_id && (
+          <div className="flex items-center justify-between text-xs">
+            <span className="text-muted-foreground">SENAITE ID</span>
+            <span className="font-mono font-medium">{prep.senaite_sample_id}</span>
+          </div>
+        )}
+        <div className="flex items-center justify-between text-xs">
+          <span className="text-muted-foreground">Peptide</span>
+          <span className="font-medium">{prep.peptide_name ?? prep.peptide_abbreviation ?? '—'}</span>
+        </div>
+        {prep.is_standard && (
+          <div className="flex items-center justify-between text-xs">
+            <span className="text-muted-foreground">Manufacturer</span>
+            <span className="font-medium">{prep.manufacturer ?? '—'}</span>
+          </div>
+        )}
+        {prep.notes && (
+          <div className="flex items-center justify-between text-xs">
+            <span className="text-muted-foreground">Notes</span>
+            <span className="font-medium truncate ml-4">{prep.notes}</span>
+          </div>
+        )}
+      </div>
+
+      {/* Target parameters */}
+      <div className="rounded-md border border-border/60 p-3">
+        <p className="text-xs font-semibold text-muted-foreground mb-2">Target Parameters</p>
+        <CalcRow label="Declared Weight" value={prep.declared_weight_mg} unit="mg" />
+        <CalcRow label="Target Concentration" value={prep.target_conc_ug_ml} unit="µg/mL" />
+        <CalcRow label="Target Total Volume" value={prep.target_total_vol_ul} unit="µL" />
+      </div>
+
+      {/* Weights — single vial */}
+      {!isBlend && (
+        <>
+          <div className="rounded-md border border-border/60 p-3">
+            <p className="text-xs font-semibold text-muted-foreground mb-2">Stock Prep (Step 2)</p>
+            <WeightRow label="Vial + cap + peptide" value={prep.stock_vial_empty_mg} />
+            <WeightRow label="After adding diluent" value={prep.stock_vial_loaded_mg} />
+            <CalcRow label="Stock Concentration" value={prep.stock_conc_ug_ml} unit="µg/mL" />
+            <CalcRow label="Required Diluent Vol" value={prep.required_diluent_vol_ul} unit="µL" />
+            <CalcRow label="Required Stock Vol" value={prep.required_stock_vol_ul} unit="µL" />
+          </div>
+
+          <div className="rounded-md border border-border/60 p-3">
+            <p className="text-xs font-semibold text-muted-foreground mb-2">Dilution (Step 3)</p>
+            <WeightRow label="Dil. vial — empty" value={prep.dil_vial_empty_mg} />
+            <WeightRow label="Dil. vial + diluent" value={prep.dil_vial_with_diluent_mg} />
+            <WeightRow label="Dil. vial — final" value={prep.dil_vial_final_mg} />
+            <CalcRow label="Actual Concentration" value={prep.actual_conc_ug_ml} unit="µg/mL" />
+            <CalcRow label="Actual Diluent Volume" value={prep.actual_diluent_vol_ul} unit="µL" />
+            <CalcRow label="Actual Stock Volume" value={prep.actual_stock_vol_ul} unit="µL" />
+            <CalcRow label="Actual Total Volume" value={prep.actual_total_vol_ul} unit="µL" />
+          </div>
+        </>
+      )}
+
+      {/* Weights — multi-vial blend */}
+      {isBlend && prep.vial_data?.map((vial, i) => (
+        <div key={i} className="rounded-md border border-border/60 p-3">
+          <p className="text-xs font-semibold text-muted-foreground mb-2">
+            Vial {vial.vial_number}
+            {vial.component_abbreviations?.length ? ` — ${vial.component_abbreviations.join(', ')}` : ''}
+          </p>
+          <CalcRow label="Target Concentration" value={vial.target_conc_ug_ml} unit="µg/mL" />
+          <CalcRow label="Target Total Volume" value={vial.target_total_vol_ul} unit="µL" />
+          <WeightRow label="Stock vial empty" value={vial.stock_vial_empty_mg} />
+          <WeightRow label="Stock vial loaded" value={vial.stock_vial_loaded_mg} />
+          <CalcRow label="Stock Concentration" value={vial.stock_conc_ug_ml} unit="µg/mL" />
+          <WeightRow label="Dil. vial — empty" value={vial.dil_vial_empty_mg} />
+          <WeightRow label="Dil. vial + diluent" value={vial.dil_vial_with_diluent_mg} />
+          <WeightRow label="Dil. vial — final" value={vial.dil_vial_final_mg} />
+          <CalcRow label="Actual Concentration" value={vial.actual_conc_ug_ml} unit="µg/mL" />
+          <CalcRow label="Actual Total Volume" value={vial.actual_total_vol_ul} unit="µL" />
+        </div>
+      ))}
+
+      {/* User tracking */}
+      <div className="rounded-md border border-border/60 p-3 space-y-1.5">
+        <p className="text-xs font-semibold text-muted-foreground mb-2">Audit</p>
+        <div className="flex items-center justify-between text-xs">
+          <span className="text-muted-foreground">Created By</span>
+          <span className="font-medium">{prep.created_by_email ?? '—'}</span>
+        </div>
+        <div className="flex items-center justify-between text-xs">
+          <span className="text-muted-foreground">Last Updated By</span>
+          <span className="font-medium">{prep.updated_by_email ?? '—'}</span>
+        </div>
+        <div className="flex items-center justify-between text-xs">
+          <span className="text-muted-foreground">Status</span>
+          <span className="font-medium">{prep.status}</span>
+        </div>
+      </div>
     </div>
   )
 }
@@ -573,9 +694,10 @@ interface Props {
   onClose: () => void
   prep: SamplePrep
   match: HplcScanMatch
+  readOnly?: boolean
 }
 
-export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
+export function SamplePrepHplcFlyout({ open, onClose, prep, match, readOnly = false }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const authUser = useAuthStore(state => state.user)
   // Phase 13.5: Archive downloaded file contents for audit trail
@@ -701,8 +823,61 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
     if (loadingSaved) return              // skip while DB check still in progress (state)
     if (dbCheckActiveRef.current) return  // skip during DB check (ref — synchronous guard)
 
-    // History mode: no SharePoint files — reconstruct from stored analysis data
+    // History mode: no SharePoint files — reconstruct from stored data
     const isHistoryMode = match.peak_files.length === 0 && !match.folder_id
+
+    // Standard history mode: no HPLC analysis records — load from calibration curve
+    if (isHistoryMode && prep.is_standard && (!savedResults || savedResults.length === 0)) {
+      setLoading(true)
+      try {
+        const cals = await getCalibrations(prep.peptide_id)
+        const senaiteId = prep.senaite_sample_id ?? prep.sample_id
+        const linkedCurve = cals.find(c => c.source_sample_id === senaiteId) ?? cals[0]
+        if (linkedCurve?.standard_data) {
+          const sd = linkedCurve.standard_data
+          // Build synthetic injections from standard_data so standardCurveData memo works
+          const injections: HPLCInjection[] = sd.concentrations.map((conc: number, i: number) => ({
+            injection_name: `${senaiteId}_Std_${conc}_PeakData`,
+            peptide_label: '',
+            peaks: [{
+              retention_time: sd.rts?.[i] ?? 0,
+              area: sd.areas[i] ?? 0,
+              area_percent: 100,
+              begin_time: 0,
+              end_time: 0,
+              height: 0,
+              is_solvent_front: false,
+              is_main_peak: true,
+            }],
+            total_area: sd.areas[i] ?? 0,
+            main_peak_index: 0,
+          }))
+          setParseResult({
+            injections,
+            purity: { purity_percent: null, individual_values: [], injection_names: [], rsd_percent: null },
+            errors: [],
+            warnings: [],
+            detected_peptides: [],
+            standard_injections: [],
+          })
+
+          // Chromatogram from curve
+          if (linkedCurve.chromatogram_data) {
+            const cd = linkedCurve.chromatogram_data as { times: number[]; signals: number[] }
+            if (cd.times && cd.signals) {
+              const points: [number, number][] = cd.times.map((t: number, i: number) => [t, cd.signals[i] ?? 0])
+              setChromTraces([{ name: senaiteId, points }])
+            }
+          }
+        }
+      } catch {
+        // Fall through — will show empty
+      } finally {
+        setLoading(false)
+      }
+      return
+    }
+
     if (isHistoryMode && savedResults && savedResults.length > 0) {
       setLoading(true)
       try {
@@ -793,7 +968,7 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
     } finally {
       setLoading(false)
     }
-  }, [match, parseResult, loadingSaved, savedResults])
+  }, [match, parseResult, loadingSaved, savedResults, prep.is_standard, prep.peptide_id, prep.sample_id, prep.senaite_sample_id])
 
   useEffect(() => {
     if (open) loadPeakData()
@@ -1301,7 +1476,7 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
             </div>
             <div className="min-w-0 flex-1">
               <SheetTitle className="text-base font-semibold truncate">
-                Process HPLC — {prep.senaite_sample_id ?? prep.sample_id}
+                {readOnly ? 'Review' : 'Process HPLC'} — {prep.senaite_sample_id ?? prep.sample_id}
               </SheetTitle>
               <p className="text-xs text-muted-foreground mt-0.5 truncate">
                 {match.folder_name}
@@ -1347,7 +1522,54 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
             <span className="text-muted-foreground">Instrument:</span>
             <span className="font-medium truncate">{prep.instrument_name ?? '—'}</span>
           </div>
+          <div className="flex items-center gap-2 text-xs">
+            <Calendar className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+            <span className="text-muted-foreground">Created:</span>
+            <span className="font-medium">{new Date(prep.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
+            {prep.updated_at !== prep.created_at && (
+              <>
+                <span className="text-muted-foreground/40">|</span>
+                <span className="text-muted-foreground">Updated:</span>
+                <span className="font-medium">{new Date(prep.updated_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
+              </>
+            )}
+          </div>
         </div>
+
+        {/* Blend summary — shown when multiple analyte results exist */}
+        {analyteResults.size > 1 && (() => {
+          const allResults = [...analyteResults.values()]
+          const totalQty = allResults.reduce((sum, r) => sum + (r.quantity_mg ?? 0), 0)
+          const weightedPuritySum = allResults.reduce(
+            (sum, r) => sum + (r.quantity_mg ?? 0) * (r.purity_percent ?? 0), 0
+          )
+          const blendPurity = totalQty > 0 ? weightedPuritySum / totalQty : 0
+          const blendIdentity = allResults.every(r => r.identity_conforms === true)
+          return (
+            <div className="mx-6 mt-3 rounded-lg border border-border/60 bg-muted/30 p-3 space-y-1.5">
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-muted-foreground font-medium">Blend Purity</span>
+                <span className="font-mono font-semibold">{blendPurity.toFixed(2)}%</span>
+              </div>
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-muted-foreground font-medium">Total Quantity</span>
+                <span className="font-mono font-semibold">{totalQty.toFixed(2)} mg</span>
+              </div>
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-muted-foreground font-medium">Blend Identity</span>
+                {blendIdentity ? (
+                  <span className="inline-flex items-center gap-1 font-medium text-emerald-500">
+                    <CheckCircle2 size={12} /> Conforms
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1 font-medium text-destructive">
+                    <AlertTriangle size={12} /> Does Not Conform
+                  </span>
+                )}
+              </div>
+            </div>
+          )
+        })()}
 
         {/* Debug console overlay */}
         {showDebug && (
@@ -1406,8 +1628,8 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
               {/* ════ Left column — results + data ════════════════════════ */}
               <div className="flex-1 min-w-0 space-y-5">
 
-                {/* Re-run banner — shown when results were loaded from DB */}
-                {savedResults && !running && (
+                {/* Re-run banner — shown when results were loaded from DB (hidden in read-only) */}
+                {!readOnly && savedResults && !running && (
                   <div className="flex items-center justify-between gap-3 px-4 py-3 rounded-lg border border-teal-500/30 bg-teal-500/5">
                     <div className="flex items-center gap-2 min-w-0">
                       <CheckCircle2 size={14} className="text-teal-500 shrink-0" />
@@ -1605,10 +1827,12 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
                 )}
 
                 {/* Loading state */}
-                {loading && (
+                {(loading || loadingSaved) && (
                   <div className="flex flex-col items-center gap-3 py-12">
                     <Spinner className="size-6" />
-                    <p className="text-sm text-muted-foreground">Downloading HPLC data from SharePoint…</p>
+                    <p className="text-sm text-muted-foreground">
+                      {loadingSaved ? 'Loading saved results…' : 'Downloading HPLC data from SharePoint…'}
+                    </p>
                   </div>
                 )}
 
@@ -1653,6 +1877,7 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
                           updateSamplePrep(prep.id, { status: 'curve_created' }).catch(_e => { /* non-blocking */ })
                           prep.status = 'curve_created'
                         }}
+                        readOnly={readOnly}
                       />
                     )}
 
@@ -1751,7 +1976,7 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
                                   Active
                                 </Badge>
                               )}
-                              {calibrations.length > 1 && (
+                              {!readOnly && calibrations.length > 1 && (
                                 <Button
                                   size="sm"
                                   variant="ghost"
@@ -1795,8 +2020,16 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
               )}
             </div>
 
-            {/* Submit Results button — not applicable for standards */}
-            {!isStandard && result && (
+            {/* Prep Details — collapsible full audit trail */}
+            <details className="border-t border-border/60">
+              <summary className="px-6 py-3 cursor-pointer text-sm font-medium text-muted-foreground hover:text-foreground transition-colors">
+                Prep Details
+              </summary>
+              <PrepDetailsSection prep={prep} />
+            </details>
+
+            {/* Submit Results button — not applicable for standards or read-only */}
+            {!readOnly && !isStandard && result && (
               <div className="px-6 pb-6 pt-4 border-t border-border/60 flex justify-end">
                 <Button onClick={() => setView('results')} className="gap-2">
                   Submit Results
@@ -1805,7 +2038,7 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match }: Props) {
               </div>
             )}
           </>
-        ) : result ? (
+        ) : !readOnly && result ? (
           <SenaiteResultsView
             prep={prep}
             results={isBlend || hasMultipleAnalytes ? [...analyteResults.values()] : [result]}

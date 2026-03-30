@@ -37,6 +37,7 @@ export interface StandardCurveReviewProps {
   notes?: string
   instrument?: string
   onCurveCreated: (curve: CalibrationCurve) => void
+  readOnly?: boolean
 }
 
 // ─── Linear regression (preview only) ───────────────────────────────────────────
@@ -270,6 +271,7 @@ export function StandardCurveReview({
   notes,
   instrument,
   onCurveCreated,
+  readOnly = false,
 }: StandardCurveReviewProps) {
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -445,24 +447,26 @@ export function StandardCurveReview({
           </Alert>
         )}
 
-        {/* Create button */}
-        <Button
-          onClick={handleCreate}
-          disabled={submitting}
-          className="w-full gap-2"
-        >
-          {submitting ? (
-            <>
-              <Spinner className="size-4" />
-              Creating Curve...
-            </>
-          ) : (
-            <>
-              <TrendingUp size={15} />
-              Create Calibration Curve
-            </>
-          )}
-        </Button>
+        {/* Create button — hidden in read-only */}
+        {!readOnly && (
+          <Button
+            onClick={handleCreate}
+            disabled={submitting}
+            className="w-full gap-2"
+          >
+            {submitting ? (
+              <>
+                <Spinner className="size-4" />
+                Creating Curve...
+              </>
+            ) : (
+              <>
+                <TrendingUp size={15} />
+                Create Calibration Curve
+              </>
+            )}
+          </Button>
+        )}
       </CardContent>
     </Card>
   )
