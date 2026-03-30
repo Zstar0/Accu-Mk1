@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.27.5 — 2026-03-30
+
+### Chromatogram Image for SENAITE
+
+- **Chromatogram rendering**: HPLC chromatogram images are now rendered server-side via the Integration Service using the same matplotlib renderer as the COA Builder — matching style, peak labels, DAD header text, and Harmony Peptides watermark
+- **SENAITE submit preview**: When navigating to the Submit to SENAITE step, a rendered chromatogram preview is shown inline
+- **Auto-upload to SENAITE**: After auto-filling results, the chromatogram PNG is uploaded to SENAITE as an "HPLC Graph" attachment (best-effort, non-blocking)
+- **New backend endpoints**: `POST /hplc/analyses/{id}/chromatogram-image` (render preview) and `POST /hplc/analyses/{id}/chromatogram-to-senaite` (render + upload)
+
+### Integration Service
+
+- **Chromatogram render endpoint**: `POST /v1/chromatogram/render` — accepts time/signal arrays, returns professional chromatogram PNG with peak detection, DAD header, and watermark
+- **Slack notification module**: New adapter, service, and API router (`/v1/slack`) for Slack Bot Token integration — ready to activate with `SLACK_BOT_TOKEN` env var
+
 ## v0.27.4 — 2026-03-30
 
 ### Sample Analysis Management

@@ -28,7 +28,7 @@ def _read_app_version() -> str:
 
 APP_VERSION = _read_app_version()
 
-from fastapi import FastAPI, Depends, Form, HTTPException, Header, Request, Response, UploadFile, status
+from fastapi import FastAPI, Depends, Form, HTTPException, Header, Query, Request, Response, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sqlalchemy.orm import Session, joinedload
@@ -3225,6 +3225,171 @@ async def get_analyses_by_sample_prep(
         peptide = db.execute(select(Peptide).where(Peptide.id == a.peptide_id)).scalar_one_or_none()
         result.append(_analysis_to_response(a, peptide.abbreviation if peptide else "?"))
     return result
+
+
+@app.post("/hplc/analyses/{analysis_id}/chromatogram-image")
+async def render_chromatogram_image(
+    analysis_id: int,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Render chromatogram PNG via Integration Service and return it directly.
+
+    Used by the frontend to display a preview before uploading to SENAITE.
+    """
+    analysis = db.execute(
+        select(HPLCAnalysis).where(HPLCAnalysis.id == analysis_id)
+    ).scalar_one_or_none()
+    if not analysis:
+        raise HTTPException(404, f"HPLC Analysis {analysis_id} not found")
+
+    chrom = analysis.chromatogram_data
+    if not chrom or not chrom.get("times") or not chrom.get("signals"):
+        raise HTTPException(400, "No chromatogram data stored on this analysis")
+
+    render_url = f"{INTEGRATION_SERVICE_URL}/v1/chromatogram/render"
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            render_resp = await client.post(
+                render_url,
+                json={
+                    "times": chrom["times"],
+                    "signals": chrom["signals"],
+                    "sample_id": analysis.sample_id_label,
+                },
+                headers={"X-API-Key": INTEGRATION_SERVICE_API_KEY},
+            )
+            render_resp.raise_for_status()
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(502, f"Integration Service render failed: {e.response.status_code}")
+    except httpx.RequestError as e:
+        raise HTTPException(502, f"Integration Service unreachable: {e}")
+
+    return Response(
+        content=render_resp.content,
+        media_type="image/png",
+        headers={"Content-Disposition": f'inline; filename="chromatogram_{analysis.sample_id_label}.png"'},
+    )
+
+
+@app.post("/hplc/analyses/{analysis_id}/chromatogram-to-senaite")
+async def upload_chromatogram_to_senaite(
+    analysis_id: int,
+    sample_uid: str = Query(..., description="SENAITE sample UID to attach image to"),
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Render chromatogram image via Integration Service and upload to SENAITE as HPLC Graph attachment.
+
+    1. Loads chromatogram_data from the HPLC analysis record
+    2. Calls Integration Service /v1/chromatogram/render to get PNG
+    3. Uploads PNG to SENAITE as "HPLC Graph" attachment
+    """
+    analysis = db.execute(
+        select(HPLCAnalysis).where(HPLCAnalysis.id == analysis_id)
+    ).scalar_one_or_none()
+    if not analysis:
+        raise HTTPException(404, f"HPLC Analysis {analysis_id} not found")
+
+    chrom = analysis.chromatogram_data
+    if not chrom or not chrom.get("times") or not chrom.get("signals"):
+        raise HTTPException(400, "No chromatogram data stored on this analysis")
+
+    # Step 1: Render PNG via Integration Service
+    render_url = f"{INTEGRATION_SERVICE_URL}/v1/chromatogram/render"
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            render_resp = await client.post(
+                render_url,
+                json={
+                    "times": chrom["times"],
+                    "signals": chrom["signals"],
+                    "sample_id": analysis.sample_id_label,
+                },
+                headers={"X-API-Key": INTEGRATION_SERVICE_API_KEY},
+            )
+            render_resp.raise_for_status()
+            png_bytes = render_resp.content
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(502, f"Integration Service render failed: {e.response.status_code}")
+    except httpx.RequestError as e:
+        raise HTTPException(502, f"Integration Service unreachable: {e}")
+
+    if not png_bytes or png_bytes[:4] != b'\x89PNG':
+        raise HTTPException(502, "Integration Service returned invalid PNG")
+
+    # Step 2: Upload PNG to SENAITE as HPLC Graph attachment
+    if SENAITE_URL is None:
+        raise HTTPException(503, "SENAITE not configured")
+
+    filename = f"chromatogram_{analysis.sample_id_label}.png"
+    try:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(60.0, connect=10.0),
+            auth=_get_senaite_auth(current_user),
+            follow_redirects=True,
+        ) as client:
+            # Resolve sample Plone URL
+            api_url = f"{SENAITE_URL}/senaite/@@API/senaite/v1/analysisrequest/{sample_uid}"
+            meta_resp = await client.get(api_url)
+            meta_resp.raise_for_status()
+            items = meta_resp.json().get("items", [])
+            if not items:
+                raise HTTPException(404, "Sample not found in SENAITE")
+            sample_url = items[0].get("url") or items[0].get("absolute_url")
+            if not sample_url:
+                raise HTTPException(502, "Could not resolve sample URL")
+
+            # GET page for CSRF token + attachment type UID
+            page_resp = await client.get(sample_url)
+            page_html = page_resp.text
+
+            auth_match = re.search(r'name="_authenticator"\s+value="([^"]+)"', page_html)
+            authenticator = auth_match.group(1) if auth_match else ""
+
+            type_pattern = re.compile(
+                r'<option\s+value="([^"]+)"[^>]*>\s*' + re.escape("HPLC Graph") + r'\s*</option>',
+                re.IGNORECASE,
+            )
+            type_match = type_pattern.search(page_html)
+            attachment_type_uid = type_match.group(1) if type_match else ""
+
+            # POST attachment
+            form_url = f"{sample_url}/@@attachments_view/add"
+            form_data = {
+                "submitted": "1",
+                "_authenticator": authenticator,
+                "AttachmentType": attachment_type_uid,
+                "Analysis": "",
+                "AttachmentKeys": "",
+                "RenderInReport:boolean": "True",
+                "RenderInReport:boolean:default": "False",
+                "addARAttachment": "Add Attachment",
+            }
+            files = {
+                "AttachmentFile_file": (filename, png_bytes, "image/png"),
+            }
+            headers = {
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Referer": sample_url,
+            }
+            att_resp = await client.post(form_url, data=form_data, files=files, headers=headers)
+            if att_resp.status_code not in (200, 301, 302):
+                raise HTTPException(502, f"SENAITE attachment upload returned {att_resp.status_code}")
+
+    except HTTPException:
+        raise
+    except httpx.TimeoutException:
+        raise HTTPException(504, "SENAITE request timed out")
+    except Exception as e:
+        raise HTTPException(502, f"SENAITE upload failed: {e}")
+
+    return {
+        "success": True,
+        "message": f"Chromatogram uploaded to SENAITE for {analysis.sample_id_label}",
+        "filename": filename,
+        "size_bytes": len(png_bytes),
+    }
 
 
 @app.delete("/hplc/analyses/{analysis_id}")

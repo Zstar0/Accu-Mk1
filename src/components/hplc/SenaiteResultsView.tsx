@@ -17,6 +17,8 @@ import {
   lookupSenaiteSample,
   setAnalysisResult,
   updateSamplePrep,
+  uploadChromatogramToSenaite,
+  renderChromatogramImage,
   type SamplePrep,
   type HPLCAnalysisResult,
   type SenaiteLookupResult,
@@ -142,7 +144,7 @@ interface Props {
   onComplete?: () => void
 }
 
-export function SenaiteResultsView({ prep, results, onBack, onComplete }: Props) {
+export function SenaiteResultsView({ prep, results: hplcResults, onBack, onComplete }: Props) {
   const [sampleIdInput, setSampleIdInput] = useState(
     prep.senaite_sample_id ?? '',
   )
@@ -153,6 +155,27 @@ export function SenaiteResultsView({ prep, results, onBack, onComplete }: Props)
   // Auto-fill state
   const [filling, setFilling] = useState(false)
   const [fillResults, setFillResults] = useState<Map<string, 'success' | 'error'>>(new Map())
+
+  // Chromatogram preview
+  const [chromUrl, setChromUrl] = useState<string | null>(null)
+  const [chromLoading, setChromLoading] = useState(false)
+
+  // Render chromatogram image on mount (from first result with chromatogram data)
+  const chromAnalysisId = hplcResults.find(r => r.chromatogram_data?.times?.length)?.id ?? null
+
+  useEffect(() => {
+    if (!chromAnalysisId || chromUrl) return
+    let revoked = false
+    setChromLoading(true)
+    renderChromatogramImage(chromAnalysisId)
+      .then(url => { if (!revoked) setChromUrl(url) })
+      .catch(e => console.warn('[Chromatogram] render failed:', e))
+      .finally(() => { if (!revoked) setChromLoading(false) })
+    return () => {
+      revoked = true
+      if (chromUrl) URL.revokeObjectURL(chromUrl)
+    }
+  }, [chromAnalysisId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleLoad = useCallback(async () => {
     const id = sampleIdInput.trim()
@@ -200,7 +223,7 @@ export function SenaiteResultsView({ prep, results, onBack, onComplete }: Props)
   const pendingCount = analyses.length - verifiedCount
 
   // Auto-fill mappings
-  const autoFillMappings = senaiteData ? buildAllAutoFillMappings(results, analyses) : []
+  const autoFillMappings = senaiteData ? buildAllAutoFillMappings(hplcResults, analyses) : []
 
   // ── Auto-fill handler ───────────────────────────────────────────────────────
 
@@ -246,7 +269,17 @@ export function SenaiteResultsView({ prep, results, onBack, onComplete }: Props)
     } else {
       toast.warning(`${successCount} filled, ${errorCount} failed`)
     }
-  }, [autoFillMappings])
+
+    // Upload chromatogram image to SENAITE (best-effort, non-blocking)
+    if (successCount > 0 && senaiteData?.sample_uid) {
+      const firstHplcResult = hplcResults[0]
+      if (firstHplcResult?.id) {
+        uploadChromatogramToSenaite(firstHplcResult.id, senaiteData.sample_uid)
+          .then(r => { if (r.success) toast.success('Chromatogram image uploaded to SENAITE') })
+          .catch(() => { /* best-effort — don't block the user */ })
+      }
+    }
+  }, [autoFillMappings, senaiteData, hplcResults])
 
   // ── AnalysisTable callbacks ──────────────────────────────────────────────────
 
@@ -328,13 +361,13 @@ export function SenaiteResultsView({ prep, results, onBack, onComplete }: Props)
       </div>
 
       {/* HPLC Results Summary */}
-      {results.length > 0 && (
+      {hplcResults.length > 0 && (
         <div className="px-6 pt-5 pb-4 border-b border-border/60">
           <div className="rounded-lg border border-border bg-card p-4 space-y-3">
             <div className="flex items-center justify-between">
               <h3 className="text-sm font-semibold">HPLC Results Summary</h3>
               <span className="text-xs text-muted-foreground">
-                {results.length} analyte{results.length !== 1 ? 's' : ''}
+                {hplcResults.length} analyte{hplcResults.length !== 1 ? 's' : ''}
               </span>
             </div>
 
@@ -349,7 +382,7 @@ export function SenaiteResultsView({ prep, results, onBack, onComplete }: Props)
                   </tr>
                 </thead>
                 <tbody>
-                  {results.map((r, i) => (
+                  {hplcResults.map((r, i) => (
                     <tr key={i} className="border-b border-border/50 last:border-0">
                       <td className="px-3 py-2 font-medium">
                         {r.peptide_abbreviation ?? `Analyte ${i + 1}`}
@@ -381,13 +414,13 @@ export function SenaiteResultsView({ prep, results, onBack, onComplete }: Props)
               </table>
             </div>
 
-            {results.length > 1 && (() => {
-              const totalQty = results.reduce((sum, r) => sum + (r.quantity_mg ?? 0), 0)
-              const weightedPuritySum = results.reduce(
+            {hplcResults.length > 1 && (() => {
+              const totalQty = hplcResults.reduce((sum, r) => sum + (r.quantity_mg ?? 0), 0)
+              const weightedPuritySum = hplcResults.reduce(
                 (sum, r) => sum + (r.quantity_mg ?? 0) * (r.purity_percent ?? 0), 0
               )
               const blendPurity = totalQty > 0 ? weightedPuritySum / totalQty : 0
-              const blendIdentity = results.every(r => r.identity_conforms === true)
+              const blendIdentity = hplcResults.every(r => r.identity_conforms === true)
 
               return (
                 <div className="space-y-1.5">
@@ -416,6 +449,30 @@ export function SenaiteResultsView({ prep, results, onBack, onComplete }: Props)
                 </div>
               )
             })()}
+          </div>
+        </div>
+      )}
+
+      {/* Chromatogram Preview */}
+      {(chromUrl || chromLoading) && (
+        <div className="px-6 pt-4 pb-4 border-b border-border/60">
+          <div className="rounded-lg border border-border bg-card p-4 space-y-2">
+            <h3 className="text-sm font-semibold">Chromatogram</h3>
+            {chromLoading ? (
+              <div className="flex items-center justify-center py-8">
+                <Spinner className="size-5" />
+                <span className="ml-2 text-sm text-muted-foreground">Rendering chromatogram...</span>
+              </div>
+            ) : chromUrl ? (
+              <img
+                src={chromUrl}
+                alt="HPLC Chromatogram"
+                className="w-full rounded border border-border/50"
+              />
+            ) : null}
+            <p className="text-xs text-muted-foreground">
+              This image will be uploaded to SENAITE when you auto-fill results.
+            </p>
           </div>
         </div>
       )}
@@ -507,9 +564,9 @@ export function SenaiteResultsView({ prep, results, onBack, onComplete }: Props)
                 <div className="flex items-center gap-2">
                   <Zap size={15} className="text-amber-600 dark:text-amber-400" />
                   <span className="text-sm font-medium">
-                    Auto-fill from {results.length === 1
-                      ? `${results[0]?.peptide_abbreviation} analysis`
-                      : `${results.length} analyte analyses`}
+                    Auto-fill from {hplcResults.length === 1
+                      ? `${hplcResults[0]?.peptide_abbreviation} analysis`
+                      : `${hplcResults.length} analyte analyses`}
                   </span>
                 </div>
                 <Button

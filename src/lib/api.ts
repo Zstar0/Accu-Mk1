@@ -3192,6 +3192,33 @@ export async function uploadSenaiteAttachment(
   return response.json() as Promise<SenaiteUploadAttachmentResponse>
 }
 
+export async function renderChromatogramImage(analysisId: number): Promise<string> {
+  const response = await fetch(
+    `${API_BASE_URL()}/hplc/analyses/${analysisId}/chromatogram-image`,
+    { method: 'POST', headers: getBearerHeaders() }
+  )
+  if (!response.ok) {
+    throw new Error(`Chromatogram render failed: ${response.status}`)
+  }
+  const blob = await response.blob()
+  return URL.createObjectURL(blob)
+}
+
+export async function uploadChromatogramToSenaite(
+  analysisId: number,
+  sampleUid: string
+): Promise<{ success: boolean; message: string; filename?: string; size_bytes?: number }> {
+  const response = await fetch(
+    `${API_BASE_URL()}/hplc/analyses/${analysisId}/chromatogram-to-senaite?sample_uid=${encodeURIComponent(sampleUid)}`,
+    { method: 'POST', headers: getBearerHeaders() }
+  )
+  if (!response.ok) {
+    const err = await response.json().catch(() => null)
+    throw new Error(err?.detail || `Chromatogram upload failed: ${response.status}`)
+  }
+  return response.json()
+}
+
 export interface SenaiteFieldUpdateResponse {
   success: boolean
   message: string
