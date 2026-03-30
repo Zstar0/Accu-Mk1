@@ -56,6 +56,10 @@ import {
   getExplorerCOASignedUrl,
   generateSenaiteCOA,
   publishSenaiteCOA,
+  listSamplePreps,
+  listAnalysisServices,
+  addAnalysisToSample,
+  removeAnalysisFromSample,
   type SenaiteLookupResult,
   type SenaiteAttachment,
   type SenaiteAttachmentType,
@@ -63,6 +67,9 @@ import {
   type AdditionalCOAConfig,
   type ExplorerCOAGeneration,
   type WooOrder,
+  type SamplePrep,
+  type HplcScanMatch,
+  type AnalysisService,
   getWooOrder,
   fetchChromatogramLttb,
 } from '@/lib/api'
@@ -86,6 +93,8 @@ import { getSenaiteUrl, getWordpressUrl } from '@/lib/api-profiles'
 import { cn } from '@/lib/utils'
 import { EditableDataRow } from '@/components/dashboard/EditableField'
 import { AnalysisTable, StatusBadge } from '@/components/senaite/AnalysisTable'
+import { SamplePrepHplcFlyout } from '@/components/hplc/SamplePrepHplcFlyout'
+import { Microscope, Plus, Search, Trash2 } from 'lucide-react'
 
 // --- COA Console ---
 
@@ -1550,6 +1559,84 @@ export function SampleDetails() {
   const [wooOrderData, setWooOrderData] = useState<WooOrder | null>(null)
   const [wooOrderLoading, setWooOrderLoading] = useState(false)
 
+  // HPLC Results flyout
+  const [hplcFlyoutPrep, setHplcFlyoutPrep] = useState<SamplePrep | null>(null)
+  const [hplcFlyoutMatch, setHplcFlyoutMatch] = useState<HplcScanMatch | null>(null)
+
+  // Manage analyses panel
+  const [manageAnalysesOpen, setManageAnalysesOpen] = useState(false)
+  const [availableServices, setAvailableServices] = useState<AnalysisService[]>([])
+  const [servicesLoading, setServicesLoading] = useState(false)
+  const [serviceSearch, setServiceSearch] = useState('')
+  const [addingService, setAddingService] = useState<string | null>(null)
+  const [removingKeyword, setRemovingKeyword] = useState<string | null>(null)
+
+  async function openHplcResults() {
+    if (!sampleId) return
+    try {
+      const preps = await listSamplePreps({ search: sampleId, limit: 1 })
+      if (preps.length === 0) {
+        toast.error('No sample prep found for this sample')
+        return
+      }
+      const prep = preps[0]!
+      setHplcFlyoutMatch({
+        prep_id: prep.id,
+        senaite_sample_id: prep.senaite_sample_id ?? prep.sample_id,
+        folder_name: prep.senaite_sample_id ?? prep.sample_id,
+        folder_id: '',
+        peak_files: [],
+        chrom_files: [],
+      })
+      setHplcFlyoutPrep(prep)
+    } catch {
+      toast.error('Failed to load sample prep')
+    }
+  }
+
+  const openManageAnalyses = async () => {
+    setManageAnalysesOpen(true)
+    if (availableServices.length === 0) {
+      setServicesLoading(true)
+      try {
+        const services = await listAnalysisServices()
+        setAvailableServices(services)
+      } catch {
+        toast.error('Failed to load analysis services')
+      } finally {
+        setServicesLoading(false)
+      }
+    }
+  }
+
+  const handleAddAnalysis = async (service: AnalysisService) => {
+    if (!data?.sample_id) return
+    setAddingService(service.uid)
+    try {
+      await addAnalysisToSample(data.sample_id, service.uid)
+      toast.success(`Added ${service.title}`)
+      refreshSample(data.sample_id)
+    } catch (e) {
+      toast.error('Failed to add analysis', { description: e instanceof Error ? e.message : String(e) })
+    } finally {
+      setAddingService(null)
+    }
+  }
+
+  const handleRemoveAnalysis = async (keyword: string, title: string) => {
+    if (!data?.sample_id) return
+    setRemovingKeyword(keyword)
+    try {
+      await removeAnalysisFromSample(data.sample_id, keyword)
+      toast.success(`Removed ${title}`)
+      refreshSample(data.sample_id)
+    } catch (e) {
+      toast.error('Failed to remove analysis', { description: e instanceof Error ? e.message : String(e) })
+    } finally {
+      setRemovingKeyword(null)
+    }
+  }
+
   const fetchSample = (id: string) => {
     setLoading(true)
     setError(null)
@@ -1845,6 +1932,15 @@ export function SampleDetails() {
             <span className="text-sm font-medium">{data.sample_id}</span>
           </div>
           <div className="flex items-center gap-1.5">
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-1.5 cursor-pointer"
+              onClick={openHplcResults}
+            >
+              <Microscope size={13} />
+              HPLC Results
+            </Button>
             <div className="relative">
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
@@ -2577,6 +2673,115 @@ export function SampleDetails() {
           </SectionHeader>
         </Card>
 
+        {/* Manage Analyses */}
+        {data.review_state && ['sample_received', 'sample_due', 'sample_registered'].includes(data.review_state) && (
+          <div className="mb-2">
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-1.5 text-xs"
+              onClick={openManageAnalyses}
+            >
+              <Plus size={13} />
+              Manage Analyses
+            </Button>
+          </div>
+        )}
+
+        {/* Manage Analyses Panel */}
+        {manageAnalysesOpen && (
+          <Card className="mb-3 border-dashed">
+            <div className="p-4">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-sm font-medium">Manage Analyses</h3>
+                <Button variant="ghost" size="sm" className="h-6 w-6 p-0" onClick={() => setManageAnalysesOpen(false)}>
+                  <X size={14} />
+                </Button>
+              </div>
+
+              {/* Current analyses with remove buttons */}
+              <div className="mb-4">
+                <p className="text-xs text-muted-foreground mb-2">Current analyses</p>
+                <div className="space-y-1">
+                  {analyses
+                    .filter(a => a.review_state && !['retracted', 'cancelled'].includes(a.review_state))
+                    .map(a => (
+                      <div key={a.keyword ?? a.uid} className="flex items-center justify-between py-1 px-2 rounded bg-muted/40">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="text-xs font-mono text-muted-foreground shrink-0">{a.keyword}</span>
+                          <span className="text-xs truncate">{a.title}</span>
+                        </div>
+                        {a.review_state && ['unassigned', 'assigned', 'registered'].includes(a.review_state) && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-6 w-6 p-0 shrink-0 text-muted-foreground hover:text-destructive"
+                            disabled={removingKeyword === a.keyword}
+                            onClick={() => handleRemoveAnalysis(a.keyword ?? '', a.title)}
+                          >
+                            {removingKeyword === a.keyword
+                              ? <Loader2 size={12} className="animate-spin" />
+                              : <Trash2 size={12} />
+                            }
+                          </Button>
+                        )}
+                      </div>
+                    ))}
+                </div>
+              </div>
+
+              {/* Add new analysis */}
+              <div>
+                <p className="text-xs text-muted-foreground mb-2">Add analysis</p>
+                <div className="relative mb-2">
+                  <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
+                  <input
+                    type="text"
+                    placeholder="Search services..."
+                    value={serviceSearch}
+                    onChange={e => setServiceSearch(e.target.value)}
+                    className="w-full pl-7 pr-3 py-1.5 text-xs rounded-md border border-input bg-background focus:outline-none focus:ring-1 focus:ring-ring"
+                  />
+                </div>
+                {servicesLoading ? (
+                  <div className="flex justify-center py-4">
+                    <Loader2 size={16} className="animate-spin text-muted-foreground" />
+                  </div>
+                ) : (
+                  <div className="max-h-48 overflow-y-auto space-y-0.5">
+                    {availableServices
+                      .filter(s => {
+                        const q = serviceSearch.toLowerCase()
+                        return !q || s.title.toLowerCase().includes(q) || s.keyword.toLowerCase().includes(q)
+                      })
+                      .filter(s => !analyses.some(a => a.keyword === s.keyword && a.review_state !== 'retracted'))
+                      .map(s => (
+                        <div key={s.uid} className="flex items-center justify-between py-1 px-2 rounded hover:bg-muted/60">
+                          <div className="min-w-0">
+                            <span className="text-xs truncate block">{s.title}</span>
+                            <span className="text-[10px] font-mono text-muted-foreground">{s.keyword}</span>
+                          </div>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-6 w-6 p-0 shrink-0"
+                            disabled={addingService === s.uid}
+                            onClick={() => handleAddAnalysis(s)}
+                          >
+                            {addingService === s.uid
+                              ? <Loader2 size={12} className="animate-spin" />
+                              : <Plus size={12} />
+                            }
+                          </Button>
+                        </div>
+                      ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          </Card>
+        )}
+
         {/* Analyses Table */}
         <AnalysisTable
           analyses={analyses}
@@ -2621,6 +2826,17 @@ export function SampleDetails() {
             setWooOrderOpen(false)
             setWooOrderData(null)
           }}
+        />
+      )}
+
+      {/* HPLC Results flyout */}
+      {hplcFlyoutPrep && hplcFlyoutMatch && (
+        <SamplePrepHplcFlyout
+          open={true}
+          onClose={() => { setHplcFlyoutPrep(null); setHplcFlyoutMatch(null) }}
+          prep={hplcFlyoutPrep}
+          match={hplcFlyoutMatch}
+          readOnly
         />
       )}
     </div>

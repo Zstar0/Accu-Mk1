@@ -6145,6 +6145,47 @@ async def get_sample_additional_coas(sample_id: str, _current_user=Depends(get_c
         raise HTTPException(status_code=503, detail=f"Integration Service unavailable: {e}")
 
 
+@app.get("/explorer/analysis-services")
+async def get_analysis_services(_current_user=Depends(get_current_user)):
+    """List all active analysis services (proxied to Integration Service)."""
+    try:
+        return await _proxy_explorer_get("/analysis-services")
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(status_code=e.response.status_code, detail=e.response.text)
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Integration Service unavailable: {e}")
+
+
+@app.post("/explorer/samples/{sample_id}/analyses")
+async def add_sample_analysis(sample_id: str, body: dict, _current_user=Depends(get_current_user)):
+    """Add an analysis service to a sample (proxied to Integration Service)."""
+    try:
+        url = f"{INTEGRATION_SERVICE_URL}/explorer/samples/{sample_id}/analyses"
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(url, json=body, headers={"X-API-Key": INTEGRATION_SERVICE_API_KEY})
+            resp.raise_for_status()
+            return resp.json()
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(status_code=e.response.status_code, detail=e.response.text)
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Integration Service unavailable: {e}")
+
+
+@app.delete("/explorer/samples/{sample_id}/analyses/{keyword}")
+async def remove_sample_analysis(sample_id: str, keyword: str, _current_user=Depends(get_current_user)):
+    """Remove an analysis from a sample (proxied to Integration Service)."""
+    try:
+        url = f"{INTEGRATION_SERVICE_URL}/explorer/samples/{sample_id}/analyses/{keyword}"
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.delete(url, headers={"X-API-Key": INTEGRATION_SERVICE_API_KEY})
+            resp.raise_for_status()
+            return resp.json()
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(status_code=e.response.status_code, detail=e.response.text)
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Integration Service unavailable: {e}")
+
+
 # ── WooCommerce REST API Proxy ──────────────────────────────────────
 # Fetches live order data directly from WooCommerce, including full
 # financial breakdown (totals, discounts, coupons, shipping, tax).

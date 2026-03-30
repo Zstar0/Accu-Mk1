@@ -1439,6 +1439,65 @@ export interface AdditionalCOAConfig {
   generation_number: number | null
 }
 
+// --- Analysis Management ---
+
+export interface AnalysisService {
+  uid: string
+  title: string
+  keyword: string
+}
+
+export interface ManageAnalysisResult {
+  success: boolean
+  message: string
+}
+
+export async function listAnalysisServices(): Promise<AnalysisService[]> {
+  const response = await fetch(
+    `${API_BASE_URL()}/explorer/analysis-services`,
+    { headers: getAuthHeaders() }
+  )
+  if (!response.ok) throw new Error(`Failed to list analysis services: ${response.status}`)
+  return response.json()
+}
+
+export async function addAnalysisToSample(
+  sampleId: string,
+  serviceUid: string,
+): Promise<ManageAnalysisResult> {
+  const response = await fetch(
+    `${API_BASE_URL()}/explorer/samples/${encodeURIComponent(sampleId)}/analyses`,
+    {
+      method: 'POST',
+      headers: getBearerHeaders('application/json'),
+      body: JSON.stringify({ service_uid: serviceUid }),
+    }
+  )
+  if (!response.ok) {
+    const err = await response.json().catch(() => null)
+    throw new Error(err?.detail || `Failed to add analysis: ${response.status}`)
+  }
+  return response.json()
+}
+
+export async function removeAnalysisFromSample(
+  sampleId: string,
+  keyword: string,
+): Promise<ManageAnalysisResult> {
+  const response = await fetch(
+    `${API_BASE_URL()}/explorer/samples/${encodeURIComponent(sampleId)}/analyses/${encodeURIComponent(keyword)}`,
+    {
+      method: 'DELETE',
+      headers: getAuthHeaders(),
+    }
+  )
+  if (!response.ok) {
+    const err = await response.json().catch(() => null)
+    throw new Error(err?.detail || `Failed to remove analysis: ${response.status}`)
+  }
+  return response.json()
+}
+
 /**
  * Get additional COA configurations for a sample.
  */

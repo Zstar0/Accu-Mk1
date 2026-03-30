@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.27.4 — 2026-03-30
+
+### Sample Analysis Management
+
+- **Manage Analyses panel**: New inline panel on Sample Details page lets lab staff add or remove analysis services from a sample before work begins
+- **Add service**: Searchable picker lists all 87 active Senaite analysis services; already-attached services are filtered out
+- **Remove service**: Trash button on each unassigned/registered analysis removes it via ZMI; locked analyses (verified, published) cannot be removed
+- **Guard**: Button only appears on samples in `sample_received`, `sample_due`, or `sample_registered` state
+- **Bug fix**: Removal correctly targets the Zope object id (e.g. `ID_AOD9604-1`) rather than the keyword, preventing silent failures when retracted analyses left behind a renamed duplicate
+
+### Integration Service
+
+- New `list_analysis_services`, `add_analysis_to_sample`, `remove_analysis_from_sample` methods on the Senaite adapter
+- New `GET /analysis-services`, `POST /samples/{id}/analyses`, `DELETE /samples/{id}/analyses/{keyword}` endpoints in `desktop.py`
+
 ## v0.27.3 — 2026-03-27
 
 ### Sample Prep Workflow
