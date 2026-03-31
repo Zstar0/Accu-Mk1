@@ -6,6 +6,9 @@ import { InstrumentsPage } from '@/components/hplc/InstrumentsPage'
 import { MethodsPage } from '@/components/hplc/MethodsPage'
 import { PeptideConfig } from '@/components/hplc/PeptideConfig'
 import { AnalysisServicesPage } from '@/components/hplc/AnalysisServicesPage'
+import ServiceGroupsPage from '@/components/hplc/ServiceGroupsPage'
+import WorksheetsInboxPage from '@/components/hplc/WorksheetsInboxPage'
+import WorksheetsListPage from '@/components/hplc/WorksheetsListPage'
 import { OrderDashboard } from '@/components/dashboard/OrderDashboard'
 import { AnalyticsDashboard } from '@/components/dashboard/AnalyticsDashboard'
 import { SenaiteDashboard } from '@/components/senaite/SenaiteDashboard'
@@ -47,8 +50,11 @@ export function MainWindowContent({
         if (activeSubSection === 'methods') return <MethodsPage />
         if (activeSubSection === 'peptide-config') return <PeptideConfig />
         if (activeSubSection === 'analysis-services') return <AnalysisServicesPage />
+        if (activeSubSection === 'service-groups') return <ServiceGroupsPage />
         return <InstrumentsPage />
       case 'hplc-analysis':
+        if (activeSubSection === 'inbox') return <WorksheetsInboxPage />
+        if (activeSubSection === 'worksheets') return <WorksheetsListPage />
         return <HPLCAnalysis />
       case 'accumark-tools':
         if (activeSubSection === 'chromatographs') return <ChromatographViewer />

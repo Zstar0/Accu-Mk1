@@ -80,6 +80,7 @@ const navItems: NavItem[] = [
       { id: 'methods', label: 'Methods' },
       { id: 'peptide-config', label: 'Peptides' },
       { id: 'analysis-services', label: 'Analysis Services' },
+      { id: 'service-groups', label: 'Service Groups', adminOnly: true },
     ],
   },
   {
@@ -91,6 +92,8 @@ const navItems: NavItem[] = [
       { id: 'new-analysis', label: 'New Analysis' },
       { id: 'analysis-history', label: 'History' },
       { id: 'sample-preps', label: 'Sample Preps' },
+      { id: 'inbox', label: 'Inbox' },
+      { id: 'worksheets', label: 'Worksheets' },
     ],
   },
   {
