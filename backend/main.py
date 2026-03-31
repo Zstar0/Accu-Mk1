@@ -1464,6 +1464,12 @@ class AnalystAssignRequest(BaseModel):
     analyst_value: str
 
 
+class AnalystTestRequest(BaseModel):
+    """Schema for testing SENAITE Analyst field format (username vs UID)."""
+    username: str
+    uid: str
+
+
 # ─── HPLC Method schemas ───
 
 class MethodCreate(BaseModel):
@@ -10389,3 +10395,103 @@ async def set_analysis_analyst(
         raise HTTPException(502, f"SENAITE returned {e.response.status_code}")
     except Exception as e:
         raise HTTPException(500, f"Analyst assign error: {e}")
+
+
+@app.post("/senaite/analyses/{uid}/analyst-test")
+async def test_analyst_format(
+    uid: str,
+    req: AnalystTestRequest,
+    current_user=Depends(get_current_user),
+):
+    """Diagnostic: test whether SENAITE Analyst field accepts username or UID format.
+
+    Tests both formats against a live analysis, reads back the stored value after each
+    write, then restores the original value. Returns a structured diagnostic report so
+    the caller can determine which format SENAITE actually accepts.
+    """
+    if not SENAITE_URL:
+        raise HTTPException(503, "SENAITE URL not configured")
+
+    try:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(30.0, connect=5.0),
+            auth=_get_senaite_auth(current_user),
+            follow_redirects=True,
+        ) as client:
+            read_url = f"{SENAITE_URL}/senaite/@@API/senaite/v1/{uid}"
+            update_url = f"{SENAITE_URL}/senaite/@@API/senaite/v1/update/{uid}"
+
+            # 1. Read current Analyst value so we can restore it later.
+            read_resp = await client.get(read_url)
+            read_resp.raise_for_status()
+            read_data = read_resp.json()
+            original_items = read_data.get("items", [])
+            original_value = original_items[0].get("Analyst") if original_items else None
+
+            # 2. Test username format.
+            username_resp = await client.post(update_url, json={"Analyst": req.username})
+            username_resp.raise_for_status()
+            username_data = username_resp.json()
+            username_items = username_data.get("items", [])
+            username_stored = username_items[0].get("Analyst") if username_items else None
+            username_accepted = bool(
+                username_stored and (
+                    username_stored == req.username or username_stored is not None
+                )
+            )
+
+            # 3. Test UID format.
+            uid_resp = await client.post(update_url, json={"Analyst": req.uid})
+            uid_resp.raise_for_status()
+            uid_data = uid_resp.json()
+            uid_items = uid_data.get("items", [])
+            uid_stored = uid_items[0].get("Analyst") if uid_items else None
+            uid_accepted = bool(
+                uid_stored and (
+                    uid_stored == req.uid or uid_stored is not None
+                )
+            )
+
+            # 4. Restore original value (best-effort — don't fail the whole request).
+            try:
+                restore_value = original_value if original_value is not None else ""
+                await client.post(update_url, json={"Analyst": restore_value})
+            except Exception:
+                pass  # Restoration failure is non-fatal — diagnostic result already captured
+
+            # 5. Derive recommendation.
+            username_exact = username_stored == req.username
+            uid_exact = uid_stored == req.uid
+
+            if username_exact and not uid_exact:
+                recommendation = "use_username"
+            elif uid_exact and not username_exact:
+                recommendation = "use_uid"
+            elif username_accepted and not uid_accepted:
+                recommendation = "use_username"
+            elif uid_accepted and not username_accepted:
+                recommendation = "use_uid"
+            else:
+                recommendation = "unclear"
+
+            return {
+                "original_value": original_value,
+                "username_test": {
+                    "sent": req.username,
+                    "stored": username_stored,
+                    "accepted": username_accepted,
+                },
+                "uid_test": {
+                    "sent": req.uid,
+                    "stored": uid_stored,
+                    "accepted": uid_accepted,
+                },
+                "recommendation": recommendation,
+            }
+
+    except httpx.TimeoutException:
+        raise HTTPException(504, "SENAITE request timed out")
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(502, f"SENAITE returned {e.response.status_code}")
+    except Exception as e:
+        raise HTTPException(500, f"Analyst format test error: {e}")
