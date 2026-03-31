@@ -79,44 +79,44 @@ Requirements for worksheet feature milestone. Each maps to roadmap phases.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| SGRP-01 | — | Pending |
-| SGRP-02 | — | Pending |
-| SGRP-03 | — | Pending |
-| SGRP-04 | — | Pending |
-| ANLY-01 | — | Pending |
-| ANLY-02 | — | Pending |
-| ANLY-03 | — | Pending |
-| INBX-01 | — | Pending |
-| INBX-02 | — | Pending |
-| INBX-03 | — | Pending |
-| INBX-04 | — | Pending |
-| INBX-05 | — | Pending |
-| INBX-06 | — | Pending |
-| INBX-07 | — | Pending |
-| INBX-08 | — | Pending |
-| INBX-09 | — | Pending |
-| INBX-10 | — | Pending |
-| INBX-11 | — | Pending |
-| WSHT-01 | — | Pending |
-| WSHT-02 | — | Pending |
-| WSHT-03 | — | Pending |
-| WSHT-04 | — | Pending |
-| WSHT-05 | — | Pending |
-| WSHT-06 | — | Pending |
-| WSHT-07 | — | Pending |
-| WSHT-08 | — | Pending |
-| WLST-01 | — | Pending |
-| WLST-02 | — | Pending |
-| WLST-03 | — | Pending |
-| WLST-04 | — | Pending |
-| NAVG-01 | — | Pending |
-| NAVG-02 | — | Pending |
+| SGRP-01 | Phase 15 | Pending |
+| SGRP-02 | Phase 15 | Pending |
+| SGRP-03 | Phase 15 | Pending |
+| SGRP-04 | Phase 15 | Pending |
+| ANLY-01 | Phase 15 | Pending |
+| ANLY-02 | Phase 15 | Pending |
+| ANLY-03 | Phase 15 | Pending |
+| INBX-01 | Phase 16 | Pending |
+| INBX-02 | Phase 16 | Pending |
+| INBX-03 | Phase 16 | Pending |
+| INBX-04 | Phase 16 | Pending |
+| INBX-05 | Phase 16 | Pending |
+| INBX-06 | Phase 16 | Pending |
+| INBX-07 | Phase 16 | Pending |
+| INBX-08 | Phase 16 | Pending |
+| INBX-09 | Phase 16 | Pending |
+| INBX-10 | Phase 16 | Pending |
+| INBX-11 | Phase 16 | Pending |
+| WSHT-01 | Phase 17 | Pending |
+| WSHT-02 | Phase 17 | Pending |
+| WSHT-03 | Phase 17 | Pending |
+| WSHT-04 | Phase 17 | Pending |
+| WSHT-05 | Phase 17 | Pending |
+| WSHT-06 | Phase 17 | Pending |
+| WSHT-07 | Phase 17 | Pending |
+| WSHT-08 | Phase 17 | Pending |
+| WLST-01 | Phase 18 | Pending |
+| WLST-02 | Phase 18 | Pending |
+| WLST-03 | Phase 18 | Pending |
+| WLST-04 | Phase 18 | Pending |
+| NAVG-01 | Phase 15 | Pending |
+| NAVG-02 | Phase 15 | Pending |
 
 **Coverage:**
 - v0.28.0 requirements: 32 total
-- Mapped to phases: 0
-- Unmapped: 32 ⚠️
+- Mapped to phases: 32
+- Unmapped: 0 ✓
 
 ---
 *Requirements defined: 2026-03-31*
-*Last updated: 2026-03-31 after initial definition*
+*Last updated: 2026-03-31 — traceability mapped after roadmap creation*
