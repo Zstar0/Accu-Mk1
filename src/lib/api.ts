@@ -3496,3 +3496,113 @@ export async function downloadSharePointFiles(
   const data = await response.json()
   return data.files
 }
+
+// ─── Service Groups ───────────────────────────────────────────────────────────
+
+export interface ServiceGroup {
+  id: number
+  name: string
+  description: string | null
+  color: string
+  sort_order: number
+  member_count: number
+  created_at: string
+  updated_at: string
+}
+
+export interface ServiceGroupCreate {
+  name: string
+  description?: string | null
+  color?: string
+  sort_order?: number
+}
+
+export interface ServiceGroupUpdate {
+  name?: string
+  description?: string | null
+  color?: string
+  sort_order?: number
+}
+
+export interface SenaiteAnalyst {
+  username: string | null
+  fullname: string
+}
+
+export async function getServiceGroups(): Promise<ServiceGroup[]> {
+  const response = await fetch(`${API_BASE_URL()}/service-groups`, {
+    headers: getBearerHeaders(),
+  })
+  if (!response.ok) throw new Error(`Failed to load service groups: ${response.status}`)
+  return response.json()
+}
+
+export async function createServiceGroup(data: ServiceGroupCreate): Promise<ServiceGroup> {
+  const response = await fetch(`${API_BASE_URL()}/service-groups`, {
+    method: 'POST',
+    headers: getBearerHeaders('application/json'),
+    body: JSON.stringify(data),
+  })
+  if (!response.ok) throw new Error(`Failed to create service group: ${response.status}`)
+  return response.json()
+}
+
+export async function updateServiceGroup(id: number, data: ServiceGroupUpdate): Promise<ServiceGroup> {
+  const response = await fetch(`${API_BASE_URL()}/service-groups/${id}`, {
+    method: 'PUT',
+    headers: getBearerHeaders('application/json'),
+    body: JSON.stringify(data),
+  })
+  if (!response.ok) throw new Error(`Failed to update service group: ${response.status}`)
+  return response.json()
+}
+
+export async function deleteServiceGroup(id: number): Promise<void> {
+  const response = await fetch(`${API_BASE_URL()}/service-groups/${id}`, {
+    method: 'DELETE',
+    headers: getBearerHeaders(),
+  })
+  if (!response.ok) throw new Error(`Failed to delete service group: ${response.status}`)
+}
+
+export async function getServiceGroupMembers(groupId: number): Promise<number[]> {
+  const response = await fetch(`${API_BASE_URL()}/service-groups/${groupId}/members`, {
+    headers: getBearerHeaders(),
+  })
+  if (!response.ok) throw new Error(`Failed to load service group members: ${response.status}`)
+  return response.json()
+}
+
+export async function setServiceGroupMembers(
+  groupId: number,
+  analysisServiceIds: number[]
+): Promise<{ count: number }> {
+  const response = await fetch(`${API_BASE_URL()}/service-groups/${groupId}/members`, {
+    method: 'PUT',
+    headers: getBearerHeaders('application/json'),
+    body: JSON.stringify({ analysis_service_ids: analysisServiceIds }),
+  })
+  if (!response.ok) throw new Error(`Failed to update service group members: ${response.status}`)
+  return response.json()
+}
+
+export async function getSenaiteAnalysts(): Promise<SenaiteAnalyst[]> {
+  const response = await fetch(`${API_BASE_URL()}/senaite/analysts`, {
+    headers: getBearerHeaders(),
+  })
+  if (!response.ok) throw new Error(`Failed to load analysts: ${response.status}`)
+  return response.json()
+}
+
+export async function setAnalysisAnalyst(
+  uid: string,
+  analystValue: string
+): Promise<{ success: boolean; analyst_stored: string | null }> {
+  const response = await fetch(`${API_BASE_URL()}/senaite/analyses/${uid}/analyst`, {
+    method: 'POST',
+    headers: getBearerHeaders('application/json'),
+    body: JSON.stringify({ analyst_value: analystValue }),
+  })
+  if (!response.ok) throw new Error(`Failed to assign analyst: ${response.status}`)
+  return response.json()
+}

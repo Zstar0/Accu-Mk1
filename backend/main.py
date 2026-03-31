@@ -35,7 +35,7 @@ from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import select, desc, delete, update, func
 
 from database import get_db, init_db
-from models import AuditLog, Settings, Job, Sample, Result, Instrument, AnalysisService, HplcMethod, Peptide, PeptideAnalyte, CalibrationCurve, HPLCAnalysis, User, SharePointFileCache, WizardSession, WizardMeasurement, peptide_methods, blend_components
+from models import AuditLog, Settings, Job, Sample, Result, Instrument, AnalysisService, HplcMethod, Peptide, PeptideAnalyte, CalibrationCurve, HPLCAnalysis, User, SharePointFileCache, WizardSession, WizardMeasurement, peptide_methods, blend_components, ServiceGroup, service_group_members
 from auth import (
     get_current_user, require_admin, create_access_token,
     verify_password, get_password_hash, seed_admin_user,
@@ -1419,6 +1419,49 @@ class AnalysisServiceResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+# ─── Service Group schemas ───
+
+class ServiceGroupCreate(BaseModel):
+    """Schema for creating a service group."""
+    name: str
+    description: Optional[str] = None
+    color: str = "blue"
+    sort_order: int = 0
+
+
+class ServiceGroupUpdate(BaseModel):
+    """Schema for updating a service group."""
+    name: Optional[str] = None
+    description: Optional[str] = None
+    color: Optional[str] = None
+    sort_order: Optional[int] = None
+
+
+class ServiceGroupResponse(BaseModel):
+    """Schema for service group response."""
+    id: int
+    name: str
+    description: Optional[str]
+    color: str
+    sort_order: int
+    member_count: int = 0
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class ServiceGroupMembersRequest(BaseModel):
+    """Schema for setting service group membership."""
+    analysis_service_ids: list[int]
+
+
+class AnalystAssignRequest(BaseModel):
+    """Schema for assigning an analyst to a SENAITE analysis."""
+    analyst_value: str
 
 
 # ─── HPLC Method schemas ───
@@ -10121,3 +10164,228 @@ async def stream_scale_weight(
             "X-Accel-Buffering": "no",
         },
     )
+
+
+# ─── Service Groups ───────────────────────────────────────────────────────────
+
+@app.get("/service-groups", response_model=list[ServiceGroupResponse])
+async def get_service_groups(
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Return all service groups ordered by sort_order, name."""
+    groups = db.execute(
+        select(ServiceGroup)
+        .options(joinedload(ServiceGroup.analysis_services))
+        .order_by(ServiceGroup.sort_order, ServiceGroup.name)
+    ).scalars().unique().all()
+
+    result = []
+    for group in groups:
+        resp = ServiceGroupResponse(
+            id=group.id,
+            name=group.name,
+            description=group.description,
+            color=group.color,
+            sort_order=group.sort_order,
+            member_count=len(group.analysis_services),
+            created_at=group.created_at,
+            updated_at=group.updated_at,
+        )
+        result.append(resp)
+    return result
+
+
+@app.post("/service-groups", response_model=ServiceGroupResponse, status_code=201)
+async def create_service_group(
+    data: ServiceGroupCreate,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Create a new service group."""
+    existing = db.execute(
+        select(ServiceGroup).where(ServiceGroup.name == data.name)
+    ).scalar_one_or_none()
+    if existing:
+        raise HTTPException(400, f"Service group '{data.name}' already exists")
+
+    group = ServiceGroup(**data.model_dump())
+    db.add(group)
+    db.commit()
+    db.refresh(group)
+    return ServiceGroupResponse(
+        id=group.id,
+        name=group.name,
+        description=group.description,
+        color=group.color,
+        sort_order=group.sort_order,
+        member_count=0,
+        created_at=group.created_at,
+        updated_at=group.updated_at,
+    )
+
+
+@app.put("/service-groups/{group_id}", response_model=ServiceGroupResponse)
+async def update_service_group(
+    group_id: int,
+    data: ServiceGroupUpdate,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Update an existing service group."""
+    group = db.execute(
+        select(ServiceGroup)
+        .options(joinedload(ServiceGroup.analysis_services))
+        .where(ServiceGroup.id == group_id)
+    ).scalar_one_or_none()
+    if not group:
+        raise HTTPException(404, f"Service group {group_id} not found")
+
+    for field, value in data.model_dump(exclude_unset=True).items():
+        setattr(group, field, value)
+
+    db.commit()
+    db.refresh(group)
+    return ServiceGroupResponse(
+        id=group.id,
+        name=group.name,
+        description=group.description,
+        color=group.color,
+        sort_order=group.sort_order,
+        member_count=len(group.analysis_services),
+        created_at=group.created_at,
+        updated_at=group.updated_at,
+    )
+
+
+@app.delete("/service-groups/{group_id}")
+async def delete_service_group(
+    group_id: int,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Delete a service group. Membership rows cascade-delete."""
+    group = db.execute(
+        select(ServiceGroup).where(ServiceGroup.id == group_id)
+    ).scalar_one_or_none()
+    if not group:
+        raise HTTPException(404, f"Service group {group_id} not found")
+
+    db.delete(group)
+    db.commit()
+    return {"message": f"Service group '{group.name}' deleted"}
+
+
+@app.get("/service-groups/{group_id}/members", response_model=list[int])
+async def get_service_group_members(
+    group_id: int,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Return the list of analysis_service IDs currently in the group."""
+    group = db.execute(
+        select(ServiceGroup).where(ServiceGroup.id == group_id)
+    ).scalar_one_or_none()
+    if not group:
+        raise HTTPException(404, f"Service group {group_id} not found")
+
+    rows = db.execute(
+        select(service_group_members.c.analysis_service_id).where(
+            service_group_members.c.service_group_id == group_id
+        )
+    ).all()
+    return [row.analysis_service_id for row in rows]
+
+
+@app.put("/service-groups/{group_id}/members")
+async def set_service_group_members(
+    group_id: int,
+    req: ServiceGroupMembersRequest,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Replace the full membership set for a service group."""
+    group = db.execute(
+        select(ServiceGroup)
+        .options(joinedload(ServiceGroup.analysis_services))
+        .where(ServiceGroup.id == group_id)
+    ).scalar_one_or_none()
+    if not group:
+        raise HTTPException(404, f"Service group {group_id} not found")
+
+    services = db.execute(
+        select(AnalysisService).where(AnalysisService.id.in_(req.analysis_service_ids))
+    ).scalars().all()
+
+    group.analysis_services = list(services)
+    db.commit()
+    return {"count": len(services)}
+
+
+# ─── SENAITE Analyst Proxy ────────────────────────────────────────────────────
+
+@app.get("/senaite/analysts")
+async def get_senaite_analysts(
+    current_user=Depends(get_current_user),
+):
+    """Proxy to SENAITE LabContact — returns list of {username, fullname}."""
+    if not SENAITE_URL:
+        raise HTTPException(503, "SENAITE URL not configured")
+
+    try:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(30.0, connect=5.0),
+            auth=_get_senaite_auth(current_user),
+            follow_redirects=True,
+        ) as client:
+            url = f"{SENAITE_URL}/senaite/@@API/senaite/v1/LabContact"
+            resp = await client.get(url, params={"complete": "yes", "limit": 200})
+            resp.raise_for_status()
+            data = resp.json()
+            items = data.get("items", [])
+            return [
+                {
+                    "username": i.get("getUsername"),
+                    "fullname": i.get("getFullname", i.get("title", "")),
+                }
+                for i in items
+            ]
+    except httpx.TimeoutException:
+        raise HTTPException(504, "SENAITE request timed out")
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(502, f"SENAITE returned {e.response.status_code}")
+    except Exception as e:
+        raise HTTPException(500, f"Analyst fetch error: {e}")
+
+
+@app.post("/senaite/analyses/{uid}/analyst")
+async def set_analysis_analyst(
+    uid: str,
+    req: AnalystAssignRequest,
+    current_user=Depends(get_current_user),
+):
+    """Assign an analyst to a SENAITE analysis by UID."""
+    if not SENAITE_URL:
+        raise HTTPException(503, "SENAITE URL not configured")
+
+    try:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(30.0, connect=5.0),
+            auth=_get_senaite_auth(current_user),
+            follow_redirects=True,
+        ) as client:
+            update_url = f"{SENAITE_URL}/senaite/@@API/senaite/v1/update/{uid}"
+            resp = await client.post(update_url, json={"Analyst": req.analyst_value})
+            resp.raise_for_status()
+            data = resp.json()
+            items = data.get("items", [])
+            return {
+                "success": bool(items),
+                "analyst_stored": items[0].get("Analyst") if items else None,
+            }
+    except httpx.TimeoutException:
+        raise HTTPException(504, "SENAITE request timed out")
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(502, f"SENAITE returned {e.response.status_code}")
+    except Exception as e:
+        raise HTTPException(500, f"Analyst assign error: {e}")
