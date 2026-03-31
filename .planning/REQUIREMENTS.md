@@ -1,148 +1,122 @@
-# Requirements: Accu-Mk1 v0.26.0
+# Requirements: Accu-Mk1 v0.28.0
 
-**Defined:** 2026-03-16
-**Core Value:** Streamlined morning workflow: import CSV, review batch, calculate purity, push to SENAITE. One operator, one workstation, no friction.
+**Defined:** 2026-03-31
+**Core Value:** Streamlined morning workflow: import CSV → review batch → calculate purity → push to SENAITE. One operator, one workstation, no friction.
 
-## v0.26.0 Requirements
+## v0.28.0 Requirements
 
-Requirements for Standard Sample Preps & Calibration Curve Chromatograms milestone.
+Requirements for worksheet feature milestone. Each maps to roadmap phases.
 
-### Standard Sample Prep
+### Service Groups
 
-- [ ] **STDP-01**: User can mark a sample prep as "Standard" during New Analysis wizard Step 1
-- [ ] **STDP-02**: When marked as Standard, user can enter manufacturer name (e.g., "Cayman", "NxGen")
-- [ ] **STDP-03**: When marked as Standard, user can enter free-text notes for the standard
-- [ ] **STDP-04**: Standard preps flow through the same wizard steps as production preps (stock prep, dilution, measurements)
-- [ ] **STDP-05**: Sample Preps list shows a "Standard" badge on standard preps and supports filtering by standard vs production
+- [ ] **SGRP-01**: Admin can create, edit, and delete service groups (name, description, color, sort order)
+- [ ] **SGRP-02**: Admin can assign analysis services to service groups via checkbox-based membership editor
+- [ ] **SGRP-03**: Service groups display in admin UI with member service count and color badge
+- [ ] **SGRP-04**: Service group data persists in local SQLite (service_groups + service_group_members tables)
 
-### Calibration Curve Schema
+### Analyst Assignment
 
-- [ ] **CURV-01**: CalibrationCurve model includes source_sample_id field (links to the standard SamplePrep that built it)
-- [ ] **CURV-02**: CalibrationCurve model includes chromatogram_data field (JSON: times[] + signals[] from DAD1A CSV)
-- [ ] **CURV-03**: CalibrationCurve model includes source_sharepoint_folder field (path to .rslt data)
-- [ ] **CURV-04**: CalibrationCurve model includes manufacturer field (vendor who supplied the standard)
-- [ ] **CURV-05**: CalibrationCurve model includes notes field (free-text per curve)
+- [ ] **ANLY-01**: User can view available SENAITE lab contacts (analysts) from the application
+- [ ] **ANLY-02**: User can assign an analyst to a SENAITE analysis (pushes Analyst field to SENAITE via API)
+- [ ] **ANLY-03**: Analyst assignment verified against SENAITE (confirm field format: username vs UID)
 
-### Auto-Create Curve from Standard
+### Received Samples Queue (Inbox)
 
-- [ ] **AUTO-01**: When Process HPLC completes on a standard sample prep, system auto-creates a new CalibrationCurve for the matching peptide
-- [ ] **AUTO-02**: Auto-created curve is populated with slope, intercept, r_squared from the standard's analysis results
-- [ ] **AUTO-03**: Auto-created curve stores reference_rt from the standard's main peak retention time
-- [ ] **AUTO-04**: Auto-created curve stores chromatogram_data from the DAD1A CSV trace
-- [ ] **AUTO-05**: Auto-created curve links source_sample_id and source_sharepoint_folder from the standard prep
-- [ ] **AUTO-06**: Auto-created curve carries manufacturer and notes from the standard sample prep metadata
+- [ ] **INBX-01**: User can view all received samples from SENAITE in a queue/inbox table
+- [ ] **INBX-02**: Each sample row expands to show analyses grouped by service group with color badges
+- [ ] **INBX-03**: User can set sample priority (normal/high/expedited) with color-coded badge display
+- [ ] **INBX-04**: User can assign a tech (analyst) to a sample inline via dropdown
+- [ ] **INBX-05**: User can assign an instrument to a sample inline via dropdown
+- [ ] **INBX-06**: Inbox shows aging timer per sample with SLA color coding (green <12h, yellow 12-20h, orange 20-24h, red >24h)
+- [ ] **INBX-07**: User can select multiple samples via checkboxes and apply bulk actions (set priority, assign tech, set instrument)
+- [ ] **INBX-08**: User can create a worksheet from selected inbox items (primary action)
+- [ ] **INBX-09**: Inbox auto-refreshes via 30-second polling with TanStack Query
+- [ ] **INBX-10**: Worksheet creation validates each sample is still in sample_received state (stale data guard)
+- [ ] **INBX-11**: Priority data persists locally in sample_priorities table
 
-### HPLC Results Persistence
+### Worksheet Management
 
-- [ ] **HRES-01**: hplc_analyses stores calibration_curve_id (FK) identifying which curve was used for the analysis
-- [ ] **HRES-02**: hplc_analyses stores sample_prep_id linking back to the sample_preps record in accumark_mk1
-- [ ] **HRES-03**: hplc_analyses stores instrument_id (FK) and source_sharepoint_folder for full provenance
-- [ ] **HRES-04**: hplc_analyses stores chromatogram trace data (times[] + signals[] JSON) so charts render without re-scanning SharePoint
-- [ ] **HRES-05**: Blend runs use a run_group_id to link all per-analyte analysis rows from a single Process HPLC session
-- [ ] **HRES-06**: Reopening Process HPLC for a sample prep with saved results loads them from DB (no SharePoint re-scan), with option to re-run
-- [ ] **HRES-07**: Sample prep status updates to hplc_complete when results are persisted, and results are accessible from the sample preps list
+- [ ] **WSHT-01**: User can view worksheet detail with header (title, analyst, status, created date, item count)
+- [ ] **WSHT-02**: User can edit worksheet title and notes
+- [ ] **WSHT-03**: Worksheet items table shows sample ID, analysis, service group, priority, tech, instrument, status
+- [ ] **WSHT-04**: User can add samples to an existing worksheet (mini inbox modal)
+- [ ] **WSHT-05**: User can remove items from a worksheet (items return to inbox)
+- [ ] **WSHT-06**: User can reassign items to a different worksheet
+- [ ] **WSHT-07**: User can mark a worksheet as completed
+- [ ] **WSHT-08**: Worksheet data persists locally (worksheets + worksheet_items tables)
 
-### Backfill Existing Curves
+### Worksheets List
 
-- [ ] **BKFL-01**: User can edit an existing calibration curve to add/change source_sample_id (Sample ID link)
-- [ ] **BKFL-02**: When a source_sample_id is set and saved, system locates the corresponding chromatogram data in SharePoint and stores it
-- [ ] **BKFL-03**: User can edit manufacturer and notes on existing calibration curves
+- [ ] **WLST-01**: User can view all worksheets with summary stats (title, analyst, status, item count, priority breakdown, oldest item age)
+- [ ] **WLST-02**: KPI row displays total open worksheets, items pending, high-priority count, average age
+- [ ] **WLST-03**: User can filter worksheets by status and analyst
+- [ ] **WLST-04**: User can navigate from worksheet list to worksheet detail view
 
-### Chromatogram Overlay
+### Navigation
 
-- [ ] **CHRO-01**: During Process HPLC, the flyout loads the active calibration curve's chromatogram_data (if available)
-- [ ] **CHRO-02**: Standard chromatogram trace rendered as a background/reference trace (lighter/dashed style)
-- [ ] **CHRO-03**: Sample chromatogram trace rendered as the primary trace (solid style) overlaid on the standard
-- [ ] **CHRO-04**: Both traces share a synchronized time axis for direct visual comparison
-
-### Same-Method Identity Check
-
-- [ ] **METH-01**: HPLC file parser detects `_std_` peak data files in .rslt folders and parses them as standard reference injections
-- [ ] **METH-02**: Each standard injection's main peak RT is extracted and matched to the corresponding analyte
-- [ ] **METH-03**: Identity check uses standard injection RT (same method) when available, falls back to calibration curve reference_rt when not
-- [ ] **METH-04**: Identity section displays which reference source was used (standard injection vs calibration curve) and the source sample ID
-
-### HPLC Audit Trail & Debug Persistence
-
-- [ ] **AUDT-01**: hplc_analyses stores debug_log (JSON array of {level, msg}) capturing the full processing context — renderable on DB reload
-- [ ] **AUDT-02**: hplc_analyses raw_data includes source file contents (peak data CSVs, standard injection CSVs, chromatogram CSVs) and SHA256 checksums for audit proof
-- [ ] **AUDT-03**: Debug panel shows visible warnings for missing standard injections, missing chromatograms, label matching failures, missing vial data, and SharePoint errors
-
-### RT Check Chromatogram Comparison
-
-- [ ] **RTCK-01**: Identity section shows side-by-side chromatogram comparison — standard trace with peak RT annotation next to sample trace with peak RT annotation
-- [ ] **RTCK-02**: Standard injection DAD1A chromatograms (`_std_*.dx_DAD1A.CSV`) are loaded and displayed alongside sample chromatograms
-- [ ] **RTCK-03**: Comparison view shows RT delta between standard and sample main peaks for tech confirmation
+- [ ] **NAVG-01**: Worksheets section accessible under HPLC Automation in sidebar navigation
+- [ ] **NAVG-02**: Hash navigation supports worksheets section and sub-sections (inbox, list, detail)
 
 ## Future Requirements
 
-Deferred to later milestones.
+### Worksheet Automation
 
-### Identity Enhancements
-
-- **IDEN-01**: Relative Retention Time (RRT) calculation for method-independent identity checks
-- **IDEN-02**: Method-locked calibration curve matching (enforce same HPLC method between standard and sample)
-- **IDEN-03**: UV spectral matching from DAD data for compound confirmation
+- **WAUT-01**: Auto-suggest tech assignments based on service group → analyst mapping
+- **WAUT-02**: Auto-prioritize samples nearing SLA breach
+- **WAUT-03**: Notification when worksheet items change state in SENAITE
 
 ## Out of Scope
 
 | Feature | Reason |
 |---------|--------|
-| Blend-specific calibration standards | Standards are single-peptide only; blends use per-component curves |
-| RRT calculation | Future enhancement; manual visual comparison sufficient for now |
-| Method field on calibration curves | Useful but not blocking; defer to identity enhancements milestone |
-| Auto-publish curves | Newly created curves should require manual activation |
+| SENAITE worksheet sync | We're replacing SENAITE worksheets, not syncing with them |
+| Real-time WebSocket updates | 30s polling is acceptable for this workflow |
+| Multi-instrument per sample | One instrument assignment per sample in v1 |
+| Worksheet templates | Defer to future — manual creation sufficient for v1 |
+| Print/export worksheets | Defer to future milestone |
 
 ## Traceability
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| STDP-01 | Phase 09 | Complete |
-| STDP-02 | Phase 09 | Complete |
-| STDP-03 | Phase 09 | Complete |
-| STDP-04 | Phase 09 | Complete |
-| STDP-05 | Phase 09 | Complete |
-| CURV-01 | Phase 09 | Complete |
-| CURV-02 | Phase 09 | Complete |
-| CURV-03 | Phase 09 | Complete |
-| CURV-04 | Phase 09 | Complete |
-| CURV-05 | Phase 09 | Complete |
-| AUTO-01 | Phase 10 | Pending |
-| AUTO-02 | Phase 10 | Pending |
-| AUTO-03 | Phase 10 | Pending |
-| AUTO-04 | Phase 10 | Pending |
-| AUTO-05 | Phase 10 | Pending |
-| AUTO-06 | Phase 10 | Pending |
-| HRES-01 | Phase 10.5 | Complete |
-| HRES-02 | Phase 10.5 | Complete |
-| HRES-03 | Phase 10.5 | Complete |
-| HRES-04 | Phase 10.5 | Complete |
-| HRES-05 | Phase 10.5 | Complete |
-| HRES-06 | Phase 10.5 | Complete |
-| HRES-07 | Phase 10.5 | Complete |
-| BKFL-01 | Phase 11 | Complete |
-| BKFL-02 | Phase 11 | Complete |
-| BKFL-03 | Phase 11 | Complete |
-| CHRO-01 | Phase 12 | Complete |
-| CHRO-02 | Phase 12 | Complete |
-| CHRO-03 | Phase 12 | Complete |
-| CHRO-04 | Phase 12 | Complete |
-| METH-01 | Phase 13 | Complete |
-| METH-02 | Phase 13 | Complete |
-| METH-03 | Phase 13 | Complete |
-| METH-04 | Phase 13 | Complete |
-| AUDT-01 | Phase 13.5 | Complete |
-| AUDT-02 | Phase 13.5 | Complete |
-| AUDT-03 | Phase 13.5 | Complete |
-| RTCK-01 | Phase 14 | Pending |
-| RTCK-02 | Phase 14 | Pending |
-| RTCK-03 | Phase 14 | Pending |
+| SGRP-01 | — | Pending |
+| SGRP-02 | — | Pending |
+| SGRP-03 | — | Pending |
+| SGRP-04 | — | Pending |
+| ANLY-01 | — | Pending |
+| ANLY-02 | — | Pending |
+| ANLY-03 | — | Pending |
+| INBX-01 | — | Pending |
+| INBX-02 | — | Pending |
+| INBX-03 | — | Pending |
+| INBX-04 | — | Pending |
+| INBX-05 | — | Pending |
+| INBX-06 | — | Pending |
+| INBX-07 | — | Pending |
+| INBX-08 | — | Pending |
+| INBX-09 | — | Pending |
+| INBX-10 | — | Pending |
+| INBX-11 | — | Pending |
+| WSHT-01 | — | Pending |
+| WSHT-02 | — | Pending |
+| WSHT-03 | — | Pending |
+| WSHT-04 | — | Pending |
+| WSHT-05 | — | Pending |
+| WSHT-06 | — | Pending |
+| WSHT-07 | — | Pending |
+| WSHT-08 | — | Pending |
+| WLST-01 | — | Pending |
+| WLST-02 | — | Pending |
+| WLST-03 | — | Pending |
+| WLST-04 | — | Pending |
+| NAVG-01 | — | Pending |
+| NAVG-02 | — | Pending |
 
 **Coverage:**
-- v0.26.0 requirements: 37 total
-- Mapped to phases: 37
-- Unmapped: 0
+- v0.28.0 requirements: 32 total
+- Mapped to phases: 0
+- Unmapped: 32 ⚠️
 
 ---
-*Requirements defined: 2026-03-16*
-*Last updated: 2026-03-16 after roadmap creation*
+*Requirements defined: 2026-03-31*
+*Last updated: 2026-03-31 after initial definition*
