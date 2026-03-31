@@ -3192,6 +3192,27 @@ export async function uploadSenaiteAttachment(
   return response.json() as Promise<SenaiteUploadAttachmentResponse>
 }
 
+export async function getChromatogramStatus(): Promise<{ prep_ids_with_chromatogram: number[] }> {
+  const response = await fetch(
+    `${API_BASE_URL()}/hplc/chromatogram-status`,
+    { headers: getBearerHeaders() }
+  )
+  if (!response.ok) throw new Error(`Failed to fetch chromatogram status: ${response.status}`)
+  return response.json()
+}
+
+export async function refetchChromatogram(analysisId: number): Promise<{ success: boolean; message: string; points?: number }> {
+  const response = await fetch(
+    `${API_BASE_URL()}/hplc/analyses/${analysisId}/refetch-chromatogram`,
+    { method: 'POST', headers: getBearerHeaders() }
+  )
+  if (!response.ok) {
+    const err = await response.json().catch(() => null)
+    throw new Error(err?.detail || `Refetch failed: ${response.status}`)
+  }
+  return response.json()
+}
+
 export async function renderChromatogramImage(analysisId: number): Promise<string> {
   const response = await fetch(
     `${API_BASE_URL()}/hplc/analyses/${analysisId}/chromatogram-image`,

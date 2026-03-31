@@ -259,6 +259,11 @@ export function ChromatogramChart({
           {traces.length} trace{traces.length !== 1 ? 's' : ''} overlaid
           {' '}&middot; DAD1A signal
         </CardDescription>
+        {traces.length > 0 && (
+          <p className="text-[11px] text-muted-foreground/60 font-mono truncate mt-0.5">
+            {traces.map(t => t.name).join(', ')}
+          </p>
+        )}
       </CardHeader>
       <CardContent>
         <div className="h-[280px] w-full">

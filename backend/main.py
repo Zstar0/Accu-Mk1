@@ -3272,6 +3272,172 @@ async def render_chromatogram_image(
     )
 
 
+@app.get("/hplc/chromatogram-status")
+async def get_chromatogram_status(
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Return set of sample_prep_ids that have chromatogram_data stored."""
+    from sqlalchemy import text as sa_text
+    rows = db.execute(
+        sa_text("SELECT DISTINCT sample_prep_id FROM hplc_analyses WHERE sample_prep_id IS NOT NULL AND chromatogram_data IS NOT NULL")
+    ).fetchall()
+    return {"prep_ids_with_chromatogram": [r[0] for r in rows]}
+
+
+@app.post("/hplc/analyses/{analysis_id}/refetch-chromatogram")
+async def refetch_chromatogram_data(
+    analysis_id: int,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Re-fetch chromatogram data from SharePoint for an existing analysis.
+
+    Reads the stored injections to find the one with the largest main peak,
+    downloads the matching DAD1A CSV from SharePoint, downsamples to 800 points,
+    and updates chromatogram_data on the analysis record.
+    """
+    analysis = db.execute(
+        select(HPLCAnalysis).where(HPLCAnalysis.id == analysis_id)
+    ).scalar_one_or_none()
+    if not analysis:
+        raise HTTPException(404, f"HPLC Analysis {analysis_id} not found")
+
+    # Find the injection with the largest main peak from stored raw_data
+    raw_data = analysis.raw_data or {}
+    injections = raw_data.get("injections", [])
+    if not injections:
+        raise HTTPException(400, "No injection data stored on this analysis")
+
+    best_area = -1.0
+    best_inj_name = ""
+    for inj in injections:
+        inj_name = inj.get("injection_name", "")
+        peaks = inj.get("peaks", [])
+        main_idx = inj.get("main_peak_index", 0)
+        if 0 <= main_idx < len(peaks):
+            area = peaks[main_idx].get("area", 0)
+            if area > best_area:
+                best_area = area
+                best_inj_name = inj_name
+
+    if not best_inj_name:
+        raise HTTPException(400, "Could not determine best injection from stored data")
+
+    # Build match tokens from the injection name
+    # "TB17-23_Inj_1" → prefix "TB17-23_Inj_1", analyte label "TB17-23"
+    # "P-0390_Inj1_PeakData" → prefix "P-0390_Inj1", sample "P-0390"
+    best_prefix = re.sub(r'_PeakData$', '', best_inj_name, flags=re.IGNORECASE)
+    # Extract analyte label: everything before _Inj (for blend injections like "TB17-23_Inj_1")
+    analyte_match = re.match(r'^(.+?)_Inj', best_inj_name, re.IGNORECASE)
+    analyte_label = analyte_match.group(1) if analyte_match else ""
+
+    # Find chromatogram files on SharePoint
+    import sharepoint as sp
+    sample_id = analysis.sample_id_label
+    sample_files = await sp.get_sample_files(sample_id)
+    if not sample_files or not sample_files.get("chromatogram_files"):
+        raise HTTPException(404, f"No chromatogram files found on SharePoint for {sample_id}")
+
+    # Filter out blanks
+    chrom_files = [cf for cf in sample_files["chromatogram_files"]
+                   if "blank" not in cf["name"].lower()]
+
+    if not chrom_files:
+        raise HTTPException(404, f"No non-blank chromatogram files found for {sample_id}")
+
+    # Match strategy (in priority order):
+    # 1. Exact prefix match: "P-0390_Inj1" in filename
+    # 2. Analyte label match: "TB17-23" in filename (for blends)
+    # 3. Sample ID match: "PB-0078" in filename (fallback to first non-blank)
+    matched_file = None
+
+    # Strategy 1: exact prefix
+    for cf in chrom_files:
+        cf_stem = re.sub(r'\.dx_DAD1A\.CSV$', '', cf["name"], flags=re.IGNORECASE)
+        if cf_stem.lower() == best_prefix.lower():
+            matched_file = cf
+            break
+
+    # Strategy 2: analyte label in filename
+    if not matched_file and analyte_label:
+        for cf in chrom_files:
+            if analyte_label.lower() in cf["name"].lower():
+                matched_file = cf
+                break
+
+    # Strategy 3: sample ID in filename (first non-blank)
+    if not matched_file:
+        for cf in chrom_files:
+            if sample_id.lower() in cf["name"].lower():
+                matched_file = cf
+                break
+
+    # Strategy 4: just take first non-blank
+    if not matched_file:
+        matched_file = chrom_files[0]
+
+    # Download and parse
+    file_bytes, _ = await sp.download_file(matched_file["id"])
+    csv_text = file_bytes.decode("utf-8", errors="replace")
+
+    times = []
+    signals = []
+    for line in csv_text.strip().splitlines():
+        parts = line.split(",")
+        if len(parts) >= 2:
+            try:
+                times.append(float(parts[0]))
+                signals.append(float(parts[1]))
+            except ValueError:
+                continue
+
+    if len(times) < 10:
+        raise HTTPException(400, f"Chromatogram file too small: {len(times)} points")
+
+    # Downsample to 800 points using LTTB (pure Python — no numpy needed)
+    target = 800
+    if len(times) > target:
+        data = list(zip(times, signals))
+        sampled = [data[0]]
+        bucket_size = (len(data) - 2) / (target - 2)
+        prev_idx = 0
+        for i in range(1, target - 1):
+            avg_start = int((i + 0) * bucket_size) + 1
+            avg_end = min(int((i + 1) * bucket_size) + 1, len(data))
+            avg_x = sum(d[0] for d in data[avg_start:avg_end]) / max(1, avg_end - avg_start)
+            avg_y = sum(d[1] for d in data[avg_start:avg_end]) / max(1, avg_end - avg_start)
+            rng_start = int(i * bucket_size) + 1
+            rng_end = min(int((i + 1) * bucket_size) + 1, len(data))
+            best_idx = rng_start
+            max_area = -1.0
+            for j in range(rng_start, rng_end):
+                area = abs(
+                    (data[prev_idx][0] - avg_x) * (data[j][1] - data[prev_idx][1])
+                    - (data[prev_idx][0] - data[j][0]) * (avg_y - data[prev_idx][1])
+                )
+                if area > max_area:
+                    max_area = area
+                    best_idx = j
+            sampled.append(data[best_idx])
+            prev_idx = best_idx
+        sampled.append(data[-1])
+        times = [p[0] for p in sampled]
+        signals = [p[1] for p in sampled]
+
+    # Update the analysis record
+    analysis.chromatogram_data = {"times": times, "signals": signals}
+    db.commit()
+
+    return {
+        "success": True,
+        "message": f"Chromatogram updated for {sample_id} from {matched_file['name']}",
+        "points": len(times),
+        "matched_file": matched_file["name"],
+        "matched_injection": best_prefix,
+    }
+
+
 @app.post("/hplc/analyses/{analysis_id}/chromatogram-to-senaite")
 async def upload_chromatogram_to_senaite(
     analysis_id: int,

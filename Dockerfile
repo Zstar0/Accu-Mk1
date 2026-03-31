@@ -8,9 +8,9 @@
 FROM node:20-slim AS build
 
 # Which env file to bake into the frontend bundle.
-# Default: .env.docker (local Docker dev — SENAITE on localhost:8080)
-# Production: docker build --build-arg ENV_FILE=.env.docker.prod .
-ARG ENV_FILE=.env.docker
+# Default: .env.docker.prod (production — safe default to prevent dev URLs in prod)
+# Local dev: docker build --build-arg ENV_FILE=.env.docker .
+ARG ENV_FILE=.env.docker.prod
 
 WORKDIR /app
 

@@ -19,6 +19,7 @@ import {
   updateSamplePrep,
   uploadChromatogramToSenaite,
   renderChromatogramImage,
+  refetchChromatogram,
   type SamplePrep,
   type HPLCAnalysisResult,
   type SenaiteLookupResult,
@@ -159,22 +160,20 @@ export function SenaiteResultsView({ prep, results: hplcResults, onBack, onCompl
   // Chromatogram preview
   const [chromUrl, setChromUrl] = useState<string | null>(null)
   const [chromLoading, setChromLoading] = useState(false)
+  const [refetching, setRefetching] = useState(false)
 
   // Render chromatogram image on mount (from first result with chromatogram data)
   const chromAnalysisId = hplcResults.find(r => r.chromatogram_data?.times?.length)?.id ?? null
 
   useEffect(() => {
     if (!chromAnalysisId || chromUrl) return
-    let revoked = false
+    let cancelled = false
     setChromLoading(true)
     renderChromatogramImage(chromAnalysisId)
-      .then(url => { if (!revoked) setChromUrl(url) })
+      .then(url => { if (!cancelled) setChromUrl(url) })
       .catch(e => console.warn('[Chromatogram] render failed:', e))
-      .finally(() => { if (!revoked) setChromLoading(false) })
-    return () => {
-      revoked = true
-      if (chromUrl) URL.revokeObjectURL(chromUrl)
-    }
+      .finally(() => { if (!cancelled) setChromLoading(false) })
+    return () => { cancelled = true }
   }, [chromAnalysisId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleLoad = useCallback(async () => {
@@ -454,25 +453,56 @@ export function SenaiteResultsView({ prep, results: hplcResults, onBack, onCompl
       )}
 
       {/* Chromatogram Preview */}
-      {(chromUrl || chromLoading) && (
+      {hplcResults.length > 0 && (
         <div className="px-6 pt-4 pb-4 border-b border-border/60">
           <div className="rounded-lg border border-border bg-card p-4 space-y-2">
             <h3 className="text-sm font-semibold">Chromatogram</h3>
-            {chromLoading ? (
+            {chromLoading || refetching ? (
               <div className="flex items-center justify-center py-8">
                 <Spinner className="size-5" />
-                <span className="ml-2 text-sm text-muted-foreground">Rendering chromatogram...</span>
+                <span className="ml-2 text-sm text-muted-foreground">
+                  {refetching ? 'Fetching chromatogram from SharePoint...' : 'Rendering chromatogram...'}
+                </span>
               </div>
             ) : chromUrl ? (
-              <img
-                src={chromUrl}
-                alt="HPLC Chromatogram"
-                className="w-full rounded border border-border/50"
-              />
-            ) : null}
-            <p className="text-xs text-muted-foreground">
-              This image will be uploaded to SENAITE when you auto-fill results.
-            </p>
+              <>
+                <img
+                  src={chromUrl}
+                  alt="HPLC Chromatogram"
+                  className="w-full rounded border border-border/50"
+                />
+                <p className="text-xs text-muted-foreground">
+                  This image will be uploaded to SENAITE when you auto-fill results.
+                </p>
+              </>
+            ) : (
+              <div className="flex flex-col items-center gap-3 py-6">
+                <p className="text-sm text-muted-foreground">No chromatogram data stored for this analysis.</p>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="gap-1.5"
+                  onClick={async () => {
+                    const firstResult = hplcResults[0]
+                    if (!firstResult?.id) return
+                    setRefetching(true)
+                    try {
+                      await refetchChromatogram(firstResult.id)
+                      // Now render the image
+                      const url = await renderChromatogramImage(firstResult.id)
+                      setChromUrl(url)
+                      toast.success('Chromatogram fetched from SharePoint')
+                    } catch (e) {
+                      toast.error(e instanceof Error ? e.message : 'Failed to fetch chromatogram')
+                    } finally {
+                      setRefetching(false)
+                    }
+                  }}
+                >
+                  Fetch Chromatogram
+                </Button>
+              </div>
+            )}
           </div>
         </div>
       )}

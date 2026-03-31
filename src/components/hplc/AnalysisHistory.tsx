@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import {
   Loader2,
+  CheckCircle2,
 } from 'lucide-react'
 import {
   Card,
@@ -10,6 +11,7 @@ import { Badge } from '@/components/ui/badge'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import {
   listSamplePreps,
+  getChromatogramStatus,
   type SamplePrep,
   type HplcScanMatch,
 } from '@/lib/api'
@@ -48,16 +50,18 @@ function CompletedSamplePreps({ filter }: { filter: 'production' | 'standard' })
   const [error, setError] = useState<string | null>(null)
   const [flyoutPrep, setFlyoutPrep] = useState<SamplePrep | null>(null)
   const [flyoutMatch, setFlyoutMatch] = useState<HplcScanMatch | null>(null)
+  const [chromPrepIds, setChromPrepIds] = useState<Set<number>>(new Set())
 
   useEffect(() => {
     let cancelled = false
-    listSamplePreps({
-      limit: 100,
-      is_standard: filter === 'standard' ? true : false,
-    })
-      .then(data => {
+    Promise.all([
+      listSamplePreps({ limit: 100, is_standard: filter === 'standard' }),
+      getChromatogramStatus(),
+    ])
+      .then(([data, chromStatus]) => {
         if (!cancelled) {
           setPreps(data.filter(p => DONE_STATUSES.includes(p.status)))
+          setChromPrepIds(new Set(chromStatus.prep_ids_with_chromatogram))
         }
       })
       .catch(err => {
@@ -117,7 +121,8 @@ function CompletedSamplePreps({ filter }: { filter: 'production' | 'standard' })
                 <th className="pb-2 pr-4 font-medium">Status</th>
                 <th className="pb-2 pr-4 font-medium">Instrument</th>
                 <th className="pb-2 pr-4 font-medium">Created By</th>
-                <th className="pb-2 font-medium">Completed</th>
+                <th className="pb-2 pr-4 font-medium">Completed</th>
+                <th className="pb-2 font-medium text-center" title="Chromatogram data available">Chrom</th>
               </tr>
             </thead>
             <tbody>
@@ -149,8 +154,15 @@ function CompletedSamplePreps({ filter }: { filter: 'production' | 'standard' })
                   <td className="py-2.5 pr-4 text-muted-foreground text-xs">
                     {prep.created_by_email ?? '—'}
                   </td>
-                  <td className="py-2.5 text-muted-foreground">
+                  <td className="py-2.5 pr-4 text-muted-foreground">
                     {new Date(prep.updated_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                  </td>
+                  <td className="py-2.5 text-center">
+                    {chromPrepIds.has(prep.id) ? (
+                      <CheckCircle2 size={14} className="inline text-emerald-500" />
+                    ) : (
+                      <span className="text-xs text-muted-foreground/40">—</span>
+                    )}
                   </td>
                 </tr>
               ))}

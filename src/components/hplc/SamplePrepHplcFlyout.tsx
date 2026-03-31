@@ -48,6 +48,7 @@ import {
   runHPLCAnalysis,
   getFolderChromFiles,
   getHPLCAnalysesBySamplePrep,
+  refetchChromatogram,
   updateSamplePrep,
   sha256Hex,
   type SamplePrep,
@@ -73,7 +74,8 @@ import { CalculationVisuals } from '@/components/hplc/CalculationVisuals'
 import { SenaiteResultsView } from '@/components/hplc/SenaiteResultsView'
 import { StandardCurveReview } from '@/components/hplc/StandardCurveReview'
 import { useAuthStore } from '@/store/auth-store'
-import { User, Cpu, Calendar } from 'lucide-react'
+import { User, Cpu, Calendar, Download } from 'lucide-react'
+import { toast } from 'sonner'
 
 // ─── Injection tabs ───────────────────────────────────────────────────────────
 
@@ -687,6 +689,54 @@ function DebugConsole({ lines, onClose }: { lines: DebugLine[]; onClose: () => v
   )
 }
 
+// ─── Fetch chromatogram button (for historical records with cleared data) ─────
+
+function FetchChromatogramButton({
+  analysisId,
+  samplePrepId,
+  onFetched,
+}: {
+  analysisId: number
+  samplePrepId: number | null
+  onFetched: (times: number[], signals: number[]) => void
+}) {
+  const [fetching, setFetching] = useState(false)
+
+  return (
+    <div className="flex flex-col items-center gap-2 py-4 rounded-lg border border-dashed border-border/60 bg-muted/20">
+      <p className="text-xs text-muted-foreground">No chromatogram data — fetch from SharePoint?</p>
+      <Button
+        size="sm"
+        variant="outline"
+        className="gap-1.5 text-xs"
+        disabled={fetching}
+        onClick={async () => {
+          setFetching(true)
+          try {
+            await refetchChromatogram(analysisId)
+            // Re-load the analysis from DB to get the freshly-saved chromatogram_data
+            if (samplePrepId) {
+              const all = await getHPLCAnalysesBySamplePrep(samplePrepId)
+              const updated = all.find(a => a.id === analysisId)
+              if (updated?.chromatogram_data?.times && updated.chromatogram_data.signals) {
+                onFetched(updated.chromatogram_data.times, updated.chromatogram_data.signals)
+              }
+            }
+            toast.success('Chromatogram fetched from SharePoint')
+          } catch (e) {
+            toast.error(e instanceof Error ? e.message : 'Failed to fetch chromatogram')
+          } finally {
+            setFetching(false)
+          }
+        }}
+      >
+        {fetching ? <Spinner className="size-3" /> : <Download size={13} />}
+        Fetch Chromatogram
+      </Button>
+    </div>
+  )
+}
+
 // ─── Main component ───────────────────────────────────────────────────────────
 
 interface Props {
@@ -1137,11 +1187,34 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match, readOnly = fa
     // Phase 10.5: provenance — shared across all API calls in this run
     const runGroupId = crypto.randomUUID()
     // Convert ChromatogramTrace[] → { times, signals } for persistence
-    const firstTrace = chromTraces[0]
-    const chromData = firstTrace != null
+    // Pick the chromatogram trace matching the injection with the largest main peak,
+    // so the stored image shows the analyte peak rather than a blank/solvent run.
+    // Filter out blank traces first.
+    const nonBlankTraces = chromTraces.filter(t => !t.name.toLowerCase().includes('blank'))
+    let bestTrace = nonBlankTraces[0] ?? chromTraces[0] ?? null
+    if (parseResult && nonBlankTraces.length > 0) {
+      // Find injection with highest main peak area
+      let bestArea = -1
+      let bestPrefix = ''
+      for (const inj of parseResult.injections) {
+        const mainPeak = inj.peaks[inj.main_peak_index]
+        if (mainPeak && mainPeak.area > bestArea) {
+          bestArea = mainPeak.area
+          bestPrefix = inj.injection_name.replace(/_PeakData$/i, '').toLowerCase()
+        }
+      }
+      if (bestPrefix) {
+        // Try exact startsWith, then includes (handles mismatched prefixes)
+        const matched = nonBlankTraces.find(t => t.name.toLowerCase().startsWith(bestPrefix))
+          ?? nonBlankTraces.find(t => t.name.toLowerCase().includes(bestPrefix))
+          ?? nonBlankTraces.find(t => bestPrefix.includes(t.name.toLowerCase().replace(/\.dx_dad1a$/i, '')))
+        if (matched) bestTrace = matched
+      }
+    }
+    const chromData = bestTrace != null
       ? {
-          times:   firstTrace.points.map(p => p[0]),
-          signals: firstTrace.points.map(p => p[1]),
+          times:   bestTrace.points.map(p => p[0]),
+          signals: bestTrace.points.map(p => p[1]),
         }
       : undefined
 
@@ -1798,6 +1871,18 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match, readOnly = fa
                 {!isStandard && result && (
                   <>
                     <AnalysisResults result={result} chromatograms={displayChromTraces} hideTrace />
+
+                    {/* Fetch chromatogram button — shown when no trace data (cleared historical records) */}
+                    {displayChromTraces.length === 0 && savedResults && savedResults.length > 0 && (
+                      <FetchChromatogramButton
+                        analysisId={result.id}
+                        samplePrepId={prep.id}
+                        onFetched={(times: number[], signals: number[]) => {
+                          const points: [number, number][] = times.map((t, i) => [t, signals[i] ?? 0])
+                          setChromTraces([{ name: result.peptide_abbreviation ?? result.sample_id_label, points }])
+                        }}
+                      />
+                    )}
 
                     {/* Peak table right under the chromatogram */}
                     {displayInjections.length > 1 && (
