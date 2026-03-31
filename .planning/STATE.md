@@ -2,117 +2,39 @@
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-03-16)
+See: .planning/PROJECT.md (updated 2026-03-31)
 
 **Core value:** Streamlined morning workflow: import CSV -> review batch -> calculate purity -> push to SENAITE. One operator, one workstation, no friction.
-**Current focus:** v0.27.0 — Method-Aware Identity Check
+**Current focus:** v0.28.0 — Worksheet Feature (Custom Sample Assignment)
 
 ## Current Position
 
-Phase: 14 of 14 (RT Check Chromatogram Comparison)
-Plan: 0 of 0 in current phase (Not yet planned)
-Status: Ready to plan
-Last activity: 2026-03-26 — Closed phase 09 retroactively (09-02 Standard Prep UI already shipped)
-
-Progress: [████████████████████] 44/44 plans complete — phase 14 next
-
-## Performance Metrics
-
-**Velocity:**
-- Total plans completed: 8 (v0.26.0)
-- Average duration: ~4.7 min
-- Total execution time: ~0.5 hours
-
-**By Phase:**
-
-| Phase | Plans | Total | Avg/Plan |
-|-------|-------|-------|----------|
-| 09 | 2/2 | ~6 min | ~3 min |
-| 10 | 3/3 | ~14 min | ~4.7 min |
-| 10.5 | 2/2 | ~10 min | ~5 min |
-| 11 | 2/? | ~4 min | ~2 min |
-| 12 | 2/2 | ~5 min | ~2.5 min |
-| 13 | 3/? | ~14 min | ~4.7 min |
-| 13.5 | 3/3 | ~15 min | ~5 min |
-
-**Recent Trend:**
-- Last 5 plans: 12-02 (~3 min), 13-01 (~6 min), 13-02 (~3 min), 13-03 (~5 min)
-- Trend: stable/fast
+Phase: Not started (defining requirements)
+Plan: —
+Status: Defining requirements
+Last activity: 2026-03-31 — Milestone v0.28.0 started
 
 ## Accumulated Context
 
 ### Decisions
 
-- Standards are single-peptide only (Cayman standards are individual peptides, not blends)
-- Standards flow through the same wizard as production samples (no separate workflow)
-- Chromatogram data stored as JSON on CalibrationCurve (times[] + signals[] from DAD1A CSV)
-- Existing curves can be backfilled by linking a Sample ID -> locate chromatogram in SharePoint
-- Manufacturer and notes fields added per curve for provenance tracking
-- Sample chromatogram already displayed in HPLC flyout; standard overlay is the new addition
-- Per-analyte prep data does NOT affect HPLC processing pipeline
-- Used standard_notes (not notes) on WizardSession to avoid collision with SamplePrep.notes
-- is_standard defaults to FALSE on all tables (existing data = production preps)
-- Query sample_preps by sample_id string (not integer id) for standard validation
-- Used _cal_to_response() wrapper in from-standard endpoint for SharePoint URL resolution
-- Standard wizard uses separate buildStandardWizardSteps (1 stock + N dilutions), production flow untouched
-- Concentration levels sorted descending for serial dilution order, minimum 3 enforced
-- Standard-dilution steps reuse Step3Dilution component (same measurement flow per vial)
-- Vial-to-injection mapping uses sorted index position (vial_number ascending, injection name natural sort)
-- Client-side regression is preview only — backend computes authoritative values
-- Standard branch in flyout is purely additive — non-standard flow unchanged
-- sample_prep_id on hplc_analyses is plain INTEGER (no FK) — sample_preps lives in separate accumark_mk1 DB
-- calibration_curve_id on hplc_analyses persisted from resolved cal.id, not from request — guarantees correctness
-- FastAPI route ordering: static-segment routes must be registered before parameterized routes to prevent literal-as-integer matching
-- _analysis_to_response() helper introduced in main.py for HPLCAnalysis ORM to HPLCAnalysisResponse conversion
-- instrument_id passed as undefined from frontend — SamplePrep interface only has instrument_name
-- chromatogram_data persisted from chromTraces[0] only — shared injection set across blend analytes, one trace is correct
-- Status update to hplc_complete is non-blocking (try/catch + console.warn)
-- DB-first flyout load: loadingSaved guard in loadPeakData handles race between async DB check and SharePoint effect
-- Chromatogram backfill auto-fetch is best-effort: PATCH succeeds even if SharePoint is unreachable
-- Only fetch chromatogram when source_sample_id actually changes
-- vendor displayed below stats grid in view mode
-- ChromatogramTrace optional style field: dashed traces get strokeWidth 1 vs 1.5 for visual hierarchy
-- extractStandardTrace picks highest concentration key for multi-conc calibration data
-- extractStandardTrace returns null (not throws) for empty/invalid chromatogram_data
-- Style hardcoded in extractStandardTrace (dashed + 0.4 opacity)
-- Standard trace prepended at index 0 in displayChromTraces
-- selectedCal in displayChromTraces dependency array
-- chromatogram_data cast to Record<string, unknown> in flyout
-- Standard injection files detected by _std_ in filename (case-insensitive)
-- Analyte label extracted between _std_ and _PeakData in filename — supports hyphenated labels (TB17-23)
-- Source sample ID stripped at first _Inj_ in "Sample name:" metadata line — produces bare ID (P-0111)
-- standard_injections defaults to [] on HPLCParseResponse — backward compatible API addition
-- stdInjRts is undefined (not empty object) when no standard injections present — backend receives no field, uses calibration curve path unchanged
-- identity_reference_source_id displayed in font-mono to distinguish sample IDs from prose text in identity card
-- Silent fallback documentation pattern: every code path that falls back silently now emits a warn-level debug line explaining the fallback
-- Per-component standard injection check iterates labelToComponent entries (not blendComponents) — only resolved/matched labels have meaning
-- Chromatogram availability debug section not gated on isBlend — single-peptide preps also get the missing-chrom warning
-- Vial weight missing-component check only activates when vial_data is non-empty — broader "no per-vial data" warning covers the empty case
-- buildDebugLines() accepts optional parseError param; SharePoint download errors appear at top of debug console
-- debug_log built BEFORE analysis loop (preAnalysisDebugLog) — captures prep/parse/cal state, no PATCH endpoint needed
-- source_files includes full content + SHA256 — backend can verify integrity without re-fetching SharePoint
-- DB-reload rendering: savedResults[0].debug_log cast as DebugLine[] (level string values always valid from backend)
-- downloadedFilesRef useRef not useState — file archive doesn't need to trigger re-renders
+- SENAITE Analyst field format (username vs UID) is a Phase 1 risk — test early before building bulk flows
+- SenaiteAnalysis.keyword → AnalysisService.keyword is the join key for service groups
+- Stale data guard needed on worksheet creation (validate sample_received state)
+- main.py monolith pattern continues (~200 new lines)
+- 30s poll interval acceptable for inbox freshness
+- Worksheet pages live under HPLC Automation nav section
+- UI/UX designed with /ui-ux-pro-max skill
 
 ### Key Source Files
 
-- backend/models.py — CalibrationCurve model, WizardSession, WizardMeasurement
-- backend/main.py — All endpoints, SENAITE integration, HPLC analysis, wizard sessions
-- backend/calculations/hplc_processor.py — HPLC calculation engine
-- src/components/hplc/SamplePrepHplcFlyout.tsx — HPLC processing flyout (+ standard_injection_rts passthrough)
-- src/components/hplc/StandardCurveReview.tsx — Standard curve preview + creation UI
-- src/components/hplc/SamplePreps.tsx — Sample preps table
-- src/components/hplc/wizard/steps/Step1SampleInfo.tsx — Wizard step 1 (+ concentration editor for standards)
-- src/components/hplc/CreateAnalysis.tsx — Wizard step routing (renderStep + navigation)
-- src/store/wizard-store.ts — Wizard state, step builders, unlock/complete logic
-- src/lib/api.ts — All TypeScript types and API functions (+ StandardInjection, identity_reference_source fields)
-- src/components/hplc/ChromatogramChart.tsx — ChromatogramTrace interface, downsampleLTTB, parseChromatogramCsv, extractStandardTrace, ChromatogramChart
-- src/components/hplc/AnalysisResults.tsx — Identity card with reference source display
-- backend/parsers/peakdata_csv_parser.py — StandardInjection dataclass, _is_standard_injection, parse_standard_injection, separate standard_injections list in HPLCParseResult
-
-### Roadmap Evolution
-
-- Phase 10.5 inserted after Phase 10: HPLC Results Persistence (URGENT) — existing hplc_analyses table stores partial results but missing calibration_curve_id, sample_prep_id, chromatogram traces, instrument, blend run grouping, and flyout reload path.
+- backend/models.py — All SQLAlchemy models
+- backend/main.py — All endpoints, SENAITE integration
+- src/store/ui-store.ts — Navigation sections
+- src/lib/hash-navigation.ts — Hash routing
+- src/components/layout/AppSidebar.tsx — Sidebar nav
+- src/components/layout/MainWindowContent.tsx — Section switch
+- src/lib/api.ts — All TypeScript types and API functions
 
 ### Blockers/Concerns
 
@@ -124,6 +46,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-20
-Stopped at: Completed 13.5-03-PLAN.md (frontend audit trail wiring — phase 13.5 complete)
+Last session: 2026-03-31
+Stopped at: Milestone v0.28.0 initialization
 Resume file: None

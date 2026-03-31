@@ -54,17 +54,22 @@ Streamlined morning workflow: import CSV → review batch → calculate purity �
 - **Logic principle**: Backend owns all scientific calculations — UI never parses files or calculates metrics
 - **Audit principle**: All imports and pushes must be idempotent, traceable, repeatable
 
-## Current Milestone: v0.26.0 — Standard Sample Preps & Calibration Curve Chromatograms
+## Current Milestone: v0.28.0 — Worksheet Feature (Custom Sample Assignment)
 
-**Goal:** Enable lab techs to run reference standards through the normal sample prep and HPLC workflow, automatically generating calibration curves with chromatogram data, then overlay standard vs sample chromatograms during production HPLC processing for visual identity confirmation.
+**Goal:** Replace SENAITE worksheet creation with a custom workflow supporting priority-based assignment, analysis-level tech routing via service groups, and 24hr SLA tracking.
 
 **Target features:**
-- Mark sample preps as "Standard" (Cayman/vendor reference standards)
-- Standards flow through normal wizard (stock prep, dilution, HPLC)
-- Auto-create calibration curve from standard HPLC results (slope, intercept, reference_rt, chromatogram trace)
-- CalibrationCurve schema additions: source_sample_id, chromatogram_data, manufacturer, notes
-- Backfill existing curves with Sample ID to locate historical chromatogram data
-- Chromatogram overlay in Process HPLC flyout (standard trace vs sample trace)
+- Service Groups data model + admin UI (group analysis services by department/discipline)
+- SENAITE Analyst assignment (push analyst field to SENAITE analyses)
+- Received Samples Queue ("Inbox") with priority tracking, aging timers, bulk actions
+- Worksheet creation from selected inbox items with service group grouping
+- Worksheet Detail view (manage items, reassign, complete)
+- Worksheets List with KPI summary stats
+- UI/UX designed with /ui-ux-pro-max skill; pages under HPLC Automation nav section
+
+## Previous Milestone: v0.26.0 — Standard Sample Preps & Calibration Curve Chromatograms (COMPLETE)
+
+**Delivered:** Standard sample preps, auto-create calibration curves from standard HPLC results, chromatogram overlay in HPLC flyout, standard injection detection, debug audit trail.
 
 ## Previous Milestone: v0.12.0 — Analysis Results & Workflow Actions (COMPLETE)
 
@@ -121,5 +126,22 @@ The New Analysis Wizard is fully delivered. Lab techs can now run a complete sam
 | Console password reset | Skip email infra for v1, log reset tokens to console/UI | v0.6.0 |
 | Backend port 8012 | Avoid conflicts with Docker services on 8008-8009 | v0.6.0 |
 
+## Evolution
+
+This document evolves at phase transitions and milestone boundaries.
+
+**After each phase transition** (via `/gsd:transition`):
+1. Requirements invalidated? → Move to Out of Scope with reason
+2. Requirements validated? → Move to Validated with phase reference
+3. New requirements emerged? → Add to Active
+4. Decisions to log? → Add to Key Decisions
+5. "What This Is" still accurate? → Update if drifted
+
+**After each milestone** (via `/gsd:complete-milestone`):
+1. Full review of all sections
+2. Core Value check — still the right priority?
+3. Audit Out of Scope — reasons still valid?
+4. Update Context with current state
+
 ---
-*Last updated: 2026-02-24 after v0.12.0 milestone started*
+*Last updated: 2026-03-31 after v0.28.0 milestone started*
