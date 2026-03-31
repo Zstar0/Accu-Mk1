@@ -161,6 +161,40 @@ class AnalysisService(Base):
         return f"<AnalysisService(id={self.id}, title='{self.title}')>"
 
 
+class ServiceGroup(Base):
+    """
+    Service Group for grouping analysis services by department/discipline.
+    Used for tech routing and worksheet organisation.
+    """
+    __tablename__ = "service_groups"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(200), nullable=False, unique=True)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    color: Mapped[str] = mapped_column(String(50), nullable=False, default="blue")
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    analysis_services: Mapped[list["AnalysisService"]] = relationship(
+        "AnalysisService", secondary="service_group_members"
+    )
+
+    def __repr__(self) -> str:
+        return f"<ServiceGroup(id={self.id}, name='{self.name}')>"
+
+
+# M2M junction: service_group <-> analysis_service
+service_group_members = Table(
+    "service_group_members",
+    Base.metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("service_group_id", Integer, ForeignKey("service_groups.id", ondelete="CASCADE"), nullable=False),
+    Column("analysis_service_id", Integer, ForeignKey("analysis_services.id", ondelete="CASCADE"), nullable=False),
+    UniqueConstraint("service_group_id", "analysis_service_id", name="uq_service_group_member"),
+)
+
+
 # M2M junction: peptide <-> method (one method per instrument per peptide, enforced at app level)
 peptide_methods = Table(
     "peptide_methods",
