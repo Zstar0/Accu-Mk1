@@ -59,7 +59,13 @@
 4. A user can see the list of available SENAITE analysts (lab contacts) from within the application
 5. Assigning an analyst to a SENAITE analysis pushes the correct field value to SENAITE and the assignment is confirmed as accepted (field format verified: username vs UID)
 
-**Plans:** TBD
+**Plans:** 4 plans
+
+Plans:
+- [ ] 15-01-PLAN.md — Backend data model (ServiceGroup + M2M), CRUD endpoints, SENAITE analyst proxy
+- [ ] 15-02-PLAN.md — Navigation wiring (type unions, sidebar items, placeholder pages)
+- [ ] 15-03-PLAN.md — Service Groups admin UI (table + slide-out + membership editor)
+- [ ] 15-04-PLAN.md — SENAITE Analyst field format verification
 
 **UI hint**: yes
 
@@ -144,7 +150,7 @@
 | 13. Same-Method Identity Check | v0.26.0 | 3/3 | Complete | 2026-03-19 |
 | 13.5 HPLC Audit Trail & Debug | v0.26.0 | 3/3 | Complete | 2026-03-19 |
 | 14. RT Check Chromatogram Comparison | v0.26.0 | 0/? | Not started | - |
-| 15. Foundation | v0.28.0 | 0/? | Not started | - |
+| 15. Foundation | v0.28.0 | 0/4 | Not started | - |
 | 16. Received Samples Inbox | v0.28.0 | 0/? | Not started | - |
 | 17. Worksheet Detail | v0.28.0 | 0/? | Not started | - |
 | 18. Worksheets List | v0.28.0 | 0/? | Not started | - |
