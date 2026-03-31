@@ -7,11 +7,12 @@ export type ActiveSection = 'dashboard' | 'senaite' | 'lims' | 'hplc-analysis' |
 // Sub-sections within each main section
 export type DashboardSubSection = 'orders' | 'analytics'
 export type SenaiteSubSection = 'samples' | 'event-log' | 'sample-details' | 'receive-sample'
-export type LIMSSubSection = 'instruments' | 'methods' | 'peptide-config' | 'analysis-services'
-export type HPLCAnalysisSubSection = 'overview' | 'new-analysis' | 'import-analysis' | 'analysis-history' | 'sample-preps'
+export type LIMSSubSection = 'instruments' | 'methods' | 'peptide-config' | 'analysis-services' | 'service-groups'
+export type HPLCAnalysisSubSection = 'overview' | 'new-analysis' | 'import-analysis' | 'analysis-history' | 'sample-preps' | 'inbox' | 'worksheets' | 'worksheet-detail'
+export type WorksheetSubSection = 'inbox' | 'worksheets' | 'worksheet-detail'
 export type AccuMarkToolsSubSection = 'overview' | 'order-explorer' | 'order-status' | 'coa-explorer' | 'chromatographs' | 'digital-coa'
 export type AccountSubSection = 'profile' | 'user-management'
-export type ActiveSubSection = DashboardSubSection | SenaiteSubSection | LIMSSubSection | HPLCAnalysisSubSection | AccuMarkToolsSubSection | AccountSubSection
+export type ActiveSubSection = DashboardSubSection | SenaiteSubSection | LIMSSubSection | HPLCAnalysisSubSection | WorksheetSubSection | AccuMarkToolsSubSection | AccountSubSection
 
 interface UIState {
   leftSidebarVisible: boolean
