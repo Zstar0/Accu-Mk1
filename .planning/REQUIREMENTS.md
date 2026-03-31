@@ -54,8 +54,8 @@ Requirements for worksheet feature milestone. Each maps to roadmap phases.
 
 ### Navigation
 
-- [ ] **NAVG-01**: Worksheets section accessible under HPLC Automation in sidebar navigation
-- [ ] **NAVG-02**: Hash navigation supports worksheets section and sub-sections (inbox, list, detail)
+- [x] **NAVG-01**: Worksheets section accessible under HPLC Automation in sidebar navigation
+- [x] **NAVG-02**: Hash navigation supports worksheets section and sub-sections (inbox, list, detail)
 
 ## Future Requirements
 
@@ -109,8 +109,8 @@ Requirements for worksheet feature milestone. Each maps to roadmap phases.
 | WLST-02 | Phase 18 | Pending |
 | WLST-03 | Phase 18 | Pending |
 | WLST-04 | Phase 18 | Pending |
-| NAVG-01 | Phase 15 | Pending |
-| NAVG-02 | Phase 15 | Pending |
+| NAVG-01 | Phase 15 | Complete |
+| NAVG-02 | Phase 15 | Complete |
 
 **Coverage:**
 - v0.28.0 requirements: 32 total
