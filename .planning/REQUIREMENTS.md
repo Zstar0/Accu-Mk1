@@ -9,16 +9,16 @@ Requirements for worksheet feature milestone. Each maps to roadmap phases.
 
 ### Service Groups
 
-- [ ] **SGRP-01**: Admin can create, edit, and delete service groups (name, description, color, sort order)
-- [ ] **SGRP-02**: Admin can assign analysis services to service groups via checkbox-based membership editor
+- [x] **SGRP-01**: Admin can create, edit, and delete service groups (name, description, color, sort order)
+- [x] **SGRP-02**: Admin can assign analysis services to service groups via checkbox-based membership editor
 - [ ] **SGRP-03**: Service groups display in admin UI with member service count and color badge
-- [ ] **SGRP-04**: Service group data persists in local SQLite (service_groups + service_group_members tables)
+- [x] **SGRP-04**: Service group data persists in local SQLite (service_groups + service_group_members tables)
 
 ### Analyst Assignment
 
-- [ ] **ANLY-01**: User can view available SENAITE lab contacts (analysts) from the application
-- [ ] **ANLY-02**: User can assign an analyst to a SENAITE analysis (pushes Analyst field to SENAITE via API)
-- [ ] **ANLY-03**: Analyst assignment verified against SENAITE (confirm field format: username vs UID)
+- [x] **ANLY-01**: User can view available SENAITE lab contacts (analysts) from the application
+- [x] **ANLY-02**: User can assign an analyst to a SENAITE analysis (pushes Analyst field to SENAITE via API)
+- [x] **ANLY-03**: Analyst assignment verified against SENAITE (confirm field format: username vs UID)
 
 ### Received Samples Queue (Inbox)
 
@@ -79,13 +79,13 @@ Requirements for worksheet feature milestone. Each maps to roadmap phases.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| SGRP-01 | Phase 15 | Pending |
-| SGRP-02 | Phase 15 | Pending |
+| SGRP-01 | Phase 15 | Complete |
+| SGRP-02 | Phase 15 | Complete |
 | SGRP-03 | Phase 15 | Pending |
-| SGRP-04 | Phase 15 | Pending |
-| ANLY-01 | Phase 15 | Pending |
-| ANLY-02 | Phase 15 | Pending |
-| ANLY-03 | Phase 15 | Pending |
+| SGRP-04 | Phase 15 | Complete |
+| ANLY-01 | Phase 15 | Complete |
+| ANLY-02 | Phase 15 | Complete |
+| ANLY-03 | Phase 15 | Complete |
 | INBX-01 | Phase 16 | Pending |
 | INBX-02 | Phase 16 | Pending |
 | INBX-03 | Phase 16 | Pending |
