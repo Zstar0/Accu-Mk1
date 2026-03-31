@@ -11,7 +11,7 @@ Requirements for worksheet feature milestone. Each maps to roadmap phases.
 
 - [x] **SGRP-01**: Admin can create, edit, and delete service groups (name, description, color, sort order)
 - [x] **SGRP-02**: Admin can assign analysis services to service groups via checkbox-based membership editor
-- [ ] **SGRP-03**: Service groups display in admin UI with member service count and color badge
+- [x] **SGRP-03**: Service groups display in admin UI with member service count and color badge
 - [x] **SGRP-04**: Service group data persists in local SQLite (service_groups + service_group_members tables)
 
 ### Analyst Assignment
@@ -81,7 +81,7 @@ Requirements for worksheet feature milestone. Each maps to roadmap phases.
 |-------------|-------|--------|
 | SGRP-01 | Phase 15 | Complete |
 | SGRP-02 | Phase 15 | Complete |
-| SGRP-03 | Phase 15 | Pending |
+| SGRP-03 | Phase 15 | Complete |
 | SGRP-04 | Phase 15 | Complete |
 | ANLY-01 | Phase 15 | Complete |
 | ANLY-02 | Phase 15 | Complete |

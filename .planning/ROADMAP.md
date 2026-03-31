@@ -35,7 +35,7 @@
 
 ## Phases
 
-- [ ] **Phase 15: Foundation** — Service groups data model + admin UI, analyst assignment to SENAITE, and navigation wiring
+- [x] **Phase 15: Foundation** — Service groups data model + admin UI, analyst assignment to SENAITE, and navigation wiring (completed 2026-03-31)
 - [ ] **Phase 16: Received Samples Inbox** — Full inbox queue with priority, aging timers, inline assignment, bulk actions, and worksheet creation
 - [ ] **Phase 17: Worksheet Detail** — Worksheet header, items table, add/remove/reassign items, and completion
 - [ ] **Phase 18: Worksheets List** — All-worksheets view with KPI stats row, filters, and drill-through navigation
@@ -59,12 +59,12 @@
 4. A user can see the list of available SENAITE analysts (lab contacts) from within the application
 5. Assigning an analyst to a SENAITE analysis pushes the correct field value to SENAITE and the assignment is confirmed as accepted (field format verified: username vs UID)
 
-**Plans:** 3/4 plans executed
+**Plans:** 4/4 plans complete
 
 Plans:
 - [x] 15-01-PLAN.md — Backend data model (ServiceGroup + M2M), CRUD endpoints, SENAITE analyst proxy
 - [x] 15-02-PLAN.md — Navigation wiring (type unions, sidebar items, placeholder pages)
-- [ ] 15-03-PLAN.md — Service Groups admin UI (table + slide-out + membership editor)
+- [x] 15-03-PLAN.md — Service Groups admin UI (table + slide-out + membership editor)
 - [x] 15-04-PLAN.md — SENAITE Analyst field format verification
 
 **UI hint**: yes
@@ -150,7 +150,7 @@ Plans:
 | 13. Same-Method Identity Check | v0.26.0 | 3/3 | Complete | 2026-03-19 |
 | 13.5 HPLC Audit Trail & Debug | v0.26.0 | 3/3 | Complete | 2026-03-19 |
 | 14. RT Check Chromatogram Comparison | v0.26.0 | 0/? | Not started | - |
-| 15. Foundation | v0.28.0 | 3/4 | In Progress|  |
+| 15. Foundation | v0.28.0 | 4/4 | Complete   | 2026-03-31 |
 | 16. Received Samples Inbox | v0.28.0 | 0/? | Not started | - |
 | 17. Worksheet Detail | v0.28.0 | 0/? | Not started | - |
 | 18. Worksheets List | v0.28.0 | 0/? | Not started | - |
