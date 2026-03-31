@@ -3445,11 +3445,11 @@ async def upload_chromatogram_to_senaite(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    """Render chromatogram image via Integration Service and upload to SENAITE as HPLC Graph attachment.
+    """Generate chromatogram CSV and upload to SENAITE as HPLC Graph attachment.
 
     1. Loads chromatogram_data from the HPLC analysis record
-    2. Calls Integration Service /v1/chromatogram/render to get PNG
-    3. Uploads PNG to SENAITE as "HPLC Graph" attachment
+    2. Builds a CSV from the times/signals arrays
+    3. Uploads CSV to SENAITE as "HPLC Graph" attachment (not rendered in COA)
     """
     analysis = db.execute(
         select(HPLCAnalysis).where(HPLCAnalysis.id == analysis_id)
@@ -3461,34 +3461,21 @@ async def upload_chromatogram_to_senaite(
     if not chrom or not chrom.get("times") or not chrom.get("signals"):
         raise HTTPException(400, "No chromatogram data stored on this analysis")
 
-    # Step 1: Render PNG via Integration Service
-    render_url = f"{INTEGRATION_SERVICE_URL}/v1/chromatogram/render"
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            render_resp = await client.post(
-                render_url,
-                json={
-                    "times": chrom["times"],
-                    "signals": chrom["signals"],
-                    "sample_id": analysis.sample_id_label,
-                },
-                headers={"X-API-Key": INTEGRATION_SERVICE_API_KEY},
-            )
-            render_resp.raise_for_status()
-            png_bytes = render_resp.content
-    except httpx.HTTPStatusError as e:
-        raise HTTPException(502, f"Integration Service render failed: {e.response.status_code}")
-    except httpx.RequestError as e:
-        raise HTTPException(502, f"Integration Service unreachable: {e}")
+    # Step 1: Build CSV from chromatogram data
+    import io, csv as csv_mod
+    times = chrom["times"]
+    signals = chrom["signals"]
+    buf = io.StringIO()
+    writer = csv_mod.writer(buf)
+    for t, s in zip(times, signals):
+        writer.writerow([t, s])
+    csv_bytes = buf.getvalue().encode("utf-8")
 
-    if not png_bytes or png_bytes[:4] != b'\x89PNG':
-        raise HTTPException(502, "Integration Service returned invalid PNG")
-
-    # Step 2: Upload PNG to SENAITE as HPLC Graph attachment
+    # Step 2: Upload CSV to SENAITE as HPLC Graph attachment
     if SENAITE_URL is None:
         raise HTTPException(503, "SENAITE not configured")
 
-    filename = f"chromatogram_{analysis.sample_id_label}.png"
+    filename = f"chromatogram_{analysis.sample_id_label}.csv"
     try:
         async with httpx.AsyncClient(
             timeout=httpx.Timeout(60.0, connect=10.0),
@@ -3528,12 +3515,12 @@ async def upload_chromatogram_to_senaite(
                 "AttachmentType": attachment_type_uid,
                 "Analysis": "",
                 "AttachmentKeys": "",
-                "RenderInReport:boolean": "True",
+                "RenderInReport:boolean": "False",
                 "RenderInReport:boolean:default": "False",
                 "addARAttachment": "Add Attachment",
             }
             files = {
-                "AttachmentFile_file": (filename, png_bytes, "image/png"),
+                "AttachmentFile_file": (filename, csv_bytes, "text/csv"),
             }
             headers = {
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -3552,9 +3539,9 @@ async def upload_chromatogram_to_senaite(
 
     return {
         "success": True,
-        "message": f"Chromatogram uploaded to SENAITE for {analysis.sample_id_label}",
+        "message": f"Chromatogram CSV uploaded to SENAITE for {analysis.sample_id_label}",
         "filename": filename,
-        "size_bytes": len(png_bytes),
+        "size_bytes": len(csv_bytes),
     }
 
 

@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.27.7 — 2026-03-31
+
+### Fix: Chromatogram upload to SENAITE
+
+- **CSV instead of PNG**: Chromatogram data is now uploaded to SENAITE as a `.csv` file (time/signal columns) rather than a rendered PNG image
+- **COA rendering fix**: Removed `RenderInReport=True` flag that was causing the chromatogram to render in the sample image slot on PDF COAs
+- The in-app chromatogram preview is unaffected — only the SENAITE attachment format changed
+
 ## v0.27.5 — 2026-03-30
 
 ### Chromatogram Image for SENAITE

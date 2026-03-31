@@ -274,7 +274,7 @@ export function SenaiteResultsView({ prep, results: hplcResults, onBack, onCompl
       const firstHplcResult = hplcResults[0]
       if (firstHplcResult?.id) {
         uploadChromatogramToSenaite(firstHplcResult.id, senaiteData.sample_uid)
-          .then(r => { if (r.success) toast.success('Chromatogram image uploaded to SENAITE') })
+          .then(r => { if (r.success) toast.success('Chromatogram CSV uploaded to SENAITE') })
           .catch(() => { /* best-effort — don't block the user */ })
       }
     }
@@ -472,7 +472,7 @@ export function SenaiteResultsView({ prep, results: hplcResults, onBack, onCompl
                   className="w-full rounded border border-border/50"
                 />
                 <p className="text-xs text-muted-foreground">
-                  This image will be uploaded to SENAITE when you auto-fill results.
+                  The chromatogram data will be uploaded as a CSV to SENAITE when you auto-fill results.
                 </p>
               </>
             ) : (
