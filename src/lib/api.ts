@@ -3601,3 +3601,113 @@ export async function getSenaiteAnalysts(): Promise<SenaiteAnalyst[]> {
 
 // NOTE: SENAITE Analyst field is read-only — analyst assignment lives in
 // AccuMark's local worksheet_items table, not pushed to SENAITE.
+
+// ─── Inbox Types ─────────────────────────────────────────────────────────────
+
+export type InboxPriority = 'normal' | 'high' | 'expedited'
+
+export interface InboxAnalysisItem {
+  uid: string | null
+  title: string
+  keyword: string | null
+  method: string | null
+  review_state: string | null
+}
+
+export interface InboxServiceGroupSection {
+  group_id: number
+  group_name: string
+  group_color: string
+  analyses: InboxAnalysisItem[]
+}
+
+export interface InboxSampleItem {
+  uid: string
+  id: string
+  title: string
+  client_id: string | null
+  client_order_number: string | null
+  date_received: string | null
+  review_state: string
+  priority: InboxPriority
+  assigned_analyst_id: number | null
+  assigned_analyst_email: string | null
+  instrument_uid: string | null
+  analyses_by_group: InboxServiceGroupSection[]
+}
+
+export interface InboxResponse {
+  items: InboxSampleItem[]
+  total: number
+}
+
+export interface WorksheetUser {
+  id: number
+  email: string
+}
+
+export interface WorksheetCreateResponse {
+  id: number
+  title: string
+  status: string
+  item_count: number
+}
+
+// ─── Inbox API Functions ──────────────────────────────────────────────────────
+
+export async function getInboxSamples(): Promise<InboxResponse> {
+  const response = await fetch(`${API_BASE_URL()}/worksheets/inbox`, {
+    headers: getBearerHeaders(),
+  })
+  if (!response.ok) throw new Error(`Inbox fetch failed: ${response.status}`)
+  return response.json()
+}
+
+export async function updateInboxPriority(sampleUid: string, priority: InboxPriority): Promise<void> {
+  const response = await fetch(`${API_BASE_URL()}/worksheets/inbox/${sampleUid}/priority`, {
+    method: 'PUT',
+    headers: getBearerHeaders('application/json'),
+    body: JSON.stringify({ priority }),
+  })
+  if (!response.ok) throw new Error(`Priority update failed: ${response.status}`)
+}
+
+export async function getWorksheetUsers(): Promise<WorksheetUser[]> {
+  const response = await fetch(`${API_BASE_URL()}/worksheets/users`, {
+    headers: getBearerHeaders(),
+  })
+  if (!response.ok) throw new Error(`Users fetch failed: ${response.status}`)
+  return response.json()
+}
+
+export async function bulkUpdateInbox(data: {
+  sample_uids: string[]
+  priority?: InboxPriority
+  analyst_id?: number
+  instrument_uid?: string
+}): Promise<void> {
+  const response = await fetch(`${API_BASE_URL()}/worksheets/inbox/bulk`, {
+    method: 'PUT',
+    headers: getBearerHeaders('application/json'),
+    body: JSON.stringify(data),
+  })
+  if (!response.ok) throw new Error(`Bulk update failed: ${response.status}`)
+}
+
+export async function createWorksheet(data: {
+  title: string
+  sample_uids: string[]
+  notes?: string
+}): Promise<WorksheetCreateResponse> {
+  const response = await fetch(`${API_BASE_URL()}/worksheets`, {
+    method: 'POST',
+    headers: getBearerHeaders('application/json'),
+    body: JSON.stringify(data),
+  })
+  if (response.status === 409) {
+    const body = await response.json()
+    throw Object.assign(new Error('Stale samples detected'), { staleUids: body.stale_uids })
+  }
+  if (!response.ok) throw new Error(`Worksheet creation failed: ${response.status}`)
+  return response.json()
+}
