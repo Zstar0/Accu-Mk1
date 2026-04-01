@@ -16,9 +16,9 @@ Requirements for worksheet feature milestone. Each maps to roadmap phases.
 
 ### Analyst Assignment
 
-- [x] **ANLY-01**: User can view available SENAITE lab contacts (analysts) from the application
-- [x] **ANLY-02**: User can assign an analyst to a SENAITE analysis (pushes Analyst field to SENAITE via API)
-- [x] **ANLY-03**: Analyst assignment verified against SENAITE (confirm field format: username vs UID)
+- [x] **ANLY-01**: User can view available analysts from the application (sourced from AccuMark user list)
+- [x] **ANLY-02**: User can assign an analyst to a sample locally (stored in AccuMark worksheet_items table, not pushed to SENAITE — Analyst field is read-only in SENAITE)
+- [x] **ANLY-03**: Analyst assignment approach verified — SENAITE Analyst field is read-only, assignment stays local in AccuMark
 
 ### Received Samples Queue (Inbox)
 
