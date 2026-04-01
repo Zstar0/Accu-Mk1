@@ -183,7 +183,7 @@ export default function WorksheetsInboxPage() {
 
   return (
     <DndContext onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
-      <div className="flex h-full">
+      <div className="flex h-full overflow-hidden">
         {/* Left — inbox cards (scrollable) */}
         <div className="flex-1 overflow-y-auto">
           <div className="p-6">
@@ -279,9 +279,9 @@ export default function WorksheetsInboxPage() {
       </div>
 
       {/* Drag overlay — shows a ghost card while dragging */}
-      <DragOverlay>
+      <DragOverlay dropAnimation={null}>
         {activeDrag && (
-          <div className="rounded-lg border bg-card shadow-xl px-3 py-2 opacity-90 max-w-xs">
+          <div className="rounded-lg border bg-card shadow-xl px-3 py-2 opacity-90 w-48 pointer-events-none">
             <span className="font-mono text-xs font-medium">{activeDrag.sampleId}</span>
             <span className="mx-1.5 text-muted-foreground/50">·</span>
             <span className="text-xs">{activeDrag.groupName}</span>
