@@ -11062,16 +11062,31 @@ async def list_worksheets(
                 select(ServiceGroup.id, ServiceGroup.name).where(ServiceGroup.id.in_(group_ids))
             ).all()
             group_name_map = {g.id: g.name for g in groups}
-            # Resolve peptide_id via first analysis service in each group
+            # Resolve peptide_id and analyses per group
+            group_analyses_map: dict[int, list[dict]] = {}
             for gid in group_ids:
-                svc = db.execute(
-                    select(AnalysisService.peptide_id)
+                svcs = db.execute(
+                    select(AnalysisService)
                     .join(service_group_members, service_group_members.c.analysis_service_id == AnalysisService.id)
                     .where(service_group_members.c.service_group_id == gid)
-                    .where(AnalysisService.peptide_id.isnot(None))
-                    .limit(1)
-                ).scalar_one_or_none()
-                group_peptide_map[gid] = svc
+                ).scalars().all()
+                analyses = []
+                first_peptide_id = None
+                for s in svcs:
+                    if s.peptide_id and not first_peptide_id:
+                        first_peptide_id = s.peptide_id
+                    # Extract method name from methods JSON if available
+                    method_name = None
+                    if s.methods and isinstance(s.methods, list) and len(s.methods) > 0:
+                        method_name = s.methods[0].get("title") if isinstance(s.methods[0], dict) else None
+                    analyses.append({
+                        "title": s.title,
+                        "keyword": s.keyword,
+                        "peptide_name": s.peptide_name,
+                        "method": method_name,
+                    })
+                group_peptide_map[gid] = first_peptide_id
+                group_analyses_map[gid] = analyses
 
         # Resolve assigned analyst email
         analyst_email = None
@@ -11113,6 +11128,7 @@ async def list_worksheets(
                     "assigned_analyst_email": item_analyst_email_map.get(it.assigned_analyst_id) if it.assigned_analyst_id else None,
                     "notes": it.notes,
                     "peptide_id": group_peptide_map.get(it.service_group_id) if it.service_group_id else None,
+                    "analyses": group_analyses_map.get(it.service_group_id, []) if it.service_group_id else [],
                 }
                 for it in items
             ],

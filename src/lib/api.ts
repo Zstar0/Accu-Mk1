@@ -3751,6 +3751,12 @@ export interface WorksheetListItem {
     assigned_analyst_email: string | null
     notes: string | null
     peptide_id: number | null
+    analyses: {
+      title: string
+      keyword: string | null
+      peptide_name: string | null
+      method: string | null
+    }[]
   }[]
 }
 
