@@ -10232,7 +10232,7 @@ async def update_service_group(
         select(ServiceGroup)
         .options(joinedload(ServiceGroup.analysis_services))
         .where(ServiceGroup.id == group_id)
-    ).scalar_one_or_none()
+    ).unique().scalar_one_or_none()
     if not group:
         raise HTTPException(404, f"Service group {group_id} not found")
 
@@ -10304,7 +10304,7 @@ async def set_service_group_members(
         select(ServiceGroup)
         .options(joinedload(ServiceGroup.analysis_services))
         .where(ServiceGroup.id == group_id)
-    ).scalar_one_or_none()
+    ).unique().scalar_one_or_none()
     if not group:
         raise HTTPException(404, f"Service group {group_id} not found")
 
