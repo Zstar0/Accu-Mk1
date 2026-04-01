@@ -223,7 +223,16 @@ export default function ServiceGroupsPage() {
     )
   })
 
+  // Build set of service IDs claimed by OTHER groups (not the one being edited)
+  const takenIds = new Set(
+    groups
+      .filter(g => g.id !== editingGroup?.id)
+      .flatMap(g => g.member_ids)
+  )
+
   const filteredServices = allServices.filter(s => {
+    // Hide services already assigned to another group
+    if (takenIds.has(s.id)) return false
     if (!memberSearch) return true
     const q = memberSearch.toLowerCase()
     return (

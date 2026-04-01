@@ -1447,6 +1447,7 @@ class ServiceGroupResponse(BaseModel):
     color: str
     sort_order: int
     member_count: int = 0
+    member_ids: list[int] = []
     created_at: datetime
     updated_at: datetime
 
@@ -10184,6 +10185,7 @@ async def get_service_groups(
             color=group.color,
             sort_order=group.sort_order,
             member_count=len(group.analysis_services),
+            member_ids=[s.id for s in group.analysis_services],
             created_at=group.created_at,
             updated_at=group.updated_at,
         )

@@ -3506,6 +3506,7 @@ export interface ServiceGroup {
   color: string
   sort_order: number
   member_count: number
+  member_ids: number[]
   created_at: string
   updated_at: string
 }
