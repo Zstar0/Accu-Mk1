@@ -115,10 +115,10 @@ Plans:
 5. User can reassign one or more items to a different worksheet from the detail view
 6. User can click "Complete Worksheet" to transition the worksheet to completed status; the action is reflected in both the detail header and the worksheets list
 
-**Plans:** 3 plans
+**Plans:** 1/3 plans executed
 
 Plans:
-- [ ] 17-01-PLAN.md — Backend endpoints (complete, reassign) + API types + Zustand drawer state + TanStack Query hooks
+- [x] 17-01-PLAN.md — Backend endpoints (complete, reassign) + API types + Zustand drawer state + TanStack Query hooks
 - [ ] 17-02-PLAN.md — WorksheetDrawer UI (FAB, Sheet, header, items, add-samples modal, MainWindow wiring)
 - [ ] 17-03-PLAN.md — Hash navigation drawer route + Start Prep wiring + human verification
 
@@ -163,5 +163,5 @@ Plans:
 | 14. RT Check Chromatogram Comparison | v0.26.0 | 0/? | Not started | - |
 | 15. Foundation | v0.28.0 | 4/4 | Complete    | 2026-04-01 |
 | 16. Received Samples Inbox | v0.28.0 | 4/4 | Complete    | 2026-04-01 |
-| 17. Worksheet Detail | v0.28.0 | 0/3 | Planned | - |
+| 17. Worksheet Detail | v0.28.0 | 1/3 | In Progress|  |
 | 18. Worksheets List | v0.28.0 | 0/? | Not started | - |

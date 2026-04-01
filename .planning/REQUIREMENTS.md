@@ -37,13 +37,13 @@ Requirements for worksheet feature milestone. Each maps to roadmap phases.
 ### Worksheet Management
 
 - [ ] **WSHT-01**: User can view worksheet detail with header (title, analyst, status, created date, item count)
-- [ ] **WSHT-02**: User can edit worksheet title and notes
-- [ ] **WSHT-03**: Worksheet items table shows sample ID, analysis, service group, priority, tech, instrument, status
+- [x] **WSHT-02**: User can edit worksheet title and notes
+- [x] **WSHT-03**: Worksheet items table shows sample ID, analysis, service group, priority, tech, instrument, status
 - [ ] **WSHT-04**: User can add samples to an existing worksheet (mini inbox modal)
 - [ ] **WSHT-05**: User can remove items from a worksheet (items return to inbox)
-- [ ] **WSHT-06**: User can reassign items to a different worksheet
-- [ ] **WSHT-07**: User can mark a worksheet as completed
-- [ ] **WSHT-08**: Worksheet data persists locally (worksheets + worksheet_items tables)
+- [x] **WSHT-06**: User can reassign items to a different worksheet
+- [x] **WSHT-07**: User can mark a worksheet as completed
+- [x] **WSHT-08**: Worksheet data persists locally (worksheets + worksheet_items tables)
 
 ### Worksheets List
 
@@ -98,13 +98,13 @@ Requirements for worksheet feature milestone. Each maps to roadmap phases.
 | INBX-10 | Phase 16 | Complete |
 | INBX-11 | Phase 16 | Complete |
 | WSHT-01 | Phase 17 | Pending |
-| WSHT-02 | Phase 17 | Pending |
-| WSHT-03 | Phase 17 | Pending |
+| WSHT-02 | Phase 17 | Complete |
+| WSHT-03 | Phase 17 | Complete |
 | WSHT-04 | Phase 17 | Pending |
 | WSHT-05 | Phase 17 | Pending |
-| WSHT-06 | Phase 17 | Pending |
-| WSHT-07 | Phase 17 | Pending |
-| WSHT-08 | Phase 17 | Pending |
+| WSHT-06 | Phase 17 | Complete |
+| WSHT-07 | Phase 17 | Complete |
+| WSHT-08 | Phase 17 | Complete |
 | WLST-01 | Phase 18 | Pending |
 | WLST-02 | Phase 18 | Pending |
 | WLST-03 | Phase 18 | Pending |

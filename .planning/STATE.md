@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v0.28.0
 milestone_name: — Worksheet Feature
-status: verifying
-stopped_at: Phase 17 UI-SPEC approved
-last_updated: "2026-04-01T17:18:48.883Z"
+status: executing
+stopped_at: Completed 17-01-PLAN.md
+last_updated: "2026-04-01T18:10:53.539Z"
 last_activity: 2026-04-01
 progress:
   total_phases: 4
   completed_phases: 2
-  total_plans: 8
-  completed_plans: 8
+  total_plans: 11
+  completed_plans: 9
   percent: 0
 ---
 
@@ -21,13 +21,13 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-31)
 
 **Core value:** Streamlined morning workflow: import CSV -> review batch -> calculate purity -> push to SENAITE. One operator, one workstation, no friction.
-**Current focus:** Phase 16 — received-samples-inbox
+**Current focus:** Phase 17 — worksheet-detail
 
 ## Current Position
 
-Phase: 17
-Plan: Not started
-Status: Phase complete — ready for verification
+Phase: 17 (worksheet-detail) — EXECUTING
+Plan: 2 of 3
+Status: Ready to execute
 Last activity: 2026-04-01
 
 Progress: [░░░░░░░░░░░░░░░░░░░░] 0% (0/4 phases complete)
@@ -48,6 +48,7 @@ Progress: [░░░░░░░░░░░░░░░░░░░░] 0% (0/4
 | Phase 16 P01 | 4 | 2 tasks | 2 files |
 | Phase 16-received-samples-inbox P03 | 3 | 2 tasks | 2 files |
 | Phase 16-received-samples-inbox P04 | 4 | 3 tasks | 3 files |
+| Phase 17-worksheet-detail P01 | 260 | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -75,6 +76,8 @@ Progress: [░░░░░░░░░░░░░░░░░░░░] 0% (0/4
 - [Phase 16-received-samples-inbox]: Instrument dropdown maps senaite_uid ?? String(id) for uid key; bulk toolbar slot reserved in WorksheetsInboxPage for Plan 04
 - [Phase 16-received-samples-inbox]: CreateWorksheetDialog resets title/notes in useEffect on open — generates fresh WS-YYYY-MM-DD-001 each open
 - [Phase 16-received-samples-inbox]: Mutation callbacks passed at call-site in WorksheetsInboxPage for selection/dialog state side effects — hook-level callbacks handle toast only
+- [Phase 17-worksheet-detail]: Per-item analyst email resolved via batched User query in list_worksheets — no N+1 per item
+- [Phase 17-worksheet-detail]: useWorksheetDrawer uses getState() in mutation callbacks per project rule; selector syntax for activeWorksheetId
 
 ### Key Source Files
 
@@ -96,6 +99,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-04-01T17:18:48.879Z
-Stopped at: Phase 17 UI-SPEC approved
-Resume file: .planning/phases/17-worksheet-detail/17-UI-SPEC.md
+Last session: 2026-04-01T18:10:53.535Z
+Stopped at: Completed 17-01-PLAN.md
+Resume file: None
