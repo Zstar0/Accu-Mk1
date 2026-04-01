@@ -10578,6 +10578,19 @@ async def get_worksheets_inbox(
         sample_id = str(it.get("id", ""))
         raw_analyses = analyses_by_sample.get(sample_id, [])
 
+        # Build slot → peptide name map for "Analyte N" title renaming
+        # Same pattern as sample details page (Analyte1Peptide through Analyte4Peptide)
+        analyte_name_map: dict[int, str] = {}
+        for slot, key in enumerate(
+            ("Analyte1Peptide", "Analyte2Peptide", "Analyte3Peptide", "Analyte4Peptide"),
+            start=1,
+        ):
+            raw_name = it.get(key)
+            if raw_name and str(raw_name).strip():
+                # Strip method suffix: "BPC-157 - Identity (HPLC)" → "BPC-157"
+                stripped = re.sub(r"\s*-\s*[^-]+\([^)]+\)\s*$", "", str(raw_name)).strip()
+                analyte_name_map[slot] = stripped
+
         # Group analyses by service group
         groups_by_id: dict[int, InboxServiceGroupSection] = {}
         for analysis in raw_analyses:
@@ -10585,10 +10598,25 @@ async def get_worksheets_inbox(
                 continue
             keyword = analysis.get("getKeyword") or analysis.get("keyword") or ""
             title = analysis.get("title") or analysis.get("getTitle") or keyword or ""
+
+            # Rename "Analyte N ..." titles to actual peptide names
+            analyte_match = re.match(r"^Analyte\s+(\d)\s*(.*)", title, re.IGNORECASE)
+            if analyte_match:
+                slot_num = int(analyte_match.group(1))
+                suffix = analyte_match.group(2) or ""
+                peptide_name = analyte_name_map.get(slot_num)
+                if peptide_name:
+                    title = f"{peptide_name} {suffix}".strip()
+
             a_uid = analysis.get("uid") or analysis.get("UID")
-            method = analysis.get("getMethod") or analysis.get("method")
-            if isinstance(method, dict):
-                method = method.get("title")
+            # Method: use getMethodTitle (string) first, then Method object ref
+            method = analysis.get("getMethodTitle") or None
+            if not method:
+                method_obj = analysis.get("Method") or analysis.get("getMethod")
+                if isinstance(method_obj, dict):
+                    method = method_obj.get("title")
+                elif isinstance(method_obj, str):
+                    method = method_obj
             review_state = analysis.get("review_state") or analysis.get("getReviewState")
 
             group_info = keyword_to_group.get(keyword, default_group)
