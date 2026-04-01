@@ -146,10 +146,13 @@ export default function WorksheetsInboxPage() {
 
   function handleDragStart(event: DragStartEvent) {
     setActiveDrag(event.active.data.current as DragData)
+    // Prevent body scroll during drag
+    document.body.style.overflow = 'hidden'
   }
 
   async function handleDragEnd(event: DragEndEvent) {
     setActiveDrag(null)
+    document.body.style.overflow = ''
     const { over, active } = event
     if (!over) return
 
@@ -182,8 +185,9 @@ export default function WorksheetsInboxPage() {
   }
 
   return (
+    <div className="h-[calc(100vh-4rem)] overflow-hidden">
     <DndContext onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
-      <div className="flex h-[calc(100vh-4rem)] overflow-hidden">
+      <div className="flex h-full overflow-hidden">
         {/* Left — inbox cards (scrollable) */}
         <div className="flex-1 overflow-y-auto">
           <div className="p-6">
@@ -289,5 +293,6 @@ export default function WorksheetsInboxPage() {
         )}
       </DragOverlay>
     </DndContext>
+    </div>
   )
 }
