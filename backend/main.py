@@ -35,7 +35,7 @@ from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import select, desc, delete, update, func
 
 from database import get_db, init_db
-from models import AuditLog, Settings, Job, Sample, Result, Instrument, AnalysisService, HplcMethod, Peptide, PeptideAnalyte, CalibrationCurve, HPLCAnalysis, User, SharePointFileCache, WizardSession, WizardMeasurement, peptide_methods, blend_components, ServiceGroup, service_group_members
+from models import AuditLog, Settings, Job, Sample, Result, Instrument, AnalysisService, HplcMethod, Peptide, PeptideAnalyte, CalibrationCurve, HPLCAnalysis, User, SharePointFileCache, WizardSession, WizardMeasurement, peptide_methods, blend_components, ServiceGroup, service_group_members, SamplePriority, Worksheet, WorksheetItem
 from auth import (
     get_current_user, require_admin, create_access_token,
     verify_password, get_password_hash, seed_admin_user,
@@ -10378,4 +10378,495 @@ async def get_senaite_analysts(
 # when an analysis is added to a SENAITE Worksheet. Since AccuMark replaces SENAITE
 # worksheets, analyst assignment lives in AccuMark's local worksheet_items table.
 # The GET /senaite/analysts endpoint above remains useful for populating analyst
+
+
+# ─── Worksheets Inbox ─────────────────────────────────────────────────────────
+
+class InboxAnalysisItem(BaseModel):
+    uid: Optional[str] = None
+    title: str
+    keyword: Optional[str] = None
+    method: Optional[str] = None
+    review_state: Optional[str] = None
+
+
+class InboxServiceGroupSection(BaseModel):
+    group_id: int
+    group_name: str
+    group_color: str
+    analyses: list[InboxAnalysisItem]
+
+
+class InboxSampleItem(BaseModel):
+    uid: str
+    id: str
+    title: str
+    client_id: Optional[str] = None
+    client_order_number: Optional[str] = None
+    date_received: Optional[str] = None
+    review_state: str
+    priority: str = "normal"
+    assigned_analyst_id: Optional[int] = None
+    assigned_analyst_email: Optional[str] = None
+    instrument_uid: Optional[str] = None
+    analyses_by_group: list[InboxServiceGroupSection] = []
+
+
+class InboxResponse(BaseModel):
+    items: list[InboxSampleItem]
+    total: int
+
+
+class PriorityUpdate(BaseModel):
+    priority: str  # "normal" | "high" | "expedited"
+
+
+class BulkInboxUpdate(BaseModel):
+    sample_uids: list[str]
+    priority: Optional[str] = None
+    analyst_id: Optional[int] = None
+    instrument_uid: Optional[str] = None
+
+
+class WorksheetCreate(BaseModel):
+    title: str
+    sample_uids: list[str]
+    notes: Optional[str] = None
+
+
+@app.get("/worksheets/inbox", response_model=InboxResponse)
+async def get_worksheets_inbox(
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """
+    Return received samples from SENAITE enriched with service group analysis grouping,
+    local priorities, and analyst assignments. Excludes samples already assigned to
+    open worksheets to prevent re-appearing after worksheet creation.
+    """
+    if not SENAITE_URL:
+        raise HTTPException(status_code=503, detail="SENAITE not configured")
+
+    # Step 1: Fetch sample_received samples from SENAITE
+    senaite_url = f"{SENAITE_URL}/senaite/@@API/senaite/v1/AnalysisRequest"
+    params = {
+        "review_state": "sample_received",
+        "complete": "yes",
+        "limit": 200,
+        "sort_on": "created",
+        "sort_order": "descending",
+    }
+
+    try:
+        async with httpx.AsyncClient(
+            timeout=SENAITE_TIMEOUT,
+            auth=_get_senaite_auth(current_user),
+            follow_redirects=True,
+        ) as client:
+            resp = await client.get(senaite_url, params=params)
+            resp.raise_for_status()
+            senaite_data = resp.json()
+    except httpx.TimeoutException:
+        raise HTTPException(status_code=504, detail="SENAITE request timed out")
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(status_code=502, detail=f"SENAITE returned {e.response.status_code}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"SENAITE fetch error: {e}")
+
+    senaite_items = senaite_data.get("items", [])
+
+    # Step 2: Exclude samples already in open worksheets
+    open_worksheet_uids_rows = db.execute(
+        select(WorksheetItem.sample_uid)
+        .join(Worksheet, WorksheetItem.worksheet_id == Worksheet.id)
+        .where(Worksheet.status == "open")
+    ).all()
+    assigned_uids: set[str] = {row.sample_uid for row in open_worksheet_uids_rows}
+
+    filtered_items = [it for it in senaite_items if str(it.get("uid", "")) not in assigned_uids]
+
+    # Step 3: Build keyword → service group map
+    group_rows = db.execute(
+        select(
+            AnalysisService.keyword,
+            ServiceGroup.id,
+            ServiceGroup.name,
+            ServiceGroup.color,
+        )
+        .join(service_group_members, AnalysisService.id == service_group_members.c.analysis_service_id)
+        .join(ServiceGroup, ServiceGroup.id == service_group_members.c.service_group_id)
+        .where(AnalysisService.keyword.isnot(None))
+    ).all()
+    keyword_to_group: dict[str, tuple[int, str, str]] = {
+        row.keyword: (row.id, row.name, row.color) for row in group_rows
+    }
+
+    # Default group for unmatched analyses
+    default_group_row = db.execute(
+        select(ServiceGroup).where(ServiceGroup.is_default == True)  # noqa: E712
+    ).scalar_one_or_none()
+    default_group = (
+        (default_group_row.id, default_group_row.name, default_group_row.color)
+        if default_group_row
+        else (0, "Other", "gray")
+    )
+
+    # Step 4: Load local priorities for these samples
+    uids = [str(it.get("uid", "")) for it in filtered_items if it.get("uid")]
+    priority_rows = db.execute(
+        select(SamplePriority).where(SamplePriority.sample_uid.in_(uids))
+    ).scalars().all()
+    priority_map: dict[str, str] = {row.sample_uid: row.priority for row in priority_rows}
+
+    # Step 5: Load worksheet_item assignments (analyst + instrument) for these samples
+    # These are pre-worksheet orphan assignments stored before worksheet creation
+    item_rows = db.execute(
+        select(WorksheetItem)
+        .join(Worksheet, WorksheetItem.worksheet_id == Worksheet.id)
+        .where(
+            WorksheetItem.sample_uid.in_(uids),
+            Worksheet.status == "open",
+        )
+    ).scalars().all()
+    assignment_map: dict[str, WorksheetItem] = {row.sample_uid: row for row in item_rows}
+
+    # Collect analyst IDs to load emails
+    analyst_ids = {row.assigned_analyst_id for row in item_rows if row.assigned_analyst_id}
+    analyst_map: dict[int, str] = {}
+    if analyst_ids:
+        analyst_users = db.execute(
+            select(User.id, User.email).where(User.id.in_(analyst_ids))
+        ).all()
+        analyst_map = {row.id: row.email for row in analyst_users}
+
+    # Step 6: Enrich each sample item
+    if len(filtered_items) > 20:
+        print(f"[WARN] /worksheets/inbox: {len(filtered_items)} samples — N+1 SENAITE fetches may be slow")
+
+    result_items: list[InboxSampleItem] = []
+
+    async with httpx.AsyncClient(
+        timeout=SENAITE_TIMEOUT,
+        auth=_get_senaite_auth(current_user),
+        follow_redirects=True,
+    ) as client:
+        for it in filtered_items:
+            uid = str(it.get("uid", ""))
+            sample_id = str(it.get("id", ""))
+
+            # Extract analyses — try inline keys first, else fetch individually
+            raw_analyses: list[dict] = []
+            inline = it.get("Analyses") or it.get("getAnalyses") or []
+            if isinstance(inline, list) and inline:
+                raw_analyses = inline
+            elif uid:
+                try:
+                    detail_resp = await client.get(
+                        f"{SENAITE_URL}/senaite/@@API/senaite/v1/AnalysisRequest/{uid}",
+                        params={"complete": "yes"},
+                    )
+                    detail_resp.raise_for_status()
+                    detail_data = detail_resp.json()
+                    raw_analyses = detail_data.get("Analyses") or detail_data.get("getAnalyses") or []
+                except Exception as fetch_err:
+                    print(f"[WARN] Failed to fetch analyses for {uid}: {fetch_err}")
+                    raw_analyses = []
+
+            # Group analyses by service group
+            groups_by_id: dict[int, InboxServiceGroupSection] = {}
+            for analysis in raw_analyses:
+                if not isinstance(analysis, dict):
+                    continue
+                keyword = analysis.get("getKeyword") or analysis.get("keyword") or ""
+                title = analysis.get("title") or analysis.get("getTitle") or keyword or ""
+                a_uid = analysis.get("uid") or analysis.get("UID")
+                method = analysis.get("getMethod") or analysis.get("method")
+                if isinstance(method, dict):
+                    method = method.get("title")
+                review_state = analysis.get("review_state") or analysis.get("getReviewState")
+
+                group_info = keyword_to_group.get(keyword, default_group)
+                group_id, group_name, group_color = group_info
+
+                if group_id not in groups_by_id:
+                    groups_by_id[group_id] = InboxServiceGroupSection(
+                        group_id=group_id,
+                        group_name=group_name,
+                        group_color=group_color,
+                        analyses=[],
+                    )
+                groups_by_id[group_id].analyses.append(
+                    InboxAnalysisItem(
+                        uid=str(a_uid) if a_uid else None,
+                        title=str(title),
+                        keyword=str(keyword) if keyword else None,
+                        method=str(method) if method else None,
+                        review_state=str(review_state) if review_state else None,
+                    )
+                )
+
+            analyses_by_group = list(groups_by_id.values())
+
+            # Build enriched item
+            assignment = assignment_map.get(uid)
+            assigned_analyst_id = assignment.assigned_analyst_id if assignment else None
+            instrument_uid_val = assignment.instrument_uid if assignment else None
+            assigned_analyst_email = analyst_map.get(assigned_analyst_id) if assigned_analyst_id else None
+
+            result_items.append(
+                InboxSampleItem(
+                    uid=uid,
+                    id=sample_id,
+                    title=str(it.get("title", "")),
+                    client_id=it.get("getClientTitle") or it.get("ClientID") or None,
+                    client_order_number=it.get("getClientOrderNumber") or it.get("ClientOrderNumber") or None,
+                    date_received=it.get("getDateReceived") or it.get("DateReceived") or None,
+                    review_state=str(it.get("review_state", "")),
+                    priority=priority_map.get(uid, "normal"),
+                    assigned_analyst_id=assigned_analyst_id,
+                    assigned_analyst_email=assigned_analyst_email,
+                    instrument_uid=instrument_uid_val,
+                    analyses_by_group=analyses_by_group,
+                )
+            )
+
+    return InboxResponse(items=result_items, total=len(result_items))
+
+
+@app.put("/worksheets/inbox/{sample_uid}/priority")
+async def update_inbox_priority(
+    sample_uid: str,
+    data: PriorityUpdate,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Upsert priority for a received sample. Persists in sample_priorities table."""
+    valid_priorities = {"normal", "high", "expedited"}
+    if data.priority not in valid_priorities:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid priority '{data.priority}'. Must be one of: {', '.join(sorted(valid_priorities))}",
+        )
+
+    existing = db.execute(
+        select(SamplePriority).where(SamplePriority.sample_uid == sample_uid)
+    ).scalar_one_or_none()
+
+    if existing:
+        existing.priority = data.priority
+        existing.updated_at = datetime.utcnow()
+    else:
+        db.add(SamplePriority(sample_uid=sample_uid, priority=data.priority))
+
+    db.commit()
+    return {"sample_uid": sample_uid, "priority": data.priority}
+
+
+@app.get("/worksheets/users")
+async def get_worksheets_users(
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Return active users for analyst assignment. Accessible to all authenticated users (not admin-only)."""
+    users = db.execute(
+        select(User.id, User.email).where(User.is_active == True)  # noqa: E712
+        .order_by(User.email)
+    ).all()
+    return [{"id": row.id, "email": row.email} for row in users]
+
+
+@app.put("/worksheets/inbox/bulk")
+async def bulk_update_inbox(
+    data: BulkInboxUpdate,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """
+    Bulk update priority and/or analyst/instrument assignments for multiple inbox samples.
+    Priority upserts go to sample_priorities. Analyst/instrument go to worksheet_items
+    as orphan pre-assignments (picked up when worksheet is created).
+    """
+    if not data.sample_uids:
+        raise HTTPException(status_code=400, detail="sample_uids must not be empty")
+
+    # Upsert priorities
+    if data.priority is not None:
+        valid_priorities = {"normal", "high", "expedited"}
+        if data.priority not in valid_priorities:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid priority '{data.priority}'. Must be one of: {', '.join(sorted(valid_priorities))}",
+            )
+        existing_priorities = db.execute(
+            select(SamplePriority).where(SamplePriority.sample_uid.in_(data.sample_uids))
+        ).scalars().all()
+        existing_map = {row.sample_uid: row for row in existing_priorities}
+        for uid in data.sample_uids:
+            if uid in existing_map:
+                existing_map[uid].priority = data.priority
+                existing_map[uid].updated_at = datetime.utcnow()
+            else:
+                db.add(SamplePriority(sample_uid=uid, priority=data.priority))
+
+    # Upsert analyst/instrument orphan worksheet_items
+    if data.analyst_id is not None or data.instrument_uid is not None:
+        # Find orphan worksheet (one per-update session: a special "pre-assignment" worksheet)
+        # We use a sentinel worksheet with status='pre_assigned' to park these assignments.
+        # When a real worksheet is created, it picks up priority from sample_priorities directly.
+        # For analyst/instrument pre-assignments we simply store them as worksheet_items
+        # referencing a temporary open worksheet, or update existing ones.
+        existing_items = db.execute(
+            select(WorksheetItem)
+            .join(Worksheet, WorksheetItem.worksheet_id == Worksheet.id)
+            .where(
+                WorksheetItem.sample_uid.in_(data.sample_uids),
+                Worksheet.status == "open",
+            )
+        ).scalars().all()
+        existing_item_map = {row.sample_uid: row for row in existing_items}
+
+        # If some samples have no existing item, we need a staging worksheet
+        missing_uids = [uid for uid in data.sample_uids if uid not in existing_item_map]
+        staging_ws = None
+        if missing_uids:
+            staging_ws = db.execute(
+                select(Worksheet).where(
+                    Worksheet.title == "__inbox_staging__",
+                    Worksheet.status == "open",
+                )
+            ).scalar_one_or_none()
+            if not staging_ws:
+                staging_ws = Worksheet(
+                    title="__inbox_staging__",
+                    status="open",
+                    created_by=_current_user.id,
+                )
+                db.add(staging_ws)
+                db.flush()  # Get ID assigned
+
+        for uid in data.sample_uids:
+            if uid in existing_item_map:
+                item = existing_item_map[uid]
+                if data.analyst_id is not None:
+                    item.assigned_analyst_id = data.analyst_id
+                if data.instrument_uid is not None:
+                    item.instrument_uid = data.instrument_uid
+            else:
+                db.add(WorksheetItem(
+                    worksheet_id=staging_ws.id,
+                    sample_uid=uid,
+                    sample_id=uid,  # SENAITE sample_id unknown here; use uid as placeholder
+                    assigned_analyst_id=data.analyst_id,
+                    instrument_uid=data.instrument_uid,
+                ))
+
+    db.commit()
+    return {"updated": len(data.sample_uids)}
+
+
+@app.post("/worksheets", status_code=201)
+async def create_worksheet(
+    data: WorksheetCreate,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """
+    Create a new worksheet from selected inbox samples.
+
+    Performs a stale data guard: verifies each sample is still in sample_received
+    state in SENAITE before creating the worksheet. Returns HTTP 409 if any samples
+    have changed state.
+    """
+    if not data.sample_uids:
+        raise HTTPException(status_code=400, detail="sample_uids must not be empty")
+
+    if not SENAITE_URL:
+        raise HTTPException(status_code=503, detail="SENAITE not configured")
+
+    # Stale data guard: verify all samples still in sample_received state (INBX-10)
+    stale_uids: list[str] = []
+    try:
+        async with httpx.AsyncClient(
+            timeout=SENAITE_TIMEOUT,
+            auth=_get_senaite_auth(current_user),
+            follow_redirects=True,
+        ) as client:
+            for uid in data.sample_uids:
+                try:
+                    verify_resp = await client.get(
+                        f"{SENAITE_URL}/senaite/@@API/senaite/v1/AnalysisRequest/{uid}",
+                        params={"complete": "no"},
+                    )
+                    verify_resp.raise_for_status()
+                    sample_data = verify_resp.json()
+                    # Handle both direct item and items-list responses
+                    item_data = sample_data
+                    if "items" in sample_data and sample_data["items"]:
+                        item_data = sample_data["items"][0]
+                    current_state = item_data.get("review_state", "")
+                    if current_state != "sample_received":
+                        stale_uids.append(uid)
+                except Exception as verify_err:
+                    print(f"[WARN] Could not verify state for {uid}: {verify_err}")
+                    stale_uids.append(uid)
+    except httpx.TimeoutException:
+        raise HTTPException(status_code=504, detail="SENAITE request timed out during state verification")
+
+    if stale_uids:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "stale_uids": stale_uids,
+                "message": f"{len(stale_uids)} samples have changed state",
+            },
+        )
+
+    # Load priorities for these samples
+    priority_rows = db.execute(
+        select(SamplePriority).where(SamplePriority.sample_uid.in_(data.sample_uids))
+    ).scalars().all()
+    priority_map: dict[str, str] = {row.sample_uid: row.priority for row in priority_rows}
+
+    # Load sample IDs from any existing pre-assignment worksheet_items
+    existing_items = db.execute(
+        select(WorksheetItem)
+        .join(Worksheet, WorksheetItem.worksheet_id == Worksheet.id)
+        .where(
+            WorksheetItem.sample_uid.in_(data.sample_uids),
+            Worksheet.status == "open",
+        )
+    ).scalars().all()
+    existing_item_map: dict[str, WorksheetItem] = {row.sample_uid: row for row in existing_items}
+
+    # Create the worksheet
+    ws = Worksheet(
+        title=data.title,
+        status="open",
+        notes=data.notes,
+        created_by=current_user.id,
+    )
+    db.add(ws)
+    db.flush()  # Get ID before adding items
+
+    # Create worksheet items
+    for uid in data.sample_uids:
+        existing = existing_item_map.get(uid)
+        db.add(WorksheetItem(
+            worksheet_id=ws.id,
+            sample_uid=uid,
+            sample_id=existing.sample_id if existing else uid,
+            priority=priority_map.get(uid, "normal"),
+            assigned_analyst_id=existing.assigned_analyst_id if existing else None,
+            instrument_uid=existing.instrument_uid if existing else None,
+        ))
+
+    db.commit()
+    db.refresh(ws)
+
+    return {
+        "id": ws.id,
+        "title": ws.title,
+        "status": ws.status,
+        "item_count": len(data.sample_uids),
+    }
 # dropdowns from SENAITE LabContact records.
