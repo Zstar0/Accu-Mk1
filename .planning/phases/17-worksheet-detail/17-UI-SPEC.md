@@ -57,9 +57,11 @@ Exceptions:
 | Role | Size | Weight | Line Height | Usage |
 |------|------|--------|-------------|-------|
 | Body | 14px (text-sm) | 400 (regular) | 1.5 | Item row text, notes textarea, dropdown labels |
-| Label | 12px (text-xs) | 500 (medium) | 1.4 | Section labels, badge text, column headers |
+| Label | 12px (text-xs) | 600 (semibold) | 1.4 | Section labels, badge text, column headers |
 | Heading | 16px (text-base) | 600 (semibold) | 1.25 | Drawer worksheet title, modal heading |
 | Mono | 12px (text-xs) | 400 (regular) | 1.0 | Sample IDs (font-mono tabular-nums), aging timer |
+
+Declared weights: 400 (regular) and 600 (semibold) only. Maximum 2 weights.
 
 Notes:
 - "Prep started" indicator: text-[10px] muted-foreground/60, italic — matches existing WorksheetDropPanel convention
@@ -142,10 +144,14 @@ Priority badge colors:
 - Background: `bg-primary text-primary-foreground shadow-lg`
 - Hover: `hover:bg-primary/90 transition-colors`
 - Icon: `ClipboardList` from lucide-react, `h-5 w-5`
-- Badge: absolute `-top-1 -right-1`, `h-5 w-5 rounded-full bg-destructive text-destructive-foreground text-[10px] font-bold`
+- Badge: absolute `-top-1 -right-1`, `h-5 w-5 rounded-full bg-destructive text-destructive-foreground text-[10px] font-semibold`
 - Badge content: total open item count across all non-completed worksheets (see Open Question resolution below)
 - When drawer is open: FAB hidden (Sheet overlay covers it; Tauri desktop — no mobile back-button concern)
 - aria-label: "Open worksheet"
+
+### Focal Point
+
+Primary focal point: FAB button (`bg-primary`, fixed bottom-right). Inside the drawer: worksheet title (text-base, weight 600) and the "Complete Worksheet" button (primary variant, right-aligned in action row).
 
 ### Sheet Drawer
 
@@ -176,7 +182,7 @@ Priority badge colors:
   "Complete Worksheet" button (primary variant, right-aligned)
 
 [Items section — flex-1 overflow-hidden]
-  "Items (N)" label — px-4 pt-3 pb-1 text-xs font-medium muted-foreground
+  "Items (N)" label — px-4 pt-3 pb-1 text-xs font-semibold muted-foreground
   ScrollArea — full remaining height
     Item rows (see below)
     Empty state (when no items)
@@ -192,9 +198,9 @@ Reuses WorksheetDropPanel item row pattern (lines 172-195):
 
 - Height: auto, min 28px per row
 - `group/item` hover reveals remove button (opacity-0 → opacity-100)
-- Group badge: `inline-flex rounded-md border px-2 py-0.5 text-xs font-medium` using `SERVICE_GROUP_COLORS[colorKey]`
+- Group badge: `inline-flex rounded-md border px-2 py-0.5 text-xs font-semibold` using `SERVICE_GROUP_COLORS[colorKey]`
 - "Start Prep" button: `h-6 text-[10px]` secondary variant, visible on row hover; shows "Prep started" state as `text-[10px] text-muted-foreground/60 italic` once triggered
-- "Reassign" button: icon-only (`MoveRight` lucide, h-3 w-3), opens a popover with worksheet picker
+- "Reassign" button: icon-only (`MoveRight` lucide, h-3 w-3), opens a popover with worksheet picker; aria-label: "Move {sample_id} to another worksheet"
 
 ---
 
@@ -255,7 +261,7 @@ Reuses WorksheetDropPanel item row pattern (lines 172-195):
 - Opens: `AlertDialog` confirmation
   - Title: "Complete this worksheet?"
   - Description: "This worksheet will be marked as completed and removed from the active queue. This cannot be undone."
-  - Cancel: "Cancel" (outline)
+  - Cancel: "Keep Worksheet" (outline — keeps the worksheet active)
   - Confirm: "Complete Worksheet" (destructive variant — irreversible action)
 - API: `POST /worksheets/{id}/complete`
 - On success: drawer closes, `['worksheets']` query invalidated, toast "Worksheet completed"
@@ -328,7 +334,7 @@ Reuses WorksheetDropPanel item row pattern (lines 172-195):
 | Complete action | "Complete Worksheet" |
 | Confirmation title | "Complete this worksheet?" |
 | Confirmation description | "This worksheet will be marked as completed and removed from the active queue. This cannot be undone." |
-| Confirmation cancel | "Cancel" |
+| Confirmation cancel | "Keep Worksheet" |
 | Confirmation confirm | "Complete Worksheet" |
 | Remove item toast | "Item removed — now back in inbox" |
 | Reassign item toast | "Item moved to {target title}" |
@@ -348,6 +354,7 @@ Reuses WorksheetDropPanel item row pattern (lines 172-195):
 | Add Samples modal title | "Add Samples to Worksheet" |
 | Reassign popover label | "Move to worksheet" |
 | FAB badge (screen reader) | "{N} items in open worksheets" |
+| Reassign item button (aria-label) | "Move {sample_id} to another worksheet" |
 
 Destructive actions in this phase:
 
@@ -417,3 +424,8 @@ No third-party registries declared for Phase 17.
 | AlertDialog for complete confirm | RESEARCH.md + existing WorksheetDropZone delete confirm |
 | No DnD in mini inbox modal | RESEARCH.md Pitfall 5 |
 | Completed = read-only visible | Claude's discretion (deferred ideas excluded viewing entirely) |
+| Typography weight reduction (400/600 only) | UI checker revision — removed weight 500, converted labels/badges to 600 |
+| FAB badge font-semibold | UI checker revision — replaced font-bold (700) with font-semibold (600) |
+| Confirmation cancel label "Keep Worksheet" | UI checker revision — replaced generic "Cancel" per BLOCK list |
+| Reassign button aria-label | UI checker recommendation — added to Copywriting Contract |
+| Focal point declaration | UI checker recommendation — added to Layout Specification |
