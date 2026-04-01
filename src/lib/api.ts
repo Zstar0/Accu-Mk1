@@ -3751,6 +3751,14 @@ export async function listWorksheets(status?: string): Promise<WorksheetListItem
   return response.json()
 }
 
+export async function deleteWorksheet(worksheetId: number): Promise<void> {
+  const response = await fetch(`${API_BASE_URL()}/worksheets/${worksheetId}`, {
+    method: 'DELETE',
+    headers: getBearerHeaders(),
+  })
+  if (!response.ok) throw new Error(`Delete worksheet failed: ${response.status}`)
+}
+
 export async function updateWorksheet(
   worksheetId: number,
   data: { title?: string; assigned_analyst?: number }

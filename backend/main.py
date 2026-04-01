@@ -11233,4 +11233,26 @@ async def create_worksheet_from_drop(
     db.commit()
     return {"id": ws.id, "title": ws.title, "status": ws.status, "item_count": 1}
 
+
+@app.delete("/worksheets/{worksheet_id}")
+async def delete_worksheet(
+    worksheet_id: int,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Delete a worksheet. Items are removed (analyses return to inbox on next poll)."""
+    ws = db.execute(
+        select(Worksheet).where(Worksheet.id == worksheet_id)
+    ).scalar_one_or_none()
+    if not ws:
+        raise HTTPException(404, "Worksheet not found")
+
+    # Delete items first (CASCADE should handle it, but be explicit)
+    db.execute(
+        WorksheetItem.__table__.delete().where(WorksheetItem.worksheet_id == worksheet_id)
+    )
+    db.delete(ws)
+    db.commit()
+    return {"status": "deleted"}
+
 # dropdowns from SENAITE LabContact records.

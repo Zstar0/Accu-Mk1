@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useDroppable } from '@dnd-kit/core'
-import { Plus, FileSpreadsheet, Pencil, Check, X } from 'lucide-react'
+import { Plus, FileSpreadsheet, Pencil, Check, X, Trash2 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import {
@@ -11,6 +11,17 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { ScrollArea } from '@/components/ui/scroll-area'
+import { Button } from '@/components/ui/button'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import type { WorksheetUser } from '@/lib/api'
 
 export interface WorksheetSummary {
@@ -51,15 +62,18 @@ function WorksheetDropZone({
   users,
   onRename,
   onAssignTech,
+  onDelete,
 }: {
   worksheet: WorksheetSummary
   users: WorksheetUser[]
   onRename: (id: number, title: string) => void
   onAssignTech: (id: number, analystId: number) => void
+  onDelete: (id: number) => void
 }) {
   const { isOver, setNodeRef } = useDroppable({ id: `worksheet-${worksheet.id}` })
   const [editing, setEditing] = useState(false)
   const [editTitle, setEditTitle] = useState(worksheet.title)
+  const [confirmDelete, setConfirmDelete] = useState(false)
 
   function handleSaveTitle() {
     const trimmed = editTitle.trim()
@@ -100,12 +114,20 @@ function WorksheetDropZone({
         ) : (
           <>
             <span className="text-xs font-medium truncate flex-1">{worksheet.title}</span>
-            <button
-              onClick={() => { setEditTitle(worksheet.title); setEditing(true) }}
-              className="text-muted-foreground/40 hover:text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity"
-            >
-              <Pencil className="h-3 w-3" />
-            </button>
+            <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+              <button
+                onClick={() => { setEditTitle(worksheet.title); setEditing(true) }}
+                className="text-muted-foreground/40 hover:text-muted-foreground"
+              >
+                <Pencil className="h-3 w-3" />
+              </button>
+              <button
+                onClick={() => setConfirmDelete(true)}
+                className="text-muted-foreground/40 hover:text-destructive"
+              >
+                <Trash2 className="h-3 w-3" />
+              </button>
+            </div>
             <Badge variant="secondary" className="text-[10px] px-1.5 py-0 h-4 shrink-0">
               {worksheet.item_count}
             </Badge>
@@ -149,6 +171,27 @@ function WorksheetDropZone({
       {worksheet.items.length === 0 && (
         <p className="text-[10px] text-muted-foreground/50 italic">Empty — drop items here</p>
       )}
+
+      <AlertDialog open={confirmDelete} onOpenChange={setConfirmDelete}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete worksheet?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will delete <span className="font-medium">{worksheet.title}</span> and
+              return its {worksheet.item_count} item{worksheet.item_count !== 1 ? 's' : ''} to the inbox.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => onDelete(worksheet.id)}
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }
@@ -159,9 +202,10 @@ interface WorksheetDropPanelProps {
   loading?: boolean
   onRename: (id: number, title: string) => void
   onAssignTech: (id: number, analystId: number) => void
+  onDelete: (id: number) => void
 }
 
-export function WorksheetDropPanel({ worksheets, users, loading, onRename, onAssignTech }: WorksheetDropPanelProps) {
+export function WorksheetDropPanel({ worksheets, users, loading, onRename, onAssignTech, onDelete }: WorksheetDropPanelProps) {
   const openWorksheets = worksheets.filter(w => w.status === 'open')
 
   return (
@@ -205,6 +249,7 @@ export function WorksheetDropPanel({ worksheets, users, loading, onRename, onAss
                 users={users}
                 onRename={onRename}
                 onAssignTech={onAssignTech}
+                onDelete={onDelete}
               />
             ))
           )}
