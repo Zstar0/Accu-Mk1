@@ -183,7 +183,7 @@ export default function WorksheetsInboxPage() {
 
   return (
     <DndContext onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
-      <div className="flex h-full overflow-hidden">
+      <div className="flex h-[calc(100vh-4rem)] overflow-hidden">
         {/* Left — inbox cards (scrollable) */}
         <div className="flex-1 overflow-y-auto">
           <div className="p-6">
@@ -252,7 +252,7 @@ export default function WorksheetsInboxPage() {
         </div>
 
         {/* Right — worksheet drop panel (fixed, doesn't scroll with content) */}
-        <div className="w-72 shrink-0">
+        <div className="w-72 shrink-0 h-full overflow-hidden">
           <WorksheetDropPanel
             worksheets={worksheets}
             users={users}
