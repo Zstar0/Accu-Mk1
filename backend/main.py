@@ -11097,6 +11097,15 @@ async def list_worksheets(
             ).scalar_one_or_none()
             analyst_email = analyst_user
 
+        # Pre-resolve instrument senaite_uid → instrument.id for method lookup
+        instrument_uids = {it.instrument_uid for it in items if it.instrument_uid}
+        inst_uid_to_id: dict[str, int] = {}
+        if instrument_uids:
+            inst_rows = db.execute(
+                select(Instrument.senaite_uid, Instrument.id).where(Instrument.senaite_uid.in_(instrument_uids))
+            ).all()
+            inst_uid_to_id = {r.senaite_uid: r.id for r in inst_rows if r.senaite_uid}
+
         # Resolve per-item analyst emails
         item_analyst_ids = {it.assigned_analyst_id for it in items if it.assigned_analyst_id}
         item_analyst_email_map: dict[int, str] = {}
@@ -11105,6 +11114,23 @@ async def list_worksheets(
                 select(User.id, User.email).where(User.id.in_(item_analyst_ids))
             ).all()
             item_analyst_email_map = {u.id: u.email for u in item_analyst_users}
+
+        def _resolve_method(it_instrument_uid: str | None, it_service_group_id: int | None) -> str | None:
+            """Resolve HPLC method name from instrument + peptide (via service group)."""
+            if not it_instrument_uid or not it_service_group_id:
+                return None
+            inst_id = inst_uid_to_id.get(it_instrument_uid)
+            peptide_id = group_peptide_map.get(it_service_group_id)
+            if not inst_id or not peptide_id:
+                return None
+            method = db.execute(
+                select(HplcMethod.name)
+                .join(peptide_methods, peptide_methods.c.method_id == HplcMethod.id)
+                .where(peptide_methods.c.peptide_id == peptide_id)
+                .where(HplcMethod.instrument_id == inst_id)
+                .limit(1)
+            ).scalar_one_or_none()
+            return method
 
         result.append({
             "id": ws.id,
@@ -11130,6 +11156,7 @@ async def list_worksheets(
                     "assigned_analyst_email": item_analyst_email_map.get(it.assigned_analyst_id) if it.assigned_analyst_id else None,
                     "notes": it.notes,
                     "peptide_id": group_peptide_map.get(it.service_group_id) if it.service_group_id else None,
+                    "method_name": _resolve_method(it.instrument_uid, it.service_group_id),
                     "analyses": json.loads(it.analyses_json) if it.analyses_json else (group_analyses_map.get(it.service_group_id, []) if it.service_group_id else []),
                 }
                 for it in items

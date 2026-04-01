@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { X, MoveRight, ClipboardX, GripVertical } from 'lucide-react'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import { Badge } from '@/components/ui/badge'
+// Badge import kept for potential future use
 import {
   Popover,
   PopoverTrigger,
@@ -38,31 +38,13 @@ import {
 } from '@/lib/service-group-colors'
 import type { WorksheetListItem, InboxPriority, Instrument } from '@/lib/api'
 
-/** Group core analyses by peptide name — same logic as InboxServiceGroupCard */
-function groupCoreAnalyses(analyses: { title: string; keyword: string | null; peptide_name: string | null; method: string | null }[]) {
-  const peptideMap = new Map<string, { peptide: string; types: string[]; method: string | null }>()
-  const standalone: typeof analyses = []
-
+/** Extract unique peptide names from analyses — compact display for worksheet */
+function getPeptideNames(analyses: { title: string; peptide_name: string | null }[]): string[] {
+  const names = new Set<string>()
   for (const a of analyses) {
-    if (!a.peptide_name) {
-      standalone.push(a)
-      continue
-    }
-    const existing = peptideMap.get(a.peptide_name)
-    if (existing) {
-      const typeMatch = a.title.match(/\(([^)]+)\)/)
-      const identMatch = a.title.match(/Identity/)
-      const type = identMatch ? 'Identity' : typeMatch?.[1] ?? a.title
-      if (!existing.types.includes(type)) existing.types.push(type)
-      if (!existing.method && a.method) existing.method = a.method
-    } else {
-      const typeMatch = a.title.match(/\(([^)]+)\)/)
-      const identMatch = a.title.match(/Identity/)
-      const type = identMatch ? 'Identity' : typeMatch?.[1] ?? a.title
-      peptideMap.set(a.peptide_name, { peptide: a.peptide_name, types: [type], method: a.method })
-    }
+    if (a.peptide_name) names.add(a.peptide_name)
   }
-  return { peptideLines: Array.from(peptideMap.values()), standalone }
+  return Array.from(names)
 }
 
 type ItemType = WorksheetListItem['items'][number]
@@ -133,8 +115,8 @@ export function WorksheetDrawerItems({
           <div className="w-[80px] shrink-0">Sample</div>
           <div className="w-[80px] shrink-0">Group</div>
           <div className="w-[70px] shrink-0">Priority</div>
-          <div className="flex-1 min-w-[180px]">Analyses</div>
-          <div className="w-[90px] shrink-0">Method</div>
+          <div className="flex-1 min-w-[140px]">Peptide</div>
+          <div className="w-[110px] shrink-0">Method</div>
           <div className="w-[120px] shrink-0">Instrument</div>
           <div className="w-[100px] shrink-0">Tech</div>
           <div className="w-[60px] shrink-0">Age</div>
@@ -228,7 +210,7 @@ function SortableItemRow({
     ? (item.group_color as ServiceGroupColor)
     : 'zinc'
   const groupColorClass = SERVICE_GROUP_COLORS[colorKey]
-  const { peptideLines, standalone } = groupCoreAnalyses(item.analyses)
+  const peptideNames = getPeptideNames(item.analyses)
 
   return (
     <div
@@ -275,38 +257,22 @@ function SortableItemRow({
         <PriorityBadge priority={item.priority as InboxPriority} />
       </div>
 
-      {/* Analyses — peptide lines with type badges */}
-      <div className="flex-1 min-w-[180px] space-y-0.5">
-        {peptideLines.length === 0 && standalone.length === 0 ? (
-          <span className="text-[10px] text-muted-foreground">—</span>
+      {/* Peptide — compact list of peptide names */}
+      <div className="flex-1 min-w-[140px]">
+        {peptideNames.length === 0 ? (
+          <span className="text-xs text-muted-foreground">—</span>
         ) : (
-          <>
-            {peptideLines.map(line => (
-              <div key={line.peptide} className="flex items-center gap-1.5 flex-wrap">
-                <span className="text-xs font-medium">{line.peptide}</span>
-                <div className="flex gap-0.5">
-                  {line.types.sort().map(t => (
-                    <Badge key={t} variant="outline" className="text-[10px] px-1.5 py-0 h-4">
-                      {t}
-                    </Badge>
-                  ))}
-                </div>
-              </div>
-            ))}
-            {standalone.map((a, i) => (
-              <div key={i} className="flex items-center gap-1.5">
-                <span className="text-xs">{a.title}</span>
-              </div>
-            ))}
-          </>
+          <span className="text-xs font-medium">
+            {peptideNames.join(', ')}
+          </span>
         )}
       </div>
 
-      {/* Method */}
-      <div className="w-[90px] shrink-0">
-        <span className="text-[10px] text-muted-foreground font-mono truncate block">
-          {peptideLines.find(l => l.method)?.method
-            ?? standalone.find(a => a.method)?.method
+      {/* Method — computed from instrument+peptide, fallback to analyses */}
+      <div className="w-[110px] shrink-0">
+        <span className="text-xs text-muted-foreground font-mono truncate block">
+          {item.method_name
+            ?? item.analyses.find(a => a.method)?.method
             ?? '—'}
         </span>
       </div>

@@ -111,7 +111,7 @@ export function WorksheetDrawer() {
 
       {/* Sheet drawer */}
       <Sheet open={drawerOpen} onOpenChange={open => { if (!open) closeDrawer() }}>
-        <SheetContent side="right" className="w-[960px] sm:max-w-[960px] p-0 flex flex-col">
+        <SheetContent side="right" className="w-[1100px] sm:max-w-[1100px] p-0 flex flex-col">
           {/* Loading state */}
           {isLoading && (
             <div className="p-4 space-y-3">
