@@ -74,6 +74,8 @@ function applyNavToStore(nav: ParsedNav) {
     store.navigateToOrderExplorer(targetId)
   } else if (subSection === 'peptide-config' && targetId) {
     store.navigateToPeptide(Number(targetId))
+  } else if (subSection === 'worksheet-detail' && targetId) {
+    store.openWorksheetDrawer(Number(targetId))
   } else {
     store.navigateTo(section, subSection)
   }
