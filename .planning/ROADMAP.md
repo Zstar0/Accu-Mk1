@@ -140,7 +140,10 @@ Plans:
 3. User can filter the list by status (open / completed / all) and by analyst; the list updates without a page reload
 4. Clicking any worksheet row navigates to that worksheet's detail view
 
-**Plans:** TBD
+**Plans:** 1 plan
+
+Plans:
+- [ ] 18-01-PLAN.md — Full WorksheetsListPage with KPI stats, status/analyst filters, worksheet table, and drawer navigation
 
 **UI hint**: yes
 
@@ -164,4 +167,4 @@ Plans:
 | 15. Foundation | v0.28.0 | 4/4 | Complete    | 2026-04-01 |
 | 16. Received Samples Inbox | v0.28.0 | 4/4 | Complete    | 2026-04-01 |
 | 17. Worksheet Detail | v0.28.0 | 3/3 | Complete    | 2026-04-01 |
-| 18. Worksheets List | v0.28.0 | 0/? | Not started | - |
+| 18. Worksheets List | v0.28.0 | 0/1 | Not started | - |
