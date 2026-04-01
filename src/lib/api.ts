@@ -3737,7 +3737,7 @@ export interface WorksheetListItem {
   assigned_analyst_email: string | null
   item_count: number
   created_at: string | null
-  items: { sample_id: string; group_name: string; priority: string; added_at: string | null }[]
+  items: { sample_id: string; sample_uid: string; service_group_id: number | null; group_name: string; priority: string; added_at: string | null }[]
 }
 
 export async function listWorksheets(status?: string): Promise<WorksheetListItem[]> {
@@ -3749,6 +3749,18 @@ export async function listWorksheets(status?: string): Promise<WorksheetListItem
   })
   if (!response.ok) throw new Error(`List worksheets failed: ${response.status}`)
   return response.json()
+}
+
+export async function removeWorksheetItem(
+  worksheetId: number,
+  sampleUid: string,
+  serviceGroupId: number
+): Promise<void> {
+  const response = await fetch(
+    `${API_BASE_URL()}/worksheets/${worksheetId}/items/${encodeURIComponent(sampleUid)}/${serviceGroupId}`,
+    { method: 'DELETE', headers: getBearerHeaders() }
+  )
+  if (!response.ok) throw new Error(`Remove item failed: ${response.status}`)
 }
 
 export async function deleteWorksheet(worksheetId: number): Promise<void> {

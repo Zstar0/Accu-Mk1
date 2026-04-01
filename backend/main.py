@@ -11079,6 +11079,8 @@ async def list_worksheets(
             "items": [
                 {
                     "sample_id": it.sample_id,
+                    "sample_uid": it.sample_uid,
+                    "service_group_id": it.service_group_id,
                     "group_name": group_name_map.get(it.service_group_id, "—") if it.service_group_id else "—",
                     "priority": it.priority,
                     "added_at": it.added_at.isoformat() if it.added_at else None,
@@ -11268,5 +11270,29 @@ async def delete_worksheet(
     db.delete(ws)
     db.commit()
     return {"status": "deleted"}
+
+
+@app.delete("/worksheets/{worksheet_id}/items/{sample_uid}/{service_group_id}")
+async def remove_worksheet_item(
+    worksheet_id: int,
+    sample_uid: str,
+    service_group_id: int,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Remove a single service group item from a worksheet. Analysis returns to inbox."""
+    item = db.execute(
+        select(WorksheetItem).where(
+            WorksheetItem.worksheet_id == worksheet_id,
+            WorksheetItem.sample_uid == sample_uid,
+            WorksheetItem.service_group_id == service_group_id,
+        )
+    ).scalar_one_or_none()
+    if not item:
+        raise HTTPException(404, "Item not found")
+
+    db.delete(item)
+    db.commit()
+    return {"status": "removed"}
 
 # dropdowns from SENAITE LabContact records.

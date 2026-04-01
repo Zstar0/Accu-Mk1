@@ -27,6 +27,8 @@ import type { WorksheetUser, InboxPriority } from '@/lib/api'
 
 export interface WorksheetSummaryItem {
   sample_id: string
+  sample_uid: string
+  service_group_id: number | null
   group_name: string
   priority: string
   added_at: string | null
@@ -77,6 +79,7 @@ function WorksheetDropZone({
   onRename: (id: number, title: string) => void
   onAssignTech: (id: number, analystId: number) => void
   onDelete: (id: number) => void
+  onRemoveItem: (worksheetId: number, sampleUid: string, serviceGroupId: number) => void
 }) {
   const { isOver, setNodeRef } = useDroppable({ id: `worksheet-${worksheet.id}` })
   const [editing, setEditing] = useState(false)
@@ -167,7 +170,18 @@ function WorksheetDropZone({
       {worksheet.items.length > 0 && (
         <div className="space-y-1">
           {worksheet.items.map((item, i) => (
-            <div key={i} className="flex items-center gap-1.5 text-[10px]">
+            <div key={i} className="group/item flex items-center gap-1.5 text-[10px]">
+              <button
+                onClick={() => {
+                  if (item.service_group_id != null) {
+                    onRemoveItem(worksheet.id, item.sample_uid, item.service_group_id)
+                  }
+                }}
+                className="opacity-0 group-hover/item:opacity-100 text-muted-foreground/40 hover:text-destructive transition-opacity shrink-0"
+                aria-label={`Remove ${item.sample_id} from worksheet`}
+              >
+                <X className="h-3 w-3" />
+              </button>
               <span className="font-mono text-muted-foreground">{item.sample_id}</span>
               <span className="text-muted-foreground/50">·</span>
               <span className="truncate text-muted-foreground">{item.group_name}</span>
@@ -214,9 +228,10 @@ interface WorksheetDropPanelProps {
   onRename: (id: number, title: string) => void
   onAssignTech: (id: number, analystId: number) => void
   onDelete: (id: number) => void
+  onRemoveItem: (worksheetId: number, sampleUid: string, serviceGroupId: number) => void
 }
 
-export function WorksheetDropPanel({ worksheets, users, loading, onRename, onAssignTech, onDelete }: WorksheetDropPanelProps) {
+export function WorksheetDropPanel({ worksheets, users, loading, onRename, onAssignTech, onDelete, onRemoveItem }: WorksheetDropPanelProps) {
   const openWorksheets = worksheets.filter(w => w.status === 'open')
 
   return (
@@ -261,6 +276,7 @@ export function WorksheetDropPanel({ worksheets, users, loading, onRename, onAss
                 onRename={onRename}
                 onAssignTech={onAssignTech}
                 onDelete={onDelete}
+                onRemoveItem={onRemoveItem}
               />
             ))
           )}

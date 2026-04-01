@@ -19,6 +19,7 @@ import {
   createWorksheetFromDrop,
   updateWorksheet,
   deleteWorksheet,
+  removeWorksheetItem,
   type InboxPriority,
   type InboxSampleItem,
   type InboxServiceGroupSection,
@@ -294,11 +295,22 @@ export default function WorksheetsInboxPage() {
               try {
                 await deleteWorksheet(id)
                 toast.success('Worksheet deleted — items returned to inbox')
-                setPendingDropKeys(new Set()) // Clear any pending keys
+                setPendingDropKeys(new Set())
                 queryClient.invalidateQueries({ queryKey: ['worksheets-list'] })
                 queryClient.invalidateQueries({ queryKey: ['inbox-samples'] })
               } catch (err) {
                 toast.error(err instanceof Error ? err.message : 'Delete failed')
+              }
+            }}
+            onRemoveItem={async (worksheetId, sampleUid, serviceGroupId) => {
+              try {
+                await removeWorksheetItem(worksheetId, sampleUid, serviceGroupId)
+                toast.success('Item returned to inbox')
+                setPendingDropKeys(new Set())
+                queryClient.invalidateQueries({ queryKey: ['worksheets-list'] })
+                queryClient.invalidateQueries({ queryKey: ['inbox-samples'] })
+              } catch (err) {
+                toast.error(err instanceof Error ? err.message : 'Remove failed')
               }
             }}
           />
