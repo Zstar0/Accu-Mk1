@@ -3505,6 +3505,7 @@ export interface ServiceGroup {
   description: string | null
   color: string
   sort_order: number
+  is_default: boolean
   member_count: number
   member_ids: number[]
   created_at: string
@@ -3516,6 +3517,7 @@ export interface ServiceGroupCreate {
   description?: string | null
   color?: string
   sort_order?: number
+  is_default?: boolean
 }
 
 export interface ServiceGroupUpdate {
@@ -3523,6 +3525,7 @@ export interface ServiceGroupUpdate {
   description?: string | null
   color?: string
   sort_order?: number
+  is_default?: boolean
 }
 
 export interface SenaiteAnalyst {

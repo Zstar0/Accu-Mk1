@@ -1429,6 +1429,7 @@ class ServiceGroupCreate(BaseModel):
     description: Optional[str] = None
     color: str = "blue"
     sort_order: int = 0
+    is_default: bool = False
 
 
 class ServiceGroupUpdate(BaseModel):
@@ -1437,6 +1438,7 @@ class ServiceGroupUpdate(BaseModel):
     description: Optional[str] = None
     color: Optional[str] = None
     sort_order: Optional[int] = None
+    is_default: Optional[bool] = None
 
 
 class ServiceGroupResponse(BaseModel):
@@ -1446,6 +1448,7 @@ class ServiceGroupResponse(BaseModel):
     description: Optional[str]
     color: str
     sort_order: int
+    is_default: bool = False
     member_count: int = 0
     member_ids: list[int] = []
     created_at: datetime
@@ -10184,6 +10187,7 @@ async def get_service_groups(
             description=group.description,
             color=group.color,
             sort_order=group.sort_order,
+            is_default=group.is_default,
             member_count=len(group.analysis_services),
             member_ids=[s.id for s in group.analysis_services],
             created_at=group.created_at,
@@ -10207,6 +10211,11 @@ async def create_service_group(
         raise HTTPException(400, f"Service group '{data.name}' already exists")
 
     group = ServiceGroup(**data.model_dump())
+    if group.is_default:
+        db.execute(
+            select(ServiceGroup).where(ServiceGroup.is_default == True)  # noqa: E712
+        )
+        db.query(ServiceGroup).filter(ServiceGroup.is_default == True).update({"is_default": False})  # noqa: E712
     db.add(group)
     db.commit()
     db.refresh(group)
@@ -10216,6 +10225,7 @@ async def create_service_group(
         description=group.description,
         color=group.color,
         sort_order=group.sort_order,
+        is_default=group.is_default,
         member_count=0,
         created_at=group.created_at,
         updated_at=group.updated_at,
@@ -10238,7 +10248,12 @@ async def update_service_group(
     if not group:
         raise HTTPException(404, f"Service group {group_id} not found")
 
-    for field, value in data.model_dump(exclude_unset=True).items():
+    update_data = data.model_dump(exclude_unset=True)
+    if update_data.get("is_default"):
+        db.query(ServiceGroup).filter(
+            ServiceGroup.is_default == True, ServiceGroup.id != group_id  # noqa: E712
+        ).update({"is_default": False})
+    for field, value in update_data.items():
         setattr(group, field, value)
 
     db.commit()
@@ -10249,7 +10264,9 @@ async def update_service_group(
         description=group.description,
         color=group.color,
         sort_order=group.sort_order,
+        is_default=group.is_default,
         member_count=len(group.analysis_services),
+        member_ids=[s.id for s in group.analysis_services],
         created_at=group.created_at,
         updated_at=group.updated_at,
     )

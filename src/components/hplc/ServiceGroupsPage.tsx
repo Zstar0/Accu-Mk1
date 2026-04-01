@@ -49,6 +49,7 @@ interface FormState {
   description: string
   color: ServiceGroupColor
   sort_order: string
+  is_default: boolean
 }
 
 const DEFAULT_FORM: FormState = {
@@ -56,6 +57,7 @@ const DEFAULT_FORM: FormState = {
   description: '',
   color: 'blue',
   sort_order: '0',
+  is_default: false,
 }
 
 // ─── Main Page ────────────────────────────────────────────────────────────────
@@ -116,6 +118,7 @@ export default function ServiceGroupsPage() {
       description: group.description ?? '',
       color: (group.color as ServiceGroupColor) ?? 'blue',
       sort_order: String(group.sort_order),
+      is_default: group.is_default,
     })
     setMemberSearch('')
     setPanelOpen(true)
@@ -158,6 +161,7 @@ export default function ServiceGroupsPage() {
         description: form.description.trim() || null,
         color: form.color,
         sort_order: parseInt(form.sort_order, 10) || 0,
+        is_default: form.is_default,
       }
       if (editingGroup) {
         await updateServiceGroup(editingGroup.id, payload)
@@ -330,7 +334,14 @@ export default function ServiceGroupsPage() {
                       <span className="sr-only">{group.color}</span>
                     </Badge>
                   </TableCell>
-                  <TableCell className="font-medium">{group.name}</TableCell>
+                  <TableCell className="font-medium">
+                    {group.name}
+                    {group.is_default && (
+                      <Badge variant="outline" className="ml-2 text-[10px] px-1.5 py-0">
+                        Default
+                      </Badge>
+                    )}
+                  </TableCell>
                   <TableCell className="max-w-xs truncate text-sm text-muted-foreground">
                     {group.description ?? '—'}
                   </TableCell>
@@ -427,6 +438,23 @@ export default function ServiceGroupsPage() {
                     onChange={e => setForm(f => ({ ...f, sort_order: e.target.value }))}
                     className="max-w-[120px]"
                   />
+                </div>
+
+                {/* Default group toggle */}
+                <div className="flex items-center gap-3">
+                  <Checkbox
+                    id="is-default"
+                    checked={form.is_default}
+                    onCheckedChange={checked =>
+                      setForm(f => ({ ...f, is_default: checked === true }))
+                    }
+                  />
+                  <label htmlFor="is-default" className="text-sm font-medium leading-none">
+                    Default group
+                    <span className="block text-xs font-normal text-muted-foreground">
+                      Unassigned services automatically fall into this group
+                    </span>
+                  </label>
                 </div>
 
                 {/* Color picker */}
