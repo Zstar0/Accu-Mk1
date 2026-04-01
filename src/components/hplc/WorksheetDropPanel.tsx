@@ -73,6 +73,7 @@ function WorksheetDropZone({
   onRename,
   onAssignTech,
   onDelete,
+  onRemoveItem,
 }: {
   worksheet: WorksheetSummary
   users: WorksheetUser[]
