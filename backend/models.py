@@ -547,6 +547,65 @@ class WizardSession(Base):
         return f"<WizardSession(id={self.id}, status='{self.status}')>"
 
 
+class SamplePriority(Base):
+    """
+    Per-sample priority override for the Received Samples Inbox.
+    Priority values: 'normal' | 'high' | 'expedited'
+    """
+    __tablename__ = "sample_priorities"
+
+    sample_uid: Mapped[str] = mapped_column(String(50), primary_key=True)
+    priority: Mapped[str] = mapped_column(String(20), nullable=False, default="normal")
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def __repr__(self) -> str:
+        return f"<SamplePriority(sample_uid='{self.sample_uid}', priority='{self.priority}')>"
+
+
+class Worksheet(Base):
+    """
+    Custom AccuMark worksheet grouping received samples for analyst assignment.
+    Replaces SENAITE worksheets for priority-based tech routing.
+    Status lifecycle: 'open' | 'completed' | 'cancelled'
+    """
+    __tablename__ = "worksheets"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    status: Mapped[str] = mapped_column(String(50), default="open", nullable=False)
+    assigned_analyst_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_by: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def __repr__(self) -> str:
+        return f"<Worksheet(id={self.id}, title='{self.title}', status='{self.status}')>"
+
+
+class WorksheetItem(Base):
+    """
+    Individual sample row within an AccuMark worksheet.
+    Stores per-item analyst assignment, service group, and instrument.
+    """
+    __tablename__ = "worksheet_items"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    worksheet_id: Mapped[int] = mapped_column(ForeignKey("worksheets.id", ondelete="CASCADE"), nullable=False)
+    sample_uid: Mapped[str] = mapped_column(String(50), nullable=False)
+    sample_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    analysis_uid: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    service_group_id: Mapped[Optional[int]] = mapped_column(ForeignKey("service_groups.id", ondelete="SET NULL"), nullable=True)
+    priority: Mapped[str] = mapped_column(String(20), default="normal", nullable=False)
+    assigned_analyst_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    instrument_uid: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    added_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    def __repr__(self) -> str:
+        return f"<WorksheetItem(id={self.id}, worksheet_id={self.worksheet_id}, sample_uid='{self.sample_uid}')>"
+
+
 class WizardMeasurement(Base):
     """
     Individual balance reading within a wizard session.
