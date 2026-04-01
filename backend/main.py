@@ -11062,9 +11062,9 @@ async def list_worksheets(
 
         # Resolve assigned analyst email
         analyst_email = None
-        if ws.assigned_analyst:
+        if ws.assigned_analyst_id:
             analyst_user = db.execute(
-                select(User.email).where(User.id == ws.assigned_analyst)
+                select(User.email).where(User.id == ws.assigned_analyst_id)
             ).scalar_one_or_none()
             analyst_email = analyst_user
 
@@ -11072,7 +11072,7 @@ async def list_worksheets(
             "id": ws.id,
             "title": ws.title,
             "status": ws.status,
-            "assigned_analyst": ws.assigned_analyst,
+            "assigned_analyst": ws.assigned_analyst_id,
             "assigned_analyst_email": analyst_email,
             "item_count": len(items),
             "created_at": ws.created_at.isoformat() if ws.created_at else None,
@@ -11109,7 +11109,7 @@ async def update_worksheet(
     if data.title is not None:
         ws.title = data.title
     if data.assigned_analyst is not None:
-        ws.assigned_analyst = data.assigned_analyst
+        ws.assigned_analyst_id = data.assigned_analyst
         # Also reassign all items in this worksheet to the new analyst
         items = db.execute(
             select(WorksheetItem).where(WorksheetItem.worksheet_id == worksheet_id)
@@ -11164,7 +11164,7 @@ async def add_group_to_worksheet(
     ).scalar_one_or_none()
 
     # If worksheet has an assigned analyst, use that (overrides card's tech)
-    analyst_id = ws.assigned_analyst
+    analyst_id = ws.assigned_analyst_id
     if not analyst_id and staging_item:
         analyst_id = staging_item.assigned_analyst_id
 
