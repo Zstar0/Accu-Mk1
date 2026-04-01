@@ -268,12 +268,10 @@ function SortableItemRow({
         )}
       </div>
 
-      {/* Method — computed from instrument+peptide, fallback to analyses */}
+      {/* Method — only shown when instrument is set (computed from instrument+peptide) */}
       <div className="w-[110px] shrink-0">
         <span className="text-xs text-muted-foreground font-mono truncate block">
-          {item.method_name
-            ?? item.analyses.find(a => a.method)?.method
-            ?? '—'}
+          {item.method_name ?? '—'}
         </span>
       </div>
 
