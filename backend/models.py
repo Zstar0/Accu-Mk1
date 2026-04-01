@@ -150,12 +150,16 @@ class AnalysisService(Base):
     category: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)  # "HPLC"
     unit: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)  # "%", "mg", "EU/mL"
     methods: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)  # [{uid, title}, ...]
-    peptide_name: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)  # derived: "AICAR"
+    peptide_name: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)  # derived: "AICAR" (legacy)
+    peptide_id: Mapped[Optional[int]] = mapped_column(ForeignKey("peptides.id", ondelete="SET NULL"), nullable=True)
     senaite_id: Mapped[Optional[str]] = mapped_column(String(200), nullable=True, unique=True)
     senaite_uid: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationships
+    peptide: Mapped[Optional["Peptide"]] = relationship("Peptide", foreign_keys=[peptide_id])
 
     def __repr__(self) -> str:
         return f"<AnalysisService(id={self.id}, title='{self.title}')>"

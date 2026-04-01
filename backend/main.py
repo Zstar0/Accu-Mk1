@@ -1411,6 +1411,7 @@ class AnalysisServiceResponse(BaseModel):
     unit: Optional[str] = None
     methods: Optional[list] = None
     peptide_name: Optional[str] = None
+    peptide_id: Optional[int] = None
     senaite_id: Optional[str] = None
     senaite_uid: Optional[str] = None
     active: bool
@@ -1923,6 +1924,41 @@ async def get_analysis_services(
         )
     services = db.execute(query).scalars().all()
     return [AnalysisServiceResponse.model_validate(s) for s in services]
+
+
+class AnalysisServicePeptideUpdate(BaseModel):
+    peptide_id: Optional[int] = None  # null to clear the link
+
+
+@app.put("/analysis-services/{service_id}/peptide", response_model=AnalysisServiceResponse)
+async def update_analysis_service_peptide(
+    service_id: int,
+    data: AnalysisServicePeptideUpdate,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Link or unlink a peptide to an analysis service."""
+    service = db.execute(
+        select(AnalysisService).where(AnalysisService.id == service_id)
+    ).scalar_one_or_none()
+    if not service:
+        raise HTTPException(404, f"Analysis service {service_id} not found")
+
+    if data.peptide_id is not None:
+        peptide = db.execute(
+            select(Peptide).where(Peptide.id == data.peptide_id)
+        ).scalar_one_or_none()
+        if not peptide:
+            raise HTTPException(404, f"Peptide {data.peptide_id} not found")
+        service.peptide_id = peptide.id
+        service.peptide_name = peptide.name
+    else:
+        service.peptide_id = None
+        service.peptide_name = None
+
+    db.commit()
+    db.refresh(service)
+    return AnalysisServiceResponse.model_validate(service)
 
 
 @app.post("/analysis-services/sync")
@@ -10386,6 +10422,7 @@ class InboxAnalysisItem(BaseModel):
     uid: Optional[str] = None
     title: str
     keyword: Optional[str] = None
+    peptide_name: Optional[str] = None
     method: Optional[str] = None
     review_state: Optional[str] = None
 
@@ -10503,6 +10540,32 @@ async def get_worksheets_inbox(
         row.keyword: (row.id, row.name, row.color) for row in group_rows
     }
 
+    # Step 3b: Build keyword → local enrichment map (peptide name + method)
+    # AnalysisService.keyword → (peptide_name, method_name)
+    # For identity services (ID_*), peptide_name is on the AnalysisService directly.
+    # For slot services (ANALYTE-N-*), peptide_name is None — resolved per-sample from AnalyteNPeptide.
+    # Method comes from the peptide → peptide_methods → HplcMethod chain.
+    svc_rows = db.execute(
+        select(AnalysisService.keyword, AnalysisService.peptide_name)
+        .where(AnalysisService.keyword.isnot(None))
+    ).all()
+    keyword_to_peptide: dict[str, str | None] = {
+        row.keyword: row.peptide_name for row in svc_rows
+    }
+
+    # Build peptide_name → method_name map from peptide_methods
+    from sqlalchemy.orm import joinedload as _jl
+    peptide_rows = db.execute(
+        select(Peptide)
+        .options(_jl(Peptide.methods))
+        .where(Peptide.active == True)  # noqa: E712
+    ).unique().scalars().all()
+    peptide_to_method: dict[str, str] = {}
+    for pep in peptide_rows:
+        if pep.methods:
+            # Use first active method as the display method
+            peptide_to_method[pep.name] = pep.methods[0].name
+
     # Default group for unmatched analyses
     default_group_row = db.execute(
         select(ServiceGroup).where(ServiceGroup.is_default == True)  # noqa: E712
@@ -10613,15 +10676,27 @@ async def get_worksheets_inbox(
                     title = f"{peptide_name} {suffix}".strip()
 
             a_uid = analysis.get("uid") or analysis.get("UID")
-            # Method: use getMethodTitle (string) first, then Method object ref
-            method = analysis.get("getMethodTitle") or None
-            if not method:
-                method_obj = analysis.get("Method") or analysis.get("getMethod")
-                if isinstance(method_obj, dict):
-                    method = method_obj.get("title")
-                elif isinstance(method_obj, str):
-                    method = method_obj
             review_state = analysis.get("review_state") or analysis.get("getReviewState")
+
+            # Resolve peptide name: for identity services (ID_*), use local AnalysisService.peptide_name.
+            # For slot services (ANALYTE-N-*), use per-sample analyte_name_map (from AnalyteNPeptide).
+            resolved_peptide: str | None = keyword_to_peptide.get(keyword)
+            if not resolved_peptide and analyte_match:
+                # Already matched "Analyte N" — use the slot map
+                slot_num = int(analyte_match.group(1))
+                resolved_peptide = analyte_name_map.get(slot_num)
+
+            # Resolve method from local peptide → peptide_methods → HplcMethod
+            method: str | None = None
+            if resolved_peptide:
+                method = peptide_to_method.get(resolved_peptide)
+            # Fallback to SENAITE method title if local lookup didn't resolve
+            if not method:
+                method = analysis.get("getMethodTitle") or None
+                if not method:
+                    method_obj = analysis.get("Method") or analysis.get("getMethod")
+                    if isinstance(method_obj, dict):
+                        method = method_obj.get("title")
 
             group_info = keyword_to_group.get(keyword, default_group)
             group_id, group_name, group_color = group_info
@@ -10638,6 +10713,7 @@ async def get_worksheets_inbox(
                     uid=str(a_uid) if a_uid else None,
                     title=str(title),
                     keyword=str(keyword) if keyword else None,
+                    peptide_name=resolved_peptide,
                     method=str(method) if method else None,
                     review_state=str(review_state) if review_state else None,
                 )

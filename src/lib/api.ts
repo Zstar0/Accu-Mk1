@@ -1961,6 +1961,7 @@ export interface AnalysisServiceRecord {
   unit: string | null
   methods: { uid: string; title: string }[] | null
   peptide_name: string | null
+  peptide_id: number | null
   senaite_id: string | null
   senaite_uid: string | null
   active: boolean
@@ -1977,6 +1978,19 @@ export async function getAnalysisServices(opts?: { search?: string; category?: s
     headers: getBearerHeaders(),
   })
   if (!response.ok) throw new Error(`Get analysis services failed: ${response.status}`)
+  return response.json()
+}
+
+export async function updateAnalysisServicePeptide(
+  serviceId: number,
+  peptideId: number | null
+): Promise<AnalysisServiceRecord> {
+  const response = await fetch(`${API_BASE_URL()}/analysis-services/${serviceId}/peptide`, {
+    method: 'PUT',
+    headers: getBearerHeaders('application/json'),
+    body: JSON.stringify({ peptide_id: peptideId }),
+  })
+  if (!response.ok) throw new Error(`Update peptide link failed: ${response.status}`)
   return response.json()
 }
 
@@ -3610,6 +3624,7 @@ export interface InboxAnalysisItem {
   uid: string | null
   title: string
   keyword: string | null
+  peptide_name: string | null
   method: string | null
   review_state: string | null
 }

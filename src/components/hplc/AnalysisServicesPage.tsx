@@ -25,13 +25,24 @@ import {
 } from '@/components/ui/table'
 import { toast } from 'sonner'
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import {
   getAnalysisServices,
   syncAnalysisServices,
+  updateAnalysisServicePeptide,
+  getPeptides,
   type AnalysisServiceRecord,
+  type PeptideRecord,
 } from '@/lib/api'
 
 export function AnalysisServicesPage() {
   const [services, setServices] = useState<AnalysisServiceRecord[]>([])
+  const [peptides, setPeptides] = useState<PeptideRecord[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [selectedId, setSelectedId] = useState<number | null>(null)
@@ -42,8 +53,12 @@ export function AnalysisServicesPage() {
     setLoading(true)
     setError(null)
     try {
-      const data = await getAnalysisServices()
-      setServices(data)
+      const [svcData, pepData] = await Promise.all([
+        getAnalysisServices(),
+        getPeptides(),
+      ])
+      setServices(svcData)
+      setPeptides(pepData)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load analysis services')
     } finally {
@@ -225,7 +240,19 @@ export function AnalysisServicesPage() {
 
             {/* Content */}
             <div className="flex-1 overflow-y-auto px-6 py-4">
-              <ServicePanel service={selectedService} />
+              <ServicePanel
+                service={selectedService}
+                peptides={peptides}
+                onPeptideChange={async (peptideId) => {
+                  try {
+                    await updateAnalysisServicePeptide(selectedService.id, peptideId)
+                    toast.success(peptideId ? 'Peptide linked' : 'Peptide unlinked')
+                    await load()
+                  } catch (err) {
+                    toast.error(err instanceof Error ? err.message : 'Failed to update peptide link')
+                  }
+                }}
+              />
             </div>
           </div>
         </>
@@ -248,7 +275,17 @@ export function AnalysisServicesPage() {
 
 // ─── Service Detail Panel ───
 
-function ServicePanel({ service }: { service: AnalysisServiceRecord }) {
+function ServicePanel({
+  service,
+  peptides,
+  onPeptideChange,
+}: {
+  service: AnalysisServiceRecord
+  peptides: PeptideRecord[]
+  onPeptideChange: (peptideId: number | null) => void
+}) {
+  const isSlotService = /^ANALYTE-\d/i.test(service.keyword ?? '')
+
   return (
     <div className="space-y-6">
       {/* Detail grid */}
@@ -256,7 +293,36 @@ function ServicePanel({ service }: { service: AnalysisServiceRecord }) {
         <div className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm">
           <DetailRow label="Title" value={service.title} />
           <DetailRow label="Keyword" value={service.keyword} />
-          <DetailRow label="Peptide Name" value={service.peptide_name} />
+          <div className="col-span-2">
+            <dt className="font-medium text-muted-foreground mb-1">Linked Peptide</dt>
+            {isSlotService ? (
+              <dd className="text-xs text-muted-foreground italic">
+                Generic slot service — peptide resolved per-sample from SENAITE Analyte fields
+              </dd>
+            ) : (
+              <Select
+                value={service.peptide_id != null ? String(service.peptide_id) : 'none'}
+                onValueChange={value =>
+                  onPeptideChange(value === 'none' ? null : Number(value))
+                }
+              >
+                <SelectTrigger className="w-full max-w-xs">
+                  <SelectValue placeholder="Select peptide…" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">— None —</SelectItem>
+                  {peptides
+                    .filter(p => p.active)
+                    .sort((a, b) => a.name.localeCompare(b.name))
+                    .map(p => (
+                      <SelectItem key={p.id} value={String(p.id)}>
+                        {p.name}{p.is_blend ? ' (blend)' : ''}
+                      </SelectItem>
+                    ))}
+                </SelectContent>
+              </Select>
+            )}
+          </div>
           <DetailRow label="Category" value={service.category} />
           <DetailRow label="Unit" value={service.unit} />
           <DetailRow
