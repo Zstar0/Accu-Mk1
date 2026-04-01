@@ -3749,6 +3749,7 @@ export interface WorksheetListItem {
     assigned_analyst_id: number | null
     assigned_analyst_email: string | null
     notes: string | null
+    peptide_id: number | null
   }[]
 }
 

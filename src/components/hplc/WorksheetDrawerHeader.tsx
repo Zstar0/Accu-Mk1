@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { Check, X } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
@@ -13,6 +13,7 @@ import type { WorksheetListItem } from '@/lib/api'
 
 interface WorksheetDrawerHeaderProps {
   worksheet: WorksheetListItem
+  userNotes: string
   users: { id: number; email: string }[]
   onUpdate: (data: { title?: string; assigned_analyst?: number; notes?: string }) => void
   isCompleted: boolean
@@ -33,14 +34,20 @@ function formatDate(dateStr: string | null): string {
 
 export function WorksheetDrawerHeader({
   worksheet,
+  userNotes,
   users,
   onUpdate,
   isCompleted,
 }: WorksheetDrawerHeaderProps) {
   const [editingTitle, setEditingTitle] = useState(false)
   const [titleDraft, setTitleDraft] = useState(worksheet.title)
-  const [notesValue, setNotesValue] = useState(worksheet.notes ?? '')
+  const [notesValue, setNotesValue] = useState(userNotes)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // Sync when switching worksheets or when external updates arrive
+  useEffect(() => {
+    setNotesValue(userNotes)
+  }, [userNotes])
 
   function startEdit() {
     if (isCompleted) return

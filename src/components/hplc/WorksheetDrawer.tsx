@@ -55,14 +55,15 @@ export function WorksheetDrawer() {
 
   const isCompleted = activeWorksheet?.status === 'completed'
 
-  // Compute prepStartedItems from worksheet-level notes JSON
-  const prepStartedItems = useMemo(() => {
-    const notes = activeWorksheet?.notes ?? '{}'
+  // Parse notes JSON: separate user text from prep_started metadata
+  const { userNotes, prepStartedItems } = useMemo(() => {
+    const raw = activeWorksheet?.notes ?? ''
     let parsed: Record<string, unknown> = {}
     try {
-      parsed = JSON.parse(notes)
+      parsed = JSON.parse(raw)
     } catch {
-      parsed = {}
+      // Plain text notes (not JSON) — treat as user text
+      return { userNotes: raw, prepStartedItems: new Set<string>() }
     }
     const set = new Set<string>()
     for (const key of Object.keys(parsed)) {
@@ -70,7 +71,8 @@ export function WorksheetDrawer() {
         set.add(key.replace('prep_started:', ''))
       }
     }
-    return set
+    const text = typeof parsed.text === 'string' ? parsed.text : ''
+    return { userNotes: text, prepStartedItems: set }
   }, [activeWorksheet?.notes])
 
   return (
@@ -152,10 +154,23 @@ export function WorksheetDrawer() {
               {/* Header */}
               <WorksheetDrawerHeader
                 worksheet={activeWorksheet}
+                userNotes={userNotes}
                 users={users}
-                onUpdate={data =>
+                onUpdate={data => {
+                  // If updating notes text, merge with existing metadata
+                  if (data.notes !== undefined) {
+                    const raw = activeWorksheet.notes ?? ''
+                    let parsed: Record<string, unknown> = {}
+                    try {
+                      parsed = JSON.parse(raw)
+                    } catch {
+                      parsed = {}
+                    }
+                    parsed.text = data.notes
+                    data = { ...data, notes: JSON.stringify(parsed) }
+                  }
                   updateMutation.mutate({ worksheetId: activeWorksheet.id, data })
-                }
+                }}
                 isCompleted={!!isCompleted}
               />
 
@@ -243,7 +258,7 @@ export function WorksheetDrawer() {
                   // Navigate to new-analysis with pre-fill
                   useUIStore.getState().startPrepFromWorksheet({
                     sampleId: item.sampleId,
-                    peptideId: null,
+                    peptideId: item.peptideId,
                     method: null,
                   })
                 }}

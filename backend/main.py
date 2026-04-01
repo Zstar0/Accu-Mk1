@@ -11051,14 +11051,25 @@ async def list_worksheets(
             select(WorksheetItem).where(WorksheetItem.worksheet_id == ws.id)
         ).scalars().all()
 
-        # Resolve service group names for display
+        # Resolve service group names and peptide IDs for display
         group_ids = {it.service_group_id for it in items if it.service_group_id}
         group_name_map: dict[int, str] = {}
+        group_peptide_map: dict[int, int | None] = {}
         if group_ids:
             groups = db.execute(
                 select(ServiceGroup.id, ServiceGroup.name).where(ServiceGroup.id.in_(group_ids))
             ).all()
             group_name_map = {g.id: g.name for g in groups}
+            # Resolve peptide_id via first analysis service in each group
+            for gid in group_ids:
+                svc = db.execute(
+                    select(AnalysisService.peptide_id)
+                    .join(service_group_members, service_group_members.c.analysis_service_id == AnalysisService.id)
+                    .where(service_group_members.c.service_group_id == gid)
+                    .where(AnalysisService.peptide_id.isnot(None))
+                    .limit(1)
+                ).scalar_one_or_none()
+                group_peptide_map[gid] = svc
 
         # Resolve assigned analyst email
         analyst_email = None
@@ -11098,6 +11109,7 @@ async def list_worksheets(
                     "assigned_analyst_id": it.assigned_analyst_id,
                     "assigned_analyst_email": item_analyst_email_map.get(it.assigned_analyst_id) if it.assigned_analyst_id else None,
                     "notes": it.notes,
+                    "peptide_id": group_peptide_map.get(it.service_group_id) if it.service_group_id else None,
                 }
                 for it in items
             ],

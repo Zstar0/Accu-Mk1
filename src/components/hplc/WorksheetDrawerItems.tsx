@@ -40,7 +40,7 @@ interface WorksheetDrawerItemsProps {
   prepStartedItems: Set<string>
   onRemove: (sampleUid: string, serviceGroupId: number) => void
   onReassign: (sampleUid: string, serviceGroupId: number, targetWorksheetId: number) => void
-  onStartPrep: (item: { sampleId: string; serviceGroupId: number | null; groupName: string }) => void
+  onStartPrep: (item: { sampleId: string; serviceGroupId: number | null; groupName: string; peptideId: number | null }) => void
 }
 
 export function WorksheetDrawerItems({
@@ -77,7 +77,7 @@ export function WorksheetDrawerItems({
         ) : (
           <div className="pb-4">
             {items.map(item => {
-              const prepKey = `${item.sample_uid}-${item.service_group_id}`
+              const prepKey = `${item.sample_id}-${item.service_group_id}`
               const isPrepStarted = prepStartedItems.has(prepKey)
               const groupColorClass = getColorForGroup(item.group_name)
 
@@ -156,6 +156,7 @@ export function WorksheetDrawerItems({
                             sampleId: item.sample_id,
                             serviceGroupId: item.service_group_id,
                             groupName: item.group_name,
+                            peptideId: item.peptide_id,
                           })
                         }
                       >

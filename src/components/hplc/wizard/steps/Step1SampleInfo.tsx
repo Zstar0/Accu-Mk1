@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Loader2, Search } from 'lucide-react'
 import {
   Card,
@@ -34,6 +34,7 @@ import {
 } from '@/lib/api'
 import { Switch } from '@/components/ui/switch'
 import { useWizardStore } from '@/store/wizard-store'
+import { useUIStore } from '@/store/ui-store'
 
 interface AnalyteParamLocal {
   declaredWeight: string
@@ -73,6 +74,9 @@ export function Step1SampleInfo() {
 
   const [submitting, setSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState<string | null>(null)
+
+  // Tracks whether a prefill just applied — prevents tab switch from clearing peptide
+  const prefillAppliedRef = useRef(false)
 
   // SENAITE state
   const [senaiteEnabled, setSenaiteEnabled] = useState(false)
@@ -139,6 +143,35 @@ export function Step1SampleInfo() {
       cancelled = true
     }
   }, [])
+
+  // Apply worksheet pre-fill if present (from Start Prep in worksheet drawer)
+  // Runs once when peptides finish loading — reads prefill from store, applies, clears
+  useEffect(() => {
+    if (loadingPeptides || peptides.length === 0) return
+    const prefill = useUIStore.getState().worksheetPrepPrefill
+    if (!prefill) return
+    // Set sample ID for both SENAITE lookup and manual entry
+    if (prefill.sampleId) {
+      setSampleIdLabel(prefill.sampleId)
+      setLookupId(prefill.sampleId)
+      // Switch to lookup tab if SENAITE is available (checked at read time, not dep)
+      if (senaiteEnabled) {
+        setActiveTab('lookup')
+      }
+    }
+    // Set peptide
+    if (prefill.peptideId) {
+      const match = peptides.find(p => p.id === prefill.peptideId)
+      if (match) {
+        setPeptideId(match.id)
+      }
+    }
+    // Mark prefill as applied so tab switch doesn't clear peptide
+    prefillAppliedRef.current = true
+    // Clear prefill so it doesn't re-apply
+    useUIStore.getState().clearWorksheetPrepPrefill()
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loadingPeptides, peptides])
 
   // Multi-vial / multi-analyte helpers (must be before early return)
   const isMultiVial = (peptides.find(p => p.id === peptideId)?.prep_vial_count ?? 1) > 1
@@ -358,6 +391,12 @@ export function Step1SampleInfo() {
   }
 
   function handleTabChange(tab: string) {
+    // If a worksheet prefill just applied, don't clear on first tab switch
+    if (prefillAppliedRef.current) {
+      prefillAppliedRef.current = false
+      setActiveTab(tab as 'lookup' | 'manual')
+      return
+    }
     if (tab === 'manual') {
       // Per user decision: clear everything when switching to manual
       setPeptideId(null)
