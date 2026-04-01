@@ -50,6 +50,16 @@ interface UIState {
   navigateToMethod: (methodId: number) => void
   setUpdateVersion: (version: string | null) => void
   setUpdateReady: (ready: boolean) => void
+
+  worksheetDrawerOpen: boolean
+  activeWorksheetId: number | null
+  worksheetPrepPrefill: { sampleId: string; peptideId: number | null; method: string | null } | null
+
+  openWorksheetDrawer: (worksheetId?: number) => void
+  closeWorksheetDrawer: () => void
+  setActiveWorksheetId: (id: number | null) => void
+  startPrepFromWorksheet: (prefill: { sampleId: string; peptideId: number | null; method: string | null }) => void
+  clearWorksheetPrepPrefill: () => void
 }
 
 export const useUIStore = create<UIState>()(
@@ -70,6 +80,9 @@ export const useUIStore = create<UIState>()(
       methodsTargetId: null,
       updateVersion: null,
       updateReady: false,
+      worksheetDrawerOpen: false,
+      activeWorksheetId: null,
+      worksheetPrepPrefill: null,
 
       toggleLeftSidebar: () =>
         set(
@@ -200,6 +213,38 @@ export const useUIStore = create<UIState>()(
 
       setUpdateReady: (ready) =>
         set({ updateReady: ready }, undefined, 'setUpdateReady'),
+
+      openWorksheetDrawer: (worksheetId) =>
+        set(
+          state => ({
+            worksheetDrawerOpen: true,
+            activeWorksheetId: worksheetId ?? state.activeWorksheetId,
+          }),
+          undefined,
+          'openWorksheetDrawer'
+        ),
+
+      closeWorksheetDrawer: () =>
+        set({ worksheetDrawerOpen: false }, undefined, 'closeWorksheetDrawer'),
+
+      setActiveWorksheetId: (id) =>
+        set({ activeWorksheetId: id }, undefined, 'setActiveWorksheetId'),
+
+      startPrepFromWorksheet: (prefill) =>
+        set(
+          state => ({
+            worksheetPrepPrefill: prefill,
+            worksheetDrawerOpen: false,
+            activeSection: 'hplc-analysis' as const,
+            activeSubSection: 'new-analysis' as const,
+            navigationKey: state.navigationKey + 1,
+          }),
+          undefined,
+          'startPrepFromWorksheet'
+        ),
+
+      clearWorksheetPrepPrefill: () =>
+        set({ worksheetPrepPrefill: null }, undefined, 'clearWorksheetPrepPrefill'),
     }),
     {
       name: 'ui-store',

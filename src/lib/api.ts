@@ -3733,11 +3733,23 @@ export interface WorksheetListItem {
   id: number
   title: string
   status: string
+  notes: string | null
   assigned_analyst: number | null
   assigned_analyst_email: string | null
   item_count: number
   created_at: string | null
-  items: { sample_id: string; sample_uid: string; service_group_id: number | null; group_name: string; priority: string; added_at: string | null }[]
+  items: {
+    sample_id: string
+    sample_uid: string
+    service_group_id: number | null
+    group_name: string
+    priority: string
+    added_at: string | null
+    instrument_uid: string | null
+    assigned_analyst_id: number | null
+    assigned_analyst_email: string | null
+    notes: string | null
+  }[]
 }
 
 export async function listWorksheets(status?: string): Promise<WorksheetListItem[]> {
@@ -3773,7 +3785,7 @@ export async function deleteWorksheet(worksheetId: number): Promise<void> {
 
 export async function updateWorksheet(
   worksheetId: number,
-  data: { title?: string; assigned_analyst?: number }
+  data: { title?: string; assigned_analyst?: number; notes?: string }
 ): Promise<void> {
   const response = await fetch(`${API_BASE_URL()}/worksheets/${worksheetId}`, {
     method: 'PUT',
@@ -3793,6 +3805,33 @@ export async function addGroupToWorksheet(
     body: JSON.stringify(data),
   })
   if (!response.ok) throw new Error(`Add to worksheet failed: ${response.status}`)
+  return response.json()
+}
+
+export async function completeWorksheet(worksheetId: number): Promise<{ status: string }> {
+  const response = await fetch(`${API_BASE_URL()}/worksheets/${worksheetId}/complete`, {
+    method: 'POST',
+    headers: getBearerHeaders(),
+  })
+  if (!response.ok) throw new Error(`Complete worksheet failed: ${response.status}`)
+  return response.json()
+}
+
+export async function reassignWorksheetItem(
+  worksheetId: number,
+  sampleUid: string,
+  serviceGroupId: number,
+  targetWorksheetId: number
+): Promise<{ status: string; target_worksheet_id: number }> {
+  const response = await fetch(
+    `${API_BASE_URL()}/worksheets/${worksheetId}/items/${encodeURIComponent(sampleUid)}/${serviceGroupId}/reassign`,
+    {
+      method: 'POST',
+      headers: getBearerHeaders('application/json'),
+      body: JSON.stringify({ target_worksheet_id: targetWorksheetId }),
+    }
+  )
+  if (!response.ok) throw new Error(`Reassign item failed: ${response.status}`)
   return response.json()
 }
 
