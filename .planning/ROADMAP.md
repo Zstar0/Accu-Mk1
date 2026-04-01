@@ -37,7 +37,7 @@
 
 - [x] **Phase 15: Foundation** — Service groups data model + admin UI, analyst assignment to SENAITE, and navigation wiring (completed 2026-03-31)
 - [x] **Phase 16: Received Samples Inbox** — Full inbox queue with priority, aging timers, inline assignment, bulk actions, and worksheet creation (completed 2026-04-01)
-- [ ] **Phase 17: Worksheet Detail** — Worksheet header, items table, add/remove/reassign items, and completion
+- [x] **Phase 17: Worksheet Detail** — Worksheet header, items table, add/remove/reassign items, and completion (completed 2026-04-01)
 - [ ] **Phase 18: Worksheets List** — All-worksheets view with KPI stats row, filters, and drill-through navigation
 
 ---
@@ -115,12 +115,12 @@ Plans:
 5. User can reassign one or more items to a different worksheet from the detail view
 6. User can click "Complete Worksheet" to transition the worksheet to completed status; the action is reflected in both the detail header and the worksheets list
 
-**Plans:** 2/3 plans executed
+**Plans:** 3/3 plans complete
 
 Plans:
 - [x] 17-01-PLAN.md — Backend endpoints (complete, reassign) + API types + Zustand drawer state + TanStack Query hooks
 - [x] 17-02-PLAN.md — WorksheetDrawer UI (FAB, Sheet, header, items, add-samples modal, MainWindow wiring)
-- [ ] 17-03-PLAN.md — Hash navigation drawer route + Start Prep wiring + human verification
+- [x] 17-03-PLAN.md — Hash navigation drawer route + Start Prep wiring + human verification
 
 **UI hint**: yes
 
@@ -163,5 +163,5 @@ Plans:
 | 14. RT Check Chromatogram Comparison | v0.26.0 | 0/? | Not started | - |
 | 15. Foundation | v0.28.0 | 4/4 | Complete    | 2026-04-01 |
 | 16. Received Samples Inbox | v0.28.0 | 4/4 | Complete    | 2026-04-01 |
-| 17. Worksheet Detail | v0.28.0 | 2/3 | In Progress|  |
+| 17. Worksheet Detail | v0.28.0 | 3/3 | Complete   | 2026-04-01 |
 | 18. Worksheets List | v0.28.0 | 0/? | Not started | - |

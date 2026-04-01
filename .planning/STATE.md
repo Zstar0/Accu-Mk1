@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v0.28.0
 milestone_name: — Worksheet Feature
-status: executing
-stopped_at: Completed 17-02-PLAN.md
-last_updated: "2026-04-01T18:18:58.224Z"
+status: verifying
+stopped_at: Completed 17-03-PLAN.md — Phase 17 complete
+last_updated: "2026-04-01T19:03:39.651Z"
 last_activity: 2026-04-01
 progress:
   total_phases: 4
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 11
-  completed_plans: 10
+  completed_plans: 11
   percent: 0
 ---
 
@@ -27,7 +27,7 @@ See: .planning/PROJECT.md (updated 2026-03-31)
 
 Phase: 17 (worksheet-detail) — EXECUTING
 Plan: 3 of 3
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-04-01
 
 Progress: [░░░░░░░░░░░░░░░░░░░░] 0% (0/4 phases complete)
@@ -50,6 +50,7 @@ Progress: [░░░░░░░░░░░░░░░░░░░░] 0% (0/4
 | Phase 16-received-samples-inbox P04 | 4 | 3 tasks | 3 files |
 | Phase 17-worksheet-detail P01 | 260 | 2 tasks | 4 files |
 | Phase 17-worksheet-detail P02 | 5 | 2 tasks | 7 files |
+| Phase 17-worksheet-detail P03 | 60 | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -82,6 +83,9 @@ Progress: [░░░░░░░░░░░░░░░░░░░░] 0% (0/4
 - [Phase 17-worksheet-detail]: AgingTimer uses dateReceived prop (not receivedAt) — WorksheetDrawerItems uses correct prop name per actual component API
 - [Phase 17-worksheet-detail]: SERVICE_GROUP_COLORS is Tailwind class strings — WorksheetDrawerItems uses deterministic char-code hash of group_name to pick color key, applied as className
 - [Phase 17-worksheet-detail]: AddSamplesModal flattens InboxResponse.items[].analyses_by_group into per-(sample, group) rows for per-item add UX
+- [Phase 17-worksheet-detail]: Hash nav for worksheet drawer is one-way parse only: #hplc-analysis/worksheet-detail?id=X opens drawer, FAB clicks produce no hash change — avoids subscribe feedback loop
+- [Phase 17-worksheet-detail]: prepKey must be sample_id (local stable ID) not sample_uid (SENAITE alphanumeric) — mismatch caused prep_started indicator to never match stored flags
+- [Phase 17-worksheet-detail]: Worksheet notes JSON separates user text ('notes' key) from internal prep_started metadata ('prep_started' key) — prevents raw metadata leaking into notes textarea
 
 ### Key Source Files
 
@@ -103,6 +107,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-04-01T18:18:58.220Z
-Stopped at: Completed 17-02-PLAN.md
+Last session: 2026-04-01T19:03:39.643Z
+Stopped at: Completed 17-03-PLAN.md — Phase 17 complete
 Resume file: None
