@@ -10525,7 +10525,7 @@ async def get_worksheets_inbox(
         .join(Worksheet, WorksheetItem.worksheet_id == Worksheet.id)
         .where(
             WorksheetItem.sample_uid.in_(uids),
-            Worksheet.status == "open",
+            Worksheet.status == "staging",
         )
     ).scalars().all()
     assignment_map: dict[str, WorksheetItem] = {row.sample_uid: row for row in item_rows}
@@ -10732,13 +10732,13 @@ async def bulk_update_inbox(
             staging_ws = db.execute(
                 select(Worksheet).where(
                     Worksheet.title == "__inbox_staging__",
-                    Worksheet.status == "open",
+                    Worksheet.status == "staging",
                 )
             ).scalar_one_or_none()
             if not staging_ws:
                 staging_ws = Worksheet(
                     title="__inbox_staging__",
-                    status="open",
+                    status="staging",
                     created_by=_current_user.id,
                 )
                 db.add(staging_ws)
