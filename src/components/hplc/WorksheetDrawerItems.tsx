@@ -32,20 +32,11 @@ import {
 import { CSS } from '@dnd-kit/utilities'
 import { PriorityBadge } from '@/components/hplc/PriorityBadge'
 import { AgingTimer } from '@/components/hplc/AgingTimer'
-import { SERVICE_GROUP_COLORS } from '@/lib/service-group-colors'
+import {
+  SERVICE_GROUP_COLORS,
+  type ServiceGroupColor,
+} from '@/lib/service-group-colors'
 import type { WorksheetListItem, InboxPriority } from '@/lib/api'
-
-const COLOR_KEYS = Object.keys(SERVICE_GROUP_COLORS) as (keyof typeof SERVICE_GROUP_COLORS)[]
-
-function getColorForGroup(groupName: string): string {
-  if (!groupName) return SERVICE_GROUP_COLORS.zinc
-  let hash = 0
-  for (let i = 0; i < groupName.length; i++) {
-    hash = (hash + groupName.charCodeAt(i)) % COLOR_KEYS.length
-  }
-  const key = COLOR_KEYS[hash]
-  return key ? SERVICE_GROUP_COLORS[key] : SERVICE_GROUP_COLORS.zinc
-}
 
 /** Group core analyses by peptide name — same logic as InboxServiceGroupCard */
 function groupCoreAnalyses(analyses: { title: string; keyword: string | null; peptide_name: string | null; method: string | null }[]) {
@@ -221,7 +212,10 @@ function SortableItemRow({
 
   const prepKey = `${item.sample_id}-${item.service_group_id}`
   const isPrepStarted = prepStartedItems.has(prepKey)
-  const groupColorClass = getColorForGroup(item.group_name)
+  const colorKey = (item.group_color as ServiceGroupColor) in SERVICE_GROUP_COLORS
+    ? (item.group_color as ServiceGroupColor)
+    : 'zinc'
+  const groupColorClass = SERVICE_GROUP_COLORS[colorKey]
   const { peptideLines, standalone } = groupCoreAnalyses(item.analyses)
 
   return (

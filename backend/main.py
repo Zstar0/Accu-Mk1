@@ -11059,9 +11059,10 @@ async def list_worksheets(
         group_peptide_map: dict[int, int | None] = {}
         if group_ids:
             groups = db.execute(
-                select(ServiceGroup.id, ServiceGroup.name).where(ServiceGroup.id.in_(group_ids))
+                select(ServiceGroup.id, ServiceGroup.name, ServiceGroup.color).where(ServiceGroup.id.in_(group_ids))
             ).all()
             group_name_map = {g.id: g.name for g in groups}
+            group_color_map: dict[int, str] = {g.id: g.color for g in groups}
             # Resolve peptide_id and analyses per group
             group_analyses_map: dict[int, list[dict]] = {}
             for gid in group_ids:
@@ -11121,6 +11122,7 @@ async def list_worksheets(
                     "sample_uid": it.sample_uid,
                     "service_group_id": it.service_group_id,
                     "group_name": group_name_map.get(it.service_group_id, "—") if it.service_group_id else "—",
+                    "group_color": group_color_map.get(it.service_group_id, "zinc") if it.service_group_id else "zinc",
                     "priority": it.priority,
                     "added_at": it.added_at.isoformat() if it.added_at else None,
                     "instrument_uid": it.instrument_uid,

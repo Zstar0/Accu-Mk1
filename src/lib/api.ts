@@ -3744,6 +3744,7 @@ export interface WorksheetListItem {
     sample_uid: string
     service_group_id: number | null
     group_name: string
+    group_color: string
     priority: string
     added_at: string | null
     instrument_uid: string | null
