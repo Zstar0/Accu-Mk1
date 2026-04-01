@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v0.28.0
 milestone_name: — Worksheet Feature
 status: executing
-stopped_at: Completed 17-01-PLAN.md
-last_updated: "2026-04-01T18:10:53.539Z"
+stopped_at: Completed 17-02-PLAN.md
+last_updated: "2026-04-01T18:18:58.224Z"
 last_activity: 2026-04-01
 progress:
   total_phases: 4
   completed_phases: 2
   total_plans: 11
-  completed_plans: 9
+  completed_plans: 10
   percent: 0
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-03-31)
 ## Current Position
 
 Phase: 17 (worksheet-detail) — EXECUTING
-Plan: 2 of 3
+Plan: 3 of 3
 Status: Ready to execute
 Last activity: 2026-04-01
 
@@ -49,6 +49,7 @@ Progress: [░░░░░░░░░░░░░░░░░░░░] 0% (0/4
 | Phase 16-received-samples-inbox P03 | 3 | 2 tasks | 2 files |
 | Phase 16-received-samples-inbox P04 | 4 | 3 tasks | 3 files |
 | Phase 17-worksheet-detail P01 | 260 | 2 tasks | 4 files |
+| Phase 17-worksheet-detail P02 | 5 | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -78,6 +79,9 @@ Progress: [░░░░░░░░░░░░░░░░░░░░] 0% (0/4
 - [Phase 16-received-samples-inbox]: Mutation callbacks passed at call-site in WorksheetsInboxPage for selection/dialog state side effects — hook-level callbacks handle toast only
 - [Phase 17-worksheet-detail]: Per-item analyst email resolved via batched User query in list_worksheets — no N+1 per item
 - [Phase 17-worksheet-detail]: useWorksheetDrawer uses getState() in mutation callbacks per project rule; selector syntax for activeWorksheetId
+- [Phase 17-worksheet-detail]: AgingTimer uses dateReceived prop (not receivedAt) — WorksheetDrawerItems uses correct prop name per actual component API
+- [Phase 17-worksheet-detail]: SERVICE_GROUP_COLORS is Tailwind class strings — WorksheetDrawerItems uses deterministic char-code hash of group_name to pick color key, applied as className
+- [Phase 17-worksheet-detail]: AddSamplesModal flattens InboxResponse.items[].analyses_by_group into per-(sample, group) rows for per-item add UX
 
 ### Key Source Files
 
@@ -99,6 +103,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-04-01T18:10:53.535Z
-Stopped at: Completed 17-01-PLAN.md
+Last session: 2026-04-01T18:18:58.220Z
+Stopped at: Completed 17-02-PLAN.md
 Resume file: None
