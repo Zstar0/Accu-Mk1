@@ -10654,14 +10654,41 @@ async def get_worksheets_inbox(
                 stripped = re.sub(r"\s*-\s*[^-]+\([^)]+\)\s*$", "", str(raw_name)).strip()
                 analyte_name_map[slot] = stripped
 
-        # Group analyses by service group (skip rejected/retracted/cancelled)
+        # Filter and deduplicate analyses:
+        # 1. Skip rejected/retracted/cancelled
+        # 2. When multiple analyses share the same keyword (retests), keep only the most recent
         EXCLUDED_STATES = {"rejected", "retracted", "cancelled"}
-        groups_by_id: dict[int, InboxServiceGroupSection] = {}
+        seen_keywords: dict[str, dict] = {}
         for analysis in raw_analyses:
             if not isinstance(analysis, dict):
                 continue
             a_state = analysis.get("review_state") or analysis.get("getReviewState") or ""
             if a_state in EXCLUDED_STATES:
+                continue
+            kw = analysis.get("getKeyword") or analysis.get("keyword") or ""
+            if kw and kw in seen_keywords:
+                # Retest (RetestOf is set) supersedes original
+                is_retest = bool(analysis.get("RetestOf") or analysis.get("getRetestOf"))
+                if is_retest:
+                    seen_keywords[kw] = analysis  # retest replaces original
+                # else keep the existing one (it might be the retest already)
+            else:
+                seen_keywords[kw] = analysis
+        # For analyses without keywords, keep all
+        deduped_analyses = list(seen_keywords.values())
+        for analysis in raw_analyses:
+            if not isinstance(analysis, dict):
+                continue
+            a_state = analysis.get("review_state") or analysis.get("getReviewState") or ""
+            if a_state in EXCLUDED_STATES:
+                continue
+            kw = analysis.get("getKeyword") or analysis.get("keyword") or ""
+            if not kw:
+                deduped_analyses.append(analysis)
+
+        groups_by_id: dict[int, InboxServiceGroupSection] = {}
+        for analysis in deduped_analyses:
+            if not isinstance(analysis, dict):
                 continue
             keyword = analysis.get("getKeyword") or analysis.get("keyword") or ""
             title = analysis.get("title") or analysis.get("getTitle") or keyword or ""
@@ -11033,10 +11060,20 @@ async def list_worksheets(
             ).all()
             group_name_map = {g.id: g.name for g in groups}
 
+        # Resolve assigned analyst email
+        analyst_email = None
+        if ws.assigned_analyst:
+            analyst_user = db.execute(
+                select(User.email).where(User.id == ws.assigned_analyst)
+            ).scalar_one_or_none()
+            analyst_email = analyst_user
+
         result.append({
             "id": ws.id,
             "title": ws.title,
             "status": ws.status,
+            "assigned_analyst": ws.assigned_analyst,
+            "assigned_analyst_email": analyst_email,
             "item_count": len(items),
             "created_at": ws.created_at.isoformat() if ws.created_at else None,
             "items": [
@@ -11048,6 +11085,40 @@ async def list_worksheets(
             ],
         })
     return result
+
+
+class WorksheetUpdate(BaseModel):
+    title: Optional[str] = None
+    assigned_analyst: Optional[int] = None
+
+
+@app.put("/worksheets/{worksheet_id}")
+async def update_worksheet(
+    worksheet_id: int,
+    data: WorksheetUpdate,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Update worksheet title and/or assigned analyst."""
+    ws = db.execute(
+        select(Worksheet).where(Worksheet.id == worksheet_id)
+    ).scalar_one_or_none()
+    if not ws:
+        raise HTTPException(404, "Worksheet not found")
+
+    if data.title is not None:
+        ws.title = data.title
+    if data.assigned_analyst is not None:
+        ws.assigned_analyst = data.assigned_analyst
+        # Also reassign all items in this worksheet to the new analyst
+        items = db.execute(
+            select(WorksheetItem).where(WorksheetItem.worksheet_id == worksheet_id)
+        ).scalars().all()
+        for item in items:
+            item.assigned_analyst_id = data.assigned_analyst
+
+    db.commit()
+    return {"status": "updated"}
 
 
 class AddToWorksheetRequest(BaseModel):
@@ -11092,12 +11163,17 @@ async def add_group_to_worksheet(
         )
     ).scalar_one_or_none()
 
+    # If worksheet has an assigned analyst, use that (overrides card's tech)
+    analyst_id = ws.assigned_analyst
+    if not analyst_id and staging_item:
+        analyst_id = staging_item.assigned_analyst_id
+
     item = WorksheetItem(
         worksheet_id=worksheet_id,
         sample_uid=data.sample_uid,
         sample_id=data.sample_id,
         service_group_id=data.service_group_id,
-        assigned_analyst_id=staging_item.assigned_analyst_id if staging_item else None,
+        assigned_analyst_id=analyst_id,
         instrument_uid=staging_item.instrument_uid if staging_item else None,
         priority=staging_item.priority if staging_item else "normal",
     )

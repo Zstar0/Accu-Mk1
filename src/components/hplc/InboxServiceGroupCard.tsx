@@ -116,17 +116,13 @@ export function InboxServiceGroupCard({
         isDragging ? 'shadow-lg ring-2 ring-primary/20' : ''
       }`}
     >
-      {/* Card header */}
-      <div className="flex items-center gap-3 border-b px-3 py-2.5">
-        {/* Drag handle */}
-        <button
-          {...attributes}
-          {...listeners}
-          className="cursor-grab touch-none text-muted-foreground/40 hover:text-muted-foreground transition-colors active:cursor-grabbing"
-          aria-label="Drag to assign to worksheet"
-        >
-          <GripVertical className="h-4 w-4" />
-        </button>
+      {/* Card header — entire bar is drag handle */}
+      <div
+        {...attributes}
+        {...listeners}
+        className="flex items-center gap-3 border-b px-3 py-2.5 cursor-grab touch-none active:cursor-grabbing hover:bg-muted/30 transition-colors"
+      >
+        <GripVertical className="h-4 w-4 text-muted-foreground/40 shrink-0" />
 
         {/* Sample ID */}
         <span className="font-mono text-sm font-medium">{sample.id}</span>

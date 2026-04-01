@@ -1,12 +1,24 @@
+import { useState } from 'react'
 import { useDroppable } from '@dnd-kit/core'
-import { Plus, FileSpreadsheet } from 'lucide-react'
+import { Plus, FileSpreadsheet, Pencil, Check, X } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
+import { Input } from '@/components/ui/input'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { ScrollArea } from '@/components/ui/scroll-area'
+import type { WorksheetUser } from '@/lib/api'
 
 export interface WorksheetSummary {
   id: number
   title: string
   status: string
+  assigned_analyst: number | null
+  assigned_analyst_email: string | null
   item_count: number
   items: { sample_id: string; group_name: string }[]
 }
@@ -34,8 +46,28 @@ function NewWorksheetDropZone() {
   )
 }
 
-function WorksheetDropZone({ worksheet }: { worksheet: WorksheetSummary }) {
+function WorksheetDropZone({
+  worksheet,
+  users,
+  onRename,
+  onAssignTech,
+}: {
+  worksheet: WorksheetSummary
+  users: WorksheetUser[]
+  onRename: (id: number, title: string) => void
+  onAssignTech: (id: number, analystId: number) => void
+}) {
   const { isOver, setNodeRef } = useDroppable({ id: `worksheet-${worksheet.id}` })
+  const [editing, setEditing] = useState(false)
+  const [editTitle, setEditTitle] = useState(worksheet.title)
+
+  function handleSaveTitle() {
+    const trimmed = editTitle.trim()
+    if (trimmed && trimmed !== worksheet.title) {
+      onRename(worksheet.id, trimmed)
+    }
+    setEditing(false)
+  }
 
   return (
     <div
@@ -46,15 +78,62 @@ function WorksheetDropZone({ worksheet }: { worksheet: WorksheetSummary }) {
           : 'border-border hover:border-primary/20'
       }`}
     >
-      <div className="flex items-center gap-2 mb-2">
-        <FileSpreadsheet className="h-3.5 w-3.5 text-muted-foreground" />
-        <span className="text-xs font-medium truncate flex-1">{worksheet.title}</span>
-        <Badge variant="secondary" className="text-[10px] px-1.5 py-0 h-4">
-          {worksheet.item_count}
-        </Badge>
+      {/* Title row */}
+      <div className="flex items-center gap-1.5 mb-1.5">
+        <FileSpreadsheet className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+        {editing ? (
+          <div className="flex items-center gap-1 flex-1 min-w-0">
+            <Input
+              value={editTitle}
+              onChange={e => setEditTitle(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') handleSaveTitle(); if (e.key === 'Escape') setEditing(false) }}
+              className="h-5 text-xs px-1 py-0"
+              autoFocus
+            />
+            <button onClick={handleSaveTitle} className="text-primary hover:text-primary/80">
+              <Check className="h-3 w-3" />
+            </button>
+            <button onClick={() => setEditing(false)} className="text-muted-foreground hover:text-foreground">
+              <X className="h-3 w-3" />
+            </button>
+          </div>
+        ) : (
+          <>
+            <span className="text-xs font-medium truncate flex-1">{worksheet.title}</span>
+            <button
+              onClick={() => { setEditTitle(worksheet.title); setEditing(true) }}
+              className="text-muted-foreground/40 hover:text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity"
+            >
+              <Pencil className="h-3 w-3" />
+            </button>
+            <Badge variant="secondary" className="text-[10px] px-1.5 py-0 h-4 shrink-0">
+              {worksheet.item_count}
+            </Badge>
+          </>
+        )}
       </div>
 
-      {/* Show existing items */}
+      {/* Tech assignment */}
+      <div className="mb-2">
+        <Select
+          value={worksheet.assigned_analyst != null ? String(worksheet.assigned_analyst) : ''}
+          onValueChange={value => onAssignTech(worksheet.id, Number(value))}
+        >
+          <SelectTrigger
+            size="sm"
+            className="h-5 text-[10px] border-transparent bg-transparent shadow-none hover:border-border w-full"
+          >
+            <SelectValue placeholder="Assign tech…" />
+          </SelectTrigger>
+          <SelectContent>
+            {users.map(user => (
+              <SelectItem key={user.id} value={String(user.id)}>{user.email}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+
+      {/* Existing items */}
       {worksheet.items.length > 0 && (
         <div className="space-y-0.5">
           {worksheet.items.map((item, i) => (
@@ -76,10 +155,13 @@ function WorksheetDropZone({ worksheet }: { worksheet: WorksheetSummary }) {
 
 interface WorksheetDropPanelProps {
   worksheets: WorksheetSummary[]
+  users: WorksheetUser[]
   loading?: boolean
+  onRename: (id: number, title: string) => void
+  onAssignTech: (id: number, analystId: number) => void
 }
 
-export function WorksheetDropPanel({ worksheets, loading }: WorksheetDropPanelProps) {
+export function WorksheetDropPanel({ worksheets, users, loading, onRename, onAssignTech }: WorksheetDropPanelProps) {
   const openWorksheets = worksheets.filter(w => w.status === 'open')
 
   return (
@@ -94,7 +176,7 @@ export function WorksheetDropPanel({ worksheets, loading }: WorksheetDropPanelPr
 
       <ScrollArea className="flex-1">
         <div className="space-y-3 p-4">
-          {/* New worksheet drop zone — always at top */}
+          {/* New worksheet drop zone */}
           <NewWorksheetDropZone />
 
           {/* Divider */}
@@ -117,7 +199,13 @@ export function WorksheetDropPanel({ worksheets, loading }: WorksheetDropPanelPr
             </div>
           ) : (
             openWorksheets.map(ws => (
-              <WorksheetDropZone key={ws.id} worksheet={ws} />
+              <WorksheetDropZone
+                key={ws.id}
+                worksheet={ws}
+                users={users}
+                onRename={onRename}
+                onAssignTech={onAssignTech}
+              />
             ))
           )}
 

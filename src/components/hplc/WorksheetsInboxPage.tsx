@@ -17,6 +17,7 @@ import {
   listWorksheets,
   addGroupToWorksheet,
   createWorksheetFromDrop,
+  updateWorksheet,
   type InboxPriority,
   type InboxSampleItem,
   type InboxServiceGroupSection,
@@ -254,7 +255,25 @@ export default function WorksheetsInboxPage() {
         <div className="w-72 shrink-0">
           <WorksheetDropPanel
             worksheets={worksheets}
+            users={users}
             loading={worksheetsLoading}
+            onRename={async (id, title) => {
+              try {
+                await updateWorksheet(id, { title })
+                queryClient.invalidateQueries({ queryKey: ['worksheets-list'] })
+              } catch (err) {
+                toast.error(err instanceof Error ? err.message : 'Rename failed')
+              }
+            }}
+            onAssignTech={async (id, analystId) => {
+              try {
+                await updateWorksheet(id, { assigned_analyst: analystId })
+                toast.success('Tech assigned to worksheet')
+                queryClient.invalidateQueries({ queryKey: ['worksheets-list'] })
+              } catch (err) {
+                toast.error(err instanceof Error ? err.message : 'Assignment failed')
+              }
+            }}
           />
         </div>
       </div>

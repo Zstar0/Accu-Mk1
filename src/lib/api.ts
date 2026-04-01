@@ -3733,6 +3733,8 @@ export interface WorksheetListItem {
   id: number
   title: string
   status: string
+  assigned_analyst: number | null
+  assigned_analyst_email: string | null
   item_count: number
   created_at: string | null
   items: { sample_id: string; group_name: string }[]
@@ -3747,6 +3749,18 @@ export async function listWorksheets(status?: string): Promise<WorksheetListItem
   })
   if (!response.ok) throw new Error(`List worksheets failed: ${response.status}`)
   return response.json()
+}
+
+export async function updateWorksheet(
+  worksheetId: number,
+  data: { title?: string; assigned_analyst?: number }
+): Promise<void> {
+  const response = await fetch(`${API_BASE_URL()}/worksheets/${worksheetId}`, {
+    method: 'PUT',
+    headers: getBearerHeaders('application/json'),
+    body: JSON.stringify(data),
+  })
+  if (!response.ok) throw new Error(`Update worksheet failed: ${response.status}`)
 }
 
 export async function addGroupToWorksheet(
