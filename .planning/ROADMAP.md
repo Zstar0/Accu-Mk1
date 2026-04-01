@@ -167,4 +167,4 @@ Plans:
 | 15. Foundation | v0.28.0 | 4/4 | Complete    | 2026-04-01 |
 | 16. Received Samples Inbox | v0.28.0 | 4/4 | Complete    | 2026-04-01 |
 | 17. Worksheet Detail | v0.28.0 | 3/3 | Complete    | 2026-04-01 |
-| 18. Worksheets List | v0.28.0 | 1/1 | Complete   | 2026-04-01 |
+| 18. Worksheets List | v0.28.0 | 1/1 | Complete    | 2026-04-01 |
