@@ -72,7 +72,7 @@ function WorksheetDropZone({
   return (
     <div
       ref={setNodeRef}
-      className={`rounded-lg border p-3 transition-all duration-200 ${
+      className={`group rounded-lg border p-3 transition-all duration-200 ${
         isOver
           ? 'border-primary bg-primary/5 shadow-sm'
           : 'border-border hover:border-primary/20'
