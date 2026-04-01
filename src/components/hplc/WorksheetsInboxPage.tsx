@@ -3,10 +3,13 @@ import { useQuery } from '@tanstack/react-query'
 import { Inbox, RefreshCw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { InboxSampleTable } from '@/components/hplc/InboxSampleTable'
+import { InboxBulkToolbar } from '@/components/hplc/InboxBulkToolbar'
+import { CreateWorksheetDialog } from '@/components/hplc/CreateWorksheetDialog'
 import {
   useInboxSamples,
   usePriorityMutation,
   useBulkUpdateMutation,
+  useCreateWorksheetMutation,
 } from '@/hooks/use-inbox-samples'
 import {
   getWorksheetUsers,
@@ -59,6 +62,7 @@ export default function WorksheetsInboxPage() {
 
   const priorityMutation = usePriorityMutation()
   const bulkUpdateMutation = useBulkUpdateMutation()
+  const createWorksheetMutation = useCreateWorksheetMutation()
 
   const { data: users = [] } = useQuery({
     queryKey: ['worksheet-users'],
@@ -78,6 +82,7 @@ export default function WorksheetsInboxPage() {
   }))
 
   const [selectedUids, setSelectedUids] = useState<Set<string>>(new Set())
+  const [worksheetDialogOpen, setWorksheetDialogOpen] = useState(false)
 
   const samples = inboxData?.items ?? []
   const total = inboxData?.total ?? 0
@@ -153,21 +158,66 @@ export default function WorksheetsInboxPage() {
 
       {/* Main table */}
       {!isLoading && !isError && samples.length > 0 && (
-        <>
-          {/* Bulk toolbar slot — Plan 04 will render the floating toolbar here */}
-
-          <InboxSampleTable
-            samples={samples}
-            selectedUids={selectedUids}
-            onSelectionChange={setSelectedUids}
-            users={users}
-            instruments={instruments}
-            onPriorityChange={handlePriorityChange}
-            onTechAssign={handleTechAssign}
-            onInstrumentAssign={handleInstrumentAssign}
-          />
-        </>
+        <InboxSampleTable
+          samples={samples}
+          selectedUids={selectedUids}
+          onSelectionChange={setSelectedUids}
+          users={users}
+          instruments={instruments}
+          onPriorityChange={handlePriorityChange}
+          onTechAssign={handleTechAssign}
+          onInstrumentAssign={handleInstrumentAssign}
+        />
       )}
+
+      {/* Floating bulk toolbar — visible when samples are selected */}
+      {selectedUids.size > 0 && (
+        <InboxBulkToolbar
+          selectedCount={selectedUids.size}
+          users={users}
+          instruments={instruments}
+          onSetPriority={priority =>
+            bulkUpdateMutation.mutate({ sample_uids: Array.from(selectedUids), priority })
+          }
+          onAssignTech={analystId =>
+            bulkUpdateMutation.mutate({ sample_uids: Array.from(selectedUids), analyst_id: analystId })
+          }
+          onSetInstrument={instrumentUid =>
+            bulkUpdateMutation.mutate({ sample_uids: Array.from(selectedUids), instrument_uid: instrumentUid })
+          }
+          onCreateWorksheet={() => setWorksheetDialogOpen(true)}
+          onClearSelection={() => setSelectedUids(new Set())}
+        />
+      )}
+
+      {/* Create Worksheet dialog */}
+      <CreateWorksheetDialog
+        open={worksheetDialogOpen}
+        onOpenChange={setWorksheetDialogOpen}
+        selectedUids={Array.from(selectedUids)}
+        isPending={createWorksheetMutation.isPending}
+        onConfirm={(title, notes) => {
+          createWorksheetMutation.mutate(
+            { title, sample_uids: Array.from(selectedUids), notes: notes || undefined },
+            {
+              onSuccess: () => {
+                setSelectedUids(new Set())
+                setWorksheetDialogOpen(false)
+              },
+              onError: (err) => {
+                const staleUids = (err as Error & { staleUids?: string[] }).staleUids
+                if (staleUids) {
+                  setSelectedUids(prev => {
+                    const next = new Set(prev)
+                    for (const uid of staleUids) next.delete(uid)
+                    return next
+                  })
+                }
+              },
+            }
+          )
+        }}
+      />
     </div>
   )
 }
