@@ -11165,6 +11165,12 @@ async def add_group_to_worksheet(
         )
     ).scalar_one_or_none()
 
+    # Look up actual priority from sample_priorities
+    sample_priority = db.execute(
+        select(SamplePriority).where(SamplePriority.sample_uid == data.sample_uid)
+    ).scalar_one_or_none()
+    priority = sample_priority.priority if sample_priority else "normal"
+
     # If worksheet has an assigned analyst, use that (overrides card's tech)
     analyst_id = ws.assigned_analyst_id
     if not analyst_id and staging_item:
@@ -11177,7 +11183,7 @@ async def add_group_to_worksheet(
         service_group_id=data.service_group_id,
         assigned_analyst_id=analyst_id,
         instrument_uid=staging_item.instrument_uid if staging_item else None,
-        priority=staging_item.priority if staging_item else "normal",
+        priority=priority,
     )
     db.add(item)
 
@@ -11207,6 +11213,12 @@ async def create_worksheet_from_drop(
     db.add(ws)
     db.flush()
 
+    # Look up actual priority from sample_priorities
+    sample_priority = db.execute(
+        select(SamplePriority).where(SamplePriority.sample_uid == data.sample_uid)
+    ).scalar_one_or_none()
+    priority = sample_priority.priority if sample_priority else "normal"
+
     # Pick up staging pre-assignments
     staging_item = db.execute(
         select(WorksheetItem)
@@ -11225,7 +11237,7 @@ async def create_worksheet_from_drop(
         service_group_id=data.service_group_id,
         assigned_analyst_id=staging_item.assigned_analyst_id if staging_item else None,
         instrument_uid=staging_item.instrument_uid if staging_item else None,
-        priority=staging_item.priority if staging_item else "normal",
+        priority=priority,
     )
     db.add(item)
 
