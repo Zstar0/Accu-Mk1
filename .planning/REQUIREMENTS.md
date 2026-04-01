@@ -25,7 +25,7 @@ Requirements for worksheet feature milestone. Each maps to roadmap phases.
 - [x] **INBX-01**: User can view all received samples from SENAITE in a queue/inbox table
 - [x] **INBX-02**: Each sample row expands to show analyses grouped by service group with color badges
 - [x] **INBX-03**: User can set sample priority (normal/high/expedited) with color-coded badge display
-- [ ] **INBX-04**: User can assign a tech (analyst) to a sample inline via dropdown
+- [x] **INBX-04**: User can assign a tech (analyst) to a sample inline via dropdown
 - [x] **INBX-05**: User can assign an instrument to a sample inline via dropdown
 - [x] **INBX-06**: Inbox shows aging timer per sample with SLA color coding (green <12h, yellow 12-20h, orange 20-24h, red >24h)
 - [ ] **INBX-07**: User can select multiple samples via checkboxes and apply bulk actions (set priority, assign tech, set instrument)
@@ -89,7 +89,7 @@ Requirements for worksheet feature milestone. Each maps to roadmap phases.
 | INBX-01 | Phase 16 | Complete |
 | INBX-02 | Phase 16 | Complete |
 | INBX-03 | Phase 16 | Complete |
-| INBX-04 | Phase 16 | Pending |
+| INBX-04 | Phase 16 | Complete |
 | INBX-05 | Phase 16 | Complete |
 | INBX-06 | Phase 16 | Complete |
 | INBX-07 | Phase 16 | Pending |
