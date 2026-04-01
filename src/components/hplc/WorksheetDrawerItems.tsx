@@ -36,7 +36,7 @@ import {
   SERVICE_GROUP_COLORS,
   type ServiceGroupColor,
 } from '@/lib/service-group-colors'
-import type { WorksheetListItem, InboxPriority } from '@/lib/api'
+import type { WorksheetListItem, InboxPriority, Instrument } from '@/lib/api'
 
 /** Group core analyses by peptide name — same logic as InboxServiceGroupCard */
 function groupCoreAnalyses(analyses: { title: string; keyword: string | null; peptide_name: string | null; method: string | null }[]) {
@@ -76,6 +76,8 @@ interface WorksheetDrawerItemsProps {
   onRemove: (sampleUid: string, serviceGroupId: number) => void
   onReassign: (sampleUid: string, serviceGroupId: number, targetWorksheetId: number) => void
   onStartPrep: (item: { sampleId: string; serviceGroupId: number | null; groupName: string; peptideId: number | null }) => void
+  instruments: Instrument[]
+  onUpdateItem: (itemId: number, data: { instrument_uid?: string }) => void
   onReorder: (itemIds: number[]) => void
 }
 
@@ -88,6 +90,8 @@ export function WorksheetDrawerItems({
   onRemove,
   onReassign,
   onStartPrep,
+  instruments,
+  onUpdateItem,
   onReorder,
 }: WorksheetDrawerItemsProps) {
   const otherWorksheets = openWorksheets.filter(ws => ws.id !== worksheetId)
@@ -131,6 +135,7 @@ export function WorksheetDrawerItems({
           <div className="w-[70px] shrink-0">Priority</div>
           <div className="flex-1 min-w-[180px]">Analyses</div>
           <div className="w-[90px] shrink-0">Method</div>
+          <div className="w-[120px] shrink-0">Instrument</div>
           <div className="w-[100px] shrink-0">Tech</div>
           <div className="w-[60px] shrink-0">Age</div>
           <div className="w-[80px] shrink-0 text-right">Actions</div>
@@ -162,9 +167,11 @@ export function WorksheetDrawerItems({
                     isCompleted={isCompleted}
                     prepStartedItems={prepStartedItems}
                     otherWorksheets={otherWorksheets}
+                    instruments={instruments}
                     onRemove={onRemove}
                     onReassign={onReassign}
                     onStartPrep={onStartPrep}
+                    onUpdateItem={onUpdateItem}
                   />
                 ))}
               </div>
@@ -181,9 +188,11 @@ interface SortableItemRowProps {
   isCompleted: boolean
   prepStartedItems: Set<string>
   otherWorksheets: WorksheetListItem[]
+  instruments: Instrument[]
   onRemove: (sampleUid: string, serviceGroupId: number) => void
   onReassign: (sampleUid: string, serviceGroupId: number, targetWorksheetId: number) => void
   onStartPrep: (item: { sampleId: string; serviceGroupId: number | null; groupName: string; peptideId: number | null }) => void
+  onUpdateItem: (itemId: number, data: { instrument_uid?: string }) => void
 }
 
 function SortableItemRow({
@@ -191,9 +200,11 @@ function SortableItemRow({
   isCompleted,
   prepStartedItems,
   otherWorksheets,
+  instruments,
   onRemove,
   onReassign,
   onStartPrep,
+  onUpdateItem,
 }: SortableItemRowProps) {
   const {
     attributes,
@@ -298,6 +309,34 @@ function SortableItemRow({
             ?? standalone.find(a => a.method)?.method
             ?? '—'}
         </span>
+      </div>
+
+      {/* Instrument */}
+      <div className="w-[120px] shrink-0">
+        {isCompleted ? (
+          <span className="text-[10px] text-muted-foreground font-mono truncate block">
+            {instruments.find(i => i.senaite_uid === item.instrument_uid)?.name ?? item.instrument_uid ?? '—'}
+          </span>
+        ) : (
+          <Select
+            value={item.instrument_uid ?? ''}
+            onValueChange={value => onUpdateItem(item.id, { instrument_uid: value })}
+          >
+            <SelectTrigger
+              size="sm"
+              className="h-6 text-[10px] border-transparent bg-transparent shadow-none hover:border-border"
+            >
+              <SelectValue placeholder="Instrument…" />
+            </SelectTrigger>
+            <SelectContent>
+              {instruments.map(inst => (
+                <SelectItem key={inst.senaite_uid ?? inst.id} value={inst.senaite_uid ?? String(inst.id)}>
+                  {inst.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
       </div>
 
       {/* Tech */}

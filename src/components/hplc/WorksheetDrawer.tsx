@@ -20,7 +20,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { useUIStore } from '@/store/ui-store'
 import { useWorksheetDrawer } from '@/hooks/use-worksheet-drawer'
-import { getWorksheetUsers } from '@/lib/api'
+import { getWorksheetUsers, getInstruments } from '@/lib/api'
 import WorksheetDrawerHeader from './WorksheetDrawerHeader'
 import WorksheetDrawerItems from './WorksheetDrawerItems'
 import AddSamplesModal from './AddSamplesModal'
@@ -42,6 +42,7 @@ export function WorksheetDrawer() {
     removeMutation,
     completeMutation,
     reassignMutation,
+    updateItemMutation,
     reorderMutation,
     addItemMutation,
   } = useWorksheetDrawer()
@@ -49,6 +50,12 @@ export function WorksheetDrawer() {
   const { data: users = [] } = useQuery({
     queryKey: ['worksheet-users'],
     queryFn: getWorksheetUsers,
+    staleTime: 5 * 60 * 1000,
+  })
+
+  const { data: instruments = [] } = useQuery({
+    queryKey: ['instruments'],
+    queryFn: getInstruments,
     staleTime: 5 * 60 * 1000,
   })
 
@@ -271,6 +278,14 @@ export function WorksheetDrawer() {
                     method: null,
                   })
                 }}
+                instruments={instruments}
+                onUpdateItem={(itemId, data) =>
+                  updateItemMutation.mutate({
+                    worksheetId: activeWorksheet.id,
+                    itemId,
+                    data,
+                  })
+                }
                 onReorder={itemIds =>
                   reorderMutation.mutate({
                     worksheetId: activeWorksheet.id,

@@ -11396,6 +11396,33 @@ async def reassign_worksheet_item(
     return {"status": "reassigned", "target_worksheet_id": data.target_worksheet_id}
 
 
+class WorksheetItemUpdate(BaseModel):
+    instrument_uid: Optional[str] = None
+
+
+@app.patch("/worksheets/{worksheet_id}/items/{item_id}")
+async def update_worksheet_item(
+    worksheet_id: int,
+    item_id: int,
+    data: WorksheetItemUpdate,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Update a worksheet item's instrument assignment."""
+    item = db.execute(
+        select(WorksheetItem).where(
+            WorksheetItem.id == item_id,
+            WorksheetItem.worksheet_id == worksheet_id,
+        )
+    ).scalar_one_or_none()
+    if not item:
+        raise HTTPException(404, "Worksheet item not found")
+    if data.instrument_uid is not None:
+        item.instrument_uid = data.instrument_uid if data.instrument_uid else None
+    db.commit()
+    return {"status": "updated", "item_id": item_id}
+
+
 class ReorderRequest(BaseModel):
     item_ids: list[int]  # WorksheetItem IDs in desired order
 

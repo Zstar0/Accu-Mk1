@@ -3844,6 +3844,20 @@ export async function reassignWorksheetItem(
   return response.json()
 }
 
+export async function updateWorksheetItem(
+  worksheetId: number,
+  itemId: number,
+  data: { instrument_uid?: string }
+): Promise<{ status: string; item_id: number }> {
+  const response = await fetch(`${API_BASE_URL()}/worksheets/${worksheetId}/items/${itemId}`, {
+    method: 'PATCH',
+    headers: getBearerHeaders('application/json'),
+    body: JSON.stringify(data),
+  })
+  if (!response.ok) throw new Error(`Update item failed: ${response.status}`)
+  return response.json()
+}
+
 export async function reorderWorksheetItems(
   worksheetId: number,
   itemIds: number[]
