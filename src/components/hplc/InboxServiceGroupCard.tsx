@@ -1,5 +1,4 @@
 import { useDraggable } from '@dnd-kit/core'
-import { CSS } from '@dnd-kit/utilities'
 import { GripVertical } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import {
@@ -97,8 +96,9 @@ export function InboxServiceGroupCard({
     } satisfies DragData,
   })
 
-  const style = transform
-    ? { transform: CSS.Transform.toString(transform), opacity: isDragging ? 0.5 : 1 }
+  // When dragging, hide the source card entirely — the DragOverlay shows the ghost
+  const style: React.CSSProperties | undefined = isDragging
+    ? { opacity: 0.3, pointerEvents: 'none' }
     : undefined
 
   const colorKey = (group.group_color as ServiceGroupColor) in SERVICE_GROUP_COLORS
