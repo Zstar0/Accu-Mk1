@@ -42,6 +42,7 @@ export function WorksheetDrawer() {
     removeMutation,
     completeMutation,
     reassignMutation,
+    reorderMutation,
     addItemMutation,
   } = useWorksheetDrawer()
 
@@ -103,7 +104,7 @@ export function WorksheetDrawer() {
 
       {/* Sheet drawer */}
       <Sheet open={drawerOpen} onOpenChange={open => { if (!open) closeDrawer() }}>
-        <SheetContent side="right" className="w-[480px] sm:max-w-[480px] p-0 flex flex-col">
+        <SheetContent side="right" className="w-[600px] sm:max-w-[600px] p-0 flex flex-col">
           {/* Loading state */}
           {isLoading && (
             <div className="p-4 space-y-3">
@@ -270,6 +271,12 @@ export function WorksheetDrawer() {
                     method: null,
                   })
                 }}
+                onReorder={itemIds =>
+                  reorderMutation.mutate({
+                    worksheetId: activeWorksheet.id,
+                    itemIds,
+                  })
+                }
               />
 
               {/* Add Samples modal */}

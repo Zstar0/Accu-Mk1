@@ -11048,7 +11048,9 @@ async def list_worksheets(
     result = []
     for ws in worksheets:
         items = db.execute(
-            select(WorksheetItem).where(WorksheetItem.worksheet_id == ws.id)
+            select(WorksheetItem)
+            .where(WorksheetItem.worksheet_id == ws.id)
+            .order_by(WorksheetItem.sort_order, WorksheetItem.id)
         ).scalars().all()
 
         # Resolve service group names and peptide IDs for display
@@ -11099,6 +11101,7 @@ async def list_worksheets(
             "created_at": ws.created_at.isoformat() if ws.created_at else None,
             "items": [
                 {
+                    "id": it.id,
                     "sample_id": it.sample_id,
                     "sample_uid": it.sample_uid,
                     "service_group_id": it.service_group_id,
@@ -11373,6 +11376,36 @@ async def reassign_worksheet_item(
     item.worksheet_id = data.target_worksheet_id
     db.commit()
     return {"status": "reassigned", "target_worksheet_id": data.target_worksheet_id}
+
+
+class ReorderRequest(BaseModel):
+    item_ids: list[int]  # WorksheetItem IDs in desired order
+
+
+@app.put("/worksheets/{worksheet_id}/reorder")
+async def reorder_worksheet_items(
+    worksheet_id: int,
+    data: ReorderRequest,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Reorder items within a worksheet by setting sort_order."""
+    ws = db.execute(
+        select(Worksheet).where(Worksheet.id == worksheet_id)
+    ).scalar_one_or_none()
+    if not ws:
+        raise HTTPException(404, "Worksheet not found")
+    for idx, item_id in enumerate(data.item_ids):
+        item = db.execute(
+            select(WorksheetItem).where(
+                WorksheetItem.id == item_id,
+                WorksheetItem.worksheet_id == worksheet_id,
+            )
+        ).scalar_one_or_none()
+        if item:
+            item.sort_order = idx
+    db.commit()
+    return {"status": "reordered", "count": len(data.item_ids)}
 
 
 # dropdowns from SENAITE LabContact records.

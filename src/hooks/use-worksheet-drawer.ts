@@ -6,6 +6,7 @@ import {
   completeWorksheet,
   reassignWorksheetItem,
   addGroupToWorksheet,
+  reorderWorksheetItems,
 } from '@/lib/api'
 import type { WorksheetListItem } from '@/lib/api'
 import { useUIStore } from '@/store/ui-store'
@@ -90,6 +91,18 @@ export function useWorksheetDrawer() {
     onError: (err) => toast.error(err instanceof Error ? err.message : 'Reassign failed'),
   })
 
+  const reorderMutation = useMutation({
+    mutationFn: ({
+      worksheetId,
+      itemIds,
+    }: {
+      worksheetId: number
+      itemIds: number[]
+    }) => reorderWorksheetItems(worksheetId, itemIds),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['worksheets'] }),
+    onError: (err) => toast.error(err instanceof Error ? err.message : 'Reorder failed'),
+  })
+
   const addItemMutation = useMutation({
     mutationFn: ({
       worksheetId,
@@ -117,6 +130,7 @@ export function useWorksheetDrawer() {
     removeMutation,
     completeMutation,
     reassignMutation,
+    reorderMutation,
     addItemMutation,
   }
 }

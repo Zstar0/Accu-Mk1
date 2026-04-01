@@ -3739,6 +3739,7 @@ export interface WorksheetListItem {
   item_count: number
   created_at: string | null
   items: {
+    id: number
     sample_id: string
     sample_uid: string
     service_group_id: number | null
@@ -3833,6 +3834,19 @@ export async function reassignWorksheetItem(
     }
   )
   if (!response.ok) throw new Error(`Reassign item failed: ${response.status}`)
+  return response.json()
+}
+
+export async function reorderWorksheetItems(
+  worksheetId: number,
+  itemIds: number[]
+): Promise<{ status: string; count: number }> {
+  const response = await fetch(`${API_BASE_URL()}/worksheets/${worksheetId}/reorder`, {
+    method: 'PUT',
+    headers: getBearerHeaders('application/json'),
+    body: JSON.stringify({ item_ids: itemIds }),
+  })
+  if (!response.ok) throw new Error(`Reorder failed: ${response.status}`)
   return response.json()
 }
 
