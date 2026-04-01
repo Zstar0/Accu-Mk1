@@ -144,4 +144,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-03-31 after v0.28.0 milestone started*
+*Last updated: 2026-04-01 after Phase 18 (Worksheets List) complete — all v0.28.0 phases finished*
