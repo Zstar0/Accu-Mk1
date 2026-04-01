@@ -11068,10 +11068,20 @@ async def list_worksheets(
             ).scalar_one_or_none()
             analyst_email = analyst_user
 
+        # Resolve per-item analyst emails
+        item_analyst_ids = {it.assigned_analyst_id for it in items if it.assigned_analyst_id}
+        item_analyst_email_map: dict[int, str] = {}
+        if item_analyst_ids:
+            item_analyst_users = db.execute(
+                select(User.id, User.email).where(User.id.in_(item_analyst_ids))
+            ).all()
+            item_analyst_email_map = {u.id: u.email for u in item_analyst_users}
+
         result.append({
             "id": ws.id,
             "title": ws.title,
             "status": ws.status,
+            "notes": ws.notes,
             "assigned_analyst": ws.assigned_analyst_id,
             "assigned_analyst_email": analyst_email,
             "item_count": len(items),
@@ -11084,6 +11094,10 @@ async def list_worksheets(
                     "group_name": group_name_map.get(it.service_group_id, "—") if it.service_group_id else "—",
                     "priority": it.priority,
                     "added_at": it.added_at.isoformat() if it.added_at else None,
+                    "instrument_uid": it.instrument_uid,
+                    "assigned_analyst_id": it.assigned_analyst_id,
+                    "assigned_analyst_email": item_analyst_email_map.get(it.assigned_analyst_id) if it.assigned_analyst_id else None,
+                    "notes": it.notes,
                 }
                 for it in items
             ],
@@ -11094,6 +11108,7 @@ async def list_worksheets(
 class WorksheetUpdate(BaseModel):
     title: Optional[str] = None
     assigned_analyst: Optional[int] = None
+    notes: Optional[str] = None
 
 
 @app.put("/worksheets/{worksheet_id}")
@@ -11120,6 +11135,8 @@ async def update_worksheet(
         ).scalars().all()
         for item in items:
             item.assigned_analyst_id = data.assigned_analyst
+    if data.notes is not None:
+        ws.notes = data.notes
 
     db.commit()
     return {"status": "updated"}
@@ -11294,5 +11311,56 @@ async def remove_worksheet_item(
     db.delete(item)
     db.commit()
     return {"status": "removed"}
+
+
+class ReassignRequest(BaseModel):
+    target_worksheet_id: int
+
+
+@app.post("/worksheets/{worksheet_id}/complete")
+async def complete_worksheet(
+    worksheet_id: int,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Transition a worksheet from open to completed."""
+    ws = db.execute(select(Worksheet).where(Worksheet.id == worksheet_id)).scalar_one_or_none()
+    if not ws:
+        raise HTTPException(404, "Worksheet not found")
+    if ws.status != "open":
+        raise HTTPException(400, f"Worksheet is already {ws.status}")
+    ws.status = "completed"
+    db.commit()
+    return {"status": "completed"}
+
+
+@app.post("/worksheets/{worksheet_id}/items/{sample_uid}/{service_group_id}/reassign")
+async def reassign_worksheet_item(
+    worksheet_id: int,
+    sample_uid: str,
+    service_group_id: int,
+    data: ReassignRequest,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Move a worksheet item to a different (open) worksheet."""
+    item = db.execute(
+        select(WorksheetItem).where(
+            WorksheetItem.worksheet_id == worksheet_id,
+            WorksheetItem.sample_uid == sample_uid,
+            WorksheetItem.service_group_id == service_group_id,
+        )
+    ).scalar_one_or_none()
+    if not item:
+        raise HTTPException(404, "Item not found")
+    target = db.execute(
+        select(Worksheet).where(Worksheet.id == data.target_worksheet_id, Worksheet.status == "open")
+    ).scalar_one_or_none()
+    if not target:
+        raise HTTPException(404, "Target worksheet not found or not open")
+    item.worksheet_id = data.target_worksheet_id
+    db.commit()
+    return {"status": "reassigned", "target_worksheet_id": data.target_worksheet_id}
+
 
 # dropdowns from SENAITE LabContact records.
