@@ -86,7 +86,7 @@ export function InboxServiceGroupCard({
   onGroupInstrumentAssign,
 }: InboxServiceGroupCardProps) {
   const dragId = `${sample.uid}::${group.group_id}`
-  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
+  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: dragId,
     data: {
       sampleUid: sample.uid,
