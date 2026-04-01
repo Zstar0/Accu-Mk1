@@ -119,10 +119,11 @@ export default function WorksheetsInboxPage() {
   }))
 
   const [activeDrag, setActiveDrag] = useState<DragData | null>(null)
+  const [pendingDropKeys, setPendingDropKeys] = useState<Set<string>>(new Set())
 
   const samples = inboxData?.items ?? []
   const total = inboxData?.total ?? 0
-  const cards = flattenToCards(samples)
+  const cards = flattenToCards(samples).filter(c => !pendingDropKeys.has(c.key))
 
   function handlePriorityChange(sampleUid: string, priority: InboxPriority) {
     priorityMutation.mutate({ sampleUid, priority })
@@ -158,6 +159,10 @@ export default function WorksheetsInboxPage() {
 
     const dragData = active.data.current as DragData
     const dropId = String(over.id)
+    const cardKey = `${dragData.sampleUid}::${dragData.groupId}`
+
+    // Optimistically hide the card immediately
+    setPendingDropKeys(prev => new Set(prev).add(cardKey))
 
     try {
       if (dropId === 'new-worksheet') {
@@ -180,6 +185,12 @@ export default function WorksheetsInboxPage() {
       queryClient.invalidateQueries({ queryKey: ['inbox-samples'] })
       queryClient.invalidateQueries({ queryKey: ['worksheets-list'] })
     } catch (err) {
+      // Restore card on failure
+      setPendingDropKeys(prev => {
+        const next = new Set(prev)
+        next.delete(cardKey)
+        return next
+      })
       toast.error(err instanceof Error ? err.message : 'Failed to assign to worksheet')
     }
   }
