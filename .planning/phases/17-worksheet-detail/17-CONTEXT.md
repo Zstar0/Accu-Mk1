@@ -35,6 +35,11 @@ Users can open any worksheet to view and manage its contents — edit title/note
 - **D-13:** The inbox sidebar already handles: rename, tech assign, remove items, delete worksheet. The drawer reuses these API endpoints but provides a richer UI with notes, status, add-samples, reassign, and complete actions.
 - **D-14:** Backend endpoints already exist: `GET /worksheets`, `PUT /worksheets/{id}`, `DELETE /worksheets/{id}`, `DELETE /worksheets/{id}/items/{uid}/{gid}`, `POST /worksheets/{id}/add-group`. New endpoints needed: `POST /worksheets/{id}/complete`, `POST /worksheets/{id}/items/{uid}/{gid}/reassign`.
 
+### Start Sample Prep from Worksheet
+- **D-15:** Each item in the worksheet drawer has a "Start Prep" button that navigates to the New Analysis / Sample Prep page with pre-filled fields: sample ID (from SENAITE), peptide (from the service group's linked peptide via AnalysisService.peptide_id), and any other derivable fields (declared weight, method).
+- **D-16:** The navigation uses the existing wizard flow (`hplc-analysis/new-analysis`) with query params or store state to pass the pre-fill data. The SENAITE lookup step can be auto-triggered since we already have the sample ID.
+- **D-17:** Once a prep is started from a worksheet item, the item should show a "Prep started" indicator (not block further preps — a sample may need multiple preps for different service groups).
+
 ### Claude's Discretion
 - Drawer width and animation
 - FAB icon design and positioning details
