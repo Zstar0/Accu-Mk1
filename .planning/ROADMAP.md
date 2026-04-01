@@ -87,11 +87,11 @@ Plans:
 5. User can select multiple samples with checkboxes and apply bulk actions (set priority, assign tech, set instrument) to all selected rows in one step
 6. Selecting one or more samples and clicking "Create Worksheet" produces a new worksheet; if any selected sample has left `sample_received` state, creation is blocked with a clear error identifying the stale item(s)
 
-**Plans:** 4 plans
+**Plans:** 1/4 plans executed
 
 Plans:
 - [ ] 16-01-PLAN.md — Backend models (SamplePriority, Worksheet, WorksheetItem) + 5 endpoints (inbox, priority, users, bulk, worksheet create)
-- [ ] 16-02-PLAN.md — TypeScript types, API functions, TanStack Query hook, PriorityBadge, AgingTimer
+- [x] 16-02-PLAN.md — TypeScript types, API functions, TanStack Query hook, PriorityBadge, AgingTimer
 - [ ] 16-03-PLAN.md — InboxSampleTable with expandable rows, inline editing, WorksheetsInboxPage full page
 - [ ] 16-04-PLAN.md — Bulk toolbar, worksheet creation dialog, final wiring + human verification
 
@@ -157,6 +157,6 @@ Plans:
 | 13.5 HPLC Audit Trail & Debug | v0.26.0 | 3/3 | Complete | 2026-03-19 |
 | 14. RT Check Chromatogram Comparison | v0.26.0 | 0/? | Not started | - |
 | 15. Foundation | v0.28.0 | 4/4 | Complete    | 2026-04-01 |
-| 16. Received Samples Inbox | v0.28.0 | 0/4 | Planned | - |
+| 16. Received Samples Inbox | v0.28.0 | 1/4 | In Progress|  |
 | 17. Worksheet Detail | v0.28.0 | 0/? | Not started | - |
 | 18. Worksheets List | v0.28.0 | 0/? | Not started | - |

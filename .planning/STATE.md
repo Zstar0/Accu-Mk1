@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v0.28.0
 milestone_name: — Worksheet Feature
-status: verifying
-stopped_at: Phase 16 context gathered
-last_updated: "2026-04-01T02:51:17.535Z"
+status: executing
+stopped_at: Completed 16-02-PLAN.md
+last_updated: "2026-04-01T03:39:59.639Z"
 last_activity: 2026-04-01
 progress:
   total_phases: 4
   completed_phases: 1
-  total_plans: 4
-  completed_plans: 4
+  total_plans: 8
+  completed_plans: 5
   percent: 0
 ---
 
@@ -21,13 +21,13 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-31)
 
 **Core value:** Streamlined morning workflow: import CSV -> review batch -> calculate purity -> push to SENAITE. One operator, one workstation, no friction.
-**Current focus:** Phase 15 — foundation
+**Current focus:** Phase 16 — received-samples-inbox
 
 ## Current Position
 
-Phase: 16
-Plan: Not started
-Status: Phase complete — ready for verification
+Phase: 16 (received-samples-inbox) — EXECUTING
+Plan: 2 of 4
+Status: Ready to execute
 Last activity: 2026-04-01
 
 Progress: [░░░░░░░░░░░░░░░░░░░░] 0% (0/4 phases complete)
@@ -44,6 +44,7 @@ Progress: [░░░░░░░░░░░░░░░░░░░░] 0% (0/4
 | Phase 15 P01 | 18 | 2 tasks | 3 files |
 | Phase 15-foundation P04 | 5 | 1 tasks | 1 files |
 | Phase 15-foundation P03 | 2 | 1 tasks | 2 files |
+| Phase 16-received-samples-inbox P02 | 12 | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -63,6 +64,8 @@ Progress: [░░░░░░░░░░░░░░░░░░░░] 0% (0/4
 - [Phase 15-foundation]: SENAITE Analyst field format (username vs UID) requires live verification — diagnostic endpoint added, human verification pending for ANLY-03
 - [Phase 15-foundation]: service-group-colors.ts is a shared module — Phase 16 Inbox imports SERVICE_GROUP_COLORS for badge rendering
 - [Phase 15-foundation]: Membership editor uses parallel Promise.all for getAnalysisServices and getServiceGroupMembers on panel open
+- [Phase 16-received-samples-inbox]: API functions use project-standard API_BASE_URL()/getBearerHeaders() pattern, not credentials:include
+- [Phase 16-received-samples-inbox]: Live queue pattern: refetchInterval:30_000 + staleTime:0 bypasses global 5min stale cache for inbox
 
 ### Key Source Files
 
@@ -84,6 +87,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-04-01T02:51:17.532Z
-Stopped at: Phase 16 context gathered
-Resume file: .planning/phases/16-received-samples-inbox/16-CONTEXT.md
+Last session: 2026-04-01T03:39:59.636Z
+Stopped at: Completed 16-02-PLAN.md
+Resume file: None
