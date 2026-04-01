@@ -1,110 +1,43 @@
 ---
 phase: 15-foundation
 plan: "04"
-subsystem: api
-tags: [senaite, analyst, diagnostic, httpx, fastapi]
-
-# Dependency graph
-requires:
-  - phase: 15-foundation-01
-    provides: SENAITE analyst endpoints (get_senaite_analysts, set_analysis_analyst, _get_senaite_auth pattern)
-provides:
-  - Diagnostic endpoint POST /senaite/analyses/{uid}/analyst-test
-  - AnalystTestRequest schema (username + uid fields)
-  - Live-testable format verification for SENAITE Analyst field (username vs UID)
-affects: [16-bulk-analyst-assignment, phase-16, analyst-assignment]
-
-# Tech tracking
-tech-stack:
-  added: []
-  patterns:
-    - "Diagnostic test-and-restore pattern: read original → test format A → test format B → restore → return structured report"
-
-key-files:
-  created: []
-  modified:
-    - backend/main.py
-
-key-decisions:
-  - "SENAITE Analyst field format (username vs UID) requires live verification — endpoint created, human verification pending"
-  - "Restore original Analyst value after testing (best-effort, non-fatal if restore fails)"
-  - "recommendation logic: exact match to sent value takes precedence over non-null stored value"
-
-patterns-established:
-  - "Diagnostic endpoints: test both possible formats, read back stored value, restore, return structured recommendation"
-
-requirements-completed:
-  - ANLY-03
-
-# Metrics
-duration: 5min
+status: complete
+started: 2026-03-31
 completed: 2026-03-31
 ---
 
-# Phase 15 Plan 04: Analyst Format Verification Summary
+# Plan 15-04: SENAITE Analyst Field Verification — Summary
 
-**POST /senaite/analyses/{uid}/analyst-test diagnostic endpoint that tests username vs UID Analyst field format against live SENAITE and returns a structured recommendation — human verification pending**
+## Result
 
-## Performance
+**ANLY-03 resolved:** SENAITE's `Analyst` field on Analysis objects is **read-only**. It returns `"Not allowed to set the field 'Analyst'"` on direct update attempts. The field is only set when an analysis is added to a SENAITE Worksheet with an assigned analyst.
 
-- **Duration:** ~5 min
-- **Started:** 2026-03-31T21:20:00Z
-- **Completed:** 2026-03-31T21:22:17Z (Task 1 only; Task 2 is a human checkpoint)
-- **Tasks:** 1/2 (Task 2 is checkpoint:human-verify)
-- **Files modified:** 1
+Since AccuMark replaces SENAITE worksheets entirely, analyst assignment will live in AccuMark's local `worksheet_items` table (Phase 16 data model). No SENAITE push needed.
 
-## Accomplishments
+## Changes
 
-- Added `AnalystTestRequest(BaseModel)` schema with `username` and `uid` fields
-- Added `POST /senaite/analyses/{uid}/analyst-test` endpoint in backend/main.py
-- Endpoint reads current Analyst value, tests username format, tests UID format, restores original, returns `{original_value, username_test, uid_test, recommendation}`
-- Recommendation logic: exact string match takes precedence; falls back to non-null detection; returns `"use_username"`, `"use_uid"`, or `"unclear"`
-- Human verification against live SENAITE is pending (Task 2 checkpoint)
+### Removed (cleanup after verification)
+- `POST /senaite/analyses/{uid}/analyst` — assignment endpoint (SENAITE rejects writes)
+- `POST /senaite/analyses/{uid}/analyst-test` — diagnostic endpoint (no longer needed)
+- `AnalystAssignRequest` schema
+- `AnalystTestRequest` schema
+- `setAnalysisAnalyst()` frontend function
 
-## Task Commits
+### Updated
+- `GET /senaite/analysts` — now returns `uid` field alongside `username` and `fullname`
+- `SenaiteAnalyst` TypeScript interface — added `uid` field
 
-1. **Task 1: Add analyst format test endpoint** - `919017a` (feat)
+## Key Decision
 
-**Plan metadata:** pending (after checkpoint resolution)
+Analyst assignment is **local-only** (AccuMark PostgreSQL). This aligns with the long-term direction of phasing out SENAITE. The `GET /senaite/analysts` endpoint remains as a read-only source for analyst dropdown options.
 
-## Files Created/Modified
+## Commits
 
-- `backend/main.py` — Added `AnalystTestRequest` schema at line 1467; added `test_analyst_format` endpoint at end of file (line 10400+)
+- `919017a` — feat(15-04): add analyst format diagnostic endpoint (Task 1)
+- `ff88c34` — refactor(15): remove SENAITE analyst push — assignment stays local
 
-## Decisions Made
+## Self-Check: PASSED
 
-- The restore step is best-effort (non-fatal) — diagnostic result is already captured before restore, so a restore failure doesn't invalidate the test.
-- `username_exact` (stored value matches sent value exactly) takes precedence over `username_accepted` (any non-null stored value) in the recommendation logic. This avoids false positives when SENAITE transforms the value.
-
-## Deviations from Plan
-
-None — plan executed exactly as written for Task 1.
-
-## Issues Encountered
-
-None.
-
-## Verification Status
-
-**PENDING** — Task 2 requires a human to call the endpoint against a live SENAITE instance and report whether `username_test.accepted` or `uid_test.accepted` is true. Until this is done, the verified format is unknown.
-
-If verified format differs from current `set_analysis_analyst` implementation (which sends `req.analyst_value` as-is without transformation), the endpoint will need updating before Phase 16.
-
-Expected outcomes:
-- `"recommendation": "use_username"` → current implementation is likely correct
-- `"recommendation": "use_uid"` → `set_analysis_analyst` must be updated to accept a username and resolve it to a UID before sending
-- `"recommendation": "unclear"` → manual inspection of `stored` values required
-
-## User Setup Required
-
-None — no external service configuration required beyond the existing `SENAITE_URL` env var.
-
-## Next Phase Readiness
-
-- Diagnostic endpoint is deployed and callable once backend server is started
-- Human verification (Task 2) must complete before Phase 16 bulk analyst assignment is built on top of this
-- If SENAITE unavailable: defer to Phase 16 start per plan instructions
-
----
-*Phase: 15-foundation*
-*Completed: 2026-03-31 (Task 1); Task 2 pending human checkpoint*
+- [x] ANLY-03 resolved (field format question answered: read-only, use local assignment)
+- [x] Unused code removed
+- [x] GET analysts endpoint returns uid for identification
