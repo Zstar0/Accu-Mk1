@@ -157,6 +157,6 @@ Plans:
 | 13.5 HPLC Audit Trail & Debug | v0.26.0 | 3/3 | Complete | 2026-03-19 |
 | 14. RT Check Chromatogram Comparison | v0.26.0 | 0/? | Not started | - |
 | 15. Foundation | v0.28.0 | 4/4 | Complete    | 2026-04-01 |
-| 16. Received Samples Inbox | v0.28.0 | 4/4 | Complete   | 2026-04-01 |
+| 16. Received Samples Inbox | v0.28.0 | 4/4 | Complete    | 2026-04-01 |
 | 17. Worksheet Detail | v0.28.0 | 0/? | Not started | - |
 | 18. Worksheets List | v0.28.0 | 0/? | Not started | - |
