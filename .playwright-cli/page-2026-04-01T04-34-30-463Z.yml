@@ -1,0 +1,407 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e48]:
+    - generic [ref=e49]:
+      - generic [ref=e50]:
+        - generic [ref=e51]:
+          - button "Close window" [ref=e52]
+          - button "Minimize window" [ref=e54]
+          - button "Enter fullscreen" [ref=e56]
+        - button "Hide Left Sidebar" [ref=e59]:
+          - img
+      - generic [ref=e60]: AccuMk1
+      - generic [ref=e62]:
+        - generic "Switch to dark mode" [ref=e63] [cursor=pointer]:
+          - img [ref=e64]
+          - switch
+          - img [ref=e70]
+        - button "Settings" [ref=e72]:
+          - img
+        - button "Hide Right Sidebar" [ref=e73]:
+          - img
+    - generic [ref=e74]:
+      - generic [ref=e77]:
+        - generic [ref=e79]:
+          - img [ref=e80]
+          - generic [ref=e82]: Accu-Mk1
+        - generic [ref=e84]:
+          - generic [ref=e85]: Navigation
+          - list [ref=e87]:
+            - listitem [ref=e88]:
+              - button "Dashboard" [expanded] [ref=e89]:
+                - img [ref=e90]
+                - generic [ref=e95]: Dashboard
+                - img [ref=e96]
+              - list [ref=e99]:
+                - listitem [ref=e100]:
+                  - button "Orders" [ref=e101]:
+                    - generic [ref=e102]: Orders
+                - listitem [ref=e103]:
+                  - button "Analytics" [ref=e104]:
+                    - generic [ref=e105]: Analytics
+            - listitem [ref=e106]:
+              - button "Analysis" [expanded] [ref=e107]:
+                - img [ref=e108]
+                - generic [ref=e110]: Analysis
+                - img [ref=e111]
+              - list [ref=e114]:
+                - listitem [ref=e115]:
+                  - button "Samples" [ref=e116]:
+                    - generic [ref=e117]: Samples
+                - listitem [ref=e118]:
+                  - button "Receive Sample" [ref=e119]:
+                    - generic [ref=e120]: Receive Sample
+                - listitem [ref=e121]:
+                  - button "Event Log" [ref=e122]:
+                    - generic [ref=e123]: Event Log
+            - listitem [ref=e124]:
+              - button "LIMS" [expanded] [ref=e125]:
+                - img [ref=e126]
+                - generic [ref=e130]: LIMS
+                - img [ref=e131]
+              - list [ref=e134]:
+                - listitem [ref=e135]:
+                  - button "Instruments" [ref=e136]:
+                    - generic [ref=e137]: Instruments
+                - listitem [ref=e138]:
+                  - button "Methods" [ref=e139]:
+                    - generic [ref=e140]: Methods
+                - listitem [ref=e141]:
+                  - button "Peptides" [ref=e142]:
+                    - generic [ref=e143]: Peptides
+                - listitem [ref=e144]:
+                  - button "Analysis Services" [ref=e145]:
+                    - generic [ref=e146]: Analysis Services
+                - listitem [ref=e147]:
+                  - button "Service Groups" [ref=e148]:
+                    - generic [ref=e149]: Service Groups
+            - listitem [ref=e150]:
+              - button "HPLC Automation" [expanded] [ref=e151]:
+                - img [ref=e152]
+                - generic [ref=e156]: HPLC Automation
+                - img [ref=e157]
+              - list [ref=e160]:
+                - listitem [ref=e161]:
+                  - button "Overview" [ref=e162]:
+                    - generic [ref=e163]: Overview
+                - listitem [ref=e164]:
+                  - button "New Analysis" [ref=e165]:
+                    - generic [ref=e166]: New Analysis
+                - listitem [ref=e167]:
+                  - button "History" [ref=e168]:
+                    - generic [ref=e169]: History
+                - listitem [ref=e170]:
+                  - button "Sample Preps" [ref=e171]:
+                    - generic [ref=e172]: Sample Preps
+                - listitem [ref=e173]:
+                  - button "Inbox" [ref=e174]:
+                    - generic [ref=e175]: Inbox
+                - listitem [ref=e176]:
+                  - button "Worksheets" [ref=e177]:
+                    - generic [ref=e178]: Worksheets
+            - listitem [ref=e179]:
+              - button "AccuMark Tools" [expanded] [ref=e180]:
+                - img [ref=e181]
+                - generic [ref=e183]: AccuMark Tools
+                - img [ref=e184]
+              - list [ref=e187]:
+                - listitem [ref=e188]:
+                  - button "Overview" [ref=e189]:
+                    - generic [ref=e190]: Overview
+                - listitem [ref=e191]:
+                  - button "Order Explorer" [ref=e192]:
+                    - generic [ref=e193]: Order Explorer
+                - listitem [ref=e194]:
+                  - button "Order Status" [ref=e195]:
+                    - generic [ref=e196]: Order Status
+                - listitem [ref=e197]:
+                  - button "COA Explorer" [ref=e198]:
+                    - generic [ref=e199]: COA Explorer
+                - listitem [ref=e200]:
+                  - button "Digital COA" [ref=e201]:
+                    - generic [ref=e202]: Digital COA
+                - listitem [ref=e203]:
+                  - button "Chromatographs" [ref=e204]:
+                    - generic [ref=e205]: Chromatographs
+            - listitem [ref=e206]:
+              - button "Account" [expanded] [ref=e207]:
+                - img [ref=e208]
+                - generic [ref=e213]: Account
+                - img [ref=e214]
+              - list [ref=e217]:
+                - listitem [ref=e218]:
+                  - button "Profile" [ref=e219]:
+                    - generic [ref=e220]: Profile
+                - listitem [ref=e221]:
+                  - button "User Management" [ref=e222]:
+                    - generic [ref=e223]: User Management
+        - generic [ref=e224]:
+          - list [ref=e225]:
+            - listitem [ref=e226]:
+              - button "Settings" [ref=e227]:
+                - img [ref=e228]
+                - generic [ref=e231]: Settings
+            - listitem [ref=e232]:
+              - button "Sign Out" [ref=e233]:
+                - img [ref=e234]
+                - generic [ref=e237]: Sign Out
+          - generic [ref=e238]: admin@accumark.local
+      - main [ref=e239]:
+        - generic [ref=e240]:
+          - button "Toggle Sidebar" [ref=e241]:
+            - img
+            - generic [ref=e242]: Toggle Sidebar
+          - generic [ref=e243]: Accu-Mk1
+        - generic [ref=e250]:
+          - generic [ref=e251]:
+            - heading "Order Dashboard" [level=1] [ref=e252]
+            - paragraph [ref=e253]: Order tracking and fulfillment status
+          - generic [ref=e254]:
+            - generic [ref=e255]:
+              - img [ref=e256]
+              - generic [ref=e260]: "0"
+              - generic [ref=e261]: today
+            - generic [ref=e262]:
+              - img [ref=e263]
+              - generic [ref=e266]: "25"
+              - generic [ref=e267]: outstanding
+            - generic [ref=e268]:
+              - img [ref=e269]
+              - generic [ref=e272]: "0"
+              - generic [ref=e273]: completed
+            - generic [ref=e274]:
+              - img [ref=e275]
+              - generic [ref=e279]: "0"
+              - generic [ref=e280]: failed
+          - generic [ref=e281]:
+            - generic [ref=e282]:
+              - generic [ref=e284]:
+                - generic [ref=e285]:
+                  - generic [ref=e286]:
+                    - img [ref=e287]
+                    - text: Outstanding Orders
+                  - generic [ref=e290]: 25 orders awaiting completion
+                - generic [ref=e291]:
+                  - button "Refresh orders" [ref=e292]:
+                    - img
+                  - button "View All" [ref=e293]:
+                    - text: View All
+                    - img
+              - table [ref=e297]:
+                - rowgroup [ref=e298]:
+                  - row "Order Email Status Samples Age" [ref=e299]:
+                    - columnheader "Order" [ref=e300]
+                    - columnheader "Email" [ref=e301]
+                    - columnheader "Status" [ref=e302]
+                    - columnheader "Samples" [ref=e303]
+                    - columnheader "Age" [ref=e304]
+                - rowgroup [ref=e305]:
+                  - row "2967 test@test.com accepted 0/1 65d ago" [ref=e306] [cursor=pointer]:
+                    - cell "2967" [ref=e307]
+                    - cell "test@test.com" [ref=e308]
+                    - cell "accepted" [ref=e309]:
+                      - generic [ref=e310]: accepted
+                    - cell "0/1" [ref=e311]
+                    - cell "65d ago" [ref=e312]
+                  - row "2925 hello@valera.codes accepted 0/1 67d ago" [ref=e313] [cursor=pointer]:
+                    - cell "2925" [ref=e314]
+                    - cell "hello@valera.codes" [ref=e315]
+                    - cell "accepted" [ref=e316]:
+                      - generic [ref=e317]: accepted
+                    - cell "0/1" [ref=e318]
+                    - cell "67d ago" [ref=e319]
+                  - row "2924 hello@valera.codes senaite_error 0/1 67d ago" [ref=e320] [cursor=pointer]:
+                    - cell "2924" [ref=e321]
+                    - cell "hello@valera.codes" [ref=e322]
+                    - cell "senaite_error" [ref=e323]:
+                      - generic [ref=e324]: senaite_error
+                    - cell "0/1" [ref=e325]
+                    - cell "67d ago" [ref=e326]
+                  - row "2923 hello@valera.codes accepted 0/1 67d ago" [ref=e327] [cursor=pointer]:
+                    - cell "2923" [ref=e328]
+                    - cell "hello@valera.codes" [ref=e329]
+                    - cell "accepted" [ref=e330]:
+                      - generic [ref=e331]: accepted
+                    - cell "0/1" [ref=e332]
+                    - cell "67d ago" [ref=e333]
+                  - row "2872 hello@valera.codes accepted 5/1 72d ago" [ref=e334] [cursor=pointer]:
+                    - cell "2872" [ref=e335]
+                    - cell "hello@valera.codes" [ref=e336]
+                    - cell "accepted" [ref=e337]:
+                      - generic [ref=e338]: accepted
+                    - cell "5/1" [ref=e339]
+                    - cell "72d ago" [ref=e340]
+                  - row "2867 hello@valera.codes accepted 0/0 75d ago" [ref=e341] [cursor=pointer]:
+                    - cell "2867" [ref=e342]
+                    - cell "hello@valera.codes" [ref=e343]
+                    - cell "accepted" [ref=e344]:
+                      - generic [ref=e345]: accepted
+                    - cell "0/0" [ref=e346]
+                    - cell "75d ago" [ref=e347]
+                  - row "2866 hello@valera.codes accepted 0/0 75d ago" [ref=e348] [cursor=pointer]:
+                    - cell "2866" [ref=e349]
+                    - cell "hello@valera.codes" [ref=e350]
+                    - cell "accepted" [ref=e351]:
+                      - generic [ref=e352]: accepted
+                    - cell "0/0" [ref=e353]
+                    - cell "75d ago" [ref=e354]
+                  - row "2865 hello@valera.codes accepted 0/0 75d ago" [ref=e355] [cursor=pointer]:
+                    - cell "2865" [ref=e356]
+                    - cell "hello@valera.codes" [ref=e357]
+                    - cell "accepted" [ref=e358]:
+                      - generic [ref=e359]: accepted
+                    - cell "0/0" [ref=e360]
+                    - cell "75d ago" [ref=e361]
+                  - row "2864 hello@valera.codes accepted 0/0 75d ago" [ref=e362] [cursor=pointer]:
+                    - cell "2864" [ref=e363]
+                    - cell "hello@valera.codes" [ref=e364]
+                    - cell "accepted" [ref=e365]:
+                      - generic [ref=e366]: accepted
+                    - cell "0/0" [ref=e367]
+                    - cell "75d ago" [ref=e368]
+                  - row "2863 hello@valera.codes accepted 0/0 75d ago" [ref=e369] [cursor=pointer]:
+                    - cell "2863" [ref=e370]
+                    - cell "hello@valera.codes" [ref=e371]
+                    - cell "accepted" [ref=e372]:
+                      - generic [ref=e373]: accepted
+                    - cell "0/0" [ref=e374]
+                    - cell "75d ago" [ref=e375]
+                  - row "2862 hello@valera.codes accepted 0/0 75d ago" [ref=e376] [cursor=pointer]:
+                    - cell "2862" [ref=e377]
+                    - cell "hello@valera.codes" [ref=e378]
+                    - cell "accepted" [ref=e379]:
+                      - generic [ref=e380]: accepted
+                    - cell "0/0" [ref=e381]
+                    - cell "75d ago" [ref=e382]
+                  - row "2861 hello@valera.codes accepted 0/0 75d ago" [ref=e383] [cursor=pointer]:
+                    - cell "2861" [ref=e384]
+                    - cell "hello@valera.codes" [ref=e385]
+                    - cell "accepted" [ref=e386]:
+                      - generic [ref=e387]: accepted
+                    - cell "0/0" [ref=e388]
+                    - cell "75d ago" [ref=e389]
+                  - row "2860 hello@valera.codes accepted 0/0 75d ago" [ref=e390] [cursor=pointer]:
+                    - cell "2860" [ref=e391]
+                    - cell "hello@valera.codes" [ref=e392]
+                    - cell "accepted" [ref=e393]:
+                      - generic [ref=e394]: accepted
+                    - cell "0/0" [ref=e395]
+                    - cell "75d ago" [ref=e396]
+                  - row "2859 hello@valera.codes accepted 0/0 75d ago" [ref=e397] [cursor=pointer]:
+                    - cell "2859" [ref=e398]
+                    - cell "hello@valera.codes" [ref=e399]
+                    - cell "accepted" [ref=e400]:
+                      - generic [ref=e401]: accepted
+                    - cell "0/0" [ref=e402]
+                    - cell "75d ago" [ref=e403]
+                  - row "2858 hello@valera.codes accepted 0/0 75d ago" [ref=e404] [cursor=pointer]:
+                    - cell "2858" [ref=e405]
+                    - cell "hello@valera.codes" [ref=e406]
+                    - cell "accepted" [ref=e407]:
+                      - generic [ref=e408]: accepted
+                    - cell "0/0" [ref=e409]
+                    - cell "75d ago" [ref=e410]
+                  - row "2857 hello@valera.codes processing 0/0 75d ago" [ref=e411] [cursor=pointer]:
+                    - cell "2857" [ref=e412]
+                    - cell "hello@valera.codes" [ref=e413]
+                    - cell "processing" [ref=e414]:
+                      - generic [ref=e415]: processing
+                    - cell "0/0" [ref=e416]
+                    - cell "75d ago" [ref=e417]
+                  - row "2856 hello@valera.codes accepted 0/0 75d ago" [ref=e418] [cursor=pointer]:
+                    - cell "2856" [ref=e419]
+                    - cell "hello@valera.codes" [ref=e420]
+                    - cell "accepted" [ref=e421]:
+                      - generic [ref=e422]: accepted
+                    - cell "0/0" [ref=e423]
+                    - cell "75d ago" [ref=e424]
+                  - row "2855 hello@valera.codes accepted 0/0 75d ago" [ref=e425] [cursor=pointer]:
+                    - cell "2855" [ref=e426]
+                    - cell "hello@valera.codes" [ref=e427]
+                    - cell "accepted" [ref=e428]:
+                      - generic [ref=e429]: accepted
+                    - cell "0/0" [ref=e430]
+                    - cell "75d ago" [ref=e431]
+                  - row "2854 hello@valera.codes accepted 0/0 75d ago" [ref=e432] [cursor=pointer]:
+                    - cell "2854" [ref=e433]
+                    - cell "hello@valera.codes" [ref=e434]
+                    - cell "accepted" [ref=e435]:
+                      - generic [ref=e436]: accepted
+                    - cell "0/0" [ref=e437]
+                    - cell "75d ago" [ref=e438]
+                  - row "2853 hello@valera.codes accepted 0/0 75d ago" [ref=e439] [cursor=pointer]:
+                    - cell "2853" [ref=e440]
+                    - cell "hello@valera.codes" [ref=e441]
+                    - cell "accepted" [ref=e442]:
+                      - generic [ref=e443]: accepted
+                    - cell "0/0" [ref=e444]
+                    - cell "75d ago" [ref=e445]
+                  - row "2852 hello@valera.codes accepted 0/0 75d ago" [ref=e446] [cursor=pointer]:
+                    - cell "2852" [ref=e447]
+                    - cell "hello@valera.codes" [ref=e448]
+                    - cell "accepted" [ref=e449]:
+                      - generic [ref=e450]: accepted
+                    - cell "0/0" [ref=e451]
+                    - cell "75d ago" [ref=e452]
+                  - row "LINK-TEST-b81424 — processing 0/0 76d ago" [ref=e453] [cursor=pointer]:
+                    - cell "LINK-TEST-b81424" [ref=e454]
+                    - cell "—" [ref=e455]
+                    - cell "processing" [ref=e456]:
+                      - generic [ref=e457]: processing
+                    - cell "0/0" [ref=e458]
+                    - cell "76d ago" [ref=e459]
+                  - row "2845 hello@valera.codes accepted 0/0 76d ago" [ref=e460] [cursor=pointer]:
+                    - cell "2845" [ref=e461]
+                    - cell "hello@valera.codes" [ref=e462]
+                    - cell "accepted" [ref=e463]:
+                      - generic [ref=e464]: accepted
+                    - cell "0/0" [ref=e465]
+                    - cell "76d ago" [ref=e466]
+                  - row "FIX-VERIFY-999 verify@example.com validation_failed 0/0 76d ago" [ref=e467] [cursor=pointer]:
+                    - cell "FIX-VERIFY-999" [ref=e468]
+                    - cell "verify@example.com" [ref=e469]
+                    - cell "validation_failed" [ref=e470]:
+                      - generic [ref=e471]: validation_failed
+                    - cell "0/0" [ref=e472]
+                    - cell "76d ago" [ref=e473]
+                  - row "DEBUG-ORD-001 — processing 0/0 76d ago" [ref=e474] [cursor=pointer]:
+                    - cell "DEBUG-ORD-001" [ref=e475]
+                    - cell "—" [ref=e476]
+                    - cell "processing" [ref=e477]:
+                      - generic [ref=e478]: processing
+                    - cell "0/0" [ref=e479]
+                    - cell "76d ago" [ref=e480]
+            - generic [ref=e481]:
+              - generic [ref=e483]:
+                - generic [ref=e484]:
+                  - generic [ref=e485]:
+                    - img [ref=e486]
+                    - text: Orders — Last 14 Days
+                  - generic [ref=e488]: 111 total orders loaded
+                - button "Order Explorer" [ref=e489]:
+                  - text: Order Explorer
+                  - img
+              - application [ref=e494]:
+                - generic [ref=e498]:
+                  - generic [ref=e499]:
+                    - generic [ref=e501]: Mar 19
+                    - generic [ref=e503]: Mar 21
+                    - generic [ref=e505]: Mar 23
+                    - generic [ref=e507]: Mar 25
+                    - generic [ref=e509]: Mar 27
+                    - generic [ref=e511]: Mar 29
+                    - generic [ref=e513]: Mar 31
+                  - generic [ref=e514]:
+                    - generic [ref=e516]: "0"
+                    - generic [ref=e518]: "1"
+                    - generic [ref=e520]: "2"
+                    - generic [ref=e522]: "3"
+                    - generic [ref=e524]: "4"
+    - generic [ref=e527]:
+      - heading "Command Palette" [level=2] [ref=e528]
+      - paragraph [ref=e529]: Type a command or search...
+    - region "Notifications alt+T"
+    - generic:
+      - generic: Accu-Mk1 v0.27.7
+      - generic: •
+      - generic: Connected - Docker (local)
+  - generic [ref=e530]: "0"

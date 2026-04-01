@@ -1,0 +1,707 @@
+- generic:
+  - generic:
+    - generic:
+      - generic:
+        - generic:
+          - generic:
+            - generic:
+              - button
+              - button
+              - button
+            - generic:
+              - button:
+                - img
+          - generic: AccuMk1
+          - generic:
+            - generic:
+              - generic:
+                - img
+                - switch
+                - img
+              - button:
+                - img
+              - button:
+                - img
+        - generic:
+          - generic:
+            - generic:
+              - generic:
+                - generic:
+                  - generic:
+                    - img
+                    - generic: Accu-Mk1
+                - generic:
+                  - generic:
+                    - generic: Navigation
+                    - generic:
+                      - list:
+                        - listitem:
+                          - button [expanded]:
+                            - img
+                            - generic: Dashboard
+                            - img
+                          - generic:
+                            - list:
+                              - listitem:
+                                - button:
+                                  - generic: Orders
+                              - listitem:
+                                - button:
+                                  - generic: Analytics
+                        - listitem:
+                          - button [expanded]:
+                            - img
+                            - generic: Analysis
+                            - img
+                          - generic:
+                            - list:
+                              - listitem:
+                                - button:
+                                  - generic: Samples
+                              - listitem:
+                                - button:
+                                  - generic: Receive Sample
+                              - listitem:
+                                - button:
+                                  - generic: Event Log
+                        - listitem:
+                          - button [expanded]:
+                            - img
+                            - generic: LIMS
+                            - img
+                          - generic:
+                            - list:
+                              - listitem:
+                                - button:
+                                  - generic: Instruments
+                              - listitem:
+                                - button:
+                                  - generic: Methods
+                              - listitem:
+                                - button:
+                                  - generic: Peptides
+                              - listitem:
+                                - button:
+                                  - generic: Analysis Services
+                              - listitem:
+                                - button:
+                                  - generic: Service Groups
+                        - listitem:
+                          - button [expanded]:
+                            - img
+                            - generic: HPLC Automation
+                            - img
+                          - generic:
+                            - list:
+                              - listitem:
+                                - button:
+                                  - generic: Overview
+                              - listitem:
+                                - button:
+                                  - generic: New Analysis
+                              - listitem:
+                                - button:
+                                  - generic: History
+                              - listitem:
+                                - button:
+                                  - generic: Sample Preps
+                              - listitem:
+                                - button:
+                                  - generic: Inbox
+                              - listitem:
+                                - button:
+                                  - generic: Worksheets
+                        - listitem:
+                          - button [expanded]:
+                            - img
+                            - generic: AccuMark Tools
+                            - img
+                          - generic:
+                            - list:
+                              - listitem:
+                                - button:
+                                  - generic: Overview
+                              - listitem:
+                                - button:
+                                  - generic: Order Explorer
+                              - listitem:
+                                - button:
+                                  - generic: Order Status
+                              - listitem:
+                                - button:
+                                  - generic: COA Explorer
+                              - listitem:
+                                - button:
+                                  - generic: Digital COA
+                              - listitem:
+                                - button:
+                                  - generic: Chromatographs
+                        - listitem:
+                          - button [expanded]:
+                            - img
+                            - generic: Account
+                            - img
+                          - generic:
+                            - list:
+                              - listitem:
+                                - button:
+                                  - generic: Profile
+                              - listitem:
+                                - button:
+                                  - generic: User Management
+                - generic:
+                  - list:
+                    - listitem:
+                      - button:
+                        - img
+                        - generic: Settings
+                    - listitem:
+                      - button:
+                        - img
+                        - generic: Sign Out
+                  - generic: admin@accumark.local
+          - main:
+            - generic:
+              - button:
+                - img
+                - generic: Toggle Sidebar
+              - generic: Accu-Mk1
+            - generic:
+              - generic:
+                - generic:
+                  - generic:
+                    - generic:
+                      - generic:
+                        - generic:
+                          - heading [level=1]: Received Samples
+                          - generic: "18"
+                        - paragraph: Auto-refreshes every 30s
+                    - generic:
+                      - table:
+                        - rowgroup:
+                          - row:
+                            - columnheader
+                            - columnheader:
+                              - checkbox [checked=mixed]:
+                                - generic:
+                                  - img
+                            - columnheader: Sample ID
+                            - columnheader: Client
+                            - columnheader: Priority
+                            - columnheader: Assigned Tech
+                            - columnheader: Instrument
+                            - columnheader: Age
+                            - columnheader: Status
+                        - rowgroup:
+                          - row:
+                            - cell:
+                              - button:
+                                - img
+                            - cell:
+                              - checkbox [checked]:
+                                - generic:
+                                  - img
+                            - cell: P-0125
+                            - cell: WP-3154
+                            - cell:
+                              - combobox:
+                                - generic:
+                                  - generic: Normal
+                                - img
+                            - cell:
+                              - combobox:
+                                - generic: Assign tech…
+                                - img
+                            - cell:
+                              - combobox:
+                                - generic: Assign instrument…
+                                - img
+                            - cell: 11d 23h
+                            - cell:
+                              - generic: Received
+                          - row:
+                            - cell:
+                              - button:
+                                - img
+                            - cell:
+                              - checkbox [checked]:
+                                - generic:
+                                  - img
+                            - cell: P-0124
+                            - cell: WP-3154
+                            - cell:
+                              - combobox:
+                                - generic:
+                                  - generic: High
+                                - img
+                            - cell:
+                              - combobox:
+                                - generic: Assign tech…
+                                - img
+                            - cell:
+                              - combobox:
+                                - generic: Assign instrument…
+                                - img
+                            - cell: 2h 41m
+                            - cell:
+                              - generic: Received
+                          - row:
+                            - cell
+                            - cell:
+                              - generic:
+                                - generic:
+                                  - generic:
+                                    - generic: Core Panel
+                                  - generic:
+                                    - table:
+                                      - rowgroup:
+                                        - row:
+                                          - columnheader: Analysis
+                                          - columnheader: Keyword
+                                          - columnheader: Method
+                                      - rowgroup:
+                                        - row:
+                                          - cell
+                                          - cell: —
+                                          - cell: —
+                                        - row:
+                                          - cell
+                                          - cell: —
+                                          - cell: —
+                                        - row:
+                                          - cell
+                                          - cell: —
+                                          - cell: —
+                                        - row:
+                                          - cell
+                                          - cell: —
+                                          - cell: —
+                                        - row:
+                                          - cell
+                                          - cell: —
+                                          - cell: —
+                          - row:
+                            - cell:
+                              - button:
+                                - img
+                            - cell:
+                              - checkbox
+                            - cell: PB-0065
+                            - cell: WP-3151
+                            - cell:
+                              - combobox:
+                                - generic:
+                                  - generic: Normal
+                                - img
+                            - cell:
+                              - combobox:
+                                - generic: Assign tech…
+                                - img
+                            - cell:
+                              - combobox:
+                                - generic: Assign instrument…
+                                - img
+                            - cell: 22d 12h
+                            - cell:
+                              - generic: Received
+                          - row:
+                            - cell:
+                              - button:
+                                - img
+                            - cell:
+                              - checkbox
+                            - cell: P-0122
+                            - cell: WP-3149
+                            - cell:
+                              - combobox:
+                                - generic:
+                                  - generic: Normal
+                                - img
+                            - cell:
+                              - combobox:
+                                - generic: Assign tech…
+                                - img
+                            - cell:
+                              - combobox:
+                                - generic: Assign instrument…
+                                - img
+                            - cell: 24d 7h
+                            - cell:
+                              - generic: Received
+                          - row:
+                            - cell:
+                              - button:
+                                - img
+                            - cell:
+                              - checkbox
+                            - cell: PB-0063
+                            - cell: WP-3148
+                            - cell:
+                              - combobox:
+                                - generic:
+                                  - generic: Normal
+                                - img
+                            - cell:
+                              - combobox:
+                                - generic: Assign tech…
+                                - img
+                            - cell:
+                              - combobox:
+                                - generic: Assign instrument…
+                                - img
+                            - cell: 23d 2h
+                            - cell:
+                              - generic: Received
+                          - row:
+                            - cell:
+                              - button:
+                                - img
+                            - cell:
+                              - checkbox
+                            - cell: PB-0062
+                            - cell: WP-3148
+                            - cell:
+                              - combobox:
+                                - generic:
+                                  - generic: Normal
+                                - img
+                            - cell:
+                              - combobox:
+                                - generic: Assign tech…
+                                - img
+                            - cell:
+                              - combobox:
+                                - generic: Assign instrument…
+                                - img
+                            - cell: 23d 2h
+                            - cell:
+                              - generic: Received
+                          - row:
+                            - cell:
+                              - button:
+                                - img
+                            - cell:
+                              - checkbox
+                            - cell: PB-0061
+                            - cell: WP-3124
+                            - cell:
+                              - combobox:
+                                - generic:
+                                  - generic: Normal
+                                - img
+                            - cell:
+                              - combobox:
+                                - generic: Assign tech…
+                                - img
+                            - cell:
+                              - combobox:
+                                - generic: Assign instrument…
+                                - img
+                            - cell: 34d 12h
+                            - cell:
+                              - generic: Received
+                          - row:
+                            - cell:
+                              - button:
+                                - img
+                            - cell:
+                              - checkbox
+                            - cell: PB-0060
+                            - cell: WP-3123
+                            - cell:
+                              - combobox:
+                                - generic:
+                                  - generic: Normal
+                                - img
+                            - cell:
+                              - combobox:
+                                - generic: Assign tech…
+                                - img
+                            - cell:
+                              - combobox:
+                                - generic: Assign instrument…
+                                - img
+                            - cell: 35d 8h
+                            - cell:
+                              - generic: Received
+                          - row:
+                            - cell:
+                              - button:
+                                - img
+                            - cell:
+                              - checkbox
+                            - cell: PB-0059
+                            - cell: WP-3085
+                            - cell:
+                              - combobox:
+                                - generic:
+                                  - generic: Normal
+                                - img
+                            - cell:
+                              - combobox:
+                                - generic: Assign tech…
+                                - img
+                            - cell:
+                              - combobox:
+                                - generic: Assign instrument…
+                                - img
+                            - cell: 43d 8h
+                            - cell:
+                              - generic: Received
+                          - row:
+                            - cell:
+                              - button:
+                                - img
+                            - cell:
+                              - checkbox
+                            - cell: PB-0058
+                            - cell: WP-3083
+                            - cell:
+                              - combobox:
+                                - generic:
+                                  - generic: Normal
+                                - img
+                            - cell:
+                              - combobox:
+                                - generic: Assign tech…
+                                - img
+                            - cell:
+                              - combobox:
+                                - generic: Assign instrument…
+                                - img
+                            - cell: 43d 22h
+                            - cell:
+                              - generic: Received
+                          - row:
+                            - cell:
+                              - button:
+                                - img
+                            - cell:
+                              - checkbox
+                            - cell: P-0107
+                            - cell: WP-3082
+                            - cell:
+                              - combobox:
+                                - generic:
+                                  - generic: Normal
+                                - img
+                            - cell:
+                              - combobox:
+                                - generic: Assign tech…
+                                - img
+                            - cell:
+                              - combobox:
+                                - generic: Assign instrument…
+                                - img
+                            - cell: 42d 12h
+                            - cell:
+                              - generic: Received
+                          - row:
+                            - cell:
+                              - button:
+                                - img
+                            - cell:
+                              - checkbox
+                            - cell: P-0102
+                            - cell: WP-3066
+                            - cell:
+                              - combobox:
+                                - generic:
+                                  - generic: Normal
+                                - img
+                            - cell:
+                              - combobox:
+                                - generic: Assign tech…
+                                - img
+                            - cell:
+                              - combobox:
+                                - generic: Assign instrument…
+                                - img
+                            - cell: 47d 8h
+                            - cell:
+                              - generic: Received
+                          - row:
+                            - cell:
+                              - button:
+                                - img
+                            - cell:
+                              - checkbox
+                            - cell: P-0101
+                            - cell: forrest@valenceanalytical.com
+                            - cell:
+                              - combobox:
+                                - generic:
+                                  - generic: Normal
+                                - img
+                            - cell:
+                              - combobox:
+                                - generic: Assign tech…
+                                - img
+                            - cell:
+                              - combobox:
+                                - generic: Assign instrument…
+                                - img
+                            - cell: 48d 1h
+                            - cell:
+                              - generic: Received
+                          - row:
+                            - cell:
+                              - button:
+                                - img
+                            - cell:
+                              - checkbox
+                            - cell: P-0096
+                            - cell: WP-3042
+                            - cell:
+                              - combobox:
+                                - generic:
+                                  - generic: Normal
+                                - img
+                            - cell:
+                              - combobox:
+                                - generic: Assign tech…
+                                - img
+                            - cell:
+                              - combobox:
+                                - generic: Assign instrument…
+                                - img
+                            - cell: 48d 9h
+                            - cell:
+                              - generic: Received
+                          - row:
+                            - cell:
+                              - button:
+                                - img
+                            - cell:
+                              - checkbox
+                            - cell: P-0090
+                            - cell: WP-3032
+                            - cell:
+                              - combobox:
+                                - generic:
+                                  - generic: Normal
+                                - img
+                            - cell:
+                              - combobox:
+                                - generic: Assign tech…
+                                - img
+                            - cell:
+                              - combobox:
+                                - generic: Assign instrument…
+                                - img
+                            - cell: 38d 3h
+                            - cell:
+                              - generic: Received
+                          - row:
+                            - cell:
+                              - button:
+                                - img
+                            - cell:
+                              - checkbox
+                            - cell: P-0089
+                            - cell: WP-3031
+                            - cell:
+                              - combobox:
+                                - generic:
+                                  - generic: Normal
+                                - img
+                            - cell:
+                              - combobox:
+                                - generic: Assign tech…
+                                - img
+                            - cell:
+                              - combobox:
+                                - generic: Assign instrument…
+                                - img
+                            - cell: 38d 3h
+                            - cell:
+                              - generic: Received
+                          - row:
+                            - cell:
+                              - button:
+                                - img
+                            - cell:
+                              - checkbox
+                            - cell: P-0088
+                            - cell: WP-3030
+                            - cell:
+                              - combobox:
+                                - generic:
+                                  - generic: Normal
+                                - img
+                            - cell:
+                              - combobox:
+                                - generic: Assign tech…
+                                - img
+                            - cell:
+                              - combobox:
+                                - generic: Assign instrument…
+                                - img
+                            - cell: 38d 4h
+                            - cell:
+                              - generic: Received
+                          - row:
+                            - cell:
+                              - button:
+                                - img
+                            - cell:
+                              - checkbox
+                            - cell: P-0086
+                            - cell: forrest@valenceanalytical.com
+                            - cell:
+                              - combobox:
+                                - generic:
+                                  - generic: Normal
+                                - img
+                            - cell:
+                              - combobox:
+                                - generic: Assign tech…
+                                - img
+                            - cell:
+                              - combobox:
+                                - generic: Assign instrument…
+                                - img
+                            - cell: 60d 3h
+                            - cell:
+                              - generic: Received
+                    - generic:
+                      - generic:
+                        - generic: 2 selected
+                        - combobox:
+                          - generic: Set Priority
+                          - img
+                        - combobox:
+                          - generic: Assign Tech
+                          - img
+                        - combobox:
+                          - generic: Set Instrument
+                          - img
+                        - button: Create Worksheet
+                        - button: Clear
+        - generic:
+          - heading [level=2]: Command Palette
+          - paragraph: Type a command or search...
+        - region "Notifications alt+T"
+        - generic:
+          - generic: Accu-Mk1 v0.27.7
+          - generic: •
+          - generic: Connected - Docker (local)
+  - generic: "0"
+  - dialog "Create Worksheet" [ref=e947]:
+    - generic [ref=e948]:
+      - heading "Create Worksheet" [level=2] [ref=e949]
+      - paragraph [ref=e950]: 2 samples selected
+    - generic [ref=e951]:
+      - generic [ref=e952]:
+        - generic [ref=e953]: Title
+        - textbox "Title" [active] [ref=e954]: WS-2026-03-31-001
+      - generic [ref=e955]:
+        - generic [ref=e956]: Notes (optional)
+        - textbox "Notes (optional)" [ref=e957]:
+          - /placeholder: Add notes...
+    - generic [ref=e958]:
+      - button "Cancel" [ref=e959]
+      - button "Create" [ref=e960]
+    - button "Close" [ref=e961]:
+      - img
+      - generic [ref=e962]: Close

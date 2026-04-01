@@ -11000,4 +11000,161 @@ async def create_worksheet(
         "status": ws.status,
         "item_count": len(data.sample_uids),
     }
+
+
+@app.get("/worksheets")
+async def list_worksheets(
+    status: Optional[str] = None,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """List worksheets with summary. Excludes staging worksheets."""
+    query = (
+        select(Worksheet)
+        .where(Worksheet.status != "staging")
+        .order_by(Worksheet.created_at.desc())
+    )
+    if status:
+        query = query.where(Worksheet.status == status)
+
+    worksheets = db.execute(query).scalars().all()
+    result = []
+    for ws in worksheets:
+        items = db.execute(
+            select(WorksheetItem).where(WorksheetItem.worksheet_id == ws.id)
+        ).scalars().all()
+
+        # Resolve service group names for display
+        group_ids = {it.service_group_id for it in items if it.service_group_id}
+        group_name_map: dict[int, str] = {}
+        if group_ids:
+            groups = db.execute(
+                select(ServiceGroup.id, ServiceGroup.name).where(ServiceGroup.id.in_(group_ids))
+            ).all()
+            group_name_map = {g.id: g.name for g in groups}
+
+        result.append({
+            "id": ws.id,
+            "title": ws.title,
+            "status": ws.status,
+            "item_count": len(items),
+            "created_at": ws.created_at.isoformat() if ws.created_at else None,
+            "items": [
+                {
+                    "sample_id": it.sample_id,
+                    "group_name": group_name_map.get(it.service_group_id, "—") if it.service_group_id else "—",
+                }
+                for it in items
+            ],
+        })
+    return result
+
+
+class AddToWorksheetRequest(BaseModel):
+    sample_uid: str
+    sample_id: str
+    service_group_id: int
+
+
+@app.post("/worksheets/{worksheet_id}/add-group")
+async def add_group_to_worksheet(
+    worksheet_id: int,
+    data: AddToWorksheetRequest,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Add a service group (from a sample) to a worksheet. Used by drag-and-drop."""
+    ws = db.execute(
+        select(Worksheet).where(Worksheet.id == worksheet_id)
+    ).scalar_one_or_none()
+    if not ws:
+        raise HTTPException(404, "Worksheet not found")
+
+    # Check if this sample+group is already in the worksheet
+    existing = db.execute(
+        select(WorksheetItem).where(
+            WorksheetItem.worksheet_id == worksheet_id,
+            WorksheetItem.sample_uid == data.sample_uid,
+            WorksheetItem.service_group_id == data.service_group_id,
+        )
+    ).scalar_one_or_none()
+    if existing:
+        return {"status": "already_exists", "item_id": existing.id}
+
+    # Pick up any staging pre-assignments for this sample+group
+    staging_item = db.execute(
+        select(WorksheetItem)
+        .join(Worksheet, WorksheetItem.worksheet_id == Worksheet.id)
+        .where(
+            WorksheetItem.sample_uid == data.sample_uid,
+            WorksheetItem.service_group_id == data.service_group_id,
+            Worksheet.status == "staging",
+        )
+    ).scalar_one_or_none()
+
+    item = WorksheetItem(
+        worksheet_id=worksheet_id,
+        sample_uid=data.sample_uid,
+        sample_id=data.sample_id,
+        service_group_id=data.service_group_id,
+        assigned_analyst_id=staging_item.assigned_analyst_id if staging_item else None,
+        instrument_uid=staging_item.instrument_uid if staging_item else None,
+        priority=staging_item.priority if staging_item else "normal",
+    )
+    db.add(item)
+
+    # Remove staging item if picked up
+    if staging_item:
+        db.delete(staging_item)
+
+    db.commit()
+    return {"status": "added", "item_id": item.id}
+
+
+@app.post("/worksheets/create-from-drop")
+async def create_worksheet_from_drop(
+    data: AddToWorksheetRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Create a new worksheet from a drag-and-drop action."""
+    from datetime import datetime as _dt
+    title = f"WS-{_dt.utcnow().strftime('%Y-%m-%d')}-{db.query(Worksheet).filter(Worksheet.status != 'staging').count() + 1:03d}"
+
+    ws = Worksheet(
+        title=title,
+        status="open",
+        created_by=current_user.id,
+    )
+    db.add(ws)
+    db.flush()
+
+    # Pick up staging pre-assignments
+    staging_item = db.execute(
+        select(WorksheetItem)
+        .join(Worksheet, WorksheetItem.worksheet_id == Worksheet.id)
+        .where(
+            WorksheetItem.sample_uid == data.sample_uid,
+            WorksheetItem.service_group_id == data.service_group_id,
+            Worksheet.status == "staging",
+        )
+    ).scalar_one_or_none()
+
+    item = WorksheetItem(
+        worksheet_id=ws.id,
+        sample_uid=data.sample_uid,
+        sample_id=data.sample_id,
+        service_group_id=data.service_group_id,
+        assigned_analyst_id=staging_item.assigned_analyst_id if staging_item else None,
+        instrument_uid=staging_item.instrument_uid if staging_item else None,
+        priority=staging_item.priority if staging_item else "normal",
+    )
+    db.add(item)
+
+    if staging_item:
+        db.delete(staging_item)
+
+    db.commit()
+    return {"id": ws.id, "title": ws.title, "status": ws.status, "item_count": 1}
+
 # dropdowns from SENAITE LabContact records.

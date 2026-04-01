@@ -1,0 +1,34 @@
+- generic [ref=e3]:
+  - generic [ref=e4]:
+    - generic [ref=e5]:
+      - generic [ref=e6]:
+        - button "Close window" [ref=e7]
+        - button "Minimize window" [ref=e9]
+        - button "Enter fullscreen" [ref=e11]
+      - button "Hide Left Sidebar" [ref=e14]:
+        - img
+    - generic [ref=e15]: AccuMk1
+    - generic [ref=e17]:
+      - generic "Switch to dark mode" [ref=e18] [cursor=pointer]:
+        - img [ref=e19]
+        - switch
+        - img [ref=e25]
+      - button "Settings" [ref=e27]:
+        - img
+      - button "Hide Right Sidebar" [ref=e28]:
+        - img
+  - generic [ref=e30]:
+    - generic [ref=e31]:
+      - img [ref=e33]
+      - generic [ref=e35]: Accu-Mk1
+      - generic [ref=e36]: Sign in to your account
+    - generic [ref=e38]:
+      - generic [ref=e39]:
+        - generic [ref=e40]: Email
+        - textbox "Email" [ref=e41]:
+          - /placeholder: admin@accumark.local
+      - generic [ref=e42]:
+        - generic [ref=e43]: Password
+        - textbox "Password" [ref=e44]
+      - paragraph [ref=e45]: "API: /api"
+      - button "Sign in" [ref=e46]

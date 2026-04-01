@@ -3728,3 +3728,48 @@ export async function createWorksheet(data: {
   if (!response.ok) throw new Error(`Worksheet creation failed: ${response.status}`)
   return response.json()
 }
+
+export interface WorksheetListItem {
+  id: number
+  title: string
+  status: string
+  item_count: number
+  created_at: string | null
+  items: { sample_id: string; group_name: string }[]
+}
+
+export async function listWorksheets(status?: string): Promise<WorksheetListItem[]> {
+  const params = new URLSearchParams()
+  if (status) params.set('status', status)
+  const qs = params.toString()
+  const response = await fetch(`${API_BASE_URL()}/worksheets${qs ? `?${qs}` : ''}`, {
+    headers: getBearerHeaders(),
+  })
+  if (!response.ok) throw new Error(`List worksheets failed: ${response.status}`)
+  return response.json()
+}
+
+export async function addGroupToWorksheet(
+  worksheetId: number,
+  data: { sample_uid: string; sample_id: string; service_group_id: number }
+): Promise<{ status: string; item_id: number }> {
+  const response = await fetch(`${API_BASE_URL()}/worksheets/${worksheetId}/add-group`, {
+    method: 'POST',
+    headers: getBearerHeaders('application/json'),
+    body: JSON.stringify(data),
+  })
+  if (!response.ok) throw new Error(`Add to worksheet failed: ${response.status}`)
+  return response.json()
+}
+
+export async function createWorksheetFromDrop(
+  data: { sample_uid: string; sample_id: string; service_group_id: number }
+): Promise<WorksheetCreateResponse> {
+  const response = await fetch(`${API_BASE_URL()}/worksheets/create-from-drop`, {
+    method: 'POST',
+    headers: getBearerHeaders('application/json'),
+    body: JSON.stringify(data),
+  })
+  if (!response.ok) throw new Error(`Create worksheet failed: ${response.status}`)
+  return response.json()
+}

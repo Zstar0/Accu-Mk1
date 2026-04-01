@@ -1,0 +1,570 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e48]:
+    - generic [ref=e49]:
+      - generic [ref=e50]:
+        - generic [ref=e51]:
+          - button "Close window" [ref=e52]
+          - button "Minimize window" [ref=e54]
+          - button "Enter fullscreen" [ref=e56]
+        - button "Hide Left Sidebar" [ref=e59]:
+          - img
+      - generic [ref=e60]: AccuMk1
+      - generic [ref=e62]:
+        - generic "Switch to dark mode" [ref=e63] [cursor=pointer]:
+          - img [ref=e64]
+          - switch
+          - img [ref=e70]
+        - button "Settings" [ref=e72]:
+          - img
+        - button "Hide Right Sidebar" [ref=e73]:
+          - img
+    - generic [ref=e74]:
+      - generic [ref=e77]:
+        - generic [ref=e79]:
+          - img [ref=e80]
+          - generic [ref=e82]: Accu-Mk1
+        - generic [ref=e84]:
+          - generic [ref=e85]: Navigation
+          - list [ref=e87]:
+            - listitem [ref=e88]:
+              - button "Dashboard" [expanded] [ref=e89]:
+                - img [ref=e90]
+                - generic [ref=e95]: Dashboard
+                - img [ref=e96]
+              - list [ref=e99]:
+                - listitem [ref=e100]:
+                  - button "Orders" [ref=e101]:
+                    - generic [ref=e102]: Orders
+                - listitem [ref=e103]:
+                  - button "Analytics" [ref=e104]:
+                    - generic [ref=e105]: Analytics
+            - listitem [ref=e106]:
+              - button "Analysis" [expanded] [ref=e107]:
+                - img [ref=e108]
+                - generic [ref=e110]: Analysis
+                - img [ref=e111]
+              - list [ref=e114]:
+                - listitem [ref=e115]:
+                  - button "Samples" [ref=e116]:
+                    - generic [ref=e117]: Samples
+                - listitem [ref=e118]:
+                  - button "Receive Sample" [ref=e119]:
+                    - generic [ref=e120]: Receive Sample
+                - listitem [ref=e121]:
+                  - button "Event Log" [ref=e122]:
+                    - generic [ref=e123]: Event Log
+            - listitem [ref=e124]:
+              - button "LIMS" [expanded] [ref=e125]:
+                - img [ref=e126]
+                - generic [ref=e130]: LIMS
+                - img [ref=e131]
+              - list [ref=e134]:
+                - listitem [ref=e135]:
+                  - button "Instruments" [ref=e136]:
+                    - generic [ref=e137]: Instruments
+                - listitem [ref=e138]:
+                  - button "Methods" [ref=e139]:
+                    - generic [ref=e140]: Methods
+                - listitem [ref=e141]:
+                  - button "Peptides" [ref=e142]:
+                    - generic [ref=e143]: Peptides
+                - listitem [ref=e144]:
+                  - button "Analysis Services" [ref=e145]:
+                    - generic [ref=e146]: Analysis Services
+                - listitem [ref=e147]:
+                  - button "Service Groups" [ref=e148]:
+                    - generic [ref=e149]: Service Groups
+            - listitem [ref=e150]:
+              - button "HPLC Automation" [expanded] [ref=e151]:
+                - img [ref=e152]
+                - generic [ref=e156]: HPLC Automation
+                - img [ref=e157]
+              - list [ref=e160]:
+                - listitem [ref=e161]:
+                  - button "Overview" [ref=e162]:
+                    - generic [ref=e163]: Overview
+                - listitem [ref=e164]:
+                  - button "New Analysis" [ref=e165]:
+                    - generic [ref=e166]: New Analysis
+                - listitem [ref=e167]:
+                  - button "History" [ref=e168]:
+                    - generic [ref=e169]: History
+                - listitem [ref=e170]:
+                  - button "Sample Preps" [ref=e171]:
+                    - generic [ref=e172]: Sample Preps
+                - listitem [ref=e173]:
+                  - button "Inbox" [ref=e174]:
+                    - generic [ref=e175]: Inbox
+                - listitem [ref=e176]:
+                  - button "Worksheets" [ref=e177]:
+                    - generic [ref=e178]: Worksheets
+            - listitem [ref=e179]:
+              - button "AccuMark Tools" [expanded] [ref=e180]:
+                - img [ref=e181]
+                - generic [ref=e183]: AccuMark Tools
+                - img [ref=e184]
+              - list [ref=e187]:
+                - listitem [ref=e188]:
+                  - button "Overview" [ref=e189]:
+                    - generic [ref=e190]: Overview
+                - listitem [ref=e191]:
+                  - button "Order Explorer" [ref=e192]:
+                    - generic [ref=e193]: Order Explorer
+                - listitem [ref=e194]:
+                  - button "Order Status" [ref=e195]:
+                    - generic [ref=e196]: Order Status
+                - listitem [ref=e197]:
+                  - button "COA Explorer" [ref=e198]:
+                    - generic [ref=e199]: COA Explorer
+                - listitem [ref=e200]:
+                  - button "Digital COA" [ref=e201]:
+                    - generic [ref=e202]: Digital COA
+                - listitem [ref=e203]:
+                  - button "Chromatographs" [ref=e204]:
+                    - generic [ref=e205]: Chromatographs
+            - listitem [ref=e206]:
+              - button "Account" [expanded] [ref=e207]:
+                - img [ref=e208]
+                - generic [ref=e213]: Account
+                - img [ref=e214]
+              - list [ref=e217]:
+                - listitem [ref=e218]:
+                  - button "Profile" [ref=e219]:
+                    - generic [ref=e220]: Profile
+                - listitem [ref=e221]:
+                  - button "User Management" [ref=e222]:
+                    - generic [ref=e223]: User Management
+        - generic [ref=e224]:
+          - list [ref=e225]:
+            - listitem [ref=e226]:
+              - button "Settings" [ref=e227]:
+                - img [ref=e228]
+                - generic [ref=e231]: Settings
+            - listitem [ref=e232]:
+              - button "Sign Out" [ref=e233]:
+                - img [ref=e234]
+                - generic [ref=e237]: Sign Out
+          - generic [ref=e238]: admin@accumark.local
+      - main [ref=e239]:
+        - generic [ref=e240]:
+          - button "Toggle Sidebar" [ref=e241]:
+            - img
+            - generic [ref=e242]: Toggle Sidebar
+          - generic [ref=e243]: Accu-Mk1
+        - generic [ref=e532]:
+          - generic [ref=e534]:
+            - generic [ref=e535]:
+              - heading "Received Samples" [level=1] [ref=e536]
+              - generic [ref=e537]: "16"
+            - paragraph [ref=e538]: Auto-refreshes every 30s
+          - table [ref=e540]:
+            - rowgroup [ref=e541]:
+              - row "Select all Sample ID Client Priority Assigned Tech Instrument Age Status" [ref=e542]:
+                - columnheader [ref=e543]
+                - columnheader "Select all" [ref=e544]:
+                  - checkbox "Select all" [ref=e545]
+                - columnheader "Sample ID" [ref=e546]
+                - columnheader "Client" [ref=e547]
+                - columnheader "Priority" [ref=e548]
+                - columnheader "Assigned Tech" [ref=e549]
+                - columnheader "Instrument" [ref=e550]
+                - columnheader "Age" [ref=e551]
+                - columnheader "Status" [ref=e552]
+            - rowgroup [ref=e553]:
+              - row "Expand row Select PB-0065 PB-0065 WP-3151 22d 12h Received" [ref=e963]:
+                - cell "Expand row" [ref=e964]:
+                  - button "Expand row" [ref=e965]:
+                    - img [ref=e966]
+                - cell "Select PB-0065" [ref=e968]:
+                  - checkbox "Select PB-0065" [ref=e969]
+                - cell "PB-0065" [ref=e970]
+                - cell "WP-3151" [ref=e971]
+                - cell [ref=e972]:
+                  - combobox "Priority" [ref=e973]:
+                    - generic:
+                      - generic: Normal
+                    - img
+                - cell [ref=e974]:
+                  - combobox "Assigned tech" [ref=e975]:
+                    - generic: Assign tech…
+                    - img
+                - cell [ref=e976]:
+                  - combobox "Instrument" [ref=e977]:
+                    - generic: Assign instrument…
+                    - img
+                - cell "22d 12h" [ref=e978]
+                - cell "Received" [ref=e979]:
+                  - generic [ref=e980]: Received
+              - row "Expand row Select P-0122 P-0122 WP-3149 24d 7h Received" [ref=e981]:
+                - cell "Expand row" [ref=e982]:
+                  - button "Expand row" [ref=e983]:
+                    - img [ref=e984]
+                - cell "Select P-0122" [ref=e986]:
+                  - checkbox "Select P-0122" [ref=e987]
+                - cell "P-0122" [ref=e988]
+                - cell "WP-3149" [ref=e989]
+                - cell [ref=e990]:
+                  - combobox "Priority" [ref=e991]:
+                    - generic:
+                      - generic: Normal
+                    - img
+                - cell [ref=e992]:
+                  - combobox "Assigned tech" [ref=e993]:
+                    - generic: Assign tech…
+                    - img
+                - cell [ref=e994]:
+                  - combobox "Instrument" [ref=e995]:
+                    - generic: Assign instrument…
+                    - img
+                - cell "24d 7h" [ref=e996]
+                - cell "Received" [ref=e997]:
+                  - generic [ref=e998]: Received
+              - row "Expand row Select PB-0063 PB-0063 WP-3148 23d 2h Received" [ref=e999]:
+                - cell "Expand row" [ref=e1000]:
+                  - button "Expand row" [ref=e1001]:
+                    - img [ref=e1002]
+                - cell "Select PB-0063" [ref=e1004]:
+                  - checkbox "Select PB-0063" [ref=e1005]
+                - cell "PB-0063" [ref=e1006]
+                - cell "WP-3148" [ref=e1007]
+                - cell [ref=e1008]:
+                  - combobox "Priority" [ref=e1009]:
+                    - generic:
+                      - generic: Normal
+                    - img
+                - cell [ref=e1010]:
+                  - combobox "Assigned tech" [ref=e1011]:
+                    - generic: Assign tech…
+                    - img
+                - cell [ref=e1012]:
+                  - combobox "Instrument" [ref=e1013]:
+                    - generic: Assign instrument…
+                    - img
+                - cell "23d 2h" [ref=e1014]
+                - cell "Received" [ref=e1015]:
+                  - generic [ref=e1016]: Received
+              - row "Expand row Select PB-0062 PB-0062 WP-3148 23d 2h Received" [ref=e1017]:
+                - cell "Expand row" [ref=e1018]:
+                  - button "Expand row" [ref=e1019]:
+                    - img [ref=e1020]
+                - cell "Select PB-0062" [ref=e1022]:
+                  - checkbox "Select PB-0062" [ref=e1023]
+                - cell "PB-0062" [ref=e1024]
+                - cell "WP-3148" [ref=e1025]
+                - cell [ref=e1026]:
+                  - combobox "Priority" [ref=e1027]:
+                    - generic:
+                      - generic: Normal
+                    - img
+                - cell [ref=e1028]:
+                  - combobox "Assigned tech" [ref=e1029]:
+                    - generic: Assign tech…
+                    - img
+                - cell [ref=e1030]:
+                  - combobox "Instrument" [ref=e1031]:
+                    - generic: Assign instrument…
+                    - img
+                - cell "23d 2h" [ref=e1032]
+                - cell "Received" [ref=e1033]:
+                  - generic [ref=e1034]: Received
+              - row "Expand row Select PB-0061 PB-0061 WP-3124 34d 12h Received" [ref=e1035]:
+                - cell "Expand row" [ref=e1036]:
+                  - button "Expand row" [ref=e1037]:
+                    - img [ref=e1038]
+                - cell "Select PB-0061" [ref=e1040]:
+                  - checkbox "Select PB-0061" [ref=e1041]
+                - cell "PB-0061" [ref=e1042]
+                - cell "WP-3124" [ref=e1043]
+                - cell [ref=e1044]:
+                  - combobox "Priority" [ref=e1045]:
+                    - generic:
+                      - generic: Normal
+                    - img
+                - cell [ref=e1046]:
+                  - combobox "Assigned tech" [ref=e1047]:
+                    - generic: Assign tech…
+                    - img
+                - cell [ref=e1048]:
+                  - combobox "Instrument" [ref=e1049]:
+                    - generic: Assign instrument…
+                    - img
+                - cell "34d 12h" [ref=e1050]
+                - cell "Received" [ref=e1051]:
+                  - generic [ref=e1052]: Received
+              - row "Expand row Select PB-0060 PB-0060 WP-3123 35d 8h Received" [ref=e1053]:
+                - cell "Expand row" [ref=e1054]:
+                  - button "Expand row" [ref=e1055]:
+                    - img [ref=e1056]
+                - cell "Select PB-0060" [ref=e1058]:
+                  - checkbox "Select PB-0060" [ref=e1059]
+                - cell "PB-0060" [ref=e1060]
+                - cell "WP-3123" [ref=e1061]
+                - cell [ref=e1062]:
+                  - combobox "Priority" [ref=e1063]:
+                    - generic:
+                      - generic: Normal
+                    - img
+                - cell [ref=e1064]:
+                  - combobox "Assigned tech" [ref=e1065]:
+                    - generic: Assign tech…
+                    - img
+                - cell [ref=e1066]:
+                  - combobox "Instrument" [ref=e1067]:
+                    - generic: Assign instrument…
+                    - img
+                - cell "35d 8h" [ref=e1068]
+                - cell "Received" [ref=e1069]:
+                  - generic [ref=e1070]: Received
+              - row "Expand row Select PB-0059 PB-0059 WP-3085 43d 8h Received" [ref=e1071]:
+                - cell "Expand row" [ref=e1072]:
+                  - button "Expand row" [ref=e1073]:
+                    - img [ref=e1074]
+                - cell "Select PB-0059" [ref=e1076]:
+                  - checkbox "Select PB-0059" [ref=e1077]
+                - cell "PB-0059" [ref=e1078]
+                - cell "WP-3085" [ref=e1079]
+                - cell [ref=e1080]:
+                  - combobox "Priority" [ref=e1081]:
+                    - generic:
+                      - generic: Normal
+                    - img
+                - cell [ref=e1082]:
+                  - combobox "Assigned tech" [ref=e1083]:
+                    - generic: Assign tech…
+                    - img
+                - cell [ref=e1084]:
+                  - combobox "Instrument" [ref=e1085]:
+                    - generic: Assign instrument…
+                    - img
+                - cell "43d 8h" [ref=e1086]
+                - cell "Received" [ref=e1087]:
+                  - generic [ref=e1088]: Received
+              - row "Expand row Select PB-0058 PB-0058 WP-3083 43d 22h Received" [ref=e1089]:
+                - cell "Expand row" [ref=e1090]:
+                  - button "Expand row" [ref=e1091]:
+                    - img [ref=e1092]
+                - cell "Select PB-0058" [ref=e1094]:
+                  - checkbox "Select PB-0058" [ref=e1095]
+                - cell "PB-0058" [ref=e1096]
+                - cell "WP-3083" [ref=e1097]
+                - cell [ref=e1098]:
+                  - combobox "Priority" [ref=e1099]:
+                    - generic:
+                      - generic: Normal
+                    - img
+                - cell [ref=e1100]:
+                  - combobox "Assigned tech" [ref=e1101]:
+                    - generic: Assign tech…
+                    - img
+                - cell [ref=e1102]:
+                  - combobox "Instrument" [ref=e1103]:
+                    - generic: Assign instrument…
+                    - img
+                - cell "43d 22h" [ref=e1104]
+                - cell "Received" [ref=e1105]:
+                  - generic [ref=e1106]: Received
+              - row "Expand row Select P-0107 P-0107 WP-3082 42d 12h Received" [ref=e1107]:
+                - cell "Expand row" [ref=e1108]:
+                  - button "Expand row" [ref=e1109]:
+                    - img [ref=e1110]
+                - cell "Select P-0107" [ref=e1112]:
+                  - checkbox "Select P-0107" [ref=e1113]
+                - cell "P-0107" [ref=e1114]
+                - cell "WP-3082" [ref=e1115]
+                - cell [ref=e1116]:
+                  - combobox "Priority" [ref=e1117]:
+                    - generic:
+                      - generic: Normal
+                    - img
+                - cell [ref=e1118]:
+                  - combobox "Assigned tech" [ref=e1119]:
+                    - generic: Assign tech…
+                    - img
+                - cell [ref=e1120]:
+                  - combobox "Instrument" [ref=e1121]:
+                    - generic: Assign instrument…
+                    - img
+                - cell "42d 12h" [ref=e1122]
+                - cell "Received" [ref=e1123]:
+                  - generic [ref=e1124]: Received
+              - row "Expand row Select P-0102 P-0102 WP-3066 47d 8h Received" [ref=e1125]:
+                - cell "Expand row" [ref=e1126]:
+                  - button "Expand row" [ref=e1127]:
+                    - img [ref=e1128]
+                - cell "Select P-0102" [ref=e1130]:
+                  - checkbox "Select P-0102" [ref=e1131]
+                - cell "P-0102" [ref=e1132]
+                - cell "WP-3066" [ref=e1133]
+                - cell [ref=e1134]:
+                  - combobox "Priority" [ref=e1135]:
+                    - generic:
+                      - generic: Normal
+                    - img
+                - cell [ref=e1136]:
+                  - combobox "Assigned tech" [ref=e1137]:
+                    - generic: Assign tech…
+                    - img
+                - cell [ref=e1138]:
+                  - combobox "Instrument" [ref=e1139]:
+                    - generic: Assign instrument…
+                    - img
+                - cell "47d 8h" [ref=e1140]
+                - cell "Received" [ref=e1141]:
+                  - generic [ref=e1142]: Received
+              - row "Expand row Select P-0101 P-0101 forrest@valenceanalytical.com 48d 1h Received" [ref=e1143]:
+                - cell "Expand row" [ref=e1144]:
+                  - button "Expand row" [ref=e1145]:
+                    - img [ref=e1146]
+                - cell "Select P-0101" [ref=e1148]:
+                  - checkbox "Select P-0101" [ref=e1149]
+                - cell "P-0101" [ref=e1150]
+                - cell "forrest@valenceanalytical.com" [ref=e1151]
+                - cell [ref=e1152]:
+                  - combobox "Priority" [ref=e1153]:
+                    - generic:
+                      - generic: Normal
+                    - img
+                - cell [ref=e1154]:
+                  - combobox "Assigned tech" [ref=e1155]:
+                    - generic: Assign tech…
+                    - img
+                - cell [ref=e1156]:
+                  - combobox "Instrument" [ref=e1157]:
+                    - generic: Assign instrument…
+                    - img
+                - cell "48d 1h" [ref=e1158]
+                - cell "Received" [ref=e1159]:
+                  - generic [ref=e1160]: Received
+              - row "Expand row Select P-0096 P-0096 WP-3042 48d 9h Received" [ref=e1161]:
+                - cell "Expand row" [ref=e1162]:
+                  - button "Expand row" [ref=e1163]:
+                    - img [ref=e1164]
+                - cell "Select P-0096" [ref=e1166]:
+                  - checkbox "Select P-0096" [ref=e1167]
+                - cell "P-0096" [ref=e1168]
+                - cell "WP-3042" [ref=e1169]
+                - cell [ref=e1170]:
+                  - combobox "Priority" [ref=e1171]:
+                    - generic:
+                      - generic: Normal
+                    - img
+                - cell [ref=e1172]:
+                  - combobox "Assigned tech" [ref=e1173]:
+                    - generic: Assign tech…
+                    - img
+                - cell [ref=e1174]:
+                  - combobox "Instrument" [ref=e1175]:
+                    - generic: Assign instrument…
+                    - img
+                - cell "48d 9h" [ref=e1176]
+                - cell "Received" [ref=e1177]:
+                  - generic [ref=e1178]: Received
+              - row "Expand row Select P-0090 P-0090 WP-3032 38d 3h Received" [ref=e1179]:
+                - cell "Expand row" [ref=e1180]:
+                  - button "Expand row" [ref=e1181]:
+                    - img [ref=e1182]
+                - cell "Select P-0090" [ref=e1184]:
+                  - checkbox "Select P-0090" [ref=e1185]
+                - cell "P-0090" [ref=e1186]
+                - cell "WP-3032" [ref=e1187]
+                - cell [ref=e1188]:
+                  - combobox "Priority" [ref=e1189]:
+                    - generic:
+                      - generic: Normal
+                    - img
+                - cell [ref=e1190]:
+                  - combobox "Assigned tech" [ref=e1191]:
+                    - generic: Assign tech…
+                    - img
+                - cell [ref=e1192]:
+                  - combobox "Instrument" [ref=e1193]:
+                    - generic: Assign instrument…
+                    - img
+                - cell "38d 3h" [ref=e1194]
+                - cell "Received" [ref=e1195]:
+                  - generic [ref=e1196]: Received
+              - row "Expand row Select P-0089 P-0089 WP-3031 38d 3h Received" [ref=e1197]:
+                - cell "Expand row" [ref=e1198]:
+                  - button "Expand row" [ref=e1199]:
+                    - img [ref=e1200]
+                - cell "Select P-0089" [ref=e1202]:
+                  - checkbox "Select P-0089" [ref=e1203]
+                - cell "P-0089" [ref=e1204]
+                - cell "WP-3031" [ref=e1205]
+                - cell [ref=e1206]:
+                  - combobox "Priority" [ref=e1207]:
+                    - generic:
+                      - generic: Normal
+                    - img
+                - cell [ref=e1208]:
+                  - combobox "Assigned tech" [ref=e1209]:
+                    - generic: Assign tech…
+                    - img
+                - cell [ref=e1210]:
+                  - combobox "Instrument" [ref=e1211]:
+                    - generic: Assign instrument…
+                    - img
+                - cell "38d 3h" [ref=e1212]
+                - cell "Received" [ref=e1213]:
+                  - generic [ref=e1214]: Received
+              - row "Expand row Select P-0088 P-0088 WP-3030 38d 4h Received" [ref=e1215]:
+                - cell "Expand row" [ref=e1216]:
+                  - button "Expand row" [ref=e1217]:
+                    - img [ref=e1218]
+                - cell "Select P-0088" [ref=e1220]:
+                  - checkbox "Select P-0088" [ref=e1221]
+                - cell "P-0088" [ref=e1222]
+                - cell "WP-3030" [ref=e1223]
+                - cell [ref=e1224]:
+                  - combobox "Priority" [ref=e1225]:
+                    - generic:
+                      - generic: Normal
+                    - img
+                - cell [ref=e1226]:
+                  - combobox "Assigned tech" [ref=e1227]:
+                    - generic: Assign tech…
+                    - img
+                - cell [ref=e1228]:
+                  - combobox "Instrument" [ref=e1229]:
+                    - generic: Assign instrument…
+                    - img
+                - cell "38d 4h" [ref=e1230]
+                - cell "Received" [ref=e1231]:
+                  - generic [ref=e1232]: Received
+              - row "Expand row Select P-0086 P-0086 forrest@valenceanalytical.com 60d 3h Received" [ref=e1233]:
+                - cell "Expand row" [ref=e1234]:
+                  - button "Expand row" [ref=e1235]:
+                    - img [ref=e1236]
+                - cell "Select P-0086" [ref=e1238]:
+                  - checkbox "Select P-0086" [ref=e1239]
+                - cell "P-0086" [ref=e1240]
+                - cell "forrest@valenceanalytical.com" [ref=e1241]
+                - cell [ref=e1242]:
+                  - combobox "Priority" [ref=e1243]:
+                    - generic:
+                      - generic: Normal
+                    - img
+                - cell [ref=e1244]:
+                  - combobox "Assigned tech" [ref=e1245]:
+                    - generic: Assign tech…
+                    - img
+                - cell [ref=e1246]:
+                  - combobox "Instrument" [ref=e1247]:
+                    - generic: Assign instrument…
+                    - img
+                - cell "60d 3h" [ref=e1248]
+                - cell "Received" [ref=e1249]:
+                  - generic [ref=e1250]: Received
+    - generic [ref=e527]:
+      - heading "Command Palette" [level=2] [ref=e528]
+      - paragraph [ref=e529]: Type a command or search...
+    - region "Notifications alt+T":
+      - list:
+        - listitem [ref=e1251]:
+          - img [ref=e1253]
+          - generic [ref=e1256]: Worksheet "WS-2026-03-31-001" created with 2 items
+    - generic:
+      - generic: Accu-Mk1 v0.27.7
+      - generic: •
+      - generic: Connected - Docker (local)
+  - generic [ref=e530]: "0"
