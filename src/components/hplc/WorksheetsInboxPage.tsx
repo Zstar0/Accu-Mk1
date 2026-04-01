@@ -91,16 +91,18 @@ export default function WorksheetsInboxPage() {
     priorityMutation.mutate({ sampleUid, priority })
   }
 
-  function handleTechAssign(sampleUids: string[], analystId: number) {
+  function handleGroupTechAssign(sampleUid: string, groupId: number, analystId: number) {
     bulkUpdateMutation.mutate({
-      sample_uids: sampleUids,
+      sample_uids: [sampleUid],
+      service_group_id: groupId,
       analyst_id: analystId,
     })
   }
 
-  function handleInstrumentAssign(sampleUids: string[], instrumentUid: string) {
+  function handleGroupInstrumentAssign(sampleUid: string, groupId: number, instrumentUid: string) {
     bulkUpdateMutation.mutate({
-      sample_uids: sampleUids,
+      sample_uids: [sampleUid],
+      service_group_id: groupId,
       instrument_uid: instrumentUid,
     })
   }
@@ -165,8 +167,8 @@ export default function WorksheetsInboxPage() {
           users={users}
           instruments={instruments}
           onPriorityChange={handlePriorityChange}
-          onTechAssign={handleTechAssign}
-          onInstrumentAssign={handleInstrumentAssign}
+          onGroupTechAssign={handleGroupTechAssign}
+          onGroupInstrumentAssign={handleGroupInstrumentAssign}
         />
       )}
 
@@ -174,16 +176,8 @@ export default function WorksheetsInboxPage() {
       {selectedUids.size > 0 && (
         <InboxBulkToolbar
           selectedCount={selectedUids.size}
-          users={users}
-          instruments={instruments}
           onSetPriority={priority =>
             bulkUpdateMutation.mutate({ sample_uids: Array.from(selectedUids), priority })
-          }
-          onAssignTech={analystId =>
-            bulkUpdateMutation.mutate({ sample_uids: Array.from(selectedUids), analyst_id: analystId })
-          }
-          onSetInstrument={instrumentUid =>
-            bulkUpdateMutation.mutate({ sample_uids: Array.from(selectedUids), instrument_uid: instrumentUid })
           }
           onCreateWorksheet={() => setWorksheetDialogOpen(true)}
           onClearSelection={() => setSelectedUids(new Set())}

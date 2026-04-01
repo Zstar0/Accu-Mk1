@@ -3618,6 +3618,9 @@ export interface InboxServiceGroupSection {
   group_id: number
   group_name: string
   group_color: string
+  assigned_analyst_id: number | null
+  assigned_analyst_email: string | null
+  instrument_uid: string | null
   analyses: InboxAnalysisItem[]
 }
 
@@ -3630,9 +3633,7 @@ export interface InboxSampleItem {
   date_received: string | null
   review_state: string
   priority: InboxPriority
-  assigned_analyst_id: number | null
-  assigned_analyst_email: string | null
-  instrument_uid: string | null
+  assignment_summary: string
   analyses_by_group: InboxServiceGroupSection[]
 }
 
@@ -3683,6 +3684,7 @@ export async function getWorksheetUsers(): Promise<WorksheetUser[]> {
 export async function bulkUpdateInbox(data: {
   sample_uids: string[]
   priority?: InboxPriority
+  service_group_id?: number
   analyst_id?: number
   instrument_uid?: string
 }): Promise<void> {

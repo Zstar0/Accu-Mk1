@@ -6,28 +6,20 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Button } from '@/components/ui/button'
-import type { InboxPriority, WorksheetUser } from '@/lib/api'
+import type { InboxPriority } from '@/lib/api'
 
 interface InboxBulkToolbarProps {
   selectedCount: number
   onSetPriority: (priority: InboxPriority) => void
-  onAssignTech: (analystId: number) => void
-  onSetInstrument: (instrumentUid: string) => void
   onCreateWorksheet: () => void
   onClearSelection: () => void
-  users: WorksheetUser[]
-  instruments: { uid: string; title: string }[]
 }
 
 export function InboxBulkToolbar({
   selectedCount,
   onSetPriority,
-  onAssignTech,
-  onSetInstrument,
   onCreateWorksheet,
   onClearSelection,
-  users,
-  instruments,
 }: InboxBulkToolbarProps) {
   return (
     <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 animate-in slide-in-from-bottom-4 duration-200">
@@ -48,40 +40,6 @@ export function InboxBulkToolbar({
             <SelectItem value="normal">Normal</SelectItem>
             <SelectItem value="high">High</SelectItem>
             <SelectItem value="expedited">Expedited</SelectItem>
-          </SelectContent>
-        </Select>
-
-        {/* Assign Tech */}
-        <Select
-          onValueChange={value => onAssignTech(Number(value))}
-          disabled={users.length === 0}
-        >
-          <SelectTrigger size="sm" className="w-44">
-            <SelectValue placeholder="Assign Tech" />
-          </SelectTrigger>
-          <SelectContent>
-            {users.map(user => (
-              <SelectItem key={user.id} value={String(user.id)}>
-                {user.email}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-
-        {/* Set Instrument */}
-        <Select
-          onValueChange={value => onSetInstrument(value)}
-          disabled={instruments.length === 0}
-        >
-          <SelectTrigger size="sm" className="w-44">
-            <SelectValue placeholder="Set Instrument" />
-          </SelectTrigger>
-          <SelectContent>
-            {instruments.map(inst => (
-              <SelectItem key={inst.uid} value={inst.uid}>
-                {inst.title}
-              </SelectItem>
-            ))}
           </SelectContent>
         </Select>
 

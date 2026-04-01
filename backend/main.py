@@ -10394,6 +10394,9 @@ class InboxServiceGroupSection(BaseModel):
     group_id: int
     group_name: str
     group_color: str
+    assigned_analyst_id: Optional[int] = None
+    assigned_analyst_email: Optional[str] = None
+    instrument_uid: Optional[str] = None
     analyses: list[InboxAnalysisItem]
 
 
@@ -10406,9 +10409,7 @@ class InboxSampleItem(BaseModel):
     date_received: Optional[str] = None
     review_state: str
     priority: str = "normal"
-    assigned_analyst_id: Optional[int] = None
-    assigned_analyst_email: Optional[str] = None
-    instrument_uid: Optional[str] = None
+    assignment_summary: str = ""  # e.g., "2/3 assigned"
     analyses_by_group: list[InboxServiceGroupSection] = []
 
 
@@ -10424,6 +10425,7 @@ class PriorityUpdate(BaseModel):
 class BulkInboxUpdate(BaseModel):
     sample_uids: list[str]
     priority: Optional[str] = None
+    service_group_id: Optional[int] = None  # required when setting analyst or instrument
     analyst_id: Optional[int] = None
     instrument_uid: Optional[str] = None
 
@@ -10518,8 +10520,8 @@ async def get_worksheets_inbox(
     ).scalars().all()
     priority_map: dict[str, str] = {row.sample_uid: row.priority for row in priority_rows}
 
-    # Step 5: Load worksheet_item assignments (analyst + instrument) for these samples
-    # These are pre-worksheet orphan assignments stored before worksheet creation
+    # Step 5: Load per-group worksheet_item assignments (analyst + instrument)
+    # Key is (sample_uid, service_group_id) → WorksheetItem
     item_rows = db.execute(
         select(WorksheetItem)
         .join(Worksheet, WorksheetItem.worksheet_id == Worksheet.id)
@@ -10528,7 +10530,9 @@ async def get_worksheets_inbox(
             Worksheet.status == "staging",
         )
     ).scalars().all()
-    assignment_map: dict[str, WorksheetItem] = {row.sample_uid: row for row in item_rows}
+    assignment_map: dict[tuple[str, int | None], WorksheetItem] = {
+        (row.sample_uid, row.service_group_id): row for row in item_rows
+    }
 
     # Collect analyst IDs to load emails
     analyst_ids = {row.assigned_analyst_id for row in item_rows if row.assigned_analyst_id}
@@ -10609,11 +10613,22 @@ async def get_worksheets_inbox(
 
         analyses_by_group = list(groups_by_id.values())
 
-        # Build enriched item
-        assignment = assignment_map.get(uid)
-        assigned_analyst_id = assignment.assigned_analyst_id if assignment else None
-        instrument_uid_val = assignment.instrument_uid if assignment else None
-        assigned_analyst_email = analyst_map.get(assigned_analyst_id) if assigned_analyst_id else None
+        # Attach per-group assignments (analyst + instrument)
+        assigned_count = 0
+        for grp in analyses_by_group:
+            assignment = assignment_map.get((uid, grp.group_id))
+            if assignment:
+                grp.assigned_analyst_id = assignment.assigned_analyst_id
+                grp.instrument_uid = assignment.instrument_uid
+                if assignment.assigned_analyst_id:
+                    grp.assigned_analyst_email = analyst_map.get(assignment.assigned_analyst_id)
+                    assigned_count += 1
+
+        total_groups = len(analyses_by_group)
+        if total_groups > 0 and assigned_count > 0:
+            summary = f"{assigned_count}/{total_groups} assigned"
+        else:
+            summary = ""
 
         result_items.append(
             InboxSampleItem(
@@ -10625,9 +10640,7 @@ async def get_worksheets_inbox(
                 date_received=it.get("getDateReceived") or it.get("DateReceived") or None,
                 review_state=str(it.get("review_state", "")),
                 priority=priority_map.get(uid, "normal"),
-                assigned_analyst_id=assigned_analyst_id,
-                assigned_analyst_email=assigned_analyst_email,
-                instrument_uid=instrument_uid_val,
+                assignment_summary=summary,
                 analyses_by_group=analyses_by_group,
             )
         )
@@ -10710,24 +10723,27 @@ async def bulk_update_inbox(
             else:
                 db.add(SamplePriority(sample_uid=uid, priority=data.priority))
 
-    # Upsert analyst/instrument orphan worksheet_items
+    # Upsert analyst/instrument per service group as staging worksheet_items
     if data.analyst_id is not None or data.instrument_uid is not None:
-        # Find orphan worksheet (one per-update session: a special "pre-assignment" worksheet)
-        # We use a sentinel worksheet with status='pre_assigned' to park these assignments.
-        # When a real worksheet is created, it picks up priority from sample_priorities directly.
-        # For analyst/instrument pre-assignments we simply store them as worksheet_items
-        # referencing a temporary open worksheet, or update existing ones.
+        if data.service_group_id is None:
+            raise HTTPException(
+                status_code=400,
+                detail="service_group_id is required when setting analyst or instrument",
+            )
+
+        # Find existing staging items keyed by (sample_uid, service_group_id)
         existing_items = db.execute(
             select(WorksheetItem)
             .join(Worksheet, WorksheetItem.worksheet_id == Worksheet.id)
             .where(
                 WorksheetItem.sample_uid.in_(data.sample_uids),
-                Worksheet.status == "open",
+                WorksheetItem.service_group_id == data.service_group_id,
+                Worksheet.status == "staging",
             )
         ).scalars().all()
         existing_item_map = {row.sample_uid: row for row in existing_items}
 
-        # If some samples have no existing item, we need a staging worksheet
+        # Get or create staging worksheet
         missing_uids = [uid for uid in data.sample_uids if uid not in existing_item_map]
         staging_ws = None
         if missing_uids:
@@ -10744,7 +10760,7 @@ async def bulk_update_inbox(
                     created_by=_current_user.id,
                 )
                 db.add(staging_ws)
-                db.flush()  # Get ID assigned
+                db.flush()
 
         for uid in data.sample_uids:
             if uid in existing_item_map:
@@ -10757,7 +10773,8 @@ async def bulk_update_inbox(
                 db.add(WorksheetItem(
                     worksheet_id=staging_ws.id,
                     sample_uid=uid,
-                    sample_id=uid,  # SENAITE sample_id unknown here; use uid as placeholder
+                    sample_id=uid,
+                    service_group_id=data.service_group_id,
                     assigned_analyst_id=data.analyst_id,
                     instrument_uid=data.instrument_uid,
                 ))

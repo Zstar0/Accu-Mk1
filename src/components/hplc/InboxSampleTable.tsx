@@ -36,8 +36,8 @@ interface InboxSampleTableProps {
   users: WorksheetUser[]
   instruments: { uid: string; title: string }[]
   onPriorityChange: (sampleUid: string, priority: InboxPriority) => void
-  onTechAssign: (sampleUids: string[], analystId: number) => void
-  onInstrumentAssign: (sampleUids: string[], instrumentUid: string) => void
+  onGroupTechAssign: (sampleUid: string, groupId: number, analystId: number) => void
+  onGroupInstrumentAssign: (sampleUid: string, groupId: number, instrumentUid: string) => void
 }
 
 function HeaderCheckbox({
@@ -60,7 +60,19 @@ function HeaderCheckbox({
   )
 }
 
-function ExpandedAnalyses({ sample }: { sample: InboxSampleItem }) {
+function ExpandedAnalyses({
+  sample,
+  users,
+  instruments,
+  onGroupTechAssign,
+  onGroupInstrumentAssign,
+}: {
+  sample: InboxSampleItem
+  users: WorksheetUser[]
+  instruments: { uid: string; title: string }[]
+  onGroupTechAssign: (sampleUid: string, groupId: number, analystId: number) => void
+  onGroupInstrumentAssign: (sampleUid: string, groupId: number, instrumentUid: string) => void
+}) {
   if (sample.analyses_by_group.length === 0) {
     return (
       <p className="text-sm text-muted-foreground italic">No analyses available</p>
@@ -68,7 +80,7 @@ function ExpandedAnalyses({ sample }: { sample: InboxSampleItem }) {
   }
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-4">
       {sample.analyses_by_group.map(group => {
         const colorKey = (group.group_color as ServiceGroupColor) in SERVICE_GROUP_COLORS
           ? (group.group_color as ServiceGroupColor)
@@ -77,12 +89,56 @@ function ExpandedAnalyses({ sample }: { sample: InboxSampleItem }) {
 
         return (
           <div key={group.group_id}>
-            <div className="mb-1.5 flex items-center gap-2">
+            <div className="mb-1.5 flex items-center gap-3">
               <span
                 className={`inline-flex items-center rounded-md border px-2 py-0.5 text-xs font-medium ${colorClasses}`}
               >
                 {group.group_name}
               </span>
+              <div className="flex items-center gap-2">
+                <Select
+                  value={group.assigned_analyst_id != null ? String(group.assigned_analyst_id) : ''}
+                  onValueChange={value =>
+                    onGroupTechAssign(sample.uid, group.group_id, Number(value))
+                  }
+                >
+                  <SelectTrigger
+                    size="sm"
+                    className="h-6 min-w-[130px] text-xs border-transparent bg-transparent shadow-none hover:border-border"
+                    aria-label={`Assign tech for ${group.group_name}`}
+                  >
+                    <SelectValue placeholder="Assign tech…" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {users.map(user => (
+                      <SelectItem key={user.id} value={String(user.id)}>
+                        {user.email}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Select
+                  value={group.instrument_uid ?? ''}
+                  onValueChange={value =>
+                    onGroupInstrumentAssign(sample.uid, group.group_id, value)
+                  }
+                >
+                  <SelectTrigger
+                    size="sm"
+                    className="h-6 min-w-[130px] text-xs border-transparent bg-transparent shadow-none hover:border-border"
+                    aria-label={`Assign instrument for ${group.group_name}`}
+                  >
+                    <SelectValue placeholder="Instrument…" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {instruments.map(inst => (
+                      <SelectItem key={inst.uid} value={inst.uid}>
+                        {inst.title}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
             <div className="rounded-md border border-border/50 overflow-hidden">
               <table className="w-full text-xs">
@@ -121,8 +177,8 @@ export function InboxSampleTable({
   users,
   instruments,
   onPriorityChange,
-  onTechAssign,
-  onInstrumentAssign,
+  onGroupTechAssign,
+  onGroupInstrumentAssign,
 }: InboxSampleTableProps) {
   const [expandedUids, setExpandedUids] = useState<Set<string>>(new Set())
 
@@ -157,7 +213,7 @@ export function InboxSampleTable({
     setExpandedUids(next)
   }
 
-  const TOTAL_COLS = 9 // expand + 8 data columns
+  const TOTAL_COLS = 8 // expand + 7 data columns
 
   return (
     <Table>
@@ -176,8 +232,7 @@ export function InboxSampleTable({
           <TableHead>Sample ID</TableHead>
           <TableHead>Client</TableHead>
           <TableHead>Priority</TableHead>
-          <TableHead>Assigned Tech</TableHead>
-          <TableHead>Instrument</TableHead>
+          <TableHead>Assignments</TableHead>
           <TableHead>Age</TableHead>
           <TableHead>Status</TableHead>
         </TableRow>
@@ -259,54 +314,11 @@ export function InboxSampleTable({
                   </Select>
                 </TableCell>
 
-                {/* Assigned Tech */}
+                {/* Assignments summary */}
                 <TableCell>
-                  <Select
-                    value={sample.assigned_analyst_id != null ? String(sample.assigned_analyst_id) : ''}
-                    onValueChange={(value) =>
-                      onTechAssign([sample.uid], Number(value))
-                    }
-                  >
-                    <SelectTrigger
-                      size="sm"
-                      className="h-7 min-w-[140px] border-transparent bg-transparent shadow-none hover:border-border focus-visible:border-ring"
-                      aria-label="Assigned tech"
-                    >
-                      <SelectValue placeholder="Assign tech…" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {users.map(user => (
-                        <SelectItem key={user.id} value={String(user.id)}>
-                          {user.email}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </TableCell>
-
-                {/* Instrument */}
-                <TableCell>
-                  <Select
-                    value={sample.instrument_uid ?? ''}
-                    onValueChange={(value) =>
-                      onInstrumentAssign([sample.uid], value)
-                    }
-                  >
-                    <SelectTrigger
-                      size="sm"
-                      className="h-7 min-w-[140px] border-transparent bg-transparent shadow-none hover:border-border focus-visible:border-ring"
-                      aria-label="Instrument"
-                    >
-                      <SelectValue placeholder="Assign instrument…" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {instruments.map(inst => (
-                        <SelectItem key={inst.uid} value={inst.uid}>
-                          {inst.title}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <span className="text-xs text-muted-foreground">
+                    {sample.assignment_summary || '—'}
+                  </span>
                 </TableCell>
 
                 {/* Age */}
@@ -325,7 +337,13 @@ export function InboxSampleTable({
                 <TableRow key={`${sample.uid}-expanded`} className="hover:bg-transparent">
                   <TableCell />
                   <TableCell colSpan={TOTAL_COLS - 1} className="bg-muted/30 py-3 px-4 whitespace-normal">
-                    <ExpandedAnalyses sample={sample} />
+                    <ExpandedAnalyses
+                      sample={sample}
+                      users={users}
+                      instruments={instruments}
+                      onGroupTechAssign={onGroupTechAssign}
+                      onGroupInstrumentAssign={onGroupInstrumentAssign}
+                    />
                   </TableCell>
                 </TableRow>
               )}
