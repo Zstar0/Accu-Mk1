@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v0.28.0
 milestone_name: — Worksheet Feature
 status: executing
-stopped_at: Completed 16-02-PLAN.md
-last_updated: "2026-04-01T03:39:59.639Z"
+stopped_at: Completed 16-01-PLAN.md
+last_updated: "2026-04-01T03:50:16.630Z"
 last_activity: 2026-04-01
 progress:
   total_phases: 4
   completed_phases: 1
   total_plans: 8
-  completed_plans: 5
+  completed_plans: 6
   percent: 0
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-03-31)
 ## Current Position
 
 Phase: 16 (received-samples-inbox) — EXECUTING
-Plan: 2 of 4
+Plan: 3 of 4
 Status: Ready to execute
 Last activity: 2026-04-01
 
@@ -45,6 +45,7 @@ Progress: [░░░░░░░░░░░░░░░░░░░░] 0% (0/4
 | Phase 15-foundation P04 | 5 | 1 tasks | 1 files |
 | Phase 15-foundation P03 | 2 | 1 tasks | 2 files |
 | Phase 16-received-samples-inbox P02 | 12 | 2 tasks | 4 files |
+| Phase 16 P01 | 4 | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -66,6 +67,8 @@ Progress: [░░░░░░░░░░░░░░░░░░░░] 0% (0/4
 - [Phase 15-foundation]: Membership editor uses parallel Promise.all for getAnalysisServices and getServiceGroupMembers on panel open
 - [Phase 16-received-samples-inbox]: API functions use project-standard API_BASE_URL()/getBearerHeaders() pattern, not credentials:include
 - [Phase 16-received-samples-inbox]: Live queue pattern: refetchInterval:30_000 + staleTime:0 bypasses global 5min stale cache for inbox
+- [Phase 16]: Staging worksheet (__inbox_staging__) parks bulk pre-assignments before real worksheet exists; picked up at create_worksheet time
+- [Phase 16]: Stale data guard on POST /worksheets verifies each sample UID against SENAITE before creation, returns 409 with stale_uids list
 
 ### Key Source Files
 
@@ -87,6 +90,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-04-01T03:39:59.636Z
-Stopped at: Completed 16-02-PLAN.md
+Last session: 2026-04-01T03:50:16.627Z
+Stopped at: Completed 16-01-PLAN.md
 Resume file: None

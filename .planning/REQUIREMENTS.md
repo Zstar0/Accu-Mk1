@@ -22,8 +22,8 @@ Requirements for worksheet feature milestone. Each maps to roadmap phases.
 
 ### Received Samples Queue (Inbox)
 
-- [ ] **INBX-01**: User can view all received samples from SENAITE in a queue/inbox table
-- [ ] **INBX-02**: Each sample row expands to show analyses grouped by service group with color badges
+- [x] **INBX-01**: User can view all received samples from SENAITE in a queue/inbox table
+- [x] **INBX-02**: Each sample row expands to show analyses grouped by service group with color badges
 - [x] **INBX-03**: User can set sample priority (normal/high/expedited) with color-coded badge display
 - [ ] **INBX-04**: User can assign a tech (analyst) to a sample inline via dropdown
 - [x] **INBX-05**: User can assign an instrument to a sample inline via dropdown
@@ -32,7 +32,7 @@ Requirements for worksheet feature milestone. Each maps to roadmap phases.
 - [ ] **INBX-08**: User can create a worksheet from selected inbox items (primary action)
 - [x] **INBX-09**: Inbox auto-refreshes via 30-second polling with TanStack Query
 - [ ] **INBX-10**: Worksheet creation validates each sample is still in sample_received state (stale data guard)
-- [ ] **INBX-11**: Priority data persists locally in sample_priorities table
+- [x] **INBX-11**: Priority data persists locally in sample_priorities table
 
 ### Worksheet Management
 
@@ -86,8 +86,8 @@ Requirements for worksheet feature milestone. Each maps to roadmap phases.
 | ANLY-01 | Phase 15 | Complete |
 | ANLY-02 | Phase 15 | Complete |
 | ANLY-03 | Phase 15 | Complete |
-| INBX-01 | Phase 16 | Pending |
-| INBX-02 | Phase 16 | Pending |
+| INBX-01 | Phase 16 | Complete |
+| INBX-02 | Phase 16 | Complete |
 | INBX-03 | Phase 16 | Complete |
 | INBX-04 | Phase 16 | Pending |
 | INBX-05 | Phase 16 | Complete |
@@ -96,7 +96,7 @@ Requirements for worksheet feature milestone. Each maps to roadmap phases.
 | INBX-08 | Phase 16 | Pending |
 | INBX-09 | Phase 16 | Complete |
 | INBX-10 | Phase 16 | Pending |
-| INBX-11 | Phase 16 | Pending |
+| INBX-11 | Phase 16 | Complete |
 | WSHT-01 | Phase 17 | Pending |
 | WSHT-02 | Phase 17 | Pending |
 | WSHT-03 | Phase 17 | Pending |
