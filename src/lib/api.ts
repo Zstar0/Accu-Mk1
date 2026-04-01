@@ -3525,6 +3525,7 @@ export interface ServiceGroupUpdate {
 }
 
 export interface SenaiteAnalyst {
+  uid: string
   username: string | null
   fullname: string
 }
@@ -3594,15 +3595,5 @@ export async function getSenaiteAnalysts(): Promise<SenaiteAnalyst[]> {
   return response.json()
 }
 
-export async function setAnalysisAnalyst(
-  uid: string,
-  analystValue: string
-): Promise<{ success: boolean; analyst_stored: string | null }> {
-  const response = await fetch(`${API_BASE_URL()}/senaite/analyses/${uid}/analyst`, {
-    method: 'POST',
-    headers: getBearerHeaders('application/json'),
-    body: JSON.stringify({ analyst_value: analystValue }),
-  })
-  if (!response.ok) throw new Error(`Failed to assign analyst: ${response.status}`)
-  return response.json()
-}
+// NOTE: SENAITE Analyst field is read-only — analyst assignment lives in
+// AccuMark's local worksheet_items table, not pushed to SENAITE.
