@@ -27,6 +27,12 @@ Source: `components.json`, `src/App.css`
 
 ---
 
+## Focal Point
+
+Primary visual anchor: the worksheet table — the KPI row is secondary context. The table is the first interactive element users engage with. KPI cards provide at-a-glance totals but do not compete with the table for attention.
+
+---
+
 ## Spacing Scale
 
 Declared values (must be multiples of 4):
@@ -54,11 +60,12 @@ Source: `WorksheetsListPage.tsx` placeholder uses `p-6`; `WorksheetDrawerHeader`
 | Role | Size | Weight | Line Height |
 |------|------|--------|-------------|
 | Body | 14px (`text-sm`) | 400 (regular) | 1.5 |
-| Label / badge | 12px (`text-xs`) | 500 (medium) | 1.0 |
+| Label / badge | 12px (`text-xs`) | 600 (semibold) | 1.0 |
 | Heading (page title) | 24px (`text-2xl`) | 600 (semibold) | 1.2 |
-| KPI value | 20px (`text-xl`) or 28px (`text-2xl`) | 600 (semibold) | 1.0 |
+| KPI value | 20px (`text-xl`) | 600 (semibold) | 1.0 |
 
 Notes:
+- Declared scale: 12, 14, 20, 24 — four sizes, two weights (400 and 600).
 - Page title pattern established: `text-2xl font-semibold` (WorksheetsListPage placeholder, AnalyticsDashboard)
 - KPI stat value: `text-xl font-semibold` — matches inline stat pattern from AnalyticsDashboard
 - Body base: 16px set in App.css, but table cell content uses `text-sm` (14px) per established table patterns
@@ -122,7 +129,7 @@ open:      bg-emerald-100 text-emerald-800 border border-emerald-200 dark:bg-eme
 completed: bg-zinc-100 text-zinc-600 border border-zinc-200 dark:bg-zinc-900/30 dark:text-zinc-400
 ```
 
-Apply as: `inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium capitalize`
+Apply as: `inline-flex items-center rounded-md px-2 py-0.5 text-xs font-semibold capitalize`
 
 ### Status filter (segmented control)
 
@@ -179,7 +186,7 @@ Each KPI card uses `CardContent` with `py-4 px-4` padding (override default `py-
 ```
 <Card className="py-0">
   <CardContent className="px-4 py-4">
-    <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">{label}</p>
+    <p className="text-xs text-muted-foreground font-semibold uppercase tracking-wide">{label}</p>
     <p className="text-xl font-semibold mt-1">{value}</p>
   </CardContent>
 </Card>
