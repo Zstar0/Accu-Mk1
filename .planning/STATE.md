@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v0.28.0
 milestone_name: — Worksheet Feature
 status: verifying
-stopped_at: Phase 17 context gathered
-last_updated: "2026-04-01T16:41:28.319Z"
+stopped_at: Phase 17 UI-SPEC approved
+last_updated: "2026-04-01T17:18:48.883Z"
 last_activity: 2026-04-01
 progress:
   total_phases: 4
@@ -96,6 +96,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-04-01T16:41:28.315Z
-Stopped at: Phase 17 context gathered
-Resume file: .planning/phases/17-worksheet-detail/17-CONTEXT.md
+Last session: 2026-04-01T17:18:48.879Z
+Stopped at: Phase 17 UI-SPEC approved
+Resume file: .planning/phases/17-worksheet-detail/17-UI-SPEC.md
