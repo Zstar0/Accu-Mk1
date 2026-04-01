@@ -10643,6 +10643,10 @@ async def get_worksheets_inbox(
                 )
             )
 
+        # Sort analyses within each group by title
+        for grp in groups_by_id.values():
+            grp.analyses.sort(key=lambda a: a.title.lower())
+
         analyses_by_group = list(groups_by_id.values())
 
         # Attach per-group assignments (analyst + instrument)
