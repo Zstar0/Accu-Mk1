@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v0.28.0
 milestone_name: — Worksheet Feature
 status: verifying
-stopped_at: Phase 18 UI-SPEC approved
-last_updated: "2026-04-01T23:24:21.701Z"
+stopped_at: Completed 18-01-PLAN.md
+last_updated: "2026-04-01T23:49:47.570Z"
 last_activity: 2026-04-01
 progress:
   total_phases: 4
-  completed_phases: 3
-  total_plans: 11
-  completed_plans: 11
+  completed_phases: 4
+  total_plans: 12
+  completed_plans: 12
   percent: 0
 ---
 
@@ -21,12 +21,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-31)
 
 **Core value:** Streamlined morning workflow: import CSV -> review batch -> calculate purity -> push to SENAITE. One operator, one workstation, no friction.
-**Current focus:** Phase 17 — worksheet-detail
+**Current focus:** Phase 18 — worksheets-list
 
 ## Current Position
 
-Phase: 18
-Plan: Not started
+Phase: 18 (worksheets-list) — EXECUTING
+Plan: 1 of 1
 Status: Phase complete — ready for verification
 Last activity: 2026-04-01
 
@@ -51,6 +51,7 @@ Progress: [░░░░░░░░░░░░░░░░░░░░] 0% (0/4
 | Phase 17-worksheet-detail P01 | 260 | 2 tasks | 4 files |
 | Phase 17-worksheet-detail P02 | 5 | 2 tasks | 7 files |
 | Phase 17-worksheet-detail P03 | 60 | 2 tasks | 7 files |
+| Phase 18-worksheets-list P01 | 8 | 2 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -86,6 +87,8 @@ Progress: [░░░░░░░░░░░░░░░░░░░░] 0% (0/4
 - [Phase 17-worksheet-detail]: Hash nav for worksheet drawer is one-way parse only: #hplc-analysis/worksheet-detail?id=X opens drawer, FAB clicks produce no hash change — avoids subscribe feedback loop
 - [Phase 17-worksheet-detail]: prepKey must be sample_id (local stable ID) not sample_uid (SENAITE alphanumeric) — mismatch caused prep_started indicator to never match stored flags
 - [Phase 17-worksheet-detail]: Worksheet notes JSON separates user text ('notes' key) from internal prep_started metadata ('prep_started' key) — prevents raw metadata leaking into notes textarea
+- [Phase 18-worksheets-list]: STATUS_CLASSES defined locally in WorksheetsListPage — StateBadge from senaite-utils maps SENAITE states not worksheet statuses
+- [Phase 18-worksheets-list]: KPI computed from unfiltered worksheets so stats reflect global state regardless of analyst filter
 
 ### Key Source Files
 
@@ -107,6 +110,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-04-01T23:24:21.697Z
-Stopped at: Phase 18 UI-SPEC approved
-Resume file: .planning/phases/18-worksheets-list/18-UI-SPEC.md
+Last session: 2026-04-01T23:49:47.565Z
+Stopped at: Completed 18-01-PLAN.md
+Resume file: None

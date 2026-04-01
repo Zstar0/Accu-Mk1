@@ -47,10 +47,10 @@ Requirements for worksheet feature milestone. Each maps to roadmap phases.
 
 ### Worksheets List
 
-- [ ] **WLST-01**: User can view all worksheets with summary stats (title, analyst, status, item count, priority breakdown, oldest item age)
-- [ ] **WLST-02**: KPI row displays total open worksheets, items pending, high-priority count, average age
-- [ ] **WLST-03**: User can filter worksheets by status and analyst
-- [ ] **WLST-04**: User can navigate from worksheet list to worksheet detail view
+- [x] **WLST-01**: User can view all worksheets with summary stats (title, analyst, status, item count, priority breakdown, oldest item age)
+- [x] **WLST-02**: KPI row displays total open worksheets, items pending, high-priority count, average age
+- [x] **WLST-03**: User can filter worksheets by status and analyst
+- [x] **WLST-04**: User can navigate from worksheet list to worksheet detail view
 
 ### Navigation
 
@@ -105,10 +105,10 @@ Requirements for worksheet feature milestone. Each maps to roadmap phases.
 | WSHT-06 | Phase 17 | Complete |
 | WSHT-07 | Phase 17 | Complete |
 | WSHT-08 | Phase 17 | Complete |
-| WLST-01 | Phase 18 | Pending |
-| WLST-02 | Phase 18 | Pending |
-| WLST-03 | Phase 18 | Pending |
-| WLST-04 | Phase 18 | Pending |
+| WLST-01 | Phase 18 | Complete |
+| WLST-02 | Phase 18 | Complete |
+| WLST-03 | Phase 18 | Complete |
+| WLST-04 | Phase 18 | Complete |
 | NAVG-01 | Phase 15 | Complete |
 | NAVG-02 | Phase 15 | Complete |
 
