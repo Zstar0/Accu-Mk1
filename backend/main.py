@@ -10539,96 +10539,98 @@ async def get_worksheets_inbox(
         ).all()
         analyst_map = {row.id: row.email for row in analyst_users}
 
-    # Step 6: Enrich each sample item
-    if len(filtered_items) > 20:
-        print(f"[WARN] /worksheets/inbox: {len(filtered_items)} samples — N+1 SENAITE fetches may be slow")
+    # Step 6: Batch-fetch analyses for all samples via the Analysis endpoint
+    # The AnalysisRequest endpoint only returns analysis references ({url, uid, api_url}),
+    # not full analysis objects. We need the Analysis endpoint with getRequestID filter
+    # to get title, keyword, method, review_state — same approach as sample details page.
+    sample_id_list = [str(it.get("id", "")) for it in filtered_items if it.get("id")]
+    analyses_by_sample: dict[str, list[dict]] = {sid: [] for sid in sample_id_list}
 
+    if sample_id_list:
+        async with httpx.AsyncClient(
+            timeout=SENAITE_TIMEOUT,
+            auth=_get_senaite_auth(current_user),
+            follow_redirects=True,
+        ) as client:
+            # Fetch analyses for each sample — SENAITE doesn't support multi-ID filter
+            # so we do per-sample fetches, but with a shared client connection
+            for sid in sample_id_list:
+                try:
+                    an_resp = await client.get(
+                        f"{SENAITE_URL}/senaite/@@API/senaite/v1/Analysis",
+                        params={"getRequestID": sid, "complete": "yes", "limit": "50"},
+                    )
+                    an_resp.raise_for_status()
+                    an_data = an_resp.json()
+                    analyses_by_sample[sid] = an_data.get("items", [])
+                except Exception as fetch_err:
+                    print(f"[WARN] Failed to fetch analyses for {sid}: {fetch_err}")
+
+    # Step 7: Build enriched sample items
     result_items: list[InboxSampleItem] = []
 
-    async with httpx.AsyncClient(
-        timeout=SENAITE_TIMEOUT,
-        auth=_get_senaite_auth(current_user),
-        follow_redirects=True,
-    ) as client:
-        for it in filtered_items:
-            uid = str(it.get("uid", ""))
-            sample_id = str(it.get("id", ""))
+    for it in filtered_items:
+        uid = str(it.get("uid", ""))
+        sample_id = str(it.get("id", ""))
+        raw_analyses = analyses_by_sample.get(sample_id, [])
 
-            # Extract analyses — try inline keys first, else fetch individually
-            raw_analyses: list[dict] = []
-            inline = it.get("Analyses") or it.get("getAnalyses") or []
-            if isinstance(inline, list) and inline:
-                raw_analyses = inline
-            elif uid:
-                try:
-                    detail_resp = await client.get(
-                        f"{SENAITE_URL}/senaite/@@API/senaite/v1/AnalysisRequest/{uid}",
-                        params={"complete": "yes"},
-                    )
-                    detail_resp.raise_for_status()
-                    detail_data = detail_resp.json()
-                    raw_analyses = detail_data.get("Analyses") or detail_data.get("getAnalyses") or []
-                except Exception as fetch_err:
-                    print(f"[WARN] Failed to fetch analyses for {uid}: {fetch_err}")
-                    raw_analyses = []
+        # Group analyses by service group
+        groups_by_id: dict[int, InboxServiceGroupSection] = {}
+        for analysis in raw_analyses:
+            if not isinstance(analysis, dict):
+                continue
+            keyword = analysis.get("getKeyword") or analysis.get("keyword") or ""
+            title = analysis.get("title") or analysis.get("getTitle") or keyword or ""
+            a_uid = analysis.get("uid") or analysis.get("UID")
+            method = analysis.get("getMethod") or analysis.get("method")
+            if isinstance(method, dict):
+                method = method.get("title")
+            review_state = analysis.get("review_state") or analysis.get("getReviewState")
 
-            # Group analyses by service group
-            groups_by_id: dict[int, InboxServiceGroupSection] = {}
-            for analysis in raw_analyses:
-                if not isinstance(analysis, dict):
-                    continue
-                keyword = analysis.get("getKeyword") or analysis.get("keyword") or ""
-                title = analysis.get("title") or analysis.get("getTitle") or keyword or ""
-                a_uid = analysis.get("uid") or analysis.get("UID")
-                method = analysis.get("getMethod") or analysis.get("method")
-                if isinstance(method, dict):
-                    method = method.get("title")
-                review_state = analysis.get("review_state") or analysis.get("getReviewState")
+            group_info = keyword_to_group.get(keyword, default_group)
+            group_id, group_name, group_color = group_info
 
-                group_info = keyword_to_group.get(keyword, default_group)
-                group_id, group_name, group_color = group_info
-
-                if group_id not in groups_by_id:
-                    groups_by_id[group_id] = InboxServiceGroupSection(
-                        group_id=group_id,
-                        group_name=group_name,
-                        group_color=group_color,
-                        analyses=[],
-                    )
-                groups_by_id[group_id].analyses.append(
-                    InboxAnalysisItem(
-                        uid=str(a_uid) if a_uid else None,
-                        title=str(title),
-                        keyword=str(keyword) if keyword else None,
-                        method=str(method) if method else None,
-                        review_state=str(review_state) if review_state else None,
-                    )
+            if group_id not in groups_by_id:
+                groups_by_id[group_id] = InboxServiceGroupSection(
+                    group_id=group_id,
+                    group_name=group_name,
+                    group_color=group_color,
+                    analyses=[],
                 )
-
-            analyses_by_group = list(groups_by_id.values())
-
-            # Build enriched item
-            assignment = assignment_map.get(uid)
-            assigned_analyst_id = assignment.assigned_analyst_id if assignment else None
-            instrument_uid_val = assignment.instrument_uid if assignment else None
-            assigned_analyst_email = analyst_map.get(assigned_analyst_id) if assigned_analyst_id else None
-
-            result_items.append(
-                InboxSampleItem(
-                    uid=uid,
-                    id=sample_id,
-                    title=str(it.get("title", "")),
-                    client_id=it.get("getClientTitle") or it.get("ClientID") or None,
-                    client_order_number=it.get("getClientOrderNumber") or it.get("ClientOrderNumber") or None,
-                    date_received=it.get("getDateReceived") or it.get("DateReceived") or None,
-                    review_state=str(it.get("review_state", "")),
-                    priority=priority_map.get(uid, "normal"),
-                    assigned_analyst_id=assigned_analyst_id,
-                    assigned_analyst_email=assigned_analyst_email,
-                    instrument_uid=instrument_uid_val,
-                    analyses_by_group=analyses_by_group,
+            groups_by_id[group_id].analyses.append(
+                InboxAnalysisItem(
+                    uid=str(a_uid) if a_uid else None,
+                    title=str(title),
+                    keyword=str(keyword) if keyword else None,
+                    method=str(method) if method else None,
+                    review_state=str(review_state) if review_state else None,
                 )
             )
+
+        analyses_by_group = list(groups_by_id.values())
+
+        # Build enriched item
+        assignment = assignment_map.get(uid)
+        assigned_analyst_id = assignment.assigned_analyst_id if assignment else None
+        instrument_uid_val = assignment.instrument_uid if assignment else None
+        assigned_analyst_email = analyst_map.get(assigned_analyst_id) if assigned_analyst_id else None
+
+        result_items.append(
+            InboxSampleItem(
+                uid=uid,
+                id=sample_id,
+                title=str(it.get("title", "")),
+                client_id=it.get("getClientTitle") or it.get("ClientID") or None,
+                client_order_number=it.get("getClientOrderNumber") or it.get("ClientOrderNumber") or None,
+                date_received=it.get("getDateReceived") or it.get("DateReceived") or None,
+                review_state=str(it.get("review_state", "")),
+                priority=priority_map.get(uid, "normal"),
+                assigned_analyst_id=assigned_analyst_id,
+                assigned_analyst_email=assigned_analyst_email,
+                instrument_uid=instrument_uid_val,
+                analyses_by_group=analyses_by_group,
+            )
+        )
 
     return InboxResponse(items=result_items, total=len(result_items))
 
