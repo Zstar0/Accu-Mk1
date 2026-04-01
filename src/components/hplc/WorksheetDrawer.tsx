@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { ClipboardList } from 'lucide-react'
 import { Sheet, SheetContent } from '@/components/ui/sheet'
@@ -50,6 +50,14 @@ export function WorksheetDrawer() {
     queryFn: getWorksheetUsers,
     staleTime: 5 * 60 * 1000,
   })
+
+  // Auto-select first open worksheet when drawer opens with no active selection
+  useEffect(() => {
+    const first = openWorksheets[0]
+    if (drawerOpen && !activeWorksheetId && first) {
+      setActiveId(first.id)
+    }
+  }, [drawerOpen, activeWorksheetId, openWorksheets, setActiveId])
 
   const [addSamplesOpen, setAddSamplesOpen] = useState(false)
 
