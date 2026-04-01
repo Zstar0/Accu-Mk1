@@ -129,7 +129,8 @@ export function WorksheetDrawerItems({
           <div className="w-[80px] shrink-0">Sample</div>
           <div className="w-[80px] shrink-0">Group</div>
           <div className="w-[70px] shrink-0">Priority</div>
-          <div className="flex-1 min-w-[200px]">Analyses</div>
+          <div className="flex-1 min-w-[180px]">Analyses</div>
+          <div className="w-[90px] shrink-0">Method</div>
           <div className="w-[100px] shrink-0">Tech</div>
           <div className="w-[60px] shrink-0">Age</div>
           <div className="w-[80px] shrink-0 text-right">Actions</div>
@@ -263,8 +264,8 @@ function SortableItemRow({
         <PriorityBadge priority={item.priority as InboxPriority} />
       </div>
 
-      {/* Analyses — peptide lines with type badges + method */}
-      <div className="flex-1 min-w-[200px] space-y-0.5">
+      {/* Analyses — peptide lines with type badges */}
+      <div className="flex-1 min-w-[180px] space-y-0.5">
         {peptideLines.length === 0 && standalone.length === 0 ? (
           <span className="text-[10px] text-muted-foreground">—</span>
         ) : (
@@ -279,21 +280,24 @@ function SortableItemRow({
                     </Badge>
                   ))}
                 </div>
-                {line.method && (
-                  <span className="text-[10px] text-muted-foreground font-mono">{line.method}</span>
-                )}
               </div>
             ))}
             {standalone.map((a, i) => (
               <div key={i} className="flex items-center gap-1.5">
                 <span className="text-xs">{a.title}</span>
-                {a.method && (
-                  <span className="text-[10px] text-muted-foreground font-mono">{a.method}</span>
-                )}
               </div>
             ))}
           </>
         )}
+      </div>
+
+      {/* Method */}
+      <div className="w-[90px] shrink-0">
+        <span className="text-[10px] text-muted-foreground font-mono truncate block">
+          {peptideLines.find(l => l.method)?.method
+            ?? standalone.find(a => a.method)?.method
+            ?? '—'}
+        </span>
       </div>
 
       {/* Tech */}
