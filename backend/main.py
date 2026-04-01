@@ -10591,10 +10591,14 @@ async def get_worksheets_inbox(
                 stripped = re.sub(r"\s*-\s*[^-]+\([^)]+\)\s*$", "", str(raw_name)).strip()
                 analyte_name_map[slot] = stripped
 
-        # Group analyses by service group
+        # Group analyses by service group (skip rejected/retracted/cancelled)
+        EXCLUDED_STATES = {"rejected", "retracted", "cancelled"}
         groups_by_id: dict[int, InboxServiceGroupSection] = {}
         for analysis in raw_analyses:
             if not isinstance(analysis, dict):
+                continue
+            a_state = analysis.get("review_state") or analysis.get("getReviewState") or ""
+            if a_state in EXCLUDED_STATES:
                 continue
             keyword = analysis.get("getKeyword") or analysis.get("keyword") or ""
             title = analysis.get("title") or analysis.get("getTitle") or keyword or ""
