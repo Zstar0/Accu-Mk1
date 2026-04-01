@@ -26,6 +26,7 @@ export interface DragData {
   sampleId: string
   groupId: number
   groupName: string
+  analyses: { title: string; keyword: string | null; peptide_name: string | null; method: string | null }[]
 }
 
 interface InboxServiceGroupCardProps {
@@ -93,6 +94,7 @@ export function InboxServiceGroupCard({
       sampleId: sample.id,
       groupId: group.group_id,
       groupName: group.group_name,
+      analyses: group.analyses.map(a => ({ title: a.title, keyword: a.keyword, peptide_name: a.peptide_name, method: a.method })),
     } satisfies DragData,
   })
 

@@ -19,7 +19,7 @@ interface AddSamplesModalProps {
   onOpenChange: (open: boolean) => void
   worksheetId: number
   existingItems: WorksheetListItem['items']
-  onAdd: (data: { sample_uid: string; sample_id: string; service_group_id: number }) => void
+  onAdd: (data: { sample_uid: string; sample_id: string; service_group_id: number; analyses?: { title: string; keyword?: string | null; peptide_name?: string | null; method?: string | null }[] }) => void
 }
 
 interface FlatInboxItem {
@@ -29,6 +29,7 @@ interface FlatInboxItem {
   service_group_id: number
   group_name: string
   group_color: string
+  analyses: { title: string; keyword: string | null; peptide_name: string | null; method: string | null }[]
 }
 
 function getColorClass(groupColor: string): string {
@@ -59,6 +60,7 @@ export function AddSamplesModal({
         service_group_id: group.group_id,
         group_name: group.group_name,
         group_color: group.group_color,
+        analyses: group.analyses.map(a => ({ title: a.title, keyword: a.keyword, peptide_name: a.peptide_name, method: a.method })),
       })
     }
   }
@@ -100,7 +102,7 @@ export function AddSamplesModal({
 
 interface AddSampleCardProps {
   item: FlatInboxItem
-  onAdd: (data: { sample_uid: string; sample_id: string; service_group_id: number }) => void
+  onAdd: (data: { sample_uid: string; sample_id: string; service_group_id: number; analyses?: { title: string; keyword?: string | null; peptide_name?: string | null; method?: string | null }[] }) => void
 }
 
 function AddSampleCard({ item, onAdd }: AddSampleCardProps) {
@@ -113,6 +115,7 @@ function AddSampleCard({ item, onAdd }: AddSampleCardProps) {
       sample_uid: item.sample_uid,
       sample_id: item.sample_id,
       service_group_id: item.service_group_id,
+      analyses: item.analyses,
     })
     setAdded(true)
   }

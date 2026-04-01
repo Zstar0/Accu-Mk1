@@ -11130,7 +11130,7 @@ async def list_worksheets(
                     "assigned_analyst_email": item_analyst_email_map.get(it.assigned_analyst_id) if it.assigned_analyst_id else None,
                     "notes": it.notes,
                     "peptide_id": group_peptide_map.get(it.service_group_id) if it.service_group_id else None,
-                    "analyses": group_analyses_map.get(it.service_group_id, []) if it.service_group_id else [],
+                    "analyses": json.loads(it.analyses_json) if it.analyses_json else (group_analyses_map.get(it.service_group_id, []) if it.service_group_id else []),
                 }
                 for it in items
             ],
@@ -11175,10 +11175,18 @@ async def update_worksheet(
     return {"status": "updated"}
 
 
+class AddToWorksheetAnalysis(BaseModel):
+    title: str
+    keyword: Optional[str] = None
+    peptide_name: Optional[str] = None
+    method: Optional[str] = None
+
+
 class AddToWorksheetRequest(BaseModel):
     sample_uid: str
     sample_id: str
     service_group_id: int
+    analyses: Optional[list[AddToWorksheetAnalysis]] = None
 
 
 @app.post("/worksheets/{worksheet_id}/add-group")
@@ -11236,6 +11244,7 @@ async def add_group_to_worksheet(
         assigned_analyst_id=analyst_id,
         instrument_uid=staging_item.instrument_uid if staging_item else None,
         priority=priority,
+        analyses_json=json.dumps([a.model_dump() for a in data.analyses]) if data.analyses else None,
     )
     db.add(item)
 
@@ -11408,7 +11417,7 @@ async def update_worksheet_item(
     db: Session = Depends(get_db),
     _current_user=Depends(get_current_user),
 ):
-    """Update a worksheet item's instrument assignment."""
+    """Update a worksheet item's instrument assignment. Auto-resolves method when instrument changes."""
     item = db.execute(
         select(WorksheetItem).where(
             WorksheetItem.id == item_id,
@@ -11417,10 +11426,48 @@ async def update_worksheet_item(
     ).scalar_one_or_none()
     if not item:
         raise HTTPException(404, "Worksheet item not found")
+
+    resolved_method = None
     if data.instrument_uid is not None:
         item.instrument_uid = data.instrument_uid if data.instrument_uid else None
+
+        # Auto-resolve method: find instrument → get its hplc_method → match peptide
+        if data.instrument_uid and item.service_group_id:
+            # Get peptide_id from service group's first analysis service
+            svc_peptide = db.execute(
+                select(AnalysisService.peptide_id)
+                .join(service_group_members, service_group_members.c.analysis_service_id == AnalysisService.id)
+                .where(service_group_members.c.service_group_id == item.service_group_id)
+                .where(AnalysisService.peptide_id.isnot(None))
+                .limit(1)
+            ).scalar_one_or_none()
+
+            if svc_peptide:
+                # Find instrument by senaite_uid
+                inst = db.execute(
+                    select(Instrument).where(Instrument.senaite_uid == data.instrument_uid)
+                ).scalar_one_or_none()
+                if inst:
+                    # Find method for this peptide + instrument
+                    method = db.execute(
+                        select(HplcMethod)
+                        .join(peptide_methods, peptide_methods.c.method_id == HplcMethod.id)
+                        .where(peptide_methods.c.peptide_id == svc_peptide)
+                        .where(HplcMethod.instrument_id == inst.id)
+                        .limit(1)
+                    ).scalar_one_or_none()
+                    if method:
+                        resolved_method = method.name
+                        # Update analyses_json with method
+                        if item.analyses_json:
+                            analyses = json.loads(item.analyses_json)
+                            for a in analyses:
+                                if not a.get("method"):
+                                    a["method"] = resolved_method
+                            item.analyses_json = json.dumps(analyses)
+
     db.commit()
-    return {"status": "updated", "item_id": item_id}
+    return {"status": "updated", "item_id": item_id, "resolved_method": resolved_method}
 
 
 class ReorderRequest(BaseModel):

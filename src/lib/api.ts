@@ -3806,7 +3806,7 @@ export async function updateWorksheet(
 
 export async function addGroupToWorksheet(
   worksheetId: number,
-  data: { sample_uid: string; sample_id: string; service_group_id: number }
+  data: { sample_uid: string; sample_id: string; service_group_id: number; analyses?: { title: string; keyword?: string | null; peptide_name?: string | null; method?: string | null }[] }
 ): Promise<{ status: string; item_id: number }> {
   const response = await fetch(`${API_BASE_URL()}/worksheets/${worksheetId}/add-group`, {
     method: 'POST',

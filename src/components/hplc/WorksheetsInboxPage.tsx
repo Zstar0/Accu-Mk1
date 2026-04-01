@@ -180,6 +180,7 @@ export default function WorksheetsInboxPage() {
           sample_uid: dragData.sampleUid,
           sample_id: dragData.sampleId,
           service_group_id: dragData.groupId,
+          analyses: dragData.analyses,
         })
         toast.success(`Added to worksheet`)
       }

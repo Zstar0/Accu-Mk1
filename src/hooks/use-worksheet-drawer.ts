@@ -124,7 +124,7 @@ export function useWorksheetDrawer() {
       data,
     }: {
       worksheetId: number
-      data: { sample_uid: string; sample_id: string; service_group_id: number }
+      data: { sample_uid: string; sample_id: string; service_group_id: number; analyses?: { title: string; keyword?: string | null; peptide_name?: string | null; method?: string | null }[] }
     }) => addGroupToWorksheet(worksheetId, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['worksheets'] })
