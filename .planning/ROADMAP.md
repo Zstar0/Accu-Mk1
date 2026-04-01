@@ -36,7 +36,7 @@
 ## Phases
 
 - [x] **Phase 15: Foundation** — Service groups data model + admin UI, analyst assignment to SENAITE, and navigation wiring (completed 2026-03-31)
-- [ ] **Phase 16: Received Samples Inbox** — Full inbox queue with priority, aging timers, inline assignment, bulk actions, and worksheet creation
+- [x] **Phase 16: Received Samples Inbox** — Full inbox queue with priority, aging timers, inline assignment, bulk actions, and worksheet creation (completed 2026-04-01)
 - [ ] **Phase 17: Worksheet Detail** — Worksheet header, items table, add/remove/reassign items, and completion
 - [ ] **Phase 18: Worksheets List** — All-worksheets view with KPI stats row, filters, and drill-through navigation
 
@@ -87,13 +87,13 @@ Plans:
 5. User can select multiple samples with checkboxes and apply bulk actions (set priority, assign tech, set instrument) to all selected rows in one step
 6. Selecting one or more samples and clicking "Create Worksheet" produces a new worksheet; if any selected sample has left `sample_received` state, creation is blocked with a clear error identifying the stale item(s)
 
-**Plans:** 3/4 plans executed
+**Plans:** 4/4 plans complete
 
 Plans:
 - [x] 16-01-PLAN.md — Backend models (SamplePriority, Worksheet, WorksheetItem) + 5 endpoints (inbox, priority, users, bulk, worksheet create)
 - [x] 16-02-PLAN.md — TypeScript types, API functions, TanStack Query hook, PriorityBadge, AgingTimer
 - [x] 16-03-PLAN.md — InboxSampleTable with expandable rows, inline editing, WorksheetsInboxPage full page
-- [ ] 16-04-PLAN.md — Bulk toolbar, worksheet creation dialog, final wiring + human verification
+- [x] 16-04-PLAN.md — Bulk toolbar, worksheet creation dialog, final wiring + human verification
 
 **UI hint**: yes
 
@@ -157,6 +157,6 @@ Plans:
 | 13.5 HPLC Audit Trail & Debug | v0.26.0 | 3/3 | Complete | 2026-03-19 |
 | 14. RT Check Chromatogram Comparison | v0.26.0 | 0/? | Not started | - |
 | 15. Foundation | v0.28.0 | 4/4 | Complete    | 2026-04-01 |
-| 16. Received Samples Inbox | v0.28.0 | 3/4 | In Progress|  |
+| 16. Received Samples Inbox | v0.28.0 | 4/4 | Complete   | 2026-04-01 |
 | 17. Worksheet Detail | v0.28.0 | 0/? | Not started | - |
 | 18. Worksheets List | v0.28.0 | 0/? | Not started | - |

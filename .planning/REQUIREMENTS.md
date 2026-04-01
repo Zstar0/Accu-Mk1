@@ -28,10 +28,10 @@ Requirements for worksheet feature milestone. Each maps to roadmap phases.
 - [x] **INBX-04**: User can assign a tech (analyst) to a sample inline via dropdown
 - [x] **INBX-05**: User can assign an instrument to a sample inline via dropdown
 - [x] **INBX-06**: Inbox shows aging timer per sample with SLA color coding (green <12h, yellow 12-20h, orange 20-24h, red >24h)
-- [ ] **INBX-07**: User can select multiple samples via checkboxes and apply bulk actions (set priority, assign tech, set instrument)
-- [ ] **INBX-08**: User can create a worksheet from selected inbox items (primary action)
+- [x] **INBX-07**: User can select multiple samples via checkboxes and apply bulk actions (set priority, assign tech, set instrument)
+- [x] **INBX-08**: User can create a worksheet from selected inbox items (primary action)
 - [x] **INBX-09**: Inbox auto-refreshes via 30-second polling with TanStack Query
-- [ ] **INBX-10**: Worksheet creation validates each sample is still in sample_received state (stale data guard)
+- [x] **INBX-10**: Worksheet creation validates each sample is still in sample_received state (stale data guard)
 - [x] **INBX-11**: Priority data persists locally in sample_priorities table
 
 ### Worksheet Management
@@ -92,10 +92,10 @@ Requirements for worksheet feature milestone. Each maps to roadmap phases.
 | INBX-04 | Phase 16 | Complete |
 | INBX-05 | Phase 16 | Complete |
 | INBX-06 | Phase 16 | Complete |
-| INBX-07 | Phase 16 | Pending |
-| INBX-08 | Phase 16 | Pending |
+| INBX-07 | Phase 16 | Complete |
+| INBX-08 | Phase 16 | Complete |
 | INBX-09 | Phase 16 | Complete |
-| INBX-10 | Phase 16 | Pending |
+| INBX-10 | Phase 16 | Complete |
 | INBX-11 | Phase 16 | Complete |
 | WSHT-01 | Phase 17 | Pending |
 | WSHT-02 | Phase 17 | Pending |

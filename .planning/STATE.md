@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v0.28.0
 milestone_name: — Worksheet Feature
-status: executing
-stopped_at: Completed 16-03-PLAN.md
-last_updated: "2026-04-01T03:55:47.490Z"
+status: verifying
+stopped_at: Completed 16-04-PLAN.md
+last_updated: "2026-04-01T03:59:49.345Z"
 last_activity: 2026-04-01
 progress:
   total_phases: 4
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 8
-  completed_plans: 7
+  completed_plans: 8
   percent: 0
 ---
 
@@ -27,7 +27,7 @@ See: .planning/PROJECT.md (updated 2026-03-31)
 
 Phase: 16 (received-samples-inbox) — EXECUTING
 Plan: 4 of 4
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-04-01
 
 Progress: [░░░░░░░░░░░░░░░░░░░░] 0% (0/4 phases complete)
@@ -47,6 +47,7 @@ Progress: [░░░░░░░░░░░░░░░░░░░░] 0% (0/4
 | Phase 16-received-samples-inbox P02 | 12 | 2 tasks | 4 files |
 | Phase 16 P01 | 4 | 2 tasks | 2 files |
 | Phase 16-received-samples-inbox P03 | 3 | 2 tasks | 2 files |
+| Phase 16-received-samples-inbox P04 | 4 | 3 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -72,6 +73,8 @@ Progress: [░░░░░░░░░░░░░░░░░░░░] 0% (0/4
 - [Phase 16]: Stale data guard on POST /worksheets verifies each sample UID against SENAITE before creation, returns 409 with stale_uids list
 - [Phase 16-received-samples-inbox]: shadcn Checkbox supports checked='indeterminate' directly — no DOM ref workaround needed for partial header selection
 - [Phase 16-received-samples-inbox]: Instrument dropdown maps senaite_uid ?? String(id) for uid key; bulk toolbar slot reserved in WorksheetsInboxPage for Plan 04
+- [Phase 16-received-samples-inbox]: CreateWorksheetDialog resets title/notes in useEffect on open — generates fresh WS-YYYY-MM-DD-001 each open
+- [Phase 16-received-samples-inbox]: Mutation callbacks passed at call-site in WorksheetsInboxPage for selection/dialog state side effects — hook-level callbacks handle toast only
 
 ### Key Source Files
 
@@ -93,6 +96,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-04-01T03:55:47.486Z
-Stopped at: Completed 16-03-PLAN.md
+Last session: 2026-04-01T03:59:49.342Z
+Stopped at: Completed 16-04-PLAN.md
 Resume file: None
