@@ -21,7 +21,16 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
-import type { WorksheetUser } from '@/lib/api'
+import { PriorityBadge } from '@/components/hplc/PriorityBadge'
+import { AgingTimer } from '@/components/hplc/AgingTimer'
+import type { WorksheetUser, InboxPriority } from '@/lib/api'
+
+export interface WorksheetSummaryItem {
+  sample_id: string
+  group_name: string
+  priority: string
+  added_at: string | null
+}
 
 export interface WorksheetSummary {
   id: number
@@ -30,7 +39,7 @@ export interface WorksheetSummary {
   assigned_analyst: number | null
   assigned_analyst_email: string | null
   item_count: number
-  items: { sample_id: string; group_name: string }[]
+  items: WorksheetSummaryItem[]
 }
 
 function NewWorksheetDropZone() {
@@ -156,12 +165,15 @@ function WorksheetDropZone({
 
       {/* Existing items */}
       {worksheet.items.length > 0 && (
-        <div className="space-y-0.5">
+        <div className="space-y-1">
           {worksheet.items.map((item, i) => (
-            <div key={i} className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
-              <span className="font-mono">{item.sample_id}</span>
+            <div key={i} className="flex items-center gap-1.5 text-[10px]">
+              <span className="font-mono text-muted-foreground">{item.sample_id}</span>
               <span className="text-muted-foreground/50">·</span>
-              <span className="truncate">{item.group_name}</span>
+              <span className="truncate text-muted-foreground">{item.group_name}</span>
+              <div className="flex-1" />
+              <PriorityBadge priority={item.priority as InboxPriority} />
+              <AgingTimer dateReceived={item.added_at} compact />
             </div>
           ))}
         </div>

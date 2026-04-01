@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 
 interface AgingTimerProps {
   dateReceived: string | null
+  compact?: boolean
   className?: string
 }
 
@@ -28,7 +29,7 @@ function getAgeColor(ageMs: number): string {
   return 'text-green-500'
 }
 
-export function AgingTimer({ dateReceived, className = '' }: AgingTimerProps) {
+export function AgingTimer({ dateReceived, compact, className = '' }: AgingTimerProps) {
   const [now, setNow] = useState(Date.now())
 
   useEffect(() => {
@@ -38,9 +39,11 @@ export function AgingTimer({ dateReceived, className = '' }: AgingTimerProps) {
     return () => clearInterval(id)
   }, [])
 
+  const sizeClass = compact ? 'text-[10px]' : 'text-sm'
+
   if (!dateReceived) {
     return (
-      <span className={`font-mono text-sm tabular-nums text-zinc-400 ${className}`}>—</span>
+      <span className={`font-mono ${sizeClass} tabular-nums text-zinc-400 ${className}`}>—</span>
     )
   }
 
@@ -49,7 +52,7 @@ export function AgingTimer({ dateReceived, className = '' }: AgingTimerProps) {
   const colorClass = getAgeColor(ageMs)
 
   return (
-    <span className={`font-mono text-sm tabular-nums ${colorClass} ${className}`}>
+    <span className={`font-mono ${sizeClass} tabular-nums ${colorClass} ${className}`}>
       {formatAge(ageMs)}
     </span>
   )

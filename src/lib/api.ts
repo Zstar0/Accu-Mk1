@@ -3737,7 +3737,7 @@ export interface WorksheetListItem {
   assigned_analyst_email: string | null
   item_count: number
   created_at: string | null
-  items: { sample_id: string; group_name: string }[]
+  items: { sample_id: string; group_name: string; priority: string; added_at: string | null }[]
 }
 
 export async function listWorksheets(status?: string): Promise<WorksheetListItem[]> {

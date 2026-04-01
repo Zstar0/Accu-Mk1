@@ -11080,6 +11080,8 @@ async def list_worksheets(
                 {
                     "sample_id": it.sample_id,
                     "group_name": group_name_map.get(it.service_group_id, "—") if it.service_group_id else "—",
+                    "priority": it.priority,
+                    "added_at": it.added_at.isoformat() if it.added_at else None,
                 }
                 for it in items
             ],
