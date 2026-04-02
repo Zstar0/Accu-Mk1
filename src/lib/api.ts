@@ -3885,7 +3885,7 @@ export async function reorderWorksheetItems(
 }
 
 export async function createWorksheetFromDrop(
-  data: { sample_uid: string; sample_id: string; service_group_id: number; date_received?: string | null }
+  data: { sample_uid: string; sample_id: string; service_group_id: number; date_received?: string | null; analyses?: { title: string; keyword?: string | null; peptide_name?: string | null; method?: string | null }[] }
 ): Promise<WorksheetCreateResponse> {
   const response = await fetch(`${API_BASE_URL()}/worksheets/create-from-drop`, {
     method: 'POST',

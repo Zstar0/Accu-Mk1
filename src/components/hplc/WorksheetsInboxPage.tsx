@@ -159,6 +159,7 @@ export default function WorksheetsInboxPage() {
           sample_id: dragData.sampleId,
           service_group_id: dragData.groupId,
           date_received: dragData.dateReceived,
+          analyses: dragData.analyses,
         })
         toast.success(`Created "${result.title}"`)
       } else if (dropId.startsWith('worksheet-')) {

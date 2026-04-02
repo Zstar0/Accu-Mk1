@@ -11509,6 +11509,7 @@ async def create_worksheet_from_drop(
         instrument_uid=staging_item.instrument_uid if staging_item else None,
         priority=priority,
         date_received=datetime.fromisoformat(data.date_received.replace("Z", "+00:00")) if data.date_received else None,
+        analyses_json=json.dumps([a.model_dump() for a in data.analyses]) if data.analyses else None,
     )
     db.add(item)
 
