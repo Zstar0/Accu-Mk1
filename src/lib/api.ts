@@ -3819,7 +3819,13 @@ export async function addGroupToWorksheet(
     headers: getBearerHeaders('application/json'),
     body: JSON.stringify(data),
   })
-  if (!response.ok) throw new Error(`Add to worksheet failed: ${response.status}`)
+  if (!response.ok) {
+    if (response.status === 409) {
+      const detail = await response.json().catch(() => null)
+      throw new Error(detail?.detail ?? 'Sample already assigned to another worksheet')
+    }
+    throw new Error(`Add to worksheet failed: ${response.status}`)
+  }
   return response.json()
 }
 
@@ -3885,6 +3891,12 @@ export async function createWorksheetFromDrop(
     headers: getBearerHeaders('application/json'),
     body: JSON.stringify(data),
   })
-  if (!response.ok) throw new Error(`Create worksheet failed: ${response.status}`)
+  if (!response.ok) {
+    if (response.status === 409) {
+      const detail = await response.json().catch(() => null)
+      throw new Error(detail?.detail ?? 'Sample already assigned to another worksheet')
+    }
+    throw new Error(`Create worksheet failed: ${response.status}`)
+  }
   return response.json()
 }

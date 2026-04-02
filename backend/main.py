@@ -11335,18 +11335,28 @@ async def add_group_to_worksheet(
     if not ws:
         raise HTTPException(404, "Worksheet not found")
 
-    # Check if this sample+group is already in the worksheet
+    # Check if this sample+group is already in ANY open worksheet (collision guard)
     gid = data.service_group_id
     gid_filter = WorksheetItem.service_group_id.is_(None) if gid is None else (WorksheetItem.service_group_id == gid)
-    existing = db.execute(
-        select(WorksheetItem).where(
-            WorksheetItem.worksheet_id == worksheet_id,
+    existing_anywhere = db.execute(
+        select(WorksheetItem)
+        .join(Worksheet, WorksheetItem.worksheet_id == Worksheet.id)
+        .where(
             WorksheetItem.sample_uid == data.sample_uid,
             gid_filter,
+            Worksheet.status == "open",
         )
     ).scalar_one_or_none()
-    if existing:
-        return {"status": "already_exists", "item_id": existing.id}
+    if existing_anywhere:
+        owner_ws = db.execute(
+            select(Worksheet.title).where(Worksheet.id == existing_anywhere.worksheet_id)
+        ).scalar_one_or_none()
+        if existing_anywhere.worksheet_id == worksheet_id:
+            return {"status": "already_exists", "item_id": existing_anywhere.id}
+        raise HTTPException(
+            409,
+            detail=f"Sample {data.sample_id} is already in worksheet \"{owner_ws or 'unknown'}\"",
+        )
 
     # Pick up any staging pre-assignments for this sample+group
     staging_item = db.execute(
@@ -11398,6 +11408,27 @@ async def create_worksheet_from_drop(
     current_user=Depends(get_current_user),
 ):
     """Create a new worksheet from a drag-and-drop action."""
+    # Collision guard: check if sample+group is already in any open worksheet
+    gid = data.service_group_id
+    gid_filter = WorksheetItem.service_group_id.is_(None) if gid is None else (WorksheetItem.service_group_id == gid)
+    existing_anywhere = db.execute(
+        select(WorksheetItem)
+        .join(Worksheet, WorksheetItem.worksheet_id == Worksheet.id)
+        .where(
+            WorksheetItem.sample_uid == data.sample_uid,
+            gid_filter,
+            Worksheet.status == "open",
+        )
+    ).scalar_one_or_none()
+    if existing_anywhere:
+        owner_ws = db.execute(
+            select(Worksheet.title).where(Worksheet.id == existing_anywhere.worksheet_id)
+        ).scalar_one_or_none()
+        raise HTTPException(
+            409,
+            detail=f"Sample {data.sample_id} is already in worksheet \"{owner_ws or 'unknown'}\"",
+        )
+
     from datetime import datetime as _dt
     title = f"WS-{_dt.utcnow().strftime('%Y-%m-%d')}-{db.query(Worksheet).filter(Worksheet.status != 'staging').count() + 1:03d}"
 
