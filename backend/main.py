@@ -11141,6 +11141,7 @@ async def list_worksheets(
             "assigned_analyst_email": analyst_email,
             "item_count": len(items),
             "created_at": ws.created_at.isoformat() if ws.created_at else None,
+            "completed_at": ws.completed_at.isoformat() if ws.completed_at else None,
             "items": [
                 {
                     "id": it.id,
@@ -11390,17 +11391,19 @@ class ReassignRequest(BaseModel):
 async def complete_worksheet(
     worksheet_id: int,
     db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
-    """Transition a worksheet from open to completed."""
+    """Transition a worksheet from open to completed. Records who completed it and when."""
     ws = db.execute(select(Worksheet).where(Worksheet.id == worksheet_id)).scalar_one_or_none()
     if not ws:
         raise HTTPException(404, "Worksheet not found")
     if ws.status != "open":
         raise HTTPException(400, f"Worksheet is already {ws.status}")
     ws.status = "completed"
+    ws.completed_by = current_user.id
+    ws.completed_at = datetime.utcnow()
     db.commit()
-    return {"status": "completed"}
+    return {"status": "completed", "completed_by": current_user.email, "completed_at": ws.completed_at.isoformat()}
 
 
 @app.post("/worksheets/{worksheet_id}/items/{sample_uid}/{service_group_id}/reassign")

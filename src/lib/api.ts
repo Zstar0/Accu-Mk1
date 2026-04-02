@@ -3738,6 +3738,7 @@ export interface WorksheetListItem {
   assigned_analyst_email: string | null
   item_count: number
   created_at: string | null
+  completed_at: string | null
   items: {
     id: number
     sample_id: string

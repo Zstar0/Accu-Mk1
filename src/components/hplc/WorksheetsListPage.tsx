@@ -298,7 +298,17 @@ export default function WorksheetsListPage() {
                           )}
                         </TableCell>
                         <TableCell>
-                          {earliestAddedAt ? (
+                          {ws.completed_at ? (
+                            <span className="text-sm text-muted-foreground">
+                              {new Date(ws.completed_at).toLocaleDateString(undefined, {
+                                month: 'short',
+                                day: 'numeric',
+                                year: 'numeric',
+                                hour: 'numeric',
+                                minute: '2-digit',
+                              })}
+                            </span>
+                          ) : earliestAddedAt ? (
                             <AgingTimer dateReceived={earliestAddedAt} compact />
                           ) : (
                             <span className="text-muted-foreground">—</span>
