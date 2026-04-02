@@ -32,6 +32,7 @@ export interface WorksheetSummaryItem {
   group_name: string
   priority: string
   added_at: string | null
+  date_received: string | null
 }
 
 export interface WorksheetSummary {
@@ -188,7 +189,7 @@ function WorksheetDropZone({
               <span className="truncate text-muted-foreground">{item.group_name}</span>
               <div className="flex-1" />
               <PriorityBadge priority={item.priority as InboxPriority} />
-              <AgingTimer dateReceived={item.added_at} compact />
+              <AgingTimer dateReceived={item.date_received ?? item.added_at} compact />
             </div>
           ))}
         </div>

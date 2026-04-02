@@ -10477,9 +10477,16 @@ class WorksheetCreate(BaseModel):
     notes: Optional[str] = None
 
 
+# Server-side SENAITE inbox cache — shared across all users, 30-minute TTL
+_inbox_senaite_cache: dict[str, list] = {}
+_inbox_senaite_cache_time: float = 0
+_INBOX_CACHE_TTL_SECONDS = 30 * 60  # 30 minutes
+
+
 @app.get("/worksheets/inbox", response_model=InboxResponse)
 async def get_worksheets_inbox(
     hide_test_orders: bool = True,
+    force_refresh: bool = False,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
@@ -10487,35 +10494,61 @@ async def get_worksheets_inbox(
     Return received samples from SENAITE enriched with service group analysis grouping,
     local priorities, and analyst assignments. Only shows samples linked to tracked orders
     in the integration DB. Excludes samples already assigned to open worksheets.
+
+    SENAITE responses are cached server-side for 30 minutes to avoid hammering SENAITE.
+    Pass force_refresh=true to bypass the cache.
     """
+    global _inbox_senaite_cache, _inbox_senaite_cache_time
+
     if not SENAITE_URL:
         raise HTTPException(status_code=503, detail="SENAITE not configured")
 
-    # Step 1: Fetch sample_received samples from SENAITE
-    senaite_url = f"{SENAITE_URL}/senaite/@@API/senaite/v1/AnalysisRequest"
-    params = {
-        "review_state": "sample_received",
-        "complete": "yes",
-        "limit": 200,
-        "sort_on": "created",
-        "sort_order": "descending",
-    }
+    # Step 1: Fetch sample_received samples from SENAITE (with cache)
+    import time as _time
+    now = _time.time()
+    cache_age = now - _inbox_senaite_cache_time
+    cache_valid = not force_refresh and _inbox_senaite_cache.get("items") is not None and cache_age < _INBOX_CACHE_TTL_SECONDS
 
-    try:
-        async with httpx.AsyncClient(
-            timeout=SENAITE_TIMEOUT,
-            auth=_get_senaite_auth(current_user),
-            follow_redirects=True,
-        ) as client:
-            resp = await client.get(senaite_url, params=params)
-            resp.raise_for_status()
-            senaite_data = resp.json()
-    except httpx.TimeoutException:
-        raise HTTPException(status_code=504, detail="SENAITE request timed out")
-    except httpx.HTTPStatusError as e:
-        raise HTTPException(status_code=502, detail=f"SENAITE returned {e.response.status_code}")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"SENAITE fetch error: {e}")
+    if cache_valid:
+        senaite_data = _inbox_senaite_cache
+    else:
+        senaite_url = f"{SENAITE_URL}/senaite/@@API/senaite/v1/AnalysisRequest"
+        params = {
+            "review_state": "sample_received",
+            "complete": "yes",
+            "limit": 200,
+            "sort_on": "created",
+            "sort_order": "descending",
+        }
+
+        try:
+            async with httpx.AsyncClient(
+                timeout=SENAITE_TIMEOUT,
+                auth=_get_senaite_auth(current_user),
+                follow_redirects=True,
+            ) as client:
+                resp = await client.get(senaite_url, params=params)
+                resp.raise_for_status()
+                senaite_data = resp.json()
+                # Update cache
+                _inbox_senaite_cache = senaite_data
+                _inbox_senaite_cache_time = now
+        except httpx.TimeoutException:
+            # If cache exists but expired, serve stale data rather than error
+            if _inbox_senaite_cache.get("items") is not None:
+                senaite_data = _inbox_senaite_cache
+            else:
+                raise HTTPException(status_code=504, detail="SENAITE request timed out")
+        except httpx.HTTPStatusError as e:
+            if _inbox_senaite_cache.get("items") is not None:
+                senaite_data = _inbox_senaite_cache
+            else:
+                raise HTTPException(status_code=502, detail=f"SENAITE returned {e.response.status_code}")
+        except Exception as e:
+            if _inbox_senaite_cache.get("items") is not None:
+                senaite_data = _inbox_senaite_cache
+            else:
+                raise HTTPException(status_code=500, detail=f"SENAITE fetch error: {e}")
 
     senaite_items = senaite_data.get("items", [])
 

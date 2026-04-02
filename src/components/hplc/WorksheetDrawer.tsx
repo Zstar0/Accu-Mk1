@@ -166,7 +166,7 @@ export function WorksheetDrawer() {
 
           {/* Active worksheet content */}
           {!isLoading && !isError && activeWorksheet && (
-            <>
+            <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
               {/* Header */}
               <WorksheetDrawerHeader
                 worksheet={activeWorksheet}
@@ -304,7 +304,7 @@ export function WorksheetDrawer() {
                   addItemMutation.mutate({ worksheetId: activeWorksheet.id, data })
                 }
               />
-            </>
+            </div>
           )}
 
           {/* No active worksheet fallback */}

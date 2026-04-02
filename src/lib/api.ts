@@ -3671,9 +3671,10 @@ export interface WorksheetCreateResponse {
 
 // ─── Inbox API Functions ──────────────────────────────────────────────────────
 
-export async function getInboxSamples(hideTestOrders = true): Promise<InboxResponse> {
+export async function getInboxSamples(hideTestOrders = true, forceRefresh = false): Promise<InboxResponse> {
   const params = new URLSearchParams()
   params.set('hide_test_orders', String(hideTestOrders))
+  if (forceRefresh) params.set('force_refresh', 'true')
   const response = await fetch(`${API_BASE_URL()}/worksheets/inbox?${params}`, {
     headers: getBearerHeaders(),
   })

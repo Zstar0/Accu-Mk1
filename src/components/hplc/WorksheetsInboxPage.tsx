@@ -15,6 +15,7 @@ import {
 import {
   getWorksheetUsers,
   getInstruments,
+  getInboxSamples,
   listWorksheets,
   addGroupToWorksheet,
   createWorksheetFromDrop,
@@ -88,6 +89,7 @@ function flattenToCards(samples: InboxSampleItem[]): FlatCard[] {
 export default function WorksheetsInboxPage() {
   const queryClient = useQueryClient()
   const [hideTestOrders, setHideTestOrders] = useState(true)
+  const [isRefreshing, setIsRefreshing] = useState(false)
   const {
     data: inboxData,
     isLoading,
@@ -95,6 +97,16 @@ export default function WorksheetsInboxPage() {
     error,
     refetch,
   } = useInboxSamples(hideTestOrders)
+
+  const handleForceRefresh = async () => {
+    setIsRefreshing(true)
+    try {
+      await getInboxSamples(hideTestOrders, true)
+      queryClient.invalidateQueries({ queryKey: ['inbox-samples'] })
+    } finally {
+      setIsRefreshing(false)
+    }
+  }
 
   const priorityMutation = usePriorityMutation()
   const bulkUpdateMutation = useBulkUpdateMutation()
@@ -224,13 +236,26 @@ export default function WorksheetsInboxPage() {
                   Drag analysis groups to worksheets on the right
                 </p>
               </div>
-              <label className="flex items-center gap-2 cursor-pointer select-none">
-                <Checkbox
-                  checked={hideTestOrders}
-                  onCheckedChange={v => setHideTestOrders(v === true)}
-                />
-                <span className="text-sm text-muted-foreground">Hide test orders</span>
-              </label>
+              <div className="flex items-center gap-3">
+                <label className="flex items-center gap-2 cursor-pointer select-none">
+                  <Checkbox
+                    checked={hideTestOrders}
+                    onCheckedChange={v => setHideTestOrders(v === true)}
+                  />
+                  <span className="text-sm text-muted-foreground">Hide test orders</span>
+                </label>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={handleForceRefresh}
+                  disabled={isRefreshing}
+                  className="gap-1.5 text-muted-foreground"
+                  title="Force refresh from SENAITE (cached for 30 minutes)"
+                >
+                  <RefreshCw className={`size-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
+                  <span className="text-xs">Refresh</span>
+                </Button>
+              </div>
             </div>
 
             {/* Loading state */}
