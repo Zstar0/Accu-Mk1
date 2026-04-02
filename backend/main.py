@@ -11205,8 +11205,8 @@ async def list_worksheets(
             "assigned_analyst": ws.assigned_analyst_id,
             "assigned_analyst_email": analyst_email,
             "item_count": len(items),
-            "created_at": ws.created_at.isoformat() if ws.created_at else None,
-            "completed_at": ws.completed_at.isoformat() if ws.completed_at else None,
+            "created_at": (ws.created_at.isoformat() + "Z") if ws.created_at else None,
+            "completed_at": (ws.completed_at.isoformat() + "Z") if ws.completed_at else None,
             "items": [
                 {
                     "id": it.id,
@@ -11216,8 +11216,8 @@ async def list_worksheets(
                     "group_name": group_name_map.get(it.service_group_id, "—") if it.service_group_id else "—",
                     "group_color": group_color_map.get(it.service_group_id, "zinc") if it.service_group_id else "zinc",
                     "priority": it.priority,
-                    "added_at": it.added_at.isoformat() if it.added_at else None,
-                    "date_received": it.date_received.isoformat() if it.date_received else None,
+                    "added_at": (it.added_at.isoformat() + "Z") if it.added_at else None,
+                    "date_received": (it.date_received.isoformat() + "Z") if it.date_received else None,
                     "instrument_uid": it.instrument_uid,
                     "assigned_analyst_id": it.assigned_analyst_id,
                     "assigned_analyst_email": item_analyst_email_map.get(it.assigned_analyst_id) if it.assigned_analyst_id else None,
