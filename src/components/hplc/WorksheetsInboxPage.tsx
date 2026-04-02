@@ -305,8 +305,8 @@ export default function WorksheetsInboxPage() {
           </div>
         </div>
 
-        {/* Right — worksheet drop panel (fixed, doesn't scroll with content) */}
-        <div className="w-96 shrink-0 h-full overflow-hidden">
+        {/* Right — worksheet drop panel (scrollable) */}
+        <div className="w-96 shrink-0 h-full overflow-y-auto">
           <WorksheetDropPanel
             worksheets={worksheets}
             users={users}
