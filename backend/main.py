@@ -10516,7 +10516,9 @@ async def get_worksheets_inbox(
     senaite_items = senaite_data.get("items", [])
 
     # Step 1b: Filter to only samples linked to tracked orders in integration DB
+    # Also build senaite_id → order priority map for auto-priority
     TEST_EMAILS = ["forrestp@outlook.com", "forrest@valenceanalytical.com"]
+    order_priority_map: dict[str, str] = {}  # senaite_id → priority from order payload
     try:
         from integration_db import get_integration_db
         from psycopg2.extras import RealDictCursor
@@ -10527,18 +10529,23 @@ async def get_worksheets_inbox(
                     "SELECT sample_results, payload FROM order_submissions WHERE sample_results IS NOT NULL"
                 )
                 for row in cur.fetchall():
+                    payload = row["payload"] if isinstance(row.get("payload"), dict) else {}
                     # Check if this is a test order
-                    if hide_test_orders and row.get("payload"):
-                        payload = row["payload"] if isinstance(row["payload"], dict) else {}
+                    if hide_test_orders:
                         billing = payload.get("billing", {})
                         email = (billing.get("email") or "").lower() if isinstance(billing, dict) else ""
                         if email in TEST_EMAILS:
                             continue
+                    # Extract order-level priority (sent by WP, optional)
+                    order_priority = payload.get("priority")
                     sr = row["sample_results"]
                     if isinstance(sr, dict):
                         for entry in sr.values():
                             if isinstance(entry, dict) and entry.get("senaite_id"):
-                                linked_senaite_ids.add(entry["senaite_id"])
+                                sid = entry["senaite_id"]
+                                linked_senaite_ids.add(sid)
+                                if order_priority and order_priority in ("high", "expedited"):
+                                    order_priority_map[sid] = order_priority
         # Filter SENAITE items to only those with a linked order
         senaite_items = [
             it for it in senaite_items
@@ -10615,6 +10622,27 @@ async def get_worksheets_inbox(
         select(SamplePriority).where(SamplePriority.sample_uid.in_(uids))
     ).scalars().all()
     priority_map: dict[str, str] = {row.sample_uid: row.priority for row in priority_rows}
+
+    # Step 4b: Apply order-level priority for samples without a manual override
+    # WP can send priority on the order payload — auto-set for samples still at "normal"
+    for it in filtered_items:
+        uid = str(it.get("uid", ""))
+        senaite_id = str(it.get("id", ""))
+        if uid and senaite_id and uid not in priority_map and senaite_id in order_priority_map:
+            order_prio = order_priority_map[senaite_id]
+            # Persist so it shows up immediately and survives page reloads
+            existing = db.execute(
+                select(SamplePriority).where(SamplePriority.sample_uid == uid)
+            ).scalar_one_or_none()
+            if not existing:
+                db.add(SamplePriority(sample_uid=uid, priority=order_prio))
+                priority_map[uid] = order_prio
+            # If existing and still "normal", upgrade to order priority
+            elif existing.priority == "normal":
+                existing.priority = order_prio
+                priority_map[uid] = order_prio
+    if order_priority_map:
+        db.commit()
 
     # Step 5: Load per-group worksheet_item assignments (analyst + instrument)
     # Key is (sample_uid, service_group_id) → WorksheetItem
