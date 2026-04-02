@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useUIStore } from '@/store/ui-store'
 import { X, MoveRight, ClipboardX, GripVertical } from 'lucide-react'
 import { ScrollArea } from '@/components/ui/scroll-area'
 // Badge import kept for potential future use
@@ -242,7 +243,12 @@ function SortableItemRow({
 
       {/* Sample ID */}
       <div className="w-[80px] shrink-0">
-        <span className="font-mono text-xs font-medium tabular-nums">{item.sample_id}</span>
+        <button
+          className="font-mono text-xs font-medium tabular-nums hover:underline hover:text-primary transition-colors"
+          onClick={() => useUIStore.getState().navigateToSample(item.sample_id)}
+        >
+          {item.sample_id}
+        </button>
       </div>
 
       {/* Service group badge */}

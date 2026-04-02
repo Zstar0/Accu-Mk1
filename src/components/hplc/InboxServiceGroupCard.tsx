@@ -1,4 +1,5 @@
 import { useDraggable } from '@dnd-kit/core'
+import { useUIStore } from '@/store/ui-store'
 import { GripVertical } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import {
@@ -132,8 +133,16 @@ export function InboxServiceGroupCard({
           <GripVertical className="h-4 w-4" />
         </button>
 
-        {/* Sample ID */}
-        <span className="font-mono text-sm font-medium">{sample.id}</span>
+        {/* Sample ID — clickable to sample details */}
+        <button
+          className="font-mono text-sm font-medium hover:underline hover:text-primary transition-colors"
+          onClick={e => {
+            e.stopPropagation()
+            useUIStore.getState().navigateToSample(sample.id)
+          }}
+        >
+          {sample.id}
+        </button>
 
         {/* Service group badge */}
         <span className={`inline-flex items-center rounded-md border px-2 py-0.5 text-[10px] font-medium ${colorClasses}`}>

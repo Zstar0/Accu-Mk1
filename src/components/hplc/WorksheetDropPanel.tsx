@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useUIStore } from '@/store/ui-store'
 import { useDroppable } from '@dnd-kit/core'
 import { Plus, FileSpreadsheet, Pencil, Check, X, Trash2 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
@@ -184,7 +185,12 @@ function WorksheetDropZone({
               >
                 <X className="h-3 w-3" />
               </button>
-              <span className="font-mono text-muted-foreground">{item.sample_id}</span>
+              <button
+                className="font-mono text-muted-foreground hover:underline hover:text-primary transition-colors"
+                onClick={() => useUIStore.getState().navigateToSample(item.sample_id)}
+              >
+                {item.sample_id}
+              </button>
               <span className="text-muted-foreground/50">·</span>
               <span className="truncate text-muted-foreground">{item.group_name}</span>
               <div className="flex-1" />
