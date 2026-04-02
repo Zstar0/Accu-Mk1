@@ -1,5 +1,35 @@
 # Changelog
 
+## v0.28.0 — 2026-04-01
+
+### Worksheet Feature Milestone
+
+#### Phase 15: Foundation
+- **Service Groups admin**: Create, edit, delete service groups with color-coded badges; assign analysis services to groups via checkbox membership editor
+- **Analyst assignment**: View and assign analysts from AccuMark's local user list (SENAITE Analyst field is read-only)
+- **Navigation**: Worksheets section accessible under HPLC Automation in sidebar (Inbox + Worksheets sub-items)
+
+#### Phase 16: Received Samples Inbox
+- **Live inbox**: All SENAITE received samples displayed in a polling queue (30s refresh) with aging timers and SLA color coding (green <12h, yellow 12-20h, orange 20-24h, red >24h)
+- **Inline assignment**: Set priority (normal/high/expedited), assign tech, and set instrument per sample directly in the table
+- **Bulk actions**: Select multiple samples via checkboxes; floating toolbar for bulk priority, tech, instrument, and worksheet creation
+- **Worksheet creation**: Create worksheet from selected inbox items with stale-data guard (validates samples are still in received state)
+- **Expandable rows**: Click to view analyses grouped by service group with color badges
+
+#### Phase 17: Worksheet Detail
+- **Floating clipboard drawer**: Global FAB button opens a slide-out drawer with full worksheet detail from any page
+- **Worksheet management**: Edit title/notes, assign tech, add samples via mini inbox modal, remove items, reassign items between worksheets, mark complete
+- **Start Prep**: Navigate from worksheet item directly to Sample Prep wizard with pre-filled fields
+- **Multi-worksheet tabs**: Switch between open worksheets within the drawer
+- **Completion tracking**: Records who completed a worksheet and when
+
+#### Phase 18: Worksheets List
+- **Worksheets overview page**: Table showing all worksheets with title, analyst, status badge, item count, priority breakdown, and oldest item age
+- **KPI row**: Four stat cards — Open Worksheets, Items Pending, High Priority count, Average Age — computed live from current data
+- **Filtering**: Status tabs (All/Open/Completed) with server-side filtering; analyst dropdown with client-side post-filter
+- **Click-to-detail**: Row click opens the worksheet clipboard drawer
+- **Completed timestamp**: Completed worksheets display their completion date/time in the list
+
 ## v0.27.7 — 2026-03-31
 
 ### Fix: Chromatogram upload to SENAITE
