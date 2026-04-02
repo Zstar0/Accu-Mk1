@@ -3750,6 +3750,7 @@ export interface WorksheetListItem {
     group_color: string
     priority: string
     added_at: string | null
+    date_received: string | null
     instrument_uid: string | null
     assigned_analyst_id: number | null
     assigned_analyst_email: string | null
@@ -3810,7 +3811,7 @@ export async function updateWorksheet(
 
 export async function addGroupToWorksheet(
   worksheetId: number,
-  data: { sample_uid: string; sample_id: string; service_group_id: number; analyses?: { title: string; keyword?: string | null; peptide_name?: string | null; method?: string | null }[] }
+  data: { sample_uid: string; sample_id: string; service_group_id: number; date_received?: string | null; analyses?: { title: string; keyword?: string | null; peptide_name?: string | null; method?: string | null }[] }
 ): Promise<{ status: string; item_id: number }> {
   const response = await fetch(`${API_BASE_URL()}/worksheets/${worksheetId}/add-group`, {
     method: 'POST',
@@ -3876,7 +3877,7 @@ export async function reorderWorksheetItems(
 }
 
 export async function createWorksheetFromDrop(
-  data: { sample_uid: string; sample_id: string; service_group_id: number }
+  data: { sample_uid: string; sample_id: string; service_group_id: number; date_received?: string | null }
 ): Promise<WorksheetCreateResponse> {
   const response = await fetch(`${API_BASE_URL()}/worksheets/create-from-drop`, {
     method: 'POST',

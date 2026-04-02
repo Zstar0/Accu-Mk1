@@ -89,7 +89,10 @@ export default function WorksheetsListPage() {
     const now = Date.now()
     const ages = openWithItems.map(w => {
       const earliest = w.items
-        .map(i => (i.added_at ? new Date(i.added_at).getTime() : now))
+        .map(i => {
+          const ts = i.date_received ?? i.added_at
+          return ts ? new Date(ts).getTime() : now
+        })
         .reduce((min, t) => Math.min(min, t), now)
       return now - earliest
     })
@@ -249,9 +252,9 @@ export default function WorksheetsListPage() {
                       p => (priorityCounts[p] ?? 0) > 0,
                     )
 
-                    // Find earliest added_at
+                    // Find earliest date_received (or added_at as fallback)
                     const earliestAddedAt = ws.items
-                      .map(i => i.added_at)
+                      .map(i => i.date_received ?? i.added_at)
                       .filter(Boolean)
                       .sort()[0] ?? null
 

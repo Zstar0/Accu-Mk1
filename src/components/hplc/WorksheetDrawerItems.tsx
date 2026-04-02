@@ -315,7 +315,7 @@ function SortableItemRow({
 
       {/* Age */}
       <div className="w-[60px] shrink-0">
-        <AgingTimer dateReceived={item.added_at} compact />
+        <AgingTimer dateReceived={item.date_received ?? item.added_at} compact />
       </div>
 
       {/* Actions */}

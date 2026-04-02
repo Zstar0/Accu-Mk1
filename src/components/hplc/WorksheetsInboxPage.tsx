@@ -174,6 +174,7 @@ export default function WorksheetsInboxPage() {
           sample_uid: dragData.sampleUid,
           sample_id: dragData.sampleId,
           service_group_id: dragData.groupId,
+          date_received: dragData.dateReceived,
         })
         toast.success(`Created "${result.title}"`)
       } else if (dropId.startsWith('worksheet-')) {
@@ -182,6 +183,7 @@ export default function WorksheetsInboxPage() {
           sample_uid: dragData.sampleUid,
           sample_id: dragData.sampleId,
           service_group_id: dragData.groupId,
+          date_received: dragData.dateReceived,
           analyses: dragData.analyses,
         })
         toast.success(`Added to worksheet`)

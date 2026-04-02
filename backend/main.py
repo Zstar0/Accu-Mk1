@@ -11217,6 +11217,7 @@ async def list_worksheets(
                     "group_color": group_color_map.get(it.service_group_id, "zinc") if it.service_group_id else "zinc",
                     "priority": it.priority,
                     "added_at": it.added_at.isoformat() if it.added_at else None,
+                    "date_received": it.date_received.isoformat() if it.date_received else None,
                     "instrument_uid": it.instrument_uid,
                     "assigned_analyst_id": it.assigned_analyst_id,
                     "assigned_analyst_email": item_analyst_email_map.get(it.assigned_analyst_id) if it.assigned_analyst_id else None,
@@ -11279,6 +11280,7 @@ class AddToWorksheetRequest(BaseModel):
     sample_uid: str
     sample_id: str
     service_group_id: int | None = None
+    date_received: Optional[str] = None
     analyses: Optional[list[AddToWorksheetAnalysis]] = None
 
     @validator("service_group_id", pre=True, always=True)
@@ -11343,6 +11345,7 @@ async def add_group_to_worksheet(
         assigned_analyst_id=analyst_id,
         instrument_uid=staging_item.instrument_uid if staging_item else None,
         priority=priority,
+        date_received=datetime.fromisoformat(data.date_received.replace("Z", "+00:00")) if data.date_received else None,
         analyses_json=json.dumps([a.model_dump() for a in data.analyses]) if data.analyses else None,
     )
     db.add(item)
@@ -11400,6 +11403,7 @@ async def create_worksheet_from_drop(
         assigned_analyst_id=staging_item.assigned_analyst_id if staging_item else None,
         instrument_uid=staging_item.instrument_uid if staging_item else None,
         priority=priority,
+        date_received=datetime.fromisoformat(data.date_received.replace("Z", "+00:00")) if data.date_received else None,
     )
     db.add(item)
 
