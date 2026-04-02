@@ -354,8 +354,23 @@ export default function WorksheetsInboxPage() {
         </div>
       </div>
 
-      {/* Drag overlay — shows a ghost card while dragging */}
-      <DragOverlay dropAnimation={null}>
+      {/* Drag overlay — shows a ghost card following the cursor */}
+      <DragOverlay
+        dropAnimation={null}
+        modifiers={[
+          ({ transform, activatorEvent, activeNodeRect }) => {
+            if (!activatorEvent || !activeNodeRect || !transform) return transform
+            const event = activatorEvent as PointerEvent
+            const offsetX = event.clientX - activeNodeRect.left
+            const offsetY = event.clientY - activeNodeRect.top
+            return {
+              ...transform,
+              x: transform.x + offsetX - activeNodeRect.width / 2,
+              y: transform.y + offsetY - 16,
+            }
+          },
+        ]}
+      >
         {activeDrag && (
           <div className="rounded-lg border bg-card shadow-xl px-3 py-2 opacity-90 w-48 pointer-events-none">
             <span className="font-mono text-xs font-medium">{activeDrag.sampleId}</span>
