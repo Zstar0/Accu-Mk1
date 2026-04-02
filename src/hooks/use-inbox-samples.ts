@@ -30,21 +30,27 @@ export function usePriorityMutation() {
       updateInboxPriority(sampleUid, priority),
     onMutate: async ({ sampleUid, priority }) => {
       await queryClient.cancelQueries({ queryKey: ['inbox-samples'] })
-      const previous = queryClient.getQueryData<InboxResponse>(['inbox-samples'])
-      queryClient.setQueryData<InboxResponse>(['inbox-samples'], old => {
-        if (!old) return old
-        return {
-          ...old,
-          items: old.items.map(s =>
-            s.uid === sampleUid ? { ...s, priority } : s
-          ),
-        }
-      })
-      return { previous }
+      // Optimistically update all inbox query variants (any hideTestOrders value)
+      const allQueries = queryClient.getQueriesData<InboxResponse>({ queryKey: ['inbox-samples'] })
+      const previousMap = new Map(allQueries)
+      for (const [key] of allQueries) {
+        queryClient.setQueryData<InboxResponse>(key, old => {
+          if (!old) return old
+          return {
+            ...old,
+            items: old.items.map(s =>
+              s.uid === sampleUid ? { ...s, priority } : s
+            ),
+          }
+        })
+      }
+      return { previousMap }
     },
     onError: (_err, _vars, context) => {
-      if (context?.previous) {
-        queryClient.setQueryData(['inbox-samples'], context.previous)
+      if (context?.previousMap) {
+        for (const [key, data] of context.previousMap) {
+          queryClient.setQueryData(key, data)
+        }
       }
       toast.error('Failed to update priority')
     },
