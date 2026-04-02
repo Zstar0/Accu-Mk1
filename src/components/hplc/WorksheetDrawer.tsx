@@ -25,6 +25,7 @@ import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { useUIStore } from '@/store/ui-store'
+import { useAuthStore } from '@/store/auth-store'
 import { useWorksheetDrawer } from '@/hooks/use-worksheet-drawer'
 import { getWorksheetUsers, getInstruments } from '@/lib/api'
 import WorksheetDrawerHeader from './WorksheetDrawerHeader'
@@ -36,9 +37,12 @@ export function WorksheetDrawer() {
   const closeDrawer = useUIStore(state => state.closeWorksheetDrawer)
   const setActiveId = useUIStore(state => state.setActiveWorksheetId)
   const activeWorksheetId = useUIStore(state => state.activeWorksheetId)
+  const currentUserEmail = useAuthStore(state => state.user?.email ?? '')
+
+  const [analystFilter, setAnalystFilter] = useState(currentUserEmail)
 
   const {
-    openWorksheets,
+    openWorksheets: allOpenWorksheets,
     activeWorksheet,
     totalOpenItems,
     isLoading,
@@ -53,6 +57,19 @@ export function WorksheetDrawer() {
     addItemMutation,
   } = useWorksheetDrawer()
 
+  // Filter worksheets by analyst
+  const openWorksheets = analystFilter === 'all'
+    ? allOpenWorksheets
+    : allOpenWorksheets.filter(ws => ws.assigned_analyst_email === analystFilter)
+
+  // Build unique analyst list from all open worksheets
+  const analystOptions = (() => {
+    const emails = new Set(
+      allOpenWorksheets.map(ws => ws.assigned_analyst_email).filter(Boolean) as string[],
+    )
+    return Array.from(emails).sort()
+  })()
+
   const { data: users = [] } = useQuery({
     queryKey: ['worksheet-users'],
     queryFn: getWorksheetUsers,
@@ -65,11 +82,12 @@ export function WorksheetDrawer() {
     staleTime: 5 * 60 * 1000,
   })
 
-  // Auto-select first open worksheet when drawer opens with no active selection
+  // Auto-select first worksheet when drawer opens or filter changes
   useEffect(() => {
-    const first = openWorksheets[0]
-    if (drawerOpen && !activeWorksheetId && first) {
-      setActiveId(first.id)
+    if (!drawerOpen || openWorksheets.length === 0) return
+    const activeStillVisible = openWorksheets.some(ws => ws.id === activeWorksheetId)
+    if (!activeStillVisible) {
+      setActiveId(openWorksheets[0]!.id)
     }
   }, [drawerOpen, activeWorksheetId, openWorksheets, setActiveId])
 
@@ -146,27 +164,42 @@ export function WorksheetDrawer() {
             </div>
           )}
 
-          {/* Worksheet selector — only when 2+ open worksheets */}
-          {!isLoading && !isError && openWorksheets.length >= 2 && (
-            <div className="border-b px-4 py-2">
-              <Select
-                value={String(activeWorksheetId)}
-                onValueChange={v => setActiveId(Number(v))}
-              >
-                <SelectTrigger className="w-full">
-                  <SelectValue />
+          {/* Analyst filter + worksheet selector */}
+          {!isLoading && !isError && allOpenWorksheets.length >= 1 && (
+            <div className="border-b px-4 py-2 flex items-center gap-2">
+              <Select value={analystFilter} onValueChange={setAnalystFilter}>
+                <SelectTrigger className="w-48 shrink-0">
+                  <SelectValue placeholder="All analysts" />
                 </SelectTrigger>
                 <SelectContent>
-                  {openWorksheets.map(ws => (
-                    <SelectItem key={ws.id} value={String(ws.id)}>
-                      {ws.title}
-                      <span className="ml-2 text-muted-foreground text-xs">
-                        ({ws.item_count} items)
-                      </span>
+                  <SelectItem value="all">All analysts</SelectItem>
+                  {analystOptions.map(email => (
+                    <SelectItem key={email} value={email}>
+                      {email}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
+              {openWorksheets.length >= 2 && (
+                <Select
+                  value={String(activeWorksheetId)}
+                  onValueChange={v => setActiveId(Number(v))}
+                >
+                  <SelectTrigger className="flex-1">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {openWorksheets.map(ws => (
+                      <SelectItem key={ws.id} value={String(ws.id)}>
+                        {ws.title}
+                        <span className="ml-2 text-muted-foreground text-xs">
+                          ({ws.item_count} items)
+                        </span>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
             </div>
           )}
 
