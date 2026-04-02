@@ -9,12 +9,14 @@ import {
 } from '@/lib/api'
 import { toast } from 'sonner'
 
-const INBOX_KEY = ['inbox-samples'] as const
+export function inboxKey(hideTestOrders: boolean) {
+  return ['inbox-samples', { hideTestOrders }] as const
+}
 
-export function useInboxSamples() {
+export function useInboxSamples(hideTestOrders = true) {
   return useQuery({
-    queryKey: INBOX_KEY,
-    queryFn: getInboxSamples,
+    queryKey: inboxKey(hideTestOrders),
+    queryFn: () => getInboxSamples(hideTestOrders),
     refetchInterval: 30_000, // 30s polling per D-04
     staleTime: 0, // always fresh -- live queue
   })
@@ -27,9 +29,9 @@ export function usePriorityMutation() {
     mutationFn: ({ sampleUid, priority }: { sampleUid: string; priority: InboxPriority }) =>
       updateInboxPriority(sampleUid, priority),
     onMutate: async ({ sampleUid, priority }) => {
-      await queryClient.cancelQueries({ queryKey: INBOX_KEY })
-      const previous = queryClient.getQueryData<InboxResponse>(INBOX_KEY)
-      queryClient.setQueryData<InboxResponse>(INBOX_KEY, old => {
+      await queryClient.cancelQueries({ queryKey: ['inbox-samples'] })
+      const previous = queryClient.getQueryData<InboxResponse>(['inbox-samples'])
+      queryClient.setQueryData<InboxResponse>(['inbox-samples'], old => {
         if (!old) return old
         return {
           ...old,
@@ -42,7 +44,7 @@ export function usePriorityMutation() {
     },
     onError: (_err, _vars, context) => {
       if (context?.previous) {
-        queryClient.setQueryData(INBOX_KEY, context.previous)
+        queryClient.setQueryData(['inbox-samples'], context.previous)
       }
       toast.error('Failed to update priority')
     },
@@ -55,7 +57,7 @@ export function useBulkUpdateMutation() {
   return useMutation({
     mutationFn: bulkUpdateInbox,
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: INBOX_KEY })
+      queryClient.invalidateQueries({ queryKey: ['inbox-samples'] })
       toast.success('Bulk update applied')
     },
     onError: () => {
@@ -70,7 +72,7 @@ export function useCreateWorksheetMutation() {
   return useMutation({
     mutationFn: createWorksheet,
     onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: INBOX_KEY })
+      queryClient.invalidateQueries({ queryKey: ['inbox-samples'] })
       toast.success(`Worksheet "${data.title}" created with ${data.item_count} items`)
     },
     onError: (err: Error & { staleUids?: string[] }) => {

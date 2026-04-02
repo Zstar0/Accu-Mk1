@@ -10475,13 +10475,14 @@ class WorksheetCreate(BaseModel):
 
 @app.get("/worksheets/inbox", response_model=InboxResponse)
 async def get_worksheets_inbox(
+    hide_test_orders: bool = True,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
     """
     Return received samples from SENAITE enriched with service group analysis grouping,
-    local priorities, and analyst assignments. Excludes samples already assigned to
-    open worksheets to prevent re-appearing after worksheet creation.
+    local priorities, and analyst assignments. Only shows samples linked to tracked orders
+    in the integration DB. Excludes samples already assigned to open worksheets.
     """
     if not SENAITE_URL:
         raise HTTPException(status_code=503, detail="SENAITE not configured")
@@ -10513,6 +10514,38 @@ async def get_worksheets_inbox(
         raise HTTPException(status_code=500, detail=f"SENAITE fetch error: {e}")
 
     senaite_items = senaite_data.get("items", [])
+
+    # Step 1b: Filter to only samples linked to tracked orders in integration DB
+    TEST_EMAILS = ["forrestp@outlook.com", "forrest@valenceanalytical.com"]
+    try:
+        from integration_db import get_integration_db
+        from psycopg2.extras import RealDictCursor
+        linked_senaite_ids: set[str] = set()
+        with get_integration_db() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    "SELECT sample_results, payload FROM order_submissions WHERE sample_results IS NOT NULL"
+                )
+                for row in cur.fetchall():
+                    # Check if this is a test order
+                    if hide_test_orders and row.get("payload"):
+                        payload = row["payload"] if isinstance(row["payload"], dict) else {}
+                        billing = payload.get("billing", {})
+                        email = (billing.get("email") or "").lower() if isinstance(billing, dict) else ""
+                        if email in TEST_EMAILS:
+                            continue
+                    sr = row["sample_results"]
+                    if isinstance(sr, dict):
+                        for entry in sr.values():
+                            if isinstance(entry, dict) and entry.get("senaite_id"):
+                                linked_senaite_ids.add(entry["senaite_id"])
+        # Filter SENAITE items to only those with a linked order
+        senaite_items = [
+            it for it in senaite_items
+            if str(it.get("id", "")) in linked_senaite_ids
+        ]
+    except Exception:
+        pass  # If integration DB is unavailable, show all samples (graceful degradation)
 
     # Step 2: Exclude samples already in open worksheets
     open_worksheet_uids_rows = db.execute(

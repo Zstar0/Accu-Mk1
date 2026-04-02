@@ -3,6 +3,7 @@ import { DndContext, DragOverlay, type DragEndEvent, type DragStartEvent } from 
 import { useState } from 'react'
 import { Inbox, RefreshCw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 import { toast } from 'sonner'
 import { InboxServiceGroupCard, type DragData } from '@/components/hplc/InboxServiceGroupCard'
 import { WorksheetDropPanel } from '@/components/hplc/WorksheetDropPanel'
@@ -86,13 +87,14 @@ function flattenToCards(samples: InboxSampleItem[]): FlatCard[] {
 
 export default function WorksheetsInboxPage() {
   const queryClient = useQueryClient()
+  const [hideTestOrders, setHideTestOrders] = useState(true)
   const {
     data: inboxData,
     isLoading,
     isError,
     error,
     refetch,
-  } = useInboxSamples()
+  } = useInboxSamples(hideTestOrders)
 
   const priorityMutation = usePriorityMutation()
   const bulkUpdateMutation = useBulkUpdateMutation()
@@ -220,6 +222,13 @@ export default function WorksheetsInboxPage() {
                   Drag analysis groups to worksheets on the right
                 </p>
               </div>
+              <label className="flex items-center gap-2 cursor-pointer select-none">
+                <Checkbox
+                  checked={hideTestOrders}
+                  onCheckedChange={v => setHideTestOrders(v === true)}
+                />
+                <span className="text-sm text-muted-foreground">Hide test orders</span>
+              </label>
             </div>
 
             {/* Loading state */}

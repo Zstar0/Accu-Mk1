@@ -44,8 +44,8 @@ export function AddSamplesModal({
   onAdd,
 }: AddSamplesModalProps) {
   const { data: inboxData } = useQuery({
-    queryKey: ['inbox-samples'],
-    queryFn: getInboxSamples,
+    queryKey: ['inbox-samples', { hideTestOrders: true }],
+    queryFn: () => getInboxSamples(true),
     enabled: open,
   })
 

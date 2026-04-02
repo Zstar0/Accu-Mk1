@@ -3671,8 +3671,10 @@ export interface WorksheetCreateResponse {
 
 // ─── Inbox API Functions ──────────────────────────────────────────────────────
 
-export async function getInboxSamples(): Promise<InboxResponse> {
-  const response = await fetch(`${API_BASE_URL()}/worksheets/inbox`, {
+export async function getInboxSamples(hideTestOrders = true): Promise<InboxResponse> {
+  const params = new URLSearchParams()
+  params.set('hide_test_orders', String(hideTestOrders))
+  const response = await fetch(`${API_BASE_URL()}/worksheets/inbox?${params}`, {
     headers: getBearerHeaders(),
   })
   if (!response.ok) throw new Error(`Inbox fetch failed: ${response.status}`)
