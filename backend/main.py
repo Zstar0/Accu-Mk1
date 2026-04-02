@@ -30,7 +30,7 @@ APP_VERSION = _read_app_version()
 
 from fastapi import FastAPI, Depends, Form, HTTPException, Header, Query, Request, Response, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, validator
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import select, desc, delete, update, func
 
@@ -10466,6 +10466,10 @@ class BulkInboxUpdate(BaseModel):
     analyst_id: Optional[int] = None
     instrument_uid: Optional[str] = None
 
+    @validator("service_group_id", pre=True, always=True)
+    def zero_to_none(cls, v):
+        return None if v == 0 else v
+
 
 class WorksheetCreate(BaseModel):
     title: str
@@ -11274,8 +11278,12 @@ class AddToWorksheetAnalysis(BaseModel):
 class AddToWorksheetRequest(BaseModel):
     sample_uid: str
     sample_id: str
-    service_group_id: int
+    service_group_id: int | None = None
     analyses: Optional[list[AddToWorksheetAnalysis]] = None
+
+    @validator("service_group_id", pre=True, always=True)
+    def zero_to_none(cls, v):
+        return None if v == 0 else v
 
 
 @app.post("/worksheets/{worksheet_id}/add-group")
@@ -11293,11 +11301,13 @@ async def add_group_to_worksheet(
         raise HTTPException(404, "Worksheet not found")
 
     # Check if this sample+group is already in the worksheet
+    gid = data.service_group_id
+    gid_filter = WorksheetItem.service_group_id.is_(None) if gid is None else (WorksheetItem.service_group_id == gid)
     existing = db.execute(
         select(WorksheetItem).where(
             WorksheetItem.worksheet_id == worksheet_id,
             WorksheetItem.sample_uid == data.sample_uid,
-            WorksheetItem.service_group_id == data.service_group_id,
+            gid_filter,
         )
     ).scalar_one_or_none()
     if existing:
@@ -11309,7 +11319,7 @@ async def add_group_to_worksheet(
         .join(Worksheet, WorksheetItem.worksheet_id == Worksheet.id)
         .where(
             WorksheetItem.sample_uid == data.sample_uid,
-            WorksheetItem.service_group_id == data.service_group_id,
+            gid_filter,
             Worksheet.status == "staging",
         )
     ).scalar_one_or_none()
@@ -11370,12 +11380,14 @@ async def create_worksheet_from_drop(
     priority = sample_priority.priority if sample_priority else "normal"
 
     # Pick up staging pre-assignments
+    gid = data.service_group_id
+    gid_filter = WorksheetItem.service_group_id.is_(None) if gid is None else (WorksheetItem.service_group_id == gid)
     staging_item = db.execute(
         select(WorksheetItem)
         .join(Worksheet, WorksheetItem.worksheet_id == Worksheet.id)
         .where(
             WorksheetItem.sample_uid == data.sample_uid,
-            WorksheetItem.service_group_id == data.service_group_id,
+            gid_filter,
             Worksheet.status == "staging",
         )
     ).scalar_one_or_none()
@@ -11384,7 +11396,7 @@ async def create_worksheet_from_drop(
         worksheet_id=ws.id,
         sample_uid=data.sample_uid,
         sample_id=data.sample_id,
-        service_group_id=data.service_group_id,
+        service_group_id=gid,
         assigned_analyst_id=staging_item.assigned_analyst_id if staging_item else None,
         instrument_uid=staging_item.instrument_uid if staging_item else None,
         priority=priority,
@@ -11429,11 +11441,13 @@ async def remove_worksheet_item(
     _current_user=Depends(get_current_user),
 ):
     """Remove a single service group item from a worksheet. Analysis returns to inbox."""
+    gid = None if service_group_id == 0 else service_group_id
+    gid_filter = WorksheetItem.service_group_id.is_(None) if gid is None else (WorksheetItem.service_group_id == gid)
     item = db.execute(
         select(WorksheetItem).where(
             WorksheetItem.worksheet_id == worksheet_id,
             WorksheetItem.sample_uid == sample_uid,
-            WorksheetItem.service_group_id == service_group_id,
+            gid_filter,
         )
     ).scalar_one_or_none()
     if not item:
@@ -11477,11 +11491,13 @@ async def reassign_worksheet_item(
     _current_user=Depends(get_current_user),
 ):
     """Move a worksheet item to a different (open) worksheet."""
+    gid = None if service_group_id == 0 else service_group_id
+    gid_filter = WorksheetItem.service_group_id.is_(None) if gid is None else (WorksheetItem.service_group_id == gid)
     item = db.execute(
         select(WorksheetItem).where(
             WorksheetItem.worksheet_id == worksheet_id,
             WorksheetItem.sample_uid == sample_uid,
-            WorksheetItem.service_group_id == service_group_id,
+            gid_filter,
         )
     ).scalar_one_or_none()
     if not item:
