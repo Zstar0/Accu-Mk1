@@ -136,6 +136,9 @@ def _run_migrations():
         "ALTER TABLE calibration_curves ADD COLUMN IF NOT EXISTS updated_by_email VARCHAR(320)",
         "ALTER TABLE hplc_analyses ADD COLUMN IF NOT EXISTS processed_by_user_id INTEGER",
         "ALTER TABLE hplc_analyses ADD COLUMN IF NOT EXISTS processed_by_email VARCHAR(320)",
+        # Phase 17: Worksheet completion tracking
+        "ALTER TABLE worksheets ADD COLUMN IF NOT EXISTS completed_by INTEGER REFERENCES users(id) ON DELETE SET NULL",
+        "ALTER TABLE worksheets ADD COLUMN IF NOT EXISTS completed_at TIMESTAMP",
     ]
     try:
         with engine.connect() as conn:
