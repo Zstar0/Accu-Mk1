@@ -23,10 +23,9 @@ function formatAge(ageMs: number): string {
 function getAgeColor(ageMs: number): string {
   const hours = ageMs / (1000 * 60 * 60)
 
-  if (hours >= 24) return 'text-red-500 animate-pulse'
-  if (hours >= 20) return 'text-orange-500'
-  if (hours >= 12) return 'text-yellow-500'
-  return 'text-green-500'
+  if (hours > 48) return 'text-red-400'
+  if (hours > 24) return 'text-amber-400'
+  return 'text-muted-foreground'
 }
 
 export function AgingTimer({ dateReceived, compact, className = '' }: AgingTimerProps) {
