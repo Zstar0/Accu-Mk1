@@ -9,14 +9,14 @@ import {
 } from '@/lib/api'
 import { toast } from 'sonner'
 
-export function inboxKey(hideTestOrders: boolean) {
-  return ['inbox-samples', { hideTestOrders }] as const
+export function inboxKey(hideTestOrders: boolean, hidePrepped: boolean) {
+  return ['inbox-samples', { hideTestOrders, hidePrepped }] as const
 }
 
-export function useInboxSamples(hideTestOrders = true) {
+export function useInboxSamples(hideTestOrders = true, hidePrepped = true) {
   return useQuery({
-    queryKey: inboxKey(hideTestOrders),
-    queryFn: () => getInboxSamples(hideTestOrders),
+    queryKey: inboxKey(hideTestOrders, hidePrepped),
+    queryFn: () => getInboxSamples(hideTestOrders, false, hidePrepped),
     refetchInterval: 30_000, // 30s polling per D-04
     staleTime: 0, // always fresh -- live queue
   })

@@ -89,6 +89,7 @@ function flattenToCards(samples: InboxSampleItem[]): FlatCard[] {
 export default function WorksheetsInboxPage() {
   const queryClient = useQueryClient()
   const [hideTestOrders, setHideTestOrders] = useState(true)
+  const [hidePrepped, setHidePrepped] = useState(true)
   const [isRefreshing, setIsRefreshing] = useState(false)
   const {
     data: inboxData,
@@ -96,12 +97,12 @@ export default function WorksheetsInboxPage() {
     isError,
     error,
     refetch,
-  } = useInboxSamples(hideTestOrders)
+  } = useInboxSamples(hideTestOrders, hidePrepped)
 
   const handleForceRefresh = async () => {
     setIsRefreshing(true)
     try {
-      await getInboxSamples(hideTestOrders, true)
+      await getInboxSamples(hideTestOrders, true, hidePrepped)
       queryClient.invalidateQueries({ queryKey: ['inbox-samples'] })
     } finally {
       setIsRefreshing(false)
@@ -243,6 +244,13 @@ export default function WorksheetsInboxPage() {
                     onCheckedChange={v => setHideTestOrders(v === true)}
                   />
                   <span className="text-sm text-muted-foreground">Hide test orders</span>
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer select-none">
+                  <Checkbox
+                    checked={hidePrepped}
+                    onCheckedChange={v => setHidePrepped(v === true)}
+                  />
+                  <span className="text-sm text-muted-foreground">Hide prepped</span>
                 </label>
                 <Button
                   variant="ghost"

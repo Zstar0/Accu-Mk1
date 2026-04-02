@@ -10486,6 +10486,7 @@ _INBOX_CACHE_TTL_SECONDS = 30 * 60  # 30 minutes
 @app.get("/worksheets/inbox", response_model=InboxResponse)
 async def get_worksheets_inbox(
     hide_test_orders: bool = True,
+    hide_prepped: bool = True,
     force_refresh: bool = False,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
@@ -10610,8 +10611,24 @@ async def get_worksheets_inbox(
         if gid is None:
             assigned_uids_for_null_group.add(uid)
 
-    # Don't filter samples here — filter at the group level in step 6
-    filtered_items = senaite_items
+    # Step 2b: Load SENAITE sample IDs that already have a sample prep
+    prepped_senaite_ids: set[str] = set()
+    if hide_prepped:
+        try:
+            from mk1_db import ensure_sample_preps_table, get_mk1_db
+            ensure_sample_preps_table()
+            with get_mk1_db() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT DISTINCT senaite_sample_id FROM sample_preps WHERE senaite_sample_id IS NOT NULL")
+                    prepped_senaite_ids = {row[0] for row in cur.fetchall()}
+        except Exception:
+            pass  # If mk1 DB is unavailable, show all samples
+
+    # Filter out samples that already have preps (by SENAITE sample ID e.g. "P-0085")
+    filtered_items = [
+        it for it in senaite_items
+        if not hide_prepped or str(it.get("id", "")) not in prepped_senaite_ids
+    ]
 
     # Step 3: Build keyword → service group map
     group_rows = db.execute(
