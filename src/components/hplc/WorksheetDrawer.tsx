@@ -2,7 +2,13 @@ import { useState, useMemo, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { ClipboardList } from 'lucide-react'
 import { Sheet, SheetContent } from '@/components/ui/sheet'
-import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -15,7 +21,7 @@ import {
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
+// Badge removed — worksheet selector uses Select instead of Tabs
 import { Skeleton } from '@/components/ui/skeleton'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { useUIStore } from '@/store/ui-store'
@@ -140,28 +146,28 @@ export function WorksheetDrawer() {
             </div>
           )}
 
-          {/* Worksheet tabs — only when 2+ open worksheets */}
+          {/* Worksheet selector — only when 2+ open worksheets */}
           {!isLoading && !isError && openWorksheets.length >= 2 && (
-            <Tabs
-              value={String(activeWorksheetId)}
-              onValueChange={v => setActiveId(Number(v))}
-              className="border-b"
-            >
-              <TabsList className="w-full justify-start overflow-x-auto">
-                {openWorksheets.map(ws => (
-                  <TabsTrigger
-                    key={ws.id}
-                    value={String(ws.id)}
-                    className="max-w-[160px] truncate"
-                  >
-                    {ws.title.length > 20 ? ws.title.slice(0, 20) + '...' : ws.title}
-                    <Badge variant="secondary" className="ml-1 text-[10px]">
-                      {ws.item_count}
-                    </Badge>
-                  </TabsTrigger>
-                ))}
-              </TabsList>
-            </Tabs>
+            <div className="border-b px-4 py-2">
+              <Select
+                value={String(activeWorksheetId)}
+                onValueChange={v => setActiveId(Number(v))}
+              >
+                <SelectTrigger className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {openWorksheets.map(ws => (
+                    <SelectItem key={ws.id} value={String(ws.id)}>
+                      {ws.title}
+                      <span className="ml-2 text-muted-foreground text-xs">
+                        ({ws.item_count} items)
+                      </span>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
           )}
 
           {/* Active worksheet content */}
