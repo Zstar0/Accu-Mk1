@@ -10591,15 +10591,27 @@ async def get_worksheets_inbox(
     except Exception:
         pass  # If integration DB is unavailable, show all samples (graceful degradation)
 
-    # Step 2: Exclude samples already in open worksheets
-    open_worksheet_uids_rows = db.execute(
-        select(WorksheetItem.sample_uid)
+    # Step 2: Build set of (sample_uid, service_group_id) pairs already in open worksheets
+    # Only exclude specific service groups, not the entire sample — a sample can have
+    # Microbiology in a worksheet while Core HPLC is still available in the inbox.
+    open_worksheet_pairs = db.execute(
+        select(WorksheetItem.sample_uid, WorksheetItem.service_group_id)
         .join(Worksheet, WorksheetItem.worksheet_id == Worksheet.id)
         .where(Worksheet.status == "open")
     ).all()
-    assigned_uids: set[str] = {row.sample_uid for row in open_worksheet_uids_rows}
+    assigned_pairs: set[tuple[str, int | None]] = {
+        (row.sample_uid, row.service_group_id) for row in open_worksheet_pairs
+    }
+    # Also track fully-assigned samples (all groups in worksheets) for backward compat
+    # We'll filter at the group level later in step 6, not at the sample level here
+    assigned_uids_for_null_group: set[str] = set()
+    # Samples with service_group_id=None in a worksheet are fully claimed
+    for uid, gid in assigned_pairs:
+        if gid is None:
+            assigned_uids_for_null_group.add(uid)
 
-    filtered_items = [it for it in senaite_items if str(it.get("uid", "")) not in assigned_uids]
+    # Don't filter samples here — filter at the group level in step 6
+    filtered_items = senaite_items
 
     # Step 3: Build keyword → service group map
     group_rows = db.execute(
@@ -10849,6 +10861,18 @@ async def get_worksheets_inbox(
             grp.analyses.sort(key=lambda a: a.title.lower())
 
         analyses_by_group = list(groups_by_id.values())
+
+        # Filter out groups already in open worksheets
+        if uid in assigned_uids_for_null_group:
+            # Sample with null service_group_id in a worksheet — fully claimed, skip entirely
+            continue
+        analyses_by_group = [
+            grp for grp in analyses_by_group
+            if (uid, grp.group_id) not in assigned_pairs
+        ]
+        if not analyses_by_group:
+            # All groups for this sample are in worksheets — skip
+            continue
 
         # Attach per-group assignments (analyst + instrument)
         assigned_count = 0
