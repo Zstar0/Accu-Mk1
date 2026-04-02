@@ -127,7 +127,7 @@ export function InboxServiceGroupCard({
         <button
           {...attributes}
           {...listeners}
-          className="h-6 w-5 shrink-0 flex items-center justify-center cursor-grab active:cursor-grabbing touch-none text-muted-foreground/40 hover:text-muted-foreground"
+          className="h-6 w-14 shrink-0 flex items-center justify-center cursor-grab active:cursor-grabbing touch-none text-muted-foreground/40 hover:text-muted-foreground rounded hover:bg-muted/50"
         >
           <GripVertical className="h-4 w-4" />
         </button>
