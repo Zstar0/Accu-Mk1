@@ -19,7 +19,6 @@ import type {
   InboxSampleItem,
   InboxServiceGroupSection,
   InboxPriority,
-  WorksheetUser,
 } from '@/lib/api'
 
 export interface DragData {
@@ -34,11 +33,7 @@ export interface DragData {
 interface InboxServiceGroupCardProps {
   sample: InboxSampleItem
   group: InboxServiceGroupSection
-  users: WorksheetUser[]
-  instruments: { uid: string; title: string }[]
   onPriorityChange: (sampleUid: string, priority: InboxPriority) => void
-  onGroupTechAssign: (sampleUid: string, groupId: number, analystId: number) => void
-  onGroupInstrumentAssign: (sampleUid: string, groupId: number, instrumentUid: string) => void
 }
 
 /** Group core HPLC analyses (Purity, Identity, Quantity) into one peptide line */
@@ -82,11 +77,7 @@ function groupCoreAnalyses(analyses: InboxServiceGroupSection['analyses']) {
 export function InboxServiceGroupCard({
   sample,
   group,
-  users,
-  instruments,
   onPriorityChange,
-  onGroupTechAssign,
-  onGroupInstrumentAssign,
 }: InboxServiceGroupCardProps) {
   const dragId = `${sample.uid}::${group.group_id}`
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
@@ -175,46 +166,8 @@ export function InboxServiceGroupCard({
         <AgingTimer dateReceived={sample.date_received} />
       </div>
 
-      {/* Card body — analyses + assignments */}
+      {/* Card body — analyses */}
       <div className="px-3 py-2">
-        {/* Per-group assignment row */}
-        <div className="flex items-center gap-2 mb-2">
-          <Select
-            value={group.assigned_analyst_id != null ? String(group.assigned_analyst_id) : ''}
-            onValueChange={value => onGroupTechAssign(sample.uid, group.group_id, Number(value))}
-          >
-            <SelectTrigger
-              size="sm"
-              className="h-6 min-w-[130px] text-xs border-transparent bg-transparent shadow-none hover:border-border"
-              aria-label={`Assign tech for ${group.group_name}`}
-            >
-              <SelectValue placeholder="Assign tech…" />
-            </SelectTrigger>
-            <SelectContent>
-              {users.map(user => (
-                <SelectItem key={user.id} value={String(user.id)}>{user.email}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Select
-            value={group.instrument_uid ?? ''}
-            onValueChange={value => onGroupInstrumentAssign(sample.uid, group.group_id, value)}
-          >
-            <SelectTrigger
-              size="sm"
-              className="h-6 min-w-[130px] text-xs border-transparent bg-transparent shadow-none hover:border-border"
-              aria-label={`Assign instrument for ${group.group_name}`}
-            >
-              <SelectValue placeholder="Instrument…" />
-            </SelectTrigger>
-            <SelectContent>
-              {instruments.map(inst => (
-                <SelectItem key={inst.uid} value={inst.uid}>{inst.title}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-
         {/* Peptide lines (grouped core analyses) */}
         <div className="space-y-1">
           {peptideLines.map(line => (

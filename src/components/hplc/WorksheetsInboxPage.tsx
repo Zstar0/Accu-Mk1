@@ -10,11 +10,9 @@ import { WorksheetDropPanel } from '@/components/hplc/WorksheetDropPanel'
 import {
   useInboxSamples,
   usePriorityMutation,
-  useBulkUpdateMutation,
 } from '@/hooks/use-inbox-samples'
 import {
   getWorksheetUsers,
-  getInstruments,
   getInboxSamples,
   listWorksheets,
   addGroupToWorksheet,
@@ -110,17 +108,11 @@ export default function WorksheetsInboxPage() {
   }
 
   const priorityMutation = usePriorityMutation()
-  const bulkUpdateMutation = useBulkUpdateMutation()
+
 
   const { data: users = [] } = useQuery({
     queryKey: ['worksheet-users'],
     queryFn: getWorksheetUsers,
-    staleTime: 5 * 60 * 1000,
-  })
-
-  const { data: instrumentsRaw = [] } = useQuery({
-    queryKey: ['instruments'],
-    queryFn: getInstruments,
     staleTime: 5 * 60 * 1000,
   })
 
@@ -129,11 +121,6 @@ export default function WorksheetsInboxPage() {
     queryFn: () => listWorksheets('open'),
     refetchInterval: 30_000,
   })
-
-  const instruments = instrumentsRaw.map(inst => ({
-    uid: inst.senaite_uid ?? String(inst.id),
-    title: inst.name,
-  }))
 
   const [activeDrag, setActiveDrag] = useState<DragData | null>(null)
   const [pendingDropKeys, setPendingDropKeys] = useState<Set<string>>(new Set())
@@ -144,22 +131,6 @@ export default function WorksheetsInboxPage() {
 
   function handlePriorityChange(sampleUid: string, priority: InboxPriority) {
     priorityMutation.mutate({ sampleUid, priority })
-  }
-
-  function handleGroupTechAssign(sampleUid: string, groupId: number, analystId: number) {
-    bulkUpdateMutation.mutate({
-      sample_uids: [sampleUid],
-      service_group_id: groupId,
-      analyst_id: analystId,
-    })
-  }
-
-  function handleGroupInstrumentAssign(sampleUid: string, groupId: number, instrumentUid: string) {
-    bulkUpdateMutation.mutate({
-      sample_uids: [sampleUid],
-      service_group_id: groupId,
-      instrument_uid: instrumentUid,
-    })
   }
 
   function handleDragStart(event: DragStartEvent) {
@@ -301,11 +272,7 @@ export default function WorksheetsInboxPage() {
                     key={card.key}
                     sample={card.sample}
                     group={card.group}
-                    users={users}
-                    instruments={instruments}
                     onPriorityChange={handlePriorityChange}
-                    onGroupTechAssign={handleGroupTechAssign}
-                    onGroupInstrumentAssign={handleGroupInstrumentAssign}
                   />
                 ))}
               </div>
