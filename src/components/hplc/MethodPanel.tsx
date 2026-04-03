@@ -3,6 +3,7 @@ import { Loader2, Save, X, Pencil, FlaskConical } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Checkbox } from '@/components/ui/checkbox'
 import { useUIStore } from '@/store/ui-store'
 import { toast } from 'sonner'
 import {
@@ -80,7 +81,7 @@ export function MethodPanel({ method, onUpdated }: MethodPanelProps) {
   // Editable fields
   const [name, setName] = useState(method.name)
   const [senaiteId, setSenaiteId] = useState(method.senaite_id ?? '')
-  const [instrumentId, setInstrumentId] = useState<number | null>(method.instrument_id ?? null)
+  const [instrumentIds, setInstrumentIds] = useState<number[]>(method.instrument_ids ?? [])
   const [sizePeptide, setSizePeptide] = useState(method.size_peptide ?? '')
   const [startingOrganicPct, setStartingOrganicPct] = useState(
     method.starting_organic_pct?.toString() ?? ''
@@ -94,7 +95,7 @@ export function MethodPanel({ method, onUpdated }: MethodPanelProps) {
   const resetForm = () => {
     setName(method.name)
     setSenaiteId(method.senaite_id ?? '')
-    setInstrumentId(method.instrument_id ?? null)
+    setInstrumentIds(method.instrument_ids ?? [])
     setSizePeptide(method.size_peptide ?? '')
     setStartingOrganicPct(method.starting_organic_pct?.toString() ?? '')
     setTemperatureMctC(method.temperature_mct_c?.toString() ?? '')
@@ -114,7 +115,7 @@ export function MethodPanel({ method, onUpdated }: MethodPanelProps) {
       await updateMethod(method.id, {
         name: name.trim(),
         senaite_id: senaiteId.trim() || null,
-        instrument_id: instrumentId,
+        instrument_ids: instrumentIds,
         size_peptide: sizePeptide.trim() || null,
         starting_organic_pct: startingOrganicPct ? parseFloat(startingOrganicPct) : null,
         temperature_mct_c: temperatureMctC ? parseFloat(temperatureMctC) : null,
@@ -191,17 +192,27 @@ export function MethodPanel({ method, onUpdated }: MethodPanelProps) {
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label>Instrument</Label>
-              <select
-                className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                value={instrumentId ?? ''}
-                onChange={e => setInstrumentId(e.target.value ? parseInt(e.target.value, 10) : null)}
-              >
-                <option value="">None</option>
+              <Label>Instruments</Label>
+              <div className="space-y-1.5 rounded-md border border-input bg-background px-3 py-2">
                 {instruments.map(inst => (
-                  <option key={inst.id} value={inst.id}>{inst.name}</option>
+                  <label key={inst.id} className="flex items-center gap-2 text-sm cursor-pointer">
+                    <Checkbox
+                      checked={instrumentIds.includes(inst.id)}
+                      onCheckedChange={checked => {
+                        setInstrumentIds(prev =>
+                          checked
+                            ? [...prev, inst.id]
+                            : prev.filter(id => id !== inst.id)
+                        )
+                      }}
+                    />
+                    {inst.name}
+                  </label>
                 ))}
-              </select>
+                {instruments.length === 0 && (
+                  <span className="text-xs text-muted-foreground">No instruments available</span>
+                )}
+              </div>
             </div>
             <div className="space-y-2">
               <Label>Size Peptide</Label>
@@ -256,7 +267,7 @@ export function MethodPanel({ method, onUpdated }: MethodPanelProps) {
         <div className="space-y-4">
           {/* Read-only detail grid */}
           <div className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm">
-            <DetailRow label="Instrument" value={method.instrument?.name} />
+            <DetailRow label="Instruments" value={method.instruments.map(i => i.name).join(', ') || null} />
             <DetailRow label="Size Peptide" value={method.size_peptide} />
             <DetailRow
               label="Starting Organic"

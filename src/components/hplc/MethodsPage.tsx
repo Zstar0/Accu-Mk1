@@ -18,6 +18,7 @@ import {
 } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import {
   Tooltip,
@@ -40,10 +41,27 @@ import {
   getMethods,
   createMethod,
   deleteMethod,
+  updateMethod,
   getInstruments,
   type HplcMethod,
   type Instrument,
 } from '@/lib/api'
+
+const INSTRUMENT_COLORS = new Map<number, string>()
+const COLOR_PALETTE = [
+  'bg-blue-500/15 text-blue-400 border-blue-500/30',
+  'bg-emerald-500/15 text-emerald-400 border-emerald-500/30',
+  'bg-amber-500/15 text-amber-400 border-amber-500/30',
+  'bg-purple-500/15 text-purple-400 border-purple-500/30',
+  'bg-rose-500/15 text-rose-400 border-rose-500/30',
+  'bg-cyan-500/15 text-cyan-400 border-cyan-500/30',
+]
+function instrumentColor(id: number): string {
+  if (!INSTRUMENT_COLORS.has(id)) {
+    INSTRUMENT_COLORS.set(id, COLOR_PALETTE[INSTRUMENT_COLORS.size % COLOR_PALETTE.length]!)
+  }
+  return INSTRUMENT_COLORS.get(id)!
+}
 
 export function MethodsPage() {
   const [methods, setMethods] = useState<HplcMethod[]>([])
@@ -53,7 +71,9 @@ export function MethodsPage() {
   const [selectedId, setSelectedId] = useState<number | null>(null)
   const [showAddForm, setShowAddForm] = useState(false)
   const [searchInput, setSearchInput] = useState('')
-  const [instrumentTab, setInstrumentTab] = useState<string>('1290')
+  const [selectedMethodIds, setSelectedMethodIds] = useState<Set<number>>(new Set())
+  const [bulkAssigning, setBulkAssigning] = useState(false)
+  const [instrumentTab, setInstrumentTab] = useState<string>('all')
 
   // Delete confirmation
   const [deleteTarget, setDeleteTarget] = useState<HplcMethod | null>(null)
@@ -89,20 +109,20 @@ export function MethodsPage() {
 
   const selectedMethod = methods.find(m => m.id === selectedId) ?? null
 
-  // Find the active instrument object for tab filtering
-  const activeInstrument = allInstruments.find(i => i.model === instrumentTab)
+  // Find the active instrument by ID (tab stores instrument ID as string, or 'all')
+  const activeInstrumentId = instrumentTab === 'all' ? null : Number(instrumentTab)
 
   // Client-side filtering: instrument tab + search
   const filtered = methods.filter(m => {
-    // Instrument tab filter
-    if (activeInstrument && m.instrument_id !== activeInstrument.id) return false
+    // Instrument tab filter — "all" shows everything, otherwise match by instrument ID
+    if (activeInstrumentId != null && !m.instrument_ids.includes(activeInstrumentId)) return false
     // Text search
     if (!searchInput) return true
     const q = searchInput.toLowerCase()
     return (
       m.name.toLowerCase().includes(q) ||
       (m.senaite_id?.toLowerCase().includes(q) ?? false) ||
-      (m.instrument?.name.toLowerCase().includes(q) ?? false) ||
+      m.instruments.some(i => i.name.toLowerCase().includes(q)) ||
       (m.size_peptide?.toLowerCase().includes(q) ?? false) ||
       (m.dissolution?.toLowerCase().includes(q) ?? false)
     )
@@ -175,14 +195,28 @@ export function MethodsPage() {
           />
         </div>
         <div className="flex items-center gap-0 border-b border-zinc-800">
-          <span className="text-xs font-medium text-muted-foreground mr-3 uppercase tracking-wider">Instrument</span>
+          <span className="text-xs font-medium text-muted-foreground mr-3 uppercase tracking-wider">Filter</span>
+          <button
+            type="button"
+            onClick={() => setInstrumentTab('all')}
+            className={`relative px-4 py-2 text-sm font-medium transition-colors ${
+              instrumentTab === 'all'
+                ? 'text-foreground'
+                : 'text-muted-foreground hover:text-foreground/80'
+            }`}
+          >
+            All
+            {instrumentTab === 'all' && (
+              <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary rounded-t" />
+            )}
+          </button>
           {allInstruments.map(inst => {
-            const isActive = instrumentTab === inst.model
+            const isActive = instrumentTab === String(inst.id)
             return (
               <button
                 key={inst.id}
                 type="button"
-                onClick={() => setInstrumentTab(inst.model ?? '')}
+                onClick={() => setInstrumentTab(String(inst.id))}
                 className={`relative px-4 py-2 text-sm font-medium transition-colors ${
                   isActive
                     ? 'text-foreground'
@@ -199,12 +233,73 @@ export function MethodsPage() {
         </div>
       </div>
 
+      {/* Bulk action bar */}
+      {selectedMethodIds.size > 0 && (
+        <div className="flex items-center gap-3 rounded-md border border-primary/30 bg-primary/5 px-4 py-2">
+          <span className="text-sm font-medium">{selectedMethodIds.size} selected</span>
+          <span className="text-sm text-muted-foreground">Assign to:</span>
+          {allInstruments.map(inst => (
+            <Button
+              key={inst.id}
+              variant="outline"
+              size="sm"
+              disabled={bulkAssigning}
+              onClick={async () => {
+                setBulkAssigning(true)
+                try {
+                  const targets = methods.filter(m => selectedMethodIds.has(m.id))
+                  await Promise.all(
+                    targets.map(m => {
+                      if (m.instrument_ids.includes(inst.id)) return Promise.resolve()
+                      return updateMethod(m.id, { instrument_ids: [...m.instrument_ids, inst.id] })
+                    })
+                  )
+                  setSelectedMethodIds(new Set())
+                  await load()
+                } catch (err) {
+                  setError(err instanceof Error ? err.message : 'Bulk assign failed')
+                } finally {
+                  setBulkAssigning(false)
+                }
+              }}
+            >
+              {inst.name}
+            </Button>
+          ))}
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setSelectedMethodIds(new Set())}
+            className="ml-auto"
+          >
+            Clear
+          </Button>
+        </div>
+      )}
+
       {/* Table */}
       <Card className="flex-1 overflow-auto">
         <Table>
           <TableHeader>
             <TableRow>
+              <TableHead className="w-[40px]">
+                <Checkbox
+                  checked={filtered.length > 0 && filtered.every(m => selectedMethodIds.has(m.id))
+                    ? true
+                    : filtered.some(m => selectedMethodIds.has(m.id))
+                      ? 'indeterminate'
+                      : false}
+                  onCheckedChange={checked => {
+                    if (checked) {
+                      setSelectedMethodIds(new Set(filtered.map(m => m.id)))
+                    } else {
+                      setSelectedMethodIds(new Set())
+                    }
+                  }}
+                />
+              </TableHead>
               <TableHead>Method</TableHead>
+              <TableHead>Instruments</TableHead>
               <TableHead>Size Peptide</TableHead>
               <TableHead>Organic %</TableHead>
               <TableHead>Dissolution</TableHead>
@@ -215,13 +310,13 @@ export function MethodsPage() {
           <TableBody>
             {loading ? (
               <TableRow>
-                <TableCell colSpan={6} className="py-8 text-center">
+                <TableCell colSpan={8} className="py-8 text-center">
                   <Loader2 className="mx-auto h-5 w-5 animate-spin text-muted-foreground" />
                 </TableCell>
               </TableRow>
             ) : filtered.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={6} className="py-8 text-center text-muted-foreground">
+                <TableCell colSpan={8} className="py-8 text-center text-muted-foreground">
                   {methods.length === 0
                     ? 'No methods yet. Click "New Method" to create one.'
                     : 'No methods match your search.'}
@@ -236,11 +331,35 @@ export function MethodsPage() {
                   }`}
                   onClick={() => setSelectedId(m.id)}
                 >
+                  <TableCell onClick={e => e.stopPropagation()}>
+                    <Checkbox
+                      checked={selectedMethodIds.has(m.id)}
+                      onCheckedChange={checked => {
+                        setSelectedMethodIds(prev => {
+                          const next = new Set(prev)
+                          if (checked) next.add(m.id)
+                          else next.delete(m.id)
+                          return next
+                        })
+                      }}
+                    />
+                  </TableCell>
                   <TableCell>
                     <div>
                       <div className="font-medium">{m.name}</div>
                       {m.senaite_id && (
                         <div className="text-xs text-muted-foreground">{m.senaite_id}</div>
+                      )}
+                    </div>
+                  </TableCell>
+                  <TableCell>
+                    <div className="flex flex-wrap gap-1">
+                      {m.instruments.length > 0 ? m.instruments.map(i => (
+                        <span key={i.id} className={`inline-flex items-center rounded-md border px-2 py-0.5 text-xs font-medium ${instrumentColor(i.id)}`}>
+                          {i.name}
+                        </span>
+                      )) : (
+                        <span className="text-xs text-muted-foreground">—</span>
                       )}
                     </div>
                   </TableCell>
@@ -425,7 +544,7 @@ function AddMethodForm({
       await createMethod({
         name: name.trim(),
         senaite_id: senaiteId.trim() || null,
-        instrument_id: instrumentId,
+        instrument_ids: instrumentId ? [instrumentId] : [],
       })
       onSaved()
     } catch (err) {

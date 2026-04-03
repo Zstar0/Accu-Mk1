@@ -1750,16 +1750,16 @@ export interface MethodBrief {
   id: number
   name: string
   senaite_id: string | null
-  instrument_id: number | null
-  instrument: InstrumentBrief | null
+  instrument_ids: number[]
+  instruments: InstrumentBrief[]
 }
 
 export interface HplcMethod {
   id: number
   name: string
   senaite_id: string | null
-  instrument_id: number | null
-  instrument: InstrumentBrief | null
+  instrument_ids: number[]
+  instruments: InstrumentBrief[]
   size_peptide: string | null
   starting_organic_pct: number | null
   temperature_mct_c: number | null
@@ -1774,7 +1774,7 @@ export interface HplcMethod {
 export interface HplcMethodInput {
   name: string
   senaite_id?: string | null
-  instrument_id?: number | null
+  instrument_ids?: number[]
   size_peptide?: string | null
   starting_organic_pct?: number | null
   temperature_mct_c?: number | null

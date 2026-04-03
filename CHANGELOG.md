@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.28.2 — 2026-04-03
+
+### Method-Instrument Many-to-Many & Identity Fix
+
+#### Identity Check
+- **Fix:** Single-peptide standard injection files (`_Std_PeakData.csv`) now correctly used as identity RT reference — previously fell back to calibration curve RT (different method) causing false DOES NOT CONFORM
+
+#### Method-Instrument Relationship
+- **Schema change:** Methods can now be shared across multiple instruments (M2M junction table replaces single FK)
+- **Migration:** Automatic data migration on startup — existing method-instrument links preserved
+- **Methods page:** "All" tab shows every method; per-instrument tabs filter by individual instrument
+- **Instruments column:** Color-coded instrument tags on each method row
+- **Bulk assign:** Select multiple methods via checkboxes and assign to an instrument in one click
+- **Instrument sync:** Auto-parses title for model/brand/type (e.g., "HPLC 1290b" → model=1290, brand=Agilent) and backfills missing fields on existing instruments
+- **Worksheets list:** Shows completed/total prep count per worksheet
+
 ## v0.28.0 — 2026-04-01
 
 ### Worksheet Feature Milestone

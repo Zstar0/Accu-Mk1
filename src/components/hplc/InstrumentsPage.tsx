@@ -93,7 +93,7 @@ export function InstrumentsPage() {
   })
 
   const methodCountFor = (instrumentId: number) =>
-    methods.filter(m => m.instrument_id === instrumentId).length
+    methods.filter(m => m.instrument_ids.includes(instrumentId)).length
 
   return (
     <div className="flex h-full flex-col gap-4 p-6">
@@ -237,7 +237,7 @@ export function InstrumentsPage() {
             <div className="flex-1 overflow-y-auto px-6 py-4">
               <InstrumentPanel
                 instrument={selectedInstrument}
-                methods={methods.filter(m => m.instrument_id === selectedInstrument.id)}
+                methods={methods.filter(m => m.instrument_ids.includes(selectedInstrument.id))}
               />
             </div>
           </div>

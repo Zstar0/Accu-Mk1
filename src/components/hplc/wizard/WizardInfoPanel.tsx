@@ -326,7 +326,7 @@ function MethodsSection({
 
         // Filter to selected instrument when specified (picked in Step 1)
         if (instrumentId != null) {
-          const filtered = matched.filter(m => m.instrument_id === instrumentId)
+          const filtered = matched.filter(m => m.instrument_ids.includes(instrumentId))
           if (filtered.length > 0) matched = filtered
         }
 
@@ -407,10 +407,10 @@ function MethodCard({
 
       {/* All method fields in a grid */}
       <div className="grid grid-cols-2 gap-x-3 gap-y-1.5 text-xs">
-        {method.instrument && (
+        {method.instruments.length > 0 && (
           <div>
-            <span className="text-muted-foreground">Instrument</span>
-            <p className="font-medium">{method.instrument.name}</p>
+            <span className="text-muted-foreground">Instruments</span>
+            <p className="font-medium">{method.instruments.map(i => i.name).join(', ')}</p>
           </div>
         )}
         {method.size_peptide && (

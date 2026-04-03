@@ -1000,7 +1000,7 @@ export function PeptideConfig() {
                               <div className="flex flex-wrap gap-1">
                                 {p.methods.map(m => (
                                   <Badge key={m.id} variant="outline" className="text-xs">
-                                    {m.name}{m.instrument ? ` (${m.instrument.name})` : ''}
+                                    {m.name}{m.instruments.length > 0 ? ` (${m.instruments.map(i => i.name).join(', ')})` : ''}
                                   </Badge>
                                 ))}
                               </div>
@@ -1224,8 +1224,8 @@ export function PeptideConfig() {
                       </div>
                     )}
                     {allInstruments.filter(inst => String(inst.id) === flyoutInstrument).map(inst => {
-                      const methodsForInst = allMethods.filter(m => m.instrument_id === inst.id)
-                      const assigned = selectedPeptide.methods.find(m => m.instrument_id === inst.id)
+                      const methodsForInst = allMethods.filter(m => m.instrument_ids.includes(inst.id))
+                      const assigned = selectedPeptide.methods.find(m => m.instrument_ids.includes(inst.id))
                       return (
                         <div key={inst.id} className="space-y-1.5">
                           <div className="flex items-center justify-between">
@@ -1247,7 +1247,7 @@ export function PeptideConfig() {
                             onChange={async (e) => {
                               const newMethodId = e.target.value ? parseInt(e.target.value, 10) : null
                               const otherMethodIds = selectedPeptide.methods
-                                .filter(m => m.instrument_id !== inst.id)
+                                .filter(m => !m.instrument_ids.includes(inst.id))
                                 .map(m => m.id)
                               const methodIds = newMethodId
                                 ? [...otherMethodIds, newMethodId]

@@ -133,6 +133,9 @@ class Instrument(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
+    # Relationships
+    methods: Mapped[list["HplcMethod"]] = relationship("HplcMethod", secondary="instrument_methods", back_populates="instruments")
+
     def __repr__(self) -> str:
         return f"<Instrument(id={self.id}, name='{self.name}')>"
 
@@ -200,6 +203,17 @@ service_group_members = Table(
 )
 
 
+# M2M junction: instrument <-> method (methods can be shared across instruments of the same model)
+instrument_methods = Table(
+    "instrument_methods",
+    Base.metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("instrument_id", Integer, ForeignKey("instruments.id", ondelete="CASCADE"), nullable=False),
+    Column("method_id", Integer, ForeignKey("hplc_methods.id", ondelete="CASCADE"), nullable=False),
+    UniqueConstraint("instrument_id", "method_id", name="uq_instrument_method"),
+)
+
+
 # M2M junction: peptide <-> method (one method per instrument per peptide, enforced at app level)
 peptide_methods = Table(
     "peptide_methods",
@@ -222,7 +236,6 @@ class HplcMethod(Base):
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(String(200), nullable=False, unique=True)
     senaite_id: Mapped[Optional[str]] = mapped_column(String(200), nullable=True, unique=True)
-    instrument_id: Mapped[Optional[int]] = mapped_column(ForeignKey("instruments.id"), nullable=True)
     size_peptide: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)  # "Extremely Polar", "3-9 (Very Polar)", etc.
     starting_organic_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)  # Starting organic amount %
     temperature_mct_c: Mapped[Optional[float]] = mapped_column(Float, nullable=True)  # Mobile column temperature °C
@@ -233,7 +246,7 @@ class HplcMethod(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     # Relationships
-    instrument: Mapped[Optional["Instrument"]] = relationship("Instrument")
+    instruments: Mapped[list["Instrument"]] = relationship("Instrument", secondary=instrument_methods, back_populates="methods")
     peptides: Mapped[list["Peptide"]] = relationship("Peptide", secondary=peptide_methods, back_populates="methods")
 
     def __repr__(self) -> str:

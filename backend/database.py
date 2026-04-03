@@ -144,6 +144,24 @@ def _run_migrations():
         # Phase 17: Worksheet completion tracking
         "ALTER TABLE worksheets ADD COLUMN IF NOT EXISTS completed_by INTEGER REFERENCES users(id) ON DELETE SET NULL",
         "ALTER TABLE worksheets ADD COLUMN IF NOT EXISTS completed_at TIMESTAMP",
+        # Method-Instrument M2M migration: move from hplc_methods.instrument_id FK to junction table
+        """DO $$ BEGIN
+            IF EXISTS (SELECT 1 FROM information_schema.columns
+                       WHERE table_name = 'hplc_methods' AND column_name = 'instrument_id')
+            THEN
+                CREATE TABLE IF NOT EXISTS instrument_methods (
+                    id SERIAL PRIMARY KEY,
+                    instrument_id INTEGER NOT NULL REFERENCES instruments(id) ON DELETE CASCADE,
+                    method_id INTEGER NOT NULL REFERENCES hplc_methods(id) ON DELETE CASCADE,
+                    CONSTRAINT uq_instrument_method UNIQUE (instrument_id, method_id)
+                );
+                INSERT INTO instrument_methods (instrument_id, method_id)
+                SELECT instrument_id, id FROM hplc_methods
+                WHERE instrument_id IS NOT NULL
+                ON CONFLICT DO NOTHING;
+                ALTER TABLE hplc_methods DROP COLUMN instrument_id;
+            END IF;
+        END $$""",
     ]
     try:
         with engine.connect() as conn:

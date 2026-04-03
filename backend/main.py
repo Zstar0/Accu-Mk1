@@ -1470,7 +1470,7 @@ class MethodCreate(BaseModel):
     """Schema for creating an HPLC method."""
     name: str
     senaite_id: Optional[str] = None
-    instrument_id: Optional[int] = None
+    instrument_ids: list[int] = []
     size_peptide: Optional[str] = None
     starting_organic_pct: Optional[float] = None
     temperature_mct_c: Optional[float] = None
@@ -1482,7 +1482,7 @@ class MethodUpdate(BaseModel):
     """Schema for updating an HPLC method."""
     name: Optional[str] = None
     senaite_id: Optional[str] = None
-    instrument_id: Optional[int] = None
+    instrument_ids: Optional[list[int]] = None
     size_peptide: Optional[str] = None
     starting_organic_pct: Optional[float] = None
     temperature_mct_c: Optional[float] = None
@@ -1506,8 +1506,8 @@ class MethodBrief(BaseModel):
     id: int
     name: str
     senaite_id: Optional[str] = None
-    instrument_id: Optional[int] = None
-    instrument: Optional[InstrumentBrief] = None
+    instrument_ids: list[int] = []
+    instruments: list[InstrumentBrief] = []
 
     class Config:
         from_attributes = True
@@ -1518,8 +1518,8 @@ class MethodResponse(BaseModel):
     id: int
     name: str
     senaite_id: Optional[str] = None
-    instrument_id: Optional[int] = None
-    instrument: Optional[InstrumentBrief] = None
+    instrument_ids: list[int] = []
+    instruments: list[InstrumentBrief] = []
     size_peptide: Optional[str] = None
     starting_organic_pct: Optional[float] = None
     temperature_mct_c: Optional[float] = None
@@ -1766,13 +1766,13 @@ def _instrument_to_brief(instrument) -> Optional[InstrumentBrief]:
 
 
 def _method_to_brief(method: HplcMethod) -> MethodBrief:
-    """Convert HplcMethod model to brief response with instrument."""
+    """Convert HplcMethod model to brief response with instruments."""
     brief = MethodBrief(
         id=method.id,
         name=method.name,
         senaite_id=method.senaite_id,
-        instrument_id=method.instrument_id,
-        instrument=_instrument_to_brief(method.instrument),
+        instrument_ids=[i.id for i in method.instruments],
+        instruments=[_instrument_to_brief(i) for i in method.instruments],
     )
     return brief
 
@@ -1822,9 +1822,10 @@ def _build_component_briefs(db: Session, blend_id: int) -> list[ComponentBrief]:
 
 
 def _method_to_response(method: HplcMethod) -> MethodResponse:
-    """Convert HplcMethod model to response with common peptides and instrument."""
+    """Convert HplcMethod model to response with common peptides and instruments."""
     resp = MethodResponse.model_validate(method)
-    resp.instrument = _instrument_to_brief(method.instrument)
+    resp.instrument_ids = [i.id for i in method.instruments]
+    resp.instruments = [_instrument_to_brief(i) for i in method.instruments]
     resp.common_peptides = [PeptideBrief.model_validate(p) for p in method.peptides]
     return resp
 
@@ -1859,35 +1860,64 @@ async def sync_instruments(db: Session = Depends(get_db), _current_user=Depends(
 
     items = resp.json().get("items", [])
     created = 0
+    updated = 0
     for item in items:
         senaite_id = item.get("id")
         if not senaite_id:
             continue
-        # Skip if already exists
-        existing = db.execute(select(Instrument).where(Instrument.senaite_id == senaite_id)).scalar_one_or_none()
-        if existing:
-            continue
-        # Extract instrument type and manufacturer from nested objects
+
+        # Extract instrument type and manufacturer from nested objects or title
+        title = item.get("title", senaite_id)
         inst_type = None
         brand = None
+        model = item.get("Model")
         if isinstance(item.get("InstrumentType"), dict):
             inst_type = item["InstrumentType"].get("title")
         if isinstance(item.get("Manufacturer"), dict):
             brand = item["Manufacturer"].get("title")
+
+        # Auto-parse from title when SENAITE fields are empty
+        # e.g. "HPLC 1290b" → type=HPLC, model=1290, brand=Agilent
+        if not inst_type and title.upper().startswith("HPLC"):
+            inst_type = "HPLC"
+            brand = brand or "Agilent"
+        if not model:
+            import re as _re
+            m = _re.search(r'(\d{4})', title)
+            if m:
+                model = m.group(1)
+
+        existing = db.execute(select(Instrument).where(Instrument.senaite_id == senaite_id)).scalar_one_or_none()
+        if existing:
+            # Backfill missing fields on existing instruments
+            changed = False
+            if not existing.instrument_type and inst_type:
+                existing.instrument_type = inst_type
+                changed = True
+            if not existing.brand and brand:
+                existing.brand = brand
+                changed = True
+            if not existing.model and model:
+                existing.model = model
+                changed = True
+            if changed:
+                updated += 1
+            continue
+
         instrument = Instrument(
-            name=item.get("title", senaite_id),
+            name=title,
             senaite_id=senaite_id,
             senaite_uid=item.get("uid"),
             instrument_type=inst_type,
             brand=brand,
-            model=item.get("Model"),
+            model=model,
         )
         db.add(instrument)
         created += 1
 
     db.commit()
     total = db.execute(select(func.count()).select_from(Instrument)).scalar()
-    return {"created": created, "total": total}
+    return {"created": created, "updated": updated, "total": total}
 
 
 # ─── Analysis Service Endpoints ───
@@ -2060,10 +2090,10 @@ async def sync_analysis_services(db: Session = Depends(get_db), _current_user=De
 
 @app.get("/hplc/methods", response_model=list[MethodResponse])
 async def get_methods(db: Session = Depends(get_db), _current_user=Depends(get_current_user)):
-    """Get all HPLC methods with their common peptides and instrument."""
+    """Get all HPLC methods with their common peptides and instruments."""
     methods = db.execute(
         select(HplcMethod)
-        .options(joinedload(HplcMethod.instrument), joinedload(HplcMethod.peptides))
+        .options(joinedload(HplcMethod.instruments), joinedload(HplcMethod.peptides))
         .order_by(HplcMethod.name)
     ).scalars().unique().all()
     return [_method_to_response(m) for m in methods]
@@ -2081,7 +2111,10 @@ async def create_method(data: MethodCreate, db: Session = Depends(get_db), _curr
         if dup:
             raise HTTPException(400, f"Method with Senaite ID '{data.senaite_id}' already exists")
 
-    method = HplcMethod(**data.model_dump())
+    method = HplcMethod(**data.model_dump(exclude={"instrument_ids"}))
+    if data.instrument_ids:
+        instruments = db.execute(select(Instrument).where(Instrument.id.in_(data.instrument_ids))).scalars().all()
+        method.instruments = list(instruments)
     db.add(method)
     db.commit()
     db.refresh(method)
@@ -2091,12 +2124,20 @@ async def create_method(data: MethodCreate, db: Session = Depends(get_db), _curr
 @app.put("/hplc/methods/{method_id}", response_model=MethodResponse)
 async def update_method(method_id: int, data: MethodUpdate, db: Session = Depends(get_db), _current_user=Depends(get_current_user)):
     """Update an HPLC method."""
-    method = db.execute(select(HplcMethod).where(HplcMethod.id == method_id)).scalar_one_or_none()
+    method = db.execute(
+        select(HplcMethod).options(joinedload(HplcMethod.instruments))
+        .where(HplcMethod.id == method_id)
+    ).scalars().unique().first()
     if not method:
         raise HTTPException(404, f"Method {method_id} not found")
 
-    for field, value in data.model_dump(exclude_unset=True).items():
+    update_data = data.model_dump(exclude_unset=True)
+    instrument_ids = update_data.pop("instrument_ids", None)
+    for field, value in update_data.items():
         setattr(method, field, value)
+    if instrument_ids is not None:
+        instruments = db.execute(select(Instrument).where(Instrument.id.in_(instrument_ids))).scalars().all() if instrument_ids else []
+        method.instruments = list(instruments)
 
     db.commit()
     db.refresh(method)
@@ -2123,7 +2164,7 @@ async def get_peptides(db: Session = Depends(get_db), _current_user=Depends(get_
     peptides = db.execute(
         select(Peptide)
         .options(
-            joinedload(Peptide.methods).joinedload(HplcMethod.instrument),
+            joinedload(Peptide.methods).joinedload(HplcMethod.instruments),
             joinedload(Peptide.analytes).joinedload(PeptideAnalyte.analysis_service),
             joinedload(Peptide.analytes).joinedload(PeptideAnalyte.component_peptide),
             joinedload(Peptide.components),
@@ -2350,7 +2391,7 @@ async def update_peptide(peptide_id: int, data: PeptideUpdate, db: Session = Dep
     """Update a peptide. method_ids sets all method assignments (one per instrument)."""
     peptide = db.execute(
         select(Peptide).options(
-            joinedload(Peptide.methods).joinedload(HplcMethod.instrument),
+            joinedload(Peptide.methods).joinedload(HplcMethod.instruments),
             joinedload(Peptide.analytes).joinedload(PeptideAnalyte.analysis_service),
             joinedload(Peptide.analytes).joinedload(PeptideAnalyte.component_peptide),
             joinedload(Peptide.components),
@@ -2444,15 +2485,18 @@ async def update_peptide(peptide_id: int, data: PeptideUpdate, db: Session = Dep
     if method_ids is not None:
         if method_ids:
             methods = db.execute(
-                select(HplcMethod).options(joinedload(HplcMethod.instrument))
+                select(HplcMethod).options(joinedload(HplcMethod.instruments))
                 .where(HplcMethod.id.in_(method_ids))
             ).scalars().unique().all()
             if len(methods) != len(method_ids):
                 raise HTTPException(400, "One or more method IDs not found")
-            # Enforce one method per instrument
-            instrument_ids = [m.instrument_id for m in methods if m.instrument_id is not None]
-            if len(instrument_ids) != len(set(instrument_ids)):
-                raise HTTPException(400, "Cannot assign multiple methods for the same instrument")
+            # Enforce one method per instrument: two methods can't share an instrument
+            seen_instrument_ids: set[int] = set()
+            for m in methods:
+                for inst in m.instruments:
+                    if inst.id in seen_instrument_ids:
+                        raise HTTPException(400, "Cannot assign multiple methods for the same instrument")
+                    seen_instrument_ids.add(inst.id)
             peptide.methods = list(methods)
         else:
             peptide.methods = []
