@@ -23,4 +23,4 @@ COPY . .
 EXPOSE 8012
 
 # Run with uvicorn — 0.0.0.0 so Docker can route traffic in
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8012"]
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8012", "--workers", "2"]
