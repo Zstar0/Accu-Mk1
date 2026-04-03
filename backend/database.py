@@ -136,8 +136,9 @@ def _run_migrations():
         "ALTER TABLE calibration_curves ADD COLUMN IF NOT EXISTS updated_by_email VARCHAR(320)",
         "ALTER TABLE hplc_analyses ADD COLUMN IF NOT EXISTS processed_by_user_id INTEGER",
         "ALTER TABLE hplc_analyses ADD COLUMN IF NOT EXISTS processed_by_email VARCHAR(320)",
-        # Phase 17: Worksheet item SENAITE received date
+        # Phase 17: Worksheet item SENAITE received date + prep status
         "ALTER TABLE worksheet_items ADD COLUMN IF NOT EXISTS date_received TIMESTAMP",
+        "ALTER TABLE worksheet_items ADD COLUMN IF NOT EXISTS prep_status VARCHAR(20) DEFAULT 'ready'",
         # Phase 15: AnalysisService peptide link
         "ALTER TABLE analysis_services ADD COLUMN IF NOT EXISTS peptide_id INTEGER REFERENCES peptides(id) ON DELETE SET NULL",
         # Phase 17: Worksheet completion tracking
