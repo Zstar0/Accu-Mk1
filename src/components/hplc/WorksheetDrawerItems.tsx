@@ -119,7 +119,6 @@ export function WorksheetDrawerItems({
           <div className="flex-1 min-w-[140px]">Peptide</div>
           <div className="w-[110px] shrink-0">Method</div>
           <div className="w-[120px] shrink-0">Instrument</div>
-          <div className="w-[100px] shrink-0">Tech</div>
           <div className="w-[60px] shrink-0">Age</div>
           <div className="w-[110px] shrink-0">Status</div>
           <div className="w-[80px] shrink-0 text-right">Actions</div>
@@ -312,16 +311,6 @@ function SortableItemRow({
         )}
       </div>
 
-      {/* Tech */}
-      <div className="w-[100px] shrink-0">
-        <span
-          className="text-[10px] text-muted-foreground truncate block"
-          title={item.assigned_analyst_email ?? 'Unassigned'}
-        >
-          {item.assigned_analyst_email ?? '—'}
-        </span>
-      </div>
-
       {/* Age */}
       <div className="w-[60px] shrink-0">
         <AgingTimer dateReceived={item.date_received ?? item.added_at} compact />
@@ -329,23 +318,38 @@ function SortableItemRow({
 
       {/* Status dropdown */}
       <div className="w-[110px] shrink-0">
-        {isCompleted ? (
-          <span className="text-[10px] text-muted-foreground capitalize">{item.prep_status}</span>
-        ) : (
-          <Select
-            value={item.prep_status ?? 'ready'}
-            onValueChange={value => onUpdateItem(item.id, { prep_status: value })}
-          >
-            <SelectTrigger size="sm" className="h-6 text-[10px] border-transparent bg-transparent shadow-none hover:border-border">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="ready">Ready</SelectItem>
-              <SelectItem value="in_progress">In Progress</SelectItem>
-              <SelectItem value="complete">Complete</SelectItem>
-            </SelectContent>
-          </Select>
-        )}
+        {(() => {
+          const status = item.prep_status ?? 'ready'
+          const statusColors: Record<string, string> = {
+            ready: 'text-zinc-400',
+            in_progress: 'text-amber-500',
+            complete: 'text-emerald-500',
+          }
+          const statusBg: Record<string, string> = {
+            ready: '',
+            in_progress: 'bg-amber-500/10 border-amber-500/20',
+            complete: 'bg-emerald-500/10 border-emerald-500/20',
+          }
+          const colorClass = statusColors[status] ?? 'text-muted-foreground'
+
+          return isCompleted ? (
+            <span className={`text-[10px] capitalize ${colorClass}`}>{status.replace('_', ' ')}</span>
+          ) : (
+            <Select
+              value={status}
+              onValueChange={value => onUpdateItem(item.id, { prep_status: value })}
+            >
+              <SelectTrigger size="sm" className={`h-6 text-[10px] border-transparent shadow-none hover:border-border ${statusBg[status] ?? ''} ${colorClass}`}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="ready"><span className="text-zinc-400">Ready</span></SelectItem>
+                <SelectItem value="in_progress"><span className="text-amber-500">In Progress</span></SelectItem>
+                <SelectItem value="complete"><span className="text-emerald-500">Complete</span></SelectItem>
+              </SelectContent>
+            </Select>
+          )
+        })()}
       </div>
 
       {/* Actions */}
