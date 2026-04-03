@@ -58,7 +58,7 @@ interface WorksheetDrawerItemsProps {
   prepStartedItems: Set<string>
   onRemove: (sampleUid: string, serviceGroupId: number) => void
   onReassign: (sampleUid: string, serviceGroupId: number, targetWorksheetId: number) => void
-  onStartPrep: (item: { sampleId: string; serviceGroupId: number | null; groupName: string; peptideId: number | null }) => void
+  onStartPrep: (item: { sampleId: string; serviceGroupId: number | null; groupName: string; peptideId: number | null; instrumentUid: string | null }) => void
   instruments: Instrument[]
   onUpdateItem: (itemId: number, data: { instrument_uid?: string; prep_status?: string }) => void
   onReorder: (itemIds: number[]) => void
@@ -174,7 +174,7 @@ interface SortableItemRowProps {
   instruments: Instrument[]
   onRemove: (sampleUid: string, serviceGroupId: number) => void
   onReassign: (sampleUid: string, serviceGroupId: number, targetWorksheetId: number) => void
-  onStartPrep: (item: { sampleId: string; serviceGroupId: number | null; groupName: string; peptideId: number | null }) => void
+  onStartPrep: (item: { sampleId: string; serviceGroupId: number | null; groupName: string; peptideId: number | null; instrumentUid: string | null }) => void
   onUpdateItem: (itemId: number, data: { instrument_uid?: string; prep_status?: string }) => void
 }
 
@@ -373,6 +373,7 @@ function SortableItemRow({
                   serviceGroupId: item.service_group_id,
                   groupName: item.group_name,
                   peptideId: item.peptide_id,
+                  instrumentUid: item.instrument_uid ?? null,
                 })
               }
             >

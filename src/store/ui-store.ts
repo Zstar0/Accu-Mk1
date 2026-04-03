@@ -53,12 +53,12 @@ interface UIState {
 
   worksheetDrawerOpen: boolean
   activeWorksheetId: number | null
-  worksheetPrepPrefill: { sampleId: string; peptideId: number | null; method: string | null } | null
+  worksheetPrepPrefill: { sampleId: string; peptideId: number | null; method: string | null; instrumentId: number | null } | null
 
   openWorksheetDrawer: (worksheetId?: number) => void
   closeWorksheetDrawer: () => void
   setActiveWorksheetId: (id: number | null) => void
-  startPrepFromWorksheet: (prefill: { sampleId: string; peptideId: number | null; method: string | null }) => void
+  startPrepFromWorksheet: (prefill: { sampleId: string; peptideId: number | null; method: string | null; instrumentId: number | null }) => void
   clearWorksheetPrepPrefill: () => void
 }
 

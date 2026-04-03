@@ -166,6 +166,10 @@ export function Step1SampleInfo() {
         setPeptideId(match.id)
       }
     }
+    // Set instrument
+    if (prefill.instrumentId) {
+      setInstrumentId(String(prefill.instrumentId))
+    }
     // Mark prefill as applied so tab switch doesn't clear peptide
     prefillAppliedRef.current = true
     // Clear prefill so it doesn't re-apply
@@ -275,6 +279,7 @@ export function Step1SampleInfo() {
 
   const canSubmit =
     peptideId !== null &&
+    instrumentId !== '' &&
     (isStandard
       ? standardReady
       : (isMultiAnalyte ? multiVialReady : (targetConcUgMl.trim() !== '' && targetTotalVolUl.trim() !== ''))) &&

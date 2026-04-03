@@ -7968,7 +7968,10 @@ async def create_sample_prep_endpoint(
         "is_standard": session.is_standard,
         "manufacturer": session.manufacturer,
         "standard_notes": session.standard_notes,
-        "instrument_name": session.instrument_name,
+        "instrument_name": session.instrument_name or (
+            session.instrument_obj.name if session.instrument_id and session.instrument_obj else None
+        ),
+        "instrument_id": session.instrument_id,
         # User tracking
         "created_by_user_id": current_user.id,
         "created_by_email": current_user.email,

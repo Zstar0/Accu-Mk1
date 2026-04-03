@@ -315,6 +315,9 @@ export function WorksheetDrawer() {
                     sampleId: item.sampleId,
                     peptideId: item.peptideId,
                     method: null,
+                    instrumentId: item.instrumentUid
+                      ? instruments.find(i => i.senaite_uid === item.instrumentUid)?.id ?? null
+                      : null,
                   })
                 }}
                 instruments={instruments}
