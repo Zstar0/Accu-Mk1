@@ -3123,6 +3123,17 @@ async def run_hplc_analysis(
                 std_injection_source = std_info.get("source_sample_id")
                 break
 
+        # Fallback: single-peptide standard injection with no analyte label
+        # e.g. P-0416_Inj_1_Std_PeakData.csv — no label between _Std_ and _PeakData
+        if std_injection_rt is None:
+            unlabeled = [
+                (lbl, info) for lbl, info in request.standard_injection_rts.items()
+                if not lbl  # empty string = no analyte label
+            ]
+            if len(unlabeled) == 1:
+                std_injection_rt = unlabeled[0][1].get("rt")
+                std_injection_source = unlabeled[0][1].get("source_sample_id")
+
     # Build analysis input
     analysis_input = AnalysisInput(
         injections=request.injections,

@@ -339,9 +339,10 @@ def _extract_standard_info(filename: str) -> tuple[str, str]:
         label = after_std[9:]  # skip "PeakData_"
         return label, ""
 
-    # Convention 3: _Std_PeakData only (no label)
+    # Convention 3: _Std_PeakData only (no label — single-peptide standard injection)
+    # Return empty string so the backend can auto-match to the sample's peptide
     if after_std.lower() in ('peakdata', ''):
-        return after_std, ""
+        return "", ""
 
     return after_std, ""
 

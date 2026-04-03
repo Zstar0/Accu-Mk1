@@ -299,7 +299,9 @@ export default function WorksheetsListPage() {
                           </span>
                         </TableCell>
                         <TableCell>
-                          <span className="text-right tabular-nums">{ws.item_count}</span>
+                          <span className="text-right tabular-nums">
+                            {ws.items.filter(i => i.prep_status === 'complete').length}/{ws.item_count}
+                          </span>
                         </TableCell>
                         <TableCell className="hidden xl:table-cell">
                           {activePriorities.length > 0 ? (
