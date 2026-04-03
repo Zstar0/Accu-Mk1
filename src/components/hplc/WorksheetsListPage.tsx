@@ -80,6 +80,11 @@ export default function WorksheetsListPage() {
     .filter(w => w.status === 'open')
     .reduce((sum, w) => sum + w.item_count, 0)
 
+  const itemsComplete = worksheets
+    .filter(w => w.status === 'open')
+    .flatMap(w => w.items)
+    .filter(i => i.prep_status === 'complete').length
+
   const highPriorityCount = worksheets
     .flatMap(w => w.items)
     .filter(i => i.priority === 'high' || i.priority === 'expedited').length
@@ -111,13 +116,13 @@ export default function WorksheetsListPage() {
 
         {/* KPI row */}
         {isLoading ? (
-          <div className="grid grid-cols-4 gap-4">
+          <div className="grid grid-cols-5 gap-4">
             {Array.from({ length: 4 }).map((_, i) => (
               <Skeleton key={i} className="h-[72px] rounded-xl" />
             ))}
           </div>
         ) : (
-          <div className="grid grid-cols-4 gap-4">
+          <div className="grid grid-cols-5 gap-4">
             <Card className="py-0">
               <CardContent className="px-4 py-4">
                 <div className="flex items-center gap-1.5">
@@ -151,6 +156,18 @@ export default function WorksheetsListPage() {
                   </p>
                 </div>
                 <p className="text-xl font-semibold mt-1">{highPriorityCount}</p>
+              </CardContent>
+            </Card>
+
+            <Card className="py-0">
+              <CardContent className="px-4 py-4">
+                <div className="flex items-center gap-1.5">
+                  <ListChecks className="h-4 w-4 text-emerald-500" />
+                  <p className="text-xs text-muted-foreground font-semibold uppercase tracking-wide">
+                    Items Complete
+                  </p>
+                </div>
+                <p className="text-xl font-semibold mt-1">{itemsComplete}</p>
               </CardContent>
             </Card>
 

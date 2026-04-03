@@ -3765,6 +3765,7 @@ export interface WorksheetListItem {
       peptide_name: string | null
       method: string | null
     }[]
+    prep_status: string
   }[]
 }
 
@@ -3860,7 +3861,7 @@ export async function reassignWorksheetItem(
 export async function updateWorksheetItem(
   worksheetId: number,
   itemId: number,
-  data: { instrument_uid?: string }
+  data: { instrument_uid?: string; prep_status?: string }
 ): Promise<{ status: string; item_id: number }> {
   const response = await fetch(`${API_BASE_URL()}/worksheets/${worksheetId}/items/${itemId}`, {
     method: 'PATCH',

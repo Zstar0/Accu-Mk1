@@ -60,7 +60,7 @@ interface WorksheetDrawerItemsProps {
   onReassign: (sampleUid: string, serviceGroupId: number, targetWorksheetId: number) => void
   onStartPrep: (item: { sampleId: string; serviceGroupId: number | null; groupName: string; peptideId: number | null }) => void
   instruments: Instrument[]
-  onUpdateItem: (itemId: number, data: { instrument_uid?: string }) => void
+  onUpdateItem: (itemId: number, data: { instrument_uid?: string; prep_status?: string }) => void
   onReorder: (itemIds: number[]) => void
 }
 
@@ -121,6 +121,7 @@ export function WorksheetDrawerItems({
           <div className="w-[120px] shrink-0">Instrument</div>
           <div className="w-[100px] shrink-0">Tech</div>
           <div className="w-[60px] shrink-0">Age</div>
+          <div className="w-[110px] shrink-0">Status</div>
           <div className="w-[80px] shrink-0 text-right">Actions</div>
         </div>
       )}
@@ -175,7 +176,7 @@ interface SortableItemRowProps {
   onRemove: (sampleUid: string, serviceGroupId: number) => void
   onReassign: (sampleUid: string, serviceGroupId: number, targetWorksheetId: number) => void
   onStartPrep: (item: { sampleId: string; serviceGroupId: number | null; groupName: string; peptideId: number | null }) => void
-  onUpdateItem: (itemId: number, data: { instrument_uid?: string }) => void
+  onUpdateItem: (itemId: number, data: { instrument_uid?: string; prep_status?: string }) => void
 }
 
 function SortableItemRow({
@@ -207,6 +208,8 @@ function SortableItemRow({
 
   const prepKey = `${item.sample_id}-${item.service_group_id}`
   const isPrepStarted = prepStartedItems.has(prepKey)
+  const isHplcItem = item.analyses.some(a => a.keyword != null && /PURITY|IDENTITY/i.test(a.keyword))
+    || /hplc|core/i.test(item.group_name)
   const colorKey = (item.group_color as ServiceGroupColor) in SERVICE_GROUP_COLORS
     ? (item.group_color as ServiceGroupColor)
     : 'zinc'
@@ -324,6 +327,27 @@ function SortableItemRow({
         <AgingTimer dateReceived={item.date_received ?? item.added_at} compact />
       </div>
 
+      {/* Status dropdown */}
+      <div className="w-[110px] shrink-0">
+        {isCompleted ? (
+          <span className="text-[10px] text-muted-foreground capitalize">{item.prep_status}</span>
+        ) : (
+          <Select
+            value={item.prep_status ?? 'ready'}
+            onValueChange={value => onUpdateItem(item.id, { prep_status: value })}
+          >
+            <SelectTrigger size="sm" className="h-6 text-[10px] border-transparent bg-transparent shadow-none hover:border-border">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="ready">Ready</SelectItem>
+              <SelectItem value="in_progress">In Progress</SelectItem>
+              <SelectItem value="complete">Complete</SelectItem>
+            </SelectContent>
+          </Select>
+        )}
+      </div>
+
       {/* Actions */}
       <div className="w-[80px] shrink-0 flex items-center justify-end gap-1">
         {!isCompleted && (
@@ -333,7 +357,7 @@ function SortableItemRow({
             onReassign={onReassign}
           />
         )}
-        {!isCompleted && (
+        {!isCompleted && isHplcItem && (
           isPrepStarted ? (
             <span className="text-[10px] text-muted-foreground/60 italic">Prep</span>
           ) : (

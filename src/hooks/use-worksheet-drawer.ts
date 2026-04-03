@@ -17,11 +17,13 @@ export function useWorksheetDrawer() {
   const queryClient = useQueryClient()
   const activeWorksheetId = useUIStore(state => state.activeWorksheetId)
 
+  const drawerOpen = useUIStore(state => state.worksheetDrawerOpen)
+
   const { data: worksheets = [], isLoading, isError, refetch } = useQuery({
     queryKey: ['worksheets'],
     queryFn: () => listWorksheets(),
     staleTime: 0,
-    refetchInterval: 30_000,
+    refetchInterval: drawerOpen ? 30_000 : false,
   })
 
   const activeWorksheet: WorksheetListItem | undefined = worksheets.find(

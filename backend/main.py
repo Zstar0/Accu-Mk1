@@ -11299,6 +11299,7 @@ async def list_worksheets(
                     "peptide_id": group_peptide_map.get(it.service_group_id) if it.service_group_id else None,
                     "method_name": _resolve_method(it.instrument_uid, it.service_group_id),
                     "analyses": json.loads(it.analyses_json) if it.analyses_json else (group_analyses_map.get(it.service_group_id, []) if it.service_group_id else []),
+                    "prep_status": it.prep_status,
                 }
                 for it in items
             ],
@@ -11624,6 +11625,7 @@ async def reassign_worksheet_item(
 
 class WorksheetItemUpdate(BaseModel):
     instrument_uid: Optional[str] = None
+    prep_status: Optional[str] = None
 
 
 @app.patch("/worksheets/{worksheet_id}/items/{item_id}")
@@ -11682,6 +11684,11 @@ async def update_worksheet_item(
                                 if not a.get("method"):
                                     a["method"] = resolved_method
                             item.analyses_json = json.dumps(analyses)
+
+    if data.prep_status is not None:
+        allowed = {"ready", "in_progress", "complete"}
+        if data.prep_status in allowed:
+            item.prep_status = data.prep_status
 
     db.commit()
     return {"status": "updated", "item_id": item_id, "resolved_method": resolved_method}

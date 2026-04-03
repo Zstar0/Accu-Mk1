@@ -608,6 +608,7 @@ class WorksheetItem(Base):
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     analyses_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON array of {title, keyword, peptide_name, method}
     sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    prep_status: Mapped[str] = mapped_column(String(20), default="ready", nullable=False, server_default="ready")
     date_received: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)  # SENAITE sample received date
     added_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
