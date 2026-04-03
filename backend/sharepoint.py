@@ -165,12 +165,12 @@ async def _list_folder_at_root(root_path: str, path: str = "") -> list[dict]:
     url = f"{GRAPH_BASE_URL}/drives/{drive_id}/root:/{encoded_path}:/children"
     params = {
         "$select": "id,name,size,createdDateTime,lastModifiedDateTime,folder,file,webUrl",
-        "$top": "200",
+        "$top": "999",
     }
 
     items = []
     retried_auth = False
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=30.0) as client:
         while url:
             resp = await client.get(url, headers=_headers(), params=params)
             if resp.status_code == 401 and not retried_auth:
@@ -226,13 +226,15 @@ async def list_folder_by_id(folder_id: str) -> list[dict]:
 
     items = []
     retried_auth = False
-    async with httpx.AsyncClient() as client:
+    auth_headers = _headers()
+    async with httpx.AsyncClient(timeout=30.0) as client:
         while url:
-            resp = await client.get(url, headers=_headers(), params=params)
+            resp = await client.get(url, headers=auth_headers, params=params)
             if resp.status_code == 401 and not retried_auth:
                 _invalidate_token()
                 retried_auth = True
-                resp = await client.get(url, headers=_headers(), params=params)
+                auth_headers = _headers()
+                resp = await client.get(url, headers=auth_headers, params=params)
             resp.raise_for_status()
             data = resp.json()
 

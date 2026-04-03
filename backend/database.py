@@ -31,7 +31,7 @@ def get_database_url() -> str:
 
 
 DATABASE_URL = get_database_url()
-engine = create_engine(DATABASE_URL, pool_pre_ping=True, echo=False)
+engine = create_engine(DATABASE_URL, pool_pre_ping=True, echo=False, pool_size=10, max_overflow=20)
 
 # Session maker for dependency injection
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
