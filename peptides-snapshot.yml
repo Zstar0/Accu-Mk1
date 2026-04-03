@@ -1,0 +1,64 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e48]:
+    - generic [ref=e49]:
+      - generic [ref=e50]:
+        - generic [ref=e51]:
+          - button "Close window" [ref=e52]
+          - button "Minimize window" [ref=e54]
+          - button "Enter fullscreen" [ref=e56]
+        - button "Hide Left Sidebar" [ref=e59]:
+          - img
+      - generic [ref=e60]: AccuMk1
+      - generic [ref=e62]:
+        - generic "Switch to dark mode" [ref=e63] [cursor=pointer]:
+          - img [ref=e64]
+          - switch
+          - img [ref=e70]
+        - button "Settings" [ref=e72]:
+          - img
+        - button "Hide Right Sidebar" [ref=e73]:
+          - img
+    - generic [ref=e74]:
+      - generic [ref=e77]:
+        - generic [ref=e79]:
+          - img [ref=e80]
+          - generic [ref=e82]: Accu-Mk1
+        - generic [ref=e84]:
+          - generic [ref=e85]: Navigation
+          - list [ref=e87]:
+            - listitem [ref=e88]
+            - listitem [ref=e106]
+            - listitem [ref=e124]
+            - listitem [ref=e150]
+            - listitem [ref=e179]
+            - listitem [ref=e206]
+        - generic [ref=e224]:
+          - list [ref=e225]:
+            - listitem [ref=e226]
+            - listitem [ref=e232]
+          - generic [ref=e238]: forrest@valenceanalytical.com
+      - main [ref=e239]:
+        - generic [ref=e240]:
+          - button "Toggle Sidebar" [ref=e241]:
+            - img
+            - generic [ref=e242]: Toggle Sidebar
+          - generic [ref=e243]: Accu-Mk1
+        - generic [ref=e549]:
+          - generic [ref=e550]:
+            - generic [ref=e551]
+            - generic [ref=e554]
+          - generic [ref=e558]:
+            - generic [ref=e560]
+            - table [ref=e573]
+    - generic [ref=e536]:
+      - heading "Command Palette" [level=2] [ref=e537]
+      - paragraph [ref=e538]: Type a command or search...
+    - button "Open worksheet" [ref=e539]:
+      - img [ref=e540]
+      - generic [ref=e543]: "2"
+    - region "Notifications alt+T"
+    - generic:
+      - generic: Accu-Mk1 v0.28.0
+      - generic: •
+      - generic: Connected - Docker (local)
+  - generic [ref=e544]: "0"
