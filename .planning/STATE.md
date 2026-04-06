@@ -1,8 +1,8 @@
 ---
 gsd_state_version: 1.0
-milestone: null
-milestone_name: null
-status: between_milestones
+milestone: v0.30.0
+milestone_name: Multi-Instrument Architecture
+status: defining_requirements
 stopped_at: null
 last_updated: "2026-04-06"
 last_activity: 2026-04-06
@@ -20,15 +20,15 @@ progress:
 
 See: .planning/PROJECT.md (updated 2026-04-06)
 
-**Core value:** Streamlined morning workflow: import CSV -> review batch -> calculate purity -> push to SENAITE. One operator, one workstation, no friction.
-**Current focus:** Planning next milestone
+**Core value:** Streamlined lab workflow: import instrument data -> review batch -> calculate results -> push to SENAITE. One operator, one workstation, any instrument type, no friction.
+**Current focus:** Defining requirements for v0.30.0 Multi-Instrument Architecture
 
 ## Current Position
 
-Phase: —
+Phase: Not started (defining requirements)
 Plan: —
-Status: v0.28.0 shipped, between milestones
-Last activity: 2026-04-06
+Status: Defining requirements
+Last activity: 2026-04-06 — Milestone v0.30.0 started
 
 ## Accumulated Context
 

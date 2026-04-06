@@ -2,11 +2,11 @@
 
 ## What This Is
 
-A lab application for operators to import overnight HPLC exports, calculate purity metrics, review and validate results in a batch workflow, and push approved results to SENAITE LIMS. Runs as both a browser app (shared web server) and a Tauri-packaged desktop app, with user authentication protecting access.
+A lab application for operators to import instrument exports, calculate metrics (purity, quantity, endotoxin levels, sterility), review and validate results in a batch workflow, and push approved results to SENAITE LIMS. Supports multiple instrument types (HPLC, LAL/endotoxin, sterility, with LCMS/GCMS/heavy metals planned). Runs as both a browser app (shared web server) and a Tauri-packaged desktop app, with user authentication protecting access.
 
 ## Core Value
 
-Streamlined morning workflow: import CSV → review batch → calculate purity → push to SENAITE. One operator, one workstation, no friction.
+Streamlined lab workflow: import instrument data → review batch → calculate results → push to SENAITE. One operator, one workstation, any instrument type, no friction.
 
 ## Requirements
 
@@ -31,7 +31,13 @@ Streamlined morning workflow: import CSV → review batch → calculate purity �
 
 ### Active
 
-(Next milestone will define active requirements)
+- [ ] Generalized instrument automation framework (method model, result storage, ingest pipeline)
+- [ ] Pluggable parser/calculator registry per instrument type
+- [ ] Endotoxin (LAL) automation with numeric EU/mL results
+- [ ] Sterility automation with pass/fail results
+- [ ] Mixed ingest support (file import + manual entry paths)
+- [ ] HPLC refactored to use generalized framework
+- [ ] Schema designed for cross-sample analytics (deferred UI)
 
 ### Out of Scope
 
@@ -58,6 +64,20 @@ Streamlined morning workflow: import CSV → review batch → calculate purity �
 - **UI principle**: Web-first development — UI must work fully in Chrome without Tauri APIs
 - **Logic principle**: Backend owns all scientific calculations — UI never parses files or calculates metrics
 - **Audit principle**: All imports and pushes must be idempotent, traceable, repeatable
+
+## Current Milestone: v0.30.0 — Multi-Instrument Architecture
+
+**Goal:** Generalize the HPLC-only automation pipeline into an instrument-agnostic framework, prove it with endotoxin (numeric) and sterility (pass/fail), and design the schema for future analytics.
+
+**Target features:**
+- Generalized Method model replacing HPLC-specific HplcMethod, with instrument-type config and analysis service relationships
+- Generalized results storage supporting multiple result shapes (numeric, pass/fail, multi-point) with full provenance/audit trail
+- Instrument automation registry: pluggable parsers, calculators, and ingest flows per instrument type
+- Refactor existing HPLC automation to use the new framework (backwards compatibility)
+- Endotoxin (LAL) automation: file or manual ingest → EU/mL result with provenance
+- Sterility automation: manual entry → pass/fail result with provenance
+- Mixed ingest support: CSV/file import and manual entry paths
+- Schema designed to support cross-sample analytics (trending, averages by peptide/blend) — reporting UI deferred
 
 ## Current State (after v0.28.0)
 
@@ -147,4 +167,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-04-06 after v0.28.0 milestone*
+*Last updated: 2026-04-06 — v0.30.0 Multi-Instrument Architecture milestone started*
