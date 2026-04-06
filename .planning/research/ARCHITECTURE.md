@@ -1,571 +1,759 @@
-# Architecture: Inline Result Editing + SENAITE Workflow Transitions
+# Architecture Research: Multi-Instrument Automation Framework
 
-**Milestone:** Subsequent — Inline analysis result editing and workflow actions
-**Domain:** Tauri + React + FastAPI (Accu-Mk1 local backend) + Integration-Service + SENAITE REST API
-**Researched:** 2026-02-24
-**Overall Confidence:** HIGH (all claims verified against actual codebase)
+**Domain:** Lab instrument automation — polymorphic result storage, plugin parser/calculator pipeline
+**Milestone:** v0.30.0 — Multi-Instrument Architecture
+**Researched:** 2026-04-05
+**Confidence:** HIGH (all claims verified against actual codebase files)
 
 ---
 
 ## Executive Summary
 
-This milestone adds two closely related capabilities to `SampleDetails.tsx`:
+The core architectural challenge is extending an HPLC-only pipeline into one that supports multiple instrument types (endotoxin EU/mL, sterility pass/fail, and future types) without rewriting the working HPLC pipeline and without sacrificing query-ability for cross-sample analytics.
 
-1. **Inline result editing** — click a result cell in the analyses table, type a value, save.
-2. **Workflow transitions** — buttons to submit, verify, or reject individual analyses (or in bulk).
+The existing codebase already has latent generalization. The `Instrument` model has `instrument_type`. The `AnalysisService` model has `category`. The `Result` model has `calculation_type` and JSON fields for input/output. The `engine.py` has a `FORMULA_REGISTRY` dict. These are all seeds of the plugin pattern — they just need to be elevated into a coherent framework.
 
-Both capabilities are "thin wires" through the existing stack. The backend pattern (proxy to SENAITE's two-step update+transition) already exists in the integration-service. The frontend pattern (click-to-edit with optimistic update + rollback) already exists in `EditableField.tsx`. The gap is connecting them: new Accu-Mk1 backend endpoints that call SENAITE's `POST /update/{uid}`, and a revamped `AnalysisRow` component that exercises those endpoints.
+**The recommended approach is three coordinated changes:**
 
-The most significant structural decision is **where to add the backend endpoints**: they belong in the Accu-Mk1 local backend (`backend/main.py`), following the same pattern as `update_senaite_sample_fields`, not in the integration-service. The integration-service's desktop.py `submit_sample_results` endpoint is the reference implementation but serves a different auth context (API key for desktop) and targets a different workflow path (batch result submission by keyword, not per-analysis editing).
+1. **Rename `HplcMethod` → `Method`** (or introduce a `Method` supertype) with a `method_type` discriminator and a `config` JSON column for type-specific settings. Keep the existing HPLC-specific columns on a `hplc_method_config` substructure within config, so no data is lost and no migrations break HPLC operation.
 
-**Recommended build order:**
+2. **Introduce `InstrumentResult`** as the generalized result table, replacing the HPLC-specific `HPLCAnalysis` for new types. Keep `HPLCAnalysis` intact and add a `result_id` FK to it pointing at an `InstrumentResult` row. This avoids migrating 100% of HPLC records on day one while giving all new types a shared schema.
 
-1. Extend `SenaiteAnalysis` type to include `uid` (one-line Python + TypeScript change)
-2. Add two Accu-Mk1 backend endpoints: `POST /wizard/senaite/analyses/{uid}/result` and `POST /wizard/senaite/analyses/{uid}/transition`
-3. Upgrade `AnalysisRow` to support inline result editing
-4. Add per-row transition action buttons (submit, verify, reject)
-5. Add bulk action toolbar to the analyses table header
+3. **Promote the `FORMULA_REGISTRY` pattern in `engine.py` into a proper plugin registry** with a defined interface: `parse(files) → ParsedData`, `calculate(parsed, context) → ResultData`, `validate(result) → errors`. Each instrument type registers a parser + calculator pair. The ingest endpoint becomes type-agnostic.
 
 ---
 
 ## Current Architecture Audit
 
-### The Missing `uid` Field
+### Existing Models (Verified Against `backend/models.py`)
 
-**This is the single most critical prerequisite.** The existing `SenaiteAnalysis` model on both the backend and frontend is missing `uid`.
+| Model | Table | HPLC-Specific Columns | Generalization Status |
+|-------|-------|-----------------------|-----------------------|
+| `Instrument` | `instruments` | `instrument_type` (currently only "HPLC") | Already generic — just needs values populated |
+| `HplcMethod` | `hplc_methods` | `size_peptide`, `starting_organic_pct`, `temperature_mct_c`, `dissolution` | Fully HPLC-specific — needs generalization |
+| `HPLCAnalysis` | `hplc_analyses` | All columns (5 weights, purity, quantity, identity, dilution) | Fully HPLC-specific — keep but link to new generic table |
+| `AnalysisService` | `analysis_services` | `category` field (e.g., "HPLC") | Already generic |
+| `Result` | `results` | `calculation_type`, `input_data` JSON, `output_data` JSON | Already generic, underused |
 
-**Backend model (`backend/main.py`, line 5005):**
-```python
-class SenaiteAnalysis(BaseModel):
-    title: str
-    result: Optional[str] = None
-    unit: Optional[str] = None
-    method: Optional[str] = None
-    instrument: Optional[str] = None
-    analyst: Optional[str] = None
-    due_date: Optional[str] = None
-    review_state: Optional[str] = None
-    sort_key: Optional[float] = None
-    captured: Optional[str] = None
-    retested: bool = False
-    # uid is NOT here — must be added
+### Existing Pipeline (Verified Against `backend/calculations/`)
+
+```
+Current HPLC Pipeline:
+  peakdata_csv_parser.py  →  HPLCParseResult (typed dataclass)
+        ↓
+  hplc_processor.py       →  process_hplc_analysis(AnalysisInput) → dict
+  [also: engine.py has FORMULA_REGISTRY — separate older path, underused]
+        ↓
+  HPLCAnalysis row created in main.py (inline, ~3000-line file)
+        ↓
+  SENAITE push (httpx POST to integration-service or direct)
 ```
 
-**Frontend type (`src/lib/api.ts`, line 2016):**
-```typescript
-export interface SenaiteAnalysis {
-  title: string
-  result: string | null
-  unit: string | null
-  method: string | null
-  instrument: string | null
-  analyst: string | null
-  due_date: string | null
-  review_state: string | null
-  sort_key: number | null
-  captured: string | null
-  retested: boolean
-  // uid is NOT here — must be added
+**Key observation:** `hplc_processor.py` is already pure-function — it takes typed inputs and returns a dict. It has no database access. This is the correct shape for a plugin calculator. The parser (`peakdata_csv_parser.py`) returns typed dataclasses (`HPLCParseResult`). The problem is these typed outputs are HPLC-specific and wired directly into the ingest endpoint logic in `main.py` rather than through an abstraction layer.
+
+### Existing Registry Seed (Verified Against `backend/calculations/engine.py`)
+
+`engine.py` already has:
+```python
+FORMULA_REGISTRY: dict[str, type[Formula]] = {
+    "accumulation": AccumulationFormula,
+    "response_factor": ResponseFactorFormula,
+    "dilution_factor": DilutionFactorFormula,
+    "compound_id": CompoundIdentificationFormula,
+    "purity": PurityFormula,
 }
 ```
 
-**Where the uid is fetched but dropped:** In the lookup endpoint (`backend/main.py` around line 5304), the analysis items from SENAITE already include `uid` in the response JSON. The field is just never mapped into `SenaiteAnalysis`. Adding it is a one-field addition in both files with no schema migration required.
+This registry is the correct pattern. It's not yet connected to the HPLC-specific parser/processor path — the `hplc_processor.py` bypass doesn't go through `engine.py`. The new framework should extend this registry pattern (or introduce a parallel instrument-type registry that references both parsers and calculators).
 
-### Existing SENAITE Proxy Pattern (HIGH confidence — code verified)
+### M2M Table Hard-Coding Problem
 
-The `update_senaite_sample_fields` endpoint at `POST /wizard/senaite/samples/{uid}/update` (line 5760) is the direct model for new analysis endpoints:
-
-```python
-# Current pattern — used for sample field updates:
-POST /wizard/senaite/samples/{uid}/update
-Body: {"fields": {"Remarks": "some text"}}
-→ backend proxies to: POST {SENAITE_URL}/senaite/@@API/senaite/v1/update/{uid}
-→ returns SenaiteFieldUpdateResponse(success, message, updated_fields)
-```
-
-The new analysis endpoints follow the same HTTP proxy pattern, same auth (`Depends(get_current_user)`), same httpx client configuration (JSON body first, form-encoded fallback on 400), same error handling.
-
-### Existing Two-Step Pattern (HIGH confidence — code verified)
-
-The integration-service adapter's `submit_analysis_result` (line 901 in `senaite.py`) documents the SENAITE two-step workflow as observed, working code:
+The junction tables reference `hplc_methods` directly:
 
 ```python
-# Step 1: Set result value
-POST {SENAITE_URL}/senaite/@@API/senaite/v1/update/{analysis_uid}
-Body: {"Result": "95.4"}
+# instrument_methods table — FK to hplc_methods.id
+Column("method_id", Integer, ForeignKey("hplc_methods.id", ondelete="CASCADE"))
 
-# Step 2: Submit (transition state)
-POST {SENAITE_URL}/senaite/@@API/senaite/v1/update/{analysis_uid}
-Body: {"transition": "submit"}
+# peptide_methods table — FK to hplc_methods.id
+Column("method_id", Integer, ForeignKey("hplc_methods.id", ondelete="CASCADE"))
 ```
 
-The transition name `"submit"` moves the analysis from `unassigned` to `to_be_verified`. Other transitions: `"verify"` (`to_be_verified` → `verified`), `"retract"` (reverts), `"reject"`. The exact available transitions per state are SENAITE workflow-dependent and should be verified against the live instance during implementation.
-
-### Existing EditableField Pattern (HIGH confidence — code verified)
-
-`EditableField.tsx` already implements the exact UX pattern needed for result cells:
-- Click to enter edit mode
-- Optimistic update via `onSaved` callback (immediate UI update before server confirms)
-- Save via custom `onSave` async function or default `updateSenaiteSampleFields`
-- Rollback on failure with error toast
-- Keyboard: Enter to save, Escape to cancel
-
-The `AnalysisRow` component needs the same behavior. The cleanest implementation passes an `onSave` callback that calls a new `updateAnalysisResult(uid, value)` API function. No new UI primitives are needed.
-
-### Current SampleDetails Data Loading Pattern (HIGH confidence — code verified)
-
-`SampleDetails.tsx` uses manual `useState` + `useEffect` with the `lookupSenaiteSample()` call — it does **not** use TanStack Query. The `fetchSample` function is already factored out and callable imperatively:
-
-```typescript
-const fetchSample = (id: string) => {
-  setLoading(true)
-  setError(null)
-  lookupSenaiteSample(id)
-    .then(result => setData(result))
-    .catch(e => setError(...))
-    .finally(() => setLoading(false))
-}
-```
-
-This `fetchSample` function is passed down as a refresh callback after mutations complete. After a result is saved or a transition fires, call `fetchSample(sampleId)` to re-fetch the full sample including updated analysis states. This is the existing pattern for `onAdded={() => fetchSample(data.sample_id)}` on the COA section.
-
-**Decision: Do not convert to TanStack Query for this milestone.** The existing useState+useEffect pattern is functional, and converting a 1400-line component mid-milestone introduces risk. Use the existing `fetchSample` as the post-mutation refresh mechanism.
+Any generalization of `HplcMethod` → `Method` must address these FKs.
 
 ---
 
-## New Components Required
+## Recommended Architecture
 
-### Backend: Two New Endpoints in `backend/main.py`
-
-Both endpoints follow the established `update_senaite_sample_fields` pattern exactly.
-
-#### Endpoint 1: Set Analysis Result
+### System Overview
 
 ```
-POST /wizard/senaite/analyses/{uid}/result
-Body: {"value": "95.4"}
-Response: {"success": true, "message": "Result updated", "new_review_state": "unassigned"}
+┌──────────────────────────────────────────────────────────────────┐
+│  Ingest Layer (instrument-type-agnostic endpoint in main.py)     │
+│  POST /ingest/{instrument_type}  OR  POST /ingest/manual         │
+├──────────────────────────────────────────────────────────────────┤
+│  Plugin Registry                                                  │
+│  ┌────────────────┐  ┌────────────────┐  ┌────────────────┐     │
+│  │  HPLC Plugin   │  │ Endotoxin Plug │  │ Sterility Plug │     │
+│  │  parser: csv   │  │  parser: csv   │  │  parser: none  │     │
+│  │  calc: hplc_   │  │  calc: lal_    │  │  calc: pass_   │     │
+│  │  processor.py  │  │  processor.py  │  │  fail.py       │     │
+│  └────────────────┘  └────────────────┘  └────────────────┘     │
+├──────────────────────────────────────────────────────────────────┤
+│  Generalized Result Storage                                       │
+│  ┌──────────────────────────────────────────────────────────┐    │
+│  │  InstrumentResult  (instrument_type, analyte_id, values) │    │
+│  │  ├── hplc_analyses.result_id → FK to InstrumentResult    │    │
+│  │  └── Future types link here directly                      │    │
+│  └──────────────────────────────────────────────────────────┘    │
+├──────────────────────────────────────────────────────────────────┤
+│  Method Layer                                                     │
+│  ┌──────────────────────────────────────────────────────────┐    │
+│  │  Method  (method_type discriminator + config JSON)        │    │
+│  │  ├── hplc_methods view / compat shim for existing FKs    │    │
+│  │  └── instrument_methods / analyte_methods junction tables │    │
+│  └──────────────────────────────────────────────────────────┘    │
+├──────────────────────────────────────────────────────────────────┤
+│  Existing Models (unchanged)                                      │
+│  Instrument, AnalysisService, Peptide, CalibrationCurve,         │
+│  WorksheetItem, Worksheet, SamplePriority, User                   │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
-This endpoint:
-1. POSTs `{"Result": value}` to SENAITE `update/{uid}`
-2. Returns success/failure + the updated `review_state` from SENAITE's response
-3. Does NOT auto-submit — submit is a separate explicit action
+---
 
-Separating set-result from submit-transition is important: a lab tech may want to enter a result value and review it before formally submitting. Forcing auto-submit on save removes that review window.
+## Pattern 1: Method Generalization — Single Table with Discriminator + JSON Config
 
-#### Endpoint 2: Apply Transition
+**What:** Rename `HplcMethod` to `Method`, add `method_type` discriminator column, move HPLC-specific columns into a `config` JSON column. Keep existing HPLC columns as columns (not JSON) during a transition period by using a migration that populates `config` from existing values, then drops the old columns after HPLC is confirmed working through the new path.
 
-```
-POST /wizard/senaite/analyses/{uid}/transition
-Body: {"transition": "submit"}  -- or "verify", "retract", "reject"
-Response: {"success": true, "message": "Transitioned to to_be_verified", "new_review_state": "to_be_verified"}
-```
+**Why not table-per-type (concrete table inheritance):** Breaks the existing M2M junction tables and doubles schema complexity. Every new instrument type requires a new table + new junction tables.
 
-This endpoint:
-1. POSTs `{"transition": transitionName}` to SENAITE `update/{uid}`
-2. Returns success/failure + new `review_state` from SENAITE's response
-3. Is intentionally separate from the result endpoint — supports verify/retract/reject which don't involve result values
+**Why not abstract base + joined-table inheritance:** SQLAlchemy supports this (polymorphic_on + joined tables) but requires JOINs for every method query and adds FK complexity. For 3-5 instrument types with small config differences, JSON config outperforms joined inheritance on simplicity.
 
-**Why two endpoints instead of combining:** The two-step pattern in SENAITE is sequential but the UI actions are conceptually distinct. A tech entering a result mid-session should not trigger workflow state changes. Transitions are explicit lab decisions (submit for review, verify, reject). Keeping them separate also supports transitions on already-submitted analyses (e.g., verify) where no result change is involved.
+**Why not pure JSON config (no typed columns):** Analytics and filtering need typed columns for commonly-queried fields. A hybrid is correct: discriminator column stays typed, HPLC-specific params go into `config` JSON.
 
-#### Pydantic Models
+**SQLAlchemy pattern (HIGH confidence — matches SQLAlchemy 2.0 mapped_column syntax already used):**
 
 ```python
-class AnalysisResultRequest(BaseModel):
-    value: str
+class Method(Base):
+    __tablename__ = "methods"
 
-class AnalysisResultResponse(BaseModel):
-    success: bool
-    message: str
-    new_review_state: Optional[str] = None
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(200), nullable=False, unique=True)
+    method_type: Mapped[str] = mapped_column(String(50), nullable=False)  # "hplc", "endotoxin", "sterility"
+    senaite_id: Mapped[Optional[str]] = mapped_column(String(200), nullable=True, unique=True)
+    config: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    # config shape per type:
+    # hplc:       {"size_peptide": "...", "starting_organic_pct": 5.0, "temperature_mct_c": 40.0, "dissolution": "..."}
+    # endotoxin:  {"mvd": 10.0, "clsi_threshold": 5.0, "reagent_lot": "..."}
+    # sterility:  {"incubation_days": 14, "media_type": "TSB"}
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-class AnalysisTransitionRequest(BaseModel):
-    transition: str  # "submit" | "verify" | "retract" | "reject"
-
-class AnalysisTransitionResponse(BaseModel):
-    success: bool
-    message: str
-    new_review_state: Optional[str] = None
+    # Relationships
+    instruments: Mapped[list["Instrument"]] = relationship(
+        "Instrument", secondary="instrument_methods_v2", back_populates="methods"
+    )
 ```
 
-### Frontend: Two New API Functions in `src/lib/api.ts`
+**Migration strategy for HPLC backwards compatibility:**
 
-```typescript
-export interface AnalysisResultResponse {
-  success: boolean
-  message: string
-  new_review_state: string | null
-}
+1. Create `methods` table with the shape above.
+2. Copy all `hplc_methods` rows into `methods` with `method_type="hplc"` and HPLC-specific columns marshalled into `config` JSON.
+3. Create new junction tables `instrument_methods_v2` and `analyte_methods` pointing at `methods.id`.
+4. Copy existing `instrument_methods` and `peptide_methods` rows into the new tables.
+5. Add `legacy_hplc_method_id` FK column on `Method` for cross-reference during transition.
+6. Keep `hplc_methods` table intact (read-only, no new writes) until all HPLC code paths are migrated.
 
-export async function updateAnalysisResult(
-  uid: string,
-  value: string
-): Promise<AnalysisResultResponse> {
-  const response = await fetch(
-    `${API_BASE_URL()}/wizard/senaite/analyses/${encodeURIComponent(uid)}/result`,
-    {
-      method: 'POST',
-      headers: getBearerHeaders('application/json'),
-      body: JSON.stringify({ value }),
-    }
-  )
-  if (!response.ok) {
-    const err = await response.json().catch(() => null)
-    throw new Error(err?.detail || `Result update failed: ${response.status}`)
-  }
-  return response.json()
-}
-
-export async function transitionAnalysis(
-  uid: string,
-  transition: string
-): Promise<AnalysisResultResponse> {
-  const response = await fetch(
-    `${API_BASE_URL()}/wizard/senaite/analyses/${encodeURIComponent(uid)}/transition`,
-    {
-      method: 'POST',
-      headers: getBearerHeaders('application/json'),
-      body: JSON.stringify({ transition }),
-    }
-  )
-  if (!response.ok) {
-    const err = await response.json().catch(() => null)
-    throw new Error(err?.detail || `Transition failed: ${response.status}`)
-  }
-  return response.json()
-}
-```
-
-### Frontend: Upgraded `AnalysisRow` Component
-
-The `AnalysisRow` function (line 1305) changes from a pure display row to an interactive row. It needs:
-
-1. **Editable result cell** — replace static text with an inline input when the analysis is in `unassigned` or `assigned` state (states where result entry is permitted). Use the `EditableField` pattern: click → input → Enter/save button → confirm, with optimistic update.
-
-2. **Transition action buttons** — a small action button or dropdown per row, showing only the transitions valid for the current `review_state`. SENAITE workflow rules:
-   - `unassigned` / `assigned` → "Submit" (requires result first)
-   - `to_be_verified` → "Verify", "Reject"
-   - `verified` → no actions (locked)
-   - `published` → no actions (locked)
-
-3. **Row-level loading state** — while a save or transition is pending, show a spinner in the row and disable its controls. Since analyses are independent, other rows remain interactive.
-
-4. **Post-action refresh** — after any mutation succeeds, call the `fetchSample` refresh callback to reload the full sample. This updates the sample-level `review_state` if SENAITE auto-transitioned the parent (e.g., sample moves to `to_be_verified` when all analyses are submitted).
-
-**Component signature change:**
-
-```typescript
-// Before:
-function AnalysisRow({ analysis, analyteNameMap }: {
-  analysis: SenaiteAnalysis
-  analyteNameMap: Map<number, string>
-})
-
-// After:
-function AnalysisRow({ analysis, analyteNameMap, onMutated }: {
-  analysis: SenaiteAnalysis
-  analyteNameMap: Map<number, string>
-  onMutated: () => void  // calls fetchSample after any mutation succeeds
-})
-```
-
-### Frontend: Bulk Action Toolbar
-
-For bulk operations (e.g., select all unassigned analyses, submit all), a toolbar sits between the filter tabs and the progress bar in the analyses card. It appears only when one or more rows are selected.
-
-**State required (local to SampleDetails, not Zustand):**
-```typescript
-const [selectedUids, setSelectedUids] = useState<Set<string>>(new Set())
-```
-
-**Bulk actions:**
-- "Submit selected" — calls `transitionAnalysis(uid, 'submit')` for each selected uid sequentially (not in parallel — SENAITE can struggle with concurrent writes to the same sample)
-- "Verify selected" — same pattern with `'verify'`
-
-The bulk action progress is shown inline ("Submitting 3 of 5...") using a local counter state. A single `fetchSample` refresh happens after all batch operations complete.
-
-**Sequential constraint:** SENAITE's analysis workflow may update sample-level state after each analysis transitions. Firing concurrent requests risks race conditions in SENAITE's state machine. Process bulk actions one at a time with await between each call.
+This is a two-migration approach: first migration creates and populates new tables, second migration (after HPLC refactor is validated) drops the old tables.
 
 ---
 
-## Data Flow: Edit → Save → Refresh
+## Pattern 2: Generalized Result Storage — InstrumentResult + Type-Specific Extension
 
-### Single Analysis Result Save
+**What:** Introduce `InstrumentResult` as the common result record. HPLC gets a FK on `HPLCAnalysis` pointing to its `InstrumentResult` row. New types (endotoxin, sterility) store everything in `InstrumentResult` directly (no separate table).
 
+**Why not one table for everything:** Some type-specific queries benefit from typed columns (HPLC purity_percent is frequently queried for trending). A pure-JSON approach makes those queries `json_extract` which is slower and unindexable in SQLite without generated columns.
+
+**Why not completely separate tables per type:** Cross-type analytics (e.g., "all results for sample P-0142 across all tests") require UNIONs or a dispatch layer. A common base table makes those queries trivial.
+
+**Why keep `HPLCAnalysis` instead of migrating it:** It has 20+ columns, CalibrationCurve FKs, sample_prep_id references, chromatogram_data, debug_log, and is the source of truth for all existing HPLC records. Migrating it in-place is high risk, low benefit during this milestone. Instead, link it forward.
+
+**SQLAlchemy pattern:**
+
+```python
+class InstrumentResult(Base):
+    """
+    Generalized result record for any instrument type.
+    HPLCAnalysis links to this via result_id FK.
+    New types (endotoxin, sterility) store results here directly.
+    """
+    __tablename__ = "instrument_results"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    instrument_type: Mapped[str] = mapped_column(String(50), nullable=False)  # "hplc", "endotoxin", "sterility"
+    sample_id_label: Mapped[str] = mapped_column(String(200), nullable=False)  # e.g. "P-0142"
+
+    # Foreign keys to context
+    instrument_id: Mapped[Optional[int]] = mapped_column(ForeignKey("instruments.id"), nullable=True)
+    method_id: Mapped[Optional[int]] = mapped_column(ForeignKey("methods.id"), nullable=True)
+    analyte_id: Mapped[Optional[int]] = mapped_column(ForeignKey("peptides.id"), nullable=True)  # Peptide for HPLC; None for endotoxin/sterility if test-level
+    analysis_service_id: Mapped[Optional[int]] = mapped_column(ForeignKey("analysis_services.id"), nullable=True)
+
+    # Provenance
+    # NOTE: sample_prep_id is plain INTEGER — lives in separate accumark_mk1 DB, no FK possible
+    sample_prep_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    ingest_source: Mapped[str] = mapped_column(String(50), nullable=False, default="file")  # "file" | "manual"
+    source_filename: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    run_group_id: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)  # Groups multiple results from one ingest
+
+    # Typed result columns — populated based on instrument_type
+    # Numeric result (EU/mL for endotoxin, purity % for HPLC summary, etc.)
+    result_numeric: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    result_unit: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)  # "EU/mL", "%", "mg"
+    # Pass/fail result (sterility, identity check)
+    result_pass: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    # Full calculation output with audit trace
+    result_data: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)  # All calculated values
+    calculation_trace: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)  # Step-by-step trace for audit
+
+    # Raw input captured for re-processing
+    raw_input: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+
+    # Workflow
+    status: Mapped[str] = mapped_column(String(50), default="pending", nullable=False)  # pending | calculated | approved | rejected
+    rejection_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    senaite_pushed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    debug_log: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+
+    # User tracking
+    created_by_user_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    created_by_email: Mapped[Optional[str]] = mapped_column(String(320), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationships
+    instrument_obj: Mapped[Optional["Instrument"]] = relationship("Instrument", foreign_keys=[instrument_id])
+    method_obj: Mapped[Optional["Method"]] = relationship("Method", foreign_keys=[method_id])
+    analyte: Mapped[Optional["Peptide"]] = relationship("Peptide", foreign_keys=[analyte_id])
+    analysis_service: Mapped[Optional["AnalysisService"]] = relationship("AnalysisService")
 ```
-1. Tech clicks result cell on an "unassigned" analysis row
-   └→ AnalysisRow enters edit mode (local useState)
-   └→ Optimistic: UI shows new value immediately (pre-confirm)
 
-2. Tech types value, presses Enter or clicks save button
-   └→ POST /wizard/senaite/analyses/{uid}/result {"value": "95.4"}
+**HPLCAnalysis link:**
 
-3. Backend receives request
-   └→ httpx POST to SENAITE: /update/{uid} {"Result": "95.4"}
-   └→ Returns AnalysisResultResponse(success=true, new_review_state="unassigned")
+Add one FK column to the existing `HPLCAnalysis` model:
 
-4. Frontend receives success
-   └→ toast.success("Result saved")
-   └→ onMutated() called → fetchSample(sampleId) → full refresh
-
-5. On failure:
-   └→ toast.error("Failed to save result", description: err.message)
-   └→ Optimistic rollback: revert displayed value to original
+```python
+# Add to HPLCAnalysis:
+instrument_result_id: Mapped[Optional[int]] = mapped_column(
+    ForeignKey("instrument_results.id", ondelete="SET NULL"), nullable=True
+)
 ```
 
-### Single Analysis Transition (Submit)
+When HPLC analyses are created through the new framework, an `InstrumentResult` row is written first, then `HPLCAnalysis` is written with `instrument_result_id` set. Old pre-migration HPLC records have `instrument_result_id = NULL` — they're still queryable, just not linked to the new table.
 
-```
-1. Tech clicks "Submit" button on a row with result entered
-   └→ Row enters loading state (spinner, controls disabled)
+**Cross-sample analytics query pattern (SQLite compatible):**
 
-2. POST /wizard/senaite/analyses/{uid}/transition {"transition": "submit"}
+```python
+# All results for a peptide, all instrument types, last 90 days
+session.query(InstrumentResult).filter(
+    InstrumentResult.analyte_id == peptide_id,
+    InstrumentResult.created_at >= ninety_days_ago,
+    InstrumentResult.status == "approved"
+).order_by(InstrumentResult.created_at.desc()).all()
 
-3. Backend proxies to SENAITE:
-   └→ POST /update/{uid} {"transition": "submit"}
-   └→ SENAITE moves analysis from "unassigned" → "to_be_verified"
-   └→ SENAITE may auto-transition sample to "to_be_verified" if all analyses submitted
-
-4. Returns AnalysisTransitionResponse(success=true, new_review_state="to_be_verified")
-
-5. Frontend:
-   └→ toast.success("Analysis submitted for verification")
-   └→ onMutated() → fetchSample(sampleId) → full refresh
-   └→ Full refresh picks up: updated analysis review_state AND updated sample review_state
-```
-
-### Bulk Submit Flow
-
-```
-1. Tech checks 3 analyses, clicks "Submit selected"
-   └→ BulkActionState: { pending: 3, completed: 0, failed: 0 }
-
-2. For each uid in selectedUids (sequentially, not parallel):
-   a. POST /wizard/senaite/analyses/{uid}/transition {"transition": "submit"}
-   b. await response
-   c. Update counter: completed++
-   d. If error: failed++, continue to next (don't abort batch)
-
-3. After all complete:
-   └→ fetchSample(sampleId) — single refresh for all changes
-   └→ toast.success("3 submitted, 0 failed") or toast.warning("2 submitted, 1 failed")
-   └→ Clear selectedUids
+# Purity trending — HPLC only, indexed on result_numeric
+session.query(InstrumentResult).filter(
+    InstrumentResult.instrument_type == "hplc",
+    InstrumentResult.analyte_id == peptide_id,
+    InstrumentResult.result_numeric.isnot(None)
+).order_by(InstrumentResult.created_at).all()
 ```
 
 ---
 
-## Component Boundaries and Dependency Graph
+## Pattern 3: Plugin Registry for Parsers and Calculators
+
+**What:** A `INSTRUMENT_REGISTRY` dict in a new `backend/instruments/registry.py` module. Each entry maps an instrument type string to a plugin object that implements two methods: `parse()` and `calculate()`.
+
+**Why not separate parser/calculator registries:** Parser output must match calculator input exactly. Coupling them in a single plugin object enforces that contract. A plugin knows both what it can parse and what it produces.
+
+**Why not class-based with ABC:** Python protocol (structural typing) is lighter and doesn't force inheritance on existing code like `hplc_processor.py`. The existing HPLC processor can be wrapped with a thin shim.
+
+**Recommended module structure:**
 
 ```
-SampleDetails.tsx
-│
-├── State: data (SenaiteLookupResult), loading, error
-├── State: analysisFilter, selectedUids
-├── fetchSample() ─────────────────────────── calls lookupSenaiteSample()
-│
-├── AnalysesTable (inline, not extracted)
-│   ├── BulkActionToolbar
-│   │   ├── State: bulkPending (local)
-│   │   └── Calls: transitionAnalysis() [sequential loop] → onAllComplete → fetchSample()
-│   │
-│   └── AnalysisRow (one per filteredAnalysis)
-│       ├── Props: analysis (now includes uid), analyteNameMap, onMutated
-│       ├── State: editing (bool), draft (string), saving (bool) [all local]
-│       │
-│       ├── EditableResultCell (inline or extracted)
-│       │   └── Calls: updateAnalysisResult(uid, value) → onMutated → fetchSample()
-│       │
-│       └── TransitionButtons
-│           └── Calls: transitionAnalysis(uid, transition) → onMutated → fetchSample()
-│
-└── api.ts
-    ├── lookupSenaiteSample() — GET /wizard/senaite/lookup
-    ├── updateAnalysisResult() — POST /wizard/senaite/analyses/{uid}/result  [NEW]
-    └── transitionAnalysis() — POST /wizard/senaite/analyses/{uid}/transition [NEW]
+backend/
+├── instruments/
+│   ├── __init__.py
+│   ├── registry.py         # INSTRUMENT_REGISTRY dict + registration decorator
+│   ├── base.py             # InstrumentPlugin Protocol definition
+│   ├── hplc/
+│   │   ├── __init__.py
+│   │   ├── plugin.py       # HplcPlugin — wraps existing parser + processor
+│   │   ├── parser.py       # Thin import shim → parsers/peakdata_csv_parser.py
+│   │   └── calculator.py   # Thin import shim → calculations/hplc_processor.py
+│   ├── endotoxin/
+│   │   ├── __init__.py
+│   │   ├── plugin.py       # EndotoxinPlugin
+│   │   ├── parser.py       # LAL instrument CSV/TXT parser (new)
+│   │   └── calculator.py   # EU/mL calculation (new)
+│   └── sterility/
+│       ├── __init__.py
+│       ├── plugin.py       # SterilityPlugin
+│       └── calculator.py   # Pass/fail logic (new; no parser — manual entry)
+├── parsers/
+│   ├── peakdata_csv_parser.py   # Unchanged
+│   └── txt_parser.py            # Unchanged
+└── calculations/
+    ├── hplc_processor.py        # Unchanged
+    ├── engine.py                # Unchanged (FORMULA_REGISTRY stays)
+    ├── calibration.py           # Unchanged
+    ├── formulas.py              # Unchanged
+    └── wizard.py                # Unchanged
 ```
 
-```
-backend/main.py
-│
-├── POST /wizard/senaite/analyses/{uid}/result  [NEW]
-│   └── httpx POST → SENAITE /@@API/senaite/v1/update/{uid}  {"Result": value}
-│
-└── POST /wizard/senaite/analyses/{uid}/transition  [NEW]
-    └── httpx POST → SENAITE /@@API/senaite/v1/update/{uid}  {"transition": name}
+**Protocol definition (`backend/instruments/base.py`):**
+
+```python
+from typing import Protocol, runtime_checkable
+from dataclasses import dataclass
+
+@dataclass
+class ParsedData:
+    """Normalized output from any parser. Plugin-specific data goes in 'data' dict."""
+    instrument_type: str
+    raw_files: list[dict]    # [{filename: str, content: str}]
+    data: dict               # Type-specific parsed data
+    errors: list[str]
+    warnings: list[str]
+
+@dataclass
+class CalculatedResult:
+    """Normalized output from any calculator."""
+    instrument_type: str
+    result_numeric: float | None    # Primary numeric result (purity%, EU/mL, etc.)
+    result_unit: str | None
+    result_pass: bool | None        # For pass/fail types
+    result_data: dict               # Full result dict (all calculated values)
+    calculation_trace: dict         # Step-by-step trace for audit
+    errors: list[str]
+
+@runtime_checkable
+class InstrumentPlugin(Protocol):
+    instrument_type: str  # class attribute
+
+    def parse(self, files: list[dict]) -> ParsedData:
+        """Parse raw instrument files into normalized intermediate form."""
+        ...
+
+    def calculate(self, parsed: ParsedData, context: dict) -> CalculatedResult:
+        """
+        Run calculations on parsed data.
+        context: {method_config, calibration, peptide_params, ...}
+        """
+        ...
+
+    def supports_manual_entry(self) -> bool:
+        """True if this type allows manual entry without file upload."""
+        ...
 ```
 
-No changes required to:
-- Zustand `ui-store.ts` — no new global UI state needed
-- Integration-service — new endpoints are in Accu-Mk1 backend only
-- Any other component outside `SampleDetails.tsx` and `EditableField.tsx`
+**Registry (`backend/instruments/registry.py`):**
+
+```python
+from instruments.base import InstrumentPlugin
+
+_REGISTRY: dict[str, InstrumentPlugin] = {}
+
+def register(plugin: InstrumentPlugin) -> None:
+    _REGISTRY[plugin.instrument_type] = plugin
+
+def get_plugin(instrument_type: str) -> InstrumentPlugin:
+    if instrument_type not in _REGISTRY:
+        raise ValueError(f"No plugin registered for instrument type: {instrument_type!r}")
+    return _REGISTRY[instrument_type]
+
+def registered_types() -> list[str]:
+    return list(_REGISTRY.keys())
+```
+
+**HPLC plugin shim (wraps existing code with zero changes to existing files):**
+
+```python
+# backend/instruments/hplc/plugin.py
+from instruments.base import InstrumentPlugin, ParsedData, CalculatedResult
+from parsers.peakdata_csv_parser import parse_hplc_files, HPLCParseResult
+from calculations.hplc_processor import (
+    process_hplc_analysis, AnalysisInput, WeightInputs, CalibrationParams, PeptideParams
+)
+
+class HplcPlugin:
+    instrument_type = "hplc"
+
+    def parse(self, files: list[dict]) -> ParsedData:
+        result: HPLCParseResult = parse_hplc_files(files)
+        return ParsedData(
+            instrument_type="hplc",
+            raw_files=files,
+            data={
+                "injections": [inj.__dict__ for inj in result.injections],
+                "standard_injections": [std.__dict__ for std in result.standard_injections],
+            },
+            errors=result.errors,
+            warnings=result.warnings,
+        )
+
+    def calculate(self, parsed: ParsedData, context: dict) -> CalculatedResult:
+        # Build typed inputs from context + parsed data (same as current main.py logic)
+        weights = WeightInputs(**context["weights"])
+        calibration = CalibrationParams(**context["calibration"])
+        peptide = PeptideParams(**context["peptide"])
+        analysis_input = AnalysisInput(
+            injections=parsed.data["injections"],
+            weights=weights,
+            calibration=calibration,
+            peptide=peptide,
+        )
+        output = process_hplc_analysis(analysis_input)
+        return CalculatedResult(
+            instrument_type="hplc",
+            result_numeric=output.get("purity_percent"),
+            result_unit="%",
+            result_pass=output.get("identity_conforms"),
+            result_data=output,
+            calculation_trace=output.get("calculation_trace", {}),
+            errors=[],
+        )
+
+    def supports_manual_entry(self) -> bool:
+        return False
+```
+
+**Endotoxin plugin (new, EU/mL calculation):**
+
+```python
+# backend/instruments/endotoxin/plugin.py
+class EndotoxinPlugin:
+    instrument_type = "endotoxin"
+
+    def parse(self, files: list[dict]) -> ParsedData:
+        # LAL reader instrument exports CSV with Sample ID, EU/mL value, pass/fail flag
+        # Parser TBD based on actual instrument export format
+        ...
+
+    def calculate(self, parsed: ParsedData, context: dict) -> CalculatedResult:
+        # EU/mL result from instrument is already calculated — validate against MVD
+        eu_ml = parsed.data.get("eu_ml_raw")
+        mvd = context.get("method_config", {}).get("mvd", 10.0)
+        clsi_threshold = context.get("method_config", {}).get("clsi_threshold", 5.0)
+        conforms = eu_ml is not None and eu_ml <= clsi_threshold
+        return CalculatedResult(
+            instrument_type="endotoxin",
+            result_numeric=eu_ml,
+            result_unit="EU/mL",
+            result_pass=conforms,
+            result_data={"eu_ml": eu_ml, "mvd": mvd, "clsi_threshold": clsi_threshold},
+            calculation_trace={"raw_eu_ml": eu_ml, "threshold_check": f"{eu_ml} <= {clsi_threshold}"},
+            errors=[],
+        )
+
+    def supports_manual_entry(self) -> bool:
+        return True  # Manual EU/mL entry allowed alongside file import
+```
+
+**Sterility plugin (pass/fail, manual entry only):**
+
+```python
+class SterilityPlugin:
+    instrument_type = "sterility"
+
+    def parse(self, files: list[dict]) -> ParsedData:
+        # Sterility has no file import — manual entry only
+        return ParsedData(instrument_type="sterility", raw_files=[], data={}, errors=[], warnings=[])
+
+    def calculate(self, parsed: ParsedData, context: dict) -> CalculatedResult:
+        # context must contain {"pass_fail": True/False, "observation": "No growth observed"}
+        result_pass = context.get("pass_fail")
+        observation = context.get("observation", "")
+        return CalculatedResult(
+            instrument_type="sterility",
+            result_numeric=None,
+            result_unit=None,
+            result_pass=result_pass,
+            result_data={"pass_fail": result_pass, "observation": observation},
+            calculation_trace={"manual_entry": True, "observation": observation},
+            errors=[] if result_pass is not None else ["pass_fail must be provided"],
+        )
+
+    def supports_manual_entry(self) -> bool:
+        return True
+```
 
 ---
 
-## Modified vs. New: Explicit Inventory
+## Data Flow: Generalized Ingest Pipeline
 
-### Files That Change
+### File Import Flow (HPLC, Endotoxin)
 
-| File | Change Type | What Changes |
-|------|-------------|--------------|
-| `backend/main.py` | Addition | 2 new endpoints + 4 new Pydantic models; no existing code modified |
-| `src/lib/api.ts` | Addition | `uid` added to `SenaiteAnalysis` interface; 2 new API functions; 1 new response type |
-| `src/components/senaite/SampleDetails.tsx` | Modification | `AnalysisRow` gains `uid` prop, inline edit, transition buttons; analyses table gains checkbox column and bulk toolbar; `onMutated` prop threading |
+```
+POST /ingest/{instrument_type}
+  body: {files: [{filename, content}], method_id, context: {...}}
+      ↓
+  plugin = get_plugin(instrument_type)
+      ↓
+  parsed = plugin.parse(files)                          # ParsedData
+  if parsed.errors: return 422
+      ↓
+  result = plugin.calculate(parsed, context)            # CalculatedResult
+      ↓
+  Write InstrumentResult row
+    (instrument_type, sample_id_label, method_id, result_numeric,
+     result_unit, result_pass, result_data, calculation_trace, raw_input)
+      ↓
+  [HPLC only] Write HPLCAnalysis row with instrument_result_id FK
+      ↓
+  Return InstrumentResult.id + summary to frontend
+```
 
-### Files That Do Not Change
+### Manual Entry Flow (Endotoxin, Sterility)
 
-| File | Why Untouched |
-|------|---------------|
-| `src/components/dashboard/EditableField.tsx` | Used as-is; or its pattern replicated inline in AnalysisRow |
-| `src/store/ui-store.ts` | No new global state needed |
-| `integration-service/app/api/desktop.py` | Reference only; not modified |
-| `integration-service/app/adapters/senaite.py` | Reference only; not modified |
-| Any other component | Edits are fully contained |
+```
+POST /ingest/manual
+  body: {instrument_type, method_id, manual_data: {...}}
+      ↓
+  plugin = get_plugin(instrument_type)
+  if not plugin.supports_manual_entry(): return 422
+      ↓
+  parsed = ParsedData(instrument_type, raw_files=[], data=manual_data, ...)
+  result = plugin.calculate(parsed, context)
+      ↓
+  Write InstrumentResult row (ingest_source="manual")
+      ↓
+  Return InstrumentResult.id + summary to frontend
+```
 
----
+### SENAITE Push Flow (Unchanged Pattern)
 
-## Suggested Build Order
-
-This order minimizes risk by making each step independently verifiable before proceeding.
-
-### Step 1: Add `uid` to the Data Model (Prerequisite, ~30 min)
-
-1. In `backend/main.py` `SenaiteAnalysis` model: add `uid: Optional[str] = None`
-2. In the lookup endpoint where analyses are built (line ~5304): map `an_item.get("uid", "")` into the model
-3. In `src/lib/api.ts` `SenaiteAnalysis` interface: add `uid: string | null`
-
-**Verify:** Reload a sample in the UI. Open browser devtools, check the network response for `/wizard/senaite/lookup` — analysis items should now include `uid` populated with SENAITE UIDs (not empty strings).
-
-### Step 2: Backend Endpoints (No Frontend Yet, ~1 hour)
-
-1. Add `AnalysisResultRequest`, `AnalysisResultResponse`, `AnalysisTransitionRequest`, `AnalysisTransitionResponse` Pydantic models to `backend/main.py`
-2. Add `POST /wizard/senaite/analyses/{uid}/result` endpoint
-3. Add `POST /wizard/senaite/analyses/{uid}/transition` endpoint
-4. Follow the `update_senaite_sample_fields` error handling pattern exactly (JSON body first, form-encoded fallback, timeout handling)
-
-**Verify:** Use curl or the FastAPI `/docs` swagger UI to manually call the endpoints with a real SENAITE analysis UID. Confirm result values set and transitions fire in SENAITE.
-
-### Step 3: Inline Result Editing in `AnalysisRow` (~2 hours)
-
-1. Add `uid` and `onMutated` to `AnalysisRow` props
-2. Add local state: `editing`, `draft`, `saving`
-3. Replace the static result `<td>` with an interactive cell:
-   - Non-editable states (verified, published): static display as before
-   - Editable states (unassigned, assigned, to_be_verified): click-to-edit using the EditableField pattern
-4. Wire the save handler to `updateAnalysisResult(uid, draft)` → on success call `onMutated()`
-5. Thread `onMutated={() => fetchSample(sampleId)}` from `SampleDetails` into each `AnalysisRow`
-
-**Verify:** Click a result cell on an unassigned analysis. Edit the value. Save. Confirm SENAITE shows the updated result. Confirm the UI refreshes.
-
-### Step 4: Per-Row Transition Buttons (~1.5 hours)
-
-1. Add a narrow "Actions" column to the analyses table header
-2. In `AnalysisRow`, render action buttons conditional on `review_state`:
-   - `unassigned` / `assigned`: "Submit" button (only if `result` is non-null)
-   - `to_be_verified`: "Verify" and "Reject" buttons
-   - `verified` / `published`: no buttons (or empty cell)
-3. Each button calls `transitionAnalysis(uid, transitionName)` → on success call `onMutated()`
-4. Disable all row controls when `saving` is true
-
-**Verify:** Submit an analysis with a result. Verify an analysis in to_be_verified state. Confirm sample-level state updates if all analyses transition (SENAITE auto-transition).
-
-### Step 5: Bulk Actions (~2 hours)
-
-1. Add checkbox column to table (leftmost column)
-2. Add `selectedUids` state to `SampleDetails` (`useState<Set<string>>`)
-3. Wire checkboxes: only show on rows in actionable states; "select all" checkbox in header
-4. Add bulk toolbar above progress bar (appears when `selectedUids.size > 0`)
-5. Implement sequential bulk submit and verify with progress counter
-6. Single `fetchSample` refresh after all operations complete
-
-**Verify:** Select multiple analyses, bulk submit, observe sequential processing and single refresh.
+```
+POST /results/{instrument_result_id}/push-senaite
+      ↓
+  Load InstrumentResult
+  Load AnalysisService for this result's analysis_service_id
+      ↓
+  httpx POST to integration-service or direct SENAITE:
+    keyword = analysis_service.keyword
+    result_value = instrument_result.result_numeric or str(instrument_result.result_pass)
+      ↓
+  Update InstrumentResult.senaite_pushed_at
+```
 
 ---
 
-## Key Integration Constraints
+## Component Boundaries
 
-### SENAITE State Machine Constraints
+### New vs. Modified vs. Unchanged
 
-These are observed behaviors from the existing integration-service implementation — not SENAITE documentation. Treat as HIGH confidence for the specific SENAITE instance but verify during Step 2 testing:
+| Component | Status | Change |
+|-----------|--------|--------|
+| `backend/instruments/registry.py` | NEW | Plugin registry dict + get_plugin() |
+| `backend/instruments/base.py` | NEW | Protocol definitions |
+| `backend/instruments/hplc/plugin.py` | NEW | Thin shim wrapping existing parser + processor |
+| `backend/instruments/endotoxin/plugin.py` | NEW | EU/mL plugin |
+| `backend/instruments/sterility/plugin.py` | NEW | Pass/fail plugin |
+| `backend/models.py` — `Method` | NEW (rename+extend) | Replaces `HplcMethod`; add `method_type`, `config` JSON |
+| `backend/models.py` — `InstrumentResult` | NEW | Generic result table |
+| `backend/models.py` — `HPLCAnalysis` | MODIFIED (additive) | Add `instrument_result_id` FK only |
+| `backend/models.py` — `Instrument` | UNCHANGED | `instrument_type` field already exists |
+| `backend/models.py` — `AnalysisService` | UNCHANGED | `category` field sufficient |
+| `backend/parsers/peakdata_csv_parser.py` | UNCHANGED | Wrapped by HplcPlugin shim |
+| `backend/calculations/hplc_processor.py` | UNCHANGED | Wrapped by HplcPlugin shim |
+| `backend/calculations/engine.py` | UNCHANGED | FORMULA_REGISTRY stays for legacy path |
+| `backend/main.py` | MODIFIED | Add new ingest endpoints; existing HPLC endpoints stay intact during transition |
+| Junction tables `instrument_methods` | MODIFIED | Point at `methods.id` instead of `hplc_methods.id` |
+| Junction tables `peptide_methods` | MODIFIED | Point at `methods.id` |
 
-- `submit` transition only works when analysis is in `unassigned` state (the integration-service validates this explicitly at line 1084 in desktop.py)
-- Setting a `Result` value does not auto-submit — the transition must be fired explicitly
-- Verifying all analyses may auto-transition the parent sample to `to_be_verified` or higher (SENAITE workflow automation). This is why `fetchSample` after transitions is essential — it captures sample-level state changes the UI didn't initiate.
-- `to_be_verified` analyses can have their results changed (the result set step works on any non-locked state), but whether `submit` is re-triggerable from `to_be_verified` needs verification against the live instance.
+### Integration With Existing Worksheet Flow
 
-### No Parallel Writes to Same Sample
+`WorksheetItem` has `instrument_uid` (SENAITE instrument UID) but no FK to local `Instrument`. No change needed — the worksheet tracks assignment intent; `InstrumentResult` records the actual execution. Link is through `sample_id_label` matching `WorksheetItem.sample_id`.
 
-As noted in the bulk flow: do not fire concurrent `transitionAnalysis` calls for analyses on the same sample. SENAITE's workflow automation (auto-transitions on the parent sample) can produce race conditions if multiple analysis transitions arrive simultaneously. Use sequential await chains in the bulk action loop.
+### Integration With Existing AnalysisService → Instrument → Method Chain
 
-### Refresh After Transition Captures Sample-Level State
+Current state: `AnalysisService` → `Peptide` (via `peptide_id`), `Peptide` → `HplcMethod` (via `peptide_methods`), `HplcMethod` → `Instrument` (via `instrument_methods`).
 
-After any analysis transition, the sample's own `review_state` may change (SENAITE auto-transitions). The full `fetchSample` refresh is the correct mechanism — it pulls the updated sample state and all updated analysis states in one call. Do not attempt to patch the local `data` object directly after transitions.
+Post-migration state: Same chain but `HplcMethod` → `Method` (renamed). The `method_type` discriminator on `Method` lets the frontend and backend filter methods to only show HPLC methods for HPLC analysis services, endotoxin methods for endotoxin services, etc.
 
-### Result Editing Permissions by State
+New query pattern:
+```python
+# Get methods valid for a specific instrument type
+methods = session.query(Method).filter(
+    Method.method_type == "endotoxin",
+    Method.active == True
+).all()
+```
 
-Only allow result editing on analyses in states where SENAITE will accept a `Result` update. Safe states based on the integration-service implementation: `unassigned`, `assigned`. Analyses in `to_be_verified`, `verified`, or `published` should display results as read-only. If SENAITE does accept result updates in `to_be_verified` (retesting scenario), this can be unlocked in a follow-on task.
+---
+
+## Build Order (Dependency-Aware)
+
+This order ensures HPLC never breaks during migration.
+
+### Phase 1: Schema Foundation (No App Logic Change)
+
+1. Add `Method` table (new, separate from `hplc_methods`)
+2. Add `InstrumentResult` table (new)
+3. Seed `Method` rows from existing `hplc_methods` rows (data migration)
+4. Add new junction tables `instrument_methods_v2`, `analyte_methods` pointing at `methods.id`
+5. Seed junction rows from existing `instrument_methods`, `peptide_methods`
+6. Add `instrument_result_id` FK to `HPLCAnalysis` (nullable, no existing rows break)
+7. Update `Instrument.methods` relationship to use `instrument_methods_v2`
+
+**Verify:** All existing HPLC endpoints still function. No regressions.
+
+### Phase 2: Plugin Registry (No Schema Change)
+
+1. Create `backend/instruments/` module structure
+2. Define `base.py` Protocol
+3. Create `registry.py` with `register()` and `get_plugin()`
+4. Create `HplcPlugin` shim wrapping existing parser + processor
+5. Register `HplcPlugin` at app startup in `main.py`
+
+**Verify:** `get_plugin("hplc")` returns the plugin; `parse()` and `calculate()` produce correct results on known HPLC test data.
+
+### Phase 3: New Ingest Endpoints (HPLC via new path, legacy path stays)
+
+1. Add `POST /ingest/hplc` endpoint that uses `HplcPlugin` + writes `InstrumentResult` + writes `HPLCAnalysis` with `instrument_result_id`
+2. Keep existing HPLC ingest endpoint alive (don't delete, just don't use it for new ingests)
+3. Add `GET /results/instrument/{id}` endpoint returning `InstrumentResult`
+
+**Verify:** New HPLC ingest writes both `InstrumentResult` and `HPLCAnalysis` rows. Old HPLC ingest endpoint still works.
+
+### Phase 4: Endotoxin (New Plugin + Manual Entry)
+
+1. Create `EndotoxinPlugin` with CSV parser for LAL instrument format
+2. Register `EndotoxinPlugin`
+3. Add `POST /ingest/endotoxin` and `POST /ingest/manual` endpoints
+4. Add endotoxin-specific `Method` admin UI (frontend)
+5. Add endotoxin result review page (frontend)
+
+**Verify:** Endotoxin CSV ingests produce `InstrumentResult` rows with `result_numeric` (EU/mL) and correct `result_pass`.
+
+### Phase 5: Sterility (Manual Entry Only)
+
+1. Create `SterilityPlugin` (no parser)
+2. Register `SterilityPlugin`
+3. Wire sterility through `POST /ingest/manual` (no new endpoint needed)
+4. Add sterility result entry UI (frontend)
+
+**Verify:** Manual sterility entry produces `InstrumentResult` with `result_pass = True/False`.
+
+### Phase 6: Decommission Legacy HPLC Path (Optional, After Validation)
+
+1. Remove old `hplc_methods` table (after confirming all methods migrated to `methods`)
+2. Remove old junction tables
+3. Remove old HPLC-specific ingest endpoint
 
 ---
 
 ## Anti-Patterns to Avoid
 
-### Parallel Bulk Writes
+### Using SQLAlchemy Polymorphic Inheritance for Result Types
 
-**What goes wrong:** `Promise.all(selectedUids.map(uid => transitionAnalysis(uid, 'submit')))` — concurrent writes race in SENAITE's workflow engine, producing inconsistent parent sample state.
+**What people do:** Define `InstrumentResult` with `__mapper_args__ = {"polymorphic_on": "instrument_type"}` and create `HPLCResult(InstrumentResult)`, `EndotoxinResult(InstrumentResult)` subclasses.
 
-**Instead:** `for (const uid of selectedUids) { await transitionAnalysis(uid, transition) }`
+**Why it's wrong:** SQLAlchemy's joined-table inheritance requires a JOIN for every query on the parent table. Cross-type analytics queries (the primary goal of this milestone) become slow and complex. The union of typed columns that vary by type is best handled by JSON config + a few typed columns for commonly-queried fields — not inheritance.
 
-### Patching Local State Instead of Refreshing
+**Do this instead:** Single `InstrumentResult` table with `instrument_type` discriminator, `result_numeric`, `result_pass`, and `result_data` JSON. No inheritance.
 
-**What goes wrong:** After a transition, manually updating `data.analyses[i].review_state = 'to_be_verified'` in local state. This misses sample-level state changes that SENAITE may have fired automatically.
+### Migrating HPLCAnalysis In-Place
 
-**Instead:** Always call `fetchSample(sampleId)` after any mutation. The full refresh is fast (sub-second for the lookup endpoint) and guarantees consistency with SENAITE's actual state.
+**What people do:** ALTER TABLE `hplc_analyses` to rename it to `instrument_results`, drop HPLC-specific columns, move data to JSON.
 
-### Converting SampleDetails to TanStack Query Mid-Milestone
+**Why it's wrong:** `HPLCAnalysis` has 25+ columns, cross-references from `CalibrationCurve`, `WizardSession`, a separate-database `sample_prep_id` (no FK possible), chromatogram data, and debug logs. An in-place migration touches every existing HPLC record. One mistake corrupts years of results.
 
-**What goes wrong:** The component is 1400+ lines. Refactoring state management mid-milestone dramatically increases scope and risk of regressions in unrelated features (COA editing, remarks, additional COAs).
+**Do this instead:** Create `InstrumentResult` as a new table alongside `HPLCAnalysis`. Add one FK column (`instrument_result_id`) to `HPLCAnalysis`. New ingests write both tables; old records remain queryable via `HPLCAnalysis` directly.
 
-**Instead:** Use the existing `fetchSample` imperative refresh as the post-mutation mechanism. A TanStack Query migration is a valid future cleanup task, scoped separately.
+### Embedding Instrument Logic in main.py
 
-### Combining Result Set and Transition in One Endpoint
+**What people do:** Add a new `if instrument_type == "endotoxin": ... elif instrument_type == "sterility": ...` block directly in the ingest endpoint in `main.py`.
 
-**What goes wrong:** A single "submit result" endpoint that sets value and fires `submit` transition in one call. This removes the lab tech's opportunity to set a value and review it before formally submitting for verification.
+**Why it's wrong:** `main.py` is already ~3000 lines. Adding per-type branches makes each new instrument type a 3000-line-file modification. Testing individual instrument types requires the full app context.
 
-**Instead:** Two explicit endpoints. The UI can offer a "Set & Submit" convenience button that calls them sequentially, but the backend stays intentionally decomposed.
+**Do this instead:** Plugin registry with one file per type. `main.py` ingest endpoint calls `get_plugin(instrument_type).parse()` and `.calculate()`. Adding a new type = create a new plugin file, register it. No changes to `main.py`.
 
-### Using Integration-Service Endpoints from Accu-Mk1 Frontend
+### Hardcoding Instrument Types as Enums Checked Everywhere
 
-**What goes wrong:** Calling the integration-service's `POST /samples/{id}/results` from the Accu-Mk1 frontend. The integration-service uses API key auth (X-API-Key header), a different auth model than Accu-Mk1's JWT Bearer tokens. Additionally, that endpoint takes keywords (not UIDs) and does a keyword→UID lookup, adding an unnecessary round trip.
+**What people do:** `InstrumentType = Literal["hplc", "endotoxin", "sterility"]` referenced in 15 places across the codebase.
 
-**Instead:** Add new endpoints directly in `backend/main.py` that take UIDs and proxy to SENAITE. The integration-service is a reference implementation, not a dependency.
+**Why it's wrong:** Every new instrument type requires grep-and-update across all those files.
+
+**Do this instead:** `registered_types()` from the registry is the single source of valid instrument types. Validation at the ingest endpoint: `if instrument_type not in registered_types(): raise HTTPException(422)`. Nothing else needs to know the list.
+
+### Separate Parse and Calculate Registries
+
+**What people do:** `PARSER_REGISTRY["hplc"] = HplcParser` and `CALCULATOR_REGISTRY["hplc"] = HplcCalculator` as separate dicts.
+
+**Why it's wrong:** Parser output shape must match calculator input shape exactly. Separating them allows mismatched pairs to be registered without detection until runtime.
+
+**Do this instead:** One plugin per type that owns both `parse()` and `calculate()`. The plugin is the contract between parsing and calculation for that type.
+
+---
+
+## Integration Points
+
+### External Services
+
+| Service | Integration Pattern | Notes |
+|---------|---------------------|-------|
+| SENAITE LIMS | HTTP POST via httpx, same as current | `InstrumentResult` → `AnalysisService.keyword` → SENAITE update; no changes to SENAITE integration layer |
+| Integration-service | HTTP proxy from Accu-Mk1 backend | Unchanged; integration-service doesn't know about `InstrumentResult` |
+| accumark_mk1 PostgreSQL DB | `sample_prep_id` integer column, no FK | Unchanged; `InstrumentResult.sample_prep_id` follows same pattern as `HPLCAnalysis.sample_prep_id` |
+
+### Internal Boundaries
+
+| Boundary | Communication | Notes |
+|----------|---------------|-------|
+| `main.py` ↔ plugin registry | `get_plugin(type)` → Protocol methods | Only boundary: parse() and calculate(). Registry imported at startup. |
+| Plugin ↔ existing parsers/calculators | Direct Python import | HplcPlugin imports from `parsers/peakdata_csv_parser.py` and `calculations/hplc_processor.py`. No interface changes. |
+| `InstrumentResult` ↔ `HPLCAnalysis` | FK: `hplc_analyses.instrument_result_id` | Nullable FK. Old HPLC records: NULL. New records: populated. |
+| `Method` ↔ existing `Instrument` | `instrument_methods_v2` junction table | New junction table replaces `instrument_methods` |
+| `Method` ↔ `Peptide` | `analyte_methods` junction table | New junction table replaces `peptide_methods` |
+| Frontend ↔ `InstrumentResult` | TanStack Query → FastAPI REST | New endpoints return `InstrumentResult` shape; frontend types updated in `api.ts` |
 
 ---
 
 ## Scalability Considerations
 
-This is a lab desktop application. Scalability concerns are about correctness, not load.
+This is a local-first lab desktop app. Scalability concerns are about data volume and query performance, not HTTP load.
 
-| Concern | Approach |
-|---------|----------|
-| SENAITE rate limiting | Not an observed issue at lab scale; sequential bulk operations naturally limit request rate |
-| Stale display after transition | Full `fetchSample` refresh after every mutation guarantees consistency |
-| Many analyses per sample | The analyses table already handles filtering; bulk actions apply only to selected rows |
-| Sample-level state divergence | `fetchSample` refresh is the single source of truth; no client-side state prediction |
+| Scale | Architecture Adjustments |
+|-------|--------------------------|
+| 1-2 instrument types, <1000 results | Current approach works. No indexes needed beyond PK. |
+| 3-5 instrument types, 10k+ results | Add index on `(instrument_type, analyte_id, created_at)` for trending queries. SQLite handles this well. |
+| Cross-sample analytics with date ranges | Add index on `(sample_id_label, instrument_type)` for sample-level lookups. Consider a `result_date` column if `created_at` isn't reliable. |
+| Large `result_data` JSON | Keep calculation traces in `calculation_trace` JSON column; keep primary results in typed `result_numeric`/`result_pass` columns. Analytics queries never touch the JSON. |
 
 ---
 
 ## Sources
 
-All claims verified directly against the codebase on 2026-02-24.
+All claims verified against actual codebase files on 2026-04-05.
 
 | Claim | Source | Confidence |
 |-------|--------|------------|
-| `SenaiteAnalysis` missing `uid` field | `backend/main.py` line 5005 + `src/lib/api.ts` line 2016 | HIGH |
-| SENAITE two-step pattern: set Result then transition | `integration-service/app/adapters/senaite.py` lines 901-997 | HIGH |
-| Same httpx proxy pattern in `update_senaite_sample_fields` | `backend/main.py` lines 5760-5837 | HIGH |
-| `EditableField` optimistic update pattern with rollback | `src/components/dashboard/EditableField.tsx` lines 70-107 | HIGH |
-| `fetchSample` imperative refresh already used post-mutation | `SampleDetails.tsx` line 1167: `onAdded={() => fetchSample(data.sample_id)}` | HIGH |
-| `submit` transition validates `unassigned` state | `integration-service/app/api/desktop.py` lines 1084-1090 | HIGH |
-| Analysis UIDs available in SENAITE API response | `integration-service/app/adapters/senaite.py` line 882: `uid=item.get("uid", "")` | HIGH |
-| Accu-Mk1 backend uses JWT Bearer, not API key | `backend/main.py` + `backend/auth.py` pattern | HIGH |
-| Integration-service uses X-API-Key header | `integration-service/app/api/desktop.py` lines 45-71 | HIGH |
+| `HplcMethod` columns | `backend/models.py` lines 228-253 | HIGH |
+| `HPLCAnalysis` columns | `backend/models.py` lines 420-476 | HIGH |
+| `instrument_methods` FK points at `hplc_methods.id` | `backend/models.py` lines 206-214 | HIGH |
+| `peptide_methods` FK points at `hplc_methods.id` | `backend/models.py` lines 217-225 | HIGH |
+| `FORMULA_REGISTRY` pattern in `engine.py` | `backend/calculations/engine.py` lines 19-26 | HIGH |
+| `hplc_processor.py` is pure-function (no DB access) | `backend/calculations/hplc_processor.py` — no SQLAlchemy imports | HIGH |
+| `sample_prep_id` is plain Integer (cross-DB, no FK) | `backend/models.py` line 459, comment on line 458 | HIGH |
+| `Instrument.instrument_type` field exists | `backend/models.py` line 129 | HIGH |
+| `AnalysisService.category` field exists | `backend/models.py` line 153 | HIGH |
+| `Result` table has `calculation_type` + JSON fields | `backend/models.py` lines 104-115 | HIGH |
+| SQLAlchemy 2.0 `mapped_column` style used throughout | `backend/models.py` — all models use `Mapped[T]` | HIGH |
+
+---
+*Architecture research for: Multi-instrument automation framework (Accu-Mk1 v0.30.0)*
+*Researched: 2026-04-05*
