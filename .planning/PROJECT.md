@@ -12,21 +12,26 @@ Streamlined morning workflow: import CSV → review batch → calculate purity �
 
 ### Validated
 
-(None yet — ship to validate)
+- ✓ Dual-mode operation: browser (localhost) and Tauri desktop shell — v0.4.x
+- ✓ CSV/Excel HPLC file import from watched local directory — v0.5.0
+- ✓ Purity % calculation in Python backend — v0.5.0
+- ✓ Batch review UI: see all results, approve/reject individual samples — v0.12.0
+- ✓ SENAITE integration: update existing samples with calculated results — v0.5.0
+- ✓ Modern, polished UI aesthetic (ClickUp/Figma-inspired visual design) — v0.8.0
+- ✓ Local SQLite database for job state, results, audit logs — v0.4.x
+- ✓ File cache for raw HPLC exports — v0.5.0
+- ✓ User authentication (login, registration, password reset) — v0.6.0
+- ✓ Role-based access control (standard + admin roles) — v0.6.0
+- ✓ Protected routes and API endpoints — v0.6.0
+- ✓ Service groups with M2M membership and admin UI — v0.28.0
+- ✓ Received samples inbox with priority, aging, bulk actions — v0.28.0
+- ✓ Worksheet creation, detail management, and completion — v0.28.0
+- ✓ Worksheets list with KPI stats and filters — v0.28.0
+- ✓ SENAITE analyst assignment (local, read-only in SENAITE) — v0.28.0
 
 ### Active
 
-- [ ] Dual-mode operation: browser (localhost) and Tauri desktop shell
-- [ ] CSV/Excel HPLC file import from watched local directory
-- [ ] Purity % calculation in Python backend
-- [ ] Batch review UI: see all results, approve/reject individual samples
-- [ ] SENAITE integration: update existing samples with calculated results
-- [ ] Modern, polished UI aesthetic (ClickUp/Figma-inspired visual design)
-- [ ] Local SQLite database for job state, results, audit logs
-- [ ] File cache for raw HPLC exports
-- [ ] User authentication (login, registration, password reset)
-- [ ] Role-based access control (standard + admin roles)
-- [ ] Protected routes and API endpoints
+(Next milestone will define active requirements)
 
 ### Out of Scope
 
@@ -54,18 +59,13 @@ Streamlined morning workflow: import CSV → review batch → calculate purity �
 - **Logic principle**: Backend owns all scientific calculations — UI never parses files or calculates metrics
 - **Audit principle**: All imports and pushes must be idempotent, traceable, repeatable
 
-## Current Milestone: v0.28.0 — Worksheet Feature (Custom Sample Assignment)
+## Current State (after v0.28.0)
 
-**Goal:** Replace SENAITE worksheet creation with a custom workflow supporting priority-based assignment, analysis-level tech routing via service groups, and 24hr SLA tracking.
+The application now supports the full worksheet workflow: service group admin, received samples inbox with priority/SLA tracking, worksheet creation from inbox, worksheet detail management, and a worksheets list with KPI stats. 74 files changed, +16,290 lines across 4 phases and 12 plans.
 
-**Target features:**
-- Service Groups data model + admin UI (group analysis services by department/discipline)
-- SENAITE Analyst assignment (push analyst field to SENAITE analyses)
-- Received Samples Queue ("Inbox") with priority tracking, aging timers, bulk actions
-- Worksheet creation from selected inbox items with service group grouping
-- Worksheet Detail view (manage items, reassign, complete)
-- Worksheets List with KPI summary stats
-- UI/UX designed with /ui-ux-pro-max skill; pages under HPLC Automation nav section
+## Previous Milestone: v0.28.0 — Worksheet Feature (COMPLETE)
+
+**Delivered:** Custom worksheet workflow replacing SENAITE worksheets — service groups admin, received samples inbox with priority queue and aging timers, worksheet detail drawer with item management, worksheets list with KPI stats and filters. 32 requirements, all complete.
 
 ## Previous Milestone: v0.26.0 — Standard Sample Preps & Calibration Curve Chromatograms (COMPLETE)
 
@@ -125,6 +125,9 @@ The New Analysis Wizard is fully delivered. Lab techs can now run a complete sam
 | JWT Bearer tokens | Works for both web browser and Tauri desktop modes | v0.6.0 |
 | Console password reset | Skip email infra for v1, log reset tokens to console/UI | v0.6.0 |
 | Backend port 8012 | Avoid conflicts with Docker services on 8008-8009 | v0.6.0 |
+| Local analyst assignment | SENAITE Analyst field is read-only; assignment stays in AccuMark | v0.28.0 |
+| Staging worksheet pattern | __inbox_staging__ as parking lot for bulk pre-assignments | v0.28.0 |
+| Stale data guard on worksheet creation | Verify sample state before committing worksheet | v0.28.0 |
 
 ## Evolution
 
@@ -144,4 +147,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-04-01 after Phase 18 (Worksheets List) complete — all v0.28.0 phases finished*
+*Last updated: 2026-04-06 after v0.28.0 milestone*
