@@ -6519,6 +6519,22 @@ INTEGRATION_SERVICE_API_KEY = os.environ.get("ACCU_MK1_API_KEY", "")
 COA_BUILDER_URL = os.environ.get("COA_BUILDER_URL", "")
 
 
+async def _notify_worksheet_assigned(sample_id: str) -> None:
+    """Fire-and-forget: tell Integration Service a sample was added to a worksheet."""
+    try:
+        url = f"{INTEGRATION_SERVICE_URL}/explorer/worksheet-assigned"
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                url,
+                json={"sample_id": sample_id},
+                headers={"X-API-Key": INTEGRATION_SERVICE_API_KEY},
+            )
+            resp.raise_for_status()
+            print(f"[INFO] worksheet_assigned notified for {sample_id}: {resp.json()}")
+    except Exception as e:
+        print(f"[WARN] worksheet_assigned notification failed for {sample_id}: {e}")
+
+
 async def _proxy_explorer_get(path: str) -> list[dict]:
     """Proxy a GET request to the Integration Service explorer API."""
     url = f"{INTEGRATION_SERVICE_URL}/explorer{path}"
@@ -11218,6 +11234,14 @@ async def create_worksheet(
     db.commit()
     db.refresh(ws)
 
+    # Notify integration service for each sample — order status → analyzing
+    items = db.execute(
+        select(WorksheetItem.sample_id).where(WorksheetItem.worksheet_id == ws.id)
+    ).scalars().all()
+    for sid in items:
+        if sid:
+            await _notify_worksheet_assigned(sid)
+
     return {
         "id": ws.id,
         "title": ws.title,
@@ -11498,6 +11522,10 @@ async def add_group_to_worksheet(
         db.delete(staging_item)
 
     db.commit()
+
+    # Notify integration service — order status → analyzing
+    await _notify_worksheet_assigned(data.sample_id)
+
     return {"status": "added", "item_id": item.id}
 
 
@@ -11576,6 +11604,10 @@ async def create_worksheet_from_drop(
         db.delete(staging_item)
 
     db.commit()
+
+    # Notify integration service — order status → analyzing
+    await _notify_worksheet_assigned(data.sample_id)
+
     return {"id": ws.id, "title": ws.title, "status": ws.status, "item_count": 1}
 
 
