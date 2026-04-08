@@ -135,12 +135,12 @@ function StockPrepVial({ session, vialNumber }: {
             <span className="flex h-6 w-6 items-center justify-center rounded-full bg-primary text-primary-foreground text-xs font-bold">
               1
             </span>
-            Peptide Sample + Septum
+            Weight of scintillation vial + cap (mg)
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
           <p className="text-sm text-muted-foreground">
-            Weigh the peptide sample vial with septum.
+            Weigh the scintillation vial with cap.
           </p>
           {error2a && (
             <Alert variant="destructive">
@@ -169,7 +169,7 @@ function StockPrepVial({ session, vialNumber }: {
           ) : (
             <WeightInput
               stepKey="stock_vial_empty_mg"
-              label="Peptide Sample + Septum weight (mg)"
+              label="Scintillation vial + cap weight (mg)"
               onAccept={handleAccept2a}
             />
           )}
@@ -184,12 +184,12 @@ function StockPrepVial({ session, vialNumber }: {
               <span className="flex h-6 w-6 items-center justify-center rounded-full bg-primary text-primary-foreground text-xs font-bold">
                 2
               </span>
-              Vial + Peptide Weight
+              Weight of scintillation vial + peptide + cap (mg)
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
             <p className="text-sm text-muted-foreground">
-              Add the peptide aliquot to the stock vial, then weigh the vial + cap + peptide.
+              Add the lyophilized peptide powder to the scintillation vial, then weigh the scintillation vial + cap + peptide.
             </p>
             {error2b && (
               <Alert variant="destructive">
@@ -208,7 +208,7 @@ function StockPrepVial({ session, vialNumber }: {
                   </span>
                   {meas2a && meas2b && (
                     <span className="text-xs text-muted-foreground ml-2">
-                      · aliquot: {(meas2b.weight_mg - meas2a.weight_mg).toFixed(2)} mg
+                      · peptide weight: {(meas2b.weight_mg - meas2a.weight_mg).toFixed(2)} mg
                     </span>
                   )}
                 </div>
@@ -224,7 +224,7 @@ function StockPrepVial({ session, vialNumber }: {
             ) : (
               <WeightInput
                 stepKey="stock_vial_with_peptide_mg"
-                label="Vial + cap + peptide weight (mg)"
+                label="Scintillation vial + cap + peptide weight (mg)"
                 onAccept={handleAccept2b}
               />
             )}

@@ -164,7 +164,7 @@ def create_sample_prep(data: dict) -> dict:
         "dil_vial_empty_mg", "dil_vial_with_diluent_mg", "dil_vial_final_mg",
         "actual_conc_ug_ml", "actual_diluent_vol_ul", "actual_stock_vol_ul",
         "actual_total_vol_ul", "status", "notes",
-        "is_blend", "components_json",
+        "is_blend", "components_json", "vial_data",
         "is_standard", "manufacturer", "standard_notes", "instrument_name", "instrument_id",
         "created_by_user_id", "created_by_email", "updated_by_user_id", "updated_by_email",
     ]

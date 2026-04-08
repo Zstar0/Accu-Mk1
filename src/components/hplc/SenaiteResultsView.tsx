@@ -52,11 +52,26 @@ function isRelevantAnalysis(name: string, peptide: string): boolean {
 }
 
 /**
+ * Resolve "Analyte N ..." titles to peptide names using the name map.
+ */
+function resolveAnalysisName(title: string, nameMap: Map<number, string>): string {
+  const match = title.match(/^Analyte\s+(\d)\s*(.*)/i)
+  if (match?.[1]) {
+    const slot = parseInt(match[1], 10)
+    const suffix = match[2] ?? ''
+    const peptideName = nameMap.get(slot)
+    if (peptideName) return `${peptideName} ${suffix}`.trim().toLowerCase()
+  }
+  return title.toLowerCase()
+}
+
+/**
  * Build a list of Senaite analyses that can be auto-filled from a single HPLC result.
  */
 function buildAutoFillMappings(
   result: HPLCAnalysisResult,
   analyses: SenaiteAnalysis[],
+  nameMap: Map<number, string>,
 ): AutoFillMapping[] {
   const peptide = result.peptide_abbreviation?.toLowerCase()
   if (!peptide) return []
@@ -67,7 +82,7 @@ function buildAutoFillMappings(
     if (!a.uid) continue
     if (!FILLABLE_STATES.has(a.review_state)) continue
 
-    const name = (a.title ?? a.keyword ?? '').toLowerCase()
+    const name = resolveAnalysisName(a.title ?? a.keyword ?? '', nameMap)
     if (!isRelevantAnalysis(name, peptide)) continue
 
     if (name.includes('purity') && result.purity_percent != null) {
@@ -115,16 +130,19 @@ function buildAutoFillMappings(
  * Aggregate auto-fill mappings from multiple HPLC results (blend support).
  * Per-analyte matches (e.g. "KPV Purity") are claimed first; generic matches
  * (e.g. "Peptide Purity") only fill if unclaimed.
+ * Also fills blend-level aggregates: Blend Purity, Peptide Total Quantity,
+ * Peptide ID (HPLC).
  */
 function buildAllAutoFillMappings(
   results: HPLCAnalysisResult[],
   analyses: SenaiteAnalysis[],
+  nameMap: Map<number, string>,
 ): AutoFillMapping[] {
   const allMappings: AutoFillMapping[] = []
   const claimed = new Set<string>()
 
   for (const result of results) {
-    const mappings = buildAutoFillMappings(result, analyses)
+    const mappings = buildAutoFillMappings(result, analyses, nameMap)
     for (const m of mappings) {
       const uid = m.analysis.uid ?? ''
       if (!claimed.has(uid)) {
@@ -133,6 +151,55 @@ function buildAllAutoFillMappings(
       }
     }
   }
+
+  // Blend-level aggregates (only when multiple results)
+  if (results.length > 1) {
+    const totalQty = results.reduce((sum, r) => sum + (r.quantity_mg ?? 0), 0)
+    const weightedPuritySum = results.reduce(
+      (sum, r) => sum + (r.quantity_mg ?? 0) * (r.purity_percent ?? 0), 0
+    )
+    const blendPurity = totalQty > 0 ? weightedPuritySum / totalQty : 0
+    const blendIdentity = results.every(r => r.identity_conforms === true)
+
+    for (const a of analyses) {
+      if (!a.uid || claimed.has(a.uid)) continue
+      if (!FILLABLE_STATES.has(a.review_state)) continue
+      const name = (a.title ?? a.keyword ?? '').toLowerCase()
+
+      if (name.includes('blend purity') && blendPurity > 0) {
+        claimed.add(a.uid)
+        allMappings.push({
+          analysis: a,
+          value: blendPurity.toFixed(2),
+          label: `${blendPurity.toFixed(2)}%`,
+          type: 'purity',
+        })
+      } else if (name === 'peptide id (hplc)' || (name.startsWith('peptide') && name.includes('id') && name.includes('hplc'))) {
+        // Blend-level identity (Peptide ID) — conforms only if all analytes conform
+        const opts = a.result_options ?? []
+        let value: string
+        if (opts.length > 0) {
+          const target = blendIdentity ? 'conform' : 'not conform'
+          const altTarget = blendIdentity ? 'pass' : 'fail'
+          const match = opts.find(o => {
+            const v = o.value.toLowerCase()
+            return v.includes(target) || v.includes(altTarget)
+          })
+          value = match?.value ?? (blendIdentity ? '1' : '0')
+        } else {
+          value = blendIdentity ? 'Conforms' : 'Does Not Conform'
+        }
+        claimed.add(a.uid)
+        allMappings.push({
+          analysis: a,
+          value,
+          label: blendIdentity ? 'Conforms' : 'Does Not Conform',
+          type: 'identity',
+        })
+      }
+    }
+  }
+
   return allMappings
 }
 
@@ -222,7 +289,7 @@ export function SenaiteResultsView({ prep, results: hplcResults, onBack, onCompl
   const pendingCount = analyses.length - verifiedCount
 
   // Auto-fill mappings
-  const autoFillMappings = senaiteData ? buildAllAutoFillMappings(hplcResults, analyses) : []
+  const autoFillMappings = senaiteData ? buildAllAutoFillMappings(hplcResults, analyses, analyteNameMap) : []
 
   // ── Auto-fill handler ───────────────────────────────────────────────────────
 
@@ -640,7 +707,16 @@ export function SenaiteResultsView({ prep, results: hplcResults, onBack, onCompl
                       ) : (
                         <div className="w-3 h-3 rounded-full border border-border shrink-0" />
                       )}
-                      <span className="text-muted-foreground">{m.analysis.title}</span>
+                      <span className="text-muted-foreground">{(() => {
+                        const match = m.analysis.title.match(/^Analyte\s+(\d)\s*(.*)/i)
+                        if (match?.[1]) {
+                          const slot = parseInt(match[1], 10)
+                          const suffix = match[2] ?? ''
+                          const name = analyteNameMap.get(slot)
+                          if (name) return `${name} ${suffix}`.trim()
+                        }
+                        return m.analysis.title
+                      })()}</span>
                       <span className="text-foreground font-mono font-medium">{m.label}</span>
                     </div>
                   )

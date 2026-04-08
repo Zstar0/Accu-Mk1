@@ -7863,6 +7863,88 @@ async def record_measurement(
     db.add(new_m)
     db.commit()
     db.refresh(session)
+
+    # Auto-sync: if a sample prep already exists for this session, update it
+    # so vial_data stays current without requiring a manual re-save
+    try:
+        from mk1_db import get_mk1_db as _sync_db, update_sample_prep as _sync_update
+        from psycopg2.extras import RealDictCursor as _sync_RDC
+        with _sync_db() as _sconn:
+            with _sconn.cursor(cursor_factory=_sync_RDC) as _scur:
+                _scur.execute(
+                    "SELECT id FROM sample_preps WHERE wizard_session_id = %s",
+                    [session_id],
+                )
+                _existing_prep = _scur.fetchone()
+        if _existing_prep:
+            # Re-run the full save logic by calling the save endpoint internally
+            response = _build_session_response(session, db)
+            calcs = response.calculations or {}
+            current = {
+                m.step_key: m.weight_mg
+                for m in session.measurements
+                if m.is_current and m.vial_number == 1
+            }
+            update_data = {
+                "stock_vial_empty_mg": current.get("stock_vial_empty_mg"),
+                "stock_vial_loaded_mg": current.get("stock_vial_loaded_mg"),
+                "stock_conc_ug_ml": calcs.get("stock_conc_ug_ml"),
+                "required_diluent_vol_ul": calcs.get("required_diluent_vol_ul"),
+                "required_stock_vol_ul": calcs.get("required_stock_vol_ul"),
+                "dil_vial_empty_mg": current.get("dil_vial_empty_mg"),
+                "dil_vial_with_diluent_mg": current.get("dil_vial_with_diluent_mg"),
+                "dil_vial_final_mg": current.get("dil_vial_final_mg"),
+                "actual_conc_ug_ml": calcs.get("actual_conc_ug_ml"),
+                "actual_diluent_vol_ul": calcs.get("actual_diluent_vol_ul"),
+                "actual_stock_vol_ul": calcs.get("actual_stock_vol_ul"),
+                "actual_total_vol_ul": calcs.get("actual_total_vol_ul"),
+            }
+            # Rebuild vial_data for blends
+            if response.vial_calculations:
+                peptide = session.peptide
+                if peptide and peptide.is_blend:
+                    comp_rows = db.execute(
+                        select(Peptide, blend_components.c.vial_number)
+                        .join(blend_components, blend_components.c.component_id == Peptide.id)
+                        .where(blend_components.c.blend_id == peptide.id)
+                        .order_by(blend_components.c.display_order)
+                    ).all()
+                    vial_data_list = []
+                    for vial_key, vc in response.vial_calculations.items():
+                        vn = int(vial_key)
+                        vp = (session.vial_params or {}).get(vial_key, {})
+                        v_current = {
+                            m.step_key: m.weight_mg
+                            for m in session.measurements
+                            if m.is_current and m.vial_number == vn
+                        }
+                        vd_entry = {
+                            "vial_number": vn,
+                            "component_ids": [c.id for c, cvn in comp_rows if (cvn or 1) == vn],
+                            "component_abbreviations": [c.abbreviation for c, cvn in comp_rows if (cvn or 1) == vn],
+                            "declared_weight_mg": vp.get("declared_weight_mg"),
+                            "target_conc_ug_ml": vp.get("target_conc_ug_ml"),
+                            "target_total_vol_ul": vp.get("target_total_vol_ul"),
+                            "stock_vial_empty_mg": v_current.get("stock_vial_empty_mg"),
+                            "stock_vial_loaded_mg": v_current.get("stock_vial_loaded_mg"),
+                            "stock_conc_ug_ml": vc.get("stock_conc_ug_ml"),
+                            "required_diluent_vol_ul": vc.get("required_diluent_vol_ul"),
+                            "required_stock_vol_ul": vc.get("required_stock_vol_ul"),
+                            "dil_vial_empty_mg": v_current.get("dil_vial_empty_mg"),
+                            "dil_vial_with_diluent_mg": v_current.get("dil_vial_with_diluent_mg"),
+                            "dil_vial_final_mg": v_current.get("dil_vial_final_mg"),
+                            "actual_conc_ug_ml": vc.get("actual_conc_ug_ml"),
+                            "actual_diluent_vol_ul": vc.get("actual_diluent_vol_ul"),
+                            "actual_stock_vol_ul": vc.get("actual_stock_vol_ul"),
+                            "actual_total_vol_ul": vc.get("actual_total_vol_ul"),
+                        }
+                        vial_data_list.append(vd_entry)
+                    update_data["vial_data"] = json.dumps(vial_data_list)
+            _sync_update(_existing_prep["id"], update_data)
+            print(f"[INFO] Auto-synced sample prep {_existing_prep['id']} from session {session_id}")
+    except Exception as e:
+        print(f"[WARN] Auto-sync sample prep failed for session {session_id}: {e}")
+
     return _build_session_response(session, db)
 
 
