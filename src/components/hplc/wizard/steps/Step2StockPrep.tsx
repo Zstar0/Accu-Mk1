@@ -36,6 +36,7 @@ function StockPrepVial({ session, vialNumber }: {
   vialNumber: number
 }) {
   const isStandard = session.is_standard
+  const vialLabel = isStandard ? 'scintillation vial' : 'Autosampler vial'
 
   const [error2a, setError2a] = useState<string | null>(null)
   const [error2b, setError2b] = useState<string | null>(null)
@@ -135,12 +136,12 @@ function StockPrepVial({ session, vialNumber }: {
             <span className="flex h-6 w-6 items-center justify-center rounded-full bg-primary text-primary-foreground text-xs font-bold">
               1
             </span>
-            Weight of scintillation vial + cap (mg)
+            Weight of {vialLabel} + cap (mg)
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
           <p className="text-sm text-muted-foreground">
-            Weigh the scintillation vial with cap.
+            Weigh the {vialLabel} with cap.
           </p>
           {error2a && (
             <Alert variant="destructive">
@@ -169,7 +170,7 @@ function StockPrepVial({ session, vialNumber }: {
           ) : (
             <WeightInput
               stepKey="stock_vial_empty_mg"
-              label="Scintillation vial + cap weight (mg)"
+              label={`${isStandard ? 'Scintillation' : 'Autosampler'} vial + cap weight (mg)`}
               onAccept={handleAccept2a}
             />
           )}

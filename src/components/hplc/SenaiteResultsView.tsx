@@ -85,6 +85,10 @@ function buildAutoFillMappings(
     const name = resolveAnalysisName(a.title ?? a.keyword ?? '', nameMap)
     if (!isRelevantAnalysis(name, peptide)) continue
 
+    // Skip blend-level aggregates — handled in buildAllAutoFillMappings
+    if (name.includes('blend purity') || (name.includes('total') && name.includes('quantity'))) continue
+    if (name === 'peptide id (hplc)' || (name.startsWith('peptide') && name.includes('id') && name.includes('hplc'))) continue
+
     if (name.includes('purity') && result.purity_percent != null) {
       mappings.push({
         analysis: a,
@@ -152,8 +156,8 @@ function buildAllAutoFillMappings(
     }
   }
 
-  // Blend-level aggregates (only when multiple results)
-  if (results.length > 1) {
+  // Aggregate analyses: Peptide Total Quantity, Blend Purity, Peptide ID (HPLC)
+  {
     const totalQty = results.reduce((sum, r) => sum + (r.quantity_mg ?? 0), 0)
     const weightedPuritySum = results.reduce(
       (sum, r) => sum + (r.quantity_mg ?? 0) * (r.purity_percent ?? 0), 0
@@ -173,6 +177,14 @@ function buildAllAutoFillMappings(
           value: blendPurity.toFixed(2),
           label: `${blendPurity.toFixed(2)}%`,
           type: 'purity',
+        })
+      } else if (name.includes('total') && name.includes('quantity') && totalQty > 0) {
+        claimed.add(a.uid)
+        allMappings.push({
+          analysis: a,
+          value: totalQty.toFixed(2),
+          label: `${totalQty.toFixed(2)} mg`,
+          type: 'quantity',
         })
       } else if (name === 'peptide id (hplc)' || (name.startsWith('peptide') && name.includes('id') && name.includes('hplc'))) {
         // Blend-level identity (Peptide ID) — conforms only if all analytes conform

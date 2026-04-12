@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import {
   RefreshCw,
   XCircle,
@@ -150,6 +150,7 @@ interface ColumnFilters {
   id: string
   client_order_number: string
   verification_code: string
+  analytes: string
 }
 
 function SampleTable({
@@ -160,7 +161,10 @@ function SampleTable({
   hideTestSamples,
   onSelectSample,
   columnFilters,
+  committedFilters,
   onColumnFilterChange,
+  onColumnFilterCommit,
+  onColumnFilterClear,
 }: {
   samples: SenaiteSample[]
   loading: boolean
@@ -169,7 +173,10 @@ function SampleTable({
   hideTestSamples: boolean
   onSelectSample?: (sampleId: string) => void
   columnFilters: ColumnFilters
+  committedFilters: ColumnFilters
   onColumnFilterChange: (column: keyof ColumnFilters, value: string) => void
+  onColumnFilterCommit: () => void
+  onColumnFilterClear: (column: keyof ColumnFilters) => void
 }) {
   const navigateToOrderExplorer = useUIStore(
     state => state.navigateToOrderExplorer
@@ -187,14 +194,20 @@ function SampleTable({
     )
   }
 
-  // Client-side filtering: only hide test samples (column searches are now server-side)
+  // Client-side filtering: hide test samples + analyte search
   const filteredSamples = useMemo(() => {
     let result = samples
     if (hideTestSamples) {
       result = result.filter(s => s.client_id?.toLowerCase() !== TEST_CLIENT_ID)
     }
+    const analytesFilter = committedFilters.analytes.trim().toLowerCase()
+    if (analytesFilter) {
+      result = result.filter(s =>
+        s.analytes?.some(a => a.toLowerCase().includes(analytesFilter))
+      )
+    }
     return result
-  }, [samples, hideTestSamples])
+  }, [samples, hideTestSamples, committedFilters.analytes])
 
   const sortedSamples = useMemo(() => {
     return [...filteredSamples].sort((a, b) => compareSamples(a, b, sort))
@@ -253,6 +266,12 @@ function SampleTable({
       cellClassName: 'text-sm',
     },
     {
+      key: 'analytes' as SortColumn,
+      label: 'Analytes',
+      className: '',
+      cellClassName: 'text-sm',
+    },
+    {
       key: 'verification_code',
       label: 'Verification Code',
       className: 'w-36',
@@ -273,7 +292,7 @@ function SampleTable({
   ]
 
   // Columns that support inline search
-  const filterableColumns: (keyof ColumnFilters)[] = ['id', 'client_order_number', 'verification_code']
+  const filterableColumns: (keyof ColumnFilters)[] = ['id', 'client_order_number', 'analytes', 'verification_code']
 
   return (
     <div className="overflow-auto">
@@ -303,10 +322,20 @@ function SampleTable({
                     <input
                       value={columnFilters[col.key as keyof ColumnFilters]}
                       onChange={e => onColumnFilterChange(col.key as keyof ColumnFilters, e.target.value)}
-                      placeholder={`Search…`}
-                      className="w-full h-6 pl-5 pr-1 text-xs bg-muted/30 border border-border/30 rounded focus:outline-none focus:ring-1 focus:ring-ring/50"
+                      onKeyDown={e => { if (e.key === 'Enter') onColumnFilterCommit() }}
+                      placeholder={`Search… (Enter)`}
+                      className="w-full h-6 pl-5 pr-5 text-xs bg-muted/30 border border-border/30 rounded focus:outline-none focus:ring-1 focus:ring-ring/50"
                       onClick={e => e.stopPropagation()}
                     />
+                    {committedFilters[col.key as keyof ColumnFilters] && (
+                      <button
+                        type="button"
+                        onClick={e => { e.stopPropagation(); onColumnFilterClear(col.key as keyof ColumnFilters) }}
+                        className="absolute right-1 top-1/2 -translate-y-1/2 h-4 w-4 flex items-center justify-center rounded-full hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+                      >
+                        <X className="h-2.5 w-2.5" />
+                      </button>
+                    )}
                   </div>
                 ) : null}
               </TableHead>
@@ -353,6 +382,17 @@ function SampleTable({
                 )}
               </TableCell>
               <TableCell className="text-sm">{s.client_id ?? '—'}</TableCell>
+              <TableCell className="text-sm">
+                {s.analytes?.length > 0 ? (
+                  <div className="flex flex-wrap gap-1">
+                    {s.analytes.map(a => (
+                      <span key={a} className="inline-flex items-center rounded-md bg-muted px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground">
+                        {a}
+                      </span>
+                    ))}
+                  </div>
+                ) : '—'}
+              </TableCell>
               <TableCell className="font-mono text-sm text-muted-foreground">
                 {s.verification_code ?? '—'}
               </TableCell>
@@ -391,19 +431,30 @@ export function SenaiteDashboard() {
   const [searchResults, setSearchResults] = useState<SenaiteSample[] | null>(
     null
   )
-  const searchTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(
-    undefined
-  )
   const [columnFilters, setColumnFilters] = useState<ColumnFilters>({
     id: '',
     client_order_number: '',
     verification_code: '',
+    analytes: '',
+  })
+  const [committedFilters, setCommittedFilters] = useState<ColumnFilters>({
+    id: '',
+    client_order_number: '',
+    verification_code: '',
+    analytes: '',
   })
   const handleColumnFilterChange = useCallback((column: keyof ColumnFilters, value: string) => {
     setColumnFilters(prev => ({ ...prev, [column]: value }))
   }, [])
+  const handleColumnFilterCommit = useCallback(() => {
+    setCommittedFilters({ ...columnFilters })
+  }, [columnFilters])
+  const handleColumnFilterClear = useCallback((column: keyof ColumnFilters) => {
+    setColumnFilters(prev => ({ ...prev, [column]: '' }))
+    setCommittedFilters(prev => ({ ...prev, [column]: '' }))
+  }, [])
   // Alias for backward compat with search logic
-  const sampleIdSearch = columnFilters.id
+  const sampleIdSearch = committedFilters.id
 
   const loadTab = useCallback(
     async (tabId: string, _page = 0, searchQuery = '', searchField?: 'verification_code' | 'order_number') => {
@@ -491,15 +542,14 @@ export function SenaiteDashboard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // Debounced server-side search — fires on any column filter change
+  // Server-side search — fires when user commits filters (Enter key)
   useEffect(() => {
     if (!connected) return
-    clearTimeout(searchTimerRef.current)
 
     // Determine which filter is active (priority: id > order > verification)
-    const idQ = columnFilters.id.trim()
-    const orderQ = columnFilters.client_order_number.trim()
-    const verQ = columnFilters.verification_code.trim()
+    const idQ = committedFilters.id.trim()
+    const orderQ = committedFilters.client_order_number.trim()
+    const verQ = committedFilters.verification_code.trim()
 
     if (!idQ && !orderQ && !verQ) {
       // No filters active — reload normal tab data
@@ -507,22 +557,15 @@ export function SenaiteDashboard() {
       return
     }
 
-    // Require at least 2 characters before searching
-    const activeQuery = idQ || orderQ || verQ
-    if (activeQuery.length < 2) return
-
-    searchTimerRef.current = setTimeout(() => {
-      if (idQ) {
-        loadTab(activeTab, 0, idQ)  // default: getId catalog
-      } else if (orderQ) {
-        loadTab(activeTab, 0, orderQ, 'order_number')
-      } else if (verQ) {
-        loadTab(activeTab, 0, verQ, 'verification_code')
-      }
-    }, 800)
-    return () => clearTimeout(searchTimerRef.current)
+    if (idQ) {
+      loadTab(activeTab, 0, idQ)  // default: getId catalog
+    } else if (orderQ) {
+      loadTab(activeTab, 0, orderQ, 'order_number')
+    } else if (verQ) {
+      loadTab(activeTab, 0, verQ, 'verification_code')
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [columnFilters])
+  }, [committedFilters])
 
   const handleTabChange = (tabId: string) => {
     setActiveTab(tabId)
@@ -539,7 +582,7 @@ export function SenaiteDashboard() {
   const currentPage = pageByTab[activeTab] ?? 0
   const totalPages = Math.ceil((totalsByTab[activeTab] ?? 0) / PAGE_SIZE)
   const currentTab = TABS.find(t => t.id === activeTab)!
-  const hasActiveFilters = sampleIdSearch.trim() !== '' || columnFilters.client_order_number !== '' || columnFilters.verification_code !== ''
+  const hasActiveFilters = committedFilters.id.trim() !== '' || committedFilters.client_order_number !== '' || committedFilters.verification_code !== '' || committedFilters.analytes !== ''
 
   return (
     <ScrollArea className="h-full">
@@ -613,7 +656,8 @@ export function SenaiteDashboard() {
                   size="sm"
                   className="text-xs gap-1 text-muted-foreground"
                   onClick={() => {
-                    setColumnFilters({ id: '', client_order_number: '', verification_code: '' })
+                    setColumnFilters({ id: '', client_order_number: '', verification_code: '', analytes: '' })
+                    setCommittedFilters({ id: '', client_order_number: '', verification_code: '', analytes: '' })
                   }}
                 >
                   <X className="h-3 w-3" />
@@ -657,7 +701,10 @@ export function SenaiteDashboard() {
                     hideTestSamples={hideTestSamples}
                     onSelectSample={navigateToSample}
                     columnFilters={columnFilters}
+                    committedFilters={committedFilters}
                     onColumnFilterChange={handleColumnFilterChange}
+                    onColumnFilterCommit={handleColumnFilterCommit}
+                    onColumnFilterClear={handleColumnFilterClear}
                   />
                 </TabsContent>
               ))}

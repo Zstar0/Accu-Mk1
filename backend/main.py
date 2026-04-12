@@ -2593,15 +2593,6 @@ async def create_calibration(
     except ValueError as e:
         raise HTTPException(400, str(e))
 
-    # Deactivate existing active curves
-    active_cals = db.execute(
-        select(CalibrationCurve)
-        .where(CalibrationCurve.peptide_id == peptide_id)
-        .where(CalibrationCurve.is_active == True)
-    ).scalars().all()
-    for cal in active_cals:
-        cal.is_active = False
-
     # Resolve analyte if provided
     resolved_analyte_id: Optional[int] = None
     if data.analyte_id:
@@ -2638,6 +2629,19 @@ async def create_calibration(
         inst = db.execute(select(Instrument).where(Instrument.name == resolved_instrument_name)).scalar_one_or_none()
         if inst:
             resolved_instrument_id = inst.id
+
+    # Deactivate existing active curves for this peptide on the same instrument
+    deactivate_query = (
+        select(CalibrationCurve)
+        .where(CalibrationCurve.peptide_id == peptide_id)
+        .where(CalibrationCurve.is_active == True)
+    )
+    if resolved_instrument_id is not None:
+        deactivate_query = deactivate_query.where(CalibrationCurve.instrument_id == resolved_instrument_id)
+    else:
+        deactivate_query = deactivate_query.where(CalibrationCurve.instrument_id.is_(None))
+    for cal in db.execute(deactivate_query).scalars().all():
+        cal.is_active = False
 
     # Create new active curve
     from datetime import datetime, timezone
@@ -2727,13 +2731,17 @@ async def create_calibration_from_standard(
     except ValueError as e:
         raise HTTPException(400, str(e))
 
-    # 5. Deactivate existing active curves for this peptide
-    active_cals = db.execute(
+    # 5. Deactivate existing active curves for this peptide on the same instrument
+    deactivate_query = (
         select(CalibrationCurve)
         .where(CalibrationCurve.peptide_id == peptide_id)
         .where(CalibrationCurve.is_active == True)
-    ).scalars().all()
-    for cal in active_cals:
+    )
+    if resolved_instrument_id is not None:
+        deactivate_query = deactivate_query.where(CalibrationCurve.instrument_id == resolved_instrument_id)
+    else:
+        deactivate_query = deactivate_query.where(CalibrationCurve.instrument_id.is_(None))
+    for cal in db.execute(deactivate_query).scalars().all():
         cal.is_active = False
 
     # 6. Compute reference RT from provided RTs
@@ -2820,10 +2828,13 @@ async def activate_calibration(
     if not target:
         raise HTTPException(404, f"Calibration {calibration_id} not found for peptide {peptide_id}")
 
-    # Deactivate all curves for this peptide
-    all_cals = db.execute(
-        select(CalibrationCurve).where(CalibrationCurve.peptide_id == peptide_id)
-    ).scalars().all()
+    # Deactivate curves for this peptide on the same instrument
+    deactivate_query = select(CalibrationCurve).where(CalibrationCurve.peptide_id == peptide_id)
+    if target.instrument_id is not None:
+        deactivate_query = deactivate_query.where(CalibrationCurve.instrument_id == target.instrument_id)
+    else:
+        deactivate_query = deactivate_query.where(CalibrationCurve.instrument_id.is_(None))
+    all_cals = db.execute(deactivate_query).scalars().all()
     for cal in all_cals:
         cal.is_active = False
 
@@ -3127,14 +3138,22 @@ async def run_hplc_analysis(
         if not cal:
             raise HTTPException(404, f"Calibration curve {request.calibration_curve_id} not found for peptide '{peptide.abbreviation}'")
     else:
-        cal = db.execute(
+        # Look up active curve matching the request's instrument
+        cal_query = (
             select(CalibrationCurve)
             .where(CalibrationCurve.peptide_id == peptide.id)
             .where(CalibrationCurve.is_active == True)
-            .order_by(desc(CalibrationCurve.created_at))
-            .limit(1)
+        )
+        if request.instrument_id:
+            cal_query = cal_query.where(CalibrationCurve.instrument_id == request.instrument_id)
+        cal = db.execute(
+            cal_query.order_by(desc(CalibrationCurve.created_at)).limit(1)
         ).scalar_one_or_none()
         if not cal:
+            if request.instrument_id:
+                inst = db.execute(select(Instrument).where(Instrument.id == request.instrument_id)).scalar_one_or_none()
+                inst_name = inst.name if inst else f"ID {request.instrument_id}"
+                raise HTTPException(400, f"No active calibration curve for peptide '{peptide.abbreviation}' on instrument '{inst_name}'. Star a curve for this instrument first.")
             raise HTTPException(400, f"No active calibration curve for peptide '{peptide.abbreviation}'")
 
     # Resolve reference RT: prefer curve setting, fall back to calibration standard RTs
@@ -7656,27 +7675,48 @@ async def create_wizard_session(
                 ).all()
             ]
             if component_ids:
-                cal = db.execute(
+                blend_cal_query = (
                     select(CalibrationCurve)
                     .where(CalibrationCurve.peptide_id.in_(component_ids))
                     .where(CalibrationCurve.is_active == True)
-                    .order_by(desc(CalibrationCurve.created_at))
-                    .limit(1)
+                )
+                if data.instrument_id:
+                    blend_cal_query = blend_cal_query.where(CalibrationCurve.instrument_id == data.instrument_id)
+                cal = db.execute(
+                    blend_cal_query.order_by(desc(CalibrationCurve.created_at)).limit(1)
                 ).scalar_one_or_none()
             if not cal:
+                if data.instrument_id:
+                    inst = db.execute(select(Instrument).where(Instrument.id == data.instrument_id)).scalar_one_or_none()
+                    inst_name = inst.name if inst else f"ID {data.instrument_id}"
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"No active calibration curves found for any component peptide in this blend on instrument '{inst_name}'. Star a curve for this instrument first."
+                    )
                 raise HTTPException(
                     status_code=400,
                     detail="No active calibration curves found for any component peptide in this blend."
                 )
         else:
-            cal = db.execute(
+            # Look up active curve matching the session's instrument
+            cal_query = (
                 select(CalibrationCurve)
                 .where(CalibrationCurve.peptide_id == data.peptide_id)
                 .where(CalibrationCurve.is_active == True)
-                .order_by(desc(CalibrationCurve.created_at))
-                .limit(1)
+            )
+            if data.instrument_id:
+                cal_query = cal_query.where(CalibrationCurve.instrument_id == data.instrument_id)
+            cal = db.execute(
+                cal_query.order_by(desc(CalibrationCurve.created_at)).limit(1)
             ).scalar_one_or_none()
             if not cal:
+                if data.instrument_id:
+                    inst = db.execute(select(Instrument).where(Instrument.id == data.instrument_id)).scalar_one_or_none()
+                    inst_name = inst.name if inst else f"ID {data.instrument_id}"
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"No active calibration curve found for peptide {data.peptide_id} on instrument '{inst_name}'. Star a curve for this instrument first."
+                    )
                 raise HTTPException(
                     status_code=400,
                     detail=f"No active calibration curve found for peptide {data.peptide_id}. Activate a calibration curve before starting a session."
@@ -9512,6 +9552,7 @@ class SenaiteSampleItem(BaseModel):
     sample_type: Optional[str] = None
     contact: Optional[str] = None
     verification_code: Optional[str] = None
+    analytes: list[str] = []
 
 
 class SenaiteSamplesResponse(BaseModel):
@@ -9570,6 +9611,15 @@ async def list_senaite_samples(
             return contact.get("title") or contact.get("id")
         return str(contact)
 
+    def _extract_analytes(it: dict) -> list[str]:
+        """Extract analyte peptide names from Analyte1Peptide..Analyte4Peptide fields."""
+        analytes = []
+        for i in range(1, 5):
+            val = it.get(f"Analyte{i}Peptide")
+            if val and str(val).strip():
+                analytes.append(str(val).strip())
+        return analytes
+
     def _item_to_model(it: dict) -> SenaiteSampleItem:
         return SenaiteSampleItem(
             uid=str(it.get("uid", "")),
@@ -9584,6 +9634,7 @@ async def list_senaite_samples(
             sample_type=it.get("getSampleTypeTitle") or it.get("SampleTypeTitle") or it.get("SampleType") or None,
             contact=_extract_contact(it),
             verification_code=it.get("VerificationCode") or it.get("getVerificationCode") or None,
+            analytes=_extract_analytes(it),
         )
 
     try:

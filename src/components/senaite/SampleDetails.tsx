@@ -1,5 +1,6 @@
 import { useState, useEffect, useId, useRef } from 'react'
 import DOMPurify from 'dompurify'
+import { useTheme } from '@/hooks/use-theme'
 import {
   ChevronDown,
   ChevronRight,
@@ -996,6 +997,44 @@ function ProfileChip({ name }: { name: string }) {
 }
 
 // StatusBadge and TabButton moved to AnalysisTable.tsx
+
+function AccuVerifyBadge({ code }: { code: string }) {
+  const containerRef = useRef<HTMLDivElement>(null)
+  const scriptLoaded = useRef(false)
+  const wpBase = getWordpressUrl() || 'https://accumarklabs.com'
+  const { theme } = useTheme()
+  const badgeTheme = theme === 'system'
+    ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+    : theme
+
+  useEffect(() => {
+    const scriptUrl = `${wpBase}/wp-content/themes/wpstar/js/accuverify-badge-embed.js`
+    if (scriptLoaded.current) return
+    const existing = document.querySelector(`script[src="${scriptUrl}"]`)
+    if (existing) {
+      scriptLoaded.current = true
+      return
+    }
+    const script = document.createElement('script')
+    script.type = 'module'
+    script.src = scriptUrl
+    script.onload = () => { scriptLoaded.current = true }
+    document.head.appendChild(script)
+  }, [wpBase])
+
+  useEffect(() => {
+    const container = containerRef.current
+    if (!container) return
+    container.innerHTML = ''
+    const badge = document.createElement('accuverify-badge')
+    badge.setAttribute('code', code)
+    badge.setAttribute('theme', badgeTheme)
+    badge.setAttribute('size', 'full')
+    container.appendChild(badge)
+  }, [code, badgeTheme])
+
+  return <div ref={containerRef} className="min-h-[200px]" />
+}
 
 function accuverifyUrl(code: string): string {
   return `${getWordpressUrl()}/accuverify/?accuverify_code=${encodeURIComponent(code)}`
@@ -2408,6 +2447,15 @@ export function SampleDetails() {
               </SectionHeader>
             </Card>
 
+            {/* Digital COA Badge Embed */}
+            {data.coa.verification_code && (
+              <Card className="p-4">
+                <SectionHeader icon={ShieldCheck} title="Digital COA">
+                  <AccuVerifyBadge code={data.coa.verification_code} />
+                </SectionHeader>
+              </Card>
+            )}
+
             {/* Additional COAs from Integration Service */}
             {additionalCoas.length > 0 && (
               <Card className="p-4">
@@ -2674,7 +2722,7 @@ export function SampleDetails() {
         </Card>
 
         {/* Manage Analyses */}
-        {data.review_state && ['sample_received', 'sample_due', 'sample_registered'].includes(data.review_state) && (
+        {data.review_state && (
           <div className="mb-2">
             <Button
               variant="outline"
@@ -2711,20 +2759,18 @@ export function SampleDetails() {
                           <span className="text-xs font-mono text-muted-foreground shrink-0">{a.keyword}</span>
                           <span className="text-xs truncate">{a.title}</span>
                         </div>
-                        {a.review_state && ['unassigned', 'assigned', 'registered'].includes(a.review_state) && (
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="h-6 w-6 p-0 shrink-0 text-muted-foreground hover:text-destructive"
-                            disabled={removingKeyword === a.keyword}
-                            onClick={() => handleRemoveAnalysis(a.keyword ?? '', a.title)}
-                          >
-                            {removingKeyword === a.keyword
-                              ? <Loader2 size={12} className="animate-spin" />
-                              : <Trash2 size={12} />
-                            }
-                          </Button>
-                        )}
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-6 w-6 p-0 shrink-0 text-muted-foreground hover:text-destructive"
+                          disabled={removingKeyword === a.keyword}
+                          onClick={() => handleRemoveAnalysis(a.keyword ?? '', a.title)}
+                        >
+                          {removingKeyword === a.keyword
+                            ? <Loader2 size={12} className="animate-spin" />
+                            : <Trash2 size={12} />
+                          }
+                        </Button>
                       </div>
                     ))}
                 </div>

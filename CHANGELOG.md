@@ -1,5 +1,31 @@
 # Changelog
 
+## v0.28.6 — 2026-04-11
+
+### Digital COA Embed, Per-Instrument Calibration, UX Fixes
+
+#### Digital COA
+- **Embed:** AccuVerify badge rendered inline on Sample Details page under Generated COAs — no more navigating away to verify
+- **Theme-aware:** Badge automatically matches the app's light/dark mode setting
+- **Environment-aware:** Loads embed script from the active WordPress environment (local DevKinsta vs production)
+
+#### Calibration Curves — Per-Instrument Starring
+- **Fix:** Starring a curve now only deactivates curves on the same instrument, not all curves for the peptide
+- **Fix:** HPLC analysis and wizard sessions now look up the starred curve matching the request's instrument — no silent fallback to wrong instrument
+- **Error messaging:** Clear error when no starred curve exists for a specific instrument (e.g. "No active calibration curve for peptide 'BPC-157' on instrument '1290b'")
+
+#### Samples List
+- **Analytes column:** New column showing analyte peptide names as labels, with Enter-to-search filtering
+- **Search UX:** All column search fields now require Enter to execute (no more auto-search on every keystroke)
+- **Clear button:** Inline X icon appears in search fields after a search is committed
+
+#### HPLC Processing
+- **Fix:** Blend auto-fill "Peptide Total Quantity" now correctly uses the sum of all analyte quantities instead of the first analyte's individual value
+- **Fix:** Blend-level aggregate analyses (Blend Purity, Peptide Total Quantity, Peptide ID) can no longer be claimed by per-analyte mappings
+
+#### Sample Prep Wizard
+- **Fix:** Step 1 vial label now shows "Autosampler vial" for regular preps and "scintillation vial" only for standards
+
 ## v0.28.2 — 2026-04-03
 
 ### Method-Instrument Many-to-Many & Identity Fix

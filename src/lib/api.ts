@@ -3357,6 +3357,7 @@ export interface SenaiteSample {
   sample_type: string | null
   contact: string | null
   verification_code: string | null
+  analytes: string[]
 }
 
 export interface SenaiteSamplesResponse {
