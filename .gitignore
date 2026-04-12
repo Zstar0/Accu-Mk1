@@ -49,3 +49,6 @@ nulbackend_logs*.txt
 ~/
 *.key
 *.key.pub
+.gitnexus
+entities.json
+scripts/patch_result_p0386.py
