@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.28.8 — 2026-04-14
+
+### Calibration Curve Fixes
+
+#### Standard Curve — Actual Concentrations
+- **Fix:** Single (non-blend) standard calibration curves now use gravimetric actual concentrations instead of nominal values from filenames
+- **Fix:** Applies correction ratio (`actual_conc / target_conc`) to all standard points, accounting for weighing variance in the stock solution
+- **Fix:** Blend calibration curves now prefer `actual_conc_ug_ml` over `target_conc_ug_ml` per vial (with fallback)
+
+#### HPLC Processing — Instrument-Matched Curve Selection
+- **Fix:** Auto-selected calibration curve now matches the sample prep's assigned instrument — previously grabbed the first active curve regardless of instrument, causing wrong-instrument curve selection (e.g. 1290b curve used for a 1290a sample)
+- **Fix:** Applies to both single and blend sample processing paths
+
 ## v0.28.6 — 2026-04-11
 
 ### Digital COA Embed, Per-Instrument Calibration, UX Fixes

@@ -1139,7 +1139,11 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match, readOnly = fa
         for (const comp of blendComponents) {
           const cals = await getCalibrations(comp.id)
           calsMap.set(comp.id, cals)
-          const active = cals.find(c => c.is_active)
+          // Prefer active curve matching the prep's instrument, fall back to any active
+          const instrumentMatch = prep.instrument_id != null
+            ? cals.find(c => c.is_active && c.instrument_id === prep.instrument_id)
+            : null
+          const active = instrumentMatch ?? cals.find(c => c.is_active)
           if (active) selectedMap.set(comp.id, active.id)
           else if (cals[0]) selectedMap.set(comp.id, cals[0].id)
         }
@@ -1156,13 +1160,17 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match, readOnly = fa
       } else {
         const cals = await getCalibrations(prep.peptide_id)
         setCalibrations(cals)
-        const active = cals.find(c => c.is_active)
+        // Prefer active curve matching the prep's instrument, fall back to any active
+        const instrumentMatch = prep.instrument_id != null
+          ? cals.find(c => c.is_active && c.instrument_id === prep.instrument_id)
+          : null
+        const active = instrumentMatch ?? cals.find(c => c.is_active)
         setSelectedCalId(active?.id ?? cals[0]?.id ?? null)
       }
       setChangingCurve(false)
     } catch { /* non-fatal */ }
     finally { setCalLoading(false) }
-  }, [prep.peptide_id, isBlend, blendComponents])
+  }, [prep.peptide_id, prep.instrument_id, isBlend, blendComponents])
 
   useEffect(() => {
     if (open) loadCalibrations()
@@ -1488,7 +1496,7 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match, readOnly = fa
         const vial = sortedVials[i]
         const inj = sortedInjections[i]
         if (!vial || !inj) continue
-        const conc = vial.target_conc_ug_ml
+        const conc = vial.actual_conc_ug_ml ?? vial.target_conc_ug_ml
         if (conc == null || conc <= 0) continue
         const mainPeak = inj.main_peak_index >= 0 && inj.main_peak_index < inj.peaks.length
           ? inj.peaks[inj.main_peak_index]
@@ -1502,11 +1510,18 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match, readOnly = fa
     } else {
       // Fallback: extract concentration from injection filename
       // e.g. "P-0136_Std_1000_PeakData" → 1000
+      // Apply gravimetric correction if the prep has actual vs target concentrations
+      const correctionRatio =
+        prep.actual_conc_ug_ml != null && prep.target_conc_ug_ml != null && prep.target_conc_ug_ml > 0
+          ? prep.actual_conc_ug_ml / prep.target_conc_ug_ml
+          : 1
+
       for (const inj of sortedInjections) {
         const match = inj.injection_name.match(/_(\d+(?:\.\d+)?)_?PeakData/i)
           ?? inj.injection_name.match(/(\d+(?:\.\d+)?)(?:[^0-9]|$)/)
-        const conc = match?.[1] != null ? parseFloat(match[1]) : null
-        if (conc == null || conc <= 0) continue
+        const nominal = match?.[1] != null ? parseFloat(match[1]) : null
+        if (nominal == null || nominal <= 0) continue
+        const conc = nominal * correctionRatio
         const mainPeak = inj.main_peak_index >= 0 && inj.main_peak_index < inj.peaks.length
           ? inj.peaks[inj.main_peak_index]
           : null
@@ -1519,7 +1534,7 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match, readOnly = fa
     }
 
     return concentrations.length > 0 ? { concentrations, areas, rts } : null
-  }, [isStandard, parseResult, prep.vial_data])
+  }, [isStandard, parseResult, prep.vial_data, prep.actual_conc_ug_ml, prep.target_conc_ug_ml])
 
   // Extract first valid chromatogram trace for standard curve provenance
   const standardChromData = useMemo(() => {
