@@ -22,6 +22,11 @@ import { cn } from '@/lib/utils'
 import { getReportsPurityTrend } from '@/lib/api'
 import type { PurityTrendPoint } from '@/lib/api'
 import { Button } from '@/components/ui/button'
+import { getWordpressUrl } from '@/lib/api-profiles'
+
+function accuverifyUrl(code: string): string {
+  return `${getWordpressUrl()}/accuverify/?accuverify_code=${encodeURIComponent(code)}`
+}
 
 type TimePeriod = '1M' | '3M' | '6M' | '1Y' | 'ALL'
 
@@ -53,7 +58,15 @@ function CustomTooltip({ active, payload }: { active?: boolean; payload?: Array<
         <span className="text-muted-foreground">Sample</span>
         <span className="font-mono text-right">{d.sample_id}</span>
         <span className="text-muted-foreground">Code</span>
-        <span className="font-mono text-blue-400 text-right">{d.verification_code}</span>
+        <a
+          href={accuverifyUrl(d.verification_code)}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="font-mono text-blue-400 text-right hover:text-blue-300 underline underline-offset-2 decoration-blue-400/30 hover:decoration-blue-300/60"
+          onClick={e => e.stopPropagation()}
+        >
+          {d.verification_code}
+        </a>
         <span className="text-muted-foreground">Status</span>
         <span className={cn('text-right font-medium', d.conforms ? 'text-emerald-400' : 'text-red-400')}>
           {d.conforms ? 'Conforms' : 'Non-conforming'}
@@ -302,7 +315,16 @@ export function PurityTrendView({
                   <tr key={d.verification_code} className="border-b border-border/20 hover:bg-muted/30">
                     <td className="py-1.5 px-3 tabular-nums">{d.date}</td>
                     <td className="py-1.5 px-3 font-mono">{d.sample_id}</td>
-                    <td className="py-1.5 px-3 font-mono text-blue-400">{d.verification_code}</td>
+                    <td className="py-1.5 px-3 font-mono">
+                      <a
+                        href={accuverifyUrl(d.verification_code)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-blue-400 hover:text-blue-300 underline underline-offset-2 decoration-blue-400/30 hover:decoration-blue-300/60"
+                      >
+                        {d.verification_code}
+                      </a>
+                    </td>
                     <td className="py-1.5 px-3 text-right font-mono font-medium">{d.purity_percent.toFixed(2)}%</td>
                     <td className="py-1.5 px-3 text-center">
                       {d.conforms ? (
