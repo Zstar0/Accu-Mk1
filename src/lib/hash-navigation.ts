@@ -22,6 +22,7 @@ const VALID_SECTIONS = new Set<string>([
   'senaite',
   'lims',
   'hplc-analysis',
+  'reports',
   'accumark-tools',
   'account',
 ])

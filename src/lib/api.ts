@@ -3903,3 +3903,83 @@ export async function createWorksheetFromDrop(
   }
   return response.json()
 }
+
+// ── Reports API ─────────────────────────────────────────────────
+
+export interface ReportsSummary {
+  total_peptides: number
+  total_coas: number
+  conforming: number
+  non_conforming: number
+}
+
+export interface PeptideCard {
+  analyte_name: string
+  is_blend: boolean
+  total_coas: number
+  additional_coas: number
+  conforming: number
+  non_conforming: number
+  most_recent_code: string | null
+  most_recent_sample: string | null
+  most_recent_status: string | null
+  most_recent_date: string | null
+  most_recent_lot: string | null
+}
+
+export interface ReportsDashboard {
+  summary: ReportsSummary
+  peptides: PeptideCard[]
+  blends: PeptideCard[]
+}
+
+export interface PurityTrendPoint {
+  date: string
+  purity_percent: number
+  sample_id: string
+  verification_code: string
+  conforms: boolean | null
+}
+
+export async function getReportsDashboard(): Promise<ReportsDashboard> {
+  const response = await fetch(`${API_BASE_URL()}/reports/dashboard`, {
+    headers: getBearerHeaders(),
+  })
+  if (!response.ok) throw new Error(`Reports dashboard failed: ${response.status}`)
+  return response.json()
+}
+
+export async function getReportsPurityTrend(analyteName: string, isBlend = false): Promise<PurityTrendPoint[]> {
+  const params = isBlend ? '?is_blend=true' : ''
+  const response = await fetch(
+    `${API_BASE_URL()}/reports/purity-trend/${encodeURIComponent(analyteName)}${params}`,
+    { headers: getBearerHeaders() }
+  )
+  if (!response.ok) throw new Error(`Purity trend failed: ${response.status}`)
+  return response.json()
+}
+
+// ─── Sample Activity Timeline ────────────────────────────────────────────────
+
+export interface SampleActivityEvent {
+  timestamp: string | null
+  event: string
+  label: string
+  details: Record<string, unknown>
+  source: string
+}
+
+export interface SampleActivityResponse {
+  sample_id: string
+  events: SampleActivityEvent[]
+  count: number
+}
+
+export async function getSampleActivity(sampleId: string): Promise<SampleActivityResponse> {
+  const response = await fetch(
+    `${API_BASE_URL()}/samples/${encodeURIComponent(sampleId)}/activity`,
+    { headers: getAuthHeaders() }
+  )
+  if (!response.ok) throw new Error(`Sample activity failed: ${response.status}`)
+  return response.json()
+}

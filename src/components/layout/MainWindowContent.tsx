@@ -17,6 +17,8 @@ import { SampleEventLog } from '@/components/senaite/SampleEventLog'
 import { ReceiveSample } from '@/components/intake/ReceiveSample'
 import { UserManagement } from '@/components/auth/UserManagement'
 import { ProfilePage } from '@/components/auth/ProfilePage'
+import { ReportsDashboard } from '@/components/reports/ReportsDashboard'
+import { ReportsSyncDebug } from '@/components/reports/ReportsSyncDebug'
 import { useUIStore } from '@/store/ui-store'
 import { useAuthStore } from '@/store/auth-store'
 
@@ -56,6 +58,9 @@ export function MainWindowContent({
         if (activeSubSection === 'inbox') return <WorksheetsInboxPage />
         if (activeSubSection === 'worksheets') return <WorksheetsListPage />
         return <HPLCAnalysis />
+      case 'reports':
+        if (activeSubSection === 'sync-debug') return <ReportsSyncDebug />
+        return <ReportsDashboard />
       case 'accumark-tools':
         if (activeSubSection === 'chromatographs') return <ChromatographViewer />
         return <AccuMarkTools />

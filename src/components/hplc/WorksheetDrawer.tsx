@@ -44,7 +44,6 @@ export function WorksheetDrawer() {
   const {
     openWorksheets: allOpenWorksheets,
     activeWorksheet,
-    totalOpenItems,
     isLoading,
     isError,
     refetch,
@@ -117,22 +116,6 @@ export function WorksheetDrawer() {
 
   return (
     <>
-      {/* FAB button — only visible when drawer is closed */}
-      {!drawerOpen && (
-        <button
-          onClick={() => useUIStore.getState().openWorksheetDrawer()}
-          className="fixed bottom-8 right-4 z-40 flex h-12 w-12 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-lg hover:bg-primary/90 transition-colors"
-          aria-label="Open worksheet"
-        >
-          <ClipboardList className="h-5 w-5" />
-          {totalOpenItems > 0 && (
-            <span className="absolute -top-1 -right-1 flex h-5 w-5 items-center justify-center rounded-full bg-destructive text-[10px] text-destructive-foreground font-semibold">
-              {totalOpenItems > 99 ? '99+' : totalOpenItems}
-            </span>
-          )}
-        </button>
-      )}
-
       {/* Sheet drawer */}
       <Sheet open={drawerOpen} onOpenChange={open => { if (!open) closeDrawer() }}>
         <SheetContent side="right" className="w-[1100px] sm:max-w-[1100px] p-0 flex flex-col">

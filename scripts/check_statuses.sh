@@ -1,5 +1,5 @@
 #!/bin/bash
-sshpass -p 'ekg9ENyLj3aGXNgiQ6CW' ssh -o StrictHostKeyChecking=no root@165.227.241.81 \
+ssh -o StrictHostKeyChecking=no root@165.227.241.81 \
   'docker exec accu-mk1-backend python3 -c "
 import sqlite3
 conn = sqlite3.connect(\"/app/data/accu_mk1.db\")

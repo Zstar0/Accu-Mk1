@@ -35,7 +35,7 @@ from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import select, desc, delete, update, func
 
 from database import get_db, init_db
-from models import AuditLog, Settings, Job, Sample, Result, Instrument, AnalysisService, HplcMethod, Peptide, PeptideAnalyte, CalibrationCurve, HPLCAnalysis, User, SharePointFileCache, WizardSession, WizardMeasurement, peptide_methods, blend_components, ServiceGroup, service_group_members, SamplePriority, Worksheet, WorksheetItem
+from models import AuditLog, Settings, Job, Sample, Result, Instrument, AnalysisService, HplcMethod, Peptide, PeptideAnalyte, CalibrationCurve, HPLCAnalysis, User, SharePointFileCache, WizardSession, WizardMeasurement, peptide_methods, blend_components, ServiceGroup, service_group_members, SamplePriority, Worksheet, WorksheetItem, instrument_methods
 from auth import (
     get_current_user, require_admin, create_access_token,
     verify_password, get_password_hash, seed_admin_user,
@@ -585,6 +585,193 @@ async def get_audit_logs(
     stmt = select(AuditLog).order_by(desc(AuditLog.created_at)).limit(limit)
     result = db.execute(stmt)
     return result.scalars().all()
+
+
+@app.get("/samples/{sample_id}/activity")
+async def get_sample_activity(
+    sample_id: str,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """
+    Federated activity timeline for a sample.
+
+    Pulls events from multiple Mk1 tables + Integration DB and returns
+    a unified, reverse-chronological activity stream.
+    """
+    events: list[dict] = []
+
+    # --- Mk1 DB: wizard_sessions (prep started / completed) ---
+    sessions = db.execute(
+        select(WizardSession).where(WizardSession.sample_id_label == sample_id)
+    ).scalars().all()
+    for s in sessions:
+        events.append({
+            "timestamp": s.created_at.isoformat() if s.created_at else None,
+            "event": "prep_started",
+            "label": "Sample prep started",
+            "details": {"session_id": s.id, "status": s.status},
+            "source": "wizard_sessions",
+        })
+        if s.completed_at:
+            events.append({
+                "timestamp": s.completed_at.isoformat(),
+                "event": "prep_completed",
+                "label": "Sample prep completed",
+                "details": {"session_id": s.id},
+                "source": "wizard_sessions",
+            })
+
+    # --- Mk1 DB: sample_preps (prep records with user attribution) ---
+    from mk1_db import ensure_sample_preps_table, get_mk1_db
+    from psycopg2.extras import RealDictCursor
+    ensure_sample_preps_table()
+    with get_mk1_db() as mk1_conn:
+        with mk1_conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                "SELECT id, sample_id, senaite_sample_id, status, created_at, created_by_email "
+                "FROM sample_preps WHERE senaite_sample_id = %s ORDER BY created_at",
+                [sample_id],
+            )
+            for row in cur.fetchall():
+                events.append({
+                    "timestamp": row["created_at"].isoformat() if row["created_at"] else None,
+                    "event": "prep_record_created",
+                    "label": "Prep record created",
+                    "details": {
+                        "prep_id": row["sample_id"],
+                        "status": row["status"],
+                        "by": row["created_by_email"],
+                    },
+                    "source": "sample_preps",
+                })
+
+    # --- Mk1 DB: worksheet_items (added to worksheet) ---
+    items = db.execute(
+        select(WorksheetItem).where(WorksheetItem.sample_id == sample_id)
+    ).scalars().all()
+    for item in items:
+        ws = db.execute(
+            select(Worksheet).where(Worksheet.id == item.worksheet_id)
+        ).scalar_one_or_none()
+        analyst_email = None
+        if item.assigned_analyst_id:
+            analyst_user = db.execute(
+                select(User).where(User.id == item.assigned_analyst_id)
+            ).scalar_one_or_none()
+            analyst_email = analyst_user.email if analyst_user else None
+        created_by_email = None
+        if ws and ws.created_by:
+            ws_creator = db.execute(
+                select(User).where(User.id == ws.created_by)
+            ).scalar_one_or_none()
+            created_by_email = ws_creator.email if ws_creator else None
+        events.append({
+            "timestamp": item.added_at.isoformat() if item.added_at else None,
+            "event": "added_to_worksheet",
+            "label": f"Added to worksheet {ws.title if ws else item.worksheet_id}",
+            "details": {
+                "worksheet_id": item.worksheet_id,
+                "worksheet_title": ws.title if ws else None,
+                "analyst": analyst_email,
+                "created_by": created_by_email,
+            },
+            "source": "worksheet_items",
+        })
+
+    # --- Mk1 DB: hplc_analyses (results processed) ---
+    analyses = db.execute(
+        select(HPLCAnalysis).where(HPLCAnalysis.sample_id_label == sample_id)
+    ).scalars().all()
+    for a in analyses:
+        peptide = db.execute(
+            select(Peptide).where(Peptide.id == a.peptide_id)
+        ).scalar_one_or_none()
+        events.append({
+            "timestamp": a.created_at.isoformat() if a.created_at else None,
+            "event": "hplc_analysis",
+            "label": f"HPLC analysis — {peptide.abbreviation if peptide else 'unknown'}",
+            "details": {
+                "analysis_id": a.id,
+                "peptide": peptide.abbreviation if peptide else None,
+                "purity": a.purity_percent,
+                "identity_conforms": a.identity_conforms,
+                "processed_by": a.processed_by_email,
+            },
+            "source": "hplc_analyses",
+        })
+
+    # --- Integration DB: sample_status_events ---
+    try:
+        with get_integration_db() as int_conn:
+            with int_conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    "SELECT transition, new_status, event_timestamp, wp_notified, created_at "
+                    "FROM sample_status_events WHERE sample_id = %s ORDER BY created_at",
+                    [sample_id],
+                )
+                for row in cur.fetchall():
+                    ts = row["created_at"]
+                    events.append({
+                        "timestamp": ts.isoformat() if ts else None,
+                        "event": "status_change",
+                        "label": f"Status → {row['new_status']} ({row['transition']})",
+                        "details": {
+                            "transition": row["transition"],
+                            "new_status": row["new_status"],
+                            "wp_notified": row["wp_notified"],
+                        },
+                        "source": "sample_status_events",
+                    })
+
+                # --- Integration DB: coa_generations ---
+                cur.execute(
+                    "SELECT generation_number, verification_code, status, published_at, superseded_at, created_at "
+                    "FROM coa_generations WHERE sample_id = %s ORDER BY created_at",
+                    [sample_id],
+                )
+                for row in cur.fetchall():
+                    vcode = row["verification_code"]
+                    events.append({
+                        "timestamp": row["created_at"].isoformat() if row["created_at"] else None,
+                        "event": "coa_generated",
+                        "label": f"COA v{row['generation_number']} generated",
+                        "details": {
+                            "generation_number": row["generation_number"],
+                            "status": row["status"],
+                            "verification_code": vcode,
+                        },
+                        "source": "coa_generations",
+                    })
+                    if row["published_at"]:
+                        events.append({
+                            "timestamp": row["published_at"].isoformat(),
+                            "event": "coa_published",
+                            "label": f"COA v{row['generation_number']} published",
+                            "details": {
+                                "generation_number": row["generation_number"],
+                                "verification_code": vcode,
+                            },
+                            "source": "coa_generations",
+                        })
+                    if row["superseded_at"]:
+                        events.append({
+                            "timestamp": row["superseded_at"].isoformat(),
+                            "event": "coa_superseded",
+                            "label": f"COA v{row['generation_number']} superseded",
+                            "details": {
+                                "generation_number": row["generation_number"],
+                                "verification_code": vcode,
+                            },
+                            "source": "coa_generations",
+                        })
+    except Exception:
+        pass  # Integration DB unavailable — return Mk1 events only
+
+    # Sort all events reverse-chronological, nulls last
+    events.sort(key=lambda e: e["timestamp"] or "", reverse=True)
+
+    return {"sample_id": sample_id, "events": events, "count": len(events)}
 
 
 # --- Settings Endpoints ---
@@ -6304,6 +6491,7 @@ from integration_db import (
     fetch_access_logs_for_order,
     test_connection,
     get_wordpress_host,
+    get_integration_db,
 )
 
 
@@ -6524,6 +6712,389 @@ def get_order_ingestions(order_id: str, _current_user=Depends(get_current_user))
             status_code=503,
             detail=f"Failed to connect to Integration Service database: {e}"
         )
+
+
+# ── Reports Endpoints (Published COA Results) ─────────────────────
+# Read-optimized queries against the published_coa_results table
+# in the Integration Service database.
+
+
+class ReportsSummary(BaseModel):
+    total_peptides: int
+    total_coas: int
+    conforming: int
+    non_conforming: int
+
+
+class PeptideCard(BaseModel):
+    analyte_name: str
+    is_blend: bool = False
+    total_coas: int
+    additional_coas: int
+    conforming: int
+    non_conforming: int
+    most_recent_code: Optional[str] = None
+    most_recent_sample: Optional[str] = None
+    most_recent_status: Optional[str] = None
+    most_recent_date: Optional[str] = None
+    most_recent_lot: Optional[str] = None
+
+
+class ReportsDashboard(BaseModel):
+    summary: ReportsSummary
+    peptides: list[PeptideCard]
+    blends: list[PeptideCard] = []
+
+
+class PurityTrendPoint(BaseModel):
+    date: str
+    purity_percent: float
+    sample_id: str
+    verification_code: str
+    conforms: Optional[bool] = None
+
+
+@app.get("/reports/dashboard", response_model=ReportsDashboard)
+async def reports_dashboard(
+    _current_user=Depends(get_current_user),
+):
+    """COA reporting dashboard — grouped by product (single peptide or blend)."""
+    try:
+        with get_integration_db() as conn:
+            with conn.cursor() as cur:
+                # Deduplicate to one row per COA — use blend overall row for blends, the single row for non-blends
+                # This gives us product-level grouping
+                cur.execute("""
+                    WITH unique_coas AS (
+                        SELECT DISTINCT ON (verification_code)
+                            verification_code, product_name, is_blend, overall_status,
+                            published_at, client_sample_id, lot_code, purity_percent, purity_conforms
+                        FROM published_coa_results
+                        WHERE (is_blend_overall = true OR is_blend = false)
+                        ORDER BY verification_code, published_at DESC
+                    )
+                    SELECT
+                        COUNT(DISTINCT product_name),
+                        COUNT(*),
+                        COUNT(*) FILTER (WHERE overall_status = 'PASSED'),
+                        COUNT(*) FILTER (WHERE overall_status = 'FAILED')
+                    FROM unique_coas
+                """)
+                total_products, total_coas, conforming, non_conforming = cur.fetchone()
+
+                # Per-product cards
+                cur.execute("""
+                    WITH unique_coas AS (
+                        SELECT DISTINCT ON (verification_code)
+                            verification_code, product_name, is_blend, overall_status,
+                            published_at, client_sample_id, lot_code
+                        FROM published_coa_results
+                        WHERE (is_blend_overall = true OR is_blend = false)
+                        ORDER BY verification_code, published_at DESC
+                    ),
+                    product_stats AS (
+                        SELECT
+                            product_name,
+                            bool_or(is_blend) as is_blend,
+                            COUNT(*) as total_coas,
+                            COUNT(*) FILTER (WHERE overall_status = 'PASSED') as conforming,
+                            COUNT(*) FILTER (WHERE overall_status = 'FAILED') as non_conforming
+                        FROM unique_coas
+                        WHERE product_name IS NOT NULL
+                        GROUP BY product_name
+                    ),
+                    most_recent AS (
+                        SELECT DISTINCT ON (product_name)
+                            product_name,
+                            verification_code,
+                            client_sample_id,
+                            overall_status,
+                            published_at,
+                            lot_code
+                        FROM unique_coas
+                        WHERE product_name IS NOT NULL
+                        ORDER BY product_name, published_at DESC
+                    ),
+                    additional_counts AS (
+                        SELECT
+                            r.product_name,
+                            COUNT(DISTINCT child.id) as additional
+                        FROM published_coa_results r
+                        JOIN coa_generations cg ON cg.verification_code = r.verification_code
+                        LEFT JOIN coa_generations child ON child.parent_generation_id = cg.id AND child.status = 'published'
+                        WHERE (r.is_blend_overall = true OR r.is_blend = false) AND r.product_name IS NOT NULL AND child.id IS NOT NULL
+                        GROUP BY r.product_name
+                    )
+                    SELECT
+                        s.product_name,
+                        s.is_blend,
+                        s.total_coas,
+                        COALESCE(ac.additional, 0) as additional_coas,
+                        s.conforming,
+                        s.non_conforming,
+                        m.verification_code,
+                        m.client_sample_id,
+                        m.overall_status,
+                        m.published_at,
+                        m.lot_code
+                    FROM product_stats s
+                    LEFT JOIN most_recent m ON m.product_name = s.product_name
+                    LEFT JOIN additional_counts ac ON ac.product_name = s.product_name
+                    ORDER BY s.total_coas DESC
+                """)
+                products = []
+                for row in cur.fetchall():
+                    products.append(PeptideCard(
+                        analyte_name=row[0],
+                        is_blend=row[1],
+                        total_coas=row[2],
+                        additional_coas=row[3],
+                        conforming=row[4],
+                        non_conforming=row[5],
+                        most_recent_code=row[6],
+                        most_recent_sample=row[7],
+                        most_recent_status=row[8],
+                        most_recent_date=row[9].strftime("%Y-%m-%d") if row[9] else None,
+                        most_recent_lot=row[10],
+                    ))
+
+                return ReportsDashboard(
+                    summary=ReportsSummary(
+                        total_peptides=total_products,
+                        total_coas=total_coas,
+                        conforming=conforming,
+                        non_conforming=non_conforming,
+                    ),
+                    peptides=products,
+                )
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Reports database error: {e}")
+
+
+@app.get("/reports/purity-trend/{analyte_name}", response_model=list[PurityTrendPoint])
+async def reports_purity_trend(
+    analyte_name: str,
+    is_blend: bool = False,
+    _current_user=Depends(get_current_user),
+):
+    """Purity trend over time for a specific analyte or blend."""
+    try:
+        with get_integration_db() as conn:
+            with conn.cursor() as cur:
+                if is_blend:
+                    # Blend: query by product_name using the blend overall rows
+                    cur.execute("""
+                        SELECT
+                            published_at,
+                            purity_percent,
+                            sample_id,
+                            verification_code,
+                            purity_conforms
+                        FROM published_coa_results
+                        WHERE product_name = %s
+                          AND is_blend_overall = true
+                          AND purity_percent IS NOT NULL
+                        ORDER BY published_at ASC
+                    """, (analyte_name,))
+                else:
+                    cur.execute("""
+                        SELECT
+                            published_at,
+                            purity_percent,
+                            sample_id,
+                            verification_code,
+                            purity_conforms
+                        FROM published_coa_results
+                        WHERE analyte_name = %s
+                          AND NOT is_blend_overall
+                          AND purity_percent IS NOT NULL
+                        ORDER BY published_at ASC
+                    """, (analyte_name,))
+                return [
+                    PurityTrendPoint(
+                        date=row[0].strftime("%Y-%m-%d") if row[0] else "",
+                        purity_percent=row[1],
+                        sample_id=row[2],
+                        verification_code=row[3],
+                        conforms=row[4],
+                    )
+                    for row in cur.fetchall()
+                ]
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Reports database error: {e}")
+
+
+class ReportsSyncStatus(BaseModel):
+    source_published: int
+    source_verification_codes: int
+    report_table_rows: int
+    report_verification_codes: int
+    missing_codes: list[str]
+    orphaned_codes: list[str]
+    in_sync: bool
+
+
+@app.get("/reports/sync-status", response_model=ReportsSyncStatus)
+async def reports_sync_status(
+    _current_user=Depends(get_current_user),
+):
+    """Compare published_coa_results with coa_generations source table."""
+    try:
+        with get_integration_db() as conn:
+            with conn.cursor() as cur:
+                # Source: coa_generations
+                cur.execute("SELECT count(*) FROM coa_generations WHERE status = 'published'")
+                source_published = cur.fetchone()[0]
+                cur.execute("SELECT count(DISTINCT verification_code) FROM coa_generations WHERE status = 'published'")
+                source_codes = cur.fetchone()[0]
+
+                # Report table
+                cur.execute("SELECT count(*) FROM published_coa_results")
+                report_rows = cur.fetchone()[0]
+                cur.execute("SELECT count(DISTINCT verification_code) FROM published_coa_results")
+                report_codes = cur.fetchone()[0]
+
+                # Missing: in source but not in report table
+                cur.execute("""
+                    SELECT verification_code FROM coa_generations
+                    WHERE status = 'published' AND coa_data IS NOT NULL
+                      AND verification_code NOT IN (SELECT DISTINCT verification_code FROM published_coa_results)
+                """)
+                missing = [r[0] for r in cur.fetchall()]
+
+                # Orphaned: in report table but no longer published in source
+                cur.execute("""
+                    SELECT DISTINCT verification_code FROM published_coa_results
+                    WHERE verification_code NOT IN (
+                        SELECT verification_code FROM coa_generations WHERE status = 'published'
+                    )
+                """)
+                orphaned = [r[0] for r in cur.fetchall()]
+
+                return ReportsSyncStatus(
+                    source_published=source_published,
+                    source_verification_codes=source_codes,
+                    report_table_rows=report_rows,
+                    report_verification_codes=report_codes,
+                    missing_codes=missing,
+                    orphaned_codes=orphaned,
+                    in_sync=len(missing) == 0 and len(orphaned) == 0,
+                )
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Reports sync check failed: {e}")
+
+
+@app.post("/reports/resync")
+async def reports_resync(
+    _current_user=Depends(require_admin),
+):
+    """Re-sync published_coa_results: backfill missing codes, remove orphans."""
+    import json as _json
+    synced = 0
+    removed = 0
+    try:
+        with get_integration_db() as conn:
+            with conn.cursor() as cur:
+                # Remove orphaned rows
+                cur.execute("""
+                    DELETE FROM published_coa_results
+                    WHERE verification_code NOT IN (
+                        SELECT verification_code FROM coa_generations WHERE status = 'published'
+                    )
+                """)
+                removed = cur.rowcount
+
+                # Find missing codes
+                cur.execute("""
+                    SELECT id, sample_id, verification_code, coa_data, published_at, created_at
+                    FROM coa_generations
+                    WHERE status = 'published' AND coa_data IS NOT NULL
+                      AND verification_code NOT IN (SELECT DISTINCT verification_code FROM published_coa_results)
+                """)
+                missing_rows = cur.fetchall()
+
+                def _parse_float(val):
+                    if val is None:
+                        return None
+                    s = str(val).strip().replace("%", "").replace("mg/mL", "").replace("mg", "").replace("EU/mL", "").strip()
+                    try:
+                        return float(s)
+                    except (ValueError, TypeError):
+                        return None
+
+                def _parse_date(val):
+                    if not val:
+                        return None
+                    from datetime import datetime as _dt
+                    for fmt in ("%m/%d/%Y", "%Y-%m-%d", "%B %d, %Y"):
+                        try:
+                            return _dt.strptime(val, fmt).date()
+                        except ValueError:
+                            continue
+                    return None
+
+                for gen_id, sample_id, vcode, coa_data, published_at, created_at in missing_rows:
+                    if not isinstance(coa_data, dict):
+                        coa_data = _json.loads(coa_data)
+                    pub_at = published_at or created_at
+                    sample = coa_data.get("sample", {})
+                    client = coa_data.get("client", {})
+                    product = coa_data.get("product", {})
+                    results = coa_data.get("results", {})
+                    overall_status = coa_data.get("overall_status", "UNKNOWN")
+                    received_date = _parse_date(sample.get("received_date"))
+                    product_components = product.get("components", [])
+                    product_name = ", ".join(product_components) if product_components else product.get("name")
+                    is_blend = len(product_components) > 1
+                    addons = results.get("addons", [])
+                    has_endo = any("endotoxin" in (a.get("test_name", "")).lower() for a in addons)
+                    endo_conf = None
+                    if has_endo:
+                        e = next((a for a in addons if "endotoxin" in a.get("test_name", "").lower()), None)
+                        if e: endo_conf = e.get("status", "").upper() == "CONFORMS"
+                    has_ster = any("sterility" in (a.get("test_name", "")).lower() for a in addons)
+                    ster_conf = None
+                    if has_ster:
+                        s = next((a for a in addons if "sterility" in a.get("test_name", "").lower()), None)
+                        if s: ster_conf = s.get("status", "").upper() == "CONFORMS"
+
+                    base = (gen_id, vcode, sample_id, pub_at, received_date,
+                            client.get("name"), sample.get("name"), sample.get("batch_id"), None,
+                            product_name, sample.get("matrix_type"), is_blend)
+
+                    insert_sql = """INSERT INTO published_coa_results (
+                        coa_generation_id, verification_code, sample_id, published_at, received_date,
+                        client_name, client_sample_id, lot_code, order_number,
+                        product_name, sample_type, is_blend,
+                        analyte_name, is_blend_overall,
+                        purity_percent, purity_conforms, purity_spec, identity_conforms,
+                        quantity_value, quantity_unit, overall_status,
+                        has_endotoxin, endotoxin_conforms, has_sterility, sterility_conforms
+                    ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"""
+
+                    analytes = results.get("analytes", [])
+                    if analytes:
+                        for analyte in analytes:
+                            name = analyte.get("name", "Unknown")
+                            is_overall = name.lower() in ("peptide blend", "blend")
+                            p = analyte.get("purity", {}); i = analyte.get("identity", {}); q = analyte.get("quantity", {})
+                            cur.execute(insert_sql, base + (
+                                name, is_overall, _parse_float(p.get("result")), p.get("conforms"), p.get("specification"),
+                                i.get("conforms"), _parse_float(q.get("result")), q.get("unit"), overall_status,
+                                has_endo, endo_conf, has_ster, ster_conf))
+                    else:
+                        p = results.get("purity", {}); i = results.get("identity", {}); q = results.get("quantity", {})
+                        a_name = p.get("analyte") or (product_components[0] if product_components else "Unknown")
+                        cur.execute(insert_sql, base + (
+                            a_name, False, _parse_float(p.get("result")), p.get("conforms"), p.get("specification"),
+                            i.get("conforms"), _parse_float(q.get("result")), q.get("unit"), overall_status,
+                            has_endo, endo_conf, has_ster, ster_conf))
+                    synced += 1
+
+                conn.commit()
+        return {"synced": synced, "removed": removed, "message": f"Synced {synced} missing, removed {removed} orphaned"}
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Resync failed: {e}")
 
 
 # ── Integration Service HTTP Proxy ─────────────────────────────────
@@ -7033,6 +7604,7 @@ async def publish_sample_coa(
         message=data.get("message", "COA published"),
         verification_code=verification_code,
     )
+
 
 
 # ── SharePoint Integration ─────────────────────────────────────────
@@ -11480,8 +12052,9 @@ async def list_worksheets(
             method = db.execute(
                 select(HplcMethod.name)
                 .join(peptide_methods, peptide_methods.c.method_id == HplcMethod.id)
+                .join(instrument_methods, instrument_methods.c.method_id == HplcMethod.id)
                 .where(peptide_methods.c.peptide_id == peptide_id)
-                .where(HplcMethod.instrument_id == inst_id)
+                .where(instrument_methods.c.instrument_id == inst_id)
                 .limit(1)
             ).scalar_one_or_none()
             return method
@@ -11890,12 +12463,13 @@ async def update_worksheet_item(
                     select(Instrument).where(Instrument.senaite_uid == data.instrument_uid)
                 ).scalar_one_or_none()
                 if inst:
-                    # Find method for this peptide + instrument
+                    # Find method for this peptide + instrument (M2M via instrument_methods)
                     method = db.execute(
                         select(HplcMethod)
                         .join(peptide_methods, peptide_methods.c.method_id == HplcMethod.id)
+                        .join(instrument_methods, instrument_methods.c.method_id == HplcMethod.id)
                         .where(peptide_methods.c.peptide_id == svc_peptide)
-                        .where(HplcMethod.instrument_id == inst.id)
+                        .where(instrument_methods.c.instrument_id == inst.id)
                         .limit(1)
                     ).scalar_one_or_none()
                     if method:

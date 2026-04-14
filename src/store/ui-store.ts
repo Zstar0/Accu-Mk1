@@ -2,7 +2,7 @@ import { create } from 'zustand'
 import { devtools } from 'zustand/middleware'
 
 // Navigation sections for main content area
-export type ActiveSection = 'dashboard' | 'senaite' | 'lims' | 'hplc-analysis' | 'accumark-tools' | 'account'
+export type ActiveSection = 'dashboard' | 'senaite' | 'lims' | 'hplc-analysis' | 'reports' | 'accumark-tools' | 'account'
 
 // Sub-sections within each main section
 export type DashboardSubSection = 'orders' | 'analytics'
@@ -11,8 +11,9 @@ export type LIMSSubSection = 'instruments' | 'methods' | 'peptide-config' | 'ana
 export type HPLCAnalysisSubSection = 'overview' | 'new-analysis' | 'import-analysis' | 'analysis-history' | 'sample-preps' | 'inbox' | 'worksheets' | 'worksheet-detail'
 export type WorksheetSubSection = 'inbox' | 'worksheets' | 'worksheet-detail'
 export type AccuMarkToolsSubSection = 'overview' | 'order-explorer' | 'order-status' | 'coa-explorer' | 'chromatographs' | 'digital-coa'
+export type ReportsSubSection = 'dashboard' | 'sync-debug'
 export type AccountSubSection = 'profile' | 'user-management'
-export type ActiveSubSection = DashboardSubSection | SenaiteSubSection | LIMSSubSection | HPLCAnalysisSubSection | WorksheetSubSection | AccuMarkToolsSubSection | AccountSubSection
+export type ActiveSubSection = DashboardSubSection | SenaiteSubSection | LIMSSubSection | HPLCAnalysisSubSection | WorksheetSubSection | ReportsSubSection | AccuMarkToolsSubSection | AccountSubSection
 
 interface UIState {
   leftSidebarVisible: boolean

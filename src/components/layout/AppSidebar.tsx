@@ -97,6 +97,15 @@ const navItems: NavItem[] = [
     ],
   },
   {
+    id: 'reports',
+    label: 'Reports',
+    icon: Activity,
+    subItems: [
+      { id: 'dashboard', label: 'Dashboard' },
+      { id: 'sync-debug', label: 'Sync Debug', adminOnly: true },
+    ],
+  },
+  {
     id: 'accumark-tools',
     label: 'AccuMark Tools',
     icon: Wrench,

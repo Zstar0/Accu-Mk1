@@ -23,12 +23,36 @@ import {
 import { healthCheck, type HealthResponse } from '@/lib/api'
 import { Separator } from '@/components/ui/separator'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { ClipboardList } from 'lucide-react'
+import { useWorksheetDrawer } from '@/hooks/use-worksheet-drawer'
+import { useUIStore } from '@/store/ui-store'
 
 // Backend connection status type
 type BackendStatus =
   | { state: 'loading' }
   | { state: 'connected'; data: HealthResponse }
   | { state: 'error'; message: string }
+
+function WorksheetHeaderButton() {
+  const { totalOpenItems } = useWorksheetDrawer()
+  return (
+    <Button
+      variant="ghost"
+      size="sm"
+      className="gap-1.5 h-7 px-2.5 bg-accent text-foreground hover:bg-accent/80 hover:shadow-sm cursor-pointer"
+      onClick={() => useUIStore.getState().openWorksheetDrawer()}
+    >
+      <ClipboardList className="h-3.5 w-3.5" />
+      <span className="text-xs">Worksheets</span>
+      {totalOpenItems > 0 && (
+        <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-primary text-[10px] text-primary-foreground font-semibold px-1">
+          {totalOpenItems > 99 ? '99+' : totalOpenItems}
+        </span>
+      )}
+    </Button>
+  )
+}
 
 export function MainWindow() {
   const { theme } = useTheme()
@@ -138,6 +162,9 @@ export function MainWindow() {
               <SidebarTrigger className="-ml-1" />
               <Separator orientation="vertical" className="mr-2 h-4" />
               <span className="text-sm text-muted-foreground">Accu-Mk1</span>
+              <div className="ml-auto">
+                <WorksheetHeaderButton />
+              </div>
             </header>
 
             {/* Main content area */}

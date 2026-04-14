@@ -95,7 +95,8 @@ import { cn } from '@/lib/utils'
 import { EditableDataRow } from '@/components/dashboard/EditableField'
 import { AnalysisTable, StatusBadge } from '@/components/senaite/AnalysisTable'
 import { SamplePrepHplcFlyout } from '@/components/hplc/SamplePrepHplcFlyout'
-import { Microscope, Plus, Search, Trash2 } from 'lucide-react'
+import { SampleActivityLog } from '@/components/senaite/SampleActivityLog'
+import { Microscope, Plus, Search, Trash2, ScrollText } from 'lucide-react'
 
 // --- COA Console ---
 
@@ -1602,6 +1603,9 @@ export function SampleDetails() {
   const [hplcFlyoutPrep, setHplcFlyoutPrep] = useState<SamplePrep | null>(null)
   const [hplcFlyoutMatch, setHplcFlyoutMatch] = useState<HplcScanMatch | null>(null)
 
+  // Activity log flyout
+  const [activityLogOpen, setActivityLogOpen] = useState(false)
+
   // Manage analyses panel
   const [manageAnalysesOpen, setManageAnalysesOpen] = useState(false)
   const [availableServices, setAvailableServices] = useState<AnalysisService[]>([])
@@ -1979,6 +1983,15 @@ export function SampleDetails() {
             >
               <Microscope size={13} />
               HPLC Results
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-1.5 cursor-pointer"
+              onClick={() => setActivityLogOpen(true)}
+            >
+              <ScrollText size={13} />
+              Activity
             </Button>
             <div className="relative">
               <DropdownMenu>
@@ -2885,6 +2898,13 @@ export function SampleDetails() {
           readOnly
         />
       )}
+
+      {/* Activity log flyout */}
+      <SampleActivityLog
+        open={activityLogOpen}
+        onClose={() => setActivityLogOpen(false)}
+        sampleId={sampleId || ''}
+      />
     </div>
   )
 }
