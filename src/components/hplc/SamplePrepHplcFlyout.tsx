@@ -1484,12 +1484,17 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match, readOnly = fa
     const concentrations: number[] = []
     const areas: number[] = []
     const rts: number[] = []
+    const warnings: string[] = []
 
     if (prep.vial_data && prep.vial_data.length > 0) {
-      // Primary: sort vials by target_conc ascending to match injection order
       const sortedVials = [...prep.vial_data].sort(
         (a, b) => (a.target_conc_ug_ml ?? 0) - (b.target_conc_ug_ml ?? 0)
       )
+
+      const missingActual = sortedVials.filter(v => v.actual_conc_ug_ml == null)
+      if (missingActual.length > 0) {
+        warnings.push(`${missingActual.length} of ${sortedVials.length} vials missing actual concentration — using target instead`)
+      }
 
       const count = Math.min(sortedVials.length, sortedInjections.length)
       for (let i = 0; i < count; i++) {
@@ -1508,20 +1513,35 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match, readOnly = fa
         }
       }
     } else {
-      // Fallback: extract concentration from injection filename
-      // e.g. "P-0136_Std_1000_PeakData" → 1000
-      // Apply gravimetric correction if the prep has actual vs target concentrations
-      const correctionRatio =
-        prep.actual_conc_ug_ml != null && prep.target_conc_ug_ml != null && prep.target_conc_ug_ml > 0
-          ? prep.actual_conc_ug_ml / prep.target_conc_ug_ml
-          : 1
-
+      // Extract concentrations from injection filenames (e.g. "P-0136_Std_1000_PeakData" → 1000)
+      const parsed: { inj: typeof sortedInjections[0]; nominal: number }[] = []
       for (const inj of sortedInjections) {
         const match = inj.injection_name.match(/_(\d+(?:\.\d+)?)_?PeakData/i)
           ?? inj.injection_name.match(/(\d+(?:\.\d+)?)(?:[^0-9]|$)/)
         const nominal = match?.[1] != null ? parseFloat(match[1]) : null
-        if (nominal == null || nominal <= 0) continue
-        const conc = nominal * correctionRatio
+        if (nominal != null && nominal > 0) parsed.push({ inj, nominal })
+      }
+
+      if (prep.actual_conc_ug_ml == null || prep.actual_conc_ug_ml <= 0) {
+        // No actual concentration — can't apply gravimetric correction
+        warnings.push('Standard prep is missing actual concentration — cannot apply gravimetric correction. Concentrations from filenames will be uncorrected.')
+      }
+
+      // Gravimetric correction: use explicit target if set, otherwise infer
+      // from the highest nominal (= the undiluted standard level)
+      let correctionRatio: number | null = null
+      if (prep.actual_conc_ug_ml != null && prep.actual_conc_ug_ml > 0) {
+        if (prep.target_conc_ug_ml != null && prep.target_conc_ug_ml > 0) {
+          correctionRatio = prep.actual_conc_ug_ml / prep.target_conc_ug_ml
+        } else if (parsed.length > 0) {
+          const maxNominal = Math.max(...parsed.map(p => p.nominal))
+          correctionRatio = prep.actual_conc_ug_ml / maxNominal
+          warnings.push(`Inferred correction from max filename level (${maxNominal}) → ratio ${correctionRatio.toFixed(4)}`)
+        }
+      }
+
+      for (const { inj, nominal } of parsed) {
+        const conc = correctionRatio != null ? nominal * correctionRatio : nominal
         const mainPeak = inj.main_peak_index >= 0 && inj.main_peak_index < inj.peaks.length
           ? inj.peaks[inj.main_peak_index]
           : null
@@ -1533,7 +1553,7 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match, readOnly = fa
       }
     }
 
-    return concentrations.length > 0 ? { concentrations, areas, rts } : null
+    return concentrations.length > 0 ? { concentrations, areas, rts, warnings } : null
   }, [isStandard, parseResult, prep.vial_data, prep.actual_conc_ug_ml, prep.target_conc_ug_ml])
 
   // Extract first valid chromatogram trace for standard curve provenance
@@ -1957,6 +1977,17 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match, readOnly = fa
                             Expected filenames like <code className="font-mono bg-muted px-1 rounded">_1000_PeakData.csv</code>.
                             Open the debug console (terminal icon) to see what was parsed.
                           </p>
+                        </div>
+                      </div>
+                    )}
+                    {isStandard && standardCurveData && standardCurveData.warnings.length > 0 && (
+                      <div className="flex items-start gap-3 p-4 rounded-lg border border-amber-500/30 bg-amber-500/5">
+                        <AlertTriangle size={16} className="text-amber-500 mt-0.5 shrink-0" />
+                        <div className="space-y-1 text-sm">
+                          <p className="font-medium text-amber-700 dark:text-amber-400">Standard curve warnings</p>
+                          {standardCurveData.warnings.map((w, i) => (
+                            <p key={i} className="text-muted-foreground text-xs">{w}</p>
+                          ))}
                         </div>
                       </div>
                     )}

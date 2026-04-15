@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.28.9 — 2026-04-15
+
+### Standard Curve Gravimetric Correction Fix
+
+- **Fix:** Standard preps with `target_conc_ug_ml = NULL` (all current standards) now infer the correction from the highest filename concentration level instead of silently defaulting to ratio=1
+- **Fix:** Removed silent fallbacks — missing `actual_conc_ug_ml`, inferred correction ratios, and vials missing actuals now surface warnings in the UI
+- **Reported on:** P-0475 (Kisspeptin-10) — concentrations were showing uncorrected nominal values (1, 10, 100, 250, 500, 1000) instead of actuals
+
 ## v0.28.8 — 2026-04-14
 
 ### Calibration Curve Fixes
