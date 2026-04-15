@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.28.10 — 2026-04-15
+
+### Standard Prep Vial Data
+
+- **Fix:** Backend now stores per-vial actual concentrations in `vial_data` for standard preps — previously only populated for blends
+- **Result:** Standard calibration curves use gravimetric actual concentrations directly from the prep instead of parsing filenames
+
 ## v0.28.9 — 2026-04-15
 
 ### Standard Curve Gravimetric Correction Fix

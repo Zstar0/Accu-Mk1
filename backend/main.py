@@ -8689,6 +8689,36 @@ async def create_sample_prep_endpoint(
         "updated_by_email": current_user.email,
     }
 
+    # Standard multi-vial support: store per-vial actual concentrations
+    if session.is_standard and response.vial_calculations and len(response.vial_calculations) > 1:
+        vial_data_list = []
+        for vial_key, vc in response.vial_calculations.items():
+            vn = int(vial_key)
+            vp = (session.vial_params or {}).get(vial_key, {})
+            v_current = {
+                m.step_key: m.weight_mg
+                for m in session.measurements
+                if m.is_current and m.vial_number == vn
+            }
+            vial_data_list.append({
+                "vial_number": vn,
+                "target_conc_ug_ml": vp.get("target_conc_ug_ml"),
+                "target_total_vol_ul": vp.get("target_total_vol_ul"),
+                "stock_vial_empty_mg": v_current.get("stock_vial_empty_mg"),
+                "stock_vial_loaded_mg": v_current.get("stock_vial_loaded_mg"),
+                "stock_conc_ug_ml": vc.get("stock_conc_ug_ml"),
+                "required_diluent_vol_ul": vc.get("required_diluent_vol_ul"),
+                "required_stock_vol_ul": vc.get("required_stock_vol_ul"),
+                "dil_vial_empty_mg": v_current.get("dil_vial_empty_mg"),
+                "dil_vial_with_diluent_mg": v_current.get("dil_vial_with_diluent_mg"),
+                "dil_vial_final_mg": v_current.get("dil_vial_final_mg"),
+                "actual_conc_ug_ml": vc.get("actual_conc_ug_ml"),
+                "actual_diluent_vol_ul": vc.get("actual_diluent_vol_ul"),
+                "actual_stock_vol_ul": vc.get("actual_stock_vol_ul"),
+                "actual_total_vol_ul": vc.get("actual_total_vol_ul"),
+            })
+        data["vial_data"] = json.dumps(vial_data_list)
+
     # Blend support: include component info so HPLC flyout can load per-component curves
     peptide = session.peptide
     if peptide and peptide.is_blend:
