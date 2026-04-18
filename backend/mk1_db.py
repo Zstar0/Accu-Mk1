@@ -247,6 +247,42 @@ def ensure_peptide_request_status_log_table() -> None:
         conn.commit()
 
 
+# ─── clickup_user_mapping DDL ──────────────────────────────────────────────────
+
+_CLICKUP_USER_MAPPING_DDL = """
+CREATE TABLE IF NOT EXISTS clickup_user_mapping (
+    clickup_user_id TEXT PRIMARY KEY,
+    accumk1_user_id UUID,
+    clickup_username TEXT NOT NULL,
+    clickup_email TEXT,
+    auto_matched BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_clickup_user_mapping_unmapped
+    ON clickup_user_mapping (accumk1_user_id) WHERE accumk1_user_id IS NULL;
+"""
+
+
+def ensure_clickup_user_mapping_table() -> None:
+    """
+    Idempotently create the clickup_user_mapping table and its indexes in
+    accumark_mk1. Safe to call on every startup — uses CREATE TABLE/INDEX
+    IF NOT EXISTS.
+
+    Enables the pgcrypto extension first to stay consistent with the other
+    peptide-request ensure-functions (harmless and idempotent; safeguards
+    any future edit that introduces a UUID default on this table).
+    """
+    with get_mk1_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto;")
+            cur.execute(_CLICKUP_USER_MAPPING_DDL)
+        conn.commit()
+
+
 # ─── sample_preps CRUD ─────────────────────────────────────────────────────────
 
 def _generate_sample_id(cur) -> str:
