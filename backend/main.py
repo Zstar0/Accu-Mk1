@@ -49,6 +49,7 @@ from backend.models_peptide_request import (
 )
 from backend.peptide_request_repo import PeptideRequestRepository
 from backend.peptide_request_config import get_config as get_peptide_request_config
+from backend.clickup_webhook import verify_signature
 from parsers import parse_txt_file
 from parsers.peakdata_csv_parser import parse_hplc_files, calculate_purity
 from calculations import CalculationEngine
@@ -12610,6 +12611,17 @@ def get_peptide_request(
     if not row:
         raise HTTPException(404, "not found")
     return row
+
+
+@app.post("/webhooks/clickup")
+async def clickup_webhook(request: Request):
+    raw = await request.body()
+    sig = request.headers.get("X-Signature")
+    cfg = get_peptide_request_config()
+    if not verify_signature(raw, sig, cfg.clickup_webhook_secret):
+        raise HTTPException(401, "invalid signature")
+    # Event dispatch in next task
+    return {"ok": True}
 
 
 # dropdowns from SENAITE LabContact records.
