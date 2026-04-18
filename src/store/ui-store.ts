@@ -2,18 +2,59 @@ import { create } from 'zustand'
 import { devtools } from 'zustand/middleware'
 
 // Navigation sections for main content area
-export type ActiveSection = 'dashboard' | 'senaite' | 'lims' | 'hplc-analysis' | 'reports' | 'accumark-tools' | 'account'
+export type ActiveSection =
+  | 'dashboard'
+  | 'senaite'
+  | 'lims'
+  | 'hplc-analysis'
+  | 'reports'
+  | 'accumark-tools'
+  | 'account'
+  | 'peptide-requests'
 
 // Sub-sections within each main section
 export type DashboardSubSection = 'orders' | 'analytics'
-export type SenaiteSubSection = 'samples' | 'event-log' | 'sample-details' | 'receive-sample'
-export type LIMSSubSection = 'instruments' | 'methods' | 'peptide-config' | 'analysis-services' | 'service-groups'
-export type HPLCAnalysisSubSection = 'overview' | 'new-analysis' | 'import-analysis' | 'analysis-history' | 'sample-preps' | 'inbox' | 'worksheets' | 'worksheet-detail'
+export type SenaiteSubSection =
+  | 'samples'
+  | 'event-log'
+  | 'sample-details'
+  | 'receive-sample'
+export type LIMSSubSection =
+  | 'instruments'
+  | 'methods'
+  | 'peptide-config'
+  | 'analysis-services'
+  | 'service-groups'
+export type HPLCAnalysisSubSection =
+  | 'overview'
+  | 'new-analysis'
+  | 'import-analysis'
+  | 'analysis-history'
+  | 'sample-preps'
+  | 'inbox'
+  | 'worksheets'
+  | 'worksheet-detail'
 export type WorksheetSubSection = 'inbox' | 'worksheets' | 'worksheet-detail'
-export type AccuMarkToolsSubSection = 'overview' | 'order-explorer' | 'order-status' | 'coa-explorer' | 'chromatographs' | 'digital-coa'
+export type AccuMarkToolsSubSection =
+  | 'overview'
+  | 'order-explorer'
+  | 'order-status'
+  | 'coa-explorer'
+  | 'chromatographs'
+  | 'digital-coa'
 export type ReportsSubSection = 'dashboard' | 'sync-debug'
 export type AccountSubSection = 'profile' | 'user-management'
-export type ActiveSubSection = DashboardSubSection | SenaiteSubSection | LIMSSubSection | HPLCAnalysisSubSection | WorksheetSubSection | ReportsSubSection | AccuMarkToolsSubSection | AccountSubSection
+export type PeptideRequestsSubSection = 'list' | 'detail'
+export type ActiveSubSection =
+  | DashboardSubSection
+  | SenaiteSubSection
+  | LIMSSubSection
+  | HPLCAnalysisSubSection
+  | WorksheetSubSection
+  | ReportsSubSection
+  | AccuMarkToolsSubSection
+  | AccountSubSection
+  | PeptideRequestsSubSection
 
 interface UIState {
   leftSidebarVisible: boolean
@@ -29,6 +70,7 @@ interface UIState {
   sampleDetailsTargetId: string | null
   samplePrepTargetId: number | null
   methodsTargetId: number | null
+  peptideRequestTargetId: string | null
   updateVersion: string | null
   updateReady: boolean
 
@@ -49,17 +91,28 @@ interface UIState {
   navigateToSample: (sampleId: string) => void
   navigateToSamplePrep: (prepId: number) => void
   navigateToMethod: (methodId: number) => void
+  navigateToPeptideRequest: (requestId: string) => void
   setUpdateVersion: (version: string | null) => void
   setUpdateReady: (ready: boolean) => void
 
   worksheetDrawerOpen: boolean
   activeWorksheetId: number | null
-  worksheetPrepPrefill: { sampleId: string; peptideId: number | null; method: string | null; instrumentId: number | null } | null
+  worksheetPrepPrefill: {
+    sampleId: string
+    peptideId: number | null
+    method: string | null
+    instrumentId: number | null
+  } | null
 
   openWorksheetDrawer: (worksheetId?: number) => void
   closeWorksheetDrawer: () => void
   setActiveWorksheetId: (id: number | null) => void
-  startPrepFromWorksheet: (prefill: { sampleId: string; peptideId: number | null; method: string | null; instrumentId: number | null }) => void
+  startPrepFromWorksheet: (prefill: {
+    sampleId: string
+    peptideId: number | null
+    method: string | null
+    instrumentId: number | null
+  }) => void
   clearWorksheetPrepPrefill: () => void
 }
 
@@ -79,6 +132,7 @@ export const useUIStore = create<UIState>()(
       sampleDetailsTargetId: null,
       samplePrepTargetId: null,
       methodsTargetId: null,
+      peptideRequestTargetId: null,
       updateVersion: null,
       updateReady: false,
       worksheetDrawerOpen: false,
@@ -137,14 +191,22 @@ export const useUIStore = create<UIState>()(
         set({ lastQuickPaneEntry: text }, undefined, 'setLastQuickPaneEntry'),
 
       setActiveSection: section =>
-        set({ activeSection: section, activeSubSection: 'overview' }, undefined, 'setActiveSection'),
+        set(
+          { activeSection: section, activeSubSection: 'overview' },
+          undefined,
+          'setActiveSection'
+        ),
 
       setActiveSubSection: subSection =>
         set({ activeSubSection: subSection }, undefined, 'setActiveSubSection'),
 
       navigateTo: (section, subSection) =>
         set(
-          state => ({ activeSection: section, activeSubSection: subSection, navigationKey: state.navigationKey + 1 }),
+          state => ({
+            activeSection: section,
+            activeSubSection: subSection,
+            navigationKey: state.navigationKey + 1,
+          }),
           undefined,
           'navigateTo'
         ),
@@ -161,7 +223,7 @@ export const useUIStore = create<UIState>()(
           'navigateToPeptide'
         ),
 
-      navigateToOrderExplorer: (orderId) =>
+      navigateToOrderExplorer: orderId =>
         set(
           state => ({
             activeSection: 'accumark-tools',
@@ -173,7 +235,7 @@ export const useUIStore = create<UIState>()(
           'navigateToOrderExplorer'
         ),
 
-      navigateToSample: (sampleId) =>
+      navigateToSample: sampleId =>
         set(
           state => ({
             activeSection: 'senaite',
@@ -185,7 +247,7 @@ export const useUIStore = create<UIState>()(
           'navigateToSample'
         ),
 
-      navigateToSamplePrep: (prepId) =>
+      navigateToSamplePrep: prepId =>
         set(
           state => ({
             activeSection: 'hplc-analysis',
@@ -197,7 +259,7 @@ export const useUIStore = create<UIState>()(
           'navigateToSamplePrep'
         ),
 
-      navigateToMethod: (methodId) =>
+      navigateToMethod: methodId =>
         set(
           state => ({
             activeSection: 'lims',
@@ -209,13 +271,25 @@ export const useUIStore = create<UIState>()(
           'navigateToMethod'
         ),
 
-      setUpdateVersion: (version) =>
+      navigateToPeptideRequest: requestId =>
+        set(
+          state => ({
+            activeSection: 'peptide-requests',
+            activeSubSection: 'detail',
+            peptideRequestTargetId: requestId,
+            navigationKey: state.navigationKey + 1,
+          }),
+          undefined,
+          'navigateToPeptideRequest'
+        ),
+
+      setUpdateVersion: version =>
         set({ updateVersion: version }, undefined, 'setUpdateVersion'),
 
-      setUpdateReady: (ready) =>
+      setUpdateReady: ready =>
         set({ updateReady: ready }, undefined, 'setUpdateReady'),
 
-      openWorksheetDrawer: (worksheetId) =>
+      openWorksheetDrawer: worksheetId =>
         set(
           state => ({
             worksheetDrawerOpen: true,
@@ -228,10 +302,10 @@ export const useUIStore = create<UIState>()(
       closeWorksheetDrawer: () =>
         set({ worksheetDrawerOpen: false }, undefined, 'closeWorksheetDrawer'),
 
-      setActiveWorksheetId: (id) =>
+      setActiveWorksheetId: id =>
         set({ activeWorksheetId: id }, undefined, 'setActiveWorksheetId'),
 
-      startPrepFromWorksheet: (prefill) =>
+      startPrepFromWorksheet: prefill =>
         set(
           state => ({
             worksheetPrepPrefill: prefill,
@@ -245,7 +319,11 @@ export const useUIStore = create<UIState>()(
         ),
 
       clearWorksheetPrepPrefill: () =>
-        set({ worksheetPrepPrefill: null }, undefined, 'clearWorksheetPrepPrefill'),
+        set(
+          { worksheetPrepPrefill: null },
+          undefined,
+          'clearWorksheetPrepPrefill'
+        ),
     }),
     {
       name: 'ui-store',
