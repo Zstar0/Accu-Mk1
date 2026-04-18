@@ -22,19 +22,9 @@ class PeptideRequestRepository:
         clickup_list_id: str,
     ) -> PeptideRequest:
         """Insert a new request. Returns existing row if (wp_user_id, idempotency_key)
-        already exists AND payload matches."""
+        already exists. Race-safe via INSERT ... ON CONFLICT DO NOTHING."""
         with get_mk1_conn() as conn:
             cur = conn.cursor(cursor_factory=RealDictCursor)
-            cur.execute("""
-                SELECT * FROM peptide_requests
-                WHERE submitted_by_wp_user_id = %s AND idempotency_key = %s
-            """, (data.submitted_by_wp_user_id, idempotency_key))
-            existing = cur.fetchone()
-            if existing:
-                # Payload equality check (simple: compare compound_name + kind).
-                # For v1, trust idempotency — return existing.
-                return _row_to_model(dict(existing))
-
             cur.execute("""
                 INSERT INTO peptide_requests (
                     idempotency_key, submitted_by_wp_user_id,
@@ -45,7 +35,9 @@ class PeptideRequestRepository:
                     clickup_list_id
                 ) VALUES (
                     %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
-                ) RETURNING *
+                )
+                ON CONFLICT (submitted_by_wp_user_id, idempotency_key) DO NOTHING
+                RETURNING *
             """, (
                 idempotency_key, data.submitted_by_wp_user_id,
                 data.submitted_by_email, data.submitted_by_name,
@@ -55,6 +47,13 @@ class PeptideRequestRepository:
                 clickup_list_id,
             ))
             row = cur.fetchone()
+            if row is None:
+                # Conflict hit — another concurrent insert won. Return the existing row.
+                cur.execute("""
+                    SELECT * FROM peptide_requests
+                    WHERE submitted_by_wp_user_id = %s AND idempotency_key = %s
+                """, (data.submitted_by_wp_user_id, idempotency_key))
+                row = cur.fetchone()
             conn.commit()
             return _row_to_model(dict(row))
 

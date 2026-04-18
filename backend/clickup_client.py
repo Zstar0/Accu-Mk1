@@ -22,7 +22,7 @@ class ClickUpClient:
         ]
         if r.sequence_or_structure:
             lines.append(f"**Sequence/structure:** {r.sequence_or_structure}")
-        if r.molecular_weight:
+        if r.molecular_weight is not None:
             lines.append(f"**Molecular weight:** {r.molecular_weight}")
         if r.cas_or_reference:
             lines.append(f"**CAS/reference:** {r.cas_or_reference}")
