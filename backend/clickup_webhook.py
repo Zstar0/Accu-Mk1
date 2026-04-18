@@ -159,5 +159,12 @@ def _relay_with_retry(
 
 
 def enqueue_completion_side_effects(request_id: UUID) -> None:
-    """Stub — Task 14 will implement coupon + SENAITE side effects."""
-    pass
+    """Schedule coupon + SENAITE side effects in a background daemon thread.
+
+    Mirrors the lightweight concurrency model used by enqueue_relay_status_to_wp
+    (no job queue in v1). `run_all` catches per-function failures and writes a
+    `*_failed_at` timestamp so the UI can surface them.
+    """
+    import threading
+    from backend.jobs.completion_side_effects import run_all
+    threading.Thread(target=run_all, args=(request_id,), daemon=True).start()
