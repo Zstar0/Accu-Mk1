@@ -30,6 +30,7 @@ const VALID_SECTIONS = new Set<string>([
   'accumark-tools',
   'account',
   'peptide-requests',
+  'admin-clickup-users',
 ])
 
 interface ParsedNav {

@@ -21,6 +21,7 @@ import { ReportsDashboard } from '@/components/reports/ReportsDashboard'
 import { ReportsSyncDebug } from '@/components/reports/ReportsSyncDebug'
 import { PeptideRequestsList } from '@/pages/PeptideRequestsList'
 import { PeptideRequestDetail } from '@/pages/PeptideRequestDetail'
+import { AdminClickupUsers } from '@/pages/AdminClickupUsers'
 import { useUIStore } from '@/store/ui-store'
 import { useAuthStore } from '@/store/auth-store'
 
@@ -76,6 +77,8 @@ export function MainWindowContent({
       case 'peptide-requests':
         if (activeSubSection === 'detail') return <PeptideRequestDetail />
         return <PeptideRequestsList />
+      case 'admin-clickup-users':
+        return <AdminClickupUsers />
       default:
         return null
     }

@@ -29,7 +29,7 @@ def _read_app_version() -> str:
 
 APP_VERSION = _read_app_version()
 
-from fastapi import FastAPI, Depends, Form, HTTPException, Header, Query, Request, Response, UploadFile, status
+from fastapi import FastAPI, Body, Depends, Form, HTTPException, Header, Query, Request, Response, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, validator
 from sqlalchemy.orm import Session, joinedload
@@ -12644,6 +12644,34 @@ def get_peptide_request_history(
 ):
     lrepo = StatusLogRepository()
     return lrepo.get_for_request(UUID(request_id))
+
+
+# ── Admin: ClickUp user mapping ──────────────────────────────────────
+# Concerns (flagged, not blocking):
+#   * Auth: spec called for require_admin_or_service which does not exist.
+#     Using require_internal_service_token (same as peptide-request API)
+#     means an admin must present the shared service token, not their user
+#     bearer. UX is broken for a real admin workflow; consistent with Tasks
+#     10/16 pattern. Pre-merge resolution.
+#   * Schema: accumk1_user_id is UUID but users.id is INTEGER (Task 6
+#     mismatch). UUID(accumk1_user_id) will raise on any real integer-id
+#     input. Deferred to pre-merge schema reconciliation.
+
+@app.get("/api/admin/clickup-users/unmapped")
+def list_unmapped_clickup_users(
+    _: None = Depends(require_internal_service_token),
+):
+    return ClickUpUserMappingRepository().list_unmapped()
+
+
+@app.post("/api/admin/clickup-users/{clickup_user_id}/map")
+def map_clickup_user(
+    clickup_user_id: str,
+    accumk1_user_id: str = Body(..., embed=True),
+    _: None = Depends(require_internal_service_token),
+):
+    ClickUpUserMappingRepository().set_mapping(clickup_user_id, UUID(accumk1_user_id))
+    return {"ok": True}
 
 
 @app.post("/webhooks/clickup")

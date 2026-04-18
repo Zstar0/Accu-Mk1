@@ -11,6 +11,7 @@ export type ActiveSection =
   | 'accumark-tools'
   | 'account'
   | 'peptide-requests'
+  | 'admin-clickup-users'
 
 // Sub-sections within each main section
 export type DashboardSubSection = 'orders' | 'analytics'

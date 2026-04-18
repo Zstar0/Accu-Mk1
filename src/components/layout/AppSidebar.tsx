@@ -12,6 +12,7 @@ import {
   LayoutDashboard,
   RefreshCw,
   TestTube,
+  UserCog,
 } from 'lucide-react'
 import { relaunch } from '@tauri-apps/plugin-process'
 import {
@@ -54,6 +55,7 @@ interface NavItem {
   label: string
   icon: React.ComponentType<{ className?: string }>
   subItems?: SubItem[]
+  adminOnly?: boolean
 }
 
 const navItems: NavItem[] = [
@@ -138,6 +140,15 @@ const navItems: NavItem[] = [
       { id: 'user-management', label: 'User Management', adminOnly: true },
     ],
   },
+  // Admin-only top-level item. No natural parent section exists today — the
+  // admin grouping has not been formalized. TBD: if more admin pages land,
+  // fold these under a dedicated "Admin" parent section.
+  {
+    id: 'admin-clickup-users',
+    label: 'ClickUp Users',
+    icon: UserCog,
+    adminOnly: true,
+  },
 ]
 
 const SIDEBAR_EXPANDED_KEY = 'sidebar-expanded-sections'
@@ -199,6 +210,7 @@ export function AppSidebar() {
           <SidebarGroupContent>
             <SidebarMenu>
               {navItems.map(item => {
+                if (item.adminOnly && !isAdmin) return null
                 const Icon = item.icon
                 const isActive = activeSection === item.id
                 const visibleSubItems = item.subItems?.filter(
