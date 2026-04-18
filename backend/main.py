@@ -45,7 +45,7 @@ from auth import (
     SenaiteCredentials,
 )
 from backend.models_peptide_request import (
-    PeptideRequestCreate, PeptideRequest, PeptideRequestList,
+    PeptideRequestCreate, PeptideRequest, PeptideRequestList, StatusLogEntry,
 )
 from backend.peptide_request_repo import PeptideRequestRepository
 from backend.status_log_repo import StatusLogRepository
@@ -12632,6 +12632,18 @@ def get_peptide_request(
     if not row:
         raise HTTPException(404, "not found")
     return row
+
+
+@app.get(
+    "/api/peptide-requests/{request_id}/history",
+    response_model=list[StatusLogEntry],
+)
+def get_peptide_request_history(
+    request_id: str,
+    _: None = Depends(require_internal_service_token),
+):
+    lrepo = StatusLogRepository()
+    return lrepo.get_for_request(UUID(request_id))
 
 
 @app.post("/webhooks/clickup")
