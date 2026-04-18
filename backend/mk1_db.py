@@ -48,6 +48,11 @@ def get_mk1_db() -> Generator[psycopg2.extensions.connection, None, None]:
         conn.close()
 
 
+# Canonical alias used by newer modules (peptide_requests, status_log, etc.).
+# Kept alongside get_mk1_db for backward compatibility with existing callers.
+get_mk1_conn = get_mk1_db
+
+
 # ─── sample_preps DDL ──────────────────────────────────────────────────────────
 
 _SAMPLE_PREPS_DDL = """
@@ -126,6 +131,77 @@ def ensure_sample_preps_table() -> None:
             cur.execute("ALTER TABLE sample_preps ADD COLUMN IF NOT EXISTS created_by_email VARCHAR(320)")
             cur.execute("ALTER TABLE sample_preps ADD COLUMN IF NOT EXISTS updated_by_user_id INTEGER")
             cur.execute("ALTER TABLE sample_preps ADD COLUMN IF NOT EXISTS updated_by_email VARCHAR(320)")
+        conn.commit()
+
+
+# ─── peptide_requests DDL ──────────────────────────────────────────────────────
+
+_PEPTIDE_REQUESTS_DDL = """
+CREATE TABLE IF NOT EXISTS peptide_requests (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    idempotency_key TEXT NOT NULL,
+    submitted_by_wp_user_id INTEGER NOT NULL,
+    submitted_by_email TEXT NOT NULL,
+    submitted_by_name TEXT NOT NULL,
+    compound_kind TEXT NOT NULL CHECK (compound_kind IN ('peptide', 'other')),
+    compound_name TEXT NOT NULL,
+    vendor_producer TEXT NOT NULL,
+    sequence_or_structure TEXT,
+    molecular_weight NUMERIC,
+    cas_or_reference TEXT,
+    vendor_catalog_number TEXT,
+    reason_notes TEXT,
+    expected_monthly_volume INTEGER,
+    status TEXT NOT NULL DEFAULT 'new' CHECK (status IN (
+        'new', 'approved', 'ordering_standard', 'sample_prep_created',
+        'in_process', 'on_hold', 'completed', 'rejected', 'cancelled'
+    )),
+    previous_status TEXT,
+    rejection_reason TEXT,
+    sample_id TEXT,
+    clickup_task_id TEXT,
+    clickup_list_id TEXT NOT NULL,
+    clickup_assignee_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+    senaite_service_uid TEXT,
+    wp_coupon_code TEXT,
+    wp_coupon_issued_at TIMESTAMPTZ,
+    completed_at TIMESTAMPTZ,
+    rejected_at TIMESTAMPTZ,
+    cancelled_at TIMESTAMPTZ,
+    clickup_create_failed_at TIMESTAMPTZ,
+    coupon_failed_at TIMESTAMPTZ,
+    senaite_clone_failed_at TIMESTAMPTZ,
+    wp_relay_failed_at TIMESTAMPTZ
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_peptide_requests_idempotency
+    ON peptide_requests (submitted_by_wp_user_id, idempotency_key);
+
+CREATE INDEX IF NOT EXISTS idx_peptide_requests_wp_user
+    ON peptide_requests (submitted_by_wp_user_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_peptide_requests_status
+    ON peptide_requests (status, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_peptide_requests_clickup_task
+    ON peptide_requests (clickup_task_id) WHERE clickup_task_id IS NOT NULL;
+"""
+
+
+def ensure_peptide_requests_table() -> None:
+    """
+    Idempotently create the peptide_requests table and its indexes in accumark_mk1.
+    Safe to call on every startup — uses CREATE TABLE/INDEX IF NOT EXISTS.
+
+    Enables the pgcrypto extension first because gen_random_uuid() is the
+    default for the `id` column.
+    """
+    with get_mk1_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto;")
+            cur.execute(_PEPTIDE_REQUESTS_DDL)
         conn.commit()
 
 
