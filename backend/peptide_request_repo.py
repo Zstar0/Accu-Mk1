@@ -97,6 +97,33 @@ class PeptideRequestRepository:
             rows = [_row_to_model(dict(r)) for r in cur.fetchall()]
             return rows, total
 
+    def list_all(
+        self, *, wp_user_id: int | None = None,
+        status: list[str] | None = None,
+        limit: int = 50, offset: int = 0,
+    ) -> tuple[list[PeptideRequest], int]:
+        """Admin/LIMS list across all customers. wp_user_id is an optional filter."""
+        with get_mk1_conn() as conn:
+            cur = conn.cursor(cursor_factory=RealDictCursor)
+            where: list[str] = []
+            params: list = []
+            if wp_user_id is not None:
+                where.append("submitted_by_wp_user_id = %s")
+                params.append(wp_user_id)
+            if status:
+                where.append("status = ANY(%s)")
+                params.append(status)
+            where_sql = (" WHERE " + " AND ".join(where)) if where else ""
+            cur.execute(f"SELECT COUNT(*) AS count FROM peptide_requests{where_sql}", params)
+            total = cur.fetchone()["count"]
+            cur.execute(
+                f"SELECT * FROM peptide_requests{where_sql} "
+                f"ORDER BY created_at DESC LIMIT %s OFFSET %s",
+                (*params, limit, offset),
+            )
+            rows = [_row_to_model(dict(r)) for r in cur.fetchall()]
+            return rows, total
+
     def update_clickup_task_id(self, request_id: UUID, task_id: str) -> None:
         with get_mk1_conn() as conn:
             cur = conn.cursor()

@@ -12674,6 +12674,70 @@ def map_clickup_user(
     return {"ok": True}
 
 
+# ── LIMS UI endpoints (JWT-gated) ────────────────────────────────────
+# Parallel to the /api/peptide-requests and /api/admin/clickup-users routes
+# above. Those are service-token-gated for integration-service (WP bridge);
+# these are JWT-gated for LIMS staff in the React app. No role gating for v1
+# — any authenticated user can hit admin routes. A proper role gate
+# (lab_manager vs regular) is a follow-up.
+
+@app.get("/api/lims/peptide-requests", response_model=PeptideRequestList)
+def lims_list_peptide_requests(
+    wp_user_id: int | None = None,
+    status: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+    _user=Depends(get_current_user),
+):
+    repo = PeptideRequestRepository()
+    status_list = status.split(",") if status else None
+    items, total = repo.list_all(
+        wp_user_id=wp_user_id, status=status_list, limit=limit, offset=offset
+    )
+    return PeptideRequestList(total=total, limit=limit, offset=offset, items=items)
+
+
+@app.get("/api/lims/peptide-requests/{request_id}", response_model=PeptideRequest)
+def lims_get_peptide_request(
+    request_id: str,
+    _user=Depends(get_current_user),
+):
+    repo = PeptideRequestRepository()
+    row = repo.get_by_id(UUID(request_id))
+    if not row:
+        raise HTTPException(404, "not found")
+    return row
+
+
+@app.get(
+    "/api/lims/peptide-requests/{request_id}/history",
+    response_model=list[StatusLogEntry],
+)
+def lims_get_peptide_request_history(
+    request_id: str,
+    _user=Depends(get_current_user),
+):
+    lrepo = StatusLogRepository()
+    return lrepo.get_for_request(UUID(request_id))
+
+
+@app.get("/api/lims/admin/clickup-users/unmapped")
+def lims_list_unmapped_clickup_users(
+    _user=Depends(get_current_user),
+):
+    return ClickUpUserMappingRepository().list_unmapped()
+
+
+@app.post("/api/lims/admin/clickup-users/{clickup_user_id}/map")
+def lims_map_clickup_user(
+    clickup_user_id: str,
+    accumk1_user_id: str = Body(..., embed=True),
+    _user=Depends(get_current_user),
+):
+    ClickUpUserMappingRepository().set_mapping(clickup_user_id, UUID(accumk1_user_id))
+    return {"ok": True}
+
+
 @app.post("/webhooks/clickup")
 async def clickup_webhook(request: Request):
     raw = await request.body()

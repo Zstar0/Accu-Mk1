@@ -13,7 +13,7 @@ export function useUnmappedClickupUsers() {
   return useQuery({
     queryKey: ['clickup-users', 'unmapped'],
     queryFn: () =>
-      apiFetch<ClickUpUserMapping[]>('/api/admin/clickup-users/unmapped'),
+      apiFetch<ClickUpUserMapping[]>('/api/lims/admin/clickup-users/unmapped'),
   })
 }
 
@@ -25,7 +25,7 @@ export function useMapClickupUser() {
       accumk1UserId: string
     }) => {
       return apiFetch<{ ok: boolean }>(
-        `/api/admin/clickup-users/${args.clickupUserId}/map`,
+        `/api/lims/admin/clickup-users/${args.clickupUserId}/map`,
         {
           method: 'POST',
           body: JSON.stringify({ accumk1_user_id: args.accumk1UserId }),
