@@ -39,9 +39,15 @@ from models import AuditLog, Settings, Job, Sample, Result, Instrument, Analysis
 from auth import (
     get_current_user, require_admin, create_access_token,
     verify_password, get_password_hash, seed_admin_user,
+    require_internal_service_token,
     UserCreate, UserRead, UserUpdate, PasswordChange, TokenResponse,
     SenaiteCredentials,
 )
+from backend.models_peptide_request import (
+    PeptideRequestCreate, PeptideRequest,
+)
+from backend.peptide_request_repo import PeptideRequestRepository
+from backend.peptide_request_config import get_config as get_peptide_request_config
 from parsers import parse_txt_file
 from parsers.peakdata_csv_parser import parse_hplc_files, calculate_purity
 from calculations import CalculationEngine
@@ -12549,6 +12555,30 @@ async def reorder_worksheet_items(
             item.sort_order = idx
     db.commit()
     return {"status": "reordered", "count": len(data.item_ids)}
+
+
+# ── Peptide requests API (integration-service bridge) ────────────────
+# Called server-to-server by integration-service when a WP user submits the
+# peptide-request form. Internal service token + idempotency key are required.
+
+@app.post("/api/peptide-requests", response_model=PeptideRequest)
+def create_peptide_request(
+    data: PeptideRequestCreate,
+    response: Response,
+    idempotency_key: str = Header(None, alias="Idempotency-Key"),
+    _: None = Depends(require_internal_service_token),
+):
+    if not idempotency_key:
+        raise HTTPException(400, "Idempotency-Key header required")
+    repo = PeptideRequestRepository()
+    cfg = get_peptide_request_config()
+    row = repo.create(
+        data,
+        idempotency_key=idempotency_key,
+        clickup_list_id=cfg.clickup_list_id,
+    )
+    response.status_code = status.HTTP_201_CREATED
+    return row
 
 
 # dropdowns from SENAITE LabContact records.
