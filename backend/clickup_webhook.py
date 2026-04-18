@@ -4,6 +4,7 @@ import logging
 from uuid import UUID
 
 from backend.clickup_user_mapping_repo import ClickUpUserMappingRepository
+from backend.jobs.relay_status_to_wp import run_once as relay_run_once
 from backend.peptide_request_config import PeptideRequestConfig
 from backend.peptide_request_repo import PeptideRequestRepository
 from backend.status_log_repo import StatusLogRepository
@@ -92,7 +93,7 @@ def dispatch_event(
             # Duplicate clickup_event_id — short-circuit any downstream jobs.
             return
         if mapped in ("approved", "rejected", "completed"):
-            enqueue_relay_status_to_wp(req.id)
+            enqueue_relay_status_to_wp(req.id, new_status=mapped, previous_status=prev)
         if mapped == "completed":
             enqueue_completion_side_effects(req.id)
 
@@ -106,9 +107,55 @@ def dispatch_event(
         return
 
 
-def enqueue_relay_status_to_wp(request_id: UUID) -> None:
-    """Stub — Task 13 will implement the WP relay background job."""
-    pass
+def enqueue_relay_status_to_wp(
+    request_id: UUID, new_status: str, previous_status: str | None
+) -> None:
+    """Schedule a background relay of this status change to WP.
+
+    Accu-Mk1 does not have a general-purpose job queue (no Celery, APScheduler,
+    or worker pool today — see file_watcher.py / scale_agent.py). We use a
+    daemon thread to match the lightweight concurrency model already in the
+    codebase. Retry is best-effort with exponential-ish backoff; after all
+    attempts fail we mark the row with wp_relay_failed_at so the UI and any
+    future reconciliation sweep can surface it.
+    """
+    import threading
+    threading.Thread(
+        target=_relay_with_retry,
+        args=(request_id, new_status, previous_status),
+        daemon=True,
+    ).start()
+
+
+def _relay_with_retry(
+    request_id: UUID, new_status: str, previous_status: str | None
+) -> None:
+    import time
+    delays = [60, 300, 900, 3600, 14400]
+    for i, delay in enumerate([0, *delays]):
+        if delay:
+            time.sleep(delay)
+        try:
+            relay_run_once(
+                request_id,
+                new_status=new_status,
+                previous_status=previous_status,
+            )
+            return
+        except Exception as e:
+            log.warning("relay attempt %d failed: %s", i + 1, e)
+    # All retries exhausted — mark the row for admin attention.
+    from backend.mk1_db import get_mk1_conn
+    try:
+        with get_mk1_conn() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "UPDATE peptide_requests SET wp_relay_failed_at = NOW() WHERE id = %s",
+                (str(request_id),),
+            )
+            conn.commit()
+    except Exception as e:
+        log.error("failed to mark wp_relay_failed_at for %s: %s", request_id, e)
 
 
 def enqueue_completion_side_effects(request_id: UUID) -> None:
