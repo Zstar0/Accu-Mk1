@@ -14,6 +14,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Union
+from uuid import UUID
 
 # App version: prefer APP_VERSION env var (set by Docker build-arg),
 # fall back to reading package.json (works in local dev).
@@ -44,7 +45,7 @@ from auth import (
     SenaiteCredentials,
 )
 from backend.models_peptide_request import (
-    PeptideRequestCreate, PeptideRequest,
+    PeptideRequestCreate, PeptideRequest, PeptideRequestList,
 )
 from backend.peptide_request_repo import PeptideRequestRepository
 from backend.peptide_request_config import get_config as get_peptide_request_config
@@ -12580,6 +12581,34 @@ def create_peptide_request(
         idempotency_key=idempotency_key,
         clickup_list_id=cfg.clickup_list_id,
     )
+    return row
+
+
+@app.get("/api/peptide-requests", response_model=PeptideRequestList)
+def list_peptide_requests(
+    wp_user_id: int,
+    status: str | None = None,  # comma-separated
+    limit: int = 50,
+    offset: int = 0,
+    _: None = Depends(require_internal_service_token),
+):
+    repo = PeptideRequestRepository()
+    status_list = status.split(",") if status else None
+    items, total = repo.list_by_wp_user(
+        wp_user_id, status=status_list, limit=limit, offset=offset
+    )
+    return PeptideRequestList(total=total, limit=limit, offset=offset, items=items)
+
+
+@app.get("/api/peptide-requests/{request_id}", response_model=PeptideRequest)
+def get_peptide_request(
+    request_id: str,
+    _: None = Depends(require_internal_service_token),
+):
+    repo = PeptideRequestRepository()
+    row = repo.get_by_id(UUID(request_id))
+    if not row:
+        raise HTTPException(404, "not found")
     return row
 
 
