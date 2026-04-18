@@ -51,6 +51,7 @@ from backend.peptide_request_repo import PeptideRequestRepository
 from backend.status_log_repo import StatusLogRepository
 from backend.clickup_user_mapping_repo import ClickUpUserMappingRepository
 from backend.peptide_request_config import get_config as get_peptide_request_config
+from backend.clickup_client import ClickUpClient
 from backend.clickup_webhook import verify_signature, dispatch_event
 from parsers import parse_txt_file
 from parsers.peakdata_csv_parser import parse_hplc_files, calculate_purity
@@ -12584,6 +12585,24 @@ def create_peptide_request(
         idempotency_key=idempotency_key,
         clickup_list_id=cfg.clickup_list_id,
     )
+    # Best-effort inline ClickUp task creation. On failure the retry job
+    # (backend/jobs/clickup_task_retry.py) will pick up the row once it is
+    # > 60s old. Never block the 201 response on ClickUp availability.
+    if not row.clickup_task_id:
+        try:
+            client = ClickUpClient(
+                api_token=cfg.clickup_api_token,
+                list_id=cfg.clickup_list_id,
+                accumk1_base_url=os.environ.get("ACCUMK1_BASE_URL", ""),
+            )
+            task_id = client.create_task_for_request(row)
+            repo.update_clickup_task_id(row.id, task_id)
+            row = repo.get_by_id(row.id)
+        except Exception:
+            import logging as _logging
+            _logging.getLogger(__name__).exception(
+                "inline clickup create failed; retry job will pick up"
+            )
     return row
 
 
