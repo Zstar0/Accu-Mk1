@@ -1,0 +1,201 @@
+# Peptide Request Flow
+
+End-to-end reference for the peptide/compound testing request feature: WP submission → Accu-Mk1 entity → ClickUp task → lab workflow → on-completion side effects (WooCommerce coupon + SENAITE Analysis Service clone).
+
+## Overview
+
+A customer on the WordPress site fills out a form requesting that Accumark add testing for a new peptide (or other compound). That form submission becomes:
+
+1. A canonical **peptide request** record in Accu-Mk1 Postgres.
+2. A **ClickUp task** in the lab's workflow list.
+3. Lab staff move the task through ClickUp columns as work progresses.
+4. On `completed`, Accu-Mk1 issues a WooCommerce discount coupon to the customer and clones the SENAITE Analysis Service template so the new compound is immediately testable.
+
+The customer sees status updates on the WP site; the lab operates entirely in ClickUp; Accu-Mk1 is the source of truth for the record and fires the side effects.
+
+## Architecture
+
+Three systems participate:
+
+| System                | Role                                                                 |
+| --------------------- | -------------------------------------------------------------------- |
+| WordPress (WP)        | Customer-facing form + status display + WooCommerce coupon issuance  |
+| `integration-service` | Narrowly scoped bridge: relays WP ↔ Accu-Mk1 HTTP calls              |
+| Accu-Mk1              | Canonical entity store, ClickUp integration, SENAITE integration     |
+
+**Canonical record lives in Accu-Mk1 Postgres.** WP and ClickUp are views / workflow surfaces. The **status source of truth is the ClickUp column** for the task, mapped to a Postgres enum value via configuration. Column renames don't break the system — the mapping does.
+
+`integration-service` has no domain logic for peptide requests. It forwards validated WP payloads to Accu-Mk1's internal API and relays status updates back to WP. All LIMS-facing integrations (ClickUp, SENAITE, WooCommerce coupon API) live in Accu-Mk1.
+
+## Postgres Tables
+
+Three tables, all in the default schema.
+
+### `peptide_requests`
+
+The main entity.
+
+- `id` (UUID, pk)
+- `idempotency_key` (text, unique) — derived from WP form submission; dedupes retries
+- Submitter fields: `wp_user_id`, `submitter_email`, `submitter_name`
+- Compound fields: `compound_name`, `compound_kind` (`peptide` | `other`), `molecular_weight`, `sequence`, `notes`
+- `status` (enum, see below), `previous_status` (for `on_hold` restoration)
+- `clickup_task_id` (text, nullable until inline create succeeds)
+- `senaite_service_uid` (text, nullable until completion)
+- `wp_coupon_code` (text, nullable until completion)
+- Four **terminal timestamp** columns: `approved_at`, `completed_at`, `rejected_at`, `cancelled_at`
+- Four **failure timestamp** columns: `clickup_create_failed_at`, `wp_relay_failed_at`, `coupon_failed_at`, `senaite_clone_failed_at`
+- Standard `created_at`, `updated_at`
+
+### `peptide_request_status_log`
+
+Append-only audit log of every status transition.
+
+- Row per status change with `from_status`, `to_status`, `changed_at`, `source` (`clickup` | `admin` | `system`), actor details
+- `clickup_event_id` (text, nullable) with a **unique partial index** — dedupes replayed ClickUp webhooks while still allowing non-ClickUp log rows
+
+### `clickup_user_mapping`
+
+Reconciles ClickUp users to Accu-Mk1 users. Populated automatically when email matches, otherwise flagged for manual admin reconciliation.
+
+- `clickup_user_id`, `clickup_username`, `clickup_email`
+- `accumk1_user_id` (fk to `users.id`) — see *Known Issues* below regarding type mismatch
+- `mapped_at`, `mapped_by`, `mapping_source` (`auto` | `manual`)
+
+## API Endpoints
+
+All internal endpoints are gated by the `X-Service-Token` header (shared secret with `integration-service`). ClickUp webhooks use HMAC instead.
+
+| Method | Path                                                  | Purpose                                            |
+| ------ | ----------------------------------------------------- | -------------------------------------------------- |
+| POST   | `/api/peptide-requests`                               | `integration-service` submits on behalf of WP       |
+| GET    | `/api/peptide-requests?wp_user_id=X&status=csv`       | List for a customer (status filter CSV, optional)   |
+| GET    | `/api/peptide-requests/{id}`                          | Detail                                              |
+| GET    | `/api/peptide-requests/{id}/history`                  | Status log entries for a request                    |
+| POST   | `/webhooks/clickup`                                   | ClickUp webhook receiver (HMAC-signed)              |
+| GET    | `/api/admin/clickup-users/unmapped`                   | List ClickUp users awaiting reconciliation          |
+| POST   | `/api/admin/clickup-users/{id}/map`                   | Admin maps a ClickUp user to an Accu-Mk1 user       |
+
+Frozen HTTP shapes: see [`docs/superpowers/specs/2026-04-17-peptide-request-contracts.md`](../superpowers/specs/2026-04-17-peptide-request-contracts.md).
+
+## Webhook Dispatch Flow
+
+`POST /webhooks/clickup` handler:
+
+1. **Signature verify** — reject if HMAC doesn't match `CLICKUP_WEBHOOK_SECRET`.
+2. **Parse body** — extract event type, task id, payload.
+3. **Dispatch** — `dispatch_event` routes on event type:
+   - `taskStatusUpdated` → status transition path
+   - `taskAssigneeUpdated` → assignee sync (no state change on the request itself)
+   - Unknown event → log and 200
+4. **Status transition**:
+   - Map the new ClickUp column to a peptide request status via `DEFAULT_COLUMN_MAP`. Unmapped columns log `ERROR` and return 200 (no state change — safer than 4xx which ClickUp retries).
+   - Update `peptide_requests.status`, append `peptide_request_status_log` row.
+   - **Dedup**: the unique partial index on `clickup_event_id` means replayed webhooks short-circuit at INSERT.
+   - On successful transition, enqueue `relay_status_to_wp` (daemon thread).
+   - If new status is `completed`, also enqueue `completion_side_effects` (daemon thread).
+
+## Status Enum
+
+Nine values:
+
+| Status                  | Meaning                                           |
+| ----------------------- | ------------------------------------------------- |
+| `new`                   | Submitted, not yet triaged                        |
+| `approved`              | Lab accepted the request                          |
+| `ordering_standard`     | Reference standard being ordered                  |
+| `sample_prep_created`   | Sample prep logged in LIMS                        |
+| `in_process`            | Active lab work                                   |
+| `on_hold`               | Paused — `previous_status` preserves restore point |
+| `completed`             | Terminal, triggers coupon + SENAITE clone         |
+| `rejected`              | Terminal, lab declined                            |
+| `cancelled`             | Terminal, customer withdrew                       |
+
+`on_hold` is the only non-terminal status that restores the prior status on resume; `previous_status` is written when entering `on_hold` and read when leaving.
+
+## Config / Env Vars
+
+| Variable                           | Purpose                                                                |
+| ---------------------------------- | ---------------------------------------------------------------------- |
+| `CLICKUP_LIST_ID`                  | ClickUp list where peptide request tasks are created                   |
+| `CLICKUP_API_TOKEN`                | ClickUp API personal token                                             |
+| `CLICKUP_WEBHOOK_SECRET`           | HMAC secret for webhook signature verification                         |
+| `ACCUMK1_INTERNAL_SERVICE_TOKEN`   | Shared secret with `integration-service` (inbound `X-Service-Token`)   |
+| `INTEGRATION_SERVICE_URL`          | Base URL for outbound WP-relay calls                                   |
+| `INTEGRATION_SERVICE_TOKEN`        | Bearer for outbound calls to `integration-service`                     |
+| `SENAITE_PEPTIDE_TEMPLATE_KEYWORD` | SENAITE template keyword to clone (default: `BPC157-ID`)               |
+| `ACCUMK1_BASE_URL`                 | Base URL injected into ClickUp task descriptions for deep links        |
+| `MK1_DB_HOST`                      | Postgres host — `localhost` in dev, `host.docker.internal` in prod     |
+
+## Adding a New ClickUp Column
+
+Two options:
+
+1. Edit `DEFAULT_COLUMN_MAP` in `backend/peptide_request_config.py` (source default).
+2. Or override via the runtime config mechanism — the config value wins over the default.
+
+Unmapped columns are **not** fatal: the webhook handler logs an `ERROR` with the column name and returns 200. No state change occurs. Fix the map, then manually replay if needed.
+
+## SENAITE Naming — Load-Bearing
+
+On `completed`, Accu-Mk1 clones the SENAITE Analysis Service whose keyword matches `SENAITE_PEPTIDE_TEMPLATE_KEYWORD` (default `BPC157-ID`), then renames the clone.
+
+**Naming rule:**
+
+- Service **name**: `{compound_name} - Identity (HPLC)` (e.g. `Retatrutide - Identity (HPLC)`)
+- Service **keyword**: `{first 4 alphanumerics of compound_name, uppercased}-ID` (e.g. `RETA-ID`)
+
+This pattern is load-bearing — downstream Senaite scripts, reports, and the reset-verified-analyses runbook all rely on the `{Name} - Identity (HPLC)` convention. Do not alter the format without auditing consumers.
+
+## Non-Peptide Path
+
+When `compound_kind='other'`, the SENAITE clone step is skipped. The coupon still issues. An Accumark staffer must manually configure the SENAITE catalog entries for non-peptide testing. The request flows through ClickUp identically.
+
+## Retry Strategy
+
+Three failure surfaces, each handled independently so one failure never blocks the others.
+
+### Inline ClickUp create + sweeper
+
+- `POST /api/peptide-requests` attempts ClickUp task creation inline.
+- If inline creation fails, the row is still persisted with `clickup_task_id = NULL`.
+- A background `run_once` job (manual-invoke for v1) sweeps rows matching:
+  `clickup_task_id IS NULL AND clickup_create_failed_at IS NULL AND created_at < NOW() - 60 seconds`
+- After **24 hours** of retry failures, `clickup_create_failed_at` is set and the row is left for manual intervention.
+
+### WP relay (outbound status push)
+
+- On-dispatch **daemon thread** with delay schedule: `[0, 60, 300, 900, 3600, 14400]` seconds.
+- On exhaustion, sets `wp_relay_failed_at` and gives up. WP eventually polls and reconciles.
+
+### Completion side effects
+
+- Daemon thread runs `issue_coupon()` and `clone_senaite_service()` **independently** — a failure in one does not block the other.
+- Failures set `coupon_failed_at` or `senaite_clone_failed_at` respectively.
+- Both are manually re-runnable from the admin UI.
+
+## Known Issues / Pre-Merge Decisions
+
+These are architectural judgments flagged during build-out; they need Handler input before the LIMS UI is functional and before production deploy.
+
+1. **Auth mismatch on API endpoints.** The internal API endpoints use `X-Service-Token` (service-to-service). The LIMS UI currently sends `Authorization: Bearer <JWT>`. Real users hitting these endpoints get `401`. Resolution needed: either dual-auth (accept both), a session-aware shim, or move LIMS-UI-facing reads behind a separate JWT-authed route.
+
+2. **`users.id` ↔ `clickup_user_mapping.accumk1_user_id` type mismatch.** `users.id` is `INTEGER`; `clickup_user_mapping.accumk1_user_id` is `UUID`. The admin reconciliation page will fail on real user IDs. Schema reconciliation needed (migrate one side or add a lookup table).
+
+3. **`PeptideRequestRepository.create` race.** SELECT-then-INSERT on `idempotency_key` can race under concurrent duplicate submissions. At WP form submission scale the window is microseconds, so it's low-probability — but the correct fix is `INSERT ... ON CONFLICT (idempotency_key) DO NOTHING RETURNING *`.
+
+4. **`requests` phantom dependency.** `backend/clickup_client.py` and `backend/integration_service_client.py` `import requests`, but `requirements.txt` pins `httpx` — `requests` is only transitively installed today. Pin `requests` explicitly in `requirements.txt` or port both clients to `httpx` before deploy.
+
+5. **`email-validator` not pinned.** Pydantic `EmailStr` requires `email-validator`; `requirements.txt` has plain `pydantic==2.9.0`, not `pydantic[email]`. Works today via transitive install. Pin explicitly (`pydantic[email]==2.9.0` or add `email-validator` directly).
+
+6. **`molecular_weight` truthy-check.** `backend/clickup_client.py` uses `if r.molecular_weight:` which silently drops `0.0`. Change to `if r.molecular_weight is not None:`.
+
+## Integration Test Entry Point
+
+`backend/tests/test_e2e_peptide_request.py::test_happy_path` exercises the full flow with mocked HTTP (WP submit → Accu-Mk1 persist → ClickUp create → webhook replay → status transitions → completion side effects). Start there when adding coverage for a new branch.
+
+## Related Docs
+
+- HTTP contracts: [`docs/superpowers/specs/2026-04-17-peptide-request-contracts.md`](../superpowers/specs/2026-04-17-peptide-request-contracts.md)
+- SENAITE reset runbook (adjacent ops): [`senaite-reset-verified-analyses.md`](./senaite-reset-verified-analyses.md)
+- Architecture overview: [`architecture-guide.md`](./architecture-guide.md)
