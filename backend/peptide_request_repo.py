@@ -65,6 +65,18 @@ class PeptideRequestRepository:
             row = cur.fetchone()
             return _row_to_model(dict(row)) if row else None
 
+    def get_by_clickup_task_id(self, task_id: str) -> Optional[PeptideRequest]:
+        """Lookup a peptide request by its ClickUp task id. Used by the webhook
+        dispatcher to resolve inbound events back to the owning row."""
+        with get_mk1_conn() as conn:
+            cur = conn.cursor(cursor_factory=RealDictCursor)
+            cur.execute(
+                "SELECT * FROM peptide_requests WHERE clickup_task_id = %s",
+                (task_id,),
+            )
+            row = cur.fetchone()
+            return _row_to_model(dict(row)) if row else None
+
     def list_by_wp_user(
         self, wp_user_id: int, *, status: Optional[list[str]] = None,
         limit: int = 50, offset: int = 0,

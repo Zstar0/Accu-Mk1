@@ -48,8 +48,10 @@ from backend.models_peptide_request import (
     PeptideRequestCreate, PeptideRequest, PeptideRequestList,
 )
 from backend.peptide_request_repo import PeptideRequestRepository
+from backend.status_log_repo import StatusLogRepository
+from backend.clickup_user_mapping_repo import ClickUpUserMappingRepository
 from backend.peptide_request_config import get_config as get_peptide_request_config
-from backend.clickup_webhook import verify_signature
+from backend.clickup_webhook import verify_signature, dispatch_event
 from parsers import parse_txt_file
 from parsers.peakdata_csv_parser import parse_hplc_files, calculate_purity
 from calculations import CalculationEngine
@@ -12620,7 +12622,18 @@ async def clickup_webhook(request: Request):
     cfg = get_peptide_request_config()
     if not verify_signature(raw, sig, cfg.clickup_webhook_secret):
         raise HTTPException(401, "invalid signature")
-    # Event dispatch in next task
+    payload = json.loads(raw)
+    try:
+        dispatch_event(
+            payload, cfg,
+            PeptideRequestRepository(),
+            StatusLogRepository(),
+            ClickUpUserMappingRepository(),
+        )
+    except Exception:
+        import logging as _logging
+        _logging.getLogger(__name__).exception("webhook dispatch failure")
+        raise HTTPException(500, "dispatch failed")
     return {"ok": True}
 
 
