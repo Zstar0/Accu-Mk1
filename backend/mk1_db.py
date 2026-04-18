@@ -205,6 +205,48 @@ def ensure_peptide_requests_table() -> None:
         conn.commit()
 
 
+# ─── peptide_request_status_log DDL ────────────────────────────────────────────
+
+_PEPTIDE_REQUEST_STATUS_LOG_DDL = """
+CREATE TABLE IF NOT EXISTS peptide_request_status_log (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    peptide_request_id UUID NOT NULL REFERENCES peptide_requests(id) ON DELETE CASCADE,
+    from_status TEXT,
+    to_status TEXT NOT NULL,
+    source TEXT NOT NULL CHECK (source IN ('clickup', 'accumk1_admin', 'system')),
+    clickup_event_id TEXT,
+    actor_clickup_user_id TEXT,
+    actor_accumk1_user_id UUID,
+    note TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_status_log_clickup_event
+    ON peptide_request_status_log (clickup_event_id)
+    WHERE clickup_event_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_status_log_request
+    ON peptide_request_status_log (peptide_request_id, created_at DESC);
+"""
+
+
+def ensure_peptide_request_status_log_table() -> None:
+    """
+    Idempotently create the peptide_request_status_log table and its indexes
+    in accumark_mk1. Safe to call on every startup — uses CREATE TABLE/INDEX
+    IF NOT EXISTS.
+
+    Enables the pgcrypto extension first because gen_random_uuid() is the
+    default for the `id` column. The parent peptide_requests table must already
+    exist (FK reference); call ensure_peptide_requests_table() first.
+    """
+    with get_mk1_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto;")
+            cur.execute(_PEPTIDE_REQUEST_STATUS_LOG_DDL)
+        conn.commit()
+
+
 # ─── sample_preps CRUD ─────────────────────────────────────────────────────────
 
 def _generate_sample_id(cur) -> str:
