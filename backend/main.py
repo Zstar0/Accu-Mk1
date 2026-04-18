@@ -12561,10 +12561,13 @@ async def reorder_worksheet_items(
 # Called server-to-server by integration-service when a WP user submits the
 # peptide-request form. Internal service token + idempotency key are required.
 
-@app.post("/api/peptide-requests", response_model=PeptideRequest)
+@app.post(
+    "/api/peptide-requests",
+    response_model=PeptideRequest,
+    status_code=status.HTTP_201_CREATED,
+)
 def create_peptide_request(
     data: PeptideRequestCreate,
-    response: Response,
     idempotency_key: str = Header(None, alias="Idempotency-Key"),
     _: None = Depends(require_internal_service_token),
 ):
@@ -12577,7 +12580,6 @@ def create_peptide_request(
         idempotency_key=idempotency_key,
         clickup_list_id=cfg.clickup_list_id,
     )
-    response.status_code = status.HTTP_201_CREATED
     return row
 
 

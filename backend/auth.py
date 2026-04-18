@@ -138,7 +138,7 @@ def require_internal_service_token(
     if not expected:
         raise HTTPException(
             status.HTTP_500_INTERNAL_SERVER_ERROR,
-            "ACCUMK1_INTERNAL_SERVICE_TOKEN not configured",
+            "internal service auth not configured",
         )
     if not x_service_token or not secrets.compare_digest(x_service_token, expected):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid service token")
