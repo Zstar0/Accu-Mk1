@@ -41,25 +41,25 @@ class PeptideRequest(BaseModel):
     compound_kind: CompoundKind
     compound_name: str
     vendor_producer: str
-    sequence_or_structure: Optional[str]
-    molecular_weight: Optional[float]
-    cas_or_reference: Optional[str]
-    vendor_catalog_number: Optional[str]
-    reason_notes: Optional[str]
-    expected_monthly_volume: Optional[int]
+    sequence_or_structure: Optional[str] = None
+    molecular_weight: Optional[float] = None
+    cas_or_reference: Optional[str] = None
+    vendor_catalog_number: Optional[str] = None
+    reason_notes: Optional[str] = None
+    expected_monthly_volume: Optional[int] = None
     status: Status
-    previous_status: Optional[Status]
-    rejection_reason: Optional[str]
-    sample_id: Optional[str]
-    clickup_task_id: Optional[str]
+    previous_status: Optional[Status] = None
+    rejection_reason: Optional[str] = None
+    sample_id: Optional[str] = None
+    clickup_task_id: Optional[str] = None
     clickup_list_id: str
     clickup_assignee_ids: list[str]
-    senaite_service_uid: Optional[str]
-    wp_coupon_code: Optional[str]
-    wp_coupon_issued_at: Optional[datetime]
-    completed_at: Optional[datetime]
-    rejected_at: Optional[datetime]
-    cancelled_at: Optional[datetime]
+    senaite_service_uid: Optional[str] = None
+    wp_coupon_code: Optional[str] = None
+    wp_coupon_issued_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    rejected_at: Optional[datetime] = None
+    cancelled_at: Optional[datetime] = None
 
 
 class PeptideRequestList(BaseModel):
@@ -72,11 +72,11 @@ class PeptideRequestList(BaseModel):
 class StatusLogEntry(BaseModel):
     id: UUID
     peptide_request_id: UUID
-    from_status: Optional[Status]
+    from_status: Optional[Status] = None
     to_status: Status
     source: Literal["clickup", "accumk1_admin", "system"]
-    clickup_event_id: Optional[str]
-    actor_clickup_user_id: Optional[str]
-    actor_accumk1_user_id: Optional[UUID]
-    note: Optional[str]
+    clickup_event_id: Optional[str] = None
+    actor_clickup_user_id: Optional[str] = None
+    actor_accumk1_user_id: Optional[UUID] = None
+    note: Optional[str] = None
     created_at: datetime
