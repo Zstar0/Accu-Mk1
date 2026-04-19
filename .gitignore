@@ -52,3 +52,6 @@ nulbackend_logs*.txt
 .gitnexus
 entities.json
 scripts/patch_result_p0386.py
+
+# Superpowers brainstorming sessions (transient, per-session)
+.superpowers/

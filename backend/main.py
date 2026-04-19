@@ -14,6 +14,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Union
+from uuid import UUID
 
 # App version: prefer APP_VERSION env var (set by Docker build-arg),
 # fall back to reading package.json (works in local dev).
@@ -28,7 +29,7 @@ def _read_app_version() -> str:
 
 APP_VERSION = _read_app_version()
 
-from fastapi import FastAPI, Depends, Form, HTTPException, Header, Query, Request, Response, UploadFile, status
+from fastapi import FastAPI, Body, Depends, Form, HTTPException, Header, Query, Request, Response, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, validator
 from sqlalchemy.orm import Session, joinedload
@@ -39,9 +40,19 @@ from models import AuditLog, Settings, Job, Sample, Result, Instrument, Analysis
 from auth import (
     get_current_user, require_admin, create_access_token,
     verify_password, get_password_hash, seed_admin_user,
+    require_internal_service_token,
     UserCreate, UserRead, UserUpdate, PasswordChange, TokenResponse,
     SenaiteCredentials,
 )
+from backend.models_peptide_request import (
+    PeptideRequestCreate, PeptideRequest, PeptideRequestList, StatusLogEntry,
+)
+from backend.peptide_request_repo import PeptideRequestRepository
+from backend.status_log_repo import StatusLogRepository
+from backend.clickup_user_mapping_repo import ClickUpUserMappingRepository
+from backend.peptide_request_config import get_config as get_peptide_request_config
+from backend.clickup_client import ClickUpClient
+from backend.clickup_webhook import verify_signature, dispatch_event
 from parsers import parse_txt_file
 from parsers.peakdata_csv_parser import parse_hplc_files, calculate_purity
 from calculations import CalculationEngine
@@ -12549,6 +12560,201 @@ async def reorder_worksheet_items(
             item.sort_order = idx
     db.commit()
     return {"status": "reordered", "count": len(data.item_ids)}
+
+
+# ── Peptide requests API (integration-service bridge) ────────────────
+# Called server-to-server by integration-service when a WP user submits the
+# peptide-request form. Internal service token + idempotency key are required.
+
+@app.post(
+    "/api/peptide-requests",
+    response_model=PeptideRequest,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_peptide_request(
+    data: PeptideRequestCreate,
+    idempotency_key: str = Header(None, alias="Idempotency-Key"),
+    _: None = Depends(require_internal_service_token),
+):
+    if not idempotency_key:
+        raise HTTPException(400, "Idempotency-Key header required")
+    repo = PeptideRequestRepository()
+    cfg = get_peptide_request_config()
+    row = repo.create(
+        data,
+        idempotency_key=idempotency_key,
+        clickup_list_id=cfg.clickup_list_id,
+    )
+    # Best-effort inline ClickUp task creation. On failure the retry job
+    # (backend/jobs/clickup_task_retry.py) will pick up the row once it is
+    # > 60s old. Never block the 201 response on ClickUp availability.
+    if not row.clickup_task_id:
+        try:
+            client = ClickUpClient(
+                api_token=cfg.clickup_api_token,
+                list_id=cfg.clickup_list_id,
+                accumk1_base_url=os.environ.get("ACCUMK1_BASE_URL", ""),
+            )
+            task_id = client.create_task_for_request(row)
+            repo.update_clickup_task_id(row.id, task_id)
+            row = repo.get_by_id(row.id)
+        except Exception:
+            import logging as _logging
+            _logging.getLogger(__name__).exception(
+                "inline clickup create failed; retry job will pick up"
+            )
+    return row
+
+
+@app.get("/api/peptide-requests", response_model=PeptideRequestList)
+def list_peptide_requests(
+    wp_user_id: int,
+    status: str | None = None,  # comma-separated
+    limit: int = 50,
+    offset: int = 0,
+    _: None = Depends(require_internal_service_token),
+):
+    repo = PeptideRequestRepository()
+    status_list = status.split(",") if status else None
+    items, total = repo.list_by_wp_user(
+        wp_user_id, status=status_list, limit=limit, offset=offset
+    )
+    return PeptideRequestList(total=total, limit=limit, offset=offset, items=items)
+
+
+@app.get("/api/peptide-requests/{request_id}", response_model=PeptideRequest)
+def get_peptide_request(
+    request_id: str,
+    _: None = Depends(require_internal_service_token),
+):
+    repo = PeptideRequestRepository()
+    row = repo.get_by_id(UUID(request_id))
+    if not row:
+        raise HTTPException(404, "not found")
+    return row
+
+
+@app.get(
+    "/api/peptide-requests/{request_id}/history",
+    response_model=list[StatusLogEntry],
+)
+def get_peptide_request_history(
+    request_id: str,
+    _: None = Depends(require_internal_service_token),
+):
+    lrepo = StatusLogRepository()
+    return lrepo.get_for_request(UUID(request_id))
+
+
+# ── Admin: ClickUp user mapping ──────────────────────────────────────
+# Concerns (flagged, not blocking):
+#   * Auth: spec called for require_admin_or_service which does not exist.
+#     Using require_internal_service_token (same as peptide-request API)
+#     means an admin must present the shared service token, not their user
+#     bearer. UX is broken for a real admin workflow; consistent with Tasks
+#     10/16 pattern. Pre-merge resolution.
+
+@app.get("/api/admin/clickup-users/unmapped")
+def list_unmapped_clickup_users(
+    _: None = Depends(require_internal_service_token),
+):
+    return ClickUpUserMappingRepository().list_unmapped()
+
+
+@app.post("/api/admin/clickup-users/{clickup_user_id}/map")
+def map_clickup_user(
+    clickup_user_id: str,
+    accumk1_user_id: int = Body(..., embed=True),
+    _: None = Depends(require_internal_service_token),
+):
+    ClickUpUserMappingRepository().set_mapping(clickup_user_id, accumk1_user_id)
+    return {"ok": True}
+
+
+# ── LIMS UI endpoints (JWT-gated) ────────────────────────────────────
+# Parallel to the /api/peptide-requests and /api/admin/clickup-users routes
+# above. Those are service-token-gated for integration-service (WP bridge);
+# these are JWT-gated for LIMS staff in the React app. No role gating for v1
+# — any authenticated user can hit admin routes. A proper role gate
+# (lab_manager vs regular) is a follow-up.
+
+@app.get("/api/lims/peptide-requests", response_model=PeptideRequestList)
+def lims_list_peptide_requests(
+    wp_user_id: int | None = None,
+    status: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+    _user=Depends(get_current_user),
+):
+    repo = PeptideRequestRepository()
+    status_list = status.split(",") if status else None
+    items, total = repo.list_all(
+        wp_user_id=wp_user_id, status=status_list, limit=limit, offset=offset
+    )
+    return PeptideRequestList(total=total, limit=limit, offset=offset, items=items)
+
+
+@app.get("/api/lims/peptide-requests/{request_id}", response_model=PeptideRequest)
+def lims_get_peptide_request(
+    request_id: str,
+    _user=Depends(get_current_user),
+):
+    repo = PeptideRequestRepository()
+    row = repo.get_by_id(UUID(request_id))
+    if not row:
+        raise HTTPException(404, "not found")
+    return row
+
+
+@app.get(
+    "/api/lims/peptide-requests/{request_id}/history",
+    response_model=list[StatusLogEntry],
+)
+def lims_get_peptide_request_history(
+    request_id: str,
+    _user=Depends(get_current_user),
+):
+    lrepo = StatusLogRepository()
+    return lrepo.get_for_request(UUID(request_id))
+
+
+@app.get("/api/lims/admin/clickup-users/unmapped")
+def lims_list_unmapped_clickup_users(
+    _user=Depends(require_admin),
+):
+    return ClickUpUserMappingRepository().list_unmapped()
+
+
+@app.post("/api/lims/admin/clickup-users/{clickup_user_id}/map")
+def lims_map_clickup_user(
+    clickup_user_id: str,
+    accumk1_user_id: int = Body(..., embed=True),
+    _user=Depends(require_admin),
+):
+    ClickUpUserMappingRepository().set_mapping(clickup_user_id, accumk1_user_id)
+    return {"ok": True}
+
+
+@app.post("/webhooks/clickup")
+async def clickup_webhook(request: Request):
+    raw = await request.body()
+    sig = request.headers.get("X-Signature")
+    cfg = get_peptide_request_config()
+    if not verify_signature(raw, sig, cfg.clickup_webhook_secret):
+        raise HTTPException(401, "invalid signature")
+    payload = json.loads(raw)
+    try:
+        dispatch_event(
+            payload, cfg,
+            PeptideRequestRepository(),
+            StatusLogRepository(),
+            ClickUpUserMappingRepository(),
+        )
+    except Exception:
+        import logging as _logging
+        _logging.getLogger(__name__).exception("webhook dispatch failure")
+        raise HTTPException(500, "dispatch failed")
+    return {"ok": True}
 
 
 # dropdowns from SENAITE LabContact records.

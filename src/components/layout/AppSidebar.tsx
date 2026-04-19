@@ -11,6 +11,8 @@ import {
   LogOut,
   LayoutDashboard,
   RefreshCw,
+  TestTube,
+  UserCog,
 } from 'lucide-react'
 import { relaunch } from '@tauri-apps/plugin-process'
 import {
@@ -33,7 +35,11 @@ import {
   SidebarFooter,
   SidebarHeader,
 } from '@/components/ui/sidebar'
-import { useUIStore, type ActiveSection, type ActiveSubSection } from '@/store/ui-store'
+import {
+  useUIStore,
+  type ActiveSection,
+  type ActiveSubSection,
+} from '@/store/ui-store'
 import { useWizardStore } from '@/store/wizard-store'
 import { useAuthStore } from '@/store/auth-store'
 import { logout } from '@/lib/auth-api'
@@ -49,6 +55,7 @@ interface NavItem {
   label: string
   icon: React.ComponentType<{ className?: string }>
   subItems?: SubItem[]
+  adminOnly?: boolean
 }
 
 const navItems: NavItem[] = [
@@ -82,6 +89,12 @@ const navItems: NavItem[] = [
       { id: 'analysis-services', label: 'Analysis Services' },
       { id: 'service-groups', label: 'Service Groups', adminOnly: true },
     ],
+  },
+  {
+    id: 'peptide-requests',
+    label: 'Peptide Requests',
+    icon: TestTube,
+    subItems: [{ id: 'list', label: 'All Requests' }],
   },
   {
     id: 'hplc-analysis',
@@ -127,6 +140,15 @@ const navItems: NavItem[] = [
       { id: 'user-management', label: 'User Management', adminOnly: true },
     ],
   },
+  // Admin-only top-level item. No natural parent section exists today — the
+  // admin grouping has not been formalized. TBD: if more admin pages land,
+  // fold these under a dedicated "Admin" parent section.
+  {
+    id: 'admin-clickup-users',
+    label: 'ClickUp Users',
+    icon: UserCog,
+    adminOnly: true,
+  },
 ]
 
 const SIDEBAR_EXPANDED_KEY = 'sidebar-expanded-sections'
@@ -135,7 +157,9 @@ function loadExpandedSections(): Record<string, boolean> {
   try {
     const stored = localStorage.getItem(SIDEBAR_EXPANDED_KEY)
     if (stored) return JSON.parse(stored)
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
   // Default: all sections expanded
   const defaults: Record<string, boolean> = {}
   for (const item of navItems) defaults[item.id] = true
@@ -145,7 +169,9 @@ function loadExpandedSections(): Record<string, boolean> {
 function saveExpandedSections(state: Record<string, boolean>) {
   try {
     localStorage.setItem(SIDEBAR_EXPANDED_KEY, JSON.stringify(state))
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
 }
 
 export function AppSidebar() {
@@ -184,12 +210,14 @@ export function AppSidebar() {
           <SidebarGroupContent>
             <SidebarMenu>
               {navItems.map(item => {
+                if (item.adminOnly && !isAdmin) return null
                 const Icon = item.icon
                 const isActive = activeSection === item.id
                 const visibleSubItems = item.subItems?.filter(
                   sub => !sub.adminOnly || isAdmin
                 )
-                const hasSubItems = visibleSubItems && visibleSubItems.length > 0
+                const hasSubItems =
+                  visibleSubItems && visibleSubItems.length > 0
 
                 if (hasSubItems) {
                   return (
@@ -197,7 +225,7 @@ export function AppSidebar() {
                       key={item.id}
                       asChild
                       open={expandedSections[item.id] ?? true}
-                      onOpenChange={(open) => toggleSection(item.id, open)}
+                      onOpenChange={open => toggleSection(item.id, open)}
                       className="group/collapsible"
                     >
                       <SidebarMenuItem>
@@ -225,8 +253,13 @@ export function AppSidebar() {
                                     <button
                                       type="button"
                                       onClick={() => {
-                                        if (item.id === 'hplc-analysis' && subItem.id === 'new-analysis') {
-                                          useWizardStore.getState().resetWizard()
+                                        if (
+                                          item.id === 'hplc-analysis' &&
+                                          subItem.id === 'new-analysis'
+                                        ) {
+                                          useWizardStore
+                                            .getState()
+                                            .resetWizard()
                                         }
                                         navigateTo(item.id, subItem.id)
                                       }}
@@ -286,10 +319,7 @@ export function AppSidebar() {
             </SidebarMenuButton>
           </SidebarMenuItem>
           <SidebarMenuItem>
-            <SidebarMenuButton
-              tooltip="Sign Out"
-              onClick={() => logout()}
-            >
+            <SidebarMenuButton tooltip="Sign Out" onClick={() => logout()}>
               <LogOut className="h-4 w-4" />
               <span>Sign Out</span>
             </SidebarMenuButton>

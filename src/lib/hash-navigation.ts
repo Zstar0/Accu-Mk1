@@ -15,7 +15,11 @@
  */
 
 import { useEffect } from 'react'
-import { useUIStore, type ActiveSection, type ActiveSubSection } from '@/store/ui-store'
+import {
+  useUIStore,
+  type ActiveSection,
+  type ActiveSubSection,
+} from '@/store/ui-store'
 
 const VALID_SECTIONS = new Set<string>([
   'dashboard',
@@ -25,6 +29,8 @@ const VALID_SECTIONS = new Set<string>([
   'reports',
   'accumark-tools',
   'account',
+  'peptide-requests',
+  'admin-clickup-users',
 ])
 
 interface ParsedNav {
@@ -93,11 +99,20 @@ function buildHash(state: {
   let hash = `#${state.activeSection}/${state.activeSubSection}`
 
   // Append ?id= for sub-sections that carry a target
-  if (state.activeSubSection === 'sample-details' && state.sampleDetailsTargetId) {
+  if (
+    state.activeSubSection === 'sample-details' &&
+    state.sampleDetailsTargetId
+  ) {
     hash += `?id=${encodeURIComponent(state.sampleDetailsTargetId)}`
-  } else if (state.activeSubSection === 'order-explorer' && state.orderExplorerTargetOrderId) {
+  } else if (
+    state.activeSubSection === 'order-explorer' &&
+    state.orderExplorerTargetOrderId
+  ) {
     hash += `?id=${encodeURIComponent(state.orderExplorerTargetOrderId)}`
-  } else if (state.activeSubSection === 'peptide-config' && state.peptideConfigTargetId != null) {
+  } else if (
+    state.activeSubSection === 'peptide-config' &&
+    state.peptideConfigTargetId != null
+  ) {
     hash += `?id=${encodeURIComponent(String(state.peptideConfigTargetId))}`
   }
 

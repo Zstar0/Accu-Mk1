@@ -19,6 +19,9 @@ import { UserManagement } from '@/components/auth/UserManagement'
 import { ProfilePage } from '@/components/auth/ProfilePage'
 import { ReportsDashboard } from '@/components/reports/ReportsDashboard'
 import { ReportsSyncDebug } from '@/components/reports/ReportsSyncDebug'
+import { PeptideRequestsList } from '@/pages/PeptideRequestsList'
+import { PeptideRequestDetail } from '@/pages/PeptideRequestDetail'
+import { AdminClickupUsers } from '@/pages/AdminClickupUsers'
 import { useUIStore } from '@/store/ui-store'
 import { useAuthStore } from '@/store/auth-store'
 
@@ -51,7 +54,8 @@ export function MainWindowContent({
         if (activeSubSection === 'instruments') return <InstrumentsPage />
         if (activeSubSection === 'methods') return <MethodsPage />
         if (activeSubSection === 'peptide-config') return <PeptideConfig />
-        if (activeSubSection === 'analysis-services') return <AnalysisServicesPage />
+        if (activeSubSection === 'analysis-services')
+          return <AnalysisServicesPage />
         if (activeSubSection === 'service-groups') return <ServiceGroupsPage />
         return <InstrumentsPage />
       case 'hplc-analysis':
@@ -62,13 +66,19 @@ export function MainWindowContent({
         if (activeSubSection === 'sync-debug') return <ReportsSyncDebug />
         return <ReportsDashboard />
       case 'accumark-tools':
-        if (activeSubSection === 'chromatographs') return <ChromatographViewer />
+        if (activeSubSection === 'chromatographs')
+          return <ChromatographViewer />
         return <AccuMarkTools />
       case 'account':
         if (activeSubSection === 'user-management' && isAdmin) {
           return <UserManagement />
         }
         return <ProfilePage />
+      case 'peptide-requests':
+        if (activeSubSection === 'detail') return <PeptideRequestDetail />
+        return <PeptideRequestsList />
+      case 'admin-clickup-users':
+        return <AdminClickupUsers />
       default:
         return null
     }
@@ -76,7 +86,11 @@ export function MainWindowContent({
 
   return (
     <div className={cn('flex h-full flex-col bg-background', className)}>
-      {children || <div key={navigationKey} className="contents">{renderSectionContent()}</div>}
+      {children || (
+        <div key={navigationKey} className="contents">
+          {renderSectionContent()}
+        </div>
+      )}
     </div>
   )
 }

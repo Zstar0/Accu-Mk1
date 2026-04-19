@@ -274,3 +274,7 @@ See [static-analysis.md](./static-analysis.md) for all tools included.
 4. **Persistence** - Use established [data-persistence.md](./data-persistence.md) patterns
 5. **Testing** - Add tests following [testing.md](./testing.md) patterns
 6. **Documentation** - Update relevant docs
+
+## Peptide Request Flow
+
+Customers on the WP site submit requests for Accumark to add testing for a new peptide or compound. These become canonical Postgres entities in Accu-Mk1, ClickUp tasks for the lab, and — on completion — a SENAITE Analysis Service + WooCommerce coupon. See [`peptide-request-flow.md`](./peptide-request-flow.md) for the full architecture.

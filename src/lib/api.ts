@@ -23,6 +23,30 @@ function getBearerHeaders(contentType?: string): HeadersInit {
   return headers
 }
 
+/**
+ * Generic typed fetch wrapper. Prefixes the app's API base URL, attaches
+ * the JWT Bearer header (when a session exists), JSON-encodes bodies, and
+ * throws on non-2xx responses. Use for new endpoints; the older ad-hoc
+ * helpers above predate this wrapper and remain for compatibility.
+ */
+export async function apiFetch<T>(
+  path: string,
+  init: RequestInit = {}
+): Promise<T> {
+  const contentType =
+    init.body !== undefined && init.body !== null ? 'application/json' : undefined
+  const headers: HeadersInit = {
+    ...getBearerHeaders(contentType),
+    ...(init.headers ?? {}),
+  }
+  const response = await fetch(`${API_BASE_URL()}${path}`, { ...init, headers })
+  if (!response.ok) {
+    throw new Error(`${init.method ?? 'GET'} ${path} failed: ${response.status}`)
+  }
+  if (response.status === 204) return undefined as T
+  return response.json() as Promise<T>
+}
+
 // --- Types ---
 
 export interface HealthResponse {
