@@ -12720,7 +12720,7 @@ def lims_get_peptide_request_history(
 
 @app.get("/api/lims/admin/clickup-users/unmapped")
 def lims_list_unmapped_clickup_users(
-    _user=Depends(get_current_user),
+    _user=Depends(require_admin),
 ):
     return ClickUpUserMappingRepository().list_unmapped()
 
@@ -12729,7 +12729,7 @@ def lims_list_unmapped_clickup_users(
 def lims_map_clickup_user(
     clickup_user_id: str,
     accumk1_user_id: int = Body(..., embed=True),
-    _user=Depends(get_current_user),
+    _user=Depends(require_admin),
 ):
     ClickUpUserMappingRepository().set_mapping(clickup_user_id, accumk1_user_id)
     return {"ok": True}

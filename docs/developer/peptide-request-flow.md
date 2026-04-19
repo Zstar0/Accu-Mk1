@@ -176,9 +176,7 @@ Three failure surfaces, each handled independently so one failure never blocks t
 
 ## Known Issues / Pre-Merge Decisions
 
-These are architectural judgments flagged during build-out; they need Handler input before the LIMS UI is functional and before production deploy.
-
-1. **No role gating on admin endpoints.** The `/api/lims/admin/*` routes currently depend only on `get_current_user`, so any authenticated user can hit them. A proper `require_admin` gate (lab_manager vs regular staff) is a follow-up before rollout.
+All pre-merge items resolved. LIMS admin endpoints are gated on `require_admin` (role check) as of this commit.
 
 ## Integration Test Entry Point
 
