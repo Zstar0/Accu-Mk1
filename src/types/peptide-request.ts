@@ -43,7 +43,7 @@ export interface StatusLogEntry {
   to_status: RequestStatus
   source: 'clickup' | 'accumk1_admin' | 'system'
   actor_clickup_user_id: string | null
-  actor_accumk1_user_id: string | null
+  actor_accumk1_user_id: number | null
   note: string | null
   created_at: string
 }

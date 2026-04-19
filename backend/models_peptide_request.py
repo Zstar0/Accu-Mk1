@@ -77,6 +77,6 @@ class StatusLogEntry(BaseModel):
     source: Literal["clickup", "accumk1_admin", "system"]
     clickup_event_id: Optional[str] = None
     actor_clickup_user_id: Optional[str] = None
-    actor_accumk1_user_id: Optional[UUID] = None
+    actor_accumk1_user_id: Optional[int] = None
     note: Optional[str] = None
     created_at: datetime

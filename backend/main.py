@@ -12653,9 +12653,6 @@ def get_peptide_request_history(
 #     means an admin must present the shared service token, not their user
 #     bearer. UX is broken for a real admin workflow; consistent with Tasks
 #     10/16 pattern. Pre-merge resolution.
-#   * Schema: accumk1_user_id is UUID but users.id is INTEGER (Task 6
-#     mismatch). UUID(accumk1_user_id) will raise on any real integer-id
-#     input. Deferred to pre-merge schema reconciliation.
 
 @app.get("/api/admin/clickup-users/unmapped")
 def list_unmapped_clickup_users(
@@ -12667,10 +12664,10 @@ def list_unmapped_clickup_users(
 @app.post("/api/admin/clickup-users/{clickup_user_id}/map")
 def map_clickup_user(
     clickup_user_id: str,
-    accumk1_user_id: str = Body(..., embed=True),
+    accumk1_user_id: int = Body(..., embed=True),
     _: None = Depends(require_internal_service_token),
 ):
-    ClickUpUserMappingRepository().set_mapping(clickup_user_id, UUID(accumk1_user_id))
+    ClickUpUserMappingRepository().set_mapping(clickup_user_id, accumk1_user_id)
     return {"ok": True}
 
 
@@ -12731,10 +12728,10 @@ def lims_list_unmapped_clickup_users(
 @app.post("/api/lims/admin/clickup-users/{clickup_user_id}/map")
 def lims_map_clickup_user(
     clickup_user_id: str,
-    accumk1_user_id: str = Body(..., embed=True),
+    accumk1_user_id: int = Body(..., embed=True),
     _user=Depends(get_current_user),
 ):
-    ClickUpUserMappingRepository().set_mapping(clickup_user_id, UUID(accumk1_user_id))
+    ClickUpUserMappingRepository().set_mapping(clickup_user_id, accumk1_user_id)
     return {"ok": True}
 
 

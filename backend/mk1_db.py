@@ -216,7 +216,7 @@ CREATE TABLE IF NOT EXISTS peptide_request_status_log (
     source TEXT NOT NULL CHECK (source IN ('clickup', 'accumk1_admin', 'system')),
     clickup_event_id TEXT,
     actor_clickup_user_id TEXT,
-    actor_accumk1_user_id UUID,
+    actor_accumk1_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
     note TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -239,10 +239,34 @@ def ensure_peptide_request_status_log_table() -> None:
     Enables the pgcrypto extension first because gen_random_uuid() is the
     default for the `id` column. The parent peptide_requests table must already
     exist (FK reference); call ensure_peptide_requests_table() first.
+
+    Forward-only migration: if a prior dev schema has actor_accumk1_user_id
+    as UUID (pre-reconciliation), drop and re-add as INTEGER with an FK to
+    users(id). The column is always NULL in practice (the old code never
+    persisted a value into the UUID column) so data loss is a non-issue.
+    The `users` table is created by SQLAlchemy's create_all() during
+    init_db(); all production callers of this ensure function run after
+    init_db(), so the FK reference resolves.
     """
     with get_mk1_db() as conn:
         with conn.cursor() as cur:
             cur.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto;")
+            cur.execute("""
+                DO $$
+                BEGIN
+                  IF EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'peptide_request_status_log'
+                      AND column_name = 'actor_accumk1_user_id'
+                      AND data_type = 'uuid'
+                  ) THEN
+                    ALTER TABLE peptide_request_status_log DROP COLUMN actor_accumk1_user_id;
+                    ALTER TABLE peptide_request_status_log
+                      ADD COLUMN actor_accumk1_user_id INTEGER
+                      REFERENCES users(id) ON DELETE SET NULL;
+                  END IF;
+                END $$;
+            """)
             cur.execute(_PEPTIDE_REQUEST_STATUS_LOG_DDL)
         conn.commit()
 
@@ -252,7 +276,7 @@ def ensure_peptide_request_status_log_table() -> None:
 _CLICKUP_USER_MAPPING_DDL = """
 CREATE TABLE IF NOT EXISTS clickup_user_mapping (
     clickup_user_id TEXT PRIMARY KEY,
-    accumk1_user_id UUID,
+    accumk1_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
     clickup_username TEXT NOT NULL,
     clickup_email TEXT,
     auto_matched BOOLEAN NOT NULL DEFAULT FALSE,
@@ -275,10 +299,34 @@ def ensure_clickup_user_mapping_table() -> None:
     Enables the pgcrypto extension first to stay consistent with the other
     peptide-request ensure-functions (harmless and idempotent; safeguards
     any future edit that introduces a UUID default on this table).
+
+    Forward-only migration: if a prior dev schema has accumk1_user_id as
+    UUID (pre-reconciliation with users.id as INTEGER), drop and re-add it
+    as INTEGER with an FK to users(id). The column is always NULL in
+    practice (the Task 6 workaround never persisted anything) so this is
+    data-safe. The `users` table is created by SQLAlchemy's create_all()
+    during init_db(); all production callers of this ensure function run
+    after init_db(), so the FK reference resolves.
     """
     with get_mk1_db() as conn:
         with conn.cursor() as cur:
             cur.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto;")
+            cur.execute("""
+                DO $$
+                BEGIN
+                  IF EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'clickup_user_mapping'
+                      AND column_name = 'accumk1_user_id'
+                      AND data_type = 'uuid'
+                  ) THEN
+                    ALTER TABLE clickup_user_mapping DROP COLUMN accumk1_user_id;
+                    ALTER TABLE clickup_user_mapping
+                      ADD COLUMN accumk1_user_id INTEGER
+                      REFERENCES users(id) ON DELETE SET NULL;
+                  END IF;
+                END $$;
+            """)
             cur.execute(_CLICKUP_USER_MAPPING_DDL)
         conn.commit()
 

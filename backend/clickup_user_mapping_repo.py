@@ -1,7 +1,6 @@
 """Repository layer for clickup_user_mapping."""
 from dataclasses import dataclass
 from typing import Optional
-from uuid import UUID
 
 from psycopg2.extras import RealDictCursor
 
@@ -11,7 +10,7 @@ from backend.mk1_db import get_mk1_conn
 @dataclass
 class ClickUpUserMapping:
     clickup_user_id: str
-    accumk1_user_id: Optional[UUID]
+    accumk1_user_id: Optional[int]
     clickup_username: str
     clickup_email: Optional[str]
     auto_matched: bool
@@ -35,29 +34,23 @@ class ClickUpUserMappingRepository:
     ) -> ClickUpUserMapping:
         """Upsert mapping. On insert, attempt email auto-match to users table.
 
-        Note on auto-match: ``users.id`` is INTEGER while
-        ``clickup_user_mapping.accumk1_user_id`` is UUID. The existing auth
-        schema does not expose a UUID identity column on users, so a best-effort
-        email lookup is performed but the integer id cannot be stored in the
-        UUID column. When a matching user exists we still flag auto_matched=True
-        so an admin can reconcile later; accumk1_user_id remains NULL until the
-        users schema grows a UUID or this column is migrated to INTEGER.
+        Both ``users.id`` and ``clickup_user_mapping.accumk1_user_id`` are now
+        INTEGER (with an FK constraint), so a successful email match is
+        persisted directly — no more Task-6 workaround where auto_matched was
+        flagged but the id was left NULL.
         """
         with get_mk1_conn() as conn:
             # RealDictCursor throughout — simpler than juggling two cursors and
             # lets us index users row as user["id"] instead of positional user[0].
             cur = conn.cursor(cursor_factory=RealDictCursor)
 
-            accumk1_user_id: Optional[UUID] = None
+            accumk1_user_id: Optional[int] = None
             auto_matched = False
             if clickup_email:
                 cur.execute("SELECT id FROM users WHERE email = %s", (clickup_email,))
                 user = cur.fetchone()
                 if user:
-                    # users.id is INTEGER and accumk1_user_id is UUID — the two
-                    # schemas aren't compatible today. Flag auto_matched so
-                    # downstream admin UI can surface the near-match, but leave
-                    # accumk1_user_id NULL rather than storing an invalid UUID.
+                    accumk1_user_id = user["id"] if isinstance(user, dict) else user[0]
                     auto_matched = True
 
             cur.execute("""
@@ -75,7 +68,7 @@ class ClickUpUserMappingRepository:
                           clickup_email, auto_matched
             """, (
                 clickup_user_id, clickup_username, clickup_email,
-                str(accumk1_user_id) if accumk1_user_id else None, auto_matched,
+                accumk1_user_id, auto_matched,
             ))
             row = cur.fetchone()
             conn.commit()
@@ -92,7 +85,7 @@ class ClickUpUserMappingRepository:
             """)
             return [ClickUpUserMapping(**dict(r)) for r in cur.fetchall()]
 
-    def set_mapping(self, clickup_user_id: str, accumk1_user_id: UUID) -> None:
+    def set_mapping(self, clickup_user_id: str, accumk1_user_id: int) -> None:
         """Admin-driven manual mapping. Clears auto_matched since a human set it."""
         with get_mk1_conn() as conn:
             cur = conn.cursor()
@@ -100,5 +93,5 @@ class ClickUpUserMappingRepository:
                 UPDATE clickup_user_mapping
                 SET accumk1_user_id = %s, auto_matched = FALSE, updated_at = NOW()
                 WHERE clickup_user_id = %s
-            """, (str(accumk1_user_id), clickup_user_id))
+            """, (accumk1_user_id, clickup_user_id))
             conn.commit()

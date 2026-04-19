@@ -24,7 +24,7 @@ function wrapper({ children }: { children: React.ReactNode }) {
 
 interface MockRow {
   clickup_user_id: string
-  accumk1_user_id: string | null
+  accumk1_user_id: number | null
   clickup_username: string
   clickup_email: string | null
   auto_matched: boolean
@@ -114,7 +114,7 @@ describe('AdminClickupUsers', () => {
     expect(mutate).not.toHaveBeenCalled()
   })
 
-  it('calls mutate with the entered UUID when Save is clicked', async () => {
+  it('calls mutate with the entered user ID when Save is clicked', async () => {
     vi.mocked(useUnmappedClickupUsers).mockReturnValue(
       listReturn({
         data: [
@@ -132,15 +132,14 @@ describe('AdminClickupUsers', () => {
 
     render(<AdminClickupUsers />, { wrapper })
 
-    const uuid = '11111111-2222-3333-4444-555555555555'
-    const input = screen.getByPlaceholderText('UUID')
-    await user.type(input, uuid)
+    const input = screen.getByPlaceholderText('User ID')
+    await user.type(input, '42')
     await user.click(screen.getByRole('button', { name: /save/i }))
 
     expect(mutate).toHaveBeenCalledTimes(1)
     expect(mutate).toHaveBeenCalledWith({
       clickupUserId: 'cu-1',
-      accumk1UserId: uuid,
+      accumk1UserId: 42,
     })
   })
 })

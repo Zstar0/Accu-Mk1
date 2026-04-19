@@ -3,7 +3,7 @@ import { apiFetch } from '@/lib/api'
 
 export interface ClickUpUserMapping {
   clickup_user_id: string
-  accumk1_user_id: string | null
+  accumk1_user_id: number | null
   clickup_username: string
   clickup_email: string | null
   auto_matched: boolean
@@ -22,7 +22,7 @@ export function useMapClickupUser() {
   return useMutation({
     mutationFn: async (args: {
       clickupUserId: string
-      accumk1UserId: string
+      accumk1UserId: number
     }) => {
       return apiFetch<{ ok: boolean }>(
         `/api/lims/admin/clickup-users/${args.clickupUserId}/map`,

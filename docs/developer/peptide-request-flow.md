@@ -59,7 +59,7 @@ Append-only audit log of every status transition.
 Reconciles ClickUp users to Accu-Mk1 users. Populated automatically when email matches, otherwise flagged for manual admin reconciliation.
 
 - `clickup_user_id`, `clickup_username`, `clickup_email`
-- `accumk1_user_id` (fk to `users.id`) — see *Known Issues* below regarding type mismatch
+- `accumk1_user_id` (`INTEGER`, fk to `users.id`, `ON DELETE SET NULL`)
 - `mapped_at`, `mapped_by`, `mapping_source` (`auto` | `manual`)
 
 ## API Endpoints
@@ -178,17 +178,7 @@ Three failure surfaces, each handled independently so one failure never blocks t
 
 These are architectural judgments flagged during build-out; they need Handler input before the LIMS UI is functional and before production deploy.
 
-1. **Auth mismatch on API endpoints.** The internal API endpoints use `X-Service-Token` (service-to-service). The LIMS UI currently sends `Authorization: Bearer <JWT>`. Real users hitting these endpoints get `401`. Resolution needed: either dual-auth (accept both), a session-aware shim, or move LIMS-UI-facing reads behind a separate JWT-authed route.
-
-2. **`users.id` ↔ `clickup_user_mapping.accumk1_user_id` type mismatch.** `users.id` is `INTEGER`; `clickup_user_mapping.accumk1_user_id` is `UUID`. The admin reconciliation page will fail on real user IDs. Schema reconciliation needed (migrate one side or add a lookup table).
-
-3. **`PeptideRequestRepository.create` race.** SELECT-then-INSERT on `idempotency_key` can race under concurrent duplicate submissions. At WP form submission scale the window is microseconds, so it's low-probability — but the correct fix is `INSERT ... ON CONFLICT (idempotency_key) DO NOTHING RETURNING *`.
-
-4. **`requests` phantom dependency.** `backend/clickup_client.py` and `backend/integration_service_client.py` `import requests`, but `requirements.txt` pins `httpx` — `requests` is only transitively installed today. Pin `requests` explicitly in `requirements.txt` or port both clients to `httpx` before deploy.
-
-5. **`email-validator` not pinned.** Pydantic `EmailStr` requires `email-validator`; `requirements.txt` has plain `pydantic==2.9.0`, not `pydantic[email]`. Works today via transitive install. Pin explicitly (`pydantic[email]==2.9.0` or add `email-validator` directly).
-
-6. **`molecular_weight` truthy-check.** `backend/clickup_client.py` uses `if r.molecular_weight:` which silently drops `0.0`. Change to `if r.molecular_weight is not None:`.
+1. **No role gating on admin endpoints.** The `/api/lims/admin/*` routes currently depend only on `get_current_user`, so any authenticated user can hit them. A proper `require_admin` gate (lab_manager vs regular staff) is a follow-up before rollout.
 
 ## Integration Test Entry Point
 

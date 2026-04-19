@@ -10,9 +10,11 @@ export function AdminClickupUsers() {
   const [inputs, setInputs] = useState<Record<string, string>>({})
 
   const onSave = (clickupUserId: string) => {
-    const accumk1UserId = inputs[clickupUserId]
-    if (!accumk1UserId) return
-    map.mutate({ clickupUserId, accumk1UserId })
+    const raw = inputs[clickupUserId]
+    if (!raw) return
+    const parsed = parseInt(raw, 10)
+    if (!Number.isFinite(parsed)) return
+    map.mutate({ clickupUserId, accumk1UserId: parsed })
   }
 
   return (
@@ -45,7 +47,7 @@ export function AdminClickupUsers() {
                 <td>{u.auto_matched ? '✓' : '—'}</td>
                 <td>
                   <input
-                    type="text"
+                    type="number"
                     className="border rounded px-2 py-1"
                     value={inputs[u.clickup_user_id] ?? ''}
                     onChange={e =>
@@ -54,7 +56,7 @@ export function AdminClickupUsers() {
                         [u.clickup_user_id]: e.target.value,
                       })
                     }
-                    placeholder="UUID"
+                    placeholder="User ID"
                   />
                 </td>
                 <td>

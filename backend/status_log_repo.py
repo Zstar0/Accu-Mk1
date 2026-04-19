@@ -13,7 +13,7 @@ class StatusLogRepository:
     def append(
         self, *, peptide_request_id: UUID, from_status: Optional[str],
         to_status: str, source: str, clickup_event_id: Optional[str],
-        actor_clickup_user_id: Optional[str], actor_accumk1_user_id: Optional[UUID],
+        actor_clickup_user_id: Optional[str], actor_accumk1_user_id: Optional[int],
         note: Optional[str],
     ) -> bool:
         """Insert a status-log row. Returns True on insert, False on dedupe.
@@ -37,7 +37,7 @@ class StatusLogRepository:
                 """, (
                     str(peptide_request_id), from_status, to_status, source,
                     clickup_event_id, actor_clickup_user_id,
-                    str(actor_accumk1_user_id) if actor_accumk1_user_id else None,
+                    actor_accumk1_user_id,
                     note,
                 ))
                 conn.commit()
