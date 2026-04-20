@@ -3,16 +3,31 @@ import os
 from dataclasses import dataclass, field
 
 
+# Maps ClickUp list column names (as they appear in the ClickUp webhook
+# payload) to our internal peptide_request.status enum. Keys match the
+# actual statuses on the sandbox list `testing_Peptide Requests` (list id
+# 901713092705). `_normalize` lowercases + collapses whitespace before
+# compare, so these keys are effectively case-insensitive.
+#
+# Two ClickUp columns ("verified" and "added to accumk") both map to our
+# internal `completed` value. `verified` is the tech's signal that testing
+# finished; `added to accumk` is a post-completion tracking-only state in
+# ClickUp. Completion side-effects are idempotent, so the redundant
+# mapping is safe.
+#
+# The internal enum still includes "approved" for the admin-set path in
+# main.py (manual approval endpoint, not driven by ClickUp); no ClickUp
+# column maps to it.
 DEFAULT_COLUMN_MAP = {
-    "New": "new",
-    "Approved": "approved",
-    "Ordering Standard": "ordering_standard",
-    "Sample Prep Created": "sample_prep_created",
-    "In Process": "in_process",
-    "On Hold": "on_hold",
-    "Completed": "completed",
-    "Rejected": "rejected",
-    "Cancelled": "cancelled",
+    "requested": "new",
+    "ordered": "ordering_standard",
+    "received": "sample_prep_created",
+    "analyzing": "in_process",
+    "verified": "completed",
+    "added to accumk": "completed",
+    "on_hold": "on_hold",
+    "rejected": "rejected",
+    "cancelled": "cancelled",
 }
 
 
