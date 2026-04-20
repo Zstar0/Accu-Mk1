@@ -1,11 +1,11 @@
 """End-to-end: submit -> ClickUp task created -> webhook status changes -> WP relay + coupon + SENAITE all called.
 
 This ties Tasks 1-15 together as one cohesive happy-path run:
-  POST /api/peptide-requests  -> inline ClickUp create (mocked)
+  POST /peptide-requests  -> inline ClickUp create (mocked)
   POST /webhooks/clickup      -> signature verify + dispatch
   run_all (synchronous)       -> coupon + SENAITE side-effects (mocked)
   run_once (synchronous)      -> WP relay (mocked)
-  GET  /api/peptide-requests  -> final state: status=completed, wp_coupon_code set
+  GET  /peptide-requests  -> final state: status=completed, wp_coupon_code set
 
 Mocking strategy:
 
@@ -106,7 +106,7 @@ def test_happy_path(mock_post):
 
     mock_post.side_effect = _route
 
-    # 1. POST /api/peptide-requests as integration-service.
+    # 1. POST /peptide-requests as integration-service.
     client = TestClient(app)
     headers = {
         "X-Service-Token": os.environ["ACCUMK1_INTERNAL_SERVICE_TOKEN"],
@@ -120,7 +120,7 @@ def test_happy_path(mock_post):
         "submitted_by_email": "e2e@test.com",
         "submitted_by_name": "E2E",
     }
-    resp = client.post("/api/peptide-requests", headers=headers, json=body)
+    resp = client.post("/peptide-requests", headers=headers, json=body)
     assert resp.status_code == 201, resp.text
     req_id = resp.json()["id"]
     assert resp.json()["clickup_task_id"] == task_id
@@ -157,7 +157,7 @@ def test_happy_path(mock_post):
     run_once(UUID(req_id), new_status="completed", previous_status="approved")
 
     # 4. Verify final state
-    final = client.get(f"/api/peptide-requests/{req_id}", headers=headers)
+    final = client.get(f"/peptide-requests/{req_id}", headers=headers)
     assert final.status_code == 200, final.text
     data = final.json()
     assert data["status"] == "completed"

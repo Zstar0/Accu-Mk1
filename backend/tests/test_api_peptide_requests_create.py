@@ -15,23 +15,23 @@ def headers():
 
 
 def test_create_rejects_missing_token():
-    resp = client.post("/api/peptide-requests", json={}, headers={})
+    resp = client.post("/peptide-requests", json={}, headers={})
     assert resp.status_code == 401
 
 
 def test_create_rejects_invalid_token():
-    resp = client.post("/api/peptide-requests", json={},
+    resp = client.post("/peptide-requests", json={},
                        headers={"X-Service-Token": "bogus", "Idempotency-Key": "k"})
     assert resp.status_code == 401
 
 
 def test_create_validates_body():
-    resp = client.post("/api/peptide-requests", json={}, headers=headers())
+    resp = client.post("/peptide-requests", json={}, headers=headers())
     assert resp.status_code == 422
 
 
 def test_create_returns_201_on_success():
-    resp = client.post("/api/peptide-requests", headers=headers(), json={
+    resp = client.post("/peptide-requests", headers=headers(), json={
         "compound_kind": "peptide",
         "compound_name": "Retatrutide",
         "vendor_producer": "PepMart",
@@ -53,6 +53,6 @@ def test_create_is_idempotent():
     }
     h = {"X-Service-Token": os.environ["ACCUMK1_INTERNAL_SERVICE_TOKEN"],
          "Idempotency-Key": idem}
-    first = client.post("/api/peptide-requests", headers=h, json=body)
-    second = client.post("/api/peptide-requests", headers=h, json=body)
+    first = client.post("/peptide-requests", headers=h, json=body)
+    second = client.post("/peptide-requests", headers=h, json=body)
     assert first.json()["id"] == second.json()["id"]

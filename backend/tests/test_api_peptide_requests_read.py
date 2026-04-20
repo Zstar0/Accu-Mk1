@@ -23,7 +23,7 @@ def auth_headers():
 def _make_request(wp_user_id: int, compound_name: str = "Semaglutide") -> dict:
     """POST a peptide request and return the created row as dict."""
     resp = client.post(
-        "/api/peptide-requests",
+        "/peptide-requests",
         headers=headers(),
         json={
             "compound_kind": "peptide",
@@ -39,12 +39,12 @@ def _make_request(wp_user_id: int, compound_name: str = "Semaglutide") -> dict:
 
 
 def test_list_rejects_missing_token():
-    resp = client.get("/api/peptide-requests", params={"wp_user_id": 101})
+    resp = client.get("/peptide-requests", params={"wp_user_id": 101})
     assert resp.status_code == 401
 
 
 def test_list_requires_wp_user_id():
-    resp = client.get("/api/peptide-requests", headers=auth_headers())
+    resp = client.get("/peptide-requests", headers=auth_headers())
     assert resp.status_code == 422
 
 
@@ -52,7 +52,7 @@ def test_list_returns_envelope_shape():
     wp_user = 101
     created = _make_request(wp_user, compound_name="Tirzepatide")
     resp = client.get(
-        "/api/peptide-requests",
+        "/peptide-requests",
         headers=auth_headers(),
         params={"wp_user_id": wp_user},
     )
@@ -71,7 +71,7 @@ def test_list_filters_by_status():
     wp_user = 102
     _make_request(wp_user, compound_name="Retatrutide")
     resp = client.get(
-        "/api/peptide-requests",
+        "/peptide-requests",
         headers=auth_headers(),
         params={"wp_user_id": wp_user, "status": "new"},
     )
@@ -83,7 +83,7 @@ def test_list_filters_by_status():
 
 
 def test_detail_rejects_missing_token():
-    resp = client.get(f"/api/peptide-requests/{uuid.uuid4()}")
+    resp = client.get(f"/peptide-requests/{uuid.uuid4()}")
     assert resp.status_code == 401
 
 
@@ -91,7 +91,7 @@ def test_detail_returns_record():
     wp_user = 103
     created = _make_request(wp_user, compound_name="BPC-157")
     resp = client.get(
-        f"/api/peptide-requests/{created['id']}",
+        f"/peptide-requests/{created['id']}",
         headers=auth_headers(),
     )
     assert resp.status_code == 200, resp.text
@@ -104,7 +104,7 @@ def test_detail_returns_record():
 
 def test_detail_returns_404_for_missing():
     resp = client.get(
-        f"/api/peptide-requests/{uuid.uuid4()}",
+        f"/peptide-requests/{uuid.uuid4()}",
         headers=auth_headers(),
     )
     assert resp.status_code == 404

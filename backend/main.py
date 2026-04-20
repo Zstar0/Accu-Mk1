@@ -12567,7 +12567,7 @@ async def reorder_worksheet_items(
 # peptide-request form. Internal service token + idempotency key are required.
 
 @app.post(
-    "/api/peptide-requests",
+    "/peptide-requests",
     response_model=PeptideRequest,
     status_code=status.HTTP_201_CREATED,
 )
@@ -12606,7 +12606,7 @@ def create_peptide_request(
     return row
 
 
-@app.get("/api/peptide-requests", response_model=PeptideRequestList)
+@app.get("/peptide-requests", response_model=PeptideRequestList)
 def list_peptide_requests(
     wp_user_id: int,
     status: str | None = None,  # comma-separated
@@ -12622,7 +12622,7 @@ def list_peptide_requests(
     return PeptideRequestList(total=total, limit=limit, offset=offset, items=items)
 
 
-@app.get("/api/peptide-requests/{request_id}", response_model=PeptideRequest)
+@app.get("/peptide-requests/{request_id}", response_model=PeptideRequest)
 def get_peptide_request(
     request_id: str,
     _: None = Depends(require_internal_service_token),
@@ -12635,7 +12635,7 @@ def get_peptide_request(
 
 
 @app.get(
-    "/api/peptide-requests/{request_id}/history",
+    "/peptide-requests/{request_id}/history",
     response_model=list[StatusLogEntry],
 )
 def get_peptide_request_history(
@@ -12654,14 +12654,14 @@ def get_peptide_request_history(
 #     bearer. UX is broken for a real admin workflow; consistent with Tasks
 #     10/16 pattern. Pre-merge resolution.
 
-@app.get("/api/admin/clickup-users/unmapped")
+@app.get("/admin/clickup-users/unmapped")
 def list_unmapped_clickup_users(
     _: None = Depends(require_internal_service_token),
 ):
     return ClickUpUserMappingRepository().list_unmapped()
 
 
-@app.post("/api/admin/clickup-users/{clickup_user_id}/map")
+@app.post("/admin/clickup-users/{clickup_user_id}/map")
 def map_clickup_user(
     clickup_user_id: str,
     accumk1_user_id: int = Body(..., embed=True),
@@ -12678,7 +12678,7 @@ def map_clickup_user(
 # — any authenticated user can hit admin routes. A proper role gate
 # (lab_manager vs regular) is a follow-up.
 
-@app.get("/api/lims/peptide-requests", response_model=PeptideRequestList)
+@app.get("/lims/peptide-requests", response_model=PeptideRequestList)
 def lims_list_peptide_requests(
     wp_user_id: int | None = None,
     status: str | None = None,
@@ -12694,7 +12694,7 @@ def lims_list_peptide_requests(
     return PeptideRequestList(total=total, limit=limit, offset=offset, items=items)
 
 
-@app.get("/api/lims/peptide-requests/{request_id}", response_model=PeptideRequest)
+@app.get("/lims/peptide-requests/{request_id}", response_model=PeptideRequest)
 def lims_get_peptide_request(
     request_id: str,
     _user=Depends(get_current_user),
@@ -12707,7 +12707,7 @@ def lims_get_peptide_request(
 
 
 @app.get(
-    "/api/lims/peptide-requests/{request_id}/history",
+    "/lims/peptide-requests/{request_id}/history",
     response_model=list[StatusLogEntry],
 )
 def lims_get_peptide_request_history(
@@ -12718,14 +12718,14 @@ def lims_get_peptide_request_history(
     return lrepo.get_for_request(UUID(request_id))
 
 
-@app.get("/api/lims/admin/clickup-users/unmapped")
+@app.get("/lims/admin/clickup-users/unmapped")
 def lims_list_unmapped_clickup_users(
     _user=Depends(require_admin),
 ):
     return ClickUpUserMappingRepository().list_unmapped()
 
 
-@app.post("/api/lims/admin/clickup-users/{clickup_user_id}/map")
+@app.post("/lims/admin/clickup-users/{clickup_user_id}/map")
 def lims_map_clickup_user(
     clickup_user_id: str,
     accumk1_user_id: int = Body(..., embed=True),
