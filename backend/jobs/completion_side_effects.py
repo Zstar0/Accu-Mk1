@@ -46,6 +46,14 @@ def run_coupon(request_id: UUID) -> None:
     req = repo.get_by_id(request_id)
     if not req or req.wp_coupon_code:
         return
+    cfg = get_config()
+    if not cfg.coupon_enabled:
+        log.info(
+            "coupon skipped: PEPTIDE_COUPON_ENABLED not set; "
+            "no WooCommerce coupon will be issued (request %s)",
+            request_id,
+        )
+        return
     client = IntegrationServiceClient()
     result = client.issue_coupon({
         "wp_user_id": req.submitted_by_wp_user_id,

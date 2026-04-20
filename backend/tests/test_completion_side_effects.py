@@ -26,6 +26,7 @@ os.environ.setdefault("MK1_DB_HOST", "localhost")
 # assertions still exercise that code path. A dedicated test below covers the
 # disabled-flag branch explicitly.
 os.environ.setdefault("PEPTIDE_SENAITE_CLONE_ENABLED", "true")
+os.environ.setdefault("PEPTIDE_COUPON_ENABLED", "true")
 
 from backend.mk1_db import ensure_peptide_requests_table, get_mk1_conn
 from backend.models_peptide_request import PeptideRequestCreate
@@ -242,3 +243,47 @@ def test_senaite_clone_skipped_when_flag_disabled(mock_post, monkeypatch):
     # network call.
     assert mock_post.call_count == 1
     assert "/coupons/single-use" in mock_post.call_args.args[0]
+
+
+@patch("backend.integration_service_client.requests.post")
+def test_coupon_skipped_when_flag_disabled(mock_post, monkeypatch):
+    """With PEPTIDE_COUPON_ENABLED unset/false, a peptide completion skips
+    the coupon side-effect entirely — no HTTP call, no wp_coupon_code,
+    no coupon_failed_at. The SENAITE clone still runs if its own flag is on.
+    """
+    monkeypatch.setenv("PEPTIDE_COUPON_ENABLED", "false")
+    req = _make_request(409, compound_kind="peptide", compound_name="Tirzepatide")
+    mock_post.return_value = _mock_response({
+        "service_uid": "uid_tirz", "title": "Tirzepatide - Identity (HPLC)",
+        "keyword": "TIRZ-ID",
+    })
+
+    run_all(req.id)
+
+    row = _fetch_row(req.id)
+    assert row["wp_coupon_code"] is None
+    assert row["coupon_failed_at"] is None
+    assert row["senaite_service_uid"] == "uid_tirz"
+    # Only one POST — the SENAITE clone. Coupon short-circuited before any
+    # network call.
+    assert mock_post.call_count == 1
+    assert "/senaite/services/clone" in mock_post.call_args.args[0]
+
+
+@patch("backend.integration_service_client.requests.post")
+def test_both_side_effects_skipped_when_both_flags_disabled(mock_post, monkeypatch):
+    """With both flags unset/false, a peptide completion is a DB-only no-op —
+    no HTTP calls, no markers on either column.
+    """
+    monkeypatch.setenv("PEPTIDE_COUPON_ENABLED", "false")
+    monkeypatch.setenv("PEPTIDE_SENAITE_CLONE_ENABLED", "false")
+    req = _make_request(410, compound_kind="peptide", compound_name="Retatrutide")
+
+    run_all(req.id)
+
+    row = _fetch_row(req.id)
+    assert row["wp_coupon_code"] is None
+    assert row["coupon_failed_at"] is None
+    assert row["senaite_service_uid"] is None
+    assert row["senaite_clone_failed_at"] is None
+    assert mock_post.called is False

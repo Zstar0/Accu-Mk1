@@ -62,3 +62,23 @@ def test_senaite_clone_enabled_falsy_values(monkeypatch, value):
     _set_required_env(monkeypatch)
     monkeypatch.setenv("PEPTIDE_SENAITE_CLONE_ENABLED", value)
     assert get_config().senaite_clone_enabled is False
+
+
+def test_coupon_enabled_defaults_false(monkeypatch):
+    _set_required_env(monkeypatch)
+    monkeypatch.delenv("PEPTIDE_COUPON_ENABLED", raising=False)
+    assert get_config().coupon_enabled is False
+
+
+@pytest.mark.parametrize("value", ["true", "TRUE", "True", "1", "yes", "on"])
+def test_coupon_enabled_truthy_values(monkeypatch, value):
+    _set_required_env(monkeypatch)
+    monkeypatch.setenv("PEPTIDE_COUPON_ENABLED", value)
+    assert get_config().coupon_enabled is True
+
+
+@pytest.mark.parametrize("value", ["false", "0", "no", "off", "", "bogus"])
+def test_coupon_enabled_falsy_values(monkeypatch, value):
+    _set_required_env(monkeypatch)
+    monkeypatch.setenv("PEPTIDE_COUPON_ENABLED", value)
+    assert get_config().coupon_enabled is False
