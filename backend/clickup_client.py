@@ -38,10 +38,13 @@ class ClickUpClient:
 
     def create_task_for_request(self, r: PeptideRequest) -> str:
         url = f"https://api.clickup.com/api/v2/list/{self.list_id}/task"
+        # No `status` — ClickUp defaults to the list's initial (open-type)
+        # column. Keeps this client decoupled from the lab's column
+        # naming in ClickUp; the webhook-side column_map handles the
+        # reverse translation when status changes come back.
         body = {
             "name": f"[{r.compound_kind}] {r.compound_name} — {r.vendor_producer}",
             "description": self._build_description(r),
-            "status": "New",
             "assignees": [],
             "priority": None,
         }
