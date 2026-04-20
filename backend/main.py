@@ -44,15 +44,15 @@ from auth import (
     UserCreate, UserRead, UserUpdate, PasswordChange, TokenResponse,
     SenaiteCredentials,
 )
-from backend.models_peptide_request import (
+from models_peptide_request import (
     PeptideRequestCreate, PeptideRequest, PeptideRequestList, StatusLogEntry,
 )
-from backend.peptide_request_repo import PeptideRequestRepository
-from backend.status_log_repo import StatusLogRepository
-from backend.clickup_user_mapping_repo import ClickUpUserMappingRepository
-from backend.peptide_request_config import get_config as get_peptide_request_config
-from backend.clickup_client import ClickUpClient
-from backend.clickup_webhook import verify_signature, dispatch_event
+from peptide_request_repo import PeptideRequestRepository
+from status_log_repo import StatusLogRepository
+from clickup_user_mapping_repo import ClickUpUserMappingRepository
+from peptide_request_config import get_config as get_peptide_request_config
+from clickup_client import ClickUpClient
+from clickup_webhook import verify_signature, dispatch_event
 from parsers import parse_txt_file
 from parsers.peakdata_csv_parser import parse_hplc_files, calculate_purity
 from calculations import CalculationEngine

@@ -3,11 +3,11 @@ import hashlib
 import logging
 from uuid import UUID
 
-from backend.clickup_user_mapping_repo import ClickUpUserMappingRepository
-from backend.jobs.relay_status_to_wp import run_once as relay_run_once
-from backend.peptide_request_config import PeptideRequestConfig
-from backend.peptide_request_repo import PeptideRequestRepository
-from backend.status_log_repo import StatusLogRepository
+from clickup_user_mapping_repo import ClickUpUserMappingRepository
+from jobs.relay_status_to_wp import run_once as relay_run_once
+from peptide_request_config import PeptideRequestConfig
+from peptide_request_repo import PeptideRequestRepository
+from status_log_repo import StatusLogRepository
 
 
 log = logging.getLogger(__name__)
@@ -145,7 +145,7 @@ def _relay_with_retry(
         except Exception as e:
             log.warning("relay attempt %d failed: %s", i + 1, e)
     # All retries exhausted — mark the row for admin attention.
-    from backend.mk1_db import get_mk1_conn
+    from mk1_db import get_mk1_conn
     try:
         with get_mk1_conn() as conn:
             cur = conn.cursor()
@@ -166,5 +166,5 @@ def enqueue_completion_side_effects(request_id: UUID) -> None:
     `*_failed_at` timestamp so the UI can surface them.
     """
     import threading
-    from backend.jobs.completion_side_effects import run_all
+    from jobs.completion_side_effects import run_all
     threading.Thread(target=run_all, args=(request_id,), daemon=True).start()

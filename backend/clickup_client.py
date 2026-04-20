@@ -1,6 +1,6 @@
 """ClickUp API client for peptide requests."""
 import requests
-from backend.models_peptide_request import PeptideRequest
+from models_peptide_request import PeptideRequest
 
 
 class ClickUpClient:

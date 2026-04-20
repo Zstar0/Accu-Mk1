@@ -9,8 +9,8 @@ customer-facing email and the WP-side request row.
 customer notification — all other statuses relay silently.
 """
 from uuid import UUID
-from backend.peptide_request_repo import PeptideRequestRepository
-from backend.integration_service_client import IntegrationServiceClient
+from peptide_request_repo import PeptideRequestRepository
+from integration_service_client import IntegrationServiceClient
 
 
 EMAIL_TRIGGER_STATUSES = {"approved", "rejected", "completed"}

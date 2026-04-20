@@ -21,10 +21,10 @@ import logging
 import re
 from uuid import UUID
 
-from backend.integration_service_client import IntegrationServiceClient
-from backend.mk1_db import get_mk1_conn
-from backend.peptide_request_config import get_config
-from backend.peptide_request_repo import PeptideRequestRepository
+from integration_service_client import IntegrationServiceClient
+from mk1_db import get_mk1_conn
+from peptide_request_config import get_config
+from peptide_request_repo import PeptideRequestRepository
 
 
 log = logging.getLogger(__name__)

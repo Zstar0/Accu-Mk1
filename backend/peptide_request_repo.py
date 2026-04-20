@@ -5,8 +5,8 @@ from uuid import UUID
 
 from psycopg2.extras import RealDictCursor
 
-from backend.mk1_db import get_mk1_conn
-from backend.models_peptide_request import PeptideRequest, PeptideRequestCreate
+from mk1_db import get_mk1_conn
+from models_peptide_request import PeptideRequest, PeptideRequestCreate
 
 
 def _row_to_model(row: dict) -> PeptideRequest:

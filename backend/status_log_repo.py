@@ -5,8 +5,8 @@ from uuid import UUID
 import psycopg2
 from psycopg2.extras import RealDictCursor
 
-from backend.mk1_db import get_mk1_conn
-from backend.models_peptide_request import StatusLogEntry
+from mk1_db import get_mk1_conn
+from models_peptide_request import StatusLogEntry
 
 
 class StatusLogRepository:

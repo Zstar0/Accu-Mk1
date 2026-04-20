@@ -4,7 +4,7 @@ from typing import Optional
 
 from psycopg2.extras import RealDictCursor
 
-from backend.mk1_db import get_mk1_conn
+from mk1_db import get_mk1_conn
 
 
 @dataclass
