@@ -45,8 +45,8 @@ os.environ.setdefault("MK1_DB_HOST", "localhost")
 
 from fastapi.testclient import TestClient  # noqa: E402
 
-from backend.main import app  # noqa: E402
-from backend.mk1_db import (  # noqa: E402
+from main import app  # noqa: E402
+from mk1_db import (  # noqa: E402
     ensure_clickup_user_mapping_table,
     ensure_peptide_request_status_log_table,
     ensure_peptide_requests_table,
@@ -71,12 +71,12 @@ def _mock_response(body: dict) -> MagicMock:
     return resp
 
 
-@patch("backend.clickup_webhook.enqueue_completion_side_effects", lambda _id: None)
+@patch("clickup_webhook.enqueue_completion_side_effects", lambda _id: None)
 @patch(
-    "backend.clickup_webhook.enqueue_relay_status_to_wp",
+    "clickup_webhook.enqueue_relay_status_to_wp",
     lambda _id, new_status, previous_status: None,
 )
-@patch("backend.integration_service_client.requests.post")
+@patch("integration_service_client.requests.post")
 def test_happy_path(mock_post):
     """Happy path: POST -> webhook -> sync jobs -> final state reflects all side effects.
 
@@ -150,8 +150,8 @@ def test_happy_path(mock_post):
     # patched to no-ops above so the webhook doesn't spawn competing threads).
     from uuid import UUID
 
-    from backend.jobs.completion_side_effects import run_all
-    from backend.jobs.relay_status_to_wp import run_once
+    from jobs.completion_side_effects import run_all
+    from jobs.relay_status_to_wp import run_once
 
     run_all(UUID(req_id))
     run_once(UUID(req_id), new_status="completed", previous_status="approved")

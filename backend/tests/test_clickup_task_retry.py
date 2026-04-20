@@ -29,10 +29,10 @@ os.environ.setdefault("CLICKUP_API_TOKEN", "fake-clickup-token")
 os.environ.setdefault("CLICKUP_WEBHOOK_SECRET", "fake-webhook-secret")
 os.environ.setdefault("MK1_DB_HOST", "localhost")
 
-from backend.mk1_db import ensure_peptide_requests_table, get_mk1_conn
-from backend.models_peptide_request import PeptideRequestCreate
-from backend.peptide_request_repo import PeptideRequestRepository
-from backend.jobs.clickup_task_retry import run_once
+from mk1_db import ensure_peptide_requests_table, get_mk1_conn
+from models_peptide_request import PeptideRequestCreate
+from peptide_request_repo import PeptideRequestRepository
+from jobs.clickup_task_retry import run_once
 
 
 # Idempotent DDL — matches the pattern used elsewhere in the suite.
@@ -81,7 +81,7 @@ def _make_request(wp_user_id: int, compound_name: str = "Tesamorelin"):
     )
 
 
-@patch("backend.jobs.clickup_task_retry.ClickUpClient")
+@patch("jobs.clickup_task_retry.ClickUpClient")
 def test_retry_picks_up_and_creates(mock_client_cls):
     # Unique wp_user_id per test avoids collisions with other test files
     # that share this DB table.
@@ -112,7 +112,7 @@ def test_retry_picks_up_and_creates(mock_client_cls):
     assert row["clickup_create_failed_at"] is None
 
 
-@patch("backend.jobs.clickup_task_retry.ClickUpClient")
+@patch("jobs.clickup_task_retry.ClickUpClient")
 def test_retry_does_not_pick_up_recent_rows(mock_client_cls):
     # Freshly-created row: created_at ~ NOW(), so the 60s age guard in
     # find_needing_clickup_create() should exclude it.
@@ -128,7 +128,7 @@ def test_retry_does_not_pick_up_recent_rows(mock_client_cls):
     assert row["clickup_create_failed_at"] is None
 
 
-@patch("backend.jobs.clickup_task_retry.ClickUpClient")
+@patch("jobs.clickup_task_retry.ClickUpClient")
 def test_retry_marks_terminally_failed_after_24h(mock_client_cls):
     req = _make_request(wp_user_id=9003, compound_name="Retry-Terminal")
     # Backdate past 24h so the failure branch's `created_at < NOW() - 24h`

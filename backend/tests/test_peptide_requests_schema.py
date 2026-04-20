@@ -1,6 +1,6 @@
 """Verify peptide_requests table exists with correct columns."""
 import pytest
-from backend.mk1_db import get_mk1_conn, ensure_peptide_requests_table
+from mk1_db import get_mk1_conn, ensure_peptide_requests_table
 
 # The app invokes ensure_*_table() lazily at runtime. In tests we call it
 # explicitly so the information_schema queries below have something to find.

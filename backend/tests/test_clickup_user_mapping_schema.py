@@ -1,5 +1,5 @@
 """Verify clickup_user_mapping table."""
-from backend.mk1_db import get_mk1_conn, ensure_clickup_user_mapping_table
+from mk1_db import get_mk1_conn, ensure_clickup_user_mapping_table
 
 # The app invokes ensure_*_table() lazily at runtime. In tests we call it
 # explicitly so the information_schema queries below have something to find.

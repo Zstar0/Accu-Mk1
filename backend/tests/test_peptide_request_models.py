@@ -1,6 +1,6 @@
 import pytest
 from pydantic import ValidationError
-from backend.models_peptide_request import (
+from models_peptide_request import (
     PeptideRequestCreate, PeptideRequest, CompoundKind, Status
 )
 

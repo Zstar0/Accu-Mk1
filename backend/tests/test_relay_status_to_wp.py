@@ -15,10 +15,10 @@ from unittest.mock import patch, MagicMock
 os.environ.setdefault("INTEGRATION_SERVICE_URL", "http://fake-integration")
 os.environ.setdefault("INTEGRATION_SERVICE_TOKEN", "fake-token")
 
-from backend.mk1_db import ensure_peptide_requests_table
-from backend.models_peptide_request import PeptideRequestCreate
-from backend.peptide_request_repo import PeptideRequestRepository
-from backend.jobs.relay_status_to_wp import run_once
+from mk1_db import ensure_peptide_requests_table
+from models_peptide_request import PeptideRequestCreate
+from peptide_request_repo import PeptideRequestRepository
+from jobs.relay_status_to_wp import run_once
 
 # Idempotent DDL — matches the repo-test pattern elsewhere in the suite.
 ensure_peptide_requests_table()
@@ -42,7 +42,7 @@ def created_request():
     return req
 
 
-@patch("backend.integration_service_client.requests.post")
+@patch("integration_service_client.requests.post")
 def test_relay_posts_to_integration_service(mock_post, created_request):
     mock_post.return_value = MagicMock(
         status_code=200,
@@ -66,7 +66,7 @@ def test_relay_posts_to_integration_service(mock_post, created_request):
     assert body["send_email"] is True
 
 
-@patch("backend.integration_service_client.requests.post")
+@patch("integration_service_client.requests.post")
 def test_relay_no_email_for_non_trigger_status(mock_post, created_request):
     mock_post.return_value = MagicMock(
         status_code=200,

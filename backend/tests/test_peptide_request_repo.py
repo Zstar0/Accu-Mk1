@@ -1,8 +1,8 @@
 import pytest
 import uuid
-from backend.mk1_db import get_mk1_conn, ensure_peptide_requests_table
-from backend.peptide_request_repo import PeptideRequestRepository
-from backend.models_peptide_request import PeptideRequestCreate
+from mk1_db import get_mk1_conn, ensure_peptide_requests_table
+from peptide_request_repo import PeptideRequestRepository
+from models_peptide_request import PeptideRequestCreate
 
 # The app invokes ensure_*_table() lazily at runtime. In tests we call it
 # explicitly so the repo has a real table to INSERT/SELECT against. The DDL

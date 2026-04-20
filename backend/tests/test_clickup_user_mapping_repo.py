@@ -1,7 +1,7 @@
 import uuid
 
-from backend.mk1_db import ensure_clickup_user_mapping_table, get_mk1_conn
-from backend.clickup_user_mapping_repo import ClickUpUserMappingRepository
+from mk1_db import ensure_clickup_user_mapping_table, get_mk1_conn
+from clickup_user_mapping_repo import ClickUpUserMappingRepository
 
 # Idempotent DDL setup for the test suite. See sibling tests for the same
 # pattern — ensure_*_table() is a no-op on subsequent runs. The `users` table

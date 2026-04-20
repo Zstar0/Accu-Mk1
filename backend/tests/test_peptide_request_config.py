@@ -1,6 +1,6 @@
 import os
 import pytest
-from backend.peptide_request_config import get_config, PeptideRequestConfig
+from peptide_request_config import get_config, PeptideRequestConfig
 
 
 def test_missing_required_env_raises(monkeypatch):

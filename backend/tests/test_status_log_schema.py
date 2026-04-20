@@ -1,5 +1,5 @@
 """Verify status log table."""
-from backend.mk1_db import (
+from mk1_db import (
     get_mk1_conn,
     ensure_peptide_requests_table,
     ensure_peptide_request_status_log_table,

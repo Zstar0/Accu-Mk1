@@ -12,15 +12,15 @@ import uuid
 
 from fastapi.testclient import TestClient
 
-from backend.main import app
-from backend.mk1_db import (
+from main import app
+from mk1_db import (
     ensure_clickup_user_mapping_table,
     ensure_peptide_request_status_log_table,
     ensure_peptide_requests_table,
 )
-from backend.models_peptide_request import PeptideRequestCreate
-from backend.peptide_request_repo import PeptideRequestRepository
-from backend.status_log_repo import StatusLogRepository
+from models_peptide_request import PeptideRequestCreate
+from peptide_request_repo import PeptideRequestRepository
+from status_log_repo import StatusLogRepository
 
 # DDL is idempotent — ensure all three tables exist for the webhook dispatch
 # path (peptide_requests row, status log writes, and user mapping upserts).

@@ -28,10 +28,10 @@ os.environ.setdefault("MK1_DB_HOST", "localhost")
 os.environ.setdefault("PEPTIDE_SENAITE_CLONE_ENABLED", "true")
 os.environ.setdefault("PEPTIDE_COUPON_ENABLED", "true")
 
-from backend.mk1_db import ensure_peptide_requests_table, get_mk1_conn
-from backend.models_peptide_request import PeptideRequestCreate
-from backend.peptide_request_repo import PeptideRequestRepository
-from backend.jobs.completion_side_effects import (
+from mk1_db import ensure_peptide_requests_table, get_mk1_conn
+from models_peptide_request import PeptideRequestCreate
+from peptide_request_repo import PeptideRequestRepository
+from jobs.completion_side_effects import (
     run_all,
     run_coupon,
     run_senaite_clone,
@@ -84,7 +84,7 @@ def test_new_senaite_keyword_basic():
     assert _new_senaite_keyword("---") == "NEW-ID"
 
 
-@patch("backend.integration_service_client.requests.post")
+@patch("integration_service_client.requests.post")
 def test_peptide_runs_both_coupon_and_senaite(mock_post):
     req = _make_request(401, compound_kind="peptide", compound_name="Sermorelin")
     mock_post.side_effect = [
@@ -108,7 +108,7 @@ def test_peptide_runs_both_coupon_and_senaite(mock_post):
     assert body["template_keyword"] == "BPC157-ID"
 
 
-@patch("backend.integration_service_client.requests.post")
+@patch("integration_service_client.requests.post")
 def test_non_peptide_only_runs_coupon(mock_post):
     req = _make_request(402, compound_kind="other", compound_name="Creatine")
     # Only coupon should be called — SENAITE is skipped for non-peptide.
@@ -125,7 +125,7 @@ def test_non_peptide_only_runs_coupon(mock_post):
     assert "/coupons/single-use" in mock_post.call_args.args[0]
 
 
-@patch("backend.integration_service_client.requests.post")
+@patch("integration_service_client.requests.post")
 def test_coupon_idempotent_when_already_set(mock_post):
     req = _make_request(403)
     # Pre-populate wp_coupon_code to simulate an already-issued coupon.
@@ -144,7 +144,7 @@ def test_coupon_idempotent_when_already_set(mock_post):
     assert row["wp_coupon_code"] == "EXISTING"
 
 
-@patch("backend.integration_service_client.requests.post")
+@patch("integration_service_client.requests.post")
 def test_senaite_idempotent_when_already_set(mock_post):
     req = _make_request(404)
     with get_mk1_conn() as conn:
@@ -162,7 +162,7 @@ def test_senaite_idempotent_when_already_set(mock_post):
     assert row["senaite_service_uid"] == "uid_old"
 
 
-@patch("backend.integration_service_client.requests.post")
+@patch("integration_service_client.requests.post")
 def test_coupon_failure_sets_coupon_failed_at(mock_post):
     req = _make_request(405, compound_kind="other", compound_name="Ashwagandha")
     mock_post.side_effect = Exception("boom — integration-service unreachable")
@@ -176,7 +176,7 @@ def test_coupon_failure_sets_coupon_failed_at(mock_post):
     assert row["senaite_clone_failed_at"] is None
 
 
-@patch("backend.integration_service_client.requests.post")
+@patch("integration_service_client.requests.post")
 def test_senaite_failure_sets_senaite_clone_failed_at(mock_post):
     req = _make_request(406, compound_kind="peptide", compound_name="Ipamorelin")
     # First call (coupon) succeeds; second call (SENAITE) raises.
@@ -194,7 +194,7 @@ def test_senaite_failure_sets_senaite_clone_failed_at(mock_post):
     assert row["senaite_clone_failed_at"] is not None
 
 
-@patch("backend.integration_service_client.requests.post")
+@patch("integration_service_client.requests.post")
 def test_senaite_failure_does_not_prevent_coupon(mock_post):
     """Explicit isolation check: a SENAITE exception must NOT roll back the
     coupon side of the pipeline. Same setup as the previous test, but we assert
@@ -221,7 +221,7 @@ def test_senaite_failure_does_not_prevent_coupon(mock_post):
     assert "/senaite/services/clone" in mock_post.call_args_list[1].args[0]
 
 
-@patch("backend.integration_service_client.requests.post")
+@patch("integration_service_client.requests.post")
 def test_senaite_clone_skipped_when_flag_disabled(mock_post, monkeypatch):
     """With PEPTIDE_SENAITE_CLONE_ENABLED unset/false, a peptide completion
     runs the coupon side-effect but skips the SENAITE clone entirely —
@@ -245,7 +245,7 @@ def test_senaite_clone_skipped_when_flag_disabled(mock_post, monkeypatch):
     assert "/coupons/single-use" in mock_post.call_args.args[0]
 
 
-@patch("backend.integration_service_client.requests.post")
+@patch("integration_service_client.requests.post")
 def test_coupon_skipped_when_flag_disabled(mock_post, monkeypatch):
     """With PEPTIDE_COUPON_ENABLED unset/false, a peptide completion skips
     the coupon side-effect entirely — no HTTP call, no wp_coupon_code,
@@ -270,7 +270,7 @@ def test_coupon_skipped_when_flag_disabled(mock_post, monkeypatch):
     assert "/senaite/services/clone" in mock_post.call_args.args[0]
 
 
-@patch("backend.integration_service_client.requests.post")
+@patch("integration_service_client.requests.post")
 def test_both_side_effects_skipped_when_both_flags_disabled(mock_post, monkeypatch):
     """With both flags unset/false, a peptide completion is a DB-only no-op —
     no HTTP calls, no markers on either column.

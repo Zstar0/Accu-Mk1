@@ -1,6 +1,6 @@
 from unittest.mock import patch, MagicMock
-from backend.clickup_client import ClickUpClient
-from backend.models_peptide_request import PeptideRequest
+from clickup_client import ClickUpClient
+from models_peptide_request import PeptideRequest
 from uuid import uuid4
 from datetime import datetime
 
@@ -22,7 +22,7 @@ def make_request() -> PeptideRequest:
     )
 
 
-@patch("backend.clickup_client.requests.post")
+@patch("clickup_client.requests.post")
 def test_create_task_posts_to_list(mock_post):
     mock_post.return_value = MagicMock(status_code=200, json=lambda: {"id": "tsk_1", "url": "x"})
     client = ClickUpClient(api_token="t", list_id="L1", accumk1_base_url="https://accumk1")
@@ -40,7 +40,7 @@ def test_create_task_posts_to_list(mock_post):
     assert "accumk1" in body["description"]  # deep link
 
 
-@patch("backend.clickup_client.requests.post")
+@patch("clickup_client.requests.post")
 def test_create_task_raises_on_error(mock_post):
     mock_post.return_value = MagicMock(status_code=500, text="err")
     client = ClickUpClient(api_token="t", list_id="L1", accumk1_base_url="https://accumk1")
