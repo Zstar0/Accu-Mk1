@@ -62,7 +62,7 @@ describe('usePeptideRequestsList', () => {
 
     expect(apiFetch).toHaveBeenCalledTimes(1)
     const calledWith = vi.mocked(apiFetch).mock.calls[0]![0] as string
-    expect(calledWith.startsWith('/api/lims/peptide-requests?')).toBe(true)
+    expect(calledWith.startsWith('/lims/peptide-requests?')).toBe(true)
     expect(calledWith).toContain('status=new%2Capproved')
     expect(calledWith).toContain('limit=25')
     expect(calledWith).toContain('offset=10')
@@ -77,7 +77,7 @@ describe('usePeptideRequestsList', () => {
     await waitFor(() => expect(result.current.isSuccess).toBe(true))
 
     const calledWith = vi.mocked(apiFetch).mock.calls[0]![0] as string
-    expect(calledWith).toBe('/api/lims/peptide-requests?')
+    expect(calledWith).toBe('/lims/peptide-requests?')
   })
 })
 
@@ -98,7 +98,7 @@ describe('usePeptideRequest', () => {
     })
     await waitFor(() => expect(result.current.isSuccess).toBe(true))
 
-    expect(apiFetch).toHaveBeenCalledWith('/api/lims/peptide-requests/abc-123')
+    expect(apiFetch).toHaveBeenCalledWith('/lims/peptide-requests/abc-123')
     expect(result.current.data).toEqual(fake)
   })
 
@@ -123,7 +123,7 @@ describe('usePeptideRequestHistory', () => {
     await waitFor(() => expect(result.current.isSuccess).toBe(true))
 
     expect(apiFetch).toHaveBeenCalledWith(
-      '/api/lims/peptide-requests/xyz-9/history'
+      '/lims/peptide-requests/xyz-9/history'
     )
   })
 

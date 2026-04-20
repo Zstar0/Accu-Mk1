@@ -21,7 +21,7 @@ export function usePeptideRequestsList(opts: {
       if (opts.limit) params.set('limit', String(opts.limit))
       if (opts.offset) params.set('offset', String(opts.offset))
       return apiFetch<{ total: number; items: PeptideRequest[] }>(
-        `/api/lims/peptide-requests?${params}`
+        `/lims/peptide-requests?${params}`
       )
     },
   })
@@ -30,7 +30,7 @@ export function usePeptideRequestsList(opts: {
 export function usePeptideRequest(id: string) {
   return useQuery({
     queryKey: [...KEY_ROOT, 'detail', id],
-    queryFn: () => apiFetch<PeptideRequest>(`/api/lims/peptide-requests/${id}`),
+    queryFn: () => apiFetch<PeptideRequest>(`/lims/peptide-requests/${id}`),
     enabled: Boolean(id),
   })
 }
@@ -39,7 +39,7 @@ export function usePeptideRequestHistory(id: string) {
   return useQuery({
     queryKey: [...KEY_ROOT, 'history', id],
     queryFn: () =>
-      apiFetch<StatusLogEntry[]>(`/api/lims/peptide-requests/${id}/history`),
+      apiFetch<StatusLogEntry[]>(`/lims/peptide-requests/${id}/history`),
     enabled: Boolean(id),
   })
 }
