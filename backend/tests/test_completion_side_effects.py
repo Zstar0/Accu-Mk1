@@ -20,6 +20,12 @@ os.environ.setdefault("CLICKUP_LIST_ID", "fake-list-id")
 os.environ.setdefault("CLICKUP_API_TOKEN", "fake-clickup-token")
 os.environ.setdefault("CLICKUP_WEBHOOK_SECRET", "fake-webhook-secret")
 os.environ.setdefault("MK1_DB_HOST", "localhost")
+# Existing SENAITE-path tests were written against the legacy default behavior
+# where the clone side-effect always ran. The feature is now gated on
+# PEPTIDE_SENAITE_CLONE_ENABLED (default false); enable it here so existing
+# assertions still exercise that code path. A dedicated test below covers the
+# disabled-flag branch explicitly.
+os.environ.setdefault("PEPTIDE_SENAITE_CLONE_ENABLED", "true")
 
 from backend.mk1_db import ensure_peptide_requests_table, get_mk1_conn
 from backend.models_peptide_request import PeptideRequestCreate
@@ -212,3 +218,27 @@ def test_senaite_failure_does_not_prevent_coupon(mock_post):
     assert mock_post.call_count == 2
     assert "/coupons/single-use" in mock_post.call_args_list[0].args[0]
     assert "/senaite/services/clone" in mock_post.call_args_list[1].args[0]
+
+
+@patch("backend.integration_service_client.requests.post")
+def test_senaite_clone_skipped_when_flag_disabled(mock_post, monkeypatch):
+    """With PEPTIDE_SENAITE_CLONE_ENABLED unset/false, a peptide completion
+    runs the coupon side-effect but skips the SENAITE clone entirely —
+    no HTTP call, no senaite_service_uid, no senaite_clone_failed_at.
+    """
+    # Flip the flag off for just this test. The module-level setdefault at
+    # import time set it to "true"; monkeypatch overrides and restores.
+    monkeypatch.setenv("PEPTIDE_SENAITE_CLONE_ENABLED", "false")
+    req = _make_request(408, compound_kind="peptide", compound_name="BPC-157")
+    mock_post.return_value = _mock_response({"coupon_code": "SAVE250-E5"})
+
+    run_all(req.id)
+
+    row = _fetch_row(req.id)
+    assert row["wp_coupon_code"] == "SAVE250-E5"
+    assert row["senaite_service_uid"] is None
+    assert row["senaite_clone_failed_at"] is None
+    # Only one POST — the coupon. SENAITE clone short-circuited before any
+    # network call.
+    assert mock_post.call_count == 1
+    assert "/coupons/single-use" in mock_post.call_args.args[0]

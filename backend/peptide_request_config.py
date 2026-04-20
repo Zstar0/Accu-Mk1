@@ -26,6 +26,7 @@ class PeptideRequestConfig:
     clickup_api_token: str
     clickup_webhook_secret: str
     senaite_peptide_template_keyword: str = "BPC157-ID"
+    senaite_clone_enabled: bool = False
     column_map: dict[str, str] = field(default_factory=lambda: dict(DEFAULT_COLUMN_MAP))
 
     def map_column_to_status(self, column_name: str) -> str | None:
@@ -43,6 +44,12 @@ def _require(key: str) -> str:
     return v
 
 
+def _parse_bool(value: str | None, default: bool = False) -> bool:
+    if value is None:
+        return default
+    return value.strip().lower() in ("1", "true", "yes", "on")
+
+
 def get_config() -> PeptideRequestConfig:
     return PeptideRequestConfig(
         clickup_list_id=_require("CLICKUP_LIST_ID"),
@@ -50,5 +57,8 @@ def get_config() -> PeptideRequestConfig:
         clickup_webhook_secret=_require("CLICKUP_WEBHOOK_SECRET"),
         senaite_peptide_template_keyword=os.environ.get(
             "SENAITE_PEPTIDE_TEMPLATE_KEYWORD", "BPC157-ID"
+        ),
+        senaite_clone_enabled=_parse_bool(
+            os.environ.get("PEPTIDE_SENAITE_CLONE_ENABLED"), default=False
         ),
     )

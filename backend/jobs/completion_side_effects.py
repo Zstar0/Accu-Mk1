@@ -75,6 +75,13 @@ def run_senaite_clone(request_id: UUID) -> None:
     if req.compound_kind != "peptide":
         return
     cfg = get_config()
+    if not cfg.senaite_clone_enabled:
+        log.info(
+            "senaite_clone skipped: PEPTIDE_SENAITE_CLONE_ENABLED not set; "
+            "lab tech will clone the template manually (request %s)",
+            request_id,
+        )
+        return
     client = IntegrationServiceClient()
     result = client.clone_senaite_service({
         "template_keyword": cfg.senaite_peptide_template_keyword,
