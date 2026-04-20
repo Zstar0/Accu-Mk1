@@ -7592,6 +7592,24 @@ async def publish_sample_coa(
                     json={"transition": "publish"},
                 )
                 transition_resp.raise_for_status()
+
+                # SENAITE returns 200 OK even when it silently rejects a
+                # transition (e.g. sample still in `to_be_verified`, not
+                # `verified`). Confirm the review_state actually changed.
+                items = transition_resp.json().get("items", [])
+                actual_state = items[0].get("review_state", "") if items else ""
+                if actual_state != "published":
+                    raise HTTPException(
+                        status_code=502,
+                        detail=(
+                            f"COA published in system but SENAITE silently "
+                            f"rejected the 'publish' transition for {sample_id} "
+                            f"(state is still '{actual_state or 'unknown'}'). "
+                            f"Verify the sample in SENAITE, then retry."
+                        ),
+                    )
+        except HTTPException:
+            raise
         except Exception as e:
             # COA is published in our system — surface SENAITE failure clearly
             raise HTTPException(
