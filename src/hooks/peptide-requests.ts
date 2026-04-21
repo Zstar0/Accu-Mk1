@@ -43,22 +43,54 @@ export interface SyncDiffFixStatusItem {
   mapped_status: RequestStatus
 }
 
+/**
+ * One item in the field_drift bucket. Emitted by compute_diff when a
+ * row + task agree on identity (same clickup_task_id) but disagree on
+ * one of the 5 bidirectional-sync fields. compound_kind's
+ * clickup_value is already resolved to 'peptide'/'other' server-side
+ * (NOT the raw option UUID) so the UI renders it verbatim.
+ */
+export type BidirectionalField =
+  | 'sample_id'
+  | 'compound_kind'
+  | 'cas_or_reference'
+  | 'vendor_producer'
+  | 'submitted_by_email'
+
+export interface SyncDiffFieldDriftItem {
+  row_id: string
+  task_id: string
+  compound_name: string
+  field: BidirectionalField
+  db_value: string | null
+  clickup_value: string | null
+}
+
 export interface SyncDiff {
   in_clickup_not_mk1: SyncDiffCreateItem[]
   in_mk1_not_clickup: SyncDiffRetireItem[]
   status_mismatch: SyncDiffFixStatusItem[]
+  field_drift: SyncDiffFieldDriftItem[]
+}
+
+export interface FieldDriftResolution {
+  row_id: string
+  field: BidirectionalField
+  value_to_use: 'db' | 'clickup'
 }
 
 export interface SyncApplyRequest {
   materialize_task_ids: string[]
   retire_row_ids: string[]
   fix_status_pairs: { row_id: string; target_status: RequestStatus }[]
+  resolve_field_drift: FieldDriftResolution[]
 }
 
 export interface SyncApplyResult {
   materialized: number
   retired: number
   fixed_status: number
+  field_drift_resolved: number
   errors: { type: string; id: string; reason: string }[]
 }
 

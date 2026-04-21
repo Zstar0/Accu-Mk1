@@ -62,6 +62,24 @@ const diffFixture = {
       mapped_status: 'in_process' as const,
     },
   ],
+  field_drift: [
+    {
+      row_id: 'row-fd-1',
+      task_id: 't_fd_1',
+      compound_name: 'DriftingCompound',
+      field: 'sample_id' as const,
+      db_value: 'S-DB-111',
+      clickup_value: 'S-CU-222',
+    },
+    {
+      row_id: 'row-fd-2',
+      task_id: 't_fd_2',
+      compound_name: 'KindDrift',
+      field: 'compound_kind' as const,
+      db_value: 'peptide',
+      clickup_value: 'other',
+    },
+  ],
 }
 
 function mockHooks(opts: {
@@ -217,6 +235,124 @@ describe('SyncClickUpModal', () => {
       expect(screen.getByTestId('sync-result')).toHaveTextContent(
         /1 created, 1 retired, 1 status fix/,
       )
+    })
+  })
+
+  // ------------------------------------------------------------------
+  // Field drift section
+  // ------------------------------------------------------------------
+
+  it('renders a field_drift row per drift item with DB + ClickUp buttons', () => {
+    mockHooks({ data: diffFixture })
+    render(
+      <SyncClickUpModal open={true} onOpenChange={() => {}} />,
+      { wrapper },
+    )
+
+    // Section heading present.
+    expect(screen.getByText('Field drift')).toBeInTheDocument()
+
+    // Both drift items render with their compound + field names.
+    expect(screen.getByText(/DriftingCompound/)).toBeInTheDocument()
+    expect(screen.getByText(/KindDrift/)).toBeInTheDocument()
+
+    // Both sides' values are rendered on the picker buttons.
+    expect(
+      screen.getAllByText((_, node) => {
+        const text = node?.textContent ?? ''
+        return /DB:\s*S-DB-111/.test(text)
+      }).length,
+    ).toBeGreaterThan(0)
+    expect(
+      screen.getAllByText((_, node) => {
+        const text = node?.textContent ?? ''
+        return /ClickUp:\s*S-CU-222/.test(text)
+      }).length,
+    ).toBeGreaterThan(0)
+  })
+
+  it('picking a side adds that drift item to the Apply payload', async () => {
+    const user = userEvent.setup()
+    const mutateAsync = vi.fn().mockResolvedValue({
+      materialized: 0,
+      retired: 0,
+      fixed_status: 0,
+      field_drift_resolved: 1,
+      errors: [],
+    })
+    mockHooks({ data: diffFixture, mutateAsync })
+    render(
+      <SyncClickUpModal open={true} onOpenChange={() => {}} />,
+      { wrapper },
+    )
+
+    // Pick ClickUp side for the sample_id drift row. We scope to the
+    // row containing the compound name so we don't grab a button from
+    // another row.
+    const firstDriftRow = screen.getByText(/DriftingCompound/).closest('div')!
+      .parentElement!
+    const cuBtn = within(firstDriftRow).getByTestId('sync-drift-clickup')
+    await user.click(cuBtn)
+
+    // Apply count reflects one drift pick.
+    expect(screen.getByTestId('sync-apply-btn')).toHaveTextContent(
+      /apply \(1 action\)/i,
+    )
+
+    await user.click(screen.getByTestId('sync-apply-btn'))
+
+    await waitFor(() => expect(mutateAsync).toHaveBeenCalledTimes(1))
+    const payload = mutateAsync.mock.calls[0]![0]
+    expect(payload.resolve_field_drift).toEqual([
+      {
+        row_id: 'row-fd-1',
+        field: 'sample_id',
+        value_to_use: 'clickup',
+      },
+    ])
+    // Other buckets empty.
+    expect(payload.materialize_task_ids).toEqual([])
+    expect(payload.retire_row_ids).toEqual([])
+    expect(payload.fix_status_pairs).toEqual([])
+
+    // Result banner includes the new counter.
+    await waitFor(() => {
+      expect(screen.getByTestId('sync-result')).toHaveTextContent(
+        /1 field drift resolved/,
+      )
+    })
+  })
+
+  it('unchosen drift rows are excluded from the payload', async () => {
+    const user = userEvent.setup()
+    const mutateAsync = vi.fn().mockResolvedValue({
+      materialized: 0,
+      retired: 0,
+      fixed_status: 0,
+      field_drift_resolved: 1,
+      errors: [],
+    })
+    mockHooks({ data: diffFixture, mutateAsync })
+    render(
+      <SyncClickUpModal open={true} onOpenChange={() => {}} />,
+      { wrapper },
+    )
+
+    // Pick DB for the first drift row; leave the second one unchosen.
+    const firstDriftRow = screen.getByText(/DriftingCompound/).closest('div')!
+      .parentElement!
+    await user.click(within(firstDriftRow).getByTestId('sync-drift-db'))
+
+    await user.click(screen.getByTestId('sync-apply-btn'))
+
+    await waitFor(() => expect(mutateAsync).toHaveBeenCalledTimes(1))
+    const payload = mutateAsync.mock.calls[0]![0]
+    // Exactly one resolution — the unchosen row is excluded.
+    expect(payload.resolve_field_drift).toHaveLength(1)
+    expect(payload.resolve_field_drift[0]).toMatchObject({
+      row_id: 'row-fd-1',
+      field: 'sample_id',
+      value_to_use: 'db',
     })
   })
 })

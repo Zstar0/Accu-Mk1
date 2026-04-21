@@ -66,3 +66,37 @@ export const ACTIVE_STATUSES: RequestStatus[] = [
   'in_process', 'on_hold',
 ]
 export const CLOSED_STATUSES: RequestStatus[] = ['completed', 'rejected', 'cancelled']
+
+// ---------------------------------------------------------------------
+// Bidirectional sync wire types (field_drift bucket + resolution).
+//
+// These used to live inline in hooks/peptide-requests.ts alongside the
+// rest of the sync modal contract; surfacing them here keeps a single
+// canonical spot for any future consumer (reports, admin dashboards)
+// that needs to reason about drift without pulling in the hooks file.
+// hooks/peptide-requests.ts re-declares identically-shaped interfaces
+// for backwards compatibility with existing imports — deliberate: a
+// structural match means TypeScript treats them as the same type.
+// ---------------------------------------------------------------------
+
+export type BidirectionalField =
+  | 'sample_id'
+  | 'compound_kind'
+  | 'cas_or_reference'
+  | 'vendor_producer'
+  | 'submitted_by_email'
+
+export interface SyncDiffFieldDriftItem {
+  row_id: string
+  task_id: string
+  compound_name: string
+  field: BidirectionalField
+  db_value: string | null
+  clickup_value: string | null
+}
+
+export interface FieldDriftResolution {
+  row_id: string
+  field: BidirectionalField
+  value_to_use: 'db' | 'clickup'
+}
