@@ -1,6 +1,8 @@
+import { useEffect, useState } from 'react'
 import {
   usePeptideRequest,
   usePeptideRequestHistory,
+  useUpdatePeptideRequest,
 } from '@/hooks/peptide-requests'
 import { StatusTimeline } from '@/components/status-timeline'
 import { useUIStore } from '@/store/ui-store'
@@ -14,6 +16,49 @@ export function PeptideRequestDetail() {
   if (!req.data) return <p className="p-6">Not found.</p>
 
   const r = req.data
+  // Inner component so the mutation hook sees the guaranteed-present id.
+  return <PeptideRequestDetailInner id={id} r={r} history={history} />
+}
+
+interface InnerProps {
+  id: string
+  r: import('@/types/peptide-request').PeptideRequest
+  history: ReturnType<typeof usePeptideRequestHistory>
+}
+
+function PeptideRequestDetailInner({ id, r, history }: InnerProps) {
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState<string>(r.sample_id ?? '')
+  const [saveWarning, setSaveWarning] = useState<string | null>(null)
+  const update = useUpdatePeptideRequest(id)
+
+  // Keep draft in sync when the server row changes (e.g. after invalidate).
+  useEffect(() => {
+    setDraft(r.sample_id ?? '')
+  }, [r.sample_id])
+
+  const commit = () => {
+    const next = draft.trim()
+    const payload = next === '' ? null : next
+    if (payload === (r.sample_id ?? null)) {
+      setEditing(false)
+      return
+    }
+    update.mutate(
+      { sample_id: payload },
+      {
+        onSuccess: data => {
+          setSaveWarning(data.warning ?? null)
+          setEditing(false)
+        },
+      },
+    )
+  }
+
+  const cancel = () => {
+    setDraft(r.sample_id ?? '')
+    setEditing(false)
+  }
 
   return (
     <div className="p-6 max-w-4xl">
@@ -46,12 +91,63 @@ export function PeptideRequestDetail() {
           <dd>{r.reason_notes ?? '—'}</dd>
           <dt>Expected monthly volume</dt>
           <dd>{r.expected_monthly_volume ?? '—'}</dd>
-          {r.sample_id && (
-            <>
-              <dt>Linked sample</dt>
-              <dd>{r.sample_id}</dd>
-            </>
-          )}
+          <dt>Sample ID</dt>
+          <dd>
+            {editing ? (
+              <span className="inline-flex items-center gap-2">
+                <input
+                  type="text"
+                  value={draft}
+                  autoFocus
+                  onChange={e => setDraft(e.target.value)}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter') commit()
+                    if (e.key === 'Escape') cancel()
+                  }}
+                  aria-label="Sample ID"
+                  className="border rounded px-2 py-1 text-sm"
+                  disabled={update.isPending}
+                />
+                <button
+                  type="button"
+                  onClick={commit}
+                  disabled={update.isPending}
+                  className="text-xs underline"
+                >
+                  Save
+                </button>
+                <button
+                  type="button"
+                  onClick={cancel}
+                  disabled={update.isPending}
+                  className="text-xs text-muted-foreground hover:underline"
+                >
+                  Cancel
+                </button>
+              </span>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setEditing(true)}
+                className="text-left hover:underline"
+                aria-label="Edit Sample ID"
+              >
+                {r.sample_id ?? (
+                  <span className="text-muted-foreground">— click to add</span>
+                )}
+              </button>
+            )}
+            {saveWarning && (
+              <p className="text-xs text-amber-600 mt-1" role="alert">
+                {saveWarning}
+              </p>
+            )}
+            {update.isError && (
+              <p className="text-xs text-destructive mt-1" role="alert">
+                Failed to save. Try again.
+              </p>
+            )}
+          </dd>
         </dl>
       </section>
 

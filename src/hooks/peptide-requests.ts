@@ -1,4 +1,8 @@
-import { useQuery } from '@tanstack/react-query'
+import {
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query'
 import { apiFetch } from '@/lib/api'
 import type {
   PeptideRequest,
@@ -41,5 +45,31 @@ export function usePeptideRequestHistory(id: string) {
     queryFn: () =>
       apiFetch<StatusLogEntry[]>(`/lims/peptide-requests/${id}/history`),
     enabled: Boolean(id),
+  })
+}
+
+/**
+ * Mutation for editing a peptide request from the LIMS UI.
+ *
+ * Backend accepts sample_id=string to set and sample_id=null to clear. On
+ * success the detail query is invalidated so the UI re-reads the server
+ * state (including the updated_at bump). The backend may return a
+ * `warning` field when the DB was updated but the ClickUp sync failed —
+ * callers can surface it to the tech without blocking the save.
+ */
+export function useUpdatePeptideRequest(id: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ sample_id }: { sample_id: string | null }) =>
+      apiFetch<PeptideRequest & { warning?: string }>(
+        `/lims/peptide-requests/${id}`,
+        {
+          method: 'PATCH',
+          body: JSON.stringify({ sample_id }),
+        },
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: [...KEY_ROOT, 'detail', id] })
+    },
   })
 }
