@@ -35,6 +35,11 @@ class PeptideRequest(BaseModel):
     id: UUID
     created_at: datetime
     updated_at: datetime
+    # Origin: 'wp' for WP-submitted requests (integration-service path),
+    # 'manual' for lab-tech-created ClickUp tasks that were materialized
+    # here by the taskCreated webhook handler. Defaults to 'wp' to match
+    # the DB default and keep all pre-migration rows correct.
+    source: Literal["wp", "manual"] = "wp"
     submitted_by_wp_user_id: int
     submitted_by_email: str
     submitted_by_name: str

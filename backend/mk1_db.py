@@ -202,6 +202,14 @@ def ensure_peptide_requests_table() -> None:
         with conn.cursor() as cur:
             cur.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto;")
             cur.execute(_PEPTIDE_REQUESTS_DDL)
+            # Origin tracking: 'wp' (WP-submitted via integration-service; the
+            # default for all pre-existing rows since that was the only path)
+            # or 'manual' (lab tech created the task directly in ClickUp and
+            # the taskCreated webhook materialized a row here).
+            cur.execute(
+                "ALTER TABLE peptide_requests ADD COLUMN IF NOT EXISTS "
+                "source TEXT NOT NULL DEFAULT 'wp'"
+            )
         conn.commit()
 
 

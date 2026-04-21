@@ -36,6 +36,21 @@ class ClickUpClient:
         lines.append(f"[Open in Accu-Mk1]({self.accumk1_base_url}/requests/{r.id})")
         return "\n".join(lines)
 
+    def get_task(self, task_id: str) -> dict:
+        """Fetch a task detail payload from ClickUp.
+
+        Used by the taskCreated webhook branch: the inbound webhook gives us
+        a task id, but we need name/status/creator/etc. to materialize a
+        peptide_requests row. Returns the raw JSON dict from ClickUp so the
+        caller can pluck whatever nested shape it needs (e.g. status.status,
+        creator.username, creator.id).
+        """
+        url = f"https://api.clickup.com/api/v2/task/{task_id}"
+        resp = requests.get(url, headers=self._headers(), timeout=15)
+        if resp.status_code >= 300:
+            raise RuntimeError(f"ClickUp get_task failed: {resp.status_code} {resp.text}")
+        return resp.json()
+
     def create_task_for_request(self, r: PeptideRequest) -> str:
         url = f"https://api.clickup.com/api/v2/list/{self.list_id}/task"
         # No `status` — ClickUp defaults to the list's initial (open-type)

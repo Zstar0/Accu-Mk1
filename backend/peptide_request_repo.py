@@ -57,6 +57,84 @@ class PeptideRequestRepository:
             conn.commit()
             return _row_to_model(dict(row))
 
+    def create_from_clickup_task(
+        self,
+        *,
+        task_dict: dict,
+        mapped_status: str,
+        clickup_task_id: str,
+        clickup_list_id: str,
+    ) -> PeptideRequest:
+        """Materialize a peptide_requests row from a ClickUp task that was
+        created manually by a lab tech (not via the WP submission flow).
+
+        Idempotent on clickup_task_id: if a row already exists with this
+        task id, the existing row is returned rather than inserting a
+        duplicate. This mirrors the race-safe pattern in ``create()`` and
+        is critical because taskCreated webhooks can arrive multiple times
+        (ClickUp re-delivery) and also because our OWN create path emits a
+        taskCreated event for WP-submitted rows.
+
+        Placeholder identity fields:
+            submitted_by_wp_user_id = 0   (no WP user behind this row)
+            submitted_by_email      = "manual@accumarklabs.com"
+            submitted_by_name       = ClickUp creator username if present,
+                                      else "Lab Tech (manual)"
+            vendor_producer         = "Unknown"  (tech can edit later)
+            compound_kind           = "other"    (safer default than peptide)
+            compound_name           = ClickUp task name, untrimmed
+
+        source column is forced to 'manual'. idempotency_key is derived from
+        the clickup_task_id so re-inserts collapse onto the same row.
+        """
+        creator = task_dict.get("creator") or {}
+        creator_username = creator.get("username") or "Lab Tech (manual)"
+        compound_name = task_dict.get("name") or ""
+        idempotency_key = f"clickup_task:{clickup_task_id}"
+
+        with get_mk1_conn() as conn:
+            cur = conn.cursor(cursor_factory=RealDictCursor)
+            cur.execute("""
+                INSERT INTO peptide_requests (
+                    idempotency_key, submitted_by_wp_user_id,
+                    submitted_by_email, submitted_by_name,
+                    compound_kind, compound_name, vendor_producer,
+                    clickup_list_id, clickup_task_id, status, source
+                ) VALUES (
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                )
+                ON CONFLICT (submitted_by_wp_user_id, idempotency_key) DO NOTHING
+                RETURNING *
+            """, (
+                idempotency_key, 0,
+                "manual@accumarklabs.com", creator_username,
+                "other", compound_name, "Unknown",
+                clickup_list_id, clickup_task_id, mapped_status, "manual",
+            ))
+            row = cur.fetchone()
+            if row is None:
+                # Conflict on (0, idempotency_key) — another concurrent call
+                # won, or the row already exists. Prefer the clickup_task_id
+                # lookup because it survives even if the idempotency_key
+                # shape ever changes.
+                cur.execute(
+                    "SELECT * FROM peptide_requests WHERE clickup_task_id = %s",
+                    (clickup_task_id,),
+                )
+                row = cur.fetchone()
+                if row is None:
+                    # Conflict fired on (wp_user_id=0, idempotency_key) but
+                    # clickup_task_id didn't match — fall back to the
+                    # idempotency_key lookup so we still return a valid row.
+                    cur.execute("""
+                        SELECT * FROM peptide_requests
+                        WHERE submitted_by_wp_user_id = %s
+                          AND idempotency_key = %s
+                    """, (0, idempotency_key))
+                    row = cur.fetchone()
+            conn.commit()
+            return _row_to_model(dict(row))
+
     def get_by_id(self, request_id: UUID) -> Optional[PeptideRequest]:
         with get_mk1_conn() as conn:
             cur = conn.cursor(cursor_factory=RealDictCursor)
