@@ -52,6 +52,56 @@ class ClickUpClient:
         lines.append(f"[Open in Accu-Mk1]({self.accumk1_base_url}/requests/{r.id})")
         return "\n".join(lines)
 
+    def list_tasks(
+        self,
+        *,
+        include_closed: bool = True,
+        include_subtasks: bool = False,
+    ) -> list[dict]:
+        """Fetch every task on ``self.list_id`` as a flat list.
+
+        ClickUp v2 paginates list/{list_id}/task with a 0-indexed ``page``
+        query param and signals the last page via ``last_page=True`` in the
+        response body. We loop until that flag fires (or until we've pulled
+        a pathological 50 pages, as a belt-and-suspenders guard against an
+        API that forgets to flip the flag).
+
+        ``include_closed=True`` is the safe default for the sync-diff use
+        case: we need to see tasks in terminal columns (REJECTED, CANCELLED,
+        ADDED TO ACCUMK) so we don't flag the corresponding DB rows as
+        "in Accu-Mk1, not in ClickUp" and accidentally retire them.
+
+        Returns the raw task dicts unchanged — callers (compute_diff) pluck
+        whatever nested shape they need (status, creator, url, etc.). No
+        projection here keeps the client generic; the sync module owns
+        the view-model.
+        """
+        url = f"https://api.clickup.com/api/v2/list/{self.list_id}/task"
+        out: list[dict] = []
+        page = 0
+        # Hard upper bound prevents an infinite loop if ClickUp ever
+        # regresses on last_page. 50 * ~100 tasks/page = 5000 tasks;
+        # well beyond the sandbox list's size.
+        while page < 50:
+            params = {
+                "page": page,
+                "include_closed": "true" if include_closed else "false",
+                "subtasks": "true" if include_subtasks else "false",
+            }
+            resp = requests.get(
+                url, headers=self._headers(), params=params, timeout=15
+            )
+            if resp.status_code >= 300:
+                raise RuntimeError(
+                    f"ClickUp list_tasks failed: {resp.status_code} {resp.text}"
+                )
+            body = resp.json()
+            out.extend(body.get("tasks", []) or [])
+            if body.get("last_page", True):
+                break
+            page += 1
+        return out
+
     def get_task(self, task_id: str) -> dict:
         """Fetch a task detail payload from ClickUp.
 

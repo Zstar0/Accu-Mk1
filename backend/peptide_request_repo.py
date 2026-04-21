@@ -297,6 +297,36 @@ class PeptideRequestRepository:
             conn.commit()
             return _row_to_model(dict(row)) if row else None
 
+    def list_all_with_clickup_ids(self) -> list[PeptideRequest]:
+        """Rows that are candidates for the "In Accu-Mk1, not in ClickUp"
+        sync-diff bucket.
+
+        Scope:
+          * clickup_task_id IS NOT NULL — a row with no task id was never
+            linked to ClickUp (WP submission pending create, or a
+            legitimate never-synced state). Excluding these keeps the
+            diff focused on genuine drift: rows that DID have a task and
+            whose task has since vanished from the list fetch.
+          * retired_at IS NULL — a retired row is expected to be absent
+            from ClickUp (the task was deleted; retirement is our record
+            of that). Including retired rows would re-offer them every
+            sync, which is noise.
+
+        Returns oldest-first via created_at DESC to mirror the rest of
+        the list queries in this repo.
+        """
+        with get_mk1_conn() as conn:
+            cur = conn.cursor(cursor_factory=RealDictCursor)
+            cur.execute(
+                """
+                SELECT * FROM peptide_requests
+                WHERE clickup_task_id IS NOT NULL
+                  AND retired_at IS NULL
+                ORDER BY created_at DESC
+                """
+            )
+            return [_row_to_model(dict(r)) for r in cur.fetchall()]
+
     def find_needing_clickup_create(self, older_than_seconds: int = 60) -> list[PeptideRequest]:
         """Rows with clickup_task_id NULL and older than N seconds."""
         with get_mk1_conn() as conn:
