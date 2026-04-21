@@ -331,6 +331,48 @@ def test_name_change_does_not_update_compound_name():
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Real-world payload shape regression
+# ---------------------------------------------------------------------------
+
+
+def test_real_world_custom_field_shape_extracts_uuid_from_custom_field_id():
+    """ClickUp delivers taskUpdated custom-field events as
+        {"field": "custom_field", "custom_field": {"id": "<uuid>", ...}}
+    rather than putting the UUID directly in `field`. Discovered on
+    the live webhook during the HANDOFF smoke test — locked in here so
+    a future refactor can't regress to the documented-but-wrong shape.
+    """
+    task_id = f"cu_tu_rw_{uuid.uuid4().hex[:10]}"
+    row = _seed_row(task_id)
+    event_id = f"evt_{uuid.uuid4().hex[:10]}"
+
+    resp = _run_webhook({
+        "event": "taskUpdated",
+        "task_id": task_id,
+        "history_items": [
+            {
+                "id": event_id,
+                "type": 1,
+                "field": "custom_field",
+                "custom_field": {
+                    "id": FIELD_CAS,
+                    "name": "CAS #",
+                    "type": "short_text",
+                },
+                "before": "CAS-ORIG",
+                "after": "CAS-REAL-WORLD",
+                "user": {"id": 77100, "username": "tech_rw"},
+            }
+        ],
+    })
+    assert resp.status_code == 200
+
+    after = PeptideRequestRepository().get_by_clickup_task_id(task_id)
+    assert after is not None
+    assert after.cas_or_reference == "CAS-REAL-WORLD"
+
+
 def test_status_field_in_history_is_ignored():
     """taskStatusUpdated owns status transitions. If we also processed a
     status history_item here, we'd double-log and potentially

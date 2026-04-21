@@ -227,7 +227,20 @@ def _handle_task_updated(
     # same payload touch the same column.
     for hi in history_items:
         event_id = hi.get("id")
-        field = hi.get("field") or ""
+        raw_field = hi.get("field") or ""
+
+        # ClickUp taskUpdated payload quirk (observed on live webhook):
+        #   field="custom_field"  marker string, NOT the field UUID
+        #   custom_field.id       carries the actual UUID
+        # For name/status/built-in fields, `field` IS the name.
+        # Normalize: if this is the custom_field shape, lift the UUID
+        # out of hi.custom_field.id so the downstream reverse-map
+        # sees a real UUID.
+        if raw_field == "custom_field":
+            cf_obj = hi.get("custom_field") or {}
+            field = cf_obj.get("id") or ""
+        else:
+            field = raw_field
 
         # Status is handled by taskStatusUpdated; skipping here is
         # critical — otherwise we'd double-process.
