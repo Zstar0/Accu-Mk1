@@ -1,8 +1,10 @@
 import hmac
 import hashlib
 import logging
+import os
 from uuid import UUID
 
+from clickup_client import ClickUpClient
 from clickup_user_mapping_repo import ClickUpUserMappingRepository
 from jobs.relay_status_to_wp import run_once as relay_run_once
 from peptide_request_config import PeptideRequestConfig
@@ -39,6 +41,15 @@ def dispatch_event(
     task_id = payload.get("task_id")
     if not task_id:
         return
+
+    # taskCreated is the one branch that INTENTIONALLY handles unknown
+    # task ids — its whole job is to materialize a row for a task we've
+    # never seen before. Every other branch requires an existing row,
+    # so resolve + bail here for them.
+    if event == "taskCreated":
+        _handle_task_created(task_id, payload, cfg, prepo, lrepo, urepo)
+        return
+
     req = prepo.get_by_clickup_task_id(task_id)
     if not req:
         log.warning("Webhook for unknown clickup_task_id=%s", task_id)
@@ -105,6 +116,90 @@ def dispatch_event(
     else:
         # Unknown / unhandled event. 200 OK, no action.
         return
+
+
+def _handle_task_created(
+    task_id: str,
+    payload: dict,
+    cfg: PeptideRequestConfig,
+    prepo: PeptideRequestRepository,
+    lrepo: StatusLogRepository,
+    urepo: ClickUpUserMappingRepository,
+) -> None:
+    """Materialize a peptide_requests row from a lab-tech-created ClickUp task.
+
+    Flow:
+      1. Idempotency gate: if we already have a row for this task id,
+         this is either our OWN create (webhook fires for WP-submitted
+         rows too) or a ClickUp re-delivery. Either way: silent return.
+      2. Fetch the task detail via ClickUp REST (webhook payload is thin).
+      3. Map the ClickUp column to our internal status. Unmapped -> log
+         ERROR and bail. We refuse to insert a stub row with a bogus
+         status; the tech should fix the column mapping or rename the
+         ClickUp column.
+      4. Upsert the creator's user mapping (mirrors taskStatusUpdated).
+      5. Insert the peptide_requests row with source='manual'.
+      6. Append a status_log entry for audit trail.
+    """
+    existing = prepo.get_by_clickup_task_id(task_id)
+    if existing is not None:
+        # Our own create, or a re-delivery — nothing to do.
+        return
+
+    client = ClickUpClient(
+        api_token=cfg.clickup_api_token,
+        list_id=cfg.clickup_list_id,
+        accumk1_base_url=os.environ.get(
+            "ACCUMK1_BASE_URL", "https://accumk1.accumarklabs.com"
+        ),
+    )
+    task = client.get_task(task_id)
+
+    status_obj = task.get("status") or {}
+    column_name = status_obj.get("status") or ""
+    mapped = cfg.map_column_to_status(column_name)
+    if not mapped:
+        # Refuse to insert a stub with a bogus status. Mirrors the
+        # taskStatusUpdated branch's unmapped-column policy.
+        # TODO: admin alert once notification plumbing exists.
+        log.error(
+            "UNMAPPED CLICKUP COLUMN on taskCreated: %r (task=%s)",
+            column_name, task_id,
+        )
+        return
+
+    creator = task.get("creator") or {}
+    actor_mapping = None
+    if creator.get("id"):
+        actor_mapping = urepo.upsert(
+            clickup_user_id=str(creator.get("id")),
+            clickup_username=creator.get("username", ""),
+            clickup_email=creator.get("email"),
+        )
+
+    req = prepo.create_from_clickup_task(
+        task_dict=task,
+        mapped_status=mapped,
+        clickup_task_id=task_id,
+        clickup_list_id=cfg.clickup_list_id,
+    )
+
+    # Audit trail. clickup_event_id is best-effort from the webhook
+    # payload — taskCreated doesn't always carry a history_items entry,
+    # but some ClickUp deliveries include a top-level `event_id`.
+    event_id = payload.get("event_id")
+    lrepo.append(
+        peptide_request_id=req.id,
+        from_status=None,
+        to_status=mapped,
+        source="clickup",
+        clickup_event_id=event_id,
+        actor_clickup_user_id=str(creator.get("id")) if creator.get("id") else None,
+        actor_accumk1_user_id=(
+            actor_mapping.accumk1_user_id if actor_mapping else None
+        ),
+        note="Manual task created in ClickUp",
+    )
 
 
 def enqueue_relay_status_to_wp(
