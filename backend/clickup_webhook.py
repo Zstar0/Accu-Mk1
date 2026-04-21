@@ -4,12 +4,21 @@ import logging
 import os
 from uuid import UUID
 
+from pydantic import ValidationError, EmailStr, TypeAdapter
+
 from clickup_client import ClickUpClient
 from clickup_user_mapping_repo import ClickUpUserMappingRepository
 from jobs.relay_status_to_wp import run_once as relay_run_once
 from peptide_request_config import PeptideRequestConfig
 from peptide_request_repo import PeptideRequestRepository
 from status_log_repo import StatusLogRepository
+
+
+# Pre-built validator for the EmailStr check in taskUpdated. Reusing a
+# TypeAdapter avoids spinning up a one-off model on every event and
+# keeps the error path (ValidationError) identical to the WP-submission
+# path, which is what the downstream logging assumes.
+_EMAIL_VALIDATOR = TypeAdapter(EmailStr)
 
 
 log = logging.getLogger(__name__)
@@ -142,9 +151,199 @@ def dispatch_event(
             note="Task deleted in ClickUp — retired",
         )
 
+    elif event == "taskUpdated":
+        _handle_task_updated(req, history_items, cfg, prepo, lrepo)
+
     else:
         # Unknown / unhandled event. 200 OK, no action.
         return
+
+
+def _handle_task_updated(
+    req,
+    history_items: list,
+    cfg: PeptideRequestConfig,
+    prepo: PeptideRequestRepository,
+    lrepo: StatusLogRepository,
+) -> None:
+    """Apply custom-field drift from a ClickUp taskUpdated event.
+
+    Scope:
+      * Each ``history_items`` entry describes ONE field change. ClickUp
+        batches multiple changes into a single event, so a customer
+        editing three fields in ClickUp arrives here as one event with
+        three items.
+      * ``field`` may be a plain name ("name", "status") OR a custom
+        field UUID. We route by shape:
+          - "name"       -> log INFO, don't touch DB (name format
+                            "[kind] X — Y" is fragile; DB->ClickUp
+                            only per HANDOFF).
+          - "status"     -> skip entirely. taskStatusUpdated fires
+                            separately and is the source of truth for
+                            status transitions; processing it here
+                            would double-write status_log and
+                            double-fire relay_status_to_wp.
+          - custom UUID  -> reverse-map via cfg.custom_field_id_to_column,
+                            extract the `after` value, apply.
+          - anything else -> DEBUG + skip.
+      * Dedup per history_item id: status_log has a partial unique
+        index on clickup_event_id; we check that before applying to
+        avoid a redundant UPDATE on a re-delivered event.
+      * One status_log row per distinct history_item we actually
+        applied. ``from_status == to_status == req.status`` — these
+        aren't transitions, they're audit markers that a field
+        changed. The `note` names the field(s).
+
+    Does NOT enqueue WP relay or completion side effects: field
+    updates are orthogonal to customer milestones (those fire on
+    status transitions only).
+    """
+    if not history_items:
+        return
+
+    # Collect successful field applies in a single UPDATE per history
+    # item (usually just one field per item, but the shape allows
+    # multiple values to land on the same row — we take the last one
+    # wins per item). Re-look-up the row after each apply so the next
+    # iteration sees fresh state — matters if two history items in the
+    # same payload touch the same column.
+    for hi in history_items:
+        event_id = hi.get("id")
+        field = hi.get("field") or ""
+
+        # Status is handled by taskStatusUpdated; skipping here is
+        # critical — otherwise we'd double-process.
+        if field == "status":
+            continue
+
+        if field == "name":
+            before = (hi.get("before") or {}).get("title") if isinstance(hi.get("before"), dict) else hi.get("before")
+            after = (hi.get("after") or {}).get("title") if isinstance(hi.get("after"), dict) else hi.get("after")
+            log.info(
+                "taskUpdated: name change on task %s (%r -> %r) — not syncing to DB",
+                req.clickup_task_id, before, after,
+            )
+            continue
+
+        # Dedup BEFORE the apply: if the status_log already has a row
+        # with this event id, someone (us, a prior delivery) already
+        # processed it. Skipping the DB write avoids the updated_at
+        # bump, which matters for diff noise.
+        if event_id and _already_processed(lrepo, req.id, event_id):
+            log.debug("taskUpdated: history_item %s already processed", event_id)
+            continue
+
+        column = cfg.custom_field_id_to_column(field)
+        if column is None:
+            # Not a field we sync, not an error.
+            log.debug("taskUpdated: ignoring unmapped field %r on task %s",
+                      field, req.clickup_task_id)
+            continue
+
+        raw_after = hi.get("after")
+        value = _extract_field_value(column, raw_after, cfg)
+        if value is _SKIP_FIELD:
+            # Specific reasons are logged inside _extract_field_value.
+            continue
+
+        try:
+            prepo.update_fields(req.id, **{column: value})
+        except ValueError:
+            log.exception(
+                "taskUpdated: update_fields rejected column %r for task %s",
+                column, req.clickup_task_id,
+            )
+            continue
+
+        # Append the audit entry. Dedup is defense-in-depth — the
+        # _already_processed check above is the primary gate, but if
+        # the payload carries duplicate history_items in a single call
+        # (not observed in the wild, but allowed by the schema) the
+        # partial unique index catches it.
+        lrepo.append(
+            peptide_request_id=req.id,
+            from_status=req.status,
+            to_status=req.status,
+            source="clickup",
+            clickup_event_id=event_id,
+            actor_clickup_user_id=(
+                str((hi.get("user") or {}).get("id"))
+                if (hi.get("user") or {}).get("id")
+                else None
+            ),
+            actor_accumk1_user_id=None,
+            note=f"Field updated via taskUpdated: {column}",
+        )
+
+
+# Sentinel used by _extract_field_value to distinguish "skip this field
+# for non-value reasons" (validation failed, unresolvable option, etc.)
+# from "the tech cleared the field to None" which is a legitimate
+# write. A plain None return would collapse the two.
+_SKIP_FIELD = object()
+
+
+def _extract_field_value(column: str, raw_after, cfg: PeptideRequestConfig):
+    """Convert a ClickUp `after` payload into the value to write.
+
+    compound_kind arrives as a dropdown option UUID (or a list containing
+    one); all other fields are plain string values. Email values go
+    through Pydantic EmailStr; invalid emails return _SKIP_FIELD so
+    the caller bypasses the apply without aborting the event.
+    """
+    if column == "compound_kind":
+        option_id = raw_after
+        # ClickUp dropdown payloads sometimes wrap the option id in a
+        # list, and sometimes deliver it as a dict with orderindex+id.
+        # Handle both shapes defensively.
+        if isinstance(option_id, list):
+            option_id = option_id[0] if option_id else ""
+        if isinstance(option_id, dict):
+            option_id = option_id.get("id") or option_id.get("orderindex") or ""
+        resolved = cfg.compound_kind_option_to_value(str(option_id) if option_id else "")
+        if resolved is None:
+            log.warning(
+                "taskUpdated: unresolvable compound_kind option %r — skipping field",
+                option_id,
+            )
+            return _SKIP_FIELD
+        return resolved
+
+    if column == "submitted_by_email":
+        # Accept None/""/missing as clear-to-empty; reject invalid format.
+        if raw_after is None or raw_after == "":
+            return None
+        try:
+            _EMAIL_VALIDATOR.validate_python(raw_after)
+        except ValidationError:
+            log.warning(
+                "taskUpdated: invalid email %r — skipping field",
+                raw_after,
+            )
+            return _SKIP_FIELD
+        return raw_after
+
+    # Plain-string fields: sample_id, cas_or_reference, vendor_producer.
+    # None / empty string collapse to None for the DB so the column
+    # actually clears rather than storing "".
+    if raw_after is None or raw_after == "":
+        return None
+    return str(raw_after)
+
+
+def _already_processed(lrepo: StatusLogRepository, request_id, event_id: str) -> bool:
+    """Return True if a status_log row with this clickup_event_id already
+    exists for this request. Uses the existing get_for_request read
+    rather than a dedicated SELECT — keeps the dedup logic in-Python and
+    avoids a schema migration for a secondary index. History is bounded
+    (status transitions + field updates per request) so the linear scan
+    is cheap enough for webhook-scale traffic."""
+    if not event_id:
+        return False
+    for entry in lrepo.get_for_request(request_id):
+        if entry.clickup_event_id == event_id:
+            return True
+    return False
 
 
 def _handle_task_created(
