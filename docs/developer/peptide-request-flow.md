@@ -86,6 +86,9 @@ Frozen HTTP shapes: see [`docs/superpowers/specs/2026-04-17-peptide-request-cont
 2. **Parse body** — extract event type, task id, payload.
 3. **Dispatch** — `dispatch_event` routes on event type:
    - `taskStatusUpdated` → status transition path
+   - `taskCreated` → **manual-origin materialization** — creates a new `peptide_requests` row with `source='manual'` when a lab staffer creates a task directly in ClickUp (not via the WP form). Pulls `compound_name` / `molecular_weight` / `sequence` / `notes` / `sample_id` from custom fields if present. Marked with a visual badge in the LIMS list so they're distinguishable from WP-originated rows.
+   - `taskDeleted` → **retire** the corresponding Accu-Mk1 row by writing `retired_at = NOW()`. Soft-delete only — the row stays in Postgres but hides from the Active tab and shows a "Retired" badge on Closed. Never physically deletes.
+   - `taskUpdated` → **field sync** — handles two sub-cases: task-name changes (updates `compound_name` if different) and custom-field edits (writes into the matching `peptide_requests` column). Feeds the field-drift resolution flow below.
    - `taskAssigneeUpdated` → assignee sync (no state change on the request itself)
    - Unknown event → log and 200
 4. **Status transition**:
@@ -94,6 +97,46 @@ Frozen HTTP shapes: see [`docs/superpowers/specs/2026-04-17-peptide-request-cont
    - **Dedup**: the unique partial index on `clickup_event_id` means replayed webhooks short-circuit at INSERT.
    - On successful transition, enqueue `relay_status_to_wp` (daemon thread).
    - If new status is `completed`, also enqueue `completion_side_effects` (daemon thread).
+
+## Bidirectional Field Sync
+
+`taskUpdated` handles one edit at a time (push from ClickUp → Postgres). For detecting
+rows that are already out of sync — e.g. because the webhook was missed, or a batch of
+edits was made while the service was down — there's a manual reconciliation flow.
+
+**UI entry point:** "Sync from ClickUp" button on the peptide requests list page opens a
+modal (`SyncFromClickUpModal`) that calls `GET /sync/diff` and renders three buckets:
+
+| Bucket               | Meaning                                                                                            |
+| -------------------- | -------------------------------------------------------------------------------------------------- |
+| `new_in_clickup`     | Task exists in ClickUp but not in Postgres → create row (same outcome as a missed `taskCreated`)   |
+| `missing_in_clickup` | Row exists in Postgres but the ClickUp task is gone → retire row (same outcome as `taskDeleted`)   |
+| `field_drift`        | Row + task both exist but individual fields disagree → **human picks** DB or ClickUp value per field |
+
+The `field_drift` bucket is deliberately non-automatic. Automatic last-write-wins is the
+wrong policy when lab staff edit both surfaces concurrently. The modal renders a
+DB-vs-ClickUp picker per field; `POST /sync/apply` commits the chosen values in both
+directions (Postgres via `repo.update_fields`, ClickUp via `set_custom_field`).
+
+### Inline editing
+
+The detail page also supports inline editing of `sample_id` — the PATCH endpoint updates
+the row and pushes the change to ClickUp as a custom-field write in the same request.
+Saves an extra round-trip through the sync modal for the most common edit.
+
+## Provenance: `source` and `retired_at`
+
+Two columns on `peptide_requests` capture lifecycle provenance:
+
+| Column       | Values                         | Meaning                                                              |
+| ------------ | ------------------------------ | -------------------------------------------------------------------- |
+| `source`     | `wp` (default) \| `manual`     | `wp` = customer submitted via form; `manual` = lab created via ClickUp `taskCreated` |
+| `retired_at` | timestamp \| NULL              | Set when ClickUp task is deleted. Non-null = hidden from Active tab. |
+
+The Active tab filters on `retired_at IS NULL`. The Closed tab shows everything else and
+renders a "Retired" badge on rows with `retired_at IS NOT NULL`. Manual-origin rows
+(`source='manual'`) are flagged with a separate badge in both tabs so they're
+distinguishable from WP customer submissions.
 
 ## Status Enum
 
@@ -126,6 +169,27 @@ Nine values:
 | `SENAITE_PEPTIDE_TEMPLATE_KEYWORD` | SENAITE template keyword to clone (default: `BPC157-ID`)               |
 | `ACCUMK1_BASE_URL`                 | Base URL injected into ClickUp task descriptions for deep links        |
 | `MK1_DB_HOST`                      | Postgres host — `localhost` in dev, `host.docker.internal` in prod     |
+| `CLICKUP_FIELD_COMPOUND_KIND`      | ClickUp custom-field UUID for `compound_kind` (dropdown)               |
+| `CLICKUP_FIELD_MOLECULAR_WEIGHT`   | ClickUp custom-field UUID for `molecular_weight` (number)              |
+| `CLICKUP_FIELD_SEQUENCE`           | ClickUp custom-field UUID for `sequence` (short text)                  |
+| `CLICKUP_FIELD_SAMPLE_ID`          | ClickUp custom-field UUID for `sample_id` (short text)                 |
+| `CLICKUP_OPT_PEPTIDE`              | ClickUp option ID for `compound_kind=peptide` in the dropdown field    |
+| `CLICKUP_OPT_OTHER`                | ClickUp option ID for `compound_kind=other` in the dropdown field      |
+| `CLICKUP_OPT_PENDING`              | ClickUp option ID for any intake-pending dropdown state (reserved)     |
+| `CLICKUP_OPT_VERIFIED`             | ClickUp option ID for verified/confirmed dropdown state (reserved)     |
+| `PEPTIDE_SENAITE_CLONE_ENABLED`    | Feature flag (default `false`) — gates the SENAITE clone side-effect   |
+| `PEPTIDE_COUPON_ENABLED`           | Feature flag (default `false`) — gates the WooCommerce coupon issue    |
+
+**Feature flags:** Both completion side-effects ship gated off. Flip `PEPTIDE_COUPON_ENABLED=true`
+once the WooCommerce REST creds are wired through integration-service. Flip
+`PEPTIDE_SENAITE_CLONE_ENABLED=true` only after the SENAITE clone endpoint is implemented
+on integration-service (currently deferred — lab tech clones the `BPC157-ID` template
+manually; see handoff note for rationale).
+
+**ClickUp custom-field IDs:** The `CLICKUP_FIELD_*` UUIDs are list-scoped — they're
+re-issued if you clone the ClickUp list or move to a different workspace. Pull the
+current values from the ClickUp API's `/list/{id}/field` endpoint and re-inject into
+`.env` after any list migration.
 
 ## Adding a New ClickUp Column
 
