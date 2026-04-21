@@ -40,6 +40,7 @@ function makeRequest(overrides: Partial<PeptideRequest> = {}): PeptideRequest {
     id: 'req-123',
     created_at: '2026-04-01T00:00:00Z',
     updated_at: '2026-04-01T00:00:00Z',
+    source: 'wp',
     submitted_by_wp_user_id: 42,
     submitted_by_email: 'researcher@example.com',
     submitted_by_name: 'Dr. Researcher',

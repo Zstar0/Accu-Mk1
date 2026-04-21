@@ -9,6 +9,13 @@ export interface PeptideRequest {
   id: string
   created_at: string
   updated_at: string
+  /**
+   * Origin of the row:
+   *   'wp'     — submitted via WP checkout (integration-service relay).
+   *   'manual' — lab tech created the ClickUp task directly and the
+   *              taskCreated webhook materialized a row here.
+   */
+  source: 'wp' | 'manual'
   submitted_by_wp_user_id: number
   submitted_by_email: string
   submitted_by_name: string
