@@ -132,8 +132,12 @@ def test_happy_path(mock_post):
         "history_items": [{
             "id": f"evt_{uuid.uuid4()}",
             "field": "status",
-            "before": {"status": "approved"},
-            "after": {"status": "completed"},
+            # ClickUp sends actual column names (see DEFAULT_COLUMN_MAP in
+            # peptide_request_config.py). "Verified" is the column that maps
+            # to internal status "completed"; "completed" itself is not a
+            # ClickUp column and would log UNMAPPED COLUMN.
+            "before": {"status": "Analyzing"},
+            "after": {"status": "Verified"},
             "user": {"id": "cu_test", "username": "t", "email": "t@lab.com"},
         }],
     }).encode()
@@ -154,7 +158,7 @@ def test_happy_path(mock_post):
     from jobs.relay_status_to_wp import run_once
 
     run_all(UUID(req_id))
-    run_once(UUID(req_id), new_status="completed", previous_status="approved")
+    run_once(UUID(req_id), new_status="completed", previous_status="in_process")
 
     # 4. Verify final state
     final = client.get(f"/peptide-requests/{req_id}", headers=headers)

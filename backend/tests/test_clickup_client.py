@@ -35,7 +35,9 @@ def test_create_task_posts_to_list(mock_post):
     assert body["name"].startswith("[peptide]")
     assert "Retatrutide" in body["name"]
     assert "PepMart" in body["name"]
-    assert body["status"] == "New"
+    # No `status` in the create payload — ClickUp uses the list's initial
+    # column. Keeps client decoupled from lab column naming.
+    assert "status" not in body
     assert body["assignees"] == []
     assert "accumk1" in body["description"]  # deep link
 

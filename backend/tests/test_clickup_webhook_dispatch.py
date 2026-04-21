@@ -71,24 +71,28 @@ def test_task_status_updated_with_mapped_column():
     req = _make_request(wp_user_id=201, task_id=task_id)
     event_id = f"evt_{uuid.uuid4().hex[:10]}"
 
+    # Per DEFAULT_COLUMN_MAP (peptide_request_config.py): ClickUp column
+    # "Verified" maps to our internal status "completed". "Approved" no
+    # longer maps to any ClickUp column — it's an internal-only status
+    # set by the admin approve endpoint.
     resp = _post({
         "event": "taskStatusUpdated",
         "task_id": task_id,
         "history_items": [{
             "id": event_id,
-            "after": {"status": "Approved"},
+            "after": {"status": "Verified"},
             "user": {"id": "cu_u_42", "username": "alice", "email": "alice@example.com"},
             "comment": None,
         }],
     })
     assert resp.status_code == 200
 
-    # Request row flipped to approved, history row exists.
+    # Request row flipped to completed, history row exists.
     repo = PeptideRequestRepository()
     after = repo.get_by_id(req.id)
-    assert after.status == "approved"
+    assert after.status == "completed"
     history = StatusLogRepository().get_for_request(req.id)
-    assert any(h.to_status == "approved" and h.clickup_event_id == event_id for h in history)
+    assert any(h.to_status == "completed" and h.clickup_event_id == event_id for h in history)
 
 
 def test_task_status_updated_with_unmapped_column():
@@ -119,12 +123,14 @@ def test_duplicate_event_id_dedups():
     task_id = f"cu_task_{uuid.uuid4().hex[:10]}"
     req = _make_request(wp_user_id=203, task_id=task_id)
     event_id = f"evt_{uuid.uuid4().hex[:10]}"
+    # "Verified" is a currently-mapped ClickUp column ("Approved" was dropped
+    # from DEFAULT_COLUMN_MAP; see peptide_request_config.py).
     payload = {
         "event": "taskStatusUpdated",
         "task_id": task_id,
         "history_items": [{
             "id": event_id,
-            "after": {"status": "Approved"},
+            "after": {"status": "Verified"},
             "user": {"id": "cu_u_44", "username": "carol", "email": "carol@example.com"},
         }],
     }
