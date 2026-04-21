@@ -113,6 +113,35 @@ def dispatch_event(
         assignee_ids = [a["id"] for a in assignees if "id" in a]
         prepo.set_assignees(req.id, assignee_ids)
 
+    elif event == "taskDeleted":
+        # Retire-on-delete: the tech deleted the ClickUp task, but the
+        # Accu-Mk1 row is the source of truth — we don't cascade the
+        # delete. Stamp retired_at and log audit entry. Silent from the
+        # customer's perspective (no WP relay, no coupon, no SENAITE).
+        if req.retired_at is not None:
+            # Already retired — ClickUp may re-deliver the event. No-op.
+            return
+        updated = prepo.mark_retired(req.id)
+        if updated is None:
+            # Race: another handler retired between get_by_clickup_task_id
+            # and mark_retired. Treat as no-op.
+            return
+        # Audit log. to_status mirrors current status — no workflow
+        # transition occurred; the `note` carries the semantic signal.
+        user = payload.get("user") or {}
+        lrepo.append(
+            peptide_request_id=req.id,
+            from_status=req.status,
+            to_status=req.status,
+            source="clickup",
+            clickup_event_id=payload.get("event_id"),
+            actor_clickup_user_id=(
+                str(user.get("id")) if user.get("id") else None
+            ),
+            actor_accumk1_user_id=None,
+            note="Task deleted in ClickUp — retired",
+        )
+
     else:
         # Unknown / unhandled event. 200 OK, no action.
         return
