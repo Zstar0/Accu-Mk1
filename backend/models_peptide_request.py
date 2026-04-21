@@ -100,15 +100,38 @@ class FixStatusPair(BaseModel):
     target_status: str = Field(..., min_length=1, max_length=64)
 
 
+class FieldDriftResolution(BaseModel):
+    """One item in PeptideRequestSyncApplyRequest.resolve_field_drift.
+
+    ``field`` is typed as a bare str (not a Literal over the 5
+    bidirectional fields) so an unknown / misspelled field surfaces as
+    a per-item error in apply_actions, matching the widening pattern
+    used by FixStatusPair.target_status. The sync layer re-checks the
+    field against PeptideRequestRepository._UPDATE_FIELDS_WHITELIST
+    before touching the DB.
+
+    ``value_to_use`` picks which side wins:
+      'db'      — push the DB value to ClickUp (set_custom_field).
+      'clickup' — pull the fresh ClickUp value to the DB
+                  (repo.update_fields).
+    The route validates the literal up front so a typo fails the whole
+    request rather than silently no-op'ing inside the sync layer.
+    """
+    row_id: UUID
+    field: str = Field(..., min_length=1, max_length=64)
+    value_to_use: Literal["db", "clickup"]
+
+
 class PeptideRequestSyncApplyRequest(BaseModel):
     """Body for POST /lims/peptide-requests/sync/apply.
 
-    All three arrays default to empty so callers can omit unused
+    All four arrays default to empty so callers can omit unused
     action kinds. The route passes the model_dump dict to
     peptide_request_sync.apply_actions unchanged."""
     materialize_task_ids: list[str] = Field(default_factory=list)
     retire_row_ids: list[UUID] = Field(default_factory=list)
     fix_status_pairs: list[FixStatusPair] = Field(default_factory=list)
+    resolve_field_drift: list[FieldDriftResolution] = Field(default_factory=list)
 
 
 class StatusLogEntry(BaseModel):
