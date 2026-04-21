@@ -86,6 +86,31 @@ class PeptideRequestUpdate(BaseModel):
     sample_id: Optional[str] = Field(None, max_length=200)
 
 
+class FixStatusPair(BaseModel):
+    """One item in PeptideRequestSyncApplyRequest.fix_status_pairs.
+
+    target_status is typed as a bare str (not the Status Literal) so the
+    route can surface an explicit 400 / per-item error when a tech
+    somehow submits an unknown status, rather than Pydantic rejecting
+    the whole payload with a validation error. The sync service layer
+    already serializes mapped_status values from the column_map, which
+    are always drawn from the Status enum, so in practice this is a
+    defensive widening."""
+    row_id: UUID
+    target_status: str = Field(..., min_length=1, max_length=64)
+
+
+class PeptideRequestSyncApplyRequest(BaseModel):
+    """Body for POST /lims/peptide-requests/sync/apply.
+
+    All three arrays default to empty so callers can omit unused
+    action kinds. The route passes the model_dump dict to
+    peptide_request_sync.apply_actions unchanged."""
+    materialize_task_ids: list[str] = Field(default_factory=list)
+    retire_row_ids: list[UUID] = Field(default_factory=list)
+    fix_status_pairs: list[FixStatusPair] = Field(default_factory=list)
+
+
 class StatusLogEntry(BaseModel):
     id: UUID
     peptide_request_id: UUID

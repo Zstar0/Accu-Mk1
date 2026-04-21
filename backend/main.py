@@ -46,7 +46,7 @@ from auth import (
 )
 from models_peptide_request import (
     PeptideRequestCreate, PeptideRequest, PeptideRequestList,
-    PeptideRequestUpdate, StatusLogEntry,
+    PeptideRequestUpdate, PeptideRequestSyncApplyRequest, StatusLogEntry,
 )
 from peptide_request_repo import PeptideRequestRepository
 from status_log_repo import StatusLogRepository
@@ -54,6 +54,10 @@ from clickup_user_mapping_repo import ClickUpUserMappingRepository
 from peptide_request_config import get_config as get_peptide_request_config
 from clickup_client import ClickUpClient
 from clickup_webhook import verify_signature, dispatch_event
+from peptide_request_sync import (
+    apply_actions as peptide_request_apply_sync_actions,
+    compute_diff as peptide_request_compute_sync_diff,
+)
 from parsers import parse_txt_file
 from parsers.peakdata_csv_parser import parse_hplc_files, calculate_purity
 from calculations import CalculationEngine
@@ -12693,6 +12697,58 @@ def lims_list_peptide_requests(
         wp_user_id=wp_user_id, status=status_list, limit=limit, offset=offset
     )
     return PeptideRequestList(total=total, limit=limit, offset=offset, items=items)
+
+
+@app.get("/lims/peptide-requests/sync/diff")
+def lims_peptide_request_sync_diff(_user=Depends(get_current_user)):
+    """Compute the 3 discrepancy buckets between ClickUp and Accu-Mk1.
+
+    Declared BEFORE /lims/peptide-requests/{request_id} because FastAPI
+    matches routes in declaration order — "sync" would otherwise be
+    treated as a UUID path param and 500 on UUID(...) parsing.
+
+    Auth: any logged-in LIMS user. Sync is read-only on this endpoint
+    (no side effects until the tech clicks Apply) so admin-gating would
+    be unnecessarily restrictive.
+    """
+    cfg = get_peptide_request_config()
+    client = ClickUpClient(
+        api_token=cfg.clickup_api_token,
+        list_id=cfg.clickup_list_id,
+        accumk1_base_url=os.environ.get("ACCUMK1_BASE_URL", ""),
+        config=cfg,
+    )
+    return peptide_request_compute_sync_diff(
+        client, PeptideRequestRepository(), cfg
+    )
+
+
+@app.post("/lims/peptide-requests/sync/apply")
+def lims_peptide_request_sync_apply(
+    body: PeptideRequestSyncApplyRequest,
+    _user=Depends(get_current_user),
+):
+    """Apply tech-selected reconciliation actions.
+
+    Per-item error isolation lives in apply_actions; the route simply
+    wires repos + client and returns the resulting counts + errors
+    array so the frontend can show a toast with a breakdown.
+    """
+    cfg = get_peptide_request_config()
+    client = ClickUpClient(
+        api_token=cfg.clickup_api_token,
+        list_id=cfg.clickup_list_id,
+        accumk1_base_url=os.environ.get("ACCUMK1_BASE_URL", ""),
+        config=cfg,
+    )
+    return peptide_request_apply_sync_actions(
+        body.model_dump(mode="python"),
+        client,
+        PeptideRequestRepository(),
+        StatusLogRepository(),
+        ClickUpUserMappingRepository(),
+        cfg,
+    )
 
 
 @app.get("/lims/peptide-requests/{request_id}", response_model=PeptideRequest)
