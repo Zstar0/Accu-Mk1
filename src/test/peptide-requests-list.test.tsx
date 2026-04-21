@@ -5,10 +5,24 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import React from 'react'
 
 // Mock the hooks module before importing the page so the page picks up the mock.
+// The SyncClickUpModal (rendered by the page) consumes useSyncDiff/useApplySync,
+// so we must stub them here too — otherwise vitest complains about missing
+// exports as soon as the page renders its modal.
 vi.mock('@/hooks/peptide-requests', () => ({
   usePeptideRequestsList: vi.fn(),
   usePeptideRequest: vi.fn(),
   usePeptideRequestHistory: vi.fn(),
+  useUpdatePeptideRequest: vi.fn(),
+  useSyncDiff: vi.fn(() => ({
+    data: undefined,
+    isLoading: false,
+    isError: false,
+    error: null,
+  })),
+  useApplySync: vi.fn(() => ({
+    mutateAsync: vi.fn(),
+    isPending: false,
+  })),
 }))
 
 const { usePeptideRequestsList } = await import('@/hooks/peptide-requests')
