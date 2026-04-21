@@ -1,13 +1,29 @@
 """ClickUp API client for peptide requests."""
 import requests
+from typing import Optional
 from models_peptide_request import PeptideRequest
+from peptide_request_config import PeptideRequestConfig, get_config
 
 
 class ClickUpClient:
-    def __init__(self, *, api_token: str, list_id: str, accumk1_base_url: str):
+    def __init__(
+        self,
+        *,
+        api_token: str,
+        list_id: str,
+        accumk1_base_url: str,
+        config: Optional[PeptideRequestConfig] = None,
+    ):
         self.api_token = api_token
         self.list_id = list_id
         self.accumk1_base_url = accumk1_base_url.rstrip("/")
+        # Lazy-load config for custom-field IDs. Callers may pass an
+        # explicit config (tests, or code that already has one); otherwise
+        # we resolve via get_config() on first use. We do NOT call get_config
+        # eagerly here because it raises when required env vars are missing,
+        # and some test paths construct the client with fake tokens but no
+        # env. Deferred resolution keeps those paths working.
+        self._config = config
 
     def _headers(self) -> dict:
         return {"Authorization": self.api_token, "Content-Type": "application/json"}
@@ -51,6 +67,68 @@ class ClickUpClient:
             raise RuntimeError(f"ClickUp get_task failed: {resp.status_code} {resp.text}")
         return resp.json()
 
+    def _resolve_config(self) -> Optional[PeptideRequestConfig]:
+        """Return a config or None. Suppresses RuntimeError from missing
+        required env so create_task_for_request never fails because we
+        couldn't resolve optional custom-field IDs."""
+        if self._config is not None:
+            return self._config
+        try:
+            self._config = get_config()
+        except Exception:
+            self._config = None
+        return self._config
+
+    def _build_custom_fields(self, r: PeptideRequest) -> list[dict]:
+        """Build the custom_fields array for task create. Skips any field
+        whose ID is empty in config (graceful degrade). Skips individual
+        fields whose source data is None/empty so we don't push empty
+        strings into ClickUp for values the user never provided.
+        """
+        cfg = self._resolve_config()
+        if cfg is None:
+            return []
+        fields: list[dict] = []
+
+        # Compound Kind is a dropdown — value is the option id, not the string.
+        if cfg.clickup_field_compound_kind:
+            option_id = ""
+            if r.compound_kind == "peptide":
+                option_id = cfg.clickup_opt_compound_kind_peptide
+            elif r.compound_kind == "other":
+                option_id = cfg.clickup_opt_compound_kind_other
+            if option_id:
+                fields.append(
+                    {"id": cfg.clickup_field_compound_kind, "value": option_id}
+                )
+
+        if cfg.clickup_field_customer_email and r.submitted_by_email:
+            fields.append(
+                {
+                    "id": cfg.clickup_field_customer_email,
+                    "value": r.submitted_by_email,
+                }
+            )
+        if cfg.clickup_field_vendor_producer and r.vendor_producer:
+            fields.append(
+                {
+                    "id": cfg.clickup_field_vendor_producer,
+                    "value": r.vendor_producer,
+                }
+            )
+        if cfg.clickup_field_cas and r.cas_or_reference:
+            fields.append(
+                {"id": cfg.clickup_field_cas, "value": r.cas_or_reference}
+            )
+        if cfg.clickup_field_accumk1_link and self.accumk1_base_url:
+            fields.append(
+                {
+                    "id": cfg.clickup_field_accumk1_link,
+                    "value": f"{self.accumk1_base_url}/requests/{r.id}",
+                }
+            )
+        return fields
+
     def create_task_for_request(self, r: PeptideRequest) -> str:
         url = f"https://api.clickup.com/api/v2/list/{self.list_id}/task"
         # No `status` — ClickUp defaults to the list's initial (open-type)
@@ -63,7 +141,24 @@ class ClickUpClient:
             "assignees": [],
             "priority": None,
         }
+        custom_fields = self._build_custom_fields(r)
+        if custom_fields:
+            body["custom_fields"] = custom_fields
         resp = requests.post(url, headers=self._headers(), json=body, timeout=15)
         if resp.status_code >= 300:
             raise RuntimeError(f"ClickUp create failed: {resp.status_code} {resp.text}")
         return resp.json()["id"]
+
+    def set_custom_field(self, task_id: str, field_id: str, value) -> None:
+        """Set a single custom field on an existing task. Used for fields
+        that are edited after task creation (e.g. sample_id). Raises on
+        non-2xx so callers can log and surface a sync warning to the UI.
+        """
+        url = f"https://api.clickup.com/api/v2/task/{task_id}/field/{field_id}"
+        resp = requests.post(
+            url, headers=self._headers(), json={"value": value}, timeout=15
+        )
+        if resp.status_code >= 300:
+            raise RuntimeError(
+                f"ClickUp set_custom_field failed: {resp.status_code} {resp.text}"
+            )

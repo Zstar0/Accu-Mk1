@@ -49,3 +49,119 @@ def test_create_task_raises_on_error(mock_post):
     import pytest
     with pytest.raises(Exception):
         client.create_task_for_request(make_request())
+
+
+# ── Custom field population ──────────────────────────────────────────
+
+def _make_config(**overrides):
+    """Build a PeptideRequestConfig with custom-field ids set. Avoids the
+    get_config() env-var requirement for tests."""
+    from peptide_request_config import PeptideRequestConfig
+    defaults = dict(
+        clickup_list_id="L1",
+        clickup_api_token="t",
+        clickup_webhook_secret="s",
+        clickup_field_compound_kind="cfk-id",
+        clickup_field_customer_email="cfe-id",
+        clickup_field_vendor_producer="cfv-id",
+        clickup_field_cas="cfc-id",
+        clickup_field_accumk1_link="cfl-id",
+        clickup_field_sample_id="cfs-id",
+        clickup_opt_compound_kind_peptide="opt-peptide",
+        clickup_opt_compound_kind_other="opt-other",
+    )
+    defaults.update(overrides)
+    return PeptideRequestConfig(**defaults)
+
+
+@patch("clickup_client.requests.post")
+def test_create_task_populates_custom_fields_when_config_set(mock_post):
+    """Verifies the task-create body includes a custom_fields array with
+    the right IDs + option id for the dropdown when config provides them."""
+    mock_post.return_value = MagicMock(
+        status_code=200, json=lambda: {"id": "tsk_cf", "url": "x"}
+    )
+    cfg = _make_config()
+    client = ClickUpClient(
+        api_token="t", list_id="L1",
+        accumk1_base_url="https://accumk1", config=cfg,
+    )
+    req = make_request()
+    # Give it a CAS value to exercise that branch
+    req.cas_or_reference = "12345-67-8"
+    task_id = client.create_task_for_request(req)
+    assert task_id == "tsk_cf"
+    body = mock_post.call_args.kwargs["json"]
+    assert "custom_fields" in body
+    fields = {f["id"]: f["value"] for f in body["custom_fields"]}
+    # Compound Kind: dropdown value is the OPTION id, not the string
+    assert fields["cfk-id"] == "opt-peptide"
+    assert fields["cfe-id"] == "a@b.c"
+    assert fields["cfv-id"] == "PepMart"
+    assert fields["cfc-id"] == "12345-67-8"
+    # Accumk1 link is the full URL
+    assert fields["cfl-id"].startswith("https://accumk1/requests/")
+
+
+@patch("clickup_client.requests.post")
+def test_create_task_omits_custom_fields_when_config_empty(mock_post):
+    """When no custom-field IDs are configured, body must NOT contain a
+    custom_fields key. Graceful degrade — task-create still succeeds."""
+    from peptide_request_config import PeptideRequestConfig
+    mock_post.return_value = MagicMock(
+        status_code=200, json=lambda: {"id": "tsk_cf2"}
+    )
+    cfg = PeptideRequestConfig(
+        clickup_list_id="L1", clickup_api_token="t", clickup_webhook_secret="s",
+    )
+    client = ClickUpClient(
+        api_token="t", list_id="L1",
+        accumk1_base_url="https://accumk1", config=cfg,
+    )
+    client.create_task_for_request(make_request())
+    body = mock_post.call_args.kwargs["json"]
+    assert "custom_fields" not in body
+
+
+@patch("clickup_client.requests.post")
+def test_create_task_skips_missing_data_fields(mock_post):
+    """Fields with a configured ID but no source data (e.g. missing CAS)
+    must be omitted from the custom_fields array — don't push empty strings."""
+    mock_post.return_value = MagicMock(
+        status_code=200, json=lambda: {"id": "tsk_cf3"}
+    )
+    cfg = _make_config()
+    client = ClickUpClient(
+        api_token="t", list_id="L1",
+        accumk1_base_url="https://accumk1", config=cfg,
+    )
+    req = make_request()
+    req.cas_or_reference = None
+    client.create_task_for_request(req)
+    body = mock_post.call_args.kwargs["json"]
+    field_ids = {f["id"] for f in body["custom_fields"]}
+    assert "cfc-id" not in field_ids  # CAS skipped
+    assert "cfe-id" in field_ids      # email still present
+
+
+@patch("clickup_client.requests.post")
+def test_set_custom_field_posts_correct_url_and_body(mock_post):
+    mock_post.return_value = MagicMock(status_code=200, json=lambda: {})
+    client = ClickUpClient(
+        api_token="t", list_id="L1", accumk1_base_url="https://accumk1",
+    )
+    client.set_custom_field("tsk_xyz", "cfs-id", "SMP-123")
+    args, kwargs = mock_post.call_args
+    assert "/task/tsk_xyz/field/cfs-id" in args[0]
+    assert kwargs["json"] == {"value": "SMP-123"}
+
+
+@patch("clickup_client.requests.post")
+def test_set_custom_field_raises_on_error(mock_post):
+    mock_post.return_value = MagicMock(status_code=400, text="bad field")
+    client = ClickUpClient(
+        api_token="t", list_id="L1", accumk1_base_url="https://accumk1",
+    )
+    import pytest
+    with pytest.raises(Exception):
+        client.set_custom_field("tsk_xyz", "cfs-id", "X")
