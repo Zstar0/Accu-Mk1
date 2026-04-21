@@ -1,3 +1,21 @@
+"""ClickUp webhook dispatcher for peptide_requests.
+
+Subscribed events (webhook id 6bd2e887-303c-4bbe-b458-17bfd3b03c91):
+  - taskCreated         — materialize a row from a lab-tech-created task
+  - taskStatusUpdated   — map ClickUp column -> internal status, log + relay
+  - taskAssigneeUpdated — track assignees on the peptide_requests row
+  - taskDeleted         — retire the row (preserve history)
+  - taskUpdated         — custom-field drift sync (this module's newest
+                          branch; see _handle_task_updated). Subscription
+                          is performed OUT-OF-BAND via a PUT to
+                          api.clickup.com/api/v2/webhook/{id} after code
+                          deploy so we never receive events we can't yet
+                          handle.
+
+Change-management rule: the subscription list and the dispatch switch
+must stay in lockstep. Add a branch here FIRST, deploy, then update
+the subscription — not the other way around.
+"""
 import hmac
 import hashlib
 import logging
