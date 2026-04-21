@@ -14,19 +14,24 @@ from psycopg2.extras import RealDictCursor
 
 # Set required env vars BEFORE importing the client / job modules so that
 # IntegrationServiceClient.__init__ and get_config() can find them.
-os.environ.setdefault("INTEGRATION_SERVICE_URL", "http://fake-integration")
-os.environ.setdefault("INTEGRATION_SERVICE_TOKEN", "fake-token")
-os.environ.setdefault("CLICKUP_LIST_ID", "fake-list-id")
-os.environ.setdefault("CLICKUP_API_TOKEN", "fake-clickup-token")
-os.environ.setdefault("CLICKUP_WEBHOOK_SECRET", "fake-webhook-secret")
+#
+# NOTE: direct assignment (not setdefault) — the backend container already
+# sets real values for some of these (e.g. INTEGRATION_SERVICE_TOKEN,
+# PEPTIDE_COUPON_ENABLED=false, PEPTIDE_SENAITE_CLONE_ENABLED=false).
+# setdefault was a no-op against those, which made side-effects short-circuit
+# and caused the happy-path tests to see None for coupon_code / service_uid.
+os.environ["INTEGRATION_SERVICE_URL"] = "http://fake-integration"
+os.environ["INTEGRATION_SERVICE_TOKEN"] = "fake-token"
+os.environ["CLICKUP_LIST_ID"] = "fake-list-id"
+os.environ["CLICKUP_API_TOKEN"] = "fake-clickup-token"
+os.environ["CLICKUP_WEBHOOK_SECRET"] = "fake-webhook-secret"
 os.environ.setdefault("MK1_DB_HOST", "localhost")
-# Existing SENAITE-path tests were written against the legacy default behavior
-# where the clone side-effect always ran. The feature is now gated on
-# PEPTIDE_SENAITE_CLONE_ENABLED (default false); enable it here so existing
-# assertions still exercise that code path. A dedicated test below covers the
-# disabled-flag branch explicitly.
-os.environ.setdefault("PEPTIDE_SENAITE_CLONE_ENABLED", "true")
-os.environ.setdefault("PEPTIDE_COUPON_ENABLED", "true")
+# Most tests in this module exercise the happy path where both side-effects
+# run. The two `*_skipped_when_flag_disabled` tests use monkeypatch to flip
+# the flag off for their individual cases — so we must force these ON at the
+# module level.
+os.environ["PEPTIDE_SENAITE_CLONE_ENABLED"] = "true"
+os.environ["PEPTIDE_COUPON_ENABLED"] = "true"
 
 from mk1_db import ensure_peptide_requests_table, get_mk1_conn
 from models_peptide_request import PeptideRequestCreate

@@ -12,8 +12,13 @@ from unittest.mock import patch, MagicMock
 
 # Set required env vars BEFORE importing the client / job modules so
 # IntegrationServiceClient.__init__ can find them at run_once() time.
-os.environ.setdefault("INTEGRATION_SERVICE_URL", "http://fake-integration")
-os.environ.setdefault("INTEGRATION_SERVICE_TOKEN", "fake-token")
+#
+# NOTE: direct assignment (not setdefault) — the backend container sets a
+# real INTEGRATION_SERVICE_TOKEN in its environment, and tests need the
+# mocked "fake-token" sentinel for assertions. Same applies to the URL
+# (container points at a real integration-service host).
+os.environ["INTEGRATION_SERVICE_URL"] = "http://fake-integration"
+os.environ["INTEGRATION_SERVICE_TOKEN"] = "fake-token"
 
 from mk1_db import ensure_peptide_requests_table
 from models_peptide_request import PeptideRequestCreate
