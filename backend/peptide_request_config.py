@@ -44,6 +44,21 @@ class PeptideRequestConfig:
     senaite_clone_enabled: bool = False
     coupon_enabled: bool = False
     column_map: dict[str, str] = field(default_factory=lambda: dict(DEFAULT_COLUMN_MAP))
+    # Custom-field IDs for the ClickUp list (sandbox list 901713092705).
+    # Each defaults to empty string; the ClickUp client treats empty as
+    # "skip this field" so task-create/update never fails because a single
+    # field id is missing from env. Fill via env vars to enable population.
+    clickup_field_compound_kind: str = ""
+    clickup_field_customer_email: str = ""
+    clickup_field_vendor_producer: str = ""
+    clickup_field_cas: str = ""
+    clickup_field_accumk1_link: str = ""
+    clickup_field_sample_id: str = ""
+    # Dropdown option ids for the "Compound Kind" field. Required only if
+    # clickup_field_compound_kind is populated. Same empty-string-as-skip
+    # semantics apply per option.
+    clickup_opt_compound_kind_peptide: str = ""
+    clickup_opt_compound_kind_other: str = ""
 
     def map_column_to_status(self, column_name: str) -> str | None:
         target = _normalize(column_name)
@@ -79,5 +94,26 @@ def get_config() -> PeptideRequestConfig:
         ),
         coupon_enabled=_parse_bool(
             os.environ.get("PEPTIDE_COUPON_ENABLED"), default=False
+        ),
+        # Custom-field IDs — all optional; empty string means "skip this field".
+        clickup_field_compound_kind=os.environ.get(
+            "CLICKUP_FIELD_COMPOUND_KIND", ""
+        ),
+        clickup_field_customer_email=os.environ.get(
+            "CLICKUP_FIELD_CUSTOMER_EMAIL", ""
+        ),
+        clickup_field_vendor_producer=os.environ.get(
+            "CLICKUP_FIELD_VENDOR_PRODUCER", ""
+        ),
+        clickup_field_cas=os.environ.get("CLICKUP_FIELD_CAS", ""),
+        clickup_field_accumk1_link=os.environ.get(
+            "CLICKUP_FIELD_ACCUMK1_LINK", ""
+        ),
+        clickup_field_sample_id=os.environ.get("CLICKUP_FIELD_SAMPLE_ID", ""),
+        clickup_opt_compound_kind_peptide=os.environ.get(
+            "CLICKUP_OPT_COMPOUND_KIND_PEPTIDE", ""
+        ),
+        clickup_opt_compound_kind_other=os.environ.get(
+            "CLICKUP_OPT_COMPOUND_KIND_OTHER", ""
         ),
     )
