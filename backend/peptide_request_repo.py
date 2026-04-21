@@ -276,6 +276,78 @@ class PeptideRequestRepository:
             conn.commit()
             return _row_to_model(dict(row)) if row else None
 
+    # Columns writable via update_fields. Kept as a class-level constant
+    # so tests can import it (and so the whitelist lives next to the
+    # method that enforces it). Mirrors the "bidirectional-sync fields"
+    # callout in HANDOFF_PEPTIDE_REQUEST.md; adding a new syncable field
+    # is a deliberate two-step operation: add the column to the DB, add
+    # it here.
+    _UPDATE_FIELDS_WHITELIST: frozenset[str] = frozenset({
+        "sample_id",
+        "compound_kind",
+        "cas_or_reference",
+        "vendor_producer",
+        "submitted_by_email",
+    })
+
+    def update_fields(
+        self, request_id: UUID, **fields,
+    ) -> Optional["PeptideRequest"]:
+        """Update an arbitrary subset of the bidirectional-sync columns.
+
+        Intended for the taskUpdated webhook branch and the sync
+        field_drift resolution path, where the inbound payload carries
+        one-or-more custom field changes at once.
+
+        Validation:
+          * Unknown / non-whitelisted keys raise ``ValueError`` BEFORE
+            touching the DB. The whitelist is the exact set of fields
+            we sync bidirectionally; anything else is either (a) not
+            modeled in our DB, (b) derived (updated_at), or (c) owned
+            by a dedicated mutator (status, retired_at, etc.) and must
+            go through that path instead.
+          * An empty kwargs call is a no-op and returns the current
+            row. This keeps webhook dispatch simple — iterate history
+            items, only call this when there's an actual field to
+            apply, but tolerate the degenerate case.
+
+        SQL construction is dynamic but still parameterized: column
+        names come exclusively from the validated whitelist (never from
+        user input), and values go through psycopg2's %s placeholder.
+        No string interpolation of values.
+
+        Returns the updated row or None if the row does not exist.
+        """
+        if not fields:
+            return self.get_by_id(request_id)
+        unknown = set(fields) - self._UPDATE_FIELDS_WHITELIST
+        if unknown:
+            raise ValueError(
+                f"update_fields: unknown column(s): {sorted(unknown)}"
+            )
+
+        # Deterministic ordering so SQL generated is identical run-to-run
+        # (easier to read in logs / pg_stat_statements).
+        columns = sorted(fields.keys())
+        set_clauses = ", ".join(f"{c} = %s" for c in columns)
+        values: list = [fields[c] for c in columns]
+        values.append(str(request_id))
+
+        with get_mk1_conn() as conn:
+            cur = conn.cursor(cursor_factory=RealDictCursor)
+            cur.execute(
+                f"""
+                UPDATE peptide_requests
+                SET {set_clauses}, updated_at = NOW()
+                WHERE id = %s
+                RETURNING *
+                """,
+                values,
+            )
+            row = cur.fetchone()
+            conn.commit()
+            return _row_to_model(dict(row)) if row else None
+
     def update_sample_id(
         self, request_id: UUID, sample_id: Optional[str],
     ) -> Optional[PeptideRequest]:

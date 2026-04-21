@@ -67,6 +67,58 @@ class PeptideRequestConfig:
                 return v
         return None
 
+    # ------------------------------------------------------------------
+    # Reverse-mapping helpers used by the taskUpdated webhook branch and
+    # the sync field_drift bucket.
+    #
+    # Inbound payloads reference custom fields by their UUID (never by
+    # our column name), so the webhook dispatcher needs a way to go from
+    # "here is the field that changed" back to "here is the DB column it
+    # maps to". We keep the mapping inline (not a module-level dict)
+    # because every field id lives on the config instance — the mapping
+    # only exists once per config load.
+    #
+    # Unset field ids (empty string) never match: the `if field_id`
+    # guard trips first, and an empty key wouldn't be useful to match on
+    # anyway because every field id in a real payload is a non-empty
+    # UUID.
+    # ------------------------------------------------------------------
+    def custom_field_id_to_column(self, field_id: str) -> str | None:
+        """Reverse-map a ClickUp custom field UUID to the Accu-Mk1 column name.
+
+        Returns None for unknown / unconfigured field ids so callers can
+        treat them as "not one of ours" without branching on the specific
+        mapping shape.
+        """
+        if not field_id:
+            return None
+        mapping = {
+            self.clickup_field_sample_id:       "sample_id",
+            self.clickup_field_cas:             "cas_or_reference",
+            self.clickup_field_vendor_producer: "vendor_producer",
+            self.clickup_field_customer_email:  "submitted_by_email",
+            self.clickup_field_compound_kind:   "compound_kind",
+        }
+        # Drop unset keys (empty string) so a missing-from-env field id
+        # never accidentally matches an empty lookup.
+        mapping.pop("", None)
+        return mapping.get(field_id)
+
+    def compound_kind_option_to_value(self, option_id: str) -> str | None:
+        """Reverse-map a Compound Kind dropdown option UUID to 'peptide' / 'other'.
+
+        Mirrors the forward mapping in ClickUpClient._build_custom_fields
+        where we pick an option id based on the column value. Returns
+        None for unknown / unconfigured option ids.
+        """
+        if not option_id:
+            return None
+        if option_id == self.clickup_opt_compound_kind_peptide:
+            return "peptide"
+        if option_id == self.clickup_opt_compound_kind_other:
+            return "other"
+        return None
+
 
 def _require(key: str) -> str:
     v = os.environ.get(key)
