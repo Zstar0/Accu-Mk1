@@ -66,6 +66,7 @@ function makeRequest(overrides: Partial<PeptideRequest> = {}): PeptideRequest {
     completed_at: null,
     rejected_at: null,
     cancelled_at: null,
+    retired_at: null,
     ...overrides,
   }
 }
