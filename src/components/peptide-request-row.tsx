@@ -22,6 +22,15 @@ export function PeptideRequestRow({ request }: { request: PeptideRequest }) {
         </div>
       </div>
       <div className="flex items-center gap-3">
+        {request.retired_at !== null && (
+          <Badge
+            variant="secondary"
+            className="text-xs font-normal text-muted-foreground"
+            title="The corresponding ClickUp task was deleted — row kept for history"
+          >
+            Retired
+          </Badge>
+        )}
         <Badge variant="outline">{request.status.replace(/_/g, ' ')}</Badge>
         <span className="text-sm text-muted-foreground">
           {new Date(request.created_at).toLocaleDateString()}

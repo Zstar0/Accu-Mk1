@@ -41,6 +41,12 @@ export interface PeptideRequest {
   completed_at: string | null
   rejected_at: string | null
   cancelled_at: string | null
+  /**
+   * Retirement marker: populated when the corresponding ClickUp task is
+   * deleted by a lab tech. The Accu-Mk1 row is preserved; UI hides
+   * retired rows from the Active tab and surfaces them in Closed.
+   */
+  retired_at: string | null
 }
 
 export interface StatusLogEntry {
