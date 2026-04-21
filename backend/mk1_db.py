@@ -210,6 +210,14 @@ def ensure_peptide_requests_table() -> None:
                 "ALTER TABLE peptide_requests ADD COLUMN IF NOT EXISTS "
                 "source TEXT NOT NULL DEFAULT 'wp'"
             )
+            # Retirement marker: when a lab tech deletes the corresponding
+            # ClickUp task, we do NOT delete the row — we stamp retired_at
+            # and hide it from the Active tab. Nullable, no default, mirrors
+            # the existing rejected_at / cancelled_at / completed_at pattern.
+            cur.execute(
+                "ALTER TABLE peptide_requests ADD COLUMN IF NOT EXISTS "
+                "retired_at TIMESTAMPTZ"
+            )
         conn.commit()
 
 

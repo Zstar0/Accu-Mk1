@@ -65,6 +65,7 @@ class PeptideRequest(BaseModel):
     completed_at: Optional[datetime] = None
     rejected_at: Optional[datetime] = None
     cancelled_at: Optional[datetime] = None
+    retired_at: Optional[datetime] = None
 
 
 class PeptideRequestList(BaseModel):

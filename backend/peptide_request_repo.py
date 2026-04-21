@@ -250,6 +250,32 @@ class PeptideRequestRepository:
             """, (json.dumps(assignee_ids), str(request_id)))
             conn.commit()
 
+    def mark_retired(self, request_id: UUID) -> Optional[PeptideRequest]:
+        """Mark a request as retired (ClickUp task was deleted).
+
+        Idempotent: if the row is already retired, the WHERE clause matches
+        zero rows and we return None. Callers should treat None as "no-op,
+        already retired or missing" and skip side effects accordingly.
+
+        Does NOT mutate status — retirement is a separate axis from workflow
+        status. A retired row keeps its last-known status for history; UI
+        filters on retired_at directly.
+        """
+        with get_mk1_conn() as conn:
+            cur = conn.cursor(cursor_factory=RealDictCursor)
+            cur.execute(
+                """
+                UPDATE peptide_requests
+                SET retired_at = NOW(), updated_at = NOW()
+                WHERE id = %s AND retired_at IS NULL
+                RETURNING *
+                """,
+                (str(request_id),),
+            )
+            row = cur.fetchone()
+            conn.commit()
+            return _row_to_model(dict(row)) if row else None
+
     def find_needing_clickup_create(self, older_than_seconds: int = 60) -> list[PeptideRequest]:
         """Rows with clickup_task_id NULL and older than N seconds."""
         with get_mk1_conn() as conn:
