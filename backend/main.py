@@ -45,7 +45,8 @@ from auth import (
     SenaiteCredentials,
 )
 from models_peptide_request import (
-    PeptideRequestCreate, PeptideRequest, PeptideRequestList, StatusLogEntry,
+    PeptideRequestCreate, PeptideRequest, PeptideRequestList,
+    PeptideRequestUpdate, StatusLogEntry,
 )
 from peptide_request_repo import PeptideRequestRepository
 from status_log_repo import StatusLogRepository
@@ -12704,6 +12705,73 @@ def lims_get_peptide_request(
     if not row:
         raise HTTPException(404, "not found")
     return row
+
+
+@app.patch("/lims/peptide-requests/{request_id}")
+def lims_update_peptide_request(
+    request_id: str,
+    body: PeptideRequestUpdate,
+    _user=Depends(get_current_user),
+):
+    """Partial update from the LIMS UI. Currently supports editing sample_id.
+
+    Behaviour:
+      * 404 if the row doesn't exist.
+      * Always updates the DB column first (source of truth).
+      * If the row has a clickup_task_id AND config.clickup_field_sample_id
+        is populated, pushes the new value to ClickUp via
+        POST /task/{id}/field/{field_id}. Empty string is pushed when
+        clearing (sample_id=null).
+      * ClickUp failure does NOT roll back the DB. Response returns 200
+        with a `warning` field so the UI can surface a retry hint.
+        Rationale: DB is the source of truth; a transient ClickUp outage
+        shouldn't block a tech from editing a sample id. A future retry
+        queue will close the drift window.
+    """
+    import logging as _logging
+    log = _logging.getLogger(__name__)
+
+    repo = PeptideRequestRepository()
+    existing = repo.get_by_id(UUID(request_id))
+    if not existing:
+        raise HTTPException(404, "not found")
+
+    updated = repo.update_sample_id(UUID(request_id), body.sample_id)
+    if updated is None:
+        # Race: deleted between the get and the update. Treat as 404.
+        raise HTTPException(404, "not found")
+
+    warning: Optional[str] = None
+    if updated.clickup_task_id:
+        cfg = get_peptide_request_config()
+        if not cfg.clickup_field_sample_id:
+            log.info(
+                "PATCH sample_id: CLICKUP_FIELD_SAMPLE_ID unset, skipping ClickUp sync"
+            )
+        else:
+            try:
+                client = ClickUpClient(
+                    api_token=cfg.clickup_api_token,
+                    list_id=cfg.clickup_list_id,
+                    accumk1_base_url=os.environ.get("ACCUMK1_BASE_URL", ""),
+                    config=cfg,
+                )
+                client.set_custom_field(
+                    updated.clickup_task_id,
+                    cfg.clickup_field_sample_id,
+                    body.sample_id or "",
+                )
+            except Exception:
+                log.exception(
+                    "PATCH sample_id: ClickUp sync failed for task %s",
+                    updated.clickup_task_id,
+                )
+                warning = "ClickUp sync failed; will need manual retry"
+
+    result = updated.model_dump(mode="json")
+    if warning:
+        result["warning"] = warning
+    return result
 
 
 @app.get(

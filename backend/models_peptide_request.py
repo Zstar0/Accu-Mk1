@@ -75,6 +75,17 @@ class PeptideRequestList(BaseModel):
     items: list[PeptideRequest]
 
 
+class PeptideRequestUpdate(BaseModel):
+    """Partial update body for PATCH /lims/peptide-requests/{id}.
+
+    Right now only sample_id is editable from the LIMS UI. The model exists
+    so future editable fields (notes, priority, etc.) can be added without
+    changing the route signature. sample_id=None is a valid input and
+    clears the column + pushes "" to ClickUp.
+    """
+    sample_id: Optional[str] = Field(None, max_length=200)
+
+
 class StatusLogEntry(BaseModel):
     id: UUID
     peptide_request_id: UUID

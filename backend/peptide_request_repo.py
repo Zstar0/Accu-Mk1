@@ -276,6 +276,27 @@ class PeptideRequestRepository:
             conn.commit()
             return _row_to_model(dict(row)) if row else None
 
+    def update_sample_id(
+        self, request_id: UUID, sample_id: Optional[str],
+    ) -> Optional[PeptideRequest]:
+        """Set or clear the sample_id column. Idempotent: writing the same
+        value is a no-op semantically (updated_at still bumps). Returns
+        None if the row doesn't exist."""
+        with get_mk1_conn() as conn:
+            cur = conn.cursor(cursor_factory=RealDictCursor)
+            cur.execute(
+                """
+                UPDATE peptide_requests
+                SET sample_id = %s, updated_at = NOW()
+                WHERE id = %s
+                RETURNING *
+                """,
+                (sample_id, str(request_id)),
+            )
+            row = cur.fetchone()
+            conn.commit()
+            return _row_to_model(dict(row)) if row else None
+
     def find_needing_clickup_create(self, older_than_seconds: int = 60) -> list[PeptideRequest]:
         """Rows with clickup_task_id NULL and older than N seconds."""
         with get_mk1_conn() as conn:
