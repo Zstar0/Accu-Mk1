@@ -46,7 +46,8 @@ from auth import (
 )
 from models_peptide_request import (
     PeptideRequestCreate, PeptideRequest, PeptideRequestList,
-    PeptideRequestUpdate, PeptideRequestSyncApplyRequest, StatusLogEntry,
+    PeptideRequestUpdate, PeptideRequestRetract,
+    PeptideRequestSyncApplyRequest, StatusLogEntry,
 )
 from peptide_request_repo import PeptideRequestRepository
 from status_log_repo import StatusLogRepository
@@ -12649,6 +12650,79 @@ def get_peptide_request_history(
 ):
     lrepo = StatusLogRepository()
     return lrepo.get_for_request(UUID(request_id))
+
+
+@app.post("/peptide-requests/{request_id}/retract")
+def retract_peptide_request(
+    request_id: str,
+    data: PeptideRequestRetract,
+    _: None = Depends(require_internal_service_token),
+):
+    """Hard-delete a peptide request that's still in a customer-retractable state.
+
+    Gate: status must be in {"new", "rejected"}. ClickUp comment is
+    best-effort (2s timeout, failure logged but not raised). Delete is
+    atomic and authoritative.
+    """
+    import logging as _logging
+    log = _logging.getLogger(__name__)
+    rid = UUID(request_id)
+    repo = PeptideRequestRepository()
+    row = repo.get_by_id(rid)
+    if not row:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "request_not_found", "message": "Peptide request not found"},
+        )
+    if row.status not in ("new", "rejected"):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "request_not_retractable",
+                "message": "This request can no longer be retracted.",
+                "current_status": row.status,
+            },
+        )
+
+    reason = (data.reason or "").strip()
+    if len(reason) > 500:
+        reason = reason[:500]
+
+    # Best-effort ClickUp comment. Don't block the delete on ClickUp.
+    if row.clickup_task_id:
+        try:
+            from datetime import date as _date
+            lines = [f"Customer retracted this request on {_date.today().isoformat()}."]
+            if reason:
+                lines.append(f"Reason: {reason}")
+            cfg = get_peptide_request_config()
+            client = ClickUpClient(
+                api_token=cfg.clickup_api_token,
+                list_id=cfg.clickup_list_id,
+                accumk1_base_url=os.environ.get("ACCUMK1_BASE_URL", ""),
+            )
+            client.post_task_comment(row.clickup_task_id, "\n".join(lines))
+            log.info(
+                "clickup_retraction_comment_posted request_id=%s task_id=%s",
+                row.id, row.clickup_task_id,
+            )
+        except Exception:
+            log.exception(
+                "clickup_retraction_comment_failed request_id=%s task_id=%s",
+                row.id, row.clickup_task_id,
+            )
+    else:
+        log.warning(
+            "clickup_retraction_comment_skipped_no_task_id request_id=%s", row.id,
+        )
+
+    prior = row.status
+    repo.delete_by_id(rid)
+    log.info(
+        "peptide_request_retracted request_id=%s prior_status=%s had_reason=%s",
+        rid, prior, bool(reason),
+    )
+    return {"ok": True}
 
 
 # ── Admin: ClickUp user mapping ──────────────────────────────────────

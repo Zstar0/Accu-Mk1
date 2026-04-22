@@ -134,6 +134,17 @@ class PeptideRequestSyncApplyRequest(BaseModel):
     resolve_field_drift: list[FieldDriftResolution] = Field(default_factory=list)
 
 
+class PeptideRequestRetract(BaseModel):
+    """Body for POST /peptide-requests/{id}/retract.
+
+    ``reason`` is optional free-text captured from the customer. Length is
+    capped server-side at 500 chars (trim anything longer — don't 422;
+    the WP layer already caps at submission time and a hostile client
+    could still send more).
+    """
+    reason: Optional[str] = None
+
+
 class StatusLogEntry(BaseModel):
     id: UUID
     peptide_request_id: UUID
