@@ -24,9 +24,9 @@
 
 ## Deletion gate
 
-Retraction allowed iff `peptide_requests.status ∈ {requested, rejected}`.
+Retraction allowed iff `peptide_requests.status ∈ {"new", "rejected"}`.
 
-Rationale: "requested" is the pre-approval state the customer asked for; "rejected" is a terminal state where letting the customer declutter their list is harmless. Anything else (approved, ordering_standard, sample_prep_created, in_process, on_hold, completed, cancelled) means staff action has begun or finished, so the customer can't remove the record unilaterally.
+Rationale: `new` is the internal pre-approval value (ClickUp column `requested` maps to it via `DEFAULT_COLUMN_MAP` in `backend/peptide_request_config.py`); it's the state the customer asked for. `rejected` is a terminal state where letting the customer declutter their list is harmless. Anything else (`approved`, `ordering_standard`, `sample_prep_created`, `in_process`, `on_hold`, `completed`, `cancelled`) means staff action has begun or finished, so the customer can't remove the record unilaterally.
 
 Gate is enforced **authoritatively in Accu-Mk1** on every request. wpstar pre-hides the button based on the local snapshot status, but that's cosmetic — a stale snapshot letting a customer click through yields a 409 from Accu-Mk1, surfaced as a friendly "This request can no longer be retracted" message with a page reload.
 
@@ -34,7 +34,7 @@ Gate is enforced **authoritatively in Accu-Mk1** on every request. wpstar pre-hi
 
 On `/portal/peptide-request/?id={uuid}`:
 
-1. If `status ∈ {requested, rejected}`, render a **"Retract this request"** button below the status card. Destructive styling: red outline, not filled, to discourage accidental clicks.
+1. If `status ∈ {"new", "rejected"}`, render a **"Retract this request"** button below the status card. Destructive styling: red outline, not filled, to discourage accidental clicks.
 2. Click → modal: `Retract this request? This cannot be undone.` + optional textarea labeled `Reason (optional)` (≤500 chars) + `Cancel` / `Retract` buttons.
 3. `Retract` → `POST /wp-json/accumark/v1/peptide-requests/{id}/retract` with `{reason?: string}`.
 4. On 200 → redirect to `/portal/peptide-requests/` with flash: `Request retracted.`
@@ -68,7 +68,7 @@ On `/portal/peptide-request/?id={uuid}`:
 - Body: `{reason?: string}`.
 - Flow:
   1. `SELECT * FROM peptide_requests WHERE id = %s` — 404 envelope if missing.
-  2. Gate — if `status ∉ {requested, rejected}`, return `409 {error: "request_not_retractable", message: "This request can no longer be retracted.", current_status: "<status>"}`.
+  2. Gate — if `status ∉ {"new", "rejected"}`, return `409 {error: "request_not_retractable", message: "This request can no longer be retracted.", current_status: "<status>"}`.
   3. ClickUp comment (best-effort, non-blocking) — see ClickUp section.
   4. `DELETE FROM peptide_requests WHERE id = %s`.
   5. Return `200 {ok: true}`.
@@ -120,7 +120,7 @@ Uses the existing global envelope. Retraction-specific error codes:
 | Code | HTTP | Meaning |
 |---|---|---|
 | `request_not_found` | 404 | No row with that id (or already deleted) |
-| `request_not_retractable` | 409 | Status not in {requested, rejected}; includes `current_status` field |
+| `request_not_retractable` | 409 | Status not in `{"new", "rejected"}`; includes `current_status` field |
 | `unauthorized` | 401 | Missing/invalid service token or JWT |
 | `forbidden` | 403 | wpstar: current user doesn't own the snapshot row |
 
@@ -128,7 +128,7 @@ Uses the existing global envelope. Retraction-specific error codes:
 
 ### Accu-Mk1 (`tests/test_peptide_request_retract.py`)
 
-1. Happy path — `requested` row → ClickUp comment posted → row deleted → 200.
+1. Happy path — `status=new` row → ClickUp comment posted → row deleted → 200.
 2. Reason included in ClickUp comment body when provided.
 3. Reason omitted from comment body when empty/absent.
 4. Gate — `status=approved` → 409, row not deleted, no ClickUp call.
@@ -169,20 +169,26 @@ Rationale: retraction is low-volume, and failure of the ClickUp comment is recov
 ## File change estimate
 
 ### Accu-Mk1
-- `backend/api/peptide_requests.py` (or wherever the existing `POST /peptide-requests` lives) — add the new route handler.
-- `backend/services/clickup.py` (or existing client) — add `post_task_comment(task_id, body, timeout=2s)` if not already present.
-- `tests/test_peptide_request_retract.py` — new file, 7 tests.
+- `backend/main.py` — add the new `POST /peptide-requests/{request_id}/retract` route handler alongside the existing peptide-request routes (~line 12612).
+- `backend/peptide_request_repo.py` — add `delete_by_id(request_id)` helper.
+- `backend/clickup_client.py` — add `post_task_comment(task_id, body, timeout=2)` method (no comment method exists today).
+- `backend/tests/test_api_peptide_requests_retract.py` — new file, 7 tests (follows the existing `test_api_peptide_requests_create.py` pattern).
 
 ### integration-service
-- `src/routes/peptide_requests.py` (or wherever existing forwarding routes live) — add new route.
-- `tests/test_peptide_request_retract.py` — new file, 3 tests.
+- `app/api/peptide_requests.py` — add new `POST /v1/peptide-requests/{id}/retract` route.
+- `app/services/peptide_request.py` — add `retract(customer, request_id, reason)` method.
+- `app/adapters/accumk1.py` — add `retract_peptide_request(request_id, body)` adapter method.
+- `app/models/peptide_request.py` — add `PeptideRequestRetract` input model (just `reason: str | None`).
+- `tests/unit/test_peptide_request_retract_api.py` — new file, 3 tests.
+- `tests/unit/test_peptide_request_retract_service.py` — new file, 2 tests.
 
 ### wpstar (accumarklabs theme)
-- `wp-content/themes/wpstar/includes/peptide-requests/` — add retract REST controller, extend existing proxy helpers.
-- `wp-content/themes/wpstar/templates/portal-peptide-request.php` — conditional Retract button + modal markup.
-- `wp-content/themes/wpstar/assets/js/peptide-request-retract.js` (new) — modal wiring, form submit, flash handling.
-- `wp-content/themes/wpstar/assets/css/portal-peptide-request.css` — modal + button styling.
-- `wp-content/themes/wpstar/includes/peptide-requests/snapshot.php` — add `delete_snapshot($request_id)` helper.
+- `wp-content/themes/wpstar/includes/peptide-requests/rest-proxy.php` — add `register_retract_route()` + `handle_retract()` alongside the existing submit handler.
+- `wp-content/themes/wpstar/includes/peptide-requests/db.php` — add `delete_snapshot($request_id)` helper.
+- `wp-content/themes/wpstar/templates/portal-peptide-request-detail.php` — conditional Retract button + modal markup (status gate: `new` or `rejected`).
+- `wp-content/themes/wpstar/assets/js/peptide-request-retract.js` (new) — modal wiring, fetch(), flash handling.
+- `wp-content/themes/wpstar/assets/css/portal-peptide-request.css` (may already exist; extend) — button + modal styling.
+- `wp-content/themes/wpstar/functions.php` or appropriate bootstrap — enqueue the new JS on the detail-page template.
 
 ## Rollout
 
