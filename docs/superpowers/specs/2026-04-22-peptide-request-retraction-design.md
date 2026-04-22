@@ -18,7 +18,7 @@
 
 - No soft-delete/archive semantics. No audit table for retracted requests.
 - No customer-facing or staff-facing email on retraction (ClickUp comment is the only signal).
-- No ClickUp column move on retraction (card stays where it was).
+- No new ClickUp column required beyond the existing RETRACTED column (card IS moved there; see ClickUp integration section).
 - No "undo retract" / restore flow.
 - No rate limiting beyond what already applies to the portal.
 
