@@ -49,3 +49,22 @@ def test_get_by_id_returns_row(repo, sample_create):
 
 def test_get_by_id_returns_none_for_missing(repo):
     assert repo.get_by_id(uuid.uuid4()) is None
+
+
+def test_delete_by_id_removes_row(repo):
+    row = repo.create(
+        PeptideRequestCreate(
+            compound_kind="peptide", compound_name="DeleteMe",
+            vendor_producer="V", submitted_by_wp_user_id=1,
+            submitted_by_email="a@b.c", submitted_by_name="N",
+        ),
+        idempotency_key=f"idem-del-{uuid.uuid4()}",
+        clickup_list_id="L",
+    )
+    deleted = repo.delete_by_id(row.id)
+    assert deleted is True
+    assert repo.get_by_id(row.id) is None
+
+
+def test_delete_by_id_returns_false_when_missing(repo):
+    assert repo.delete_by_id(uuid.uuid4()) is False

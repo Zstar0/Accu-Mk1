@@ -142,6 +142,27 @@ class PeptideRequestRepository:
             row = cur.fetchone()
             return _row_to_model(dict(row)) if row else None
 
+    def delete_by_id(self, request_id) -> bool:
+        """Hard-delete a peptide_requests row by id.
+
+        Returns True if a row was removed, False if the id did not exist.
+        Commits on success. No cascade handling — the repo caller is
+        expected to gate on status (and any other business rules) before
+        invoking. Used by the customer-retraction path, where the row is
+        genuinely going away (no soft-delete, no tombstone) because the
+        ClickUp task is also being hard-deleted.
+        """
+        rid = request_id if isinstance(request_id, UUID) else UUID(str(request_id))
+        with get_mk1_conn() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "DELETE FROM peptide_requests WHERE id = %s",
+                (str(rid),),
+            )
+            deleted = cur.rowcount > 0
+            conn.commit()
+            return deleted
+
     def get_by_clickup_task_id(self, task_id: str) -> Optional[PeptideRequest]:
         """Lookup a peptide request by its ClickUp task id. Used by the webhook
         dispatcher to resolve inbound events back to the owning row."""
