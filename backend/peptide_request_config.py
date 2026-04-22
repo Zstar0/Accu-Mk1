@@ -32,6 +32,7 @@ DEFAULT_COLUMN_MAP = {
     "on_hold": "on_hold",
     "rejected": "rejected",
     "cancelled": "cancelled",
+    "retracted": "retracted",
 }
 
 

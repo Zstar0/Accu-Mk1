@@ -12694,32 +12694,53 @@ def retract_peptide_request(
     row_id = row.id
     repo.delete_by_id(rid)
 
-    # Best-effort ClickUp comment. Delete already succeeded; if the
-    # comment fails we accept the "ghost card" — the spec-blessed
-    # failure mode — rather than leaving a half-state where the row
-    # is live but already marked retracted on ClickUp.
+    # Best-effort ClickUp breadcrumb + column move. Delete already
+    # succeeded; if either ClickUp call fails we accept the "ghost card"
+    # — the spec-blessed failure mode — rather than leaving a half-state
+    # where the row is live but already marked retracted on ClickUp.
+    # Client is built once, outside both try-blocks, so the second block
+    # can reference it even if the first crashes post-build.
     if clickup_task_id:
         try:
-            from datetime import date as _date
-            lines = [f"Customer retracted this request on {_date.today().isoformat()}."]
-            if reason:
-                lines.append(f"Reason: {reason}")
             cfg = get_peptide_request_config()
             client = ClickUpClient(
                 api_token=cfg.clickup_api_token,
                 list_id=cfg.clickup_list_id,
                 accumk1_base_url=os.environ.get("ACCUMK1_BASE_URL", ""),
             )
-            client.post_task_comment(clickup_task_id, "\n".join(lines))
-            log.info(
-                "clickup_retraction_comment_posted request_id=%s task_id=%s",
-                row_id, clickup_task_id,
-            )
         except Exception:
             log.exception(
-                "clickup_retraction_comment_failed request_id=%s task_id=%s",
+                "clickup_retraction_client_init_failed request_id=%s task_id=%s",
                 row_id, clickup_task_id,
             )
+            client = None
+        if client is not None:
+            try:
+                from datetime import date as _date
+                lines = [f"Customer retracted this request on {_date.today().isoformat()}."]
+                if reason:
+                    lines.append(f"Reason: {reason}")
+                client.post_task_comment(clickup_task_id, "\n".join(lines))
+                log.info(
+                    "clickup_retraction_comment_posted request_id=%s task_id=%s",
+                    row_id, clickup_task_id,
+                )
+            except Exception:
+                log.exception(
+                    "clickup_retraction_comment_failed request_id=%s task_id=%s",
+                    row_id, clickup_task_id,
+                )
+            try:
+                client.set_task_status(clickup_task_id, "retracted")
+                log.info(
+                    "clickup_retraction_status_moved request_id=%s task_id=%s",
+                    row_id, clickup_task_id,
+                )
+            except Exception:
+                log.exception(
+                    "clickup_retraction_status_move_failed request_id=%s task_id=%s",
+                    row_id, clickup_task_id,
+                )
     else:
         log.warning(
             "clickup_retraction_comment_skipped_no_task_id request_id=%s", row_id,

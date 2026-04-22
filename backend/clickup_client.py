@@ -227,3 +227,23 @@ class ClickUpClient:
             raise RuntimeError(
                 f"ClickUp post_task_comment failed: {resp.status_code} {resp.text}"
             )
+
+    def set_task_status(self, task_id: str, status: str, timeout: int = 2) -> None:
+        """Programmatically move a ClickUp task to a named column.
+
+        Used for low-priority state changes (e.g., parking retracted requests
+        in the RETRACTED column). Short timeout + raise-on-non-2xx so callers
+        can log-and-continue. Status name must match an existing column on the
+        list (case-insensitive per ClickUp).
+        """
+        url = f"https://api.clickup.com/api/v2/task/{task_id}"
+        resp = requests.put(
+            url,
+            headers=self._headers(),
+            json={"status": status},
+            timeout=timeout,
+        )
+        if resp.status_code >= 300:
+            raise RuntimeError(
+                f"ClickUp set_task_status failed: {resp.status_code} {resp.text}"
+            )

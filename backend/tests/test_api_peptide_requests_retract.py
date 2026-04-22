@@ -78,7 +78,8 @@ def test_retract_rejects_missing_token():
 
 def test_retract_happy_path_new_status():
     rid = _make_request()
-    with patch("main.ClickUpClient.post_task_comment") as comment_mock:
+    with patch("main.ClickUpClient.post_task_comment") as comment_mock, \
+         patch("main.ClickUpClient.set_task_status") as status_mock:
         resp = client.post(
             f"/peptide-requests/{rid}/retract",
             headers=_headers(),
@@ -89,13 +90,19 @@ def test_retract_happy_path_new_status():
     comment_mock.assert_called_once()
     comment_text = _comment_text(comment_mock.call_args)
     assert "wrong compound" in comment_text
+    status_mock.assert_called_once()
+    args, kwargs = status_mock.call_args
+    # `self` is args[0] when patching an unbound method; status is the
+    # second positional arg (or a `status` kwarg).
+    assert (kwargs.get("status") or args[-1]) == "retracted"
     follow = client.get(f"/peptide-requests/{rid}", headers=_auth_headers())
     assert follow.status_code == 404
 
 
 def test_retract_omits_reason_line_when_empty():
     rid = _make_request()
-    with patch("main.ClickUpClient.post_task_comment") as comment_mock:
+    with patch("main.ClickUpClient.post_task_comment") as comment_mock, \
+         patch("main.ClickUpClient.set_task_status"):
         resp = client.post(
             f"/peptide-requests/{rid}/retract",
             headers=_headers(),
@@ -109,7 +116,8 @@ def test_retract_omits_reason_line_when_empty():
 
 def test_retract_rejected_status_is_retractable():
     rid = _make_request(status_override="rejected")
-    with patch("main.ClickUpClient.post_task_comment"):
+    with patch("main.ClickUpClient.post_task_comment"), \
+         patch("main.ClickUpClient.set_task_status"):
         resp = client.post(
             f"/peptide-requests/{rid}/retract",
             headers=_headers(),
@@ -120,7 +128,8 @@ def test_retract_rejected_status_is_retractable():
 
 def test_retract_blocks_on_approved_status():
     rid = _make_request(status_override="approved")
-    with patch("main.ClickUpClient.post_task_comment") as comment_mock:
+    with patch("main.ClickUpClient.post_task_comment") as comment_mock, \
+         patch("main.ClickUpClient.set_task_status") as status_mock:
         resp = client.post(
             f"/peptide-requests/{rid}/retract",
             headers=_headers(),
@@ -131,6 +140,7 @@ def test_retract_blocks_on_approved_status():
     assert body["detail"]["code"] == "request_not_retractable"
     assert body["detail"]["current_status"] == "approved"
     comment_mock.assert_not_called()
+    status_mock.assert_not_called()
     follow = client.get(f"/peptide-requests/{rid}", headers=_auth_headers())
     assert follow.status_code == 200
 
@@ -139,6 +149,9 @@ def test_retract_still_succeeds_when_clickup_fails():
     rid = _make_request()
     with patch(
         "main.ClickUpClient.post_task_comment",
+        side_effect=RuntimeError("clickup down"),
+    ), patch(
+        "main.ClickUpClient.set_task_status",
         side_effect=RuntimeError("clickup down"),
     ):
         resp = client.post(

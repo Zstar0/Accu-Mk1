@@ -198,3 +198,28 @@ def test_post_task_comment_raises_on_non_2xx():
         import pytest
         with pytest.raises(RuntimeError, match="ClickUp post_task_comment failed"):
             client.post_task_comment("TASK123", "hi")
+
+
+# ── set_task_status ──────────────────────────────────────────────────
+
+def test_set_task_status_sends_put_with_status_body():
+    client = _make_client()
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    with patch("clickup_client.requests.put", return_value=mock_resp) as m:
+        client.set_task_status("TASK123", "retracted")
+    args, kwargs = m.call_args
+    assert args[0] == "https://api.clickup.com/api/v2/task/TASK123"
+    assert kwargs["json"] == {"status": "retracted"}
+    assert kwargs["timeout"] == 2
+
+
+def test_set_task_status_raises_on_non_2xx():
+    client = _make_client()
+    mock_resp = MagicMock()
+    mock_resp.status_code = 404
+    mock_resp.text = "task not found"
+    with patch("clickup_client.requests.put", return_value=mock_resp):
+        import pytest
+        with pytest.raises(RuntimeError, match="ClickUp set_task_status failed"):
+            client.set_task_status("NOPE", "retracted")

@@ -109,7 +109,7 @@ The `Reason:` line is omitted entirely when `reason` is empty/absent.
 
 **Idempotency:** the integration-service `Idempotency-Key: {id}:retract` dedupes retries at that layer. At Accu-Mk1, once the row is gone a retry falls through to 404 `{error: "request_not_found"}` — no double-comment because step 1 fails before the ClickUp call. Intentional and correct for hard delete.
 
-**ClickUp card status:** unchanged. The card stays in whatever column it was in (REQUESTED or REJECTED) so the team can decide whether to close it. No column move on retraction.
+**ClickUp card status:** moved to the RETRACTED column via PUT /task/{task_id} {"status": "retracted"}. Best-effort (2s timeout); on failure we log and proceed — the row is already deleted, so the ghost is an out-of-sync card the team can move manually. The column exists on the list and is mapped in DEFAULT_COLUMN_MAP.
 
 **Missing `clickup_task_id`:** if the row has no task_id (shouldn't happen in prod but possible on manually-seeded rows), skip the ClickUp step entirely, log `clickup_retraction_comment_skipped_no_task_id`, and proceed to delete.
 
@@ -163,6 +163,9 @@ Structured log events in Accu-Mk1 (no new metrics, no new alerts):
 - `clickup_retraction_comment_posted` (info) — `request_id`, `clickup_task_id`.
 - `clickup_retraction_comment_failed` (warn) — `request_id`, `clickup_task_id`, `error_class`.
 - `clickup_retraction_comment_skipped_no_task_id` (warn) — `request_id` (defensive, shouldn't fire in prod).
+- `clickup_retraction_status_moved` (info) — `request_id`, `clickup_task_id`.
+- `clickup_retraction_status_move_failed` (warn) — `request_id`, `clickup_task_id`, `error_class`.
+- `clickup_retraction_client_init_failed` (warn) — `request_id`, `clickup_task_id`.
 
 Rationale: retraction is low-volume, and failure of the ClickUp comment is recoverable (ghost card is visible in the UI and staff can delete it manually).
 
