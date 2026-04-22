@@ -3,6 +3,7 @@ import DOMPurify from 'dompurify'
 import { useTheme } from '@/hooks/use-theme'
 import {
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
   FlaskConical,
   Package,
@@ -1583,6 +1584,7 @@ export function SampleDetails() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [additionalCoas, setAdditionalCoas] = useState<AdditionalCOAConfig[]>([])
+  const [additionalCoaPage, setAdditionalCoaPage] = useState(0)
   const [coaGenerations, setCoaGenerations] = useState<ExplorerCOAGeneration[]>([])
   const [isGeneratingCOA, setIsGeneratingCOA] = useState(false)
   const [isPublishingCOA, setIsPublishingCOA] = useState(false)
@@ -1742,7 +1744,10 @@ export function SampleDetails() {
     let cancelled = false
 
     getSampleAdditionalCOAs(sampleId).then(configs => {
-      if (!cancelled) setAdditionalCoas(configs)
+      if (!cancelled) {
+        setAdditionalCoas(configs)
+        setAdditionalCoaPage(0)
+      }
     })
 
     return () => {
@@ -2470,30 +2475,64 @@ export function SampleDetails() {
             )}
 
             {/* Additional COAs from Integration Service */}
-            {additionalCoas.length > 0 && (
-              <Card className="p-4">
-                <SectionHeader icon={Copy} title={`Additional COAs (${additionalCoas.length})`}>
-                  <div className="space-y-3">
-                    {additionalCoas.map(coa => (
-                      <AdditionalCoaCard
-                        key={coa.config_id}
-                        coa={coa}
-                        sampleId={data.sample_id}
-                        onUpdateState={(field, newValue) =>
-                          setAdditionalCoas(prev =>
-                            prev.map(c =>
-                              c.config_id === coa.config_id
-                                ? { ...c, coa_info: { ...c.coa_info, [field]: newValue as string | null } }
-                                : c
+            {additionalCoas.length > 0 && (() => {
+              const PAGE_SIZE = 5
+              const totalPages = Math.max(1, Math.ceil(additionalCoas.length / PAGE_SIZE))
+              const page = Math.min(additionalCoaPage, totalPages - 1)
+              const pageStart = page * PAGE_SIZE
+              const pageCoas = additionalCoas.slice(pageStart, pageStart + PAGE_SIZE)
+              return (
+                <Card className="p-4">
+                  <SectionHeader icon={Copy} title={`Additional COAs (${additionalCoas.length})`}>
+                    <div className="space-y-3">
+                      {pageCoas.map(coa => (
+                        <AdditionalCoaCard
+                          key={coa.config_id}
+                          coa={coa}
+                          sampleId={data.sample_id}
+                          onUpdateState={(field, newValue) =>
+                            setAdditionalCoas(prev =>
+                              prev.map(c =>
+                                c.config_id === coa.config_id
+                                  ? { ...c, coa_info: { ...c.coa_info, [field]: newValue as string | null } }
+                                  : c
+                              )
                             )
-                          )
-                        }
-                      />
-                    ))}
-                  </div>
-                </SectionHeader>
-              </Card>
-            )}
+                          }
+                        />
+                      ))}
+                    </div>
+                    {totalPages > 1 && (
+                      <div className="flex items-center justify-between pt-3 mt-1 border-t border-border/40">
+                        <button
+                          onClick={() => setAdditionalCoaPage(p => Math.max(0, p - 1))}
+                          disabled={page === 0}
+                          className="inline-flex items-center gap-1 px-2 py-1 text-xs rounded-md border border-border bg-background hover:bg-muted transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                        >
+                          <ChevronLeft size={12} />
+                          Previous
+                        </button>
+                        <span className="text-xs text-muted-foreground">
+                          Page {page + 1} of {totalPages}
+                          {' · '}
+                          <span className="text-[11px]">
+                            {pageStart + 1}–{Math.min(pageStart + PAGE_SIZE, additionalCoas.length)} of {additionalCoas.length}
+                          </span>
+                        </span>
+                        <button
+                          onClick={() => setAdditionalCoaPage(p => Math.min(totalPages - 1, p + 1))}
+                          disabled={page >= totalPages - 1}
+                          className="inline-flex items-center gap-1 px-2 py-1 text-xs rounded-md border border-border bg-background hover:bg-muted transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                        >
+                          Next
+                          <ChevronRight size={12} />
+                        </button>
+                      </div>
+                    )}
+                  </SectionHeader>
+                </Card>
+              )
+            })()}
 
             <Card className="p-4">
               <SectionHeader icon={Layers} title="Analytes">
