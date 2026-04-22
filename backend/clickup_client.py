@@ -212,3 +212,18 @@ class ClickUpClient:
             raise RuntimeError(
                 f"ClickUp set_custom_field failed: {resp.status_code} {resp.text}"
             )
+
+    def post_task_comment(self, task_id: str, comment_text: str, timeout: int = 2) -> None:
+        """Post a comment on an existing ClickUp task.
+
+        Used for low-priority breadcrumbs (e.g. customer retractions) where
+        failure is acceptable. Short timeout + raise-on-non-2xx so callers
+        can log-and-continue. `notify_all=False` keeps the comment quiet.
+        """
+        url = f"https://api.clickup.com/api/v2/task/{task_id}/comment"
+        body = {"comment_text": comment_text, "notify_all": False}
+        resp = requests.post(url, headers=self._headers(), json=body, timeout=timeout)
+        if resp.status_code >= 300:
+            raise RuntimeError(
+                f"ClickUp post_task_comment failed: {resp.status_code} {resp.text}"
+            )

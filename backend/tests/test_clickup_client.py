@@ -165,3 +165,36 @@ def test_set_custom_field_raises_on_error(mock_post):
     import pytest
     with pytest.raises(Exception):
         client.set_custom_field("tsk_xyz", "cfs-id", "X")
+
+
+# ── post_task_comment ────────────────────────────────────────────────
+
+def _make_client():
+    return ClickUpClient(
+        api_token="t",
+        list_id="L",
+        accumk1_base_url="https://accumk1.example",
+    )
+
+
+def test_post_task_comment_sends_expected_body():
+    client = _make_client()
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    with patch("clickup_client.requests.post", return_value=mock_resp) as m:
+        client.post_task_comment("TASK123", "hello world")
+    args, kwargs = m.call_args
+    assert args[0] == "https://api.clickup.com/api/v2/task/TASK123/comment"
+    assert kwargs["json"] == {"comment_text": "hello world", "notify_all": False}
+    assert kwargs["timeout"] == 2
+
+
+def test_post_task_comment_raises_on_non_2xx():
+    client = _make_client()
+    mock_resp = MagicMock()
+    mock_resp.status_code = 500
+    mock_resp.text = "boom"
+    with patch("clickup_client.requests.post", return_value=mock_resp):
+        import pytest
+        with pytest.raises(RuntimeError, match="ClickUp post_task_comment failed"):
+            client.post_task_comment("TASK123", "hi")
