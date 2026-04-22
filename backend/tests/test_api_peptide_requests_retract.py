@@ -8,6 +8,20 @@ from main import app
 client = TestClient(app)
 
 
+def _comment_text(call_args):
+    """Return the comment body from a patched post_task_comment call.
+
+    Patching the unbound method on the class binds `self` as args[0],
+    so the comment text lands at args[-1]. Works for either positional
+    or kwarg invocation.
+    """
+    args, kwargs = call_args
+    if "comment_text" in kwargs:
+        return kwargs["comment_text"]
+    # Last positional is always comment_text (handler calls it positionally)
+    return args[-1]
+
+
 def _headers():
     return {
         "X-Service-Token": os.environ["ACCUMK1_INTERNAL_SERVICE_TOKEN"],
@@ -73,11 +87,7 @@ def test_retract_happy_path_new_status():
     assert resp.status_code == 200, resp.text
     assert resp.json() == {"ok": True}
     comment_mock.assert_called_once()
-    args, kwargs = comment_mock.call_args
-    # args[0] is `self` when patching the unbound method on the class,
-    # so the task id / comment text live at args[1] / args[2]. Normalize
-    # by picking the comment text regardless of whether self was passed.
-    comment_text = args[2] if len(args) >= 3 else args[1]
+    comment_text = _comment_text(comment_mock.call_args)
     assert "wrong compound" in comment_text
     follow = client.get(f"/peptide-requests/{rid}", headers=_auth_headers())
     assert follow.status_code == 404
@@ -92,8 +102,7 @@ def test_retract_omits_reason_line_when_empty():
             json={},
         )
     assert resp.status_code == 200
-    args, _ = comment_mock.call_args
-    comment_text = args[2] if len(args) >= 3 else args[1]
+    comment_text = _comment_text(comment_mock.call_args)
     assert "Reason:" not in comment_text
     assert "retracted" in comment_text.lower()
 

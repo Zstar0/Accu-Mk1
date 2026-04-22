@@ -12662,7 +12662,8 @@ def retract_peptide_request(
 
     Gate: status must be in {"new", "rejected"}. ClickUp comment is
     best-effort (2s timeout, failure logged but not raised). Delete is
-    atomic and authoritative.
+    atomic and authoritative. Delete happens before the ClickUp comment
+    so a failed delete never leaves an orphaned breadcrumb.
     """
     import logging as _logging
     log = _logging.getLogger(__name__)
@@ -12688,8 +12689,16 @@ def retract_peptide_request(
     if len(reason) > 500:
         reason = reason[:500]
 
-    # Best-effort ClickUp comment. Don't block the delete on ClickUp.
-    if row.clickup_task_id:
+    prior = row.status
+    clickup_task_id = row.clickup_task_id
+    row_id = row.id
+    repo.delete_by_id(rid)
+
+    # Best-effort ClickUp comment. Delete already succeeded; if the
+    # comment fails we accept the "ghost card" — the spec-blessed
+    # failure mode — rather than leaving a half-state where the row
+    # is live but already marked retracted on ClickUp.
+    if clickup_task_id:
         try:
             from datetime import date as _date
             lines = [f"Customer retracted this request on {_date.today().isoformat()}."]
@@ -12701,23 +12710,21 @@ def retract_peptide_request(
                 list_id=cfg.clickup_list_id,
                 accumk1_base_url=os.environ.get("ACCUMK1_BASE_URL", ""),
             )
-            client.post_task_comment(row.clickup_task_id, "\n".join(lines))
+            client.post_task_comment(clickup_task_id, "\n".join(lines))
             log.info(
                 "clickup_retraction_comment_posted request_id=%s task_id=%s",
-                row.id, row.clickup_task_id,
+                row_id, clickup_task_id,
             )
         except Exception:
             log.exception(
                 "clickup_retraction_comment_failed request_id=%s task_id=%s",
-                row.id, row.clickup_task_id,
+                row_id, clickup_task_id,
             )
     else:
         log.warning(
-            "clickup_retraction_comment_skipped_no_task_id request_id=%s", row.id,
+            "clickup_retraction_comment_skipped_no_task_id request_id=%s", row_id,
         )
 
-    prior = row.status
-    repo.delete_by_id(rid)
     log.info(
         "peptide_request_retracted request_id=%s prior_status=%s had_reason=%s",
         rid, prior, bool(reason),
