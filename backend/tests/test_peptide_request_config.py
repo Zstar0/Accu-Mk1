@@ -14,11 +14,12 @@ def test_default_column_map_covers_all_statuses(monkeypatch):
     monkeypatch.setenv("CLICKUP_API_TOKEN", "tok")
     monkeypatch.setenv("CLICKUP_WEBHOOK_SECRET", "sec")
     cfg = get_config()
-    # "approved" intentionally NOT in this set — no ClickUp column maps to
-    # it; it remains in the internal enum only for the admin approve
-    # endpoint in main.py.
+    # Every internal status except the two terminal-only ones that have
+    # no inbound ClickUp transition. The admin approve endpoint in main.py
+    # still exists as an alternate write path, but "approved" is now also
+    # driven by the APPROVED column in ClickUp.
     expected_statuses = {
-        "new", "ordering_standard", "sample_prep_created",
+        "new", "approved", "ordering_standard", "sample_prep_created",
         "in_process", "on_hold", "completed", "rejected", "cancelled",
     }
     assert set(cfg.column_map.values()) == expected_statuses
@@ -31,6 +32,7 @@ def test_map_status_is_case_insensitive_and_whitespace_tolerant(monkeypatch):
     cfg = get_config()
     assert cfg.map_column_to_status("  ORDERED  ") == "ordering_standard"
     assert cfg.map_column_to_status("Requested") == "new"
+    assert cfg.map_column_to_status("Approved") == "approved"
     # "added to accumk" and "verified" both resolve to completed.
     assert cfg.map_column_to_status("ADDED TO ACCUMK") == "completed"
     assert cfg.map_column_to_status("verified") == "completed"

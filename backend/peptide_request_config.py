@@ -15,11 +15,15 @@ from dataclasses import dataclass, field
 # ClickUp. Completion side-effects are idempotent, so the redundant
 # mapping is safe.
 #
-# The internal enum still includes "approved" for the admin-set path in
-# main.py (manual approval endpoint, not driven by ClickUp); no ClickUp
-# column maps to it.
+# `approved` is a triage-gate column on the ClickUp list between
+# `requested` and `ordered` — a lab manager moves the card into it once
+# the request has been reviewed and green-lit. The webhook dispatcher in
+# clickup_webhook.py already special-cases approved transitions to relay
+# them to WP (so the customer gets an "approved" email + stepper update);
+# this map entry is what makes the special-case reachable.
 DEFAULT_COLUMN_MAP = {
     "requested": "new",
+    "approved": "approved",
     "ordered": "ordering_standard",
     "received": "sample_prep_created",
     "analyzing": "in_process",
