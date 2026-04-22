@@ -58,6 +58,8 @@ import {
   getExplorerCOASignedUrl,
   generateSenaiteCOA,
   publishSenaiteCOA,
+  regenPrimaryCOA,
+  regenAdditionalCOA,
   listSamplePreps,
   listAnalysisServices,
   addAnalysisToSample,
@@ -326,7 +328,35 @@ function PublishedCOACard({
   onRefresh: () => void
 }) {
   const [loading, setLoading] = useState(false)
+  const [regenerating, setRegenerating] = useState(false)
   const release = coaReleaseStatus(generation)
+
+  const handleRegen = async () => {
+    const confirmed = window.confirm(
+      `Regenerate & republish the primary COA for ${sampleId}?\n\n` +
+      `This mints a NEW verification code for the primary.\n` +
+      `Additional COAs keep their existing codes (untouched).`
+    )
+    if (!confirmed) return
+    setRegenerating(true)
+    try {
+      const result = await regenPrimaryCOA(sampleId)
+      if (result.success) {
+        toast.success('Primary COA regenerated & republished', {
+          description: result.verification_code ? `New code: ${result.verification_code}` : undefined,
+        })
+        onRefresh()
+      } else {
+        toast.error('Regen failed', { description: result.message })
+      }
+    } catch (err) {
+      toast.error('Regen failed', {
+        description: err instanceof Error ? err.message : 'Unknown error',
+      })
+    } finally {
+      setRegenerating(false)
+    }
+  }
 
   const handleOpen = async () => {
     setLoading(true)
@@ -381,6 +411,15 @@ function PublishedCOACard({
             >
               {loading ? <Loader2 size={11} className="animate-spin" /> : <ExternalLink size={11} />}
               PDF
+            </button>
+            <button
+              onClick={handleRegen}
+              disabled={regenerating}
+              title="Regenerate & republish the primary COA. Mints a new verification code. Does NOT touch additional COAs."
+              className="inline-flex items-center gap-1 px-2 py-1 text-xs rounded-md border border-amber-500/40 bg-amber-500/10 text-amber-600 hover:bg-amber-500/20 transition-colors disabled:opacity-50 cursor-pointer dark:text-amber-400"
+            >
+              {regenerating ? <Loader2 size={11} className="animate-spin" /> : <RefreshCw size={11} />}
+              Regen & Republish
             </button>
           </div>
         </div>
@@ -1152,13 +1191,44 @@ function AdditionalCoaCard({
   coa,
   sampleId,
   onUpdateState,
+  onRegenerated,
 }: {
   coa: AdditionalCOAConfig
   sampleId: string
   onUpdateState: (field: keyof AdditionalCOAConfig['coa_info'], newValue: string | number | null) => void
+  onRegenerated: () => void
 }) {
   const [open, setOpen] = useState(false)
   const [downloading, setDownloading] = useState(false)
+  const [regenerating, setRegenerating] = useState(false)
+
+  const handleRegen = async () => {
+    const confirmed = window.confirm(
+      `Regenerate & republish additional COA #${coa.coa_index} ` +
+      `(${coa.coa_info.company_name || 'Untitled'}) for ${sampleId}?\n\n` +
+      `This mints a NEW verification code for this additional COA only.\n` +
+      `Primary and other additional COAs are untouched.`
+    )
+    if (!confirmed) return
+    setRegenerating(true)
+    try {
+      const result = await regenAdditionalCOA(coa.config_id)
+      if (result.success) {
+        toast.success(`Additional COA #${coa.coa_index} regenerated`, {
+          description: result.verification_code ? `New code: ${result.verification_code}` : undefined,
+        })
+        onRegenerated()
+      } else {
+        toast.error('Regen failed', { description: result.message })
+      }
+    } catch (err) {
+      toast.error('Regen failed', {
+        description: err instanceof Error ? err.message : 'Unknown error',
+      })
+    } finally {
+      setRegenerating(false)
+    }
+  }
 
   const updateCoaField = (field: keyof AdditionalCOAConfig['coa_info']) =>
     async (newValue: string | number | null) => {
@@ -1269,6 +1339,17 @@ function AdditionalCoaCard({
                 >
                   {downloading ? <Loader2 size={11} className="animate-spin" /> : <ExternalLink size={11} />}
                   PDF
+                </button>
+              )}
+              {coa.status === 'published' && (
+                <button
+                  onClick={handleRegen}
+                  disabled={regenerating}
+                  title="Regenerate & republish just this additional COA. Mints a new verification code."
+                  className="inline-flex items-center gap-1 px-2 py-1 text-xs rounded-md border border-amber-500/40 bg-amber-500/10 text-amber-600 hover:bg-amber-500/20 transition-colors disabled:opacity-50 cursor-pointer dark:text-amber-400"
+                >
+                  {regenerating ? <Loader2 size={11} className="animate-spin" /> : <RefreshCw size={11} />}
+                  Regen
                 </button>
               )}
             </div>
@@ -2457,7 +2538,10 @@ export function SampleDetails() {
                     sampleId={data.sample_id}
                     verificationCode={data.coa.verification_code}
                     generation={coaGenerations.find(g => g.parent_generation_id == null && g.status !== 'superseded') ?? null}
-                    onRefresh={() => refreshSample(sampleId)}
+                    onRefresh={() => {
+                      refreshSample(sampleId)
+                      getExplorerCOAGenerations(sampleId, 10).then(setCoaGenerations).catch(() => {})
+                    }}
                   />
                 ) : (
                   <p className="text-sm text-muted-foreground">No COA generated yet</p>
@@ -2499,6 +2583,10 @@ export function SampleDetails() {
                               )
                             )
                           }
+                          onRegenerated={() => {
+                            getSampleAdditionalCOAs(data.sample_id).then(setAdditionalCoas).catch(() => {})
+                            getExplorerCOAGenerations(data.sample_id, 10).then(setCoaGenerations).catch(() => {})
+                          }}
                         />
                       ))}
                     </div>

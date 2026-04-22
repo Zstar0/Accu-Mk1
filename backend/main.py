@@ -7624,6 +7624,125 @@ async def publish_sample_coa(
     )
 
 
+@app.post("/wizard/senaite/samples/{sample_id}/regen-primary-coa")
+async def regen_primary_coa(
+    sample_id: str,
+    current_user=Depends(get_current_user),
+):
+    """Regenerate ONLY the primary COA for a sample and republish it.
+
+    Used for ops corrections where a sample's primary branding is wrong
+    (wrong client on the mother cert) but its additional COAs have already
+    been distributed with their own verification codes.  Calls COA Builder
+    with skip_additional_coas=true so existing additional COAs keep their
+    codes untouched, then publishes the new primary.
+    """
+    if not COA_BUILDER_URL:
+        return SampleCOAActionResponse(
+            success=False,
+            message="COA Builder not configured",
+        )
+
+    # 1. Regenerate only the primary COA via COA Builder
+    try:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            resp = await client.post(
+                f"{COA_BUILDER_URL}/process/{sample_id}",
+                params={"skip_additional_coas": "true"},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+    except httpx.TimeoutException:
+        return SampleCOAActionResponse(
+            success=False,
+            message="COA Builder timed out (PDF generation can take up to 2 minutes)",
+        )
+    except httpx.HTTPStatusError as e:
+        try:
+            detail = e.response.json().get("detail", str(e.response.status_code))
+        except Exception:
+            detail = str(e.response.status_code)
+        return SampleCOAActionResponse(success=False, message=f"COA Builder error: {detail}")
+    except Exception as e:
+        return SampleCOAActionResponse(success=False, message=f"COA regeneration failed: {e}")
+
+    verification_code: str | None = data.get("verification_code")
+    pdf_base64: str | None = data.get("pdf_base64")
+
+    if not verification_code:
+        return SampleCOAActionResponse(
+            success=False,
+            message="Primary regenerated but no verification code returned",
+        )
+
+    # 2. Attach new PDF to SENAITE (best-effort — the generation already has a PDF in S3)
+    if SENAITE_URL and pdf_base64:
+        try:
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(30.0, connect=5.0),
+                auth=_get_senaite_auth(current_user),
+                follow_redirects=True,
+            ) as senaite_client:
+                await senaite_client.post(
+                    f"{SENAITE_URL}/senaite/@@accumark-attach-coa",
+                    json={
+                        "sample_id": sample_id,
+                        "pdf_base64": pdf_base64,
+                        "verification_code": verification_code,
+                    },
+                )
+        except Exception:
+            pass  # Non-fatal — COA is in S3 already
+
+    # 3. Publish the new primary — reuses publish_sample_coa's flow so
+    # integration service marks the new generation as published,
+    # supersedes the old primary, and _publish_additional_coas sees no
+    # draft children (existing additionals keep their codes).
+    return await publish_sample_coa(sample_id=sample_id, current_user=current_user)
+
+
+@app.post("/wizard/senaite/additional-coas/{config_id}/regen-coa")
+async def regen_additional_coa(
+    config_id: str,
+    current_user=Depends(get_current_user),
+):
+    """Regenerate ONLY one additional COA and republish it.
+
+    Proxies to the integration service which orchestrates the single-
+    additional regen against the existing published primary.  Produces
+    a new verification code for this one additional COA; the primary
+    and other additional COAs are untouched.
+    """
+    url = f"{INTEGRATION_SERVICE_URL}/explorer/additional-coas/{config_id}/regenerate"
+    try:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            resp = await client.post(
+                url,
+                headers={"X-API-Key": INTEGRATION_SERVICE_API_KEY},
+            )
+    except Exception as e:
+        raise HTTPException(
+            status_code=503, detail=f"Integration Service unavailable: {e}"
+        )
+
+    if resp.status_code != 200:
+        try:
+            detail = resp.json().get("detail", resp.text[:200])
+        except Exception:
+            detail = resp.text[:200]
+        return SampleCOAActionResponse(
+            success=False,
+            message=f"Regen failed ({resp.status_code}): {detail}",
+        )
+
+    data = resp.json()
+    return SampleCOAActionResponse(
+        success=bool(data.get("success")),
+        message=data.get("message", "Additional COA regenerated"),
+        verification_code=data.get("new_verification_code"),
+    )
+
+
 
 # ── SharePoint Integration ─────────────────────────────────────────
 

@@ -1598,6 +1598,28 @@ export async function publishSenaiteCOA(
   return response.json()
 }
 
+export async function regenPrimaryCOA(
+  sampleId: string
+): Promise<SampleCOAActionResponse> {
+  const response = await fetch(
+    `${API_BASE_URL()}/wizard/senaite/samples/${encodeURIComponent(sampleId)}/regen-primary-coa`,
+    { method: 'POST', headers: getBearerHeaders() }
+  )
+  if (!response.ok) throw new Error(await extractErrorMessage(response, `Primary COA regen failed: ${response.status}`))
+  return response.json()
+}
+
+export async function regenAdditionalCOA(
+  configId: string
+): Promise<SampleCOAActionResponse> {
+  const response = await fetch(
+    `${API_BASE_URL()}/wizard/senaite/additional-coas/${encodeURIComponent(configId)}/regen-coa`,
+    { method: 'POST', headers: getBearerHeaders() }
+  )
+  if (!response.ok) throw new Error(await extractErrorMessage(response, `Additional COA regen failed: ${response.status}`))
+  return response.json()
+}
+
 // --- HPLC Analysis API ---
 
 export interface HPLCPeak {
