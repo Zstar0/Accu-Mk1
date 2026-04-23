@@ -1341,7 +1341,7 @@ function AdditionalCoaCard({
                   PDF
                 </button>
               )}
-              {coa.status === 'published' && (
+              {coa.generation_id && (
                 <button
                   onClick={handleRegen}
                   disabled={regenerating}
