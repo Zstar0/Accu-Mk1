@@ -7604,8 +7604,8 @@ async def publish_sample_coa(
                 actual_state = items[0].get("review_state", "") if items else ""
                 if actual_state != "published":
                     verify_resp = await client.get(
-                        f"{SENAITE_URL}/senaite/@@API/senaite/v1/search"
-                        f"?uid={senaite_uid}&complete=true"
+                        f"{SENAITE_URL}/senaite/@@API/senaite/v1/AnalysisRequest"
+                        f"?id={sample_id}&complete=true"
                     )
                     if verify_resp.status_code == 200:
                         verify_items = verify_resp.json().get("items", [])
