@@ -7595,19 +7595,32 @@ async def publish_sample_coa(
 
                 # SENAITE returns 200 OK even when it silently rejects a
                 # transition (e.g. sample still in `to_be_verified`, not
-                # `verified`). Confirm the review_state actually changed.
+                # `verified`), AND returns 200 OK with an empty `items`
+                # array when the transition is a no-op because the sample
+                # is already in the target state (e.g. regen of an
+                # already-published sample).  Verify by re-reading the AR
+                # instead of relying on the transition response.
                 items = transition_resp.json().get("items", [])
                 actual_state = items[0].get("review_state", "") if items else ""
                 if actual_state != "published":
-                    raise HTTPException(
-                        status_code=502,
-                        detail=(
-                            f"COA published in system but SENAITE silently "
-                            f"rejected the 'publish' transition for {sample_id} "
-                            f"(state is still '{actual_state or 'unknown'}'). "
-                            f"Verify the sample in SENAITE, then retry."
-                        ),
+                    verify_resp = await client.get(
+                        f"{SENAITE_URL}/senaite/@@API/senaite/v1/search"
+                        f"?uid={senaite_uid}&complete=true"
                     )
+                    if verify_resp.status_code == 200:
+                        verify_items = verify_resp.json().get("items", [])
+                        if verify_items:
+                            actual_state = verify_items[0].get("review_state", "")
+                    if actual_state != "published":
+                        raise HTTPException(
+                            status_code=502,
+                            detail=(
+                                f"COA published in system but SENAITE silently "
+                                f"rejected the 'publish' transition for {sample_id} "
+                                f"(state is '{actual_state or 'unknown'}'). "
+                                f"Verify the sample in SENAITE, then retry."
+                            ),
+                        )
         except HTTPException:
             raise
         except Exception as e:
