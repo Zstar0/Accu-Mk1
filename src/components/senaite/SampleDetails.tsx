@@ -2541,6 +2541,7 @@ export function SampleDetails() {
                     onRefresh={() => {
                       refreshSample(sampleId)
                       getExplorerCOAGenerations(sampleId, 10).then(setCoaGenerations).catch(() => {})
+                      getSampleAdditionalCOAs(sampleId).then(setAdditionalCoas).catch(() => {})
                     }}
                   />
                 ) : (
