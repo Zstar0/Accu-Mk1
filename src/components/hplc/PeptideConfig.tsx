@@ -294,6 +294,94 @@ function HplcAliasesSection({ peptide, onUpdated }: { peptide: PeptideRecord; on
 }
 
 
+function DisplayAliasesSection({ peptide, onUpdated }: { peptide: PeptideRecord; onUpdated: () => void }) {
+  const [aliases, setAliases] = useState<string[]>(peptide.display_aliases ?? [])
+  const [newAlias, setNewAlias] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    setAliases(peptide.display_aliases ?? [])
+  }, [peptide.id, peptide.display_aliases])
+
+  const save = async (updated: string[]) => {
+    setSaving(true)
+    try {
+      await updatePeptide(peptide.id, { display_aliases: updated.length > 0 ? updated : null })
+      setAliases(updated)
+      onUpdated()
+    } catch {
+      setAliases(peptide.display_aliases ?? [])
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const addAlias = () => {
+    const trimmed = newAlias.trim()
+    if (!trimmed || aliases.includes(trimmed)) return
+    const updated = [...aliases, trimmed]
+    setNewAlias('')
+    save(updated)
+  }
+
+  const removeAlias = (alias: string) => {
+    save(aliases.filter(a => a !== alias))
+  }
+
+  return (
+    <div className="rounded-lg border border-zinc-800 p-4 space-y-3">
+      <h4 className="text-sm font-semibold text-muted-foreground">COA Display Aliases</h4>
+      <p className="text-xs text-muted-foreground">
+        Approved alternate names that can be selected on a sample&apos;s COA in
+        place of the real peptide name. Conformance still matches the real
+        name; only the rendered label changes.
+      </p>
+
+      {aliases.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {aliases.map(alias => (
+            <span
+              key={alias}
+              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-zinc-800 border border-zinc-700 text-xs"
+            >
+              {alias}
+              <button
+                type="button"
+                onClick={() => removeAlias(alias)}
+                disabled={saving}
+                className="text-muted-foreground hover:text-destructive transition-colors ml-0.5"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+
+      <div className="flex gap-2">
+        <Input
+          value={newAlias}
+          onChange={e => setNewAlias(e.target.value)}
+          onKeyDown={e => e.key === 'Enter' && addAlias()}
+          placeholder="Add display alias (e.g., Mounjaro)"
+          className="h-8 text-sm flex-1"
+          disabled={saving}
+        />
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={addAlias}
+          disabled={saving || !newAlias.trim()}
+          className="h-8 shrink-0"
+        >
+          Add
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+
 export function PeptideConfig() {
   const [peptides, setPeptides] = useState<PeptideRecord[]>([])
   const [loading, setLoading] = useState(true)
@@ -1150,12 +1238,17 @@ export function PeptideConfig() {
                         : 'text-muted-foreground hover:text-foreground/80'
                     }`}
                   >
-                    File Aliases
-                    {selectedPeptide.hplc_aliases && selectedPeptide.hplc_aliases.length > 0 && (
-                      <span className="ml-1.5 inline-flex items-center justify-center h-4 min-w-4 px-1 rounded-full bg-primary/20 text-[10px] font-semibold text-primary">
-                        {selectedPeptide.hplc_aliases.length}
-                      </span>
-                    )}
+                    Aliases
+                    {(() => {
+                      const total =
+                        (selectedPeptide.hplc_aliases?.length ?? 0) +
+                        (selectedPeptide.display_aliases?.length ?? 0)
+                      return total > 0 ? (
+                        <span className="ml-1.5 inline-flex items-center justify-center h-4 min-w-4 px-1 rounded-full bg-primary/20 text-[10px] font-semibold text-primary">
+                          {total}
+                        </span>
+                      ) : null
+                    })()}
                     {flyoutSection === 'aliases' && (
                       <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary rounded-t" />
                     )}
@@ -1205,8 +1298,12 @@ export function PeptideConfig() {
               </div>
               {/* Panel content */}
               {flyoutSection === 'aliases' ? (
-                <div className="p-5">
+                <div className="p-5 space-y-4">
                   <HplcAliasesSection
+                    peptide={selectedPeptide}
+                    onUpdated={loadPeptides}
+                  />
+                  <DisplayAliasesSection
                     peptide={selectedPeptide}
                     onUpdated={loadPeptides}
                   />
