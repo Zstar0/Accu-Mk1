@@ -7553,6 +7553,7 @@ async def clear_sample_analyte_alias(
 @app.post("/wizard/senaite/samples/{sample_id}/generate-coa")
 async def generate_sample_coa(
     sample_id: str,
+    db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
     """Trigger Accumark COA generation for a SENAITE sample via COA Builder.
@@ -7565,9 +7566,20 @@ async def generate_sample_coa(
             success=False,
             message="COA Builder not configured (COA_BUILDER_URL env var not set)",
         )
+
+    # Enrich with per-sample analyte display alias picks so the COA renders
+    # the customer-facing name (real name still drives conformance).
+    alias_body: dict = {}
+    alias_map = _load_sample_aliases(db, sample_id)
+    if alias_map:
+        alias_body["analyte_display_names"] = {str(k): v for k, v in alias_map.items()}
+
     try:
         async with httpx.AsyncClient(timeout=120.0) as client:
-            resp = await client.post(f"{COA_BUILDER_URL}/process/{sample_id}")
+            resp = await client.post(
+                f"{COA_BUILDER_URL}/process/{sample_id}",
+                json=alias_body if alias_body else None,
+            )
             resp.raise_for_status()
             data = resp.json()
     except httpx.TimeoutException:
@@ -7758,6 +7770,7 @@ async def publish_sample_coa(
 @app.post("/wizard/senaite/samples/{sample_id}/regen-primary-coa")
 async def regen_primary_coa(
     sample_id: str,
+    db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
     """Regenerate ONLY the primary COA for a sample and republish it.
@@ -7774,12 +7787,18 @@ async def regen_primary_coa(
             message="COA Builder not configured",
         )
 
+    alias_body: dict = {}
+    alias_map = _load_sample_aliases(db, sample_id)
+    if alias_map:
+        alias_body["analyte_display_names"] = {str(k): v for k, v in alias_map.items()}
+
     # 1. Regenerate only the primary COA via COA Builder
     try:
         async with httpx.AsyncClient(timeout=120.0) as client:
             resp = await client.post(
                 f"{COA_BUILDER_URL}/process/{sample_id}",
                 params={"skip_additional_coas": "true"},
+                json=alias_body if alias_body else None,
             )
             resp.raise_for_status()
             data = resp.json()
