@@ -282,6 +282,7 @@ class Peptide(Base):
     is_blend: Mapped[bool] = mapped_column(Boolean, default=False)
     prep_vial_count: Mapped[int] = mapped_column(Integer, default=1)
     hplc_aliases: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)  # ["TB17-23", "TB4"] — alternate names used in HPLC filenames
+    display_aliases: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)  # ["Mounjaro", "GLP/GIP"] — approved customer-facing aliases for COA display
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -660,3 +661,33 @@ class WizardMeasurement(Base):
 
     def __repr__(self) -> str:
         return f"<WizardMeasurement(session={self.session_id}, step='{self.step_key}', weight={self.weight_mg})>"
+
+
+class SampleAnalyteAlias(Base):
+    """
+    Per-sample, per-slot customer-facing alias pick for the COA.
+
+    Denormalized alias text — stores the chosen string, not an FK to peptides.display_aliases.
+    This way, changing or removing an entry from a peptide's approved alias list doesn't
+    retroactively break historical COAs.
+
+    Conformance logic still keys on the real peptide name; this table only drives display.
+    """
+    __tablename__ = "sample_analyte_aliases"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    senaite_sample_id: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    slot: Mapped[int] = mapped_column(Integer, nullable=False)
+    alias: Mapped[str] = mapped_column(String(200), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    updated_by_user_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    updated_by_email: Mapped[Optional[str]] = mapped_column(String(320), nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("senaite_sample_id", "slot", name="uq_sample_analyte_slot"),
+        CheckConstraint("slot >= 1 AND slot <= 4", name="ck_sample_analyte_alias_slot_range"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<SampleAnalyteAlias(sample='{self.senaite_sample_id}', slot={self.slot}, alias='{self.alias}')>"

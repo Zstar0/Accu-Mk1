@@ -123,6 +123,23 @@ def _run_migrations():
         "ALTER TABLE hplc_analyses ADD COLUMN IF NOT EXISTS run_group_id VARCHAR(200)",
         # Peptide HPLC aliases — alternate names used in chromatogram filenames
         "ALTER TABLE peptides ADD COLUMN IF NOT EXISTS hplc_aliases JSON",
+        # Customer-facing display aliases — approved alternate names shown on COA
+        "ALTER TABLE peptides ADD COLUMN IF NOT EXISTS display_aliases JSON",
+        # Per-sample analyte display-alias picks (denormalized — survives changes to peptides.display_aliases)
+        """
+        CREATE TABLE IF NOT EXISTS sample_analyte_aliases (
+            id SERIAL PRIMARY KEY,
+            senaite_sample_id VARCHAR(100) NOT NULL,
+            slot INTEGER NOT NULL CHECK (slot >= 1 AND slot <= 4),
+            alias VARCHAR(200) NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_by_user_id INTEGER,
+            updated_by_email VARCHAR(320),
+            CONSTRAINT uq_sample_analyte_slot UNIQUE (senaite_sample_id, slot)
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS ix_sample_analyte_aliases_sample_id ON sample_analyte_aliases (senaite_sample_id)",
         # Phase 13.5: Debug log persistence for audit trail
         "ALTER TABLE hplc_analyses ADD COLUMN IF NOT EXISTS debug_log JSON",
         # User tracking columns
