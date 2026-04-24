@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.29.0 — 2026-04-24
+
+### Customer-Facing Analyte Aliases on COA
+
+- **Feature:** Approved display aliases per peptide (managed in Peptide Config → Aliases tab) and per-sample alias picker on the sample-details ANALYTES card.  When a pick is active, the COA renders the alias instead of the real peptide name on the digital badge, IDENTITY / QUANTITY / PURITY rows, blend identity header, and the PDF peptide title.
+- **Backend:** New `peptides.display_aliases` JSON column and `sample_analyte_aliases` table (`senaite_sample_id`, `slot`, `alias`, user-audit fields).  New endpoints `GET|PUT|DELETE /wizard/senaite/samples/{id}/analyte-aliases[/{slot}]`.
+- **Wiring:** `generate-coa` and `regen-primary-coa` now include `analyte_display_names` in the COA Builder `/process` body when picks exist; the body is omitted when none are set so historical behavior is unchanged.
+- **Conformance unchanged:** The real peptide name still drives identity matching — aliases only affect what the client sees on the COA.  Alias text is denormalized into `sample_analyte_aliases` so pruning a peptide's approved list later never retroactively invalidates a historical pick.
+
+### Partial Publish When Tests Are Still Pending
+
+- **Fix:** `publish-coa` now accepts `to_be_verified` as a valid post-transition SENAITE state, restoring the lab workflow where a COA is issued with currently-verified results (HPLC, endotoxin) while slower tests (sterility, ~14 days) are still running — the VerificationCode is already written to SENAITE and IS has already marked the generation published, so the client-facing COA is live.  A second publish runs when the final results come in.  Silent rejections for other states (`sample_received`, `open`, etc.) still surface as 502 errors.
+
 ## v0.28.10 — 2026-04-15
 
 ### Standard Prep Vial Data
