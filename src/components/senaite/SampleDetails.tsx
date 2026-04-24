@@ -64,6 +64,10 @@ import {
   listAnalysisServices,
   addAnalysisToSample,
   removeAnalysisFromSample,
+  getPeptides,
+  getSampleAnalyteAliases,
+  setSampleAnalyteAlias,
+  clearSampleAnalyteAlias,
   type SenaiteLookupResult,
   type SenaiteAttachment,
   type SenaiteAttachmentType,
@@ -74,6 +78,7 @@ import {
   type SamplePrep,
   type HplcScanMatch,
   type AnalysisService,
+  type PeptideRecord,
   getWooOrder,
   fetchChromatogramLttb,
 } from '@/lib/api'
@@ -1341,7 +1346,7 @@ function AdditionalCoaCard({
                   PDF
                 </button>
               )}
-              {coa.status === 'published' && (
+              {coa.generation_id && (
                 <button
                   onClick={handleRegen}
                   disabled={regenerating}
@@ -1664,6 +1669,11 @@ export function SampleDetails() {
   const [data, setData] = useState<SenaiteLookupResult | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  // COA display-alias state.  peptidesCatalog drives the dropdown options for
+  // each analyte slot (from each peptide's approved display_aliases list);
+  // sampleAliases holds the current per-slot pick for this sample.
+  const [peptidesCatalog, setPeptidesCatalog] = useState<PeptideRecord[]>([])
+  const [sampleAliases, setSampleAliases] = useState<Map<number, string>>(new Map())
   const [additionalCoas, setAdditionalCoas] = useState<AdditionalCOAConfig[]>([])
   const [additionalCoaPage, setAdditionalCoaPage] = useState(0)
   const [coaGenerations, setCoaGenerations] = useState<ExplorerCOAGeneration[]>([])
@@ -1830,6 +1840,29 @@ export function SampleDetails() {
         setAdditionalCoaPage(0)
       }
     })
+
+    return () => {
+      cancelled = true
+    }
+  }, [sampleId])
+
+  // Fetch peptide catalog + per-sample alias picks (drives the COA display-alias dropdown)
+  useEffect(() => {
+    if (!sampleId) return
+    let cancelled = false
+
+    Promise.all([getPeptides(), getSampleAnalyteAliases(sampleId)])
+      .then(([peptides, aliases]) => {
+        if (cancelled) return
+        setPeptidesCatalog(peptides)
+        const m = new Map<number, string>()
+        for (const a of aliases) m.set(a.slot, a.alias)
+        setSampleAliases(m)
+      })
+      .catch(e => {
+        // Non-fatal — alias picker just falls back to empty options
+        console.warn('Failed to load peptide aliases', e)
+      })
 
     return () => {
       cancelled = true
@@ -2630,6 +2663,30 @@ export function SampleDetails() {
                     {data.analytes.map((analyte) => {
                       const displayName = analyteNameMap.get(analyte.slot_number) ?? analyte.raw_name
                       const slot = analyte.slot_number
+                      const matchedPeptide = peptidesCatalog.find(
+                        p => p.name === analyte.matched_peptide_name
+                      )
+                      const approvedAliases = matchedPeptide?.display_aliases ?? []
+                      const currentAlias = sampleAliases.get(slot) ?? ''
+                      const handleAliasChange = async (next: string) => {
+                        try {
+                          if (!next) {
+                            await clearSampleAnalyteAlias(data.sample_id, slot)
+                            setSampleAliases(prev => {
+                              const m = new Map(prev)
+                              m.delete(slot)
+                              return m
+                            })
+                          } else {
+                            await setSampleAnalyteAlias(data.sample_id, slot, next)
+                            setSampleAliases(prev => new Map(prev).set(slot, next))
+                          }
+                        } catch (e) {
+                          toast.error('Failed to save alias', {
+                            description: e instanceof Error ? e.message : String(e),
+                          })
+                        }
+                      }
                       return (
                         <div
                           key={slot}
@@ -2681,6 +2738,22 @@ export function SampleDetails() {
                               })
                             }
                           />
+                          {approvedAliases.length > 0 && (
+                            <div className="flex items-center justify-between py-1 text-xs">
+                              <span className="text-muted-foreground">COA Alias</span>
+                              <select
+                                value={currentAlias}
+                                onChange={e => handleAliasChange(e.target.value)}
+                                className="h-7 px-2 rounded-md border border-border bg-background text-xs max-w-[200px] cursor-pointer hover:bg-muted transition-colors"
+                                title="Name shown on the customer-facing COA. Conformance still matches the real peptide name."
+                              >
+                                <option value="">— Use real name ({displayName}) —</option>
+                                {approvedAliases.map(alias => (
+                                  <option key={alias} value={alias}>{alias}</option>
+                                ))}
+                              </select>
+                            </div>
+                          )}
                           </div>
                         </div>
                       )

@@ -35,7 +35,7 @@ from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import select, desc, delete, update, func
 
 from database import get_db, init_db
-from models import AuditLog, Settings, Job, Sample, Result, Instrument, AnalysisService, HplcMethod, Peptide, PeptideAnalyte, CalibrationCurve, HPLCAnalysis, User, SharePointFileCache, WizardSession, WizardMeasurement, peptide_methods, blend_components, ServiceGroup, service_group_members, SamplePriority, Worksheet, WorksheetItem, instrument_methods
+from models import AuditLog, Settings, Job, Sample, Result, Instrument, AnalysisService, HplcMethod, Peptide, PeptideAnalyte, CalibrationCurve, HPLCAnalysis, User, SharePointFileCache, WizardSession, WizardMeasurement, peptide_methods, blend_components, ServiceGroup, service_group_members, SamplePriority, Worksheet, WorksheetItem, instrument_methods, SampleAnalyteAlias
 from auth import (
     get_current_user, require_admin, create_access_token,
     verify_password, get_password_hash, seed_admin_user,
@@ -1774,6 +1774,7 @@ class PeptideUpdate(BaseModel):
     active: Optional[bool] = None
     prep_vial_count: Optional[int] = None
     hplc_aliases: Optional[list[str]] = None  # Alternate names used in HPLC filenames
+    display_aliases: Optional[list[str]] = None  # Approved customer-facing COA display aliases
     method_ids: Optional[list[int]] = None  # Set all method assignments (one per instrument)
     analytes: Optional[list[AnalyteInput]] = None
     component_ids: Optional[list[int]] = None
@@ -1846,6 +1847,7 @@ class PeptideResponse(BaseModel):
     is_blend: bool = False
     prep_vial_count: int = 1
     hplc_aliases: Optional[list[str]] = None
+    display_aliases: Optional[list[str]] = None
     created_at: datetime
     updated_at: datetime
     methods: list[MethodBrief] = []
@@ -7432,9 +7434,126 @@ class SampleCOAActionResponse(BaseModel):
     verification_code: str | None = None
 
 
+class AnalyteAliasSet(BaseModel):
+    """Schema for setting a per-sample analyte display alias."""
+    alias: str
+
+
+class AnalyteAliasResponse(BaseModel):
+    """Schema for a per-sample analyte display alias pick."""
+    slot: int
+    alias: str
+    updated_at: datetime
+    updated_by_email: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
+def _load_sample_aliases(db: Session, sample_id: str) -> dict[int, str]:
+    """Return {slot: alias} for a sample.  Used by COA-trigger endpoints to
+    enrich the coabuilder request body with per-sample alias overrides."""
+    rows = db.execute(
+        select(SampleAnalyteAlias).where(
+            SampleAnalyteAlias.senaite_sample_id == sample_id
+        )
+    ).scalars().all()
+    return {r.slot: r.alias for r in rows}
+
+
+@app.get(
+    "/wizard/senaite/samples/{sample_id}/analyte-aliases",
+    response_model=list[AnalyteAliasResponse],
+)
+async def get_sample_analyte_aliases(
+    sample_id: str,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """List all per-slot COA display-alias picks for a SENAITE sample."""
+    rows = db.execute(
+        select(SampleAnalyteAlias)
+        .where(SampleAnalyteAlias.senaite_sample_id == sample_id)
+        .order_by(SampleAnalyteAlias.slot)
+    ).scalars().all()
+    return rows
+
+
+@app.put(
+    "/wizard/senaite/samples/{sample_id}/analyte-aliases/{slot}",
+    response_model=AnalyteAliasResponse,
+)
+async def set_sample_analyte_alias(
+    sample_id: str,
+    slot: int,
+    data: AnalyteAliasSet,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Set the COA display alias for one analyte slot (1-4) of a SENAITE sample.
+
+    Alias is stored as a denormalized string so pruning a peptide's approved
+    list later does not retroactively change this pick.  Caller (UI) is
+    responsible for ensuring the alias is currently in the peptide's
+    approved list; this endpoint does not validate against that list.
+    """
+    if slot < 1 or slot > 4:
+        raise HTTPException(400, "slot must be between 1 and 4")
+    if not data.alias or not data.alias.strip():
+        raise HTTPException(400, "alias must be a non-empty string")
+
+    alias = data.alias.strip()
+    existing = db.execute(
+        select(SampleAnalyteAlias).where(
+            SampleAnalyteAlias.senaite_sample_id == sample_id,
+            SampleAnalyteAlias.slot == slot,
+        )
+    ).scalar_one_or_none()
+
+    if existing:
+        existing.alias = alias
+        existing.updated_by_user_id = current_user.id
+        existing.updated_by_email = current_user.email
+        row = existing
+    else:
+        row = SampleAnalyteAlias(
+            senaite_sample_id=sample_id,
+            slot=slot,
+            alias=alias,
+            updated_by_user_id=current_user.id,
+            updated_by_email=current_user.email,
+        )
+        db.add(row)
+
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+@app.delete(
+    "/wizard/senaite/samples/{sample_id}/analyte-aliases/{slot}",
+    status_code=204,
+)
+async def clear_sample_analyte_alias(
+    sample_id: str,
+    slot: int,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Clear the alias pick for one analyte slot.  Missing row is a no-op."""
+    db.execute(
+        delete(SampleAnalyteAlias).where(
+            SampleAnalyteAlias.senaite_sample_id == sample_id,
+            SampleAnalyteAlias.slot == slot,
+        )
+    )
+    db.commit()
+
+
 @app.post("/wizard/senaite/samples/{sample_id}/generate-coa")
 async def generate_sample_coa(
     sample_id: str,
+    db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
     """Trigger Accumark COA generation for a SENAITE sample via COA Builder.
@@ -7447,9 +7566,20 @@ async def generate_sample_coa(
             success=False,
             message="COA Builder not configured (COA_BUILDER_URL env var not set)",
         )
+
+    # Enrich with per-sample analyte display alias picks so the COA renders
+    # the customer-facing name (real name still drives conformance).
+    alias_body: dict = {}
+    alias_map = _load_sample_aliases(db, sample_id)
+    if alias_map:
+        alias_body["analyte_display_names"] = {str(k): v for k, v in alias_map.items()}
+
     try:
         async with httpx.AsyncClient(timeout=120.0) as client:
-            resp = await client.post(f"{COA_BUILDER_URL}/process/{sample_id}")
+            resp = await client.post(
+                f"{COA_BUILDER_URL}/process/{sample_id}",
+                json=alias_body if alias_body else None,
+            )
             resp.raise_for_status()
             data = resp.json()
     except httpx.TimeoutException:
@@ -7600,9 +7730,22 @@ async def publish_sample_coa(
                 # is already in the target state (e.g. regen of an
                 # already-published sample).  Verify by re-reading the AR
                 # instead of relying on the transition response.
+                #
+                # Accepted terminal states:
+                #   - published      : fully published, normal success
+                #   - to_be_verified : lab-partial-publish flow.  Some
+                #     analyses (e.g. sterility) take days longer than
+                #     others; we issue a partial COA with current results
+                #     and re-publish when final results come in.  The
+                #     VerificationCode is already written to SENAITE above,
+                #     and IS already marked the generation published, so
+                #     the client-facing COA is live.  SENAITE's workflow
+                #     label stays `to_be_verified` to correctly reflect
+                #     that tests are still pending.
                 items = transition_resp.json().get("items", [])
                 actual_state = items[0].get("review_state", "") if items else ""
-                if actual_state != "published":
+                accepted_states = {"published", "to_be_verified"}
+                if actual_state not in accepted_states:
                     verify_resp = await client.get(
                         f"{SENAITE_URL}/senaite/@@API/senaite/v1/AnalysisRequest"
                         f"?id={sample_id}&complete=true"
@@ -7611,7 +7754,7 @@ async def publish_sample_coa(
                         verify_items = verify_resp.json().get("items", [])
                         if verify_items:
                             actual_state = verify_items[0].get("review_state", "")
-                    if actual_state != "published":
+                    if actual_state not in accepted_states:
                         raise HTTPException(
                             status_code=502,
                             detail=(
@@ -7640,6 +7783,7 @@ async def publish_sample_coa(
 @app.post("/wizard/senaite/samples/{sample_id}/regen-primary-coa")
 async def regen_primary_coa(
     sample_id: str,
+    db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
     """Regenerate ONLY the primary COA for a sample and republish it.
@@ -7656,12 +7800,18 @@ async def regen_primary_coa(
             message="COA Builder not configured",
         )
 
+    alias_body: dict = {}
+    alias_map = _load_sample_aliases(db, sample_id)
+    if alias_map:
+        alias_body["analyte_display_names"] = {str(k): v for k, v in alias_map.items()}
+
     # 1. Regenerate only the primary COA via COA Builder
     try:
         async with httpx.AsyncClient(timeout=120.0) as client:
             resp = await client.post(
                 f"{COA_BUILDER_URL}/process/{sample_id}",
                 params={"skip_additional_coas": "true"},
+                json=alias_body if alias_body else None,
             )
             resp.raise_for_status()
             data = resp.json()

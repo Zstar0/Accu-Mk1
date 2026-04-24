@@ -1840,6 +1840,7 @@ export interface PeptideRecord {
   is_blend: boolean
   prep_vial_count: number
   hplc_aliases?: string[] | null
+  display_aliases?: string[] | null
   created_at: string
   updated_at: string
   methods: MethodBrief[]
@@ -1917,6 +1918,7 @@ export async function updatePeptide(
     method_ids: number[]
     prep_vial_count: number
     hplc_aliases: string[] | null
+    display_aliases: string[] | null
     component_vial_assignments: Record<string, number>
   }>
 ): Promise<PeptideRecord> {
@@ -1948,6 +1950,61 @@ export async function deletePeptide(peptideId: number): Promise<void> {
   } catch (error) {
     console.error('Delete peptide error:', error)
     throw error
+  }
+}
+
+// ─── Per-sample analyte display alias ───
+
+export interface SampleAnalyteAliasRecord {
+  slot: number
+  alias: string
+  updated_at: string
+  updated_by_email?: string | null
+}
+
+export async function getSampleAnalyteAliases(
+  sampleId: string
+): Promise<SampleAnalyteAliasRecord[]> {
+  const response = await fetch(
+    `${API_BASE_URL()}/wizard/senaite/samples/${encodeURIComponent(sampleId)}/analyte-aliases`,
+    { headers: getBearerHeaders() }
+  )
+  if (!response.ok) {
+    throw new Error(`Get sample analyte aliases failed: ${response.status}`)
+  }
+  return response.json()
+}
+
+export async function setSampleAnalyteAlias(
+  sampleId: string,
+  slot: number,
+  alias: string
+): Promise<SampleAnalyteAliasRecord> {
+  const response = await fetch(
+    `${API_BASE_URL()}/wizard/senaite/samples/${encodeURIComponent(sampleId)}/analyte-aliases/${slot}`,
+    {
+      method: 'PUT',
+      headers: getBearerHeaders('application/json'),
+      body: JSON.stringify({ alias }),
+    }
+  )
+  if (!response.ok) {
+    const err = await response.json().catch(() => null)
+    throw new Error(err?.detail || `Set analyte alias failed: ${response.status}`)
+  }
+  return response.json()
+}
+
+export async function clearSampleAnalyteAlias(
+  sampleId: string,
+  slot: number
+): Promise<void> {
+  const response = await fetch(
+    `${API_BASE_URL()}/wizard/senaite/samples/${encodeURIComponent(sampleId)}/analyte-aliases/${slot}`,
+    { method: 'DELETE', headers: getBearerHeaders() }
+  )
+  if (!response.ok && response.status !== 204) {
+    throw new Error(`Clear analyte alias failed: ${response.status}`)
   }
 }
 
