@@ -13,6 +13,17 @@
 
 - **Fix:** `publish-coa` now accepts `to_be_verified` as a valid post-transition SENAITE state, restoring the lab workflow where a COA is issued with currently-verified results (HPLC, endotoxin) while slower tests (sterility, ~14 days) are still running — the VerificationCode is already written to SENAITE and IS has already marked the generation published, so the client-facing COA is live.  A second publish runs when the final results come in.  Silent rejections for other states (`sample_received`, `open`, etc.) still surface as 502 errors.
 
+### Senaite Publish Silent-Rejection Detection (PB-0050 fix)
+
+- **Fix:** `publish_sample_coa` now re-reads `review_state` from the SENAITE response after POSTing the publish transition and raises **502** if the sample isn't actually in `published` (or `to_be_verified` per the partial-publish path above). Previously SENAITE returned 200 OK even when it silently refused the transition, so the verification code was minted on the integration-service side while the sample stayed unpublished in SENAITE — the failure mode that produced the PB-0050 ghost state.
+- **Fix:** Accept `published` as a valid post-transition state for retried publishes (idempotency — the transition was already applied on a previous attempt that timed out client-side).
+
+### Sample Details Badge + Per-Item Regen
+
+- **Fix:** Sample Details right-column badge no longer shows "Generated" on a sample whose primary is actually `Published`. The page used to fetch only 10 newest COA generations and client-side `find()` the published primary; on samples with many regens × additional COAs (P-0453 had 45 rows), the published primary fell outside the window and the lookup returned undefined. Companion change in integration-service sorts primaries first in the response, so the active primary is always in the default page.
+- **Feature:** Per-item Regen & Republish button on each additional COA card in Sample Details for ops correction. Enabled whenever a config has been generated (so re-generation is always reachable, not just when status is "published" or "wp_failed"). Refreshes the additional COAs list after the primary regen completes.
+- **Fix:** Refresh additional COAs in the sidebar after a primary regen so newly-superseded children are reflected immediately without a hard reload.
+
 ## v0.28.10 — 2026-04-15
 
 ### Standard Prep Vial Data
