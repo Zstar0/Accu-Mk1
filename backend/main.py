@@ -7730,9 +7730,22 @@ async def publish_sample_coa(
                 # is already in the target state (e.g. regen of an
                 # already-published sample).  Verify by re-reading the AR
                 # instead of relying on the transition response.
+                #
+                # Accepted terminal states:
+                #   - published      : fully published, normal success
+                #   - to_be_verified : lab-partial-publish flow.  Some
+                #     analyses (e.g. sterility) take days longer than
+                #     others; we issue a partial COA with current results
+                #     and re-publish when final results come in.  The
+                #     VerificationCode is already written to SENAITE above,
+                #     and IS already marked the generation published, so
+                #     the client-facing COA is live.  SENAITE's workflow
+                #     label stays `to_be_verified` to correctly reflect
+                #     that tests are still pending.
                 items = transition_resp.json().get("items", [])
                 actual_state = items[0].get("review_state", "") if items else ""
-                if actual_state != "published":
+                accepted_states = {"published", "to_be_verified"}
+                if actual_state not in accepted_states:
                     verify_resp = await client.get(
                         f"{SENAITE_URL}/senaite/@@API/senaite/v1/AnalysisRequest"
                         f"?id={sample_id}&complete=true"
@@ -7741,7 +7754,7 @@ async def publish_sample_coa(
                         verify_items = verify_resp.json().get("items", [])
                         if verify_items:
                             actual_state = verify_items[0].get("review_state", "")
-                    if actual_state != "published":
+                    if actual_state not in accepted_states:
                         raise HTTPException(
                             status_code=502,
                             detail=(
