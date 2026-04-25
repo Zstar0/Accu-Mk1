@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.30.0 — 2026-04-24
+
+### Customer Peptide Request Submission + Retraction (Web Portal)
+
+- **Feature:** Backend support for the customer-facing peptide-request portal flow on accumarklabs.com.  Customers can submit a new peptide-test request from `/portal/new-peptide-request/`; integration-service forwards to Accu-Mk1's new `POST /peptide-requests` endpoint, which inserts a row in the `peptide_requests` table and inline-creates a ClickUp card for the lab team to triage.
+- **Feature:** Customer retraction — `POST /peptide-requests/{id}/retract` hard-deletes a pre-approval (or rejected) request, drops a "Customer retracted" comment on the ClickUp task, and moves the card to the new RETRACTED column.  Gate is authoritative on the backend (status must be `new` or `rejected`); stale-snapshot retract attempts surface as 409 envelopes.
+- **Feature:** ClickUp column-map adds the `RETRACTED → retracted` mapping so the webhook handler tolerates inbound events for the new column.
+- **Feature:** ClickUp client gains `post_task_comment(task_id, body)` and `set_task_status(task_id, status)` helpers used by the retraction flow.
+- **Feature:** ClickUp APPROVED column is wired into the status map (column added on the list this cycle).
+- **Endpoints (internal, X-Service-Token):** `POST /peptide-requests`, `GET /peptide-requests`, `GET /peptide-requests/{id}`, `GET /peptide-requests/{id}/history`, `POST /peptide-requests/{id}/retract`.  Plus admin `GET/POST /admin/clickup-users/...` mapping endpoints and `GET/POST /lims/peptide-requests/...` for in-app sync.
+- **DB:** New `peptide_requests` table (UUID PK, status enum, customer wp_user_id + email/name, ClickUp task id, idempotency key, audit timestamps) and `peptide_request_status_log` table for transition history.
+- **Tests:** +12 new tests covering the retract route (gate, ClickUp failure isolation, both retractable statuses, missing-row 404, auth) and the ClickUp client helpers.
+
 ## v0.29.0 — 2026-04-24
 
 ### Customer-Facing Analyte Aliases on COA
