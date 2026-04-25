@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.30.1 — 2026-04-25
+
+### Changed
+
+- **VERIFIED ClickUp column no longer triggers customer-facing completion.** The `verified` column now maps to internal `in_process` instead of `completed`. The completion email + $250 coupon + stepper-step-3 now fire only when the card moves to the Closed-group `added to accumk` column (= compound is actually live in the catalog). The lab tech's "testing finished" signal still drives the internal pipeline; customers just don't see "Complete" until it's real.
+
+### Fixed
+
+- **Coupon code now reaches the customer's request-detail page.** The completion side-effect that issues the $250 single-use coupon runs in a background thread *after* the original status-transition relay to wpstar has already fired. Without a follow-up sync, the wpstar snapshot stayed at `wp_coupon_code=NULL` and the "$250 coupon waiting" banner had no code to display. `run_coupon` now triggers a data-only relay (`send_email=False`) once the coupon lands in Postgres so the snapshot picks up the code and the detail page renders it. `relay_status_to_wp.run_once` includes `wp_coupon_code` in the forwarded payload.
+
 ## v0.30.0 — 2026-04-24
 
 ### Customer Peptide Request Submission + Retraction (Web Portal)

@@ -16,11 +16,26 @@ from integration_service_client import IntegrationServiceClient
 EMAIL_TRIGGER_STATUSES = {"approved", "rejected", "completed"}
 
 
-def run_once(request_id: UUID, *, new_status: str, previous_status: str | None) -> None:
+def run_once(
+    request_id: UUID,
+    *,
+    new_status: str,
+    previous_status: str | None,
+    send_email: bool | None = None,
+) -> None:
+    """Forward a status change (or a data-only refresh) to wpstar via int-svc.
+
+    `send_email` defaults to True for approved/rejected/completed transitions
+    and False otherwise. Pass `send_email=False` explicitly when running a
+    data-only relay (e.g. backfilling `wp_coupon_code` after the coupon job
+    lands post-completion) so the customer doesn't get a duplicate email.
+    """
     repo = PeptideRequestRepository()
     req = repo.get_by_id(request_id)
     if not req:
         return
+    if send_email is None:
+        send_email = new_status in EMAIL_TRIGGER_STATUSES
     payload = {
         "peptide_request_id": str(req.id),
         "wp_user_id": req.submitted_by_wp_user_id,
@@ -28,7 +43,8 @@ def run_once(request_id: UUID, *, new_status: str, previous_status: str | None) 
         "previous_status": previous_status,
         "rejection_reason": req.rejection_reason,
         "compound_name": req.compound_name,
-        "send_email": new_status in EMAIL_TRIGGER_STATUSES,
+        "wp_coupon_code": req.wp_coupon_code,
+        "send_email": send_email,
     }
     client = IntegrationServiceClient()
     client.relay_peptide_request_status(payload)

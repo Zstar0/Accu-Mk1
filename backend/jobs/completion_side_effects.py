@@ -68,6 +68,22 @@ def run_coupon(request_id: UUID) -> None:
             WHERE id = %s
         """, (result["coupon_code"], str(request_id)))
         conn.commit()
+    # Data-only relay so wpstar's snapshot picks up wp_coupon_code on the
+    # detail page. The coupon job runs async after the original
+    # completion-transition relay already fired — without this follow-up,
+    # the snapshot stays at wp_coupon_code=NULL and the "$250 coupon
+    # waiting" banner has no code to display. send_email=False because the
+    # completion email already fired on the original transition.
+    try:
+        from jobs.relay_status_to_wp import run_once as relay_run_once
+        relay_run_once(
+            request_id,
+            new_status="completed",
+            previous_status="completed",
+            send_email=False,
+        )
+    except Exception:
+        log.exception("post-coupon relay failed for %s", request_id)
 
 
 def run_senaite_clone(request_id: UUID) -> None:

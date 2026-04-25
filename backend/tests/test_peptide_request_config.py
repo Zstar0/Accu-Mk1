@@ -21,6 +21,7 @@ def test_default_column_map_covers_all_statuses(monkeypatch):
     expected_statuses = {
         "new", "approved", "ordering_standard", "sample_prep_created",
         "in_process", "on_hold", "completed", "rejected", "cancelled",
+        "retracted",
     }
     assert set(cfg.column_map.values()) == expected_statuses
 
@@ -33,9 +34,12 @@ def test_map_status_is_case_insensitive_and_whitespace_tolerant(monkeypatch):
     assert cfg.map_column_to_status("  ORDERED  ") == "ordering_standard"
     assert cfg.map_column_to_status("Requested") == "new"
     assert cfg.map_column_to_status("Approved") == "approved"
-    # "added to accumk" and "verified" both resolve to completed.
+    # `added to accumk` is the only column that resolves to `completed` —
+    # `verified` is the lab tech's testing-finished marker but the customer
+    # shouldn't see the completion email + coupon until the compound is
+    # actually live in the catalog.
     assert cfg.map_column_to_status("ADDED TO ACCUMK") == "completed"
-    assert cfg.map_column_to_status("verified") == "completed"
+    assert cfg.map_column_to_status("verified") == "in_process"
 
 
 def test_unmapped_column_returns_none(monkeypatch):

@@ -27,7 +27,11 @@ DEFAULT_COLUMN_MAP = {
     "ordered": "ordering_standard",
     "received": "sample_prep_created",
     "analyzing": "in_process",
-    "verified": "completed",
+    # `verified` is the lab tech's "testing finished" signal — but the customer
+    # shouldn't see Complete on the stepper (or get the completion email +
+    # coupon) until the compound is actually live in the catalog. That happens
+    # when the card moves to the Closed-group `added to accumk` column.
+    "verified": "in_process",
     "added to accumk": "completed",
     "on_hold": "on_hold",
     "rejected": "rejected",
