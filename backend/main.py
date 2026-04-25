@@ -14,6 +14,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Union
+from uuid import UUID
 
 # App version: prefer APP_VERSION env var (set by Docker build-arg),
 # fall back to reading package.json (works in local dev).
@@ -28,7 +29,7 @@ def _read_app_version() -> str:
 
 APP_VERSION = _read_app_version()
 
-from fastapi import FastAPI, Depends, Form, HTTPException, Header, Query, Request, Response, UploadFile, status
+from fastapi import FastAPI, Body, Depends, Form, HTTPException, Header, Query, Request, Response, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, validator
 from sqlalchemy.orm import Session, joinedload
@@ -39,8 +40,24 @@ from models import AuditLog, Settings, Job, Sample, Result, Instrument, Analysis
 from auth import (
     get_current_user, require_admin, create_access_token,
     verify_password, get_password_hash, seed_admin_user,
+    require_internal_service_token,
     UserCreate, UserRead, UserUpdate, PasswordChange, TokenResponse,
     SenaiteCredentials,
+)
+from models_peptide_request import (
+    PeptideRequestCreate, PeptideRequest, PeptideRequestList,
+    PeptideRequestUpdate, PeptideRequestRetract,
+    PeptideRequestSyncApplyRequest, StatusLogEntry,
+)
+from peptide_request_repo import PeptideRequestRepository
+from status_log_repo import StatusLogRepository
+from clickup_user_mapping_repo import ClickUpUserMappingRepository
+from peptide_request_config import get_config as get_peptide_request_config
+from clickup_client import ClickUpClient
+from clickup_webhook import verify_signature, dispatch_event
+from peptide_request_sync import (
+    apply_actions as peptide_request_apply_sync_actions,
+    compute_diff as peptide_request_compute_sync_diff,
 )
 from parsers import parse_txt_file
 from parsers.peakdata_csv_parser import parse_hplc_files, calculate_purity
@@ -12849,6 +12866,421 @@ async def reorder_worksheet_items(
             item.sort_order = idx
     db.commit()
     return {"status": "reordered", "count": len(data.item_ids)}
+
+
+# ── Peptide requests API (integration-service bridge) ────────────────
+# Called server-to-server by integration-service when a WP user submits the
+# peptide-request form. Internal service token + idempotency key are required.
+
+@app.post(
+    "/peptide-requests",
+    response_model=PeptideRequest,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_peptide_request(
+    data: PeptideRequestCreate,
+    idempotency_key: str = Header(None, alias="Idempotency-Key"),
+    _: None = Depends(require_internal_service_token),
+):
+    if not idempotency_key:
+        raise HTTPException(400, "Idempotency-Key header required")
+    repo = PeptideRequestRepository()
+    cfg = get_peptide_request_config()
+    row = repo.create(
+        data,
+        idempotency_key=idempotency_key,
+        clickup_list_id=cfg.clickup_list_id,
+    )
+    # Best-effort inline ClickUp task creation. On failure the retry job
+    # (backend/jobs/clickup_task_retry.py) will pick up the row once it is
+    # > 60s old. Never block the 201 response on ClickUp availability.
+    if not row.clickup_task_id:
+        try:
+            client = ClickUpClient(
+                api_token=cfg.clickup_api_token,
+                list_id=cfg.clickup_list_id,
+                accumk1_base_url=os.environ.get("ACCUMK1_BASE_URL", ""),
+            )
+            task_id = client.create_task_for_request(row)
+            repo.update_clickup_task_id(row.id, task_id)
+            row = repo.get_by_id(row.id)
+        except Exception:
+            import logging as _logging
+            _logging.getLogger(__name__).exception(
+                "inline clickup create failed; retry job will pick up"
+            )
+    return row
+
+
+@app.get("/peptide-requests", response_model=PeptideRequestList)
+def list_peptide_requests(
+    wp_user_id: int,
+    status: str | None = None,  # comma-separated
+    limit: int = 50,
+    offset: int = 0,
+    _: None = Depends(require_internal_service_token),
+):
+    repo = PeptideRequestRepository()
+    status_list = status.split(",") if status else None
+    items, total = repo.list_by_wp_user(
+        wp_user_id, status=status_list, limit=limit, offset=offset
+    )
+    return PeptideRequestList(total=total, limit=limit, offset=offset, items=items)
+
+
+@app.get("/peptide-requests/{request_id}", response_model=PeptideRequest)
+def get_peptide_request(
+    request_id: str,
+    _: None = Depends(require_internal_service_token),
+):
+    repo = PeptideRequestRepository()
+    row = repo.get_by_id(UUID(request_id))
+    if not row:
+        raise HTTPException(404, "not found")
+    return row
+
+
+@app.get(
+    "/peptide-requests/{request_id}/history",
+    response_model=list[StatusLogEntry],
+)
+def get_peptide_request_history(
+    request_id: str,
+    _: None = Depends(require_internal_service_token),
+):
+    lrepo = StatusLogRepository()
+    return lrepo.get_for_request(UUID(request_id))
+
+
+@app.post("/peptide-requests/{request_id}/retract")
+def retract_peptide_request(
+    request_id: str,
+    data: PeptideRequestRetract,
+    _: None = Depends(require_internal_service_token),
+):
+    """Hard-delete a peptide request that's still in a customer-retractable state.
+
+    Gate: status must be in {"new", "rejected"}. ClickUp comment is
+    best-effort (2s timeout, failure logged but not raised). Delete is
+    atomic and authoritative. Delete happens before the ClickUp comment
+    so a failed delete never leaves an orphaned breadcrumb.
+    """
+    import logging as _logging
+    log = _logging.getLogger(__name__)
+    rid = UUID(request_id)
+    repo = PeptideRequestRepository()
+    row = repo.get_by_id(rid)
+    if not row:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "request_not_found", "message": "Peptide request not found"},
+        )
+    if row.status not in ("new", "rejected"):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "request_not_retractable",
+                "message": "This request can no longer be retracted.",
+                "current_status": row.status,
+            },
+        )
+
+    reason = (data.reason or "").strip()
+    if len(reason) > 500:
+        reason = reason[:500]
+
+    prior = row.status
+    clickup_task_id = row.clickup_task_id
+    row_id = row.id
+    repo.delete_by_id(rid)
+
+    # Best-effort ClickUp breadcrumb + column move. Delete already
+    # succeeded; if either ClickUp call fails we accept the "ghost card"
+    # — the spec-blessed failure mode — rather than leaving a half-state
+    # where the row is live but already marked retracted on ClickUp.
+    # Client is built once, outside both try-blocks, so the second block
+    # can reference it even if the first crashes post-build.
+    if clickup_task_id:
+        try:
+            cfg = get_peptide_request_config()
+            client = ClickUpClient(
+                api_token=cfg.clickup_api_token,
+                list_id=cfg.clickup_list_id,
+                accumk1_base_url=os.environ.get("ACCUMK1_BASE_URL", ""),
+            )
+        except Exception:
+            log.exception(
+                "clickup_retraction_client_init_failed request_id=%s task_id=%s",
+                row_id, clickup_task_id,
+            )
+            client = None
+        if client is not None:
+            try:
+                from datetime import date as _date
+                lines = [f"Customer retracted this request on {_date.today().isoformat()}."]
+                if reason:
+                    lines.append(f"Reason: {reason}")
+                client.post_task_comment(clickup_task_id, "\n".join(lines))
+                log.info(
+                    "clickup_retraction_comment_posted request_id=%s task_id=%s",
+                    row_id, clickup_task_id,
+                )
+            except Exception:
+                log.exception(
+                    "clickup_retraction_comment_failed request_id=%s task_id=%s",
+                    row_id, clickup_task_id,
+                )
+            try:
+                client.set_task_status(clickup_task_id, "retracted")
+                log.info(
+                    "clickup_retraction_status_moved request_id=%s task_id=%s",
+                    row_id, clickup_task_id,
+                )
+            except Exception:
+                log.exception(
+                    "clickup_retraction_status_move_failed request_id=%s task_id=%s",
+                    row_id, clickup_task_id,
+                )
+    else:
+        log.warning(
+            "clickup_retraction_comment_skipped_no_task_id request_id=%s", row_id,
+        )
+
+    log.info(
+        "peptide_request_retracted request_id=%s prior_status=%s had_reason=%s",
+        rid, prior, bool(reason),
+    )
+    return {"ok": True}
+
+
+# ── Admin: ClickUp user mapping ──────────────────────────────────────
+# Concerns (flagged, not blocking):
+#   * Auth: spec called for require_admin_or_service which does not exist.
+#     Using require_internal_service_token (same as peptide-request API)
+#     means an admin must present the shared service token, not their user
+#     bearer. UX is broken for a real admin workflow; consistent with Tasks
+#     10/16 pattern. Pre-merge resolution.
+
+@app.get("/admin/clickup-users/unmapped")
+def list_unmapped_clickup_users(
+    _: None = Depends(require_internal_service_token),
+):
+    return ClickUpUserMappingRepository().list_unmapped()
+
+
+@app.post("/admin/clickup-users/{clickup_user_id}/map")
+def map_clickup_user(
+    clickup_user_id: str,
+    accumk1_user_id: int = Body(..., embed=True),
+    _: None = Depends(require_internal_service_token),
+):
+    ClickUpUserMappingRepository().set_mapping(clickup_user_id, accumk1_user_id)
+    return {"ok": True}
+
+
+# ── LIMS UI endpoints (JWT-gated) ────────────────────────────────────
+# Parallel to the /api/peptide-requests and /api/admin/clickup-users routes
+# above. Those are service-token-gated for integration-service (WP bridge);
+# these are JWT-gated for LIMS staff in the React app. No role gating for v1
+# — any authenticated user can hit admin routes. A proper role gate
+# (lab_manager vs regular) is a follow-up.
+
+@app.get("/lims/peptide-requests", response_model=PeptideRequestList)
+def lims_list_peptide_requests(
+    wp_user_id: int | None = None,
+    status: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+    _user=Depends(get_current_user),
+):
+    repo = PeptideRequestRepository()
+    status_list = status.split(",") if status else None
+    items, total = repo.list_all(
+        wp_user_id=wp_user_id, status=status_list, limit=limit, offset=offset
+    )
+    return PeptideRequestList(total=total, limit=limit, offset=offset, items=items)
+
+
+@app.get("/lims/peptide-requests/sync/diff")
+def lims_peptide_request_sync_diff(_user=Depends(get_current_user)):
+    """Compute the 3 discrepancy buckets between ClickUp and Accu-Mk1.
+
+    Declared BEFORE /lims/peptide-requests/{request_id} because FastAPI
+    matches routes in declaration order — "sync" would otherwise be
+    treated as a UUID path param and 500 on UUID(...) parsing.
+
+    Auth: any logged-in LIMS user. Sync is read-only on this endpoint
+    (no side effects until the tech clicks Apply) so admin-gating would
+    be unnecessarily restrictive.
+    """
+    cfg = get_peptide_request_config()
+    client = ClickUpClient(
+        api_token=cfg.clickup_api_token,
+        list_id=cfg.clickup_list_id,
+        accumk1_base_url=os.environ.get("ACCUMK1_BASE_URL", ""),
+        config=cfg,
+    )
+    return peptide_request_compute_sync_diff(
+        client, PeptideRequestRepository(), cfg
+    )
+
+
+@app.post("/lims/peptide-requests/sync/apply")
+def lims_peptide_request_sync_apply(
+    body: PeptideRequestSyncApplyRequest,
+    _user=Depends(get_current_user),
+):
+    """Apply tech-selected reconciliation actions.
+
+    Per-item error isolation lives in apply_actions; the route simply
+    wires repos + client and returns the resulting counts + errors
+    array so the frontend can show a toast with a breakdown.
+    """
+    cfg = get_peptide_request_config()
+    client = ClickUpClient(
+        api_token=cfg.clickup_api_token,
+        list_id=cfg.clickup_list_id,
+        accumk1_base_url=os.environ.get("ACCUMK1_BASE_URL", ""),
+        config=cfg,
+    )
+    return peptide_request_apply_sync_actions(
+        body.model_dump(mode="python"),
+        client,
+        PeptideRequestRepository(),
+        StatusLogRepository(),
+        ClickUpUserMappingRepository(),
+        cfg,
+    )
+
+
+@app.get("/lims/peptide-requests/{request_id}", response_model=PeptideRequest)
+def lims_get_peptide_request(
+    request_id: str,
+    _user=Depends(get_current_user),
+):
+    repo = PeptideRequestRepository()
+    row = repo.get_by_id(UUID(request_id))
+    if not row:
+        raise HTTPException(404, "not found")
+    return row
+
+
+@app.patch("/lims/peptide-requests/{request_id}")
+def lims_update_peptide_request(
+    request_id: str,
+    body: PeptideRequestUpdate,
+    _user=Depends(get_current_user),
+):
+    """Partial update from the LIMS UI. Currently supports editing sample_id.
+
+    Behaviour:
+      * 404 if the row doesn't exist.
+      * Always updates the DB column first (source of truth).
+      * If the row has a clickup_task_id AND config.clickup_field_sample_id
+        is populated, pushes the new value to ClickUp via
+        POST /task/{id}/field/{field_id}. Empty string is pushed when
+        clearing (sample_id=null).
+      * ClickUp failure does NOT roll back the DB. Response returns 200
+        with a `warning` field so the UI can surface a retry hint.
+        Rationale: DB is the source of truth; a transient ClickUp outage
+        shouldn't block a tech from editing a sample id. A future retry
+        queue will close the drift window.
+    """
+    import logging as _logging
+    log = _logging.getLogger(__name__)
+
+    repo = PeptideRequestRepository()
+    existing = repo.get_by_id(UUID(request_id))
+    if not existing:
+        raise HTTPException(404, "not found")
+
+    updated = repo.update_sample_id(UUID(request_id), body.sample_id)
+    if updated is None:
+        # Race: deleted between the get and the update. Treat as 404.
+        raise HTTPException(404, "not found")
+
+    warning: Optional[str] = None
+    if updated.clickup_task_id:
+        cfg = get_peptide_request_config()
+        if not cfg.clickup_field_sample_id:
+            log.info(
+                "PATCH sample_id: CLICKUP_FIELD_SAMPLE_ID unset, skipping ClickUp sync"
+            )
+        else:
+            try:
+                client = ClickUpClient(
+                    api_token=cfg.clickup_api_token,
+                    list_id=cfg.clickup_list_id,
+                    accumk1_base_url=os.environ.get("ACCUMK1_BASE_URL", ""),
+                    config=cfg,
+                )
+                client.set_custom_field(
+                    updated.clickup_task_id,
+                    cfg.clickup_field_sample_id,
+                    body.sample_id or "",
+                )
+            except Exception:
+                log.exception(
+                    "PATCH sample_id: ClickUp sync failed for task %s",
+                    updated.clickup_task_id,
+                )
+                warning = "ClickUp sync failed; will need manual retry"
+
+    result = updated.model_dump(mode="json")
+    if warning:
+        result["warning"] = warning
+    return result
+
+
+@app.get(
+    "/lims/peptide-requests/{request_id}/history",
+    response_model=list[StatusLogEntry],
+)
+def lims_get_peptide_request_history(
+    request_id: str,
+    _user=Depends(get_current_user),
+):
+    lrepo = StatusLogRepository()
+    return lrepo.get_for_request(UUID(request_id))
+
+
+@app.get("/lims/admin/clickup-users/unmapped")
+def lims_list_unmapped_clickup_users(
+    _user=Depends(require_admin),
+):
+    return ClickUpUserMappingRepository().list_unmapped()
+
+
+@app.post("/lims/admin/clickup-users/{clickup_user_id}/map")
+def lims_map_clickup_user(
+    clickup_user_id: str,
+    accumk1_user_id: int = Body(..., embed=True),
+    _user=Depends(require_admin),
+):
+    ClickUpUserMappingRepository().set_mapping(clickup_user_id, accumk1_user_id)
+    return {"ok": True}
+
+
+@app.post("/webhooks/clickup")
+async def clickup_webhook(request: Request):
+    raw = await request.body()
+    sig = request.headers.get("X-Signature")
+    cfg = get_peptide_request_config()
+    if not verify_signature(raw, sig, cfg.clickup_webhook_secret):
+        raise HTTPException(401, "invalid signature")
+    payload = json.loads(raw)
+    try:
+        dispatch_event(
+            payload, cfg,
+            PeptideRequestRepository(),
+            StatusLogRepository(),
+            ClickUpUserMappingRepository(),
+        )
+    except Exception:
+        import logging as _logging
+        _logging.getLogger(__name__).exception("webhook dispatch failure")
+        raise HTTPException(500, "dispatch failed")
+    return {"ok": True}
 
 
 # dropdowns from SENAITE LabContact records.

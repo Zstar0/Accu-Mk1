@@ -1,0 +1,434 @@
+"""Repository layer for peptide_requests."""
+import json
+from typing import Optional
+from uuid import UUID
+
+from psycopg2.extras import RealDictCursor
+
+from mk1_db import get_mk1_conn
+from models_peptide_request import PeptideRequest, PeptideRequestCreate
+
+
+def _row_to_model(row: dict) -> PeptideRequest:
+    return PeptideRequest(**row)
+
+
+class PeptideRequestRepository:
+    def create(
+        self,
+        data: PeptideRequestCreate,
+        *,
+        idempotency_key: str,
+        clickup_list_id: str,
+    ) -> PeptideRequest:
+        """Insert a new request. Returns existing row if (wp_user_id, idempotency_key)
+        already exists. Race-safe via INSERT ... ON CONFLICT DO NOTHING."""
+        with get_mk1_conn() as conn:
+            cur = conn.cursor(cursor_factory=RealDictCursor)
+            cur.execute("""
+                INSERT INTO peptide_requests (
+                    idempotency_key, submitted_by_wp_user_id,
+                    submitted_by_email, submitted_by_name,
+                    compound_kind, compound_name, vendor_producer,
+                    sequence_or_structure, molecular_weight, cas_or_reference,
+                    vendor_catalog_number, reason_notes, expected_monthly_volume,
+                    clickup_list_id
+                ) VALUES (
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                )
+                ON CONFLICT (submitted_by_wp_user_id, idempotency_key) DO NOTHING
+                RETURNING *
+            """, (
+                idempotency_key, data.submitted_by_wp_user_id,
+                data.submitted_by_email, data.submitted_by_name,
+                data.compound_kind, data.compound_name, data.vendor_producer,
+                data.sequence_or_structure, data.molecular_weight, data.cas_or_reference,
+                data.vendor_catalog_number, data.reason_notes, data.expected_monthly_volume,
+                clickup_list_id,
+            ))
+            row = cur.fetchone()
+            if row is None:
+                # Conflict hit — another concurrent insert won. Return the existing row.
+                cur.execute("""
+                    SELECT * FROM peptide_requests
+                    WHERE submitted_by_wp_user_id = %s AND idempotency_key = %s
+                """, (data.submitted_by_wp_user_id, idempotency_key))
+                row = cur.fetchone()
+            conn.commit()
+            return _row_to_model(dict(row))
+
+    def create_from_clickup_task(
+        self,
+        *,
+        task_dict: dict,
+        mapped_status: str,
+        clickup_task_id: str,
+        clickup_list_id: str,
+    ) -> PeptideRequest:
+        """Materialize a peptide_requests row from a ClickUp task that was
+        created manually by a lab tech (not via the WP submission flow).
+
+        Idempotent on clickup_task_id: if a row already exists with this
+        task id, the existing row is returned rather than inserting a
+        duplicate. This mirrors the race-safe pattern in ``create()`` and
+        is critical because taskCreated webhooks can arrive multiple times
+        (ClickUp re-delivery) and also because our OWN create path emits a
+        taskCreated event for WP-submitted rows.
+
+        Placeholder identity fields:
+            submitted_by_wp_user_id = 0   (no WP user behind this row)
+            submitted_by_email      = "manual@accumarklabs.com"
+            submitted_by_name       = ClickUp creator username if present,
+                                      else "Lab Tech (manual)"
+            vendor_producer         = "Unknown"  (tech can edit later)
+            compound_kind           = "other"    (safer default than peptide)
+            compound_name           = ClickUp task name, untrimmed
+
+        source column is forced to 'manual'. idempotency_key is derived from
+        the clickup_task_id so re-inserts collapse onto the same row.
+        """
+        creator = task_dict.get("creator") or {}
+        creator_username = creator.get("username") or "Lab Tech (manual)"
+        compound_name = task_dict.get("name") or ""
+        idempotency_key = f"clickup_task:{clickup_task_id}"
+
+        with get_mk1_conn() as conn:
+            cur = conn.cursor(cursor_factory=RealDictCursor)
+            cur.execute("""
+                INSERT INTO peptide_requests (
+                    idempotency_key, submitted_by_wp_user_id,
+                    submitted_by_email, submitted_by_name,
+                    compound_kind, compound_name, vendor_producer,
+                    clickup_list_id, clickup_task_id, status, source
+                ) VALUES (
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                )
+                ON CONFLICT (submitted_by_wp_user_id, idempotency_key) DO NOTHING
+                RETURNING *
+            """, (
+                idempotency_key, 0,
+                "manual@accumarklabs.com", creator_username,
+                "other", compound_name, "Unknown",
+                clickup_list_id, clickup_task_id, mapped_status, "manual",
+            ))
+            row = cur.fetchone()
+            if row is None:
+                # Conflict on (0, idempotency_key) — another concurrent call
+                # won, or the row already exists. Prefer the clickup_task_id
+                # lookup because it survives even if the idempotency_key
+                # shape ever changes.
+                cur.execute(
+                    "SELECT * FROM peptide_requests WHERE clickup_task_id = %s",
+                    (clickup_task_id,),
+                )
+                row = cur.fetchone()
+                if row is None:
+                    # Conflict fired on (wp_user_id=0, idempotency_key) but
+                    # clickup_task_id didn't match — fall back to the
+                    # idempotency_key lookup so we still return a valid row.
+                    cur.execute("""
+                        SELECT * FROM peptide_requests
+                        WHERE submitted_by_wp_user_id = %s
+                          AND idempotency_key = %s
+                    """, (0, idempotency_key))
+                    row = cur.fetchone()
+            conn.commit()
+            return _row_to_model(dict(row))
+
+    def get_by_id(self, request_id: UUID) -> Optional[PeptideRequest]:
+        with get_mk1_conn() as conn:
+            cur = conn.cursor(cursor_factory=RealDictCursor)
+            cur.execute("SELECT * FROM peptide_requests WHERE id = %s", (str(request_id),))
+            row = cur.fetchone()
+            return _row_to_model(dict(row)) if row else None
+
+    def delete_by_id(self, request_id) -> bool:
+        """Hard-delete a peptide_requests row by id.
+
+        Returns True if a row was removed, False if the id did not exist.
+        Commits on success. No cascade handling — the repo caller is
+        expected to gate on status (and any other business rules) before
+        invoking. Used by the customer-retraction path, where the row is
+        genuinely going away (no soft-delete, no tombstone) because the
+        ClickUp task is also being hard-deleted.
+        """
+        rid = request_id if isinstance(request_id, UUID) else UUID(str(request_id))
+        with get_mk1_conn() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "DELETE FROM peptide_requests WHERE id = %s",
+                (str(rid),),
+            )
+            deleted = cur.rowcount > 0
+            conn.commit()
+            return deleted
+
+    def get_by_clickup_task_id(self, task_id: str) -> Optional[PeptideRequest]:
+        """Lookup a peptide request by its ClickUp task id. Used by the webhook
+        dispatcher to resolve inbound events back to the owning row."""
+        with get_mk1_conn() as conn:
+            cur = conn.cursor(cursor_factory=RealDictCursor)
+            cur.execute(
+                "SELECT * FROM peptide_requests WHERE clickup_task_id = %s",
+                (task_id,),
+            )
+            row = cur.fetchone()
+            return _row_to_model(dict(row)) if row else None
+
+    def list_by_wp_user(
+        self, wp_user_id: int, *, status: Optional[list[str]] = None,
+        limit: int = 50, offset: int = 0,
+    ) -> tuple[list[PeptideRequest], int]:
+        with get_mk1_conn() as conn:
+            cur = conn.cursor(cursor_factory=RealDictCursor)
+            where = ["submitted_by_wp_user_id = %s"]
+            params: list = [wp_user_id]
+            if status:
+                where.append(f"status = ANY(%s)")
+                params.append(status)
+            where_sql = " AND ".join(where)
+            cur.execute(f"SELECT COUNT(*) AS count FROM peptide_requests WHERE {where_sql}", params)
+            total = cur.fetchone()["count"]
+            cur.execute(f"""
+                SELECT * FROM peptide_requests WHERE {where_sql}
+                ORDER BY created_at DESC LIMIT %s OFFSET %s
+            """, (*params, limit, offset))
+            rows = [_row_to_model(dict(r)) for r in cur.fetchall()]
+            return rows, total
+
+    def list_all(
+        self, *, wp_user_id: int | None = None,
+        status: list[str] | None = None,
+        limit: int = 50, offset: int = 0,
+    ) -> tuple[list[PeptideRequest], int]:
+        """Admin/LIMS list across all customers. wp_user_id is an optional filter."""
+        with get_mk1_conn() as conn:
+            cur = conn.cursor(cursor_factory=RealDictCursor)
+            where: list[str] = []
+            params: list = []
+            if wp_user_id is not None:
+                where.append("submitted_by_wp_user_id = %s")
+                params.append(wp_user_id)
+            if status:
+                where.append("status = ANY(%s)")
+                params.append(status)
+            where_sql = (" WHERE " + " AND ".join(where)) if where else ""
+            cur.execute(f"SELECT COUNT(*) AS count FROM peptide_requests{where_sql}", params)
+            total = cur.fetchone()["count"]
+            cur.execute(
+                f"SELECT * FROM peptide_requests{where_sql} "
+                f"ORDER BY created_at DESC LIMIT %s OFFSET %s",
+                (*params, limit, offset),
+            )
+            rows = [_row_to_model(dict(r)) for r in cur.fetchall()]
+            return rows, total
+
+    def update_clickup_task_id(self, request_id: UUID, task_id: str) -> None:
+        with get_mk1_conn() as conn:
+            cur = conn.cursor()
+            cur.execute("""
+                UPDATE peptide_requests
+                SET clickup_task_id = %s, updated_at = NOW()
+                WHERE id = %s
+            """, (task_id, str(request_id)))
+            conn.commit()
+
+    def update_status(
+        self, request_id: UUID, *, new_status: str,
+        previous_status: Optional[str] = None,
+    ) -> None:
+        """Update status + set terminal timestamp columns."""
+        with get_mk1_conn() as conn:
+            cur = conn.cursor()
+            terminal_col_sql = ""
+            if new_status == "completed":
+                terminal_col_sql = ", completed_at = NOW()"
+            elif new_status == "rejected":
+                terminal_col_sql = ", rejected_at = NOW()"
+            elif new_status == "cancelled":
+                terminal_col_sql = ", cancelled_at = NOW()"
+            prev_sql = ", previous_status = %s" if previous_status is not None else ""
+            params: list = [new_status]
+            if previous_status is not None:
+                params.append(previous_status)
+            params.append(str(request_id))
+            cur.execute(f"""
+                UPDATE peptide_requests
+                SET status = %s{prev_sql}{terminal_col_sql}, updated_at = NOW()
+                WHERE id = %s
+            """, params)
+            conn.commit()
+
+    def set_assignees(self, request_id: UUID, assignee_ids: list[str]) -> None:
+        with get_mk1_conn() as conn:
+            cur = conn.cursor()
+            # Use json.dumps for safe encoding — the spec's repr/replace hack
+            # would break on any assignee id containing apostrophes or quotes.
+            cur.execute("""
+                UPDATE peptide_requests
+                SET clickup_assignee_ids = %s::jsonb, updated_at = NOW()
+                WHERE id = %s
+            """, (json.dumps(assignee_ids), str(request_id)))
+            conn.commit()
+
+    def mark_retired(self, request_id: UUID) -> Optional[PeptideRequest]:
+        """Mark a request as retired (ClickUp task was deleted).
+
+        Idempotent: if the row is already retired, the WHERE clause matches
+        zero rows and we return None. Callers should treat None as "no-op,
+        already retired or missing" and skip side effects accordingly.
+
+        Does NOT mutate status — retirement is a separate axis from workflow
+        status. A retired row keeps its last-known status for history; UI
+        filters on retired_at directly.
+        """
+        with get_mk1_conn() as conn:
+            cur = conn.cursor(cursor_factory=RealDictCursor)
+            cur.execute(
+                """
+                UPDATE peptide_requests
+                SET retired_at = NOW(), updated_at = NOW()
+                WHERE id = %s AND retired_at IS NULL
+                RETURNING *
+                """,
+                (str(request_id),),
+            )
+            row = cur.fetchone()
+            conn.commit()
+            return _row_to_model(dict(row)) if row else None
+
+    # Columns writable via update_fields. Kept as a class-level constant
+    # so tests can import it (and so the whitelist lives next to the
+    # method that enforces it). Mirrors the "bidirectional-sync fields"
+    # callout in HANDOFF_PEPTIDE_REQUEST.md; adding a new syncable field
+    # is a deliberate two-step operation: add the column to the DB, add
+    # it here.
+    _UPDATE_FIELDS_WHITELIST: frozenset[str] = frozenset({
+        "sample_id",
+        "compound_kind",
+        "cas_or_reference",
+        "vendor_producer",
+        "submitted_by_email",
+    })
+
+    def update_fields(
+        self, request_id: UUID, **fields,
+    ) -> Optional["PeptideRequest"]:
+        """Update an arbitrary subset of the bidirectional-sync columns.
+
+        Intended for the taskUpdated webhook branch and the sync
+        field_drift resolution path, where the inbound payload carries
+        one-or-more custom field changes at once.
+
+        Validation:
+          * Unknown / non-whitelisted keys raise ``ValueError`` BEFORE
+            touching the DB. The whitelist is the exact set of fields
+            we sync bidirectionally; anything else is either (a) not
+            modeled in our DB, (b) derived (updated_at), or (c) owned
+            by a dedicated mutator (status, retired_at, etc.) and must
+            go through that path instead.
+          * An empty kwargs call is a no-op and returns the current
+            row. This keeps webhook dispatch simple — iterate history
+            items, only call this when there's an actual field to
+            apply, but tolerate the degenerate case.
+
+        SQL construction is dynamic but still parameterized: column
+        names come exclusively from the validated whitelist (never from
+        user input), and values go through psycopg2's %s placeholder.
+        No string interpolation of values.
+
+        Returns the updated row or None if the row does not exist.
+        """
+        if not fields:
+            return self.get_by_id(request_id)
+        unknown = set(fields) - self._UPDATE_FIELDS_WHITELIST
+        if unknown:
+            raise ValueError(
+                f"update_fields: unknown column(s): {sorted(unknown)}"
+            )
+
+        # Deterministic ordering so SQL generated is identical run-to-run
+        # (easier to read in logs / pg_stat_statements).
+        columns = sorted(fields.keys())
+        set_clauses = ", ".join(f"{c} = %s" for c in columns)
+        values: list = [fields[c] for c in columns]
+        values.append(str(request_id))
+
+        with get_mk1_conn() as conn:
+            cur = conn.cursor(cursor_factory=RealDictCursor)
+            cur.execute(
+                f"""
+                UPDATE peptide_requests
+                SET {set_clauses}, updated_at = NOW()
+                WHERE id = %s
+                RETURNING *
+                """,
+                values,
+            )
+            row = cur.fetchone()
+            conn.commit()
+            return _row_to_model(dict(row)) if row else None
+
+    def update_sample_id(
+        self, request_id: UUID, sample_id: Optional[str],
+    ) -> Optional[PeptideRequest]:
+        """Set or clear the sample_id column. Idempotent: writing the same
+        value is a no-op semantically (updated_at still bumps). Returns
+        None if the row doesn't exist."""
+        with get_mk1_conn() as conn:
+            cur = conn.cursor(cursor_factory=RealDictCursor)
+            cur.execute(
+                """
+                UPDATE peptide_requests
+                SET sample_id = %s, updated_at = NOW()
+                WHERE id = %s
+                RETURNING *
+                """,
+                (sample_id, str(request_id)),
+            )
+            row = cur.fetchone()
+            conn.commit()
+            return _row_to_model(dict(row)) if row else None
+
+    def list_all_with_clickup_ids(self) -> list[PeptideRequest]:
+        """Rows that are candidates for the "In Accu-Mk1, not in ClickUp"
+        sync-diff bucket.
+
+        Scope:
+          * clickup_task_id IS NOT NULL — a row with no task id was never
+            linked to ClickUp (WP submission pending create, or a
+            legitimate never-synced state). Excluding these keeps the
+            diff focused on genuine drift: rows that DID have a task and
+            whose task has since vanished from the list fetch.
+          * retired_at IS NULL — a retired row is expected to be absent
+            from ClickUp (the task was deleted; retirement is our record
+            of that). Including retired rows would re-offer them every
+            sync, which is noise.
+
+        Returns oldest-first via created_at DESC to mirror the rest of
+        the list queries in this repo.
+        """
+        with get_mk1_conn() as conn:
+            cur = conn.cursor(cursor_factory=RealDictCursor)
+            cur.execute(
+                """
+                SELECT * FROM peptide_requests
+                WHERE clickup_task_id IS NOT NULL
+                  AND retired_at IS NULL
+                ORDER BY created_at DESC
+                """
+            )
+            return [_row_to_model(dict(r)) for r in cur.fetchall()]
+
+    def find_needing_clickup_create(self, older_than_seconds: int = 60) -> list[PeptideRequest]:
+        """Rows with clickup_task_id NULL and older than N seconds."""
+        with get_mk1_conn() as conn:
+            cur = conn.cursor(cursor_factory=RealDictCursor)
+            cur.execute("""
+                SELECT * FROM peptide_requests
+                WHERE clickup_task_id IS NULL
+                  AND clickup_create_failed_at IS NULL
+                  AND created_at < NOW() - (%s || ' seconds')::interval
+                ORDER BY created_at ASC LIMIT 50
+            """, (older_than_seconds,))
+            return [_row_to_model(dict(r)) for r in cur.fetchall()]

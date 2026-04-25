@@ -66,7 +66,15 @@ class TestCalcStockPrep:
     def test_all_keys_present(self):
         """Result dict contains all expected keys."""
         result = calc_stock_prep(DECLARED_WEIGHT_MG, STOCK_VIAL_EMPTY, STOCK_VIAL_LOADED, DILUENT_DENSITY)
-        assert set(result.keys()) == {"diluent_mass_mg", "total_diluent_added_ml", "stock_conc_ug_ml"}
+        # `actual_peptide_mg` was added when calc_stock_prep gained a
+        # measured-aliquot path (stock_vial_with_peptide_mg arg); it's the
+        # peptide mass used for concentration in either mode.
+        assert set(result.keys()) == {
+            "actual_peptide_mg",
+            "diluent_mass_mg",
+            "total_diluent_added_ml",
+            "stock_conc_ug_ml",
+        }
 
     def test_returns_decimal_types(self):
         """All returned values must be Decimal — no float leakage."""

@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import bcrypt
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, Header, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
 from pydantic import BaseModel, EmailStr
@@ -124,6 +124,24 @@ def require_admin(current_user=Depends(get_current_user)):
             detail="Admin access required",
         )
     return current_user
+
+
+def require_internal_service_token(
+    x_service_token: str = Header(None),
+) -> None:
+    """Dependency: validate a shared-secret internal service token via X-Service-Token header.
+
+    Used for server-to-server calls from the integration-service (WP bridge). Compares
+    against ACCUMK1_INTERNAL_SERVICE_TOKEN using timing-safe comparison.
+    """
+    expected = os.environ.get("ACCUMK1_INTERNAL_SERVICE_TOKEN")
+    if not expected:
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            "internal service auth not configured",
+        )
+    if not x_service_token or not secrets.compare_digest(x_service_token, expected):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid service token")
 
 
 # ── Admin seed ────────────────────────────────────────────────

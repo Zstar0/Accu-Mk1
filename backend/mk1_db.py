@@ -48,6 +48,11 @@ def get_mk1_db() -> Generator[psycopg2.extensions.connection, None, None]:
         conn.close()
 
 
+# Canonical alias used by newer modules (peptide_requests, status_log, etc.).
+# Kept alongside get_mk1_db for backward compatibility with existing callers.
+get_mk1_conn = get_mk1_db
+
+
 # ─── sample_preps DDL ──────────────────────────────────────────────────────────
 
 _SAMPLE_PREPS_DDL = """
@@ -126,6 +131,219 @@ def ensure_sample_preps_table() -> None:
             cur.execute("ALTER TABLE sample_preps ADD COLUMN IF NOT EXISTS created_by_email VARCHAR(320)")
             cur.execute("ALTER TABLE sample_preps ADD COLUMN IF NOT EXISTS updated_by_user_id INTEGER")
             cur.execute("ALTER TABLE sample_preps ADD COLUMN IF NOT EXISTS updated_by_email VARCHAR(320)")
+        conn.commit()
+
+
+# ─── peptide_requests DDL ──────────────────────────────────────────────────────
+
+_PEPTIDE_REQUESTS_DDL = """
+CREATE TABLE IF NOT EXISTS peptide_requests (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    idempotency_key TEXT NOT NULL,
+    submitted_by_wp_user_id INTEGER NOT NULL,
+    submitted_by_email TEXT NOT NULL,
+    submitted_by_name TEXT NOT NULL,
+    compound_kind TEXT NOT NULL CHECK (compound_kind IN ('peptide', 'other')),
+    compound_name TEXT NOT NULL,
+    vendor_producer TEXT NOT NULL,
+    sequence_or_structure TEXT,
+    molecular_weight NUMERIC,
+    cas_or_reference TEXT,
+    vendor_catalog_number TEXT,
+    reason_notes TEXT,
+    expected_monthly_volume INTEGER,
+    status TEXT NOT NULL DEFAULT 'new' CHECK (status IN (
+        'new', 'approved', 'ordering_standard', 'sample_prep_created',
+        'in_process', 'on_hold', 'completed', 'rejected', 'cancelled'
+    )),
+    previous_status TEXT,
+    rejection_reason TEXT,
+    sample_id TEXT,
+    clickup_task_id TEXT,
+    clickup_list_id TEXT NOT NULL,
+    clickup_assignee_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+    senaite_service_uid TEXT,
+    wp_coupon_code TEXT,
+    wp_coupon_issued_at TIMESTAMPTZ,
+    completed_at TIMESTAMPTZ,
+    rejected_at TIMESTAMPTZ,
+    cancelled_at TIMESTAMPTZ,
+    clickup_create_failed_at TIMESTAMPTZ,
+    coupon_failed_at TIMESTAMPTZ,
+    senaite_clone_failed_at TIMESTAMPTZ,
+    wp_relay_failed_at TIMESTAMPTZ
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_peptide_requests_idempotency
+    ON peptide_requests (submitted_by_wp_user_id, idempotency_key);
+
+CREATE INDEX IF NOT EXISTS idx_peptide_requests_wp_user
+    ON peptide_requests (submitted_by_wp_user_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_peptide_requests_status
+    ON peptide_requests (status, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_peptide_requests_clickup_task
+    ON peptide_requests (clickup_task_id) WHERE clickup_task_id IS NOT NULL;
+"""
+
+
+def ensure_peptide_requests_table() -> None:
+    """
+    Idempotently create the peptide_requests table and its indexes in accumark_mk1.
+    Safe to call on every startup — uses CREATE TABLE/INDEX IF NOT EXISTS.
+
+    Enables the pgcrypto extension first because gen_random_uuid() is the
+    default for the `id` column.
+    """
+    with get_mk1_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto;")
+            cur.execute(_PEPTIDE_REQUESTS_DDL)
+            # Origin tracking: 'wp' (WP-submitted via integration-service; the
+            # default for all pre-existing rows since that was the only path)
+            # or 'manual' (lab tech created the task directly in ClickUp and
+            # the taskCreated webhook materialized a row here).
+            cur.execute(
+                "ALTER TABLE peptide_requests ADD COLUMN IF NOT EXISTS "
+                "source TEXT NOT NULL DEFAULT 'wp'"
+            )
+            # Retirement marker: when a lab tech deletes the corresponding
+            # ClickUp task, we do NOT delete the row — we stamp retired_at
+            # and hide it from the Active tab. Nullable, no default, mirrors
+            # the existing rejected_at / cancelled_at / completed_at pattern.
+            cur.execute(
+                "ALTER TABLE peptide_requests ADD COLUMN IF NOT EXISTS "
+                "retired_at TIMESTAMPTZ"
+            )
+        conn.commit()
+
+
+# ─── peptide_request_status_log DDL ────────────────────────────────────────────
+
+_PEPTIDE_REQUEST_STATUS_LOG_DDL = """
+CREATE TABLE IF NOT EXISTS peptide_request_status_log (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    peptide_request_id UUID NOT NULL REFERENCES peptide_requests(id) ON DELETE CASCADE,
+    from_status TEXT,
+    to_status TEXT NOT NULL,
+    source TEXT NOT NULL CHECK (source IN ('clickup', 'accumk1_admin', 'system')),
+    clickup_event_id TEXT,
+    actor_clickup_user_id TEXT,
+    actor_accumk1_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    note TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_status_log_clickup_event
+    ON peptide_request_status_log (clickup_event_id)
+    WHERE clickup_event_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_status_log_request
+    ON peptide_request_status_log (peptide_request_id, created_at DESC);
+"""
+
+
+def ensure_peptide_request_status_log_table() -> None:
+    """
+    Idempotently create the peptide_request_status_log table and its indexes
+    in accumark_mk1. Safe to call on every startup — uses CREATE TABLE/INDEX
+    IF NOT EXISTS.
+
+    Enables the pgcrypto extension first because gen_random_uuid() is the
+    default for the `id` column. The parent peptide_requests table must already
+    exist (FK reference); call ensure_peptide_requests_table() first.
+
+    Forward-only migration: if a prior dev schema has actor_accumk1_user_id
+    as UUID (pre-reconciliation), drop and re-add as INTEGER with an FK to
+    users(id). The column is always NULL in practice (the old code never
+    persisted a value into the UUID column) so data loss is a non-issue.
+    The `users` table is created by SQLAlchemy's create_all() during
+    init_db(); all production callers of this ensure function run after
+    init_db(), so the FK reference resolves.
+    """
+    with get_mk1_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto;")
+            cur.execute("""
+                DO $$
+                BEGIN
+                  IF EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'peptide_request_status_log'
+                      AND column_name = 'actor_accumk1_user_id'
+                      AND data_type = 'uuid'
+                  ) THEN
+                    ALTER TABLE peptide_request_status_log DROP COLUMN actor_accumk1_user_id;
+                    ALTER TABLE peptide_request_status_log
+                      ADD COLUMN actor_accumk1_user_id INTEGER
+                      REFERENCES users(id) ON DELETE SET NULL;
+                  END IF;
+                END $$;
+            """)
+            cur.execute(_PEPTIDE_REQUEST_STATUS_LOG_DDL)
+        conn.commit()
+
+
+# ─── clickup_user_mapping DDL ──────────────────────────────────────────────────
+
+_CLICKUP_USER_MAPPING_DDL = """
+CREATE TABLE IF NOT EXISTS clickup_user_mapping (
+    clickup_user_id TEXT PRIMARY KEY,
+    accumk1_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    clickup_username TEXT NOT NULL,
+    clickup_email TEXT,
+    auto_matched BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_clickup_user_mapping_unmapped
+    ON clickup_user_mapping (accumk1_user_id) WHERE accumk1_user_id IS NULL;
+"""
+
+
+def ensure_clickup_user_mapping_table() -> None:
+    """
+    Idempotently create the clickup_user_mapping table and its indexes in
+    accumark_mk1. Safe to call on every startup — uses CREATE TABLE/INDEX
+    IF NOT EXISTS.
+
+    Enables the pgcrypto extension first to stay consistent with the other
+    peptide-request ensure-functions (harmless and idempotent; safeguards
+    any future edit that introduces a UUID default on this table).
+
+    Forward-only migration: if a prior dev schema has accumk1_user_id as
+    UUID (pre-reconciliation with users.id as INTEGER), drop and re-add it
+    as INTEGER with an FK to users(id). The column is always NULL in
+    practice (the Task 6 workaround never persisted anything) so this is
+    data-safe. The `users` table is created by SQLAlchemy's create_all()
+    during init_db(); all production callers of this ensure function run
+    after init_db(), so the FK reference resolves.
+    """
+    with get_mk1_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto;")
+            cur.execute("""
+                DO $$
+                BEGIN
+                  IF EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'clickup_user_mapping'
+                      AND column_name = 'accumk1_user_id'
+                      AND data_type = 'uuid'
+                  ) THEN
+                    ALTER TABLE clickup_user_mapping DROP COLUMN accumk1_user_id;
+                    ALTER TABLE clickup_user_mapping
+                      ADD COLUMN accumk1_user_id INTEGER
+                      REFERENCES users(id) ON DELETE SET NULL;
+                  END IF;
+                END $$;
+            """)
+            cur.execute(_CLICKUP_USER_MAPPING_DDL)
         conn.commit()
 
 
