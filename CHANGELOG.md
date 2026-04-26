@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.30.2 — 2026-04-26
+
+### Fixed
+
+- **Partial-publish no longer toasts "Regen failed" when add-on tests are pending.** `publish_sample_coa`'s post-transition guard previously allowlisted only `published` and `to_be_verified`; samples with sterility/endotoxin (or other SENAITE add-on analyses) outstanding land in `waiting_for_addon_results` after the `publish` transition fires, which the guard treated as a silent rejection and surfaced as a 502. The COA was already live (Integration Service had published it, the verification code was written, SENAITE accepted the transition into the addon-pending state) — staff just saw a confusing error and a refresh "fixed" it. `waiting_for_addon_results` is now an accepted post-transition state. Genuine silent rejections (`verified`, `sample_received`, etc.) still surface as 502s.
+
 ## v0.30.1 — 2026-04-25
 
 ### Changed

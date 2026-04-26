@@ -7759,9 +7759,19 @@ async def publish_sample_coa(
                 #     the client-facing COA is live.  SENAITE's workflow
                 #     label stays `to_be_verified` to correctly reflect
                 #     that tests are still pending.
+                #   - waiting_for_addon_results : same partial-publish
+                #     flow as above, but for samples with add-on analyses
+                #     (sterility, endotoxin) that run on a different
+                #     timeline.  SENAITE's addon plugin parks the AR in
+                #     this state until addon results return; the publish
+                #     transition is accepted and the COA is live.
                 items = transition_resp.json().get("items", [])
                 actual_state = items[0].get("review_state", "") if items else ""
-                accepted_states = {"published", "to_be_verified"}
+                accepted_states = {
+                    "published",
+                    "to_be_verified",
+                    "waiting_for_addon_results",
+                }
                 if actual_state not in accepted_states:
                     verify_resp = await client.get(
                         f"{SENAITE_URL}/senaite/@@API/senaite/v1/AnalysisRequest"
