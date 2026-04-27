@@ -4086,3 +4086,33 @@ export async function getSampleActivity(sampleId: string): Promise<SampleActivit
   if (!response.ok) throw new Error(`Sample activity failed: ${response.status}`)
   return response.json()
 }
+
+// ─── Sample Retest Info ──────────────────────────────────────────────────────
+
+export interface RetestForwardLink {
+  sample_id: string
+  order_id: number | null
+  created_at: string | null
+}
+
+export interface SampleRetestInfo {
+  sample_id: string
+  // True when this sample was created as a retest of another.
+  is_retest: boolean
+  // Populated when is_retest === true:
+  source_sample_id: string | null
+  source_order_id: number | null
+  this_order_id: number | null
+  retest_created_at: string | null
+  // Samples that are retests of THIS one (chain-forward, may be empty).
+  retested_as: RetestForwardLink[]
+}
+
+export async function getSampleRetestInfo(sampleId: string): Promise<SampleRetestInfo> {
+  const response = await fetch(
+    `${API_BASE_URL()}/samples/${encodeURIComponent(sampleId)}/retest-info`,
+    { headers: getAuthHeaders() }
+  )
+  if (!response.ok) throw new Error(`Sample retest-info failed: ${response.status}`)
+  return response.json()
+}

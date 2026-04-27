@@ -604,6 +604,94 @@ async def get_audit_logs(
     return result.scalars().all()
 
 
+@app.get("/samples/{sample_id}/retest-info")
+async def get_sample_retest_info(
+    sample_id: str,
+    _current_user=Depends(get_current_user),
+):
+    """
+    Retest relationship metadata for a sample.
+
+    Returns:
+      - is_retest: this sample was created as a retest of another
+      - source_sample_id, source_order_id, this_order_id, retest_created_at:
+          populated when is_retest=True
+      - retested_as: list of samples that retest THIS one (chain-forward)
+
+    Reads from the integration-service Postgres directly. Cheap — bounded
+    queries against indexed columns + JSONB lateral expansions.
+    """
+    from psycopg2.extras import RealDictCursor
+
+    result = {
+        "sample_id": sample_id,
+        "is_retest": False,
+        "source_sample_id": None,
+        "source_order_id": None,
+        "this_order_id": None,
+        "retest_created_at": None,
+        "retested_as": [],
+    }
+
+    try:
+        with get_integration_db() as int_conn:
+            with int_conn.cursor(cursor_factory=RealDictCursor) as cur:
+                # Is this sample itself a retest?
+                cur.execute(
+                    """
+                    SELECT
+                      os.order_id::text AS order_id,
+                      os.created_at,
+                      os.retest_of_order_id,
+                      s.value->>'retest_of_senaite_id' AS source_sample_id
+                    FROM order_submissions os,
+                         jsonb_array_elements(os.payload->'samples') s
+                    WHERE os.is_retest = TRUE
+                      AND s.value->>'retest_of_senaite_id' IS NOT NULL
+                      AND os.sample_results->(s.value->>'number')->>'senaite_id' = %s
+                    LIMIT 1
+                    """,
+                    [sample_id],
+                )
+                row = cur.fetchone()
+                if row:
+                    result["is_retest"] = True
+                    result["source_sample_id"] = row["source_sample_id"]
+                    result["source_order_id"] = row["retest_of_order_id"]
+                    result["this_order_id"] = int(row["order_id"]) if row["order_id"] else None
+                    result["retest_created_at"] = (
+                        row["created_at"].isoformat() if row["created_at"] else None
+                    )
+
+                # Forward-chain: samples that retest THIS one
+                cur.execute(
+                    """
+                    SELECT
+                      os.order_id::text AS order_id,
+                      os.created_at,
+                      os.sample_results->(s.value->>'number')->>'senaite_id' AS new_sample_id
+                    FROM order_submissions os,
+                         jsonb_array_elements(os.payload->'samples') s
+                    WHERE os.is_retest = TRUE
+                      AND s.value->>'retest_of_senaite_id' = %s
+                      AND os.sample_results->(s.value->>'number')->>'senaite_id' IS NOT NULL
+                    ORDER BY os.created_at
+                    """,
+                    [sample_id],
+                )
+                for r in cur.fetchall():
+                    result["retested_as"].append({
+                        "sample_id": r["new_sample_id"],
+                        "order_id": int(r["order_id"]) if r["order_id"] else None,
+                        "created_at": r["created_at"].isoformat() if r["created_at"] else None,
+                    })
+    except Exception:
+        # Integration DB unavailable — return the empty shell so callers can render gracefully
+        pass
+
+    return result
+
+
 @app.get("/samples/{sample_id}/activity")
 async def get_sample_activity(
     sample_id: str,
@@ -722,6 +810,67 @@ async def get_sample_activity(
     try:
         with get_integration_db() as int_conn:
             with int_conn.cursor(cursor_factory=RealDictCursor) as cur:
+                # --- Retest creation (this sample IS a retest) ---
+                # Find the retest order whose sample_results includes this sample_id
+                # AND whose payload identifies the source sample via retest_of_senaite_id.
+                cur.execute(
+                    """
+                    SELECT
+                      os.order_id::text AS order_id,
+                      os.created_at,
+                      s.value->>'retest_of_senaite_id' AS source_sample_id,
+                      os.retest_of_order_id
+                    FROM order_submissions os,
+                         jsonb_array_elements(os.payload->'samples') s
+                    WHERE os.is_retest = TRUE
+                      AND s.value->>'retest_of_senaite_id' IS NOT NULL
+                      AND os.sample_results->(s.value->>'number')->>'senaite_id' = %s
+                    LIMIT 1
+                    """,
+                    [sample_id],
+                )
+                row = cur.fetchone()
+                if row:
+                    events.append({
+                        "timestamp": row["created_at"].isoformat() if row["created_at"] else None,
+                        "event": "retest_created",
+                        "label": f"Retest of {row['source_sample_id']} created — order #{row['order_id']}",
+                        "details": {
+                            "source_sample_id": row["source_sample_id"],
+                            "this_order_id": int(row["order_id"]) if row["order_id"] else None,
+                            "source_order_id": row["retest_of_order_id"],
+                        },
+                        "source": "order_submissions",
+                    })
+
+                # --- Retested as (other samples that retest THIS one) ---
+                cur.execute(
+                    """
+                    SELECT
+                      os.order_id::text AS order_id,
+                      os.created_at,
+                      os.sample_results->(s.value->>'number')->>'senaite_id' AS new_sample_id
+                    FROM order_submissions os,
+                         jsonb_array_elements(os.payload->'samples') s
+                    WHERE os.is_retest = TRUE
+                      AND s.value->>'retest_of_senaite_id' = %s
+                      AND os.sample_results->(s.value->>'number')->>'senaite_id' IS NOT NULL
+                    ORDER BY os.created_at
+                    """,
+                    [sample_id],
+                )
+                for r in cur.fetchall():
+                    events.append({
+                        "timestamp": r["created_at"].isoformat() if r["created_at"] else None,
+                        "event": "retested_as",
+                        "label": f"Retested as {r['new_sample_id']} — order #{r['order_id']}",
+                        "details": {
+                            "new_sample_id": r["new_sample_id"],
+                            "retest_order_id": int(r["order_id"]) if r["order_id"] else None,
+                        },
+                        "source": "order_submissions",
+                    })
+
                 cur.execute(
                     "SELECT transition, new_status, event_timestamp, wp_notified, created_at "
                     "FROM sample_status_events WHERE sample_id = %s ORDER BY created_at",

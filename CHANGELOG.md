@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.31.0 — 2026-04-26
+
+### Added
+
+- **Retest visibility on the sample detail page.** When a sample is itself a retest, a violet alert strip now sits at the top of the sticky header band: `↻ Retest of <source_sample_id> · WP order #<n> · <date>`. The source sample ID is a button that navigates to the source sample's detail page. Inverse view too: when a sample has been retested by other samples, an inline `↳ Retested as: <list>` pill appears next to the Received-time/Client line in the header, with each retest sample as a clickable navigation button. Driven by a new `GET /samples/{sample_id}/retest-info` endpoint that queries the integration-service Postgres directly (one indexed lookup + one JSONB lateral expansion against `order_submissions`).
+- **Retest events in the activity timeline.** Two new event types added to `GET /samples/{sample_id}/activity`:
+  - `retest_created` (accent / `↻`) — fires for retest samples at their order's `created_at`. Label: `Retest of <source> created — order #<n>`.
+  - `retested_as` (warn / `↪`) — fires on the original sample, one entry per forward-chain retest. Label: `Retested as <new_sample_id> — order #<n>`.
+- Both events sourced via JSONB lateral expansion on `order_submissions.payload->'samples'` (matching `retest_of_senaite_id`) joined to `os.sample_results` for the new senaite_id. No migrations — uses existing schema.
+
 ## v0.30.2 — 2026-04-26
 
 ### Fixed
