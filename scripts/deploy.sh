@@ -28,6 +28,9 @@ PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 VERSION=$(grep '"version"' "$PROJECT_DIR/package.json" | head -1 | sed 's/.*: "\(.*\)".*/\1/')
 GIT_SHA=$(git -C "$PROJECT_DIR" rev-parse --short HEAD 2>/dev/null || echo "unknown")
 
+# Derive GitHub repo slug (owner/repo) from the origin remote so renames/forks just work
+REPO_SLUG=$(git -C "$PROJECT_DIR" remote get-url origin 2>/dev/null | sed -E 's|.*github\.com[:/]([^/]+/[^/.]+)(\.git)?/?$|\1|')
+
 # GHCR image names
 REGISTRY="ghcr.io/zstar0"
 FRONTEND_IMAGE="$REGISTRY/accu-mk1-frontend"
@@ -483,7 +486,7 @@ if [ "$SKIP_RELEASE" = false ]; then
     # Create GitHub release
     if command -v gh &>/dev/null; then
         # Check if release already exists
-        if gh release view "v$VERSION" --repo Zstar0/Accu-Mk1 &>/dev/null 2>&1; then
+        if gh release view "v$VERSION" --repo "$REPO_SLUG" &>/dev/null 2>&1; then
             warn "GitHub release v$VERSION already exists — skipping"
         else
             info "Creating GitHub release v$VERSION..."
@@ -495,14 +498,14 @@ if [ "$SKIP_RELEASE" = false ]; then
             # Use CHANGELOG.md if it exists
             if [ -f "$PROJECT_DIR/CHANGELOG.md" ]; then
                 gh release create "v$VERSION" \
-                    --repo Zstar0/Accu-Mk1 \
+                    --repo "$REPO_SLUG" \
                     --title "v$VERSION" \
                     --notes-file "$PROJECT_DIR/CHANGELOG.md" \
                     2>/dev/null && success "GitHub release created" \
                     || warn "GitHub release creation failed (non-fatal)"
             else
                 echo -e "$RELEASE_NOTES" | gh release create "v$VERSION" \
-                    --repo Zstar0/Accu-Mk1 \
+                    --repo "$REPO_SLUG" \
                     --title "v$VERSION" \
                     --notes-file - \
                     2>/dev/null && success "GitHub release created" \
