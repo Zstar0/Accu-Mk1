@@ -43,6 +43,8 @@ function eventToLevel(event: string): EventLevel {
     case 'prep_started':      return 'info'
     case 'prep_record_created': return 'info'
     case 'added_to_worksheet': return 'info'
+    case 'retest_created':    return 'accent'
+    case 'retested_as':       return 'warn'
     default:                  return 'dim'
   }
 }
@@ -58,6 +60,8 @@ function eventIcon(event: string): string {
     case 'prep_completed':      return '\u2714' // ✔
     case 'prep_record_created': return '\u2022' // •
     case 'added_to_worksheet':  return '\u002b' // +
+    case 'retest_created':      return '↻' // ↻
+    case 'retested_as':         return '↪' // ↪
     default:                    return '\u2022' // •
   }
 }

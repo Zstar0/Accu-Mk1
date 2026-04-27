@@ -1665,6 +1665,7 @@ function WooOrderFlyout({
 export function SampleDetails() {
   const sampleId = useUIStore(state => state.sampleDetailsTargetId)
   const navigateTo = useUIStore(state => state.navigateTo)
+  const navigateToSample = useUIStore(state => state.navigateToSample)
 
   const [data, setData] = useState<SenaiteLookupResult | null>(null)
   const [loading, setLoading] = useState(true)
@@ -1698,6 +1699,9 @@ export function SampleDetails() {
 
   // Activity log flyout
   const [activityLogOpen, setActivityLogOpen] = useState(false)
+
+  // Retest relationship metadata (banner + chain links)
+  const [retestInfo, setRetestInfo] = useState<import('@/lib/api').SampleRetestInfo | null>(null)
 
   // Manage analyses panel
   const [manageAnalysesOpen, setManageAnalysesOpen] = useState(false)
@@ -1877,6 +1881,27 @@ export function SampleDetails() {
     getExplorerCOAGenerations(sampleId, 10).then(gens => {
       if (!cancelled) setCoaGenerations(gens)
     }).catch(() => {})
+
+    return () => {
+      cancelled = true
+    }
+  }, [sampleId])
+
+  // Fetch retest relationship metadata (drives the retest banner + chain pills)
+  useEffect(() => {
+    if (!sampleId) {
+      setRetestInfo(null)
+      return
+    }
+    let cancelled = false
+
+    import('@/lib/api').then(({ getSampleRetestInfo }) =>
+      getSampleRetestInfo(sampleId)
+    ).then(info => {
+      if (!cancelled) setRetestInfo(info)
+    }).catch(() => {
+      if (!cancelled) setRetestInfo(null)
+    })
 
     return () => {
       cancelled = true
@@ -2172,6 +2197,35 @@ export function SampleDetails() {
         {/* Sticky header band — bleeds to container edges with -mx-6 px-6 */}
         <div className="sticky -top-4 z-20 -mx-6 px-6 pt-4 pb-4 mb-6 backdrop-blur-md bg-background/85 border-b border-border/30 shadow-sm">
 
+          {/* Retest banner — prominent strip when this sample IS a retest */}
+          {retestInfo?.is_retest && retestInfo.source_sample_id && (
+            <div className="mb-3 rounded-md border border-violet-500/40 bg-violet-500/10 dark:bg-violet-500/15 px-3 py-2 flex items-center gap-3 flex-wrap">
+              <span className="inline-flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-violet-700 dark:text-violet-300">
+                <RefreshCw size={13} /> Retest
+              </span>
+              <span className="text-sm text-foreground">
+                of{' '}
+                <button
+                  type="button"
+                  onClick={() => navigateToSample(retestInfo.source_sample_id!)}
+                  className="font-mono font-semibold text-violet-700 dark:text-violet-300 hover:underline underline-offset-2"
+                >
+                  {retestInfo.source_sample_id}
+                </button>
+              </span>
+              {retestInfo.this_order_id && (
+                <span className="text-xs text-muted-foreground">
+                  · WP order #{retestInfo.this_order_id}
+                </span>
+              )}
+              {retestInfo.retest_created_at && (
+                <span className="text-xs text-muted-foreground">
+                  · {formatDate(retestInfo.retest_created_at)}
+                </span>
+              )}
+            </div>
+          )}
+
           {/* Sample ID + counters + progress */}
           <div className="flex items-start justify-between gap-x-4 gap-y-2 flex-wrap">
           <div className="flex items-center gap-4">
@@ -2231,6 +2285,25 @@ export function SampleDetails() {
                 })()}
                 {' · '}Client:{' '}
                 <span className="text-foreground/80">{data.client ?? '—'}</span>
+                {!retestInfo?.is_retest && retestInfo?.retested_as && retestInfo.retested_as.length > 0 && (
+                  <>
+                    {' · '}
+                    <span className="text-violet-700 dark:text-violet-300">↳ Retested as:</span>{' '}
+                    {retestInfo.retested_as.map((r, i) => (
+                      <span key={r.sample_id}>
+                        {i > 0 && ', '}
+                        <button
+                          type="button"
+                          onClick={() => navigateToSample(r.sample_id)}
+                          className="font-mono font-semibold text-violet-700 dark:text-violet-300 hover:underline underline-offset-2"
+                          title={r.created_at ? `Created ${formatDate(r.created_at)}` : undefined}
+                        >
+                          {r.sample_id}
+                        </button>
+                      </span>
+                    ))}
+                  </>
+                )}
               </p>
             </div>
           </div>
