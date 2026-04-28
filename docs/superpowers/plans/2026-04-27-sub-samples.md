@@ -367,52 +367,97 @@ git commit -m "feat(sub-samples): add Pydantic schemas"
 - Create: `backend/sub_samples/senaite.py`
 - Create: `backend/tests/test_sub_samples_senaite.py`
 
-Use the verified call shape from `docs/developer/senaite-secondary-api.md` (Task 1).
+**Use the verified call shape from `docs/developer/senaite-secondary-api.md` (Task 1).** The spike surfaced several gotchas that change the code below from earlier drafts of this plan — the snippets in Steps 1 and 3 already incorporate them. Specifically:
 
-- [ ] **Step 1: Write the failing test**
+- Payload field is `portal_type` (NOT `type`).
+- `Client` and date fields must NOT be sent — SENAITE overrides.
+- **Silent fallthrough on bad parent UID:** create returns 200 with a normal AR (no `-SNN` suffix). Caller MUST validate `^<parent_id>-S\d{2}$` and treat mismatch as failure.
+- Photo upload is an HTML form (not JSON) at `<sample_path>/@@attachments_view/add` with CSRF preflight — copy the existing primary-flow at `backend/main.py:10912-10950`.
+- `fetch_secondaries` cannot filter by `PrimaryAnalysisRequest` (silently dropped) — use `@@API/senaite/v1/search?portal_type=AnalysisRequest&q=<parent_id>` and filter client-side for `^<parent_id>-S\d{2}$`.
+
+- [ ] **Step 1: Write the failing tests**
 
 Create `backend/tests/test_sub_samples_senaite.py`:
 
 ```python
+import re
 from unittest.mock import patch, MagicMock
-from sub_samples.senaite import create_secondary, SecondaryCreateResult
+import pytest
+from sub_samples.senaite import (
+    create_secondary, SecondaryCreateResult, SecondaryFalloutError,
+)
 
 
 def test_create_secondary_posts_correct_payload():
     mock_resp = MagicMock(status_code=200)
-    mock_resp.json.return_value = {
-        "uid": "SECONDARY_UID_ABC",
-        "id": "P-0134-S01",
-    }
-    with patch("sub_samples.senaite._post", return_value=mock_resp) as m:
+    mock_resp.json.return_value = {"items": [{"uid": "SECONDARY_UID_ABC", "id": "P-0134-S01"}]}
+    with patch("sub_samples.senaite._post_json", return_value=mock_resp) as m:
         result = create_secondary(
+            parent_sample_id="P-0134",
             parent_uid="PARENT_UID_XYZ",
             client_uid="CLIENT_UID",
             contact_uid="CONTACT_UID",
             sample_type_uid="ST_UID",
-            remarks="vial 1 of 3",
         )
     assert isinstance(result, SecondaryCreateResult)
     assert result.uid == "SECONDARY_UID_ABC"
     assert result.sample_id == "P-0134-S01"
-    args, kwargs = m.call_args
-    payload = kwargs["json"]
+    payload = m.call_args.kwargs["json"]
+    # Verified contract from docs/developer/senaite-secondary-api.md
+    assert payload["portal_type"] == "AnalysisRequest"
+    assert payload["parent_uid"] == "CLIENT_UID"
     assert payload["PrimaryAnalysisRequest"] == "PARENT_UID_XYZ"
-    assert payload["Client"] == "CLIENT_UID"
-    assert payload["Remarks"] == "vial 1 of 3"
+    assert payload["Contact"] == "CONTACT_UID"
+    assert payload["SampleType"] == "ST_UID"
+    # MUST NOT send these — SENAITE overrides Client and inherits dates
+    assert "Client" not in payload
+    assert "DateSampled" not in payload
+    assert "DateReceived" not in payload
 
 
-def test_create_secondary_raises_on_error():
+def test_create_secondary_detects_silent_fallthrough_when_id_lacks_SNN():
+    """If parent UID is bad, SENAITE returns 200 with a normal AR id (no -SNN).
+    Caller MUST detect this and raise — see docs/developer/senaite-secondary-api.md §1."""
+    mock_resp = MagicMock(status_code=200)
+    mock_resp.json.return_value = {"items": [{"uid": "ORPHAN_UID", "id": "P-0135"}]}
+    with patch("sub_samples.senaite._post_json", return_value=mock_resp), \
+         patch("sub_samples.senaite.delete_secondary") as cleanup:
+        with pytest.raises(SecondaryFalloutError):
+            create_secondary(
+                parent_sample_id="P-0134",
+                parent_uid="WRONG_UID", client_uid="C", contact_uid="CT", sample_type_uid="ST",
+            )
+    cleanup.assert_called_once_with("ORPHAN_UID")
+
+
+def test_create_secondary_raises_on_http_error():
     mock_resp = MagicMock(status_code=500, text="boom")
-    with patch("sub_samples.senaite._post", return_value=mock_resp):
-        import pytest
+    with patch("sub_samples.senaite._post_json", return_value=mock_resp):
         with pytest.raises(RuntimeError, match="SENAITE create_secondary failed"):
             create_secondary(
+                parent_sample_id="P-0134",
                 parent_uid="X", client_uid="Y", contact_uid="Z", sample_type_uid="W",
             )
+
+
+def test_fetch_secondaries_uses_search_and_filters_client_side():
+    """The senaite.jsonapi v1 list endpoint cannot filter by parent UID.
+    See docs/developer/senaite-secondary-api.md §3 — must use search?q=<id>."""
+    mock_resp = MagicMock(status_code=200)
+    mock_resp.json.return_value = {"items": [
+        {"uid": "PARENT_UID", "id": "P-0134"},
+        {"uid": "S01_UID", "id": "P-0134-S01"},
+        {"uid": "S02_UID", "id": "P-0134-S02"},
+        {"uid": "OTHER_UID", "id": "P-0134-R01"},  # retest, NOT a secondary
+    ]}
+    from sub_samples.senaite import fetch_secondaries
+    with patch("sub_samples.senaite._get", return_value=mock_resp) as m:
+        secondaries = fetch_secondaries("P-0134")
+    assert m.call_args.kwargs["params"]["q"] == "P-0134"
+    assert {s["id"] for s in secondaries} == {"P-0134-S01", "P-0134-S02"}
 ```
 
-- [ ] **Step 2: Run the test, see it fail**
+- [ ] **Step 2: Run the tests, see them fail**
 
 ```bash
 docker exec accu-mk1-backend python -m pytest backend/tests/test_sub_samples_senaite.py -v
@@ -425,19 +470,37 @@ Expected: FAIL — module not found.
 Create `backend/sub_samples/senaite.py`:
 
 ```python
-"""SENAITE adapter for AnalysisRequestSecondary creation/update/delete.
+"""SENAITE adapter for AnalysisRequestSecondary creation/upload/fetch/delete.
 
 Verified payload shape: docs/developer/senaite-secondary-api.md
+Critical contract — keep in sync with that doc:
+  * Field names are PascalCase (PrimaryAnalysisRequest, SampleType, Contact).
+  * portal_type, NOT type.
+  * Client and date fields MUST NOT be sent — SENAITE overrides.
+  * Bad PrimaryAnalysisRequest UID returns 200 with a normal AR — silent
+    fallthrough. Caller validates `^<parent_id>-S\\d{2}$`.
+  * The list endpoint cannot filter by parent UID — use search?q=<parent_id>.
+  * Photo upload is an HTML form, not JSON — reuse the primary flow at
+    backend/main.py:10912-10950 directly.
 """
 import os
-import requests
+import re
+import logging
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, List
+import requests
 
+log = logging.getLogger(__name__)
 
 SENAITE_BASE_URL = os.environ.get("SENAITE_BASE_URL", "http://localhost:8080/senaite")
 SENAITE_USER = os.environ.get("SENAITE_USER", "admin")
 SENAITE_PASSWORD = os.environ.get("SENAITE_PASSWORD", "admin")
+
+
+class SecondaryFalloutError(RuntimeError):
+    """Raised when SENAITE silently created a normal AR instead of a secondary
+    (because the PrimaryAnalysisRequest UID was bad). The orphan AR has been
+    cleaned up before this is raised."""
 
 
 @dataclass
@@ -446,110 +509,164 @@ class SecondaryCreateResult:
     sample_id: str
 
 
-def _post(url: str, **kwargs) -> requests.Response:
-    return requests.post(
-        url,
-        auth=(SENAITE_USER, SENAITE_PASSWORD),
-        timeout=30,
-        **kwargs,
-    )
+def _post_json(url: str, **kwargs) -> requests.Response:
+    return requests.post(url, auth=(SENAITE_USER, SENAITE_PASSWORD), timeout=30, **kwargs)
+
+
+def _get(url: str, **kwargs) -> requests.Response:
+    return requests.get(url, auth=(SENAITE_USER, SENAITE_PASSWORD), timeout=30, **kwargs)
 
 
 def create_secondary(
+    parent_sample_id: str,
     parent_uid: str,
     client_uid: str,
-    contact_uid: str,
+    contact_uid: Optional[str],
     sample_type_uid: str,
-    remarks: Optional[str] = None,
 ) -> SecondaryCreateResult:
-    """Create an AnalysisRequestSecondary tied to parent_uid."""
+    """Create an AnalysisRequestSecondary tied to parent_uid.
+
+    parent_sample_id is needed only to validate the response id pattern.
+    """
     url = f"{SENAITE_BASE_URL}/@@API/senaite/v1/create"
     payload = {
-        "type": "AnalysisRequest",
-        "parent_uid": client_uid,
-        "PrimaryAnalysisRequest": parent_uid,
-        "Client": client_uid,
-        "Contact": contact_uid,
+        "portal_type": "AnalysisRequest",
+        "parent_uid": client_uid,                   # the Client folder owns the AR
+        "PrimaryAnalysisRequest": parent_uid,       # exact spelling — silent fallthrough otherwise
         "SampleType": sample_type_uid,
     }
-    if remarks:
-        payload["Remarks"] = remarks
-    resp = _post(url, json=payload)
+    if contact_uid:
+        payload["Contact"] = contact_uid
+    resp = _post_json(url, json=payload)
     if resp.status_code >= 300:
         raise RuntimeError(f"SENAITE create_secondary failed ({resp.status_code}): {resp.text}")
+
     body = resp.json()
-    return SecondaryCreateResult(uid=body["uid"], sample_id=body["id"])
+    items = body.get("items") or []
+    if not items:
+        raise RuntimeError(f"SENAITE create_secondary returned no items: {body}")
+    item = items[0]
+    new_uid, new_id = item["uid"], item["id"]
+
+    # Silent-fallthrough guard: if the marker wasn't applied, SENAITE created a
+    # normal AR. Delete the orphan and raise.
+    expected = re.compile(rf"^{re.escape(parent_sample_id)}-S\d{{2}}$")
+    if not expected.match(new_id):
+        log.error(
+            "sub_samples.silent_fallthrough parent=%s expected_pattern=%s got_id=%s",
+            parent_sample_id, expected.pattern, new_id,
+        )
+        try:
+            delete_secondary(new_uid)
+        except Exception as e:
+            log.error("sub_samples.orphan_cleanup_failed uid=%s err=%s", new_uid, e)
+        raise SecondaryFalloutError(
+            f"SENAITE silently created a normal AR ({new_id}) instead of a secondary of "
+            f"{parent_sample_id}. Likely cause: bad PrimaryAnalysisRequest UID. Orphan deleted."
+        )
+
+    return SecondaryCreateResult(uid=new_uid, sample_id=new_id)
 
 
-def upload_photo(secondary_uid: str, photo_base64: str) -> str:
-    """Upload a photo as a SENAITE attachment to the secondary AR. Returns attachment UID.
+def upload_photo(secondary_path: str, photo_bytes: bytes, filename: str = "vial.jpg") -> None:
+    """Upload a photo as a SENAITE attachment to the secondary AR.
 
-    Mirrors the existing flow at backend/main.py:10912-10950.
+    secondary_path is the SENAITE path returned in the create response (e.g.
+    "/senaite/clients/client-8/P-0134-S01"). This call goes through the
+    HTML form flow — the JSON API does NOT have a clean attachment route.
+    Reuse the existing primary helper at backend/main.py:10912-10950 if it has
+    been extracted into a callable function; otherwise inline the same logic
+    here (CSRF preflight + multipart form post).
     """
-    url = f"{SENAITE_BASE_URL}/@@API/senaite/v1/upload_attachment"
-    payload = {"parent_uid": secondary_uid, "file_data": photo_base64, "filename": "vial.jpg"}
-    resp = _post(url, json=payload)
-    if resp.status_code >= 300:
-        raise RuntimeError(f"SENAITE upload_photo failed ({resp.status_code}): {resp.text}")
-    return resp.json()["uid"]
+    raise NotImplementedError(
+        "Implement by extracting backend/main.py:10912-10950 into a "
+        "shared helper, then call it with this AR's path."
+    )
 
 
 def update_remarks(secondary_uid: str, remarks: str) -> None:
+    """Update Remarks via the JSON API. NOTE: not yet verified end-to-end —
+    confirm against a live SENAITE before relying on it for edit flows."""
     url = f"{SENAITE_BASE_URL}/@@API/senaite/v1/update"
-    resp = _post(url, json={"uid": secondary_uid, "Remarks": remarks})
+    resp = _post_json(url, json={"uid": secondary_uid, "Remarks": remarks})
     if resp.status_code >= 300:
         raise RuntimeError(f"SENAITE update_remarks failed ({resp.status_code}): {resp.text}")
 
 
 def delete_secondary(secondary_uid: str) -> None:
+    """Delete via the JSON API. NOTE: not yet verified end-to-end — confirm
+    against a live SENAITE before relying on it (used by the silent-fallthrough
+    guard above and by user-initiated this-session delete)."""
     url = f"{SENAITE_BASE_URL}/@@API/senaite/v1/delete"
-    resp = _post(url, json={"uid": secondary_uid})
+    resp = _post_json(url, json={"uid": secondary_uid})
     if resp.status_code >= 300:
         raise RuntimeError(f"SENAITE delete_secondary failed ({resp.status_code}): {resp.text}")
 
 
 def fetch_parent_metadata(parent_sample_id: str) -> dict:
-    """Fetch parent AR metadata for lazy upsert into samples table."""
-    url = f"{SENAITE_BASE_URL}/@@API/senaite/v1/AnalysisRequest"
-    resp = requests.get(
-        url,
-        params={"id": parent_sample_id},
-        auth=(SENAITE_USER, SENAITE_PASSWORD),
-        timeout=30,
-    )
+    """Fetch parent AR metadata for lazy upsert into samples table.
+
+    Use ?complete=true on the UID-path form to get full fields (Client UID,
+    Contact UID, SampleType UID); the ?id= list-form returns a minimal
+    projection. We do this in two steps: id-lookup → uid-lookup with complete.
+    """
+    list_url = f"{SENAITE_BASE_URL}/@@API/senaite/v1/AnalysisRequest"
+    resp = _get(list_url, params={"id": parent_sample_id})
     if resp.status_code >= 300:
         raise RuntimeError(f"SENAITE fetch_parent failed ({resp.status_code}): {resp.text}")
     items = resp.json().get("items", [])
     if not items:
         raise RuntimeError(f"SENAITE has no AR with id={parent_sample_id}")
-    return items[0]
+    parent_uid = items[0]["uid"]
+
+    detail_url = f"{SENAITE_BASE_URL}/@@API/senaite/v1/AnalysisRequest/{parent_uid}"
+    resp = _get(detail_url, params={"complete": "true"})
+    if resp.status_code >= 300:
+        raise RuntimeError(f"SENAITE fetch_parent detail failed ({resp.status_code}): {resp.text}")
+    detail_items = resp.json().get("items", [])
+    if not detail_items:
+        raise RuntimeError(f"SENAITE detail empty for uid={parent_uid}")
+    return detail_items[0]
 
 
-def fetch_secondaries(parent_uid: str) -> list[dict]:
-    """Fetch all secondary ARs for a parent UID. Used for drift reconciliation."""
-    url = f"{SENAITE_BASE_URL}/@@API/senaite/v1/AnalysisRequest"
-    resp = requests.get(
-        url,
-        params={"PrimaryAnalysisRequest": parent_uid, "limit": 1000},
-        auth=(SENAITE_USER, SENAITE_PASSWORD),
-        timeout=30,
-    )
+def fetch_secondaries(parent_sample_id: str) -> List[dict]:
+    """Fetch all secondaries for a parent. Drift reconciliation in service.
+
+    The list endpoint can NOT filter by parent UID (see api doc §3). We use
+    SearchableText `q=<parent_id>` and filter ids client-side for `-SNN`.
+    """
+    url = f"{SENAITE_BASE_URL}/@@API/senaite/v1/search"
+    resp = _get(url, params={"portal_type": "AnalysisRequest", "q": parent_sample_id})
     if resp.status_code >= 300:
         raise RuntimeError(f"SENAITE fetch_secondaries failed ({resp.status_code}): {resp.text}")
-    return resp.json().get("items", [])
+    pattern = re.compile(rf"^{re.escape(parent_sample_id)}-S\d{{2}}$")
+    return [it for it in resp.json().get("items", []) if pattern.match(it.get("id", ""))]
 ```
 
-- [ ] **Step 4: Run the test, see it pass**
+- [ ] **Step 4: Run the tests, see them pass**
 
 ```bash
 docker exec accu-mk1-backend python -m pytest backend/tests/test_sub_samples_senaite.py -v
 ```
 
-Expected: 2 passed.
+Expected: 4 passed.
 
-- [ ] **Step 5: Reconcile field names with verified spec**
+- [ ] **Step 5: Verify update / delete shapes against live SENAITE**
 
-If Task 1's verified payload uses different field names (e.g. `ContactUID` vs `Contact`, attachment endpoint different), update both `senaite.py` and the tests to match exactly. Re-run tests.
+The `update_remarks` and `delete_secondary` REST shapes were NOT verified by the Task 1 spike. Before the wider plan depends on them (Task 6 service uses them), spike them quickly:
+
+```bash
+# Pick a test secondary uid from a previous create
+curl -u admin:<pw> -X POST http://localhost:8080/senaite/@@API/senaite/v1/update \
+  -H "Content-Type: application/json" \
+  -d '{"uid": "<UID>", "Remarks": "test"}'
+
+curl -u admin:<pw> -X POST http://localhost:8080/senaite/@@API/senaite/v1/delete \
+  -H "Content-Type: application/json" \
+  -d '{"uid": "<UID>"}'
+```
+
+If either differs from the planned shape, update both `senaite.py` and `docs/developer/senaite-secondary-api.md` to match, and re-run tests.
 
 - [ ] **Step 6: Commit**
 
@@ -627,14 +744,18 @@ def test_create_sub_sample_assigns_sequential_vial_numbers(db):
 
     with patch("sub_samples.service.fetch_parent_metadata", return_value=fake_meta), \
          patch("sub_samples.service.senaite.create_secondary", return_value=fake_create_1), \
-         patch("sub_samples.service.senaite.upload_photo", return_value="ATT_UID"):
-        ss1 = create_sub_sample(db, parent_sample_id="P-0134", photo_base64="abc", remarks=None, user_id=1)
+         patch("sub_samples.service.senaite.upload_photo", return_value=None):
+        ss1 = create_sub_sample(db, parent_sample_id="P-0134",
+                                photo_bytes=b"abc", photo_filename="vial.jpg",
+                                remarks=None, user_id=1)
     assert ss1.vial_sequence == 1
 
     with patch("sub_samples.service.fetch_parent_metadata", return_value=fake_meta), \
          patch("sub_samples.service.senaite.create_secondary", return_value=fake_create_2), \
-         patch("sub_samples.service.senaite.upload_photo", return_value="ATT_UID2"):
-        ss2 = create_sub_sample(db, parent_sample_id="P-0134", photo_base64="def", remarks=None, user_id=1)
+         patch("sub_samples.service.senaite.upload_photo", return_value=None):
+        ss2 = create_sub_sample(db, parent_sample_id="P-0134",
+                                photo_bytes=b"def", photo_filename="vial.jpg",
+                                remarks=None, user_id=1)
     assert ss2.vial_sequence == 2
 
 
@@ -644,7 +765,9 @@ def test_create_sub_sample_rolls_back_on_senaite_failure(db):
     with patch("sub_samples.service.fetch_parent_metadata", return_value=fake_meta), \
          patch("sub_samples.service.senaite.create_secondary", side_effect=RuntimeError("boom")):
         with pytest.raises(RuntimeError):
-            create_sub_sample(db, parent_sample_id="P-0134", photo_base64="abc", remarks=None, user_id=1)
+            create_sub_sample(db, parent_sample_id="P-0134",
+                              photo_bytes=b"abc", photo_filename="vial.jpg",
+                              remarks=None, user_id=1)
     assert db.query(SubSample).count() == 0
 ```
 
@@ -722,25 +845,56 @@ def _next_vial_sequence(db: Session, parent_pk: int) -> int:
 def create_sub_sample(
     db: Session,
     parent_sample_id: str,
-    photo_base64: str,
+    photo_bytes: bytes,
+    photo_filename: str,
     remarks: Optional[str],
     user_id: int,
 ) -> SubSample:
-    """Create a sub-sample atomically: SENAITE first, local row second."""
+    """Create a sub-sample atomically: SENAITE first, local row second.
+
+    Order of SENAITE calls (per docs/developer/senaite-secondary-api.md):
+      1. create_secondary — POST JSON, validates -SNN suffix, raises on fallthrough
+      2. upload_photo    — HTML form to <secondary_path>/@@attachments_view/add
+      3. update_remarks  — only if remarks provided (separate JSON call)
+    The first call is the only one that creates state; if (2) or (3) fail after
+    (1) succeeded, the sub-sample exists in SENAITE but local insert is rolled
+    back. Callers can retry — the next attempt will discover the orphan via
+    drift reconciliation, OR we can compensate by deleting on (2)/(3) failure.
+    For v1: we compensate on (2) failure only (photo is mandatory); (3) failure
+    leaves remarks unset and is logged as a warning.
+    """
     parent = ensure_sample_row(db, parent_sample_id)
     is_first_vial = db.execute(
         select(func.count(SubSample.id)).where(SubSample.parent_sample_pk == parent.id)
     ).scalar_one() == 0
 
-    # SENAITE write — happens before local insert
+    # 1. Create secondary in SENAITE (raises SecondaryFalloutError on silent fallthrough)
     create_result = senaite.create_secondary(
+        parent_sample_id=parent_sample_id,
         parent_uid=parent.external_lims_uid,
         client_uid=parent.client_uid,
-        contact_uid=parent.contact_uid or "",
+        contact_uid=parent.contact_uid,
         sample_type_uid=parent.sample_type or "",
-        remarks=remarks,
     )
-    photo_uid = senaite.upload_photo(create_result.uid, photo_base64)
+
+    # 2. Upload photo via HTML form (mandatory). Compensate on failure.
+    secondary_path = f"/senaite/clients/{parent.client_id}/{create_result.sample_id}"
+    try:
+        senaite.upload_photo(secondary_path, photo_bytes, photo_filename)
+    except Exception:
+        try:
+            senaite.delete_secondary(create_result.uid)
+        except Exception as cleanup_err:
+            log.error("sub_samples.photo_upload_orphan uid=%s cleanup_err=%s",
+                      create_result.uid, cleanup_err)
+        raise
+
+    # 3. Set remarks if provided. Best-effort.
+    if remarks:
+        try:
+            senaite.update_remarks(create_result.uid, remarks)
+        except Exception as e:
+            log.warning("sub_samples.remarks_set_failed uid=%s err=%s", create_result.uid, e)
 
     # Local insert under row lock
     vial_seq = _next_vial_sequence(db, parent.id)
@@ -750,7 +904,10 @@ def create_sub_sample(
         sample_id=create_result.sample_id,
         vial_sequence=vial_seq,
         received_by_user_id=user_id,
-        photo_external_uid=photo_uid,
+        # photo_external_uid is repurposed as "where to fetch the photo from".
+        # The HTML form upload doesn't return an attachment UID, so we store the
+        # AR's path and let a backend proxy resolve attachments on demand.
+        photo_external_uid=secondary_path,
         remarks=remarks,
     )
     db.add(sub)
