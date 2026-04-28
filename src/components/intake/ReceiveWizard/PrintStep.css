@@ -7,32 +7,43 @@
   }
   .print-area .label {
     display: flex;
-    flex-direction: column;
+    flex-direction: row;
     align-items: center;
-    justify-content: center;
-    gap: 1px;
+    gap: 1.5mm;
     border: 1px dashed #ccc;
-    padding: 6px 8px;
+    padding: 1mm 1.5mm;
     width: 30mm;
     height: 15mm;
+    box-sizing: border-box;
   }
   .label svg {
-    width: 9mm;
-    height: 9mm;
+    width: 12mm;
+    height: 12mm;
+    flex-shrink: 0;
+  }
+  .label-text {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 0.5mm;
   }
   .label-id {
     font-family: ui-monospace, monospace;
     font-weight: 700;
-    font-size: 8pt;
-    text-align: center;
+    font-size: 11pt;
     line-height: 1;
+    letter-spacing: -0.02em;
+    white-space: nowrap;
   }
   .label-order {
     font-family: ui-monospace, monospace;
-    font-size: 6pt;
-    color: #666;
-    text-align: center;
+    font-size: 8pt;
+    color: #555;
     line-height: 1;
+    letter-spacing: -0.02em;
+    white-space: nowrap;
   }
 }
 
@@ -73,35 +84,47 @@
     page-break-inside: avoid;
     width: 30mm;
     height: 15mm;
-    padding: 1mm;
+    padding: 1mm 1.5mm;
     margin: 0;
+    box-sizing: border-box;
     display: flex;
-    flex-direction: column;
+    flex-direction: row;
     align-items: center;
-    justify-content: center;
-    gap: 0;
+    gap: 1.5mm;
+    border: none !important;
   }
 
   .label svg {
-    width: 8mm;
-    height: 8mm;
+    width: 12mm;
+    height: 12mm;
+    flex-shrink: 0;
     display: block;
+  }
+
+  .label-text {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 0.5mm;
   }
 
   .label-id {
     font-family: ui-monospace, monospace;
     font-weight: 700;
-    font-size: 7pt;
-    text-align: center;
+    font-size: 11pt;
     line-height: 1;
-    margin-top: 0.5mm;
+    letter-spacing: -0.02em;
+    white-space: nowrap;
   }
 
   .label-order {
     font-family: ui-monospace, monospace;
-    font-size: 5pt;
-    color: #555;
-    text-align: center;
+    font-size: 8pt;
+    color: #000;
     line-height: 1;
+    letter-spacing: -0.02em;
+    white-space: nowrap;
   }
 }

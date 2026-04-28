@@ -11,12 +11,14 @@ export function LabelTemplate({ sampleId, orderNumber }: Props) {
     <div className="label">
       <QRCodeSVG
         value={sampleId}
-        size={64}
+        size={96}
         level="M"
         marginSize={0}
       />
-      <div className="label-id">{sampleId}</div>
-      {orderNumber && <div className="label-order">{orderNumber}</div>}
+      <div className="label-text">
+        <div className="label-id">{sampleId}</div>
+        {orderNumber && <div className="label-order">{orderNumber}</div>}
+      </div>
     </div>
   )
 }
