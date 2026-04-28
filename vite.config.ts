@@ -52,6 +52,11 @@ export default defineConfig(async () => ({
     watch: {
       // 3. tell vite to ignore watching `src-tauri`
       ignored: ['**/src-tauri/**'],
+      // 4. Docker Desktop on Windows doesn't reliably forward filesystem events
+      //    through bind mounts. Polling fixes HMR; cost is ~1% CPU idle.
+      //    Harmless outside Docker (process is already long-running).
+      usePolling: true,
+      interval: 300,
     },
   },
 }))
