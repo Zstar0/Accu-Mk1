@@ -1,0 +1,151 @@
+import { useState, useCallback, useEffect, useRef } from 'react'
+import {
+  listSubSamples,
+  createSubSample,
+  updateSubSample,
+  deleteSubSample,
+  receiveSenaiteSample,
+  type SubSample,
+} from '@/lib/api'
+
+export interface ParentInfo {
+  uid: string
+  sample_id: string
+  status: string | null
+}
+
+interface SessionVial {
+  sub: SubSample
+  isThisSession: boolean
+}
+
+const PRE_RECEIVED_STATES = new Set<string | null>([
+  null,
+  '',
+  'sample_due',
+  'sample_registered',
+  'to_be_sampled',
+])
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = ''
+  const chunk = 0x8000
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode.apply(
+      null,
+      bytes.subarray(i, i + chunk) as unknown as number[],
+    )
+  }
+  return btoa(binary)
+}
+
+export function useReceiveWizard(parent: ParentInfo) {
+  const [vials, setVials] = useState<SessionVial[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  // Tracks whether the parent has been transitioned to received during this
+  // wizard session. Combined with the initial parent.status, this gates
+  // whether we dual-fire on the next save.
+  const [parentReceivedThisSession, setParentReceivedThisSession] = useState(false)
+
+  // Track which sub-samples were created in this wizard session so they can
+  // be flagged for the print step at the end. Keyed by sample_id (stable
+  // primary identifier on the SubSample model).
+  const sessionSampleIdsRef = useRef<Set<string>>(new Set())
+
+  const isParentInPreReceivedState =
+    PRE_RECEIVED_STATES.has(parent.status) && !parentReceivedThisSession
+
+  const refresh = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const data = await listSubSamples(parent.sample_id)
+      setVials(
+        data.sub_samples.map(s => ({
+          sub: s,
+          isThisSession: sessionSampleIdsRef.current.has(s.sample_id),
+        })),
+      )
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setLoading(false)
+    }
+  }, [parent.sample_id])
+
+  useEffect(() => {
+    void refresh()
+  }, [refresh])
+
+  const saveNewVial = useCallback(
+    async (photoBytes: Uint8Array, remarks?: string): Promise<SubSample> => {
+      const photoBase64 = bytesToBase64(photoBytes)
+      const isFirstVialEver =
+        isParentInPreReceivedState && !vials.some(v => v.isThisSession)
+
+      // Dual-fire on first vial of a never-received parent. Order matters:
+      // parent receive first (existing endpoint, drives WP comms); then
+      // sub-sample create.
+      if (isFirstVialEver) {
+        await receiveSenaiteSample(
+          parent.uid,
+          parent.sample_id,
+          photoBase64,
+          remarks ?? null,
+        )
+        setParentReceivedThisSession(true)
+      }
+
+      const sub = await createSubSample({
+        parentSampleId: parent.sample_id,
+        photoBase64,
+        remarks,
+      })
+
+      sessionSampleIdsRef.current.add(sub.sample_id)
+      setVials(prev => [...prev, { sub, isThisSession: true }])
+      return sub
+    },
+    [
+      isParentInPreReceivedState,
+      parent.uid,
+      parent.sample_id,
+      vials,
+    ],
+  )
+
+  const editSessionVial = useCallback(
+    async (sampleId: string, photoBytes?: Uint8Array, remarks?: string) => {
+      const photoBase64 = photoBytes ? bytesToBase64(photoBytes) : undefined
+      const sub = await updateSubSample(sampleId, { photoBase64, remarks })
+      setVials(prev =>
+        prev.map(v =>
+          v.sub.sample_id === sampleId ? { sub, isThisSession: true } : v,
+        ),
+      )
+      return sub
+    },
+    [],
+  )
+
+  const deleteSessionVial = useCallback(async (sampleId: string) => {
+    await deleteSubSample(sampleId)
+    sessionSampleIdsRef.current.delete(sampleId)
+    setVials(prev => prev.filter(v => v.sub.sample_id !== sampleId))
+  }, [])
+
+  const sessionVials = vials.filter(v => v.isThisSession).map(v => v.sub)
+
+  return {
+    vials,
+    sessionVials,
+    loading,
+    error,
+    parentReceived: !isParentInPreReceivedState,
+    refresh,
+    saveNewVial,
+    editSessionVial,
+    deleteSessionVial,
+  }
+}
