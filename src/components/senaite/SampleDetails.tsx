@@ -1,4 +1,4 @@
-import { useState, useEffect, useId, useRef } from 'react'
+import { useState, useEffect, useId, useRef, useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import DOMPurify from 'dompurify'
 import { useTheme } from '@/hooks/use-theme'
@@ -29,6 +29,7 @@ import {
   Maximize2,
   FileText,
   Terminal,
+  CornerDownRight,
   type LucideIcon,
 } from 'lucide-react'
 import { Card } from '@/components/ui/card'
@@ -1792,6 +1793,19 @@ export function SampleDetails() {
   const subSamples = subData?.sub_samples ?? []
   const subCount = subData?.parent.sub_sample_count ?? 0
 
+  // Parent linkage breadcrumb — only for sub-samples
+  const parentSampleId = useMemo(() => {
+    if (!sampleId) return null
+    const m = sampleId.match(/^(.*)-S\d{2,}$/)
+    return m ? m[1] : null
+  }, [sampleId])
+
+  const { data: parentSummary } = useQuery({
+    queryKey: ['sub-samples', parentSampleId],
+    queryFn: () => listSubSamples(parentSampleId!),
+    enabled: !!parentSampleId,
+  })
+
   function openSubSampleWizard() {
     if (!data?.sample_id || !data.sample_uid) return
     setWizardParent({
@@ -2323,6 +2337,30 @@ export function SampleDetails() {
               <FlaskConical size={20} className="text-violet-600 dark:text-violet-400" />
             </div>
             <div>
+              {!isParent && parentSampleId && (
+                <div className="flex items-center gap-2 text-sm text-muted-foreground mb-2 flex-wrap">
+                  <CornerDownRight className="h-3.5 w-3.5 shrink-0" />
+                  <span>Sub-sample of</span>
+                  <button
+                    type="button"
+                    onClick={() => navigateToSample(parentSampleId)}
+                    className="font-mono underline hover:text-foreground transition-colors cursor-pointer"
+                  >
+                    {parentSampleId}
+                  </button>
+                  {parentSummary && (() => {
+                    const me = parentSummary.sub_samples.find(s => s.sample_id === sampleId)
+                    const total = parentSummary.parent.sub_sample_count
+                    if (!me || !total) return null
+                    return (
+                      <>
+                        <span aria-hidden>·</span>
+                        <span>Vial {me.vial_sequence} of {total}</span>
+                      </>
+                    )
+                  })()}
+                </div>
+              )}
               <div className="flex items-center gap-3 flex-wrap">
                 <h1 className="text-xl font-bold tracking-tight font-mono">
                   {data.senaite_url ? (
