@@ -4144,10 +4144,6 @@ export interface SubSampleListResponse {
   sub_samples: SubSample[]
 }
 
-export interface SubSampleResponse {
-  sub_sample: SubSample
-}
-
 /**
  * Thrown when SENAITE silently created a non-secondary AR (orphan).
  * Carries the orphan AR's identifiers so the UI can prompt for manual cleanup.
@@ -4218,8 +4214,7 @@ export async function createSubSample(args: {
     throw new Error(`createSubSample failed: ${response.status}`)
   }
 
-  const body = await response.json()
-  return body.sub_sample
+  return response.json()
 }
 
 /**
@@ -4241,8 +4236,7 @@ export async function updateSubSample(
     }
   )
   if (!response.ok) throw new Error(`updateSubSample failed: ${response.status}`)
-  const body = await response.json()
-  return body.sub_sample
+  return response.json()
 }
 
 /**
