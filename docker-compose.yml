@@ -38,6 +38,8 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"  # Resolve host on Linux (Docker Desktop handles this automatically)
       - "accumarklabs.local:host-gateway"    # Route local WP domain to host (DevKinsta)
+    volumes:
+      - ./backend:/app
     restart: unless-stopped
     networks:
       - accu-mk1
