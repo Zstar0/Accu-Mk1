@@ -20,7 +20,12 @@ import requests
 
 log = logging.getLogger(__name__)
 
-SENAITE_BASE_URL = os.environ.get("SENAITE_BASE_URL", "http://localhost:8080/senaite")
+# Project convention: SENAITE_URL points at the Plone host (e.g.
+# "http://senaite:8080" inside the docker network). The Plone site is mounted
+# at /senaite, so all REST routes start with /senaite/@@API/...
+# SENAITE_BASE_URL retained as an explicit override for tests and unusual setups.
+_SENAITE_HOST = os.environ.get("SENAITE_URL", "http://localhost:8080").rstrip("/")
+SENAITE_BASE_URL = os.environ.get("SENAITE_BASE_URL", f"{_SENAITE_HOST}/senaite")
 SENAITE_USER = os.environ.get("SENAITE_USER", "admin")
 SENAITE_PASSWORD = os.environ.get("SENAITE_PASSWORD", "admin")
 
