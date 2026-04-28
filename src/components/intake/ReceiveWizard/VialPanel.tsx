@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
+import { Camera, CheckCircle2, RotateCcw } from 'lucide-react'
 import type { SenaiteLookupResult, SubSample } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
@@ -19,14 +20,13 @@ interface Props {
   editingSub: SubSample | null
   loading: boolean
   error: string | null
-  onSaveNew: (photoBytes: Uint8Array, remarks?: string) => Promise<void>
+  onSaveNew: (photoBytes: Uint8Array, remarks?: string) => Promise<SubSample>
   onSaveEdit: (
     sampleId: string,
     photoBytes?: Uint8Array,
     remarks?: string
   ) => Promise<void>
   onDelete: (sampleId: string) => Promise<void>
-  onDone: () => void
 }
 
 async function dataUrlToBytes(dataUrl: string): Promise<Uint8Array> {
@@ -45,13 +45,20 @@ export function VialPanel({
   onSaveNew,
   onSaveEdit,
   onDelete,
-  onDone,
 }: Props) {
   const [photoDataUrl, setPhotoDataUrl] = useState<string | null>(null)
   const [remarks, setRemarks] = useState(editingSub?.remarks ?? '')
   const [busy, setBusy] = useState(false)
   const [localError, setLocalError] = useState<string | null>(null)
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false)
+  // After a successful new-vial save, we show a confirmation card with the
+  // returned sample ID until the user clicks "Receive another vial". Edit
+  // mode does not use this — editingSub takes precedence below.
+  const [savedSampleId, setSavedSampleId] = useState<string | null>(null)
+  // When editing an existing vial, prefer-existing-photo unless the user
+  // explicitly clicks Retake. This lets us treat "load existing photo" as
+  // captured-equivalent state without forcing a new shot.
+  const [editPhotoOverride, setEditPhotoOverride] = useState(false)
 
   const videoRef = useRef<HTMLVideoElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -63,6 +70,8 @@ export function VialPanel({
     setRemarks(editingSub?.remarks ?? '')
     setPhotoDataUrl(null)
     setLocalError(null)
+    setEditPhotoOverride(false)
+    setSavedSampleId(null)
   }, [editingSub?.sample_id, editingSub?.remarks])
 
   // Initialize camera. Cleanup on unmount.
@@ -115,6 +124,16 @@ export function VialPanel({
     setLocalError(null)
   }, [])
 
+  const retake = useCallback(() => {
+    setPhotoDataUrl(null)
+    setLocalError(null)
+    // For edit mode: explicitly drop back to live preview to overwrite the
+    // existing photo on save.
+    if (editingSub) {
+      setEditPhotoOverride(true)
+    }
+  }, [editingSub])
+
   const onPickFile = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0]
     if (!f) return
@@ -140,20 +159,24 @@ export function VialPanel({
       const trimmedRemarks = trimmed ? trimmed : undefined
       if (editingSub) {
         await onSaveEdit(editingSub.sample_id, photoBytes, trimmedRemarks)
+        // Edit mode keeps current behavior — no confirmation card.
+        // The parent clears editingSampleId; reset effect handles state.
+        setPhotoDataUrl(null)
+        setRemarks('')
+        setEditPhotoOverride(false)
       } else {
         if (!photoBytes) {
           setLocalError('Photo is required.')
           setBusy(false)
           return
         }
-        await onSaveNew(photoBytes, trimmedRemarks)
+        const newSub = await onSaveNew(photoBytes, trimmedRemarks)
+        // Defense in depth: reset transient state so falling back to the
+        // form (e.g. via "Receive another vial") starts clean.
+        setPhotoDataUrl(null)
+        setRemarks('')
+        setSavedSampleId(newSub.sample_id)
       }
-      // Reset panel state so the next "+ New vial" click starts fresh.
-      // The reset effect only fires on editingSub.sample_id changes, which
-      // doesn't happen on null→null transitions (save-new → click "+ New vial"),
-      // so we have to clear the local state explicitly here.
-      setPhotoDataUrl(null)
-      setRemarks('')
     } catch (e) {
       setLocalError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -175,12 +198,16 @@ export function VialPanel({
     }
   }, [editingSub, onDelete])
 
+  const startAnotherVial = useCallback(() => {
+    setSavedSampleId(null)
+    setPhotoDataUrl(null)
+    setRemarks('')
+    setLocalError(null)
+  }, [])
+
   const error = localError ?? parentError
 
   // Build the at-a-glance one-liner: "{client} · {peptide} · {qty}".
-  // We pick the matched peptide name from analyte slot 1 if available, else
-  // its raw name, so the tech sees the canonical compound rather than
-  // SENAITE's free-text label.
   const oneLinerParts: string[] = []
   if (parentDetails?.client) oneLinerParts.push(parentDetails.client)
   const firstAnalyte = parentDetails?.analytes?.[0]
@@ -193,6 +220,54 @@ export function VialPanel({
     oneLinerParts.push(`${parentDetails.declared_weight_mg} mg`)
   }
   const oneLiner = oneLinerParts.join(' · ')
+
+  // Confirmation card after a successful new-vial save. Edit mode never
+  // reaches this branch because editingSub takes precedence in the parent's
+  // reset logic — but we also gate on !editingSub here as a belt-and-braces.
+  if (savedSampleId && !editingSub) {
+    return (
+      <main className="p-6 flex flex-col gap-4 overflow-y-auto">
+        <header className="flex items-baseline justify-between gap-4">
+          <div className="min-w-0">
+            <h2 className="text-xl font-semibold">
+              New vial for {parentSampleId}
+            </h2>
+            {oneLiner && (
+              <p
+                className="text-sm text-muted-foreground truncate"
+                title={oneLiner}
+              >
+                {oneLiner}
+              </p>
+            )}
+          </div>
+        </header>
+        <div className="flex flex-1 items-center justify-center">
+          <div className="flex flex-col items-center gap-3 rounded-lg border bg-muted/40 px-8 py-10 max-w-md w-full transition-colors">
+            <CheckCircle2
+              className="w-12 h-12 text-primary"
+              aria-hidden="true"
+            />
+            <div className="flex flex-col items-center gap-1">
+              <p className="text-base font-medium">Vial saved</p>
+              <p className="text-lg font-mono">{savedSampleId}</p>
+            </div>
+            <Button type="button" onClick={startAnotherVial} autoFocus>
+              <Camera className="w-4 h-4" aria-hidden="true" />
+              Receive another vial
+            </Button>
+          </div>
+        </div>
+      </main>
+    )
+  }
+
+  // Determine camera phase. Captured = either a fresh capture/upload OR an
+  // existing photo on the editing sub (when the user hasn't asked to retake).
+  const showExistingEditPhoto =
+    !!editingSub?.photo_external_uid && !editPhotoOverride && !photoDataUrl
+  const cameraPhase: 'live' | 'captured' =
+    photoDataUrl || showExistingEditPhoto ? 'captured' : 'live'
 
   return (
     <main className="p-6 flex flex-col gap-4 overflow-y-auto">
@@ -212,32 +287,60 @@ export function VialPanel({
             </p>
           )}
         </div>
-        <Button
-          type="button"
-          variant="link"
-          size="sm"
-          onClick={onDone}
-          disabled={busy}
-        >
-          Done — print labels
-        </Button>
       </header>
 
       <section className="flex flex-col gap-2">
         {cameraOk ? (
           <>
+            {/* Keep the <video> element mounted with stream attached so we
+                can swap back to live mode instantly on retake — no
+                getUserMedia round-trip. Hide it via CSS rather than
+                unmount. */}
             <video
               ref={videoRef}
               autoPlay
               playsInline
               muted
-              className="w-full max-w-md rounded bg-black aspect-[4/3] object-contain"
+              className={
+                cameraPhase === 'live'
+                  ? 'block w-full max-w-md rounded bg-black aspect-[4/3] object-contain transition-opacity'
+                  : 'hidden'
+              }
             />
+            {cameraPhase === 'captured' && photoDataUrl && (
+              <img
+                src={photoDataUrl}
+                alt="Captured vial"
+                className="block w-full max-w-md rounded border aspect-[4/3] object-contain bg-black transition-opacity"
+              />
+            )}
+            {cameraPhase === 'captured' &&
+              !photoDataUrl &&
+              showExistingEditPhoto && (
+                <div className="flex flex-col gap-1 max-w-md">
+                  <div className="rounded border bg-muted/40 px-3 py-6 text-sm text-muted-foreground text-center transition-colors">
+                    Existing photo on file for {editingSub?.sample_id}.
+                  </div>
+                </div>
+              )}
             <canvas ref={canvasRef} className="hidden" />
             <div>
-              <Button type="button" onClick={capture} disabled={busy}>
-                Capture photo
-              </Button>
+              {cameraPhase === 'live' ? (
+                <Button type="button" onClick={capture} disabled={busy}>
+                  <Camera className="w-4 h-4" aria-hidden="true" />
+                  Capture photo
+                </Button>
+              ) : (
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={retake}
+                  disabled={busy}
+                >
+                  <RotateCcw className="w-4 h-4" aria-hidden="true" />
+                  Retake photo
+                </Button>
+              )}
             </div>
           </>
         ) : (
@@ -253,21 +356,15 @@ export function VialPanel({
               disabled={busy}
               className="text-sm"
             />
+            {photoDataUrl && (
+              <img
+                src={photoDataUrl}
+                alt="Uploaded vial"
+                className="block w-full max-w-md rounded border aspect-[4/3] object-contain bg-black"
+              />
+            )}
           </div>
         )}
-
-        {/* Live preview — captured / uploaded photo, OR an existing-photo notice when editing. */}
-        {photoDataUrl ? (
-          <img
-            src={photoDataUrl}
-            alt="Captured vial"
-            className="max-w-md rounded border"
-          />
-        ) : editingSub?.photo_external_uid ? (
-          <div className="text-xs text-muted-foreground">
-            Existing photo on file. Capture or upload a new one to replace it.
-          </div>
-        ) : null}
       </section>
 
       <label className="block">
@@ -291,6 +388,7 @@ export function VialPanel({
           type="button"
           onClick={handleSave}
           disabled={busy || parentLoading}
+          className="disabled:opacity-50"
         >
           {busy ? 'Saving…' : editingSub ? 'Save changes' : 'Save vial'}
         </Button>

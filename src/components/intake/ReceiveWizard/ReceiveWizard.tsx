@@ -1,4 +1,6 @@
 import { useState } from 'react'
+import { Printer, Check } from 'lucide-react'
+import { Button } from '@/components/ui/button'
 import { useReceiveWizard, type ParentInfo } from './useReceiveWizard'
 import { useParentSampleDetails } from './useParentSampleDetails'
 import { WizardSidebar } from './WizardSidebar'
@@ -26,40 +28,63 @@ export function ReceiveWizard({ parent, onClose }: Props) {
     ? (wiz.vials.find(v => v.sub.sample_id === editingSampleId)?.sub ?? null)
     : null
 
+  const hasSessionVials = wiz.sessionVials.length > 0
+
   return (
-    <div className="grid grid-cols-[260px_1fr] h-full min-h-[500px]">
-      <WizardSidebar
-        vials={wiz.vials}
-        activeSampleId={editingSampleId}
-        onSelect={setEditingSampleId}
-        parentDetails={parentDetails.details}
-        parentDetailsLoading={parentDetails.loading}
-        parentDetailsError={parentDetails.error}
-      />
-      <VialPanel
-        parentSampleId={parent.sample_id}
-        parentDetails={parentDetails.details}
-        editingSub={editingSub}
-        loading={wiz.loading}
-        error={wiz.error}
-        onSaveNew={async (photoBytes: Uint8Array, remarks?: string) => {
-          await wiz.saveNewVial(photoBytes, remarks)
-          setEditingSampleId(null)
-        }}
-        onSaveEdit={async (
-          sid: string,
-          photoBytes?: Uint8Array,
-          remarks?: string
-        ) => {
-          await wiz.editSessionVial(sid, photoBytes, remarks)
-          setEditingSampleId(null)
-        }}
-        onDelete={async (sid: string) => {
-          await wiz.deleteSessionVial(sid)
-          setEditingSampleId(null)
-        }}
-        onDone={() => setPhase('print')}
-      />
+    <div className="grid grid-rows-[1fr_auto] h-full min-h-[500px]">
+      <div className="grid grid-cols-[260px_1fr] min-h-0 overflow-hidden">
+        <WizardSidebar
+          vials={wiz.vials}
+          activeSampleId={editingSampleId}
+          onSelect={setEditingSampleId}
+          parentDetails={parentDetails.details}
+          parentDetailsLoading={parentDetails.loading}
+          parentDetailsError={parentDetails.error}
+        />
+        <VialPanel
+          parentSampleId={parent.sample_id}
+          parentDetails={parentDetails.details}
+          editingSub={editingSub}
+          loading={wiz.loading}
+          error={wiz.error}
+          onSaveNew={async (photoBytes: Uint8Array, remarks?: string) => {
+            const sub = await wiz.saveNewVial(photoBytes, remarks)
+            setEditingSampleId(null)
+            return sub
+          }}
+          onSaveEdit={async (
+            sid: string,
+            photoBytes?: Uint8Array,
+            remarks?: string
+          ) => {
+            await wiz.editSessionVial(sid, photoBytes, remarks)
+            setEditingSampleId(null)
+          }}
+          onDelete={async (sid: string) => {
+            await wiz.deleteSessionVial(sid)
+            setEditingSampleId(null)
+          }}
+        />
+      </div>
+      <footer className="flex justify-end gap-2 px-6 py-3 border-t bg-muted/20 transition-colors">
+        <Button
+          type="button"
+          variant="outline"
+          onClick={() => setPhase('print')}
+          disabled={!hasSessionVials}
+          title={
+            hasSessionVials ? undefined : 'Save at least one vial first'
+          }
+          className="disabled:opacity-50"
+        >
+          <Printer className="w-4 h-4" aria-hidden="true" />
+          Print labels
+        </Button>
+        <Button type="button" onClick={onClose}>
+          <Check className="w-4 h-4" aria-hidden="true" />
+          Finished
+        </Button>
+      </footer>
     </div>
   )
 }
