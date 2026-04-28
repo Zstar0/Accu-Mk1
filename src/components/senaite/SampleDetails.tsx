@@ -84,6 +84,7 @@ import {
   getWooOrder,
   fetchChromatogramLttb,
   listSubSamples,
+  fetchSubSamplePhotoUrl,
 } from '@/lib/api'
 import { ReceiveWizard } from '@/components/intake/ReceiveWizard/ReceiveWizard'
 import type { ParentInfo } from '@/components/intake/ReceiveWizard/useReceiveWizard'
@@ -110,6 +111,68 @@ import { AnalysisTable, StatusBadge } from '@/components/senaite/AnalysisTable'
 import { SamplePrepHplcFlyout } from '@/components/hplc/SamplePrepHplcFlyout'
 import { SampleActivityLog } from '@/components/senaite/SampleActivityLog'
 import { Microscope, Plus, Search, Trash2, ScrollText } from 'lucide-react'
+
+/**
+ * Renders the most-recent vial photo for a sub-sample, falling back to a
+ * placeholder icon while loading or if the proxy errors. The proxy requires
+ * Bearer auth, so we can't use a plain `<img src>` — fetch as blob and render
+ * via an object URL.
+ */
+function SubSamplePhotoCell({
+  sampleId,
+  hasPhoto,
+}: {
+  sampleId: string
+  hasPhoto: boolean
+}) {
+  const [url, setUrl] = useState<string | null>(null)
+  const [errored, setErrored] = useState(false)
+
+  useEffect(() => {
+    if (!hasPhoto) return
+    let cancelled = false
+    void fetchSubSamplePhotoUrl(sampleId)
+      .then(u => {
+        if (cancelled) return
+        if (u) setUrl(u)
+        else setErrored(true)
+      })
+      .catch(() => {
+        if (!cancelled) setErrored(true)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [sampleId, hasPhoto])
+
+  if (!hasPhoto) {
+    return <span className="text-muted-foreground">—</span>
+  }
+  if (errored) {
+    return (
+      <span className="inline-flex w-12 h-12 rounded bg-muted text-muted-foreground items-center justify-center text-xs">
+        <ImageIcon size={16} />
+      </span>
+    )
+  }
+  if (!url) {
+    // Loading: show the icon placeholder rather than layout-shifting once it loads.
+    return (
+      <span className="inline-flex w-12 h-12 rounded bg-muted text-muted-foreground items-center justify-center text-xs">
+        <ImageIcon size={16} />
+      </span>
+    )
+  }
+  return (
+    <img
+      src={url}
+      alt={`Vial ${sampleId}`}
+      className="h-12 w-12 rounded object-cover bg-muted"
+      loading="lazy"
+      onError={() => setErrored(true)}
+    />
+  )
+}
 
 // --- COA Console ---
 
@@ -3224,13 +3287,10 @@ export function SampleDetails() {
                             </button>
                           </td>
                           <td className="px-3 py-2">
-                            {s.photo_external_uid ? (
-                              <span className="inline-flex w-12 h-12 rounded bg-muted text-muted-foreground items-center justify-center text-xs">
-                                <ImageIcon size={16} />
-                              </span>
-                            ) : (
-                              <span className="text-muted-foreground">—</span>
-                            )}
+                            <SubSamplePhotoCell
+                              sampleId={s.sample_id}
+                              hasPhoto={!!s.photo_external_uid}
+                            />
                           </td>
                           <td className="px-3 py-2">
                             {new Date(s.received_at).toLocaleString()}

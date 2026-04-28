@@ -4250,3 +4250,30 @@ export async function deleteSubSample(sampleId: string): Promise<void> {
   if (!response.ok && response.status !== 204)
     throw new Error(`deleteSubSample failed: ${response.status}`)
 }
+
+/**
+ * Resolve a renderable object URL for a sub-sample's most-recent photo.
+ * The backend proxy requires Bearer auth, so a plain `<img src=...>` would
+ * 401; we have to fetch as blob and wrap it in an object URL. Mirrors
+ * fetchSenaiteAttachmentUrl. Returns null if no photo is on file (404).
+ */
+const _subSamplePhotoCache = new Map<string, string>()
+
+export async function fetchSubSamplePhotoUrl(
+  sampleId: string
+): Promise<string | null> {
+  const cached = _subSamplePhotoCache.get(sampleId)
+  if (cached) return cached
+
+  const response = await fetch(
+    `${API_BASE_URL()}/api/sub-samples/${encodeURIComponent(sampleId)}/photo`,
+    { headers: getBearerHeaders() }
+  )
+  if (response.status === 404) return null
+  if (!response.ok)
+    throw new Error(`fetchSubSamplePhotoUrl failed: ${response.status}`)
+  const blob = await response.blob()
+  const url = URL.createObjectURL(blob)
+  _subSamplePhotoCache.set(sampleId, url)
+  return url
+}

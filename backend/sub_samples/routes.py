@@ -6,12 +6,22 @@ and provides structured error handling for SecondaryFalloutError.
 """
 import base64
 from datetime import datetime
+import requests
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import StreamingResponse
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 from database import get_db
 from auth import get_current_user
+from models import LimsSubSample
 from sub_samples import service
-from sub_samples.senaite import SecondaryFalloutError
+from sub_samples.senaite import (
+    SecondaryFalloutError,
+    SENAITE_BASE_URL,
+    SENAITE_USER,
+    SENAITE_PASSWORD,
+    _get,
+)
 from sub_samples.schemas import (
     CreateSubSampleRequest, UpdateSubSampleRequest,
     SubSampleResponse, SubSampleListResponse, ParentSampleSummary,
@@ -159,3 +169,82 @@ def delete_sub_sample(
     except RuntimeError as e:
         raise HTTPException(status_code=502, detail=str(e))
     return None
+
+
+@router.get("/{sample_id}/photo")
+def get_sub_sample_photo(
+    sample_id: str,
+    db: Session = Depends(get_db),
+    _user=Depends(get_current_user),
+):
+    """Stream the most-recent photo attached to a sub-sample's secondary AR.
+
+    Resolves the AR via the local row's `external_lims_uid`, fetches the AR
+    detail with `complete=true` to get the `Attachment` reference list, picks
+    the last attachment, and proxies its binary `download` URL.
+
+    Note: `photo_external_uid` on the row holds the AR PATH (set at
+    create-time as `secondary_path` — see service.create_sub_sample), NOT an
+    attachment UID. We use it as a "has-photo" sentinel only; the AR's UID
+    is what we hit for the API lookup.
+    """
+    sub = db.execute(
+        select(LimsSubSample).where(LimsSubSample.sample_id == sample_id)
+    ).scalar_one_or_none()
+    if not sub:
+        raise HTTPException(404, f"Sub-sample {sample_id} not found")
+    if not sub.photo_external_uid:
+        raise HTTPException(404, f"No photo on file for {sample_id}")
+
+    # Fetch AR detail with attachments expanded.
+    detail_url = f"{SENAITE_BASE_URL}/@@API/senaite/v1/AnalysisRequest/{sub.external_lims_uid}"
+    detail_resp = _get(detail_url, params={"complete": "true"})
+    if detail_resp.status_code >= 300:
+        raise HTTPException(
+            502,
+            f"SENAITE AR detail fetch failed ({detail_resp.status_code}): {detail_resp.text[:200]}",
+        )
+    items = detail_resp.json().get("items", [])
+    if not items:
+        raise HTTPException(404, f"No SENAITE AR for uid={sub.external_lims_uid}")
+
+    raw_attachments = items[0].get("Attachment") or []
+    if not raw_attachments:
+        raise HTTPException(404, f"No attachments on AR for {sample_id}")
+
+    # Each entry is a reference dict with `uid` and `api_url`. Take the last
+    # one — most-recently uploaded (consistent with how the wizard appends).
+    last_ref = raw_attachments[-1]
+    if not isinstance(last_ref, dict):
+        raise HTTPException(502, "Unparsable attachment reference shape")
+    att_api_url = last_ref.get("api_url")
+    if not att_api_url:
+        raise HTTPException(502, "Attachment reference missing api_url")
+
+    # Resolve the attachment's binary download URL + content type.
+    att_resp = _get(att_api_url)
+    if att_resp.status_code >= 300:
+        raise HTTPException(
+            502,
+            f"SENAITE attachment metadata fetch failed ({att_resp.status_code})",
+        )
+    att_data = att_resp.json()
+    att_item = att_data["items"][0] if att_data.get("items") else att_data
+    att_file = att_item.get("AttachmentFile") or {}
+    download_url = att_file.get("download")
+    content_type = att_file.get("content_type") or "image/jpeg"
+    if not download_url:
+        raise HTTPException(502, "Attachment has no download URL")
+
+    bin_resp = requests.get(
+        download_url,
+        auth=(SENAITE_USER, SENAITE_PASSWORD),
+        timeout=30,
+        stream=True,
+    )
+    if bin_resp.status_code >= 300:
+        raise HTTPException(
+            502, f"SENAITE attachment fetch failed: {bin_resp.status_code}"
+        )
+
+    return StreamingResponse(bin_resp.iter_content(8192), media_type=content_type)

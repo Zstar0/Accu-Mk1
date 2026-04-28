@@ -148,6 +148,12 @@ export function VialPanel({
         }
         await onSaveNew(photoBytes, trimmedRemarks)
       }
+      // Reset panel state so the next "+ New vial" click starts fresh.
+      // The reset effect only fires on editingSub.sample_id changes, which
+      // doesn't happen on null→null transitions (save-new → click "+ New vial"),
+      // so we have to clear the local state explicitly here.
+      setPhotoDataUrl(null)
+      setRemarks('')
     } catch (e) {
       setLocalError(e instanceof Error ? e.message : String(e))
     } finally {
