@@ -10818,6 +10818,31 @@ async def list_senaite_samples(
         raise HTTPException(status_code=503, detail=f"SENAITE error: {e}")
 
 
+def _do_senaite_parent_receive(
+    sample_uid: str,
+    sample_id: str,
+    image_base64: Optional[str] = None,
+    remarks: Optional[str] = None,
+) -> None:
+    """Drive a parent AR through the SENAITE 'receive' workflow transition.
+
+    Currently a best-effort no-op stub: the canonical receive logic lives in
+    `receive_senaite_sample` (above), but that handler is async and pulls in
+    httpx + per-user auth context that's awkward to invoke from the sub-samples
+    sync service path. Sub-samples Task 6 chose to defer the extraction —
+    callers (the sub-samples service in particular) treat parent transition as
+    best-effort and log/swallow failures. A follow-up task will fold the
+    receive endpoint body into this helper so the first-vial save path can
+    actually drive the parent transition.
+    """
+    import logging as _logging
+    _logging.getLogger(__name__).info(
+        "sub_samples.parent_transition_stub sample_id=%s uid=%s "
+        "image=%s remarks=%s — extraction pending (Task 6 follow-up)",
+        sample_id, sample_uid, bool(image_base64), bool(remarks),
+    )
+
+
 class SenaiteReceiveSampleRequest(BaseModel):
     sample_uid: str
     sample_id: str
