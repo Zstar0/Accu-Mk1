@@ -111,7 +111,9 @@ import { EditableDataRow } from '@/components/dashboard/EditableField'
 import { AnalysisTable, StatusBadge } from '@/components/senaite/AnalysisTable'
 import { SamplePrepHplcFlyout } from '@/components/hplc/SamplePrepHplcFlyout'
 import { SampleActivityLog } from '@/components/senaite/SampleActivityLog'
-import { Microscope, Plus, Search, Trash2, ScrollText } from 'lucide-react'
+import { Microscope, Plus, Printer, Search, Trash2, ScrollText } from 'lucide-react'
+import { usePrintLabel } from '@/components/samples/usePrintLabel'
+import { PrintLabelPortal } from '@/components/samples/PrintLabelPortal'
 
 /**
  * Renders the most-recent vial photo for a sub-sample, falling back to a
@@ -1769,6 +1771,9 @@ export function SampleDetails() {
   // Activity log flyout
   const [activityLogOpen, setActivityLogOpen] = useState(false)
 
+  // Print Label — single-label print for this sample / its sub-samples
+  const { printLabel, target: printTarget } = usePrintLabel()
+
   // Retest relationship metadata (banner + chain links)
   const [retestInfo, setRetestInfo] = useState<import('@/lib/api').SampleRetestInfo | null>(null)
 
@@ -2241,6 +2246,20 @@ export function SampleDetails() {
               <ScrollText size={13} />
               Activity
             </Button>
+            {!isParent && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-1.5 cursor-pointer"
+                onClick={() => printLabel({
+                  sampleId: sampleId!,
+                  orderNumber: data?.client_order_number ?? null,
+                })}
+              >
+                <Printer size={13} />
+                Print Label
+              </Button>
+            )}
             <div className="relative">
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
@@ -3346,9 +3365,11 @@ export function SampleDetails() {
                             </button>
                             <button
                               type="button"
-                              disabled
-                              title="Reprint coming in a follow-up"
-                              className="text-sm underline text-muted-foreground cursor-not-allowed opacity-60"
+                              onClick={() => printLabel({
+                                sampleId: s.sample_id,
+                                orderNumber: data?.client_order_number ?? null,
+                              })}
+                              className="text-sm underline"
                             >
                               Print Label
                             </button>
@@ -3427,6 +3448,9 @@ export function SampleDetails() {
         onClose={() => setActivityLogOpen(false)}
         sampleId={sampleId || ''}
       />
+
+      {/* Single-label print portal — off-screen DOM the print CSS reveals */}
+      <PrintLabelPortal target={printTarget} />
     </div>
   )
 }
