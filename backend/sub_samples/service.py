@@ -40,7 +40,11 @@ def ensure_sample_row(db: Session, parent_sample_id: str) -> LimsSample:
         contact_uid=_extract_uid(meta.get("ContactUID") or meta.get("Contact")),
         sample_type=_extract_uid(meta.get("SampleType")),
         status=meta.get("review_state"),
-        peptide_name=meta.get("Analyte1Peptide"),
+        # Analyte1Peptide may come back as a {uid, url} dict from
+        # /complete=true; the lims_samples.peptide_name column is a string
+        # (display label), so reduce to title/string. Falls back to None when
+        # the parent has no analytes (non-peptide samples).
+        peptide_name=_extract_label(meta.get("Analyte1Peptide")),
         client_sample_id=meta.get("ClientSampleID"),
         last_synced_at=datetime.utcnow(),
     )
@@ -56,6 +60,22 @@ def _extract_uid(value):
         return None
     if isinstance(value, dict):
         return value.get("uid")
+    return value
+
+
+def _extract_label(value):
+    """For display-label fields (e.g. Analyte1Peptide) SENAITE may return a
+    plain string OR a {uid, url, title, ...} dict from complete=true. Reduce
+    to a human-readable string, preferring `title` then falling back to a
+    UID/string.
+
+    Mirrors _extract_uid but targets the human label rather than the UID,
+    used for caching display strings into lims_samples.peptide_name.
+    """
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        return value.get("title") or value.get("Title") or value.get("uid")
     return value
 
 
@@ -122,7 +142,22 @@ def create_sub_sample(
                 f"contact_uid even after refresh from SENAITE."
             )
 
-    # 1. Create secondary in SENAITE. Children always inherit parent's contact.
+    # 1. Fetch FRESH parent metadata so we have all Accumark-custom fields to
+    #    copy onto the secondary. lims_samples cache is intentionally minimal
+    #    (Client/Contact/SampleType + a couple peptide/order hints), so we
+    #    must hit SENAITE directly to get ClientOrderNumber, Analyte*Peptide,
+    #    Coa*, etc. Best-effort: if this fails we still create the secondary —
+    #    only the inheritance step is degraded, not the whole vial.
+    parent_meta: dict = {}
+    try:
+        parent_meta = senaite.fetch_parent_metadata(parent_sample_id)
+    except Exception as e:
+        log.warning(
+            "sub_samples.parent_meta_fetch_failed parent=%s err=%s",
+            parent_sample_id, e,
+        )
+
+    # 2. Create secondary in SENAITE. Children always inherit parent's contact.
     create_result = senaite.create_secondary(
         parent_sample_id=parent_sample_id,
         parent_uid=parent.external_lims_uid,
@@ -131,6 +166,30 @@ def create_sub_sample(
         sample_type_uid=parent.sample_type or "",
     )
     # SecondaryFalloutError naturally propagates with orphan_uid attribute (#3).
+
+    # 3. Copy inheritable Accumark-custom fields from parent → secondary.
+    #    SENAITE's secondary-create natively inherits only Client/Contact/
+    #    SampleType/DateSampled; everything else (ClientOrderNumber,
+    #    Analyte*Peptide, Coa*, CompanyLogoUrl, VerificationCode, Profiles,
+    #    DeclaredTotalQuantity, ClientLot, ClientSampleID, ClientReference)
+    #    must be explicitly copied via /update. Best-effort: a failure here
+    #    leaves the vial in SENAITE with empty Accumark fields rather than
+    #    failing the whole create — the user can backfill via the field-update
+    #    UI on the sample detail page.
+    if parent_meta:
+        inherited = senaite.extract_inheritable_fields(parent_meta)
+        if inherited:
+            try:
+                senaite.update_secondary_fields(create_result.uid, inherited)
+                log.info(
+                    "sub_samples.field_inheritance_applied parent=%s child=%s fields=%s",
+                    parent_sample_id, create_result.sample_id, sorted(inherited.keys()),
+                )
+            except Exception as e:
+                log.warning(
+                    "sub_samples.field_inheritance_failed parent=%s child=%s err=%s",
+                    parent_sample_id, create_result.sample_id, e,
+                )
 
     # 2. Upload photo. Compensate (delete the secondary) on failure so we don't
     #    leave a vial without a photo.

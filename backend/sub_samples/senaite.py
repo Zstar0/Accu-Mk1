@@ -277,6 +277,134 @@ def uid_exists(uid: Optional[str]) -> bool:
     return bool(items)
 
 
+# Whitelist of SENAITE AR field names that should be copied parent → secondary
+# after the secondary is created. SENAITE's AnalysisRequestSecondary natively
+# inherits only Client / Contact / SampleType / DateSampled (and dates); all
+# Accumark-custom fields below are blank on the secondary unless explicitly
+# copied.
+#
+# Sources (verified 2026-04-27):
+#   * integration-service/app/adapters/senaite.py
+#       AnalysisRequestData.to_senaite_payload()  — these are the Accumark
+#       fields populated when the parent AR is first created from a WP order.
+#   * Accu-Mk1/backend/main.py
+#       lookup_senaite_sample()                   — confirms parser key names
+#       update_senaite_sample_fields()            — confirms /update accepts them
+#       publish_sample_coa()                      — confirms VerificationCode
+#   * Accu-Mk1/src/components/senaite/SampleDetails.tsx
+#       senaiteField="..." attributes on EditableDataRow — confirms the UI
+#       reads/writes these exact keys.
+#
+# DO NOT include:
+#   * uid, id, path, review_state               — SENAITE-managed identifiers
+#   * Client, Contact, SampleType               — already passed on create
+#   * PrimaryAnalysisRequest                    — already set on create
+#   * DateSampled, DateReceived, DatePublished  — SENAITE inherits/manages
+#   * Analyses                                  — secondary inherits its own
+#   * Remarks                                   — handled separately by
+#                                                 service.create_sub_sample
+#                                                 (the create_sub_sample
+#                                                 caller passes vial-specific
+#                                                 remarks; we don't want to
+#                                                 clobber those with parent's)
+INHERITABLE_FIELDS: list[str] = [
+    # Order / client identification
+    "ClientOrderNumber",
+    "ClientSampleID",
+    "ClientLot",
+    "ClientReference",
+    # Profiles (list of profile UIDs)
+    "Profiles",
+    # Declared quantities
+    "DeclaredTotalQuantity",
+    # Accumark analyte slots — 4 in Accu-Mk1 UI, 8 in integration-service
+    # payload. Copy all 8 to be safe; SENAITE will accept whichever exist.
+    "Analyte1Peptide", "Analyte1DeclaredQuantity",
+    "Analyte2Peptide", "Analyte2DeclaredQuantity",
+    "Analyte3Peptide", "Analyte3DeclaredQuantity",
+    "Analyte4Peptide", "Analyte4DeclaredQuantity",
+    "Analyte5Peptide", "Analyte5DeclaredQuantity",
+    "Analyte6Peptide", "Analyte6DeclaredQuantity",
+    "Analyte7Peptide", "Analyte7DeclaredQuantity",
+    "Analyte8Peptide", "Analyte8DeclaredQuantity",
+    # COA Info block — exact field names confirmed via SampleDetails.tsx and
+    # the SENAITE update endpoint in main.py.
+    "CoaCompanyName",
+    "CoaEmail",
+    "CoaWebsite",
+    "CoaAddress",
+    "CompanyLogoUrl",
+    "ChromatographBackgroundUrl",
+    "VerificationCode",
+]
+
+
+def extract_inheritable_fields(parent_meta: dict) -> dict:
+    """Pull fields from parent SENAITE metadata that should be copied to a
+    secondary. Skips empty / null / SENAITE-managed values.
+
+    Reference fields come back from the SENAITE complete=true endpoint as
+    {"uid": "...", "url": "..."} dicts; reduce to UID strings. List fields
+    (Profiles) come back as lists of such dicts; reduce to a list of UIDs.
+    """
+    out: dict = {}
+    for field in INHERITABLE_FIELDS:
+        value = parent_meta.get(field)
+        if value is None or value == "":
+            continue
+        # Reference field as a single dict {uid, url, ...} → reduce to UID
+        if isinstance(value, dict):
+            uid = value.get("uid")
+            if uid:
+                out[field] = uid
+            continue
+        # List of references (e.g. Profiles) → list of UIDs
+        if isinstance(value, list):
+            uids: list = []
+            for item in value:
+                if isinstance(item, dict):
+                    if item.get("uid"):
+                        uids.append(item["uid"])
+                elif item not in (None, ""):
+                    uids.append(item)
+            if uids:
+                out[field] = uids
+            continue
+        out[field] = value
+    return out
+
+
+def update_secondary_fields(secondary_uid: str, fields: dict) -> None:
+    """Copy arbitrary AR fields onto a freshly-created secondary via the JSON
+    /update endpoint.
+
+    Why the path-style update endpoint (`/update/{uid}`):
+      The existing update_remarks() in this module uses the body-style
+      `/update` with `{"uid": ..., "Remarks": ...}` payload. That works for
+      single-field, single-value updates but the body-style endpoint validates
+      the FULL AR schema and 400s if any required field is missing on the
+      target object. The path-style endpoint accepts a partial-update payload
+      and is the same shape main.py's update_senaite_sample_fields() proxies
+      against in production — verified working for ClientOrderNumber, Coa*,
+      CompanyLogoUrl, etc.
+    """
+    if not fields:
+        return
+    url = f"{SENAITE_BASE_URL}/@@API/senaite/v1/update/{secondary_uid}"
+    resp = _post_json(url, json=fields)
+    if resp.status_code >= 300:
+        raise RuntimeError(
+            f"SENAITE update_secondary_fields failed ({resp.status_code}): {resp.text[:300]}"
+        )
+    body = resp.json()
+    # /update/{uid} returns 200 with `items` on success; on validation failure
+    # it returns 200 with success=false and a message.
+    if body.get("success") is False:
+        raise RuntimeError(f"SENAITE update_secondary_fields rejected: {body}")
+    if not body.get("items"):
+        raise RuntimeError(f"SENAITE update_secondary_fields returned no items: {body}")
+
+
 def fetch_secondaries(parent_sample_id: str) -> List[dict]:
     """Fetch all secondaries for a parent. The list endpoint can NOT filter
     by parent UID — use SearchableText `q=<parent_id>` and filter client-side
