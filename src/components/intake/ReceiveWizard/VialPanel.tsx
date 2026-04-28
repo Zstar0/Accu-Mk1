@@ -61,6 +61,17 @@ export function VialPanel({
   const [editPhotoOverride, setEditPhotoOverride] = useState(false)
 
   const videoRef = useRef<HTMLVideoElement>(null)
+  // Persist the camera stream across renders so we can re-attach it when the
+  // <video> element remounts — e.g. after the save-confirmation card returns
+  // to live capture, the <video> is a fresh DOM node and needs srcObject set
+  // again.
+  const streamRef = useRef<MediaStream | null>(null)
+  const setVideoRef = useCallback((el: HTMLVideoElement | null) => {
+    videoRef.current = el
+    if (el && streamRef.current && el.srcObject !== streamRef.current) {
+      el.srcObject = streamRef.current
+    }
+  }, [])
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
   const [cameraOk, setCameraOk] = useState(true)
@@ -74,9 +85,10 @@ export function VialPanel({
     setSavedSampleId(null)
   }, [editingSub?.sample_id, editingSub?.remarks])
 
-  // Initialize camera. Cleanup on unmount.
+  // Initialize camera. Cleanup on unmount. Stream lives in streamRef so the
+  // callback ref above can re-attach it whenever the <video> element mounts
+  // (e.g. after the save-confirmation card returns to capture mode).
   useEffect(() => {
-    let stream: MediaStream | null = null
     let cancelled = false
     if (
       typeof navigator === 'undefined' ||
@@ -92,7 +104,7 @@ export function VialPanel({
           s.getTracks().forEach(t => t.stop())
           return
         }
-        stream = s
+        streamRef.current = s
         if (videoRef.current) {
           videoRef.current.srcObject = s
         }
@@ -100,7 +112,8 @@ export function VialPanel({
       .catch(() => setCameraOk(false))
     return () => {
       cancelled = true
-      stream?.getTracks().forEach(t => t.stop())
+      streamRef.current?.getTracks().forEach(t => t.stop())
+      streamRef.current = null
     }
   }, [])
 
@@ -297,7 +310,7 @@ export function VialPanel({
                 getUserMedia round-trip. Hide it via CSS rather than
                 unmount. */}
             <video
-              ref={videoRef}
+              ref={setVideoRef}
               autoPlay
               playsInline
               muted
