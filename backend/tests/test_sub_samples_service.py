@@ -53,8 +53,7 @@ def test_create_sub_sample_assigns_sequential_vial_numbers(db):
     with patch("sub_samples.service.senaite.fetch_parent_metadata", return_value=_meta()), \
          patch("sub_samples.service.senaite.uid_exists", return_value=True), \
          patch("sub_samples.service.senaite.create_secondary", return_value=_create_result("UID1", "P-0134-S01")), \
-         patch("sub_samples.service.senaite.upload_photo", return_value=None), \
-         patch("main._do_senaite_parent_receive"):
+         patch("sub_samples.service.senaite.upload_photo", return_value=None):
         ss1 = create_sub_sample(db, parent_sample_id="P-0134",
                                 photo_bytes=b"abc", photo_filename="vial.jpg",
                                 remarks=None, user_id=1)
@@ -90,8 +89,7 @@ def test_create_sub_sample_refreshes_stale_uid_then_retries(db):
          patch("sub_samples.service.senaite.fetch_parent_metadata", return_value=fresh_meta) as fpm, \
          patch("sub_samples.service.senaite.create_secondary",
                return_value=_create_result("UID1", "P-0134-S01")) as cs, \
-         patch("sub_samples.service.senaite.upload_photo", return_value=None), \
-         patch("main._do_senaite_parent_receive"):
+         patch("sub_samples.service.senaite.upload_photo", return_value=None):
         sub = create_sub_sample(db, parent_sample_id="P-0134",
                                 photo_bytes=b"abc", photo_filename="vial.jpg",
                                 remarks=None, user_id=1)
@@ -132,30 +130,3 @@ def test_create_sub_sample_compensates_on_photo_upload_failure(db):
     assert db.query(LimsSubSample).count() == 0
 
 
-def test_first_vial_transitions_parent_when_pre_received(db):
-    with patch("sub_samples.service.senaite.fetch_parent_metadata",
-               return_value=_meta()), \
-         patch("sub_samples.service.senaite.uid_exists", return_value=True), \
-         patch("sub_samples.service.senaite.create_secondary",
-               return_value=_create_result("UID1", "P-0134-S01")), \
-         patch("sub_samples.service.senaite.upload_photo", return_value=None), \
-         patch("main._do_senaite_parent_receive") as transition:
-        create_sub_sample(db, "P-0134", b"abc", "vial.jpg", None, 1)
-    transition.assert_called_once()
-
-
-def test_subsequent_vial_does_not_re_transition_parent(db):
-    parent = LimsSample(sample_id="P-0134", external_lims_uid="PARENT_UID",
-                        client_uid="C_UID", contact_uid="CT_UID",
-                        sample_type="ST_UID", status="sample_received")
-    db.add(parent); db.flush()
-    db.add(LimsSubSample(parent_sample_pk=parent.id, external_lims_uid="UID1",
-                         sample_id="P-0134-S01", vial_sequence=1))
-    db.commit()
-    with patch("sub_samples.service.senaite.uid_exists", return_value=True), \
-         patch("sub_samples.service.senaite.create_secondary",
-               return_value=_create_result("UID2", "P-0134-S02")), \
-         patch("sub_samples.service.senaite.upload_photo", return_value=None), \
-         patch("main._do_senaite_parent_receive") as transition:
-        create_sub_sample(db, "P-0134", b"def", "vial.jpg", None, 1)
-    transition.assert_not_called()

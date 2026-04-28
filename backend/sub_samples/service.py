@@ -93,9 +93,6 @@ def create_sub_sample(
 ) -> LimsSubSample:
     """Create a sub-sample atomically with defense-in-depth protections."""
     parent = ensure_sample_row(db, parent_sample_id)
-    is_first_vial = db.execute(
-        select(func.count(LimsSubSample.id)).where(LimsSubSample.parent_sample_pk == parent.id)
-    ).scalar_one() == 0
 
     # Defense in depth #1: parent must have a contact. Children inherit it.
     # Cheap local check; fail fast before any SENAITE round-trip.
@@ -169,17 +166,6 @@ def create_sub_sample(
         remarks=remarks,
     )
     db.add(sub)
-
-    # Drive parent receive transition on the very first vial (best-effort).
-    pre_received_states = (None, "sample_due", "sample_registered", "to_be_sampled")
-    if is_first_vial and parent.status in pre_received_states:
-        try:
-            from main import _do_senaite_parent_receive
-            _do_senaite_parent_receive(parent.external_lims_uid, parent.sample_id)
-            parent.status = "sample_received"
-        except Exception as e:
-            log.warning("sub_samples.parent_transition_failed parent=%s err=%s",
-                        parent.sample_id, e)
 
     parent.last_synced_at = datetime.utcnow()
     db.commit()
