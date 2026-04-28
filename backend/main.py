@@ -356,8 +356,10 @@ app.add_middleware(
         "http://127.0.0.1:1420",
         "http://localhost:5173",      # Vite default
         "http://127.0.0.1:5173",
-        "http://localhost:3100",      # Docker local test
+        "http://localhost:3100",      # Docker local test (nginx)
         "http://127.0.0.1:3100",
+        "http://localhost:3101",      # Docker local test (Vite dev fallback when 3100 is leased)
+        "http://127.0.0.1:3101",
         "https://accumk1.valenceanalytical.com",  # Production
         "tauri://localhost",          # Tauri production (v1)
         "https://tauri.localhost",    # Tauri production (v2)
