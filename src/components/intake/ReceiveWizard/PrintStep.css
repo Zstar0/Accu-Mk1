@@ -1,0 +1,49 @@
+@media screen {
+  .print-area .label {
+    display: inline-block;
+    border: 1px dashed #ccc;
+    padding: 4px;
+    margin: 2px;
+    width: 50.8mm;
+    height: 6.35mm;
+    overflow: hidden;
+  }
+  .print-area .label-id {
+    font-family: ui-monospace, monospace;
+    font-size: 8pt;
+    text-align: center;
+  }
+}
+
+@media print {
+  /* Hide the wizard chrome — only print the labels */
+  .screen-only { display: none !important; }
+  body { margin: 0; }
+
+  @page {
+    size: 50.8mm 6.35mm;
+    margin: 0;
+  }
+
+  .label {
+    page-break-after: always;
+    padding: 0;
+    margin: 0;
+    width: 50.8mm;
+    height: 6.35mm;
+    overflow: hidden;
+  }
+
+  .label svg {
+    width: 48mm;
+    height: 4mm;
+    display: block;
+    margin: 0 auto;
+  }
+
+  .label-id {
+    font-family: ui-monospace, monospace;
+    font-size: 6pt;
+    text-align: center;
+  }
+}
