@@ -264,6 +264,83 @@ fields require the UID-path form OR `?complete=true`.
 
 ---
 
+## 3.5. Update Remarks (and other field updates)
+
+### Endpoint
+
+```
+POST http://<senaite-host>/senaite/@@API/senaite/v1/update
+```
+
+Body: `{"uid": "<AR_UID>", "Remarks": "<text>"}` — works for any field on the AR
+schema. The route also accepts the path form
+`/senaite/@@API/senaite/v1/update/<UID>`; both behave identically.
+
+### Verified outcome (Task 5 spike, 2026-04-27)
+
+Against `P-0129` (a parent AR with all required fields populated):
+`200` + `{"success": true, "items": [<full updated AR>]}`. Remarks are stored
+as an append-only list — each call adds a new entry with a timestamp and the
+authoring user.
+
+### Sharp edge: full-schema validation
+
+The `/update` route validates the **entire AR schema**, not just the fields
+you sent. If a required field is missing on the target AR (e.g. `Contact`),
+the call returns `HTTP 400` with body:
+
+```json
+{"success": false, "message": "{\"Contact\": \"Contact is required, please correct.\"}"}
+```
+
+**However:** the Remarks append side-effect still applies even on the 400
+response. Treat the HTTP code as authoritative and ensure all secondaries are
+created with a Contact UID so this stays clean.
+
+---
+
+## 3.6. Delete a Secondary (deactivate)
+
+### Endpoint
+
+```
+POST http://<senaite-host>/senaite/@@API/senaite/v1/delete
+```
+
+Body: `{"uid": "<AR_UID>"}`. The path form
+`/senaite/@@API/senaite/v1/delete/<UID>` is also accepted with empty body.
+
+### Verified outcome (Task 5 spike, 2026-04-27)
+
+The route maps internally to the `deactivate` workflow transition (NOT a
+hard delete). The HTTP code is **always 200** — success is signalled by the
+body's `success` field.
+
+### Sharp edge: deactivate is invalid past `sample_due`
+
+For ARs in `sample_received`, `to_be_verified`, `verified`, or `published`,
+`deactivate` is not a valid transition. SENAITE responds:
+
+```
+HTTP 200
+{"success": false, "message": "Failed to perform transition 'deactivate' on
+ <AnalysisRequest at P-0129-S03>: Invalid transition 'deactivate'.
+ Valid transitions are:\ncancel\ncreate_partitions\ndispatch\nmulti_results"}
+```
+
+This matters for **silent-fallthrough orphan cleanup**: a fresh orphan AR
+is auto-received (it inherits the primary's `DateReceived`), which puts it
+in `sample_received` immediately. So `delete` will report `success: false`
+and the orphan persists. The JSON API has no `cancel` route — the only path
+to remove it is the SENAITE web UI's workflow menu (`cancel` action) or
+direct ZMI access.
+
+The adapter (`update_remarks`, `delete_secondary` in `backend/sub_samples/senaite.py`)
+parses the body and raises on `success: false` so callers don't silently
+ignore failed cleanups.
+
+---
+
 ## 4. End-to-End Quirks Summary
 
 1. **`PrimaryAnalysisRequest` is silent on bad UIDs.** A wrong UID does not
