@@ -267,10 +267,10 @@ function SampleCard({
       <div className="flex items-center gap-2 mb-1">
         <button
           type="button"
-          className="text-xs font-mono font-medium text-primary hover:underline cursor-pointer"
+          className="hover:underline cursor-pointer"
           onClick={() => navigateToSample(sampleId)}
         >
-          {sampleId}
+          <SampleIdBadge id={sampleId} />
         </button>
         <SampleStateBadge state={lookup.review_state} />
         {needsAttention && (
@@ -745,10 +745,10 @@ function KanbanSampleCard({
         <div className="flex items-center gap-1.5 min-w-0">
           <button
             type="button"
-            className="text-[11px] font-mono font-semibold text-primary hover:underline leading-none cursor-pointer shrink-0"
+            className="leading-none cursor-pointer shrink-0"
             onClick={() => navigateToSample(item.sampleId)}
           >
-            {item.sampleId}
+            <SampleIdBadge id={item.sampleId} />
           </button>
           {item.email && (
             <span className="text-[10px] text-muted-foreground/60 leading-none truncate">{item.email}</span>

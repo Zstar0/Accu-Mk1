@@ -10,6 +10,7 @@ import {
 } from '@/components/ui/dialog'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { PriorityBadge } from '@/components/hplc/PriorityBadge'
+import { SampleIdBadge } from '@/components/samples/SampleIdBadge'
 import { SERVICE_GROUP_COLORS } from '@/lib/service-group-colors'
 import { getInboxSamples } from '@/lib/api'
 import type { WorksheetListItem, InboxPriority } from '@/lib/api'
@@ -131,7 +132,7 @@ function AddSampleCard({ item, onAdd }: AddSampleCardProps) {
           <Check className="h-4 w-4 text-emerald-600" />
         </span>
       )}
-      <span className="font-mono text-xs tabular-nums flex-shrink-0">{item.sample_id}</span>
+      <div className="flex-shrink-0"><SampleIdBadge id={item.sample_id} /></div>
       <span className={`inline-flex rounded-md border px-2 py-0.5 text-xs font-semibold flex-shrink-0 ${colorClass}`}>
         {item.group_name}
       </span>

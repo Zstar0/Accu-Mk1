@@ -17,6 +17,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import type { HPLCAnalysisResult } from '@/lib/api'
 import { useUIStore } from '@/store/ui-store'
+import { SampleIdBadge } from '@/components/samples/SampleIdBadge'
 import { CalculationVisuals } from './CalculationVisuals'
 import { ChromatogramChart, type ChromatogramTrace } from './ChromatogramChart'
 
@@ -149,7 +150,7 @@ export function AnalysisResults({ result, chromatograms, hideTrace }: AnalysisRe
 
       {/* Summary line */}
       <div className="flex items-center gap-2 rounded-md bg-muted/50 px-4 py-2 text-sm">
-        <span className="font-medium">{result.sample_id_label}</span>
+        <SampleIdBadge id={result.sample_id_label} />
         <span className="text-muted-foreground">|</span>
         <button
           type="button"

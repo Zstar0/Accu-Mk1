@@ -37,6 +37,7 @@ import {
   SERVICE_GROUP_COLORS,
   type ServiceGroupColor,
 } from '@/lib/service-group-colors'
+import { SampleIdBadge } from '@/components/samples/SampleIdBadge'
 import type { WorksheetListItem, InboxPriority, Instrument } from '@/lib/api'
 
 /** Extract unique peptide names from analyses — compact display for worksheet */
@@ -246,10 +247,10 @@ function SortableItemRow({
       {/* Sample ID */}
       <div className="w-[80px] shrink-0">
         <button
-          className="font-mono text-xs font-medium tabular-nums hover:underline hover:text-primary transition-colors"
+          className="hover:underline hover:text-primary transition-colors"
           onClick={() => useUIStore.getState().navigateToSample(item.sample_id)}
         >
-          {item.sample_id}
+          <SampleIdBadge id={item.sample_id} />
         </button>
       </div>
 
