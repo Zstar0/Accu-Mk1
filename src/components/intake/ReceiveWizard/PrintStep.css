@@ -17,8 +17,8 @@
     box-sizing: border-box;
   }
   .label svg {
-    width: 12mm;
-    height: 12mm;
+    width: 10mm;
+    height: 10mm;
     flex-shrink: 0;
   }
   .label-text {
@@ -95,8 +95,8 @@
   }
 
   .label svg {
-    width: 12mm;
-    height: 12mm;
+    width: 10mm;
+    height: 10mm;
     flex-shrink: 0;
     display: block;
   }
