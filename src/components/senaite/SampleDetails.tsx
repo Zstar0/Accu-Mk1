@@ -2356,30 +2356,6 @@ export function SampleDetails() {
               <FlaskConical size={20} className="text-violet-600 dark:text-violet-400" />
             </div>
             <div>
-              {!isParent && parentSampleId && (
-                <div className="flex items-center gap-2 text-sm text-muted-foreground mb-2 flex-wrap">
-                  <CornerDownRight className="h-3.5 w-3.5 shrink-0" />
-                  <span>Sub-sample of</span>
-                  <button
-                    type="button"
-                    onClick={() => navigateToSample(parentSampleId)}
-                    className="font-mono underline hover:text-foreground transition-colors cursor-pointer"
-                  >
-                    {parentSampleId}
-                  </button>
-                  {parentSummary && (() => {
-                    const me = parentSummary.sub_samples.find(s => s.sample_id === sampleId)
-                    const total = parentSummary.parent.sub_sample_count
-                    if (!me || !total) return null
-                    return (
-                      <>
-                        <span aria-hidden>·</span>
-                        <span>Vial {me.vial_sequence} of {total}</span>
-                      </>
-                    )
-                  })()}
-                </div>
-              )}
               <div className="flex items-center gap-3 flex-wrap">
                 <h1 className="text-xl font-bold tracking-tight font-mono">
                   {data.senaite_url ? (
@@ -2406,6 +2382,30 @@ export function SampleDetails() {
                   </Badge>
                 )}
               </div>
+              {!isParent && parentSampleId && (
+                <div className="flex items-center gap-2 text-sm text-muted-foreground mt-1 flex-wrap">
+                  <CornerDownRight className="h-3.5 w-3.5 shrink-0" />
+                  <span>Sub-sample of</span>
+                  <button
+                    type="button"
+                    onClick={() => navigateToSample(parentSampleId)}
+                    className="font-mono underline hover:text-foreground transition-colors cursor-pointer"
+                  >
+                    {parentSampleId}
+                  </button>
+                  {parentSummary && (() => {
+                    const me = parentSummary.sub_samples.find(s => s.sample_id === sampleId)
+                    const total = parentSummary.parent.sub_sample_count
+                    if (!me || !total) return null
+                    return (
+                      <>
+                        <span aria-hidden>·</span>
+                        <span>Vial {me.vial_sequence} of {total}</span>
+                      </>
+                    )
+                  })()}
+                </div>
+              )}
               <p className="text-xs text-muted-foreground mt-0.5">
                 Received {formatDate(data.date_received)}
                 {data.date_received && data.review_state !== 'published' && (() => {
