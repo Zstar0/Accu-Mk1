@@ -26,9 +26,14 @@ SENAITE_PASSWORD = os.environ.get("SENAITE_PASSWORD", "admin")
 
 
 class SecondaryFalloutError(RuntimeError):
-    """Raised when SENAITE silently created a normal AR instead of a secondary
-    (because the PrimaryAnalysisRequest UID was bad). The orphan AR has been
-    cleaned up before this is raised."""
+    """Raised when SENAITE silently created a normal AR instead of a secondary.
+    The orphan AR may or may not have been cleaned up — orphan_uid is provided
+    so callers can surface it for manual cleanup in SENAITE UI."""
+
+    def __init__(self, message: str, orphan_uid: str = "", orphan_sample_id: str = ""):
+        super().__init__(message)
+        self.orphan_uid = orphan_uid
+        self.orphan_sample_id = orphan_sample_id
 
 
 @dataclass
@@ -88,7 +93,10 @@ def create_secondary(
             log.error("sub_samples.orphan_cleanup_failed uid=%s err=%s", new_uid, e)
         raise SecondaryFalloutError(
             f"SENAITE silently created a normal AR ({new_id}) instead of a secondary of "
-            f"{parent_sample_id}. Likely cause: bad PrimaryAnalysisRequest UID. Orphan deleted."
+            f"{parent_sample_id}. Orphan cleanup may have failed — manual cleanup in "
+            f"SENAITE UI may be required.",
+            orphan_uid=new_uid,
+            orphan_sample_id=new_id,
         )
 
     return SecondaryCreateResult(uid=new_uid, sample_id=new_id, path=new_path)
@@ -243,6 +251,25 @@ def fetch_parent_metadata(parent_sample_id: str) -> dict:
     if not detail_items:
         raise RuntimeError(f"SENAITE detail empty for uid={parent_uid}")
     return detail_items[0]
+
+
+def uid_exists(uid: Optional[str]) -> bool:
+    """Defense-in-depth: cheap check that SENAITE recognizes a UID before we try
+    to create a secondary against it. Returns False on 404 or empty result."""
+    if not uid:
+        return False
+    url = f"{SENAITE_BASE_URL}/@@API/senaite/v1/AnalysisRequest/{uid}"
+    try:
+        resp = _get(url)
+    except Exception:
+        return False
+    if resp.status_code == 404:
+        return False
+    if resp.status_code >= 300:
+        # Network / 500 etc — don't false-positive a "doesn't exist" claim
+        raise RuntimeError(f"SENAITE uid_exists check failed ({resp.status_code}): {resp.text[:200]}")
+    items = resp.json().get("items", [])
+    return bool(items)
 
 
 def fetch_secondaries(parent_sample_id: str) -> List[dict]:
