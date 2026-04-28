@@ -1,4 +1,5 @@
 import { useState, useEffect, useId, useRef } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import DOMPurify from 'dompurify'
 import { useTheme } from '@/hooks/use-theme'
 import {
@@ -36,6 +37,7 @@ import { Button } from '@/components/ui/button'
 import {
   Dialog,
   DialogContent,
+  DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
 import {
@@ -81,7 +83,10 @@ import {
   type PeptideRecord,
   getWooOrder,
   fetchChromatogramLttb,
+  listSubSamples,
 } from '@/lib/api'
+import { ReceiveWizard } from '@/components/intake/ReceiveWizard/ReceiveWizard'
+import type { ParentInfo } from '@/components/intake/ReceiveWizard/useReceiveWizard'
 import {
   LineChart,
   Line,
@@ -1711,6 +1716,28 @@ export function SampleDetails() {
   const [addingService, setAddingService] = useState<string | null>(null)
   const [removingKeyword, setRemovingKeyword] = useState<string | null>(null)
 
+  // Sub-samples — only meaningful for parent samples (sample IDs that don't end
+  // in -SNN). Sub-samples don't have sub-sub-samples, so we hide the section
+  // entirely on sub-sample detail pages.
+  const isParent = !!sampleId && !/-S\d{2,}$/.test(sampleId)
+  const [wizardParent, setWizardParent] = useState<ParentInfo | null>(null)
+  const { data: subData, refetch: refetchSubs } = useQuery({
+    queryKey: ['sub-samples', sampleId],
+    queryFn: () => listSubSamples(sampleId ?? ''),
+    enabled: !!sampleId && isParent,
+  })
+  const subSamples = subData?.sub_samples ?? []
+  const subCount = subData?.parent.sub_sample_count ?? 0
+
+  function openSubSampleWizard() {
+    if (!data?.sample_id || !data.sample_uid) return
+    setWizardParent({
+      uid: data.sample_uid,
+      sample_id: data.sample_id,
+      status: data.review_state,
+    })
+  }
+
   async function openHplcResults() {
     if (!sampleId) return
     try {
@@ -3149,6 +3176,129 @@ export function SampleDetails() {
           }}
           onTransitionComplete={() => refreshSample(data.sample_id)}
         />
+
+        {/* Sub-Samples + Sub-Sample Analyses (parent samples only) */}
+        {isParent && (
+          <>
+            <section className="mt-8">
+              <header className="flex items-baseline justify-between mb-3">
+                <h2 className="text-lg font-semibold">
+                  Sub-Samples{subCount > 0 ? ` (${subCount})` : ''}
+                </h2>
+                <button
+                  type="button"
+                  onClick={openSubSampleWizard}
+                  disabled={!data?.sample_uid}
+                  className="px-3 py-1.5 text-sm border rounded hover:bg-muted disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  + Add Sub-Sample
+                </button>
+              </header>
+
+              {subSamples.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No sub-samples yet.</p>
+              ) : (
+                <div className="rounded border overflow-hidden">
+                  <table className="w-full text-sm">
+                    <thead className="bg-muted/40 text-muted-foreground">
+                      <tr className="text-left">
+                        <th className="px-3 py-2 w-16">Vial</th>
+                        <th className="px-3 py-2">Sample ID</th>
+                        <th className="px-3 py-2 w-28">Photo</th>
+                        <th className="px-3 py-2 w-44">Received</th>
+                        <th className="px-3 py-2 w-20">By</th>
+                        <th className="px-3 py-2 w-32"></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {subSamples.map(s => (
+                        <tr key={s.sample_id} className="border-t">
+                          <td className="px-3 py-2 font-mono">{s.vial_sequence}</td>
+                          <td className="px-3 py-2 font-mono">
+                            <button
+                              type="button"
+                              onClick={() => navigateToSample(s.sample_id)}
+                              className="underline hover:text-foreground text-left"
+                            >
+                              {s.sample_id}
+                            </button>
+                          </td>
+                          <td className="px-3 py-2">
+                            {s.photo_external_uid ? (
+                              <span className="inline-flex w-12 h-12 rounded bg-muted text-muted-foreground items-center justify-center text-xs">
+                                <ImageIcon size={16} />
+                              </span>
+                            ) : (
+                              <span className="text-muted-foreground">—</span>
+                            )}
+                          </td>
+                          <td className="px-3 py-2">
+                            {new Date(s.received_at).toLocaleString()}
+                          </td>
+                          <td className="px-3 py-2 text-muted-foreground">
+                            {s.received_by_user_id ?? '—'}
+                          </td>
+                          <td className="px-3 py-2 text-right">
+                            <button
+                              type="button"
+                              onClick={() => navigateToSample(s.sample_id)}
+                              className="text-sm underline mr-3"
+                            >
+                              Open
+                            </button>
+                            <button
+                              type="button"
+                              disabled
+                              title="Reprint coming in a follow-up"
+                              className="text-sm underline text-muted-foreground cursor-not-allowed opacity-60"
+                            >
+                              Print Label
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </section>
+
+            <section className="mt-8">
+              <h2 className="text-lg font-semibold mb-2">Sub-Sample Analyses</h2>
+              <p className="text-sm text-muted-foreground">
+                Per-sub-sample analyses appear here once the worksheet vial-to-test
+                assignment phase ships. No analyses are routed to sub-samples in v1.
+              </p>
+            </section>
+
+            {wizardParent && (
+              <Dialog
+                open={Boolean(wizardParent)}
+                onOpenChange={open => {
+                  if (!open) {
+                    setWizardParent(null)
+                    void refetchSubs()
+                  }
+                }}
+              >
+                <DialogContent className="max-w-5xl w-full p-0 sm:max-w-5xl h-[80vh] overflow-hidden">
+                  <DialogHeader className="px-6 pt-4 pb-2 border-b">
+                    <DialogTitle>Receive {wizardParent.sample_id}</DialogTitle>
+                  </DialogHeader>
+                  <div className="h-[calc(80vh-3.5rem)] overflow-hidden">
+                    <ReceiveWizard
+                      parent={wizardParent}
+                      onClose={() => {
+                        setWizardParent(null)
+                        void refetchSubs()
+                      }}
+                    />
+                  </div>
+                </DialogContent>
+              </Dialog>
+            )}
+          </>
+        )}
 
       {/* Woo Order flyout */}
       {wooOrderOpen && (
