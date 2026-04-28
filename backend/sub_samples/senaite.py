@@ -374,35 +374,67 @@ def extract_inheritable_fields(parent_meta: dict) -> dict:
     return out
 
 
-def update_secondary_fields(secondary_uid: str, fields: dict) -> None:
-    """Copy arbitrary AR fields onto a freshly-created secondary via the JSON
-    /update endpoint.
-
-    Why the path-style update endpoint (`/update/{uid}`):
-      The existing update_remarks() in this module uses the body-style
-      `/update` with `{"uid": ..., "Remarks": ...}` payload. That works for
-      single-field, single-value updates but the body-style endpoint validates
-      the FULL AR schema and 400s if any required field is missing on the
-      target object. The path-style endpoint accepts a partial-update payload
-      and is the same shape main.py's update_senaite_sample_fields() proxies
-      against in production — verified working for ClientOrderNumber, Coa*,
-      CompanyLogoUrl, etc.
-    """
-    if not fields:
-        return
+def _do_field_update(secondary_uid: str, fields: dict) -> None:
+    """Single round-trip update; raises on any non-success response."""
     url = f"{SENAITE_BASE_URL}/@@API/senaite/v1/update/{secondary_uid}"
     resp = _post_json(url, json=fields)
     if resp.status_code >= 300:
         raise RuntimeError(
-            f"SENAITE update_secondary_fields failed ({resp.status_code}): {resp.text[:300]}"
+            f"SENAITE update failed ({resp.status_code}): {resp.text[:300]}"
         )
     body = resp.json()
-    # /update/{uid} returns 200 with `items` on success; on validation failure
-    # it returns 200 with success=false and a message.
     if body.get("success") is False:
-        raise RuntimeError(f"SENAITE update_secondary_fields rejected: {body}")
+        raise RuntimeError(f"SENAITE update rejected: {body.get('message') or body}")
     if not body.get("items"):
-        raise RuntimeError(f"SENAITE update_secondary_fields returned no items: {body}")
+        raise RuntimeError(f"SENAITE update returned no items: {body}")
+
+
+def update_secondary_fields(secondary_uid: str, fields: dict) -> None:
+    """Copy arbitrary AR fields onto a freshly-created secondary.
+
+    Two-tier strategy:
+      1. Try the whole batch in one call (fast, common case).
+      2. If the batch is rejected, fall back to one call per field — that way
+         text fields land even when one decimal field trips Plone's isDecimal
+         validator (which rejects strings, ints, AND floats from Python 3
+         clients; a known SENAITE/Plone-5 bug). Without per-field fallback,
+         the path-style /update/{uid} endpoint stops at the first validation
+         failure and silently drops everything after it.
+
+    Path-style /update/{uid} is required: the body-style /update validates
+    the FULL AR schema and 400s on partial payloads. main.py's
+    update_senaite_sample_fields() uses the same path shape in production.
+    """
+    if not fields:
+        return
+    try:
+        _do_field_update(secondary_uid, fields)
+        return
+    except RuntimeError as bulk_err:
+        log.warning(
+            "sub_samples.bulk_inheritance_failed uid=%s falling_back_per_field err=%s",
+            secondary_uid, bulk_err,
+        )
+
+    rejected = []
+    for key, value in fields.items():
+        try:
+            _do_field_update(secondary_uid, {key: value})
+        except RuntimeError as field_err:
+            rejected.append((key, str(field_err)[:160]))
+            log.warning(
+                "sub_samples.inherit_field_rejected uid=%s field=%s err=%s",
+                secondary_uid, key, field_err,
+            )
+    if rejected:
+        # Inherit-as-best-we-can: caller logs but does not abort the create.
+        log.info(
+            "sub_samples.inheritance_partial uid=%s applied=%d rejected=%d rejected_fields=%s",
+            secondary_uid,
+            len(fields) - len(rejected),
+            len(rejected),
+            [k for k, _ in rejected],
+        )
 
 
 def fetch_secondaries(parent_sample_id: str) -> List[dict]:
