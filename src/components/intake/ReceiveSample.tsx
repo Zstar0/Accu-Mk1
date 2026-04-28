@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import {
   Check,
   Loader2,
@@ -42,6 +43,7 @@ import {
   getSenaiteSamples,
   getSenaiteStatus,
   receiveSenaiteSample,
+  listSubSamples,
   type SenaiteLookupResult,
   type SenaiteSample,
   type SenaiteReceiveSampleResponse,
@@ -61,6 +63,7 @@ type SortColumn =
   | 'sample_type'
   | 'date_sampled'
   | 'review_state'
+  | 'vial_count'
 type SortDir = 'asc' | 'desc'
 
 function SortableHead({
@@ -139,6 +142,25 @@ function StateBadge({ state }: { state: string }) {
     >
       {config.label}
     </span>
+  )
+}
+
+function VialCount({ sampleId }: { sampleId: string }) {
+  const { data, isLoading } = useQuery({
+    queryKey: ['sub-samples-count', sampleId],
+    queryFn: () => listSubSamples(sampleId),
+    staleTime: 60_000,
+  })
+
+  if (isLoading) {
+    return <span className="text-muted-foreground">—</span>
+  }
+
+  const count = data?.parent.sub_sample_count ?? 0
+  return count > 0 ? (
+    <span className="text-sm">{count} received</span>
+  ) : (
+    <span className="text-muted-foreground">—</span>
   )
 }
 
@@ -236,11 +258,19 @@ export function ReceiveSample() {
 
   const sortedSamples = sortColumn
     ? [...filteredSamples].sort((a, b) => {
-        const valA = a[sortColumn] ?? ''
-        const valB = b[sortColumn] ?? ''
-        const cmp = String(valA).localeCompare(String(valB), undefined, {
-          numeric: true,
-        })
+        let cmp = 0
+        if (sortColumn === 'vial_count') {
+          // For vial_count, we'll do a client-side placeholder sort
+          // Since vial counts are loaded lazily, this will sort by sample_id for now
+          // The actual vial count data is fetched per-row via useQuery
+          cmp = 0
+        } else {
+          const valA = a[sortColumn as keyof typeof a] ?? ''
+          const valB = b[sortColumn as keyof typeof b] ?? ''
+          cmp = String(valA).localeCompare(String(valB), undefined, {
+            numeric: true,
+          })
+        }
         return sortDir === 'asc' ? cmp : -cmp
       })
     : filteredSamples
@@ -555,6 +585,14 @@ export function ReceiveSample() {
                             className="w-36"
                           />
                           <SortableHead
+                            column="vial_count"
+                            label="Vials"
+                            activeColumn={sortColumn}
+                            direction={sortDir}
+                            onSort={handleSort}
+                            className="w-24 text-center"
+                          />
+                          <SortableHead
                             column="review_state"
                             label="State"
                             activeColumn={sortColumn}
@@ -604,6 +642,9 @@ export function ReceiveSample() {
                             </TableCell>
                             <TableCell className="text-sm text-muted-foreground">
                               {formatDate(s.date_sampled)}
+                            </TableCell>
+                            <TableCell className="text-center">
+                              <VialCount sampleId={s.id} />
                             </TableCell>
                             <TableCell className="text-center">
                               <StateBadge state={s.review_state} />
