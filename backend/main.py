@@ -67,6 +67,7 @@ from calculations.hplc_processor import (
     process_hplc_analysis, AnalysisInput, WeightInputs, CalibrationParams, PeptideParams
 )
 from file_watcher import FileWatcher
+from sub_samples.routes import router as sub_samples_router
 
 
 # --- API Key Configuration ---
@@ -371,6 +372,8 @@ app.add_middleware(
 # Global file watcher instance
 file_watcher = FileWatcher()
 
+# Register sub-samples router
+app.include_router(sub_samples_router)
 
 # --- Endpoints ---
 
