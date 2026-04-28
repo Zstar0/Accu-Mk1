@@ -44,6 +44,7 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card'
+import { SampleIdBadge } from '@/components/samples/SampleIdBadge'
 
 // --- Relative time formatter ---
 function formatRelativeTime(isoStr: string): string {
@@ -236,7 +237,7 @@ function SampleCard({
       <div className="rounded-md border border-border/50 bg-muted/30 px-3 py-2 min-w-[160px]">
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
           <RefreshCw className="h-3 w-3 animate-spin" />
-          <span className="font-mono">{sampleId}</span>
+          <SampleIdBadge id={sampleId} />
         </div>
       </div>
     )
@@ -716,7 +717,7 @@ function KanbanSampleCard({
     return (
       <div className="rounded border border-border/50 bg-muted/20 px-2 py-1 flex items-center gap-1.5 text-muted-foreground">
         <RefreshCw className="h-2.5 w-2.5 animate-spin shrink-0" />
-        <span className="font-mono text-[11px]">{item.sampleId}</span>
+        <SampleIdBadge id={item.sampleId} />
       </div>
     )
   }

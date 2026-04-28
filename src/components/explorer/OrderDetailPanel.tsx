@@ -44,6 +44,7 @@ import {
 } from '@/components/ui/card'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { DataTable } from '@/components/ui/data-table'
+import { SampleIdBadge } from '@/components/samples/SampleIdBadge'
 
 // --- Shared helpers ---
 
@@ -361,7 +362,7 @@ function IngestionsTab({
         header: 'Sample ID',
         size: 120,
         cell: ({ row }) => (
-          <span className="font-mono text-sm">{row.original.sample_id}</span>
+          <SampleIdBadge id={row.original.sample_id} />
         ),
       },
       {
@@ -613,7 +614,7 @@ function COAGenerationsTab({
         header: 'Sample ID',
         size: 100,
         cell: ({ row }) => (
-          <span className="font-mono text-sm">{row.original.sample_id}</span>
+          <SampleIdBadge id={row.original.sample_id} />
         ),
       },
       {
@@ -921,7 +922,7 @@ function SampleEventsTab({ orderId }: { orderId: string }) {
       header: 'Sample ID',
       size: 100,
       cell: ({ row }) => (
-        <span className="font-mono text-sm">{row.original.sample_id}</span>
+        <SampleIdBadge id={row.original.sample_id} />
       ),
     },
     {
@@ -1030,7 +1031,7 @@ function AccessLogsTab({ orderId }: { orderId: string }) {
       header: 'Sample ID',
       size: 100,
       cell: ({ row }) => (
-        <span className="font-mono text-sm">{row.original.sample_id}</span>
+        <SampleIdBadge id={row.original.sample_id} />
       ),
     },
     {

@@ -55,4 +55,15 @@ describe('SampleIdBadge', () => {
     render(<SampleIdBadge id="P-0089" />)
     expect(screen.queryByText(/child of/i)).not.toBeInTheDocument()
   })
+
+  it('auto-derives parent linkage from sub-sample id format when parentId is omitted', async () => {
+    const user = userEvent.setup()
+    render(<SampleIdBadge id="PB-0134-S02" />)
+    expect(screen.getByText('PB-0134-S02')).toBeInTheDocument()
+    expect(screen.getByText(/child of/i)).toBeInTheDocument()
+    expect(screen.getByText(/vial 2/i)).toBeInTheDocument()
+    const button = screen.getByRole('button', { name: /PB-0134/ })
+    await user.click(button)
+    expect(mockNavigateToSample).toHaveBeenCalledWith('PB-0134')
+  })
 })
