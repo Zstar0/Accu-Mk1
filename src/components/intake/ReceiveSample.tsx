@@ -27,8 +27,16 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { Checkbox } from '@/components/ui/checkbox'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { cn } from '@/lib/utils'
 import { PhotoCapture } from '@/components/intake/PhotoCapture'
+import { ReceiveWizard } from '@/components/intake/ReceiveWizard/ReceiveWizard'
+import type { ParentInfo } from '@/components/intake/ReceiveWizard/useReceiveWizard'
 import {
   lookupSenaiteSample,
   getSenaiteSamples,
@@ -202,6 +210,12 @@ export function ReceiveSample() {
   const [sortColumn, setSortColumn] = useState<SortColumn | null>(null)
   const [sortDir, setSortDir] = useState<SortDir>('asc')
   const [showTestSamples, setShowTestSamples] = useState(false)
+
+  // Sub-samples receive wizard (modal). Row click in the intake list opens
+  // the wizard for that parent sample; the legacy single-step receive flow
+  // (Step 2 detail view) stays in place and remains reachable through the
+  // sidebar Step nav for cases where a tech wants the read-only detail view.
+  const [wizardParent, setWizardParent] = useState<ParentInfo | null>(null)
 
   function handleSort(col: SortColumn) {
     if (sortColumn === col) {
@@ -569,14 +583,11 @@ export function ReceiveSample() {
                                 : 'hover:bg-muted/30'
                             )}
                             onClick={() => {
-                              setSelectedSample(s)
-                              setLookupError(null)
-                              setLookupResult(null)
-                              setPendingLookupId(s.id)
-                              setCompletedSteps(
-                                prev => new Set([...prev, 1 as IntakeStep])
-                              )
-                              setCurrentStep(2)
+                              setWizardParent({
+                                uid: s.uid,
+                                sample_id: s.id,
+                                status: s.review_state ?? null,
+                              })
                             }}
                           >
                             <TableCell className="font-mono text-sm">
@@ -980,6 +991,36 @@ export function ReceiveSample() {
           )}
         </div>
       </div>
+
+      {/* Sub-samples receive wizard (modal) */}
+      {wizardParent && (
+        <Dialog
+          open={Boolean(wizardParent)}
+          onOpenChange={open => {
+            if (!open) {
+              setWizardParent(null)
+              // Refresh the due-samples list so the row reflects the new state
+              // (parent may have transitioned to received, vials added, etc.).
+              void loadDueSamples()
+            }
+          }}
+        >
+          <DialogContent className="max-w-5xl w-full p-0 sm:max-w-5xl h-[80vh] overflow-hidden">
+            <DialogHeader className="px-6 pt-4 pb-2 border-b">
+              <DialogTitle>Receive {wizardParent.sample_id}</DialogTitle>
+            </DialogHeader>
+            <div className="h-[calc(80vh-3.5rem)] overflow-hidden">
+              <ReceiveWizard
+                parent={wizardParent}
+                onClose={() => {
+                  setWizardParent(null)
+                  void loadDueSamples()
+                }}
+              />
+            </div>
+          </DialogContent>
+        </Dialog>
+      )}
     </div>
   )
 }
