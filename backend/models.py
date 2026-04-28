@@ -4,7 +4,7 @@ Uses SQLAlchemy 2.0 style with mapped_column.
 """
 
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List
 from sqlalchemy import String, Text, Float, Integer, Boolean, DateTime, ForeignKey, JSON, Column, Table, UniqueConstraint, CheckConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -691,3 +691,55 @@ class SampleAnalyteAlias(Base):
 
     def __repr__(self) -> str:
         return f"<SampleAnalyteAlias(sample='{self.senaite_sample_id}', slot={self.slot}, alias='{self.alias}')>"
+
+
+class LimsSample(Base):
+    """Master sample record (parent of one or more LimsSubSample vials).
+
+    Seeded lazily by the receive wizard from SENAITE today. Designed to become
+    the canonical sample registry once SENAITE is sunset, hence the neutral
+    `external_lims_*` columns rather than `senaite_*`.
+    """
+    __tablename__ = "lims_samples"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    sample_id: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
+    external_lims_uid: Mapped[Optional[str]] = mapped_column(String(100), index=True)
+    external_lims_system: Mapped[Optional[str]] = mapped_column(String(50), default="senaite")
+    client_id: Mapped[Optional[str]] = mapped_column(String(100))
+    client_uid: Mapped[Optional[str]] = mapped_column(String(100))
+    contact_uid: Mapped[Optional[str]] = mapped_column(String(100))
+    sample_type: Mapped[Optional[str]] = mapped_column(String(100))
+    status: Mapped[Optional[str]] = mapped_column(String(50))
+    peptide_name: Mapped[Optional[str]] = mapped_column(String(200))
+    client_sample_id: Mapped[Optional[str]] = mapped_column(String(200))
+    date_sampled: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    date_received: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    is_retest: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    last_synced_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    sub_samples: Mapped[List["LimsSubSample"]] = relationship(
+        "LimsSubSample", back_populates="parent_sample",
+        cascade="all, delete-orphan", order_by="LimsSubSample.vial_sequence",
+    )
+
+
+class LimsSubSample(Base):
+    """One physical vial received under a parent LimsSample. SENAITE id format
+    `<parent>-S<NN>`, e.g. P-0134-S01."""
+    __tablename__ = "lims_sub_samples"
+    __table_args__ = (UniqueConstraint("parent_sample_pk", "vial_sequence", name="uq_lims_parent_vial_sequence"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    parent_sample_pk: Mapped[int] = mapped_column(Integer, ForeignKey("lims_samples.id", ondelete="CASCADE"))
+    external_lims_uid: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
+    sample_id: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
+    vial_sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    received_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    received_by_user_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("users.id", ondelete="SET NULL"))
+    photo_external_uid: Mapped[Optional[str]] = mapped_column(String(100))
+    remarks: Mapped[Optional[str]] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    parent_sample: Mapped["LimsSample"] = relationship("LimsSample", back_populates="sub_samples")
