@@ -179,6 +179,44 @@ def _run_migrations():
                 ALTER TABLE hplc_methods DROP COLUMN instrument_id;
             END IF;
         END $$""",
+        # Sub-Samples feature: LIMS-side master table + sub-samples table
+        """
+        CREATE TABLE IF NOT EXISTS lims_samples (
+            id SERIAL PRIMARY KEY,
+            sample_id VARCHAR(100) NOT NULL UNIQUE,
+            external_lims_uid VARCHAR(100),
+            external_lims_system VARCHAR(50) DEFAULT 'senaite',
+            client_id VARCHAR(100),
+            client_uid VARCHAR(100),
+            contact_uid VARCHAR(100),
+            sample_type VARCHAR(100),
+            status VARCHAR(50),
+            peptide_name VARCHAR(200),
+            client_sample_id VARCHAR(200),
+            date_sampled TIMESTAMP,
+            date_received TIMESTAMP,
+            is_retest BOOLEAN DEFAULT FALSE,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            last_synced_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS ix_lims_samples_external_lims_uid ON lims_samples (external_lims_uid)",
+        """
+        CREATE TABLE IF NOT EXISTS lims_sub_samples (
+            id SERIAL PRIMARY KEY,
+            parent_sample_pk INTEGER NOT NULL REFERENCES lims_samples(id) ON DELETE CASCADE,
+            external_lims_uid VARCHAR(100) NOT NULL UNIQUE,
+            sample_id VARCHAR(100) NOT NULL UNIQUE,
+            vial_sequence INTEGER NOT NULL,
+            received_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            received_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            photo_external_uid VARCHAR(100),
+            remarks TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            CONSTRAINT uq_lims_parent_vial_sequence UNIQUE (parent_sample_pk, vial_sequence)
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS ix_lims_sub_samples_parent_pk ON lims_sub_samples (parent_sample_pk)",
     ]
     try:
         with engine.connect() as conn:
