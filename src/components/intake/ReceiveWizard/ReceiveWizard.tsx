@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useReceiveWizard, type ParentInfo } from './useReceiveWizard'
+import { useParentSampleDetails } from './useParentSampleDetails'
 import { WizardSidebar } from './WizardSidebar'
 import { VialPanel } from './VialPanel'
 import { PrintStep } from './PrintStep'
@@ -13,6 +14,7 @@ type Phase = 'capture' | 'print'
 
 export function ReceiveWizard({ parent, onClose }: Props) {
   const wiz = useReceiveWizard(parent)
+  const parentDetails = useParentSampleDetails(parent.sample_id)
   const [phase, setPhase] = useState<Phase>('capture')
   const [editingSampleId, setEditingSampleId] = useState<string | null>(null)
 
@@ -30,9 +32,13 @@ export function ReceiveWizard({ parent, onClose }: Props) {
         vials={wiz.vials}
         activeSampleId={editingSampleId}
         onSelect={setEditingSampleId}
+        parentDetails={parentDetails.details}
+        parentDetailsLoading={parentDetails.loading}
+        parentDetailsError={parentDetails.error}
       />
       <VialPanel
         parentSampleId={parent.sample_id}
+        parentDetails={parentDetails.details}
         editingSub={editingSub}
         loading={wiz.loading}
         error={wiz.error}
@@ -43,7 +49,7 @@ export function ReceiveWizard({ parent, onClose }: Props) {
         onSaveEdit={async (
           sid: string,
           photoBytes?: Uint8Array,
-          remarks?: string,
+          remarks?: string
         ) => {
           await wiz.editSessionVial(sid, photoBytes, remarks)
           setEditingSampleId(null)

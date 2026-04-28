@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
-import type { SubSample } from '@/lib/api'
+import type { SenaiteLookupResult, SubSample } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import {
@@ -15,6 +15,7 @@ import {
 
 interface Props {
   parentSampleId: string
+  parentDetails: SenaiteLookupResult | null
   editingSub: SubSample | null
   loading: boolean
   error: string | null
@@ -22,7 +23,7 @@ interface Props {
   onSaveEdit: (
     sampleId: string,
     photoBytes?: Uint8Array,
-    remarks?: string,
+    remarks?: string
   ) => Promise<void>
   onDelete: (sampleId: string) => Promise<void>
   onDone: () => void
@@ -37,6 +38,7 @@ async function dataUrlToBytes(dataUrl: string): Promise<Uint8Array> {
 
 export function VialPanel({
   parentSampleId,
+  parentDetails,
   editingSub,
   loading: parentLoading,
   error: parentError,
@@ -67,7 +69,10 @@ export function VialPanel({
   useEffect(() => {
     let stream: MediaStream | null = null
     let cancelled = false
-    if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
+    if (
+      typeof navigator === 'undefined' ||
+      !navigator.mediaDevices?.getUserMedia
+    ) {
       setCameraOk(false)
       return
     }
@@ -128,7 +133,9 @@ export function VialPanel({
     setBusy(true)
     setLocalError(null)
     try {
-      const photoBytes = photoDataUrl ? await dataUrlToBytes(photoDataUrl) : undefined
+      const photoBytes = photoDataUrl
+        ? await dataUrlToBytes(photoDataUrl)
+        : undefined
       const trimmed = remarks.trim()
       const trimmedRemarks = trimmed ? trimmed : undefined
       if (editingSub) {
@@ -164,14 +171,41 @@ export function VialPanel({
 
   const error = localError ?? parentError
 
+  // Build the at-a-glance one-liner: "{client} · {peptide} · {qty}".
+  // We pick the matched peptide name from analyte slot 1 if available, else
+  // its raw name, so the tech sees the canonical compound rather than
+  // SENAITE's free-text label.
+  const oneLinerParts: string[] = []
+  if (parentDetails?.client) oneLinerParts.push(parentDetails.client)
+  const firstAnalyte = parentDetails?.analytes?.[0]
+  if (firstAnalyte) {
+    oneLinerParts.push(
+      firstAnalyte.matched_peptide_name ?? firstAnalyte.raw_name
+    )
+  }
+  if (parentDetails?.declared_weight_mg != null) {
+    oneLinerParts.push(`${parentDetails.declared_weight_mg} mg`)
+  }
+  const oneLiner = oneLinerParts.join(' · ')
+
   return (
     <main className="p-6 flex flex-col gap-4 overflow-y-auto">
       <header className="flex items-baseline justify-between gap-4">
-        <h2 className="text-xl font-semibold">
-          {editingSub
-            ? `Editing ${editingSub.sample_id}`
-            : `New vial for ${parentSampleId}`}
-        </h2>
+        <div className="min-w-0">
+          <h2 className="text-xl font-semibold">
+            {editingSub
+              ? `Editing ${editingSub.sample_id}`
+              : `New vial for ${parentSampleId}`}
+          </h2>
+          {oneLiner && !editingSub && (
+            <p
+              className="text-sm text-muted-foreground truncate"
+              title={oneLiner}
+            >
+              {oneLiner}
+            </p>
+          )}
+        </div>
         <Button
           type="button"
           variant="link"
@@ -231,7 +265,9 @@ export function VialPanel({
       </section>
 
       <label className="block">
-        <span className="block text-sm font-medium mb-1">Remarks (optional)</span>
+        <span className="block text-sm font-medium mb-1">
+          Remarks (optional)
+        </span>
         <Textarea
           value={remarks}
           onChange={e => setRemarks(e.target.value)}
