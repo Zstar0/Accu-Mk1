@@ -21,7 +21,13 @@ export function ReceiveWizard({ parent, onClose }: Props) {
   const [editingSampleId, setEditingSampleId] = useState<string | null>(null)
 
   if (phase === 'print') {
-    return <PrintStep vials={wiz.sessionVials} onDone={onClose} />
+    return (
+      <PrintStep
+        vials={wiz.sessionVials}
+        orderNumber={parentDetails.details?.client_order_number ?? null}
+        onDone={onClose}
+      />
+    )
   }
 
   const editingSub = editingSampleId

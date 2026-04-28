@@ -6,10 +6,12 @@ import './PrintStep.css'
 
 interface Props {
   vials: SubSample[]
+  /** WP-XXXX style client order number, surfaced from useParentSampleDetails. */
+  orderNumber?: string | null
   onDone: () => void
 }
 
-export function PrintStep({ vials, onDone }: Props) {
+export function PrintStep({ vials, orderNumber, onDone }: Props) {
   useEffect(() => {
     // Auto-trigger the OS print dialog 200ms after mount so the page renders first.
     const t = setTimeout(() => window.print(), 200)
@@ -42,7 +44,11 @@ export function PrintStep({ vials, onDone }: Props) {
 
       <div className="print-area">
         {vials.map(v => (
-          <LabelTemplate key={v.sample_id} sampleId={v.sample_id} />
+          <LabelTemplate
+            key={v.sample_id}
+            sampleId={v.sample_id}
+            orderNumber={orderNumber}
+          />
         ))}
       </div>
 
