@@ -4116,3 +4116,143 @@ export async function getSampleRetestInfo(sampleId: string): Promise<SampleRetes
   if (!response.ok) throw new Error(`Sample retest-info failed: ${response.status}`)
   return response.json()
 }
+
+// ─── Sub-samples ──────────────────────────────────────────────────────────
+
+export interface SubSample {
+  id: number
+  sample_id: string
+  parent_sample_id: string
+  vial_sequence: number
+  received_at: string
+  received_by_user_id: number | null
+  photo_external_uid: string | null
+  remarks: string | null
+}
+
+export interface ParentSampleSummary {
+  sample_id: string
+  external_lims_uid: string | null
+  peptide_name: string | null
+  status: string | null
+  sub_sample_count: number
+  last_synced_at: string
+}
+
+export interface SubSampleListResponse {
+  parent: ParentSampleSummary
+  sub_samples: SubSample[]
+}
+
+export interface SubSampleResponse {
+  sub_sample: SubSample
+}
+
+/**
+ * Thrown when SENAITE silently created a non-secondary AR (orphan).
+ * Carries the orphan AR's identifiers so the UI can prompt for manual cleanup.
+ */
+export class SecondaryFalloutError extends Error {
+  readonly orphan_uid: string
+  readonly orphan_sample_id: string
+  constructor(message: string, orphan_uid: string, orphan_sample_id: string) {
+    super(message)
+    this.name = 'SecondaryFalloutError'
+    this.orphan_uid = orphan_uid
+    this.orphan_sample_id = orphan_sample_id
+  }
+}
+
+/**
+ * List all sub-samples for a parent sample.
+ */
+export async function listSubSamples(parentSampleId: string): Promise<SubSampleListResponse> {
+  const response = await fetch(
+    `${API_BASE_URL()}/api/sub-samples?parent_sample_id=${encodeURIComponent(parentSampleId)}`,
+    { headers: getBearerHeaders() }
+  )
+  if (!response.ok) throw new Error(`listSubSamples failed: ${response.status}`)
+  return response.json()
+}
+
+/**
+ * Create a new sub-sample for a parent sample.
+ * May throw SecondaryFalloutError if SENAITE silently created an orphan AR.
+ */
+export async function createSubSample(args: {
+  parentSampleId: string
+  photoBase64: string
+  remarks?: string
+}): Promise<SubSample> {
+  const response = await fetch(`${API_BASE_URL()}/api/sub-samples`, {
+    method: 'POST',
+    headers: getBearerHeaders('application/json'),
+    body: JSON.stringify({
+      parent_sample_id: args.parentSampleId,
+      photo_base64: args.photoBase64,
+      remarks: args.remarks ?? null,
+    }),
+  })
+
+  if (!response.ok) {
+    if (response.status === 502) {
+      // Try to parse a structured fallout body
+      try {
+        const body = await response.json()
+        const d = body?.detail
+        if (d && typeof d === 'object' && d.code === 'secondary_fallout') {
+          throw new SecondaryFalloutError(
+            d.message ?? 'SENAITE silently created an orphan AR',
+            d.orphan_uid,
+            d.orphan_sample_id,
+          )
+        }
+        throw new Error(
+          `createSubSample failed: ${typeof d === 'string' ? d : JSON.stringify(d)}`
+        )
+      } catch (e) {
+        if (e instanceof SecondaryFalloutError) throw e
+        throw new Error(`createSubSample failed: ${response.status}`)
+      }
+    }
+    throw new Error(`createSubSample failed: ${response.status}`)
+  }
+
+  const body = await response.json()
+  return body.sub_sample
+}
+
+/**
+ * Update a sub-sample (photo and/or remarks).
+ */
+export async function updateSubSample(
+  sampleId: string,
+  args: { photoBase64?: string; remarks?: string }
+): Promise<SubSample> {
+  const response = await fetch(
+    `${API_BASE_URL()}/api/sub-samples/${encodeURIComponent(sampleId)}`,
+    {
+      method: 'PATCH',
+      headers: getBearerHeaders('application/json'),
+      body: JSON.stringify({
+        photo_base64: args.photoBase64 ?? null,
+        remarks: args.remarks ?? null,
+      }),
+    }
+  )
+  if (!response.ok) throw new Error(`updateSubSample failed: ${response.status}`)
+  const body = await response.json()
+  return body.sub_sample
+}
+
+/**
+ * Delete a sub-sample.
+ */
+export async function deleteSubSample(sampleId: string): Promise<void> {
+  const response = await fetch(
+    `${API_BASE_URL()}/api/sub-samples/${encodeURIComponent(sampleId)}`,
+    { method: 'DELETE', headers: getBearerHeaders() }
+  )
+  if (!response.ok && response.status !== 204)
+    throw new Error(`deleteSubSample failed: ${response.status}`)
+}
