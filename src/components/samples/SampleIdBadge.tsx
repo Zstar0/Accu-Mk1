@@ -27,7 +27,10 @@ export function SampleIdBadge({ id, parentId, vialSequence, hasChildren }: Props
   const effectiveVialSequence =
     vialSequence ?? (derived?.[2] ? parseInt(derived[2], 10) : undefined)
 
-  const handleParentClick = () => {
+  const handleParentClick = (e: React.MouseEvent) => {
+    // Stop propagation so this badge can be safely dropped inside outer
+    // clickable cards/rows without the parent-link click bubbling to them.
+    e.stopPropagation()
     if (effectiveParentId) {
       navigateToSample(effectiveParentId)
     }
