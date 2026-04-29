@@ -12,6 +12,31 @@ affect production execution.
 import os
 import sys
 
+import pytest
+
 _BACKEND_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if _BACKEND_DIR not in sys.path:
     sys.path.insert(0, _BACKEND_DIR)
+
+
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers",
+        "integration: live-SENAITE integration test. Skipped by default; "
+        "run explicitly with `-m integration`.",
+    )
+
+
+def pytest_collection_modifyitems(config, items):
+    """Skip integration-marked tests unless the user explicitly opted in
+    via `-m integration` (or any expression that mentions it, e.g.
+    `-m "integration or unit"`). A bare run with no `-m` skips them."""
+    markexpr = config.getoption("markexpr") or ""
+    if "integration" in markexpr:
+        return
+    skip_integration = pytest.mark.skip(
+        reason="integration test (run with `-m integration` to enable)"
+    )
+    for item in items:
+        if "integration" in item.keywords:
+            item.add_marker(skip_integration)

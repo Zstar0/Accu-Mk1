@@ -127,23 +127,25 @@ git commit -m "docs: verify SENAITE secondary creation REST contract"
 
 ---
 
-## Task 2: DB migration — `samples` and `sub_samples` tables
+## Task 2: DB migration — `lims_samples` and `lims_sub_samples` tables ✅ DONE (commit `c59c872`)
+
+**Naming note:** Original draft used `samples`/`sub_samples`, but those collided with `class Sample(Base): __tablename__ = "samples"` at `backend/models.py:72` (HPLC job samples). Renamed to `lims_samples` / `lims_sub_samples` — vendor-neutral, ages well as the LIMS evolves. **All downstream tasks (3, 6, 7, 22) reference these new names.**
 
 **Files:**
 - Modify: `backend/database.py` — append entries to `_run_migrations()` list around line 181.
 
-- [ ] **Step 1: Read the migration list location**
+- [x] **Step 1: Read the migration list location**
 
 Read `backend/database.py:60-190` to confirm where to append.
 
-- [ ] **Step 2: Append the two CREATE TABLE statements**
+- [x] **Step 2: Append the two CREATE TABLE statements**
 
-Add to the end of the `migrations` list in `_run_migrations()`:
+Added to the end of the `migrations` list in `_run_migrations()`:
 
 ```python
-        # Sub-Samples feature: stub master table + sub-samples table
+        # Sub-Samples feature: LIMS-side master table + sub-samples table
         """
-        CREATE TABLE IF NOT EXISTS samples (
+        CREATE TABLE IF NOT EXISTS lims_samples (
             id SERIAL PRIMARY KEY,
             sample_id VARCHAR(100) NOT NULL UNIQUE,
             external_lims_uid VARCHAR(100),
@@ -162,11 +164,11 @@ Add to the end of the `migrations` list in `_run_migrations()`:
             last_synced_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
         """,
-        "CREATE INDEX IF NOT EXISTS ix_samples_external_lims_uid ON samples (external_lims_uid)",
+        "CREATE INDEX IF NOT EXISTS ix_lims_samples_external_lims_uid ON lims_samples (external_lims_uid)",
         """
-        CREATE TABLE IF NOT EXISTS sub_samples (
+        CREATE TABLE IF NOT EXISTS lims_sub_samples (
             id SERIAL PRIMARY KEY,
-            parent_sample_pk INTEGER NOT NULL REFERENCES samples(id) ON DELETE CASCADE,
+            parent_sample_pk INTEGER NOT NULL REFERENCES lims_samples(id) ON DELETE CASCADE,
             external_lims_uid VARCHAR(100) NOT NULL UNIQUE,
             sample_id VARCHAR(100) NOT NULL UNIQUE,
             vial_sequence INTEGER NOT NULL,
@@ -175,37 +177,30 @@ Add to the end of the `migrations` list in `_run_migrations()`:
             photo_external_uid VARCHAR(100),
             remarks TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            CONSTRAINT uq_parent_vial_sequence UNIQUE (parent_sample_pk, vial_sequence)
+            CONSTRAINT uq_lims_parent_vial_sequence UNIQUE (parent_sample_pk, vial_sequence)
         )
         """,
-        "CREATE INDEX IF NOT EXISTS ix_sub_samples_parent_pk ON sub_samples (parent_sample_pk)",
+        "CREATE INDEX IF NOT EXISTS ix_lims_sub_samples_parent_pk ON lims_sub_samples (parent_sample_pk)",
 ```
 
-- [ ] **Step 3: Restart backend, verify tables exist**
+- [x] **Step 3: Restart backend, verify tables exist**
 
-```bash
-docker exec accu-mk1-backend python -c "from database import engine; from sqlalchemy import inspect; print(inspect(engine).get_table_names())"
-```
+Verified — `lims_samples` and `lims_sub_samples` both exist; the misnamed `senaite_*` tables from an earlier attempt were dropped.
 
-Expected: output includes `samples` and `sub_samples`.
-
-- [ ] **Step 4: Commit**
-
-```bash
-git add backend/database.py
-git commit -m "feat(sub-samples): add samples and sub_samples tables"
-```
+- [x] **Step 4: Commit** — landed as `c59c872 feat(sub-samples): add lims_samples and lims_sub_samples tables`
 
 ---
 
 ## Task 3: SQLAlchemy ORM models
 
 **Files:**
-- Modify: `backend/models.py` — append `Sample` and `SubSample` classes at end of file.
+- Modify: `backend/models.py` — append `LimsSample` and `LimsSubSample` classes at end of file.
+
+**Note:** Class names are `LimsSample` and `LimsSubSample` (NOT `Sample`/`SubSample`) because `class Sample(Base)` already exists at `backend/models.py:72` for HPLC job samples. Same reasoning as the table-name choice in Task 2.
 
 - [ ] **Step 1: Read existing model style**
 
-Read `backend/models.py:1-50` for imports + Base, and any one model (e.g. `WorksheetItem` around line 606) to confirm the SQLAlchemy 2.0 typed-mapped style.
+Read `backend/models.py:1-50` for imports + Base, and any one model (e.g. `WorksheetItem` around line 606) to confirm the SQLAlchemy 2.0 typed-mapped style. Confirm the existing `class Sample` is at line 72 so you don't accidentally duplicate it.
 
 - [ ] **Step 2: Append the new models**
 
@@ -219,8 +214,14 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from database import Base
 
 
-class Sample(Base):
-    __tablename__ = "samples"
+class LimsSample(Base):
+    """Master sample record (parent of one or more LimsSubSample vials).
+
+    Seeded lazily by the receive wizard from SENAITE today. Designed to become
+    the canonical sample registry once SENAITE is sunset, hence the neutral
+    `external_lims_*` columns rather than `senaite_*`.
+    """
+    __tablename__ = "lims_samples"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     sample_id: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
@@ -239,18 +240,20 @@ class Sample(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     last_synced_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
-    sub_samples: Mapped[List["SubSample"]] = relationship(
-        "SubSample", back_populates="parent_sample",
-        cascade="all, delete-orphan", order_by="SubSample.vial_sequence",
+    sub_samples: Mapped[List["LimsSubSample"]] = relationship(
+        "LimsSubSample", back_populates="parent_sample",
+        cascade="all, delete-orphan", order_by="LimsSubSample.vial_sequence",
     )
 
 
-class SubSample(Base):
-    __tablename__ = "sub_samples"
-    __table_args__ = (UniqueConstraint("parent_sample_pk", "vial_sequence", name="uq_parent_vial_sequence"),)
+class LimsSubSample(Base):
+    """One physical vial received under a parent LimsSample. SENAITE id format
+    `<parent>-S<NN>`, e.g. P-0134-S01."""
+    __tablename__ = "lims_sub_samples"
+    __table_args__ = (UniqueConstraint("parent_sample_pk", "vial_sequence", name="uq_lims_parent_vial_sequence"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    parent_sample_pk: Mapped[int] = mapped_column(Integer, ForeignKey("samples.id", ondelete="CASCADE"))
+    parent_sample_pk: Mapped[int] = mapped_column(Integer, ForeignKey("lims_samples.id", ondelete="CASCADE"))
     external_lims_uid: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
     sample_id: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
     vial_sequence: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -260,22 +263,22 @@ class SubSample(Base):
     remarks: Mapped[Optional[str]] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
-    parent_sample: Mapped["Sample"] = relationship("Sample", back_populates="sub_samples")
+    parent_sample: Mapped["LimsSample"] = relationship("LimsSample", back_populates="sub_samples")
 ```
 
 - [ ] **Step 3: Smoke-test the import**
 
 ```bash
-docker exec accu-mk1-backend python -c "from models import Sample, SubSample; print(Sample.__tablename__, SubSample.__tablename__)"
+docker exec accu-mk1-backend python -c "from models import LimsSample, LimsSubSample; print(LimsSample.__tablename__, LimsSubSample.__tablename__)"
 ```
 
-Expected: `samples sub_samples`.
+Expected: `lims_samples lims_sub_samples`.
 
 - [ ] **Step 4: Commit**
 
 ```bash
 git add backend/models.py
-git commit -m "feat(sub-samples): add Sample and SubSample ORM models"
+git commit -m "feat(sub-samples): add LimsSample and LimsSubSample ORM models"
 ```
 
 ---
@@ -2368,7 +2371,7 @@ git commit -m "feat(sub-samples): SampleIdBadge swap-in for HPLC/worksheet/repor
 
 Slower tests requiring a live SENAITE; mark them so they don't run by default.
 
-- [ ] **Step 1: Write the integration tests**
+- [x] **Step 1: Write the integration tests**
 
 ```python
 import pytest
@@ -2410,7 +2413,7 @@ def test_after_the_fact_does_not_regress_parent_state(db_session, already_receiv
 
 Add fixtures (`parent_p_test`, `parent_with_retest_suffix`, `already_received_parent`) in `conftest.py` that seed SENAITE with the required state via the existing test infrastructure.
 
-- [ ] **Step 2: Run only when SENAITE is up**
+- [x] **Step 2: Run only when SENAITE is up**
 
 ```bash
 docker exec accu-mk1-backend python -m pytest backend/tests/test_sub_samples_integration.py -v -m integration
@@ -2531,7 +2534,7 @@ git commit -m "docs: changelog entry for sub-samples feature"
 ## Final review checklist (before opening PR)
 
 - [ ] All unit tests pass: `npm run check:all` and `docker exec accu-mk1-backend python -m pytest backend/tests/ -v`
-- [ ] Integration tests pass against local SENAITE
+- [x] Integration tests pass against local SENAITE
 - [ ] E2E happy path passes
 - [ ] Manual smoke on receiver workstation completed
 - [ ] No lingering TODOs in code (all resolved or filed as follow-up tickets)
