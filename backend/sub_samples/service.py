@@ -9,6 +9,8 @@ Defense-in-depth protections (per Task 5 spike findings):
   3. Surface SecondaryFalloutError with orphan UID for manual cleanup.
 """
 import logging
+import os
+import requests
 from datetime import datetime, timedelta
 from typing import Optional, Tuple, List
 from sqlalchemy import select, func
@@ -317,3 +319,27 @@ def delete_sub_sample(db: Session, sample_id: str) -> None:
     db.delete(sub)
     parent.last_synced_at = datetime.utcnow()
     db.commit()
+
+
+def fetch_sample_services(sample_id: str) -> Optional[dict]:
+    """Fetch the WP `services` dict for a SENAITE sample by hitting IS.
+
+    Returns None on 404 (sample not in any order_submissions row); raises on
+    network error / non-2xx so the caller can surface 503 to the wizard.
+    """
+    base = os.environ.get("INTEGRATION_SERVICE_URL", "").rstrip("/")
+    key = os.environ.get("INTEGRATION_SERVICE_API_KEY", "")
+    if not base or not key:
+        raise RuntimeError(
+            "INTEGRATION_SERVICE_URL / INTEGRATION_SERVICE_API_KEY not configured"
+        )
+    resp = requests.get(
+        f"{base}/explorer/orders/sample-services",
+        params={"sample_id": sample_id},
+        headers={"X-API-Key": key},
+        timeout=15,
+    )
+    if resp.status_code == 404:
+        return None
+    resp.raise_for_status()
+    return resp.json()

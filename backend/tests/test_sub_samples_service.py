@@ -8,6 +8,7 @@ from database import Base
 from models import LimsSample, LimsSubSample
 from sub_samples.service import ensure_sample_row, create_sub_sample, list_sub_samples
 from sub_samples.senaite import SecondaryCreateResult, SecondaryFalloutError
+from sub_samples import service
 
 
 @pytest.fixture
@@ -254,5 +255,48 @@ def test_extract_inheritable_fields_handles_reference_shapes():
         "Profiles": ["P1", "P2", "P3"],
         "VerificationCode": "ABCD-1234",
     }
+
+
+def _ok_response(json_body):
+    resp = MagicMock()
+    resp.status_code = 200
+    resp.json.return_value = json_body
+    resp.raise_for_status = MagicMock()
+    return resp
+
+
+def _err_response(status_code):
+    resp = MagicMock()
+    resp.status_code = status_code
+    resp.raise_for_status.side_effect = Exception(f"HTTP {status_code}")
+    return resp
+
+
+def test_fetch_sample_services_returns_dict(monkeypatch):
+    monkeypatch.setenv("INTEGRATION_SERVICE_URL", "http://is.test")
+    monkeypatch.setenv("INTEGRATION_SERVICE_API_KEY", "test-key")
+    body = {
+        "services": {"endotoxin": True, "sterility_pcr": True, "bac_water_panel": True, "hplcpurity_identity": False, "samplevariance": False, "residualsolvents": False},
+        "analytical_test": "Bacteriostatic Water",
+        "wp_order_number": "3229",
+    }
+    with patch("sub_samples.service.requests.get", return_value=_ok_response(body)) as gp:
+        result = service.fetch_sample_services("BW-0006")
+    assert result["services"]["endotoxin"] is True
+    assert result["wp_order_number"] == "3229"
+    gp.assert_called_once()
+    call_args = gp.call_args
+    assert "BW-0006" in str(call_args)
+    assert call_args.kwargs["headers"]["X-API-Key"] == "test-key"
+
+
+def test_fetch_sample_services_returns_none_on_404(monkeypatch):
+    monkeypatch.setenv("INTEGRATION_SERVICE_URL", "http://is.test")
+    monkeypatch.setenv("INTEGRATION_SERVICE_API_KEY", "test-key")
+    resp = MagicMock()
+    resp.status_code = 404
+    with patch("sub_samples.service.requests.get", return_value=resp):
+        result = service.fetch_sample_services("P-NOSUCH")
+    assert result is None
 
 
