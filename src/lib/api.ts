@@ -4149,6 +4149,22 @@ export interface SubSampleListResponse {
   sub_samples: SubSample[]
 }
 
+export type AssignmentRole = 'hplc' | 'endo' | 'ster' | 'xtra'
+
+export interface VialPlanItem {
+  sample_id: string
+  is_parent: boolean
+  vial_sequence: number
+  assignment_role: AssignmentRole | null
+}
+
+export interface VialPlanResponse {
+  demand: { hplc: number; endo: number; ster: number }
+  wp_order_number: string | null
+  vials: VialPlanItem[]
+  is_unreachable: boolean
+}
+
 /**
  * Thrown when SENAITE silently created a non-secondary AR (orphan).
  * Carries the orphan AR's identifiers so the UI can prompt for manual cleanup.
@@ -4254,6 +4270,43 @@ export async function deleteSubSample(sampleId: string): Promise<void> {
   )
   if (!response.ok && response.status !== 204)
     throw new Error(`deleteSubSample failed: ${response.status}`)
+}
+
+/**
+ * Get the vial plan for a parent sample (demand, assignment roles, etc.).
+ */
+export async function getVialPlan(parentSampleId: string): Promise<VialPlanResponse> {
+  const response = await fetch(
+    `${API_BASE_URL()}/api/sub-samples/${encodeURIComponent(parentSampleId)}/vial-plan`,
+    { headers: getBearerHeaders() }
+  )
+  if (!response.ok) {
+    const err = await response.json().catch(() => null)
+    throw new Error(err?.detail || `Vial plan fetch failed: ${response.status}`)
+  }
+  return response.json()
+}
+
+/**
+ * Update the assignment role for a sub-sample.
+ */
+export async function patchVialAssignment(
+  sampleId: string,
+  role: AssignmentRole | null,
+): Promise<{ sample_id: string; assignment_role: AssignmentRole | null }> {
+  const response = await fetch(
+    `${API_BASE_URL()}/api/sub-samples/${encodeURIComponent(sampleId)}/assignment`,
+    {
+      method: 'PATCH',
+      headers: getBearerHeaders('application/json'),
+      body: JSON.stringify({ role }),
+    }
+  )
+  if (!response.ok) {
+    const err = await response.json().catch(() => null)
+    throw new Error(err?.detail || `Vial assignment update failed: ${response.status}`)
+  }
+  return response.json()
 }
 
 /**
