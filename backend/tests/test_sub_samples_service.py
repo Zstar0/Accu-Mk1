@@ -336,3 +336,65 @@ def test_derive_demand_hplc_or_bw_panel():
     assert service.derive_demand(services) == {"hplc": 1, "endo": 0, "ster": 0}
 
 
+def _vial(sample_id, vial_seq, role=None, is_parent=False):
+    return {
+        "sample_id": sample_id,
+        "vial_sequence": vial_seq,
+        "is_parent": is_parent,
+        "assignment_role": role,
+    }
+
+
+def test_auto_assign_full_bw_with_all_addons():
+    """Parent → HPLC (already pinned), 3 sub-samples → ENDO, STER, STER."""
+    demand = {"hplc": 1, "endo": 1, "ster": 2}
+    vials = [
+        _vial("BW-0006", 0, role="hplc", is_parent=True),
+        _vial("BW-0006-S01", 1, role=None),
+        _vial("BW-0006-S02", 2, role=None),
+        _vial("BW-0006-S03", 3, role=None),
+    ]
+    result = service.auto_assign(vials, demand)
+    assert [v["assignment_role"] for v in result] == ["hplc", "endo", "ster", "ster"]
+
+
+def test_auto_assign_skips_existing_overrides():
+    """A vial with an explicit role keeps it; demand is decremented if it
+    matches a real bucket."""
+    demand = {"hplc": 1, "endo": 1, "ster": 2}
+    vials = [
+        _vial("BW-0006", 0, role="hplc", is_parent=True),
+        _vial("BW-0006-S01", 1, role="ster"),  # tech pre-assigned this to STER
+        _vial("BW-0006-S02", 2, role=None),
+        _vial("BW-0006-S03", 3, role=None),
+    ]
+    result = service.auto_assign(vials, demand)
+    # S01 stays STER (user override), S02 fills remaining STER slot, S03 fills ENDO
+    assert [v["assignment_role"] for v in result] == ["hplc", "ster", "ster", "endo"]
+
+
+def test_auto_assign_surplus_vials_go_to_xtra():
+    """Demand met → remaining vials land in xtra."""
+    demand = {"hplc": 1, "endo": 0, "ster": 0}
+    vials = [
+        _vial("P-0139", 0, role="hplc", is_parent=True),
+        _vial("P-0139-S01", 1, role=None),
+        _vial("P-0139-S02", 2, role=None),
+    ]
+    result = service.auto_assign(vials, demand)
+    assert [v["assignment_role"] for v in result] == ["hplc", "xtra", "xtra"]
+
+
+def test_auto_assign_short_demand_leaves_unfilled():
+    """If demand exceeds vials, the unfilled slots just... don't get a vial.
+    auto_assign doesn't conjure phantom vials. (UI shows amber warning.)"""
+    demand = {"hplc": 1, "endo": 1, "ster": 2}
+    vials = [
+        _vial("BW-0006", 0, role="hplc", is_parent=True),
+        _vial("BW-0006-S01", 1, role=None),
+    ]
+    result = service.auto_assign(vials, demand)
+    # Only 2 vials, but demand was 4. S01 → ENDO (priority order). HPLC met by parent.
+    assert [v["assignment_role"] for v in result] == ["hplc", "endo"]
+
+

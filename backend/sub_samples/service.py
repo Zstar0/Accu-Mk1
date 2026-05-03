@@ -360,3 +360,59 @@ def derive_demand(services: dict) -> dict:
         "endo": 1 if endo else 0,
         "ster": 2 if ster else 0,
     }
+
+
+_BUCKET_PRIORITY = ("hplc", "endo", "ster")
+_REAL_BUCKETS = {"hplc", "endo", "ster"}
+
+
+def auto_assign(vials: list[dict], demand: dict) -> list[dict]:
+    """Pure function: assign roles in-place to a list of vial dicts.
+
+    Mutates vial['assignment_role'] for any vial where it is None. Vials
+    whose role is already set are skipped — but their bucket counts toward
+    decrementing demand so we don't double-fill.
+
+    Vials are processed in input order (which the caller orders by
+    vial_sequence with parent first).
+
+    When filling None-role vials, prefer completing buckets that already have
+    user-assigned vials, using priority order as the tiebreaker. Vials that
+    don't fit any remaining demand land in 'xtra'.
+    """
+    remaining = dict(demand)  # copy so we don't mutate caller's dict
+    assigned_buckets = set()
+
+    # First pass: track existing assignments and decrement demand.
+    for vial in vials:
+        role = vial.get("assignment_role")
+        if role in _REAL_BUCKETS:
+            assigned_buckets.add(role)
+            if remaining.get(role, 0) > 0:
+                remaining[role] -= 1
+
+    # Second pass: auto-assign None roles. Prefer completing already-assigned
+    # buckets, then fall back to priority order.
+    out = []
+    for vial in vials:
+        role = vial.get("assignment_role")
+        if role is None:
+            assigned = None
+            # First try to complete buckets that already have assignments.
+            for bucket in _BUCKET_PRIORITY:
+                if bucket in assigned_buckets and remaining.get(bucket, 0) > 0:
+                    assigned = bucket
+                    remaining[bucket] -= 1
+                    break
+            # Then try remaining buckets in priority order.
+            if assigned is None:
+                for bucket in _BUCKET_PRIORITY:
+                    if remaining.get(bucket, 0) > 0:
+                        assigned = bucket
+                        remaining[bucket] -= 1
+                        break
+            if assigned is None:
+                assigned = "xtra"
+            vial = {**vial, "assignment_role": assigned}
+        out.append(vial)
+    return out
