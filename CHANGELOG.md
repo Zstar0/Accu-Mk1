@@ -1,5 +1,51 @@
 # Changelog
 
+## Unreleased — Sub-Samples + Bac Water
+
+### Added — Analyte class & Benzyl Alcohol (Phase A)
+
+- **`peptides.analyte_class` column** (`'peptide'` | `'additive'`, NOT NULL DEFAULT `'peptide'`). All existing peptide rows backfill to `'peptide'` on column add. Discriminates non-peptide HPLC analytes from peptides without renaming the table — keeps the existing `Peptide.id` FK plumbing across `CalibrationCurve`, `peptide_methods`, `instrument_methods`, `SamplePrep`, etc. usable for Benzyl Alcohol.
+- **Benzyl Alcohol seeded as the first `'additive'` row** via startup migration (`name='Benzyl Alcohol'`, `abbreviation='Benzyl Alcohol'`, `is_blend=false`). Idempotent via `ON CONFLICT (abbreviation) DO NOTHING`.
+- **`GET /peptides?analyte_class=peptide|additive`** opt-in query filter. Default unfiltered preserves all existing callers; only the HPLC wizard Step 1 picker uses the filter today.
+- **HPLC wizard Step 1 context-filter** ([Step1SampleInfo.tsx](src/components/hplc/wizard/steps/Step1SampleInfo.tsx)). When the SENAITE lookup returns `sample_type === 'Bacteriostatic Water'`, the peptide dropdown shows **only** `'additive'`-class rows (currently just Benzyl Alcohol). All other contexts hide additives so peptide preps stay clean. Manual / pre-lookup default keeps additives hidden.
+- **`AnalyteClass` type + `analyte_class` field on `PeptideRecord`** (`src/lib/api.ts`). `getPeptides({ analyteClass })` accepts the optional filter parameter.
+
+### Added — Sub-sample publish guards
+
+- **Hide "Publish Accumark COA" menu item on sub-sample detail pages** ([SampleDetails.tsx](src/components/senaite/SampleDetails.tsx)). The `<DropdownMenuItem>` is wrapped in `{isParent && (...)}` so the option simply doesn't render on `-S\d{2}` pages.
+- **Backend 403 on sub-sample publish attempts** ([backend/main.py](backend/main.py) `POST /wizard/senaite/samples/{sample_id}/publish-coa`). Sub-samples inherit `ClientOrderNumber` from the parent via `INHERITABLE_FIELDS`, so publishing one would silently overwrite the parent's COA on the WP order line. Block stays in place until parent/sub linkage is wired through to WordPress.
+
+### Changed — Single-vial check-in policy (revised)
+
+- **First vial of a never-received parent now lands on the parent AR alone** — no `-S01` row created. Sub-samples represent vial 2+. This reverses the earlier "always create -S01" behavior and avoids redundant secondaries on single-vial check-ins. Receive wizard ([useReceiveWizard.ts](src/components/intake/ReceiveWizard/useReceiveWizard.ts)) skips `createSubSample` for the first vial of an unreceived parent and exposes a new `parentReceivedThisSession` flag.
+- **Print labels list now includes the parent** when received this session, so the lab gets the parent's label alongside any sub-sample labels in one print pass. ([ReceiveWizard.tsx](src/components/intake/ReceiveWizard/ReceiveWizard.tsx))
+- **Wizard sidebar renders the parent as Vial 1** (read-only, with "View details" link). Sub-sample vial labels now display `vial_sequence + 1` so `-S01` shows as "Vial 2" — matching the new single-vial policy where parent occupies vial 1. ([WizardSidebar.tsx](src/components/intake/ReceiveWizard/WizardSidebar.tsx))
+- **`onSaveNew` callback returns `{ sampleId: string }` uniformly** (parent OR sub-sample). ([VialPanel.tsx](src/components/intake/ReceiveWizard/VialPanel.tsx), [PrintStep.tsx](src/components/intake/ReceiveWizard/PrintStep.tsx))
+
+### Changed — Vial Panel UI
+
+- **Native `<input type="file">` replaced with a styled `<Button>` + Upload icon** in the camera-failure branch ([VialPanel.tsx](src/components/intake/ReceiveWizard/VialPanel.tsx)). The input is `hidden`; the button triggers it via the existing `fileRef`. Disabled state mirrors `busy` to match the other action buttons.
+- **Existing-photo preview** when editing a sub-sample with `photo_external_uid` now fetches and renders the actual image (via `fetchSubSamplePhotoUrl`) instead of a placeholder card. Renders inline in both camera-OK and camera-failure branches when in edit mode without a fresh capture.
+
+### Schema
+
+- New migrations in `database._run_migrations()` (run at backend startup, after the existing sub-samples tables):
+  ```sql
+  ALTER TABLE peptides ADD COLUMN IF NOT EXISTS analyte_class VARCHAR(20) NOT NULL DEFAULT 'peptide';
+  UPDATE peptides SET abbreviation='Benzyl Alcohol' WHERE abbreviation='BA' AND name='Benzyl Alcohol';
+  INSERT INTO peptides (name, abbreviation, is_blend, analyte_class, active, created_at, updated_at)
+    VALUES ('Benzyl Alcohol', 'Benzyl Alcohol', FALSE, 'additive', TRUE, NOW(), NOW())
+    ON CONFLICT (abbreviation) DO NOTHING;
+  ```
+  See [docs/deploy/2026-05-bw-subsamples-release.md](docs/deploy/2026-05-bw-subsamples-release.md) for the full deploy guide.
+
+### Deferred / post-deploy
+
+- **HplcMethod row + `peptide_methods` + `instrument_methods` links for Benzyl Alcohol** are pending lab-provided method params (RT, wavelength, column, gradient, instruments). BA samples can't be processed through the HPLC wizard until these land.
+- **BA calibration curve.** Lab will run BA standards through the existing standard-prep workflow once the method exists.
+
+---
+
 ## Unreleased — Sub-Samples
 
 ### Added

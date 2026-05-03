@@ -132,6 +132,18 @@ Wizard for parent P-0134
 
 Each [Save Vial] is its own atomic transaction. SENAITE creation happens first; only on SENAITE success does the local DB row land. If the tech closes the browser between vials, all saved vials persist; the in-flight unsaved vial is lost (no draft persistence in v1).
 
+#### Single-vial check-in policy (revised 2026-05-01)
+
+The **parent AR is vial 1**. Sub-samples (`-S01`, `-S02`, …) represent **additional vials beyond the first**. Concretely:
+
+- 1 vial received → just the parent. Photo + remarks live on the parent's attachment + Remarks. **No sub-sample row is created.**
+- 2 vials received → parent (vial 1) + `-S01` (vial 2).
+- N vials received → parent + `-S01` … `-S(N-1)`.
+
+The wizard's `[Save Vial]` for the *first* vial of a never-received parent calls only `/wizard/senaite/receive-sample` (parent transitions to received with photo). It does **not** call `create_sub_sample`. Subsequent vials in the same session, and "Add Additional Vial" launches from a parent detail page, call `create_sub_sample` as before — the new sub-sample's `vial_sequence` starts at 1 in the DB but conceptually represents the *second* physical vial. The tech does not re-record vial 1's data when adding subsequent vials; non-photo fields (compound, peptide name, client, lot) remain on the parent AR and the new sub-sample inherits them via the existing `extract_inheritable_fields` flow.
+
+Backwards-compatibility: any pre-existing parents that were checked in under the old behavior (parent received + `-S01` redundantly created from the same vial) remain valid. The new `-S01` for those parents is treated as vial 2 on subsequent additions, even though it carries the same photo as the parent. No data migration is performed; the orphan `-S01` rows can be cleaned up manually if desired.
+
 ### Edit semantics
 
 - This-session vials: photo and remarks editable. Last-write-wins; updates push to SENAITE attachment + remarks.

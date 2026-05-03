@@ -1856,12 +1856,15 @@ export interface ComponentBrief {
   hplc_aliases?: string[] | null
 }
 
+export type AnalyteClass = 'peptide' | 'additive'
+
 export interface PeptideRecord {
   id: number
   name: string
   abbreviation: string
   active: boolean
   is_blend: boolean
+  analyte_class: AnalyteClass
   prep_vial_count: number
   hplc_aliases?: string[] | null
   display_aliases?: string[] | null
@@ -1880,6 +1883,7 @@ export interface PeptideCreateInput {
   analytes?: AnalyteInput[]
   is_blend?: boolean
   component_ids?: number[]
+  analyte_class?: AnalyteClass
 }
 
 export type BlendCalibrationData = Record<string, {
@@ -1898,9 +1902,10 @@ export interface CalibrationDataInput {
   notes?: string
 }
 
-export async function getPeptides(): Promise<PeptideRecord[]> {
+export async function getPeptides(opts?: { analyteClass?: AnalyteClass }): Promise<PeptideRecord[]> {
   try {
-    const response = await fetch(`${API_BASE_URL()}/peptides`, {
+    const qs = opts?.analyteClass ? `?analyte_class=${encodeURIComponent(opts.analyteClass)}` : ''
+    const response = await fetch(`${API_BASE_URL()}/peptides${qs}`, {
       headers: getBearerHeaders(),
     })
     if (!response.ok) {

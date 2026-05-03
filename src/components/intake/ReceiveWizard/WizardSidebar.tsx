@@ -5,6 +5,10 @@ import { SampleInfoPanel } from './SampleInfoPanel'
 
 interface WizardSidebarProps {
   vials: { sub: SubSample; isThisSession: boolean }[]
+  /** Parent AR rendered as Vial 1 in the new single-vial check-in policy.
+   * Shown read-only above the sub-sample list whenever the parent has been
+   * received (this session or previously). null = parent still pre-received. */
+  parentVial: { sampleId: string; receivedThisSession: boolean } | null
   activeSampleId: string | null
   onSelect: (sampleId: string | null) => void
   parentDetails: SenaiteLookupResult | null
@@ -14,6 +18,7 @@ interface WizardSidebarProps {
 
 export function WizardSidebar({
   vials,
+  parentVial,
   activeSampleId,
   onSelect,
   parentDetails,
@@ -50,7 +55,36 @@ export function WizardSidebar({
       </button>
 
       <ul className="space-y-1 flex-1">
-        {vials.length === 0 && (
+        {/* Parent AR represents Vial 1 under the single-vial check-in policy.
+            Read-only here — edits to the parent's photo/remarks happen on
+            the main sample detail page, not inside the receive wizard.
+            Mirrors the prior-session sub-sample pattern: the entry shows
+            sample id + status, with a "View details" link below that
+            navigates to the parent's detail page. */}
+        {parentVial && (
+          <li className="rounded overflow-hidden">
+            <div className="rounded bg-muted/30">
+              <div className="text-left p-2 opacity-80">
+                <div className="font-mono text-sm">{parentVial.sampleId}</div>
+                <div className="text-xs text-muted-foreground flex items-center gap-1">
+                  <span>Vial 1</span>
+                  <span aria-hidden>·</span>
+                  <span>
+                    {parentVial.receivedThisSession ? 'received' : 'previously received'}
+                  </span>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => navigateToSample(parentVial.sampleId)}
+                className="w-full text-left text-xs underline px-2 pb-2 text-muted-foreground hover:text-foreground transition-colors"
+              >
+                View details
+              </button>
+            </div>
+          </li>
+        )}
+        {vials.length === 0 && !parentVial && (
           <li className="text-xs text-muted-foreground px-2 py-1">
             No vials received yet.
           </li>
@@ -75,7 +109,8 @@ export function WizardSidebar({
                 >
                   <div className="font-mono text-sm">{v.sub.sample_id}</div>
                   <div className="text-xs text-muted-foreground">
-                    Vial {v.sub.vial_sequence}
+                    {/* Parent is Vial 1; sub-samples are vials 2+ */}
+                    Vial {v.sub.vial_sequence + 1}
                   </div>
                 </button>
               ) : (

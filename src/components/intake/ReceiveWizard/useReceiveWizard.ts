@@ -79,14 +79,19 @@ export function useReceiveWizard(parent: ParentInfo) {
   }, [refresh])
 
   const saveNewVial = useCallback(
-    async (photoBytes: Uint8Array, remarks?: string): Promise<SubSample> => {
+    async (
+      photoBytes: Uint8Array,
+      remarks?: string,
+    ): Promise<{ sampleId: string }> => {
       const photoBase64 = bytesToBase64(photoBytes)
       const isFirstVialEver =
         isParentInPreReceivedState && !vials.some(v => v.isThisSession)
 
-      // Dual-fire on first vial of a never-received parent. Order matters:
-      // parent receive first (existing endpoint, drives WP comms); then
-      // sub-sample create.
+      // Single-vial check-in policy: the first vial of a never-received parent
+      // becomes the parent itself. Photo + remarks land on the parent AR; no
+      // sub-sample row is created. Sub-samples represent vials *beyond* the
+      // first (the parent is vial 1). See the design doc's "Single-vial
+      // check-in policy" section under Save semantics.
       if (isFirstVialEver) {
         await receiveSenaiteSample(
           parent.uid,
@@ -95,8 +100,10 @@ export function useReceiveWizard(parent: ParentInfo) {
           remarks ?? null,
         )
         setParentReceivedThisSession(true)
+        return { sampleId: parent.sample_id }
       }
 
+      // Subsequent vials → sub-samples. SENAITE assigns the next -SNN id.
       const sub = await createSubSample({
         parentSampleId: parent.sample_id,
         photoBase64,
@@ -105,7 +112,7 @@ export function useReceiveWizard(parent: ParentInfo) {
 
       sessionSampleIdsRef.current.add(sub.sample_id)
       setVials(prev => [...prev, { sub, isThisSession: true }])
-      return sub
+      return { sampleId: sub.sample_id }
     },
     [
       isParentInPreReceivedState,
@@ -143,6 +150,7 @@ export function useReceiveWizard(parent: ParentInfo) {
     loading,
     error,
     parentReceived: !isParentInPreReceivedState,
+    parentReceivedThisSession,
     refresh,
     saveNewVial,
     editSessionVial,

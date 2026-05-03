@@ -2285,13 +2285,15 @@ export function SampleDetails() {
                   >
                     Generate Accumark COA
                   </DropdownMenuItem>
-                  <DropdownMenuItem
-                    onClick={handlePublishCOA}
-                    disabled={isPublishingCOA || !hasDraftCOA}
-                    className="cursor-pointer"
-                  >
-                    Publish Accumark COA
-                  </DropdownMenuItem>
+                  {isParent && (
+                    <DropdownMenuItem
+                      onClick={handlePublishCOA}
+                      disabled={isPublishingCOA || !hasDraftCOA}
+                      className="cursor-pointer"
+                    >
+                      Publish Accumark COA
+                    </DropdownMenuItem>
+                  )}
                 </DropdownMenuContent>
               </DropdownMenu>
               <COAConsole

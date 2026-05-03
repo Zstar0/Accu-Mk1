@@ -75,6 +75,7 @@ export function BlendCalibrationPanel({
         abbreviation: selectedComponent!,
         active: true,
         is_blend: false,
+        analyte_class: 'peptide',
         created_at: '',
         updated_at: '',
         methods: [],

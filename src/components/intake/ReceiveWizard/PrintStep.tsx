@@ -1,11 +1,16 @@
 import { useEffect } from 'react'
-import type { SubSample } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { LabelTemplate } from './LabelTemplate'
 import './PrintStep.css'
 
+interface PrintLabel {
+  /** sample_id is sufficient for label rendering — works for both the parent
+   * AR (when checked in as a single-vial sample) and sub-samples. */
+  sample_id: string
+}
+
 interface Props {
-  vials: SubSample[]
+  vials: PrintLabel[]
   /** WP-XXXX style client order number, surfaced from useParentSampleDetails. */
   orderNumber?: string | null
   onDone: () => void

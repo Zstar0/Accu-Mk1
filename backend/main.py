@@ -1936,6 +1936,7 @@ class PeptideCreate(BaseModel):
     analytes: list[AnalyteInput] = []
     is_blend: bool = False
     component_ids: list[int] = []
+    analyte_class: str = "peptide"  # 'peptide' | 'additive'
 
 
 class PeptideUpdate(BaseModel):
@@ -1950,6 +1951,7 @@ class PeptideUpdate(BaseModel):
     analytes: Optional[list[AnalyteInput]] = None
     component_ids: Optional[list[int]] = None
     component_vial_assignments: Optional[dict[str, int]] = None  # {"component_id": vial_number}
+    analyte_class: Optional[str] = None
 
 
 class CalibrationCurveResponse(BaseModel):
@@ -2016,6 +2018,7 @@ class PeptideResponse(BaseModel):
     abbreviation: str
     active: bool
     is_blend: bool = False
+    analyte_class: str = "peptide"
     prep_vial_count: int = 1
     hplc_aliases: Optional[list[str]] = None
     display_aliases: Optional[list[str]] = None
@@ -2519,9 +2522,16 @@ async def delete_method(method_id: int, db: Session = Depends(get_db), _current_
 # ─── Peptide Endpoints ───
 
 @app.get("/peptides", response_model=list[PeptideResponse])
-async def get_peptides(db: Session = Depends(get_db), _current_user=Depends(get_current_user)):
-    """Get all peptides with their active calibration curves and per-instrument summary."""
-    peptides = db.execute(
+async def get_peptides(
+    analyte_class: Optional[str] = None,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Get all peptides with their active calibration curves and per-instrument summary.
+
+    Optional ?analyte_class=peptide|additive filters by class. Default returns all classes.
+    """
+    query = (
         select(Peptide)
         .options(
             joinedload(Peptide.methods).joinedload(HplcMethod.instruments),
@@ -2530,7 +2540,10 @@ async def get_peptides(db: Session = Depends(get_db), _current_user=Depends(get_
             joinedload(Peptide.components),
         )
         .order_by(Peptide.abbreviation)
-    ).scalars().unique().all()
+    )
+    if analyte_class:
+        query = query.where(Peptide.analyte_class == analyte_class)
+    peptides = db.execute(query).scalars().unique().all()
 
     # Batch 1: per-instrument curve counts for all peptides in one query
     summary_rows = db.execute(
@@ -2605,6 +2618,7 @@ async def create_peptide(data: PeptideCreate, db: Session = Depends(get_db), cur
         name=data.name,
         abbreviation=data.abbreviation,
         is_blend=data.is_blend,
+        analyte_class=data.analyte_class,
         created_by_user_id=current_user.id,
         created_by_email=current_user.email,
         updated_by_user_id=current_user.id,
@@ -7825,12 +7839,23 @@ async def publish_sample_coa(
     """Publish the latest draft Accumark COA for a SENAITE sample.
 
     Order of operations:
-    1. Resolve SENAITE UID (fail fast before any state changes)
-    2. Publish in Integration Service (marks generation published, publishes additional COAs)
-    3. Write verification code to SENAITE
-    4. Transition SENAITE sample to published workflow state
+    1. Reject sub-sample IDs (they inherit parent's order number, would clobber parent's COA on WP)
+    2. Resolve SENAITE UID (fail fast before any state changes)
+    3. Publish in Integration Service (marks generation published, publishes additional COAs)
+    4. Write verification code to SENAITE
+    5. Transition SENAITE sample to published workflow state
     """
-    # 1. Resolve SENAITE UID upfront so we fail before touching integration service state
+    # 1. Sub-sample suffix matches `-S\d{2}` (canonical from sub_samples/senaite.py:89).
+    if re.search(r"-S\d{2}$", sample_id):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Sub-sample COAs cannot be published to WordPress. "
+                "Publish the parent sample's COA instead."
+            ),
+        )
+
+    # 2. Resolve SENAITE UID upfront so we fail before touching integration service state
     senaite_uid: str | None = None
     if SENAITE_URL:
         try:

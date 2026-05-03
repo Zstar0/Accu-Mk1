@@ -21,9 +21,14 @@ export function ReceiveWizard({ parent, onClose }: Props) {
   const [editingSampleId, setEditingSampleId] = useState<string | null>(null)
 
   if (phase === 'print') {
+    // Print list = parent (if received this session) + sub-samples added this
+    // session. Parent's label leads because it's vial 1 in the new policy.
+    const printList = wiz.parentReceivedThisSession
+      ? [{ sample_id: parent.sample_id }, ...wiz.sessionVials]
+      : wiz.sessionVials
     return (
       <PrintStep
-        vials={wiz.sessionVials}
+        vials={printList}
         orderNumber={parentDetails.details?.client_order_number ?? null}
         onDone={onClose}
       />
@@ -34,13 +39,24 @@ export function ReceiveWizard({ parent, onClose }: Props) {
     ? (wiz.vials.find(v => v.sub.sample_id === editingSampleId)?.sub ?? null)
     : null
 
-  const hasSessionVials = wiz.sessionVials.length > 0
+  // Print labels enabled when ANY save happened this session — either the
+  // parent was just received (single-vial check-in) or one or more sub-sample
+  // vials were added.
+  const hasSessionVials = wiz.sessionVials.length > 0 || wiz.parentReceivedThisSession
 
   return (
     <div className="grid grid-rows-[1fr_auto] h-full min-h-[500px]">
       <div className="grid grid-cols-[260px_1fr] min-h-0 overflow-hidden">
         <WizardSidebar
           vials={wiz.vials}
+          parentVial={
+            wiz.parentReceived
+              ? {
+                  sampleId: parent.sample_id,
+                  receivedThisSession: wiz.parentReceivedThisSession,
+                }
+              : null
+          }
           activeSampleId={editingSampleId}
           onSelect={setEditingSampleId}
           parentDetails={parentDetails.details}

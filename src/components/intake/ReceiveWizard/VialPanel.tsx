@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { Camera, CheckCircle2, RotateCcw } from 'lucide-react'
-import type { SenaiteLookupResult, SubSample } from '@/lib/api'
+import { Camera, CheckCircle2, RotateCcw, Upload } from 'lucide-react'
+import { fetchSubSamplePhotoUrl, type SenaiteLookupResult, type SubSample } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import {
@@ -20,7 +20,13 @@ interface Props {
   editingSub: SubSample | null
   loading: boolean
   error: string | null
-  onSaveNew: (photoBytes: Uint8Array, remarks?: string) => Promise<SubSample>
+  // First-vial-of-a-never-received-parent saves to the parent AR (no
+  // sub-sample row); subsequent vials become sub-samples. Caller returns the
+  // resolved sample_id either way for the confirmation card.
+  onSaveNew: (
+    photoBytes: Uint8Array,
+    remarks?: string,
+  ) => Promise<{ sampleId: string }>
   onSaveEdit: (
     sampleId: string,
     photoBytes?: Uint8Array,
@@ -84,6 +90,28 @@ export function VialPanel({
     setEditPhotoOverride(false)
     setSavedSampleId(null)
   }, [editingSub?.sample_id, editingSub?.remarks])
+
+  // When editing a sub-sample with a saved photo, fetch the existing image
+  // so the user can see what's on file before deciding to keep or retake.
+  // Falls back gracefully if the fetch fails — the form still works.
+  const [existingPhotoUrl, setExistingPhotoUrl] = useState<string | null>(null)
+  useEffect(() => {
+    if (!editingSub?.photo_external_uid) {
+      setExistingPhotoUrl(null)
+      return
+    }
+    let cancelled = false
+    void fetchSubSamplePhotoUrl(editingSub.sample_id)
+      .then(url => {
+        if (!cancelled) setExistingPhotoUrl(url)
+      })
+      .catch(() => {
+        if (!cancelled) setExistingPhotoUrl(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [editingSub?.sample_id, editingSub?.photo_external_uid])
 
   // Initialize camera. Cleanup on unmount. Stream lives in streamRef so the
   // callback ref above can re-attach it whenever the <video> element mounts
@@ -183,12 +211,12 @@ export function VialPanel({
           setBusy(false)
           return
         }
-        const newSub = await onSaveNew(photoBytes, trimmedRemarks)
+        const saved = await onSaveNew(photoBytes, trimmedRemarks)
         // Defense in depth: reset transient state so falling back to the
         // form (e.g. via "Receive another vial") starts clean.
         setPhotoDataUrl(null)
         setRemarks('')
-        setSavedSampleId(newSub.sample_id)
+        setSavedSampleId(saved.sampleId)
       }
     } catch (e) {
       setLocalError(e instanceof Error ? e.message : String(e))
@@ -331,9 +359,17 @@ export function VialPanel({
               !photoDataUrl &&
               showExistingEditPhoto && (
                 <div className="flex flex-col gap-1 max-w-md">
-                  <div className="rounded border bg-muted/40 px-3 py-6 text-sm text-muted-foreground text-center transition-colors">
-                    Existing photo on file for {editingSub?.sample_id}.
-                  </div>
+                  {existingPhotoUrl ? (
+                    <img
+                      src={existingPhotoUrl}
+                      alt={`Existing photo for ${editingSub?.sample_id}`}
+                      className="block w-full max-w-md rounded border aspect-[4/3] object-contain bg-black transition-opacity"
+                    />
+                  ) : (
+                    <div className="rounded border bg-muted/40 px-3 py-6 text-sm text-muted-foreground text-center transition-colors">
+                      Existing photo on file for {editingSub?.sample_id}.
+                    </div>
+                  )}
                 </div>
               )}
             <canvas ref={canvasRef} className="hidden" />
@@ -367,14 +403,33 @@ export function VialPanel({
               accept="image/*"
               onChange={onPickFile}
               disabled={busy}
-              className="text-sm"
+              className="hidden"
             />
-            {photoDataUrl && (
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => fileRef.current?.click()}
+              disabled={busy}
+            >
+              <Upload className="w-4 h-4" aria-hidden="true" />
+              Choose file...
+            </Button>
+            {photoDataUrl ? (
               <img
                 src={photoDataUrl}
                 alt="Uploaded vial"
                 className="block w-full max-w-md rounded border aspect-[4/3] object-contain bg-black"
               />
+            ) : (
+              editingSub?.photo_external_uid &&
+              !editPhotoOverride &&
+              existingPhotoUrl && (
+                <img
+                  src={existingPhotoUrl}
+                  alt={`Existing photo for ${editingSub.sample_id}`}
+                  className="block w-full max-w-md rounded border aspect-[4/3] object-contain bg-black"
+                />
+              )
             )}
           </div>
         )}
