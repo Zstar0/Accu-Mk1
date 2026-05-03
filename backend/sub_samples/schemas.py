@@ -44,3 +44,21 @@ class ParentSampleSummary(BaseModel):
 class SubSampleListResponse(BaseModel):
     parent: ParentSampleSummary
     sub_samples: list[SubSampleResponse]
+
+
+class VialPlanItem(BaseModel):
+    sample_id: str
+    is_parent: bool
+    vial_sequence: int
+    assignment_role: Optional[str]
+
+
+class VialPlanResponse(BaseModel):
+    demand: dict
+    wp_order_number: Optional[str] = None
+    vials: list[VialPlanItem]
+    is_unreachable: bool = False
+
+
+class AssignmentPatchRequest(BaseModel):
+    role: Optional[str]  # 'hplc' | 'endo' | 'ster' | 'xtra' | None

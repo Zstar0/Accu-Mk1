@@ -25,6 +25,7 @@ from sub_samples.senaite import (
 from sub_samples.schemas import (
     CreateSubSampleRequest, UpdateSubSampleRequest,
     SubSampleResponse, SubSampleListResponse, ParentSampleSummary,
+    VialPlanResponse, VialPlanItem, AssignmentPatchRequest,
 )
 
 
@@ -169,6 +170,22 @@ def delete_sub_sample(
     except RuntimeError as e:
         raise HTTPException(status_code=502, detail=str(e))
     return None
+
+
+@router.get("/{parent_sample_id}/vial-plan", response_model=VialPlanResponse)
+def get_vial_plan(
+    parent_sample_id: str,
+    db: Session = Depends(get_db),
+    _user=Depends(get_current_user),
+):
+    """Return per-vial assignment for the parent's full vial set.
+
+    Side-effect: runs auto-assign for any sub-sample with NULL assignment_role,
+    persisting the result. Subsequent calls with the same DB state are
+    idempotent.
+    """
+    plan = service.compute_vial_plan(db, parent_sample_id)
+    return VialPlanResponse(**plan)
 
 
 @router.get("/{sample_id}/photo")

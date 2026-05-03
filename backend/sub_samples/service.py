@@ -366,6 +366,91 @@ _BUCKET_PRIORITY = ("hplc", "endo", "ster")
 _REAL_BUCKETS = {"hplc", "endo", "ster"}
 
 
+def compute_vial_plan(db: Session, parent_sample_id: str) -> dict:
+    """Resolve services from IS, run auto-assign, persist new roles, return plan.
+
+    Returns a dict matching VialPlanResponse. If IS is unreachable, returns
+    `is_unreachable=True` with empty demand and all current roles preserved
+    (no auto-assign mutation).
+    """
+    parent = ensure_sample_row(db, parent_sample_id)
+    subs = list(parent.sub_samples)
+    subs.sort(key=lambda s: s.vial_sequence)
+
+    # Try IS — fail soft on any error (wizard handles via banner)
+    try:
+        services_resp = fetch_sample_services(parent_sample_id)
+    except Exception as e:
+        log.warning("vial_plan.is_fetch_failed parent=%s err=%s", parent_sample_id, e)
+        services_resp = None
+
+    if services_resp is None:
+        return {
+            "demand": {"hplc": 0, "endo": 0, "ster": 0},
+            "wp_order_number": None,
+            "is_unreachable": True,
+            "vials": [
+                {
+                    "sample_id": parent.sample_id,
+                    "is_parent": True,
+                    "vial_sequence": 0,
+                    "assignment_role": parent.assignment_role or "hplc",
+                }
+            ] + [
+                {
+                    "sample_id": s.sample_id,
+                    "is_parent": False,
+                    "vial_sequence": s.vial_sequence,
+                    "assignment_role": s.assignment_role,
+                }
+                for s in subs
+            ],
+        }
+
+    demand = derive_demand(services_resp.get("services") or {})
+
+    # Build vial list with parent first, then sub-samples in vial_sequence order.
+    # Parent's assignment_role is never NULL (default 'hplc' from migration).
+    vials = [
+        {
+            "sample_id": parent.sample_id,
+            "is_parent": True,
+            "vial_sequence": 0,
+            "assignment_role": parent.assignment_role or "hplc",
+        }
+    ] + [
+        {
+            "sample_id": s.sample_id,
+            "is_parent": False,
+            "vial_sequence": s.vial_sequence,
+            "assignment_role": s.assignment_role,
+        }
+        for s in subs
+    ]
+
+    assigned = auto_assign(vials, demand)
+
+    # Persist newly-set roles for sub-samples (parent never NULLs, so we never
+    # write back to lims_samples here — Reset-to-auto goes through the PATCH endpoint).
+    sub_by_id = {s.sample_id: s for s in subs}
+    for v in assigned:
+        if v["is_parent"]:
+            continue
+        original = sub_by_id.get(v["sample_id"])
+        if original is None:
+            continue
+        if original.assignment_role != v["assignment_role"]:
+            original.assignment_role = v["assignment_role"]
+    db.commit()
+
+    return {
+        "demand": demand,
+        "wp_order_number": services_resp.get("wp_order_number"),
+        "is_unreachable": False,
+        "vials": assigned,
+    }
+
+
 def auto_assign(vials: list[dict], demand: dict) -> list[dict]:
     """Pure function: assign roles in-place to a list of vial dicts.
 

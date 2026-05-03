@@ -223,3 +223,52 @@ def test_delete_sub_sample_502_on_runtime_error():
         resp = client.delete("/api/sub-samples/P-0134-S01")
     assert resp.status_code == 502
     assert "cannot delete" in resp.json()["detail"]
+
+
+def test_vial_plan_returns_full_layout():
+    """GET /api/sub-samples/{parent}/vial-plan returns demand + per-vial roles."""
+    parent = MagicMock()
+    parent.sample_id = "BW-0006"
+    parent.assignment_role = "hplc"
+    sub1 = _mock_sub("BW-0006-S01", "BW-0006", vial_seq=1)
+    sub1.assignment_role = None
+    sub2 = _mock_sub("BW-0006-S02", "BW-0006", vial_seq=2)
+    sub2.assignment_role = None
+    sub3 = _mock_sub("BW-0006-S03", "BW-0006", vial_seq=3)
+    sub3.assignment_role = None
+
+    with patch("sub_samples.routes.service.compute_vial_plan", return_value={
+        "demand": {"hplc": 1, "endo": 1, "ster": 2},
+        "wp_order_number": "3229",
+        "vials": [
+            {"sample_id": "BW-0006",     "is_parent": True,  "vial_sequence": 0, "assignment_role": "hplc"},
+            {"sample_id": "BW-0006-S01", "is_parent": False, "vial_sequence": 1, "assignment_role": "endo"},
+            {"sample_id": "BW-0006-S02", "is_parent": False, "vial_sequence": 2, "assignment_role": "ster"},
+            {"sample_id": "BW-0006-S03", "is_parent": False, "vial_sequence": 3, "assignment_role": "ster"},
+        ],
+        "is_unreachable": False,
+    }):
+        resp = client.get("/api/sub-samples/BW-0006/vial-plan")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["demand"] == {"hplc": 1, "endo": 1, "ster": 2}
+    assert body["wp_order_number"] == "3229"
+    assert len(body["vials"]) == 4
+    assert body["vials"][0]["is_parent"] is True
+    assert body["vials"][1]["assignment_role"] == "endo"
+
+
+def test_vial_plan_returns_503_envelope_when_is_unreachable():
+    with patch("sub_samples.routes.service.compute_vial_plan", return_value={
+        "demand": {"hplc": 0, "endo": 0, "ster": 0},
+        "wp_order_number": None,
+        "vials": [
+            {"sample_id": "BW-0006", "is_parent": True, "vial_sequence": 0, "assignment_role": "hplc"},
+        ],
+        "is_unreachable": True,
+    }):
+        resp = client.get("/api/sub-samples/BW-0006/vial-plan")
+    assert resp.status_code == 200  # body envelope, not http 503 — wizard banner-renders
+    body = resp.json()
+    assert body["is_unreachable"] is True
+    assert body["demand"] == {"hplc": 0, "endo": 0, "ster": 0}
