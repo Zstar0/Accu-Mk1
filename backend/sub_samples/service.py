@@ -501,3 +501,34 @@ def auto_assign(vials: list[dict], demand: dict) -> list[dict]:
             vial = {**vial, "assignment_role": assigned}
         out.append(vial)
     return out
+
+
+_VALID_ROLES = {"hplc", "endo", "ster", "xtra"}
+
+
+def set_assignment_role(db: Session, sample_id: str, role: Optional[str]) -> dict:
+    """Set assignment_role on a sub-sample or parent. Routes by sample existence.
+
+    For sub-samples: role can be None (resets, next /vial-plan auto-assigns).
+    For parent (lims_samples): None is coerced to 'hplc' (parent never goes NULL).
+    """
+    if role is not None and role not in _VALID_ROLES:
+        raise ValueError(f"Invalid role: {role!r}")
+
+    sub = db.execute(
+        select(LimsSubSample).where(LimsSubSample.sample_id == sample_id)
+    ).scalar_one_or_none()
+    if sub is not None:
+        sub.assignment_role = role
+        db.commit()
+        return {"sample_id": sample_id, "assignment_role": role}
+
+    parent = db.execute(
+        select(LimsSample).where(LimsSample.sample_id == sample_id)
+    ).scalar_one_or_none()
+    if parent is None:
+        raise LookupError(f"No sample or sub-sample with sample_id={sample_id}")
+    coerced = role if role in _VALID_ROLES else "hplc"
+    parent.assignment_role = coerced
+    db.commit()
+    return {"sample_id": sample_id, "assignment_role": coerced}

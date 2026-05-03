@@ -272,3 +272,47 @@ def test_vial_plan_returns_503_envelope_when_is_unreachable():
     body = resp.json()
     assert body["is_unreachable"] is True
     assert body["demand"] == {"hplc": 0, "endo": 0, "ster": 0}
+
+
+def test_assignment_patch_subsample_to_endo():
+    sub = _mock_sub("BW-0006-S01", "BW-0006", vial_seq=1)
+    sub.assignment_role = "ster"
+    with patch("sub_samples.routes.service.set_assignment_role") as fn:
+        fn.return_value = {"sample_id": "BW-0006-S01", "assignment_role": "endo"}
+        resp = client.patch(
+            "/api/sub-samples/BW-0006-S01/assignment",
+            json={"role": "endo"},
+        )
+    assert resp.status_code == 200
+    assert resp.json() == {"sample_id": "BW-0006-S01", "assignment_role": "endo"}
+    fn.assert_called_once()
+    args, kwargs = fn.call_args
+    assert kwargs.get("sample_id") or args[1] == "BW-0006-S01"
+    assert kwargs.get("role") or args[2] == "endo"
+
+
+def test_assignment_patch_subsample_null_resets():
+    """null role on a sub-sample sets assignment_role=NULL (auto-assign on next plan call)."""
+    with patch("sub_samples.routes.service.set_assignment_role") as fn:
+        fn.return_value = {"sample_id": "BW-0006-S01", "assignment_role": None}
+        resp = client.patch(
+            "/api/sub-samples/BW-0006-S01/assignment",
+            json={"role": None},
+        )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["assignment_role"] is None
+
+
+def test_assignment_patch_parent_null_coerced_to_hplc():
+    """null role on the parent AR is coerced to 'hplc' — preserves the
+    'primary always HPLC' rule even after Reset-to-auto."""
+    with patch("sub_samples.routes.service.set_assignment_role") as fn:
+        fn.return_value = {"sample_id": "BW-0006", "assignment_role": "hplc"}
+        resp = client.patch(
+            "/api/sub-samples/BW-0006/assignment",
+            json={"role": None},
+        )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["assignment_role"] == "hplc"

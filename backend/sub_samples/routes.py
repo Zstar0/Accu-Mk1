@@ -188,6 +188,26 @@ def get_vial_plan(
     return VialPlanResponse(**plan)
 
 
+@router.patch("/{sample_id}/assignment")
+def patch_assignment(
+    sample_id: str,
+    body: AssignmentPatchRequest,
+    db: Session = Depends(get_db),
+    _user=Depends(get_current_user),
+):
+    """Set the assignment_role on a vial.
+
+    - Sub-samples: role may be null (resets to auto-assign on next /vial-plan).
+    - Parent AR: null role is coerced to 'hplc' (preserves "primary always HPLC").
+    """
+    try:
+        return service.set_assignment_role(db, sample_id, body.role)
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @router.get("/{sample_id}/photo")
 def get_sub_sample_photo(
     sample_id: str,
