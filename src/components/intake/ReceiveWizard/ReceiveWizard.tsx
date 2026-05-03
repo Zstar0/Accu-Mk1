@@ -1,18 +1,19 @@
 import { useState } from 'react'
-import { Printer, Check } from 'lucide-react'
+import { Printer, Check, ArrowRight, ArrowLeft } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useReceiveWizard, type ParentInfo } from './useReceiveWizard'
 import { useParentSampleDetails } from './useParentSampleDetails'
 import { WizardSidebar } from './WizardSidebar'
 import { VialPanel } from './VialPanel'
 import { PrintStep } from './PrintStep'
+import { AssignStep } from './AssignStep'
 
 interface Props {
   parent: ParentInfo
   onClose: () => void
 }
 
-type Phase = 'capture' | 'print'
+type Phase = 'capture' | 'assign' | 'print'
 
 export function ReceiveWizard({ parent, onClose }: Props) {
   const wiz = useReceiveWizard(parent)
@@ -20,14 +21,33 @@ export function ReceiveWizard({ parent, onClose }: Props) {
   const [phase, setPhase] = useState<Phase>('capture')
   const [editingSampleId, setEditingSampleId] = useState<string | null>(null)
 
+  if (phase === 'assign') {
+    return (
+      <div className="grid grid-rows-[1fr_auto] h-full min-h-[500px]">
+        <div className="overflow-y-auto">
+          <AssignStep parentSampleId={parent.sample_id} />
+        </div>
+        <footer className="flex justify-between gap-2 px-6 py-3 border-t bg-muted/20 transition-colors">
+          <Button type="button" variant="outline" onClick={() => setPhase('capture')}>
+            <ArrowLeft className="w-4 h-4" aria-hidden="true" />
+            Back
+          </Button>
+          <Button type="button" onClick={() => setPhase('print')}>
+            <Printer className="w-4 h-4" aria-hidden="true" />
+            Print labels
+          </Button>
+        </footer>
+      </div>
+    )
+  }
+
   if (phase === 'print') {
-    // Print list = parent (if received this session) + sub-samples added this
-    // session. Parent's label leads because it's vial 1 in the new policy.
     const printList = wiz.parentReceivedThisSession
       ? [{ sample_id: parent.sample_id }, ...wiz.sessionVials]
       : wiz.sessionVials
     return (
       <PrintStep
+        parentSampleId={parent.sample_id}
         vials={printList}
         orderNumber={parentDetails.details?.client_order_number ?? null}
         onDone={onClose}
@@ -39,9 +59,6 @@ export function ReceiveWizard({ parent, onClose }: Props) {
     ? (wiz.vials.find(v => v.sub.sample_id === editingSampleId)?.sub ?? null)
     : null
 
-  // Print labels enabled when ANY save happened this session — either the
-  // parent was just received (single-vial check-in) or one or more sub-sample
-  // vials were added.
   const hasSessionVials = wiz.sessionVials.length > 0 || wiz.parentReceivedThisSession
 
   return (
@@ -69,20 +86,16 @@ export function ReceiveWizard({ parent, onClose }: Props) {
           editingSub={editingSub}
           loading={wiz.loading}
           error={wiz.error}
-          onSaveNew={async (photoBytes: Uint8Array, remarks?: string) => {
+          onSaveNew={async (photoBytes, remarks) => {
             const sub = await wiz.saveNewVial(photoBytes, remarks)
             setEditingSampleId(null)
             return sub
           }}
-          onSaveEdit={async (
-            sid: string,
-            photoBytes?: Uint8Array,
-            remarks?: string
-          ) => {
+          onSaveEdit={async (sid, photoBytes, remarks) => {
             await wiz.editSessionVial(sid, photoBytes, remarks)
             setEditingSampleId(null)
           }}
-          onDelete={async (sid: string) => {
+          onDelete={async sid => {
             await wiz.deleteSessionVial(sid)
             setEditingSampleId(null)
           }}
@@ -92,15 +105,13 @@ export function ReceiveWizard({ parent, onClose }: Props) {
         <Button
           type="button"
           variant="outline"
-          onClick={() => setPhase('print')}
+          onClick={() => setPhase('assign')}
           disabled={!hasSessionVials}
-          title={
-            hasSessionVials ? undefined : 'Save at least one vial first'
-          }
+          title={hasSessionVials ? undefined : 'Save at least one vial first'}
           className="disabled:opacity-50"
         >
-          <Printer className="w-4 h-4" aria-hidden="true" />
-          Print labels
+          <ArrowRight className="w-4 h-4" aria-hidden="true" />
+          Continue
         </Button>
         <Button type="button" onClick={onClose}>
           <Check className="w-4 h-4" aria-hidden="true" />

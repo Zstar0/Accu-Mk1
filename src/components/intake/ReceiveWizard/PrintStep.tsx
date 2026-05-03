@@ -10,13 +10,14 @@ interface PrintLabel {
 }
 
 interface Props {
+  parentSampleId: string
   vials: PrintLabel[]
   /** WP-XXXX style client order number, surfaced from useParentSampleDetails. */
   orderNumber?: string | null
   onDone: () => void
 }
 
-export function PrintStep({ vials, orderNumber, onDone }: Props) {
+export function PrintStep({ parentSampleId: _parentSampleId, vials, orderNumber, onDone }: Props) {
   useEffect(() => {
     // Auto-trigger the OS print dialog 200ms after mount so the page renders first.
     const t = setTimeout(() => window.print(), 200)
