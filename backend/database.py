@@ -235,6 +235,14 @@ def _run_migrations():
         VALUES ('Benzyl Alcohol', 'Benzyl Alcohol', FALSE, 'additive', TRUE, NOW(), NOW())
         ON CONFLICT (abbreviation) DO NOTHING
         """,
+        # Phase 25: vial assignment role columns
+        # lims_samples: parent AR's role. Defaults to 'hplc' per the
+        # "primary always HPLC for now" rule. Backfilled to 'hplc' for
+        # all existing rows.
+        "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS assignment_role VARCHAR(8) DEFAULT 'hplc'",
+        "UPDATE lims_samples SET assignment_role = 'hplc' WHERE assignment_role IS NULL",
+        # lims_sub_samples: nullable. NULL means "auto-assign hasn't run yet".
+        "ALTER TABLE lims_sub_samples ADD COLUMN IF NOT EXISTS assignment_role VARCHAR(8)",
     ]
     try:
         with engine.connect() as conn:
