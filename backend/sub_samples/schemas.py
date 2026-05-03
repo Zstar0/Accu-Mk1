@@ -24,6 +24,7 @@ class SubSampleResponse(BaseModel):
     received_by_user_id: Optional[int]
     photo_external_uid: Optional[str]
     remarks: Optional[str]
+    assignment_role: Optional[str] = None
 
     class Config:
         from_attributes = True

@@ -43,6 +43,7 @@ def _serialize(sub) -> SubSampleResponse:
         received_by_user_id=sub.received_by_user_id,
         photo_external_uid=sub.photo_external_uid,
         remarks=sub.remarks,
+        assignment_role=sub.assignment_role,
     )
 
 

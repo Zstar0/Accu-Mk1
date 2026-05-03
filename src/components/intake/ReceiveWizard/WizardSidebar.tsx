@@ -112,6 +112,11 @@ export function WizardSidebar({
                     {/* Parent is Vial 1; sub-samples are vials 2+ */}
                     Vial {v.sub.vial_sequence + 1}
                   </div>
+                  {v.sub.assignment_role && (
+                    <span className="inline-block mt-1 text-[9px] px-1.5 py-0.5 rounded bg-muted/50 uppercase tracking-wide font-mono">
+                      {v.sub.assignment_role === 'ster' ? 'STERYL' : v.sub.assignment_role.toUpperCase()}
+                    </span>
+                  )}
                 </button>
               ) : (
                 <div className="rounded bg-muted/30">
@@ -122,6 +127,11 @@ export function WizardSidebar({
                       <span aria-hidden>·</span>
                       <span>read-only</span>
                     </div>
+                    {v.sub.assignment_role && (
+                      <span className="inline-block mt-1 text-[9px] px-1.5 py-0.5 rounded bg-muted/50 uppercase tracking-wide font-mono">
+                        {v.sub.assignment_role === 'ster' ? 'STERYL' : v.sub.assignment_role.toUpperCase()}
+                      </span>
+                    )}
                   </div>
                   <button
                     type="button"

@@ -4133,6 +4133,7 @@ export interface SubSample {
   received_by_user_id: number | null
   photo_external_uid: string | null
   remarks: string | null
+  assignment_role: AssignmentRole | null
 }
 
 export interface ParentSampleSummary {
