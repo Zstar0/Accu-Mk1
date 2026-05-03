@@ -1,25 +1,43 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { LabelTemplate } from './LabelTemplate'
+import { getVialPlan, type VialPlanItem } from '@/lib/api'
 import './PrintStep.css'
 
 interface PrintLabel {
-  /** sample_id is sufficient for label rendering — works for both the parent
-   * AR (when checked in as a single-vial sample) and sub-samples. */
   sample_id: string
 }
 
 interface Props {
   parentSampleId: string
   vials: PrintLabel[]
-  /** WP-XXXX style client order number, surfaced from useParentSampleDetails. */
   orderNumber?: string | null
   onDone: () => void
 }
 
-export function PrintStep({ parentSampleId: _parentSampleId, vials, orderNumber, onDone }: Props) {
+export function PrintStep({ parentSampleId, vials, orderNumber, onDone }: Props) {
+  const [planByVial, setPlanByVial] = useState<Record<string, VialPlanItem>>({})
+  const [vialTotal, setVialTotal] = useState<number | null>(null)
+
+  // Pull vial-plan to enrich each label with assignment_role + vial position.
+  // Soft fail: if plan isn't available, labels print without role/position.
   useEffect(() => {
-    // Auto-trigger the OS print dialog 200ms after mount so the page renders first.
+    let cancelled = false
+    void getVialPlan(parentSampleId)
+      .then(plan => {
+        if (cancelled) return
+        const lookup: Record<string, VialPlanItem> = {}
+        plan.vials.forEach(v => { lookup[v.sample_id] = v })
+        setPlanByVial(lookup)
+        setVialTotal(plan.vials.length)
+      })
+      .catch(() => {
+        // intentional: print proceeds without role enrichment
+      })
+    return () => { cancelled = true }
+  }, [parentSampleId])
+
+  useEffect(() => {
     const t = setTimeout(() => window.print(), 200)
     return () => clearTimeout(t)
   }, [])
@@ -31,31 +49,32 @@ export function PrintStep({ parentSampleId: _parentSampleId, vials, orderNumber,
           Print {vials.length} label{vials.length === 1 ? '' : 's'}
         </h2>
         <div className="flex gap-2">
-          <Button
-            type="button"
-            onClick={() => window.print()}
-            variant="default"
-          >
+          <Button type="button" onClick={() => window.print()} variant="default">
             Print
           </Button>
-          <Button
-            type="button"
-            onClick={onDone}
-            variant="outline"
-          >
+          <Button type="button" onClick={onDone} variant="outline">
             Skip — close
           </Button>
         </div>
       </header>
 
       <div className="print-area">
-        {vials.map(v => (
-          <LabelTemplate
-            key={v.sample_id}
-            sampleId={v.sample_id}
-            orderNumber={orderNumber}
-          />
-        ))}
+        {vials.map(v => {
+          const planItem = planByVial[v.sample_id]
+          const role = planItem?.assignment_role ?? null
+          // vial_sequence is 0-based on the backend; +1 for display
+          const position = planItem ? planItem.vial_sequence + 1 : null
+          return (
+            <LabelTemplate
+              key={v.sample_id}
+              sampleId={v.sample_id}
+              orderNumber={orderNumber}
+              vialPosition={position}
+              vialTotal={vialTotal}
+              role={role}
+            />
+          )
+        })}
       </div>
 
       {vials.length === 0 && (

@@ -39,10 +39,19 @@
   }
   .label-order {
     font-family: ui-monospace, monospace;
-    font-size: 6.5pt;
+    font-size: 6pt;
     color: #555;
     line-height: 1;
     letter-spacing: -0.04em;
+    white-space: nowrap;
+  }
+  .label-role {
+    font-family: ui-monospace, monospace;
+    font-weight: 700;
+    font-size: 7pt;
+    color: #000;
+    line-height: 1;
+    letter-spacing: 0.04em;
     white-space: nowrap;
   }
 }
@@ -121,10 +130,20 @@
 
   .label-order {
     font-family: ui-monospace, monospace;
-    font-size: 6.5pt;
+    font-size: 6pt;
     color: #000;
     line-height: 1;
     letter-spacing: -0.04em;
+    white-space: nowrap;
+  }
+
+  .label-role {
+    font-family: ui-monospace, monospace;
+    font-weight: 700;
+    font-size: 7pt;
+    color: #000;
+    line-height: 1;
+    letter-spacing: 0.04em;
     white-space: nowrap;
   }
 }
