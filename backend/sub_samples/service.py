@@ -326,12 +326,22 @@ def fetch_sample_services(sample_id: str) -> Optional[dict]:
 
     Returns None on 404 (sample not in any order_submissions row); raises on
     network error / non-2xx so the caller can surface 503 to the wizard.
+
+    Auth: Mk1 calls the IS desktop endpoints with X-API-Key. Historical
+    naming: the env var is ACCU_MK1_API_KEY (matches IS's DESKTOP_API_KEYS
+    allowlist), but main.py also rebinds it as INTEGRATION_SERVICE_API_KEY
+    for use elsewhere. We read both names so the helper works regardless of
+    which variable is set in any particular environment.
     """
     base = os.environ.get("INTEGRATION_SERVICE_URL", "").rstrip("/")
-    key = os.environ.get("INTEGRATION_SERVICE_API_KEY", "")
+    key = (
+        os.environ.get("ACCU_MK1_API_KEY")
+        or os.environ.get("INTEGRATION_SERVICE_API_KEY")
+        or ""
+    )
     if not base or not key:
         raise RuntimeError(
-            "INTEGRATION_SERVICE_URL / INTEGRATION_SERVICE_API_KEY not configured"
+            "INTEGRATION_SERVICE_URL / ACCU_MK1_API_KEY not configured"
         )
     resp = requests.get(
         f"{base}/explorer/orders/sample-services",

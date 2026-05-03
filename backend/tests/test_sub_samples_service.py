@@ -274,7 +274,8 @@ def _err_response(status_code):
 
 def test_fetch_sample_services_returns_dict(monkeypatch):
     monkeypatch.setenv("INTEGRATION_SERVICE_URL", "http://is.test")
-    monkeypatch.setenv("INTEGRATION_SERVICE_API_KEY", "test-key")
+    monkeypatch.setenv("ACCU_MK1_API_KEY", "test-key")
+    monkeypatch.delenv("INTEGRATION_SERVICE_API_KEY", raising=False)
     body = {
         "services": {"endotoxin": True, "sterility_pcr": True, "bac_water_panel": True, "hplcpurity_identity": False, "samplevariance": False, "residualsolvents": False},
         "analytical_test": "Bacteriostatic Water",
@@ -292,7 +293,8 @@ def test_fetch_sample_services_returns_dict(monkeypatch):
 
 def test_fetch_sample_services_returns_none_on_404(monkeypatch):
     monkeypatch.setenv("INTEGRATION_SERVICE_URL", "http://is.test")
-    monkeypatch.setenv("INTEGRATION_SERVICE_API_KEY", "test-key")
+    monkeypatch.setenv("ACCU_MK1_API_KEY", "test-key")
+    monkeypatch.delenv("INTEGRATION_SERVICE_API_KEY", raising=False)
     resp = MagicMock()
     resp.status_code = 404
     with patch("sub_samples.service.requests.get", return_value=resp):
