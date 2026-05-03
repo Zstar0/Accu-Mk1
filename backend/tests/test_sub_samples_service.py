@@ -300,3 +300,39 @@ def test_fetch_sample_services_returns_none_on_404(monkeypatch):
     assert result is None
 
 
+def test_derive_demand_peptide_only():
+    services = {"hplcpurity_identity": True, "endotoxin": False, "sterility_pcr": False, "bac_water_panel": False, "samplevariance": False, "residualsolvents": False}
+    assert service.derive_demand(services) == {"hplc": 1, "endo": 0, "ster": 0}
+
+
+def test_derive_demand_bw_only():
+    services = {"hplcpurity_identity": False, "endotoxin": False, "sterility_pcr": False, "bac_water_panel": True, "samplevariance": False, "residualsolvents": False}
+    assert service.derive_demand(services) == {"hplc": 1, "endo": 0, "ster": 0}
+
+
+def test_derive_demand_endo_only():
+    services = {"hplcpurity_identity": False, "endotoxin": True, "sterility_pcr": False, "bac_water_panel": False, "samplevariance": False, "residualsolvents": False}
+    assert service.derive_demand(services) == {"hplc": 0, "endo": 1, "ster": 0}
+
+
+def test_derive_demand_ster_is_2_vials():
+    services = {"hplcpurity_identity": False, "endotoxin": False, "sterility_pcr": True, "bac_water_panel": False, "samplevariance": False, "residualsolvents": False}
+    assert service.derive_demand(services) == {"hplc": 0, "endo": 0, "ster": 2}
+
+
+def test_derive_demand_full_bw_all_addons():
+    services = {"hplcpurity_identity": False, "endotoxin": True, "sterility_pcr": True, "bac_water_panel": True, "samplevariance": False, "residualsolvents": False}
+    assert service.derive_demand(services) == {"hplc": 1, "endo": 1, "ster": 2}
+
+
+def test_derive_demand_handles_missing_keys():
+    """Missing keys (older orders, partial WP responses) treat as False."""
+    assert service.derive_demand({}) == {"hplc": 0, "endo": 0, "ster": 0}
+
+
+def test_derive_demand_hplc_or_bw_panel():
+    """HPLC bucket is satisfied by either flag; demand stays at 1 (not 2)."""
+    services = {"hplcpurity_identity": True, "bac_water_panel": True, "endotoxin": False, "sterility_pcr": False, "samplevariance": False, "residualsolvents": False}
+    assert service.derive_demand(services) == {"hplc": 1, "endo": 0, "ster": 0}
+
+

@@ -343,3 +343,20 @@ def fetch_sample_services(sample_id: str) -> Optional[dict]:
         return None
     resp.raise_for_status()
     return resp.json()
+
+
+def derive_demand(services: dict) -> dict:
+    """Translate WP services dict to vial demand per bucket.
+
+    HPLC is satisfied by either `hplcpurity_identity` or `bac_water_panel` —
+    both result in chromatography vials. Sterility is the only bucket that
+    needs more than one vial (2 per the lab's protocol).
+    """
+    hplc = bool(services.get("hplcpurity_identity") or services.get("bac_water_panel"))
+    endo = bool(services.get("endotoxin"))
+    ster = bool(services.get("sterility_pcr"))
+    return {
+        "hplc": 1 if hplc else 0,
+        "endo": 1 if endo else 0,
+        "ster": 2 if ster else 0,
+    }
