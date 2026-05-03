@@ -719,6 +719,7 @@ class LimsSample(Base):
     date_sampled: Mapped[Optional[datetime]] = mapped_column(DateTime)
     date_received: Mapped[Optional[datetime]] = mapped_column(DateTime)
     is_retest: Mapped[bool] = mapped_column(Boolean, default=False)
+    assignment_role: Mapped[str] = mapped_column(String(8), nullable=False, server_default="hplc")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     last_synced_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
@@ -743,6 +744,7 @@ class LimsSubSample(Base):
     received_by_user_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("users.id", ondelete="SET NULL"))
     photo_external_uid: Mapped[Optional[str]] = mapped_column(String(100))
     remarks: Mapped[Optional[str]] = mapped_column(Text)
+    assignment_role: Mapped[Optional[str]] = mapped_column(String(8), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     parent_sample: Mapped["LimsSample"] = relationship("LimsSample", back_populates="sub_samples")
