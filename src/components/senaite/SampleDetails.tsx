@@ -1834,6 +1834,31 @@ export function SampleDetails() {
     }
   })()
 
+  // Build the set of analysis UIDs that are "primary" for this sample's
+  // vial assignment — used to highlight (not filter) rows in the analyses
+  // table. Mapping:
+  //   hplc → analyses in service_group 'Analytics'
+  //   endo → keyword starts with 'ENDO' (within Microbiology)
+  //   ster → keyword starts with 'STER' (within Microbiology)
+  //   xtra → no primary analyses (vial parked for backup)
+  const primaryAnalysisUids = useMemo(() => {
+    const set = new Set<string>()
+    if (!data || !currentAssignment) return set
+    for (const a of data.analyses) {
+      if (!a.uid) continue
+      const kw = (a.keyword ?? '').toUpperCase()
+      const groupName = a.service_group_name ?? ''
+      if (currentAssignment === 'hplc') {
+        if (groupName === 'Analytics') set.add(a.uid)
+      } else if (currentAssignment === 'endo') {
+        if (kw.startsWith('ENDO')) set.add(a.uid)
+      } else if (currentAssignment === 'ster') {
+        if (kw.startsWith('STER')) set.add(a.uid)
+      }
+    }
+    return set
+  }, [data, currentAssignment])
+
   function openSubSampleWizard() {
     if (!data?.sample_id || !data.sample_uid) return
     setWizardParent({
@@ -3316,6 +3341,7 @@ export function SampleDetails() {
         <AnalysisTable
           analyses={analyses}
           analyteNameMap={analyteNameMap}
+          primaryAnalysisUids={primaryAnalysisUids}
           onResultSaved={(uid, newResult, newReviewState) => {
             setData(prev => {
               if (!prev) return prev

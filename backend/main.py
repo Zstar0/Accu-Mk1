@@ -9639,6 +9639,11 @@ class SenaiteAnalysis(BaseModel):
     sort_key: Optional[float] = None
     captured: Optional[str] = None
     retested: bool = False
+    # Mk1-local enrichment: which service_group this analysis belongs to
+    # (resolved from analysis_services table by keyword). Drives the
+    # per-vial "primary analysis" highlight on the sample detail page.
+    service_group_id: Optional[int] = None
+    service_group_name: Optional[str] = None
 
 
 class SenaiteAttachment(BaseModel):
@@ -10390,6 +10395,40 @@ async def lookup_senaite_sample(
             print(f"[INFO] ARReport for {sample_id} (path={sample_path}): {'found' if published_coa_report else 'none'}")
         except Exception as exc:
             print(f"[WARN] Failed to fetch ARReport for {sample_id}: {exc}")
+
+        # Enrich each analysis with its service_group_id (Mk1-local, joined by
+        # keyword from the analysis_services table). Drives the "primary
+        # analysis for this vial" highlight on the sample detail page based on
+        # the sample's assignment_role.
+        try:
+            keywords_seen = {a.keyword for a in senaite_analyses if a.keyword}
+            if keywords_seen:
+                rows = db.execute(
+                    select(
+                        AnalysisService.keyword,
+                        ServiceGroup.id,
+                        ServiceGroup.name,
+                    )
+                    .join(
+                        service_group_members,
+                        service_group_members.c.analysis_service_id == AnalysisService.id,
+                    )
+                    .join(
+                        ServiceGroup,
+                        ServiceGroup.id == service_group_members.c.service_group_id,
+                    )
+                    .where(AnalysisService.keyword.in_(keywords_seen))
+                ).all()
+                kw_to_group = {row[0]: (row[1], row[2]) for row in rows}
+                for a in senaite_analyses:
+                    if a.keyword and a.keyword in kw_to_group:
+                        gid, gname = kw_to_group[a.keyword]
+                        a.service_group_id = gid
+                        a.service_group_name = gname
+        except Exception as e:
+            # Best-effort: a service-group lookup failure should never break
+            # the SENAITE lookup. Just log and proceed without enrichment.
+            print(f"[WARN] service_group enrichment failed for {sample_id}: {e}")
 
         from datetime import datetime, timezone
         now_iso = datetime.now(timezone.utc).isoformat()

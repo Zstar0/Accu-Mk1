@@ -3127,6 +3127,10 @@ export interface SenaiteAnalysis {
   sort_key: number | null
   captured: string | null
   retested: boolean
+  /** Mk1-local: service_group resolved from analysis_services by keyword.
+   * Drives the "primary for this vial" highlight on the detail page. */
+  service_group_id: number | null
+  service_group_name: string | null
 }
 
 export interface SenaiteAttachment {

@@ -688,6 +688,7 @@ function AnalysisRow({
   isHistoryExpanded,
   onToggleHistory,
   onMethodInstrumentSaved,
+  isPrimary,
 }: {
   analysis: SenaiteAnalysis
   analyteNameMap: Map<number, string>
@@ -700,6 +701,10 @@ function AnalysisRow({
   isHistoryExpanded?: boolean
   onToggleHistory?: () => void
   onMethodInstrumentSaved?: (uid: string, field: 'method' | 'instrument', newUid: string | null, newTitle: string | null) => void
+  /** Marks this analysis as the primary focus for the sample's vial
+   * assignment. Adds a left-border highlight and a "Primary" pill in the
+   * title cell — purely visual, doesn't filter or hide anything. */
+  isPrimary?: boolean
 }) {
   const rowTint = ROW_STATUS_STYLE[analysis.review_state ?? ''] ?? ''
   const { display, original } = formatAnalysisTitle(analysis.title, analyteNameMap)
@@ -716,7 +721,11 @@ function AnalysisRow({
   const isPending = !!analysis.uid && transition.pendingUids.has(analysis.uid)
 
   return (
-    <tr className={`border-b border-border/50 hover:bg-muted/30 transition-colors ${rowTint}`}>
+    <tr
+      className={`border-b border-border/50 hover:bg-muted/30 transition-colors ${rowTint} ${
+        isPrimary ? 'border-l-4 border-l-primary/70' : ''
+      }`}
+    >
       <td className="py-2.5 px-3">
         {analysis.uid && (
           <Checkbox
@@ -729,6 +738,14 @@ function AnalysisRow({
       </td>
       <td className="py-2.5 px-3 text-sm text-foreground font-medium">
         <div className="flex items-center gap-1.5 flex-wrap">
+          {isPrimary && (
+            <span
+              className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-semibold uppercase tracking-wider bg-primary/15 text-primary border border-primary/30 shrink-0"
+              title="Primary analysis for this vial's assignment"
+            >
+              Primary
+            </span>
+          )}
           <span title={wasRenamed ? original : undefined}>
             {display}
             {wasRenamed && (
@@ -881,12 +898,23 @@ function getCellValue(a: SenaiteAnalysis, col: SortColumn, nameMap: Map<number, 
 interface AnalysisTableProps {
   analyses: SenaiteAnalysis[]
   analyteNameMap: Map<number, string>
+  /** Set of analysis UIDs that are the "primary" focus for this sample's
+   * vial assignment. Rows in this set get a highlighted left border + a
+   * "Primary" badge in the title cell. Empty/undefined disables highlighting. */
+  primaryAnalysisUids?: Set<string>
   onResultSaved?: (uid: string, newResult: string, newReviewState: string | null) => void
   onTransitionComplete?: () => void
   onMethodInstrumentSaved?: (uid: string, field: 'method' | 'instrument', newUid: string | null, newTitle: string | null) => void
 }
 
-export function AnalysisTable({ analyses, analyteNameMap, onResultSaved, onTransitionComplete, onMethodInstrumentSaved }: AnalysisTableProps) {
+export function AnalysisTable({
+  analyses,
+  analyteNameMap,
+  primaryAnalysisUids,
+  onResultSaved,
+  onTransitionComplete,
+  onMethodInstrumentSaved,
+}: AnalysisTableProps) {
   const [analysisFilter, setAnalysisFilter] = useState<'all' | 'verified' | 'pending' | 'invalid'>('all')
   const [sortConfig, setSortConfig] = useState<SortConfig | null>(null)
   const [bulkPendingConfirm, setBulkPendingConfirm] = useState<{ transition: string; count: number } | null>(null)
@@ -1165,6 +1193,10 @@ export function AnalysisTable({ analyses, analyteNameMap, onResultSaved, onTrans
                       isHistoryExpanded={isExpanded}
                       onToggleHistory={() => toggleGroup(groupKey)}
                       onMethodInstrumentSaved={onMethodInstrumentSaved}
+                      isPrimary={
+                        !!group.current.uid &&
+                        !!primaryAnalysisUids?.has(group.current.uid)
+                      }
                     />
                     {isExpanded && group.history.map(h => (
                       <HistoryRow
