@@ -71,8 +71,6 @@ export function SampleInfoPanel({ details, loading, error }: Props) {
     details.declared_weight_mg != null
       ? `${details.declared_weight_mg} mg`
       : null
-  const profiles =
-    details.profiles.length > 0 ? details.profiles.join(', ') : null
 
   return (
     <Collapsible defaultOpen className="mb-3">
@@ -108,7 +106,27 @@ export function SampleInfoPanel({ details, loading, error }: Props) {
 
           {/* 3. Profiles + Declared Qty */}
           <div className="border-t border-border/50 pt-2 flex flex-col gap-2">
-            <StackedField label="Profiles" value={profiles} />
+            <div className="flex flex-col gap-0.5 min-w-0">
+              <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                Profiles
+              </span>
+              {details.profiles.length > 0 ? (
+                <div className="flex flex-wrap gap-1">
+                  {details.profiles.map((p, i) => (
+                    <span
+                      key={i}
+                      className="inline-flex items-center rounded-full border bg-muted/40 px-2 py-0.5 text-[11px] font-medium"
+                    >
+                      {p}
+                    </span>
+                  ))}
+                </div>
+              ) : (
+                <span className="text-xs font-medium text-muted-foreground">
+                  —
+                </span>
+              )}
+            </div>
             <StackedField label="Declared Qty" value={declaredQty} />
           </div>
 

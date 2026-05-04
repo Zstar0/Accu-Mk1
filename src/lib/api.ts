@@ -4273,6 +4273,28 @@ export async function deleteSubSample(sampleId: string): Promise<void> {
     throw new Error(`deleteSubSample failed: ${response.status}`)
 }
 
+export interface VialDemandResponse {
+  demand: { hplc: number; endo: number; ster: number }
+  wp_order_number: string | null
+  is_unreachable: boolean
+}
+
+/**
+ * Get just the vial demand for a parent sample without running auto-assign.
+ * Used by the wizard header for "expected vs received" counts on the capture step.
+ */
+export async function getVialDemand(parentSampleId: string): Promise<VialDemandResponse> {
+  const response = await fetch(
+    `${API_BASE_URL()}/api/sub-samples/${encodeURIComponent(parentSampleId)}/vial-demand`,
+    { headers: getBearerHeaders() }
+  )
+  if (!response.ok) {
+    const err = await response.json().catch(() => null)
+    throw new Error(err?.detail || `Vial demand fetch failed: ${response.status}`)
+  }
+  return response.json()
+}
+
 /**
  * Get the vial plan for a parent sample (demand, assignment roles, etc.).
  */

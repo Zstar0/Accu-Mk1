@@ -1,9 +1,11 @@
 import { useState } from 'react'
-import { Printer, Check, ArrowRight, ArrowLeft } from 'lucide-react'
+import { Printer, ArrowRight, ArrowLeft } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useReceiveWizard, type ParentInfo } from './useReceiveWizard'
 import { useParentSampleDetails } from './useParentSampleDetails'
+import { WizardHeader } from './WizardHeader'
 import { WizardSidebar } from './WizardSidebar'
+import { VialsList } from './VialsList'
 import { VialPanel } from './VialPanel'
 import { PrintStep } from './PrintStep'
 import { AssignStep } from './AssignStep'
@@ -21,9 +23,19 @@ export function ReceiveWizard({ parent, onClose }: Props) {
   const [phase, setPhase] = useState<Phase>('capture')
   const [editingSampleId, setEditingSampleId] = useState<string | null>(null)
 
+  // Received count = parent (if received) + sub-samples in the list.
+  // The receive count is identical across all phases since it tracks the
+  // parent's vial set, not phase-local state.
+  const receivedCount =
+    (wiz.parentReceived ? 1 : 0) + wiz.vials.length
+
   if (phase === 'assign') {
     return (
-      <div className="grid grid-rows-[1fr_auto] h-full min-h-[500px]">
+      <div className="grid grid-rows-[auto_1fr_auto] h-full min-h-[500px]">
+        <WizardHeader
+          parentSampleId={parent.sample_id}
+          receivedCount={receivedCount}
+        />
         <div className="overflow-y-auto">
           <AssignStep parentSampleId={parent.sample_id} />
         </div>
@@ -51,6 +63,7 @@ export function ReceiveWizard({ parent, onClose }: Props) {
         vials={printList}
         orderNumber={parentDetails.details?.client_order_number ?? null}
         onDone={onClose}
+        onBack={() => setPhase('assign')}
       />
     )
   }
@@ -62,20 +75,13 @@ export function ReceiveWizard({ parent, onClose }: Props) {
   const hasSessionVials = wiz.sessionVials.length > 0 || wiz.parentReceivedThisSession
 
   return (
-    <div className="grid grid-rows-[1fr_auto] h-full min-h-[500px]">
-      <div className="grid grid-cols-[260px_1fr] min-h-0 overflow-hidden">
+    <div className="grid grid-rows-[auto_1fr_auto] h-full min-h-[500px]">
+      <WizardHeader
+        parentSampleId={parent.sample_id}
+        receivedCount={receivedCount}
+      />
+      <div className="grid grid-cols-[260px_1fr_240px] min-h-0 overflow-hidden">
         <WizardSidebar
-          vials={wiz.vials}
-          parentVial={
-            wiz.parentReceived
-              ? {
-                  sampleId: parent.sample_id,
-                  receivedThisSession: wiz.parentReceivedThisSession,
-                }
-              : null
-          }
-          activeSampleId={editingSampleId}
-          onSelect={setEditingSampleId}
           parentDetails={parentDetails.details}
           parentDetailsLoading={parentDetails.loading}
           parentDetailsError={parentDetails.error}
@@ -100,11 +106,23 @@ export function ReceiveWizard({ parent, onClose }: Props) {
             setEditingSampleId(null)
           }}
         />
+        <VialsList
+          vials={wiz.vials}
+          parentVial={
+            wiz.parentReceived
+              ? {
+                  sampleId: parent.sample_id,
+                  receivedThisSession: wiz.parentReceivedThisSession,
+                }
+              : null
+          }
+          activeSampleId={editingSampleId}
+          onSelect={setEditingSampleId}
+        />
       </div>
       <footer className="flex justify-end gap-2 px-6 py-3 border-t bg-muted/20 transition-colors">
         <Button
           type="button"
-          variant="outline"
           onClick={() => setPhase('assign')}
           disabled={!hasSessionVials}
           title={hasSessionVials ? undefined : 'Save at least one vial first'}
@@ -112,10 +130,6 @@ export function ReceiveWizard({ parent, onClose }: Props) {
         >
           <ArrowRight className="w-4 h-4" aria-hidden="true" />
           Continue
-        </Button>
-        <Button type="button" onClick={onClose}>
-          <Check className="w-4 h-4" aria-hidden="true" />
-          Finished
         </Button>
       </footer>
     </div>

@@ -189,6 +189,35 @@ def get_vial_plan(
     return VialPlanResponse(**plan)
 
 
+@router.get("/{parent_sample_id}/vial-demand")
+def get_vial_demand(
+    parent_sample_id: str,
+    _db: Session = Depends(get_db),
+    _user=Depends(get_current_user),
+):
+    """Return just the vial demand for a sample's WP order — no DB side effects.
+
+    Used by the capture step to display "expected vs received" counts in the
+    wizard header without triggering auto-assign (which is reserved for the
+    assign step's /vial-plan call).
+    """
+    try:
+        services_resp = service.fetch_sample_services(parent_sample_id)
+    except Exception:
+        services_resp = None
+    if services_resp is None:
+        return {
+            "demand": {"hplc": 0, "endo": 0, "ster": 0},
+            "wp_order_number": None,
+            "is_unreachable": True,
+        }
+    return {
+        "demand": service.derive_demand(services_resp.get("services") or {}),
+        "wp_order_number": services_resp.get("wp_order_number"),
+        "is_unreachable": False,
+    }
+
+
 @router.patch("/{sample_id}/assignment")
 def patch_assignment(
     sample_id: str,
