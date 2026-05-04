@@ -212,9 +212,22 @@ ON CONFLICT (abbreviation) DO NOTHING;
 ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS assignment_role VARCHAR(8) DEFAULT 'hplc';
 UPDATE lims_samples SET assignment_role = 'hplc' WHERE assignment_role IS NULL;
 ALTER TABLE lims_sub_samples ADD COLUMN IF NOT EXISTS assignment_role VARCHAR(8);
+
+-- Bind Benzyl Alcohol to its SENAITE analysis service (slot 1) so the
+-- peptide-config Import Curves dialog (and other UIs keyed on
+-- peptide.analytes) surface BA. Lookup is by abbreviation + service
+-- keyword so the migration is environment-agnostic. Silent no-op on a
+-- fresh install if the SENAITE-synced analysis_services row hasn't
+-- arrived yet — next backend startup retries. Safe to re-run.
+INSERT INTO peptide_analytes (peptide_id, analysis_service_id, slot, created_at)
+SELECT p.id, ans.id, 1, NOW()
+FROM peptides p
+JOIN analysis_services ans ON ans.keyword = 'Benzyl_Alcohol_Assay'
+WHERE p.abbreviation = 'Benzyl Alcohol'
+ON CONFLICT (peptide_id, slot) DO NOTHING;
 ```
 
-> **Latent infrastructure bug to watch for:** `_run_migrations()` wraps the entire migration list in a single transaction with a broad `try/except Exception: pass`. If any single statement fails, the **whole transaction silently rolls back** without logging. After deploy, verify schema landed:
+> **Migration isolation note:** as of this release, `_run_migrations()` runs each statement in its own try/except — a failure in one statement is logged via `log.warning("migration_skipped …")` and the rest of the loop continues. The previous behavior was a single bulk transaction that silently rolled the whole list back on any failure. After deploy, still run the verification SQL below — combined with `docker logs accu-mk1-backend | grep migration_skipped` — to confirm every migration applied:
 >
 > ```sql
 > -- Should show analyte_class column with NOT NULL + default 'peptide'
@@ -239,7 +252,17 @@ ALTER TABLE lims_sub_samples ADD COLUMN IF NOT EXISTS assignment_role VARCHAR(8)
 >
 > -- Every existing parent should be backfilled to 'hplc'
 > SELECT assignment_role, COUNT(*) FROM lims_samples GROUP BY assignment_role;
+>
+> -- BA must have a peptide_analytes row (slot 1, joined to the BA service).
+> -- One row expected, joining to analysis_services keyword 'Benzyl_Alcohol_Assay'.
+> SELECT pa.slot, p.abbreviation, ans.keyword, ans.title
+> FROM peptide_analytes pa
+> JOIN peptides p ON p.id = pa.peptide_id
+> LEFT JOIN analysis_services ans ON ans.id = pa.analysis_service_id
+> WHERE p.abbreviation = 'Benzyl Alcohol';
 > ```
+>
+> **If the BA `peptide_analytes` row is missing**, the prerequisite is the SENAITE-synced `analysis_services` entry with keyword `Benzyl_Alcohol_Assay` (section 1). Confirm SENAITE prod is set up and the Mk1 ↔ SENAITE service sync has run, then restart the backend — the migration retries on every startup and is a no-op once the row appears.
 
 ### Backfills
 
@@ -517,15 +540,17 @@ VERSION=0.31.0 docker compose -f docker-compose.prod.yml up -d backend
 
 ## 9. Known issues & latent bugs (for the on-call)
 
-1. **Accu-Mk1 `_run_migrations()` swallows errors silently** ([backend/database.py:230-235](../../backend/database.py#L230-L235)). If a future migration fails, the whole transaction rolls back and nothing logs. **Mitigation:** always run the post-deploy schema verification SQL in section 4.
+1. **Accu-Mk1 migrations are now per-statement isolated** ([backend/database.py](../../backend/database.py)). Earlier behavior wrapped the full list in a single try/except and silently rolled back on any failure. As of this release, each migration runs independently and a failure logs `migration_skipped sql=… err=…` at WARNING. **Mitigation post-deploy:** run the section-4 verification SQL AND grep `docker logs accu-mk1-backend | grep migration_skipped` — both should be clean.
 
-2. **`P-0138` missing from `lims_samples`** despite being in SENAITE and `sample_status_events`. Sibling `PB-0074` from the same order #3226 IS in `lims_samples`. Likely a race or skip in the multi-sample order ingest path. **Not blocking this release**; track as a follow-up bug.
+2. **BW curve import requires `*_Std_*_PeakData.csv` filenames.** The peptide-config Import Curves dialog (Browse Folder mode) scans the chosen SharePoint folder recursively and only matches files whose name fits `^(.+?)_Std_(\d+(?:\.\d+)?)_.*PeakData\.csv$` (regex at [main.py:5844](../../backend/main.py#L5844)). For BA in particular, you need standard prep files saved with this naming convention — e.g. `BA_Std_100_PeakData.csv`, `BA_Std_250_PeakData.csv`. If the lab's BA standard runs use different filenames, either rename them in SharePoint or use Manual Entry mode. The dialog now surfaces the "No *_Std_*_PeakData.csv files found in folder" error in a destructive banner so it's no longer silent.
 
-3. **Decimal-quantity fields don't inherit to sub-samples.** SENAITE/Plone-5's `isDecimal` validator rejects strings, ints, and floats from Python 3 clients on `Analyte{N}DeclaredQuantity` and `DeclaredTotalQuantity`. All other custom fields inherit; quantities can be set manually until validator is fixed server-side.
+3. **`P-0138` missing from `lims_samples`** despite being in SENAITE and `sample_status_events`. Sibling `PB-0074` from the same order #3226 IS in `lims_samples`. Likely a race or skip in the multi-sample order ingest path. **Not blocking this release**; track as a follow-up bug.
 
-4. **Worksheet inbox sub-sample handling deferred.** Sub-samples currently appear individually alongside parents; will need grouping work as multi-vial samples become common.
+4. **Decimal-quantity fields don't inherit to sub-samples.** SENAITE/Plone-5's `isDecimal` validator rejects strings, ints, and floats from Python 3 clients on `Analyte{N}DeclaredQuantity` and `DeclaredTotalQuantity`. All other custom fields inherit; quantities can be set manually until validator is fixed server-side.
 
-5. **Sub-sample publish design — Option A (forward-only).** Sub-samples never get their own customer-facing COA; only the parent's COA reaches WP. This is enforced by the publish guard. If product wants Option B (sub-samples publish as additional COAs on the same order line) later, it requires WP-side schema changes + a new phase.
+5. **Worksheet inbox sub-sample handling deferred.** Sub-samples currently appear individually alongside parents; will need grouping work as multi-vial samples become common.
+
+6. **Sub-sample publish design — Option A (forward-only).** Sub-samples never get their own customer-facing COA; only the parent's COA reaches WP. This is enforced by the publish guard. If product wants Option B (sub-samples publish as additional COAs on the same order line) later, it requires WP-side schema changes + a new phase.
 
 ---
 
