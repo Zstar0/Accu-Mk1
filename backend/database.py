@@ -238,6 +238,23 @@ def _run_migrations():
         VALUES ('Benzyl Alcohol', 'Benzyl Alcohol', FALSE, 'additive', TRUE, NOW(), NOW())
         ON CONFLICT (abbreviation) DO NOTHING
         """,
+        # Bind Benzyl Alcohol to its SENAITE analysis service (slot 1) so the
+        # Import Curves dialog and any other UI keyed on peptide.analytes can
+        # surface it. The peptide row above is created via raw SQL (no UI
+        # path), which doesn't insert peptide_analytes — recreating BA via
+        # the wizard isn't a fix because the create form doesn't expose
+        # analyte_class. Lookup by abbreviation + keyword keeps it
+        # environment-agnostic. Silently no-ops on a fresh install where
+        # the SENAITE-synced analysis_services row doesn't exist yet; the
+        # next startup picks it up. Safe to re-run.
+        """
+        INSERT INTO peptide_analytes (peptide_id, analysis_service_id, slot, created_at)
+        SELECT p.id, ans.id, 1, NOW()
+        FROM peptides p
+        JOIN analysis_services ans ON ans.keyword = 'Benzyl_Alcohol_Assay'
+        WHERE p.abbreviation = 'Benzyl Alcohol'
+        ON CONFLICT (peptide_id, slot) DO NOTHING
+        """,
         # Phase 25: vial assignment role columns
         # lims_samples: parent AR's role. Defaults to 'hplc' per the
         # "primary always HPLC for now" rule. Backfilled to 'hplc' for
