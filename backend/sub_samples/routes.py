@@ -102,7 +102,11 @@ def create_sub_sample(
 
 
 @router.get("", response_model=SubSampleListResponse)
-def list_sub_samples(parent_sample_id: str, db: Session = Depends(get_db)):
+def list_sub_samples(
+    parent_sample_id: str,
+    db: Session = Depends(get_db),
+    _user=Depends(get_current_user),
+):
     """List all sub-samples (vials) for a parent sample.
 
     Returns parent summary + list of sub-samples. If parent doesn't exist locally,
