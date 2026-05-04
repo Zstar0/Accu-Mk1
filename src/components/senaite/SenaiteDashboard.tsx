@@ -151,8 +151,11 @@ function SortIcon({ column, sort }: { column: SortColumn; sort: SortConfig }) {
 
 const TEST_CLIENT_ID = 'forrest@valenceanalytical.com'
 
-// Compact role-pill order. Keys missing from breakdown render nothing.
-const ROLE_BADGES: { key: keyof ParentAggregate['role_breakdown']; label: string; cls: string }[] = [
+// Role-pill style + short letter for each assignment_role. Used for
+// the parent's badge on the list page and per-sub-sample badges in the
+// expanded row.
+type RoleKey = 'hplc' | 'endo' | 'ster' | 'xtra' | 'unassigned'
+const ROLE_BADGES: { key: RoleKey; label: string; cls: string }[] = [
   { key: 'hplc', label: 'H', cls: 'bg-sky-500/15 text-sky-300 border-sky-500/30' },
   { key: 'endo', label: 'E', cls: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30' },
   { key: 'ster', label: 'S', cls: 'bg-violet-500/15 text-violet-300 border-violet-500/30' },
