@@ -4315,13 +4315,13 @@ export async function getVialPlan(parentSampleId: string): Promise<VialPlanRespo
 }
 
 export interface ParentAggregate {
-  /** Total vials = parent + sub-samples. Zero when the parent has no
-   *  sub-samples (single-vial samples render as a dash). */
+  /** Total vials = parent + sub-samples. Parents with no sub-samples
+   *  are omitted from the response entirely (caller treats absence as
+   *  "single-vial; render a dash"). */
   vial_count: number
-  /** Counts keyed by role across the parent and its sub-samples; only
-   *  roles with count > 0 are included.
-   *  'unassigned' = sub-samples whose assignment_role is NULL. */
-  role_breakdown: Partial<Record<'hplc' | 'endo' | 'ster' | 'xtra' | 'unassigned', number>>
+  /** The parent AR's own assignment_role. Sub-sample roles are surfaced
+   *  inline on expand via /api/sub-samples/{parent}, not here. */
+  parent_role: 'hplc' | 'endo' | 'ster' | 'xtra' | 'unassigned'
 }
 
 export interface SampleAggregatesResponse {

@@ -462,24 +462,24 @@ function SampleTable({
                 )}
               </TableCell>
               <TableCell className="text-sm">
-                {agg && agg.vial_count > 0 ? (
-                  <div className="flex flex-wrap gap-1">
-                    {ROLE_BADGES.map(rb => {
-                      const n = agg.role_breakdown[rb.key] ?? 0
-                      if (n === 0) return null
-                      return (
-                        <span
-                          key={rb.key}
-                          className={`inline-flex items-center gap-0.5 rounded border px-1 py-0.5 text-[10px] font-medium ${rb.cls}`}
-                          title={`${n} ${rb.key}`}
-                        >
-                          <span>{rb.label}</span>
-                          <span>{n}</span>
-                        </span>
-                      )
-                    })}
-                  </div>
-                ) : (
+                {agg && agg.vial_count > 0 ? (() => {
+                  // Single badge for the parent's own role. Sub-sample
+                  // assignments live on the expanded sub-rows.
+                  const rb = ROLE_BADGES.find(b => b.key === agg.parent_role)
+                    ?? ROLE_BADGES[ROLE_BADGES.length - 1]!
+                  const label = rb.key === 'unassigned'
+                    ? 'Unassigned'
+                    : rb.key.toUpperCase()
+                  return (
+                    <span
+                      className={`inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[11px] font-medium ${rb.cls}`}
+                      title={`Parent vial: ${rb.key}`}
+                    >
+                      <span className="font-bold">{rb.label}</span>
+                      <span>{label}</span>
+                    </span>
+                  )
+                })() : (
                   <span className="text-muted-foreground/50 text-xs">—</span>
                 )}
               </TableCell>

@@ -319,17 +319,14 @@ def test_assignment_patch_parent_null_coerced_to_hplc():
     assert body["assignment_role"] == "hplc"
 
 
-def test_aggregates_returns_count_and_breakdown_per_parent():
-    """POST /aggregates returns vial_count and role_breakdown keyed by
-    parent_sample_id. vial_count rolls the parent's own vial into the
-    total. Sample IDs not present in lims_samples are omitted."""
+def test_aggregates_returns_count_and_parent_role_per_parent():
+    """POST /aggregates returns vial_count and parent_role keyed by
+    parent_sample_id. vial_count counts the parent + all sub-samples.
+    Parents without sub-samples are omitted (single-vial samples)."""
     with patch("sub_samples.routes.service.aggregate_by_parent") as fn:
         fn.return_value = {
             # 1 parent (hplc) + 1 endo + 2 ster sub-samples = 4 vials
-            "BW-0006": {
-                "vial_count": 4,
-                "role_breakdown": {"hplc": 1, "endo": 1, "ster": 2},
-            },
+            "BW-0006": {"vial_count": 4, "parent_role": "hplc"},
             # PB-0099 NOT returned — not in lims_samples
             # P-0115 absent because it has no sub-samples (single-vial,
             # nothing to surface on the list)
@@ -344,7 +341,7 @@ def test_aggregates_returns_count_and_breakdown_per_parent():
     aggs = body["aggregates"]
     assert set(aggs.keys()) == {"BW-0006"}
     assert aggs["BW-0006"]["vial_count"] == 4
-    assert aggs["BW-0006"]["role_breakdown"] == {"hplc": 1, "endo": 1, "ster": 2}
+    assert aggs["BW-0006"]["parent_role"] == "hplc"
     assert "PB-0099" not in aggs
     assert "P-0115" not in aggs
 

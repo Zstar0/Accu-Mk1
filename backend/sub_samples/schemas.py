@@ -79,12 +79,11 @@ class ParentAggregate(BaseModel):
                     "has no sub-samples (single-vial samples aren't interesting "
                     "on the list page; UI renders a dash)."
     )
-    role_breakdown: dict[str, int] = Field(
+    parent_role: str = Field(
         ...,
-        description="Counts keyed by assignment_role across the parent and "
-                    "all its sub-samples. Only roles with count > 0 included. "
-                    "'unassigned' covers sub-samples whose role is NULL "
-                    "(auto-assign hasn't run yet)."
+        description="The parent AR's assignment_role. The list page renders "
+                    "this badge on the parent row; sub-sample roles are shown "
+                    "on expansion. Defaults to 'hplc' if NULL in the DB."
     )
 
 
