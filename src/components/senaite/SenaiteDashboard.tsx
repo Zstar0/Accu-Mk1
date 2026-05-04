@@ -1,10 +1,11 @@
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { Fragment, useState, useEffect, useCallback, useMemo } from 'react'
 import {
   RefreshCw,
   XCircle,
   Loader2,
   FlaskConical,
   ChevronRight,
+  ChevronDown,
   ArrowUp,
   ArrowDown,
   ArrowUpDown,
@@ -34,7 +35,11 @@ import {
 import {
   getSenaiteSamples,
   getSenaiteStatus,
+  fetchSampleAggregates,
+  listSubSamples,
   type SenaiteSample,
+  type ParentAggregate,
+  type SubSample,
 } from '@/lib/api'
 import { useUIStore } from '@/store/ui-store'
 import { StateBadge, formatDate } from '@/components/senaite/senaite-utils'
@@ -146,6 +151,19 @@ function SortIcon({ column, sort }: { column: SortColumn; sort: SortConfig }) {
 
 const TEST_CLIENT_ID = 'forrest@valenceanalytical.com'
 
+// SENAITE secondary AR ID format. Sub-samples are folded into their parent
+// rows; the standalone rows are hidden from the list.
+const SUB_SAMPLE_RE = /-S\d{2}$/
+
+// Compact role-pill order. Keys missing from breakdown render nothing.
+const ROLE_BADGES: { key: keyof ParentAggregate['role_breakdown']; label: string; cls: string }[] = [
+  { key: 'hplc', label: 'H', cls: 'bg-sky-500/15 text-sky-300 border-sky-500/30' },
+  { key: 'endo', label: 'E', cls: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30' },
+  { key: 'ster', label: 'S', cls: 'bg-violet-500/15 text-violet-300 border-violet-500/30' },
+  { key: 'xtra', label: 'X', cls: 'bg-zinc-500/15 text-zinc-300 border-zinc-500/30' },
+  { key: 'unassigned', label: '?', cls: 'bg-amber-500/15 text-amber-300 border-amber-500/30' },
+]
+
 interface ColumnFilters {
   id: string
   client_order_number: string
@@ -194,9 +212,11 @@ function SampleTable({
     )
   }
 
-  // Client-side filtering: hide test samples + analyte search
+  // Client-side filtering: hide secondary ARs, test samples + analyte search.
+  // Secondary ARs (sub-samples) are surfaced inline under their parent via
+  // the expand-in-row UI rather than as standalone list rows.
   const filteredSamples = useMemo(() => {
-    let result = samples
+    let result = samples.filter(s => !SUB_SAMPLE_RE.test(s.id))
     if (hideTestSamples) {
       result = result.filter(s => s.client_id?.toLowerCase() !== TEST_CLIENT_ID)
     }
@@ -212,6 +232,52 @@ function SampleTable({
   const sortedSamples = useMemo(() => {
     return [...filteredSamples].sort((a, b) => compareSamples(a, b, sort))
   }, [filteredSamples, sort])
+
+  // Vial count + assignment role breakdown for visible parents.
+  // Missing entries === no sub-samples (parent not in lims_samples or no
+  // children yet). Single batch round-trip per visible parent set.
+  const [aggregates, setAggregates] = useState<Record<string, ParentAggregate>>({})
+  useEffect(() => {
+    const ids = filteredSamples.map(s => s.id)
+    if (ids.length === 0) {
+      setAggregates({})
+      return
+    }
+    let cancelled = false
+    fetchSampleAggregates(ids)
+      .then(res => { if (!cancelled) setAggregates(res.aggregates) })
+      .catch(() => { /* non-fatal: columns just render dashes */ })
+    return () => { cancelled = true }
+  }, [filteredSamples])
+
+  // Expand-in-row state. Lazy-load sub-samples on first expand and cache.
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
+  const [subSamplesCache, setSubSamplesCache] = useState<Record<string, SubSample[]>>({})
+  const [subSamplesLoading, setSubSamplesLoading] = useState<Set<string>>(new Set())
+
+  const toggleExpand = useCallback(async (parentId: string) => {
+    setExpandedIds(prev => {
+      const next = new Set(prev)
+      if (next.has(parentId)) next.delete(parentId)
+      else next.add(parentId)
+      return next
+    })
+    if (!subSamplesCache[parentId] && !subSamplesLoading.has(parentId)) {
+      setSubSamplesLoading(prev => new Set(prev).add(parentId))
+      try {
+        const res = await listSubSamples(parentId)
+        setSubSamplesCache(prev => ({ ...prev, [parentId]: res.sub_samples }))
+      } catch {
+        setSubSamplesCache(prev => ({ ...prev, [parentId]: [] }))
+      } finally {
+        setSubSamplesLoading(prev => {
+          const next = new Set(prev)
+          next.delete(parentId)
+          return next
+        })
+      }
+    }
+  }, [subSamplesCache, subSamplesLoading])
 
   if (loading) {
     return (
@@ -252,6 +318,21 @@ function SampleTable({
       label: 'Sample ID',
       className: 'w-32',
       cellClassName: 'font-mono text-sm',
+    },
+    // 'vials' and 'assigned' aren't really sortable; following the existing
+    // 'analytes' precedent, the SortColumn cast lets them coexist in the
+    // header, and compareSamples no-ops on missing keys.
+    {
+      key: 'vials' as SortColumn,
+      label: 'Vials',
+      className: 'w-20 text-center',
+      cellClassName: 'text-center',
+    },
+    {
+      key: 'assigned' as SortColumn,
+      label: 'Assigned',
+      className: 'w-32',
+      cellClassName: 'text-sm',
     },
     {
       key: 'client_order_number',
@@ -353,13 +434,58 @@ function SampleTable({
               </TableCell>
             </TableRow>
           ) : (
-            sortedSamples.map(s => (
+            sortedSamples.map(s => {
+              const agg = aggregates[s.id]
+              const vialCount = agg?.sub_sample_count ?? 0
+              const expanded = expandedIds.has(s.id)
+              const subs = subSamplesCache[s.id]
+              const subsLoading = subSamplesLoading.has(s.id)
+              return (
+            <Fragment key={s.uid}>
             <TableRow
-              key={s.uid}
               className="hover:bg-muted/30 cursor-pointer"
               onClick={() => onSelectSample?.(s.id)}
             >
               <TableCell className="font-mono text-sm">{s.id}</TableCell>
+              <TableCell className="text-center">
+                {vialCount > 0 ? (
+                  <button
+                    type="button"
+                    onClick={e => { e.stopPropagation(); void toggleExpand(s.id) }}
+                    className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-muted/60 transition-colors text-xs"
+                    aria-label={expanded ? 'Collapse vials' : 'Expand vials'}
+                  >
+                    {expanded
+                      ? <ChevronDown className="h-3 w-3 text-muted-foreground" />
+                      : <ChevronRight className="h-3 w-3 text-muted-foreground" />}
+                    <span className="font-medium">{vialCount}</span>
+                  </button>
+                ) : (
+                  <span className="text-muted-foreground/50 text-xs">—</span>
+                )}
+              </TableCell>
+              <TableCell className="text-sm">
+                {agg && agg.sub_sample_count > 0 ? (
+                  <div className="flex flex-wrap gap-1">
+                    {ROLE_BADGES.map(rb => {
+                      const n = agg.role_breakdown[rb.key] ?? 0
+                      if (n === 0) return null
+                      return (
+                        <span
+                          key={rb.key}
+                          className={`inline-flex items-center gap-0.5 rounded border px-1 py-0.5 text-[10px] font-medium ${rb.cls}`}
+                          title={`${n} ${rb.key}`}
+                        >
+                          <span>{rb.label}</span>
+                          <span>{n}</span>
+                        </span>
+                      )
+                    })}
+                  </div>
+                ) : (
+                  <span className="text-muted-foreground/50 text-xs">—</span>
+                )}
+              </TableCell>
               <TableCell className="text-sm">
                 {s.client_order_number ? (
                   <button
@@ -403,7 +529,60 @@ function SampleTable({
                 <StateBadge state={s.review_state} />
               </TableCell>
             </TableRow>
-            ))
+            {expanded && (
+              <TableRow className="bg-muted/10 hover:bg-muted/10">
+                <TableCell colSpan={columns.length} className="p-0">
+                  <div className="px-6 py-3 border-l-2 border-primary/30 bg-muted/5">
+                    {subsLoading && !subs ? (
+                      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                        Loading sub-samples…
+                      </div>
+                    ) : !subs || subs.length === 0 ? (
+                      <p className="text-xs text-muted-foreground italic">
+                        No sub-samples on file for this parent.
+                      </p>
+                    ) : (
+                      <div className="space-y-1">
+                        <div className="grid grid-cols-[7rem_3rem_5rem_1fr] gap-3 text-[10px] uppercase tracking-wide text-muted-foreground/70 pb-1 border-b border-border/30">
+                          <span>Sample ID</span>
+                          <span className="text-center">Vial</span>
+                          <span>Assigned</span>
+                          <span>Remarks</span>
+                        </div>
+                        {subs.map(sub => {
+                          const role = sub.assignment_role ?? 'unassigned'
+                          // Last entry of ROLE_BADGES is the 'unassigned' fallback;
+                          // ROLE_BADGES is non-empty so the assertion is safe.
+                          const badge = ROLE_BADGES.find(b => b.key === role) ?? ROLE_BADGES[ROLE_BADGES.length - 1]!
+                          return (
+                            <button
+                              key={sub.id}
+                              type="button"
+                              className="w-full grid grid-cols-[7rem_3rem_5rem_1fr] gap-3 text-xs py-1 px-1 -mx-1 rounded hover:bg-muted/30 transition-colors text-left"
+                              onClick={e => { e.stopPropagation(); onSelectSample?.(sub.sample_id) }}
+                            >
+                              <span className="font-mono">{sub.sample_id}</span>
+                              <span className="text-center text-muted-foreground">{sub.vial_sequence}</span>
+                              <span>
+                                <span className={`inline-flex items-center gap-0.5 rounded border px-1 py-0.5 text-[10px] font-medium ${badge.cls}`}>
+                                  <span>{badge.label}</span>
+                                  <span className="capitalize">{role}</span>
+                                </span>
+                              </span>
+                              <span className="text-muted-foreground truncate">{sub.remarks ?? '—'}</span>
+                            </button>
+                          )
+                        })}
+                      </div>
+                    )}
+                  </div>
+                </TableCell>
+              </TableRow>
+            )}
+            </Fragment>
+              )
+            })
           )}
         </TableBody>
       </Table>

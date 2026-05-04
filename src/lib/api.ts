@@ -4314,6 +4314,44 @@ export async function getVialPlan(parentSampleId: string): Promise<VialPlanRespo
   return response.json()
 }
 
+export interface ParentAggregate {
+  sub_sample_count: number
+  /** Counts keyed by role; only roles with count > 0 included.
+   *  'unassigned' = sub-samples whose assignment_role is NULL. */
+  role_breakdown: Partial<Record<'hplc' | 'endo' | 'ster' | 'xtra' | 'unassigned', number>>
+}
+
+export interface SampleAggregatesResponse {
+  /** Keyed by parent sample_id. Sample IDs not in lims_samples are absent —
+   *  callers treat absence as zero. */
+  aggregates: Record<string, ParentAggregate>
+}
+
+/**
+ * Batch fetch sub-sample count + role breakdown for a list of parent sample IDs.
+ * Used by the SENAITE samples list to render the Vials and Assigned columns.
+ */
+export async function fetchSampleAggregates(
+  parentSampleIds: string[]
+): Promise<SampleAggregatesResponse> {
+  if (parentSampleIds.length === 0) {
+    return { aggregates: {} }
+  }
+  const response = await fetch(
+    `${API_BASE_URL()}/api/sub-samples/aggregates`,
+    {
+      method: 'POST',
+      headers: getBearerHeaders('application/json'),
+      body: JSON.stringify({ parent_sample_ids: parentSampleIds }),
+    }
+  )
+  if (!response.ok) {
+    const err = await response.json().catch(() => null)
+    throw new Error(err?.detail || `Sample aggregates fetch failed: ${response.status}`)
+  }
+  return response.json()
+}
+
 /**
  * Update the assignment role for a sub-sample.
  */
