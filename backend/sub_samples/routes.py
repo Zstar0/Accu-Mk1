@@ -13,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 from database import get_db
 from auth import get_current_user
-from models import LimsSubSample
+from models import LimsSample, LimsSubSample
 from sub_samples import service
 from sub_samples.senaite import (
     SecondaryFalloutError,
@@ -244,27 +244,38 @@ def get_sub_sample_photo(
     db: Session = Depends(get_db),
     _user=Depends(get_current_user),
 ):
-    """Stream the most-recent photo attached to a sub-sample's secondary AR.
+    """Stream the most-recent photo attached to a sample's AR (sub-sample or parent).
 
     Resolves the AR via the local row's `external_lims_uid`, fetches the AR
     detail with `complete=true` to get the `Attachment` reference list, picks
     the last attachment, and proxies its binary `download` URL.
 
-    Note: `photo_external_uid` on the row holds the AR PATH (set at
-    create-time as `secondary_path` — see service.create_sub_sample), NOT an
-    attachment UID. We use it as a "has-photo" sentinel only; the AR's UID
-    is what we hit for the API lookup.
+    For sub-samples, `photo_external_uid` is set at create-time as a sentinel
+    that a photo was uploaded. For parents, we just attempt the lookup and
+    return 404 if no attachments exist (the receive wizard always uploads a
+    photo on first vial check-in, so any received parent should have one).
     """
+    # Try sub-sample first, then fall back to parent AR.
     sub = db.execute(
         select(LimsSubSample).where(LimsSubSample.sample_id == sample_id)
     ).scalar_one_or_none()
-    if not sub:
-        raise HTTPException(404, f"Sub-sample {sample_id} not found")
-    if not sub.photo_external_uid:
-        raise HTTPException(404, f"No photo on file for {sample_id}")
+
+    if sub:
+        if not sub.photo_external_uid:
+            raise HTTPException(404, f"No photo on file for {sample_id}")
+        ar_uid = sub.external_lims_uid
+    else:
+        parent = db.execute(
+            select(LimsSample).where(LimsSample.sample_id == sample_id)
+        ).scalar_one_or_none()
+        if not parent:
+            raise HTTPException(404, f"Sample {sample_id} not found")
+        if not parent.external_lims_uid:
+            raise HTTPException(404, f"Sample {sample_id} has no SENAITE UID")
+        ar_uid = parent.external_lims_uid
 
     # Fetch AR detail with attachments expanded.
-    detail_url = f"{SENAITE_BASE_URL}/@@API/senaite/v1/AnalysisRequest/{sub.external_lims_uid}"
+    detail_url = f"{SENAITE_BASE_URL}/@@API/senaite/v1/AnalysisRequest/{ar_uid}"
     detail_resp = _get(detail_url, params={"complete": "true"})
     if detail_resp.status_code >= 300:
         raise HTTPException(
@@ -273,7 +284,7 @@ def get_sub_sample_photo(
         )
     items = detail_resp.json().get("items", [])
     if not items:
-        raise HTTPException(404, f"No SENAITE AR for uid={sub.external_lims_uid}")
+        raise HTTPException(404, f"No SENAITE AR for uid={ar_uid}")
 
     raw_attachments = items[0].get("Attachment") or []
     if not raw_attachments:

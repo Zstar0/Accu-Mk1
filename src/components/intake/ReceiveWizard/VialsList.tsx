@@ -75,12 +75,11 @@ export function VialsList({
       <ul className="space-y-1 flex-1">
         {parentVial && (
           <li className="rounded bg-muted/30 opacity-80 p-2 flex items-center gap-2">
-            {/* No thumbnail on parent — its photo lives on the parent AR's
-                attachments (different endpoint than sub-samples). Skipping
-                for now keeps this iteration small. */}
-            <div className="w-9 h-9 rounded bg-muted/60 border shrink-0 flex items-center justify-center">
-              <span className="text-[8px] text-muted-foreground">vial 1</span>
-            </div>
+            {/* Photo endpoint falls back to the parent AR's last attachment
+                when the sample_id isn't a sub-sample, so the same VialThumb
+                works here. hasPhoto is true once the parent has been
+                received — pre-receive parents won't have one yet. */}
+            <VialThumb sampleId={parentVial.sampleId} hasPhoto={true} />
             <div className="min-w-0">
               <div className="font-mono text-sm truncate">{parentVial.sampleId}</div>
               <div className="text-xs text-muted-foreground flex items-center gap-1">
