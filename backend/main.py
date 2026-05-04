@@ -10871,8 +10871,17 @@ async def list_senaite_samples(
                 )
 
             else:
-                # Normal paginated listing (no search)
-                params = {**base_params, "limit": limit, "b_start": b_start}
+                # Normal paginated listing (no search). When filtering
+                # sub-samples server-side, over-fetch from SENAITE so each
+                # page yields close to `limit` parents. b_start is in
+                # user-page-units; translate to SENAITE-row-units by the
+                # same factor so consecutive pages don't overlap.
+                fetch_factor = 1 if include_sub_samples else 2
+                params = {
+                    **base_params,
+                    "limit": limit * fetch_factor,
+                    "b_start": b_start * fetch_factor,
+                }
                 params = _add_state_params(params, states)
                 multi_url = _build_state_url(url, params, states)
                 if multi_url:
@@ -10885,12 +10894,17 @@ async def list_senaite_samples(
 
             raw = data.get("items", [])
             visible = [it for it in raw if _is_visible(it)]
-            items = [_item_to_model(it) for it in visible]
+            # Cap at the user's requested `limit` so each page renders the
+            # same density even when over-fetch found more parents than
+            # expected. Anything trimmed here is picked up on the next page
+            # (b_start advances by limit*fetch_factor on the SENAITE side).
+            items = [_item_to_model(it) for it in visible[:limit]]
 
-            # SENAITE's count covers the unfiltered set; scale by the in-page
-            # parent ratio so the frontend's totalPages stays roughly right
-            # when sub-samples are excluded. Falls back to len(items) on a
-            # zero-row page to avoid div-by-zero.
+            # Estimate the parent total. SENAITE's count covers the
+            # unfiltered set; scale by the parent ratio observed in the
+            # current fetch so the frontend's totalPages stays roughly
+            # right after filtering. Falls back to raw_total on an empty
+            # page to avoid div-by-zero.
             raw_total = data.get("count") or data.get("total") or len(raw)
             if not include_sub_samples and raw:
                 ratio = len(visible) / len(raw) if len(raw) else 1.0
