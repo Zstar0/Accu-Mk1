@@ -117,8 +117,10 @@ export function AssignStep({ parentSampleId }: Props) {
     plan.vials.some(v => v.assignment_role === 'endo' || v.assignment_role === 'ster')
   const showHplc = plan.demand.hplc > 0 ||
     plan.vials.some(v => v.assignment_role === 'hplc')
-  // Xtra always shown when there are surplus vials, otherwise hidden
-  const showXtra = plan.vials.some(v => v.assignment_role === 'xtra') || true
+  // Xtra is always rendered: it doubles as the drop target for manually
+  // surplussing a vial that auto-assign placed in HPLC/Endo/Ster. Hiding
+  // it when empty would lock users out of the override path.
+  const showXtra = true
 
   return (
     <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
