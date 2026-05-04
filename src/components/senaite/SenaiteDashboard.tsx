@@ -151,10 +151,6 @@ function SortIcon({ column, sort }: { column: SortColumn; sort: SortConfig }) {
 
 const TEST_CLIENT_ID = 'forrest@valenceanalytical.com'
 
-// SENAITE secondary AR ID format. Sub-samples are folded into their parent
-// rows; the standalone rows are hidden from the list.
-const SUB_SAMPLE_RE = /-S\d{2}$/
-
 // Compact role-pill order. Keys missing from breakdown render nothing.
 const ROLE_BADGES: { key: keyof ParentAggregate['role_breakdown']; label: string; cls: string }[] = [
   { key: 'hplc', label: 'H', cls: 'bg-sky-500/15 text-sky-300 border-sky-500/30' },
@@ -212,11 +208,12 @@ function SampleTable({
     )
   }
 
-  // Client-side filtering: hide secondary ARs, test samples + analyte search.
-  // Secondary ARs (sub-samples) are surfaced inline under their parent via
+  // Client-side filtering: hide test samples + analyte search.
+  // Sub-samples are excluded server-side (include_sub_samples=False default)
+  // so the receive wizard can surface them inline under their parent via
   // the expand-in-row UI rather than as standalone list rows.
   const filteredSamples = useMemo(() => {
-    let result = samples.filter(s => !SUB_SAMPLE_RE.test(s.id))
+    let result = samples
     if (hideTestSamples) {
       result = result.filter(s => s.client_id?.toLowerCase() !== TEST_CLIENT_ID)
     }
@@ -592,7 +589,11 @@ function SampleTable({
 
 // --- Main Dashboard ---
 
-const PAGE_SIZE = 25
+// Bumped from 25 → 50 alongside the server-side sub-sample filter: the SENAITE
+// fetch returns parents only, but each "page" can be slightly shorter than
+// `limit` when sub-samples are interleaved upstream. 50 keeps the visible row
+// count in line with what the page showed before the filter was added.
+const PAGE_SIZE = 50
 
 export function SenaiteDashboard() {
   const navigateToSample = useUIStore(state => state.navigateToSample)

@@ -10715,6 +10715,7 @@ async def list_senaite_samples(
     b_start: int = 0,
     search: Optional[str] = None,
     search_field: Optional[str] = None,
+    include_sub_samples: bool = False,
     _current_user=Depends(get_current_user),
 ):
     """
@@ -10724,14 +10725,27 @@ async def list_senaite_samples(
     - review_state: Comma-separated state(s) e.g. "sample_received,to_be_verified"
     - limit: Max results (default 50)
     - b_start: Pagination offset (default 0)
-
-    Returns items sorted by DateReceived descending.
+    - include_sub_samples: when False (default), secondary ARs whose ID
+      matches the <parent>-S\\d{2} convention are filtered out so the
+      list shows parent samples only. The receive wizard surfaces
+      sub-samples under their parent rather than as standalone rows.
+      Note: pages can be slightly shorter than `limit` when many
+      sub-samples are interleaved in the SENAITE result; the caller
+      should bump `limit` if a denser display is desired.
     """
     if SENAITE_URL is None:
         raise HTTPException(status_code=503, detail="SENAITE not configured")
 
     url = f"{SENAITE_URL}/senaite/@@API/senaite/v1/AnalysisRequest"
     base_params: dict = {"complete": "yes", "sort_on": "created", "sort_order": "descending"}
+
+    # SENAITE secondary AR ID convention. Used to drop sub-sample rows
+    # from the parent listing unless include_sub_samples=True.
+    _SUB_SAMPLE_RE = re.compile(r"-S\d{2}$")
+    def _is_visible(it: dict) -> bool:
+        if include_sub_samples:
+            return True
+        return not _SUB_SAMPLE_RE.search(str(it.get("id", "")))
 
     # SENAITE supports review_state:list for multiple states
     states = [s.strip() for s in review_state.split(",") if s.strip()] if review_state else []
@@ -10849,7 +10863,7 @@ async def list_senaite_samples(
                 # Sort by creation date descending
                 deduped.sort(key=lambda x: x.get("created", "") or "", reverse=True)
 
-                items = [_item_to_model(it) for it in deduped]
+                items = [_item_to_model(it) for it in deduped if _is_visible(it)]
                 return SenaiteSamplesResponse(
                     items=items,
                     total=len(items),
@@ -10869,11 +10883,24 @@ async def list_senaite_samples(
             resp.raise_for_status()
             data = resp.json()
 
-            items = [_item_to_model(it) for it in data.get("items", [])]
+            raw = data.get("items", [])
+            visible = [it for it in raw if _is_visible(it)]
+            items = [_item_to_model(it) for it in visible]
+
+            # SENAITE's count covers the unfiltered set; scale by the in-page
+            # parent ratio so the frontend's totalPages stays roughly right
+            # when sub-samples are excluded. Falls back to len(items) on a
+            # zero-row page to avoid div-by-zero.
+            raw_total = data.get("count") or data.get("total") or len(raw)
+            if not include_sub_samples and raw:
+                ratio = len(visible) / len(raw) if len(raw) else 1.0
+                total = int(raw_total * ratio)
+            else:
+                total = raw_total
 
             return SenaiteSamplesResponse(
                 items=items,
-                total=data.get("count") or data.get("total") or len(items),
+                total=total,
                 b_start=b_start,
             )
 
