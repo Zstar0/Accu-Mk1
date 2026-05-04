@@ -465,9 +465,11 @@ function SampleTable({
                 )}
               </TableCell>
               <TableCell className="text-sm">
-                {agg && agg.vial_count > 0 ? (() => {
-                  // Single badge for the parent's own role. Sub-sample
-                  // assignments live on the expanded sub-rows.
+                {agg ? (() => {
+                  // For multi-vial parents, this is the parent AR's own role
+                  // (sub-sample roles render on expand). For sub-sample rows
+                  // (vial_count == 0, surfaced via search), this is the
+                  // sub-sample's own assignment_role.
                   const rb = ROLE_BADGES.find(b => b.key === agg.parent_role)
                     ?? ROLE_BADGES[ROLE_BADGES.length - 1]!
                   const label = rb.key === 'unassigned'
@@ -476,7 +478,7 @@ function SampleTable({
                   return (
                     <span
                       className={`inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[11px] font-medium ${rb.cls}`}
-                      title={`Parent vial: ${rb.key}`}
+                      title={`${agg.vial_count > 0 ? 'Parent' : 'Sub-sample'} vial: ${rb.key}`}
                     >
                       <span className="font-bold">{rb.label}</span>
                       <span>{label}</span>

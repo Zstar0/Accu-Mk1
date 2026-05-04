@@ -545,26 +545,31 @@ def set_assignment_role(db: Session, sample_id: str, role: Optional[str]) -> dic
 
 
 def aggregate_by_parent(db: Session, parent_sample_ids: list[str]) -> dict[str, dict]:
-    """Vial count + parent role for each parent_sample_id.
+    """Vial count + role for each requested sample_id.
 
-    A "vial" is one AR — the parent's primary vial plus any secondary
-    (sub-sample) vials. vial_count = 1 (parent) + N (sub-samples).
-    parent_role is the parent AR's assignment_role.
+    Two recognized inputs:
 
-    Parents in lims_samples with no sub-samples are omitted from the
-    response — single-vial samples are not interesting on the list page
-    (the column is meant to highlight multi-vial splits). Sample IDs
-    not present in lims_samples at all are omitted; callers treat
-    absence as "no vials to show".
+    1. Parent sample_ids (in lims_samples) with at least one sub-sample.
+       Returned as {vial_count: 1+N, parent_role: <parent's role>}.
+       Single-vial parents (no sub-samples) are omitted — the list-page
+       column is meant to highlight multi-vial splits.
 
-    The list page renders only the parent's role on the parent row;
-    sub-sample roles are surfaced on expand by hitting
-    GET /api/sub-samples/{parent}.
+    2. Sub-sample sample_ids (in lims_sub_samples). Returned as
+       {vial_count: 0, parent_role: <sub's own assignment_role>}.
+       The list page treats vial_count=0 as "no chevron, no count",
+       but renders the role badge so a search hit on a secondary AR
+       shows what department it's been assigned to.
+
+    Sample IDs not in either table are omitted; callers treat absence
+    as "no role to show".
     """
     if not parent_sample_ids:
         return {}
 
-    rows = db.execute(
+    result: dict[str, dict] = {}
+
+    # Path 1: parent rows. GROUP BY parent + count children.
+    parent_rows = db.execute(
         select(
             LimsSample.sample_id,
             LimsSample.assignment_role,
@@ -574,15 +579,26 @@ def aggregate_by_parent(db: Session, parent_sample_ids: list[str]) -> dict[str, 
         .where(LimsSample.sample_id.in_(parent_sample_ids))
         .group_by(LimsSample.sample_id, LimsSample.assignment_role)
     ).all()
-
-    result: dict[str, dict] = {}
-    for sample_id, parent_role, sub_count in rows:
-        # Skip parents with no sub-samples — single-vial samples don't
-        # warrant a Vials/Assigned column entry.
+    for sample_id, parent_role, sub_count in parent_rows:
         if sub_count == 0:
             continue
         result[sample_id] = {
-            "vial_count": sub_count + 1,  # +1 for the parent's own vial
+            "vial_count": sub_count + 1,
             "parent_role": parent_role or "hplc",
         }
+
+    # Path 2: sub-sample rows. Skip any IDs already resolved as parents
+    # to keep the query small.
+    remaining = [sid for sid in parent_sample_ids if sid not in result]
+    if remaining:
+        sub_rows = db.execute(
+            select(LimsSubSample.sample_id, LimsSubSample.assignment_role)
+            .where(LimsSubSample.sample_id.in_(remaining))
+        ).all()
+        for sample_id, role in sub_rows:
+            result[sample_id] = {
+                "vial_count": 0,
+                "parent_role": role or "unassigned",
+            }
+
     return result
