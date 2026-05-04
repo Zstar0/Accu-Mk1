@@ -317,3 +317,43 @@ def test_assignment_patch_parent_null_coerced_to_hplc():
     assert resp.status_code == 200
     body = resp.json()
     assert body["assignment_role"] == "hplc"
+
+
+def test_aggregates_returns_count_and_breakdown_per_parent():
+    """POST /aggregates returns sub_sample_count and role_breakdown keyed by
+    parent_sample_id. Sample IDs not present in lims_samples are omitted."""
+    with patch("sub_samples.routes.service.aggregate_by_parent") as fn:
+        fn.return_value = {
+            "BW-0006": {
+                "sub_sample_count": 4,
+                "role_breakdown": {"hplc": 1, "endo": 1, "ster": 2},
+            },
+            "P-0115": {
+                "sub_sample_count": 0,
+                "role_breakdown": {},
+            },
+            # PB-0099 NOT returned — not in lims_samples
+        }
+        resp = client.post(
+            "/api/sub-samples/aggregates",
+            json={"parent_sample_ids": ["BW-0006", "P-0115", "PB-0099"]},
+        )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "aggregates" in body
+    aggs = body["aggregates"]
+    assert set(aggs.keys()) == {"BW-0006", "P-0115"}
+    assert aggs["BW-0006"]["sub_sample_count"] == 4
+    assert aggs["BW-0006"]["role_breakdown"] == {"hplc": 1, "endo": 1, "ster": 2}
+    assert aggs["P-0115"]["sub_sample_count"] == 0
+    assert aggs["P-0115"]["role_breakdown"] == {}
+    assert "PB-0099" not in aggs
+
+
+def test_aggregates_rejects_empty_id_list():
+    """min_length=1 on parent_sample_ids — empty list returns 422."""
+    resp = client.post(
+        "/api/sub-samples/aggregates",
+        json={"parent_sample_ids": []},
+    )
+    assert resp.status_code == 422

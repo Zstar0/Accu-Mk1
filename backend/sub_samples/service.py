@@ -542,3 +542,40 @@ def set_assignment_role(db: Session, sample_id: str, role: Optional[str]) -> dic
     parent.assignment_role = coerced
     db.commit()
     return {"sample_id": sample_id, "assignment_role": coerced}
+
+
+def aggregate_by_parent(db: Session, parent_sample_ids: list[str]) -> dict[str, dict]:
+    """Sub-sample count + role breakdown for each parent_sample_id.
+
+    Single GROUP BY query keyed on parent.sample_id. Parents that exist in
+    lims_samples but have no sub-samples come back with sub_sample_count=0
+    and an empty role_breakdown. Sample IDs not present in lims_samples at
+    all are omitted — callers treat absence as "no sub-samples".
+
+    NULL assignment_role on a sub-sample (auto-assign hasn't run yet) is
+    grouped under the synthetic key "unassigned" so the frontend can
+    distinguish it from real roles.
+    """
+    if not parent_sample_ids:
+        return {}
+
+    # One query: group by parent sample_id and (coalesced) sub-sample role.
+    role_col = func.coalesce(LimsSubSample.assignment_role, "unassigned").label("role")
+    rows = db.execute(
+        select(
+            LimsSample.sample_id,
+            role_col,
+            func.count(LimsSubSample.id).label("count"),
+        )
+        .outerjoin(LimsSubSample, LimsSubSample.parent_sample_pk == LimsSample.id)
+        .where(LimsSample.sample_id.in_(parent_sample_ids))
+        .group_by(LimsSample.sample_id, role_col)
+    ).all()
+
+    result: dict[str, dict] = {}
+    for sample_id, role, count in rows:
+        agg = result.setdefault(sample_id, {"sub_sample_count": 0, "role_breakdown": {}})
+        if count > 0:
+            agg["sub_sample_count"] += count
+            agg["role_breakdown"][role] = count
+    return result

@@ -63,3 +63,28 @@ class VialPlanResponse(BaseModel):
 
 class AssignmentPatchRequest(BaseModel):
     role: Optional[str]  # 'hplc' | 'endo' | 'ster' | 'xtra' | None
+
+
+class AggregatesRequest(BaseModel):
+    parent_sample_ids: list[str] = Field(
+        ..., min_length=1, max_length=500,
+        description="Parent SENAITE sample IDs to look up aggregates for"
+    )
+
+
+class ParentAggregate(BaseModel):
+    sub_sample_count: int
+    role_breakdown: dict[str, int] = Field(
+        ...,
+        description="Counts keyed by assignment_role; only roles with count > 0 included. "
+                    "Use 'unassigned' for sub-samples whose role is NULL."
+    )
+
+
+class AggregatesResponse(BaseModel):
+    aggregates: dict[str, ParentAggregate] = Field(
+        ...,
+        description="Keyed by parent_sample_id. Sample IDs not present locally "
+                    "(no row in lims_samples) are omitted from the response — "
+                    "callers should treat absence as 'no sub-samples'."
+    )

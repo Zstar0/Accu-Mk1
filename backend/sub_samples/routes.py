@@ -26,6 +26,7 @@ from sub_samples.schemas import (
     CreateSubSampleRequest, UpdateSubSampleRequest,
     SubSampleResponse, SubSampleListResponse, ParentSampleSummary,
     VialPlanResponse, VialPlanItem, AssignmentPatchRequest,
+    AggregatesRequest, AggregatesResponse, ParentAggregate,
 )
 
 
@@ -135,6 +136,26 @@ def list_sub_samples(
             last_synced_at=parent.last_synced_at,
         ),
         sub_samples=[_serialize(s) for s in subs],
+    )
+
+
+@router.post("/aggregates", response_model=AggregatesResponse)
+def aggregate_parents(
+    body: AggregatesRequest,
+    db: Session = Depends(get_db),
+    _user=Depends(get_current_user),
+):
+    """Batch sub-sample count + role breakdown per parent_sample_id.
+
+    Used by the SENAITE samples list page to render Vials / Assigned columns
+    without N round-trips. Sample IDs not present in lims_samples are simply
+    omitted from the response — frontend treats absence as zero.
+    """
+    raw = service.aggregate_by_parent(db, body.parent_sample_ids)
+    return AggregatesResponse(
+        aggregates={
+            pid: ParentAggregate(**agg) for pid, agg in raw.items()
+        }
     )
 
 
