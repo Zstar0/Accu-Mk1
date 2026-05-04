@@ -10863,7 +10863,11 @@ async def list_senaite_samples(
                 # Sort by creation date descending
                 deduped.sort(key=lambda x: x.get("created", "") or "", reverse=True)
 
-                items = [_item_to_model(it) for it in deduped if _is_visible(it)]
+                # Search bypasses the sub-sample filter. If the operator
+                # explicitly searches by a verification code, order number,
+                # or a sub-sample ID directly, they should find that record
+                # — the parents-only filter is for browsing, not lookups.
+                items = [_item_to_model(it) for it in deduped]
                 return SenaiteSamplesResponse(
                     items=items,
                     total=len(items),
