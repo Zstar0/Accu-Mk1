@@ -3,9 +3,12 @@ PostgreSQL database setup using SQLAlchemy 2.0.
 Connects to accumark_mk1 database on the shared PostgreSQL server.
 """
 
+import logging
 import os
 from sqlalchemy import create_engine
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
+
+log = logging.getLogger(__name__)
 
 # Load .env file if python-dotenv is available
 try:
@@ -244,10 +247,15 @@ def _run_migrations():
         # lims_sub_samples: nullable. NULL means "auto-assign hasn't run yet".
         "ALTER TABLE lims_sub_samples ADD COLUMN IF NOT EXISTS assignment_role VARCHAR(8)",
     ]
-    try:
-        with engine.connect() as conn:
-            for sql in migrations:
+    # Per-statement isolation: a failure in one statement (e.g., a table that
+    # create_all hasn't built yet on first run) must not skip subsequent
+    # statements. The previous bulk try/except wrapped the whole loop and
+    # silently dropped every migration after the first failure.
+    with engine.connect() as conn:
+        for sql in migrations:
+            try:
                 conn.execute(text(sql))
-            conn.commit()
-    except Exception:
-        pass  # Table may not exist yet on first run — create_all handles it
+                conn.commit()
+            except Exception as e:
+                conn.rollback()
+                log.warning("migration_skipped sql=%r err=%s", sql[:80], e)
