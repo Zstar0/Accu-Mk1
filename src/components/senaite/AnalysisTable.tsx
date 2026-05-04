@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, Fragment } from 'react'
-import { Activity, ArrowDownUp, ArrowUpDown, Check, ChevronDown, ChevronRight, MoreHorizontal, Pencil, X } from 'lucide-react'
+import { Activity, ArrowDownUp, ArrowUpDown, Check, ChevronDown, ChevronRight, MoreHorizontal, Pencil, Star, X } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Spinner } from '@/components/ui/spinner'
@@ -723,7 +723,7 @@ function AnalysisRow({
   return (
     <tr
       className={`border-b border-border/50 hover:bg-muted/30 transition-colors ${rowTint} ${
-        isPrimary ? 'border-l-4 border-l-primary/70' : ''
+        isPrimary ? 'border-l-4 border-l-amber-400 shadow-[inset_8px_0_12px_-8px_rgba(251,191,36,0.25)]' : ''
       }`}
     >
       <td className="py-2.5 px-3">
@@ -740,9 +740,10 @@ function AnalysisRow({
         <div className="flex items-center gap-1.5 flex-wrap">
           {isPrimary && (
             <span
-              className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-semibold uppercase tracking-wider bg-primary/15 text-primary border border-primary/30 shrink-0"
+              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider bg-amber-400 text-amber-950 dark:bg-amber-500 dark:text-amber-50 shadow-sm shrink-0"
               title="Primary analysis for this vial's assignment"
             >
+              <Star size={9} className="fill-current" />
               Primary
             </span>
           )}
