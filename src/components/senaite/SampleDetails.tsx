@@ -2246,6 +2246,18 @@ export function SampleDetails() {
               <ScrollText size={13} />
               Activity
             </Button>
+            {isParent && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-1.5 cursor-pointer"
+                onClick={openSubSampleWizard}
+                disabled={!data?.sample_uid}
+              >
+                <Plus size={13} />
+                Add Sub-Sample
+              </Button>
+            )}
             {!isParent && (
               <Button
                 variant="outline"
@@ -3307,14 +3319,6 @@ export function SampleDetails() {
                 <h2 className="text-lg font-semibold">
                   Sub-Samples{subCount > 0 ? ` (${subCount})` : ''}
                 </h2>
-                <button
-                  type="button"
-                  onClick={openSubSampleWizard}
-                  disabled={!data?.sample_uid}
-                  className="px-3 py-1.5 text-sm border rounded hover:bg-muted disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  + Add Sub-Sample
-                </button>
               </header>
 
               {subSamples.length === 0 ? (
