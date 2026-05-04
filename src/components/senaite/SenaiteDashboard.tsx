@@ -433,7 +433,7 @@ function SampleTable({
           ) : (
             sortedSamples.map(s => {
               const agg = aggregates[s.id]
-              const vialCount = agg?.sub_sample_count ?? 0
+              const vialCount = agg?.vial_count ?? 0
               const expanded = expandedIds.has(s.id)
               const subs = subSamplesCache[s.id]
               const subsLoading = subSamplesLoading.has(s.id)
@@ -462,7 +462,7 @@ function SampleTable({
                 )}
               </TableCell>
               <TableCell className="text-sm">
-                {agg && agg.sub_sample_count > 0 ? (
+                {agg && agg.vial_count > 0 ? (
                   <div className="flex flex-wrap gap-1">
                     {ROLE_BADGES.map(rb => {
                       const n = agg.role_breakdown[rb.key] ?? 0

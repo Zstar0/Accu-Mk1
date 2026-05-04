@@ -545,37 +545,58 @@ def set_assignment_role(db: Session, sample_id: str, role: Optional[str]) -> dic
 
 
 def aggregate_by_parent(db: Session, parent_sample_ids: list[str]) -> dict[str, dict]:
-    """Sub-sample count + role breakdown for each parent_sample_id.
+    """Vial count + role breakdown for each parent_sample_id.
 
-    Single GROUP BY query keyed on parent.sample_id. Parents that exist in
-    lims_samples but have no sub-samples come back with sub_sample_count=0
-    and an empty role_breakdown. Sample IDs not present in lims_samples at
-    all are omitted — callers treat absence as "no sub-samples".
+    A "vial" is one AR — the parent's primary vial plus any secondary
+    (sub-sample) vials. The parent counts toward vial_count and its
+    assignment_role contributes to role_breakdown alongside its children.
 
-    NULL assignment_role on a sub-sample (auto-assign hasn't run yet) is
-    grouped under the synthetic key "unassigned" so the frontend can
-    distinguish it from real roles.
+    Parents in lims_samples with no sub-samples come back with
+    vial_count=0 and an empty role_breakdown — single-vial samples are
+    not interesting on the list page (the column is meant to highlight
+    multi-vial splits). Sample IDs not present in lims_samples at all
+    are omitted; callers treat absence as "no vials to show".
+
+    NULL assignment_role on a sub-sample (auto-assign hasn't run yet)
+    is grouped under the synthetic key "unassigned" so the frontend
+    can distinguish it from real roles.
     """
     if not parent_sample_ids:
         return {}
 
-    # One query: group by parent sample_id and (coalesced) sub-sample role.
+    # First query: parent + sub-sample role counts in one shot.
     role_col = func.coalesce(LimsSubSample.assignment_role, "unassigned").label("role")
     rows = db.execute(
         select(
             LimsSample.sample_id,
+            LimsSample.assignment_role,
             role_col,
             func.count(LimsSubSample.id).label("count"),
         )
         .outerjoin(LimsSubSample, LimsSubSample.parent_sample_pk == LimsSample.id)
         .where(LimsSample.sample_id.in_(parent_sample_ids))
-        .group_by(LimsSample.sample_id, role_col)
+        .group_by(LimsSample.sample_id, LimsSample.assignment_role, role_col)
     ).all()
 
-    result: dict[str, dict] = {}
-    for sample_id, role, count in rows:
-        agg = result.setdefault(sample_id, {"sub_sample_count": 0, "role_breakdown": {}})
+    # First pass: tally sub-sample counts by parent + role.
+    sub_totals: dict[str, dict[str, int]] = {}
+    parent_roles: dict[str, str] = {}
+    for sample_id, parent_role, role, count in rows:
+        parent_roles[sample_id] = parent_role or "hplc"
         if count > 0:
-            agg["sub_sample_count"] += count
-            agg["role_breakdown"][role] = count
+            sub_totals.setdefault(sample_id, {})[role] = (
+                sub_totals.get(sample_id, {}).get(role, 0) + count
+            )
+
+    # Second pass: only include parents that actually have sub-samples,
+    # and roll the parent's own vial into the count + breakdown.
+    result: dict[str, dict] = {}
+    for sample_id, sub_breakdown in sub_totals.items():
+        parent_role = parent_roles[sample_id]
+        breakdown = dict(sub_breakdown)
+        breakdown[parent_role] = breakdown.get(parent_role, 0) + 1
+        result[sample_id] = {
+            "vial_count": sum(breakdown.values()),
+            "role_breakdown": breakdown,
+        }
     return result

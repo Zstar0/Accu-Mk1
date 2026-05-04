@@ -320,19 +320,19 @@ def test_assignment_patch_parent_null_coerced_to_hplc():
 
 
 def test_aggregates_returns_count_and_breakdown_per_parent():
-    """POST /aggregates returns sub_sample_count and role_breakdown keyed by
-    parent_sample_id. Sample IDs not present in lims_samples are omitted."""
+    """POST /aggregates returns vial_count and role_breakdown keyed by
+    parent_sample_id. vial_count rolls the parent's own vial into the
+    total. Sample IDs not present in lims_samples are omitted."""
     with patch("sub_samples.routes.service.aggregate_by_parent") as fn:
         fn.return_value = {
+            # 1 parent (hplc) + 1 endo + 2 ster sub-samples = 4 vials
             "BW-0006": {
-                "sub_sample_count": 4,
+                "vial_count": 4,
                 "role_breakdown": {"hplc": 1, "endo": 1, "ster": 2},
             },
-            "P-0115": {
-                "sub_sample_count": 0,
-                "role_breakdown": {},
-            },
             # PB-0099 NOT returned — not in lims_samples
+            # P-0115 absent because it has no sub-samples (single-vial,
+            # nothing to surface on the list)
         }
         resp = client.post(
             "/api/sub-samples/aggregates",
@@ -342,12 +342,11 @@ def test_aggregates_returns_count_and_breakdown_per_parent():
     body = resp.json()
     assert "aggregates" in body
     aggs = body["aggregates"]
-    assert set(aggs.keys()) == {"BW-0006", "P-0115"}
-    assert aggs["BW-0006"]["sub_sample_count"] == 4
+    assert set(aggs.keys()) == {"BW-0006"}
+    assert aggs["BW-0006"]["vial_count"] == 4
     assert aggs["BW-0006"]["role_breakdown"] == {"hplc": 1, "endo": 1, "ster": 2}
-    assert aggs["P-0115"]["sub_sample_count"] == 0
-    assert aggs["P-0115"]["role_breakdown"] == {}
     assert "PB-0099" not in aggs
+    assert "P-0115" not in aggs
 
 
 def test_aggregates_rejects_empty_id_list():

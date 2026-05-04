@@ -73,11 +73,18 @@ class AggregatesRequest(BaseModel):
 
 
 class ParentAggregate(BaseModel):
-    sub_sample_count: int
+    vial_count: int = Field(
+        ...,
+        description="Total vials = parent + sub-samples. Zero when the parent "
+                    "has no sub-samples (single-vial samples aren't interesting "
+                    "on the list page; UI renders a dash)."
+    )
     role_breakdown: dict[str, int] = Field(
         ...,
-        description="Counts keyed by assignment_role; only roles with count > 0 included. "
-                    "Use 'unassigned' for sub-samples whose role is NULL."
+        description="Counts keyed by assignment_role across the parent and "
+                    "all its sub-samples. Only roles with count > 0 included. "
+                    "'unassigned' covers sub-samples whose role is NULL "
+                    "(auto-assign hasn't run yet)."
     )
 
 
