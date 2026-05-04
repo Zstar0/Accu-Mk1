@@ -1931,6 +1931,7 @@ class PeptideCreate(BaseModel):
     analytes: list[AnalyteInput] = []
     is_blend: bool = False
     component_ids: list[int] = []
+    analyte_class: str = "peptide"  # 'peptide' | 'additive'
 
 
 class PeptideUpdate(BaseModel):
@@ -1945,6 +1946,7 @@ class PeptideUpdate(BaseModel):
     analytes: Optional[list[AnalyteInput]] = None
     component_ids: Optional[list[int]] = None
     component_vial_assignments: Optional[dict[str, int]] = None  # {"component_id": vial_number}
+    analyte_class: Optional[str] = None
 
 
 class CalibrationCurveResponse(BaseModel):
@@ -2011,6 +2013,7 @@ class PeptideResponse(BaseModel):
     abbreviation: str
     active: bool
     is_blend: bool = False
+    analyte_class: str = "peptide"
     prep_vial_count: int = 1
     hplc_aliases: Optional[list[str]] = None
     display_aliases: Optional[list[str]] = None
@@ -2514,9 +2517,16 @@ async def delete_method(method_id: int, db: Session = Depends(get_db), _current_
 # ─── Peptide Endpoints ───
 
 @app.get("/peptides", response_model=list[PeptideResponse])
-async def get_peptides(db: Session = Depends(get_db), _current_user=Depends(get_current_user)):
-    """Get all peptides with their active calibration curves and per-instrument summary."""
-    peptides = db.execute(
+async def get_peptides(
+    analyte_class: Optional[str] = None,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Get all peptides with their active calibration curves and per-instrument summary.
+
+    Optional ?analyte_class=peptide|additive filters by class. Default returns all classes.
+    """
+    query = (
         select(Peptide)
         .options(
             joinedload(Peptide.methods).joinedload(HplcMethod.instruments),
@@ -2525,7 +2535,10 @@ async def get_peptides(db: Session = Depends(get_db), _current_user=Depends(get_
             joinedload(Peptide.components),
         )
         .order_by(Peptide.abbreviation)
-    ).scalars().unique().all()
+    )
+    if analyte_class:
+        query = query.where(Peptide.analyte_class == analyte_class)
+    peptides = db.execute(query).scalars().unique().all()
 
     # Batch 1: per-instrument curve counts for all peptides in one query
     summary_rows = db.execute(
@@ -2600,6 +2613,7 @@ async def create_peptide(data: PeptideCreate, db: Session = Depends(get_db), cur
         name=data.name,
         abbreviation=data.abbreviation,
         is_blend=data.is_blend,
+        analyte_class=data.analyte_class,
         created_by_user_id=current_user.id,
         created_by_email=current_user.email,
         updated_by_user_id=current_user.id,

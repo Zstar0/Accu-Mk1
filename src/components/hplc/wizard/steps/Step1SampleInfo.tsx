@@ -464,8 +464,14 @@ export function Step1SampleInfo() {
   // Resolve selected peptide for blend detection
   const selectedPeptide = peptideId !== null ? peptides.find(p => p.id === peptideId) : null
 
-  // Filter blends out when Standard is checked (standards are single-peptide only)
-  const filteredPeptides = isStandard ? peptides.filter(p => !p.is_blend) : peptides
+  // Bac Water samples expose only 'additive'-class analytes (e.g. Benzyl Alcohol);
+  // all other contexts (incl. manual entry) hide additives so peptide preps stay clean.
+  const isBwContext = lookupResult?.sample_type === 'Bacteriostatic Water'
+  const filteredPeptides = peptides.filter(p => {
+    if (isStandard && p.is_blend) return false
+    if (isBwContext) return p.analyte_class === 'additive'
+    return p.analyte_class !== 'additive'
+  })
 
   // Shared peptide dropdown (used in both tabs)
   const peptideDropdown = (

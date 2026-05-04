@@ -280,6 +280,9 @@ class Peptide(Base):
     abbreviation: Mapped[str] = mapped_column(String(50), nullable=False, unique=True)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     is_blend: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Discriminator for peptide vs non-peptide HPLC analyte (e.g. Benzyl Alcohol = 'additive').
+    # Filterable via GET /peptides?analyte_class=peptide — default unfiltered to preserve existing callers.
+    analyte_class: Mapped[str] = mapped_column(String(20), nullable=False, default="peptide")
     prep_vial_count: Mapped[int] = mapped_column(Integer, default=1)
     hplc_aliases: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)  # ["TB17-23", "TB4"] — alternate names used in HPLC filenames
     display_aliases: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)  # ["Mounjaro", "GLP/GIP"] — approved customer-facing aliases for COA display

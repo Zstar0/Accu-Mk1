@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.31.1 — 2026-05-04 — Bac Water analyte support (Wave 1)
+
+### Added
+
+- **`peptides.analyte_class` column** (`'peptide'` | `'additive'`, NOT NULL DEFAULT `'peptide'`). All existing peptide rows backfill to `'peptide'` on column add. Discriminates non-peptide HPLC analytes from peptides without renaming the table — keeps the existing `Peptide.id` FK plumbing across `CalibrationCurve`, `peptide_methods`, `instrument_methods`, `SamplePrep`, etc. usable for Benzyl Alcohol.
+- **Benzyl Alcohol seeded as the first `'additive'` row** via startup migration (`name='Benzyl Alcohol'`, `abbreviation='Benzyl Alcohol'`, `is_blend=false`). Idempotent via `ON CONFLICT (abbreviation) DO NOTHING`.
+- **`peptide_analytes` row for Benzyl Alcohol** auto-seeded so the Import Curves dialog populates BA. Joins to the SENAITE-synced `analysis_services` row with keyword `Benzyl_Alcohol_Assay`; silent no-op if the service hasn't synced yet (retries on every backend startup).
+- **`GET /peptides?analyte_class=peptide|additive`** opt-in query filter. Default unfiltered preserves all existing callers; only the HPLC wizard Step 1 picker uses the filter today.
+- **HPLC wizard Step 1 context-filter** ([Step1SampleInfo.tsx](src/components/hplc/wizard/steps/Step1SampleInfo.tsx)). When the SENAITE lookup returns `sample_type === 'Bacteriostatic Water'`, the peptide dropdown shows **only** `'additive'`-class rows (currently just Benzyl Alcohol). All other contexts hide additives so peptide preps stay clean.
+- **`AnalyteClass` type + `analyte_class` field on `PeptideRecord`** (`src/lib/api.ts`). `getPeptides({ analyteClass })` accepts the optional filter parameter.
+
+### Fixed
+
+- **`_run_migrations()` per-statement isolation.** A failure in one ALTER no longer halts subsequent statements — each runs in its own try/except with `migration_skipped` warning log + rollback. Previous bulk try/except masked silent migration drops on fresh-upgrade paths.
+- **SSE curve-import failures now surface in the dialog** instead of failing silently with only a small "Failed" badge.
+
+### Deferred to Wave 2
+
+- Sub-Samples (Phase 24), Vial Assignment Step, Phase 2 highlight, samples-list collapse, sub-sample publish guards. These live on `feat/vial-assignment-step` and ship in a follow-up release once Wave 1 has settled.
+
 ## v0.31.0 — 2026-04-26
 
 ### Added

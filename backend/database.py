@@ -179,6 +179,24 @@ def _run_migrations():
                 ALTER TABLE hplc_methods DROP COLUMN instrument_id;
             END IF;
         END $$""",
+        # Analyte class discriminator: distinguishes peptide rows from non-peptide HPLC analytes (e.g. Benzyl Alcohol additive in Bac Water).
+        # Backfills existing rows to 'peptide' on add; new non-peptide entries set 'additive' explicitly.
+        "ALTER TABLE peptides ADD COLUMN IF NOT EXISTS analyte_class VARCHAR(20) NOT NULL DEFAULT 'peptide'",
+        # Rename short 'BA' abbreviation from earlier dev iterations to the spelled-out form.
+        # Safe no-op on fresh installs (no row matches) and on already-renamed deployments.
+        """
+        UPDATE peptides SET abbreviation='Benzyl Alcohol'
+        WHERE abbreviation='BA' AND name='Benzyl Alcohol'
+        """,
+        # Seed Benzyl Alcohol as a non-peptide analyte for Bacteriostatic Water HPLC processing.
+        # Idempotent via abbreviation unique constraint. Explicit values for active/created_at/
+        # updated_at because those columns are NOT NULL without DB-level defaults (ORM defaults
+        # only apply on the Python side, not on raw SQL inserts).
+        """
+        INSERT INTO peptides (name, abbreviation, is_blend, analyte_class, active, created_at, updated_at)
+        VALUES ('Benzyl Alcohol', 'Benzyl Alcohol', FALSE, 'additive', TRUE, NOW(), NOW())
+        ON CONFLICT (abbreviation) DO NOTHING
+        """,
     ]
     try:
         with engine.connect() as conn:
