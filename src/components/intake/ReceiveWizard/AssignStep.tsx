@@ -87,10 +87,15 @@ export function AssignStep({ parentSampleId }: Props) {
         v => v.assignment_role === bucket && !v.is_parent
       )
       // Null each (PATCH null) — IS-side default coerces parent if it's caught here
-      await Promise.all(
-        inBucket.map(v => patchVialAssignment(v.sample_id, null))
-      )
-      void refresh()
+      try {
+        await Promise.all(
+          inBucket.map(v => patchVialAssignment(v.sample_id, null))
+        )
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e))
+      } finally {
+        void refresh()
+      }
     },
     [plan, refresh],
   )
