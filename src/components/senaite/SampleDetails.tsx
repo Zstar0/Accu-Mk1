@@ -1811,6 +1811,29 @@ export function SampleDetails() {
     enabled: !!parentSampleId,
   })
 
+  // Resolve this sample's vial-assignment role for the header label.
+  // Parent pages: always 'hplc' per the "primary always HPLC for now" rule.
+  // Sub-sample pages: look up in the parent's sub-samples list (which carries
+  // assignment_role on each entry).
+  const currentAssignment: string | null = isParent
+    ? 'hplc'
+    : parentSummary?.sub_samples.find(s => s.sample_id === sampleId)
+        ?.assignment_role ?? null
+  const assignmentLabel = (() => {
+    switch (currentAssignment) {
+      case 'hplc':
+        return 'Analytical HPLC'
+      case 'endo':
+        return 'Microbiology — Endotoxin'
+      case 'ster':
+        return 'Microbiology — Sterility'
+      case 'xtra':
+        return 'Extra (unassigned)'
+      default:
+        return null
+    }
+  })()
+
   function openSubSampleWizard() {
     if (!data?.sample_id || !data.sample_uid) return
     setWizardParent({
@@ -2509,20 +2532,33 @@ export function SampleDetails() {
                 />
               </div>
               <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <span className="flex items-center gap-1.5 text-[11px] text-emerald-600 dark:text-emerald-400">
-                    <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-500/70" />
-                    {verifiedCount} Verified
-                  </span>
-                  <span className="flex items-center gap-1.5 text-[11px] text-amber-600 dark:text-amber-400">
-                    <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-500/70" />
-                    {pendingCount} Pending
-                  </span>
+                <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                  {assignmentLabel ? (
+                    <>
+                      <span className="uppercase tracking-wider">Assigned to</span>
+                      <span className="font-medium text-foreground">
+                        {assignmentLabel}
+                      </span>
+                    </>
+                  ) : null}
                 </div>
-                <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
-                  <span>{Math.round((verifiedCount / analyses.length) * 100)}% complete</span>
+                <div className="flex items-center gap-2 text-[11px]">
+                  <span className="text-muted-foreground">
+                    <span className="text-emerald-600 dark:text-emerald-400 font-semibold">
+                      {Math.round((verifiedCount / analyses.length) * 100)}%
+                    </span>{' '}
+                    complete
+                  </span>
                   <span className="text-border">·</span>
-                  <span>{verifiedCount}/{analyses.length} verified</span>
+                  <span className="text-muted-foreground">
+                    <span className="text-emerald-600 dark:text-emerald-400 font-semibold">
+                      {verifiedCount}
+                    </span>
+                    /{analyses.length}{' '}
+                    <span className={pendingCount > 0 ? 'text-amber-600 dark:text-amber-400' : ''}>
+                      verified
+                    </span>
+                  </span>
                 </div>
               </div>
             </div>
