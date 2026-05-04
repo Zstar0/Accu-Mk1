@@ -278,12 +278,33 @@ The order line additionally gets a `· Vial X/Y` suffix when `vialPosition` is s
 
 ## Phase 2 hand-off (out of scope here)
 
-After this ships, Phase 2 implements per-sub-sample analysis filtering. Phase 2 will:
-- On sub-sample creation, instead of inheriting the parent's full `Profiles` + all `Analyte*Peptide` slots, set only the analyses relevant to the sub-sample's `assignment_role`.
-- Update `INHERITABLE_FIELDS` in `backend/sub_samples/senaite.py` to be role-aware.
-- Add a SENAITE-side analysis-removal step after secondary-create (since SENAITE inherits all on create; Phase 2 will need to delete the wrong-bucket analyses).
+**Phase 2 was re-scoped during implementation** from "filter analyses on the sub-sample AR" to "highlight primary analyses on the detail page" after the realization that vials aren't bound to one department forever — an Endo vial can move to HPLC after the LAL run completes. Hard-filtering analyses would lose useful data for that flow. Phase 2 as shipped (commit `637072e`):
 
-This spec persists `assignment_role` cleanly so Phase 2's filtering logic just reads the column.
+- Backend: SENAITE lookup result now carries `service_group_id` + `service_group_name` per analysis, joined locally from `analysis_services` by keyword.
+- Frontend: `SampleDetails` computes a `primaryAnalysisUids` set from the sample's `assignment_role`:
+  - `hplc` → analyses where `service_group_name == 'Analytics'`
+  - `endo` → keyword starts `ENDO` (within Microbiology)
+  - `ster` → keyword starts `STER` (within Microbiology)
+  - `xtra` → empty
+- `AnalysisTable` accepts `primaryAnalysisUids` and renders matched rows with a left-border accent + "Primary" pill in the title cell. No analyses are hidden.
+
+The original SENAITE-side analysis-removal idea is dropped entirely.
+
+## Phase 3 — Service Group ↔ Instrument relationship (deferred)
+
+Surfaced during Phase 2 design discussion (2026-05-03) but deferred so Phase 2 could ship clean.
+
+**Goal:** wire instruments to service groups so the worksheet planner can ask "what instruments are available for the Analytics group?" without cross-joining through `analysis_services` and the per-analysis `instrument_uid` from SENAITE.
+
+**Pieces:**
+- New `service_group_instruments` join table — composite PK on `(service_group_id, instrument_id)`. Migration via `_run_migrations()` (Mk1 doesn't use Alembic).
+- ORM relationship on `ServiceGroup` + Pydantic response field exposing the linked instruments.
+- Admin UI: extend `/lims/service-groups` to manage instrument membership per group (likely a checkbox grid or a multi-select).
+- Worksheet integration: optional consumer — own phase if it grows.
+
+**Why this isn't blocking Phase 2:** the highlight feature only needs `service_groups` ↔ `analysis_services`, which already exists. Instruments are a worksheet-planner concern, not a "what's primary on this vial" concern.
+
+**Pre-requisite cleanup for Phase 3 (and for Phase 2 to actually light up correctly):** every analysis service should belong to a service group. Today only 4 are mapped (`STER-PCR`, `ENDO-LAL`, `KF` → Microbiology; `ID_BPC157` → Analytics). Everything else (BA, pH, Fill, HPLC-PUR, HPLC-ID, PEPT-Total, all `ID_*`) is ungrouped. Bulk-assign the ungrouped HPLC-style services to Analytics, then optionally wire the create-AnalysisService endpoint to auto-assign new services to the `is_default` group so future additions don't drop ungrouped.
 
 ---
 
