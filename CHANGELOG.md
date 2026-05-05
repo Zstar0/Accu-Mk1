@@ -11,10 +11,13 @@
 - **HPLC wizard Step 1 context-filter** ([Step1SampleInfo.tsx](src/components/hplc/wizard/steps/Step1SampleInfo.tsx)). When the SENAITE lookup returns `sample_type === 'Bacteriostatic Water'`, the peptide dropdown shows **only** `'additive'`-class rows (currently just Benzyl Alcohol). All other contexts hide additives so peptide preps stay clean.
 - **`AnalyteClass` type + `analyte_class` field on `PeptideRecord`** (`src/lib/api.ts`). `getPeptides({ analyteClass })` accepts the optional filter parameter.
 
+- **File picker fallback in receive sample intake** ([PhotoCapture.tsx](src/components/intake/PhotoCapture.tsx)). When the camera fails to initialize (no device, permission denied, or device in use), the error block now offers a **Choose File** button alongside **Try Again**. The picker accepts any `image/*` file and runs it through the same 500x496 preview pipeline as the camera path (center-crop to square + step-down). Lets a tech complete intake from a phone photo or scanned image when no webcam is attached.
+
 ### Fixed
 
 - **`_run_migrations()` per-statement isolation.** A failure in one ALTER no longer halts subsequent statements — each runs in its own try/except with `migration_skipped` warning log + rollback. Previous bulk try/except masked silent migration drops on fresh-upgrade paths.
 - **SSE curve-import failures now surface in the dialog** instead of failing silently with only a small "Failed" badge.
+- **CoA publish from `ready_for_initial_review` warns instead of errors** ([backend/main.py](backend/main.py), [SampleDetails.tsx](src/components/senaite/SampleDetails.tsx)). The local CoA + IS publish have already succeeded by the time SENAITE workflow advances; failing the whole operation with HTTP 502 was misleading. `publish_sample_coa` now returns `success=True` with a `warning` field describing the SENAITE state lag for pre-publish states. The frontend renders it as `toast.warning` while keeping the console row green. Truly unexpected states (other than `ready_for_initial_review`) still raise HTTP 502.
 
 ### Deferred to Wave 2
 
