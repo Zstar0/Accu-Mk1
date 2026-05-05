@@ -24,6 +24,7 @@
   },
   "granularity": "coarse",
   "workflow": {
-    "_auto_chain_active": false
+    "_auto_chain_active": false,
+    "nyquist_validation": true
   }
 }
