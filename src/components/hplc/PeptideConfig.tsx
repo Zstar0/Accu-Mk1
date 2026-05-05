@@ -573,6 +573,11 @@ export function PeptideConfig() {
                 })
               } else if (eventType === 'done') {
                 setSeedDone(payload)
+                if (!payload.success) {
+                  // Mirror to top-level error banner so users still see the
+                  // failure even if they closed the streaming log panel.
+                  setError(payload.error || 'Import failed — see log for details.')
+                }
               } else if (eventType === 'refresh') {
                 loadPeptides()
               }
@@ -741,6 +746,11 @@ export function PeptideConfig() {
                 })
               } else if (eventType === 'done') {
                 setSeedDone(payload)
+                if (!payload.success) {
+                  // Mirror to top-level error banner so users still see the
+                  // failure even if they closed the streaming log panel.
+                  setError(payload.error || 'Import failed — see log for details.')
+                }
               } else if (eventType === 'refresh') {
                 loadPeptides()
               }
@@ -982,6 +992,19 @@ export function PeptideConfig() {
                   <span>Calibrations: <strong className="text-green-400">{seedDone.calibrations}</strong></span>
                   <span>Skipped: <strong className="text-zinc-500">{seedDone.skipped}</strong></span>
                   <span>Total: <strong className="text-zinc-300">{seedDone.total}</strong></span>
+                </div>
+              )}
+              {/* Failure banner — surface the error string clearly so the
+                  user doesn't have to scan the streaming log to find why. */}
+              {seedDone && !seedDone.success && (
+                <div className="mt-3 flex items-start gap-2 rounded border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs">
+                  <AlertCircle className="h-4 w-4 mt-0.5 shrink-0 text-destructive" />
+                  <div className="space-y-1">
+                    <div className="font-medium text-destructive">Import failed</div>
+                    <div className="text-destructive/90 wrap-break-word">
+                      {seedDone.error || 'See log above for details.'}
+                    </div>
+                  </div>
                 </div>
               )}
             </CardContent>

@@ -2070,6 +2070,9 @@ export function SampleDetails() {
       const result = await publishSenaiteCOA(sampleId)
       if (result.success) {
         settle(true)
+        if (result.warning) {
+          toast.warning('COA published with warning', { description: result.warning })
+        }
         refreshSample(sampleId)
         getExplorerCOAGenerations(sampleId, 10).then(setCoaGenerations).catch(() => {})
       } else {

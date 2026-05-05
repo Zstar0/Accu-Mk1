@@ -3,9 +3,12 @@ PostgreSQL database setup using SQLAlchemy 2.0.
 Connects to accumark_mk1 database on the shared PostgreSQL server.
 """
 
+import logging
 import os
 from sqlalchemy import create_engine
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
+
+log = logging.getLogger(__name__)
 
 # Load .env file if python-dotenv is available
 try:
@@ -179,11 +182,51 @@ def _run_migrations():
                 ALTER TABLE hplc_methods DROP COLUMN instrument_id;
             END IF;
         END $$""",
+        # Analyte class discriminator: distinguishes peptide rows from non-peptide HPLC analytes (e.g. Benzyl Alcohol additive in Bac Water).
+        # Backfills existing rows to 'peptide' on add; new non-peptide entries set 'additive' explicitly.
+        "ALTER TABLE peptides ADD COLUMN IF NOT EXISTS analyte_class VARCHAR(20) NOT NULL DEFAULT 'peptide'",
+        # Rename short 'BA' abbreviation from earlier dev iterations to the spelled-out form.
+        # Safe no-op on fresh installs (no row matches) and on already-renamed deployments.
+        """
+        UPDATE peptides SET abbreviation='Benzyl Alcohol'
+        WHERE abbreviation='BA' AND name='Benzyl Alcohol'
+        """,
+        # Seed Benzyl Alcohol as a non-peptide analyte for Bacteriostatic Water HPLC processing.
+        # Idempotent via abbreviation unique constraint. Explicit values for active/created_at/
+        # updated_at because those columns are NOT NULL without DB-level defaults (ORM defaults
+        # only apply on the Python side, not on raw SQL inserts).
+        """
+        INSERT INTO peptides (name, abbreviation, is_blend, analyte_class, active, created_at, updated_at)
+        VALUES ('Benzyl Alcohol', 'Benzyl Alcohol', FALSE, 'additive', TRUE, NOW(), NOW())
+        ON CONFLICT (abbreviation) DO NOTHING
+        """,
+        # Bind Benzyl Alcohol to its SENAITE analysis service (slot 1) so the
+        # Import Curves dialog and any other UI keyed on peptide.analytes can
+        # surface it. The peptide row above is created via raw SQL (no UI
+        # path), which doesn't insert peptide_analytes — recreating BA via
+        # the wizard isn't a fix because the create form doesn't expose
+        # analyte_class. Lookup by abbreviation + keyword keeps it
+        # environment-agnostic. Silently no-ops on a fresh install where
+        # the SENAITE-synced analysis_services row doesn't exist yet; the
+        # next startup picks it up. Safe to re-run.
+        """
+        INSERT INTO peptide_analytes (peptide_id, analysis_service_id, slot, created_at)
+        SELECT p.id, ans.id, 1, NOW()
+        FROM peptides p
+        JOIN analysis_services ans ON ans.keyword = 'Benzyl_Alcohol_Assay'
+        WHERE p.abbreviation = 'Benzyl Alcohol'
+        ON CONFLICT (peptide_id, slot) DO NOTHING
+        """,
     ]
-    try:
-        with engine.connect() as conn:
-            for sql in migrations:
+    # Per-statement isolation: a failure in one statement (e.g., a table that
+    # create_all hasn't built yet on first run) must not skip subsequent
+    # statements. The previous bulk try/except wrapped the whole loop and
+    # silently dropped every migration after the first failure.
+    with engine.connect() as conn:
+        for sql in migrations:
+            try:
                 conn.execute(text(sql))
-            conn.commit()
-    except Exception:
-        pass  # Table may not exist yet on first run — create_all handles it
+                conn.commit()
+            except Exception as e:
+                conn.rollback()
+                log.warning("migration_skipped sql=%r err=%s", sql[:80], e)

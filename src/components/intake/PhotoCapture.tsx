@@ -5,6 +5,7 @@ import {
   RotateCcw,
   AlertCircle,
   Video,
+  Upload,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Alert, AlertDescription } from '@/components/ui/alert'
@@ -16,7 +17,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { processVialPhoto } from './image-processing'
+import { processVialPhoto, processFileImage } from './image-processing'
 
 /** Fraction of the video's shorter axis covered by the guide square. */
 const GUIDE_RATIO = 0.6
@@ -53,6 +54,7 @@ export function PhotoCapture({
   const videoRef = useRef<HTMLVideoElement>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   // Camera device selection
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([])
@@ -231,6 +233,30 @@ export function PhotoCapture({
     setCameraRequest(prev => prev + 1)
   }
 
+  function handleChooseFile() {
+    fileInputRef.current?.click()
+  }
+
+  async function handleFileSelected(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    // Reset so picking the same file again after a retake re-triggers onChange
+    e.target.value = ''
+    if (!file) return
+    setState({ phase: 'processing' })
+    try {
+      const dataUrl = await processFileImage(file)
+      streamRef.current?.getTracks().forEach(t => t.stop())
+      streamRef.current = null
+      onCapture(dataUrl)
+      setState({ phase: 'review', dataUrl })
+    } catch (err) {
+      setState({
+        phase: 'error',
+        message: err instanceof Error ? err.message : 'File processing failed',
+      })
+    }
+  }
+
   function handleDeviceChange(deviceId: string) {
     // Stop current stream before switching
     streamRef.current?.getTracks().forEach(t => t.stop())
@@ -254,6 +280,15 @@ export function PhotoCapture({
       {/* Hidden work canvas */}
       <canvas ref={canvasRef} className="hidden" />
 
+      {/* Hidden file picker — triggered by the "Choose File" button in the error state */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/*"
+        className="hidden"
+        onChange={handleFileSelected}
+      />
+
       {/* ---- Initializing spinner (overlays the video container) ---- */}
       {state.phase === 'initializing' && (
         <div className="flex flex-col items-center justify-center gap-3 py-16 text-muted-foreground">
@@ -269,9 +304,18 @@ export function PhotoCapture({
             <AlertCircle className="h-4 w-4" />
             <AlertDescription>{state.message}</AlertDescription>
           </Alert>
-          <Button variant="outline" onClick={handleRetry}>
-            Try Again
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" onClick={handleRetry}>
+              Try Again
+            </Button>
+            <Button variant="outline" onClick={handleChooseFile}>
+              <Upload className="h-4 w-4" />
+              Choose File
+            </Button>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            No webcam? Upload an existing photo of the vial instead.
+          </p>
         </div>
       )}
 
