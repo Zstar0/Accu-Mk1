@@ -1589,6 +1589,7 @@ export interface SampleCOAActionResponse {
   success: boolean
   message: string
   verification_code: string | null
+  warning?: string | null
 }
 
 async function extractErrorMessage(response: Response, fallback: string): Promise<string> {

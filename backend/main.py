@@ -7614,6 +7614,7 @@ class SampleCOAActionResponse(BaseModel):
     success: bool
     message: str
     verification_code: str | None = None
+    warning: str | None = None
 
 
 class AnalyteAliasSet(BaseModel):
@@ -7883,6 +7884,7 @@ async def publish_sample_coa(
         )
 
     verification_code: str | None = data.get("verification_code")
+    warning: str | None = None
 
     # 3 & 4. Write verification code and transition SENAITE workflow — guaranteed
     if senaite_uid:
@@ -7937,6 +7939,13 @@ async def publish_sample_coa(
                     "to_be_verified",
                     "waiting_for_addon_results",
                 }
+                # Pre-publish review states — the COA is live in our system
+                # (IS marked it published, verification code is in SENAITE),
+                # but SENAITE's workflow hasn't been advanced because the lab
+                # tech hasn't run a verify transition. We surface this as a
+                # warning rather than a hard error: the customer-facing COA
+                # is published, but ops should advance the SENAITE state.
+                pre_publish_states = {"ready_for_initial_review"}
                 if actual_state not in accepted_states:
                     verify_resp = await client.get(
                         f"{SENAITE_URL}/senaite/@@API/senaite/v1/AnalysisRequest"
@@ -7946,7 +7955,15 @@ async def publish_sample_coa(
                         verify_items = verify_resp.json().get("items", [])
                         if verify_items:
                             actual_state = verify_items[0].get("review_state", "")
-                    if actual_state not in accepted_states:
+                    if actual_state in pre_publish_states:
+                        warning = (
+                            f"Warning: Sample should not typically be published "
+                            f"from the '{actual_state}' state. The COA is live "
+                            f"but SENAITE's workflow remains at "
+                            f"'{actual_state}' — verify the sample in SENAITE "
+                            f"to advance it."
+                        )
+                    elif actual_state not in accepted_states:
                         raise HTTPException(
                             status_code=502,
                             detail=(
@@ -7969,6 +7986,7 @@ async def publish_sample_coa(
         success=True,
         message=data.get("message", "COA published"),
         verification_code=verification_code,
+        warning=warning,
     )
 
 
