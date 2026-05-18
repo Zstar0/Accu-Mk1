@@ -366,6 +366,9 @@ app.add_middleware(
         "https://tauri.localhost",    # Tauri production (v2)
         "http://tauri.localhost",     # Tauri production fallback
     ],
+    # accumark-stack platform mounts the frontend on a per-stack host port
+    # (e.g. 5532 for subvial). Accept any localhost/127.0.0.1 dev port.
+    allow_origin_regex=r"^http://(localhost|127\.0\.0\.1):\d+$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
