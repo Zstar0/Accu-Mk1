@@ -51,12 +51,18 @@ export default defineConfig(async () => ({
       : undefined,
     watch: {
       // 3. tell vite to ignore watching `src-tauri`
-      ignored: ['**/src-tauri/**'],
+      // Also exclude node_modules + .planning/ (large trees that never change
+      // during dev) to keep polling cost proportional to actual source size.
+      ignored: [
+        '**/src-tauri/**',
+        '**/node_modules/**',
+        '**/.planning/**',
+      ],
       // 4. Docker Desktop on Windows doesn't reliably forward filesystem events
-      //    through bind mounts. Polling fixes HMR; cost is ~1% CPU idle.
-      //    Harmless outside Docker (process is already long-running).
+      //    through bind mounts. Polling fixes HMR. Interval 1000ms keeps idle
+      //    CPU low; HMR feels ~0.5-1s slower than 300ms but still usable.
       usePolling: true,
-      interval: 300,
+      interval: 1000,
     },
   },
 }))
