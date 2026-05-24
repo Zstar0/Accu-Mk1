@@ -909,6 +909,9 @@ export interface WooOrder {
   number: string
   status: string
   date_created: string
+  date_paid: string | null
+  currency: string
+  currency_symbol: string
   discount_total: string
   discount_tax: string
   shipping_total: string
@@ -1199,6 +1202,181 @@ export async function getExplorerOrderById(orderId: string): Promise<ExplorerOrd
     return response.json()
   } catch (error) {
     console.error('Get order by ID error:', error)
+    throw error
+  }
+}
+
+// --- Phase 29: Explorer Customers (LINK-04/05/06 consumed by UI-02..UI-07) ---
+
+/**
+ * Aggregated customer record from /explorer/customers (Phase 28 LINK-04/05/06).
+ *
+ * Field shape mirrors the backend Pydantic `ExplorerCustomerResponse` at
+ * `integration-service/app/api/desktop.py:108-123`. Snake_case is intentional
+ * (CONTEXT D-06) — no camelCase translation layer.
+ *
+ * `customer_id` is `null` for the guest bucket (orders with `customer_id IS NULL`,
+ * grouped by billing email — Phase 28 D-12). Guest rows are non-clickable in the
+ * list view (CONTEXT D-14).
+ */
+export interface ExplorerCustomer {
+  customer_id: number | null
+  email: string
+  display_name: string
+  company_name: string | null
+  total_orders: number
+  outstanding_orders: number
+  total_coas: number
+  most_recent_order_at: string | null
+}
+
+/**
+ * Paginated response for /explorer/customers.
+ *
+ * `total_count` is unconditionally returned by the backend (Phase 28 D-22), but
+ * the TS type keeps it optional (`?:`) per CONTEXT D-06 — forward-compat hedge
+ * if the endpoint ever drops it for streaming/large-page modes.
+ */
+export interface ExplorerCustomersResponse {
+  customers: ExplorerCustomer[]
+  total_count?: number
+}
+
+/**
+ * Get aggregated customers from Integration Service database.
+ *
+ * Mirrors the `getExplorerOrders` envelope (try/catch + 401 branch + URLSearchParams
+ * + getAuthHeaders + API_BASE_URL). Server owns all filters (CONTEXT D-07);
+ * no client-side re-filtering.
+ *
+ * @param search - Optional search term; backend matches email/first_name/last_name/company_name (Phase 28 D-15)
+ * @param page - 0-indexed page (converted to backend offset via page * perPage)
+ * @param perPage - Page size (default 50)
+ * @param includeTestEmails - When false (default), backend excludes TEST_EMAILS list (Phase 28 D-17)
+ */
+export async function getExplorerCustomers(
+  search?: string,
+  page = 0,
+  perPage = 50,
+  includeTestEmails = false
+): Promise<ExplorerCustomersResponse> {
+  try {
+    const params = new URLSearchParams()
+    if (search) params.set('search', search)
+    params.set('limit', String(perPage))
+    params.set('offset', String(page * perPage))
+    params.set('include_test_emails', String(includeTestEmails))
+
+    const response = await fetch(
+      `${API_BASE_URL()}/explorer/customers?${params}`,
+      {
+        headers: getAuthHeaders(),
+      }
+    )
+    if (!response.ok) {
+      if (response.status === 401) {
+        throw new Error('API key required or invalid')
+      }
+      throw new Error(`Get explorer customers failed: ${response.status}`)
+    }
+    return response.json()
+  } catch (error) {
+    console.error('Get explorer customers error:', error)
+    throw error
+  }
+}
+
+/**
+ * Get a single customer (+ aggregate stats) by WC customer ID.
+ *
+ * Authoritative read from wc_customers via IS `/explorer/customers/{id}`. Used by
+ * the customer-detail header on cold load (deep-link / refresh) when the
+ * customers-list cache is empty. Returns null on 404 (unknown / soft-deleted).
+ */
+export async function getExplorerCustomerById(
+  customerId: number
+): Promise<ExplorerCustomer | null> {
+  try {
+    const response = await fetch(
+      `${API_BASE_URL()}/explorer/customers/${customerId}`,
+      { headers: getAuthHeaders() }
+    )
+    if (response.status === 404) return null
+    if (!response.ok) {
+      if (response.status === 401) {
+        throw new Error('API key required or invalid')
+      }
+      throw new Error(`Get explorer customer failed: ${response.status}`)
+    }
+    return (await response.json()) as ExplorerCustomer
+  } catch (error) {
+    console.error('getExplorerCustomerById error:', error)
+    throw error
+  }
+}
+
+/**
+ * Get orders filtered by a specific WooCommerce customer ID.
+ *
+ * Thin wrapper over `/explorer/orders?customer_id=X` (Phase 28 LINK-07).
+ * Implemented inline rather than delegating to `getExplorerOrders` to keep the
+ * URL shape explicit and avoid coupling the customer-detail path to the
+ * generic-orders signature.
+ *
+ * @param customerId - WC customer ID (guest aggregation is not supported here; see DEFERRED-01)
+ * @param limit - Max records to return (default 200 — covers heavy-customer accounts in one round-trip)
+ * @param offset - Pagination offset (default 0)
+ */
+export async function getExplorerOrdersByCustomer(
+  customerId: number,
+  // UX revision (post-Phase 30): three independent search axes, AND-combined
+  // server-side. Each axis is independently optional, and each is gated on a
+  // 2-char minimum HERE in the client (the backend treats '' as "no filter on
+  // that axis" but doesn't enforce a minimum length — the gate is purely a UX
+  // anti-flicker convention).
+  search?: {
+    order_number?: string
+    sample_id?: string
+    analyte?: string
+  },
+  sort: 'open_first' | 'date_desc' | 'date_asc' = 'open_first',
+  page = 0,
+  perPage = 50
+): Promise<ExplorerOrder[]> {
+  try {
+    const params = new URLSearchParams()
+    params.set('customer_id', String(customerId))
+    params.set('limit', String(perPage))
+    params.set('offset', String(page * perPage))
+    params.set('sort', sort)
+    // Per-axis 2-char minimum gate — prevents "no results" flicker as the user
+    // types in each input independently. A fully-typed sample_id is forwarded
+    // even if analyte is still 1 char (each axis gates itself).
+    if (search) {
+      if (search.order_number && search.order_number.length >= 2) {
+        params.set('search_order_number', search.order_number)
+      }
+      if (search.sample_id && search.sample_id.length >= 2) {
+        params.set('search_sample_id', search.sample_id)
+      }
+      if (search.analyte && search.analyte.length >= 2) {
+        params.set('search_analyte', search.analyte)
+      }
+    }
+
+    const res = await fetch(
+      `${API_BASE_URL()}/explorer/orders?${params.toString()}`,
+      { headers: getAuthHeaders() }
+    )
+    if (res.status === 401) {
+      throw new Error('API key required or invalid')
+    }
+    if (!res.ok) {
+      throw new Error(`Get explorer orders by customer failed: ${res.status}`)
+    }
+    return (await res.json()) as ExplorerOrder[]
+  } catch (error) {
+    console.error('getExplorerOrdersByCustomer error:', error)
     throw error
   }
 }

@@ -126,6 +126,7 @@ const navItems: NavItem[] = [
       { id: 'overview', label: 'Overview' },
       { id: 'order-explorer', label: 'Order Explorer' },
       { id: 'order-status', label: 'Order Status' },
+      { id: 'customers', label: 'Customers' },
       { id: 'coa-explorer', label: 'COA Explorer' },
       { id: 'digital-coa', label: 'Digital COA' },
       { id: 'chromatographs', label: 'Chromatographs' },
@@ -242,8 +243,12 @@ export function AppSidebar() {
                         <CollapsibleContent>
                           <SidebarMenuSub>
                             {visibleSubItems?.map(subItem => {
+                              // 'customer-detail' is a child view of 'customers' — keep parent highlighted (Phase 29 RESEARCH §11 #8)
                               const isSubActive =
-                                isActive && activeSubSection === subItem.id
+                                isActive &&
+                                (activeSubSection === subItem.id ||
+                                  (subItem.id === 'customers' &&
+                                    activeSubSection === 'customer-detail'))
                               return (
                                 <SidebarMenuSubItem key={subItem.id}>
                                   <SidebarMenuSubButton

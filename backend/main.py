@@ -6831,20 +6831,70 @@ def get_explorer_status(_current_user=Depends(get_current_user)):
 
 
 @app.get("/explorer/orders", response_model=list[ExplorerOrderResponse])
-def get_explorer_orders(
+async def get_explorer_orders(
     search: Optional[str] = None,
     limit: int = 50,
     offset: int = 0,
+    customer_id: Optional[int] = None,
+    # UX revision (post-Phase 30): three independent search axes, AND-combined
+    # at the IS SQL layer. We forward verbatim — the IS enforces per-axis
+    # max_length=256 (T-30-02) and the per-axis SQL-safety pipeline (T-30-01).
+    # None = "axis not requested"; empty string is forwarded as-is so the IS
+    # sees the same absent-vs-empty semantics it would from a direct caller.
+    search_order_number: Optional[str] = None,
+    search_sample_id: Optional[str] = None,
+    search_analyte: Optional[str] = None,
+    sort: Optional[str] = None,
     _current_user=Depends(get_current_user),
 ):
     """
     Get orders from Integration Service database.
-    
+
     Query params:
     - search: Filter by order_id or order_number (partial match)
     - limit: Max records to return (default 50)
     - offset: Pagination offset (default 0)
+    - customer_id: When present, scopes the list to that WC customer (Phase 29).
+      Local fetch_orders does not support this filter, so the request is
+      proxied to the Integration Service which owns customer-scoped queries.
+    - search_order_number / search_sample_id / search_analyte: UX-revision
+      three-input AND search (Customer Detail → Customer Orders tab). Each is
+      independently optional; the IS AND-combines whichever are set. Each is
+      forwarded only when explicitly provided so an absent param stays absent.
+    - sort: Phase 30 sort key (open_first | date_desc | date_asc); forwarded
+      to the IS for customer-scoped requests.
     """
+    # Phase 29: customer-scoped listing must round-trip to Integration Service.
+    if customer_id is not None:
+        import httpx as _httpx
+        params: dict[str, str] = {
+            "customer_id": str(customer_id),
+            "limit": str(limit),
+            "offset": str(offset),
+        }
+        # Forward UX-revision search axes + sort only when set so the IS sees
+        # the same absent-vs-empty semantics it would from a direct caller.
+        # Empty string ('') IS forwarded as-is (back-compat with debounce-flush).
+        if search_order_number is not None:
+            params["search_order_number"] = search_order_number
+        if search_sample_id is not None:
+            params["search_sample_id"] = search_sample_id
+        if search_analyte is not None:
+            params["search_analyte"] = search_analyte
+        if sort is not None:
+            params["sort"] = sort
+        url = f"{os.environ.get('INTEGRATION_SERVICE_URL', 'http://host.docker.internal:8000')}/explorer/orders"
+        api_key = os.environ.get("ACCU_MK1_API_KEY", "")
+        try:
+            async with _httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.get(url, params=params, headers={"X-API-Key": api_key})
+                resp.raise_for_status()
+                return resp.json()
+        except _httpx.HTTPStatusError as e:
+            raise HTTPException(status_code=e.response.status_code, detail=e.response.text)
+        except Exception as e:
+            raise HTTPException(status_code=503, detail=f"Integration Service unavailable: {e}")
+
     try:
         orders = fetch_orders(search=search, limit=limit, offset=offset)
         # Convert UUID to string for JSON serialization
@@ -6856,6 +6906,67 @@ def get_explorer_orders(
             status_code=503,
             detail=f"Failed to connect to Integration Service database: {e}"
         )
+
+
+@app.get("/explorer/customers")
+async def get_explorer_customers(
+    search: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+    include_test_emails: bool = False,
+    _current_user=Depends(get_current_user),
+):
+    """
+    Get WC customers with aggregate stats from Integration Service (Phase 29).
+
+    Pure proxy — the Integration Service owns the aggregate query (`UNION` of
+    registered customers + guest billing-email bucket) and the test-email
+    filter. The backend forwards limit/offset/include_test_emails verbatim
+    (matching the IS shape at integration-service/app/api/desktop.py) and
+    returns the raw response: { customers: ExplorerCustomer[], total_count: int }.
+    """
+    import httpx as _httpx
+    params: dict[str, str] = {
+        "limit": str(limit),
+        "offset": str(offset),
+        "include_test_emails": "true" if include_test_emails else "false",
+    }
+    if search:
+        params["search"] = search
+    url = f"{os.environ.get('INTEGRATION_SERVICE_URL', 'http://host.docker.internal:8000')}/explorer/customers"
+    api_key = os.environ.get("ACCU_MK1_API_KEY", "")
+    try:
+        async with _httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(url, params=params, headers={"X-API-Key": api_key})
+            resp.raise_for_status()
+            return resp.json()
+    except _httpx.HTTPStatusError as e:
+        raise HTTPException(status_code=e.response.status_code, detail=e.response.text)
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Integration Service unavailable: {e}")
+
+
+@app.get("/explorer/customers/{customer_id}")
+async def get_explorer_customer(customer_id: int, _current_user=Depends(get_current_user)):
+    """Get a single WC customer (+ aggregate stats) by id from Integration Service.
+
+    Pure proxy to IS /explorer/customers/{id}. Used by the customer-detail header
+    on cold load (deep-link / refresh) when the customers-list cache is empty.
+    """
+    import httpx as _httpx
+    url = f"{os.environ.get('INTEGRATION_SERVICE_URL', 'http://host.docker.internal:8000')}/explorer/customers/{customer_id}"
+    api_key = os.environ.get("ACCU_MK1_API_KEY", "")
+    try:
+        async with _httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(url, headers={"X-API-Key": api_key})
+            if resp.status_code == 404:
+                raise HTTPException(status_code=404, detail=f"Customer {customer_id} not found")
+            resp.raise_for_status()
+            return resp.json()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Integration Service unavailable: {e}")
 
 
 @app.get("/explorer/orders/{order_id}", response_model=ExplorerOrderResponse)
