@@ -1,7 +1,7 @@
 {
   "name": "tauri-app",
   "private": true,
-  "version": "0.31.1",
+  "version": "0.35.0",
   "type": "module",
   "author": "Danny Smith",
   "copyright": "Copyright © 2025 Danny Smith. All rights reserved.",
@@ -22,6 +22,10 @@
     "test:run": "vitest run",
     "test:ui": "vitest --ui",
     "test:coverage": "vitest run --coverage",
+    "test:e2e": "playwright test",
+    "test:e2e:headed": "playwright test --headed",
+    "test:e2e:ui": "playwright test --ui",
+    "test:e2e:report": "playwright show-report",
     "rust:fmt": "source ~/.cargo/env && cd src-tauri && cargo fmt",
     "rust:fmt:check": "source ~/.cargo/env && cd src-tauri && cargo fmt --check",
     "rust:clippy": "source ~/.cargo/env && cd src-tauri && cargo clippy -- -D warnings",
@@ -100,6 +104,7 @@
   "devDependencies": {
     "@ast-grep/cli": "^0.40.3",
     "@eslint/js": "^9.39.2",
+    "@playwright/test": "^1.60.0",
     "@tauri-apps/cli": "^2.9.6",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.1",

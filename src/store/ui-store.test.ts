@@ -60,3 +60,181 @@ describe('UIStore', () => {
     expect(useUIStore.getState().commandPaletteOpen).toBe(false)
   })
 })
+
+describe('UIStore customer actions', () => {
+  beforeEach(() => {
+    // Reset customer-related fields + navigation envelope before each test.
+    useUIStore.setState({
+      activeSection: 'dashboard',
+      activeSubSection: 'orders',
+      navigationKey: 0,
+      customerDetailTargetId: null,
+      customerListPage: 0,
+      customerSearchTerm: '',
+      hideTestAccounts: true,
+    } as Partial<ReturnType<typeof useUIStore.getState>>)
+  })
+
+  it('has correct customer initial state', () => {
+    const state = useUIStore.getState()
+    expect(state.customerDetailTargetId).toBeNull()
+    expect(state.customerListPage).toBe(0)
+    expect(state.customerSearchTerm).toBe('')
+    expect(state.hideTestAccounts).toBe(true)
+  })
+
+  it('navigateToCustomer sets section, sub-section, target id, and increments navigationKey', () => {
+    const before = useUIStore.getState().navigationKey
+    useUIStore.getState().navigateToCustomer(42)
+    const state = useUIStore.getState()
+    expect(state.activeSection).toBe('accumark-tools')
+    expect(state.activeSubSection).toBe('customer-detail')
+    expect(state.customerDetailTargetId).toBe(42)
+    expect(state.navigationKey).toBe(before + 1)
+  })
+
+  it('navigateToCustomers clears customerDetailTargetId, preserves page+search, increments navigationKey', () => {
+    useUIStore.setState({
+      customerDetailTargetId: 42,
+      customerListPage: 3,
+      customerSearchTerm: 'foo',
+    } as Partial<ReturnType<typeof useUIStore.getState>>)
+    const before = useUIStore.getState().navigationKey
+    useUIStore.getState().navigateToCustomers()
+    const state = useUIStore.getState()
+    expect(state.activeSection).toBe('accumark-tools')
+    expect(state.activeSubSection).toBe('customers')
+    expect(state.customerDetailTargetId).toBeNull()
+    // D-08: page+search MUST survive the round-trip
+    expect(state.customerListPage).toBe(3)
+    expect(state.customerSearchTerm).toBe('foo')
+    expect(state.navigationKey).toBe(before + 1)
+  })
+
+  it('setSearchAndResetPage atomically updates search term and resets page to 0', () => {
+    useUIStore.setState({
+      customerListPage: 5,
+      customerSearchTerm: 'old',
+    } as Partial<ReturnType<typeof useUIStore.getState>>)
+    useUIStore.getState().setSearchAndResetPage('bar')
+    // Single observation: both fields must be committed in one render cycle.
+    const state = useUIStore.getState()
+    expect(state.customerSearchTerm).toBe('bar')
+    expect(state.customerListPage).toBe(0)
+  })
+
+  it('setHideTestAccounts toggles the flag', () => {
+    useUIStore.getState().setHideTestAccounts(false)
+    expect(useUIStore.getState().hideTestAccounts).toBe(false)
+    useUIStore.getState().setHideTestAccounts(true)
+    expect(useUIStore.getState().hideTestAccounts).toBe(true)
+  })
+
+  it('setCustomerListPage writes the page', () => {
+    useUIStore.getState().setCustomerListPage(2)
+    expect(useUIStore.getState().customerListPage).toBe(2)
+  })
+})
+
+describe('UIStore customer detail tabs + order search', () => {
+  beforeEach(() => {
+    useUIStore.setState(useUIStore.getInitialState())
+  })
+
+  it('has correct customer-detail-tab initial state', () => {
+    const state = useUIStore.getState()
+    expect(state.customerDetailTab).toBe('orders')
+    // UX revision: three-slot shape, all empty.
+    expect(state.customerOrderSearch).toEqual({
+      order_number: '',
+      sample_id: '',
+      analyte: '',
+    })
+  })
+
+  it('setCustomerDetailTab writes the tab field', () => {
+    useUIStore.getState().setCustomerDetailTab('dashboard')
+    expect(useUIStore.getState().customerDetailTab).toBe('dashboard')
+  })
+
+  it('setCustomerOrderSearchField writes one slot, preserves the other two', () => {
+    useUIStore.getState().setCustomerOrderSearchField('sample_id', 'P-0001')
+    let state = useUIStore.getState()
+    expect(state.customerOrderSearch).toEqual({
+      order_number: '',
+      sample_id: 'P-0001',
+      analyte: '',
+    })
+
+    // Independent setter call must NOT clobber the previously-written slot.
+    useUIStore.getState().setCustomerOrderSearchField('analyte', 'BPC-157')
+    state = useUIStore.getState()
+    expect(state.customerOrderSearch).toEqual({
+      order_number: '',
+      sample_id: 'P-0001',
+      analyte: 'BPC-157',
+    })
+
+    // Third slot exercise + overwrite-in-place.
+    useUIStore.getState().setCustomerOrderSearchField('order_number', 'WP-001')
+    useUIStore.getState().setCustomerOrderSearchField('sample_id', 'P-0002')
+    state = useUIStore.getState()
+    expect(state.customerOrderSearch).toEqual({
+      order_number: 'WP-001',
+      sample_id: 'P-0002',
+      analyte: 'BPC-157',
+    })
+  })
+
+  it('setCustomerOrderSearchField with empty string clears that one slot only', () => {
+    useUIStore.setState({
+      customerOrderSearch: {
+        order_number: 'WP-001',
+        sample_id: 'P-0001',
+        analyte: 'BPC-157',
+      },
+    })
+    useUIStore.getState().setCustomerOrderSearchField('sample_id', '')
+    expect(useUIStore.getState().customerOrderSearch).toEqual({
+      order_number: 'WP-001',
+      sample_id: '',
+      analyte: 'BPC-157',
+    })
+  })
+
+  it('setCustomerOrderSearchReset clears all three slots', () => {
+    useUIStore.setState({
+      customerOrderSearch: {
+        order_number: 'WP-001',
+        sample_id: 'P-0001',
+        analyte: 'BPC-157',
+      },
+    })
+    useUIStore.getState().setCustomerOrderSearchReset()
+    expect(useUIStore.getState().customerOrderSearch).toEqual({
+      order_number: '',
+      sample_id: '',
+      analyte: '',
+    })
+  })
+
+  it('navigateToCustomers clears customerDetailTab and all customerOrderSearch slots', () => {
+    // Seed all three slots + tab with non-default values
+    useUIStore.setState({
+      customerDetailTab: 'dashboard',
+      customerOrderSearch: {
+        order_number: 'WP-001',
+        sample_id: 'P-0001',
+        analyte: 'BPC-157',
+      },
+    })
+    useUIStore.getState().navigateToCustomers()
+    const state = useUIStore.getState()
+    expect(state.customerDetailTab).toBe('orders')
+    expect(state.customerOrderSearch).toEqual({
+      order_number: '',
+      sample_id: '',
+      analyte: '',
+    })
+  })
+})
