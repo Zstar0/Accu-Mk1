@@ -908,7 +908,7 @@ export function OrderStatusPage() {
                     <div className="flex items-center gap-0.5 border border-border rounded-md overflow-hidden">
                       {([
                         { key: 'order_id', label: 'Order ID' },
-                        { key: 'processing_time', label: 'Outstanding' },
+                        { key: 'processing_time', label: 'Since order' },
                       ] as const).map(opt => {
                         const isActive = orderFilters.kanbanSort === opt.key
                         return (
@@ -1108,7 +1108,7 @@ export function OrderStatusPage() {
                       <th className="py-2 px-3 font-medium whitespace-nowrap">Email</th>
                       <th className="py-2 px-3 font-medium whitespace-nowrap">Progress</th>
                       <th className="py-2 px-3 font-medium whitespace-nowrap">Created</th>
-                      <th className="py-2 px-3 font-medium whitespace-nowrap">Processing Time</th>
+                      <th className="py-2 px-3 font-medium whitespace-nowrap">Timing</th>
                       <th className="py-2 px-3 font-medium">Sample Details</th>
                     </tr>
                   </thead>

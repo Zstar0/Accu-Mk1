@@ -257,6 +257,67 @@ function makeOrderWithSamples(
   })
 }
 
+// D1 — timing cell. OrderRow shows two stacked durations: "Order" (since the
+// order was placed) and "Lab" (outstanding = time since the lab received a
+// sample). Lab is intentionally uncolored (SLA color is D2) and reads
+// "Awaiting sample" when nothing is received yet.
+describe('OrderRow — timing cell (D1)', () => {
+  it('shows "Awaiting sample" for outstanding when no sample is received', () => {
+    const order = makeOrder({ sample_results: null })
+    renderRow(
+      <OrderRow
+        order={order}
+        wordpressHost="https://wp"
+        sampleLookupMap={new Map()}
+        activeAnalysisStates={[]}
+      />
+    )
+    expect(screen.getByTestId('order-outstanding')).toHaveTextContent(
+      'Awaiting sample'
+    )
+    // "Since order" value is still shown (created ~1h ago by default).
+    expect(screen.getByTestId('order-time-since-order')).toBeInTheDocument()
+  })
+
+  it('shows time-since-received as the outstanding value, uncolored', () => {
+    const order = makeOrderWithSamples([
+      { senaite_id: 'P-1', status: 'created' },
+    ])
+    const map = new Map<
+      string,
+      { data?: SenaiteLookupResult; isLoading: boolean; isError: boolean }
+    >([
+      [
+        'P-1',
+        {
+          data: {
+            date_received: new Date(
+              Date.now() - (3 * 60 + 5) * 60_000
+            ).toISOString(), // ~3h ago
+            analyses: [],
+            review_state: 'received',
+          } as unknown as SenaiteLookupResult,
+          isLoading: false,
+          isError: false,
+        },
+      ],
+    ])
+    renderRow(
+      <OrderRow
+        order={order}
+        wordpressHost="https://wp"
+        sampleLookupMap={map}
+        activeAnalysisStates={[]}
+      />
+    )
+    const outstanding = screen.getByTestId('order-outstanding')
+    expect(outstanding).toHaveTextContent('3h')
+    // Outstanding is deliberately uncolored (color/SLA is a later sub-project).
+    expect(outstanding.className).toContain('text-muted-foreground')
+    expect(outstanding.className).not.toMatch(/text-(green|yellow)-600/)
+  })
+})
+
 // Phase 31 — analyte plumbing. OrderRow extracts payload.samples[i].sample_identity
 // and forwards it to SampleCard as the `analyte` prop. The integer key in
 // sample_results ("1", "2", ...) is the 1-based positional index into

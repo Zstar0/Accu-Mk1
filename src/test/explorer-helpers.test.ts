@@ -4,6 +4,7 @@ import {
   formatProcessingTime,
   TEST_EMAILS,
   getOrderEmail,
+  getOrderReceivedAt,
   groupAnalysisStates,
   isOrderDone,
 } from '@/components/explorer/helpers'
@@ -172,5 +173,72 @@ describe('isOrderDone', () => {
       ['P-1', { isLoading: true, isError: false }],
     ])
     expect(isOrderDone(orderWith(['P-1']), map)).toBe(false)
+  })
+})
+
+// getOrderReceivedAt drives the order-level "Outstanding" (time-since-received)
+// display in OrderRow. It returns the EARLIEST date_received across an order's
+// samples — when the lab first received anything — or null if nothing is
+// received yet (rendered as "Awaiting sample").
+describe('getOrderReceivedAt', () => {
+  interface LookupEntry {
+    data?: SenaiteLookupResult
+    isLoading: boolean
+    isError: boolean
+  }
+
+  function receivedLookup(dateReceived: string | null): LookupEntry {
+    return {
+      data: { date_received: dateReceived } as unknown as SenaiteLookupResult,
+      isLoading: false,
+      isError: false,
+    }
+  }
+
+  function orderWith(senaiteIds: string[]): ExplorerOrder {
+    const sample_results: Record<
+      string,
+      { senaite_id: string; status: string }
+    > = {}
+    senaiteIds.forEach((id, i) => {
+      sample_results[String(i + 1)] = { senaite_id: id, status: 'created' }
+    })
+    return { sample_results } as unknown as ExplorerOrder
+  }
+
+  it('returns null when sample_results is null', () => {
+    expect(
+      getOrderReceivedAt({ sample_results: null } as ExplorerOrder, new Map())
+    ).toBeNull()
+  })
+
+  it('returns null when no sample has been received', () => {
+    const map = new Map<string, LookupEntry>([
+      ['S-1', receivedLookup(null)],
+      ['S-2', { isLoading: true, isError: false }],
+    ])
+    expect(getOrderReceivedAt(orderWith(['S-1', 'S-2']), map)).toBeNull()
+  })
+
+  it('returns the earliest date_received across samples', () => {
+    const map = new Map<string, LookupEntry>([
+      ['S-1', receivedLookup('2026-05-10T12:00:00Z')],
+      ['S-2', receivedLookup('2026-05-08T09:00:00Z')], // earliest
+      ['S-3', receivedLookup('2026-05-12T00:00:00Z')],
+    ])
+    expect(getOrderReceivedAt(orderWith(['S-1', 'S-2', 'S-3']), map)).toBe(
+      '2026-05-08T09:00:00Z'
+    )
+  })
+
+  it('ignores samples lacking a lookup or a date_received', () => {
+    const map = new Map<string, LookupEntry>([
+      ['S-1', { isLoading: true, isError: false }], // no data
+      ['S-2', receivedLookup(null)], // no date
+      ['S-3', receivedLookup('2026-05-09T00:00:00Z')], // only one received
+    ])
+    expect(getOrderReceivedAt(orderWith(['S-1', 'S-2', 'S-3']), map)).toBe(
+      '2026-05-09T00:00:00Z'
+    )
   })
 })

@@ -1157,7 +1157,7 @@ function CustomerOrdersTab({
                       Created
                     </th>
                     <th className="py-2 px-3 font-medium whitespace-nowrap">
-                      Processing Time
+                      Timing
                     </th>
                     <th className="py-2 px-3 font-medium whitespace-nowrap">
                       Sample Details
