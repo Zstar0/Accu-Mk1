@@ -37,8 +37,16 @@ export function SlaPane() {
   const sorted = [...tiers].sort((a, b) => Number(b.is_default) - Number(a.is_default) || a.name.localeCompare(b.name))
   const prioMap = new Map((prioQuery.data ?? []).map(p => [p.priority, p.sla_tier_id]))
 
-  if (tiersQuery.isLoading) {
-    return <Loader2 className="mx-auto h-5 w-5 animate-spin text-muted-foreground" />
+  if (tiersQuery.isLoading || prioQuery.isLoading) {
+    return (
+      <div className="flex items-center justify-center py-8">
+        <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+      </div>
+    )
+  }
+
+  if (tiersQuery.isError) {
+    return <p className="text-sm text-destructive">{t('preferences.sla.loadError')}</p>
   }
 
   return (
@@ -51,7 +59,7 @@ export function SlaPane() {
         <div className="flex items-center justify-between">
           <p className="text-sm text-muted-foreground">{t('preferences.sla.tiersDescription')}</p>
           {isAdmin && (
-            <Button size="sm" onClick={() => createTier.mutate({ name: 'New tier', target_minutes: 1440 })}>
+            <Button size="sm" onClick={() => createTier.mutate({ name: t('preferences.sla.newTierDefaultName'), target_minutes: 1440 })}>
               <Plus className="mr-1 h-4 w-4" /> {t('preferences.sla.addTier')}
             </Button>
           )}
@@ -59,7 +67,7 @@ export function SlaPane() {
         <div className="space-y-3">
           {sorted.map(tier => (
             <TierCard
-              key={tier.id}
+              key={`${tier.id}-${tier.updated_at}`}
               tier={tier}
               readOnly={!isAdmin}
               onSave={(data) => updateTier.mutate({ id: tier.id, data })}
@@ -116,7 +124,11 @@ function TierCard({
   const commit = () => {
     if (readOnly) return
     const total = (parseInt(hours, 10) || 0) * 60 + (parseInt(minutes, 10) || 0)
-    onSave({ name: name.trim() || tier.name, target_minutes: total, business_hours_only: bh })
+    const nextName = name.trim() || tier.name
+    if (nextName === tier.name && total === tier.target_minutes && bh === tier.business_hours_only) {
+      return // nothing changed
+    }
+    onSave({ name: nextName, target_minutes: total, business_hours_only: bh })
   }
 
   return (

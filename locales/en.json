@@ -83,6 +83,8 @@
   "preferences.sla.priorityOverridesDescription": "Map a priority to a tier. A mapped priority overrides the service group's SLA. Unmapped priorities use the group/default.",
   "preferences.sla.noOverride": "No override",
   "preferences.sla.readOnly": "You have read-only access to SLA settings.",
+  "preferences.sla.newTierDefaultName": "New tier",
+  "preferences.sla.loadError": "Failed to load SLA settings.",
 
   "common.enabled": "Enabled",
   "common.disabled": "Disabled",
