@@ -1823,8 +1823,6 @@ class ServiceGroupMembersRequest(BaseModel):
     analysis_service_ids: list[int]
 
 
-# ─── SLA target schemas (sub-project A) ───
-
 # ─── SLA tier schemas (sub-project A, revised to tiers) ───
 
 # Priority tiers mirror SamplePriority/WorksheetItem.priority. Validated here at
