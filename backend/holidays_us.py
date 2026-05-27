@@ -33,7 +33,12 @@ def _observed(d: date) -> date:
 
 
 def us_federal_holidays(year: int) -> dict[date, str]:
-    """Observed US federal holiday dates -> display names for `year`."""
+    """Observed US federal holiday dates -> display names for `year`.
+
+    Note: an observed shift can move a date into an adjacent year — e.g. Jan 1
+    on a Saturday is observed on Dec 31 of the prior year, so a returned key may
+    not be in `year`.
+    """
     out: dict[date, str] = {}
 
     def add_fixed(month: int, day: int, name: str) -> None:

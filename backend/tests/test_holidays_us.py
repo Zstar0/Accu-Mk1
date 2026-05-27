@@ -40,7 +40,15 @@ def test_sunday_fixed_holiday_shifts_to_monday():
     assert h[date(2023, 1, 2)] == "New Year's Day (observed)"
 
 
+def test_jan1_saturday_observed_in_prior_year():
+    # 2028-01-01 is a Saturday -> observed Friday 2027-12-31 (prior year)
+    h = us_federal_holidays(2028)
+    assert date(2027, 12, 31) in h
+    assert h[date(2027, 12, 31)] == "New Year's Day (observed)"
+
+
 def test_returns_eleven_holidays():
+    # 5 fixed + 6 floating, structurally non-overlapping
     assert len(us_federal_holidays(2026)) == 11
 
 
