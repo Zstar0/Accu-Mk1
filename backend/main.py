@@ -1787,6 +1787,7 @@ class ServiceGroupCreate(BaseModel):
     color: str = "blue"
     sort_order: int = 0
     is_default: bool = False
+    sla_tier_id: Optional[int] = None
 
 
 class ServiceGroupUpdate(BaseModel):
@@ -1796,6 +1797,7 @@ class ServiceGroupUpdate(BaseModel):
     color: Optional[str] = None
     sort_order: Optional[int] = None
     is_default: Optional[bool] = None
+    sla_tier_id: Optional[int] = None
 
 
 class ServiceGroupResponse(BaseModel):
@@ -1806,6 +1808,7 @@ class ServiceGroupResponse(BaseModel):
     color: str
     sort_order: int
     is_default: bool = False
+    sla_tier_id: Optional[int] = None
     member_count: int = 0
     member_ids: list[int] = []
     created_at: datetime
@@ -11704,6 +11707,7 @@ async def get_service_groups(
             color=group.color,
             sort_order=group.sort_order,
             is_default=group.is_default,
+            sla_tier_id=group.sla_tier_id,
             member_count=len(group.analysis_services),
             member_ids=[s.id for s in group.analysis_services],
             created_at=group.created_at,
@@ -11742,6 +11746,7 @@ async def create_service_group(
         color=group.color,
         sort_order=group.sort_order,
         is_default=group.is_default,
+        sla_tier_id=group.sla_tier_id,
         member_count=0,
         created_at=group.created_at,
         updated_at=group.updated_at,
@@ -11781,6 +11786,7 @@ async def update_service_group(
         color=group.color,
         sort_order=group.sort_order,
         is_default=group.is_default,
+        sla_tier_id=group.sla_tier_id,
         member_count=len(group.analysis_services),
         member_ids=[s.id for s in group.analysis_services],
         created_at=group.created_at,
