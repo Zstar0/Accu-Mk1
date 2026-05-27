@@ -46,7 +46,7 @@ def test_seed_federal_per_year_re_adds_missing_on_explicit_call():
     year = 2099
     with engine.begin() as c:
         c.execute(text("DELETE FROM lab_holidays WHERE EXTRACT(year FROM holiday_date)=:y"), {"y": year})
-        assert seed_federal_holidays(c, year) == 11
+        assert seed_federal_holidays(c, year) == 11  # 11 federal holidays/year (see holidays_us)
         # re-seeding while all rows are present adds nothing
         assert seed_federal_holidays(c, year) == 0
         # delete one, re-seed -> the missing one is re-added (explicit action)
@@ -54,6 +54,7 @@ def test_seed_federal_per_year_re_adds_missing_on_explicit_call():
         c.execute(text("DELETE FROM lab_holidays WHERE holiday_date=:d"), {"d": victim})
         assert seed_federal_holidays(c, year) == 1
         # cleanup
+        # On assertion failure, engine.begin() rolls back and removes these rows too; this explicit delete handles the success path.
         c.execute(text("DELETE FROM lab_holidays WHERE EXTRACT(year FROM holiday_date)=:y"), {"y": year})
 
 

@@ -758,11 +758,11 @@ class BusinessHoursConfig(Base):
 
     __tablename__ = "business_hours_config"
 
-    id: Mapped[int] = mapped_column(primary_key=True)  # always 1
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=False)  # always 1; no sequence
     open_time: Mapped[time] = mapped_column(Time, nullable=False)
     close_time: Mapped[time] = mapped_column(Time, nullable=False)
     timezone: Mapped[str] = mapped_column(String(64), nullable=False, default="America/Los_Angeles")
-    working_days: Mapped[list] = mapped_column(JSON, nullable=False, default=lambda: [0, 1, 2, 3, 4])
+    working_days: Mapped[list[int]] = mapped_column(JSON, nullable=False, default=lambda: [0, 1, 2, 3, 4])
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
