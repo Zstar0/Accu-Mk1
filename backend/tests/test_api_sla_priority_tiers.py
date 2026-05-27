@@ -51,6 +51,7 @@ def test_upsert_is_idempotent_update():
     client.put("/sla-priority-tiers/high", json={"sla_tier_id": tid})
     resp = client.put("/sla-priority-tiers/high", json={"sla_tier_id": tid})
     assert resp.status_code == 200
+    assert resp.json()["sla_tier_id"] == tid
 
 
 def test_invalid_priority_rejected():
