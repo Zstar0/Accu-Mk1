@@ -112,6 +112,7 @@ def test_create_duplicate_returns_409(cleanup_holidays):
 
 def test_delete_holiday(cleanup_holidays):
     d = "2031-07-05"
+    cleanup_holidays.append(d)
     client.post("/lab-holidays", json={"holiday_date": d, "name": "Extra"})
     resp = client.delete(f"/lab-holidays/{d}")
     assert resp.status_code == 200, resp.text
@@ -136,3 +137,27 @@ def test_generate_federal_for_year():
     finally:
         with engine.begin() as c:
             c.execute(text("DELETE FROM lab_holidays WHERE EXTRACT(year FROM holiday_date)=:y"), {"y": year})
+
+
+def test_delete_federal_holiday_then_restore():
+    """Deleting a federal row is the lab's opt-out for a holiday it works.
+    Self-restoring: re-inserts the row in a finally block."""
+    y = _dt.date.today().year
+    with engine.connect() as c:
+        row = c.execute(text(
+            "SELECT holiday_date, name FROM lab_holidays WHERE source='federal' "
+            "AND EXTRACT(year FROM holiday_date)=:y ORDER BY holiday_date LIMIT 1"
+        ), {"y": y}).fetchone()
+    assert row is not None
+    hdate, hname = row[0], row[1]
+    try:
+        resp = client.delete(f"/lab-holidays/{hdate}")
+        assert resp.status_code == 200, resp.text
+        listing = client.get(f"/lab-holidays?year={y}").json()
+        assert all(r["holiday_date"] != str(hdate) for r in listing)
+    finally:
+        with engine.begin() as c:
+            c.execute(text(
+                "INSERT INTO lab_holidays (holiday_date, name, source, created_at) "
+                "VALUES (:d, :n, 'federal', NOW()) ON CONFLICT (holiday_date) DO NOTHING"
+            ), {"d": hdate, "n": hname})
