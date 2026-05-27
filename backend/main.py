@@ -1856,6 +1856,7 @@ class SlaTierResponse(BaseModel):
         from_attributes = True
 
 
+# Consumed by the /sla-priority-tiers endpoints (next task).
 class SlaPriorityTierResponse(BaseModel):
     priority: str
     sla_tier_id: int

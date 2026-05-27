@@ -67,6 +67,16 @@ def test_create_default_demotes_previous_default():
     assert defaults[0]["id"] == new_id
 
 
+def test_put_promote_to_default_demotes_previous():
+    # Create a non-default tier, promote it via PUT, verify the old default demoted.
+    new_id = client.post("/sla-tiers", json={"name": "Promote me", "target_minutes": 480}).json()["id"]
+    resp = client.put(f"/sla-tiers/{new_id}", json={"is_default": True})
+    assert resp.status_code == 200, resp.text
+    defaults = [r for r in client.get("/sla-tiers").json() if r["is_default"]]
+    assert len(defaults) == 1
+    assert defaults[0]["id"] == new_id
+
+
 def test_cannot_delete_default():
     default_id = next(r["id"] for r in client.get("/sla-tiers").json() if r["is_default"])
     assert client.delete(f"/sla-tiers/{default_id}").status_code == 409
