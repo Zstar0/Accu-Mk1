@@ -63,12 +63,12 @@ export function useDeleteLabHoliday(year: number) {
   })
 }
 
-export function useGenerateFederalHolidays(year: number) {
+export function useGenerateFederalHolidays(_year: number) {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (targetYear: number) => generateFederalHolidays(targetYear),
     onSuccess: (result) => {
-      qc.invalidateQueries({ queryKey: businessHoursQueryKeys.holidays(year) })
+      qc.invalidateQueries({ queryKey: businessHoursQueryKeys.holidays(result.year) })
       toast.success(`Added ${result.added} federal holiday${result.added === 1 ? '' : 's'}`)
     },
     onError: (e: Error) => toast.error(e.message),
