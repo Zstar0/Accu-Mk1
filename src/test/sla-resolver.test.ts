@@ -1,64 +1,36 @@
 import { describe, it, expect } from 'vitest'
-import { resolveSlaTarget, type SlaTarget } from '@/lib/api'
-import type { InboxPriority } from '@/lib/api'
+import { resolveSlaTier, type SlaTier } from '@/lib/api'
 
-// Parity tests for the client-side SLA resolver. These mirror the Python
-// backend tests (backend/tests/test_sla_engine.py) case-for-case — the two
-// resolvers MUST stay in lockstep, so any drift fails here.
+// Parity with backend/tests/test_sla_engine.py — keep the two resolvers in
+// lockstep. Precedence: priority override > group tier > default.
 
-function target(
-  partial: Partial<SlaTarget> & { target_minutes: number },
-): SlaTarget {
+function tier(target_minutes: number, partial: Partial<SlaTier> = {}): SlaTier {
   return {
-    id: 0,
-    analysis_service_id: null,
-    priority: null,
-    business_hours_only: false,
-    is_default: false,
-    created_at: '',
-    updated_at: '',
-    ...partial,
+    id: 0, name: 't', target_minutes,
+    business_hours_only: false, is_default: false,
+    created_at: '', updated_at: '', ...partial,
   }
 }
 
-const DEFAULT = target({ target_minutes: 1440, is_default: true })
+const DEFAULT = tier(1440, { id: 1, name: 'Standard', is_default: true })
+const RUSH = tier(240, { id: 2, name: 'Rush' })
+const GROUP = tier(2880, { id: 3, name: 'Microbiology' })
 
-describe('resolveSlaTarget — 4-level fallback', () => {
-  it('picks the exact (service, priority) row', () => {
-    const exact = target({ analysis_service_id: 7, priority: 'high', target_minutes: 120 })
-    const targets = [DEFAULT, target({ analysis_service_id: 7, target_minutes: 480 }), exact]
-    expect(resolveSlaTarget(targets, 7, 'high')).toBe(exact)
+describe('resolveSlaTier — priority override > group > default', () => {
+  it('priority override wins over group', () => {
+    expect(resolveSlaTier({ expedited: RUSH }, GROUP, 'expedited', DEFAULT)).toBe(RUSH)
   })
-
-  it('falls back to the service any-priority row', () => {
-    const svcAny = target({ analysis_service_id: 7, target_minutes: 480 })
-    expect(resolveSlaTarget([DEFAULT, svcAny], 7, 'high')).toBe(svcAny)
+  it('unmapped priority falls to group', () => {
+    expect(resolveSlaTier({ expedited: RUSH }, GROUP, 'normal', DEFAULT)).toBe(GROUP)
   })
-
-  it('falls back to the priority any-service row', () => {
-    const prioAny = target({ priority: 'expedited', target_minutes: 60 })
-    expect(resolveSlaTarget([DEFAULT, prioAny], 7, 'expedited')).toBe(prioAny)
+  it('no group tier falls to default', () => {
+    expect(resolveSlaTier({ expedited: RUSH }, null, 'normal', DEFAULT)).toBe(DEFAULT)
   })
-
-  it('falls back to the default catch-all', () => {
-    const targets = [DEFAULT, target({ analysis_service_id: 99, priority: 'high', target_minutes: 90 })]
-    expect(resolveSlaTarget(targets, 7, 'normal')).toBe(DEFAULT)
+  it('null priority falls to group then default', () => {
+    expect(resolveSlaTier({ expedited: RUSH }, GROUP, null, DEFAULT)).toBe(GROUP)
+    expect(resolveSlaTier({ expedited: RUSH }, null, null, DEFAULT)).toBe(DEFAULT)
   })
-
-  it('prefers service-wildcard over priority-wildcard', () => {
-    const svcAny = target({ analysis_service_id: 7, target_minutes: 480 })
-    const prioAny = target({ priority: 'high', target_minutes: 60 })
-    expect(resolveSlaTarget([DEFAULT, prioAny, svcAny], 7, 'high')).toBe(svcAny)
-  })
-
-  it('degrades a null priority to the service any-priority row', () => {
-    const svcAny = target({ analysis_service_id: 7, target_minutes: 480 })
-    const exact = target({ analysis_service_id: 7, priority: 'high', target_minutes: 120 })
-    expect(resolveSlaTarget([DEFAULT, exact, svcAny], 7, null)).toBe(svcAny)
-  })
-
-  it('returns null when nothing matches and there is no default', () => {
-    const targets = [target({ analysis_service_id: 99, priority: 'high', target_minutes: 90 })]
-    expect(resolveSlaTarget(targets, 7, 'normal' as InboxPriority)).toBeNull()
+  it('returns null when nothing matches and no default', () => {
+    expect(resolveSlaTier({}, null, 'normal', null)).toBeNull()
   })
 })
