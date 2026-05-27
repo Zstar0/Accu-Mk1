@@ -67,6 +67,15 @@ On schema creation, insert the default row: `analysis_service_id=NULL, priority=
 - **Confirm schema-creation mechanism before writing the migration:** does `database.py` use `Base.metadata.create_all` (dev) or Alembic? (mk1_db.py uses idempotent `CREATE TABLE IF NOT EXISTS`.) This determines how `sla_targets` is created + how the seed runs. **This is the migration step — pause for approval.**
 - Tests: engine fallback chain (all 4 levels), seed idempotency, `compute_sla_status` raw elapsed + breach boundary.
 
+## Design review notes (open for your sign-off)
+
+Surfaced in design review — confirm these (with the create/migrate mechanism) before I build:
+
+1. **Priority is sparse → most rows resolve to the default/`normal` tier (v1 reality).** `SamplePriority` is an *override* (set only when explicitly prioritized) and `WorksheetItem.priority` exists only once a sample is on a worksheet. Order-status rows — especially "Awaiting sample" ones — typically have neither, so they resolve to `priority='normal'` → effectively the default SLA. "Service × priority" therefore behaves like "Service + default" for most rows until the WP→IS priority pipeline matures. **Acceptable as v1?** (If yes, the catch-all default does most of the real work.)
+2. **Postgres unique-with-NULL:** a plain `UNIQUE(analysis_service_id, priority)` does NOT dedupe `(NULL, …)` rows (NULLs compare distinct). Use **partial unique indexes** for the nullable combinations + a partial unique index `WHERE is_default` to enforce exactly one default. (Migration detail.)
+3. **Resolution runs client-side for D2.** D2 renders SLA across many samples per page; a backend `resolve_sla_target` per sample is O(N) round-trips. Plan: frontend caches `list_sla_targets()` (small) and runs the 4-level fallback in TS; backend `resolve_sla_target` stays for server-side flows (jobs/notifications), not the render hot path.
+4. **Verify the join key:** confirm `SamplePriority.sample_uid` matches the `senaite_id` used in `sampleLookupMap` / `getOrderReceivedAt`. If it's an internal AccuMk1 id, D2 needs an extra join not yet planned. (Quick grep at implementation start.)
+
 ## ⚠️ Pause point
 
 Per the autonomy contract, **A's first implementation step creates a new DB table + migration on `accumark_mk1`**. I will stop and get explicit approval (and confirm the create/migrate mechanism) before writing any schema or running any migration.
