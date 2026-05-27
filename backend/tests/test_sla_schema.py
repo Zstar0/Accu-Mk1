@@ -32,6 +32,7 @@ def test_default_tier_encodes_old_24h_goal():
         ).fetchone()
     assert row is not None
     name, target_minutes = row
+    assert name == "Standard"
     assert target_minutes == 1440
 
 
