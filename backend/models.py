@@ -694,3 +694,50 @@ class SampleAnalyteAlias(Base):
 
     def __repr__(self) -> str:
         return f"<SampleAnalyteAlias(sample='{self.senaite_sample_id}', slot={self.slot}, alias='{self.alias}')>"
+
+
+class SlaTarget(Base):
+    """
+    SLA turnaround target per (analysis service x priority). Sub-project A of
+    the SLA/processing-time feature.
+
+    Resolution (see backend SLA engine) falls back:
+      exact (service, priority) -> (service, NULL) -> (NULL, priority) -> the
+    is_default row. A single is_default row covers everything unassigned and
+    encodes the former hardcoded 24h goal.
+
+    Both analysis_service_id and priority are nullable to express the wildcard
+    rows. Postgres treats NULLs as distinct, so a plain UniqueConstraint would
+    NOT dedupe the wildcard combinations -- uniqueness is enforced by partial
+    unique indexes created in database._run_migrations (uq_sla_*).
+    """
+
+    __tablename__ = "sla_targets"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    analysis_service_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("analysis_services.id", ondelete="CASCADE"), nullable=True
+    )
+    # 'normal' | 'high' | 'expedited' (matches SamplePriority/WorksheetItem); NULL = any priority.
+    priority: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    target_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Stored now; honored by the business-hours calendar in sub-project B.
+    business_hours_only: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
+    # Catch-all row used when nothing more specific matches.
+    is_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+    analysis_service: Mapped[Optional["AnalysisService"]] = relationship(
+        "AnalysisService"
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<SlaTarget(service={self.analysis_service_id}, priority={self.priority!r}, "
+            f"target_minutes={self.target_minutes}, default={self.is_default})>"
+        )
