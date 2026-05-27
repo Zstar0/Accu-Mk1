@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Settings, Palette, Zap, Database, Timer } from 'lucide-react'
+import { Settings, Palette, Zap, Database, Timer, CalendarClock } from 'lucide-react'
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -31,8 +31,9 @@ import { AppearancePane } from './panes/AppearancePane'
 import { DataPipelinePane } from './panes/DataPipelinePane'
 import { AdvancedPane } from './panes/AdvancedPane'
 import { SlaPane } from './panes/SlaPane'
+import { BusinessHoursPane } from './panes/BusinessHoursPane'
 
-type PreferencePane = 'general' | 'appearance' | 'dataPipeline' | 'sla' | 'advanced'
+type PreferencePane = 'general' | 'appearance' | 'dataPipeline' | 'sla' | 'businessHours' | 'advanced'
 
 const navigationItems = [
   {
@@ -54,6 +55,11 @@ const navigationItems = [
     id: 'sla' as const,
     labelKey: 'preferences.sla',
     icon: Timer,
+  },
+  {
+    id: 'businessHours' as const,
+    labelKey: 'preferences.businessHours',
+    icon: CalendarClock,
   },
   {
     id: 'advanced' as const,
@@ -134,6 +140,7 @@ export function PreferencesDialog() {
               {activePane === 'appearance' && <AppearancePane />}
               {activePane === 'dataPipeline' && <DataPipelinePane />}
               {activePane === 'sla' && <SlaPane />}
+              {activePane === 'businessHours' && <BusinessHoursPane />}
               {activePane === 'advanced' && <AdvancedPane />}
             </div>
           </main>
