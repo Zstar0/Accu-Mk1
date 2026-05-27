@@ -181,12 +181,16 @@ class ServiceGroup(Base):
     color: Mapped[str] = mapped_column(String(50), nullable=False, default="blue")
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     is_default: Mapped[bool] = mapped_column(Boolean, default=False)
+    sla_tier_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("sla_tiers.id", ondelete="SET NULL"), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     analysis_services: Mapped[list["AnalysisService"]] = relationship(
         "AnalysisService", secondary="service_group_members"
     )
+    sla_tier: Mapped[Optional["SlaTier"]] = relationship("SlaTier")
 
     def __repr__(self) -> str:
         return f"<ServiceGroup(id={self.id}, name='{self.name}')>"
@@ -696,48 +700,49 @@ class SampleAnalyteAlias(Base):
         return f"<SampleAnalyteAlias(sample='{self.senaite_sample_id}', slot={self.slot}, alias='{self.alias}')>"
 
 
-class SlaTarget(Base):
-    """
-    SLA turnaround target per (analysis service x priority). Sub-project A of
-    the SLA/processing-time feature.
+class SlaTier(Base):
+    """A named SLA turnaround target. Sub-project A (revised to tiers).
 
-    Resolution (see backend SLA engine) falls back:
-      exact (service, priority) -> (service, NULL) -> (NULL, priority) -> the
-    is_default row. A single is_default row covers everything unassigned and
-    encodes the former hardcoded 24h goal.
-
-    Both analysis_service_id and priority are nullable to express the wildcard
-    rows. Postgres treats NULLs as distinct, so a plain UniqueConstraint would
-    NOT dedupe the wildcard combinations -- uniqueness is enforced by partial
-    unique indexes created in database._run_migrations (uq_sla_*).
+    Referenced by ServiceGroup.sla_tier_id and by SlaPriorityTier. Exactly one
+    row has is_default=true (the catch-all, enforced by the partial unique index
+    uq_sla_tier_single_default created in database._run_migrations).
     """
 
-    __tablename__ = "sla_targets"
+    __tablename__ = "sla_tiers"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    analysis_service_id: Mapped[Optional[int]] = mapped_column(
-        ForeignKey("analysis_services.id", ondelete="CASCADE"), nullable=True
-    )
-    # 'normal' | 'high' | 'expedited' (matches SamplePriority/WorksheetItem); NULL = any priority.
-    priority: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
     target_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
     # Stored now; honored by the business-hours calendar in sub-project B.
     business_hours_only: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False
     )
-    # Catch-all row used when nothing more specific matches.
     is_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
     )
 
-    analysis_service: Mapped[Optional["AnalysisService"]] = relationship(
-        "AnalysisService"
+    def __repr__(self) -> str:
+        return f"<SlaTier(id={self.id}, name='{self.name}', target_minutes={self.target_minutes})>"
+
+
+class SlaPriorityTier(Base):
+    """Sparse priority -> SLA tier override. A row exists only for priorities
+    that override the group/default SLA (e.g. 'expedited'); 'normal' is normally
+    absent. priority in {normal|high|expedited}."""
+
+    __tablename__ = "sla_priority_tiers"
+
+    priority: Mapped[str] = mapped_column(String(20), primary_key=True)
+    sla_tier_id: Mapped[int] = mapped_column(
+        ForeignKey("sla_tiers.id", ondelete="CASCADE"), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
     )
 
+    tier: Mapped["SlaTier"] = relationship("SlaTier")
+
     def __repr__(self) -> str:
-        return (
-            f"<SlaTarget(service={self.analysis_service_id}, priority={self.priority!r}, "
-            f"target_minutes={self.target_minutes}, default={self.is_default})>"
-        )
+        return f"<SlaPriorityTier(priority='{self.priority}', sla_tier_id={self.sla_tier_id})>"

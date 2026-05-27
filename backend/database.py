@@ -217,14 +217,16 @@ def _run_migrations():
         WHERE p.abbreviation = 'Benzyl Alcohol'
         ON CONFLICT (peptide_id, slot) DO NOTHING
         """,
-        # Sub-project A: SLA targets per (analysis service x priority) + default.
-        # Raw DDL here (before create_all) so the partial unique indexes and seed
-        # below can run on first boot; the SlaTarget ORM model maps the same table.
+        # ── SLA tiers (revises the former sla_targets model) ──
+        # Drop the old per-(service,priority) model and its indexes.
+        "DROP TABLE IF EXISTS sla_targets CASCADE",
+        # Named SLA tier = a turnaround target. Referenced by service groups and
+        # by the priority map. Raw DDL before create_all so the seed/index below
+        # can run on first boot; the SlaTier ORM model maps the same table.
         """
-        CREATE TABLE IF NOT EXISTS sla_targets (
+        CREATE TABLE IF NOT EXISTS sla_tiers (
             id                  SERIAL PRIMARY KEY,
-            analysis_service_id INTEGER REFERENCES analysis_services(id) ON DELETE CASCADE,
-            priority            VARCHAR(20),
+            name                VARCHAR(100) NOT NULL,
             target_minutes      INTEGER NOT NULL,
             business_hours_only BOOLEAN NOT NULL DEFAULT FALSE,
             is_default          BOOLEAN NOT NULL DEFAULT FALSE,
@@ -232,18 +234,24 @@ def _run_migrations():
             updated_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
         """,
-        # Partial unique indexes — Postgres NULLs compare distinct, so a plain
-        # UNIQUE(analysis_service_id, priority) would NOT dedupe wildcard rows.
-        "CREATE UNIQUE INDEX IF NOT EXISTS uq_sla_svc_prio ON sla_targets (analysis_service_id, priority) WHERE analysis_service_id IS NOT NULL AND priority IS NOT NULL",
-        "CREATE UNIQUE INDEX IF NOT EXISTS uq_sla_svc_only ON sla_targets (analysis_service_id) WHERE analysis_service_id IS NOT NULL AND priority IS NULL",
-        "CREATE UNIQUE INDEX IF NOT EXISTS uq_sla_prio_only ON sla_targets (priority) WHERE analysis_service_id IS NULL AND priority IS NOT NULL",
-        # At most one default (catch-all) row.
-        "CREATE UNIQUE INDEX IF NOT EXISTS uq_sla_single_default ON sla_targets (is_default) WHERE is_default",
-        # Seed the default row = former hardcoded 24h goal. Idempotent via NOT EXISTS.
+        # At most one default (catch-all) tier.
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_sla_tier_single_default ON sla_tiers (is_default) WHERE is_default",
+        # Sparse priority -> tier override map. A row exists ONLY for priorities
+        # that override; absence means "does not override".
         """
-        INSERT INTO sla_targets (analysis_service_id, priority, target_minutes, business_hours_only, is_default, created_at, updated_at)
-        SELECT NULL, NULL, 1440, FALSE, TRUE, NOW(), NOW()
-        WHERE NOT EXISTS (SELECT 1 FROM sla_targets WHERE is_default)
+        CREATE TABLE IF NOT EXISTS sla_priority_tiers (
+            priority    VARCHAR(20) PRIMARY KEY,
+            sla_tier_id INTEGER NOT NULL REFERENCES sla_tiers(id) ON DELETE CASCADE,
+            updated_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        # Service groups reference a tier (NULL -> resolves to the default tier).
+        "ALTER TABLE service_groups ADD COLUMN IF NOT EXISTS sla_tier_id INTEGER REFERENCES sla_tiers(id) ON DELETE SET NULL",
+        # Seed the default tier = former hardcoded 24h goal. Idempotent.
+        """
+        INSERT INTO sla_tiers (name, target_minutes, business_hours_only, is_default, created_at, updated_at)
+        SELECT 'Standard', 1440, FALSE, TRUE, NOW(), NOW()
+        WHERE NOT EXISTS (SELECT 1 FROM sla_tiers WHERE is_default)
         """,
     ]
     # Per-statement isolation: a failure in one statement (e.g., a table that
