@@ -3996,6 +3996,93 @@ export function resolveSlaTier(
   return defaultTier
 }
 
+// ─── Business-hours config + holidays + batch status (sub-project B) ──────────
+
+export interface BusinessHoursConfig {
+  open_time: string // "HH:MM:SS"
+  close_time: string
+  timezone: string
+  working_days: number[] // Python weekday ints, Mon=0..Sun=6
+}
+
+export interface LabHoliday {
+  id: number
+  holiday_date: string // "YYYY-MM-DD"
+  name: string
+  source: 'federal' | 'custom'
+}
+
+export interface SlaStatusRequestItem {
+  key: string
+  received_at: string | null
+  target_minutes: number
+  business_hours_only: boolean
+}
+
+export interface SlaStatus {
+  target_minutes: number
+  elapsed_minutes: number
+  remaining_minutes: number
+  breached: boolean
+}
+
+export interface SlaStatusResultItem {
+  key: string
+  status: SlaStatus | null
+}
+
+export async function getBusinessHoursConfig(): Promise<BusinessHoursConfig> {
+  const response = await fetch(`${API_BASE_URL()}/business-hours-config`, { headers: getBearerHeaders() })
+  if (!response.ok) throw new Error(`Failed to load business hours: ${response.status}`)
+  return response.json()
+}
+
+export async function updateBusinessHoursConfig(data: BusinessHoursConfig): Promise<BusinessHoursConfig> {
+  const response = await fetch(`${API_BASE_URL()}/business-hours-config`, {
+    method: 'PUT', headers: getBearerHeaders('application/json'), body: JSON.stringify(data),
+  })
+  if (!response.ok) throw new Error(`Failed to save business hours: ${response.status}`)
+  return response.json()
+}
+
+export async function getLabHolidays(year: number): Promise<LabHoliday[]> {
+  const response = await fetch(`${API_BASE_URL()}/lab-holidays?year=${year}`, { headers: getBearerHeaders() })
+  if (!response.ok) throw new Error(`Failed to load holidays: ${response.status}`)
+  return response.json()
+}
+
+export async function createLabHoliday(data: { holiday_date: string; name: string }): Promise<LabHoliday> {
+  const response = await fetch(`${API_BASE_URL()}/lab-holidays`, {
+    method: 'POST', headers: getBearerHeaders('application/json'), body: JSON.stringify(data),
+  })
+  if (!response.ok) throw new Error(`Failed to add holiday: ${response.status}`)
+  return response.json()
+}
+
+export async function deleteLabHoliday(holidayDate: string): Promise<void> {
+  const response = await fetch(`${API_BASE_URL()}/lab-holidays/${holidayDate}`, {
+    method: 'DELETE', headers: getBearerHeaders(),
+  })
+  if (!response.ok) throw new Error(`Failed to remove holiday: ${response.status}`)
+}
+
+export async function generateFederalHolidays(year: number): Promise<{ year: number; added: number }> {
+  const response = await fetch(`${API_BASE_URL()}/lab-holidays/generate-federal?year=${year}`, {
+    method: 'POST', headers: getBearerHeaders(),
+  })
+  if (!response.ok) throw new Error(`Failed to generate federal holidays: ${response.status}`)
+  return response.json()
+}
+
+export async function fetchSlaStatuses(items: SlaStatusRequestItem[]): Promise<SlaStatusResultItem[]> {
+  const response = await fetch(`${API_BASE_URL()}/sla/status`, {
+    method: 'POST', headers: getBearerHeaders('application/json'), body: JSON.stringify({ items }),
+  })
+  if (!response.ok) throw new Error(`Failed to fetch SLA statuses: ${response.status}`)
+  const data = await response.json()
+  return data.items
+}
+
 export async function getSenaiteAnalysts(): Promise<SenaiteAnalyst[]> {
   const response = await fetch(`${API_BASE_URL()}/senaite/analysts`, {
     headers: getBearerHeaders(),
