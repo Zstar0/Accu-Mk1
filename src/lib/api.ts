@@ -3893,6 +3893,103 @@ export async function setServiceGroupMembers(
   return response.json()
 }
 
+// ─── SLA Targets (sub-project A) ────────────────────────────────────────────
+
+// Priority tiers mirror the worksheet InboxPriority (defined below). NULL on
+// the wire = the wildcard rows (any service / any priority).
+export interface SlaTarget {
+  id: number
+  analysis_service_id: number | null
+  priority: InboxPriority | null
+  target_minutes: number
+  business_hours_only: boolean
+  is_default: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface SlaTargetCreate {
+  analysis_service_id?: number | null
+  priority?: InboxPriority | null
+  target_minutes: number
+  business_hours_only?: boolean
+  is_default?: boolean
+}
+
+export interface SlaTargetUpdate {
+  analysis_service_id?: number | null
+  priority?: InboxPriority | null
+  target_minutes?: number
+  business_hours_only?: boolean
+  is_default?: boolean
+}
+
+export async function getSlaTargets(): Promise<SlaTarget[]> {
+  const response = await fetch(`${API_BASE_URL()}/sla-targets`, {
+    headers: getBearerHeaders(),
+  })
+  if (!response.ok) throw new Error(`Failed to load SLA targets: ${response.status}`)
+  return response.json()
+}
+
+export async function createSlaTarget(data: SlaTargetCreate): Promise<SlaTarget> {
+  const response = await fetch(`${API_BASE_URL()}/sla-targets`, {
+    method: 'POST',
+    headers: getBearerHeaders('application/json'),
+    body: JSON.stringify(data),
+  })
+  if (!response.ok) throw new Error(`Failed to create SLA target: ${response.status}`)
+  return response.json()
+}
+
+export async function updateSlaTarget(id: number, data: SlaTargetUpdate): Promise<SlaTarget> {
+  const response = await fetch(`${API_BASE_URL()}/sla-targets/${id}`, {
+    method: 'PUT',
+    headers: getBearerHeaders('application/json'),
+    body: JSON.stringify(data),
+  })
+  if (!response.ok) throw new Error(`Failed to update SLA target: ${response.status}`)
+  return response.json()
+}
+
+export async function deleteSlaTarget(id: number): Promise<void> {
+  const response = await fetch(`${API_BASE_URL()}/sla-targets/${id}`, {
+    method: 'DELETE',
+    headers: getBearerHeaders(),
+  })
+  if (!response.ok) throw new Error(`Failed to delete SLA target: ${response.status}`)
+}
+
+/**
+ * Client-side SLA resolution — the TS mirror of the backend sla_engine.
+ * D2 caches getSlaTargets() once and resolves per-sample here, avoiding O(N)
+ * /sla-targets/resolve round-trips. Keep this in lockstep with the Python
+ * resolve_sla_target: same 4-level fallback, same case-sensitive priority match.
+ *
+ *   1. exact (service, priority)  2. (service, null)
+ *   3. (null, priority)           4. the is_default catch-all
+ *
+ * A null priority degrades to the service's any-priority row, then the default.
+ * Returns null only when nothing matches and no default exists.
+ */
+export function resolveSlaTarget(
+  targets: SlaTarget[],
+  analysisServiceId: number | null,
+  priority: InboxPriority | null
+): SlaTarget | null {
+  const levels: ((t: SlaTarget) => boolean)[] = [
+    (t) => t.analysis_service_id === analysisServiceId && t.priority === priority,
+    (t) => t.analysis_service_id === analysisServiceId && t.priority === null,
+    (t) => t.analysis_service_id === null && t.priority === priority,
+    (t) => t.is_default,
+  ]
+  for (const matches of levels) {
+    const found = targets.find(matches)
+    if (found) return found
+  }
+  return null
+}
+
 export async function getSenaiteAnalysts(): Promise<SenaiteAnalyst[]> {
   const response = await fetch(`${API_BASE_URL()}/senaite/analysts`, {
     headers: getBearerHeaders(),

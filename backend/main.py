@@ -13,7 +13,7 @@ import sys
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Union
+from typing import Literal, Optional, Union
 from uuid import UUID
 
 # App version: prefer APP_VERSION env var (set by Docker build-arg),
@@ -34,9 +34,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, validator
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import select, desc, delete, update, func
+from sqlalchemy.exc import IntegrityError
 
 from database import get_db, init_db
-from models import AuditLog, Settings, Job, Sample, Result, Instrument, AnalysisService, HplcMethod, Peptide, PeptideAnalyte, CalibrationCurve, HPLCAnalysis, User, SharePointFileCache, WizardSession, WizardMeasurement, peptide_methods, blend_components, ServiceGroup, service_group_members, SamplePriority, Worksheet, WorksheetItem, instrument_methods, SampleAnalyteAlias
+from models import AuditLog, Settings, Job, Sample, Result, Instrument, AnalysisService, HplcMethod, Peptide, PeptideAnalyte, CalibrationCurve, HPLCAnalysis, User, SharePointFileCache, WizardSession, WizardMeasurement, peptide_methods, blend_components, ServiceGroup, service_group_members, SamplePriority, Worksheet, WorksheetItem, instrument_methods, SampleAnalyteAlias, SlaTarget
+from sla_engine import resolve_sla_target
 from auth import (
     get_current_user, require_admin, create_access_token,
     verify_password, get_password_hash, seed_admin_user,
@@ -1817,6 +1819,52 @@ class ServiceGroupResponse(BaseModel):
 class ServiceGroupMembersRequest(BaseModel):
     """Schema for setting service group membership."""
     analysis_service_ids: list[int]
+
+
+# ─── SLA target schemas (sub-project A) ───
+
+# Priority tiers mirror SamplePriority/WorksheetItem.priority. The DB column is
+# an unconstrained VARCHAR(20), so validation lives here at the API edge — a
+# typo'd priority would store and then silently never resolve.
+SlaPriority = Literal["normal", "high", "expedited"]
+
+
+class SlaTargetCreate(BaseModel):
+    """Schema for creating an SLA target.
+
+    NULL analysis_service_id / priority are the wildcard rows (any service /
+    any priority). is_default marks the single catch-all; setting it true
+    demotes any existing default.
+    """
+    analysis_service_id: Optional[int] = None
+    priority: Optional[SlaPriority] = None
+    target_minutes: int
+    business_hours_only: bool = False
+    is_default: bool = False
+
+
+class SlaTargetUpdate(BaseModel):
+    """Schema for updating an SLA target. All fields optional (partial update)."""
+    analysis_service_id: Optional[int] = None
+    priority: Optional[SlaPriority] = None
+    target_minutes: Optional[int] = None
+    business_hours_only: Optional[bool] = None
+    is_default: Optional[bool] = None
+
+
+class SlaTargetResponse(BaseModel):
+    """Schema for an SLA target row."""
+    id: int
+    analysis_service_id: Optional[int]
+    priority: Optional[str]
+    target_minutes: int
+    business_hours_only: bool
+    is_default: bool
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
 
 
 # ─── HPLC Method schemas ───
@@ -11800,6 +11848,143 @@ async def set_service_group_members(
     group.analysis_services = list(services)
     db.commit()
     return {"count": len(services)}
+
+
+# ─── SLA Targets (sub-project A) ──────────────────────────────────────────────
+
+
+def _demote_other_defaults(db: Session, keep_id: Optional[int] = None) -> None:
+    """Clear is_default on every row except keep_id.
+
+    The partial unique index uq_sla_single_default permits at most one default
+    row, and the check is immediate (not deferrable) — so the demotion UPDATE
+    must flush before the row being promoted is inserted/updated, or Postgres
+    rejects it. db.query(...).update() issues the UPDATE synchronously here.
+    """
+    q = db.query(SlaTarget).filter(SlaTarget.is_default == True)  # noqa: E712
+    if keep_id is not None:
+        q = q.filter(SlaTarget.id != keep_id)
+    q.update({"is_default": False})
+    db.flush()
+
+
+@app.get("/sla-targets", response_model=list[SlaTargetResponse])
+async def list_sla_targets(
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Return all SLA targets. Consumed by the settings UI (C) and, cached, by
+    the SLA column (D2) which runs the resolution fallback client-side."""
+    rows = db.execute(
+        select(SlaTarget).order_by(
+            SlaTarget.is_default.desc(),
+            SlaTarget.analysis_service_id,
+            SlaTarget.priority,
+        )
+    ).scalars().all()
+    return rows
+
+
+@app.get("/sla-targets/resolve", response_model=SlaTargetResponse)
+async def resolve_sla_target_endpoint(
+    service_id: Optional[int] = None,
+    priority: Optional[SlaPriority] = None,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Resolve the effective SLA target for a (service, priority) pair via the
+    4-level fallback engine. For server-side flows (jobs/notifications); the D2
+    render path resolves client-side off the cached list instead."""
+    rows = db.execute(select(SlaTarget)).scalars().all()
+    target = resolve_sla_target(rows, service_id, priority)
+    if target is None:
+        # The seed guarantees a default in prod, so this only fires if the
+        # catch-all was deleted out from under us — surface it rather than 500.
+        raise HTTPException(404, "No SLA target matches and no default is configured")
+    return target
+
+
+@app.post("/sla-targets", response_model=SlaTargetResponse, status_code=201)
+async def create_sla_target(
+    data: SlaTargetCreate,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Create an SLA target. Setting is_default demotes any existing default."""
+    target = SlaTarget(**data.model_dump())
+    if target.is_default:
+        _demote_other_defaults(db)
+    db.add(target)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            409,
+            "An SLA target with that (service, priority) already exists",
+        )
+    db.refresh(target)
+    return target
+
+
+@app.put("/sla-targets/{target_id}", response_model=SlaTargetResponse)
+async def update_sla_target(
+    target_id: int,
+    data: SlaTargetUpdate,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Update an SLA target. Enforces the always-one-default invariant:
+    promoting one demotes the rest; demoting the only default is rejected."""
+    target = db.get(SlaTarget, target_id)
+    if not target:
+        raise HTTPException(404, f"SLA target {target_id} not found")
+
+    update_data = data.model_dump(exclude_unset=True)
+    if "is_default" in update_data:
+        if update_data["is_default"]:
+            _demote_other_defaults(db, keep_id=target_id)
+        elif target.is_default:
+            # Clearing the only default would leave no catch-all → unmatched
+            # samples lose the 24h backstop. Require promoting another first.
+            raise HTTPException(
+                409,
+                "Cannot unset the only default SLA target; set another as default instead",
+            )
+    for field, value in update_data.items():
+        setattr(target, field, value)
+
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            409,
+            "An SLA target with that (service, priority) already exists",
+        )
+    db.refresh(target)
+    return target
+
+
+@app.delete("/sla-targets/{target_id}")
+async def delete_sla_target(
+    target_id: int,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Delete an SLA target. The default (catch-all) row cannot be deleted —
+    it's the backstop that keeps unmatched samples on the 24h goal."""
+    target = db.get(SlaTarget, target_id)
+    if not target:
+        raise HTTPException(404, f"SLA target {target_id} not found")
+    if target.is_default:
+        raise HTTPException(
+            409,
+            "Cannot delete the default SLA target; promote another default first",
+        )
+    db.delete(target)
+    db.commit()
+    return {"message": f"SLA target {target_id} deleted"}
 
 
 # ─── SENAITE Analyst Proxy ────────────────────────────────────────────────────
