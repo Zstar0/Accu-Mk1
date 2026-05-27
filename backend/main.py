@@ -11,7 +11,8 @@ import secrets
 import subprocess
 import sys
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, date, time, timezone
+from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Literal, Optional, Union
 from uuid import UUID
@@ -33,11 +34,11 @@ from fastapi import FastAPI, Body, Depends, Form, HTTPException, Header, Query, 
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, validator
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import select, desc, delete, update, func
+from sqlalchemy import select, desc, delete, update, func, extract
 from sqlalchemy.exc import IntegrityError
 
 from database import get_db, init_db
-from models import AuditLog, Settings, Job, Sample, Result, Instrument, AnalysisService, HplcMethod, Peptide, PeptideAnalyte, CalibrationCurve, HPLCAnalysis, User, SharePointFileCache, WizardSession, WizardMeasurement, peptide_methods, blend_components, ServiceGroup, service_group_members, SamplePriority, Worksheet, WorksheetItem, instrument_methods, SampleAnalyteAlias, SlaTier, SlaPriorityTier
+from models import AuditLog, Settings, Job, Sample, Result, Instrument, AnalysisService, HplcMethod, Peptide, PeptideAnalyte, CalibrationCurve, HPLCAnalysis, User, SharePointFileCache, WizardSession, WizardMeasurement, peptide_methods, blend_components, ServiceGroup, service_group_members, SamplePriority, Worksheet, WorksheetItem, instrument_methods, SampleAnalyteAlias, SlaTier, SlaPriorityTier, BusinessHoursConfig, LabHoliday
 from auth import (
     get_current_user, require_admin, create_access_token,
     verify_password, get_password_hash, seed_admin_user,
@@ -1868,6 +1869,38 @@ class SlaPriorityTierResponse(BaseModel):
 
 class SlaPriorityTierSet(BaseModel):
     sla_tier_id: int
+
+
+class BusinessHoursConfigResponse(BaseModel):
+    open_time: time
+    close_time: time
+    timezone: str
+    working_days: list[int]
+
+    class Config:
+        from_attributes = True
+
+
+class BusinessHoursConfigUpdate(BaseModel):
+    open_time: time
+    close_time: time
+    timezone: str
+    working_days: list[int]
+
+
+class LabHolidayResponse(BaseModel):
+    id: int
+    holiday_date: date
+    name: str
+    source: str
+
+    class Config:
+        from_attributes = True
+
+
+class LabHolidayCreate(BaseModel):
+    holiday_date: date
+    name: str
 
 
 # ─── HPLC Method schemas ───
@@ -11986,6 +12019,47 @@ async def delete_sla_priority_tier(
     db.delete(row)
     db.commit()
     return {"message": f"Priority override '{priority}' removed"}
+
+
+# ── Business-hours config (sub-project B) ──────────────────────────────────
+
+@app.get("/business-hours-config", response_model=BusinessHoursConfigResponse)
+async def get_business_hours_config(
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """The singleton business-hours schedule. Read-only for non-admins (UI-gated)."""
+    cfg = db.get(BusinessHoursConfig, 1)
+    if not cfg:
+        raise HTTPException(500, "Business-hours config not initialized")
+    return cfg
+
+
+@app.put("/business-hours-config", response_model=BusinessHoursConfigResponse)
+async def update_business_hours_config(
+    data: BusinessHoursConfigUpdate,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Update the schedule. Validates IANA timezone, close>open, working_days ⊆ 0..6."""
+    try:
+        ZoneInfo(data.timezone)
+    except Exception:
+        raise HTTPException(422, f"Unknown timezone: {data.timezone}")
+    if data.close_time <= data.open_time:
+        raise HTTPException(422, "close_time must be after open_time")
+    if not data.working_days or any(d < 0 or d > 6 for d in data.working_days):
+        raise HTTPException(422, "working_days must be a non-empty subset of 0..6")
+    cfg = db.get(BusinessHoursConfig, 1)
+    if not cfg:
+        raise HTTPException(500, "Business-hours config not initialized")
+    cfg.open_time = data.open_time
+    cfg.close_time = data.close_time
+    cfg.timezone = data.timezone
+    cfg.working_days = sorted(set(data.working_days))
+    db.commit()
+    db.refresh(cfg)
+    return cfg
 
 
 # ─── SENAITE Analyst Proxy ────────────────────────────────────────────────────
