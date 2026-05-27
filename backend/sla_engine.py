@@ -12,23 +12,23 @@ trivially unit-testable and lets the same contract be mirrored in TS.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional, TypeVar
+from typing import Mapping, Optional, TypeVar
 
-# Valid priority tiers (mirror SamplePriority/WorksheetItem.priority). NULL/None
-# means "any priority". Callers normally pass a concrete priority, defaulting to
-# 'normal' when a sample has no explicit SamplePriority override.
-# Matching is case-sensitive (``t.priority == priority``): always use the
-# lowercase canonical form here AND in the D2 TS resolver — 'Normal' != 'normal'.
+# Valid priority tiers (mirror SamplePriority/WorksheetItem.priority). Callers
+# normally pass a concrete priority, defaulting to 'normal' when a sample has no
+# explicit SamplePriority override; None means "no priority info" and bypasses
+# the map entirely. Dict-key lookup is case-sensitive: always use the lowercase
+# canonical form here AND in the D2 TS resolver — 'Normal' != 'normal'.
 # The Pydantic Literal on the API edge enforces this for stored rows.
 PRIORITIES = ("normal", "high", "expedited")
 
-# Duck-typed: anything with .name / .target_minutes / .is_default
-# attributes (a SlaTier ORM row, or a plain object in tests).
+# T is the SLA tier type, returned as-is — resolve_sla_tier is a passthrough and
+# never reads tier attributes; attribute access is the caller's responsibility.
 T = TypeVar("T")
 
 
 def resolve_sla_tier(
-    priority_map: dict,
+    priority_map: Mapping[str, T],
     group_tier: Optional[T],
     priority: Optional[str],
     default_tier: Optional[T],

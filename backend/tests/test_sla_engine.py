@@ -26,6 +26,11 @@ def test_priority_override_wins_over_group():
     assert resolve_sla_tier(pmap, GROUP, "expedited", DEFAULT) is RUSH
 
 
+def test_priority_override_wins_even_without_group():
+    pmap = {"expedited": RUSH}
+    assert resolve_sla_tier(pmap, None, "expedited", DEFAULT) is RUSH
+
+
 def test_unmapped_priority_falls_to_group_tier():
     pmap = {"expedited": RUSH}  # 'normal' is not mapped
     assert resolve_sla_tier(pmap, GROUP, "normal", DEFAULT) is GROUP
