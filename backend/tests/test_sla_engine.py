@@ -213,3 +213,24 @@ def test_compute_sla_status_raw_path_unchanged():
         "breached": True,
     }
     assert compute_sla_status(None, 60, now) is None
+
+
+def test_to_aware_utc_input_matches_naive_equivalent():
+    # An already-aware UTC datetime must produce the same result as the naive-UTC form.
+    aware_recv = datetime(2026, 7, 13, 16, 0, tzinfo=_tz.utc)   # Mon 09:00 PT
+    aware_now = datetime(2026, 7, 13, 18, 0, tzinfo=_tz.utc)    # Mon 11:00 PT
+    naive = compute_business_minutes(_utc(2026, 7, 13, 9), _utc(2026, 7, 13, 11), _SCHED, _NO_HOLIDAY)
+    aware = compute_business_minutes(aware_recv, aware_now, _SCHED, _NO_HOLIDAY)
+    assert aware == naive == 120.0
+
+
+def test_spans_dst_fall_back_full_days_still_480_each():
+    # Fall-back is Sun 2026-11-01 (non-working). Mon 11-02 and Tue 11-03 are full working days.
+    got = compute_business_minutes(_utc(2026, 11, 2, 0), _utc(2026, 11, 3, 23, 59), _SCHED, _NO_HOLIDAY)
+    assert got == 960.0  # 480 + 480, DST fall-back does not shift the window
+
+
+def test_multi_day_both_endpoints_inside_window():
+    # Mon 10:30 PT -> Wed 14:00 PT: Mon 10:30-17:00 (390) + Tue full (480) + Wed 09:00-14:00 (300) = 1170
+    got = compute_business_minutes(_utc(2026, 7, 13, 10, 30), _utc(2026, 7, 15, 14), _SCHED, _NO_HOLIDAY)
+    assert got == 1170.0

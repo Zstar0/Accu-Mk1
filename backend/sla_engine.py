@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
-from typing import Callable, Mapping, Optional, TypeVar
+from typing import Any, Callable, Mapping, Optional, TypeVar
 from zoneinfo import ZoneInfo
 
 # Valid priority tiers (mirror SamplePriority/WorksheetItem.priority). Callers
@@ -43,7 +43,7 @@ class BusinessSchedule:
     working_days: frozenset[int]  # Python weekday ints, Mon=0..Sun=6
 
     @classmethod
-    def from_orm(cls, config) -> "BusinessSchedule":
+    def from_orm(cls, config: Any) -> "BusinessSchedule":
         return cls(
             open_time=config.open_time,
             close_time=config.close_time,
