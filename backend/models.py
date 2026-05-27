@@ -3,9 +3,9 @@ SQLAlchemy models for Accu-Mk1 database.
 Uses SQLAlchemy 2.0 style with mapped_column.
 """
 
-from datetime import datetime
+from datetime import datetime, time, date
 from typing import Optional
-from sqlalchemy import String, Text, Float, Integer, Boolean, DateTime, ForeignKey, JSON, Column, Table, UniqueConstraint, CheckConstraint
+from sqlalchemy import String, Text, Float, Integer, Boolean, DateTime, Time, Date, ForeignKey, JSON, Column, Table, UniqueConstraint, CheckConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from database import Base
@@ -746,3 +746,41 @@ class SlaPriorityTier(Base):
 
     def __repr__(self) -> str:
         return f"<SlaPriorityTier(priority='{self.priority}', sla_tier_id={self.sla_tier_id})>"
+
+
+class BusinessHoursConfig(Base):
+    """Singleton (id=1) global lab business-hours schedule (sub-project B).
+
+    The business-minutes engine reads open/close/timezone/working_days; the
+    per-tier business_hours_only flag (sub-project A) selects whether a tier uses
+    it. Exactly one row, enforced by id=1 + the seed guard in _run_migrations.
+    """
+
+    __tablename__ = "business_hours_config"
+
+    id: Mapped[int] = mapped_column(primary_key=True)  # always 1
+    open_time: Mapped[time] = mapped_column(Time, nullable=False)
+    close_time: Mapped[time] = mapped_column(Time, nullable=False)
+    timezone: Mapped[str] = mapped_column(String(64), nullable=False, default="America/Los_Angeles")
+    working_days: Mapped[list] = mapped_column(JSON, nullable=False, default=lambda: [0, 1, 2, 3, 4])
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def __repr__(self) -> str:
+        return f"<BusinessHoursConfig(open={self.open_time}, close={self.close_time}, tz='{self.timezone}')>"
+
+
+class LabHoliday(Base):
+    """A lab closure date — federal (seeded) or custom (user-added). Every row is
+    removable; deleting a federal row means the lab works that day (sub-project B)."""
+
+    __tablename__ = "lab_holidays"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    holiday_date: Mapped[date] = mapped_column(Date, nullable=False, unique=True)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    source: Mapped[str] = mapped_column(String(10), nullable=False, default="custom")  # 'federal' | 'custom'
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    def __repr__(self) -> str:
+        return f"<LabHoliday(date={self.holiday_date}, name='{self.name}', source='{self.source}')>"
