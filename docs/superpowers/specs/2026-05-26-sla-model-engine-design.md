@@ -1,5 +1,7 @@
 # A — SLA model & engine (backend)
 
+> **⚠️ Superseded for storage by [`2026-05-27-sla-tiers-model-and-settings-design.md`](2026-05-27-sla-tiers-model-and-settings-design.md).** The one-row-per-`(analysis_service, priority)` `sla_targets` model below is replaced by a first-class **SLA tier** entity that service groups and priorities reference. The engine's pure-function approach and `compute_sla_status` carry over; the storage + resolution inputs do not. Read this doc only for that history.
+
 - **Date:** 2026-05-26
 - **Branch:** `feat/order-status-processing-time`
 - **Sub-project:** A of the SLA / processing-time feature (D1 ✅ done; **A = foundation**; then C settings UI, B calendar, D2 SLA column).
