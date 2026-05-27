@@ -11,7 +11,7 @@ import {
   useBusinessHoursConfig, useUpdateBusinessHoursConfig,
   useLabHolidays, useCreateLabHoliday, useDeleteLabHoliday, useGenerateFederalHolidays,
 } from '@/services/business-hours'
-import type { BusinessHoursConfig } from '@/lib/api'
+import type { BusinessHoursConfig, LabHoliday } from '@/lib/api'
 
 const DAY_KEYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'] as const
 
@@ -123,7 +123,7 @@ function HolidaysSection({
   readOnly: boolean
   isLoading: boolean
   isError: boolean
-  holidays: { id: number; holiday_date: string; name: string; source: 'federal' | 'custom' }[]
+  holidays: LabHoliday[]
 }) {
   const { t } = useTranslation()
   const createHoliday = useCreateLabHoliday(year)
@@ -145,7 +145,7 @@ function HolidaysSection({
 
       <div className="flex items-center gap-2">
         <span className="text-sm text-muted-foreground">{t('preferences.businessHours.year')}</span>
-        <Input className="h-8 w-24" type="number" value={String(year)}
+        <Input className="h-8 w-24" type="number" min={2000} value={String(year)}
           onChange={e => onYearChange(parseInt(e.target.value, 10) || year)} />
         {!readOnly && (
           <Button size="sm" variant="outline" disabled={generateFederal.isPending}
@@ -174,6 +174,7 @@ function HolidaysSection({
               </Badge>
               {!readOnly && (
                 <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive"
+                  aria-label={t('preferences.businessHours.removeClosure')}
                   onClick={() => deleteHoliday.mutate(h.holiday_date)}>
                   <Trash2 className="h-3.5 w-3.5" />
                 </Button>

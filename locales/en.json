@@ -102,6 +102,7 @@
   "preferences.businessHours.federalTag": "U.S. federal",
   "preferences.businessHours.customTag": "Custom",
   "preferences.businessHours.addClosure": "Add closure",
+  "preferences.businessHours.removeClosure": "Remove closure",
   "preferences.businessHours.closureName": "Name",
   "preferences.businessHours.closureNamePlaceholder": "e.g. Day after Thanksgiving",
   "preferences.businessHours.generateFederal": "Generate federal holidays for {{year}}",
