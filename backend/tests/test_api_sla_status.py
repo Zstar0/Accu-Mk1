@@ -59,7 +59,8 @@ def test_business_hours_path_differs_from_raw():
         {"key": "bh", "received_at": received, "target_minutes": 60, "business_hours_only": True},
     ]})
     by_key = {i["key"]: i["status"]["elapsed_minutes"] for i in resp.json()["items"]}
-    assert by_key["bh"] <= by_key["raw"]
+    # 3 days reliably spans off-hours, so business < raw strictly
+    assert by_key["bh"] < by_key["raw"]
 
 
 def test_loaded_once_query_count_is_constant_regardless_of_batch_size():
@@ -83,4 +84,6 @@ def test_loaded_once_query_count_is_constant_regardless_of_batch_size():
             event.remove(engine, "before_cursor_execute", _listen)
         return seen["hits"]
 
-    assert _count_for(1) == _count_for(50)
+    base = _count_for(1)
+    assert base >= 2  # at least the config read + the holidays read
+    assert base == _count_for(50)  # and constant regardless of batch size
