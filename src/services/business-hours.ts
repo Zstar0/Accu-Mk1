@@ -63,7 +63,7 @@ export function useDeleteLabHoliday(year: number) {
   })
 }
 
-export function useGenerateFederalHolidays(_year: number) {
+export function useGenerateFederalHolidays() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (targetYear: number) => generateFederalHolidays(targetYear),
