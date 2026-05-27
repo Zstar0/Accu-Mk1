@@ -38,6 +38,7 @@ from sqlalchemy import select, desc, delete, update, func, extract
 from sqlalchemy.exc import IntegrityError
 
 from database import get_db, init_db
+from sla_engine import BusinessSchedule, compute_business_minutes, sla_status_dict
 from models import AuditLog, Settings, Job, Sample, Result, Instrument, AnalysisService, HplcMethod, Peptide, PeptideAnalyte, CalibrationCurve, HPLCAnalysis, User, SharePointFileCache, WizardSession, WizardMeasurement, peptide_methods, blend_components, ServiceGroup, service_group_members, SamplePriority, Worksheet, WorksheetItem, instrument_methods, SampleAnalyteAlias, SlaTier, SlaPriorityTier, BusinessHoursConfig, LabHoliday
 from auth import (
     get_current_user, require_admin, create_access_token,
@@ -1901,6 +1902,26 @@ class LabHolidayResponse(BaseModel):
 class LabHolidayCreate(BaseModel):
     holiday_date: date
     name: str
+
+
+class SlaStatusRequestItem(BaseModel):
+    key: str
+    received_at: Optional[datetime] = None
+    target_minutes: int
+    business_hours_only: bool = False
+
+
+class SlaStatusRequest(BaseModel):
+    items: list[SlaStatusRequestItem]
+
+
+class SlaStatusResultItem(BaseModel):
+    key: str
+    status: Optional[dict] = None
+
+
+class SlaStatusResponse(BaseModel):
+    items: list[SlaStatusResultItem]
 
 
 # ─── HPLC Method schemas ───
@@ -12131,6 +12152,46 @@ async def generate_federal_holidays_endpoint(
     added = seed_federal_holidays(db.connection(), year)
     db.commit()
     return {"year": year, "added": added}
+
+
+# ─── SLA Status Batch ─────────────────────────────────────────────────────────
+
+@app.post("/sla/status", response_model=SlaStatusResponse)
+async def compute_sla_statuses(
+    req: SlaStatusRequest,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Batch SLA status for a page of rows (the render endpoint).
+
+    Loads the schedule + holiday set ONCE, then maps over items — O(items) with
+    O(1) DB reads. `now` is server time; the response is a snapshot. `key` is
+    opaque and echoed (the client correlates by key, not array order). `status`
+    is null iff `received_at` is null.
+    """
+    now = datetime.utcnow()  # naive UTC, codebase convention
+    cfg = db.get(BusinessHoursConfig, 1)
+    schedule = BusinessSchedule.from_orm(cfg) if cfg else None
+    holiday_dates = {r[0] for r in db.execute(select(LabHoliday.holiday_date)).all()}
+    is_holiday = lambda d: d in holiday_dates  # noqa: E731
+
+    results: list[SlaStatusResultItem] = []
+    for item in req.items:
+        recv = item.received_at
+        if recv is None:
+            results.append(SlaStatusResultItem(key=item.key, status=None))
+            continue
+        # Normalize to naive UTC (an offset-aware ISO string is converted).
+        if recv.tzinfo is not None:
+            recv = recv.astimezone(timezone.utc).replace(tzinfo=None)
+        if item.business_hours_only and schedule is not None:
+            elapsed = compute_business_minutes(recv, now, schedule, is_holiday)
+        else:
+            elapsed = (now - recv).total_seconds() / 60.0
+        results.append(
+            SlaStatusResultItem(key=item.key, status=sla_status_dict(item.target_minutes, elapsed))
+        )
+    return SlaStatusResponse(items=results)
 
 
 # ─── SENAITE Analyst Proxy ────────────────────────────────────────────────────
