@@ -12,7 +12,7 @@ Make `business_hours_only` tiers measure elapsed time in **business minutes** (o
 ## Decisions (locked)
 
 - **Schedule:** one **global** lab schedule (not per-tier; the per-tier `business_hours_only` flag selects whether a tier *uses* it). Seeded: **09:00–17:00, Mon–Fri, `America/Los_Angeles`**. "9–5 PST" = 9–5 on the Pacific wall clock, **DST-aware** (PST winter / PDT summer). A working day is **8 continuous hours** (no lunch carve-out).
-- **Holidays:** **US federal holidays computed on the fly** (never stored, never expire) + a stored, editable list of **custom closures**. `is_holiday(d) = d ∈ custom_closures OR d ∈ us_federal_holidays(d.year)`. The lab adds non-federal closures (e.g. day-after-Thanksgiving) as custom rows. *(Refinement from the "seed editable rows" option: identical UX — federal holidays still appear in the pane — but derived instead of seeded, killing the yearly re-seed chore. Federal entries display read-only; see "Open for review".)*
+- **Holidays:** all closures are **stored, editable rows** in `lab_holidays` (`source` = `federal` | `custom`). Federal rows are **seeded** by computing them per year (helper below) for a rolling window (current year + next 2). The lab adds custom closures (e.g. day-after-Thanksgiving). `is_holiday(d) = d ∈ lab_holidays`. **Disabling a federal holiday the lab works (e.g. Juneteenth) = delete its row** — every row, federal or custom, is removable. A **"generate federal holidays for year N"** action seeds missing future years (idempotent; skips any date already present, so it won't resurrect a row you deleted in a year you've already generated). Seeding multiple years up front mitigates the coverage edge.
 - **D2 consumption:** **server-side batch endpoint** (`POST /sla/status`). Tier *resolution* stays client-side (data's already cached); only the business-minutes computation goes to the server, batched one call per page.
 
 ## Why server-side (and no TS mirror)
@@ -32,16 +32,19 @@ Business-minutes math needs the schedule + holiday set + DST-correct local-time 
 | `working_days` | JSON (list of Python weekday ints, Mon=0…Sun=6) | `[0,1,2,3,4]` |
 | `created_at`, `updated_at` | timestamps | |
 
-**`lab_holidays`** — **custom closures only** (federal are computed, not stored):
+**`lab_holidays`** — all closure dates (federal seeded + custom added), every row editable/removable:
 
 | Column | Type | Notes |
 |--------|------|-------|
 | `id` | int PK | |
 | `holiday_date` | DATE, **unique** | the closure date |
-| `name` | String(100) | e.g. "Day after Thanksgiving" |
+| `name` | String(100) | e.g. "Independence Day (observed)", "Day after Thanksgiving" |
+| `source` | String(10) | `federal` (seeded) \| `custom` (user-added). Display tag only — both are removable; deleting a `federal` row = the lab works that day. |
 | `created_at` | timestamp | |
 
-Migration in `database.py:_run_migrations` (idempotent, no Alembic): `CREATE TABLE IF NOT EXISTS` both; seed the single config row guarded by `WHERE NOT EXISTS (SELECT 1 FROM business_hours_config)`. No holiday seed (federal computed; custom starts empty). ORM models `BusinessHoursConfig`, `LabHoliday` in `models.py`.
+Migration in `database.py:_run_migrations` (idempotent, no Alembic): `CREATE TABLE IF NOT EXISTS` both; seed the single config row guarded by `WHERE NOT EXISTS (SELECT 1 FROM business_hours_config)`. **Seed federal holiday rows** for the rolling window (current year + next 2) using `us_federal_holidays(year)`; each insert guarded by `WHERE NOT EXISTS (SELECT 1 FROM lab_holidays WHERE holiday_date = :d)` so re-runs and user deletions are respected (a deleted date is not re-seeded on the next boot — the guard sees nothing to compare, so use a per-date `ON CONFLICT (holiday_date) DO NOTHING` insert instead, which is the idempotent-and-non-resurrecting form). Custom rows start empty. ORM models `BusinessHoursConfig`, `LabHoliday` in `models.py`.
+
+> Migration nuance to pin in the plan: first-boot seeds federal rows; on later boots `ON CONFLICT DO NOTHING` means deleted federal dates stay deleted (won't resurrect). New future years are added only via the explicit "generate federal holidays for year N" endpoint, not on every boot.
 
 ## Federal holiday helper
 
@@ -98,9 +101,10 @@ def sla_status_dict(target_minutes, elapsed_minutes):
 
 - `GET /business-hours-config` → the singleton config.
 - `PUT /business-hours-config` → update open/close/timezone/working_days. Validates: `timezone` is a real IANA zone (`ZoneInfo(tz)` must not raise → 422), `close_time > open_time` (422), `working_days` ⊆ 0..6.
-- `GET /lab-holidays?year=<int>` → `{ custom: [{id, holiday_date, name}], federal: [{holiday_date, name}] }` for that year (federal computed for display; custom from the table). Defaults `year` to current.
-- `POST /lab-holidays` → add a custom closure `{holiday_date, name}` (409 on duplicate date).
-- `DELETE /lab-holidays/{holiday_date}` → remove a custom closure (404 if absent).
+- `GET /lab-holidays?year=<int>` → all stored rows for that year `[{id, holiday_date, name, source}]` (federal + custom, ordered by date). Defaults `year` to current.
+- `POST /lab-holidays` → add a custom closure `{holiday_date, name}` (`source='custom'`; 409 on duplicate date).
+- `DELETE /lab-holidays/{holiday_date}` → remove any closure, federal or custom (404 if absent). Deleting a federal row = the lab works that day.
+- `POST /lab-holidays/generate-federal?year=<int>` → insert any missing federal rows for that year (`ON CONFLICT (holiday_date) DO NOTHING` — won't resurrect deleted dates); returns count added. Extends coverage beyond the seeded window.
 - `POST /sla/status` — the batch render endpoint:
 
 ```
@@ -113,14 +117,14 @@ Response: { "items": [ { "key": "<echoed>",
 - `key` is **opaque** and echoed back (client correlates by key, not array order — e.g. D2 sends the sample uid).
 - `status` is `null` iff `received_at` is null.
 - `now` = **server time**; the response is a **snapshot** (D2 refetches on load/poll — not live-ticking).
-- The handler loads the config + custom-holiday set **once** (not per item), builds an `is_holiday` closure (custom ∪ `us_federal_holidays(year)` memoized per year), then maps over items. O(items) with O(1) DB reads.
+- The handler loads the config + the full `lab_holidays` date set **once** (not per item) into a Python `set[date]`, builds `is_holiday = lambda d: d in that_set`, then maps over items. O(items) with O(1) DB reads.
 - Auth: `get_current_user`, read-only, no admin gate (render endpoint).
 
 ## UI — "Business Hours" Preferences pane
 
 New `'businessHours'` pane in `PreferencesDialog` (TanStack Query + a `@/services/business-hours.ts`, mirroring `services/sla.ts`). Two `SettingsSection`s:
 1. **Schedule** — open/close time inputs, working-day checkboxes (Mon–Sun), timezone (text/select). Admin-editable; non-admins read-only (same gate as the SLA pane).
-2. **Holidays** — for the selected year: **federal** holidays listed read-only (with a "U.S. federal" tag), and **custom** closures with add (date + name) / remove. A year selector to view other years' federal dates.
+2. **Holidays** — for the selected year, every closure row is listed (federal tagged "U.S. federal", custom tagged "Custom") **each with a remove button** — removing a federal row is how the lab opts out of a holiday it works. Add a custom closure (date + name). A year selector + a **"Generate federal holidays for {year}"** button (calls `generate-federal`) to extend coverage into a new year.
 
 All strings via `useTranslation` (`preferences.businessHours.*` keys in `locales/*.json`).
 
@@ -130,7 +134,7 @@ All strings via `useTranslation` (`preferences.businessHours.*` keys in `locales
 - A TS mirror of business-hours math — intentionally none.
 - Sub-day granularity beyond minutes; multiple schedules; per-service overrides.
 
-## Open for review
+## Resolved (review decisions)
 
-1. **Federal holidays are display-read-only** (computed). If the lab needs to *not observe* a specific federal holiday (e.g. works Juneteenth), that requires a small `disabled_federal_holidays` opt-out list — **deferred unless you need it now**. Flag if you do.
-2. **Holiday storage = custom-only + computed federal** (the refinement above) vs. the literal "seed all federal rows into an editable table" you picked. The computed approach is recommended (same UX, no expiry). Confirm or override.
+1. **Holiday storage = stored editable rows** for both federal (seeded) and custom — chosen over computed-on-the-fly. Federal seeding uses `us_federal_holidays(year)` for the rolling window; `ON CONFLICT DO NOTHING` keeps it idempotent and non-resurrecting.
+2. **Federal opt-out = delete the row.** The lab works some federal holidays; since every row (federal included) is removable, "disable Juneteenth" is just deleting that date's row. No separate opt-out mechanism needed.
