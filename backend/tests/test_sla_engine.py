@@ -1,78 +1,54 @@
-"""Unit tests for the SLA resolution engine (sub-project A).
+"""Unit tests for the SLA tier resolution engine (A, revised to tiers).
 
-Pure-function tests: ``resolve_sla_target()`` and ``compute_sla_status()`` take
-in-memory ``SlaTarget`` rows and primitives, so no DB session is needed. The
-same 4-level fallback runs server-side here and client-side in D2 (src/lib).
+Pure-function tests: resolve_sla_tier() takes the priority->tier map, the
+service's group tier, the priority, and the default tier — no DB. The same
+fixed-precedence chain runs server-side here and client-side in D2 (src/lib).
 """
 from datetime import datetime, timedelta
 
-from models import SlaTarget
-from sla_engine import compute_sla_status, resolve_sla_target
+from models import SlaTier
+from sla_engine import compute_sla_status, resolve_sla_tier
 
 
-def _target(*, service_id=None, priority=None, minutes=1440, is_default=False):
-    return SlaTarget(
-        analysis_service_id=service_id,
-        priority=priority,
-        target_minutes=minutes,
-        is_default=is_default,
-    )
+def _tier(target_minutes=1440, *, name="t", is_default=False):
+    return SlaTier(name=name, target_minutes=target_minutes, is_default=is_default)
 
 
-# A (NULL, NULL) catch-all — the seeded default that encodes the old 24h goal.
-DEFAULT = _target(minutes=1440, is_default=True)
+DEFAULT = _tier(1440, name="Standard", is_default=True)
+RUSH = _tier(240, name="Rush")
+GROUP = _tier(2880, name="Microbiology")
 
 
-# ── resolve_sla_target: the 4-level fallback chain ──
+# ── resolve_sla_tier: fixed precedence (priority override > group > default) ──
+
+def test_priority_override_wins_over_group():
+    pmap = {"expedited": RUSH}
+    assert resolve_sla_tier(pmap, GROUP, "expedited", DEFAULT) is RUSH
 
 
-def test_resolve_exact_service_and_priority():
-    exact = _target(service_id=7, priority="high", minutes=120)
-    targets = [DEFAULT, _target(service_id=7, minutes=480), exact]
-    assert resolve_sla_target(targets, 7, "high") is exact
+def test_unmapped_priority_falls_to_group_tier():
+    pmap = {"expedited": RUSH}  # 'normal' is not mapped
+    assert resolve_sla_tier(pmap, GROUP, "normal", DEFAULT) is GROUP
 
 
-def test_resolve_falls_back_to_service_any_priority():
-    svc_any = _target(service_id=7, minutes=480)  # (7, NULL)
-    targets = [DEFAULT, svc_any]
-    # no (7, 'high') row → use the service's any-priority row
-    assert resolve_sla_target(targets, 7, "high") is svc_any
+def test_no_group_tier_falls_to_default():
+    pmap = {"expedited": RUSH}
+    assert resolve_sla_tier(pmap, None, "normal", DEFAULT) is DEFAULT
 
 
-def test_resolve_falls_back_to_any_service_for_priority():
-    prio_any = _target(priority="expedited", minutes=60)  # (NULL, 'expedited')
-    targets = [DEFAULT, prio_any]
-    # no (7, *) row at all → use the priority's any-service row
-    assert resolve_sla_target(targets, 7, "expedited") is prio_any
+def test_none_priority_falls_to_group_then_default():
+    pmap = {"expedited": RUSH}
+    assert resolve_sla_tier(pmap, GROUP, None, DEFAULT) is GROUP
+    assert resolve_sla_tier(pmap, None, None, DEFAULT) is DEFAULT
 
 
-def test_resolve_falls_back_to_default():
-    targets = [DEFAULT, _target(service_id=99, priority="high")]
-    # nothing matches service 7 / 'normal' → the catch-all default
-    assert resolve_sla_target(targets, 7, "normal") is DEFAULT
+def test_empty_priority_map_uses_group_or_default():
+    assert resolve_sla_tier({}, GROUP, "expedited", DEFAULT) is GROUP
+    assert resolve_sla_tier({}, None, "expedited", DEFAULT) is DEFAULT
 
 
-def test_resolve_prefers_service_any_over_priority_any():
-    svc_any = _target(service_id=7, minutes=480)  # (7, NULL)
-    prio_any = _target(priority="high", minutes=60)  # (NULL, 'high')
-    targets = [DEFAULT, prio_any, svc_any]
-    # both could match (7,'high'); service-wildcard beats priority-wildcard
-    assert resolve_sla_target(targets, 7, "high") is svc_any
-
-
-def test_resolve_none_priority_degrades_to_service_any():
-    svc_any = _target(service_id=7, minutes=480)
-    exact = _target(service_id=7, priority="high", minutes=120)
-    targets = [DEFAULT, exact, svc_any]
-    # caller has no priority info → must NOT pick the 'high' row; (7, NULL) wins
-    assert resolve_sla_target(targets, 7, None) is svc_any
-
-
-def test_resolve_returns_none_when_no_default_and_no_match():
-    # Defensive: the seed guarantees a default in prod, but the engine must
-    # degrade to None rather than raise when nothing matches.
-    targets = [_target(service_id=99, priority="high")]
-    assert resolve_sla_target(targets, 7, "normal") is None
+def test_returns_none_when_no_default_and_nothing_matches():
+    assert resolve_sla_tier({}, None, "normal", None) is None
 
 
 # ── compute_sla_status: raw wall-clock elapsed (business hours = sub-project B) ──

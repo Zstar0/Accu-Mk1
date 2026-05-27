@@ -1,9 +1,9 @@
 """SLA resolution engine (sub-project A of the SLA / processing-time feature).
 
 Pure, DB-free logic so it can run identically in two places:
-  * server-side flows (jobs/notifications) load all rows from ``sla_targets``
-    and call :func:`resolve_sla_target`;
-  * the D2 SLA column caches ``list_sla_targets()`` and runs the same fallback
+  * server-side flows (jobs/notifications) resolve tiers and call
+    :func:`resolve_sla_tier`;
+  * the D2 SLA column caches tier data and runs the same fallback
     client-side in TypeScript (one cache, not O(N) backend round-trips).
 
 Keeping the logic free of any session/engine import is what makes the engine
@@ -12,7 +12,7 @@ trivially unit-testable and lets the same contract be mirrored in TS.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Iterable, Optional, TypeVar
+from typing import Optional, TypeVar
 
 # Valid priority tiers (mirror SamplePriority/WorksheetItem.priority). NULL/None
 # means "any priority". Callers normally pass a concrete priority, defaulting to
@@ -22,42 +22,38 @@ from typing import Iterable, Optional, TypeVar
 # The Pydantic Literal on the API edge enforces this for stored rows.
 PRIORITIES = ("normal", "high", "expedited")
 
-# Duck-typed: anything with .analysis_service_id / .priority / .is_default
-# attributes (a SlaTarget ORM row, or a plain object in tests).
+# Duck-typed: anything with .name / .target_minutes / .is_default
+# attributes (a SlaTier ORM row, or a plain object in tests).
 T = TypeVar("T")
 
 
-def resolve_sla_target(
-    targets: Iterable[T],
-    analysis_service_id: Optional[int],
+def resolve_sla_tier(
+    priority_map: dict,
+    group_tier: Optional[T],
     priority: Optional[str],
+    default_tier: Optional[T],
 ) -> Optional[T]:
-    """Resolve the effective SLA target for a (service, priority) pair.
+    """Resolve the effective SLA tier with fixed precedence.
 
-    Four-level fallback, most specific first:
-      1. exact ``(service, priority)``
-      2. ``(service, NULL)``  — the service's any-priority target
-      3. ``(NULL, priority)`` — the priority's any-service target
-      4. the ``is_default`` catch-all row
+    1. priority override — if ``priority`` has a row in ``priority_map`` -> that
+       tier (per the lab's decision, priority beats the group SLA);
+    2. else the service's ``group_tier`` (NULL = no tier on the group);
+    3. else ``default_tier`` (the is_default tier, the 24h fallback).
 
-    When ``priority`` is None (caller has no priority info), levels 1 and 3 can
-    only match rows whose own priority is also None, so resolution degrades
-    cleanly to the service's any-priority row, then the default. Returns None
-    only if nothing matches and there is no default (the seed guarantees one in
-    production; this keeps the engine from raising in tests/edge cases).
+    Sparsity contract: ``priority_map`` holds a row ONLY for priorities that
+    override. An unmapped priority — including ``normal`` and ``None`` —
+    ``.get()``s to None and falls through. Do not add a ``normal -> default``
+    entry; it's operationally identical to no row.
+
+    Returns None only if nothing matches and ``default_tier`` is None (the seed
+    guarantees a default in production; this keeps the engine from raising).
     """
-    rows = list(targets)
-    levels = (
-        lambda t: t.analysis_service_id == analysis_service_id and t.priority == priority,
-        lambda t: t.analysis_service_id == analysis_service_id and t.priority is None,
-        lambda t: t.analysis_service_id is None and t.priority == priority,
-        lambda t: bool(t.is_default),
-    )
-    for matches in levels:
-        for t in rows:
-            if matches(t):
-                return t
-    return None
+    prio_tier = priority_map.get(priority) if priority is not None else None
+    if prio_tier is not None:
+        return prio_tier
+    if group_tier is not None:
+        return group_tier
+    return default_tier
 
 
 def compute_sla_status(
