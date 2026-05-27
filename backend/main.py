@@ -11939,6 +11939,51 @@ async def delete_sla_tier(
     return {"message": f"SLA tier {tier_id} deleted"}
 
 
+@app.get("/sla-priority-tiers", response_model=list[SlaPriorityTierResponse])
+async def list_sla_priority_tiers(
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """The sparse priority -> tier override map (only overriding priorities)."""
+    return db.execute(select(SlaPriorityTier)).scalars().all()
+
+
+@app.put("/sla-priority-tiers/{priority}", response_model=SlaPriorityTierResponse)
+async def set_sla_priority_tier(
+    priority: SlaPriority,
+    data: SlaPriorityTierSet,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Upsert a priority -> tier override."""
+    if not db.get(SlaTier, data.sla_tier_id):
+        raise HTTPException(404, f"SLA tier {data.sla_tier_id} not found")
+    row = db.get(SlaPriorityTier, priority)
+    if row:
+        row.sla_tier_id = data.sla_tier_id
+    else:
+        row = SlaPriorityTier(priority=priority, sla_tier_id=data.sla_tier_id)
+        db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+@app.delete("/sla-priority-tiers/{priority}")
+async def delete_sla_priority_tier(
+    priority: SlaPriority,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Remove a priority override (that priority falls back to group/default)."""
+    row = db.get(SlaPriorityTier, priority)
+    if not row:
+        raise HTTPException(404, f"No override for priority '{priority}'")
+    db.delete(row)
+    db.commit()
+    return {"message": f"Priority override '{priority}' removed"}
+
+
 # ─── SENAITE Analyst Proxy ────────────────────────────────────────────────────
 
 @app.get("/senaite/analysts")
