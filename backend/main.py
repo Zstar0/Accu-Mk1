@@ -12062,6 +12062,77 @@ async def update_business_hours_config(
     return cfg
 
 
+# ── Lab holidays (sub-project B) ───────────────────────────────────────────
+
+@app.get("/lab-holidays", response_model=list[LabHolidayResponse])
+async def list_lab_holidays(
+    year: Optional[int] = None,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """All stored closures for `year` (defaults to current), federal + custom, ordered by date."""
+    y = year if year is not None else date.today().year
+    return db.execute(
+        select(LabHoliday)
+        .where(extract("year", LabHoliday.holiday_date) == y)
+        .order_by(LabHoliday.holiday_date)
+    ).scalars().all()
+
+
+@app.post("/lab-holidays", response_model=LabHolidayResponse, status_code=201)
+async def create_lab_holiday(
+    data: LabHolidayCreate,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Add a custom closure (source='custom'). 409 if a closure already exists on that date."""
+    existing = db.execute(
+        select(LabHoliday).where(LabHoliday.holiday_date == data.holiday_date)
+    ).scalar_one_or_none()
+    if existing:
+        raise HTTPException(409, f"A closure already exists on {data.holiday_date}")
+    row = LabHoliday(holiday_date=data.holiday_date, name=data.name, source="custom")
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+@app.delete("/lab-holidays/{holiday_date}")
+async def delete_lab_holiday(
+    holiday_date: date,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Remove any closure (federal or custom). Deleting a federal row = the lab works that day."""
+    row = db.execute(
+        select(LabHoliday).where(LabHoliday.holiday_date == holiday_date)
+    ).scalar_one_or_none()
+    if not row:
+        raise HTTPException(404, f"No closure on {holiday_date}")
+    db.delete(row)
+    db.commit()
+    return {"message": f"Closure on {holiday_date} removed"}
+
+
+@app.post("/lab-holidays/generate-federal")
+async def generate_federal_holidays_endpoint(
+    year: int,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Insert any missing federal closures for `year`. Primary use: extend
+    coverage into a new year. Caveat: this re-adds ANY missing federal date for
+    that year — including ones the lab previously deleted — because it's a
+    deliberate, user-triggered action. (Startup seeding does NOT do this; it is
+    first-boot-only, so deletions survive restarts.)"""
+    from database import seed_federal_holidays
+
+    added = seed_federal_holidays(db.connection(), year)
+    db.commit()
+    return {"year": year, "added": added}
+
+
 # ─── SENAITE Analyst Proxy ────────────────────────────────────────────────────
 
 @app.get("/senaite/analysts")

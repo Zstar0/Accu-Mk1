@@ -69,3 +69,70 @@ def test_put_rejects_out_of_range_working_days():
         "open_time": "09:00", "close_time": "17:00", "timezone": "America/Los_Angeles", "working_days": [0, 7],
     })
     assert resp.status_code == 422
+
+
+import datetime as _dt
+
+
+@pytest.fixture
+def cleanup_holidays():
+    created = []
+    yield created
+    if created:
+        with engine.begin() as c:
+            c.execute(text("DELETE FROM lab_holidays WHERE holiday_date::text = ANY(:ds)"), {"ds": created})
+
+
+def test_list_holidays_for_current_year_includes_federal():
+    y = _dt.date.today().year
+    resp = client.get(f"/lab-holidays?year={y}")
+    assert resp.status_code == 200, resp.text
+    rows = resp.json()
+    assert any(r["source"] == "federal" for r in rows)
+    # ordered by date
+    dates = [r["holiday_date"] for r in rows]
+    assert dates == sorted(dates)
+
+
+def test_create_custom_holiday(cleanup_holidays):
+    d = "2031-11-28"
+    cleanup_holidays.append(d)
+    resp = client.post("/lab-holidays", json={"holiday_date": d, "name": "Day after Thanksgiving"})
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["source"] == "custom"
+    assert resp.json()["name"] == "Day after Thanksgiving"
+
+
+def test_create_duplicate_returns_409(cleanup_holidays):
+    d = "2031-12-31"
+    cleanup_holidays.append(d)
+    assert client.post("/lab-holidays", json={"holiday_date": d, "name": "NYE"}).status_code == 201
+    assert client.post("/lab-holidays", json={"holiday_date": d, "name": "NYE again"}).status_code == 409
+
+
+def test_delete_holiday(cleanup_holidays):
+    d = "2031-07-05"
+    client.post("/lab-holidays", json={"holiday_date": d, "name": "Extra"})
+    resp = client.delete(f"/lab-holidays/{d}")
+    assert resp.status_code == 200, resp.text
+    # gone now
+    assert client.delete(f"/lab-holidays/{d}").status_code == 404
+
+
+def test_delete_missing_returns_404():
+    assert client.delete("/lab-holidays/2031-01-15").status_code == 404
+
+
+def test_generate_federal_for_year():
+    year = 2098
+    with engine.begin() as c:
+        c.execute(text("DELETE FROM lab_holidays WHERE EXTRACT(year FROM holiday_date)=:y"), {"y": year})
+    try:
+        resp = client.post(f"/lab-holidays/generate-federal?year={year}")
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["added"] == 11
+        # second call adds nothing (idempotent)
+        assert client.post(f"/lab-holidays/generate-federal?year={year}").json()["added"] == 0
+    finally:
+        with engine.begin() as c:
+            c.execute(text("DELETE FROM lab_holidays WHERE EXTRACT(year FROM holiday_date)=:y"), {"y": year})
