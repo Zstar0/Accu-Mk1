@@ -3,7 +3,7 @@
 - **Date:** 2026-05-27
 - **Branch:** `feat/order-status-processing-time`
 - **Depends on:** A (tier model — `2026-05-27-sla-tiers-model-and-settings-design.md`), B (business-hours engine — `2026-05-27-sla-business-hours-design.md`). D2 consumes `POST /sla/status` (B) and reads/extends `sla_tiers` (A).
-- **Scope:** D2 = (1) a new **SLA column** on every `OrderRow` (table view), (2) replacing the **hardcoded 24/48h goalNote** in `OrderStatusPage`'s card view with the same real-tier SLA logic, (3) a new **per-tier `amber_threshold_percent`** stored on `sla_tiers` and edited in `SlaPane`, (4) one minimal new backend endpoint — `GET /sample-priorities?sample_uids=…` — to bulk-read per-sample priorities (locked for performance; see *Performance & caching*). **Out of scope:** live ticking timers, sortable/filterable SLA column, server-side SLA history, persistent (cross-session) client caches. The rest is existing-endpoint consumption (`POST /sla/status` from B; `/sla-tiers` CRUD from A picks up the new column via schemas).
+- **Scope:** D2 = (1) a new **SLA column** on every `OrderRow` (table view), (2) replacing the **hardcoded 24/48h goalNote** in `OrderStatusPage`'s card view with the same real-tier SLA logic, (3) a new **per-tier `amber_threshold_percent`** stored on `sla_tiers` and edited in `SlaPane`, (4) one minimal new backend endpoint — `POST /sample-priorities/lookup` with body `{sample_uids: [...]}` — to bulk-read per-sample priorities (POST instead of GET to avoid URL-length limits at 500 UIDs × 32 chars ≈ 17 KB; consistent with B's `POST /sla/status` batch-read pattern). **Out of scope:** live ticking timers, sortable/filterable SLA column, server-side SLA history, persistent (cross-session) client caches. The rest is existing-endpoint consumption (`POST /sla/status` from B; `/sla-tiers` CRUD from A picks up the new column via schemas).
 
 ## Goal
 
@@ -29,7 +29,7 @@ Per page render of the order list:
    - `getSlaPriorityTiers()` (A) — sparse priority overrides.
    - `getServiceGroups()` (A) — each carries `sla_tier_id` and `member_ids: number[]`.
    - `getExplorerAnalysisServices()` (existing) — `id`, `keyword`. (Used to map SENAITE analysis keywords → AccuMark `analysis_services.id`.)
-   - **Bulk per-sample priorities** via new `GET /sample-priorities?sample_uids=a,b,c` — one batched call per visible page. TanStack Query keyed by the **sorted, deduplicated UID set** with `staleTime: 5 * 60_000` (priorities change infrequently relative to a render); refetch fires only when the UID set materially changes. See *Performance & caching* for the scaling-out path if a page ever exceeds a few hundred samples.
+   - **Bulk per-sample priorities** via new `POST /sample-priorities/lookup` (body `{sample_uids: [...]}`) — one batched call per visible page. TanStack Query keyed by the **sorted, deduplicated UID hash** with `staleTime: 5 * 60_000` (priorities change infrequently relative to a render); refetch fires only when the UID set materially changes. See *Performance & caching* for the scaling-out path if a page ever exceeds a few hundred samples.
 
 2. **Resolve per sample** (received-but-unpublished only):
    - `priority`: `sampleLookupMap.get(senaiteId).data.sample_uid → SamplePriority.priority` (sparse; absent → `'normal'`).
@@ -82,15 +82,15 @@ amber_threshold_percent: Mapped[int] = mapped_column(
 No tier-endpoint changes — the existing tier CRUD picks up the field via the schemas.
 
 ### Bulk priorities endpoint (the one new endpoint D2 ships)
-`GET /sample-priorities?sample_uids=a,b,c` — sparse bulk read of the existing `sample_priorities` table.
+`POST /sample-priorities/lookup` — sparse bulk read of the existing `sample_priorities` table. POST (not GET) so a 500-UID body fits without URL-length concerns and matches B's `POST /sla/status` batch-read pattern.
 
-- Query: `sample_uids` is a comma-separated list of UID strings. Empty list → `422`.
+- Request body: `{sample_uids: [str, ...]}`. Empty list → `422`.
 - Hard cap **500 UIDs per request** (sanity bound; > 500 → `422 "too many sample_uids; max 500"`). At ~tens-to-low-hundreds per page this is plenty of headroom.
-- Response: `[{sample_uid: str, priority: 'normal'|'high'|'expedited'}]` — only entries that have a `SamplePriority` row. Unmatched UIDs are **omitted** (sparse semantics — the client treats absence as default `'normal'`, consistent with the existing tier-resolution model).
+- Response: `{items: [{sample_uid: str, priority: 'normal'|'high'|'expedited'}]}` — only entries that have a `SamplePriority` row. Unmatched UIDs are **omitted** (sparse semantics — the client treats absence as default `'normal'`, consistent with the existing tier-resolution model).
 - Auth: `get_current_user`; no admin gate (read endpoint).
 - Implementation: a single `select(SamplePriority).where(SamplePriority.sample_uid.in_(uids))` — O(1) DB read regardless of UID count.
-- Pydantic: `SamplePriorityResponse { sample_uid: str, priority: Literal['normal','high','expedited'] }`; the endpoint returns `list[SamplePriorityResponse]`.
-- Tests (`backend/tests/test_api_sample_priorities.py`): empty list → 422; > 500 → 422; mixed present/absent UIDs return only present rows; auth required; ordering not guaranteed (assert as a set).
+- Pydantic: `SamplePriorityLookupRequest { sample_uids: list[str] }`, `SamplePriorityResponse { sample_uid: str, priority: Literal['normal','high','expedited'] }`, `SamplePriorityLookupResponse { items: list[SamplePriorityResponse] }`.
+- Tests (`backend/tests/test_api_sample_priorities.py`): empty body → 422; > 500 → 422; mixed present/absent UIDs return only present rows in `items`; auth required; ordering not guaranteed (assert as a set).
 
 ## Frontend changes
 
