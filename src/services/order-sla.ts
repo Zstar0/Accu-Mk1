@@ -14,9 +14,10 @@ import {
   buildKeywordToServiceIdMap,
   buildServiceToGroupTierMap,
   classifySampleColor,
-  resolveSampleTier,
+  resolveSampleTierWithReason,
   type OrderSlaVerdict,
   type SampleSlaCellState,
+  type SampleSlaReason,
   type SlaColor,
 } from '@/lib/sla-resolution'
 import { useAnalysisServices } from '@/services/analysis-services'
@@ -28,6 +29,12 @@ export interface SampleSlaSnapshot {
   status: SlaStatus
   color: SlaColor
   tier: SlaTier
+  /** Diagnostic — explains which precedence rule (priority/group/default) won
+   *  and is consumed by the breakdown tooltip. */
+  reason: SampleSlaReason
+  /** Resolved priority that fed the tier resolution. Useful for the
+   *  "Priority: normal/expedited" line in the breakdown tooltip. */
+  priority: InboxPriority
 }
 
 export interface OrderSlaResult {
@@ -110,14 +117,14 @@ export function useOrderSlaStatuses(
     return liveLookups.map(({ senaiteId, lookup }) => {
       const priority: InboxPriority =
         (lookup.sample_uid && prioByUid.get(lookup.sample_uid)) || 'normal'
-      const tier = resolveSampleTier(
+      const { tier, reason } = resolveSampleTierWithReason(
         { analyses: lookup.analyses, priority },
         keywordToServiceId,
         serviceToGroupTier,
         priorityToTier,
         defaultTier
       )
-      return { senaiteId, lookup, tier, priority }
+      return { senaiteId, lookup, tier, priority, reason }
     })
   }, [
     liveLookups,
@@ -176,14 +183,22 @@ export function useOrderSlaStatuses(
     const sampleStatusBySampleId = new Map<string, SampleSlaSnapshot>()
     const cellByOrderId = new Map<string | number, SampleSlaCellState[]>()
     const sampleTierById = new Map<string, SlaTier | null>()
+    const sampleReasonById = new Map<string, SampleSlaReason>()
     for (const s of perSample) {
       sampleTierById.set(s.senaiteId, s.tier)
+      sampleReasonById.set(s.senaiteId, s.reason)
       const uid = s.lookup.sample_uid
       const status = uid ? (statusByKey.get(uid) ?? null) : null
       const color =
         status && s.tier ? classifySampleColor(status, s.tier) : null
       if (uid && status && s.tier && color) {
-        sampleStatusBySampleId.set(s.senaiteId, { status, color, tier: s.tier })
+        sampleStatusBySampleId.set(s.senaiteId, {
+          status,
+          color,
+          tier: s.tier,
+          reason: s.reason,
+          priority: s.priority,
+        })
       }
     }
     for (const order of orders) {
@@ -200,6 +215,7 @@ export function useOrderSlaStatuses(
             lookup: lq.data,
             status: snap?.status ?? null,
             color: snap?.color ?? null,
+            reason: sampleReasonById.get(entry.senaite_id) ?? null,
           })
         }
       }

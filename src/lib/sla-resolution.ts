@@ -22,6 +22,11 @@ export interface SampleSlaCellState {
   lookup: SenaiteLookupResult
   status: SlaStatus | null
   color: SlaColor | null
+  // Optional — populated when the caller resolved the tier via
+  // `resolveSampleTierWithReason`. Threading the reason through aggregation
+  // lets OrderSlaCell render a breakdown tooltip for the driving sample
+  // without re-running the resolver.
+  reason?: SampleSlaReason | null
 }
 
 export interface OrderSlaVerdict {
@@ -29,6 +34,9 @@ export interface OrderSlaVerdict {
   drivingSampleId?: string
   drivingTier?: SlaTier
   drivingStatus?: SlaStatus
+  /** Reason snapshot for the driving sample — present only when the
+   *  upstream cell state was populated with a reason. */
+  drivingReason?: SampleSlaReason
 }
 
 /**
@@ -275,5 +283,6 @@ export function aggregateOrderSlaVerdict(
     drivingSampleId: driver.senaiteId,
     drivingTier: driver.tier,
     drivingStatus: driver.status,
+    drivingReason: driver.reason ?? undefined,
   }
 }

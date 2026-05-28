@@ -24,6 +24,8 @@ describe('SampleSlaIndicator', () => {
             created_at: '2026-01-01T00:00:00',
             updated_at: '2026-01-01T00:00:00',
           },
+          reason: { tierSource: 'default', unmappedKeywords: [] },
+          priority: 'normal',
         }}
       />
     )
@@ -47,6 +49,8 @@ describe('SampleSlaIndicator', () => {
             created_at: '2026-01-01T00:00:00',
             updated_at: '2026-01-01T00:00:00',
           },
+          reason: { tierSource: 'default', unmappedKeywords: [] },
+          priority: 'normal',
         }}
       />
     )

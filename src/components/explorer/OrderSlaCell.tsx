@@ -2,6 +2,12 @@ import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
 import { formatMinutes, formatTarget } from '@/lib/sla-format'
 import type { OrderSlaColor, OrderSlaVerdict } from '@/lib/sla-resolution'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
+import { SlaBreakdownTooltip } from './SlaBreakdownTooltip'
 
 const COLOR_CLASS: Record<OrderSlaColor, string> = {
   red: 'text-red-500',
@@ -74,16 +80,44 @@ export function OrderSlaCell({
     })
   }
 
-  return (
+  // Active states (red/amber/green) with a driving sample get the rich shadcn
+  // breakdown tooltip. Inactive states (met/awaiting/loading/error) keep the
+  // simple `title=` — there's no meaningful breakdown to render for them.
+  const hasBreakdown =
+    !isLoading &&
+    !isError &&
+    Boolean(verdict.drivingTier) &&
+    Boolean(verdict.drivingStatus) &&
+    Boolean(verdict.drivingSampleId)
+
+  const cell = (
     <span
       data-testid="order-sla-cell"
       data-sla-color={color}
       className={cn('inline-flex items-center gap-1 text-xs font-mono tabular-nums', className)}
-      title={tooltip || undefined}
+      title={hasBreakdown ? undefined : tooltip || undefined}
     >
       <span aria-hidden="true">{dot}</span>
       {text && <span>{text}</span>}
       {!text && tooltip && <span className="sr-only">{tooltip}</span>}
     </span>
   )
+
+  if (hasBreakdown && verdict.drivingTier && verdict.drivingStatus) {
+    return (
+      <Tooltip>
+        <TooltipTrigger asChild>{cell}</TooltipTrigger>
+        <TooltipContent className="p-0 max-w-md">
+          <SlaBreakdownTooltip
+            tier={verdict.drivingTier}
+            status={verdict.drivingStatus}
+            reason={verdict.drivingReason ?? null}
+            drivingSampleId={verdict.drivingSampleId}
+          />
+        </TooltipContent>
+      </Tooltip>
+    )
+  }
+
+  return cell
 }
