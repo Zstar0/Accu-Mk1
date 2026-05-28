@@ -1837,6 +1837,7 @@ class SlaTierCreate(BaseModel):
     target_minutes: int
     business_hours_only: bool = False
     is_default: bool = False
+    amber_threshold_percent: int = 20
 
 
 class SlaTierUpdate(BaseModel):
@@ -1844,6 +1845,7 @@ class SlaTierUpdate(BaseModel):
     target_minutes: Optional[int] = None
     business_hours_only: Optional[bool] = None
     is_default: Optional[bool] = None
+    amber_threshold_percent: Optional[int] = None
 
 
 class SlaTierResponse(BaseModel):
@@ -1852,6 +1854,7 @@ class SlaTierResponse(BaseModel):
     target_minutes: int
     business_hours_only: bool
     is_default: bool
+    amber_threshold_percent: int
     created_at: datetime
     updated_at: datetime
 
@@ -11942,6 +11945,8 @@ async def create_sla_tier(
     _current_user=Depends(get_current_user),
 ):
     """Create a tier. Setting is_default demotes any existing default."""
+    if not (1 <= data.amber_threshold_percent <= 100):
+        raise HTTPException(422, "amber_threshold_percent must be between 1 and 100")
     tier = SlaTier(**data.model_dump())
     if tier.is_default:
         _demote_other_default_tiers(db)
@@ -11960,6 +11965,8 @@ async def update_sla_tier(
 ):
     """Update a tier. Promoting demotes the rest; demoting the only default is
     rejected (it's the 24h backstop for unmatched samples)."""
+    if data.amber_threshold_percent is not None and not (1 <= data.amber_threshold_percent <= 100):
+        raise HTTPException(422, "amber_threshold_percent must be between 1 and 100")
     tier = db.get(SlaTier, tier_id)
     if not tier:
         raise HTTPException(404, f"SLA tier {tier_id} not found")

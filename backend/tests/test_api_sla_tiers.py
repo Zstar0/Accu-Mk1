@@ -90,3 +90,82 @@ def test_cannot_unset_only_default():
 def test_delete_non_default_tier():
     created = client.post("/sla-tiers", json={"name": "Temp", "target_minutes": 30}).json()
     assert client.delete(f"/sla-tiers/{created['id']}").status_code == 200
+
+
+# ── amber_threshold_percent (sub-project D2) ──────────────────────────────
+
+
+def test_get_includes_amber_threshold_percent_with_default_20():
+    rows = client.get("/sla-tiers").json()
+    assert rows, "expected at least the seeded default tier"
+    for r in rows:
+        assert "amber_threshold_percent" in r
+        assert 1 <= r["amber_threshold_percent"] <= 100
+
+
+def test_create_accepts_custom_amber_threshold():
+    resp = client.post(
+        "/sla-tiers",
+        json={"name": "Custom amber", "target_minutes": 480, "amber_threshold_percent": 33},
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["amber_threshold_percent"] == 33
+
+
+def test_create_default_omits_amber_falls_back_to_20():
+    resp = client.post("/sla-tiers", json={"name": "Default amber", "target_minutes": 240})
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["amber_threshold_percent"] == 20
+
+
+def test_put_can_update_amber_threshold_without_touching_other_fields():
+    new_id = client.post(
+        "/sla-tiers", json={"name": "PUT amber", "target_minutes": 720}
+    ).json()["id"]
+    resp = client.put(f"/sla-tiers/{new_id}", json={"amber_threshold_percent": 50})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["amber_threshold_percent"] == 50
+    assert body["name"] == "PUT amber"
+    assert body["target_minutes"] == 720
+
+
+def test_create_rejects_amber_threshold_below_1():
+    resp = client.post(
+        "/sla-tiers",
+        json={"name": "Bad amber low", "target_minutes": 240, "amber_threshold_percent": 0},
+    )
+    assert resp.status_code == 422
+
+
+def test_create_rejects_amber_threshold_above_100():
+    resp = client.post(
+        "/sla-tiers",
+        json={"name": "Bad amber high", "target_minutes": 240, "amber_threshold_percent": 101},
+    )
+    assert resp.status_code == 422
+
+
+def test_put_rejects_amber_threshold_out_of_range():
+    new_id = client.post(
+        "/sla-tiers", json={"name": "Range PUT", "target_minutes": 240}
+    ).json()["id"]
+    assert client.put(f"/sla-tiers/{new_id}", json={"amber_threshold_percent": 0}).status_code == 422
+    assert client.put(f"/sla-tiers/{new_id}", json={"amber_threshold_percent": 101}).status_code == 422
+
+
+def test_amber_threshold_boundaries_1_and_100_accepted():
+    # 1 (lower bound)
+    r1 = client.post(
+        "/sla-tiers",
+        json={"name": "Min amber", "target_minutes": 60, "amber_threshold_percent": 1},
+    )
+    assert r1.status_code == 201, r1.text
+    assert r1.json()["amber_threshold_percent"] == 1
+    # 100 (upper bound)
+    r100 = client.post(
+        "/sla-tiers",
+        json={"name": "Max amber", "target_minutes": 60, "amber_threshold_percent": 100},
+    )
+    assert r100.status_code == 201, r100.text
+    assert r100.json()["amber_threshold_percent"] == 100

@@ -718,6 +718,10 @@ class SlaTier(Base):
         Boolean, nullable=False, default=False
     )
     is_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # D2: per-tier amber threshold. Sample is amber when remaining/target * 100 < this.
+    amber_threshold_percent: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=20
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow

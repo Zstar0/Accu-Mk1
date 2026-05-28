@@ -315,6 +315,8 @@ def _run_migrations():
         SELECT 'Standard', 1440, FALSE, TRUE, NOW(), NOW()
         WHERE NOT EXISTS (SELECT 1 FROM sla_tiers WHERE is_default)
         """,
+        # D2: per-tier amber threshold (idempotent ALTER, existing rows get 20).
+        "ALTER TABLE sla_tiers ADD COLUMN IF NOT EXISTS amber_threshold_percent INTEGER NOT NULL DEFAULT 20",
         # ── Business-hours SLA calendar (sub-project B) ──
         """
         CREATE TABLE IF NOT EXISTS business_hours_config (
