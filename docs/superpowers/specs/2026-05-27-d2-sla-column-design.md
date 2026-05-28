@@ -3,7 +3,7 @@
 - **Date:** 2026-05-27
 - **Branch:** `feat/order-status-processing-time`
 - **Depends on:** A (tier model — `2026-05-27-sla-tiers-model-and-settings-design.md`), B (business-hours engine — `2026-05-27-sla-business-hours-design.md`). D2 consumes `POST /sla/status` (B) and reads/extends `sla_tiers` (A).
-- **Scope:** D2 = (1) a new **SLA column** on every `OrderRow` (table view), (2) replacing the **hardcoded 24/48h goalNote** in `OrderStatusPage`'s card view with the same real-tier SLA logic, (3) a new **per-tier `amber_threshold_percent`** stored on `sla_tiers` and edited in `SlaPane`. **Out of scope:** live ticking timers, sortable/filterable SLA column, server-side SLA history. **Backend endpoints:** D2 primarily consumes existing endpoints (`POST /sla/status` from B; `/sla-tiers` CRUD from A picks up the new column via schemas). The **one possible new endpoint** is a minimal `GET /sample-priorities?sample_uids=…` bulk-read — only if an existing bulk surface isn't already serving that need (resolved during planning; see *Open implementation question*).
+- **Scope:** D2 = (1) a new **SLA column** on every `OrderRow` (table view), (2) replacing the **hardcoded 24/48h goalNote** in `OrderStatusPage`'s card view with the same real-tier SLA logic, (3) a new **per-tier `amber_threshold_percent`** stored on `sla_tiers` and edited in `SlaPane`, (4) one minimal new backend endpoint — `GET /sample-priorities?sample_uids=…` — to bulk-read per-sample priorities (locked for performance; see *Performance & caching*). **Out of scope:** live ticking timers, sortable/filterable SLA column, server-side SLA history, persistent (cross-session) client caches. The rest is existing-endpoint consumption (`POST /sla/status` from B; `/sla-tiers` CRUD from A picks up the new column via schemas).
 
 ## Goal
 
@@ -18,7 +18,7 @@ The Order Status page (and the customer-detail order list) should show, per orde
 5. **Color thresholds:** `elapsed > target` → **red**; else if `(remaining/target)*100 < tier.amber_threshold_percent` → **amber**; else → **green**. Palette mirrors the existing processing-time field (`text-green-600`, `text-amber-500`, `text-red-500`, `text-muted-foreground`).
 6. **Amber threshold is per-tier**, stored as `sla_tiers.amber_threshold_percent INTEGER NOT NULL DEFAULT 20` (range 1–100). Edited inline on each `SlaPane` tier card.
 7. **Refetch:** snapshot-on-load. D2 re-runs when the orders query refetches and on the existing "Refresh all data" button. **No live ticking.**
-8. **No new backend endpoints.** D2 consumes `POST /sla/status` (B) and the existing tier/service-group/analysis-service/priority endpoints. The amber threshold round-trips through the existing `/sla-tiers` CRUD (already schema-driven).
+8. **Backend surface:** D2 consumes `POST /sla/status` (B) + existing tier/service-group/analysis-service endpoints. Adds **one** new endpoint — `GET /sample-priorities?sample_uids=…` (bulk read; locked for performance). The amber threshold round-trips through the existing `/sla-tiers` CRUD (already schema-driven).
 
 ## Architecture / data flow
 
@@ -29,7 +29,7 @@ Per page render of the order list:
    - `getSlaPriorityTiers()` (A) — sparse priority overrides.
    - `getServiceGroups()` (A) — each carries `sla_tier_id` and `member_ids: number[]`.
    - `getExplorerAnalysisServices()` (existing) — `id`, `keyword`. (Used to map SENAITE analysis keywords → AccuMark `analysis_services.id`.)
-   - **Bulk per-sample priorities** keyed by `sample_uid` — *uses the existing endpoint surface*; one batched call covering all currently-visible orders' sample UIDs. (If a bulk endpoint doesn't yet exist client-side, a thin wrapper around the existing `SamplePriority` lookups counts as "existing surface" — no new server endpoint required. Implementer confirms during planning; if a true bulk fetch endpoint isn't there, this MAY become the only new backend addition. Flag as the one open implementation question.)
+   - **Bulk per-sample priorities** via new `GET /sample-priorities?sample_uids=a,b,c` — one batched call per visible page. TanStack Query keyed by the **sorted, deduplicated UID set** with `staleTime: 5 * 60_000` (priorities change infrequently relative to a render); refetch fires only when the UID set materially changes. See *Performance & caching* for the scaling-out path if a page ever exceeds a few hundred samples.
 
 2. **Resolve per sample** (received-but-unpublished only):
    - `priority`: `sampleLookupMap.get(senaiteId).data.sample_uid → SamplePriority.priority` (sparse; absent → `'normal'`).
@@ -79,7 +79,18 @@ amber_threshold_percent: Mapped[int] = mapped_column(
 - `SlaTierUpdate` — add `amber_threshold_percent: Optional[int] = None`.
 - Validation (on create + update): `1 <= amber_threshold_percent <= 100` → `422` otherwise.
 
-No endpoint changes — the existing tier CRUD picks up the field via the schemas.
+No tier-endpoint changes — the existing tier CRUD picks up the field via the schemas.
+
+### Bulk priorities endpoint (the one new endpoint D2 ships)
+`GET /sample-priorities?sample_uids=a,b,c` — sparse bulk read of the existing `sample_priorities` table.
+
+- Query: `sample_uids` is a comma-separated list of UID strings. Empty list → `422`.
+- Hard cap **500 UIDs per request** (sanity bound; > 500 → `422 "too many sample_uids; max 500"`). At ~tens-to-low-hundreds per page this is plenty of headroom.
+- Response: `[{sample_uid: str, priority: 'normal'|'high'|'expedited'}]` — only entries that have a `SamplePriority` row. Unmatched UIDs are **omitted** (sparse semantics — the client treats absence as default `'normal'`, consistent with the existing tier-resolution model).
+- Auth: `get_current_user`; no admin gate (read endpoint).
+- Implementation: a single `select(SamplePriority).where(SamplePriority.sample_uid.in_(uids))` — O(1) DB read regardless of UID count.
+- Pydantic: `SamplePriorityResponse { sample_uid: str, priority: Literal['normal','high','expedited'] }`; the endpoint returns `list[SamplePriorityResponse]`.
+- Tests (`backend/tests/test_api_sample_priorities.py`): empty list → 422; > 500 → 422; mixed present/absent UIDs return only present rows; auth required; ordering not guaranteed (assert as a set).
 
 ## Frontend changes
 
@@ -175,13 +186,21 @@ Times are formatted via `formatTimeSince`-style hours/days (e.g. `3h`, `2d 4h`).
 ### Live smoke
 - After implementation, in `:3101` (browser-authed): the `/explorer` Order Status page shows the new SLA column; each row's color is consistent with its samples' `date_received` + resolved tier; toggling a tier's amber threshold from the SLA pane refreshes the displayed amber/green boundary on the next refetch.
 
-## Open implementation question to resolve during planning
+## Performance & caching
 
-**Per-sample priority bulk fetch.** D2 needs all visible orders' samples' priorities in one call. The existing surface includes per-sample priority access (e.g. `PUT /worksheets/inbox/{sample_uid}/priority`), but a *bulk read* may not yet exist client-side. The planner should:
-1. Grep for an existing bulk read (e.g. `getSamplePriorities`, an inbox list that returns priorities, a worksheet endpoint that returns priorities per sample) and use it if present.
-2. If absent, decide: (a) issue parallel singletons (acceptable for ~tens of samples per page); (b) add one minimal `GET /sample-priorities?sample_uids=a,b,c` endpoint — the **only** backend addition D2 would make. Recommendation: (b) if the per-page sample count regularly exceeds ~20.
+The page must stay fluid as the visible-order count grows. The design's three performance-critical paths and how D2 keeps each cheap:
 
-This is the single point of design flexibility; everything else is locked.
+1. **Bulk priority read.** One `GET /sample-priorities?sample_uids=…` per page (not N), capped at 500 UIDs. Server-side it's a single `WHERE sample_uid IN (…)` — O(1) DB reads regardless of UID count.
+2. **Cached client lookups.** All five inputs (tiers, priority overrides, service groups, analysis-services, bulk priorities) live in TanStack Query with `staleTime: 5 * 60_000`. The priority-bulk query key is `['sample-priorities', sortedUidsHash]`; navigation between pages with overlapping samples won't refetch within the stale window.
+3. **One batched `/sla/status` per render.** B's `loaded-once` guarantee (`test_loaded_once_query_count_is_constant_regardless_of_batch_size`) keeps that endpoint O(items), O(1) DB reads.
+
+**Scaling-out path (deferred — only if a future page genuinely exceeds a few hundred samples or feels slow in practice):**
+
+- **Per-UID TanStack cache via `useQueries`.** Switch the bulk fetch to one cached query per `sample_uid` (key `['sample-priority', uid]`, longer `staleTime`, e.g. 30 min). Cross-page navigation hits cache on a per-sample basis instead of refetching the whole set when one UID changes. The bulk endpoint stays for cold-start population; the cache splits responsibility for warm reads.
+- **Persistent cache (localStorage / IndexedDB).** TanStack Query has a persist plugin; priorities are small + change infrequently and survive sessions well. Adds boot-time hydration.
+- **Backend response-cache header.** `Cache-Control: max-age=60, private` on the bulk endpoint (a server-side hint; the client already does the right thing).
+
+None of the scaling-out items are in the D2 plan — they're documented here so the next session can reach for them without re-deriving the design when/if the page complains.
 
 ## Out of scope (defer to later sub-projects)
 
