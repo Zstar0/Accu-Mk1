@@ -27,8 +27,15 @@ interface SampleHeaderSlaProps {
  */
 function SampleHeaderSlaImpl({ lookup }: SampleHeaderSlaProps) {
   const { t } = useTranslation()
-  const { snapshot, reason, priority, isPublished, isLoading, isError } =
+  const { snapshots, priority, isPublished, isLoading, isError } =
     useSampleSla(lookup)
+  // Multi-tier follow-on: useSampleSla now returns an array of per-group
+  // snapshots. The sample-details header currently renders only the first
+  // (preserves the single-inline "(took 13h)" layout); multi-row sample
+  // header rendering is a follow-on. Tooltip pulls reason from the same
+  // snapshot so the breakdown stays accurate to the displayed tier.
+  const snapshot = snapshots[0]
+  const reason = snapshot?.reason ?? null
 
   // Gating mirrors useSampleSla.applicable so we don't render an empty span
   // for unreceived samples. Published samples flow through — their snapshot is

@@ -95,7 +95,7 @@ describe('SampleHeaderSla', () => {
   it('renders "took Xh" + met color for published sample within SLA', async () => {
     fetchSlaStatusesMock.mockResolvedValue([
       {
-        key: 'uid-PB-001',
+        key: 'uid-PB-001|no-group',
         status: {
           target_minutes: 1440,
           elapsed_minutes: 1200,
@@ -126,7 +126,7 @@ describe('SampleHeaderSla', () => {
   it('renders "took Xh" + missed color for published sample over SLA', async () => {
     fetchSlaStatusesMock.mockResolvedValue([
       {
-        key: 'uid-PB-001',
+        key: 'uid-PB-001|no-group',
         status: {
           target_minutes: 1440,
           elapsed_minutes: 1920,
@@ -167,7 +167,7 @@ describe('SampleHeaderSla', () => {
   it('renders green-ish indicator with breakdown tooltip trigger when status resolves', async () => {
     fetchSlaStatusesMock.mockResolvedValue([
       {
-        key: 'uid-PB-001',
+        key: 'uid-PB-001|no-group',
         status: {
           target_minutes: 1440,
           elapsed_minutes: 120,
@@ -193,7 +193,7 @@ describe('SampleHeaderSla', () => {
   it('renders red color and "over" text when sample is breached', async () => {
     fetchSlaStatusesMock.mockResolvedValue([
       {
-        key: 'uid-PB-001',
+        key: 'uid-PB-001|no-group',
         status: {
           target_minutes: 1440,
           elapsed_minutes: 1700,

@@ -4,15 +4,20 @@ import {
   fetchSlaStatuses,
   type InboxPriority,
   type SenaiteLookupResult,
+  type SlaStatus,
   type SlaStatusRequestItem,
   type SlaTier,
 } from '@/lib/api'
 import {
   buildKeywordToServiceIdMap,
-  buildServiceToGroupTierMap,
+  buildServiceIdToGroupIdMap,
+  buildGroupIdToTierMap,
+  buildGlobalPriorityToTierMap,
+  buildPerGroupPriorityToTierMap,
   classifySampleColor,
-  resolveSampleTierWithReason,
+  resolveSampleTiersByGroup,
   NO_GROUP_KEY,
+  type GroupKey,
   type SampleSlaReason,
 } from '@/lib/sla-resolution'
 import { useAnalysisServices } from '@/services/analysis-services'
@@ -22,21 +27,21 @@ import { useSlaTiers, useSlaPriorityTiers } from '@/services/sla'
 import type { SampleSlaSnapshot } from '@/services/order-sla'
 
 export interface SampleSlaResult {
-  /** Resolved snapshot. `null` if the sample is unsuitable for SLA (no
+  /** Multi-tier follow-on: one snapshot per service-group bucket the sample's
+   *  analyses touch. Empty array when the sample is unsuitable for SLA (no
    *  lookup, no received date), tier resolution failed, or the `/sla/status`
-   *  round-trip hasn't returned yet. Published samples DO produce a snapshot —
-   *  a historical one with elapsed = (published_date - received_at). */
-  snapshot: SampleSlaSnapshot | null
-  /** Reason snapshot — populated even when `snapshot` is null IF tier
-   *  resolution actually ran (lookup present + received). Lets diagnostic
-   *  surfaces explain "no tier configured" cases. */
-  reason: SampleSlaReason | null
-  /** Resolved priority that fed the tier resolution. Useful for the
-   *  breakdown tooltip's "Priority: normal/expedited" line. */
+   *  round-trip hasn't returned yet. Published samples DO produce snapshots —
+   *  historical ones with elapsed = (published_date - received_at) per group.
+   *  Single-group samples have an array of length 1; consumers that still
+   *  render a single row can index [0]. */
+  snapshots: SampleSlaSnapshot[]
+  /** Resolved priority that fed the per-group tier resolution. Useful for the
+   *  breakdown tooltip's "Priority: normal/expedited" line. Priority is
+   *  per-sample (not per-group) so it stays at the top level. */
   priority: InboxPriority | null
-  /** True when this snapshot represents a published sample — the renderer
-   *  switches from countdown text ("Xh left") to historical text ("took Xh /
-   *  Met / Missed by Yh"). Driven by lookup.review_state === 'published'. */
+  /** True when this sample is published — the renderer switches from
+   *  countdown text ("Xh left") to historical text ("took Xh / Met / Missed
+   *  by Yh"). Driven by lookup.review_state === 'published'. */
   isPublished: boolean
   isLoading: boolean
   isError: boolean
@@ -46,11 +51,21 @@ export interface SampleSlaResult {
  * Per-sample SLA hook for the Sample Details header and any other surface
  * that needs SLA for a single sample.
  *
+ * Multi-tier model (mirrors useOrderSlaStatuses): the sample's analyses are
+ * bucketed by their resolved service group via `resolveSampleTiersByGroup`;
+ * each bucket gets its own (tier, status, color) and shows up as a separate
+ * snapshot in the returned array. Each `/sla/status` batch item is keyed
+ * `${sample_uid}|${groupKey}` so the response is unambiguous when the same
+ * sample has multiple groups with different `target_minutes` /
+ * `business_hours_only`.
+ *
  * Shares the same primitives as `useOrderSlaStatuses` (tiers, priority
  * overrides, service groups, analysis services, sample priorities) so the
  * underlying 5 cached queries are hit at most once per page load. Skips the
- * `/sla/status` round-trip entirely if the sample isn't received yet or is
- * already published.
+ * `/sla/status` round-trip entirely if the sample isn't received yet.
+ * Published samples flow through — each batch item gets a `now_override` so
+ * the server returns a frozen-in-time elapsed = (published_date - received_at)
+ * per group.
  */
 export function useSampleSla(
   lookup: SenaiteLookupResult | null | undefined
@@ -62,8 +77,8 @@ export function useSampleSla(
 
   // Gate everything downstream on whether SLA is even applicable for this
   // sample. Drives query enablement so we don't hammer `/sla/status` for
-  // unreceived samples. Published samples DO flow through — they get a
-  // historical snapshot driven by published_date (see batchItems below).
+  // unreceived samples. Published samples DO flow through — they get
+  // historical snapshots driven by published_date (see batchItems below).
   const applicable = Boolean(
     lookup && lookup.date_received && lookup.sample_uid
   )
@@ -77,9 +92,17 @@ export function useSampleSla(
   // useSamplePriorities skips empty arrays internally (enabled: false).
   const prioritiesQuery = useSamplePriorities(sampleUid ? [sampleUid] : [])
 
-  const resolved = useMemo(() => {
+  /** Per-group resolution for THIS one sample. Flattened to an array of
+   *  {groupKey, groupName, tier, reason} entries so batchItems and
+   *  snapshots both consume the same iteration. */
+  const perGroup = useMemo(() => {
     if (!applicable || !lookup) {
-      return { tier: null as SlaTier | null, reason: null as SampleSlaReason | null, priority: null as InboxPriority | null }
+      return [] as {
+        groupKey: GroupKey
+        groupName?: string
+        tier: SlaTier | null
+        reason: SampleSlaReason
+      }[]
     }
     const tiers = tiersQuery.data ?? []
     const groups = groupsQuery.data ?? []
@@ -87,27 +110,49 @@ export function useSampleSla(
     const tiersById = new Map(tiers.map(t => [t.id, t]))
     const defaultTier = tiers.find(t => t.is_default) ?? null
     const keywordToServiceId = buildKeywordToServiceIdMap(services)
-    const serviceToGroupTier = buildServiceToGroupTierMap(groups, tiersById)
+    const serviceIdToGroupId = buildServiceIdToGroupIdMap(groups, tiersById)
+    const groupIdToTier = buildGroupIdToTierMap(groups, tiersById)
     const priorityRows = prioOverridesQuery.data ?? []
-    const priorityToTier = new Map<InboxPriority, SlaTier>()
-    for (const row of priorityRows) {
-      const t = tiersById.get(row.sla_tier_id)
-      if (t) priorityToTier.set(row.priority, t)
-    }
+    const globalPriorityToTier = buildGlobalPriorityToTierMap(priorityRows, tiersById)
+    const perGroupPriorityToTier = buildPerGroupPriorityToTierMap(priorityRows, tiersById)
+    const groupNameById = new Map(groups.map(g => [g.id, g.name]))
     const prioByUid = new Map<string, InboxPriority>()
     for (const row of prioritiesQuery.data ?? []) {
       prioByUid.set(row.sample_uid, row.priority)
     }
     const priority: InboxPriority =
       (lookup.sample_uid && prioByUid.get(lookup.sample_uid)) || 'normal'
-    const { tier, reason } = resolveSampleTierWithReason(
+
+    const byGroup = resolveSampleTiersByGroup(
       { analyses: lookup.analyses, priority },
       keywordToServiceId,
-      serviceToGroupTier,
-      priorityToTier,
+      serviceIdToGroupId,
+      groupIdToTier,
+      globalPriorityToTier,
+      perGroupPriorityToTier,
       defaultTier
     )
-    return { tier, reason, priority }
+    // Empty resolver output (no analyses) → surface a single no-group entry
+    // so a sample with zero analyses still shows a default-tier snapshot
+    // (matches the pre-multi-tier behavior of useSampleSla).
+    if (byGroup.size === 0) {
+      const reason: SampleSlaReason = defaultTier
+        ? { tierSource: 'default', unmappedKeywords: [] }
+        : { tierSource: 'none', unmappedKeywords: [] }
+      return [{
+        groupKey: NO_GROUP_KEY as GroupKey,
+        groupName: undefined,
+        tier: defaultTier,
+        reason,
+      }]
+    }
+    return Array.from(byGroup, ([groupKey, { tier, reason }]) => ({
+      groupKey,
+      groupName:
+        groupKey !== NO_GROUP_KEY ? groupNameById.get(groupKey) : undefined,
+      tier,
+      reason,
+    }))
   }, [
     applicable,
     lookup,
@@ -118,27 +163,49 @@ export function useSampleSla(
     prioritiesQuery.data,
   ])
 
-  // Single batch item — same payload shape as the order-list hook, just a
-  // 1-element array. Hash by uid+target+business+received+override for cache
-  // reuse. Published samples include now_override so the server returns a
-  // frozen-in-time elapsed = (published_date - received_at).
+  const resolvedPriority = useMemo<InboxPriority | null>(() => {
+    if (!applicable || !lookup) return null
+    const prioByUid = new Map<string, InboxPriority>()
+    for (const row of prioritiesQuery.data ?? []) {
+      prioByUid.set(row.sample_uid, row.priority)
+    }
+    return (lookup.sample_uid && prioByUid.get(lookup.sample_uid)) || 'normal'
+  }, [applicable, lookup, prioritiesQuery.data])
+
+  /** Composite key `${sample_uid}|${groupKey}` — same scheme as
+   *  useOrderSlaStatuses so the backend `/sla/status` response is unambiguous
+   *  across groups for the same sample. */
+  function batchKey(uid: string, groupKey: GroupKey): string {
+    return `${uid}|${groupKey}`
+  }
+
+  // One batch item per resolved (sample_uid, groupKey) bucket with a non-null
+  // tier. Hash by composite key + target + business + received + override for
+  // cache reuse. Published samples include now_override per item so the
+  // server returns a frozen-in-time elapsed = (published_date - received_at).
   const batchItems: SlaStatusRequestItem[] = useMemo(() => {
-    if (!applicable || !lookup || !resolved.tier || !lookup.sample_uid) return []
-    const item: SlaStatusRequestItem = {
-      key: lookup.sample_uid,
-      received_at: lookup.date_received,
-      target_minutes: resolved.tier.target_minutes,
-      business_hours_only: resolved.tier.business_hours_only,
+    if (!applicable || !lookup || !lookup.sample_uid) return []
+    const out: SlaStatusRequestItem[] = []
+    for (const g of perGroup) {
+      if (!g.tier) continue
+      const item: SlaStatusRequestItem = {
+        key: batchKey(lookup.sample_uid, g.groupKey),
+        received_at: lookup.date_received,
+        target_minutes: g.tier.target_minutes,
+        business_hours_only: g.tier.business_hours_only,
+      }
+      if (isPublished && publishedDate) {
+        item.now_override = publishedDate
+      }
+      out.push(item)
     }
-    if (isPublished && publishedDate) {
-      item.now_override = publishedDate
-    }
-    return [item]
-  }, [applicable, lookup, resolved.tier, isPublished, publishedDate])
+    return out
+  }, [applicable, lookup, perGroup, isPublished, publishedDate])
 
   const batchItemsHash = useMemo(
     () =>
-      batchItems
+      [...batchItems]
+        .sort((a, b) => a.key.localeCompare(b.key))
         .map(b => `${b.key}:${b.target_minutes}:${b.business_hours_only ? 1 : 0}:${b.received_at ?? '-'}:${b.now_override ?? '-'}`)
         .join('|'),
     [batchItems]
@@ -156,8 +223,7 @@ export function useSampleSla(
   return useMemo<SampleSlaResult>(() => {
     if (!applicable) {
       return {
-        snapshot: null,
-        reason: null,
+        snapshots: [],
         priority: null,
         isPublished: false,
         isLoading: false,
@@ -178,31 +244,33 @@ export function useSampleSla(
       prioOverridesQuery.isError ||
       prioritiesQuery.isError ||
       statusQuery.isError
-    const { tier, reason, priority } = resolved
-    // No tier resolved → no snapshot, but still surface the reason so callers
-    // can show "no tier configured" diagnostics in the tooltip.
-    if (!tier) {
-      return { snapshot: null, reason, priority, isPublished, isLoading, isError }
+
+    const statusByKey = new Map<string, SlaStatus>()
+    for (const item of statusQuery.data ?? []) {
+      if (item.status) statusByKey.set(item.key, item.status)
     }
-    const statusItem = (statusQuery.data ?? []).find(i => i.key === lookup?.sample_uid)
-    const status = statusItem?.status ?? null
-    if (!status) {
-      return { snapshot: null, reason, priority, isPublished, isLoading, isError }
+    const snapshots: SampleSlaSnapshot[] = []
+    if (lookup?.sample_uid) {
+      for (const g of perGroup) {
+        if (!g.tier) continue
+        const status = statusByKey.get(batchKey(lookup.sample_uid, g.groupKey))
+        if (!status) continue
+        const color = classifySampleColor(status, g.tier)
+        if (!color) continue
+        snapshots.push({
+          groupKey: g.groupKey,
+          groupName: g.groupName,
+          status,
+          color,
+          tier: g.tier,
+          reason: g.reason,
+          priority: resolvedPriority ?? 'normal',
+        })
+      }
     }
-    const color = classifySampleColor(status, tier)
     return {
-      snapshot: {
-        // useSampleSla still uses the legacy single-tier resolver, so the
-        // snapshot conceptually covers the WHOLE sample (not one specific
-        // group). NO_GROUP_KEY is the honest representation until this hook
-        // migrates to resolveSampleTiersByGroup in a follow-on commit.
-        groupKey: NO_GROUP_KEY,
-        status, color, tier,
-        reason: reason ?? { tierSource: 'none', unmappedKeywords: [] },
-        priority: priority ?? 'normal',
-      },
-      reason,
-      priority,
+      snapshots,
+      priority: resolvedPriority,
       isPublished,
       isLoading,
       isError,
@@ -211,7 +279,8 @@ export function useSampleSla(
     applicable,
     isPublished,
     lookup,
-    resolved,
+    perGroup,
+    resolvedPriority,
     statusQuery.data,
     statusQuery.isLoading,
     statusQuery.isError,
