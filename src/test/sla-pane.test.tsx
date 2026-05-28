@@ -70,4 +70,45 @@ describe('SlaPane — amber threshold input', () => {
     // No mutation expected — value unchanged
     expect(updateSlaTierMock).not.toHaveBeenCalled()
   })
+
+  it('rejects invalid input "abc" and snaps the input back to the persisted value', async () => {
+    render(<SlaPane />, { wrapper })
+    const input = await screen.findByTestId('sla-amber-input-1') as HTMLInputElement
+    fireEvent.change(input, { target: { value: 'abc' } })
+    fireEvent.blur(input)
+    // No mutate; input snapped back to '25' (the persisted value)
+    expect(updateSlaTierMock).not.toHaveBeenCalled()
+    expect(input.value).toBe('25')
+  })
+
+  it('rejects out-of-range "0" and "101" and snaps back', async () => {
+    render(<SlaPane />, { wrapper })
+    const input = await screen.findByTestId('sla-amber-input-1') as HTMLInputElement
+    fireEvent.change(input, { target: { value: '0' } })
+    fireEvent.blur(input)
+    expect(updateSlaTierMock).not.toHaveBeenCalled()
+    expect(input.value).toBe('25')
+    fireEvent.change(input, { target: { value: '101' } })
+    fireEvent.blur(input)
+    expect(updateSlaTierMock).not.toHaveBeenCalled()
+    expect(input.value).toBe('25')
+  })
+
+  it('accepts boundary "1" and "100"', async () => {
+    render(<SlaPane />, { wrapper })
+    const input = await screen.findByTestId('sla-amber-input-1') as HTMLInputElement
+    fireEvent.change(input, { target: { value: '1' } })
+    fireEvent.blur(input)
+    await waitFor(() => expect(updateSlaTierMock).toHaveBeenCalled())
+    const firstCall = updateSlaTierMock.mock.calls[0]
+    expect(firstCall).toBeDefined()
+    expect(firstCall?.[1]).toMatchObject({ amber_threshold_percent: 1 })
+    updateSlaTierMock.mockClear()
+    fireEvent.change(input, { target: { value: '100' } })
+    fireEvent.blur(input)
+    await waitFor(() => expect(updateSlaTierMock).toHaveBeenCalled())
+    const secondCall = updateSlaTierMock.mock.calls[0]
+    expect(secondCall).toBeDefined()
+    expect(secondCall?.[1]).toMatchObject({ amber_threshold_percent: 100 })
+  })
 })

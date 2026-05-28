@@ -106,6 +106,13 @@ export function SlaPane() {
   )
 }
 
+/** Parse and clamp amber threshold to [1, 100]. Falls back to the current tier
+ *  value on invalid/out-of-range input — keeps invariants tight. */
+function clampAmber(raw: string, fallback: number): number {
+  const parsed = parseInt(raw, 10)
+  return Number.isFinite(parsed) && parsed >= 1 && parsed <= 100 ? parsed : fallback
+}
+
 function TierCard({
   tier, readOnly, onSave, onDelete,
 }: {
@@ -127,29 +134,35 @@ function TierCard({
   const [bh, setBh] = useState(tier.business_hours_only)
   const [amber, setAmber] = useState(String(tier.amber_threshold_percent))
 
+  const buildPayload = (overrides?: Partial<{
+    name: string
+    target_minutes: number
+    business_hours_only: boolean
+    amber_threshold_percent: number
+  }>) => ({
+    name: name.trim() || tier.name,
+    target_minutes: (parseInt(hours, 10) || 0) * 60 + (parseInt(minutes, 10) || 0),
+    business_hours_only: bh,
+    amber_threshold_percent: clampAmber(amber, tier.amber_threshold_percent),
+    ...overrides,
+  })
+
   const commit = () => {
     if (readOnly) return
-    const total = (parseInt(hours, 10) || 0) * 60 + (parseInt(minutes, 10) || 0)
-    const nextName = name.trim() || tier.name
-    const amberParsed = parseInt(amber, 10)
-    const nextAmber =
-      Number.isFinite(amberParsed) && amberParsed >= 1 && amberParsed <= 100
-        ? amberParsed
-        : tier.amber_threshold_percent
+    const next = buildPayload()
+    // Snap input back to the persisted (clamped) value so it doesn't display garbage.
+    if (next.amber_threshold_percent !== parseInt(amber, 10)) {
+      setAmber(String(next.amber_threshold_percent))
+    }
     if (
-      nextName === tier.name &&
-      total === tier.target_minutes &&
-      bh === tier.business_hours_only &&
-      nextAmber === tier.amber_threshold_percent
+      next.name === tier.name &&
+      next.target_minutes === tier.target_minutes &&
+      next.business_hours_only === tier.business_hours_only &&
+      next.amber_threshold_percent === tier.amber_threshold_percent
     ) {
       return // nothing changed
     }
-    onSave({
-      name: nextName,
-      target_minutes: total,
-      business_hours_only: bh,
-      amber_threshold_percent: nextAmber,
-    })
+    onSave(next)
   }
 
   return (
@@ -184,15 +197,7 @@ function TierCard({
           onCheckedChange={(v: boolean) => {
             setBh(v)
             if (!readOnly) {
-              onSave({
-                name: name.trim() || tier.name,
-                target_minutes: (parseInt(hours, 10) || 0) * 60 + (parseInt(minutes, 10) || 0),
-                business_hours_only: v,
-                amber_threshold_percent: Math.min(
-                  100,
-                  Math.max(1, parseInt(amber, 10) || tier.amber_threshold_percent)
-                ),
-              })
+              onSave(buildPayload({ business_hours_only: v }))
             }
           }}
         />
