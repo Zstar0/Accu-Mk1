@@ -167,6 +167,45 @@ describe('OrderRow', () => {
     )
     expect(screen.getByText('No samples')).toBeInTheDocument()
   })
+
+  it('renders_sla_cell_with_provided_verdict_color', () => {
+    const order = makeOrder({ order_id: '88001' })
+    renderRow(
+      <OrderRow
+        order={order}
+        wordpressHost="https://wp.example.test"
+        sampleLookupMap={
+          new Map<
+            string,
+            { data?: SenaiteLookupResult; isLoading: boolean; isError: boolean }
+          >()
+        }
+        activeAnalysisStates={[]}
+        slaVerdict={{ color: 'green' }}
+      />
+    )
+    const cell = screen.getByTestId('order-sla-cell')
+    expect(cell.getAttribute('data-sla-color')).toBe('green')
+  })
+
+  it('renders_sla_cell_loading_when_verdict_absent', () => {
+    const order = makeOrder({ order_id: '88002' })
+    renderRow(
+      <OrderRow
+        order={order}
+        wordpressHost="https://wp.example.test"
+        sampleLookupMap={
+          new Map<
+            string,
+            { data?: SenaiteLookupResult; isLoading: boolean; isError: boolean }
+          >()
+        }
+        activeAnalysisStates={[]}
+      />
+    )
+    const cell = screen.getByTestId('order-sla-cell')
+    expect(cell.getAttribute('data-sla-color')).toBe('loading')
+  })
 })
 
 // Phase 30 — search-result rendering props on OrderRow.

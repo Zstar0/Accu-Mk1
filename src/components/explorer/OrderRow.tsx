@@ -3,7 +3,9 @@ import { ChevronDown, ChevronRight, ExternalLink } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
 import type { ExplorerOrder, SenaiteLookupResult } from '@/lib/api'
+import type { OrderSlaVerdict } from '@/lib/sla-resolution'
 import { OrderFinancePanel } from './OrderFinancePanel'
+import { OrderSlaCell } from './OrderSlaCell'
 import { SampleCard } from './SampleCard'
 import {
   COL_COUNT_LABEL,
@@ -28,6 +30,7 @@ export function OrderRow({
   defaultExpanded,
   highlightSampleId,
   showFinance,
+  slaVerdict,
 }: {
   order: ExplorerOrder
   wordpressHost: string
@@ -58,6 +61,9 @@ export function OrderRow({
   // cell that toggles a live WooCommerce finance disclosure row beneath this one.
   // Off by default so the shared /explorer OrderStatusPage view is unchanged.
   showFinance?: boolean
+  // D2: order-aggregated SLA verdict. Undefined means "loading" (the cell renders
+  // a muted loading dot). The parent passes verdicts from useOrderSlaStatuses.
+  slaVerdict?: OrderSlaVerdict
 }) {
   const [financeExpanded, setFinanceExpanded] = useState(false)
   const wpUrl = `${wordpressHost}/wp-admin/post.php?post=${order.order_id}&action=edit`
@@ -249,6 +255,9 @@ export function OrderRow({
           </span>
         </div>
       </td>
+      <td className="py-3 px-3 whitespace-nowrap align-top">
+        <OrderSlaCell verdict={slaVerdict ?? { color: 'awaiting' }} isLoading={!slaVerdict} />
+      </td>
       <td className="py-3 px-3">
         {visibleSampleEntries.length === 0 ? (
           <span className="text-muted-foreground text-xs">
@@ -303,7 +312,7 @@ export function OrderRow({
     </tr>
     {showFinance && financeExpanded && (
       <tr data-testid="order-finance-row" className="bg-muted/20">
-        <td colSpan={6} className="p-0">
+        <td colSpan={7} className="p-0">
           <OrderFinancePanel
             orderId={order.order_id}
             enabled={financeExpanded}
