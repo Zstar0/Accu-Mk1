@@ -190,6 +190,82 @@ describe('useOrderSlaStatuses', () => {
     expect(result.current.verdictByOrderId.get('OFAILED')?.color).toBe('awaiting')
   })
 
+  it('omits orders from verdictByOrderId while any sample lookup is still loading (cold-load flicker fix)', async () => {
+    fetchSlaStatusesMock.mockResolvedValue([])
+    const orders = [
+      makeOrder({
+        order_id: 'O1',
+        sample_results: { '1': { senaite_id: 'PB-001', status: 'ok' } } as never,
+      }),
+    ]
+    // Lookup map entry is in flight: isLoading=true, data=undefined.
+    const loadingMap = new Map<
+      string,
+      { data?: SenaiteLookupResult; isLoading: boolean; isError: boolean }
+    >([
+      ['PB-001', { data: undefined, isLoading: true, isError: false }],
+    ])
+    const { result } = renderHook(
+      () => useOrderSlaStatuses(orders, loadingMap),
+      { wrapper }
+    )
+    // With the fix, the order is absent from verdictByOrderId during load so
+    // OrderSlaCell shows "…" instead of flashing "—Awaiting sample".
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false)
+    })
+    expect(result.current.verdictByOrderId.has('O1')).toBe(false)
+  })
+
+  it('transitions from omitted (loading) to a real verdict once the sample lookup resolves', async () => {
+    fetchSlaStatusesMock.mockResolvedValue([
+      {
+        key: 'PB-002-uid',
+        status: { target_minutes: 1440, elapsed_minutes: 100, remaining_minutes: 1340, breached: false },
+      },
+    ])
+    const orders = [
+      makeOrder({
+        order_id: 'O2',
+        sample_results: { '1': { senaite_id: 'PB-002', status: 'ok' } } as never,
+      }),
+    ]
+    const loadingMap = new Map<
+      string,
+      { data?: SenaiteLookupResult; isLoading: boolean; isError: boolean }
+    >([
+      ['PB-002', { data: undefined, isLoading: true, isError: false }],
+    ])
+    const resolvedMap = new Map<
+      string,
+      { data?: SenaiteLookupResult; isLoading: boolean; isError: boolean }
+    >([
+      ['PB-002', {
+        data: makeLookup('PB-002-uid', '2026-01-01T09:00:00', 'sample_received'),
+        isLoading: false,
+        isError: false,
+      }],
+    ])
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const wrap = ({ children }: { children: React.ReactNode }) => (
+      <QueryClientProvider client={qc}>{children}</QueryClientProvider>
+    )
+    const { result, rerender } = renderHook(
+      ({ map }: { map: typeof loadingMap }) => useOrderSlaStatuses(orders, map),
+      { wrapper: wrap, initialProps: { map: loadingMap } }
+    )
+    // First render: loading → no verdict
+    await waitFor(() => expect(result.current.isLoading).toBe(false))
+    expect(result.current.verdictByOrderId.has('O2')).toBe(false)
+    // Sample resolves
+    rerender({ map: resolvedMap })
+    await waitFor(() =>
+      expect(result.current.verdictByOrderId.get('O2')?.color).not.toBe(
+        'awaiting'
+      )
+    )
+  })
+
   it('keeps previous verdicts during refetch when sampleUids set grows (no flicker)', async () => {
     fetchSlaStatusesMock.mockResolvedValue([
       { key: 'uid-A', status: { target_minutes: 1440, elapsed_minutes: 60, remaining_minutes: 1380, breached: false } },

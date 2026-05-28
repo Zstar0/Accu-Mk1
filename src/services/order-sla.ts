@@ -203,10 +203,21 @@ export function useOrderSlaStatuses(
     }
     for (const order of orders) {
       const cells: SampleSlaCellState[] = []
+      // D2 follow-on (cold-load flicker fix): when ANY non-failed sample lookup
+      // for this order is still in-flight, omit the order from verdictByOrderId
+      // so OrderSlaCell keeps rendering the loading dot. Otherwise the verdict
+      // briefly resolves to "awaiting" (empty cells[] → aggregator default) and
+      // then flips to the real color a beat later when the lookup lands —
+      // exactly the cold-load flash the user reported in the table view.
+      let anyLookupPending = false
       if (order.sample_results) {
         for (const entry of Object.values(order.sample_results)) {
           if (!entry.senaite_id || entry.status === 'failed') continue
           const lq = sampleLookupMap.get(entry.senaite_id)
+          if (lq?.isLoading) {
+            anyLookupPending = true
+            continue
+          }
           if (!lq?.data) continue
           const snap = sampleStatusBySampleId.get(entry.senaite_id)
           cells.push({
@@ -219,6 +230,7 @@ export function useOrderSlaStatuses(
           })
         }
       }
+      if (anyLookupPending) continue
       // Orders with null sample_results (failed-integration / pre-pipeline) fall
       // through with an empty cells[] → aggregator returns { color: 'awaiting' }
       // instead of being absent from verdictByOrderId (which would render as
