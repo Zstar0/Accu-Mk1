@@ -8,6 +8,7 @@ function tier(target_minutes: number, partial: Partial<SlaTier> = {}): SlaTier {
   return {
     id: 0, name: 't', target_minutes,
     business_hours_only: false, is_default: false,
+    amber_threshold_percent: 75,
     created_at: '', updated_at: '', ...partial,
   }
 }

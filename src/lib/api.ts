@@ -3904,6 +3904,7 @@ export interface SlaTier {
   target_minutes: number
   business_hours_only: boolean
   is_default: boolean
+  amber_threshold_percent: number
   created_at: string
   updated_at: string
 }
@@ -3913,6 +3914,7 @@ export interface SlaTierCreate {
   target_minutes: number
   business_hours_only?: boolean
   is_default?: boolean
+  amber_threshold_percent?: number
 }
 
 export interface SlaTierUpdate {
@@ -3920,6 +3922,7 @@ export interface SlaTierUpdate {
   target_minutes?: number
   business_hours_only?: boolean
   is_default?: boolean
+  amber_threshold_percent?: number
 }
 
 export interface SlaPriorityTier {
@@ -4081,6 +4084,44 @@ export async function fetchSlaStatuses(items: SlaStatusRequestItem[]): Promise<S
   if (!response.ok) throw new Error(`Failed to fetch SLA statuses: ${response.status}`)
   const data = await response.json()
   return data.items
+}
+
+// ─── D2: bulk per-sample priority lookup ─────────────────────────────────────
+
+export interface SamplePriorityLookupResponseItem {
+  sample_uid: string
+  priority: InboxPriority
+}
+
+export async function samplePrioritiesLookup(
+  sampleUids: string[]
+): Promise<SamplePriorityLookupResponseItem[]> {
+  if (sampleUids.length === 0) return []
+  const response = await fetch(`${API_BASE_URL()}/sample-priorities/lookup`, {
+    method: 'POST',
+    headers: getBearerHeaders('application/json'),
+    body: JSON.stringify({ sample_uids: sampleUids }),
+  })
+  if (!response.ok) {
+    throw new Error(`Failed to lookup sample priorities: ${response.status}`)
+  }
+  const data = await response.json()
+  return data.items
+}
+
+// ─── D2: local /analysis-services fetch (id + keyword for keyword→id mapping) ─
+
+export async function getAnalysisServicesLocal(): Promise<AnalysisServiceRecord[]> {
+  // The local /analysis-services endpoint (NOT /explorer/analysis-services, which
+  // proxies to the Integration Service and is the wrong source for the
+  // keyword → analysis_services.id mapping the order-SLA cell needs).
+  const response = await fetch(`${API_BASE_URL()}/analysis-services`, {
+    headers: getBearerHeaders(),
+  })
+  if (!response.ok) {
+    throw new Error(`Failed to load analysis services: ${response.status}`)
+  }
+  return response.json()
 }
 
 export async function getSenaiteAnalysts(): Promise<SenaiteAnalyst[]> {
