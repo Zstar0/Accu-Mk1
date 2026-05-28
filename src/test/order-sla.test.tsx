@@ -126,7 +126,7 @@ describe('useOrderSlaStatuses', () => {
     expect(item?.received_at).toBe('2026-01-01T09:00:00')
   })
 
-  it('queryKey is stable across reorderings of the same UID set', async () => {
+  it('queryKey is stable across reorderings of the same UID set (hits cache)', async () => {
     fetchSlaStatusesMock.mockResolvedValue([])
     const lookupA = makeLookup('uid-A', '2026-01-01T09:00:00', 'sample_received')
     const lookupB = makeLookup('uid-B', '2026-01-01T10:00:00', 'sample_received')
@@ -140,17 +140,20 @@ describe('useOrderSlaStatuses', () => {
     const orders2 = [
       makeOrder({ order_id: 'O1', sample_results: { '1': { senaite_id: 'SB', status: 'ok' }, '2': { senaite_id: 'SA', status: 'ok' } } as never }),
     ]
-    const r1 = renderHook(() => useOrderSlaStatuses(orders1, lookupMap), { wrapper })
+    // Single QueryClient so the cache is shared across rerenders.
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const wrap = ({ children }: { children: React.ReactNode }) => (
+      <QueryClientProvider client={qc}>{children}</QueryClientProvider>
+    )
+    const { rerender } = renderHook(
+      ({ orders }: { orders: ExplorerOrder[] }) => useOrderSlaStatuses(orders, lookupMap),
+      { wrapper: wrap, initialProps: { orders: orders1 } }
+    )
     await waitFor(() => expect(fetchSlaStatusesMock).toHaveBeenCalledTimes(1))
-    r1.unmount()
-    const r2 = renderHook(() => useOrderSlaStatuses(orders2, lookupMap), { wrapper })
-    await waitFor(() => expect(fetchSlaStatusesMock).toHaveBeenCalledTimes(2))
-    r2.unmount()
-    const call0Items = fetchSlaStatusesMock.mock.calls[0]?.[0] ?? []
-    const call1Items = fetchSlaStatusesMock.mock.calls[1]?.[0] ?? []
-    const keys1 = new Set(call0Items.map(i => i.key))
-    const keys2 = new Set(call1Items.map(i => i.key))
-    expect(keys1).toEqual(keys2)
+    rerender({ orders: orders2 })
+    // Give React Query a beat to fire any refetch — there should be none.
+    await new Promise(r => setTimeout(r, 50))
+    expect(fetchSlaStatusesMock).toHaveBeenCalledTimes(1)
   })
 
   it('isError surfaces when /sla/status fails', async () => {

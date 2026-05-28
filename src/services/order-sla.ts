@@ -20,7 +20,7 @@ import {
   type SlaColor,
 } from '@/lib/sla-resolution'
 import { useAnalysisServices } from '@/services/analysis-services'
-import { useSamplePriorities, sortedUidsHash } from '@/services/sample-priorities'
+import { useSamplePriorities } from '@/services/sample-priorities'
 import { useServiceGroups } from '@/services/service-groups'
 import { useSlaTiers, useSlaPriorityTiers } from '@/services/sla'
 
@@ -37,30 +37,26 @@ export interface OrderSlaResult {
   isError: boolean
 }
 
-function makeTierConfigHash(
-  tiers: SlaTier[],
-  priorityRows: { priority: string; sla_tier_id: number }[]
-): string {
-  const tierPart = [...tiers]
-    .sort((a, b) => a.id - b.id)
-    .map(t => `${t.id}:${t.target_minutes}:${t.amber_threshold_percent}:${t.is_default ? 1 : 0}:${t.business_hours_only ? 1 : 0}`)
-    .join(',')
-  const prioPart = [...priorityRows]
-    .sort((a, b) => a.priority.localeCompare(b.priority))
-    .map(p => `${p.priority}:${p.sla_tier_id}`)
-    .join(',')
-  return `tiers=${tierPart}|prio=${prioPart}`
-}
-
-function makeReceivedAtHash(
-  receivedByUid: Map<string, string | null>
-): string {
-  return [...receivedByUid.entries()]
-    .sort((a, b) => a[0].localeCompare(b[0]))
-    .map(([uid, ts]) => `${uid}:${ts ?? '-'}`)
-    .join('|')
-}
-
+/**
+ * Composite hook: per-order SLA verdict + per-sample snapshot for the explorer.
+ *
+ * Wraps 5 cached queries (tiers, priority overrides, service groups, analysis
+ * services, sample priorities) and runs ONE batched `/sla/status` POST keyed
+ * by a stable hash of the resolved batch items (so re-renders with logically
+ * identical inputs hit cache). Aggregation is `useMemo`, NOT another `useQuery`
+ * (advisor sharpening #4).
+ *
+ * @param orders — pages's order list (consumed verbatim for sample_results iteration)
+ * @param sampleLookupMap — Map<senaiteId, lookupResult> from the page's senaite
+ *   lookup hook. Indirection note: map keys are senaite_ids, but `/sla/status`
+ *   batch is keyed by `sample_uid` (we read sample_uid OFF each lookup result).
+ * @returns
+ *   `verdictByOrderId` — Map<order.order_id, OrderSlaVerdict> for OrderSlaCell.
+ *   `sampleStatusBySampleId` — Map<senaiteId, SampleSlaSnapshot> for
+ *      SampleSlaIndicator. Only present for received-but-unpublished samples
+ *      with non-null tier AND status AND color.
+ *   `isLoading` / `isError` — composed across all dependent queries.
+ */
 export function useOrderSlaStatuses(
   orders: ExplorerOrder[],
   sampleLookupMap: Map<string, { data?: SenaiteLookupResult; isLoading: boolean; isError: boolean }>
@@ -93,19 +89,6 @@ export function useOrderSlaStatuses(
 
   const prioritiesQuery = useSamplePriorities(sampleUids)
 
-  const sortedUids = useMemo(() => sortedUidsHash(sampleUids), [sampleUids])
-  const receivedAtHash = useMemo(() => {
-    const m = new Map<string, string | null>()
-    for (const l of liveLookups) {
-      if (l.lookup.sample_uid) m.set(l.lookup.sample_uid, l.lookup.date_received)
-    }
-    return makeReceivedAtHash(m)
-  }, [liveLookups])
-  const tierConfigHash = useMemo(
-    () => makeTierConfigHash(tiersQuery.data ?? [], prioOverridesQuery.data ?? []),
-    [tiersQuery.data, prioOverridesQuery.data]
-  )
-
   const perSample = useMemo(() => {
     const tiers = tiersQuery.data ?? []
     const groups = groupsQuery.data ?? []
@@ -118,7 +101,7 @@ export function useOrderSlaStatuses(
     const priorityToTier = new Map<InboxPriority, SlaTier>()
     for (const row of priorityRows) {
       const t = tiersById.get(row.sla_tier_id)
-      if (t) priorityToTier.set(row.priority as InboxPriority, t)
+      if (t) priorityToTier.set(row.priority, t)
     }
     const prioByUid = new Map<string, InboxPriority>()
     for (const row of prioritiesQuery.data ?? []) {
@@ -159,8 +142,23 @@ export function useOrderSlaStatuses(
     return out
   }, [perSample])
 
+  // Stable hash that subsumes every input affecting the `/sla/status` payload:
+  // UIDs (key), received_at, target_minutes, business_hours_only. Anything that
+  // could shift a sample's resolved tier (tiers data, group membership, services,
+  // priorities) flows through `batchItems` and thus through this hash. Sorting
+  // by key first makes the hash order-independent — reordering `sample_results`
+  // keys hits the cache.
+  const batchItemsHash = useMemo(
+    () =>
+      [...batchItems]
+        .sort((a, b) => a.key.localeCompare(b.key))
+        .map(b => `${b.key}:${b.target_minutes}:${b.business_hours_only ? 1 : 0}:${b.received_at ?? '-'}`)
+        .join('|'),
+    [batchItems]
+  )
+
   const statusQuery = useQuery({
-    queryKey: ['order-sla-status', sortedUids, receivedAtHash, tierConfigHash],
+    queryKey: ['order-sla-status', batchItemsHash],
     queryFn: () => fetchSlaStatuses(batchItems),
     enabled: batchItems.length > 0,
   })
