@@ -2256,6 +2256,14 @@ export interface AnalysisServiceRecord {
   updated_at: string
 }
 
+/**
+ * Fetch the local AccuMark `analysis_services` table (id + keyword + metadata).
+ *
+ * NOTE: This is the LOCAL endpoint at backend/main.py:2401, NOT
+ * `/explorer/analysis-services` (backend/main.py:7605), which proxies to the
+ * Integration Service for SENAITE data. Consumers needing keyword → service-id
+ * mapping (e.g., the order-SLA cell in D2) must use this local one.
+ */
 export async function getAnalysisServices(opts?: { search?: string; category?: string }): Promise<AnalysisServiceRecord[]> {
   const searchParams = new URLSearchParams()
   if (opts?.search) searchParams.set('search', opts.search)
@@ -4088,14 +4096,14 @@ export async function fetchSlaStatuses(items: SlaStatusRequestItem[]): Promise<S
 
 // ─── D2: bulk per-sample priority lookup ─────────────────────────────────────
 
-export interface SamplePriorityLookupResponseItem {
+export interface SamplePriorityLookupItem {
   sample_uid: string
   priority: InboxPriority
 }
 
 export async function samplePrioritiesLookup(
   sampleUids: string[]
-): Promise<SamplePriorityLookupResponseItem[]> {
+): Promise<SamplePriorityLookupItem[]> {
   if (sampleUids.length === 0) return []
   const response = await fetch(`${API_BASE_URL()}/sample-priorities/lookup`, {
     method: 'POST',
@@ -4107,21 +4115,6 @@ export async function samplePrioritiesLookup(
   }
   const data = await response.json()
   return data.items
-}
-
-// ─── D2: local /analysis-services fetch (id + keyword for keyword→id mapping) ─
-
-export async function getAnalysisServicesLocal(): Promise<AnalysisServiceRecord[]> {
-  // The local /analysis-services endpoint (NOT /explorer/analysis-services, which
-  // proxies to the Integration Service and is the wrong source for the
-  // keyword → analysis_services.id mapping the order-SLA cell needs).
-  const response = await fetch(`${API_BASE_URL()}/analysis-services`, {
-    headers: getBearerHeaders(),
-  })
-  if (!response.ok) {
-    throw new Error(`Failed to load analysis services: ${response.status}`)
-  }
-  return response.json()
 }
 
 export async function getSenaiteAnalysts(): Promise<SenaiteAnalyst[]> {
