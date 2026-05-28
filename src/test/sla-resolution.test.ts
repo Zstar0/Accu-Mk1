@@ -10,12 +10,19 @@ import type {
 import {
   buildKeywordToServiceIdMap,
   buildServiceToGroupTierMap,
+  buildServiceIdToGroupIdMap,
+  buildGroupIdToTierMap,
+  buildGlobalPriorityToTierMap,
+  buildPerGroupPriorityToTierMap,
   resolveSampleTier,
   resolveSampleTierWithReason,
+  resolveSampleTiersByGroup,
   classifySampleColor,
   aggregateOrderSlaVerdict,
+  NO_GROUP_KEY,
   type SampleSlaInputs,
 } from '@/lib/sla-resolution'
+import type { SlaPriorityTier } from '@/lib/api'
 
 const tier = (
   id: number,
@@ -610,5 +617,328 @@ describe('aggregateOrderSlaVerdict', () => {
 
   it('empty samples array returns awaiting', () => {
     expect(aggregateOrderSlaVerdict([]).color).toBe('awaiting')
+  })
+})
+
+// ─── Multi-tier follow-on ────────────────────────────────────────────────────
+
+const priorityRow = (
+  id: number,
+  priority: InboxPriority,
+  sla_tier_id: number,
+  service_group_id: number | null
+): SlaPriorityTier => ({
+  id,
+  priority,
+  sla_tier_id,
+  service_group_id,
+})
+
+describe('buildServiceIdToGroupIdMap', () => {
+  it('maps each member service to its group id', () => {
+    const t = tier(2, 'HPLC', 1440)
+    const groups = [group(10, 'HPLC', t.id, [100, 101])]
+    const m = buildServiceIdToGroupIdMap(groups, new Map([[t.id, t]]))
+    expect(m.get(100)).toBe(10)
+    expect(m.get(101)).toBe(10)
+  })
+
+  it('when a service is in multiple groups, the tightest-tier group wins (matches buildServiceToGroupTierMap)', () => {
+    const tFast = tier(3, 'Rush', 240) // tighter
+    const tHplc = tier(2, 'HPLC', 1440)
+    const groups = [
+      group(10, 'HPLC', tHplc.id, [100]),
+      group(11, 'Rush', tFast.id, [100]),
+    ]
+    const m = buildServiceIdToGroupIdMap(
+      groups,
+      new Map([
+        [tHplc.id, tHplc],
+        [tFast.id, tFast],
+      ])
+    )
+    expect(m.get(100)).toBe(11)
+  })
+
+  it('a group with no tier still claims its members (so the resolver can fall through to default for them)', () => {
+    const groups = [group(10, 'Untiered', null, [100])]
+    const m = buildServiceIdToGroupIdMap(groups, new Map())
+    // Service 100 is mapped to group 10 even though group 10 has no tier;
+    // resolveSampleTiersByGroup will fall through to default for this group.
+    expect(m.get(100)).toBe(10)
+  })
+})
+
+describe('buildGroupIdToTierMap', () => {
+  it('maps groups with a tier id to their tier; omits groups without one', () => {
+    const t = tier(2, 'HPLC', 1440)
+    const groups = [
+      group(10, 'HPLC', t.id, [100]),
+      group(11, 'Untiered', null, [101]),
+    ]
+    const m = buildGroupIdToTierMap(groups, new Map([[t.id, t]]))
+    expect(m.get(10)).toBe(t)
+    expect(m.has(11)).toBe(false)
+  })
+})
+
+describe('buildGlobalPriorityToTierMap', () => {
+  it('keeps only NULL-group rows, keyed by priority', () => {
+    const t = tier(5, 'Expedited 4h', 240)
+    const rows = [
+      priorityRow(1, 'expedited', t.id, null), // global — kept
+      priorityRow(2, 'expedited', t.id, 10),   // per-group — skipped
+    ]
+    const m = buildGlobalPriorityToTierMap(rows, new Map([[t.id, t]]))
+    expect(m.get('expedited')).toBe(t)
+    expect(m.size).toBe(1)
+  })
+})
+
+describe('buildPerGroupPriorityToTierMap', () => {
+  it('keys per-group rows by `${priority}|${groupId}` and skips NULL-group rows', () => {
+    const t = tier(5, 'Expedited 4h', 240)
+    const rows = [
+      priorityRow(1, 'expedited', t.id, null), // global — skipped
+      priorityRow(2, 'expedited', t.id, 10),   // per-group — kept
+    ]
+    const m = buildPerGroupPriorityToTierMap(rows, new Map([[t.id, t]]))
+    expect(m.get('expedited|10')).toBe(t)
+    expect(m.size).toBe(1)
+  })
+})
+
+describe('resolveSampleTiersByGroup', () => {
+  // Fixture: HPLC group with 24h tier, Sterility group with 7d tier, default tier.
+  const HPLC_TIER = tier(2, 'HPLC', 1440)
+  const STER_TIER = tier(3, 'Sterility', 10080)
+  const EXPEDITED_TIER = tier(5, 'Expedited 4h', 240)
+
+  const services = [
+    svc(100, 'kw_hplc'),
+    svc(101, 'kw_endo'),     // sterility
+    svc(102, 'kw_sterility'), // sterility
+  ]
+  const groups = [
+    group(10, 'HPLC', HPLC_TIER.id, [100]),
+    group(11, 'Sterility', STER_TIER.id, [101, 102]),
+  ]
+  const tiersById = new Map<number, SlaTier>([
+    [HPLC_TIER.id, HPLC_TIER],
+    [STER_TIER.id, STER_TIER],
+    [EXPEDITED_TIER.id, EXPEDITED_TIER],
+    [DEFAULT_TIER.id, DEFAULT_TIER],
+  ])
+  const keywordToServiceId = buildKeywordToServiceIdMap(services)
+  const serviceIdToGroupId = buildServiceIdToGroupIdMap(groups, tiersById)
+  const groupIdToTier = buildGroupIdToTierMap(groups, tiersById)
+
+  it('sample with analyses in one group resolves to that group\'s tier', () => {
+    const inputs: SampleSlaInputs = {
+      analyses: [analysis('kw_hplc')],
+      priority: null,
+    }
+    const m = resolveSampleTiersByGroup(
+      inputs,
+      keywordToServiceId,
+      serviceIdToGroupId,
+      groupIdToTier,
+      new Map(),
+      new Map(),
+      DEFAULT_TIER
+    )
+    expect(m.size).toBe(1)
+    expect(m.get(10)?.tier).toBe(HPLC_TIER)
+    expect(m.get(10)?.reason.tierSource).toBe('group')
+  })
+
+  it('sample spanning HPLC + Sterility resolves to both groups\' tiers with no priority', () => {
+    const inputs: SampleSlaInputs = {
+      analyses: [analysis('kw_hplc'), analysis('kw_endo'), analysis('kw_sterility')],
+      priority: null,
+    }
+    const m = resolveSampleTiersByGroup(
+      inputs,
+      keywordToServiceId,
+      serviceIdToGroupId,
+      groupIdToTier,
+      new Map(),
+      new Map(),
+      DEFAULT_TIER
+    )
+    expect(m.size).toBe(2)
+    expect(m.get(10)?.tier).toBe(HPLC_TIER)
+    expect(m.get(11)?.tier).toBe(STER_TIER)
+    expect(m.get(10)?.reason.tierSource).toBe('group')
+    expect(m.get(11)?.reason.tierSource).toBe('group')
+  })
+
+  it('expedited with ONLY a global override applies the expedited tier to both groups', () => {
+    const inputs: SampleSlaInputs = {
+      analyses: [analysis('kw_hplc'), analysis('kw_endo')],
+      priority: 'expedited',
+    }
+    const globalMap = new Map<InboxPriority, SlaTier>([['expedited', EXPEDITED_TIER]])
+    const m = resolveSampleTiersByGroup(
+      inputs,
+      keywordToServiceId,
+      serviceIdToGroupId,
+      groupIdToTier,
+      globalMap,
+      new Map(),
+      DEFAULT_TIER
+    )
+    expect(m.get(10)?.tier).toBe(EXPEDITED_TIER)
+    expect(m.get(11)?.tier).toBe(EXPEDITED_TIER)
+    expect(m.get(10)?.reason.priorityScope).toBe('global')
+    expect(m.get(11)?.reason.priorityScope).toBe('global')
+  })
+
+  it('expedited + per-group override on HPLC keeps Sterility on its own group tier (the load-bearing case)', () => {
+    // This is the lab's stated requirement: expedited speeds up HPLC but does
+    // nothing for sterility (which still takes 7 days).
+    const inputs: SampleSlaInputs = {
+      analyses: [analysis('kw_hplc'), analysis('kw_sterility')],
+      priority: 'expedited',
+    }
+    const perGroupMap = new Map<string, SlaTier>([
+      [`expedited|${10}`, EXPEDITED_TIER], // expedited only on HPLC group
+    ])
+    const m = resolveSampleTiersByGroup(
+      inputs,
+      keywordToServiceId,
+      serviceIdToGroupId,
+      groupIdToTier,
+      new Map(), // no global override
+      perGroupMap,
+      DEFAULT_TIER
+    )
+    expect(m.get(10)?.tier).toBe(EXPEDITED_TIER)
+    expect(m.get(10)?.reason.priorityScope).toBe('group')
+    expect(m.get(11)?.tier).toBe(STER_TIER)
+    expect(m.get(11)?.reason.tierSource).toBe('group')
+  })
+
+  it('per-group override beats global override when both are configured for the same priority', () => {
+    const FASTER_TIER = tier(6, 'Faster HPLC', 60)
+    const tiersExtended = new Map(tiersById)
+    tiersExtended.set(FASTER_TIER.id, FASTER_TIER)
+    const inputs: SampleSlaInputs = {
+      analyses: [analysis('kw_hplc'), analysis('kw_sterility')],
+      priority: 'expedited',
+    }
+    const globalMap = new Map<InboxPriority, SlaTier>([['expedited', EXPEDITED_TIER]])
+    const perGroupMap = new Map<string, SlaTier>([[`expedited|${10}`, FASTER_TIER]])
+    const m = resolveSampleTiersByGroup(
+      inputs,
+      keywordToServiceId,
+      serviceIdToGroupId,
+      groupIdToTier,
+      globalMap,
+      perGroupMap,
+      DEFAULT_TIER
+    )
+    expect(m.get(10)?.tier).toBe(FASTER_TIER) // per-group wins
+    expect(m.get(10)?.reason.priorityScope).toBe('group')
+    expect(m.get(11)?.tier).toBe(EXPEDITED_TIER) // sterility falls to global
+    expect(m.get(11)?.reason.priorityScope).toBe('global')
+  })
+
+  it('unmapped keywords go into the no-group bucket with default tier and surface in reason.unmappedKeywords', () => {
+    const inputs: SampleSlaInputs = {
+      analyses: [analysis('kw_unmapped_xyz')],
+      priority: null,
+    }
+    const m = resolveSampleTiersByGroup(
+      inputs,
+      keywordToServiceId,
+      serviceIdToGroupId,
+      groupIdToTier,
+      new Map(),
+      new Map(),
+      DEFAULT_TIER
+    )
+    expect(m.size).toBe(1)
+    const entry = m.get(NO_GROUP_KEY)
+    expect(entry?.tier).toBe(DEFAULT_TIER)
+    expect(entry?.reason.tierSource).toBe('default')
+    expect(entry?.reason.unmappedKeywords).toContain('kw_unmapped_xyz')
+  })
+
+  it('service-with-no-group goes to no-group bucket and uses default tier', () => {
+    // svc(200) exists but is in no group.
+    const orphanServices = [...services, svc(200, 'kw_orphan')]
+    const orphanKwMap = buildKeywordToServiceIdMap(orphanServices)
+    const inputs: SampleSlaInputs = {
+      analyses: [analysis('kw_orphan')],
+      priority: null,
+    }
+    const m = resolveSampleTiersByGroup(
+      inputs,
+      orphanKwMap,
+      serviceIdToGroupId,
+      groupIdToTier,
+      new Map(),
+      new Map(),
+      DEFAULT_TIER
+    )
+    expect(m.size).toBe(1)
+    expect(m.get(NO_GROUP_KEY)?.tier).toBe(DEFAULT_TIER)
+    // Orphan kw is NOT in unmappedKeywords — the service WAS mapped, just has no group.
+    expect(m.get(NO_GROUP_KEY)?.reason.unmappedKeywords).toEqual([])
+  })
+
+  it('no-group bucket cannot use per-group priority override (only global)', () => {
+    const inputs: SampleSlaInputs = {
+      analyses: [analysis('kw_unmapped_xyz')], // forces no-group bucket
+      priority: 'expedited',
+    }
+    // Per-group override exists for the no-group bucket somehow (NO_GROUP_KEY is a string).
+    // The resolver MUST ignore it — per-group only applies to real groups.
+    const perGroupMap = new Map<string, SlaTier>([
+      [`expedited|${NO_GROUP_KEY}`, EXPEDITED_TIER],
+    ])
+    const m = resolveSampleTiersByGroup(
+      inputs,
+      keywordToServiceId,
+      serviceIdToGroupId,
+      groupIdToTier,
+      new Map(), // no global
+      perGroupMap,
+      DEFAULT_TIER
+    )
+    // Falls through to default — per-group key wasn't honored for the no-group bucket.
+    expect(m.get(NO_GROUP_KEY)?.tier).toBe(DEFAULT_TIER)
+  })
+
+  it('empty analyses array returns an empty map (no bucket exists)', () => {
+    const m = resolveSampleTiersByGroup(
+      { analyses: [], priority: null },
+      keywordToServiceId,
+      serviceIdToGroupId,
+      groupIdToTier,
+      new Map(),
+      new Map(),
+      DEFAULT_TIER
+    )
+    expect(m.size).toBe(0)
+  })
+
+  it('no default tier + unmapped keywords → no-group bucket with tier=null and tierSource=none', () => {
+    const inputs: SampleSlaInputs = {
+      analyses: [analysis('kw_unmapped_xyz')],
+      priority: null,
+    }
+    const m = resolveSampleTiersByGroup(
+      inputs,
+      keywordToServiceId,
+      serviceIdToGroupId,
+      groupIdToTier,
+      new Map(),
+      new Map(),
+      null // no default
+    )
+    expect(m.get(NO_GROUP_KEY)?.tier).toBeNull()
+    expect(m.get(NO_GROUP_KEY)?.reason.tierSource).toBe('none')
   })
 })

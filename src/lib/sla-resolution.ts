@@ -4,6 +4,7 @@ import type {
   SenaiteAnalysis,
   SenaiteLookupResult,
   ServiceGroup,
+  SlaPriorityTier,
   SlaStatus,
   SlaTier,
 } from '@/lib/api'
@@ -115,6 +116,12 @@ export function resolveSampleTier(
 /** Which precedence rule produced the resolved tier (or 'none' if nothing did). */
 export type TierSource = 'priority' | 'group' | 'default' | 'none'
 
+/** Multi-tier follow-on: when a priority override fires, was it the global
+ *  override (NULL service_group_id) or a per-group override? Only populated
+ *  when `tierSource === 'priority'`. Lets the breakdown tooltip distinguish
+ *  "expedited (HPLC override)" from "expedited (global override)". */
+export type PriorityScope = 'global' | 'group'
+
 /**
  * Diagnostic breakdown of WHY a sample resolved to a particular tier — surfaced
  * in the breakdown tooltip on order/sample SLA indicators so analysts can audit
@@ -122,6 +129,8 @@ export type TierSource = 'priority' | 'group' | 'default' | 'none'
  *
  * - `tierSource` records which precedence rule fired.
  * - `priorityUsed` is only populated when `tierSource === 'priority'`.
+ * - `priorityScope` is only populated when `tierSource === 'priority'` (multi-
+ *   tier follow-on). Tells whether the per-group or global priority row won.
  * - `multiGroupCandidates` is only populated when `tierSource === 'group'`
  *   AND more than one group-tier candidate was found — i.e. the tooltip needs
  *   to say "tightest of N candidates".
@@ -132,6 +141,7 @@ export type TierSource = 'priority' | 'group' | 'default' | 'none'
 export interface SampleSlaReason {
   tierSource: TierSource
   priorityUsed?: InboxPriority
+  priorityScope?: PriorityScope
   multiGroupCandidates?: { tierName: string; targetMinutes: number }[]
   unmappedKeywords: string[]
 }
@@ -285,4 +295,203 @@ export function aggregateOrderSlaVerdict(
     drivingStatus: driver.status,
     drivingReason: driver.reason ?? undefined,
   }
+}
+
+// ─── Multi-tier follow-on ─────────────────────────────────────────────────────
+//
+// The functions and types below resolve a sample to ONE tier PER service group
+// rather than collapsing to a single tightest tier. The legacy
+// `resolveSampleTier` / `resolveSampleTierWithReason` above are unchanged and
+// remain in use until the consumer (useOrderSlaStatuses) migrates over in the
+// next commit.
+//
+// Mental model: a sample's analyses are bucketed by their service group; each
+// bucket resolves to its own tier using the precedence
+//   (priority, group_id) > (priority, NULL) > group's own tier > default
+// Analyses whose keyword maps to no service, or to a service in no group, go
+// into a special 'no-group' bucket and use only the (priority, NULL) → default
+// portion of the precedence.
+
+/** Sentinel key for the bucket holding analyses that don't map to any service
+ *  group. Kept as a typed constant so consumers can branch on it without magic
+ *  strings. */
+export const NO_GROUP_KEY = 'no-group' as const
+export type GroupKey = number | typeof NO_GROUP_KEY
+
+/**
+ * Service-id → group-id map. When a service is a member of multiple groups,
+ * pick the group whose tier has the SMALLEST target_minutes — matches the
+ * existing `buildServiceToGroupTierMap` "tightest wins" rule so a service's
+ * group membership stays consistent across the two map builders.
+ */
+export function buildServiceIdToGroupIdMap(
+  groups: ServiceGroup[],
+  tiersById: Map<number, SlaTier>
+): Map<number, number> {
+  const out = new Map<number, number>()
+  // Track the chosen group's tier minutes so we can compare on collision.
+  const chosenTierMin = new Map<number, number>()
+  for (const g of groups) {
+    const tier = g.sla_tier_id != null ? tiersById.get(g.sla_tier_id) : undefined
+    const min = tier ? tier.target_minutes : Number.POSITIVE_INFINITY
+    for (const svcId of g.member_ids) {
+      const prev = chosenTierMin.get(svcId)
+      if (prev === undefined || min < prev) {
+        out.set(svcId, g.id)
+        chosenTierMin.set(svcId, min)
+      }
+    }
+  }
+  return out
+}
+
+/** Group-id → tier map. Groups without a tier id (or whose tier id is missing
+ *  from `tiersById`) are omitted — callers should fall back to the default
+ *  tier in the resolver's precedence walk. */
+export function buildGroupIdToTierMap(
+  groups: ServiceGroup[],
+  tiersById: Map<number, SlaTier>
+): Map<number, SlaTier> {
+  const out = new Map<number, SlaTier>()
+  for (const g of groups) {
+    if (g.sla_tier_id == null) continue
+    const tier = tiersById.get(g.sla_tier_id)
+    if (tier) out.set(g.id, tier)
+  }
+  return out
+}
+
+/** Global priority overrides (rows with NULL service_group_id) keyed by
+ *  priority value. */
+export function buildGlobalPriorityToTierMap(
+  rows: SlaPriorityTier[],
+  tiersById: Map<number, SlaTier>
+): Map<InboxPriority, SlaTier> {
+  const out = new Map<InboxPriority, SlaTier>()
+  for (const row of rows) {
+    if (row.service_group_id != null) continue
+    const tier = tiersById.get(row.sla_tier_id)
+    if (tier) out.set(row.priority, tier)
+  }
+  return out
+}
+
+/** Per-(priority, group) overrides keyed by `${priority}|${groupId}`. The
+ *  string composition keeps lookups O(1) without nesting Maps. */
+export function buildPerGroupPriorityToTierMap(
+  rows: SlaPriorityTier[],
+  tiersById: Map<number, SlaTier>
+): Map<string, SlaTier> {
+  const out = new Map<string, SlaTier>()
+  for (const row of rows) {
+    if (row.service_group_id == null) continue
+    const tier = tiersById.get(row.sla_tier_id)
+    if (tier) out.set(`${row.priority}|${row.service_group_id}`, tier)
+  }
+  return out
+}
+
+/**
+ * Resolve every (sample → service group) bucket to its own tier, applying the
+ * precedence (priority, group_id) > (priority, NULL) > group's own tier >
+ * default per bucket. Analyses with unmapped keywords or whose service has no
+ * group land in a `NO_GROUP_KEY` bucket.
+ *
+ * Returns at least one entry whenever the sample has any analyses (or the
+ * sample has a priority override / default tier configured — see edge cases
+ * below). An empty map means the sample has no analyses AND there is no
+ * default tier.
+ *
+ * Edge cases:
+ * - All keywords unmapped: produces a single `NO_GROUP_KEY` entry whose
+ *   reason.unmappedKeywords lists every analysis keyword.
+ * - Service is in multiple groups: the bucket follows the tightest-tier rule
+ *   from `buildServiceIdToGroupIdMap` (so it's deterministic and matches the
+ *   legacy single-tier collapse for that one service).
+ * - Sample has no analyses: returns an empty map.
+ */
+export function resolveSampleTiersByGroup(
+  inputs: SampleSlaInputs,
+  keywordToServiceId: Map<string, number>,
+  serviceIdToGroupId: Map<number, number>,
+  groupIdToTier: Map<number, SlaTier>,
+  globalPriorityToTier: Map<InboxPriority, SlaTier>,
+  perGroupPriorityToTier: Map<string, SlaTier>,
+  defaultTier: SlaTier | null
+): Map<GroupKey, { tier: SlaTier | null; reason: SampleSlaReason }> {
+  // Bucket each analysis by group, and accumulate unmapped keywords per bucket.
+  const bucketKeywords = new Map<GroupKey, string[]>()
+  for (const a of inputs.analyses) {
+    if (!a.keyword) continue
+    const svcId = keywordToServiceId.get(a.keyword)
+    if (svcId == null) {
+      const arr = bucketKeywords.get(NO_GROUP_KEY) ?? []
+      arr.push(a.keyword)
+      bucketKeywords.set(NO_GROUP_KEY, arr)
+      continue
+    }
+    const groupId = serviceIdToGroupId.get(svcId)
+    const key: GroupKey = groupId ?? NO_GROUP_KEY
+    if (!bucketKeywords.has(key)) bucketKeywords.set(key, [])
+  }
+
+  const result = new Map<GroupKey, { tier: SlaTier | null; reason: SampleSlaReason }>()
+  for (const [key, keywords] of bucketKeywords) {
+    // 1. (priority, group_id) — only meaningful when the bucket has a real group.
+    if (inputs.priority && key !== NO_GROUP_KEY) {
+      const perGroupTier = perGroupPriorityToTier.get(`${inputs.priority}|${key}`)
+      if (perGroupTier) {
+        result.set(key, {
+          tier: perGroupTier,
+          reason: {
+            tierSource: 'priority',
+            priorityUsed: inputs.priority,
+            priorityScope: 'group',
+            unmappedKeywords: keywords,
+          },
+        })
+        continue
+      }
+    }
+    // 2. (priority, NULL) — global override.
+    if (inputs.priority) {
+      const globalTier = globalPriorityToTier.get(inputs.priority)
+      if (globalTier) {
+        result.set(key, {
+          tier: globalTier,
+          reason: {
+            tierSource: 'priority',
+            priorityUsed: inputs.priority,
+            priorityScope: 'global',
+            unmappedKeywords: keywords,
+          },
+        })
+        continue
+      }
+    }
+    // 3. Group's own tier (only for real-group buckets).
+    if (key !== NO_GROUP_KEY) {
+      const groupTier = groupIdToTier.get(key)
+      if (groupTier) {
+        result.set(key, {
+          tier: groupTier,
+          reason: { tierSource: 'group', unmappedKeywords: keywords },
+        })
+        continue
+      }
+    }
+    // 4. Default tier (or nothing).
+    if (defaultTier) {
+      result.set(key, {
+        tier: defaultTier,
+        reason: { tierSource: 'default', unmappedKeywords: keywords },
+      })
+    } else {
+      result.set(key, {
+        tier: null,
+        reason: { tierSource: 'none', unmappedKeywords: keywords },
+      })
+    }
+  }
+  return result
 }

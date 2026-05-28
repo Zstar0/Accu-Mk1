@@ -3934,8 +3934,13 @@ export interface SlaTierUpdate {
 }
 
 export interface SlaPriorityTier {
+  id: number
   priority: InboxPriority
   sla_tier_id: number
+  // Multi-tier follow-on: null = global override for this priority; an integer
+  // scopes the override to a single service group. Precedence on the resolver:
+  // (priority, group_id) > (priority, NULL) > group's own tier > default.
+  service_group_id: number | null
 }
 
 export async function getSlaTiers(): Promise<SlaTier[]> {
@@ -3973,16 +3978,32 @@ export async function getSlaPriorityTiers(): Promise<SlaPriorityTier[]> {
   return response.json()
 }
 
-export async function setSlaPriorityTier(priority: InboxPriority, slaTierId: number): Promise<SlaPriorityTier> {
+export async function setSlaPriorityTier(
+  priority: InboxPriority,
+  slaTierId: number,
+  serviceGroupId?: number | null,
+): Promise<SlaPriorityTier> {
+  // Omit service_group_id entirely (rather than send null) when the caller is
+  // setting the global override — matches the existing single-arg call sites
+  // and keeps the request body slim.
+  const body: { sla_tier_id: number; service_group_id?: number | null } = { sla_tier_id: slaTierId }
+  if (serviceGroupId != null) body.service_group_id = serviceGroupId
   const response = await fetch(`${API_BASE_URL()}/sla-priority-tiers/${priority}`, {
-    method: 'PUT', headers: getBearerHeaders('application/json'), body: JSON.stringify({ sla_tier_id: slaTierId }),
+    method: 'PUT', headers: getBearerHeaders('application/json'), body: JSON.stringify(body),
   })
   if (!response.ok) throw new Error(`Failed to set priority override: ${response.status}`)
   return response.json()
 }
 
-export async function deleteSlaPriorityTier(priority: InboxPriority): Promise<void> {
-  const response = await fetch(`${API_BASE_URL()}/sla-priority-tiers/${priority}`, {
+export async function deleteSlaPriorityTier(
+  priority: InboxPriority,
+  serviceGroupId?: number | null,
+): Promise<void> {
+  // Without serviceGroupId, deletes the global (NULL group) override; with it,
+  // deletes only the per-group row.
+  const url = new URL(`${API_BASE_URL()}/sla-priority-tiers/${priority}`)
+  if (serviceGroupId != null) url.searchParams.set('service_group_id', String(serviceGroupId))
+  const response = await fetch(url.toString(), {
     method: 'DELETE', headers: getBearerHeaders(),
   })
   if (!response.ok) throw new Error(`Failed to remove priority override: ${response.status}`)
