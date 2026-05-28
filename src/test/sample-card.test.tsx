@@ -250,3 +250,104 @@ describe('SampleCard — analyte display (Phase 31)', () => {
     expect(screen.getByTestId('sample-card-analyte-P-0001')).toBeInTheDocument()
   })
 })
+
+// D2 follow-on — per-sample SLA indicator on the table-view sample card.
+// Replaces the legacy hardcoded 24h/48h goalNote with the real tier-resolved
+// indicator (same primitive as KanbanSampleCard). Gate matches the legacy
+// timer's gate: lookup.date_received present AND review_state !== 'published'.
+describe('SampleCard — slaSnapshot indicator', () => {
+  const baseSnapshot = {
+    color: 'amber' as const,
+    status: {
+      target_minutes: 100,
+      elapsed_minutes: 80,
+      remaining_minutes: 20,
+      breached: false,
+    },
+    tier: {
+      id: 1,
+      name: 'Standard',
+      target_minutes: 100,
+      business_hours_only: false,
+      is_default: true,
+      amber_threshold_percent: 30,
+      created_at: '2026-01-01T00:00:00',
+      updated_at: '2026-01-01T00:00:00',
+    },
+    reason: { tierSource: 'default' as const, unmappedKeywords: [] },
+    priority: 'normal' as const,
+  }
+
+  it('renders SampleSlaIndicator when slaSnapshot is provided on a non-published sample', () => {
+    const lookup = makeLookup({
+      review_state: 'verified',
+      date_received: '2026-05-01T00:00:00Z',
+    })
+    render(
+      <SampleCard
+        sampleId="SAMP-SLA-1"
+        lookup={lookup}
+        isLoading={false}
+        isError={false}
+        slaSnapshot={baseSnapshot}
+      />,
+      { wrapper }
+    )
+    const indicator = screen.getByTestId('sample-sla-indicator')
+    expect(indicator).toBeInTheDocument()
+    expect(indicator.getAttribute('data-sla-color')).toBe('amber')
+  })
+
+  it('omits the SLA indicator when slaSnapshot is provided but sample is published (gate preserved)', () => {
+    const lookup = makeLookup({
+      review_state: 'published',
+      date_received: '2026-05-01T00:00:00Z',
+    })
+    render(
+      <SampleCard
+        sampleId="SAMP-SLA-2"
+        lookup={lookup}
+        isLoading={false}
+        isError={false}
+        slaSnapshot={baseSnapshot}
+      />,
+      { wrapper }
+    )
+    expect(screen.queryByTestId('sample-sla-indicator')).toBeNull()
+  })
+
+  it('omits the SLA indicator when lookup has no date_received (gate preserved)', () => {
+    const lookup = makeLookup({
+      review_state: 'verified',
+      date_received: null,
+    })
+    render(
+      <SampleCard
+        sampleId="SAMP-SLA-3"
+        lookup={lookup}
+        isLoading={false}
+        isError={false}
+        slaSnapshot={baseSnapshot}
+      />,
+      { wrapper }
+    )
+    expect(screen.queryByTestId('sample-sla-indicator')).toBeNull()
+  })
+
+  it('renders no indicator (and no legacy 24/48h timer) when slaSnapshot is omitted', () => {
+    const lookup = makeLookup({
+      review_state: 'verified',
+      date_received: '2026-05-01T00:00:00Z',
+    })
+    render(
+      <SampleCard
+        sampleId="SAMP-SLA-4"
+        lookup={lookup}
+        isLoading={false}
+        isError={false}
+      />,
+      { wrapper }
+    )
+    expect(screen.queryByTestId('sample-sla-indicator')).toBeNull()
+  })
+})

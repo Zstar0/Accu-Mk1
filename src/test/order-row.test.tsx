@@ -606,3 +606,131 @@ describe('OrderRow — finance disclosure (Option A)', () => {
     ).toBeInTheDocument()
   })
 })
+
+// D2 follow-on — OrderRow forwards per-sample SLA snapshots (keyed by senaiteId)
+// to each SampleCard so the in-row sample timer uses the real tier-resolved
+// indicator instead of the legacy hardcoded 24/48h. Verifies prop plumbing by
+// asserting the SampleSlaIndicator surfaces with the correct data-sla-color.
+describe('OrderRow — sampleSlaStatusMap plumbing (D2 follow-on)', () => {
+  it('forwards the snapshot to each SampleCard when sampleSlaStatusMap is provided', async () => {
+    const order = makeOrder({
+      sample_results: {
+        '1': { senaite_id: 'BW-0010', status: 'created' },
+      } as ExplorerOrder['sample_results'],
+    })
+    const lookup: SenaiteLookupResult = {
+      sample_id: 'BW-0010',
+      sample_uid: 'uid-bw-0010',
+      client: null,
+      contact: null,
+      sample_type: null,
+      date_received: '2026-05-01T00:00:00Z',
+      date_sampled: null,
+      profiles: [],
+      client_order_number: null,
+      client_sample_id: null,
+      client_lot: null,
+      review_state: 'verified',
+      declared_weight_mg: null,
+      analytes: [],
+      coa: {
+        has_coa: false,
+        file_count: 0,
+        has_download_warnings: false,
+      } as never,
+      remarks: [],
+      analyses: [],
+      attachments: [],
+      published_coa: null,
+      senaite_url: null,
+      cached_at: null,
+    }
+    renderRow(
+      <OrderRow
+        order={order}
+        wordpressHost="https://wp"
+        sampleLookupMap={
+          new Map([['BW-0010', { data: lookup, isLoading: false, isError: false }]])
+        }
+        activeAnalysisStates={[]}
+        sampleSlaStatusMap={
+          new Map([
+            [
+              'BW-0010',
+              {
+                color: 'red',
+                status: {
+                  target_minutes: 1440,
+                  elapsed_minutes: 2880,
+                  remaining_minutes: -1440,
+                  breached: true,
+                },
+                tier: {
+                  id: 1,
+                  name: 'Standard',
+                  target_minutes: 1440,
+                  business_hours_only: false,
+                  is_default: true,
+                  amber_threshold_percent: 20,
+                  created_at: '2026-01-01T00:00:00',
+                  updated_at: '2026-01-01T00:00:00',
+                },
+                reason: { tierSource: 'default', unmappedKeywords: [] },
+                priority: 'normal',
+              },
+            ],
+          ])
+        }
+      />
+    )
+    const indicator = await screen.findByTestId('sample-sla-indicator')
+    expect(indicator.getAttribute('data-sla-color')).toBe('red')
+  })
+
+  it('renders no indicator when sampleSlaStatusMap is omitted (no legacy 24/48h timer)', async () => {
+    const order = makeOrder({
+      sample_results: {
+        '1': { senaite_id: 'BW-0011', status: 'created' },
+      } as ExplorerOrder['sample_results'],
+    })
+    const lookup: SenaiteLookupResult = {
+      sample_id: 'BW-0011',
+      sample_uid: 'uid-bw-0011',
+      client: null,
+      contact: null,
+      sample_type: null,
+      date_received: '2026-05-01T00:00:00Z',
+      date_sampled: null,
+      profiles: [],
+      client_order_number: null,
+      client_sample_id: null,
+      client_lot: null,
+      review_state: 'verified',
+      declared_weight_mg: null,
+      analytes: [],
+      coa: {
+        has_coa: false,
+        file_count: 0,
+        has_download_warnings: false,
+      } as never,
+      remarks: [],
+      analyses: [],
+      attachments: [],
+      published_coa: null,
+      senaite_url: null,
+      cached_at: null,
+    }
+    renderRow(
+      <OrderRow
+        order={order}
+        wordpressHost="https://wp"
+        sampleLookupMap={
+          new Map([['BW-0011', { data: lookup, isLoading: false, isError: false }]])
+        }
+        activeAnalysisStates={[]}
+      />
+    )
+    await screen.findByTestId('sample-card-BW-0011')
+    expect(screen.queryByTestId('sample-sla-indicator')).toBeNull()
+  })
+})

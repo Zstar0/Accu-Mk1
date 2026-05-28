@@ -4,6 +4,7 @@ import { ChevronDown, ChevronRight, ExternalLink } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { ExplorerOrder, SenaiteLookupResult } from '@/lib/api'
 import type { OrderSlaVerdict } from '@/lib/sla-resolution'
+import type { SampleSlaSnapshot } from '@/services/order-sla'
 import { OrderFinancePanel } from './OrderFinancePanel'
 import { OrderSlaCell } from './OrderSlaCell'
 import { SampleCard } from './SampleCard'
@@ -31,6 +32,7 @@ export function OrderRow({
   highlightSampleId,
   showFinance,
   slaVerdict,
+  sampleSlaStatusMap,
 }: {
   order: ExplorerOrder
   wordpressHost: string
@@ -64,6 +66,12 @@ export function OrderRow({
   // D2: order-aggregated SLA verdict. Undefined means "loading" (the cell renders
   // a muted loading dot). The parent passes verdicts from useOrderSlaStatuses.
   slaVerdict?: OrderSlaVerdict
+  // D2 follow-on: per-sample SLA snapshots keyed by senaiteId. Forwarded to each
+  // SampleCard so the in-row sample timer matches the SLA column (real tier
+  // resolution + business-hours math) instead of the legacy hardcoded 24/48h.
+  // Undefined when the page hasn't plumbed it yet; SampleCard renders no
+  // indicator in that case.
+  sampleSlaStatusMap?: Map<string, SampleSlaSnapshot>
 }) {
   const [financeExpanded, setFinanceExpanded] = useState(false)
   const wpUrl = `${wordpressHost}/wp-admin/post.php?post=${order.order_id}&action=edit`
@@ -299,6 +307,7 @@ export function OrderRow({
                   isLoading={lookup?.isLoading ?? true}
                   isError={lookup?.isError ?? false}
                   analyte={s.analyte}
+                  slaSnapshot={sampleSlaStatusMap?.get(s.senaiteId)}
                   className={cn(
                     highlightSampleId === s.senaiteId &&
                       'ring-2 ring-primary ring-offset-2'

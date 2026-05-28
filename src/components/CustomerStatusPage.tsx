@@ -1181,6 +1181,7 @@ function CustomerOrdersTab({
                       highlightSampleId={highlightSampleId}
                       showFinance
                       slaVerdict={orderSla.verdictByOrderId.get(order.order_id)}
+                      sampleSlaStatusMap={orderSla.sampleStatusBySampleId}
                     />
                   ))}
                 </tbody>

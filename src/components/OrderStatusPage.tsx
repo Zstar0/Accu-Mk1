@@ -1121,6 +1121,7 @@ export function OrderStatusPage() {
                         sampleLookupMap={sampleLookupMap}
                         activeAnalysisStates={orderFilters.activeStates}
                         slaVerdict={orderSla.verdictByOrderId.get(order.order_id)}
+                        sampleSlaStatusMap={orderSla.sampleStatusBySampleId}
                       />
                     ))}
                   </tbody>
