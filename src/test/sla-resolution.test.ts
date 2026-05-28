@@ -11,6 +11,7 @@ import {
   buildKeywordToServiceIdMap,
   buildServiceToGroupTierMap,
   resolveSampleTier,
+  resolveSampleTierWithReason,
   classifySampleColor,
   aggregateOrderSlaVerdict,
   type SampleSlaInputs,
@@ -283,6 +284,160 @@ describe('resolveSampleTier', () => {
     expect(
       resolveSampleTier(inputs, new Map(), new Map(), new Map(), null)
     ).toBeNull()
+  })
+})
+
+describe('resolveSampleTierWithReason', () => {
+  const priorityOverrideTier = tier(20, 'Expedited', 60, 50)
+  const groupTier = tier(21, 'Group', 480, 30)
+  const priorityToTier = new Map<InboxPriority, SlaTier>([
+    ['expedited', priorityOverrideTier],
+  ])
+
+  it('priority override → tierSource priority + priorityUsed', () => {
+    const inputs: SampleSlaInputs = {
+      analyses: [analysis('HPLC-100')],
+      priority: 'expedited',
+    }
+    const svcToGroupTier = new Map<number, SlaTier>([[100, groupTier]])
+    const keywordToServiceId = new Map<string, number>([['HPLC-100', 100]])
+    const { tier: out, reason } = resolveSampleTierWithReason(
+      inputs,
+      keywordToServiceId,
+      svcToGroupTier,
+      priorityToTier,
+      DEFAULT_TIER
+    )
+    expect(out).toEqual(priorityOverrideTier)
+    expect(reason.tierSource).toBe('priority')
+    expect(reason.priorityUsed).toBe('expedited')
+    // Priority short-circuits before keyword inspection — unmappedKeywords
+    // should be empty regardless of what the analyses contain.
+    expect(reason.unmappedKeywords).toEqual([])
+    expect(reason.multiGroupCandidates).toBeUndefined()
+  })
+
+  it('single group tier → tierSource group, multiGroupCandidates undefined', () => {
+    const inputs: SampleSlaInputs = {
+      analyses: [analysis('HPLC-100')],
+      priority: 'normal',
+    }
+    const svcToGroupTier = new Map<number, SlaTier>([[100, groupTier]])
+    const keywordToServiceId = new Map<string, number>([['HPLC-100', 100]])
+    const { tier: out, reason } = resolveSampleTierWithReason(
+      inputs,
+      keywordToServiceId,
+      svcToGroupTier,
+      priorityToTier,
+      DEFAULT_TIER
+    )
+    expect(out).toEqual(groupTier)
+    expect(reason.tierSource).toBe('group')
+    expect(reason.multiGroupCandidates).toBeUndefined()
+    expect(reason.unmappedKeywords).toEqual([])
+  })
+
+  it('multi-group → tierSource group with multiGroupCandidates listing all candidates', () => {
+    const tightTier = tier(30, 'Tight', 120, 20)
+    const inputs: SampleSlaInputs = {
+      analyses: [analysis('LOOSE'), analysis('TIGHT')],
+      priority: 'normal',
+    }
+    const svcToGroupTier = new Map<number, SlaTier>([
+      [101, groupTier], // 480 min
+      [102, tightTier], // 120 min
+    ])
+    const keywordToServiceId = new Map<string, number>([
+      ['LOOSE', 101],
+      ['TIGHT', 102],
+    ])
+    const { tier: out, reason } = resolveSampleTierWithReason(
+      inputs,
+      keywordToServiceId,
+      svcToGroupTier,
+      priorityToTier,
+      DEFAULT_TIER
+    )
+    expect(out).toEqual(tightTier)
+    expect(reason.tierSource).toBe('group')
+    expect(reason.multiGroupCandidates).toHaveLength(2)
+    expect(reason.multiGroupCandidates).toEqual(
+      expect.arrayContaining([
+        { tierName: 'Group', targetMinutes: 480 },
+        { tierName: 'Tight', targetMinutes: 120 },
+      ])
+    )
+  })
+
+  it('unmapped keyword falls through to default, keyword recorded in unmappedKeywords', () => {
+    const inputs: SampleSlaInputs = {
+      analyses: [analysis('NOT-IN-CATALOG')],
+      priority: 'normal',
+    }
+    const { tier: out, reason } = resolveSampleTierWithReason(
+      inputs,
+      new Map(),
+      new Map(),
+      new Map(),
+      DEFAULT_TIER
+    )
+    expect(out).toEqual(DEFAULT_TIER)
+    expect(reason.tierSource).toBe('default')
+    expect(reason.unmappedKeywords).toEqual(['NOT-IN-CATALOG'])
+    expect(reason.multiGroupCandidates).toBeUndefined()
+  })
+
+  it('null keyword analyses are silently skipped (not added to unmappedKeywords)', () => {
+    const inputs: SampleSlaInputs = {
+      analyses: [analysis(null), analysis('UNMAPPED')],
+      priority: 'normal',
+    }
+    const { tier: out, reason } = resolveSampleTierWithReason(
+      inputs,
+      new Map(),
+      new Map(),
+      new Map(),
+      DEFAULT_TIER
+    )
+    expect(out).toEqual(DEFAULT_TIER)
+    expect(reason.tierSource).toBe('default')
+    // Only 'UNMAPPED' should appear — null keywords never had a chance to map.
+    expect(reason.unmappedKeywords).toEqual(['UNMAPPED'])
+  })
+
+  it('no resolution + no default → tier null, tierSource none', () => {
+    const inputs: SampleSlaInputs = { analyses: [], priority: 'normal' }
+    const { tier: out, reason } = resolveSampleTierWithReason(
+      inputs,
+      new Map(),
+      new Map(),
+      new Map(),
+      null
+    )
+    expect(out).toBeNull()
+    expect(reason.tierSource).toBe('none')
+    expect(reason.unmappedKeywords).toEqual([])
+  })
+
+  it('priority slot present but no override mapping → falls through to group/default', () => {
+    // Sample has priority 'expedited' but priorityToTier map has no entry.
+    // Should NOT short-circuit on 'priority' — must fall through.
+    const inputs: SampleSlaInputs = {
+      analyses: [analysis('HPLC-100')],
+      priority: 'expedited',
+    }
+    const svcToGroupTier = new Map<number, SlaTier>([[100, groupTier]])
+    const keywordToServiceId = new Map<string, number>([['HPLC-100', 100]])
+    const { tier: out, reason } = resolveSampleTierWithReason(
+      inputs,
+      keywordToServiceId,
+      svcToGroupTier,
+      new Map<InboxPriority, SlaTier>(),
+      DEFAULT_TIER
+    )
+    expect(out).toEqual(groupTier)
+    expect(reason.tierSource).toBe('group')
+    expect(reason.priorityUsed).toBeUndefined()
   })
 })
 

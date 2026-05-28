@@ -104,6 +104,103 @@ export function resolveSampleTier(
   return defaultTier
 }
 
+/** Which precedence rule produced the resolved tier (or 'none' if nothing did). */
+export type TierSource = 'priority' | 'group' | 'default' | 'none'
+
+/**
+ * Diagnostic breakdown of WHY a sample resolved to a particular tier — surfaced
+ * in the breakdown tooltip on order/sample SLA indicators so analysts can audit
+ * the precedence decision without opening Preferences.
+ *
+ * - `tierSource` records which precedence rule fired.
+ * - `priorityUsed` is only populated when `tierSource === 'priority'`.
+ * - `multiGroupCandidates` is only populated when `tierSource === 'group'`
+ *   AND more than one group-tier candidate was found — i.e. the tooltip needs
+ *   to say "tightest of N candidates".
+ * - `unmappedKeywords` lists analyses whose keyword had no row in the
+ *   keyword→service-id map, regardless of `tierSource`. Useful for spotting
+ *   newly-added analyses that haven't been wired into a service group yet.
+ */
+export interface SampleSlaReason {
+  tierSource: TierSource
+  priorityUsed?: InboxPriority
+  multiGroupCandidates?: { tierName: string; targetMinutes: number }[]
+  unmappedKeywords: string[]
+}
+
+/**
+ * Same precedence as `resolveSampleTier` but also returns a `SampleSlaReason`
+ * describing which rule fired and (for groups) what the candidate set looked
+ * like. The two functions MUST stay in lockstep on precedence semantics —
+ * any change to one must be mirrored in the other (and asserted by tests).
+ */
+export function resolveSampleTierWithReason(
+  inputs: SampleSlaInputs,
+  keywordToServiceId: Map<string, number>,
+  serviceToGroupTier: Map<number, SlaTier>,
+  priorityToTier: Map<InboxPriority, SlaTier>,
+  defaultTier: SlaTier | null
+): { tier: SlaTier | null; reason: SampleSlaReason } {
+  // 1. Priority override.
+  if (inputs.priority) {
+    const pTier = priorityToTier.get(inputs.priority)
+    if (pTier) {
+      return {
+        tier: pTier,
+        reason: {
+          tierSource: 'priority',
+          priorityUsed: inputs.priority,
+          unmappedKeywords: [],
+        },
+      }
+    }
+  }
+  // 2. Tightest group tier. Collect ALL candidates first so we can report the
+  // candidate set in the tooltip; the tightest still wins.
+  const unmappedKeywords: string[] = []
+  const candidates: { tier: SlaTier }[] = []
+  for (const a of inputs.analyses) {
+    if (!a.keyword) continue
+    const svcId = keywordToServiceId.get(a.keyword)
+    if (svcId == null) {
+      unmappedKeywords.push(a.keyword)
+      continue
+    }
+    const groupTier = serviceToGroupTier.get(svcId)
+    if (!groupTier) continue
+    candidates.push({ tier: groupTier })
+  }
+  if (candidates.length > 0) {
+    const tightest = candidates.reduce((a, b) =>
+      a.tier.target_minutes <= b.tier.target_minutes ? a : b
+    )
+    return {
+      tier: tightest.tier,
+      reason: {
+        tierSource: 'group',
+        unmappedKeywords,
+        // Only populate when there's an actual choice to report — single
+        // candidates don't need a "tightest of 1" line in the tooltip.
+        multiGroupCandidates:
+          candidates.length > 1
+            ? candidates.map(c => ({
+                tierName: c.tier.name,
+                targetMinutes: c.tier.target_minutes,
+              }))
+            : undefined,
+      },
+    }
+  }
+  // 3. Default tier (or nothing).
+  if (defaultTier) {
+    return {
+      tier: defaultTier,
+      reason: { tierSource: 'default', unmappedKeywords },
+    }
+  }
+  return { tier: null, reason: { tierSource: 'none', unmappedKeywords } }
+}
+
 /**
  * Classify ONE sample's SLA color using its own resolved tier's amber threshold.
  * `breached` is the strict > target check from the engine (B); amber is strict <.
