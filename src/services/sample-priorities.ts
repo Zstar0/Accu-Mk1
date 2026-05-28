@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query'
+import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import {
   samplePrioritiesLookup,
   type SamplePriorityLookupItem,
@@ -43,6 +43,10 @@ export function useSamplePriorities(uids: string[]) {
     queryFn: () => samplePrioritiesLookup(normalizeUids(uids)),
     staleTime: 1000 * 60 * 5,
     enabled: normalized.length > 0,
+    // Hold the previous result while a new UID set is in-flight so the
+    // composite hook's isLoading doesn't flip back to true on every
+    // sample-lookup arrival (which would flash OrderSlaCell to '…').
+    placeholderData: keepPreviousData,
   })
 }
 

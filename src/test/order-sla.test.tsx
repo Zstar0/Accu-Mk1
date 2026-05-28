@@ -189,4 +189,38 @@ describe('useOrderSlaStatuses', () => {
     })
     expect(result.current.verdictByOrderId.get('OFAILED')?.color).toBe('awaiting')
   })
+
+  it('keeps previous verdicts during refetch when sampleUids set grows (no flicker)', async () => {
+    fetchSlaStatusesMock.mockResolvedValue([
+      { key: 'uid-A', status: { target_minutes: 1440, elapsed_minutes: 60, remaining_minutes: 1380, breached: false } },
+    ])
+    const lookupA = makeLookup('uid-A', '2026-01-01T09:00:00', 'sample_received')
+    const lookupB = makeLookup('uid-B', '2026-01-01T10:00:00', 'sample_received')
+    const initialMap = new Map([
+      ['SA', { data: lookupA, isLoading: false, isError: false }],
+    ])
+    const growingMap = new Map([
+      ['SA', { data: lookupA, isLoading: false, isError: false }],
+      ['SB', { data: lookupB, isLoading: false, isError: false }],
+    ])
+    const orders = [
+      makeOrder({ order_id: 'O1', sample_results: { '1': { senaite_id: 'SA', status: 'ok' }, '2': { senaite_id: 'SB', status: 'ok' } } as never }),
+    ]
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const wrap = ({ children }: { children: React.ReactNode }) => (
+      <QueryClientProvider client={qc}>{children}</QueryClientProvider>
+    )
+    const { result, rerender } = renderHook(
+      ({ map }: { map: typeof initialMap }) => useOrderSlaStatuses(orders, map),
+      { wrapper: wrap, initialProps: { map: initialMap } }
+    )
+    // Wait for the first fetch + aggregation to land
+    await waitFor(() => expect(result.current.verdictByOrderId.get('O1')?.drivingSampleId).toBe('SA'))
+    expect(result.current.isLoading).toBe(false)
+    // Now simulate a NEW sample resolving (sampleLookupMap grows)
+    rerender({ map: growingMap })
+    // Without keepPreviousData: isLoading flips to true during refetch.
+    // With keepPreviousData: isLoading stays false (we have placeholder data).
+    expect(result.current.isLoading).toBe(false)
+  })
 })

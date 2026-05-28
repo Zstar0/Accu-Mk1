@@ -1,5 +1,5 @@
 import { useMemo } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import {
   fetchSlaStatuses,
   type ExplorerOrder,
@@ -161,6 +161,10 @@ export function useOrderSlaStatuses(
     queryKey: ['order-sla-status', batchItemsHash],
     queryFn: () => fetchSlaStatuses(batchItems),
     enabled: batchItems.length > 0,
+    // Hold the previous batch's result while the new key fetches so isLoading
+    // stays false during the transition — prevents OrderSlaCell from flashing
+    // to '…' every time a SENAITE sample lookup trickles in and grows the UID set.
+    placeholderData: keepPreviousData,
   })
 
   // Aggregate verdict per order. useMemo, NOT useQuery (sharpening #4).
