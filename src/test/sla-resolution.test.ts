@@ -8,6 +8,7 @@ import type {
   InboxPriority,
 } from '@/lib/api'
 import {
+  buildKeywordToServiceIdMap,
   buildServiceToGroupTierMap,
   resolveSampleTier,
   classifySampleColor,
@@ -109,13 +110,33 @@ const lookup = (
 
 const DEFAULT_TIER = tier(1, 'Standard', 1440, 20, true)
 
+describe('buildKeywordToServiceIdMap', () => {
+  it('maps each service keyword to its id', () => {
+    const map = buildKeywordToServiceIdMap([
+      svc(100, 'HPLC-A'),
+      svc(101, 'HPLC-B'),
+    ])
+    expect(map.get('HPLC-A')).toBe(100)
+    expect(map.get('HPLC-B')).toBe(101)
+  })
+
+  it('skips services with null keyword', () => {
+    const map = buildKeywordToServiceIdMap([svc(100, null), svc(101, 'HPLC')])
+    expect(map.has('HPLC')).toBe(true)
+    expect(map.size).toBe(1)
+  })
+
+  it('returns an empty map for empty input', () => {
+    expect(buildKeywordToServiceIdMap([]).size).toBe(0)
+  })
+})
+
 describe('buildServiceToGroupTierMap', () => {
   it('maps single-group analysis service to its group tier', () => {
     const tierA = tier(10, 'A', 480, 25)
     const tiersById = new Map<number, SlaTier>([[tierA.id, tierA]])
     const map = buildServiceToGroupTierMap(
       [group(1, 'G1', tierA.id, [100])],
-      [svc(100, 'HPLC-100')],
       tiersById
     )
     expect(map.get(100)).toEqual(tierA)
@@ -133,7 +154,6 @@ describe('buildServiceToGroupTierMap', () => {
         group(1, 'GLoose', looseTier.id, [100, 200]),
         group(2, 'GTight', tightTier.id, [200]),
       ],
-      [svc(100, 'A'), svc(200, 'B')],
       tiersById
     )
     expect(map.get(100)).toEqual(looseTier)
@@ -144,10 +164,33 @@ describe('buildServiceToGroupTierMap', () => {
     const tiersById = new Map<number, SlaTier>()
     const map = buildServiceToGroupTierMap(
       [group(1, 'NoTier', null, [100])],
-      [svc(100, 'HPLC')],
       tiersById
     )
     expect(map.has(100)).toBe(false)
+  })
+
+  it('group references a tier id missing from tiersById: silently skipped', () => {
+    const tiersById = new Map<number, SlaTier>() // empty
+    const map = buildServiceToGroupTierMap(
+      [group(1, 'PhantomTierGroup', 999, [100])],
+      tiersById
+    )
+    expect(map.has(100)).toBe(false)
+  })
+
+  it('multi-group tie on target_minutes: first-seen wins (locks current semantics)', () => {
+    const tA = tier(10, 'A', 480, 20)
+    const tB = tier(11, 'B', 480, 30) // same target_minutes, different amber
+    const tiersById = new Map<number, SlaTier>([[tA.id, tA], [tB.id, tB]])
+    const map = buildServiceToGroupTierMap(
+      [
+        group(1, 'GA', tA.id, [100]),
+        group(2, 'GB', tB.id, [100]),
+      ],
+      tiersById
+    )
+    // First group iterated wins; strict `<` predicate means equal target_minutes does NOT replace.
+    expect(map.get(100)).toEqual(tA)
   })
 })
 
@@ -290,6 +333,15 @@ describe('classifySampleColor', () => {
       )
     ).toBe('green')
   })
+
+  it('target_minutes <= 0 defensive guard returns green', () => {
+    expect(
+      classifySampleColor(
+        { target_minutes: 0, elapsed_minutes: 5, remaining_minutes: -5, breached: false },
+        tier(99, 'broken', 0)
+      )
+    ).toBe('green')
+  })
 })
 
 describe('aggregateOrderSlaVerdict', () => {
@@ -399,5 +451,9 @@ describe('aggregateOrderSlaVerdict', () => {
     const v = aggregateOrderSlaVerdict(samples)
     expect(v.color).toBe('green')
     expect(v.drivingSampleId).toBe('live')
+  })
+
+  it('empty samples array returns awaiting', () => {
+    expect(aggregateOrderSlaVerdict([]).color).toBe('awaiting')
   })
 })

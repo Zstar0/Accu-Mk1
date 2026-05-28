@@ -54,7 +54,6 @@ export function buildKeywordToServiceIdMap(
  */
 export function buildServiceToGroupTierMap(
   groups: ServiceGroup[],
-  _services: AnalysisServiceRecord[],
   tiersById: Map<number, SlaTier>
 ): Map<number, SlaTier> {
   const out = new Map<number, SlaTier>()
@@ -123,6 +122,40 @@ export function classifySampleColor(
   return 'green'
 }
 
+type ActiveSample = SampleSlaCellState & {
+  tier: SlaTier
+  status: SlaStatus
+  color: SlaColor
+}
+
+function isActive(s: SampleSlaCellState): s is ActiveSample {
+  return (
+    s.lookup.review_state !== 'published' &&
+    s.status != null &&
+    s.color != null &&
+    s.tier != null
+  )
+}
+
+const RANK: Record<SlaColor, number> = { red: 3, amber: 2, green: 1 }
+
+/** Comparator: returns negative if `a` is WORSE than `b` (should drive verdict),
+ *  positive if `b` is worse, 0 if tied. Worse = higher color rank, then
+ *  color-specific tie-break (most-over for red, least-pct-remaining for amber). */
+function compareActive(a: ActiveSample, b: ActiveSample): number {
+  const r = RANK[b.color] - RANK[a.color]
+  if (r !== 0) return r
+  if (a.color === 'red') {
+    return a.status.remaining_minutes - b.status.remaining_minutes
+  }
+  if (a.color === 'amber') {
+    const aPct = a.status.remaining_minutes / a.status.target_minutes
+    const bPct = b.status.remaining_minutes / b.status.target_minutes
+    return aPct - bPct
+  }
+  return 0
+}
+
 /**
  * Aggregate per-sample cell state into a single order verdict.
  * Worst-active sample drives the verdict (red > amber > green), with ties broken
@@ -130,50 +163,20 @@ export function classifySampleColor(
  * are excluded; an order with all-published becomes 'met'; an order with no
  * received samples becomes 'awaiting'.
  */
-type ActiveSample = SampleSlaCellState & {
-  status: SlaStatus
-  color: SlaColor
-}
-
-function isActive(s: SampleSlaCellState): s is ActiveSample {
-  return s.lookup.review_state !== 'published' && s.status != null && s.color != null
-}
-
 export function aggregateOrderSlaVerdict(
   samples: SampleSlaCellState[]
 ): OrderSlaVerdict {
   if (samples.length === 0) return { color: 'awaiting' }
-  const active: ActiveSample[] = samples.filter(isActive)
+  const active = samples.filter(isActive)
   if (active.length === 0) {
     const allPublished = samples.every(s => s.lookup.review_state === 'published')
     return { color: allPublished ? 'met' : 'awaiting' }
   }
-  const RANK: Record<SlaColor, number> = { red: 3, amber: 2, green: 1 }
-  // active.length >= 1 is guaranteed by the early-return above.
-  const [first, ...rest] = active as [ActiveSample, ...ActiveSample[]]
-  let driver: ActiveSample = first
-  for (const s of rest) {
-    const cmp = RANK[s.color] - RANK[driver.color]
-    if (cmp > 0) {
-      driver = s
-    } else if (cmp === 0) {
-      if (s.color === 'red') {
-        // most-over: smallest (most-negative) remaining wins
-        if (s.status.remaining_minutes < driver.status.remaining_minutes) {
-          driver = s
-        }
-      } else if (s.color === 'amber') {
-        // least-percent-remaining
-        const sPct = (s.status.remaining_minutes / s.status.target_minutes) * 100
-        const dPct = (driver.status.remaining_minutes / driver.status.target_minutes) * 100
-        if (sPct < dPct) driver = s
-      }
-    }
-  }
+  const driver = active.reduce((d, s) => (compareActive(s, d) < 0 ? s : d))
   return {
-    color: driver.color,
+    color: driver.color as OrderSlaColor,
     drivingSampleId: driver.senaiteId,
-    drivingTier: driver.tier ?? undefined,
+    drivingTier: driver.tier,
     drivingStatus: driver.status,
   }
 }
