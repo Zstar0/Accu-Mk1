@@ -88,6 +88,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { formatDate } from '@/components/explorer/helpers'
 import { OrderRow } from '@/components/explorer/OrderRow'
 import { enqueueSenaiteLookup } from '@/components/explorer/senaite-queue'
+import { useOrderSlaStatuses } from '@/services/order-sla'
 
 const PER_PAGE = 50
 
@@ -1014,6 +1015,9 @@ function CustomerOrdersTab({
   const showLoading = ordersLoading && isConnected
   const showEmpty = isConnected && !showLoading && !hasError && !hasOrders
 
+  // D2: order-aggregated SLA verdicts for the table-view SLA column.
+  const orderSla = useOrderSlaStatuses(orders, sampleLookupMap)
+
   const handleClearAll = () => {
     setCustomerOrderSearchReset()
     setOrderNumberInput('')
@@ -1159,6 +1163,7 @@ function CustomerOrdersTab({
                     <th className="py-2 px-3 font-medium whitespace-nowrap">
                       Timing
                     </th>
+                    <th className="py-2 px-3 font-medium whitespace-nowrap">SLA</th>
                     <th className="py-2 px-3 font-medium whitespace-nowrap">
                       Sample Details
                     </th>
@@ -1175,6 +1180,7 @@ function CustomerOrdersTab({
                       defaultExpanded={searchActive ? true : undefined}
                       highlightSampleId={highlightSampleId}
                       showFinance
+                      slaVerdict={orderSla.verdictByOrderId.get(order.order_id)}
                     />
                   ))}
                 </tbody>
