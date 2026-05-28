@@ -1,3 +1,4 @@
+import { memo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
 import { formatMinutes, formatTarget } from '@/lib/sla-format'
@@ -29,15 +30,17 @@ const DOT: Record<OrderSlaColor, string> = {
   error: '—',
 }
 
-export function OrderSlaCell({
-  verdict,
-  isLoading,
-  isError,
-}: {
+interface OrderSlaCellProps {
   verdict: OrderSlaVerdict
   isLoading?: boolean
   isError?: boolean
-}) {
+}
+
+function OrderSlaCellImpl({
+  verdict,
+  isLoading,
+  isError,
+}: OrderSlaCellProps) {
   const { t } = useTranslation()
   const color: OrderSlaColor = isError ? 'error' : isLoading ? 'loading' : verdict.color
   const className = COLOR_CLASS[color] ?? 'text-muted-foreground'
@@ -121,3 +124,61 @@ export function OrderSlaCell({
 
   return cell
 }
+
+/** Equality check that compares only the visually-meaningful fields of the
+ *  verdict. Prevents per-row Tooltip teardown when the parent re-renders with
+ *  a new verdict object reference that has identical color + driving info.
+ *  This is the load-bearing piece that prevents synchronized flicker across
+ *  ALL rows whenever sampleLookupMap mutates. */
+function slaPropsEqual(prev: OrderSlaCellProps, next: OrderSlaCellProps): boolean {
+  if (prev.isLoading !== next.isLoading) return false
+  if (prev.isError !== next.isError) return false
+  const a = prev.verdict
+  const b = next.verdict
+  if (a === b) return true
+  if (a.color !== b.color) return false
+  if ((a.drivingSampleId ?? null) !== (b.drivingSampleId ?? null)) return false
+  if ((a.drivingTier?.id ?? null) !== (b.drivingTier?.id ?? null)) return false
+  if (
+    (a.drivingTier?.target_minutes ?? null) !==
+    (b.drivingTier?.target_minutes ?? null)
+  )
+    return false
+  if (
+    (a.drivingTier?.amber_threshold_percent ?? null) !==
+    (b.drivingTier?.amber_threshold_percent ?? null)
+  )
+    return false
+  if (
+    (a.drivingTier?.business_hours_only ?? null) !==
+    (b.drivingTier?.business_hours_only ?? null)
+  )
+    return false
+  // Status — compare structural identity not reference. Elapsed/remaining/
+  // breached drive the rendered text. target_minutes is captured above via tier.
+  if (
+    (a.drivingStatus?.elapsed_minutes ?? null) !==
+    (b.drivingStatus?.elapsed_minutes ?? null)
+  )
+    return false
+  if (
+    (a.drivingStatus?.remaining_minutes ?? null) !==
+    (b.drivingStatus?.remaining_minutes ?? null)
+  )
+    return false
+  if (
+    (a.drivingStatus?.breached ?? null) !==
+    (b.drivingStatus?.breached ?? null)
+  )
+    return false
+  // drivingReason is used in the tooltip — compare the tierSource since that's
+  // the only field that drives a visibly-different breakdown line.
+  if (
+    (a.drivingReason?.tierSource ?? null) !==
+    (b.drivingReason?.tierSource ?? null)
+  )
+    return false
+  return true
+}
+
+export const OrderSlaCell = memo(OrderSlaCellImpl, slaPropsEqual)

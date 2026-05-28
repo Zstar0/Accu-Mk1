@@ -1,3 +1,4 @@
+import { memo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
 import { formatMinutes } from '@/lib/sla-format'
@@ -10,6 +11,10 @@ import {
 } from '@/components/ui/tooltip'
 import { SlaBreakdownTooltip } from '@/components/explorer/SlaBreakdownTooltip'
 
+interface SampleHeaderSlaProps {
+  lookup: SenaiteLookupResult | null | undefined
+}
+
 /**
  * Per-sample SLA indicator for the Sample Details page header.
  * Replaces the hardcoded 24/48h `goalNote` IIFE with the real tier-based
@@ -20,11 +25,7 @@ import { SlaBreakdownTooltip } from '@/components/explorer/SlaBreakdownTooltip'
  * colouring driven by `useSampleSla` (which passes `now_override =
  * published_date` to /sla/status so elapsed is frozen at publication).
  */
-export function SampleHeaderSla({
-  lookup,
-}: {
-  lookup: SenaiteLookupResult | null | undefined
-}) {
+function SampleHeaderSlaImpl({ lookup }: SampleHeaderSlaProps) {
   const { t } = useTranslation()
   const { snapshot, reason, priority, isPublished, isLoading, isError } =
     useSampleSla(lookup)
@@ -100,3 +101,27 @@ export function SampleHeaderSla({
     </Tooltip>
   )
 }
+
+/** Memo equality on the lookup. When the parent's useState holds a stable
+ *  lookup reference (the common case), this hits the reference fast path. If
+ *  the parent rebuilds the lookup, we still skip re-render when the fields
+ *  that drive useSampleSla's tier resolution + display haven't changed. */
+function headerPropsEqual(
+  prev: SampleHeaderSlaProps,
+  next: SampleHeaderSlaProps
+): boolean {
+  if (prev.lookup === next.lookup) return true
+  if (!prev.lookup || !next.lookup) return false
+  if (prev.lookup.sample_uid !== next.lookup.sample_uid) return false
+  if (prev.lookup.date_received !== next.lookup.date_received) return false
+  if (prev.lookup.review_state !== next.lookup.review_state) return false
+  if (
+    (prev.lookup.published_coa?.published_date ?? null) !==
+    (next.lookup.published_coa?.published_date ?? null)
+  )
+    return false
+  if (prev.lookup.analyses.length !== next.lookup.analyses.length) return false
+  return true
+}
+
+export const SampleHeaderSla = memo(SampleHeaderSlaImpl, headerPropsEqual)
