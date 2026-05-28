@@ -1875,6 +1875,21 @@ class SlaPriorityTierSet(BaseModel):
     sla_tier_id: int
 
 
+# ── D2: bulk per-sample priority lookup ────────────────────────────────────
+
+class SamplePriorityLookupRequest(BaseModel):
+    sample_uids: list[str]
+
+
+class SamplePriorityResponseItem(BaseModel):
+    sample_uid: str
+    priority: Literal["normal", "high", "expedited"]
+
+
+class SamplePriorityLookupResponse(BaseModel):
+    items: list[SamplePriorityResponseItem]
+
+
 class BusinessHoursConfigResponse(BaseModel):
     open_time: time
     close_time: time
@@ -12778,6 +12793,36 @@ async def update_inbox_priority(
 
     db.commit()
     return {"sample_uid": sample_uid, "priority": data.priority}
+
+
+# ── D2: bulk per-sample priority lookup ────────────────────────────────────
+
+@app.post("/sample-priorities/lookup", response_model=SamplePriorityLookupResponse)
+async def lookup_sample_priorities(
+    req: SamplePriorityLookupRequest,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Sparse bulk read of sample_priorities for the order-list SLA cell.
+
+    Returns only rows that exist; absent UIDs are omitted (the client treats
+    absence as the default 'normal', matching the tier-resolution model).
+    Hard cap 500 UIDs per request — a sanity bound that more than covers the
+    visible-orders page at tens-to-low-hundreds of samples.
+    """
+    if not req.sample_uids:
+        raise HTTPException(422, "sample_uids must be a non-empty list")
+    if len(req.sample_uids) > 500:
+        raise HTTPException(422, "too many sample_uids; max 500")
+    rows = db.execute(
+        select(SamplePriority).where(SamplePriority.sample_uid.in_(req.sample_uids))
+    ).scalars().all()
+    return SamplePriorityLookupResponse(
+        items=[
+            SamplePriorityResponseItem(sample_uid=r.sample_uid, priority=r.priority)  # type: ignore[arg-type]
+            for r in rows
+        ]
+    )
 
 
 @app.get("/worksheets/users")
