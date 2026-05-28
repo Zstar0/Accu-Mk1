@@ -8,7 +8,11 @@ export interface SlaBreakdownTooltipProps {
   tier: SlaTier
   /** Live SLA status (elapsed/remaining/breached). */
   status: SlaStatus
-  /** Reason snapshot from `resolveSampleTierWithReason`. */
+  /** Reason snapshot from `resolveSampleTierWithReason` or
+   *  `resolveSampleTiersByGroup`. The multi-tier resolver populates
+   *  `priorityScope` ('global' | 'group') on priority-source rows so the
+   *  tooltip can distinguish "expedited (all groups)" from
+   *  "expedited (HPLC group only)". */
   reason: SampleSlaReason | null
   /** Resolved priority — drives the "Priority:" line. Optional because some
    *  callers (e.g. order-level summary) may not have a single sample-priority. */
@@ -17,6 +21,12 @@ export interface SlaBreakdownTooltipProps {
    *  hosts the tooltip. SampleSlaIndicator + SampleHeaderSla pass `undefined`
    *  (the surface IS the sample); OrderSlaCell passes the driving sample id. */
   drivingSampleId?: string
+  /** Service-group name this snapshot was resolved against. Multi-tier
+   *  follow-on: enables the tooltip to say "Group tier (HPLC)" instead of
+   *  the generic "Group tier", and "Priority override (expedited, HPLC only)"
+   *  for per-group priority overrides. Undefined for NO_GROUP_KEY snapshots
+   *  (default-tier fallback) or callers that haven't been plumbed yet. */
+  groupName?: string
   /** When true, swap the live countdown headline and "Elapsed:" label for a
    *  historical "Met / Missed by Xh" headline and "Total time:" label. Driven
    *  by `useSampleSla.isPublished`. */
@@ -35,6 +45,7 @@ export function SlaBreakdownTooltip({
   reason,
   priority,
   drivingSampleId,
+  groupName,
   isPublished = false,
 }: SlaBreakdownTooltipProps) {
   const { t } = useTranslation()
@@ -58,13 +69,32 @@ export function SlaBreakdownTooltip({
     ? t('orderStatus.sla.businessSuffix')
     : ''
 
+  // Multi-tier follow-on: when priorityScope is populated, distinguish global
+  // overrides from per-group ones in the source line. groupName comes from
+  // the caller (snapshot.groupName) — required for the per-group variant.
+  // No scope present → fall back to the legacy "Priority override ({{priority}})"
+  // so single-tier callers (useSampleSla legacy default path) still render
+  // their familiar line.
   let sourceLine: string | null = null
   if (reason?.tierSource === 'priority' && reason.priorityUsed) {
-    sourceLine = t('orderStatus.sla.breakdown.source.priority', {
-      priority: reason.priorityUsed,
-    })
+    if (reason.priorityScope === 'group' && groupName) {
+      sourceLine = t('orderStatus.sla.breakdown.source.priorityGroup', {
+        priority: reason.priorityUsed,
+        group: groupName,
+      })
+    } else if (reason.priorityScope === 'global') {
+      sourceLine = t('orderStatus.sla.breakdown.source.priorityGlobal', {
+        priority: reason.priorityUsed,
+      })
+    } else {
+      sourceLine = t('orderStatus.sla.breakdown.source.priority', {
+        priority: reason.priorityUsed,
+      })
+    }
   } else if (reason?.tierSource === 'group') {
-    sourceLine = t('orderStatus.sla.breakdown.source.group')
+    sourceLine = groupName
+      ? t('orderStatus.sla.breakdown.source.groupNamed', { group: groupName })
+      : t('orderStatus.sla.breakdown.source.group')
   } else if (reason?.tierSource === 'default') {
     sourceLine = t('orderStatus.sla.breakdown.source.default')
   } else if (reason?.tierSource === 'none') {

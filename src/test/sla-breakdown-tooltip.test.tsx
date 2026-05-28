@@ -205,4 +205,117 @@ describe('SlaBreakdownTooltip', () => {
     const el = screen.getByTestId('sla-breakdown-tooltip')
     expect(el.textContent ?? '').toMatch(/total time|totalTime/i)
   })
+
+  // Multi-tier follow-on — source line distinguishes per-group vs global
+  // priority overrides and surfaces the group name when present.
+  it('renders priorityGroup line when priorityScope=group and groupName provided', () => {
+    const reason: SampleSlaReason = {
+      tierSource: 'priority',
+      priorityUsed: 'expedited',
+      priorityScope: 'group',
+      unmappedKeywords: [],
+    }
+    render(
+      <SlaBreakdownTooltip
+        tier={tier}
+        status={status}
+        reason={reason}
+        priority="expedited"
+        groupName="HPLC"
+      />
+    )
+    const el = screen.getByTestId('sla-breakdown-tooltip')
+    // i18n fallback: either the rendered English contains both interpolations
+    // ("HPLC only") or the raw key matches.
+    expect(el.textContent ?? '').toMatch(/HPLC|priorityGroup/i)
+    expect(el.textContent ?? '').toMatch(/expedited/i)
+  })
+
+  it('renders priorityGlobal line when priorityScope=global', () => {
+    const reason: SampleSlaReason = {
+      tierSource: 'priority',
+      priorityUsed: 'expedited',
+      priorityScope: 'global',
+      unmappedKeywords: [],
+    }
+    render(
+      <SlaBreakdownTooltip
+        tier={tier}
+        status={status}
+        reason={reason}
+        priority="expedited"
+      />
+    )
+    const el = screen.getByTestId('sla-breakdown-tooltip')
+    // "all groups" hint or the raw key.
+    expect(el.textContent ?? '').toMatch(/all groups|priorityGlobal/i)
+  })
+
+  it('falls back to legacy priority line when priorityScope is undefined (single-tier callers)', () => {
+    const reason: SampleSlaReason = {
+      tierSource: 'priority',
+      priorityUsed: 'expedited',
+      // priorityScope intentionally omitted to mimic the legacy
+      // resolveSampleTierWithReason output.
+      unmappedKeywords: [],
+    }
+    render(
+      <SlaBreakdownTooltip
+        tier={tier}
+        status={status}
+        reason={reason}
+        priority="expedited"
+      />
+    )
+    const el = screen.getByTestId('sla-breakdown-tooltip')
+    // No "all groups" / "only" qualifier when the resolver didn't set a scope.
+    const text = el.textContent ?? ''
+    expect(text).toMatch(/expedited|source\.priority/i)
+    expect(text).not.toMatch(/all groups/i)
+    expect(text).not.toMatch(/only/i)
+  })
+
+  it('renders groupNamed line when tierSource=group and groupName provided', () => {
+    const reason: SampleSlaReason = {
+      tierSource: 'group',
+      unmappedKeywords: [],
+    }
+    render(
+      <SlaBreakdownTooltip
+        tier={tier}
+        status={status}
+        reason={reason}
+        priority="normal"
+        groupName="Sterility"
+      />
+    )
+    const el = screen.getByTestId('sla-breakdown-tooltip')
+    // Group name should appear in the source line.
+    expect(el.textContent ?? '').toMatch(/Sterility|groupNamed/i)
+  })
+
+  it('per-group priority line requires groupName — falls back to global when groupName absent', () => {
+    // Defensive: priorityScope='group' but no groupName supplied (caller bug
+    // or NO_GROUP_KEY snapshot). Tooltip should NOT render a malformed
+    // "{{group}} only" with an empty interpolation.
+    const reason: SampleSlaReason = {
+      tierSource: 'priority',
+      priorityUsed: 'expedited',
+      priorityScope: 'group',
+      unmappedKeywords: [],
+    }
+    render(
+      <SlaBreakdownTooltip
+        tier={tier}
+        status={status}
+        reason={reason}
+        priority="expedited"
+        // groupName omitted
+      />
+    )
+    const el = screen.getByTestId('sla-breakdown-tooltip')
+    // Falls back to global line (or the legacy line) — never the malformed
+    // priorityGroup variant with an empty {{group}}.
+    expect(el.textContent ?? '').not.toMatch(/\(expedited, \s* only\)/i)
+  })
 })

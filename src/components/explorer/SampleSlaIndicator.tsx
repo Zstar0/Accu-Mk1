@@ -74,6 +74,7 @@ function renderRow(
           status={snapshot.status}
           reason={snapshot.reason}
           priority={snapshot.priority}
+          groupName={snapshot.groupName}
         />
       </TooltipContent>
     </Tooltip>

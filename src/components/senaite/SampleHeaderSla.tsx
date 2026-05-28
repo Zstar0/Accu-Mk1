@@ -102,6 +102,7 @@ function SampleHeaderSlaImpl({ lookup }: SampleHeaderSlaProps) {
           status={snapshot.status}
           reason={reason}
           priority={priority}
+          groupName={snapshot.groupName}
           isPublished={isPublished}
         />
       </TooltipContent>
