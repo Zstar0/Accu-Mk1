@@ -1862,10 +1862,15 @@ class SlaTierResponse(BaseModel):
         from_attributes = True
 
 
-# Consumed by the /sla-priority-tiers endpoints (next task).
+# Consumed by the /sla-priority-tiers endpoints.
+# Multi-tier follow-on: `service_group_id` scopes the override to a single
+# service group. NULL means the row applies globally (precedence falls through
+# (priority, group_id) → (priority, NULL) → group's own tier → default).
 class SlaPriorityTierResponse(BaseModel):
+    id: int
     priority: str
     sla_tier_id: int
+    service_group_id: int | None = None
 
     class Config:
         from_attributes = True
@@ -1873,6 +1878,9 @@ class SlaPriorityTierResponse(BaseModel):
 
 class SlaPriorityTierSet(BaseModel):
     sla_tier_id: int
+    # Omit / null => the global override row for this priority. Specify a group
+    # id to scope the override to that group (e.g. expedited + HPLC group).
+    service_group_id: int | None = None
 
 
 # ── D2: bulk per-sample priority lookup ────────────────────────────────────
@@ -12038,14 +12046,37 @@ async def set_sla_priority_tier(
     db: Session = Depends(get_db),
     _current_user=Depends(get_current_user),
 ):
-    """Upsert a priority -> tier override."""
+    """Upsert a priority -> tier override.
+
+    The override is identified by (priority, service_group_id). Omit
+    service_group_id to upsert the global override; supply it to scope the
+    override to a single service group.
+    """
     if not db.get(SlaTier, data.sla_tier_id):
         raise HTTPException(404, f"SLA tier {data.sla_tier_id} not found")
-    row = db.get(SlaPriorityTier, priority)
+    if data.service_group_id is not None and not db.get(
+        ServiceGroup, data.service_group_id
+    ):
+        raise HTTPException(
+            404, f"Service group {data.service_group_id} not found"
+        )
+    # SQL NULL semantics — `=` against NULL never matches, so the global-row
+    # branch must use IS NULL explicitly. Both code paths return at most one
+    # row courtesy of the two partial unique indexes from _run_migrations.
+    q = select(SlaPriorityTier).where(SlaPriorityTier.priority == priority)
+    if data.service_group_id is None:
+        q = q.where(SlaPriorityTier.service_group_id.is_(None))
+    else:
+        q = q.where(SlaPriorityTier.service_group_id == data.service_group_id)
+    row = db.execute(q).scalar_one_or_none()
     if row:
         row.sla_tier_id = data.sla_tier_id
     else:
-        row = SlaPriorityTier(priority=priority, sla_tier_id=data.sla_tier_id)
+        row = SlaPriorityTier(
+            priority=priority,
+            sla_tier_id=data.sla_tier_id,
+            service_group_id=data.service_group_id,
+        )
         db.add(row)
     db.commit()
     db.refresh(row)
@@ -12055,16 +12086,28 @@ async def set_sla_priority_tier(
 @app.delete("/sla-priority-tiers/{priority}")
 async def delete_sla_priority_tier(
     priority: SlaPriority,
+    service_group_id: int | None = None,
     db: Session = Depends(get_db),
     _current_user=Depends(get_current_user),
 ):
-    """Remove a priority override (that priority falls back to group/default)."""
-    row = db.get(SlaPriorityTier, priority)
+    """Remove a priority override.
+
+    Without `service_group_id`, removes the global (NULL group) override.
+    With `service_group_id`, removes the override scoped to that group only.
+    """
+    q = select(SlaPriorityTier).where(SlaPriorityTier.priority == priority)
+    if service_group_id is None:
+        q = q.where(SlaPriorityTier.service_group_id.is_(None))
+    else:
+        q = q.where(SlaPriorityTier.service_group_id == service_group_id)
+    row = db.execute(q).scalar_one_or_none()
     if not row:
-        raise HTTPException(404, f"No override for priority '{priority}'")
+        scope = "global" if service_group_id is None else f"group_id={service_group_id}"
+        raise HTTPException(404, f"No override for priority '{priority}' ({scope})")
     db.delete(row)
     db.commit()
-    return {"message": f"Priority override '{priority}' removed"}
+    scope = "global" if service_group_id is None else f"group_id={service_group_id}"
+    return {"message": f"Priority override '{priority}' ({scope}) removed"}
 
 
 # ── Business-hours config (sub-project B) ──────────────────────────────────

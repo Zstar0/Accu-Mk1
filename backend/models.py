@@ -732,15 +732,34 @@ class SlaTier(Base):
 
 
 class SlaPriorityTier(Base):
-    """Sparse priority -> SLA tier override. A row exists only for priorities
-    that override the group/default SLA (e.g. 'expedited'); 'normal' is normally
-    absent. priority in {normal|high|expedited}."""
+    """Priority -> SLA tier override, optionally scoped to a single service group.
+
+    - service_group_id IS NULL: the row is a "global" override — applies to any
+      group's analyses unless a more specific (priority, group_id) row exists.
+    - service_group_id = <id>: applies ONLY when resolving analyses in that
+      group; lets the lab express e.g. "expedited speeds up HPLC but does
+      nothing for sterility (which still takes 7d)".
+
+    Resolution precedence (per service-group): (priority, group_id) wins, then
+    (priority, NULL), then the group's own tier, then the default tier. A row
+    exists only for combinations that actually override; absence means no
+    override at that precedence level.
+
+    Schema notes: `priority` is no longer the primary key — multiple rows can
+    share a priority (one per group + optionally one global). Two PARTIAL
+    UNIQUE indexes enforce at most one global-per-priority and at most one
+    per-(priority, group) row; see _run_migrations.
+    """
 
     __tablename__ = "sla_priority_tiers"
 
-    priority: Mapped[str] = mapped_column(String(20), primary_key=True)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    priority: Mapped[str] = mapped_column(String(20), nullable=False)
     sla_tier_id: Mapped[int] = mapped_column(
         ForeignKey("sla_tiers.id", ondelete="CASCADE"), nullable=False
+    )
+    service_group_id: Mapped[int | None] = mapped_column(
+        ForeignKey("service_groups.id", ondelete="CASCADE"), nullable=True
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
@@ -749,7 +768,10 @@ class SlaPriorityTier(Base):
     tier: Mapped["SlaTier"] = relationship("SlaTier")
 
     def __repr__(self) -> str:
-        return f"<SlaPriorityTier(priority='{self.priority}', sla_tier_id={self.sla_tier_id})>"
+        return (
+            f"<SlaPriorityTier(id={self.id}, priority='{self.priority}', "
+            f"service_group_id={self.service_group_id}, sla_tier_id={self.sla_tier_id})>"
+        )
 
 
 class BusinessHoursConfig(Base):

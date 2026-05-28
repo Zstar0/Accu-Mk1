@@ -317,6 +317,22 @@ def _run_migrations():
         """,
         # D2: per-tier amber threshold (idempotent ALTER, existing rows get 20).
         "ALTER TABLE sla_tiers ADD COLUMN IF NOT EXISTS amber_threshold_percent INTEGER NOT NULL DEFAULT 20",
+        # Multi-tier follow-on: priority overrides can now be scoped to a single
+        # service group. service_group_id IS NULL preserves the original
+        # "applies globally" semantics for any existing rows. Precedence on the
+        # frontend resolver becomes (priority, group_id) > (priority, NULL) >
+        # group's own tier > default. The old PRIMARY KEY (priority) no longer
+        # suffices because multiple rows can share a priority; a SERIAL `id`
+        # becomes the new PK, and two PARTIAL UNIQUE indexes enforce
+        # one-global-per-priority + one-per-(priority,group). Each statement is
+        # idempotent or harmless when re-run (per-statement isolation already
+        # in place below).
+        "ALTER TABLE sla_priority_tiers ADD COLUMN IF NOT EXISTS service_group_id INTEGER REFERENCES service_groups(id) ON DELETE CASCADE",
+        "ALTER TABLE sla_priority_tiers DROP CONSTRAINT IF EXISTS sla_priority_tiers_pkey",
+        "ALTER TABLE sla_priority_tiers ADD COLUMN IF NOT EXISTS id SERIAL",
+        "ALTER TABLE sla_priority_tiers ADD CONSTRAINT sla_priority_tiers_pkey PRIMARY KEY (id)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_sla_priority_global ON sla_priority_tiers (priority) WHERE service_group_id IS NULL",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_sla_priority_per_group ON sla_priority_tiers (priority, service_group_id) WHERE service_group_id IS NOT NULL",
         # ── Business-hours SLA calendar (sub-project B) ──
         """
         CREATE TABLE IF NOT EXISTS business_hours_config (
