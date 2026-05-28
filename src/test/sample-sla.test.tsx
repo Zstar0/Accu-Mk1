@@ -89,14 +89,68 @@ describe('useSampleSla', () => {
     expect(fetchSlaStatusesMock).not.toHaveBeenCalled()
   })
 
-  it('returns null snapshot + skips /sla/status when sample is published', async () => {
+  it('skips /sla/status when sample is published but has no published_date (defensive)', async () => {
     fetchSlaStatusesMock.mockResolvedValue([])
+    // review_state=published but no published_coa → published_date is null →
+    // we still flow through (applicable=true) but no override is sent. The
+    // server returns a wall-clock snapshot — which is fine; the isPublished
+    // gate on the renderer will still fall back to "live" semantics.
     const lookup = makeLookup({ review_state: 'published' })
     const { result } = renderHook(() => useSampleSla(lookup), { wrapper })
     await waitFor(() => {
-      expect(result.current.snapshot).toBeNull()
+      expect(result.current.isLoading).toBe(false)
     })
-    expect(fetchSlaStatusesMock).not.toHaveBeenCalled()
+    // No published_coa.published_date → isPublished should be false.
+    expect(result.current.isPublished).toBe(false)
+  })
+
+  it('flows through for published samples with published_date and passes now_override', async () => {
+    fetchSlaStatusesMock.mockResolvedValue([
+      {
+        key: 'uid-PB-001',
+        status: {
+          target_minutes: 1440,
+          elapsed_minutes: 1680, // 28h
+          remaining_minutes: -240,
+          breached: true,
+        },
+      },
+    ])
+    const lookup = makeLookup({
+      review_state: 'published',
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      published_coa: { published_date: '2026-01-02T13:00:00' } as any,
+    })
+    const { result } = renderHook(() => useSampleSla(lookup), { wrapper })
+    await waitFor(() => {
+      expect(result.current.snapshot).not.toBeNull()
+    })
+    expect(result.current.isPublished).toBe(true)
+    expect(fetchSlaStatusesMock).toHaveBeenCalledTimes(1)
+    const sent = fetchSlaStatusesMock.mock.calls[0]?.[0]
+    expect(sent?.[0]?.now_override).toBe('2026-01-02T13:00:00')
+  })
+
+  it('omits now_override for non-published (live) samples', async () => {
+    fetchSlaStatusesMock.mockResolvedValue([
+      {
+        key: 'uid-PB-001',
+        status: {
+          target_minutes: 1440,
+          elapsed_minutes: 60,
+          remaining_minutes: 1380,
+          breached: false,
+        },
+      },
+    ])
+    const lookup = makeLookup() // default review_state = sample_received
+    const { result } = renderHook(() => useSampleSla(lookup), { wrapper })
+    await waitFor(() => {
+      expect(result.current.snapshot).not.toBeNull()
+    })
+    expect(result.current.isPublished).toBe(false)
+    const sent = fetchSlaStatusesMock.mock.calls[0]?.[0]
+    expect(sent?.[0]?.now_override).toBeUndefined()
   })
 
   it('returns null snapshot when sample has no date_received', async () => {

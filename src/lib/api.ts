@@ -4028,6 +4028,10 @@ export interface SlaStatusRequestItem {
   received_at: string | null
   target_minutes: number
   business_hours_only: boolean
+  /** Historical mode for published samples — when set, the server uses this as
+   *  "now" instead of wall-clock UTC so elapsed = (published - received). Used
+   *  by SampleHeaderSla on published samples to show "took Xh / Met / Missed". */
+  now_override?: string | null
 }
 
 export interface SlaStatus {
