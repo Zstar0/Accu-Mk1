@@ -17,6 +17,10 @@ export interface SlaBreakdownTooltipProps {
    *  hosts the tooltip. SampleSlaIndicator + SampleHeaderSla pass `undefined`
    *  (the surface IS the sample); OrderSlaCell passes the driving sample id. */
   drivingSampleId?: string
+  /** When true, swap the live countdown headline and "Elapsed:" label for a
+   *  historical "Met / Missed by Xh" headline and "Total time:" label. Driven
+   *  by `useSampleSla.isPublished`. */
+  isPublished?: boolean
 }
 
 /**
@@ -31,11 +35,24 @@ export function SlaBreakdownTooltip({
   reason,
   priority,
   drivingSampleId,
+  isPublished = false,
 }: SlaBreakdownTooltipProps) {
   const { t } = useTranslation()
-  const headline = status.breached
-    ? t('orderStatus.sla.over', { time: formatMinutes(status.remaining_minutes) })
-    : t('orderStatus.sla.left', { time: formatMinutes(status.remaining_minutes) })
+  let headline: string
+  if (isPublished) {
+    headline = status.breached
+      ? t('orderStatus.sla.publishedMissed', {
+          time: formatMinutes(Math.abs(status.remaining_minutes)),
+        })
+      : t('orderStatus.sla.publishedMet')
+  } else {
+    headline = status.breached
+      ? t('orderStatus.sla.over', { time: formatMinutes(status.remaining_minutes) })
+      : t('orderStatus.sla.left', { time: formatMinutes(status.remaining_minutes) })
+  }
+  const elapsedLabel = isPublished
+    ? t('orderStatus.sla.breakdown.totalTime')
+    : t('orderStatus.sla.breakdown.elapsed')
 
   const businessSuffix = tier.business_hours_only
     ? t('orderStatus.sla.businessSuffix')
@@ -99,7 +116,7 @@ export function SlaBreakdownTooltip({
           </span>
         </div>
         <div>
-          {t('orderStatus.sla.breakdown.elapsed')}{' '}
+          {elapsedLabel}{' '}
           <span className="tabular-nums">
             {formatMinutes(status.elapsed_minutes)}
           </span>

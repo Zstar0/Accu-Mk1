@@ -122,6 +122,11 @@
   "orderStatus.sla.breakdown.drivingSample": "Driving sample:",
   "orderStatus.sla.breakdown.priority": "Priority:",
   "orderStatus.sla.breakdown.unmapped": "{{count}} analyses had no service-group mapping: {{keywords}}",
+  "orderStatus.sla.publishedTook": "took {{time}}",
+  "orderStatus.sla.publishedMet": "Met",
+  "orderStatus.sla.publishedMissed": "Missed by {{time}}",
+  "orderStatus.sla.breakdown.totalTime": "Total time:",
+  "orderStatus.sla.breakdown.result": "Result:",
 
   "common.enabled": "Activé",
   "common.disabled": "Désactivé",

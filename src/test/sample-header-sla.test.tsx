@@ -92,10 +92,64 @@ describe('SampleHeaderSla', () => {
     expect(container.firstChild).toBeNull()
   })
 
-  it('renders nothing when sample is published', () => {
-    const lookup = makeLookup({ review_state: 'published' })
-    const { container } = render(<SampleHeaderSla lookup={lookup} />, { wrapper })
-    expect(container.firstChild).toBeNull()
+  it('renders "took Xh" + met color for published sample within SLA', async () => {
+    fetchSlaStatusesMock.mockResolvedValue([
+      {
+        key: 'uid-PB-001',
+        status: {
+          target_minutes: 1440,
+          elapsed_minutes: 1200,
+          remaining_minutes: 240,
+          breached: false,
+        },
+      },
+    ])
+    const lookup = makeLookup({
+      review_state: 'published',
+      published_coa: {
+        published_date: '2026-01-01T22:00:00',
+        publisher: 'tester',
+        report_path: '/tmp/report.pdf',
+      },
+    } as unknown as Partial<SenaiteLookupResult>)
+    render(<SampleHeaderSla lookup={lookup} />, { wrapper })
+    await waitFor(() => {
+      const el = screen.queryByTestId('sample-header-sla')
+      expect(el?.getAttribute('data-sla-color')).toBe('met')
+    })
+    const el = screen.getByTestId('sample-header-sla')
+    // i18n returns the key when no instance, so the text matches either the
+    // rendered English "took" or the raw key "publishedTook".
+    expect(el.textContent ?? '').toMatch(/took|publishedTook/i)
+  })
+
+  it('renders "took Xh" + missed color for published sample over SLA', async () => {
+    fetchSlaStatusesMock.mockResolvedValue([
+      {
+        key: 'uid-PB-001',
+        status: {
+          target_minutes: 1440,
+          elapsed_minutes: 1920,
+          remaining_minutes: -480,
+          breached: true,
+        },
+      },
+    ])
+    const lookup = makeLookup({
+      review_state: 'published',
+      published_coa: {
+        published_date: '2026-01-02T17:00:00',
+        publisher: 'tester',
+        report_path: '/tmp/report.pdf',
+      },
+    } as unknown as Partial<SenaiteLookupResult>)
+    render(<SampleHeaderSla lookup={lookup} />, { wrapper })
+    await waitFor(() => {
+      const el = screen.queryByTestId('sample-header-sla')
+      expect(el?.getAttribute('data-sla-color')).toBe('missed')
+    })
+    const el = screen.getByTestId('sample-header-sla')
+    expect(el.textContent ?? '').toMatch(/took|publishedTook/i)
   })
 
   it('renders loading state while queries are in-flight', async () => {

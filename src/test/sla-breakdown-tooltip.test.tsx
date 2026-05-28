@@ -137,4 +137,72 @@ describe('SlaBreakdownTooltip', () => {
     )
     expect(screen.getByText(/PB-0056/)).toBeInTheDocument()
   })
+
+  it('renders "Met" header when isPublished + not breached', () => {
+    const reason: SampleSlaReason = {
+      tierSource: 'group',
+      unmappedKeywords: [],
+    }
+    const publishedStatus: SlaStatus = {
+      target_minutes: 1440,
+      elapsed_minutes: 1200,
+      remaining_minutes: 240,
+      breached: false,
+    }
+    render(
+      <SlaBreakdownTooltip
+        tier={tier}
+        status={publishedStatus}
+        reason={reason}
+        priority="normal"
+        isPublished
+      />
+    )
+    const el = screen.getByTestId('sla-breakdown-tooltip')
+    // i18n fallback returns the key text when no instance is configured, so
+    // either the rendered English "Met" or the raw "publishedMet" matches.
+    expect(el.textContent ?? '').toMatch(/met|publishedMet/i)
+  })
+
+  it('renders "Missed by Xh" header when isPublished + breached', () => {
+    const reason: SampleSlaReason = {
+      tierSource: 'group',
+      unmappedKeywords: [],
+    }
+    const breachedStatus: SlaStatus = {
+      target_minutes: 1440,
+      elapsed_minutes: 1920,
+      remaining_minutes: -480,
+      breached: true,
+    }
+    render(
+      <SlaBreakdownTooltip
+        tier={tier}
+        status={breachedStatus}
+        reason={reason}
+        priority="normal"
+        isPublished
+      />
+    )
+    const el = screen.getByTestId('sla-breakdown-tooltip')
+    expect(el.textContent ?? '').toMatch(/missed|publishedMissed/i)
+  })
+
+  it('renders "Total time:" instead of "Elapsed:" when isPublished', () => {
+    const reason: SampleSlaReason = {
+      tierSource: 'group',
+      unmappedKeywords: [],
+    }
+    render(
+      <SlaBreakdownTooltip
+        tier={tier}
+        status={status}
+        reason={reason}
+        priority="normal"
+        isPublished
+      />
+    )
+    const el = screen.getByTestId('sla-breakdown-tooltip')
+    expect(el.textContent ?? '').toMatch(/total time|totalTime/i)
+  })
 })
