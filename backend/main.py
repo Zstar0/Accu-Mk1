@@ -1930,6 +1930,10 @@ class SlaStatusRequestItem(BaseModel):
     received_at: Optional[datetime] = None
     target_minutes: int
     business_hours_only: bool = False
+    # Historical mode for published samples: when set, the server uses this as
+    # the "now" instead of `datetime.utcnow()`. Lets the UI render frozen-in-time
+    # SLA results ("took 28h, Met/Missed") on the Sample Details header.
+    now_override: Optional[datetime] = None
 
 
 class SlaStatusRequest(BaseModel):
@@ -12205,10 +12209,16 @@ async def compute_sla_statuses(
         # Normalize to naive UTC (an offset-aware ISO string is converted).
         if recv.tzinfo is not None:
             recv = recv.astimezone(timezone.utc).replace(tzinfo=None)
+        # Per-item "now": published samples send `now_override` (their
+        # publication date) so elapsed = (published - received). Live samples
+        # leave it null and get the request-time wall clock.
+        item_now = item.now_override or now
+        if item_now.tzinfo is not None:
+            item_now = item_now.astimezone(timezone.utc).replace(tzinfo=None)
         if item.business_hours_only and schedule is not None:
-            elapsed = compute_business_minutes(recv, now, schedule, is_holiday)
+            elapsed = compute_business_minutes(recv, item_now, schedule, is_holiday)
         else:
-            elapsed = (now - recv).total_seconds() / 60.0
+            elapsed = (item_now - recv).total_seconds() / 60.0
         results.append(
             SlaStatusResultItem(key=item.key, status=sla_status_dict(item.target_minutes, elapsed))
         )

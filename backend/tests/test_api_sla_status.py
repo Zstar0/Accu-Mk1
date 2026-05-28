@@ -63,6 +63,47 @@ def test_business_hours_path_differs_from_raw():
     assert by_key["bh"] < by_key["raw"]
 
 
+def test_now_override_uses_provided_datetime_as_now():
+    # A sample "received" 10h ago with now_override=5h-ago should report ~5h elapsed,
+    # not ~10h (the real wall-clock since received). Proves the override is honored.
+    received = (datetime.utcnow() - timedelta(hours=10)).isoformat()
+    override = (datetime.utcnow() - timedelta(hours=5)).isoformat()
+    resp = client.post("/sla/status", json={"items": [{
+        "key": "k", "received_at": received, "target_minutes": 60,
+        "business_hours_only": False, "now_override": override,
+    }]})
+    assert resp.status_code == 200, resp.text
+    item = resp.json()["items"][0]
+    # Elapsed should be ~5h (300 minutes), NOT ~10h (the real wall-clock since received).
+    assert 295 <= item["status"]["elapsed_minutes"] <= 305
+
+
+def test_now_override_business_hours_mode():
+    # Same shape but with business_hours_only=True. Just assert non-negative + finite —
+    # business-hours math has its own coverage; we only need to prove the override flows.
+    received = (datetime.utcnow() - timedelta(days=2)).isoformat()
+    override = (datetime.utcnow() - timedelta(days=1)).isoformat()
+    resp = client.post("/sla/status", json={"items": [{
+        "key": "bh", "received_at": received, "target_minutes": 60,
+        "business_hours_only": True, "now_override": override,
+    }]})
+    assert resp.status_code == 200, resp.text
+    item = resp.json()["items"][0]
+    assert item["status"] is not None
+    assert item["status"]["elapsed_minutes"] >= 0
+
+
+def test_now_override_absent_uses_actual_now():
+    # No now_override → server falls back to datetime.utcnow(). Backwards-compat check.
+    received = (datetime.utcnow() - timedelta(minutes=120)).isoformat()
+    resp = client.post("/sla/status", json={"items": [{
+        "key": "live", "received_at": received, "target_minutes": 60, "business_hours_only": False,
+    }]})
+    assert resp.status_code == 200, resp.text
+    item = resp.json()["items"][0]
+    assert 119 <= item["status"]["elapsed_minutes"] <= 121
+
+
 def test_loaded_once_query_count_is_constant_regardless_of_batch_size():
     # Count statements against config + holidays tables; must not scale with N.
     def _count_for(n):
