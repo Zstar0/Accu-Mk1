@@ -1878,12 +1878,15 @@ class SlaPriorityTierSet(BaseModel):
 # ── D2: bulk per-sample priority lookup ────────────────────────────────────
 
 class SamplePriorityLookupRequest(BaseModel):
-    sample_uids: list[str]
+    sample_uids: list[str] = Field(..., min_length=1, max_length=500)
 
 
 class SamplePriorityResponseItem(BaseModel):
     sample_uid: str
-    priority: Literal["normal", "high", "expedited"]
+    priority: SlaPriority
+
+    class Config:
+        from_attributes = True
 
 
 class SamplePriorityLookupResponse(BaseModel):
@@ -12810,18 +12813,11 @@ async def lookup_sample_priorities(
     Hard cap 500 UIDs per request — a sanity bound that more than covers the
     visible-orders page at tens-to-low-hundreds of samples.
     """
-    if not req.sample_uids:
-        raise HTTPException(422, "sample_uids must be a non-empty list")
-    if len(req.sample_uids) > 500:
-        raise HTTPException(422, "too many sample_uids; max 500")
     rows = db.execute(
         select(SamplePriority).where(SamplePriority.sample_uid.in_(req.sample_uids))
     ).scalars().all()
     return SamplePriorityLookupResponse(
-        items=[
-            SamplePriorityResponseItem(sample_uid=r.sample_uid, priority=r.priority)  # type: ignore[arg-type]
-            for r in rows
-        ]
+        items=[SamplePriorityResponseItem.model_validate(r, from_attributes=True) for r in rows]
     )
 
 
