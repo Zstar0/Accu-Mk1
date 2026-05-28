@@ -111,7 +111,12 @@ function TierCard({
 }: {
   tier: SlaTier
   readOnly: boolean
-  onSave: (data: { name: string; target_minutes: number; business_hours_only: boolean }) => void
+  onSave: (data: {
+    name: string
+    target_minutes: number
+    business_hours_only: boolean
+    amber_threshold_percent: number
+  }) => void
   onDelete: () => void
 }) {
   const { t } = useTranslation()
@@ -120,15 +125,31 @@ function TierCard({
   const [hours, setHours] = useState(String(hm.hours))
   const [minutes, setMinutes] = useState(String(hm.minutes))
   const [bh, setBh] = useState(tier.business_hours_only)
+  const [amber, setAmber] = useState(String(tier.amber_threshold_percent))
 
   const commit = () => {
     if (readOnly) return
     const total = (parseInt(hours, 10) || 0) * 60 + (parseInt(minutes, 10) || 0)
     const nextName = name.trim() || tier.name
-    if (nextName === tier.name && total === tier.target_minutes && bh === tier.business_hours_only) {
+    const amberParsed = parseInt(amber, 10)
+    const nextAmber =
+      Number.isFinite(amberParsed) && amberParsed >= 1 && amberParsed <= 100
+        ? amberParsed
+        : tier.amber_threshold_percent
+    if (
+      nextName === tier.name &&
+      total === tier.target_minutes &&
+      bh === tier.business_hours_only &&
+      nextAmber === tier.amber_threshold_percent
+    ) {
       return // nothing changed
     }
-    onSave({ name: nextName, target_minutes: total, business_hours_only: bh })
+    onSave({
+      name: nextName,
+      target_minutes: total,
+      business_hours_only: bh,
+      amber_threshold_percent: nextAmber,
+    })
   }
 
   return (
@@ -167,12 +188,31 @@ function TierCard({
                 name: name.trim() || tier.name,
                 target_minutes: (parseInt(hours, 10) || 0) * 60 + (parseInt(minutes, 10) || 0),
                 business_hours_only: v,
+                amber_threshold_percent: Math.min(
+                  100,
+                  Math.max(1, parseInt(amber, 10) || tier.amber_threshold_percent)
+                ),
               })
             }
           }}
         />
         <span className="text-sm">{t('preferences.sla.businessHoursOnly')}</span>
         <span className="text-xs text-muted-foreground">— {t('preferences.sla.businessHoursHint')}</span>
+      </div>
+      <div className="flex items-center gap-2 text-sm">
+        <span className="text-muted-foreground">{t('preferences.sla.amberThreshold')}</span>
+        <Input
+          data-testid={`sla-amber-input-${tier.id}`}
+          className="h-8 w-16"
+          type="number"
+          min={1}
+          max={100}
+          value={amber}
+          disabled={readOnly}
+          onChange={e => setAmber(e.target.value)}
+          onBlur={commit}
+        />
+        <span className="text-muted-foreground">{t('preferences.sla.percentRemaining')}</span>
       </div>
     </div>
   )

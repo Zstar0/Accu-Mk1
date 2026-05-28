@@ -85,6 +85,8 @@
   "preferences.sla.readOnly": "You have read-only access to SLA settings.",
   "preferences.sla.newTierDefaultName": "New tier",
   "preferences.sla.loadError": "Failed to load SLA settings.",
+  "preferences.sla.amberThreshold": "Amber at",
+  "preferences.sla.percentRemaining": "% remaining",
 
   "preferences.businessHours": "Business Hours",
   "preferences.businessHours.readOnly": "You have read-only access to business-hours settings.",
