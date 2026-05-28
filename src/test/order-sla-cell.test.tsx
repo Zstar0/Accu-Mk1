@@ -100,4 +100,10 @@ describe('OrderSlaCell — 7 states', () => {
     const cell = screen.getByTestId('order-sla-cell')
     expect(cell.getAttribute('data-sla-color')).toBe('error')
   })
+
+  it('isError takes priority over isLoading', () => {
+    render(<OrderSlaCell verdict={{ color: 'awaiting' }} isLoading isError />)
+    const cell = screen.getByTestId('order-sla-cell')
+    expect(cell.getAttribute('data-sla-color')).toBe('error')
+  })
 })

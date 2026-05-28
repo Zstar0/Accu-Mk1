@@ -105,6 +105,7 @@
   "orderStatus.sla.loading": "Loading SLA…",
   "orderStatus.sla.unavailable": "SLA unavailable",
   "orderStatus.sla.tooltipFull": "{{tier}} • target {{target}} • {{elapsed}} elapsed{{businessSuffix}} • sample {{sampleId}}",
+  "orderStatus.sla.tooltipSample": "{{tier}} • target {{target}} • {{elapsed}} elapsed{{businessSuffix}}",
   "orderStatus.sla.businessSuffix": " (business hours)",
   "orderStatus.sla.allPublished": "All samples published",
 

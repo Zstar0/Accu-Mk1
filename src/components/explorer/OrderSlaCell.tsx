@@ -1,8 +1,9 @@
 import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
-import type { OrderSlaVerdict } from '@/lib/sla-resolution'
+import { formatMinutes, formatTarget } from '@/lib/sla-format'
+import type { OrderSlaColor, OrderSlaVerdict } from '@/lib/sla-resolution'
 
-const COLOR_CLASS: Record<string, string> = {
+const COLOR_CLASS: Record<OrderSlaColor, string> = {
   red: 'text-red-500',
   amber: 'text-amber-500',
   green: 'text-green-600',
@@ -12,7 +13,7 @@ const COLOR_CLASS: Record<string, string> = {
   error: 'text-muted-foreground',
 }
 
-const DOT: Record<string, string> = {
+const DOT: Record<OrderSlaColor, string> = {
   red: '●',
   amber: '●',
   green: '●',
@@ -20,20 +21,6 @@ const DOT: Record<string, string> = {
   awaiting: '—',
   loading: '…',
   error: '—',
-}
-
-function formatMinutes(min: number): string {
-  const abs = Math.abs(min)
-  if (abs < 60) return `${Math.round(abs)}m`
-  if (abs < 60 * 24) return `${(abs / 60).toFixed(1).replace(/\.0$/, '')}h`
-  const days = Math.floor(abs / (60 * 24))
-  const hours = Math.round((abs - days * 60 * 24) / 60)
-  return hours > 0 ? `${days}d ${hours}h` : `${days}d`
-}
-
-function formatTarget(min: number): string {
-  if (min % 60 === 0) return `${min / 60}h`
-  return `${min}m`
 }
 
 export function OrderSlaCell({
@@ -46,7 +33,7 @@ export function OrderSlaCell({
   isError?: boolean
 }) {
   const { t } = useTranslation()
-  const color = isError ? 'error' : isLoading ? 'loading' : verdict.color
+  const color: OrderSlaColor = isError ? 'error' : isLoading ? 'loading' : verdict.color
   const className = COLOR_CLASS[color] ?? 'text-muted-foreground'
   const dot = DOT[color]
 
@@ -96,6 +83,7 @@ export function OrderSlaCell({
     >
       <span aria-hidden="true">{dot}</span>
       {text && <span>{text}</span>}
+      {!text && tooltip && <span className="sr-only">{tooltip}</span>}
     </span>
   )
 }
