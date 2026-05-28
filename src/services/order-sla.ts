@@ -183,21 +183,26 @@ export function useOrderSlaStatuses(
       }
     }
     for (const order of orders) {
-      if (!order.sample_results) continue
       const cells: SampleSlaCellState[] = []
-      for (const entry of Object.values(order.sample_results)) {
-        if (!entry.senaite_id || entry.status === 'failed') continue
-        const lq = sampleLookupMap.get(entry.senaite_id)
-        if (!lq?.data) continue
-        const snap = sampleStatusBySampleId.get(entry.senaite_id)
-        cells.push({
-          senaiteId: entry.senaite_id,
-          tier: sampleTierById.get(entry.senaite_id) ?? null,
-          lookup: lq.data,
-          status: snap?.status ?? null,
-          color: snap?.color ?? null,
-        })
+      if (order.sample_results) {
+        for (const entry of Object.values(order.sample_results)) {
+          if (!entry.senaite_id || entry.status === 'failed') continue
+          const lq = sampleLookupMap.get(entry.senaite_id)
+          if (!lq?.data) continue
+          const snap = sampleStatusBySampleId.get(entry.senaite_id)
+          cells.push({
+            senaiteId: entry.senaite_id,
+            tier: sampleTierById.get(entry.senaite_id) ?? null,
+            lookup: lq.data,
+            status: snap?.status ?? null,
+            color: snap?.color ?? null,
+          })
+        }
       }
+      // Orders with null sample_results (failed-integration / pre-pipeline) fall
+      // through with an empty cells[] → aggregator returns { color: 'awaiting' }
+      // instead of being absent from verdictByOrderId (which would render as
+      // eternal "Loading SLA…" in OrderSlaCell).
       cellByOrderId.set(order.order_id, cells)
     }
     const verdictByOrderId = new Map<string | number, OrderSlaVerdict>()

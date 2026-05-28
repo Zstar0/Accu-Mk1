@@ -170,4 +170,23 @@ describe('useOrderSlaStatuses', () => {
     const { result } = renderHook(() => useOrderSlaStatuses(orders, lookupMap), { wrapper })
     await waitFor(() => expect(result.current.isError).toBe(true))
   })
+
+  it('orders with sample_results=null yield an awaiting verdict (not eternal loading)', async () => {
+    fetchSlaStatusesMock.mockResolvedValue([])
+    const orders = [
+      makeOrder({ order_id: 'OFAILED', sample_results: null }),
+    ]
+    const lookupMap = new Map<
+      string,
+      { data?: SenaiteLookupResult; isLoading: boolean; isError: boolean }
+    >()
+    const { result } = renderHook(
+      () => useOrderSlaStatuses(orders, lookupMap),
+      { wrapper }
+    )
+    await waitFor(() => {
+      expect(result.current.verdictByOrderId.has('OFAILED')).toBe(true)
+    })
+    expect(result.current.verdictByOrderId.get('OFAILED')?.color).toBe('awaiting')
+  })
 })
