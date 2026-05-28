@@ -290,7 +290,7 @@ describe('SampleCard — slaSnapshot indicator', () => {
         lookup={lookup}
         isLoading={false}
         isError={false}
-        slaSnapshot={baseSnapshot}
+        slaSnapshots={[baseSnapshot]}
       />,
       { wrapper }
     )
@@ -310,7 +310,7 @@ describe('SampleCard — slaSnapshot indicator', () => {
         lookup={lookup}
         isLoading={false}
         isError={false}
-        slaSnapshot={baseSnapshot}
+        slaSnapshots={[baseSnapshot]}
       />,
       { wrapper }
     )
@@ -328,7 +328,7 @@ describe('SampleCard — slaSnapshot indicator', () => {
         lookup={lookup}
         isLoading={false}
         isError={false}
-        slaSnapshot={baseSnapshot}
+        slaSnapshots={[baseSnapshot]}
       />,
       { wrapper }
     )

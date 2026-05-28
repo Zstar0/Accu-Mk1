@@ -308,7 +308,7 @@ export function OrderRow({
                   isLoading={lookup?.isLoading ?? true}
                   isError={lookup?.isError ?? false}
                   analyte={s.analyte}
-                  slaSnapshot={sampleSlaStatusesMap?.get(s.senaiteId)?.[0]}
+                  slaSnapshots={sampleSlaStatusesMap?.get(s.senaiteId)}
                   className={cn(
                     highlightSampleId === s.senaiteId &&
                       'ring-2 ring-primary ring-offset-2'

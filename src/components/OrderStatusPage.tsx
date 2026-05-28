@@ -281,7 +281,7 @@ function KanbanSampleCard({
             )}
           </div>
           {item.lookup?.date_received && item.lookup.review_state !== 'published' ? (
-            <SampleSlaIndicator snapshot={sampleSlaStatusesMap?.get(item.sampleId)?.[0]} />
+            <SampleSlaIndicator snapshots={sampleSlaStatusesMap?.get(item.sampleId)} />
           ) : (
             <span className={cn(
               'text-[10px] font-mono leading-none tabular-nums',

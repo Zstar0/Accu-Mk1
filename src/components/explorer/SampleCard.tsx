@@ -18,7 +18,7 @@ export function SampleCard({
   isError,
   className,
   analyte,
-  slaSnapshot,
+  slaSnapshots,
 }: {
   sampleId: string
   lookup: SenaiteLookupResult | undefined
@@ -37,14 +37,15 @@ export function SampleCard({
   // while the lookup is loading or has errored. When undefined/empty the
   // sub-row is omitted so empty orders don't get a whitespace gap.
   analyte?: string
-  // D2 follow-on — per-sample SLA snapshot keyed off `senaiteId`. Replaces the
-  // legacy hardcoded 24h/48h goalNote with the real tier-resolved indicator
-  // (priority>group>default precedence, business-hours math, configurable
-  // amber threshold). Only used on the normal render branch when the sample is
-  // non-published with a date_received — same gate as the legacy timer.
-  // useOrderSlaStatuses returns undefined for published or unresolved samples;
-  // when the prop is omitted the indicator simply doesn't render.
-  slaSnapshot?: SampleSlaSnapshot
+  // Multi-tier follow-on — per-sample SLA snapshots, one entry per service
+  // group the sample's analyses touch. Replaces the legacy hardcoded 24h/48h
+  // goalNote with the real tier-resolved indicator (priority>group>default
+  // precedence, business-hours math, configurable amber threshold). Only used
+  // on the normal render branch when the sample is non-published with a
+  // date_received — same gate as the legacy timer. useOrderSlaStatuses
+  // returns undefined for published or unresolved samples; when the prop is
+  // omitted (or empty array) the indicator simply doesn't render.
+  slaSnapshots?: SampleSlaSnapshot[]
 }) {
   const navigateToSample = useUIStore(state => state.navigateToSample)
   const hasAnalyte = typeof analyte === 'string' && analyte.length > 0
@@ -124,7 +125,7 @@ export function SampleCard({
         <AnalysisCounts counts={counts} needsAttention={needsAttention} />
         {lookup.date_received && lookup.review_state !== 'published' && (
           <span className="ml-auto shrink-0">
-            <SampleSlaIndicator snapshot={slaSnapshot} />
+            <SampleSlaIndicator snapshots={slaSnapshots} />
           </span>
         )}
       </div>
