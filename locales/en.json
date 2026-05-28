@@ -117,6 +117,17 @@
   "preferences.businessHours.sat": "Sat",
   "preferences.businessHours.sun": "Sun",
 
+  "orderStatus.sla": "SLA",
+  "orderStatus.sla.left": "{{time}} left",
+  "orderStatus.sla.over": "over by {{time}}",
+  "orderStatus.sla.met": "Met",
+  "orderStatus.sla.awaiting": "Awaiting sample",
+  "orderStatus.sla.loading": "Loading SLA…",
+  "orderStatus.sla.unavailable": "SLA unavailable",
+  "orderStatus.sla.tooltipFull": "{{tier}} • target {{target}} • {{elapsed}} elapsed{{businessSuffix}} • sample {{sampleId}}",
+  "orderStatus.sla.businessSuffix": " (business hours)",
+  "orderStatus.sla.allPublished": "All samples published",
+
   "common.enabled": "Enabled",
   "common.disabled": "Disabled",
   "common.reset": "Reset",
