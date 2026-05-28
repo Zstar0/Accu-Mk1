@@ -1,6 +1,16 @@
 import '@testing-library/jest-dom'
 import { vi } from 'vitest'
 
+// jsdom doesn't implement Element.scrollIntoView, but Radix's Select uses it
+// after the popover mounts. Polyfill so tests that open Radix Select dropdowns
+// (e.g. SLA preferences pane) don't crash on the uncaught exception.
+if (!Element.prototype.scrollIntoView) {
+  Object.defineProperty(Element.prototype, 'scrollIntoView', {
+    writable: true,
+    value: vi.fn(),
+  })
+}
+
 // Mock matchMedia for tests
 Object.defineProperty(window, 'matchMedia', {
   writable: true,

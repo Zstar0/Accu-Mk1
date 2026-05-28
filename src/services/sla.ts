@@ -49,8 +49,19 @@ export function useDeleteSlaTier() {
 export function useSetPriorityTier() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: ({ priority, slaTierId }: { priority: InboxPriority; slaTierId: number }) =>
-      setSlaPriorityTier(priority, slaTierId),
+    // serviceGroupId omitted/null = global override; an id scopes to that group.
+    // Multi-tier reshape: precedence resolves (priority, group_id) before
+    // (priority, NULL) so lab can layer e.g. expedited-HPLC=4h on top of a
+    // global expedited tier.
+    mutationFn: ({
+      priority,
+      slaTierId,
+      serviceGroupId,
+    }: {
+      priority: InboxPriority
+      slaTierId: number
+      serviceGroupId?: number | null
+    }) => setSlaPriorityTier(priority, slaTierId, serviceGroupId),
     onSuccess: () => qc.invalidateQueries({ queryKey: slaQueryKeys.priorityTiers }),
     onError: (e: Error) => toast.error(e.message),
   })
@@ -59,7 +70,15 @@ export function useSetPriorityTier() {
 export function useDeletePriorityTier() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (priority: InboxPriority) => deleteSlaPriorityTier(priority),
+    // Without serviceGroupId, removes the global override; with it, removes
+    // only the per-group row (the global one survives).
+    mutationFn: ({
+      priority,
+      serviceGroupId,
+    }: {
+      priority: InboxPriority
+      serviceGroupId?: number | null
+    }) => deleteSlaPriorityTier(priority, serviceGroupId),
     onSuccess: () => qc.invalidateQueries({ queryKey: slaQueryKeys.priorityTiers }),
     onError: (e: Error) => toast.error(e.message),
   })
