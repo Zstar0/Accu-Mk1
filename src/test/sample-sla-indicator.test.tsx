@@ -12,6 +12,7 @@ describe('SampleSlaIndicator', () => {
     render(
       <SampleSlaIndicator
         snapshot={{
+          groupKey: 'no-group',
           color: 'amber',
           status: { target_minutes: 100, elapsed_minutes: 80, remaining_minutes: 20, breached: false },
           tier: {
@@ -37,6 +38,7 @@ describe('SampleSlaIndicator', () => {
     render(
       <SampleSlaIndicator
         snapshot={{
+          groupKey: 'no-group',
           color: 'red',
           status: { target_minutes: 100, elapsed_minutes: 150, remaining_minutes: -50, breached: true },
           tier: {

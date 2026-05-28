@@ -189,12 +189,15 @@ function KanbanSampleCard({
   item,
   showOrder,
   showAnalysisServices,
-  sampleSlaStatusMap,
+  sampleSlaStatusesMap,
 }: {
   item: KanbanSampleItem
   showOrder: boolean
   showAnalysisServices: boolean
-  sampleSlaStatusMap?: Map<string, SampleSlaSnapshot>
+  // Multi-tier follow-on: each sample now has an array of snapshots (one per
+  // service group). Until the indicator itself renders stacked rows, we pick
+  // the first element so behavior stays single-tier-visible.
+  sampleSlaStatusesMap?: Map<string, SampleSlaSnapshot[]>
 }) {
   const navigateToSample = useUIStore(state => state.navigateToSample)
   const navigateToOrderExplorer = useUIStore(state => state.navigateToOrderExplorer)
@@ -278,7 +281,7 @@ function KanbanSampleCard({
             )}
           </div>
           {item.lookup?.date_received && item.lookup.review_state !== 'published' ? (
-            <SampleSlaIndicator snapshot={sampleSlaStatusMap?.get(item.sampleId)} />
+            <SampleSlaIndicator snapshot={sampleSlaStatusesMap?.get(item.sampleId)?.[0]} />
           ) : (
             <span className={cn(
               'text-[10px] font-mono leading-none tabular-nums',
@@ -308,14 +311,14 @@ function KanbanView({
   groupByOrder,
   activeStates,
   showAnalysisServices,
-  sampleSlaStatusMap,
+  sampleSlaStatusesMap,
 }: {
   orders: ExplorerOrder[]
   sampleLookupMap: Map<string, { data?: SenaiteLookupResult; isLoading: boolean; isError: boolean }>
   groupByOrder: boolean
   activeStates: string[]
   showAnalysisServices: boolean
-  sampleSlaStatusMap?: Map<string, SampleSlaSnapshot>
+  sampleSlaStatusesMap?: Map<string, SampleSlaSnapshot[]>
 }) {
   // Determine which columns to show — all if no filter, else just the active one
   const visibleCols = activeStates.length > 0
@@ -402,7 +405,7 @@ function KanbanView({
                     item={item}
                     showOrder={true}
                     showAnalysisServices={showAnalysisServices}
-                    sampleSlaStatusMap={sampleSlaStatusMap}
+                    sampleSlaStatusesMap={sampleSlaStatusesMap}
                   />
                 ))}
               </div>
@@ -455,7 +458,7 @@ function KanbanView({
                           item={item}
                           showOrder={false}
                           showAnalysisServices={showAnalysisServices}
-                          sampleSlaStatusMap={sampleSlaStatusMap}
+                          sampleSlaStatusesMap={sampleSlaStatusesMap}
                         />
                       ))
                     )}
@@ -1121,7 +1124,7 @@ export function OrderStatusPage() {
                         sampleLookupMap={sampleLookupMap}
                         activeAnalysisStates={orderFilters.activeStates}
                         slaVerdict={orderSla.verdictByOrderId.get(order.order_id)}
-                        sampleSlaStatusMap={orderSla.sampleStatusBySampleId}
+                        sampleSlaStatusesMap={orderSla.sampleStatusesBySampleId}
                       />
                     ))}
                   </tbody>
@@ -1137,7 +1140,7 @@ export function OrderStatusPage() {
                   groupByOrder={orderFilters.groupByOrder}
                   activeStates={orderFilters.activeStates}
                   showAnalysisServices={orderFilters.showAnalysisServices}
-                  sampleSlaStatusMap={orderSla.sampleStatusBySampleId}
+                  sampleSlaStatusesMap={orderSla.sampleStatusesBySampleId}
                 />
               </div>
             )}

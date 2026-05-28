@@ -32,7 +32,7 @@ export function OrderRow({
   highlightSampleId,
   showFinance,
   slaVerdict,
-  sampleSlaStatusMap,
+  sampleSlaStatusesMap,
 }: {
   order: ExplorerOrder
   wordpressHost: string
@@ -66,12 +66,13 @@ export function OrderRow({
   // D2: order-aggregated SLA verdict. Undefined means "loading" (the cell renders
   // a muted loading dot). The parent passes verdicts from useOrderSlaStatuses.
   slaVerdict?: OrderSlaVerdict
-  // D2 follow-on: per-sample SLA snapshots keyed by senaiteId. Forwarded to each
-  // SampleCard so the in-row sample timer matches the SLA column (real tier
-  // resolution + business-hours math) instead of the legacy hardcoded 24/48h.
+  // D2 follow-on: per-sample SLA snapshots keyed by senaiteId. Each value is
+  // an array (one entry per service group the sample touches) per the multi-
+  // tier reshape; OrderRow forwards the first entry to SampleCard which still
+  // renders a single indicator. Multi-row UI lands in a follow-on commit.
   // Undefined when the page hasn't plumbed it yet; SampleCard renders no
   // indicator in that case.
-  sampleSlaStatusMap?: Map<string, SampleSlaSnapshot>
+  sampleSlaStatusesMap?: Map<string, SampleSlaSnapshot[]>
 }) {
   const [financeExpanded, setFinanceExpanded] = useState(false)
   const wpUrl = `${wordpressHost}/wp-admin/post.php?post=${order.order_id}&action=edit`
@@ -307,7 +308,7 @@ export function OrderRow({
                   isLoading={lookup?.isLoading ?? true}
                   isError={lookup?.isError ?? false}
                   analyte={s.analyte}
-                  slaSnapshot={sampleSlaStatusMap?.get(s.senaiteId)}
+                  slaSnapshot={sampleSlaStatusesMap?.get(s.senaiteId)?.[0]}
                   className={cn(
                     highlightSampleId === s.senaiteId &&
                       'ring-2 ring-primary ring-offset-2'

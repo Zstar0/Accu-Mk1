@@ -101,7 +101,7 @@ beforeEach(() => {
 })
 
 describe('useOrderSlaStatuses', () => {
-  it('builds one /sla/status batch item per received-but-unpublished sample, keyed by sample_uid', async () => {
+  it('builds one /sla/status batch item per (sample_uid, group_key) bucket', async () => {
     fetchSlaStatusesMock.mockResolvedValue([])
     const orders = [
       makeOrder({
@@ -122,7 +122,9 @@ describe('useOrderSlaStatuses', () => {
     expect(passed).toHaveLength(1)
     const item = passed[0]
     expect(item).toBeDefined()
-    expect(item?.key).toBe('PB-001-uid')
+    // Multi-tier reshape: the key is now `${sample_uid}|${groupKey}`. Lookup
+    // with no analyses → no-group bucket → key suffix '|no-group'.
+    expect(item?.key).toBe('PB-001-uid|no-group')
     expect(item?.received_at).toBe('2026-01-01T09:00:00')
   })
 
@@ -218,9 +220,11 @@ describe('useOrderSlaStatuses', () => {
   })
 
   it('transitions from omitted (loading) to a real verdict once the sample lookup resolves', async () => {
+    // Multi-tier reshape: batch keys are `${sample_uid}|${groupKey}`. With no
+    // analyses, the sample falls into the NO_GROUP_KEY bucket → 'no-group' suffix.
     fetchSlaStatusesMock.mockResolvedValue([
       {
-        key: 'PB-002-uid',
+        key: 'PB-002-uid|no-group',
         status: { target_minutes: 1440, elapsed_minutes: 100, remaining_minutes: 1340, breached: false },
       },
     ])
@@ -266,9 +270,85 @@ describe('useOrderSlaStatuses', () => {
     )
   })
 
-  it('keeps previous verdicts during refetch when sampleUids set grows (no flicker)', async () => {
+  it('sample with analyses spanning HPLC + Sterility groups yields two snapshots (multi-tier)', async () => {
+    // Tiers: default 24h, HPLC 24h, Sterility 7d
+    const hplcTier = {
+      id: 2, name: 'HPLC', target_minutes: 1440, business_hours_only: false,
+      is_default: false, amber_threshold_percent: 20,
+      created_at: '2026-01-01T00:00:00', updated_at: '2026-01-01T00:00:00',
+    }
+    const sterTier = {
+      id: 3, name: 'Sterility', target_minutes: 10080, business_hours_only: false,
+      is_default: false, amber_threshold_percent: 20,
+      created_at: '2026-01-01T00:00:00', updated_at: '2026-01-01T00:00:00',
+    }
+    getSlaTiersMock.mockResolvedValue([
+      {
+        id: 1, name: 'default', target_minutes: 1440, business_hours_only: false,
+        is_default: true, amber_threshold_percent: 80,
+        created_at: '2026-01-01T00:00:00', updated_at: '2026-01-01T00:00:00',
+      },
+      hplcTier, sterTier,
+    ])
+    getAnalysisServicesMock.mockResolvedValue([
+      { id: 100, keyword: 'kw_hplc' },
+      { id: 200, keyword: 'kw_sterility' },
+    ])
+    getServiceGroupsMock.mockResolvedValue([
+      { id: 10, name: 'HPLC', sla_tier_id: hplcTier.id, member_ids: [100] },
+      { id: 11, name: 'Sterility', sla_tier_id: sterTier.id, member_ids: [200] },
+    ])
+
+    // /sla/status returns one status per (sample_uid, group) composite key —
+    // HPLC breached, Sterility on-track.
     fetchSlaStatusesMock.mockResolvedValue([
-      { key: 'uid-A', status: { target_minutes: 1440, elapsed_minutes: 60, remaining_minutes: 1380, breached: false } },
+      { key: 'uid-PB-001|10', status: { target_minutes: 1440, elapsed_minutes: 2880, remaining_minutes: -1440, breached: true } },
+      { key: 'uid-PB-001|11', status: { target_minutes: 10080, elapsed_minutes: 100, remaining_minutes: 9980, breached: false } },
+    ])
+
+    const lookup = {
+      ...makeLookup('uid-PB-001', '2026-01-01T09:00:00', 'sample_received'),
+      analyses: [
+        { keyword: 'kw_hplc' } as never,
+        { keyword: 'kw_sterility' } as never,
+      ],
+    } as SenaiteLookupResult
+    const lookupMap = new Map([
+      ['PB-001', { data: lookup, isLoading: false, isError: false }],
+    ])
+    const orders = [
+      makeOrder({
+        order_id: 'OMT',
+        sample_results: { '1': { senaite_id: 'PB-001', status: 'ok' } } as never,
+      }),
+    ]
+
+    const { result } = renderHook(
+      () => useOrderSlaStatuses(orders, lookupMap),
+      { wrapper }
+    )
+
+    await waitFor(() => {
+      expect(result.current.sampleStatusesBySampleId.get('PB-001')?.length).toBe(2)
+    })
+    const snapshots = result.current.sampleStatusesBySampleId.get('PB-001') ?? []
+    const byGroup = new Map(snapshots.map(s => [s.groupKey, s]))
+    expect(byGroup.get(10)?.tier.id).toBe(hplcTier.id)
+    expect(byGroup.get(10)?.color).toBe('red') // breached
+    expect(byGroup.get(10)?.groupName).toBe('HPLC')
+    expect(byGroup.get(11)?.tier.id).toBe(sterTier.id)
+    expect(byGroup.get(11)?.color).toBe('green') // on-track
+    expect(byGroup.get(11)?.groupName).toBe('Sterility')
+    // Order verdict aggregates worst color across (sample, group) cells → red.
+    expect(result.current.verdictByOrderId.get('OMT')?.color).toBe('red')
+    expect(result.current.verdictByOrderId.get('OMT')?.drivingSampleId).toBe('PB-001')
+  })
+
+  it('keeps previous verdicts during refetch when sampleUids set grows (no flicker)', async () => {
+    // Multi-tier reshape: batch keys are `${sample_uid}|${groupKey}`. No
+    // analyses → NO_GROUP_KEY bucket → 'no-group' suffix on each key.
+    fetchSlaStatusesMock.mockResolvedValue([
+      { key: 'uid-A|no-group', status: { target_minutes: 1440, elapsed_minutes: 60, remaining_minutes: 1380, breached: false } },
     ])
     const lookupA = makeLookup('uid-A', '2026-01-01T09:00:00', 'sample_received')
     const lookupB = makeLookup('uid-B', '2026-01-01T10:00:00', 'sample_received')

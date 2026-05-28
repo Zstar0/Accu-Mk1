@@ -611,8 +611,11 @@ describe('OrderRow — finance disclosure (Option A)', () => {
 // to each SampleCard so the in-row sample timer uses the real tier-resolved
 // indicator instead of the legacy hardcoded 24/48h. Verifies prop plumbing by
 // asserting the SampleSlaIndicator surfaces with the correct data-sla-color.
-describe('OrderRow — sampleSlaStatusMap plumbing (D2 follow-on)', () => {
-  it('forwards the snapshot to each SampleCard when sampleSlaStatusMap is provided', async () => {
+// Multi-tier reshape: map values are now arrays (one snapshot per service
+// group); OrderRow forwards the first element to SampleCard until the
+// multi-row indicator UI lands.
+describe('OrderRow — sampleSlaStatusesMap plumbing (D2 follow-on)', () => {
+  it('forwards the first snapshot to each SampleCard when sampleSlaStatusesMap is provided', async () => {
     const order = makeOrder({
       sample_results: {
         '1': { senaite_id: 'BW-0010', status: 'created' },
@@ -653,31 +656,34 @@ describe('OrderRow — sampleSlaStatusMap plumbing (D2 follow-on)', () => {
           new Map([['BW-0010', { data: lookup, isLoading: false, isError: false }]])
         }
         activeAnalysisStates={[]}
-        sampleSlaStatusMap={
+        sampleSlaStatusesMap={
           new Map([
             [
               'BW-0010',
-              {
-                color: 'red',
-                status: {
-                  target_minutes: 1440,
-                  elapsed_minutes: 2880,
-                  remaining_minutes: -1440,
-                  breached: true,
+              [
+                {
+                  groupKey: 'no-group' as const,
+                  color: 'red',
+                  status: {
+                    target_minutes: 1440,
+                    elapsed_minutes: 2880,
+                    remaining_minutes: -1440,
+                    breached: true,
+                  },
+                  tier: {
+                    id: 1,
+                    name: 'Standard',
+                    target_minutes: 1440,
+                    business_hours_only: false,
+                    is_default: true,
+                    amber_threshold_percent: 20,
+                    created_at: '2026-01-01T00:00:00',
+                    updated_at: '2026-01-01T00:00:00',
+                  },
+                  reason: { tierSource: 'default', unmappedKeywords: [] },
+                  priority: 'normal',
                 },
-                tier: {
-                  id: 1,
-                  name: 'Standard',
-                  target_minutes: 1440,
-                  business_hours_only: false,
-                  is_default: true,
-                  amber_threshold_percent: 20,
-                  created_at: '2026-01-01T00:00:00',
-                  updated_at: '2026-01-01T00:00:00',
-                },
-                reason: { tierSource: 'default', unmappedKeywords: [] },
-                priority: 'normal',
-              },
+              ],
             ],
           ])
         }
@@ -687,7 +693,7 @@ describe('OrderRow — sampleSlaStatusMap plumbing (D2 follow-on)', () => {
     expect(indicator.getAttribute('data-sla-color')).toBe('red')
   })
 
-  it('renders no indicator when sampleSlaStatusMap is omitted (no legacy 24/48h timer)', async () => {
+  it('renders no indicator when sampleSlaStatusesMap is omitted (no legacy 24/48h timer)', async () => {
     const order = makeOrder({
       sample_results: {
         '1': { senaite_id: 'BW-0011', status: 'created' },

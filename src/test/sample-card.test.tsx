@@ -257,6 +257,7 @@ describe('SampleCard — analyte display (Phase 31)', () => {
 // timer's gate: lookup.date_received present AND review_state !== 'published'.
 describe('SampleCard — slaSnapshot indicator', () => {
   const baseSnapshot = {
+    groupKey: 'no-group' as const,
     color: 'amber' as const,
     status: {
       target_minutes: 100,

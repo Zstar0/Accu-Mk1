@@ -12,6 +12,7 @@ import {
   buildServiceToGroupTierMap,
   classifySampleColor,
   resolveSampleTierWithReason,
+  NO_GROUP_KEY,
   type SampleSlaReason,
 } from '@/lib/sla-resolution'
 import { useAnalysisServices } from '@/services/analysis-services'
@@ -190,7 +191,16 @@ export function useSampleSla(
     }
     const color = classifySampleColor(status, tier)
     return {
-      snapshot: { status, color, tier, reason: reason ?? { tierSource: 'none', unmappedKeywords: [] }, priority: priority ?? 'normal' },
+      snapshot: {
+        // useSampleSla still uses the legacy single-tier resolver, so the
+        // snapshot conceptually covers the WHOLE sample (not one specific
+        // group). NO_GROUP_KEY is the honest representation until this hook
+        // migrates to resolveSampleTiersByGroup in a follow-on commit.
+        groupKey: NO_GROUP_KEY,
+        status, color, tier,
+        reason: reason ?? { tierSource: 'none', unmappedKeywords: [] },
+        priority: priority ?? 'normal',
+      },
       reason,
       priority,
       isPublished,
