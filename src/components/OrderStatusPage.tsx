@@ -46,7 +46,6 @@ import {
   formatProcessingTime,
   getOrderEmail,
   groupAnalysisStates,
-  formatTimeSince,
   sampleMatchesAnalysisFilter,
   COL_COUNT_LABEL,
   TEST_EMAILS,
@@ -54,6 +53,8 @@ import {
 } from '@/components/explorer/helpers'
 import { enqueueSenaiteLookup } from '@/components/explorer/senaite-queue'
 import { OrderRow } from '@/components/explorer/OrderRow'
+import { SampleSlaIndicator } from '@/components/explorer/SampleSlaIndicator'
+import { useOrderSlaStatuses, type SampleSlaSnapshot } from '@/services/order-sla'
 
 // Re-export TEST_EMAILS so the existing import surface
 // `import { TEST_EMAILS } from '@/components/OrderStatusPage'` keeps working
@@ -188,10 +189,12 @@ function KanbanSampleCard({
   item,
   showOrder,
   showAnalysisServices,
+  sampleSlaStatusMap,
 }: {
   item: KanbanSampleItem
   showOrder: boolean
   showAnalysisServices: boolean
+  sampleSlaStatusMap?: Map<string, SampleSlaSnapshot>
 }) {
   const navigateToSample = useUIStore(state => state.navigateToSample)
   const navigateToOrderExplorer = useUIStore(state => state.navigateToOrderExplorer)
@@ -274,23 +277,9 @@ function KanbanSampleCard({
               </>
             )}
           </div>
-          {item.lookup?.date_received && item.lookup.review_state !== 'published' ? (() => {
-            const hrs = (Date.now() - new Date(item.lookup.date_received).getTime()) / 3_600_000
-            const timeStr = formatTimeSince(item.lookup.date_received)
-            const goalNote = hrs > 48
-              ? 'Over 48h — exceeds processing goal'
-              : hrs > 24
-              ? 'Over 24h — approaching processing goal limit'
-              : 'Within 24h processing goal'
-            return (
-              <span className={cn(
-                'text-[10px] font-mono leading-none tabular-nums',
-                hrs > 48 ? 'text-red-400' : hrs > 24 ? 'text-amber-400' : 'text-muted-foreground/70'
-              )} title={`Time since received in lab: ${timeStr}. ${goalNote}`}>
-                {timeStr}
-              </span>
-            )
-          })() : (
+          {item.lookup?.date_received && item.lookup.review_state !== 'published' ? (
+            <SampleSlaIndicator snapshot={sampleSlaStatusMap?.get(item.sampleId)} />
+          ) : (
             <span className={cn(
               'text-[10px] font-mono leading-none tabular-nums',
               item.completedAt ? 'text-green-600/70' : 'text-amber-500/70'
@@ -319,12 +308,14 @@ function KanbanView({
   groupByOrder,
   activeStates,
   showAnalysisServices,
+  sampleSlaStatusMap,
 }: {
   orders: ExplorerOrder[]
   sampleLookupMap: Map<string, { data?: SenaiteLookupResult; isLoading: boolean; isError: boolean }>
   groupByOrder: boolean
   activeStates: string[]
   showAnalysisServices: boolean
+  sampleSlaStatusMap?: Map<string, SampleSlaSnapshot>
 }) {
   // Determine which columns to show — all if no filter, else just the active one
   const visibleCols = activeStates.length > 0
@@ -411,6 +402,7 @@ function KanbanView({
                     item={item}
                     showOrder={true}
                     showAnalysisServices={showAnalysisServices}
+                    sampleSlaStatusMap={sampleSlaStatusMap}
                   />
                 ))}
               </div>
@@ -463,6 +455,7 @@ function KanbanView({
                           item={item}
                           showOrder={false}
                           showAnalysisServices={showAnalysisServices}
+                          sampleSlaStatusMap={sampleSlaStatusMap}
                         />
                       ))
                     )}
@@ -688,6 +681,12 @@ export function OrderStatusPage() {
     }
     return result
   }, [orders, orderFilters, sampleLookupMap])
+
+  // D2: order-aggregated SLA verdicts + per-sample status snapshots for the
+  // table-view SLA column and the card-view SampleSlaIndicator. The hook is
+  // useMemo-aggregated; only its one /sla/status batch query re-runs on data
+  // changes (sharpenings #3, #4).
+  const orderSla = useOrderSlaStatuses(filteredOrders, sampleLookupMap)
 
   // Count orders needing attention (have samples with to_verify analyses)
   const attentionCount = useMemo(() => {
@@ -1109,6 +1108,7 @@ export function OrderStatusPage() {
                       <th className="py-2 px-3 font-medium whitespace-nowrap">Progress</th>
                       <th className="py-2 px-3 font-medium whitespace-nowrap">Created</th>
                       <th className="py-2 px-3 font-medium whitespace-nowrap">Timing</th>
+                      <th className="py-2 px-3 font-medium whitespace-nowrap">SLA</th>
                       <th className="py-2 px-3 font-medium">Sample Details</th>
                     </tr>
                   </thead>
@@ -1120,6 +1120,7 @@ export function OrderStatusPage() {
                         wordpressHost={wordpressHost}
                         sampleLookupMap={sampleLookupMap}
                         activeAnalysisStates={orderFilters.activeStates}
+                        slaVerdict={orderSla.verdictByOrderId.get(order.order_id)}
                       />
                     ))}
                   </tbody>
@@ -1135,6 +1136,7 @@ export function OrderStatusPage() {
                   groupByOrder={orderFilters.groupByOrder}
                   activeStates={orderFilters.activeStates}
                   showAnalysisServices={orderFilters.showAnalysisServices}
+                  sampleSlaStatusMap={orderSla.sampleStatusBySampleId}
                 />
               </div>
             )}
