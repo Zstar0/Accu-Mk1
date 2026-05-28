@@ -32,7 +32,7 @@ APP_VERSION = _read_app_version()
 
 from fastapi import FastAPI, Body, Depends, Form, HTTPException, Header, Query, Request, Response, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, validator
+from pydantic import BaseModel, Field, validator
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import select, desc, delete, update, func, extract
 from sqlalchemy.exc import IntegrityError
@@ -1837,7 +1837,7 @@ class SlaTierCreate(BaseModel):
     target_minutes: int
     business_hours_only: bool = False
     is_default: bool = False
-    amber_threshold_percent: int = 20
+    amber_threshold_percent: int = Field(20, ge=1, le=100)
 
 
 class SlaTierUpdate(BaseModel):
@@ -1845,7 +1845,7 @@ class SlaTierUpdate(BaseModel):
     target_minutes: Optional[int] = None
     business_hours_only: Optional[bool] = None
     is_default: Optional[bool] = None
-    amber_threshold_percent: Optional[int] = None
+    amber_threshold_percent: Optional[int] = Field(None, ge=1, le=100)
 
 
 class SlaTierResponse(BaseModel):
@@ -11945,8 +11945,6 @@ async def create_sla_tier(
     _current_user=Depends(get_current_user),
 ):
     """Create a tier. Setting is_default demotes any existing default."""
-    if not (1 <= data.amber_threshold_percent <= 100):
-        raise HTTPException(422, "amber_threshold_percent must be between 1 and 100")
     tier = SlaTier(**data.model_dump())
     if tier.is_default:
         _demote_other_default_tiers(db)
@@ -11965,8 +11963,6 @@ async def update_sla_tier(
 ):
     """Update a tier. Promoting demotes the rest; demoting the only default is
     rejected (it's the 24h backstop for unmatched samples)."""
-    if data.amber_threshold_percent is not None and not (1 <= data.amber_threshold_percent <= 100):
-        raise HTTPException(422, "amber_threshold_percent must be between 1 and 100")
     tier = db.get(SlaTier, tier_id)
     if not tier:
         raise HTTPException(404, f"SLA tier {tier_id} not found")
