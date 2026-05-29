@@ -104,6 +104,7 @@ function AnalysisSlaCellImpl(props: AnalysisSlaCellProps) {
     >
       <span aria-hidden="true">{dot}</span>
       {text && <span>{text}</span>}
+      {!text && titleAttr && <span className="sr-only">{titleAttr}</span>}
     </span>
   )
 
@@ -150,6 +151,7 @@ function slaPropsEqual(prev: AnalysisSlaCellProps, next: AnalysisSlaCellProps): 
   if (a.status.remaining_minutes !== b.status.remaining_minutes) return false
   if (a.status.breached !== b.status.breached) return false
   if ((a.reason?.tierSource ?? null) !== (b.reason?.tierSource ?? null)) return false
+  if ((a.reason?.priorityScope ?? null) !== (b.reason?.priorityScope ?? null)) return false
   return true
 }
 

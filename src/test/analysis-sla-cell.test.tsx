@@ -101,7 +101,7 @@ describe('AnalysisSlaCell', () => {
     ))
     const cell = screen.getByTestId('analysis-sla-cell')
     expect(cell).toHaveAttribute('data-sla-color', 'met')
-    expect(cell.textContent).toMatch(/took/i)
+    expect(cell.textContent).toMatch(/took.*\dh/i)
   })
 
   it('renders "Missed by Xh" for published breached snapshot', () => {
