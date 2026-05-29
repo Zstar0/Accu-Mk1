@@ -275,6 +275,11 @@ export function useOrderSlaStatuses(
         status,
         color,
         reason: s.reason,
+        // Multi-tier follow-on — surface the (sample, group) identity on the
+        // cell so the order verdict's driving cell can carry its group name
+        // to the tooltip.
+        groupKey: s.groupKey,
+        groupName: s.groupName,
       }
       const cells = cellsBySampleId.get(s.senaiteId) ?? []
       cells.push(cell)

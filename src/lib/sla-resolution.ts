@@ -28,6 +28,12 @@ export interface SampleSlaCellState {
   // lets OrderSlaCell render a breakdown tooltip for the driving sample
   // without re-running the resolver.
   reason?: SampleSlaReason | null
+  // Multi-tier follow-on — which service-group bucket this cell represents.
+  // A sample with multiple groups contributes multiple cells to order
+  // aggregation; the driving cell's group surfaces on OrderSlaVerdict so the
+  // order-level tooltip can say which group drove the worst color.
+  groupKey?: GroupKey
+  groupName?: string
 }
 
 export interface OrderSlaVerdict {
@@ -38,6 +44,12 @@ export interface OrderSlaVerdict {
   /** Reason snapshot for the driving sample — present only when the
    *  upstream cell state was populated with a reason. */
   drivingReason?: SampleSlaReason
+  /** Multi-tier follow-on — which service-group's tier drove the order
+   *  verdict. Surfaced on the SlaBreakdownTooltip so the order-level breakdown
+   *  can say "Group tier (HPLC)" instead of the generic "Group tier".
+   *  Populated only when the driving cell had a real (non-NO_GROUP_KEY) group. */
+  drivingGroupKey?: GroupKey
+  drivingGroupName?: string
 }
 
 /**
@@ -294,6 +306,15 @@ export function aggregateOrderSlaVerdict(
     drivingTier: driver.tier,
     drivingStatus: driver.status,
     drivingReason: driver.reason ?? undefined,
+    // Multi-tier follow-on: the driving cell may belong to a specific service
+    // group; surfacing its identity lets OrderSlaCell's tooltip say "Group
+    // tier (HPLC)" rather than the generic "Group tier". NO_GROUP_KEY is
+    // omitted (the tooltip has no useful label to render for it).
+    drivingGroupKey:
+      driver.groupKey !== undefined && driver.groupKey !== NO_GROUP_KEY
+        ? driver.groupKey
+        : undefined,
+    drivingGroupName: driver.groupName,
   }
 }
 

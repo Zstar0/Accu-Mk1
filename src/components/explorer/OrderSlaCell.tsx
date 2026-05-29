@@ -116,6 +116,7 @@ function OrderSlaCellImpl({
             status={verdict.drivingStatus}
             reason={verdict.drivingReason ?? null}
             drivingSampleId={verdict.drivingSampleId}
+            groupName={verdict.drivingGroupName}
           />
         </TooltipContent>
       </Tooltip>
@@ -172,12 +173,22 @@ function slaPropsEqual(prev: OrderSlaCellProps, next: OrderSlaCellProps): boolea
   )
     return false
   // drivingReason is used in the tooltip — compare the tierSource since that's
-  // the only field that drives a visibly-different breakdown line.
+  // the only field that drives a visibly-different breakdown line. Same for
+  // priorityScope, which distinguishes per-group vs global override.
   if (
     (a.drivingReason?.tierSource ?? null) !==
     (b.drivingReason?.tierSource ?? null)
   )
     return false
+  if (
+    (a.drivingReason?.priorityScope ?? null) !==
+    (b.drivingReason?.priorityScope ?? null)
+  )
+    return false
+  // Multi-tier follow-on — drivingGroupName surfaces in the tooltip source
+  // line, so a change must trigger a re-render even when color is unchanged.
+  if ((a.drivingGroupKey ?? null) !== (b.drivingGroupKey ?? null)) return false
+  if ((a.drivingGroupName ?? null) !== (b.drivingGroupName ?? null)) return false
   return true
 }
 

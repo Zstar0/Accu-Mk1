@@ -618,6 +618,55 @@ describe('aggregateOrderSlaVerdict', () => {
   it('empty samples array returns awaiting', () => {
     expect(aggregateOrderSlaVerdict([]).color).toBe('awaiting')
   })
+
+  // Multi-tier follow-on — driving cell's group identity surfaces on the verdict
+  // so OrderSlaCell's tooltip can label which (sample, group) drove the
+  // worst color.
+  it('surfaces the driving cell\'s groupKey + groupName on the verdict', () => {
+    const samples = [
+      {
+        senaiteId: 'BW-0008',
+        tier: t,
+        lookup: lookup('2026-01-01', 'sample_received', []),
+        status: { target_minutes: 100, elapsed_minutes: 90, remaining_minutes: 10, breached: false },
+        color: 'green' as const,
+        groupKey: 11,
+        groupName: 'Sterility',
+      },
+      {
+        senaiteId: 'BW-0008',
+        tier: t,
+        lookup: lookup('2026-01-01', 'sample_received', []),
+        status: { target_minutes: 100, elapsed_minutes: 300, remaining_minutes: -200, breached: true },
+        color: 'red' as const,
+        groupKey: 10,
+        groupName: 'HPLC',
+      },
+    ]
+    const v = aggregateOrderSlaVerdict(samples)
+    expect(v.color).toBe('red')
+    expect(v.drivingGroupKey).toBe(10)
+    expect(v.drivingGroupName).toBe('HPLC')
+  })
+
+  it('omits drivingGroupKey when the driving cell is in NO_GROUP_KEY bucket', () => {
+    const samples = [
+      {
+        senaiteId: 'BW-0008',
+        tier: t,
+        lookup: lookup('2026-01-01', 'sample_received', []),
+        status: { target_minutes: 100, elapsed_minutes: 300, remaining_minutes: -200, breached: true },
+        color: 'red' as const,
+        groupKey: 'no-group' as const,
+        groupName: undefined,
+      },
+    ]
+    const v = aggregateOrderSlaVerdict(samples)
+    expect(v.color).toBe('red')
+    // NO_GROUP_KEY shouldn't be surfaced — there's no useful label for the tooltip.
+    expect(v.drivingGroupKey).toBeUndefined()
+    expect(v.drivingGroupName).toBeUndefined()
+  })
 })
 
 // ─── Multi-tier follow-on ────────────────────────────────────────────────────
