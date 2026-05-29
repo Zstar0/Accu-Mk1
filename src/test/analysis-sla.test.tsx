@@ -33,8 +33,10 @@ vi.mock('@/lib/api', async () => {
 
 const { useAnalysisSlaMap } = await import('@/services/analysis-sla')
 
-function wrapper({ children }: { children: React.ReactNode }) {
-  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+function Wrapper({ children }: { children: React.ReactNode }) {
+  const [qc] = React.useState(
+    () => new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  )
   return <QueryClientProvider client={qc}>{children}</QueryClientProvider>
 }
 
@@ -95,17 +97,17 @@ beforeEach(() => {
 
 describe('useAnalysisSlaMap', () => {
   it('returns empty byKeyword when lookup is null', async () => {
-    const { result } = renderHook(() => useAnalysisSlaMap(null), { wrapper })
+    const { result } = renderHook(() => useAnalysisSlaMap(null), { wrapper: Wrapper })
     await waitFor(() => {
       expect(result.current.byKeyword.size).toBe(0)
+      expect(result.current.isLoading).toBe(false)
+      expect(result.current.priority).toBeNull()
     })
-    expect(result.current.isLoading).toBe(false)
-    expect(result.current.priority).toBeNull()
   })
 
   it('returns empty byKeyword when sample has no date_received', async () => {
     const lookup = makeLookup({ date_received: null })
-    const { result } = renderHook(() => useAnalysisSlaMap(lookup), { wrapper })
+    const { result } = renderHook(() => useAnalysisSlaMap(lookup), { wrapper: Wrapper })
     await waitFor(() => {
       expect(result.current.byKeyword.size).toBe(0)
     })
@@ -125,7 +127,7 @@ describe('useAnalysisSlaMap', () => {
         { keyword: 'purity_hplc' } as never,
       ],
     })
-    const { result } = renderHook(() => useAnalysisSlaMap(lookup), { wrapper })
+    const { result } = renderHook(() => useAnalysisSlaMap(lookup), { wrapper: Wrapper })
     await waitFor(() => {
       expect(result.current.isLoading).toBe(false)
     })
@@ -151,7 +153,7 @@ describe('useAnalysisSlaMap', () => {
         { keyword: 'orphan_kw' } as never,
       ],
     })
-    const { result } = renderHook(() => useAnalysisSlaMap(lookup), { wrapper })
+    const { result } = renderHook(() => useAnalysisSlaMap(lookup), { wrapper: Wrapper })
     await waitFor(() => {
       expect(result.current.byKeyword.size).toBe(2)
     })
@@ -173,7 +175,7 @@ describe('useAnalysisSlaMap', () => {
         { keyword: 'orphan_kw' } as never,
       ],
     })
-    const { result } = renderHook(() => useAnalysisSlaMap(lookup), { wrapper })
+    const { result } = renderHook(() => useAnalysisSlaMap(lookup), { wrapper: Wrapper })
     await waitFor(() => {
       expect(result.current.byKeyword.has('identity_hplc')).toBe(true)
     })
@@ -190,7 +192,7 @@ describe('useAnalysisSlaMap', () => {
     const lookup = makeLookup({
       analyses: [{ keyword: null } as never],
     })
-    const { result } = renderHook(() => useAnalysisSlaMap(lookup), { wrapper })
+    const { result } = renderHook(() => useAnalysisSlaMap(lookup), { wrapper: Wrapper })
     await waitFor(() => {
       expect(result.current.isLoading).toBe(false)
     })
@@ -213,7 +215,7 @@ describe('useAnalysisSlaMap', () => {
       published_coa: { published_date: '2026-01-01T19:00:00' },
       analyses: [{ keyword: 'identity_hplc' } as never],
     })
-    const { result } = renderHook(() => useAnalysisSlaMap(lookup), { wrapper })
+    const { result } = renderHook(() => useAnalysisSlaMap(lookup), { wrapper: Wrapper })
     await waitFor(() => {
       expect(result.current.byKeyword.size).toBe(1)
     })
