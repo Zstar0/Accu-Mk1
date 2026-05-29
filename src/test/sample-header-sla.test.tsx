@@ -212,4 +212,79 @@ describe('SampleHeaderSla', () => {
     // i18n returns the key when no instance, so we accept "over" in either form.
     expect(el.textContent ?? '').toMatch(/over|sla\.over/i)
   })
+
+  // Multi-tier follow-on — when the sample's analyses span multiple groups,
+  // the header shows one indicator span per group, worst-color first, each
+  // labeled with the group name.
+  it('renders one indicator per service group with worst-color first when sample spans multiple groups', async () => {
+    const hplcTier = {
+      id: 2, name: 'HPLC', target_minutes: 1440, business_hours_only: false,
+      is_default: false, amber_threshold_percent: 20,
+      created_at: '2026-01-01T00:00:00', updated_at: '2026-01-01T00:00:00',
+    }
+    const sterTier = {
+      id: 3, name: 'Sterility', target_minutes: 10080, business_hours_only: false,
+      is_default: false, amber_threshold_percent: 20,
+      created_at: '2026-01-01T00:00:00', updated_at: '2026-01-01T00:00:00',
+    }
+    getSlaTiersMock.mockResolvedValue([
+      {
+        id: 1, name: 'default', target_minutes: 1440, business_hours_only: false,
+        is_default: true, amber_threshold_percent: 80,
+        created_at: '2026-01-01T00:00:00', updated_at: '2026-01-01T00:00:00',
+      },
+      hplcTier, sterTier,
+    ])
+    getAnalysisServicesMock.mockResolvedValue([
+      { id: 100, keyword: 'kw_hplc' },
+      { id: 200, keyword: 'kw_sterility' },
+    ])
+    getServiceGroupsMock.mockResolvedValue([
+      { id: 10, name: 'HPLC', sla_tier_id: hplcTier.id, member_ids: [100] },
+      { id: 11, name: 'Sterility', sla_tier_id: sterTier.id, member_ids: [200] },
+    ])
+    // HPLC breached (red), Sterility on-track (green).
+    fetchSlaStatusesMock.mockResolvedValue([
+      { key: 'uid-PB-001|10', status: { target_minutes: 1440, elapsed_minutes: 2880, remaining_minutes: -1440, breached: true } },
+      { key: 'uid-PB-001|11', status: { target_minutes: 10080, elapsed_minutes: 100, remaining_minutes: 9980, breached: false } },
+    ])
+    const lookup = makeLookup({
+      analyses: [
+        { keyword: 'kw_hplc' } as never,
+        { keyword: 'kw_sterility' } as never,
+      ],
+    })
+    render(<SampleHeaderSla lookup={lookup} />, { wrapper })
+    await waitFor(() => {
+      const els = screen.queryAllByTestId('sample-header-sla')
+      expect(els.length).toBe(2)
+    })
+    const els = screen.getAllByTestId('sample-header-sla')
+    // Red comes first (worst).
+    expect(els[0]?.getAttribute('data-sla-color')).toBe('red')
+    expect(els[0]?.getAttribute('data-group-key')).toBe('10')
+    expect(els[0]?.textContent ?? '').toContain('HPLC')
+    // Green second.
+    expect(els[1]?.getAttribute('data-sla-color')).toBe('green')
+    expect(els[1]?.getAttribute('data-group-key')).toBe('11')
+    expect(els[1]?.textContent ?? '').toContain('Sterility')
+  })
+
+  it('single-group sample renders ONE unlabeled span (preserves legacy compact display)', async () => {
+    fetchSlaStatusesMock.mockResolvedValue([
+      {
+        key: 'uid-PB-001|no-group',
+        status: { target_minutes: 1440, elapsed_minutes: 120, remaining_minutes: 1320, breached: false },
+      },
+    ])
+    const lookup = makeLookup() // empty analyses → NO_GROUP_KEY default tier
+    render(<SampleHeaderSla lookup={lookup} />, { wrapper })
+    await waitFor(() => {
+      expect(screen.queryAllByTestId('sample-header-sla').length).toBe(1)
+    })
+    const el = screen.getByTestId('sample-header-sla')
+    // No "HPLC:" or "Sterility:" prefix — single-tier samples render without
+    // a group label.
+    expect(el.textContent ?? '').not.toContain(':')
+  })
 })

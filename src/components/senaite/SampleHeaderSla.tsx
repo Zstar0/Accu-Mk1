@@ -2,8 +2,10 @@ import { memo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
 import { formatMinutes } from '@/lib/sla-format'
-import type { SenaiteLookupResult } from '@/lib/api'
+import type { InboxPriority, SenaiteLookupResult } from '@/lib/api'
+import { NO_GROUP_KEY } from '@/lib/sla-resolution'
 import { useSampleSla } from '@/services/sample-sla'
+import type { SampleSlaSnapshot } from '@/services/order-sla'
 import {
   Tooltip,
   TooltipContent,
@@ -15,31 +17,105 @@ interface SampleHeaderSlaProps {
   lookup: SenaiteLookupResult | null | undefined
 }
 
+/** Per-snapshot severity for sort. Worst → 0, best → 2. Used when stacking
+ *  multiple group snapshots so the most-pressing one appears first. */
+function snapshotSeverity(s: SampleSlaSnapshot, isPublished: boolean): number {
+  if (isPublished) return s.status.breached ? 0 : 2
+  if (s.color === 'red') return 0
+  if (s.color === 'amber') return 1
+  return 2
+}
+
+/** Single inline span — one snapshot's worth of indicator. Composed by
+ *  `SampleHeaderSlaImpl` once per group when the sample is multi-tier. */
+function renderSnapshotSpan({
+  snapshot,
+  priority,
+  isPublished,
+  showGroupLabel,
+  t,
+}: {
+  snapshot: SampleSlaSnapshot
+  priority: InboxPriority | null
+  isPublished: boolean
+  showGroupLabel: boolean
+  t: (key: string, opts?: Record<string, string | number>) => string
+}) {
+  const { status, color } = snapshot
+  let text: string
+  let colorClass: string
+  let dataColor: string
+  if (isPublished) {
+    // Historical view — total time taken to publish. Color is binary
+    // (met/missed) since amber is meaningless after the fact.
+    text = t('orderStatus.sla.publishedTook', {
+      time: formatMinutes(status.elapsed_minutes),
+    })
+    colorClass = status.breached ? 'text-red-400' : 'text-green-600/70'
+    dataColor = status.breached ? 'missed' : 'met'
+  } else {
+    text = status.breached
+      ? t('orderStatus.sla.over', { time: formatMinutes(status.remaining_minutes) })
+      : t('orderStatus.sla.left', { time: formatMinutes(status.remaining_minutes) })
+    colorClass =
+      color === 'red'
+        ? 'text-red-400'
+        : color === 'amber'
+          ? 'text-amber-400'
+          : 'text-muted-foreground'
+    dataColor = color
+  }
+  // Group label prefix appears only on multi-tier samples to disambiguate
+  // which row is which group. NO_GROUP_KEY rows have no useful label, so
+  // they render without a prefix even in the multi-tier stack.
+  const label =
+    showGroupLabel && snapshot.groupKey !== NO_GROUP_KEY && snapshot.groupName
+      ? `${snapshot.groupName}: `
+      : ''
+  return (
+    <Tooltip key={String(snapshot.groupKey)}>
+      <TooltipTrigger asChild>
+        <span
+          data-testid="sample-header-sla"
+          data-sla-color={dataColor}
+          data-group-key={String(snapshot.groupKey)}
+          className={cn('font-mono', colorClass)}
+        >
+          ({label}{text})
+        </span>
+      </TooltipTrigger>
+      <TooltipContent className="p-0 max-w-md">
+        <SlaBreakdownTooltip
+          tier={snapshot.tier}
+          status={snapshot.status}
+          reason={snapshot.reason}
+          priority={priority}
+          groupName={snapshot.groupName}
+          isPublished={isPublished}
+        />
+      </TooltipContent>
+    </Tooltip>
+  )
+}
+
 /**
  * Per-sample SLA indicator for the Sample Details page header.
- * Replaces the hardcoded 24/48h `goalNote` IIFE with the real tier-based
- * resolution + multi-line breakdown tooltip.
+ *
+ * Multi-tier follow-on: when the sample's analyses span multiple service
+ * groups, renders ONE inline span per group, worst-color first, each prefixed
+ * with the group name. Single-group samples still render as one unlabeled
+ * `(took 13h)` span — preserves the pre-multi-tier compact layout.
  *
  * Renders nothing when SLA isn't applicable (no lookup or no date_received).
- * Published samples render a historical "took Xh" indicator with met/missed
- * colouring driven by `useSampleSla` (which passes `now_override =
- * published_date` to /sla/status so elapsed is frozen at publication).
+ * Published samples render historical "took Xh" / met / missed indicators
+ * driven by `useSampleSla` (which passes `now_override = published_date` to
+ * /sla/status so elapsed is frozen at publication).
  */
 function SampleHeaderSlaImpl({ lookup }: SampleHeaderSlaProps) {
   const { t } = useTranslation()
   const { snapshots, priority, isPublished, isLoading, isError } =
     useSampleSla(lookup)
-  // Multi-tier follow-on: useSampleSla now returns an array of per-group
-  // snapshots. The sample-details header currently renders only the first
-  // (preserves the single-inline "(took 13h)" layout); multi-row sample
-  // header rendering is a follow-on. Tooltip pulls reason from the same
-  // snapshot so the breakdown stays accurate to the displayed tier.
-  const snapshot = snapshots[0]
-  const reason = snapshot?.reason ?? null
 
-  // Gating mirrors useSampleSla.applicable so we don't render an empty span
-  // for unreceived samples. Published samples flow through — their snapshot is
-  // frozen at published_date via now_override on /sla/status.
   if (!lookup?.date_received) return null
 
   if (isLoading) {
@@ -53,60 +129,28 @@ function SampleHeaderSlaImpl({ lookup }: SampleHeaderSlaProps) {
       </span>
     )
   }
-  // Errors and missing snapshots: don't pollute the header. The page still
+  // Errors and empty snapshots: don't pollute the header. The page still
   // shows "Received {date}" without an SLA suffix.
-  if (isError || !snapshot) return null
+  if (isError || snapshots.length === 0) return null
 
-  const { status, color } = snapshot
-
-  let text: string
-  let colorClass: string
-  let dataColor: string
-
-  if (isPublished) {
-    // Historical view — total time taken to publish. Color is binary
-    // (met/missed) since amber is meaningless after the fact.
-    text = t('orderStatus.sla.publishedTook', {
-      time: formatMinutes(status.elapsed_minutes),
-    })
-    colorClass = status.breached ? 'text-red-400' : 'text-green-600/70'
-    dataColor = status.breached ? 'missed' : 'met'
-  } else {
-    // Live view — countdown (existing behaviour).
-    text = status.breached
-      ? t('orderStatus.sla.over', { time: formatMinutes(status.remaining_minutes) })
-      : t('orderStatus.sla.left', { time: formatMinutes(status.remaining_minutes) })
-    colorClass =
-      color === 'red'
-        ? 'text-red-400'
-        : color === 'amber'
-          ? 'text-amber-400'
-          : 'text-muted-foreground'
-    dataColor = color
-  }
-
+  const sorted = [...snapshots].sort(
+    (a, b) =>
+      snapshotSeverity(a, isPublished) - snapshotSeverity(b, isPublished) ||
+      (a.groupName ?? '').localeCompare(b.groupName ?? '')
+  )
+  const showGroupLabel = sorted.length > 1
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <span
-          data-testid="sample-header-sla"
-          data-sla-color={dataColor}
-          className={cn('ml-1.5 font-mono', colorClass)}
-        >
-          ({text})
-        </span>
-      </TooltipTrigger>
-      <TooltipContent className="p-0 max-w-md">
-        <SlaBreakdownTooltip
-          tier={snapshot.tier}
-          status={snapshot.status}
-          reason={reason}
-          priority={priority}
-          groupName={snapshot.groupName}
-          isPublished={isPublished}
-        />
-      </TooltipContent>
-    </Tooltip>
+    <span className="ml-1.5 inline-flex items-baseline gap-1.5">
+      {sorted.map(s =>
+        renderSnapshotSpan({
+          snapshot: s,
+          priority,
+          isPublished,
+          showGroupLabel,
+          t,
+        })
+      )}
+    </span>
   )
 }
 
