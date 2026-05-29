@@ -152,6 +152,8 @@
   "orderStatus.sla.publishedTook": "took {{time}}",
   "orderStatus.sla.publishedMet": "Met",
   "orderStatus.sla.publishedMissed": "Missed by {{time}}",
+  "orderStatus.sla.missedBy": "Missed by {{time}}",
+  "orderStatus.sla.noTierConfigured": "No SLA tier configured",
   "orderStatus.sla.breakdown.totalTime": "Total time:",
   "orderStatus.sla.breakdown.result": "Result:",
 
