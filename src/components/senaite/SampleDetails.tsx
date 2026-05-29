@@ -103,6 +103,7 @@ import { cn } from '@/lib/utils'
 import { EditableDataRow } from '@/components/dashboard/EditableField'
 import { AnalysisTable, StatusBadge } from '@/components/senaite/AnalysisTable'
 import { SampleHeaderSla } from '@/components/senaite/SampleHeaderSla'
+import { useAnalysisSlaMap } from '@/services/analysis-sla'
 import { SamplePrepHplcFlyout } from '@/components/hplc/SamplePrepHplcFlyout'
 import { SampleActivityLog } from '@/components/senaite/SampleActivityLog'
 import { Microscope, Plus, Search, Trash2, ScrollText } from 'lucide-react'
@@ -1712,6 +1713,8 @@ export function SampleDetails() {
   const [addingService, setAddingService] = useState<string | null>(null)
   const [removingKeyword, setRemovingKeyword] = useState<string | null>(null)
 
+  const analysisSla = useAnalysisSlaMap(data)
+
   async function openHplcResults() {
     if (!sampleId) return
     try {
@@ -3131,6 +3134,11 @@ export function SampleDetails() {
             })
           }}
           onTransitionComplete={() => refreshSample(data.sample_id)}
+          analysisSlaMap={analysisSla.byKeyword}
+          isAnalysisSlaLoading={analysisSla.isLoading}
+          isAnalysisSlaError={analysisSla.isError}
+          isAnalysisSlaPublished={analysisSla.isPublished}
+          analysisSlaPriority={analysisSla.priority}
         />
 
       {/* Woo Order flyout */}
