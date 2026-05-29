@@ -1,5 +1,4 @@
 import { useState, useEffect, useRef, Fragment } from 'react'
-import { useTranslation } from 'react-i18next'
 import { Activity, ArrowDownUp, ArrowUpDown, Check, ChevronDown, ChevronRight, MoreHorizontal, Pencil, X } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -900,6 +899,13 @@ function sortGroups(
     if (config.column === 'sla') {
       const aVal = getSlaSortValue(a.current, analysisSlaMap, isPublished)
       const bVal = getSlaSortValue(b.current, analysisSlaMap, isPublished)
+      // Missing-data rows (POSITIVE_INFINITY sentinel) always sort to the
+      // bottom regardless of direction — per spec.
+      const aMissing = !Number.isFinite(aVal)
+      const bMissing = !Number.isFinite(bVal)
+      if (aMissing && bMissing) return 0
+      if (aMissing) return 1
+      if (bMissing) return -1
       const cmp = aVal - bVal
       return config.dir === 'asc' ? cmp : -cmp
     }
@@ -1012,7 +1018,6 @@ export function AnalysisTable({
   }
 
   // Group filtered analyses by title so retest chains collapse
-  const { t } = useTranslation()
   const rawGroups = groupAnalysesByTitle(filteredAnalyses)
   const groups = sortConfig
     ? sortGroups(rawGroups, sortConfig, analyteNameMap, analysisSlaMap, isAnalysisSlaPublished)
@@ -1205,7 +1210,7 @@ export function AnalysisTable({
               <SortableHeader column="instrument" label="Instrument" sortConfig={sortConfig} onSort={handleSort} />
               <SortableHeader column="analyst" label="Analyst" sortConfig={sortConfig} onSort={handleSort} />
               <SortableHeader column="review_state" label="Status" sortConfig={sortConfig} onSort={handleSort} />
-              <SortableHeader column="sla" label={t('orderStatus.sla')} sortConfig={sortConfig} onSort={handleSort} />
+              <SortableHeader column="sla" label="SLA" sortConfig={sortConfig} onSort={handleSort} />
               <SortableHeader column="captured" label="Captured" sortConfig={sortConfig} onSort={handleSort} />
               <th className="py-2 px-3 text-right text-[11px] font-semibold text-muted-foreground uppercase tracking-wider w-12">
                 <span className="sr-only">Actions</span>
