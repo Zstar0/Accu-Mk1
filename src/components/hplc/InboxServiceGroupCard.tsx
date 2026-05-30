@@ -10,7 +10,8 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { PriorityBadge } from '@/components/hplc/PriorityBadge'
-import { AgingTimer } from '@/components/hplc/AgingTimer'
+import { SlaAgeIndicator } from '@/components/hplc/SlaAgeIndicator'
+import { useSlaForSubjects, type SlaSubject } from '@/services/sla-subjects'
 import {
   SERVICE_GROUP_COLORS,
   type ServiceGroupColor,
@@ -104,6 +105,15 @@ export function InboxServiceGroupCard({
 
   const { peptideLines, standalone } = groupCoreAnalyses(group.analyses)
 
+  const slaSubjects: SlaSubject[] = [{
+    key: `${sample.uid}|${group.group_id}`,
+    priority: sample.priority,
+    groupId: group.group_id,
+    receivedAt: sample.date_received,
+  }]
+  const { byKey: slaByKey, isLoading: slaLoading, isError: slaError } =
+    useSlaForSubjects(slaSubjects)
+
   return (
     <div
       ref={setNodeRef}
@@ -162,8 +172,13 @@ export function InboxServiceGroupCard({
           </SelectContent>
         </Select>
 
-        {/* Aging timer */}
-        <AgingTimer dateReceived={sample.date_received} />
+        {/* SLA */}
+        <SlaAgeIndicator
+          snapshot={slaByKey.get(`${sample.uid}|${group.group_id}`) ?? null}
+          isLoading={slaLoading}
+          isError={slaError}
+          compact
+        />
       </div>
 
       {/* Card body — analyses */}

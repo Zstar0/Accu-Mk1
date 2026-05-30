@@ -23,7 +23,8 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { PriorityBadge } from '@/components/hplc/PriorityBadge'
-import { AgingTimer } from '@/components/hplc/AgingTimer'
+import { SlaAgeIndicator } from '@/components/hplc/SlaAgeIndicator'
+import { useSlaForSubjects, type SlaSubject } from '@/services/sla-subjects'
 import type { WorksheetUser, InboxPriority } from '@/lib/api'
 
 export interface WorksheetSummaryItem {
@@ -88,6 +89,15 @@ function WorksheetDropZone({
   const [editing, setEditing] = useState(false)
   const [editTitle, setEditTitle] = useState(worksheet.title)
   const [confirmDelete, setConfirmDelete] = useState(false)
+
+  const dropSubjects: SlaSubject[] = worksheet.items.map(item => ({
+    key: `${item.sample_uid}|${item.service_group_id}`,
+    priority: (item.priority as InboxPriority) || 'normal',
+    groupId: item.service_group_id,
+    receivedAt: item.date_received ?? item.added_at,
+  }))
+  const { byKey: dropSlaByKey, isLoading: dropSlaLoading, isError: dropSlaError } =
+    useSlaForSubjects(dropSubjects)
 
   function handleSaveTitle() {
     const trimmed = editTitle.trim()
@@ -195,7 +205,12 @@ function WorksheetDropZone({
               <span className="truncate text-muted-foreground">{item.group_name}</span>
               <div className="flex-1" />
               <PriorityBadge priority={item.priority as InboxPriority} />
-              <AgingTimer dateReceived={item.date_received ?? item.added_at} compact />
+              <SlaAgeIndicator
+                snapshot={dropSlaByKey.get(`${item.sample_uid}|${item.service_group_id}`) ?? null}
+                isLoading={dropSlaLoading}
+                isError={dropSlaError}
+                compact
+              />
             </div>
           ))}
         </div>

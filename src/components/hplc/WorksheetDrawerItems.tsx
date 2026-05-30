@@ -32,12 +32,14 @@ import {
 } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import { PriorityBadge } from '@/components/hplc/PriorityBadge'
-import { AgingTimer } from '@/components/hplc/AgingTimer'
+import { SlaAgeIndicator } from '@/components/hplc/SlaAgeIndicator'
+import { useSlaForSubjects, type SlaSubject, type SlaSubjectSnapshot } from '@/services/sla-subjects'
+import type { InboxPriority } from '@/lib/api'
 import {
   SERVICE_GROUP_COLORS,
   type ServiceGroupColor,
 } from '@/lib/service-group-colors'
-import type { WorksheetListItem, InboxPriority, Instrument } from '@/lib/api'
+import type { WorksheetListItem, Instrument } from '@/lib/api'
 
 /** Extract unique peptide names from analyses — compact display for worksheet */
 function getPeptideNames(analyses: { title: string; peptide_name: string | null }[]): string[] {
@@ -55,6 +57,7 @@ interface WorksheetDrawerItemsProps {
   worksheetId: number
   openWorksheets: WorksheetListItem[]
   isCompleted: boolean
+  worksheetCompletedAtProp?: string | null
   prepStartedItems: Set<string>
   onRemove: (sampleUid: string, serviceGroupId: number) => void
   onReassign: (sampleUid: string, serviceGroupId: number, targetWorksheetId: number) => void
@@ -69,6 +72,7 @@ export function WorksheetDrawerItems({
   worksheetId,
   openWorksheets,
   isCompleted,
+  worksheetCompletedAtProp,
   prepStartedItems,
   onRemove,
   onReassign,
@@ -78,6 +82,17 @@ export function WorksheetDrawerItems({
   onReorder,
 }: WorksheetDrawerItemsProps) {
   const otherWorksheets = openWorksheets.filter(ws => ws.id !== worksheetId)
+
+  const worksheetCompletedAt = isCompleted ? (worksheetCompletedAtProp ?? null) : null
+  const slaSubjects: SlaSubject[] = items.map(item => ({
+    key: String(item.id),
+    priority: (item.priority as InboxPriority) || 'normal',
+    groupId: item.service_group_id,
+    receivedAt: item.date_received ?? item.added_at,
+    completedAt: worksheetCompletedAt,
+  }))
+  const { byKey: slaByKey, isLoading: slaLoading, isError: slaError } =
+    useSlaForSubjects(slaSubjects)
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
@@ -151,6 +166,9 @@ export function WorksheetDrawerItems({
                     prepStartedItems={prepStartedItems}
                     otherWorksheets={otherWorksheets}
                     instruments={instruments}
+                    slaSnapshot={slaByKey.get(String(item.id)) ?? null}
+                    slaLoading={slaLoading}
+                    slaError={slaError}
                     onRemove={onRemove}
                     onReassign={onReassign}
                     onStartPrep={onStartPrep}
@@ -172,6 +190,9 @@ interface SortableItemRowProps {
   prepStartedItems: Set<string>
   otherWorksheets: WorksheetListItem[]
   instruments: Instrument[]
+  slaSnapshot: SlaSubjectSnapshot | null
+  slaLoading: boolean
+  slaError: boolean
   onRemove: (sampleUid: string, serviceGroupId: number) => void
   onReassign: (sampleUid: string, serviceGroupId: number, targetWorksheetId: number) => void
   onStartPrep: (item: { sampleId: string; serviceGroupId: number | null; groupName: string; peptideId: number | null; instrumentUid: string | null }) => void
@@ -184,6 +205,9 @@ function SortableItemRow({
   prepStartedItems,
   otherWorksheets,
   instruments,
+  slaSnapshot,
+  slaLoading,
+  slaError,
   onRemove,
   onReassign,
   onStartPrep,
@@ -311,9 +335,9 @@ function SortableItemRow({
         )}
       </div>
 
-      {/* Age */}
+      {/* SLA */}
       <div className="w-[60px] shrink-0">
-        <AgingTimer dateReceived={item.date_received ?? item.added_at} compact />
+        <SlaAgeIndicator snapshot={slaSnapshot} isLoading={slaLoading} isError={slaError} compact />
       </div>
 
       {/* Status dropdown */}
