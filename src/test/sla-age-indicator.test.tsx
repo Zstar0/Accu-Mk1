@@ -82,4 +82,10 @@ describe('SlaAgeIndicator', () => {
     render(wrap(<SlaAgeIndicator snapshot={snap({ color: 'green' })} isLoading={false} isError={false} />))
     expect(screen.getByTestId('sla-age-indicator').textContent).toMatch(/left/i)
   })
+
+  it('announces sr-only label for none state (no tier configured)', () => {
+    render(wrap(<SlaAgeIndicator snapshot={null} isLoading={false} isError={false} compact />))
+    expect(screen.getByTestId('sla-age-indicator')).toHaveAttribute('data-sla-color', 'none')
+    expect(screen.getByText(/no sla tier configured/i)).toBeInTheDocument()
+  })
 })

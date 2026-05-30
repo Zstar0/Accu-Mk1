@@ -72,7 +72,6 @@ function SlaAgeIndicatorImpl(props: SlaAgeIndicatorProps) {
   } else if (color === 'error') {
     titleAttr = t('orderStatus.sla.unavailable')
   } else {
-    text = '—'
     titleAttr = t('orderStatus.sla.noTierConfigured')
   }
 
@@ -88,7 +87,7 @@ function SlaAgeIndicatorImpl(props: SlaAgeIndicatorProps) {
     >
       <span aria-hidden="true">{dot}</span>
       {text && <span>{text}</span>}
-      {!text && titleAttr && <span className="sr-only">{titleAttr}</span>}
+      {titleAttr && <span className="sr-only">{titleAttr}</span>}
     </span>
   )
 
