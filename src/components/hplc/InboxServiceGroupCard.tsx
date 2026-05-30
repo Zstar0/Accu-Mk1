@@ -1,3 +1,4 @@
+import { useMemo } from 'react'
 import { useDraggable } from '@dnd-kit/core'
 import { useUIStore } from '@/store/ui-store'
 import { GripVertical } from 'lucide-react'
@@ -105,12 +106,12 @@ export function InboxServiceGroupCard({
 
   const { peptideLines, standalone } = groupCoreAnalyses(group.analyses)
 
-  const slaSubjects: SlaSubject[] = [{
+  const slaSubjects: SlaSubject[] = useMemo(() => [{
     key: `${sample.uid}|${group.group_id}`,
     priority: sample.priority,
     groupId: group.group_id,
     receivedAt: sample.date_received,
-  }]
+  }], [sample.uid, group.group_id, sample.priority, sample.date_received])
   const { byKey: slaByKey, isLoading: slaLoading, isError: slaError } =
     useSlaForSubjects(slaSubjects)
 

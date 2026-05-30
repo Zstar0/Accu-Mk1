@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { useUIStore } from '@/store/ui-store'
 import { useDroppable } from '@dnd-kit/core'
 import { Plus, FileSpreadsheet, Pencil, Check, X, Trash2 } from 'lucide-react'
@@ -90,12 +90,15 @@ function WorksheetDropZone({
   const [editTitle, setEditTitle] = useState(worksheet.title)
   const [confirmDelete, setConfirmDelete] = useState(false)
 
-  const dropSubjects: SlaSubject[] = worksheet.items.map(item => ({
-    key: `${item.sample_uid}|${item.service_group_id}`,
-    priority: (item.priority as InboxPriority) || 'normal',
-    groupId: item.service_group_id,
-    receivedAt: item.date_received ?? item.added_at,
-  }))
+  const dropSubjects: SlaSubject[] = useMemo(() =>
+    worksheet.items.map(item => ({
+      key: `${item.sample_uid}|${item.service_group_id}`,
+      priority: (item.priority as InboxPriority) || 'normal',
+      groupId: item.service_group_id,
+      receivedAt: item.date_received ?? item.added_at,
+    })),
+    [worksheet.items]
+  )
   const { byKey: dropSlaByKey, isLoading: dropSlaLoading, isError: dropSlaError } =
     useSlaForSubjects(dropSubjects)
 

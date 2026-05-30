@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { useUIStore } from '@/store/ui-store'
 import { X, MoveRight, ClipboardX, GripVertical } from 'lucide-react'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -83,14 +83,17 @@ export function WorksheetDrawerItems({
 }: WorksheetDrawerItemsProps) {
   const otherWorksheets = openWorksheets.filter(ws => ws.id !== worksheetId)
 
-  const worksheetCompletedAt = isCompleted ? (worksheetCompletedAtProp ?? null) : null
-  const slaSubjects: SlaSubject[] = items.map(item => ({
-    key: String(item.id),
-    priority: (item.priority as InboxPriority) || 'normal',
-    groupId: item.service_group_id,
-    receivedAt: item.date_received ?? item.added_at,
-    completedAt: worksheetCompletedAt,
-  }))
+  const slaSubjects: SlaSubject[] = useMemo(() => {
+    const worksheetCompletedAt =
+      isCompleted ? (worksheetCompletedAtProp ?? null) : null
+    return items.map(item => ({
+      key: String(item.id),
+      priority: (item.priority as InboxPriority) || 'normal',
+      groupId: item.service_group_id,
+      receivedAt: item.date_received ?? item.added_at,
+      completedAt: worksheetCompletedAt,
+    }))
+  }, [items, isCompleted, worksheetCompletedAtProp])
   const { byKey: slaByKey, isLoading: slaLoading, isError: slaError } =
     useSlaForSubjects(slaSubjects)
 
