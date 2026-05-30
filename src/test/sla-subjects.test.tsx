@@ -188,4 +188,11 @@ describe('pickWorstSnapshot', () => {
     const b = snap({ key: 'b', color: 'red', status: { elapsed_minutes: 360, remaining_minutes: -120, target_minutes: 240, breached: true } })
     expect(pickWorstSnapshot([a, b])?.key).toBe('b')
   })
+
+  it('breaks live-amber ties by least percent remaining', () => {
+    // 'a': 90/120 = 75% remaining; 'b': 30/240 = 12.5% remaining → b is closer to breach
+    const a = snap({ key: 'a', color: 'amber', status: { elapsed_minutes: 30, remaining_minutes: 90, target_minutes: 120, breached: false } })
+    const b = snap({ key: 'b', color: 'amber', status: { elapsed_minutes: 210, remaining_minutes: 30, target_minutes: 240, breached: false } })
+    expect(pickWorstSnapshot([a, b])?.key).toBe('b')
+  })
 })

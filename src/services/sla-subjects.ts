@@ -77,6 +77,10 @@ function resolveSubjectTier(
  *
  * Surfaces that render many rows should call this ONCE at the list level with
  * the flattened subjects of every row, then slice per row by key.
+ *
+ * Callers should pass a stable `subjects` reference (e.g. via useMemo) if they
+ * key children off `byKey` identity — an inline `.map()` produces a new array
+ * every render and will cause unnecessary re-fetches.
  */
 export function useSlaForSubjects(subjects: SlaSubject[]): SlaSubjectsResult {
   const tiersQuery = useSlaTiers()
@@ -141,19 +145,16 @@ export function useSlaForSubjects(subjects: SlaSubject[]): SlaSubjectsResult {
   })
 
   return useMemo<SlaSubjectsResult>(() => {
-    const applicable = batchItems.length > 0
     const isLoading =
-      applicable &&
-      (tiersQuery.isLoading ||
-        groupsQuery.isLoading ||
-        prioOverridesQuery.isLoading ||
-        statusQuery.isLoading)
+      tiersQuery.isLoading ||
+      groupsQuery.isLoading ||
+      prioOverridesQuery.isLoading ||
+      (batchItems.length > 0 && statusQuery.isLoading)
     const isError =
-      applicable &&
-      (tiersQuery.isError ||
-        groupsQuery.isError ||
-        prioOverridesQuery.isError ||
-        statusQuery.isError)
+      tiersQuery.isError ||
+      groupsQuery.isError ||
+      prioOverridesQuery.isError ||
+      (batchItems.length > 0 && statusQuery.isError)
 
     const statusByKey = new Map<string, SlaStatus>()
     for (const item of statusQuery.data ?? []) {
@@ -197,7 +198,7 @@ function severityRank(s: SlaSubjectSnapshot): number {
   if (s.isFrozen && s.status.breached) return 4 // frozen missed
   if (!s.isFrozen && s.color === 'amber') return 3
   if (!s.isFrozen && s.color === 'green') return 2
-  return 1 // frozen met
+  return 1 // frozen met (frozen-amber falls through here intentionally — no meaningful distinction)
 }
 
 /** Worst snapshot for aggregate surfaces. Ties within live-red broken by
