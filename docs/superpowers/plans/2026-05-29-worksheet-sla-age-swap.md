@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Replace the hardcoded "AGE" field (`AgingTimer`) across all five surfaces that render it with a configured-SLA status indicator driven by a shared `SlaSubject` model, one batched hook, and one compact indicator component.
+**Goal:** Replace the hardcoded "AGE" field (`AgingTimer`) across all five surfaces that render it with a configured-SLA status indicator driven by a shared `SlaSubject` model, one batched hook, and one compact indicator.
 
 **Architecture:** A new `useSlaForSubjects(subjects[])` hook resolves each normalized `SlaSubject` `(priority, groupId, receivedAt, completedAt?)` to its tier via the existing precedence helpers and batches one `/sla/status` call. A new `SlaAgeIndicator` renders a single snapshot or the worst of an array in the compact `OrderSlaCell` idiom (live red/amber/green; frozen took/missed once `completedAt` is set). The five call sites map their rows to subjects and drop in the indicator. `AgingTimer.tsx` is left parked, unused.
 
@@ -813,7 +813,7 @@ These three render a single `(sample, group)` per indicator. Each builds ONE sub
 
 First inspect the file to find the list component that maps items and the `SortableItemRow` that renders `AgingTimer` at ~line 316:
 ```bash
-grep -n "AgingTimer\|function SortableItemRow\|\.map(\|export function WorksheetDrawerItems\|items\b" /c/tmp/accu-mk1-wave1/src/components/hplc/WorksheetDrawerItems.tsx | head -30
+grep -n "AgingTimer\|function SortableItemRow\|\.map(\|export function WorksheetDrawerItems\|interface WorksheetDrawerItemsProps\|interface SortableItemRowProps" /c/tmp/accu-mk1-wave1/src/components/hplc/WorksheetDrawerItems.tsx | head -30
 ```
 
 - [ ] In `WorksheetDrawerItems.tsx`, replace the import:
@@ -823,11 +823,11 @@ import { AgingTimer } from '@/components/hplc/AgingTimer'
 with:
 ```ts
 import { SlaAgeIndicator } from '@/components/hplc/SlaAgeIndicator'
-import { useSlaForSubjects, type SlaSubject } from '@/services/sla-subjects'
+import { useSlaForSubjects, type SlaSubject, type SlaSubjectSnapshot } from '@/services/sla-subjects'
 import type { InboxPriority } from '@/lib/api'
 ```
 
-- [ ] In the `WorksheetDrawerItems` component body (the one that receives the `items` array and the worksheet), build subjects and call the hook. The component receives the worksheet's items; it also needs the worksheet's `completed_at` and `status` to freeze. Add near the top of the component body, after props are destructured:
+- [ ] In the `WorksheetDrawerItems` component body, after props are destructured, build subjects and call the hook:
 ```ts
 const worksheetCompletedAt =
   worksheetStatus === 'complete' ? (worksheetCompletedAtProp ?? null) : null
@@ -842,18 +842,15 @@ const { byKey: slaByKey, isLoading: slaLoading, isError: slaError } =
   useSlaForSubjects(slaSubjects)
 ```
 
-**Context note for the implementer:** `WorksheetDrawerItems` is passed the worksheet's items via props. Determine the exact prop names for the worksheet status + completion timestamp by reading `WorksheetDrawerItemsProps` (interface near line 53) and the parent `WorksheetDrawer.tsx`. If a `completed_at`/`status` is not already passed into `WorksheetDrawerItems`, thread it down from `WorksheetDrawer` (which holds the full `WorksheetListItem` with `.status` and `.completed_at`). Name the new props `worksheetStatus?: string` and `worksheetCompletedAtProp?: string | null` (or reuse existing equivalents if present). If threading is needed, that is part of this step — do it.
+**Context note for the implementer:** `WorksheetDrawerItems` is passed the worksheet's items via props. Read `WorksheetDrawerItemsProps` (interface near line 53) and the parent `WorksheetDrawer.tsx` to find the exact prop names for the worksheet status + completion timestamp. If `completed_at`/`status` is not already passed into `WorksheetDrawerItems`, thread it down from `WorksheetDrawer` (which holds the full `WorksheetListItem` with `.status` and `.completed_at`). Name the new props `worksheetStatus?: string` and `worksheetCompletedAtProp?: string | null` (or reuse existing equivalents if present). If threading is needed, that is part of this step — do it.
 
-- [ ] Pass the per-row subject into `SortableItemRow` (which renders the indicator). Add a prop to `SortableItemRow` for the row's snapshot + flags, OR look up inside the row from a passed map. Simplest: pass the map + flags down. In `SortableItemRowProps` (interface near line 169) add:
+- [ ] Pass the per-row data into `SortableItemRow`. In `SortableItemRowProps` (interface near line 169) add:
 ```ts
   slaSnapshot: SlaSubjectSnapshot | null
   slaLoading: boolean
   slaError: boolean
 ```
-and import the type at top:
-```ts
-import type { SlaSubjectSnapshot } from '@/services/sla-subjects'
-```
+(`SlaSubjectSnapshot` is imported at top per the import edit above.)
 
 - [ ] At the `SortableItemRow` call site (inside the items `.map`), pass:
 ```tsx
@@ -880,11 +877,11 @@ with:
 ### Step 3.2 — WorksheetDropPanel: same pattern
 
 ```bash
-grep -n "AgingTimer\|\.map(\|export function WorksheetDropPanel\|items\b\|date_received\|added_at" /c/tmp/accu-mk1-wave1/src/components/hplc/WorksheetDropPanel.tsx | head -25
+grep -n "AgingTimer\|\.map(\|export function WorksheetDropPanel\|date_received\|added_at\|service_group_id" /c/tmp/accu-mk1-wave1/src/components/hplc/WorksheetDropPanel.tsx | head -25
 ```
 
-- [ ] Replace the import `AgingTimer` → `SlaAgeIndicator` + add `useSlaForSubjects`, `SlaSubject`, `InboxPriority` imports (same as 3.1).
-- [ ] In the component body, build subjects from the panel's items and call the hook once:
+- [ ] Replace the import `AgingTimer` → `SlaAgeIndicator` + add `useSlaForSubjects`, `SlaSubject`, `InboxPriority` imports (same as 3.1; add `SlaSubjectSnapshot` only if you thread through a child row component).
+- [ ] In the component body, build subjects from the panel's items and call the hook once (drop-panel items are being staged onto a worksheet — not completed — so no `completedAt`):
 ```ts
 const dropSubjects: SlaSubject[] = items.map(item => ({
   key: String(item.id),
@@ -895,7 +892,6 @@ const dropSubjects: SlaSubject[] = items.map(item => ({
 const { byKey: dropSlaByKey, isLoading: dropSlaLoading, isError: dropSlaError } =
   useSlaForSubjects(dropSubjects)
 ```
-(The drop panel holds items being staged onto a worksheet — not completed — so no `completedAt`.)
 - [ ] Replace the AGE render (line ~198):
 ```tsx
 <AgingTimer dateReceived={item.date_received ?? item.added_at} compact />
@@ -909,7 +905,7 @@ with:
   compact
 />
 ```
-If `item` is inside a `.map` whose body is a child component, thread the map+flags down the same way as 3.1. Read the file to confirm whether the render is inline (in which case the inline lookup above works directly) or in a child row component.
+Read the file to confirm whether the render is inline in the `.map` (the lookup above works directly) or inside a child row component (thread the map+flags down the same way as 3.1).
 
 ### Step 3.3 — InboxServiceGroupCard: single subject per card
 
@@ -929,7 +925,7 @@ const slaSubjects: SlaSubject[] = [{
 const { byKey: slaByKey, isLoading: slaLoading, isError: slaError } =
   useSlaForSubjects(slaSubjects)
 ```
-- [ ] Replace the AGE render (line ~166):
+- [ ] Replace the AGE render (line ~165-166):
 ```tsx
 {/* Aging timer */}
 <AgingTimer dateReceived={sample.date_received} />
@@ -950,7 +946,7 @@ with:
 ```bash
 docker exec accu-mk1-frontend sh -c 'cd /app && npx vitest run src/test/sla-subjects.test.tsx src/test/sla-age-indicator.test.tsx'
 ```
-Expected: still green (no behavior change to the tested units).
+Expected: still green.
 
 ```bash
 npx eslint src/components/hplc/WorksheetDrawerItems.tsx src/components/hplc/WorksheetDropPanel.tsx src/components/hplc/InboxServiceGroupCard.tsx
@@ -985,7 +981,7 @@ grep -n "AgingTimer\|\.map(\|samples\b\|sample\.uid\|analyses_by_group\|export f
 ```ts
 import { useSlaForSubjects, type SlaSubject, type SlaSubjectSnapshot } from '@/services/sla-subjects'
 ```
-- [ ] In the table component body (it has the `samples: InboxSampleItem[]` list), build the flattened subjects across all samples and call the hook once:
+- [ ] In the table component body (it has the `samples: InboxSampleItem[]` list), build flattened subjects across all samples and call the hook once:
 ```ts
 const slaSubjects: SlaSubject[] = samples.flatMap(sample =>
   sample.analyses_by_group.map(group => ({
@@ -998,7 +994,7 @@ const slaSubjects: SlaSubject[] = samples.flatMap(sample =>
 const { byKey: slaByKey, isLoading: slaLoading, isError: slaError } =
   useSlaForSubjects(slaSubjects)
 ```
-- [ ] Per row, build the snapshots slice and pass to the indicator. Replace the AGE cell (line ~324-327):
+- [ ] Replace the AGE cell (line ~324-327):
 ```tsx
 {/* Age */}
 <TableCell>
@@ -1018,12 +1014,12 @@ with:
   />
 </TableCell>
 ```
-(Non-compact here — the table cell has room for the fuller "9h left" form. If the column is visibly cramped after testing, add `compact`.)
+(Non-compact here — the table cell has room for the fuller "9h left" form. If the column is visibly cramped after smoke-testing, add `compact`.)
 
 ### Step 4.2 — WorksheetsListPage: N subjects per worksheet (one per item)
 
 ```bash
-grep -n "AgingTimer\|earliestAddedAt\|completed_at\|ws\.items\|\.map(\|export function WorksheetsListPage" /c/tmp/accu-mk1-wave1/src/components/hplc/WorksheetsListPage.tsx | head -30
+grep -n "AgingTimer\|earliestAddedAt\|completed_at\|ws\.items\|\.map(\|worksheets\|export function WorksheetsListPage" /c/tmp/accu-mk1-wave1/src/components/hplc/WorksheetsListPage.tsx | head -30
 ```
 
 - [ ] Replace the import `AgingTimer` → `SlaAgeIndicator` + add:
@@ -1031,7 +1027,7 @@ grep -n "AgingTimer\|earliestAddedAt\|completed_at\|ws\.items\|\.map(\|export fu
 import { useSlaForSubjects, type SlaSubject, type SlaSubjectSnapshot } from '@/services/sla-subjects'
 import type { InboxPriority } from '@/lib/api'
 ```
-- [ ] At the page-component level (where the `worksheets` array is in scope), build flattened subjects across every worksheet's items and call the hook once:
+- [ ] At the page-component level (where the worksheets list is in scope), build flattened subjects across every worksheet's items and call the hook once:
 ```ts
 const slaSubjects: SlaSubject[] = worksheets.flatMap(ws =>
   ws.items.map(item => ({
@@ -1045,7 +1041,7 @@ const slaSubjects: SlaSubject[] = worksheets.flatMap(ws =>
 const { byKey: slaByKey, isLoading: slaLoading, isError: slaError } =
   useSlaForSubjects(slaSubjects)
 ```
-(Note the composite key `${ws.id}:${item.id}` — item ids may repeat across worksheets, so namespace by worksheet id.)
+(Composite key `${ws.id}:${item.id}` — item ids may repeat across worksheets, so namespace by worksheet id.)
 
 **Context note:** confirm the page-level variable holding the list is named `worksheets` (it may be `data`, `filteredWorksheets`, etc.). Read the file and use the actual in-scope name. The per-row variable is `ws` inside the `.map` (per the existing line ~333 using `ws.completed_at`).
 
@@ -1079,7 +1075,7 @@ with:
   />
 </TableCell>
 ```
-This removes the `completed_at`-date branch entirely — the frozen "took/missed" indicator now conveys completion. The `earliestAddedAt` local may become unused; if so, remove its declaration (read the file to confirm it isn't used elsewhere in the row before removing).
+This removes the `completed_at`-date branch entirely — the frozen "took/missed" indicator now conveys completion. The `earliestAddedAt` local may become unused; read the file to confirm it isn't used elsewhere in the row, and if not, remove its declaration.
 
 ### Step 4.3 — Verify + lint + typecheck
 
@@ -1092,7 +1088,7 @@ Expected: still green.
 npx eslint src/components/hplc/InboxSampleTable.tsx src/components/hplc/WorksheetsListPage.tsx
 npm run typecheck
 ```
-Run from inside the worktree. Expected: clean. If removing `earliestAddedAt` left an unused-var error elsewhere, resolve it.
+Run from inside the worktree. Expected: clean. If removing `earliestAddedAt` left an unused-var error, resolve it.
 
 ### Step 4.4 — Commit
 
@@ -1110,11 +1106,11 @@ git -C /c/tmp/accu-mk1-wave1 commit -m "feat(sla): SLA indicator on inbox sample
 ```bash
 docker exec accu-mk1-frontend sh -c 'cd /app && npx vitest run src/test/sla-subjects.test.tsx src/test/sla-age-indicator.test.tsx src/test/sla-format.test.ts src/test/analysis-sla.test.tsx src/test/analysis-sla-cell.test.tsx src/test/order-sla.test.tsx src/test/order-sla-cell.test.tsx src/test/sample-sla.test.tsx src/test/sample-header-sla.test.tsx src/test/sample-sla-indicator.test.tsx src/test/sla-resolution.test.ts src/test/sla-breakdown-tooltip.test.tsx'
 ```
-Then run any worksheet-specific tests:
+Then run worksheet-specific tests:
 ```bash
 docker exec accu-mk1-frontend sh -c 'cd /app && npx vitest run src/components/hplc/__tests__/WorksheetDrawer.test.tsx src/components/hplc/__tests__/WorksheetDrawerItems.test.tsx'
 ```
-Expected: all pass. If a worksheet test rendered `AgingTimer` text and now asserts on it, update the assertion to the SLA indicator's `data-testid="sla-age-indicator"` (read the failing test, fix the assertion to match the new component, keep the test's intent).
+Expected: all pass. If a worksheet test asserted on `AgingTimer` text and now fails, read the failing test and update the assertion to the SLA indicator's `data-testid="sla-age-indicator"`, keeping the test's intent.
 
 ### Step 5.2 — Typecheck (whole project)
 
@@ -1128,7 +1124,7 @@ Run from inside the worktree. Expected: clean.
 ```bash
 git -C /c/tmp/accu-mk1-wave1 log --oneline origin/master..HEAD | head -10
 ```
-Expected: 4 new feature commits (Task 1, 2, 3, 4) on top of the spec commit.
+Expected: 4 new feature commits (Task 1, 2, 3, 4) on top of the spec + plan commits.
 
 ### Step 5.4 — Manual smoke on :3101 (hand back to user)
 
@@ -1138,11 +1134,11 @@ Hard-refresh `http://localhost:3101` (Ctrl+Shift+R), then verify:
 - [ ] **Worksheets list page:** each worksheet row shows the worst SLA across its items; a COMPLETED worksheet shows frozen `✓ took Xh` (met) or `— Missed by Yh` (missed) instead of the bare completion date.
 - [ ] **Inbox sample table:** a multi-group sample row shows the worst group's SLA.
 - [ ] **Inbox service-group card:** shows that group's SLA.
-- [ ] Confirm `AgingTimer.tsx` still exists in the tree but is no longer imported anywhere (`grep -rn "AgingTimer" src/` should show only the parked file's own definition).
+- [ ] Confirm `AgingTimer.tsx` still exists but is no longer imported (`grep -rn "AgingTimer" src/` shows only the parked file's own definition).
 
 ### Step 5.5 — Report
 
-- Summarize the 4 new commits.
+- Summarize the 4 new feature commits.
 - Note that `AgingTimer.tsx` is parked unused (Knip will flag it; intentional).
 - Offer `superpowers:finishing-a-development-branch` once the user is satisfied with live behavior.
 
@@ -1163,6 +1159,6 @@ If any smoke check fails, capture the specific surface + observation (screenshot
 
 **Placeholder scan:** No TBDs. The "Context note" blocks in Tasks 3-4 instruct reading the file to confirm exact prop/variable names before editing — these are real codebase-navigation steps, not deferred work; the code to write is fully specified.
 
-**Type consistency:** `SlaSubject`, `SlaSubjectSnapshot`, `SlaSubjectsResult` defined in Task 1 and consumed identically in Tasks 2-4. `useSlaForSubjects` returns `{ byKey, isLoading, isError }` — destructured consistently as `byKey`/`isLoading`/`isError` (aliased per surface, e.g. `slaByKey`). `pickWorstSnapshot` defined in Task 1, used in Task 2's renderer and memo comparator. `SlaAgeIndicator` props (`snapshot?`, `snapshots?`, `isLoading`, `isError`, `compact?`) consistent across Task 2 definition and Tasks 3-4 call sites. `i18n` keys referenced (`orderStatus.sla.over/.left/.publishedTook/.missedBy/.loading/.unavailable/.noTierConfigured`) all exist post the analysis-services work.
+**Type consistency:** `SlaSubject`, `SlaSubjectSnapshot`, `SlaSubjectsResult` defined in Task 1 and consumed identically in Tasks 2-4. `useSlaForSubjects` returns `{ byKey, isLoading, isError }`, destructured (aliased) consistently. `pickWorstSnapshot` defined in Task 1, used in Task 2's renderer + memo comparator. `SlaAgeIndicator` props (`snapshot?`, `snapshots?`, `isLoading`, `isError`, `compact?`) consistent across Task 2 definition and Tasks 3-4 call sites. i18n keys referenced (`orderStatus.sla.over/.left/.publishedTook/.missedBy/.loading/.unavailable/.noTierConfigured`) all exist post the analysis-services work.
 
 **Known pre-existing oddity (not in scope):** `src/lib/api.ts` has a duplicate `SlaStatusRequestItem` interface declaration and a stray `SlaStatusReson` typo interface. TypeScript tolerates the duplicate via interface merging. Do NOT fix as part of this plan (no unsolicited refactors).
