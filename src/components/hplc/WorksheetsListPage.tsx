@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { ClipboardList, ListChecks, AlertTriangle, Clock } from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
 import {
@@ -20,7 +20,8 @@ import {
 } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { PriorityBadge } from '@/components/hplc/PriorityBadge'
-import { AgingTimer } from '@/components/hplc/AgingTimer'
+import { SlaAgeIndicator } from '@/components/hplc/SlaAgeIndicator'
+import { useSlaForSubjects, type SlaSubject, type SlaSubjectSnapshot } from '@/services/sla-subjects'
 import { listWorksheets, type InboxPriority } from '@/lib/api'
 import { useUIStore } from '@/store/ui-store'
 
@@ -71,6 +72,23 @@ export default function WorksheetsListPage() {
     analystFilter === 'all'
       ? worksheets
       : worksheets.filter(w => w.assigned_analyst_email === analystFilter)
+
+  // Flatten subjects over all worksheets (stable react-query result) for batched SLA hook
+  const slaSubjects = useMemo<SlaSubject[]>(
+    () =>
+      worksheets.flatMap(ws =>
+        ws.items.map(item => ({
+          key: `${ws.id}:${item.id}`,
+          priority: (item.priority as InboxPriority) || 'normal',
+          groupId: item.service_group_id,
+          receivedAt: item.date_received ?? item.added_at,
+          completedAt: ws.completed_at,
+        })),
+      ),
+    [worksheets],
+  )
+  const { byKey: slaByKey, isLoading: slaLoading, isError: slaError } =
+    useSlaForSubjects(slaSubjects)
 
   // ─── KPI computations (from unfiltered worksheets) ───────────────────────────
 
@@ -269,12 +287,6 @@ export default function WorksheetsListPage() {
                       p => (priorityCounts[p] ?? 0) > 0,
                     )
 
-                    // Find earliest date_received (or added_at as fallback)
-                    const earliestAddedAt = ws.items
-                      .map(i => i.date_received ?? i.added_at)
-                      .filter(Boolean)
-                      .sort()[0] ?? null
-
                     return (
                       <TableRow
                         key={ws.id}
@@ -320,21 +332,14 @@ export default function WorksheetsListPage() {
                           )}
                         </TableCell>
                         <TableCell>
-                          {ws.completed_at ? (
-                            <span className="text-sm text-muted-foreground">
-                              {new Date(ws.completed_at).toLocaleDateString(undefined, {
-                                month: 'short',
-                                day: 'numeric',
-                                year: 'numeric',
-                                hour: 'numeric',
-                                minute: '2-digit',
-                              })}
-                            </span>
-                          ) : earliestAddedAt ? (
-                            <AgingTimer dateReceived={earliestAddedAt} compact />
-                          ) : (
-                            <span className="text-muted-foreground">—</span>
-                          )}
+                          <SlaAgeIndicator
+                            snapshots={ws.items
+                              .map(item => slaByKey.get(`${ws.id}:${item.id}`))
+                              .filter((s): s is SlaSubjectSnapshot => s != null)}
+                            isLoading={slaLoading}
+                            isError={slaError}
+                            compact
+                          />
                         </TableCell>
                       </TableRow>
                     )

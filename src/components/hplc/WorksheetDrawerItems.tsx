@@ -137,7 +137,7 @@ export function WorksheetDrawerItems({
           <div className="flex-1 min-w-[140px]">Peptide</div>
           <div className="w-[110px] shrink-0">Method</div>
           <div className="w-[120px] shrink-0">Instrument</div>
-          <div className="w-[60px] shrink-0">Age</div>
+          <div className="w-[60px] shrink-0">SLA</div>
           <div className="w-[110px] shrink-0">Status</div>
           <div className="w-[80px] shrink-0 text-right">Actions</div>
         </div>
