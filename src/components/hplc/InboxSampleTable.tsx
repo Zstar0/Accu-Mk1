@@ -249,7 +249,7 @@ export function InboxSampleTable({
           <TableHead>Client</TableHead>
           <TableHead>Priority</TableHead>
           <TableHead>Assignments</TableHead>
-          <TableHead>Age</TableHead>
+          <TableHead>SLA</TableHead>
           <TableHead>Status</TableHead>
         </TableRow>
       </TableHeader>

@@ -246,7 +246,7 @@ export default function WorksheetsListPage() {
                   <TableHead>Status</TableHead>
                   <TableHead>Items</TableHead>
                   <TableHead className="hidden xl:table-cell">Priority</TableHead>
-                  <TableHead>Oldest Item</TableHead>
+                  <TableHead>SLA</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
