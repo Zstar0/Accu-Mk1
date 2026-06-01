@@ -14,7 +14,7 @@ const { useSenaiteLookupMap } = await import('@/services/senaite-lookup-map')
 
 function Wrapper({ children }: { children: React.ReactNode }) {
   const [qc] = React.useState(
-    () => new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    () => new QueryClient({ defaultOptions: { queries: { retry: false, retryDelay: 0 } } })
   )
   return <QueryClientProvider client={qc}>{children}</QueryClientProvider>
 }

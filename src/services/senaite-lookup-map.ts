@@ -62,6 +62,9 @@ export function useSenaiteLookupMap(orders: ExplorerOrder[]): SenaiteLookupMapRe
 
   const sampleLookupMap = useMemo(() => {
     const map = new Map<string, SenaiteLookupEntry>()
+    // `sampleQueries[idx]` is always defined (useQueries returns one result per
+    // input synchronously); the `?? true`/`?? false` fallbacks are defensive
+    // carryovers from the inline chains this hook replaces.
     sampleIds.forEach((id, idx) => {
       map.set(id, {
         data: sampleQueries[idx]?.data,
