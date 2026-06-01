@@ -1,0 +1,79 @@
+import { useMemo } from 'react'
+import { useQueries } from '@tanstack/react-query'
+import type { ExplorerOrder, SenaiteLookupResult } from '@/lib/api'
+import { enqueueSenaiteLookup } from '@/components/explorer/senaite-queue'
+
+export interface SenaiteLookupEntry {
+  data?: SenaiteLookupResult
+  isLoading: boolean
+  isError: boolean
+}
+
+export interface SenaiteLookupMapResult {
+  /** senaiteId → lookup query state. Keyed by senaite_id (human sample id). */
+  sampleLookupMap: Map<string, SenaiteLookupEntry>
+  /** Unique senaite_ids collected from the orders (failed/empty skipped). */
+  sampleIds: string[]
+  /** True while any underlying per-sample lookup is still loading. */
+  isLoading: boolean
+  /** True if any underlying per-sample lookup errored. */
+  isError: boolean
+}
+
+/**
+ * Per-sample SENAITE lookup map for a list of orders. Extracts the chain that
+ * was duplicated inline in OrderStatusPage and CustomerStatusPage: collect the
+ * unique senaite_ids referenced by the orders' sample_results, fire one
+ * serialized SENAITE lookup per id (via enqueueSenaiteLookup, which throttles
+ * to avoid overwhelming Zope), and expose a Map keyed by senaite_id.
+ *
+ * The query key `['senaite','lookup',id]` is shared across every surface that
+ * uses this hook, so a lookup fetched on one page is reused warm on another.
+ * Feed the returned `sampleLookupMap` to `useOrderSlaStatuses(orders, map)`.
+ */
+export function useSenaiteLookupMap(orders: ExplorerOrder[]): SenaiteLookupMapResult {
+  // Collect unique sample IDs from the orders (skip failed/empty ones).
+  const sampleIds = useMemo(() => {
+    const ids: string[] = []
+    for (const order of orders) {
+      if (!order.sample_results) continue
+      for (const entry of Object.values(order.sample_results)) {
+        if (
+          entry.senaite_id &&
+          entry.status !== 'failed' &&
+          !ids.includes(entry.senaite_id)
+        ) {
+          ids.push(entry.senaite_id)
+        }
+      }
+    }
+    return ids
+  }, [orders])
+
+  // Fetch sample details from SENAITE — serialized to avoid overwhelming Zope.
+  const sampleQueries = useQueries({
+    queries: sampleIds.map(id => ({
+      queryKey: ['senaite', 'lookup', id],
+      queryFn: () => enqueueSenaiteLookup(id),
+      staleTime: 15 * 60_000,
+      retry: 1,
+    })),
+  })
+
+  const sampleLookupMap = useMemo(() => {
+    const map = new Map<string, SenaiteLookupEntry>()
+    sampleIds.forEach((id, idx) => {
+      map.set(id, {
+        data: sampleQueries[idx]?.data,
+        isLoading: sampleQueries[idx]?.isLoading ?? true,
+        isError: sampleQueries[idx]?.isError ?? false,
+      })
+    })
+    return map
+  }, [sampleIds, sampleQueries])
+
+  const isLoading = sampleQueries.some(q => q.isLoading)
+  const isError = sampleQueries.some(q => q.isError)
+
+  return { sampleLookupMap, sampleIds, isLoading, isError }
+}
