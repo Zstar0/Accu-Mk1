@@ -1,5 +1,62 @@
 # Changelog
 
+## v0.36.0 — 2026-06-01 — SLA tracking & coverage
+
+End-to-end SLA (turnaround-time) tracking: a configurable tier model, a
+business-hours + holiday-aware elapsed/remaining engine, and SLA indicators on
+every surface where staff previously saw hardcoded "Age"/"Processing Time"
+fields.
+
+### Added
+
+- **SLA tier model.** New `sla_tiers` table (configurable `target_minutes`,
+  `business_hours_only`, `amber_threshold_percent`, single-`is_default` tier) plus
+  `sla_priority_tiers` (priority→tier overrides, global or scoped to a service
+  group) and a `service_groups.sla_tier_id` column for per-group tier assignment.
+  Resolution precedence: `(priority, group)` > `(priority, all groups)` > group's
+  own tier > default. All schema applied via idempotent startup DDL in
+  [backend/database.py](backend/database.py) — no manual migration step.
+- **Business-hours + holiday-aware SLA engine.** [backend/sla_engine.py](backend/sla_engine.py)
+  `compute_business_minutes` counts only configured business hours, skipping
+  weekends and lab holidays; [backend/holidays_us.py](backend/holidays_us.py) supplies
+  US federal holidays. New `business_hours_config` table + `lab_holidays` (seeded
+  with the federal set on first run).
+- **`POST /sla/status`** batch endpoint returning `{target, elapsed, remaining,
+  breached}` per keyed item, with a `now_override` mode that freezes elapsed at a
+  sample's publish date for historical "took Xh / Met / Missed" display.
+- **Business Hours pane** in Preferences — schedule editor, lab-holiday CRUD, and a
+  generate-US-federal-holidays action.
+- **SLA indicators across the app**, replacing prior hardcoded aging fields:
+  - Order list, **OrderExplorer**, and **OrderDashboard** SLA columns (replacing the
+    hardcoded "Processing Time" / orange "Age" columns).
+  - **Worksheet & Inbox** SLA age indicators (`SlaAgeIndicator`) replacing the
+    hardcoded 24h/48h "AGE" field across WorksheetDrawerItems, WorksheetDropPanel,
+    WorksheetsListPage, InboxSampleTable, and InboxServiceGroupCard.
+  - **Sample Details** header indicator + per-analysis-row SLA cell.
+  - Customer detail orders show SLA via the shared order row.
+- **Multi-tier support** — a sample whose analyses span multiple service groups
+  resolves one tier per group; order/worktime surfaces aggregate to the worst.
+- **Shared `useSenaiteLookupMap` hook** — the per-sample SENAITE-lookup chain,
+  previously duplicated inline in OrderStatusPage + CustomerStatusPage, extracted
+  and reused by the explorer/dashboard SLA columns (exposes `isFetching` +
+  `lastCachedAt` for "Updated X ago" headers).
+- **Received date/time as the first field of the SLA breakdown tooltip** — the SLA
+  clock start now leads the hover breakdown (`Received: …`) on every surface that
+  hosts it, rendered with the same formatter as the sample page's "Received {date}".
+
+### Changed
+
+- **OrderStatusPage + CustomerStatusPage** rewired onto the shared
+  `useSenaiteLookupMap` hook (deleted their inline lookup copies — pure DRY).
+- Refreshed the SLA business-hours preference hint to describe the live behavior
+  ("Counts only configured business hours, skipping weekends and lab holidays").
+
+### Fixed
+
+- **`WorksheetsListPage` avg-age KPI render purity** — seed `now` once via
+  `useState` initializer instead of calling `Date.now()` in render; re-enabled
+  React Compiler analysis for the file.
+
 ## v0.31.1 — 2026-05-04 — Bac Water analyte support (Wave 1)
 
 ### Added
