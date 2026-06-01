@@ -42,7 +42,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useQuery, useQueries, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   AlertCircle,
   ChevronLeft,
@@ -87,8 +87,8 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { formatDate } from '@/components/explorer/helpers'
 import { OrderRow } from '@/components/explorer/OrderRow'
-import { enqueueSenaiteLookup } from '@/components/explorer/senaite-queue'
 import { useOrderSlaStatuses } from '@/services/order-sla'
+import { useSenaiteLookupMap } from '@/services/senaite-lookup-map'
 
 const PER_PAGE = 50
 
@@ -667,56 +667,8 @@ function CustomerDetailView() {
     })
   }, [orders])
 
-  // --- SENAITE fan-out (LOAD-BEARING useMemo per RESEARCH §11 #1) ---
-  // Copy of OrderStatusPage:619-665. Deps are `[orders]` (NOT sortedOrders)
-  // to match the OrderStatusPage analog and keep identity stable across sort
-  // changes (sort doesn't affect which sample ids exist).
-  const sampleIds = useMemo(() => {
-    const ids: string[] = []
-    if (!orders) return ids
-    for (const order of orders) {
-      if (order.sample_results) {
-        for (const entry of Object.values(order.sample_results)) {
-          if (
-            entry.senaite_id &&
-            entry.status !== 'failed' &&
-            !ids.includes(entry.senaite_id)
-          ) {
-            ids.push(entry.senaite_id)
-          }
-        }
-      }
-    }
-    return ids
-  }, [orders])
-
-  const sampleQueries = useQueries({
-    queries: sampleIds.map(id => ({
-      queryKey: ['senaite', 'lookup', id],
-      queryFn: () => enqueueSenaiteLookup(id),
-      staleTime: 15 * 60_000,
-      retry: 1,
-    })),
-  })
-
-  const sampleLookupMap = useMemo(() => {
-    const map = new Map<
-      string,
-      {
-        data?: SenaiteLookupResult
-        isLoading: boolean
-        isError: boolean
-      }
-    >()
-    sampleIds.forEach((id, idx) => {
-      map.set(id, {
-        data: sampleQueries[idx]?.data,
-        isLoading: sampleQueries[idx]?.isLoading ?? true,
-        isError: sampleQueries[idx]?.isError ?? false,
-      })
-    })
-    return map
-  }, [sampleIds, sampleQueries])
+  // Per-sample SENAITE lookup map (shared hook — see useSenaiteLookupMap).
+  const { sampleLookupMap } = useSenaiteLookupMap(orders ?? [])
 
   // wordpressHost is read here and threaded into CustomerOrdersTab (the
   // derived render flags hasError/hasOrders/showLoading/showEmpty now live
