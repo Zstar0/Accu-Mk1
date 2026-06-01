@@ -36,9 +36,7 @@
  *   `include_test_emails`. The inversion is at the call site: `!hideTestAccounts`.
  *
  * No manual useMemo/useCallback in this plan. React Compiler handles
- *   memoization for the list view's render output. The one load-bearing
- *   useMemo exception (RESEARCH §11 #1, sampleIds for useQueries identity)
- *   lands in Plan 29-05's CustomerDetailView replacement.
+ *   memoization for the list view's render output.
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -494,11 +492,9 @@ function CustomerRow({
  * useMemo invariants — LOAD-BEARING (RESEARCH §11 #1, PATTERNS):
  *   - sortedOrders   — feeds OrderRow.map; identity stability avoids extra
  *                      OrderRow renders.
- *   - sampleIds      — feeds the useQueries `queries:` config; identity churn
- *                      causes TanStack to rebuild query state every render →
- *                      infinite refetch loop on heavy customers.
- *   - sampleLookupMap — feeds OrderRow's `sampleLookupMap` prop; built off the
- *                      memo'd sampleIds + sampleQueries.
+ *   - sampleLookupMap — from useSenaiteLookupMap(orders); feeds
+ *                      useOrderSlaStatuses + CustomerOrdersTab's
+ *                      sampleLookupMap prop.
  *
  * Selector syntax mandate (AGENTS.md): every useUIStore call uses
  * `state => state.x`. ast-grep enforces.
