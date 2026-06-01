@@ -97,4 +97,27 @@ describe('useSenaiteLookupMap', () => {
     await waitFor(() => expect(result.current.isError).toBe(true), { timeout: 3000 })
     expect(result.current.sampleLookupMap.get('PB-001')?.isError).toBe(true)
   })
+
+  it('lastCachedAt returns the oldest cached_at across lookups', async () => {
+    enqueueSenaiteLookupMock.mockReset().mockImplementation((id: string) =>
+      Promise.resolve({
+        ...makeLookup(id),
+        cached_at: id === 'PB-001' ? '2026-01-02T00:00:00' : '2026-01-01T00:00:00',
+      })
+    )
+    const orders = [
+      makeOrder('o1', { a: { senaite_id: 'PB-001', status: 'ok' } }),
+      makeOrder('o2', { b: { senaite_id: 'PB-002', status: 'ok' } }),
+    ]
+    const { result } = renderHook(() => useSenaiteLookupMap(orders), { wrapper: Wrapper })
+    await waitFor(() => expect(result.current.isLoading).toBe(false))
+    expect(result.current.lastCachedAt).toBe('2026-01-01T00:00:00')
+  })
+
+  it('isFetching is false after queries settle', async () => {
+    const orders = [makeOrder('o1', { a: { senaite_id: 'PB-001', status: 'ok' } })]
+    const { result } = renderHook(() => useSenaiteLookupMap(orders), { wrapper: Wrapper })
+    await waitFor(() => expect(result.current.isLoading).toBe(false))
+    expect(result.current.isFetching).toBe(false)
+  })
 })

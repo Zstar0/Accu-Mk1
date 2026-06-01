@@ -18,6 +18,12 @@ export interface SenaiteLookupMapResult {
   isLoading: boolean
   /** True if any underlying per-sample lookup errored. */
   isError: boolean
+  /** True while any lookup is re-fetching (isFetching) — distinct from
+   *  isLoading; stays true during a background refresh that has cached data. */
+  isFetching: boolean
+  /** Oldest `cached_at` across resolved lookups (ISO string), or null. Drives
+   *  a "last updated" timestamp. */
+  lastCachedAt: string | null
 }
 
 /**
@@ -77,6 +83,15 @@ export function useSenaiteLookupMap(orders: ExplorerOrder[]): SenaiteLookupMapRe
 
   const isLoading = sampleQueries.some(q => q.isLoading)
   const isError = sampleQueries.some(q => q.isError)
+  const isFetching = sampleQueries.some(q => q.isFetching)
+  const lastCachedAt = useMemo(() => {
+    let oldest: string | null = null
+    for (const q of sampleQueries) {
+      const ts = q.data?.cached_at
+      if (ts && (!oldest || ts < oldest)) oldest = ts
+    }
+    return oldest
+  }, [sampleQueries])
 
-  return { sampleLookupMap, sampleIds, isLoading, isError }
+  return { sampleLookupMap, sampleIds, isLoading, isError, isFetching, lastCachedAt }
 }
