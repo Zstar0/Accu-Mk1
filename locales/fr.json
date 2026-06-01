@@ -57,7 +57,7 @@
   "preferences.sla.hours": "hours",
   "preferences.sla.minutes": "minutes",
   "preferences.sla.businessHoursOnly": "Only during business hours",
-  "preferences.sla.businessHoursHint": "Takes effect once the business-hours calendar ships.",
+  "preferences.sla.businessHoursHint": "Counts only configured business hours, skipping weekends and lab holidays.",
   "preferences.sla.default": "Default",
   "preferences.sla.priorityOverrides": "Priority overrides",
   "preferences.sla.priorityOverridesDescription": "Map a priority to a tier, optionally scoped to a single service group. Resolution: (priority, group) > (priority, all groups) > group's own tier > default.",

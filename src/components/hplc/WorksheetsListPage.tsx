@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { useMemo, useState } from 'react'
+import { useState } from 'react'
 import { ClipboardList, ListChecks, AlertTriangle, Clock } from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
 import {
@@ -73,19 +73,16 @@ export default function WorksheetsListPage() {
       ? worksheets
       : worksheets.filter(w => w.assigned_analyst_email === analystFilter)
 
-  // Flatten subjects over all worksheets (stable react-query result) for batched SLA hook
-  const slaSubjects = useMemo<SlaSubject[]>(
-    () =>
-      worksheets.flatMap(ws =>
-        ws.items.map(item => ({
-          key: `${ws.id}:${item.id}`,
-          priority: (item.priority as InboxPriority) || 'normal',
-          groupId: item.service_group_id,
-          receivedAt: item.date_received ?? item.added_at,
-          completedAt: ws.completed_at,
-        })),
-      ),
-    [worksheets],
+  // Flatten subjects over all worksheets for the batched SLA hook.
+  // React Compiler memoizes this automatically (no manual useMemo per project convention).
+  const slaSubjects: SlaSubject[] = worksheets.flatMap(ws =>
+    ws.items.map(item => ({
+      key: `${ws.id}:${item.id}`,
+      priority: (item.priority as InboxPriority) || 'normal',
+      groupId: item.service_group_id,
+      receivedAt: item.date_received ?? item.added_at,
+      completedAt: ws.completed_at,
+    })),
   )
   const { byKey: slaByKey, isLoading: slaLoading, isError: slaError } =
     useSlaForSubjects(slaSubjects)
@@ -107,17 +104,21 @@ export default function WorksheetsListPage() {
     .flatMap(w => w.items)
     .filter(i => i.priority === 'high' || i.priority === 'expedited').length
 
+  // Seed "now" once at mount so the average-age KPI is a pure derivation of
+  // worksheet data (avoids react-hooks/purity flagging Date.now() in render).
+  // The stat only needs coarse accuracy; it refreshes on the next mount.
+  // React Compiler memoizes the derivation below automatically.
+  const [nowMs] = useState(() => Date.now())
   const avgAgeFormatted = (() => {
     const openWithItems = worksheets.filter(w => w.status === 'open' && w.items.length > 0)
-    const now = Date.now()
     const ages = openWithItems.map(w => {
       const earliest = w.items
         .map(i => {
           const ts = i.date_received ?? i.added_at
-          return ts ? new Date(ts).getTime() : now
+          return ts ? new Date(ts).getTime() : nowMs
         })
-        .reduce((min, t) => Math.min(min, t), now)
-      return now - earliest
+        .reduce((min, t) => Math.min(min, t), nowMs)
+      return nowMs - earliest
     })
     const avgMs = ages.length > 0 ? ages.reduce((s, a) => s + a, 0) / ages.length : 0
     return formatAvgAge(avgMs)
