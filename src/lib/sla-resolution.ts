@@ -41,6 +41,10 @@ export interface OrderSlaVerdict {
   drivingSampleId?: string
   drivingTier?: SlaTier
   drivingStatus?: SlaStatus
+  /** SLA clock start (received_at) of the driving sample — surfaced so the
+   *  order-level breakdown tooltip can show "Received: ..." as its first field.
+   *  Read off the driving cell's lookup. */
+  drivingReceivedAt?: string | null
   /** Reason snapshot for the driving sample — present only when the
    *  upstream cell state was populated with a reason. */
   drivingReason?: SampleSlaReason
@@ -305,6 +309,7 @@ export function aggregateOrderSlaVerdict(
     drivingSampleId: driver.senaiteId,
     drivingTier: driver.tier,
     drivingStatus: driver.status,
+    drivingReceivedAt: driver.lookup?.date_received ?? null,
     drivingReason: driver.reason ?? undefined,
     // Multi-tier follow-on: the driving cell may belong to a specific service
     // group; surfacing its identity lets OrderSlaCell's tooltip say "Group

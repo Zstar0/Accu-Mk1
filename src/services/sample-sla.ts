@@ -265,6 +265,7 @@ export function useSampleSla(
           tier: g.tier,
           reason: g.reason,
           priority: resolvedPriority ?? 'normal',
+          receivedAt: lookup?.date_received ?? null,
         })
       }
     }

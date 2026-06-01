@@ -74,6 +74,7 @@ function renderRow(
           status={snapshot.status}
           reason={snapshot.reason}
           priority={snapshot.priority}
+          receivedAt={snapshot.receivedAt}
           groupName={snapshot.groupName}
         />
       </TooltipContent>
@@ -157,6 +158,7 @@ function snapshotsPropsEqual(
     if (x.status.remaining_minutes !== y.status.remaining_minutes) return false
     if (x.status.breached !== y.status.breached) return false
     if (x.priority !== y.priority) return false
+    if ((x.receivedAt ?? null) !== (y.receivedAt ?? null)) return false
     if ((x.reason?.tierSource ?? null) !== (y.reason?.tierSource ?? null)) return false
     if ((x.groupName ?? null) !== (y.groupName ?? null)) return false
   }

@@ -38,6 +38,9 @@ export interface SlaSubjectSnapshot {
   groupId: number | null
   groupName?: string
   isFrozen: boolean
+  /** SLA clock start (received_at) — surfaced as the "Received: ..." first
+   *  field in the breakdown tooltip. Carried straight from the subject. */
+  receivedAt?: string | null
 }
 
 export interface SlaSubjectsResult {
@@ -173,6 +176,7 @@ export function useSlaForSubjects(subjects: SlaSubject[]): SlaSubjectsResult {
         groupId: subject.groupId,
         groupName,
         isFrozen: Boolean(subject.completedAt),
+        receivedAt: subject.receivedAt,
       })
     }
     return { byKey, isLoading, isError }

@@ -114,6 +114,7 @@
   "orderStatus.sla.tooltipSample": "{{tier}} • target {{target}} • {{elapsed}} elapsed{{businessSuffix}}",
   "orderStatus.sla.businessSuffix": " (business hours)",
   "orderStatus.sla.allPublished": "All samples published",
+  "orderStatus.sla.breakdown.received": "Received:",
   "orderStatus.sla.breakdown.tier": "Tier:",
   "orderStatus.sla.breakdown.source.priority": "Priority override ({{priority}})",
   "orderStatus.sla.breakdown.source.priorityGlobal": "Priority override ({{priority}}, all groups)",

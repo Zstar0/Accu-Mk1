@@ -1,5 +1,6 @@
 import { useTranslation } from 'react-i18next'
 import { formatMinutes, formatTarget } from '@/lib/sla-format'
+import { formatDate } from './helpers'
 import type { InboxPriority, SlaStatus, SlaTier } from '@/lib/api'
 import type { SampleSlaReason } from '@/lib/sla-resolution'
 
@@ -17,6 +18,11 @@ export interface SlaBreakdownTooltipProps {
   /** Resolved priority — drives the "Priority:" line. Optional because some
    *  callers (e.g. order-level summary) may not have a single sample-priority. */
   priority?: InboxPriority | null
+  /** SLA clock start — the sample's `received_at`. Rendered as the first field
+   *  ("Received: ...") above the tier line. Formatted with the same `formatDate`
+   *  helper SampleDetails uses for its "Received {date}" line so the timestamp
+   *  reads identically on the same page. Omitted when absent. */
+  receivedAt?: string | null
   /** Driving sample id — only rendered when distinct from the surface that
    *  hosts the tooltip. SampleSlaIndicator + SampleHeaderSla pass `undefined`
    *  (the surface IS the sample); OrderSlaCell passes the driving sample id. */
@@ -44,6 +50,7 @@ export function SlaBreakdownTooltip({
   status,
   reason,
   priority,
+  receivedAt,
   drivingSampleId,
   groupName,
   isPublished = false,
@@ -126,6 +133,12 @@ export function SlaBreakdownTooltip({
         {t('orderStatus.sla')} — {headline}
       </div>
       <div className="flex flex-col gap-0.5">
+        {receivedAt && (
+          <div>
+            {t('orderStatus.sla.breakdown.received')}{' '}
+            <span className="tabular-nums">{formatDate(receivedAt)}</span>
+          </div>
+        )}
         <div>
           {t('orderStatus.sla.breakdown.tier')}{' '}
           <span className="font-semibold">{tier.name}</span>

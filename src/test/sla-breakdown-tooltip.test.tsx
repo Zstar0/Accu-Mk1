@@ -294,6 +294,70 @@ describe('SlaBreakdownTooltip', () => {
     expect(el.textContent ?? '').toMatch(/Sterility|groupNamed/i)
   })
 
+  // Received date/time — first field (SLA clock start). Shared across all
+  // surfaces that host the tooltip.
+  it('renders "Received" as the first field when receivedAt provided', () => {
+    const reason: SampleSlaReason = {
+      tierSource: 'default',
+      unmappedKeywords: [],
+    }
+    render(
+      <SlaBreakdownTooltip
+        tier={tier}
+        status={status}
+        reason={reason}
+        priority="normal"
+        receivedAt="2026-01-15T09:30:00"
+      />
+    )
+    const el = screen.getByTestId('sla-breakdown-tooltip')
+    const text = el.textContent ?? ''
+    // formatDate (en-US, no year) renders the month/day — stable regardless of
+    // timezone because the timestamp has no 'Z' (parsed as local).
+    expect(text).toMatch(/Jan 15/)
+    // First field: the received date appears before the tier name "Standard".
+    expect(text.indexOf('Jan 15')).toBeLessThan(text.indexOf('Standard'))
+  })
+
+  it('renders "Received" first in published (historical) mode too', () => {
+    const reason: SampleSlaReason = {
+      tierSource: 'group',
+      unmappedKeywords: [],
+    }
+    render(
+      <SlaBreakdownTooltip
+        tier={tier}
+        status={status}
+        reason={reason}
+        priority="normal"
+        receivedAt="2026-01-15T09:30:00"
+        isPublished
+      />
+    )
+    const el = screen.getByTestId('sla-breakdown-tooltip')
+    const text = el.textContent ?? ''
+    expect(text).toMatch(/Jan 15/)
+    expect(text.indexOf('Jan 15')).toBeLessThan(text.indexOf('Standard'))
+  })
+
+  it('omits the Received line when receivedAt is null or undefined', () => {
+    const reason: SampleSlaReason = {
+      tierSource: 'default',
+      unmappedKeywords: [],
+    }
+    render(
+      <SlaBreakdownTooltip
+        tier={tier}
+        status={status}
+        reason={reason}
+        priority="normal"
+        receivedAt={null}
+      />
+    )
+    const el = screen.getByTestId('sla-breakdown-tooltip')
+    expect(el.textContent ?? '').not.toMatch(/received/i)
+  })
+
   it('per-group priority line requires groupName — falls back to global when groupName absent', () => {
     // Defensive: priorityScope='group' but no groupName supplied (caller bug
     // or NO_GROUP_KEY snapshot). Tooltip should NOT render a malformed

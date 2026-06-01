@@ -118,6 +118,7 @@ function AnalysisSlaCellImpl(props: AnalysisSlaCellProps) {
             status={props.snapshot.status}
             reason={props.snapshot.reason}
             priority={props.priority}
+            receivedAt={props.snapshot.receivedAt}
             groupName={props.snapshot.groupName}
             isPublished={props.isPublished}
           />
@@ -150,6 +151,7 @@ function slaPropsEqual(prev: AnalysisSlaCellProps, next: AnalysisSlaCellProps): 
   if (a.status.elapsed_minutes !== b.status.elapsed_minutes) return false
   if (a.status.remaining_minutes !== b.status.remaining_minutes) return false
   if (a.status.breached !== b.status.breached) return false
+  if ((a.receivedAt ?? null) !== (b.receivedAt ?? null)) return false
   if ((a.reason?.tierSource ?? null) !== (b.reason?.tierSource ?? null)) return false
   if ((a.reason?.priorityScope ?? null) !== (b.reason?.priorityScope ?? null)) return false
   return true

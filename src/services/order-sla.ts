@@ -48,6 +48,9 @@ export interface SampleSlaSnapshot {
   /** Resolved priority that fed the tier resolution. Useful for the
    *  "Priority: normal/expedited" line in the breakdown tooltip. */
   priority: InboxPriority
+  /** SLA clock start (received_at) — surfaced as the "Received: ..." first
+   *  field in the breakdown tooltip. Read off the sample's lookup. */
+  receivedAt?: string | null
 }
 
 export interface OrderSlaResult {
@@ -295,6 +298,7 @@ export function useOrderSlaStatuses(
           tier: s.tier,
           reason: s.reason,
           priority: s.priority,
+          receivedAt: s.lookup.date_received,
         })
         sampleStatusesBySampleId.set(s.senaiteId, snapshots)
       }

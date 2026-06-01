@@ -101,6 +101,7 @@ function SlaAgeIndicatorImpl(props: SlaAgeIndicatorProps) {
             status={snap.status}
             reason={null}
             priority={snap.priority}
+            receivedAt={snap.receivedAt}
             groupName={snap.groupName}
             isPublished={snap.isFrozen}
           />
@@ -133,6 +134,7 @@ function propsEqual(prev: SlaAgeIndicatorProps, next: SlaAgeIndicatorProps): boo
   if (a.status.elapsed_minutes !== b.status.elapsed_minutes) return false
   if (a.status.remaining_minutes !== b.status.remaining_minutes) return false
   if (a.status.breached !== b.status.breached) return false
+  if ((a.receivedAt ?? null) !== (b.receivedAt ?? null)) return false
   return true
 }
 

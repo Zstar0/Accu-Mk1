@@ -90,6 +90,7 @@ function renderSnapshotSpan({
           status={snapshot.status}
           reason={snapshot.reason}
           priority={priority}
+          receivedAt={snapshot.receivedAt}
           groupName={snapshot.groupName}
           isPublished={isPublished}
         />

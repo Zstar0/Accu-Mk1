@@ -115,6 +115,7 @@ function OrderSlaCellImpl({
             tier={verdict.drivingTier}
             status={verdict.drivingStatus}
             reason={verdict.drivingReason ?? null}
+            receivedAt={verdict.drivingReceivedAt}
             drivingSampleId={verdict.drivingSampleId}
             groupName={verdict.drivingGroupName}
           />
@@ -139,6 +140,7 @@ function slaPropsEqual(prev: OrderSlaCellProps, next: OrderSlaCellProps): boolea
   if (a === b) return true
   if (a.color !== b.color) return false
   if ((a.drivingSampleId ?? null) !== (b.drivingSampleId ?? null)) return false
+  if ((a.drivingReceivedAt ?? null) !== (b.drivingReceivedAt ?? null)) return false
   if ((a.drivingTier?.id ?? null) !== (b.drivingTier?.id ?? null)) return false
   if (
     (a.drivingTier?.target_minutes ?? null) !==
