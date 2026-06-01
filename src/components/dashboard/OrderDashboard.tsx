@@ -43,6 +43,9 @@ import {
   type ExplorerOrder,
 } from '@/lib/api'
 import { useUIStore } from '@/store/ui-store'
+import { useSenaiteLookupMap } from '@/services/senaite-lookup-map'
+import { useOrderSlaStatuses } from '@/services/order-sla'
+import { OrderSlaCell } from '@/components/explorer/OrderSlaCell'
 
 // --- Constants ---
 
@@ -64,19 +67,6 @@ function isTestOrder(order: ExplorerOrder): boolean {
 }
 
 // --- Helpers ---
-
-function formatRelativeDate(dateStr: string): string {
-  const date = new Date(dateStr)
-  const now = new Date()
-  const diff = now.getTime() - date.getTime()
-  const mins = Math.floor(diff / 60000)
-  const hours = Math.floor(mins / 60)
-  const days = Math.floor(hours / 24)
-  if (days > 0) return `${days}d ago`
-  if (hours > 0) return `${hours}h ago`
-  if (mins > 0) return `${mins}m ago`
-  return 'just now'
-}
 
 function StatusBadge({ status }: { status: string }) {
   const variants: Record<string, { variant: 'default' | 'secondary' | 'destructive' | 'outline'; className?: string }> = {
@@ -189,6 +179,17 @@ export function OrderDashboard() {
   const completedOrders = realOrders.filter(o => o.wp_order_status === 'complete')
   const chartData = useMemo(() => buildOrderChart(realOrders), [realOrders])
 
+  const displayedOrders = useMemo(
+    () => [...outstandingOrders, ...failedOrders].slice(0, 25),
+    [outstandingOrders, failedOrders]
+  )
+  const { sampleLookupMap, isLoading: slaMapLoading, isError: slaMapError } =
+    useSenaiteLookupMap(displayedOrders)
+  const { verdictByOrderId, isLoading: slaVerdictLoading, isError: slaVerdictError } =
+    useOrderSlaStatuses(displayedOrders, sampleLookupMap)
+  const slaIsLoading = slaMapLoading || slaVerdictLoading
+  const slaIsError = slaMapError || slaVerdictError
+
   // Stats
   const todayKey = new Date().toISOString().split('T')[0] ?? ''
   const todayOrders = chartData.find(b => b.date === todayKey)?.total || 0
@@ -299,11 +300,11 @@ export function OrderDashboard() {
                         <TableHead>Email</TableHead>
                         <TableHead className="w-28 text-center">Status</TableHead>
                         <TableHead className="w-20 text-center">Samples</TableHead>
-                        <TableHead className="w-20 text-right">Age</TableHead>
+                        <TableHead className="w-20 text-right">SLA</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {[...outstandingOrders, ...failedOrders].slice(0, 25).map(o => {
+                      {displayedOrders.map(o => {
                         const email = getOrderEmail(o)
                         return (
                           <TableRow
@@ -321,8 +322,12 @@ export function OrderDashboard() {
                             <TableCell className="text-center text-sm w-20">
                               {o.samples_delivered}/{o.samples_expected}
                             </TableCell>
-                            <TableCell className="text-right text-xs font-mono text-orange-400 w-20">
-                              {formatRelativeDate(o.created_at)}
+                            <TableCell className="text-right w-20">
+                              <OrderSlaCell
+                                verdict={verdictByOrderId.get(o.order_id) ?? { color: 'awaiting' }}
+                                isLoading={slaIsLoading}
+                                isError={slaIsError}
+                              />
                             </TableCell>
                           </TableRow>
                         )
