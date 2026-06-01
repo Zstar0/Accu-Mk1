@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react'
-import { useQuery, useQueries, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Activity,
   AlertTriangle,
@@ -51,10 +51,10 @@ import {
   TEST_EMAILS,
   type AnalysisStateCounts,
 } from '@/components/explorer/helpers'
-import { enqueueSenaiteLookup } from '@/components/explorer/senaite-queue'
 import { OrderRow } from '@/components/explorer/OrderRow'
 import { SampleSlaIndicator } from '@/components/explorer/SampleSlaIndicator'
 import { useOrderSlaStatuses, type SampleSlaSnapshot } from '@/services/order-sla'
+import { useSenaiteLookupMap } from '@/services/senaite-lookup-map'
 
 // Re-export TEST_EMAILS so the existing import surface
 // `import { TEST_EMAILS } from '@/components/OrderStatusPage'` keeps working
@@ -611,54 +611,12 @@ export function OrderStatusPage() {
     return filtered
   }, [allOrders, showAll, orderFilters])
 
-  // Collect all unique sample IDs from displayed orders (skip failed/empty ones)
-  const sampleIds = useMemo(() => {
-    const ids: string[] = []
-    for (const order of orders) {
-      if (order.sample_results) {
-        for (const entry of Object.values(order.sample_results)) {
-          if (
-            entry.senaite_id &&
-            entry.status !== 'failed' &&
-            !ids.includes(entry.senaite_id)
-          ) {
-            ids.push(entry.senaite_id)
-          }
-        }
-      }
-    }
-    return ids
-  }, [orders])
-
-  // Fetch sample details from SENAITE — serialized to avoid overwhelming Zope
-  const sampleQueries = useQueries({
-    queries: sampleIds.map(id => ({
-      queryKey: ['senaite', 'lookup', id],
-      queryFn: () => enqueueSenaiteLookup(id),
-      staleTime: 15 * 60_000,
-      retry: 1,
-    })),
-  })
-
-  // Build lookup map: sampleId → query result
-  const sampleLookupMap = useMemo(() => {
-    const map = new Map<
-      string,
-      {
-        data?: SenaiteLookupResult
-        isLoading: boolean
-        isError: boolean
-      }
-    >()
-    sampleIds.forEach((id, idx) => {
-      map.set(id, {
-        data: sampleQueries[idx]?.data,
-        isLoading: sampleQueries[idx]?.isLoading ?? true,
-        isError: sampleQueries[idx]?.isError ?? false,
-      })
-    })
-    return map
-  }, [sampleIds, sampleQueries])
+  // Per-sample SENAITE lookup map (shared hook — see useSenaiteLookupMap).
+  // `sampleLookupMap` is consumed below by the analysis-state filter
+  // (filteredOrders) and by useOrderSlaStatuses; built from the full `orders`
+  // set so filtered lookups are always present.
+  const { sampleLookupMap, isFetching: sampleLookupFetching, lastCachedAt } =
+    useSenaiteLookupMap(orders)
 
   // Hide orders where no samples match the active analysis state filter
   const filteredOrders = useMemo(() => {
@@ -727,15 +685,7 @@ export function OrderStatusPage() {
     return totals
   }, [orders, sampleLookupMap])
 
-  // Oldest cached_at from settled queries — shows when data was last fetched from Senaite
-  const lastUpdated = useMemo(() => {
-    let oldest: string | null = null
-    for (const q of sampleQueries) {
-      const ts = q.data?.cached_at
-      if (ts && (!oldest || ts < oldest)) oldest = ts
-    }
-    return oldest
-  }, [sampleQueries])
+  const lastUpdated = lastCachedAt
 
   const openCount = useMemo(() => {
     if (!allOrders) return 0
@@ -750,7 +700,7 @@ export function OrderStatusPage() {
   }, [allOrders, orderFilters])
 
   // True while any senaite lookup is actively fetching
-  const isRefreshing = sampleQueries.some(q => q.isFetching)
+  const isRefreshing = sampleLookupFetching
 
   const handleRefresh = async () => {
     // Clear server-side cache, then invalidate all client queries
