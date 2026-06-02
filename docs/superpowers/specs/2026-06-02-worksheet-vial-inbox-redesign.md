@@ -37,7 +37,7 @@ The clean reframe: **the unit of worksheet work is a vial, not a sample.** A via
 - **No new endpoint surface for sub-samples.** They flow through the same `/worksheets/inbox` route as parents; the route's contract changes but no new route lands.
 - **No worksheet `WorksheetItem` schema change.** It still keys on `(sample_uid, service_group_id)`. A sub-sample is just a different `sample_uid` (its own SENAITE AR UID).
 - **No retroactive role assignment for legacy parents.** Pre-wizard parents carry the migration-default `assignment_role='hplc'` on `lims_samples`. They show under the HPLC filter by default. If their analyses span Microbiology too, those analyses simply don't surface in the inbox until somebody manually assigns a vial to a Micro role.
-- **No "All" or "Unassigned" filter in v1.** Two filter values: HPLC and Microbiology. XTRA vials are hidden from the inbox (they're explicitly extra capacity, not worksheet-bound).
+- **No "All" or "Unassigned" filter in v1.** Two filter chips: HPLC and Microbiology. XTRA vials are governed by a separate `show_xtra` toggle (see UI section), not a third chip. NULL-role vials stay hidden until `/vial-plan` auto-assigns them.
 
 ## Architecture
 
@@ -116,6 +116,8 @@ Existing query params unchanged: `hide_test_orders` (default `True`), `hide_prep
 
 **New required query param:** `role` — one of `hplc` | `microbiology`. No default at the route layer; the frontend sets it from `localStorage`. Server-side validation: 400 on missing or invalid value.
 
+**New optional query param:** `show_xtra` (default `False`). When `True`, XTRA-role vials are appended to the response alongside the role-filtered vials. The card carries the zinc/`XTRA` badge so techs can tell at a glance they're pulling extra capacity rather than a role-assigned vial. Bench-agnostic by nature, so XTRA vials appear under whichever filter is active when the toggle is on.
+
 Returns (renamed from `InboxSampleItem` to `InboxVialItem` to signal the unit change):
 
 ```jsonc
@@ -178,17 +180,18 @@ Unchanged backend contract. Frontend dispatches `WorksheetItem` creates keyed on
 Single-select chip strip at the top of `/worksheets/inbox`:
 
 ```
-┌─────────────────────────────────────────────────────┐
-│  [ HPLC ]   ( Microbiology )         Inbox · 4      │
-│                                       hide-test ▢   │
-│                                       hide-prepped▣ │
-└─────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────┐
+│  [ HPLC ]   ( Microbiology )          Inbox · 4      │
+│                                        hide-test ▢   │
+│                                        hide-prepped▣ │
+│                                        show-XTRA  ▢  │
+└──────────────────────────────────────────────────────┘
 ```
 
 - Two pills: `HPLC` and `Microbiology`. Sky highlight for selected, neutral outline for unselected. Match the role-badge palette from `VialsList.tsx` (HPLC=sky-500, Micro=violet-500).
 - Counter on the right: `Inbox · {total}` from the response.
-- Toggles for `hide_test_orders` and `hide_prepped` carry over from today's UI, just relocated to the right of the chips.
-- `localStorage` key: `accu_mk1_worksheet_inbox_role`. Default: `hplc` if unset.
+- Toggles for `hide_test_orders` and `hide_prepped` carry over from today's UI, just relocated to the right of the chips. New `show-XTRA` toggle joins them — default off; flipping on surfaces XTRA-role vials in the current filter's results.
+- `localStorage` keys: `accu_mk1_worksheet_inbox_role` (default `hplc`), `accu_mk1_worksheet_inbox_show_xtra` (default `false`).
 
 ### Vial card
 
@@ -235,21 +238,18 @@ Two cases:
 - **Existing open worksheets** (worksheet_items already assigned): the `(uid, group_id) IN assigned_pairs` exclusion logic from today still applies and still works — the keys haven't changed shape.
 - **Frontend `flattenToCards`** in `WorksheetsInboxPage.tsx:60-83` — **deleted**. Card list comes flat from backend.
 
-## Open questions / decisions to confirm
+## Resolved decisions
 
-These are the three I flagged in conversation. Reasonable defaults baked into the spec above; **mark them confirmed / overridden before plan-phase**.
+The three open questions from the initial draft have been walked through. Confirmations and overrides:
 
-### Q1. Microbiology = ster + endo collapsed into one filter — confirm?
-**Default in spec:** Yes — one Microbiology filter that surfaces both `ster` and `endo` vials.
-**Override considered:** Split into HPLC | Endo | Sterility (3 pills). Adds a third bench at filter level. Defer unless the Endo and Ster benches genuinely want their own inbox views.
+### Q1. Microbiology filter — **CONFIRMED: one chip** (ster ∪ endo)
+HPLC | Microbiology — two top-level filter chips. The Microbiology chip surfaces both `ster` and `endo` vials. Splitting into separate Endo / Sterility chips is deferred until the benches' workflows diverge enough to justify it.
 
-### Q2. Unassigned / XTRA / legacy vials — hide, or surface in their own filter?
-**Default in spec:** Hide. XTRA is explicit extra capacity (not bench-bound). NULL `assignment_role` on subs means auto-assign hasn't run yet — they ride in on `/vial-plan` once a worksheet picks them up. Legacy parents default to `'hplc'` so they show under HPLC (not Unassigned).
-**Override considered:** Third "Unassigned" filter for techs hunting for vials in limbo. Useful diagnostic but pollutes the dominant flow. Lean keep-it-hidden; revisit if a real lab incident says otherwise.
+### Q2. XTRA / NULL / legacy vials — **OVERRIDE: `show_xtra` toggle, hidden by default**
+Resolved differently from the spec draft. Instead of a third "Unassigned" filter chip, XTRA visibility is governed by a `show_xtra` checkbox in the header (next to `hide_test_orders` / `hide_prepped`), default off. When on, XTRA-role vials append to whichever filter is active (HPLC or Microbiology). NULL-role vials stay hidden — auto-assign on `/vial-plan` is the natural cure. Legacy parents continue defaulting to `'hplc'` via the migration and ride in on the HPLC filter without ceremony. API + UI sections above already reflect this.
 
-### Q3. Worksheet item granularity per vial
-**Default in spec:** Keep today's `WorksheetItem.service_group_id` column. Dropping a vial onto a worksheet creates one item per `(vial.uid, group_id)` where the vial has matching analyses. Practically one item per vial today since Analytics is the only HPLC group, but the model supports future HPLC-domain splits (Core HPLC vs Identity HPLC, etc.).
-**Override considered:** Collapse `WorksheetItem` to one row per vial (`service_group_id` becomes unused). Simpler at the worksheet layer but loses the per-group split that the worksheet detail page presumably uses. Don't change without auditing worksheet UI consumers.
+### Q3. Worksheet item granularity — **CONFIRMED: keep `service_group_id`**
+`WorksheetItem` keeps today's `(sample_uid, service_group_id)` shape. Dropping a vial creates one item per matching service group on the vial. Practically one per vial today (Analytics is the only HPLC group); the model handles future HPLC-domain splits without schema churn.
 
 ## Inert duplicate analyses — explicit decision
 
