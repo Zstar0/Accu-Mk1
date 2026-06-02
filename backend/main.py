@@ -7219,6 +7219,223 @@ async def reports_purity_trend(
         raise HTTPException(status_code=503, detail=f"Reports database error: {e}")
 
 
+class CheckInRecord(BaseModel):
+    sample_id: str
+    sample_uid: str
+    date_received: str          # ISO 8601 UTC, trailing "Z"
+    product_label: Optional[str] = None
+    priority: str
+    is_test_order: bool = False  # sample belongs to a TEST_EMAILS order (see inbox)
+
+
+def _test_order_senaite_ids() -> set[str]:
+    """SENAITE sample IDs that belong to a test order (billing email in TEST_EMAILS).
+
+    Mirrors the /worksheets/inbox test-order definition: read order_submissions
+    from the integration DB, map each order's sample_results → senaite_id, and
+    flag those whose payload.billing.email is a known test email. Returns an
+    empty set on any failure (graceful degradation — nothing flagged as test).
+    """
+    TEST_EMAILS = {"forrestp@outlook.com", "forrest@valenceanalytical.com"}
+    test_ids: set[str] = set()
+
+    def _as_dict(val):
+        if isinstance(val, dict):
+            return val
+        if isinstance(val, str):
+            try:
+                parsed = json.loads(val)
+                return parsed if isinstance(parsed, dict) else {}
+            except (ValueError, TypeError):
+                return {}
+        return {}
+
+    try:
+        with get_integration_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT sample_results, payload FROM order_submissions WHERE sample_results IS NOT NULL"
+                )
+                for sample_results, payload in cur.fetchall():
+                    billing = _as_dict(payload).get("billing", {})
+                    email = (billing.get("email") or "").lower() if isinstance(billing, dict) else ""
+                    if email not in TEST_EMAILS:
+                        continue
+                    for entry in _as_dict(sample_results).values():
+                        if isinstance(entry, dict) and entry.get("senaite_id"):
+                            test_ids.add(str(entry["senaite_id"]))
+    except Exception:
+        pass
+    return test_ids
+
+
+def _parse_day_bound(val: Optional[str], *, end: bool) -> Optional[datetime]:
+    """Parse a YYYY-MM-DD string into a naive day boundary (start or end of day).
+
+    Returns None on missing/invalid input so callers can skip the filter.
+    date_received is stored naive (UTC), so bounds are naive to match.
+    """
+    if not val:
+        return None
+    from datetime import time as _time
+    try:
+        d = datetime.strptime(val[:10], "%Y-%m-%d").date()
+    except (ValueError, TypeError):
+        return None
+    return datetime.combine(d, _time.max if end else _time.min)
+
+
+@app.get("/reports/checkin-times", response_model=list[CheckInRecord])
+async def reports_checkin_times(
+    from_date: Optional[str] = Query(None, alias="from"),
+    to_date: Optional[str] = Query(None, alias="to"),
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Sample check-in events sourced from worksheet_items.date_received.
+
+    Returns raw UTC timestamps (one row per sample); time-of-day bucketing is done
+    client-side in the browser's local timezone. worksheet_items holds one row per
+    (sample, analysis), so a sample with multiple analyses produces several rows
+    sharing one date_received — results are deduped by sample_uid (earliest
+    date_received kept, product labels merged). Rows with a null date_received are
+    excluded. Optional `from`/`to` are inclusive YYYY-MM-DD day bounds.
+    """
+    stmt = select(WorksheetItem).where(WorksheetItem.date_received.is_not(None))
+    lo = _parse_day_bound(from_date, end=False)
+    hi = _parse_day_bound(to_date, end=True)
+    if lo is not None:
+        stmt = stmt.where(WorksheetItem.date_received >= lo)
+    if hi is not None:
+        stmt = stmt.where(WorksheetItem.date_received <= hi)
+
+    rows = db.execute(stmt.order_by(WorksheetItem.date_received.desc())).scalars().all()
+
+    test_ids = _test_order_senaite_ids()
+
+    by_uid: dict[str, dict] = {}
+    for it in rows:
+        names: list[str] = []
+        if it.analyses_json:
+            try:
+                for a in json.loads(it.analyses_json):
+                    pn = (a.get("peptide_name") or "").strip()
+                    if pn and pn not in names:
+                        names.append(pn)
+            except (ValueError, TypeError):
+                pass
+        entry = by_uid.get(it.sample_uid)
+        if entry is None:
+            by_uid[it.sample_uid] = {
+                "sample_id": it.sample_id,
+                "sample_uid": it.sample_uid,
+                "date_received": it.date_received,
+                "priority": it.priority,
+                "names": names,
+            }
+        else:
+            if it.date_received < entry["date_received"]:
+                entry["date_received"] = it.date_received
+            for pn in names:
+                if pn not in entry["names"]:
+                    entry["names"].append(pn)
+
+    records = [
+        CheckInRecord(
+            sample_id=e["sample_id"],
+            sample_uid=e["sample_uid"],
+            date_received=e["date_received"].isoformat() + "Z",
+            product_label=", ".join(e["names"]) if e["names"] else None,
+            priority=e["priority"],
+            is_test_order=e["sample_id"] in test_ids,
+        )
+        for e in by_uid.values()
+    ]
+    records.sort(key=lambda r: r.date_received, reverse=True)
+    return records
+
+
+class TurnaroundSample(BaseModel):
+    sample_id: str
+    ordered_at: Optional[str] = None
+    received_at: Optional[str] = None
+    submitted_at: Optional[str] = None
+    verified_at: Optional[str] = None
+    published_at: Optional[str] = None
+    is_test_order: bool = False
+
+
+@app.get("/reports/turnaround", response_model=list[TurnaroundSample])
+async def reports_turnaround(
+    _current_user=Depends(get_current_user),
+):
+    """Per-sample SENAITE milestone timestamps for phase-turnaround (bottleneck) analysis.
+
+    Pivots sample_status_events to first-occurrence milestone timestamps
+    (receive / submit|partial_submit / verify|partial_verify / publish), left-joins
+    the order for the Ordered milestone + test-order flag, and returns raw per-sample
+    rows. Phase durations and percentiles are aggregated client-side. event_timestamp
+    (Unix seconds — SENAITE's real time) is preferred over our created_at. Both
+    source tables live in the integration DB.
+    """
+    sql = """
+        WITH m AS (
+            SELECT
+                sample_id,
+                -- Postgres has no MAX(uuid); a sample's events share one order, so
+                -- take the first non-null order_submission_id.
+                (array_agg(order_submission_id) FILTER (WHERE order_submission_id IS NOT NULL))[1] AS order_id,
+                MIN(COALESCE(to_timestamp(event_timestamp), created_at))
+                    FILTER (WHERE transition = 'receive') AS received_at,
+                MIN(COALESCE(to_timestamp(event_timestamp), created_at))
+                    FILTER (WHERE transition IN ('submit', 'partial_submit')) AS submitted_at,
+                MIN(COALESCE(to_timestamp(event_timestamp), created_at))
+                    FILTER (WHERE transition IN ('verify', 'partial_verify')) AS verified_at,
+                MIN(COALESCE(to_timestamp(event_timestamp), created_at))
+                    FILTER (WHERE transition = 'publish') AS published_at
+            FROM sample_status_events
+            GROUP BY sample_id
+        )
+        SELECT m.sample_id, os.created_at AS ordered_at,
+               m.received_at, m.submitted_at, m.verified_at, m.published_at,
+               (LOWER(os.payload->'billing'->>'email') IN
+                  ('forrestp@outlook.com', 'forrest@valenceanalytical.com')) AS is_test_order
+        FROM m
+        LEFT JOIN order_submissions os ON os.id = m.order_id
+    """
+
+    from datetime import timezone as _tz
+
+    def _iso(dt):
+        if dt is None:
+            return None
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=_tz.utc)
+        return dt.astimezone(_tz.utc).isoformat().replace("+00:00", "Z")
+
+    try:
+        with get_integration_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql)
+                rows = cur.fetchall()
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Reports database error: {e}")
+
+    return [
+        TurnaroundSample(
+            sample_id=sample_id,
+            ordered_at=_iso(ordered_at),
+            received_at=_iso(received_at),
+            submitted_at=_iso(submitted_at),
+            verified_at=_iso(verified_at),
+            published_at=_iso(published_at),
+            is_test_order=bool(is_test),
+        )
+        for (sample_id, ordered_at, received_at, submitted_at,
+             verified_at, published_at, is_test) in rows
+    ]
+
+
 class ReportsSyncStatus(BaseModel):
     source_published: int
     source_verification_codes: int

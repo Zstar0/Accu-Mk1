@@ -19,6 +19,8 @@ import { UserManagement } from '@/components/auth/UserManagement'
 import { ProfilePage } from '@/components/auth/ProfilePage'
 import { ReportsDashboard } from '@/components/reports/ReportsDashboard'
 import { ReportsSyncDebug } from '@/components/reports/ReportsSyncDebug'
+import { CheckInTimesReport } from '@/components/reports/CheckInTimesReport'
+import { TurnaroundReport } from '@/components/reports/TurnaroundReport'
 import { PeptideRequestsList } from '@/pages/PeptideRequestsList'
 import { PeptideRequestDetail } from '@/pages/PeptideRequestDetail'
 import { AdminClickupUsers } from '@/pages/AdminClickupUsers'
@@ -64,6 +66,8 @@ export function MainWindowContent({
         return <HPLCAnalysis />
       case 'reports':
         if (activeSubSection === 'sync-debug') return <ReportsSyncDebug />
+        if (activeSubSection === 'checkin-times') return <CheckInTimesReport />
+        if (activeSubSection === 'bottlenecks') return <TurnaroundReport />
         return <ReportsDashboard />
       case 'accumark-tools':
         if (activeSubSection === 'chromatographs')
