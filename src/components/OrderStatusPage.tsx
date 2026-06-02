@@ -51,7 +51,7 @@ import {
   TEST_EMAILS,
   type AnalysisStateCounts,
 } from '@/components/explorer/helpers'
-import { toggleFilterKey } from '@/components/explorer/order-filters'
+import { toggleFilterKey, isOrderAtRisk } from '@/components/explorer/order-filters'
 import { OrderRow } from '@/components/explorer/OrderRow'
 import { SampleSlaIndicator } from '@/components/explorer/SampleSlaIndicator'
 import { useOrderSlaStatuses, type SampleSlaSnapshot } from '@/services/order-sla'
@@ -498,6 +498,7 @@ interface OrderFilters {
   emailFilter: string
   orderIdFilter: string
   hideTestOrders: boolean
+  slaAtRisk: boolean
   viewMode: 'table' | 'kanban'
   groupByOrder: boolean
   showAnalysisServices: boolean
@@ -518,6 +519,7 @@ function loadOrderFilters(): OrderFilters {
     emailFilter: '',
     orderIdFilter: '',
     hideTestOrders: true,
+    slaAtRisk: false,
     viewMode: 'table',
     groupByOrder: true,
     showAnalysisServices: false,
@@ -649,6 +651,30 @@ export function OrderStatusPage() {
   // useMemo-aggregated; only its one /sla/status batch query re-runs on data
   // changes (sharpenings #3, #4).
   const orderSla = useOrderSlaStatuses(filteredOrders, sampleLookupMap)
+
+  // Count of at-risk orders in the current filtered set — drives the toggle's
+  // badge regardless of whether the toggle is on.
+  const atRiskCount = useMemo(
+    () =>
+      filteredOrders.filter(o =>
+        isOrderAtRisk(orderSla.verdictByOrderId.get(o.order_id))
+      ).length,
+    [filteredOrders, orderSla.verdictByOrderId]
+  )
+
+  // When the SLA toggle is on, narrow to orders approaching/over their target.
+  // Computed AFTER orderSla (which runs on the full filteredOrders), so verdicts
+  // for the narrowed subset are always present. Loading-SLA orders are excluded
+  // while the toggle is on (only known-at-risk shown).
+  const displayedOrders = useMemo(
+    () =>
+      orderFilters.slaAtRisk
+        ? filteredOrders.filter(o =>
+            isOrderAtRisk(orderSla.verdictByOrderId.get(o.order_id))
+          )
+        : filteredOrders,
+    [filteredOrders, orderFilters.slaAtRisk, orderSla.verdictByOrderId]
+  )
 
   // Count orders needing attention (have samples with to_verify analyses)
   const attentionCount = useMemo(() => {
@@ -812,6 +838,23 @@ export function OrderStatusPage() {
               {!ordersLoading && allOrders && (
                 <Badge variant="secondary" className="ml-1.5">
                   {allOrders.length}
+                </Badge>
+              )}
+            </Button>
+            <Button
+              variant={orderFilters.slaAtRisk ? 'default' : 'outline'}
+              size="sm"
+              onClick={() => updateFilters({ slaAtRisk: !orderFilters.slaAtRisk })}
+              title="Show only orders approaching or past their SLA target"
+              className={cn(
+                orderFilters.slaAtRisk &&
+                  'bg-amber-500 text-white border-amber-500 hover:bg-amber-600'
+              )}
+            >
+              ⚠ SLA at-risk
+              {!ordersLoading && atRiskCount > 0 && (
+                <Badge variant="secondary" className="ml-1.5">
+                  {atRiskCount}
                 </Badge>
               )}
             </Button>
@@ -1026,7 +1069,7 @@ export function OrderStatusPage() {
                 <CardDescription>
                   {ordersLoading
                     ? 'Loading orders...'
-                    : `${filteredOrders.length} order${filteredOrders.length !== 1 ? 's' : ''} displayed`}
+                    : `${displayedOrders.length} order${displayedOrders.length !== 1 ? 's' : ''} displayed`}
                 </CardDescription>
               </div>
             </div>
@@ -1046,13 +1089,13 @@ export function OrderStatusPage() {
               </div>
             )}
 
-            {filteredOrders.length === 0 && !ordersLoading && (
+            {displayedOrders.length === 0 && !ordersLoading && (
               <div className="text-muted-foreground py-8 text-center">
                 {showAll ? 'No orders found' : 'No open orders'}
               </div>
             )}
 
-            {filteredOrders.length > 0 && orderFilters.viewMode === 'table' && (
+            {displayedOrders.length > 0 && orderFilters.viewMode === 'table' && (
               <div className="overflow-auto max-h-[850px]">
                 <table className="w-full text-sm">
                   <thead className="sticky top-0 z-10 bg-card border-b">
@@ -1067,7 +1110,7 @@ export function OrderStatusPage() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border/50">
-                    {filteredOrders.map(order => (
+                    {displayedOrders.map(order => (
                       <OrderRow
                         key={order.id}
                         order={order}
@@ -1083,10 +1126,10 @@ export function OrderStatusPage() {
               </div>
             )}
 
-            {filteredOrders.length > 0 && orderFilters.viewMode === 'kanban' && (
+            {displayedOrders.length > 0 && orderFilters.viewMode === 'kanban' && (
               <div className="overflow-auto max-h-[850px]">
                 <KanbanView
-                  orders={filteredOrders}
+                  orders={displayedOrders}
                   sampleLookupMap={sampleLookupMap}
                   groupByOrder={orderFilters.groupByOrder}
                   activeStates={orderFilters.activeStates}
