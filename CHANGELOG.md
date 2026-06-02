@@ -1,5 +1,35 @@
 # Changelog
 
+## v0.37.0 — 2026-06-02 — Check-In Times & Bottlenecks reports
+
+Two new analytical reports in the Reports area, built on the same thin-backend /
+client-aggregation pattern: the backend extracts raw rows, the browser does all
+timezone-dependent bucketing and aggregation so the period selectors recompute
+without a refetch.
+
+### Added
+
+- **Check-In Times report** (`GET /reports/checkin-times`,
+  [CheckInTimesReport.tsx](src/components/reports/CheckInTimesReport.tsx)). Check-in
+  volume and time-of-day distribution from `worksheet_items.date_received` (the
+  SENAITE sample-received timestamp, accumark_mk1 DB), deduped by `sample_uid` so
+  counts reflect samples not analyses. Date-range selector (1M/3M/6M/1Y/ALL),
+  summary cards (total, average time of day, busiest hour, busiest weekday), a
+  by-day / by-hour bar chart with off-hours (before 9, after 17) dimmed and an
+  average reference line, and a searchable raw list. All time-of-day bucketing is
+  browser-local; raw UTC is returned from the server.
+- **Bottlenecks (phase turnaround) report** (`GET /reports/turnaround`,
+  [TurnaroundReport.tsx](src/components/reports/TurnaroundReport.tsx)). Systemic
+  view of where time goes across SENAITE milestones (Ordered → Received →
+  Submitted → Verified → Published), reading `sample_status_events` ⋈
+  `order_submissions` from the integration DB (`accumark_integration`). Ranked
+  horizontal bars slowest-first showing median per phase with a lighter p90 tail,
+  summary cards (total median turnaround, slowest phase, cohort size), a per-phase
+  table, period selector by received date, and a "Hide test orders" toggle.
+  Calendar (wall-clock) time; `partial_submit`/`partial_verify` folded into
+  Submitted/Verified.
+- Reports sidebar gains **Check-In Times** and **Bottlenecks** sub-items.
+
 ## v0.36.0 — 2026-06-01 — SLA tracking & coverage
 
 End-to-end SLA (turnaround-time) tracking: a configurable tier model, a
