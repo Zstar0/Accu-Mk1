@@ -38,60 +38,8 @@ export function ReceiveWizard({ parent, onClose }: Props) {
 
   const closeAndNavigate = useCloseAndNavigate(onClose)
 
-  const phaseTabs = (
-    <div className="px-6 py-2 border-b bg-muted/10">
-      <Tabs value={phase} onValueChange={(v) => setPhase(v as Phase)}>
-        <TabsList>
-          <TabsTrigger value="capture">Vial Management</TabsTrigger>
-          <TabsTrigger value="assign" disabled={!assignmentEnabled}>Assignment</TabsTrigger>
-          <TabsTrigger value="details" disabled={wiz.vials.length === 0}>Vial Details</TabsTrigger>
-        </TabsList>
-      </Tabs>
-    </div>
-  )
-
-  if (phase === 'details') {
-    return (
-      <div className="grid grid-rows-[auto_auto_1fr] h-full min-h-[500px]">
-        <WizardHeader
-          parentSampleId={parent.sample_id}
-          receivedCount={receivedCount}
-        />
-        {phaseTabs}
-        <VialDetailsTab
-          vials={wiz.vials}
-          orderNumber={parentDetails.details?.client_order_number ?? null}
-          onCloseAndNavigate={closeAndNavigate}
-        />
-      </div>
-    )
-  }
-
-  if (phase === 'assign') {
-    return (
-      <div className="grid grid-rows-[auto_auto_1fr_auto] h-full min-h-[500px]">
-        <WizardHeader
-          parentSampleId={parent.sample_id}
-          receivedCount={receivedCount}
-        />
-        {phaseTabs}
-        <div className="overflow-y-auto">
-          <AssignStep parentSampleId={parent.sample_id} />
-        </div>
-        <footer className="flex justify-between gap-2 px-6 py-3 border-t bg-muted/20 transition-colors">
-          <Button type="button" variant="outline" onClick={() => setPhase('capture')}>
-            <ArrowLeft className="w-4 h-4" aria-hidden="true" />
-            Back
-          </Button>
-          <Button type="button" onClick={() => setPhase('print')}>
-            <Printer className="w-4 h-4" aria-hidden="true" />
-            Print labels
-          </Button>
-        </footer>
-      </div>
-    )
-  }
-
+  // Print is a terminal step with its own self-contained layout (no shared
+  // header/tabs/sidebar). Render it standalone.
   if (phase === 'print') {
     const printList = wiz.parentReceivedThisSession
       ? [{ sample_id: parent.sample_id }, ...wiz.sessionVials]
@@ -113,19 +61,31 @@ export function ReceiveWizard({ parent, onClose }: Props) {
 
   const hasSessionVials = wiz.sessionVials.length > 0 || wiz.parentReceivedThisSession
 
-  return (
-    <div className="grid grid-rows-[auto_auto_1fr_auto] h-full min-h-[500px]">
-      <WizardHeader
-        parentSampleId={parent.sample_id}
-        receivedCount={receivedCount}
-      />
-      {phaseTabs}
-      <div className="grid grid-cols-[260px_1fr_240px] min-h-0 overflow-hidden">
-        <WizardSidebar
-          parentDetails={parentDetails.details}
-          parentDetailsLoading={parentDetails.loading}
-          parentDetailsError={parentDetails.error}
-        />
+  const phaseTabs = (
+    <div className="px-6 py-2 border-b bg-muted/10">
+      <Tabs value={phase} onValueChange={(v) => setPhase(v as Phase)}>
+        <TabsList>
+          <TabsTrigger value="capture">Vial Management</TabsTrigger>
+          <TabsTrigger value="assign" disabled={!assignmentEnabled}>Assignment</TabsTrigger>
+          <TabsTrigger value="details" disabled={wiz.vials.length === 0}>Vial Details</TabsTrigger>
+        </TabsList>
+      </Tabs>
+    </div>
+  )
+
+  const sidebar = (
+    <WizardSidebar
+      parentDetails={parentDetails.details}
+      parentDetailsLoading={parentDetails.loading}
+      parentDetailsError={parentDetails.error}
+    />
+  )
+
+  // Per-phase body content (right of the persistent sidebar).
+  let body: React.ReactNode = null
+  if (phase === 'capture') {
+    body = (
+      <div className="grid grid-cols-[1fr_240px] min-h-0 overflow-hidden">
         <VialPanel
           parentSampleId={parent.sample_id}
           parentDetails={parentDetails.details}
@@ -161,6 +121,27 @@ export function ReceiveWizard({ parent, onClose }: Props) {
           onSelect={setEditingSampleId}
         />
       </div>
+    )
+  } else if (phase === 'assign') {
+    body = (
+      <div className="overflow-y-auto">
+        <AssignStep parentSampleId={parent.sample_id} />
+      </div>
+    )
+  } else if (phase === 'details') {
+    body = (
+      <VialDetailsTab
+        vials={wiz.vials}
+        orderNumber={parentDetails.details?.client_order_number ?? null}
+        onCloseAndNavigate={closeAndNavigate}
+      />
+    )
+  }
+
+  // Per-phase footer (only assign + capture have one; details is terminal-ish).
+  let footer: React.ReactNode = null
+  if (phase === 'capture') {
+    footer = (
       <footer className="flex justify-end gap-2 px-6 py-3 border-t bg-muted/20 transition-colors">
         <Button
           type="button"
@@ -173,6 +154,34 @@ export function ReceiveWizard({ parent, onClose }: Props) {
           Continue
         </Button>
       </footer>
+    )
+  } else if (phase === 'assign') {
+    footer = (
+      <footer className="flex justify-between gap-2 px-6 py-3 border-t bg-muted/20 transition-colors">
+        <Button type="button" variant="outline" onClick={() => setPhase('capture')}>
+          <ArrowLeft className="w-4 h-4" aria-hidden="true" />
+          Back
+        </Button>
+        <Button type="button" onClick={() => setPhase('print')}>
+          <Printer className="w-4 h-4" aria-hidden="true" />
+          Print labels
+        </Button>
+      </footer>
+    )
+  }
+
+  return (
+    <div className="grid grid-rows-[auto_auto_1fr_auto] h-full min-h-[500px]">
+      <WizardHeader
+        parentSampleId={parent.sample_id}
+        receivedCount={receivedCount}
+      />
+      {phaseTabs}
+      <div className="grid grid-cols-[260px_1fr] min-h-0 overflow-hidden">
+        {sidebar}
+        {body}
+      </div>
+      {footer}
     </div>
   )
 }
