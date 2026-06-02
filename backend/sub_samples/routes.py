@@ -27,6 +27,8 @@ from sub_samples.schemas import (
     SubSampleResponse, SubSampleListResponse, ParentSampleSummary,
     VialPlanResponse, VialPlanItem, AssignmentPatchRequest,
     AggregatesRequest, AggregatesResponse, ParentAggregate,
+    VarianceSetResponse, VarianceVialResult, VarianceStatsEntry,
+    PatchVarianceMembershipRequest,
 )
 
 
@@ -351,3 +353,95 @@ def get_sub_sample_photo(
         )
 
     return StreamingResponse(bin_resp.iter_content(8192), media_type=content_type)
+
+
+# ── Variance set endpoints (worksheet-variance design 2026-06-02) ────────────
+
+@router.get("/{parent_sample_id}/variance-set", response_model=VarianceSetResponse)
+def get_variance_set_endpoint(
+    parent_sample_id: str,
+    db: Session = Depends(get_db),
+    _user=Depends(get_current_user),
+):
+    result = service.get_variance_set(db, parent_sample_id)
+    if not result:
+        raise HTTPException(
+            status_code=404,
+            detail=f"parent {parent_sample_id} has no variance set yet",
+        )
+    parent = result["parent"]
+    return VarianceSetResponse(
+        parent=ParentSampleSummary(
+            sample_id=parent.sample_id,
+            external_lims_uid=parent.external_lims_uid,
+            peptide_name=parent.peptide_name,
+            status=parent.status,
+            sub_sample_count=len(parent.sub_samples),
+            last_synced_at=parent.last_synced_at,
+        ),
+        vials=[VarianceVialResult(**v) for v in result["vials"]],
+        stats={k: VarianceStatsEntry(**v) for k, v in result["stats"].items()},
+        locked=result["locked"],
+        locked_at=result["locked_at"],
+        locked_by_user_id=result["locked_by_user_id"],
+    )
+
+
+@router.patch("/{sample_id}/variance-set")
+def patch_variance_membership_endpoint(
+    sample_id: str,
+    body: PatchVarianceMembershipRequest,
+    db: Session = Depends(get_db),
+    _user=Depends(get_current_user),
+):
+    try:
+        return service.set_variance_membership(
+            db, sample_id, body.in_variance_set, body.exclusion_reason
+        )
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except service.VarianceLockedError as e:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "variance_locked", "message": str(e)},
+        )
+
+
+@router.post("/{parent_sample_id}/variance-set/lock")
+def lock_variance_set_endpoint(
+    parent_sample_id: str,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    try:
+        parent = service.lock_variance_set(db, parent_sample_id, user.id)
+        return {
+            "parent_sample_id": parent.sample_id,
+            "locked_at": parent.variance_locked_at,
+            "locked_by_user_id": parent.variance_locked_by_user_id,
+        }
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except service.VarianceTooFewVialsError as e:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "variance_too_few_vials", "message": str(e)},
+        )
+
+
+@router.post("/{parent_sample_id}/variance-set/unlock")
+def unlock_variance_set_endpoint(
+    parent_sample_id: str,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    if getattr(user, "role", None) != "admin":
+        raise HTTPException(
+            status_code=403,
+            detail="admin role required to unlock variance sets",
+        )
+    try:
+        parent = service.unlock_variance_set(db, parent_sample_id)
+        return {"parent_sample_id": parent.sample_id, "locked": False}
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e))
