@@ -12,17 +12,21 @@ import { PrintStep } from './PrintStep'
 import { AssignStep } from './AssignStep'
 import { VialDetailsTab, useCloseAndNavigate } from './VialDetailsTab'
 
+type Phase = 'capture' | 'assign' | 'details' | 'print'
+
 interface Props {
   parent: ParentInfo
   onClose: () => void
+  // Which tab to open on. Defaults to 'capture' (intake / check-in flow).
+  // SampleDetails entry passes 'details' so techs land on the sub-sample
+  // table they came in to see, not the empty new-vial form.
+  initialPhase?: Phase
 }
 
-type Phase = 'capture' | 'assign' | 'details' | 'print'
-
-export function ReceiveWizard({ parent, onClose }: Props) {
+export function ReceiveWizard({ parent, onClose, initialPhase = 'capture' }: Props) {
   const wiz = useReceiveWizard(parent)
   const parentDetails = useParentSampleDetails(parent.sample_id)
-  const [phase, setPhase] = useState<Phase>('capture')
+  const [phase, setPhase] = useState<Phase>(initialPhase)
   const [editingSampleId, setEditingSampleId] = useState<string | null>(null)
 
   // Received count = parent (if received) + sub-samples in the list.
@@ -67,7 +71,7 @@ export function ReceiveWizard({ parent, onClose }: Props) {
         <TabsList>
           <TabsTrigger value="capture">Vial Management</TabsTrigger>
           <TabsTrigger value="assign" disabled={!assignmentEnabled}>Assignment</TabsTrigger>
-          <TabsTrigger value="details" disabled={wiz.vials.length === 0}>Vial Details</TabsTrigger>
+          <TabsTrigger value="details" disabled={wiz.vials.length === 0}>Sub Sample Details</TabsTrigger>
         </TabsList>
       </Tabs>
     </div>

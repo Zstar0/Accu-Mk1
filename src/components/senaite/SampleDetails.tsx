@@ -3360,7 +3360,9 @@ export function SampleDetails() {
         />
 
         {/* Sub-Samples + Sub-Sample Analyses sections moved into the wizard's
-            "Vial Details" tab (open via "Manage Sub-Samples" button). */}
+            "Sub Sample Details" tab (open via "Manage Sub-Samples" button).
+            Entry from the sample-details page defaults to that tab so techs
+            land on the table they came in for, not the new-vial form. */}
         {isParent && (
           <>
             {wizardParent && (
@@ -3380,6 +3382,7 @@ export function SampleDetails() {
                   <div className="h-[calc(90vh-3.5rem)] overflow-hidden">
                     <ReceiveWizard
                       parent={wizardParent}
+                      initialPhase="details"
                       onClose={() => {
                         setWizardParent(null)
                         void refetchSubs()
