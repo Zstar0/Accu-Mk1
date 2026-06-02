@@ -94,3 +94,44 @@ class AggregatesResponse(BaseModel):
                     "(no row in lims_samples) are omitted from the response — "
                     "callers should treat absence as 'no sub-samples'."
     )
+
+
+# ── Variance set schemas (worksheet-variance design 2026-06-02) ──────────────
+
+class VarianceVialResult(BaseModel):
+    sample_id: str
+    vial_sequence: int
+    is_parent: bool
+    in_variance_set: bool
+    exclusion_reason: Optional[str] = None
+    review_state: Optional[str] = None
+    results: dict = {}  # keyword -> {value, kind, spec}
+
+
+class VarianceStatsEntry(BaseModel):
+    kind: str  # "numeric" | "categorical"
+    mean: Optional[float] = None
+    sd: Optional[float] = None
+    cv_pct: Optional[float] = None
+    n: int
+    conforms_count: Optional[int] = None
+    total: Optional[int] = None
+    spec: Optional[dict] = None
+    pass_: Optional[bool] = Field(default=None, alias="pass")
+
+    class Config:
+        populate_by_name = True
+
+
+class VarianceSetResponse(BaseModel):
+    parent: ParentSampleSummary
+    vials: list[VarianceVialResult]
+    stats: dict[str, VarianceStatsEntry]
+    locked: bool
+    locked_at: Optional[datetime] = None
+    locked_by_user_id: Optional[int] = None
+
+
+class PatchVarianceMembershipRequest(BaseModel):
+    in_variance_set: bool
+    exclusion_reason: Optional[str] = None
