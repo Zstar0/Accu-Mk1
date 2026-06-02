@@ -45,7 +45,7 @@ export type AccuMarkToolsSubSection =
   | 'coa-explorer'
   | 'chromatographs'
   | 'digital-coa'
-export type ReportsSubSection = 'dashboard' | 'sync-debug'
+export type ReportsSubSection = 'dashboard' | 'checkin-times' | 'bottlenecks' | 'sync-debug'
 export type AccountSubSection = 'profile' | 'user-management'
 export type PeptideRequestsSubSection = 'list' | 'detail'
 export type ActiveSubSection =

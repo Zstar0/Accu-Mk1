@@ -115,6 +115,8 @@ const navItems: NavItem[] = [
     icon: Activity,
     subItems: [
       { id: 'dashboard', label: 'Dashboard' },
+      { id: 'checkin-times', label: 'Check-In Times' },
+      { id: 'bottlenecks', label: 'Bottlenecks' },
       { id: 'sync-debug', label: 'Sync Debug', adminOnly: true },
     ],
   },
