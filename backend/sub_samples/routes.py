@@ -437,11 +437,10 @@ def unlock_variance_set_endpoint(
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
-    if getattr(user, "role", None) != "admin":
-        raise HTTPException(
-            status_code=403,
-            detail="admin role required to unlock variance sets",
-        )
+    # Admin gate intentionally relaxed for now — variance sets are a new
+    # workflow and techs need self-service unlock while the lab finds its
+    # footing. Re-gate to admin once the Variance Addon COA phase ships
+    # and lock semantics become contractual for the customer-facing COA.
     try:
         parent = service.unlock_variance_set(db, parent_sample_id)
         return {"parent_sample_id": parent.sample_id, "locked": False}
