@@ -13,11 +13,15 @@ interface Props {
   vialSequence?: number
   /** If set on a parent, render "(N vials)" hint. */
   hasChildren?: number
+  /** Stack the parent linkage on a new line below the sample ID instead of
+   *  rendering inline. Use in tight tabular contexts (worksheet rows, etc.)
+   *  where the inline layout otherwise wraps onto 3+ lines. */
+  stacked?: boolean
 }
 
 const SUB_SAMPLE_RE = /^(.+)-S(\d+)$/
 
-export function SampleIdBadge({ id, parentId, vialSequence, hasChildren }: Props) {
+export function SampleIdBadge({ id, parentId, vialSequence, hasChildren, stacked }: Props) {
   const navigateToSample = useUIStore(state => state.navigateToSample)
 
   // Auto-derive parent linkage from the ID pattern when not provided.
@@ -36,25 +40,39 @@ export function SampleIdBadge({ id, parentId, vialSequence, hasChildren }: Props
     }
   }
 
+  const parentLink = effectiveParentId && (
+    <span className={stacked ? 'block text-[10px] text-muted-foreground whitespace-nowrap' : 'text-muted-foreground'}>
+      ↳ child of{' '}
+      <Button
+        variant="ghost"
+        size="sm"
+        className="h-auto p-0 underline hover:text-foreground text-muted-foreground"
+        onClick={handleParentClick}
+      >
+        {effectiveParentId}
+      </Button>
+      {effectiveVialSequence != null && (
+        <span className={stacked ? 'ml-1' : 'ml-1 text-xs'}>(vial {effectiveVialSequence})</span>
+      )}
+    </span>
+  )
+
+  if (stacked) {
+    return (
+      <span className="font-mono text-sm leading-tight">
+        <span className="block whitespace-nowrap">{id}</span>
+        {parentLink}
+        {hasChildren != null && hasChildren > 0 && (
+          <span className="block text-[10px] text-muted-foreground">({hasChildren} vials)</span>
+        )}
+      </span>
+    )
+  }
+
   return (
     <span className="inline-flex items-center gap-1 font-mono text-sm">
       <span>{id}</span>
-      {effectiveParentId && (
-        <span className="text-muted-foreground">
-          ↳ child of{' '}
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-auto p-0 underline hover:text-foreground text-muted-foreground"
-            onClick={handleParentClick}
-          >
-            {effectiveParentId}
-          </Button>
-          {effectiveVialSequence != null && (
-            <span className="ml-1 text-xs">(vial {effectiveVialSequence})</span>
-          )}
-        </span>
-      )}
+      {parentLink}
       {hasChildren != null && hasChildren > 0 && (
         <span className="ml-1 text-xs text-muted-foreground">({hasChildren} vials)</span>
       )}

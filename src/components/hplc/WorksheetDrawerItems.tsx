@@ -109,15 +109,17 @@ export function WorksheetDrawerItems({
         </span>
       </div>
 
-      {/* Column headers */}
+      {/* Column headers — widths tuned so sub-sample rows ("BW-0009-S02 ↳ child
+          of BW-0009 (vial 2)") and the Microbiology badge render without
+          collapsing onto multiple wrap-lines. */}
       {items.length > 0 && (
         <div className="flex items-center gap-2 px-4 py-1 border-b text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
           {!isCompleted && <div className="w-4 shrink-0" />}
           {!isCompleted && <div className="w-8 shrink-0" />}
-          <div className="w-[80px] shrink-0">Sample</div>
-          <div className="w-[80px] shrink-0">Group</div>
+          <div className="w-[160px] shrink-0">Sample</div>
+          <div className="w-[110px] shrink-0">Group</div>
           <div className="w-[70px] shrink-0">Priority</div>
-          <div className="flex-1 min-w-[140px]">Peptide</div>
+          <div className="flex-1 min-w-[120px]">Peptide</div>
           <div className="w-[110px] shrink-0">Method</div>
           <div className="w-[120px] shrink-0">Instrument</div>
           <div className="w-[60px] shrink-0">Age</div>
@@ -244,19 +246,20 @@ function SortableItemRow({
         </button>
       )}
 
-      {/* Sample ID */}
-      <div className="w-[80px] shrink-0">
+      {/* Sample ID — stacked so sub-samples don't wrap. The parent linkage
+          renders on its own line below the sample ID at 10px. */}
+      <div className="w-[160px] shrink-0">
         <button
-          className="hover:underline hover:text-primary transition-colors"
+          className="text-left hover:underline hover:text-primary transition-colors"
           onClick={() => useUIStore.getState().navigateToSample(item.sample_id)}
         >
-          <SampleIdBadge id={item.sample_id} />
+          <SampleIdBadge id={item.sample_id} stacked />
         </button>
       </div>
 
       {/* Service group badge */}
-      <div className="w-[80px] shrink-0">
-        <span className={`inline-flex rounded-md border px-1.5 py-0.5 text-[10px] font-semibold ${groupColorClass}`}>
+      <div className="w-[110px] shrink-0">
+        <span className={`inline-flex rounded-md border px-1.5 py-0.5 text-[10px] font-semibold whitespace-nowrap ${groupColorClass}`}>
           {item.group_name}
         </span>
       </div>
