@@ -132,6 +132,7 @@ export function ReceiveWizard({ parent, onClose }: Props) {
               ? {
                   sampleId: parent.sample_id,
                   receivedThisSession: wiz.parentReceivedThisSession,
+                  assignmentRole: wiz.parentRole,
                 }
               : null
           }

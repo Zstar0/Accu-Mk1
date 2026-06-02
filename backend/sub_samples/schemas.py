@@ -37,6 +37,7 @@ class ParentSampleSummary(BaseModel):
     status: Optional[str]
     sub_sample_count: int
     last_synced_at: datetime
+    assignment_role: Optional[str] = None
 
     class Config:
         from_attributes = True

@@ -6,7 +6,11 @@ interface Props {
   vials: { sub: SubSample; isThisSession: boolean }[]
   /** Parent AR rendered as Vial 1 in the single-vial check-in policy.
    * null = parent still pre-received. */
-  parentVial: { sampleId: string; receivedThisSession: boolean } | null
+  parentVial: {
+    sampleId: string
+    receivedThisSession: boolean
+    assignmentRole: string | null
+  } | null
   activeSampleId: string | null
   onSelect: (sampleId: string | null) => void
 }
@@ -115,8 +119,7 @@ export function VialsList({
                   {parentVial.receivedThisSession ? 'received' : 'previously received'}
                 </span>
               </div>
-              {/* Parent's assignment_role defaults to 'hplc' per the system. */}
-              <RoleBadge role="hplc" />
+              <RoleBadge role={parentVial.assignmentRole} />
             </div>
           </li>
         )}

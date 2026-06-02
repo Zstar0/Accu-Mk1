@@ -136,6 +136,7 @@ def list_sub_samples(
             status=parent.status,
             sub_sample_count=len(subs),
             last_synced_at=parent.last_synced_at,
+            assignment_role=parent.assignment_role,
         ),
         sub_samples=[_serialize(s) for s in subs],
     )
@@ -378,6 +379,7 @@ def get_variance_set_endpoint(
             status=parent.status,
             sub_sample_count=len(parent.sub_samples),
             last_synced_at=parent.last_synced_at,
+            assignment_role=parent.assignment_role,
         ),
         vials=[VarianceVialResult(**v) for v in result["vials"]],
         stats={k: VarianceStatsEntry(**v) for k, v in result["stats"].items()},

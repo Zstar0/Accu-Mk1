@@ -47,6 +47,9 @@ export function useReceiveWizard(parent: ParentInfo) {
   // wizard session. Combined with the initial parent.status, this gates
   // whether we dual-fire on the next save.
   const [parentReceivedThisSession, setParentReceivedThisSession] = useState(false)
+  // Parent's assignment_role pulled from listSubSamples response. Defaults
+  // to 'hplc' (matches DB default) until the first refresh resolves.
+  const [parentRole, setParentRole] = useState<string | null>('hplc')
 
   // Track which sub-samples were created in this wizard session so they can
   // be flagged for the print step at the end. Keyed by sample_id (stable
@@ -67,6 +70,9 @@ export function useReceiveWizard(parent: ParentInfo) {
           isThisSession: sessionSampleIdsRef.current.has(s.sample_id),
         })),
       )
+      // Backend defaults assignment_role to 'hplc' on lims_samples; preserve
+      // that locally when the response carries null (e.g. cold-cache parent).
+      setParentRole(data.parent.assignment_role ?? 'hplc')
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -151,6 +157,7 @@ export function useReceiveWizard(parent: ParentInfo) {
     error,
     parentReceived: !isParentInPreReceivedState,
     parentReceivedThisSession,
+    parentRole,
     refresh,
     saveNewVial,
     editSessionVial,

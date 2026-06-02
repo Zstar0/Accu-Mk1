@@ -4147,6 +4147,7 @@ export interface ParentSampleSummary {
   status: string | null
   sub_sample_count: number
   last_synced_at: string
+  assignment_role: string | null
 }
 
 export interface SubSampleListResponse {
