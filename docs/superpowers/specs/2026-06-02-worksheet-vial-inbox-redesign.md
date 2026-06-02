@@ -114,7 +114,7 @@ No collapse/expand chrome. The grouping is purely visual — drag/drop targets t
 
 Existing query params unchanged: `hide_test_orders` (default `True`), `hide_prepped` (default `True`), `force_refresh` (default `False`).
 
-**New required query param:** `role` — one of `hplc` | `microbiology`. No default at the route layer; the frontend sets it from `localStorage`. Server-side validation: 400 on missing or invalid value.
+**New optional query param:** `role` — one of `hplc` | `microbiology` | omitted. Omitted means "all roles" — every vial that survives the other filters, regardless of bench. The inbox page always passes a role (sticky from `localStorage`); the AddSamplesModal (which adds samples to an existing worksheet and needs to see across both benches) omits it. Server-side validation: 400 on invalid value (an unrecognized non-empty string), 200 on absent.
 
 **New optional query param:** `show_xtra` (default `False`). When `True`, XTRA-role vials are appended to the response alongside the role-filtered vials. The card carries the zinc/`XTRA` badge so techs can tell at a glance they're pulling extra capacity rather than a role-assigned vial. Bench-agnostic by nature, so XTRA vials appear under whichever filter is active when the toggle is on.
 

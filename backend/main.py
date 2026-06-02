@@ -36,7 +36,7 @@ from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import select, desc, delete, update, func
 
 from database import get_db, init_db
-from models import AuditLog, Settings, Job, Sample, Result, Instrument, AnalysisService, HplcMethod, Peptide, PeptideAnalyte, CalibrationCurve, HPLCAnalysis, User, SharePointFileCache, WizardSession, WizardMeasurement, peptide_methods, blend_components, ServiceGroup, service_group_members, SamplePriority, Worksheet, WorksheetItem, instrument_methods, SampleAnalyteAlias
+from models import AuditLog, Settings, Job, Sample, Result, Instrument, AnalysisService, HplcMethod, Peptide, PeptideAnalyte, CalibrationCurve, HPLCAnalysis, User, SharePointFileCache, WizardSession, WizardMeasurement, peptide_methods, blend_components, ServiceGroup, service_group_members, SamplePriority, Worksheet, WorksheetItem, instrument_methods, SampleAnalyteAlias, LimsSample, LimsSubSample
 from auth import (
     get_current_user, require_admin, create_access_token,
     verify_password, get_password_hash, seed_admin_user,
@@ -11827,34 +11827,57 @@ class InboxAnalysisItem(BaseModel):
     peptide_name: Optional[str] = None
     method: Optional[str] = None
     review_state: Optional[str] = None
-
-
-class InboxServiceGroupSection(BaseModel):
+    # Service group context — surfaced per-analysis in the flat list so the
+    # frontend (or AddSamplesModal) can regroup by service group when needed.
     group_id: int
     group_name: str
     group_color: str
-    assigned_analyst_id: Optional[int] = None
-    assigned_analyst_email: Optional[str] = None
-    instrument_uid: Optional[str] = None
-    analyses: list[InboxAnalysisItem]
 
 
-class InboxSampleItem(BaseModel):
+class InboxVialItem(BaseModel):
+    """One inbox card == one vial (parent AR or sub-sample AR).
+
+    Replaces the old InboxSampleItem/InboxServiceGroupSection nesting. The
+    role-filtered analyses are flat and carry their own group metadata.
+    Vial position fields let the frontend stack same-family vials visually.
+    """
     uid: str
-    id: str
+    sample_id: str
+    is_parent: bool
+    parent_sample_id: str
+    assignment_role: Optional[str] = None
+    vial_sequence: int          # 0 for parent, 1+ for subs (lims_sub_samples.vial_sequence)
+    vial_total: int             # parent + sub count in the family
     title: str
     client_id: Optional[str] = None
     client_order_number: Optional[str] = None
     date_received: Optional[str] = None
     review_state: str
     priority: str = "normal"
-    assignment_summary: str = ""  # e.g., "2/3 assigned"
-    analyses_by_group: list[InboxServiceGroupSection] = []
+    analyses: list[InboxAnalysisItem] = []
+    assignment_summary: str = ""  # e.g., "1/1 assigned" — vial-level
 
 
 class InboxResponse(BaseModel):
-    items: list[InboxSampleItem]
+    items: list[InboxVialItem]
     total: int
+    filter_role: Optional[str] = None  # echo of the query param so the frontend can confirm
+
+
+# Role → service_group_name set. Hardcoded — the lab has had Analytics +
+# Microbiology for years and a 2-entry mapping doesn't deserve a table.
+ROLE_TO_GROUP_NAMES: dict[str, set[str]] = {
+    "hplc": {"Analytics"},
+    "microbiology": {"Microbiology"},
+}
+VALID_INBOX_ROLES = set(ROLE_TO_GROUP_NAMES.keys())
+
+# Role-set membership for the assignment_role column. Microbiology covers
+# both 'ster' and 'endo' (collapsed into one filter chip per spec Q1).
+ROLE_TO_VIAL_ROLES: dict[str, set[str]] = {
+    "hplc": {"hplc"},
+    "microbiology": {"ster", "endo"},
+}
 
 
 class PriorityUpdate(BaseModel):
@@ -11890,21 +11913,56 @@ async def get_worksheets_inbox(
     hide_test_orders: bool = True,
     hide_prepped: bool = True,
     force_refresh: bool = False,
+    role: Optional[str] = None,
+    show_xtra: bool = False,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
     """
-    Return received samples from SENAITE enriched with service group analysis grouping,
-    local priorities, and analyst assignments. Only shows samples linked to tracked orders
-    in the integration DB. Excludes samples already assigned to open worksheets.
+    Return inbox items (one per VIAL — parent AR or sub-sample AR) ready for worksheet
+    assignment. Each vial carries its role-filtered analyses, vial-position context, and
+    parent linkage. See `docs/superpowers/specs/2026-06-02-worksheet-vial-inbox-redesign.md`.
 
-    SENAITE responses are cached server-side for 30 minutes to avoid hammering SENAITE.
-    Pass force_refresh=true to bypass the cache.
+    Query params:
+      role         — 'hplc' | 'microbiology' | omitted. Omitted means all roles (used by
+                     AddSamplesModal, which adds across both benches). 400 on invalid value.
+      show_xtra    — when True, append XTRA-role vials to the active filter's results.
+      hide_test_*  — existing behavior.
+      force_refresh — bypass the 30-min SENAITE cache.
     """
     global _inbox_senaite_cache, _inbox_senaite_cache_time
 
+    # Validate role (None == "all roles", legal)
+    if role is not None and role not in VALID_INBOX_ROLES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid role: {role!r}. Expected one of {sorted(VALID_INBOX_ROLES)} or omit.",
+        )
+
     if not SENAITE_URL:
         raise HTTPException(status_code=503, detail="SENAITE not configured")
+
+    # Resolve role → allowed service_group IDs. None means "no filter; pass all groups".
+    allowed_group_ids: Optional[set[int]] = None
+    if role is not None:
+        group_names = ROLE_TO_GROUP_NAMES[role]
+        allowed_group_ids = {
+            r[0] for r in db.execute(
+                select(ServiceGroup.id).where(ServiceGroup.name.in_(group_names))
+            ).all()
+        }
+
+    # Resolve allowed vial assignment_role values. NULL roles always excluded (auto-
+    # assign on /vial-plan is the cure for those). XTRA gated by show_xtra.
+    if role is None:
+        # No bench filter: all known roles. XTRA still gated by the toggle.
+        allowed_vial_roles: set[str] = {"hplc", "ster", "endo"}
+        if show_xtra:
+            allowed_vial_roles.add("xtra")
+    else:
+        allowed_vial_roles = set(ROLE_TO_VIAL_ROLES[role])
+        if show_xtra:
+            allowed_vial_roles.add("xtra")
 
     # Step 1: Fetch sample_received samples from SENAITE (with cache)
     import time as _time
@@ -11986,7 +12044,18 @@ async def get_worksheets_inbox(
                                 linked_senaite_ids.add(sid)
                                 if order_priority and order_priority in ("high", "expedited"):
                                     order_priority_map[sid] = order_priority
-        # Filter SENAITE items to only those with a linked order
+        # Extend with sub-samples of any linked parent. Sub-samples are created
+        # post-order by the Receive Wizard and never appear in order_submissions,
+        # so without this step they'd be dropped from the inbox entirely. One
+        # SQL roundtrip pulls them all.
+        if linked_senaite_ids:
+            sub_rows = db.execute(
+                select(LimsSubSample.sample_id)
+                .join(LimsSample, LimsSubSample.parent_sample_pk == LimsSample.id)
+                .where(LimsSample.sample_id.in_(linked_senaite_ids))
+            ).scalars().all()
+            linked_senaite_ids.update(sub_rows)
+        # Filter SENAITE items to only those with a linked order (now includes subs)
         senaite_items = [
             it for it in senaite_items
             if str(it.get("id", "")) in linked_senaite_ids
@@ -12112,6 +12181,85 @@ async def get_worksheets_inbox(
     if order_priority_map:
         db.commit()
 
+    # Step 4c: Load vial metadata (assignment_role, parent linkage, vial_sequence)
+    # per item.uid. Parents come from lims_samples; sub-samples from lims_sub_samples.
+    # The structure: vial_meta_by_uid[external_lims_uid] = dict(...).
+    # vial_total for each family lets the frontend render "vial K of N" — derived
+    # from a parent + its lims_sub_samples count.
+    vial_meta_by_uid: dict[str, dict] = {}
+    # Bulk-fetch parents that match the inbox items
+    parent_rows = db.execute(
+        select(
+            LimsSample.id,
+            LimsSample.external_lims_uid,
+            LimsSample.sample_id,
+            LimsSample.assignment_role,
+        ).where(LimsSample.external_lims_uid.in_(uids))
+    ).all()
+    parent_id_to_sample_id: dict[int, str] = {r.id: r.sample_id for r in parent_rows}
+    family_sizes: dict[int, int] = {r.id: 1 for r in parent_rows}  # parent itself counts as 1
+    for r in parent_rows:
+        vial_meta_by_uid[r.external_lims_uid] = {
+            "sample_id": r.sample_id,
+            "is_parent": True,
+            "parent_sample_id": r.sample_id,
+            "parent_lims_id": r.id,
+            "assignment_role": r.assignment_role,
+            "vial_sequence": 0,
+        }
+    # Sub-samples: include both subs whose UID is in this fetch (direct hit on the
+    # inbox set) AND any sub of a parent we just loaded (to compute vial_total).
+    parent_ids = list(parent_id_to_sample_id.keys())
+    sub_rows = db.execute(
+        select(
+            LimsSubSample.parent_sample_pk,
+            LimsSubSample.external_lims_uid,
+            LimsSubSample.sample_id,
+            LimsSubSample.assignment_role,
+            LimsSubSample.vial_sequence,
+        ).where(
+            (LimsSubSample.external_lims_uid.in_(uids))
+            | (LimsSubSample.parent_sample_pk.in_(parent_ids) if parent_ids else False)
+        )
+    ).all()
+
+    # Sub-samples whose PARENT isn't already in parent_id_to_sample_id
+    # (parent has moved past sample_received, but its sub is still inbox-eligible).
+    # Without this lookup, parent_sample_id would come back empty on those subs.
+    missing_parent_ids = {
+        r.parent_sample_pk for r in sub_rows
+        if r.parent_sample_pk not in parent_id_to_sample_id
+        and r.external_lims_uid in uids
+    }
+    if missing_parent_ids:
+        extra_parents = db.execute(
+            select(LimsSample.id, LimsSample.sample_id).where(
+                LimsSample.id.in_(missing_parent_ids)
+            )
+        ).all()
+        for r in extra_parents:
+            parent_id_to_sample_id[r.id] = r.sample_id
+            family_sizes.setdefault(r.id, 1)
+    seen_sub_ids: set[int] = set()  # avoid double-counting subs that come back from both predicates
+    for r in sub_rows:
+        # Increment family size once per sub
+        # (sub_rows can contain a sub via either predicate; dedup on its db-id via parent+seq pair)
+        key = (r.parent_sample_pk, r.vial_sequence)
+        if key not in seen_sub_ids:
+            family_sizes[r.parent_sample_pk] = family_sizes.get(r.parent_sample_pk, 0) + 1
+            seen_sub_ids.add(key)
+        # Only inbox items keyed by external_lims_uid get vial_meta entries
+        if r.external_lims_uid in uids and r.external_lims_uid not in vial_meta_by_uid:
+            parent_sid = parent_id_to_sample_id.get(r.parent_sample_pk, "")
+            vial_meta_by_uid[r.external_lims_uid] = {
+                "sample_id": r.sample_id,
+                "is_parent": False,
+                "parent_sample_id": parent_sid,
+                "parent_lims_id": r.parent_sample_pk,
+                "assignment_role": r.assignment_role,
+                "vial_sequence": r.vial_sequence,
+            }
+
     # Step 5: Load per-group worksheet_item assignments (analyst + instrument)
     # Key is (sample_uid, service_group_id) → WorksheetItem
     item_rows = db.execute(
@@ -12162,16 +12310,39 @@ async def get_worksheets_inbox(
                 except Exception as fetch_err:
                     print(f"[WARN] Failed to fetch analyses for {sid}: {fetch_err}")
 
-    # Step 7: Build enriched sample items
-    result_items: list[InboxSampleItem] = []
+    # Step 7: Build vial-level inbox items.
+    # Per-vial filters applied in order:
+    #   * vial_meta exists in lims_samples / lims_sub_samples (else skip)
+    #   * vial.assignment_role ∈ allowed_vial_roles (else skip)
+    #   * not fully claimed by a null-group worksheet item (else skip)
+    #   * after analysis filtering, at least one analysis remains (else skip)
+    result_items: list[InboxVialItem] = []
+
+    EXCLUDED_STATES = {"rejected", "retracted", "cancelled"}
 
     for it in filtered_items:
         uid = str(it.get("uid", ""))
         sample_id = str(it.get("id", ""))
+
+        # Look up vial metadata (parent or sub) loaded in step 4c
+        vial_meta = vial_meta_by_uid.get(uid)
+        if vial_meta is None:
+            # SENAITE knows this sample but Mk1 has no lims_samples / lims_sub_samples row
+            # for it. Could be a SENAITE-direct sample that never went through the wizard.
+            # Skip rather than fabricate role / parent info.
+            continue
+
+        vial_role = vial_meta["assignment_role"]
+        if vial_role not in allowed_vial_roles:
+            continue
+
+        if uid in assigned_uids_for_null_group:
+            # Sample with null service_group_id in an open worksheet — fully claimed
+            continue
+
         raw_analyses = analyses_by_sample.get(sample_id, [])
 
         # Build slot → peptide name map for "Analyte N" title renaming
-        # Same pattern as sample details page (Analyte1Peptide through Analyte4Peptide)
         analyte_name_map: dict[int, str] = {}
         for slot, key in enumerate(
             ("Analyte1Peptide", "Analyte2Peptide", "Analyte3Peptide", "Analyte4Peptide"),
@@ -12179,14 +12350,10 @@ async def get_worksheets_inbox(
         ):
             raw_name = it.get(key)
             if raw_name and str(raw_name).strip():
-                # Strip method suffix: "BPC-157 - Identity (HPLC)" → "BPC-157"
                 stripped = re.sub(r"\s*-\s*[^-]+\([^)]+\)\s*$", "", str(raw_name)).strip()
                 analyte_name_map[slot] = stripped
 
-        # Filter and deduplicate analyses:
-        # 1. Skip rejected/retracted/cancelled
-        # 2. When multiple analyses share the same keyword (retests), keep only the most recent
-        EXCLUDED_STATES = {"rejected", "retracted", "cancelled"}
+        # Dedup analyses: skip excluded states, prefer retests over originals on shared keywords.
         seen_keywords: dict[str, dict] = {}
         for analysis in raw_analyses:
             if not isinstance(analysis, dict):
@@ -12196,14 +12363,11 @@ async def get_worksheets_inbox(
                 continue
             kw = analysis.get("getKeyword") or analysis.get("keyword") or ""
             if kw and kw in seen_keywords:
-                # Retest (RetestOf is set) supersedes original
                 is_retest = bool(analysis.get("RetestOf") or analysis.get("getRetestOf"))
                 if is_retest:
-                    seen_keywords[kw] = analysis  # retest replaces original
-                # else keep the existing one (it might be the retest already)
+                    seen_keywords[kw] = analysis
             else:
                 seen_keywords[kw] = analysis
-        # For analyses without keywords, keep all
         deduped_analyses = list(seen_keywords.values())
         for analysis in raw_analyses:
             if not isinstance(analysis, dict):
@@ -12215,14 +12379,14 @@ async def get_worksheets_inbox(
             if not kw:
                 deduped_analyses.append(analysis)
 
-        groups_by_id: dict[int, InboxServiceGroupSection] = {}
+        # Build flat InboxAnalysisItem list with role + assigned-group filters applied inline.
+        flat_analyses: list[InboxAnalysisItem] = []
         for analysis in deduped_analyses:
             if not isinstance(analysis, dict):
                 continue
             keyword = analysis.get("getKeyword") or analysis.get("keyword") or ""
             title = analysis.get("title") or analysis.get("getTitle") or keyword or ""
 
-            # Rename "Analyte N ..." titles to actual peptide names
             analyte_match = re.match(r"^Analyte\s+(\d)\s*(.*)", title, re.IGNORECASE)
             if analyte_match:
                 slot_num = int(analyte_match.group(1))
@@ -12234,19 +12398,14 @@ async def get_worksheets_inbox(
             a_uid = analysis.get("uid") or analysis.get("UID")
             review_state = analysis.get("review_state") or analysis.get("getReviewState")
 
-            # Resolve peptide name: for identity services (ID_*), use local AnalysisService.peptide_name.
-            # For slot services (ANALYTE-N-*), use per-sample analyte_name_map (from AnalyteNPeptide).
-            resolved_peptide: str | None = keyword_to_peptide.get(keyword)
+            resolved_peptide: Optional[str] = keyword_to_peptide.get(keyword)
             if not resolved_peptide and analyte_match:
-                # Already matched "Analyte N" — use the slot map
                 slot_num = int(analyte_match.group(1))
                 resolved_peptide = analyte_name_map.get(slot_num)
 
-            # Resolve method from local peptide → peptide_methods → HplcMethod
-            method: str | None = None
+            method: Optional[str] = None
             if resolved_peptide:
                 method = peptide_to_method.get(resolved_peptide)
-            # Fallback to SENAITE method title if local lookup didn't resolve
             if not method:
                 method = analysis.get("getMethodTitle") or None
                 if not method:
@@ -12254,17 +12413,16 @@ async def get_worksheets_inbox(
                     if isinstance(method_obj, dict):
                         method = method_obj.get("title")
 
-            group_info = keyword_to_group.get(keyword, default_group)
-            group_id, group_name, group_color = group_info
+            group_id, group_name, group_color = keyword_to_group.get(keyword, default_group)
 
-            if group_id not in groups_by_id:
-                groups_by_id[group_id] = InboxServiceGroupSection(
-                    group_id=group_id,
-                    group_name=group_name,
-                    group_color=group_color,
-                    analyses=[],
-                )
-            groups_by_id[group_id].analyses.append(
+            # Role → allowed_group_ids filter (None == pass all)
+            if allowed_group_ids is not None and group_id not in allowed_group_ids:
+                continue
+            # Already on an open worksheet for this (vial, group) — drop the analysis
+            if (uid, group_id) in assigned_pairs:
+                continue
+
+            flat_analyses.append(
                 InboxAnalysisItem(
                     uid=str(a_uid) if a_uid else None,
                     title=str(title),
@@ -12272,48 +12430,44 @@ async def get_worksheets_inbox(
                     peptide_name=resolved_peptide,
                     method=str(method) if method else None,
                     review_state=str(review_state) if review_state else None,
+                    group_id=group_id,
+                    group_name=group_name,
+                    group_color=group_color,
                 )
             )
 
-        # Sort analyses within each group by title
-        for grp in groups_by_id.values():
-            grp.analyses.sort(key=lambda a: a.title.lower())
-
-        analyses_by_group = list(groups_by_id.values())
-
-        # Filter out groups already in open worksheets
-        if uid in assigned_uids_for_null_group:
-            # Sample with null service_group_id in a worksheet — fully claimed, skip entirely
-            continue
-        analyses_by_group = [
-            grp for grp in analyses_by_group
-            if (uid, grp.group_id) not in assigned_pairs
-        ]
-        if not analyses_by_group:
-            # All groups for this sample are in worksheets — skip
+        if not flat_analyses:
+            # No analyses survive filtering — hide this vial
             continue
 
-        # Attach per-group assignments (analyst + instrument)
+        # Sort by group then title for stable rendering
+        flat_analyses.sort(key=lambda a: (a.group_name.lower(), a.title.lower()))
+
+        # Assignment summary: count unique groups present that have an analyst on the staging item
+        unique_groups = {a.group_id for a in flat_analyses}
         assigned_count = 0
-        for grp in analyses_by_group:
-            assignment = assignment_map.get((uid, grp.group_id))
-            if assignment:
-                grp.assigned_analyst_id = assignment.assigned_analyst_id
-                grp.instrument_uid = assignment.instrument_uid
-                if assignment.assigned_analyst_id:
-                    grp.assigned_analyst_email = analyst_map.get(assignment.assigned_analyst_id)
-                    assigned_count += 1
+        for gid in unique_groups:
+            assignment = assignment_map.get((uid, gid))
+            if assignment and assignment.assigned_analyst_id:
+                assigned_count += 1
+        total_groups = len(unique_groups)
+        summary = (
+            f"{assigned_count}/{total_groups} assigned"
+            if (total_groups > 0 and assigned_count > 0)
+            else ""
+        )
 
-        total_groups = len(analyses_by_group)
-        if total_groups > 0 and assigned_count > 0:
-            summary = f"{assigned_count}/{total_groups} assigned"
-        else:
-            summary = ""
+        family_size = family_sizes.get(vial_meta["parent_lims_id"], 1)
 
         result_items.append(
-            InboxSampleItem(
+            InboxVialItem(
                 uid=uid,
-                id=sample_id,
+                sample_id=sample_id,
+                is_parent=vial_meta["is_parent"],
+                parent_sample_id=vial_meta["parent_sample_id"],
+                assignment_role=vial_role,
+                vial_sequence=vial_meta["vial_sequence"],
+                vial_total=family_size,
                 title=str(it.get("title", "")),
                 client_id=it.get("getClientTitle") or it.get("ClientID") or None,
                 client_order_number=it.get("getClientOrderNumber") or it.get("ClientOrderNumber") or None,
@@ -12321,11 +12475,16 @@ async def get_worksheets_inbox(
                 review_state=str(it.get("review_state", "")),
                 priority=priority_map.get(uid, "normal"),
                 assignment_summary=summary,
-                analyses_by_group=analyses_by_group,
+                analyses=flat_analyses,
             )
         )
 
-    return InboxResponse(items=result_items, total=len(result_items))
+    # Visual grouping is the frontend's job; here we just give it a stable sort:
+    # by parent_sample_id (so same-family vials are adjacent), then is_parent first,
+    # then vial_sequence ascending within the family.
+    result_items.sort(key=lambda v: (v.parent_sample_id, not v.is_parent, v.vial_sequence))
+
+    return InboxResponse(items=result_items, total=len(result_items), filter_role=role)
 
 
 @app.put("/worksheets/inbox/{sample_uid}/priority")
