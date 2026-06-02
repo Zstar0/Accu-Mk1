@@ -602,3 +602,133 @@ def aggregate_by_parent(db: Session, parent_sample_ids: list[str]) -> dict[str, 
             }
 
     return result
+
+
+# ── Variance set helpers (worksheet-variance design 2026-06-02) ──────────────
+
+from sub_samples.variance import compute_variance_stats
+
+
+class VarianceLockedError(RuntimeError):
+    """Raised when attempting to mutate a locked variance set."""
+
+
+class VarianceTooFewVialsError(ValueError):
+    """Raised when attempting to lock with fewer than 2 selected vials."""
+
+
+def get_variance_set(db: Session, parent_sample_id: str) -> Optional[dict]:
+    """Return variance set view for a parent: vials + stats + lock state.
+
+    `results` per vial is empty in this phase — the SENAITE result fetch
+    will populate it in a follow-on task. Stats compute over whatever is
+    present (currently nothing, until per-vial result entry lands).
+    """
+    parent = db.execute(
+        select(LimsSample).where(LimsSample.sample_id == parent_sample_id)
+    ).scalar_one_or_none()
+    if not parent:
+        return None
+
+    subs = sorted(parent.sub_samples, key=lambda s: s.vial_sequence)
+
+    vial_dicts: list[dict] = [
+        {
+            "sample_id": parent.sample_id,
+            "vial_sequence": 0,
+            "is_parent": True,
+            "in_variance_set": parent.in_variance_set,
+            "exclusion_reason": parent.variance_exclusion_reason,
+            "review_state": parent.status,
+            "results": {},
+        }
+    ] + [
+        {
+            "sample_id": s.sample_id,
+            "vial_sequence": s.vial_sequence,
+            "is_parent": False,
+            "in_variance_set": s.in_variance_set,
+            "exclusion_reason": s.variance_exclusion_reason,
+            "review_state": None,
+            "results": {},
+        }
+        for s in subs
+    ]
+
+    stats = compute_variance_stats(vial_dicts)
+    return {
+        "parent": parent,
+        "vials": vial_dicts,
+        "stats": stats,
+        "locked": parent.variance_locked_at is not None,
+        "locked_at": parent.variance_locked_at,
+        "locked_by_user_id": parent.variance_locked_by_user_id,
+    }
+
+
+def _resolve_variance_vial(db: Session, sample_id: str) -> tuple:
+    """Find a row by sample_id (parent or sub) + its owning parent.
+
+    Returns (row, parent). For a parent sample row equals parent.
+    """
+    parent = db.execute(
+        select(LimsSample).where(LimsSample.sample_id == sample_id)
+    ).scalar_one_or_none()
+    if parent:
+        return parent, parent
+    sub = db.execute(
+        select(LimsSubSample).where(LimsSubSample.sample_id == sample_id)
+    ).scalar_one_or_none()
+    if sub:
+        return sub, sub.parent_sample
+    raise LookupError(f"sample {sample_id} not found in lims_samples/lims_sub_samples")
+
+
+def set_variance_membership(
+    db: Session, sample_id: str, in_set: bool, reason: Optional[str]
+) -> dict:
+    """Update one vial's variance membership. Refuses when the family is locked."""
+    row, parent = _resolve_variance_vial(db, sample_id)
+    if parent.variance_locked_at is not None:
+        raise VarianceLockedError(f"variance set for {parent.sample_id} is locked")
+    row.in_variance_set = in_set
+    row.variance_exclusion_reason = reason if not in_set else None
+    db.commit()
+    return {
+        "sample_id": sample_id,
+        "in_variance_set": row.in_variance_set,
+        "exclusion_reason": row.variance_exclusion_reason,
+    }
+
+
+def lock_variance_set(db: Session, parent_sample_id: str, user_id: int) -> LimsSample:
+    """Lock a family's variance set. Requires n_selected >= 2."""
+    parent = db.execute(
+        select(LimsSample).where(LimsSample.sample_id == parent_sample_id)
+    ).scalar_one_or_none()
+    if not parent:
+        raise LookupError(f"parent {parent_sample_id} not found")
+    selected = (1 if parent.in_variance_set else 0) + sum(
+        1 for s in parent.sub_samples if s.in_variance_set
+    )
+    if selected < 2:
+        raise VarianceTooFewVialsError(
+            f"need >=2 selected vials, have {selected}"
+        )
+    parent.variance_locked_at = datetime.utcnow()
+    parent.variance_locked_by_user_id = user_id
+    db.commit()
+    return parent
+
+
+def unlock_variance_set(db: Session, parent_sample_id: str) -> LimsSample:
+    """Admin-only: clear lock fields."""
+    parent = db.execute(
+        select(LimsSample).where(LimsSample.sample_id == parent_sample_id)
+    ).scalar_one_or_none()
+    if not parent:
+        raise LookupError(f"parent {parent_sample_id} not found")
+    parent.variance_locked_at = None
+    parent.variance_locked_by_user_id = None
+    db.commit()
+    return parent
