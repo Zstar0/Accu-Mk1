@@ -4403,3 +4403,92 @@ export async function fetchSubSamplePhotoUrl(
   _subSamplePhotoCache.set(sampleId, url)
   return url
 }
+
+// ── Variance set (worksheet-variance design 2026-06-02) ──────────────────────
+
+export interface VarianceVial {
+  sample_id: string
+  vial_sequence: number
+  is_parent: boolean
+  in_variance_set: boolean
+  exclusion_reason: string | null
+  review_state: string | null
+  results: Record<string, { value: number | string | null; kind: 'numeric' | 'categorical'; spec?: Record<string, number> }>
+}
+
+export interface VarianceStatsEntry {
+  kind: 'numeric' | 'categorical'
+  mean: number | null
+  sd: number | null
+  cv_pct: number | null
+  n: number
+  conforms_count?: number | null
+  total?: number | null
+  spec: Record<string, number> | null
+  pass: boolean | null
+}
+
+export interface VarianceSetResponse {
+  parent: ParentSampleSummary
+  vials: VarianceVial[]
+  stats: Record<string, VarianceStatsEntry>
+  locked: boolean
+  locked_at: string | null
+  locked_by_user_id: number | null
+}
+
+export async function getVarianceSet(parentSampleId: string): Promise<VarianceSetResponse> {
+  const r = await fetch(
+    `${API_BASE_URL()}/api/sub-samples/${encodeURIComponent(parentSampleId)}/variance-set`,
+    { headers: getBearerHeaders() }
+  )
+  if (!r.ok) throw new Error(`getVarianceSet failed: ${r.status}`)
+  return r.json()
+}
+
+export async function patchVarianceMembership(args: {
+  sampleId: string
+  inVarianceSet: boolean
+  exclusionReason?: string | null
+}): Promise<{ sample_id: string; in_variance_set: boolean; exclusion_reason: string | null }> {
+  const r = await fetch(
+    `${API_BASE_URL()}/api/sub-samples/${encodeURIComponent(args.sampleId)}/variance-set`,
+    {
+      method: 'PATCH',
+      headers: getBearerHeaders('application/json'),
+      body: JSON.stringify({
+        in_variance_set: args.inVarianceSet,
+        exclusion_reason: args.exclusionReason ?? null,
+      }),
+    }
+  )
+  if (r.status === 409) {
+    const body = await r.json().catch(() => ({}))
+    throw new Error(body.detail?.message ?? 'variance set is locked')
+  }
+  if (!r.ok) throw new Error(`patchVarianceMembership failed: ${r.status}`)
+  return r.json()
+}
+
+export async function lockVarianceSet(parentSampleId: string): Promise<{ parent_sample_id: string; locked_at: string }> {
+  const r = await fetch(
+    `${API_BASE_URL()}/api/sub-samples/${encodeURIComponent(parentSampleId)}/variance-set/lock`,
+    { method: 'POST', headers: getBearerHeaders() }
+  )
+  if (r.status === 422) {
+    const body = await r.json().catch(() => ({}))
+    throw new Error(body.detail?.message ?? 'need >=2 selected vials to lock')
+  }
+  if (!r.ok) throw new Error(`lockVarianceSet failed: ${r.status}`)
+  return r.json()
+}
+
+export async function unlockVarianceSet(parentSampleId: string): Promise<{ parent_sample_id: string; locked: boolean }> {
+  const r = await fetch(
+    `${API_BASE_URL()}/api/sub-samples/${encodeURIComponent(parentSampleId)}/variance-set/unlock`,
+    { method: 'POST', headers: getBearerHeaders() }
+  )
+  if (r.status === 403) throw new Error('admin role required to unlock variance sets')
+  if (!r.ok) throw new Error(`unlockVarianceSet failed: ${r.status}`)
+  return r.json()
+}
