@@ -40,17 +40,8 @@ function StatCard({
   )
 }
 
-function RankedBars({ phases }: { phases: PhaseStat[] }) {
-  // Slowest-first; phases with no data sink to the bottom.
-  const ranked = useMemo(
-    () =>
-      [...phases].sort((a, b) => {
-        if (a.median == null) return 1
-        if (b.median == null) return -1
-        return b.median - a.median
-      }),
-    [phases]
-  )
+function PhaseBars({ phases }: { phases: PhaseStat[] }) {
+  // Process order (Ordered → … → Published); phases already arrive in sequence.
   const scale = useMemo(
     () => Math.max(1, ...phases.map(p => p.p90 ?? p.median ?? 0)),
     [phases]
@@ -58,7 +49,7 @@ function RankedBars({ phases }: { phases: PhaseStat[] }) {
 
   return (
     <div className="flex flex-col gap-2.5">
-      {ranked.map(p => {
+      {phases.map(p => {
         const medianPct = p.median != null ? (p.median / scale) * 100 : 0
         const p90Pct = p.p90 != null ? (p.p90 / scale) * 100 : medianPct
         const dim = p.n < LOW_N
@@ -211,10 +202,10 @@ export function TurnaroundReport() {
           {/* Ranked bars */}
           <div className="rounded-lg border border-border/50 bg-card/30 p-4">
             <div className="mb-3 text-xs font-medium uppercase tracking-wider text-muted-foreground">
-              Median time in phase (slowest first)
+              Median time in phase (process order)
             </div>
             {hasData ? (
-              <RankedBars phases={summary.phases} />
+              <PhaseBars phases={summary.phases} />
             ) : (
               <div className="py-10 text-center text-sm text-muted-foreground">
                 No completed phases in this range
