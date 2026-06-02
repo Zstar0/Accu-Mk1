@@ -13139,10 +13139,27 @@ async def get_worksheets_inbox(
         # Look up vial metadata (parent or sub) loaded in step 4c
         vial_meta = vial_meta_by_uid.get(uid)
         if vial_meta is None:
-            # SENAITE knows this sample but Mk1 has no lims_samples / lims_sub_samples row
-            # for it. Could be a SENAITE-direct sample that never went through the wizard.
-            # Skip rather than fabricate role / parent info.
-            continue
+            # Legacy fallback: SENAITE knows this sample but Mk1 has no
+            # lims_samples / lims_sub_samples row for it. This is the dominant
+            # shape on production deploys where lims_samples didn't exist
+            # before the sub-samples feature shipped. Without this fallback the
+            # inbox would be empty until a backfill populates the table.
+            #
+            # Treat a parent-shaped id ("BW-0009", "P-0140") as a parent vial
+            # with the migration-default 'hplc' role. Sub-sample-shaped ids
+            # ("...-S01") are skipped — sub-samples shouldn't exist without a
+            # lims_sub_samples row, and fabricating parent linkage for them
+            # would be wrong.
+            if re.match(r"^.+-S\d{2,}$", sample_id):
+                continue
+            vial_meta = {
+                "sample_id": sample_id,
+                "is_parent": True,
+                "parent_sample_id": sample_id,
+                "parent_lims_id": None,
+                "assignment_role": "hplc",
+                "vial_sequence": 0,
+            }
 
         vial_role = vial_meta["assignment_role"]
         if vial_role not in allowed_vial_roles:
