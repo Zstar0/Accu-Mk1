@@ -4,9 +4,36 @@ import {
   fetchSubSamplePhotoUrl,
   type SubSample,
 } from '@/lib/api'
+import { cn } from '@/lib/utils'
 import { useUIStore } from '@/store/ui-store'
 import { usePrintLabel } from '@/components/samples/usePrintLabel'
 import { PrintLabelPortal } from '@/components/samples/PrintLabelPortal'
+
+// Mirrors the role palette in VialsList.tsx and SenaiteDashboard.tsx — kept
+// inline (third copy) to stay additive. Worth deduping into a shared module
+// when there's appetite to touch all three call sites in one pass.
+const ROLE_BADGES: Record<string, { label: string; cls: string }> = {
+  hplc:       { label: 'HPLC',       cls: 'bg-sky-500/15 text-sky-700 border-sky-500/40 dark:text-sky-300' },
+  endo:       { label: 'ENDO',       cls: 'bg-emerald-500/15 text-emerald-700 border-emerald-500/40 dark:text-emerald-300' },
+  ster:       { label: 'STERYL',     cls: 'bg-violet-500/15 text-violet-700 border-violet-500/40 dark:text-violet-300' },
+  xtra:       { label: 'XTRA',       cls: 'bg-zinc-500/15 text-zinc-700 border-zinc-500/40 dark:text-zinc-300' },
+  unassigned: { label: 'Unassigned', cls: 'bg-amber-500/15 text-amber-700 border-amber-500/40 dark:text-amber-300' },
+}
+
+function RoleBadge({ role }: { role: string | null | undefined }) {
+  const b = ROLE_BADGES[role ?? 'unassigned'] ?? ROLE_BADGES.unassigned!
+  return (
+    <span
+      className={cn(
+        'inline-block text-[10px] leading-none px-1.5 py-0.5 rounded border uppercase tracking-wide font-medium',
+        b.cls
+      )}
+      title={`Assigned to ${b.label}`}
+    >
+      {b.label}
+    </span>
+  )
+}
 
 interface Props {
   vials: { sub: SubSample; isThisSession: boolean }[]
@@ -86,6 +113,7 @@ export function VialDetailsTab({ vials, orderNumber, onCloseAndNavigate }: Props
                 <tr className="text-left">
                   <th className="px-3 py-2 w-16">Vial</th>
                   <th className="px-3 py-2">Sample ID</th>
+                  <th className="px-3 py-2 w-24">Role</th>
                   <th className="px-3 py-2 w-28">Photo</th>
                   <th className="px-3 py-2 w-44">Received</th>
                   <th className="px-3 py-2 w-20">By</th>
@@ -104,6 +132,9 @@ export function VialDetailsTab({ vials, orderNumber, onCloseAndNavigate }: Props
                       >
                         {s.sample_id}
                       </button>
+                    </td>
+                    <td className="px-3 py-2">
+                      <RoleBadge role={s.assignment_role} />
                     </td>
                     <td className="px-3 py-2">
                       <SubSamplePhotoCell
