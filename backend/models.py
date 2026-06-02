@@ -720,6 +720,13 @@ class LimsSample(Base):
     date_received: Mapped[Optional[datetime]] = mapped_column(DateTime)
     is_retest: Mapped[bool] = mapped_column(Boolean, default=False)
     assignment_role: Mapped[str] = mapped_column(String(8), nullable=False, server_default="hplc")
+    # Variance set: parent shares the membership model — parent IS vial 1.
+    in_variance_set: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true", default=True)
+    variance_exclusion_reason: Mapped[Optional[str]] = mapped_column(Text)
+    variance_locked_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    variance_locked_by_user_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="SET NULL")
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     last_synced_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
@@ -745,6 +752,9 @@ class LimsSubSample(Base):
     photo_external_uid: Mapped[Optional[str]] = mapped_column(String(100))
     remarks: Mapped[Optional[str]] = mapped_column(Text)
     assignment_role: Mapped[Optional[str]] = mapped_column(String(8), nullable=True)
+    # Variance set membership (paired with lock state on parent LimsSample).
+    in_variance_set: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true", default=True)
+    variance_exclusion_reason: Mapped[Optional[str]] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     parent_sample: Mapped["LimsSample"] = relationship("LimsSample", back_populates="sub_samples")
