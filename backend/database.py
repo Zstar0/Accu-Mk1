@@ -309,10 +309,11 @@ def _run_migrations():
         """,
         # Service groups reference a tier (NULL -> resolves to the default tier).
         "ALTER TABLE service_groups ADD COLUMN IF NOT EXISTS sla_tier_id INTEGER REFERENCES sla_tiers(id) ON DELETE SET NULL",
-        # Seed the default tier = former hardcoded 24h goal. Idempotent.
+        # Seed the default tier at 48h (2d). Idempotent — only inserts when no
+        # default exists yet, so it sets the starting target on a fresh DB.
         """
         INSERT INTO sla_tiers (name, target_minutes, business_hours_only, is_default, created_at, updated_at)
-        SELECT 'Standard', 1440, FALSE, TRUE, NOW(), NOW()
+        SELECT 'Standard', 2880, FALSE, TRUE, NOW(), NOW()
         WHERE NOT EXISTS (SELECT 1 FROM sla_tiers WHERE is_default)
         """,
         # D2: per-tier amber threshold (idempotent ALTER, existing rows get 20).

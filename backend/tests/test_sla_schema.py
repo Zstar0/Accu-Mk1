@@ -25,7 +25,7 @@ def test_seed_default_tier_idempotent_when_run_twice():
     assert n == 1
 
 
-def test_default_tier_encodes_old_24h_goal():
+def test_default_tier_seeds_48h_goal():
     with engine.connect() as c:
         row = c.execute(
             text("SELECT name, target_minutes FROM sla_tiers WHERE is_default")
@@ -33,7 +33,7 @@ def test_default_tier_encodes_old_24h_goal():
     assert row is not None
     name, target_minutes = row
     assert name == "Standard"
-    assert target_minutes == 1440
+    assert target_minutes == 2880
 
 
 def test_sla_targets_table_dropped():

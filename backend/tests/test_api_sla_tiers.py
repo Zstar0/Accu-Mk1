@@ -46,7 +46,7 @@ def test_list_returns_seeded_default():
     assert resp.status_code == 200
     defaults = [r for r in resp.json() if r["is_default"]]
     assert len(defaults) == 1
-    assert defaults[0]["target_minutes"] == 1440
+    assert defaults[0]["target_minutes"] == 2880
 
 
 def test_create_tier_returns_201():

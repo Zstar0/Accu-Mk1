@@ -10,7 +10,8 @@ fields.
 ### Added
 
 - **SLA tier model.** New `sla_tiers` table (configurable `target_minutes`,
-  `business_hours_only`, `amber_threshold_percent`, single-`is_default` tier) plus
+  `business_hours_only`, `amber_threshold_percent`, single-`is_default` tier,
+  seeded at **48h (2d)** on a fresh DB) plus
   `sla_priority_tiers` (priority→tier overrides, global or scoped to a service
   group) and a `service_groups.sla_tier_id` column for per-group tier assignment.
   Resolution precedence: `(priority, group)` > `(priority, all groups)` > group's
