@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Printer, ArrowRight, ArrowLeft } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useReceiveWizard, type ParentInfo } from './useReceiveWizard'
 import { useParentSampleDetails } from './useParentSampleDetails'
 import { WizardHeader } from './WizardHeader'
@@ -29,13 +30,30 @@ export function ReceiveWizard({ parent, onClose }: Props) {
   const receivedCount =
     (wiz.parentReceived ? 1 : 0) + wiz.vials.length
 
+  // Assignment tab is meaningful when the parent already exists (typical for
+  // sample detail entry) OR when at least one vial has been saved this session
+  // (check-in flow). Disable otherwise.
+  const assignmentEnabled = wiz.parentReceived || wiz.vials.length > 0
+
+  const phaseTabs = (
+    <div className="px-6 py-2 border-b bg-muted/10">
+      <Tabs value={phase} onValueChange={(v) => setPhase(v as Phase)}>
+        <TabsList>
+          <TabsTrigger value="capture">Vial Management</TabsTrigger>
+          <TabsTrigger value="assign" disabled={!assignmentEnabled}>Assignment</TabsTrigger>
+        </TabsList>
+      </Tabs>
+    </div>
+  )
+
   if (phase === 'assign') {
     return (
-      <div className="grid grid-rows-[auto_1fr_auto] h-full min-h-[500px]">
+      <div className="grid grid-rows-[auto_auto_1fr_auto] h-full min-h-[500px]">
         <WizardHeader
           parentSampleId={parent.sample_id}
           receivedCount={receivedCount}
         />
+        {phaseTabs}
         <div className="overflow-y-auto">
           <AssignStep parentSampleId={parent.sample_id} />
         </div>
@@ -75,11 +93,12 @@ export function ReceiveWizard({ parent, onClose }: Props) {
   const hasSessionVials = wiz.sessionVials.length > 0 || wiz.parentReceivedThisSession
 
   return (
-    <div className="grid grid-rows-[auto_1fr_auto] h-full min-h-[500px]">
+    <div className="grid grid-rows-[auto_auto_1fr_auto] h-full min-h-[500px]">
       <WizardHeader
         parentSampleId={parent.sample_id}
         receivedCount={receivedCount}
       />
+      {phaseTabs}
       <div className="grid grid-cols-[260px_1fr_240px] min-h-0 overflow-hidden">
         <WizardSidebar
           parentDetails={parentDetails.details}

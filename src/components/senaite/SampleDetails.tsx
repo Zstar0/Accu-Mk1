@@ -3517,11 +3517,11 @@ export function SampleDetails() {
                   }
                 }}
               >
-                <DialogContent className="max-w-5xl w-full p-0 sm:max-w-5xl h-[80vh] overflow-hidden">
+                <DialogContent className="max-w-6xl w-full p-0 sm:max-w-6xl h-[90vh] overflow-hidden">
                   <DialogHeader className="px-6 pt-4 pb-2 border-b">
                     <DialogTitle>Receive {wizardParent.sample_id}</DialogTitle>
                   </DialogHeader>
-                  <div className="h-[calc(80vh-3.5rem)] overflow-hidden">
+                  <div className="h-[calc(90vh-3.5rem)] overflow-hidden">
                     <ReceiveWizard
                       parent={wizardParent}
                       onClose={() => {
