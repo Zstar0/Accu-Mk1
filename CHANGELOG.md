@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.37.1 — 2026-06-02 — Bottlenecks bar order fix
+
+### Fixed
+
+- **Bottlenecks report** — phase bars now render in workflow sequence (Ordered →
+  Received → Submitted → Verified → Published) instead of slowest-first, so
+  `Submitted → Verified` sits in its correct position. Header relabeled to
+  "process order"; the Slowest Phase summary card still highlights the worst
+  phase. (The phase table below was already in sequence.)
+
 ## v0.37.0 — 2026-06-02 — Check-In Times & Bottlenecks reports
 
 Two new analytical reports in the Reports area, built on the same thin-backend /
