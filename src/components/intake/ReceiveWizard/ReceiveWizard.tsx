@@ -10,13 +10,14 @@ import { VialsList } from './VialsList'
 import { VialPanel } from './VialPanel'
 import { PrintStep } from './PrintStep'
 import { AssignStep } from './AssignStep'
+import { VialDetailsTab, useCloseAndNavigate } from './VialDetailsTab'
 
 interface Props {
   parent: ParentInfo
   onClose: () => void
 }
 
-type Phase = 'capture' | 'assign' | 'print'
+type Phase = 'capture' | 'assign' | 'details' | 'print'
 
 export function ReceiveWizard({ parent, onClose }: Props) {
   const wiz = useReceiveWizard(parent)
@@ -35,16 +36,36 @@ export function ReceiveWizard({ parent, onClose }: Props) {
   // (check-in flow). Disable otherwise.
   const assignmentEnabled = wiz.parentReceived || wiz.vials.length > 0
 
+  const closeAndNavigate = useCloseAndNavigate(onClose)
+
   const phaseTabs = (
     <div className="px-6 py-2 border-b bg-muted/10">
       <Tabs value={phase} onValueChange={(v) => setPhase(v as Phase)}>
         <TabsList>
           <TabsTrigger value="capture">Vial Management</TabsTrigger>
           <TabsTrigger value="assign" disabled={!assignmentEnabled}>Assignment</TabsTrigger>
+          <TabsTrigger value="details" disabled={wiz.vials.length === 0}>Vial Details</TabsTrigger>
         </TabsList>
       </Tabs>
     </div>
   )
+
+  if (phase === 'details') {
+    return (
+      <div className="grid grid-rows-[auto_auto_1fr] h-full min-h-[500px]">
+        <WizardHeader
+          parentSampleId={parent.sample_id}
+          receivedCount={receivedCount}
+        />
+        {phaseTabs}
+        <VialDetailsTab
+          vials={wiz.vials}
+          orderNumber={parentDetails.details?.client_order_number ?? null}
+          onCloseAndNavigate={closeAndNavigate}
+        />
+      </div>
+    )
+  }
 
   if (phase === 'assign') {
     return (

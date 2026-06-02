@@ -85,7 +85,6 @@ import {
   getWooOrder,
   fetchChromatogramLttb,
   listSubSamples,
-  fetchSubSamplePhotoUrl,
 } from '@/lib/api'
 import { ReceiveWizard } from '@/components/intake/ReceiveWizard/ReceiveWizard'
 import type { ParentInfo } from '@/components/intake/ReceiveWizard/useReceiveWizard'
@@ -115,68 +114,6 @@ import { Microscope, Plus, Printer, Search, Trash2, ScrollText, Sigma } from 'lu
 import { VarianceSummary } from '@/components/samples/VarianceSummary'
 import { usePrintLabel } from '@/components/samples/usePrintLabel'
 import { PrintLabelPortal } from '@/components/samples/PrintLabelPortal'
-
-/**
- * Renders the most-recent vial photo for a sub-sample, falling back to a
- * placeholder icon while loading or if the proxy errors. The proxy requires
- * Bearer auth, so we can't use a plain `<img src>` — fetch as blob and render
- * via an object URL.
- */
-function SubSamplePhotoCell({
-  sampleId,
-  hasPhoto,
-}: {
-  sampleId: string
-  hasPhoto: boolean
-}) {
-  const [url, setUrl] = useState<string | null>(null)
-  const [errored, setErrored] = useState(false)
-
-  useEffect(() => {
-    if (!hasPhoto) return
-    let cancelled = false
-    void fetchSubSamplePhotoUrl(sampleId)
-      .then(u => {
-        if (cancelled) return
-        if (u) setUrl(u)
-        else setErrored(true)
-      })
-      .catch(() => {
-        if (!cancelled) setErrored(true)
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [sampleId, hasPhoto])
-
-  if (!hasPhoto) {
-    return <span className="text-muted-foreground">—</span>
-  }
-  if (errored) {
-    return (
-      <span className="inline-flex w-12 h-12 rounded bg-muted text-muted-foreground items-center justify-center text-xs">
-        <ImageIcon size={16} />
-      </span>
-    )
-  }
-  if (!url) {
-    // Loading: show the icon placeholder rather than layout-shifting once it loads.
-    return (
-      <span className="inline-flex w-12 h-12 rounded bg-muted text-muted-foreground items-center justify-center text-xs">
-        <ImageIcon size={16} />
-      </span>
-    )
-  }
-  return (
-    <img
-      src={url}
-      alt={`Vial ${sampleId}`}
-      className="h-12 w-12 rounded object-cover bg-muted"
-      loading="lazy"
-      onError={() => setErrored(true)}
-    />
-  )
-}
 
 // --- COA Console ---
 
@@ -3422,91 +3359,10 @@ export function SampleDetails() {
           onTransitionComplete={() => refreshSample(data.sample_id)}
         />
 
-        {/* Sub-Samples + Sub-Sample Analyses (parent samples only) */}
+        {/* Sub-Samples + Sub-Sample Analyses sections moved into the wizard's
+            "Vial Details" tab (open via "Manage Sub-Samples" button). */}
         {isParent && (
           <>
-            <section className="mt-8">
-              <header className="flex items-baseline justify-between mb-3">
-                <h2 className="text-lg font-semibold">
-                  Sub-Samples{subCount > 0 ? ` (${subCount})` : ''}
-                </h2>
-              </header>
-
-              {subSamples.length === 0 ? (
-                <p className="text-sm text-muted-foreground">No sub-samples yet.</p>
-              ) : (
-                <div className="rounded border overflow-hidden">
-                  <table className="w-full text-sm">
-                    <thead className="bg-muted/40 text-muted-foreground">
-                      <tr className="text-left">
-                        <th className="px-3 py-2 w-16">Vial</th>
-                        <th className="px-3 py-2">Sample ID</th>
-                        <th className="px-3 py-2 w-28">Photo</th>
-                        <th className="px-3 py-2 w-44">Received</th>
-                        <th className="px-3 py-2 w-20">By</th>
-                        <th className="px-3 py-2 w-32"></th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {subSamples.map(s => (
-                        <tr key={s.sample_id} className="border-t">
-                          <td className="px-3 py-2 font-mono">{s.vial_sequence}</td>
-                          <td className="px-3 py-2 font-mono">
-                            <button
-                              type="button"
-                              onClick={() => navigateToSample(s.sample_id)}
-                              className="underline hover:text-foreground text-left"
-                            >
-                              {s.sample_id}
-                            </button>
-                          </td>
-                          <td className="px-3 py-2">
-                            <SubSamplePhotoCell
-                              sampleId={s.sample_id}
-                              hasPhoto={!!s.photo_external_uid}
-                            />
-                          </td>
-                          <td className="px-3 py-2">
-                            {new Date(s.received_at).toLocaleString()}
-                          </td>
-                          <td className="px-3 py-2 text-muted-foreground">
-                            {s.received_by_user_id ?? '—'}
-                          </td>
-                          <td className="px-3 py-2 text-right">
-                            <button
-                              type="button"
-                              onClick={() => navigateToSample(s.sample_id)}
-                              className="text-sm underline mr-3"
-                            >
-                              Open
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => printLabel({
-                                sampleId: s.sample_id,
-                                orderNumber: data?.client_order_number ?? null,
-                              })}
-                              className="text-sm underline"
-                            >
-                              Print Label
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </section>
-
-            <section className="mt-8">
-              <h2 className="text-lg font-semibold mb-2">Sub-Sample Analyses</h2>
-              <p className="text-sm text-muted-foreground">
-                Per-sub-sample analyses appear here once the worksheet vial-to-test
-                assignment phase ships. No analyses are routed to sub-samples in v1.
-              </p>
-            </section>
-
             {wizardParent && (
               <Dialog
                 open={Boolean(wizardParent)}
