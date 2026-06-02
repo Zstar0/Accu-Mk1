@@ -76,6 +76,147 @@
 - **Worksheet inbox sub-sample handling deferred** to its own phase. Sub-samples currently appear individually in the worksheet inbox alongside parents, which is acceptable for v1 but will need grouping work as samples-with-2–6-vials become common.
 - **Sample list grouping (parent rows expandable to children) deferred.** Nice-to-have; out of scope for v1.
 
+## v0.38.0 — 2026-06-02 — Order Status page filters & Kanban refinements
+
+### Added
+
+- **Multi-select stage filters** on the Order Status page — stage chips now toggle
+  independently (OR-matching) instead of single-select, via the pure
+  `toggleFilterKey` helper (`src/components/explorer/order-filters.ts`, unit-tested).
+- **SLA at-risk toggle** ("⚠ SLA at-risk") — narrows the list to amber + red orders
+  through a `displayedOrders` memo; empty-state copy clarified when it matches none.
+- **Client-side analyte filter** — a text input matching each card's displayed
+  analysis names (case-insensitive), composing (AND) with stage / SLA / text filters
+  across both table and Kanban views.
+
+### Changed
+
+- **Kanban refinements** — "Pending" hidden everywhere (removed from columns and
+  state buttons; stale `pending` stripped from persisted filters); flat-Kanban
+  columns are now collapsible (persisted `collapsedKanbanCols`, per-column chevron);
+  the SLA indicator moved to its own full-width card row.
+
+## v0.37.1 — 2026-06-02 — Bottlenecks bar order fix
+
+### Fixed
+
+- **Bottlenecks report** — phase bars now render in workflow sequence (Ordered →
+  Received → Submitted → Verified → Published) instead of slowest-first, so
+  `Submitted → Verified` sits in its correct position. Header relabeled to
+  "process order"; the Slowest Phase summary card still highlights the worst
+  phase. (The phase table below was already in sequence.)
+
+## v0.37.0 — 2026-06-02 — Check-In Times & Bottlenecks reports
+
+Two new analytical reports in the Reports area, built on the same thin-backend /
+client-aggregation pattern: the backend extracts raw rows, the browser does all
+timezone-dependent bucketing and aggregation so the period selectors recompute
+without a refetch.
+
+### Added
+
+- **Check-In Times report** (`GET /reports/checkin-times`,
+  [CheckInTimesReport.tsx](src/components/reports/CheckInTimesReport.tsx)). Check-in
+  volume and time-of-day distribution from `worksheet_items.date_received` (the
+  SENAITE sample-received timestamp, accumark_mk1 DB), deduped by `sample_uid` so
+  counts reflect samples not analyses. Date-range selector (1M/3M/6M/1Y/ALL),
+  summary cards (total, average time of day, busiest hour, busiest weekday), a
+  by-day / by-hour bar chart with off-hours (before 9, after 17) dimmed and an
+  average reference line, and a searchable raw list. All time-of-day bucketing is
+  browser-local; raw UTC is returned from the server.
+- **Bottlenecks (phase turnaround) report** (`GET /reports/turnaround`,
+  [TurnaroundReport.tsx](src/components/reports/TurnaroundReport.tsx)). Systemic
+  view of where time goes across SENAITE milestones (Ordered → Received →
+  Submitted → Verified → Published), reading `sample_status_events` ⋈
+  `order_submissions` from the integration DB (`accumark_integration`). Ranked
+  horizontal bars slowest-first showing median per phase with a lighter p90 tail,
+  summary cards (total median turnaround, slowest phase, cohort size), a per-phase
+  table, period selector by received date, and a "Hide test orders" toggle.
+  Calendar (wall-clock) time; `partial_submit`/`partial_verify` folded into
+  Submitted/Verified.
+- Reports sidebar gains **Check-In Times** and **Bottlenecks** sub-items.
+
+## v0.36.0 — 2026-06-01 — SLA tracking & coverage
+
+End-to-end SLA (turnaround-time) tracking: a configurable tier model, a
+business-hours + holiday-aware elapsed/remaining engine, and SLA indicators on
+every surface where staff previously saw hardcoded "Age"/"Processing Time"
+fields.
+
+### Added
+
+- **SLA tier model.** New `sla_tiers` table (configurable `target_minutes`,
+  `business_hours_only`, `amber_threshold_percent`, single-`is_default` tier,
+  seeded at **48h (2d)** on a fresh DB) plus
+  `sla_priority_tiers` (priority→tier overrides, global or scoped to a service
+  group) and a `service_groups.sla_tier_id` column for per-group tier assignment.
+  Resolution precedence: `(priority, group)` > `(priority, all groups)` > group's
+  own tier > default. All schema applied via idempotent startup DDL in
+  [backend/database.py](backend/database.py) — no manual migration step.
+- **Business-hours + holiday-aware SLA engine.** [backend/sla_engine.py](backend/sla_engine.py)
+  `compute_business_minutes` counts only configured business hours, skipping
+  weekends and lab holidays; [backend/holidays_us.py](backend/holidays_us.py) supplies
+  US federal holidays. New `business_hours_config` table + `lab_holidays` (seeded
+  with the federal set on first run).
+- **`POST /sla/status`** batch endpoint returning `{target, elapsed, remaining,
+  breached}` per keyed item, with a `now_override` mode that freezes elapsed at a
+  sample's publish date for historical "took Xh / Met / Missed" display.
+- **Business Hours pane** in Preferences — schedule editor, lab-holiday CRUD, and a
+  generate-US-federal-holidays action.
+- **SLA indicators across the app**, replacing prior hardcoded aging fields:
+  - Order list, **OrderExplorer**, and **OrderDashboard** SLA columns (replacing the
+    hardcoded "Processing Time" / orange "Age" columns).
+  - **Worksheet & Inbox** SLA age indicators (`SlaAgeIndicator`) replacing the
+    hardcoded 24h/48h "AGE" field across WorksheetDrawerItems, WorksheetDropPanel,
+    WorksheetsListPage, InboxSampleTable, and InboxServiceGroupCard.
+  - **Sample Details** header indicator + per-analysis-row SLA cell.
+  - Customer detail orders show SLA via the shared order row.
+- **Multi-tier support** — a sample whose analyses span multiple service groups
+  resolves one tier per group; order/worktime surfaces aggregate to the worst.
+- **Shared `useSenaiteLookupMap` hook** — the per-sample SENAITE-lookup chain,
+  previously duplicated inline in OrderStatusPage + CustomerStatusPage, extracted
+  and reused by the explorer/dashboard SLA columns (exposes `isFetching` +
+  `lastCachedAt` for "Updated X ago" headers).
+- **Received date/time as the first field of the SLA breakdown tooltip** — the SLA
+  clock start now leads the hover breakdown (`Received: …`) on every surface that
+  hosts it, rendered with the same formatter as the sample page's "Received {date}".
+
+### Changed
+
+- **OrderStatusPage + CustomerStatusPage** rewired onto the shared
+  `useSenaiteLookupMap` hook (deleted their inline lookup copies — pure DRY).
+- Refreshed the SLA business-hours preference hint to describe the live behavior
+  ("Counts only configured business hours, skipping weekends and lab holidays").
+
+### Fixed
+
+- **`WorksheetsListPage` avg-age KPI render purity** — seed `now` once via
+  `useState` initializer instead of calling `Date.now()` in render; re-enabled
+  React Compiler analysis for the file.
+
+## v0.31.1 — 2026-05-04 — Bac Water analyte support (Wave 1)
+
+### Added
+
+- **`peptides.analyte_class` column** (`'peptide'` | `'additive'`, NOT NULL DEFAULT `'peptide'`). All existing peptide rows backfill to `'peptide'` on column add. Discriminates non-peptide HPLC analytes from peptides without renaming the table — keeps the existing `Peptide.id` FK plumbing across `CalibrationCurve`, `peptide_methods`, `instrument_methods`, `SamplePrep`, etc. usable for Benzyl Alcohol.
+- **Benzyl Alcohol seeded as the first `'additive'` row** via startup migration (`name='Benzyl Alcohol'`, `abbreviation='Benzyl Alcohol'`, `is_blend=false`). Idempotent via `ON CONFLICT (abbreviation) DO NOTHING`.
+- **`peptide_analytes` row for Benzyl Alcohol** auto-seeded so the Import Curves dialog populates BA. Joins to the SENAITE-synced `analysis_services` row with keyword `Benzyl_Alcohol_Assay`; silent no-op if the service hasn't synced yet (retries on every backend startup).
+- **`GET /peptides?analyte_class=peptide|additive`** opt-in query filter. Default unfiltered preserves all existing callers; only the HPLC wizard Step 1 picker uses the filter today.
+- **HPLC wizard Step 1 context-filter** ([Step1SampleInfo.tsx](src/components/hplc/wizard/steps/Step1SampleInfo.tsx)). When the SENAITE lookup returns `sample_type === 'Bacteriostatic Water'`, the peptide dropdown shows **only** `'additive'`-class rows (currently just Benzyl Alcohol). All other contexts hide additives so peptide preps stay clean.
+- **`AnalyteClass` type + `analyte_class` field on `PeptideRecord`** (`src/lib/api.ts`). `getPeptides({ analyteClass })` accepts the optional filter parameter.
+
+- **File picker fallback in receive sample intake** ([PhotoCapture.tsx](src/components/intake/PhotoCapture.tsx)). When the camera fails to initialize (no device, permission denied, or device in use), the error block now offers a **Choose File** button alongside **Try Again**. The picker accepts any `image/*` file and runs it through the same 500x496 preview pipeline as the camera path (center-crop to square + step-down). Lets a tech complete intake from a phone photo or scanned image when no webcam is attached.
+
+### Fixed
+
+- **`_run_migrations()` per-statement isolation.** A failure in one ALTER no longer halts subsequent statements — each runs in its own try/except with `migration_skipped` warning log + rollback. Previous bulk try/except masked silent migration drops on fresh-upgrade paths.
+- **SSE curve-import failures now surface in the dialog** instead of failing silently with only a small "Failed" badge.
+- **CoA publish from `ready_for_initial_review` warns instead of errors** ([backend/main.py](backend/main.py), [SampleDetails.tsx](src/components/senaite/SampleDetails.tsx)). The local CoA + IS publish have already succeeded by the time SENAITE workflow advances; failing the whole operation with HTTP 502 was misleading. `publish_sample_coa` now returns `success=True` with a `warning` field describing the SENAITE state lag for pre-publish states. The frontend renders it as `toast.warning` while keeping the console row green. Truly unexpected states (other than `ready_for_initial_review`) still raise HTTP 502.
+
+### Deferred to Wave 2
+
+- Sub-Samples (Phase 24), Vial Assignment Step, Phase 2 highlight, samples-list collapse, sub-sample publish guards. These live on `feat/vial-assignment-step` and ship in a follow-up release once Wave 1 has settled.
+
 ## v0.31.0 — 2026-04-26
 
 ### Added

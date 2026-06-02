@@ -25,6 +25,8 @@ import {
   API_PROFILE_CHANGED_EVENT,
 } from '@/lib/api-profiles'
 import { useUIStore } from '@/store/ui-store'
+import { useSenaiteLookupMap } from '@/services/senaite-lookup-map'
+import { useOrderSlaStatuses } from '@/services/order-sla'
 
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
@@ -40,6 +42,7 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { DataTable } from '@/components/ui/data-table'
 import { PayloadPanel } from '@/components/PayloadPanel'
 import { OrderDetailPanel } from '@/components/explorer/OrderDetailPanel'
+import { OrderSlaCell } from '@/components/explorer/OrderSlaCell'
 
 // --- Helpers ---
 
@@ -88,26 +91,6 @@ function formatDate(dateStr: string | null): string {
   })
 }
 
-function formatProcessingTime(
-  createdAt: string,
-  completedAt: string | null
-): string {
-  const start = new Date(createdAt)
-  const end = completedAt ? new Date(completedAt) : new Date()
-  const ms = end.getTime() - start.getTime()
-  if (ms < 0) return '\u2014'
-
-  const seconds = Math.floor(ms / 1000)
-  const minutes = Math.floor(seconds / 60)
-  const hours = Math.floor(minutes / 60)
-  const days = Math.floor(hours / 24)
-
-  if (days > 0) return `${days}d ${hours % 24}h`
-  if (hours > 0) return `${hours}h ${minutes % 60}m`
-  if (minutes > 0) return `${minutes}m ${seconds % 60}s`
-  if (seconds > 0) return `${seconds}s`
-  return `${ms}ms`
-}
 
 function SampleIdCell({
   sampleResults,
@@ -278,6 +261,14 @@ export function OrderExplorer() {
     })
   }, [orders, hideTestOrders])
 
+  const ordersForSla = filteredOrders ?? []
+  const { sampleLookupMap, isLoading: slaMapLoading, isError: slaMapError } =
+    useSenaiteLookupMap(ordersForSla)
+  const { verdictByOrderId, isLoading: slaVerdictLoading, isError: slaVerdictError } =
+    useOrderSlaStatuses(ordersForSla, sampleLookupMap)
+  const slaIsLoading = slaMapLoading || slaVerdictLoading
+  const slaIsError = slaMapError || slaVerdictError
+
   // Auto-open flyout once orders arrive for the pending target
   useEffect(() => {
     if (!pendingAutoOpenOrderId || !filteredOrders) return
@@ -415,24 +406,18 @@ export function OrderExplorer() {
       ),
     },
     {
-      id: 'processing_time',
-      header: 'Processing Time',
+      id: 'sla',
+      header: 'SLA',
       size: 120,
       minSize: 80,
       enableSorting: false,
-      cell: ({ row }) => {
-        const order = row.original
-        return (
-          <span
-            className={cn(
-              'font-mono text-sm',
-              order.wp_order_status === 'complete' ? 'text-green-600' : 'text-yellow-600'
-            )}
-          >
-            {formatProcessingTime(order.created_at, order.completed_at)}
-          </span>
-        )
-      },
+      cell: ({ row }) => (
+        <OrderSlaCell
+          verdict={verdictByOrderId.get(row.original.order_id) ?? { color: 'awaiting' }}
+          isLoading={slaIsLoading}
+          isError={slaIsError}
+        />
+      ),
     },
     {
       id: 'chevron',

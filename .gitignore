@@ -31,6 +31,12 @@ backend/.venv/
 __pycache__/
 *.pyc
 
+# Playwright E2E artifacts — generated on every run, never committed
+test-results/
+playwright-report/
+playwright/.cache/
+.env.e2e
+
 # Local data
 data/
 # Root .env (secrets) — .env.development, .env.production, .env.docker* are committed (no secrets)

@@ -11,9 +11,10 @@ import secrets
 import subprocess
 import sys
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, date, time, timezone
+from zoneinfo import ZoneInfo
 from pathlib import Path
-from typing import Optional, Union
+from typing import Literal, Optional, Union
 from uuid import UUID
 
 # App version: prefer APP_VERSION env var (set by Docker build-arg),
@@ -31,12 +32,14 @@ APP_VERSION = _read_app_version()
 
 from fastapi import FastAPI, Body, Depends, Form, HTTPException, Header, Query, Request, Response, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, validator
+from pydantic import BaseModel, Field, validator
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import select, desc, delete, update, func
+from sqlalchemy import select, desc, delete, update, func, extract
+from sqlalchemy.exc import IntegrityError
 
 from database import get_db, init_db
-from models import AuditLog, Settings, Job, Sample, Result, Instrument, AnalysisService, HplcMethod, Peptide, PeptideAnalyte, CalibrationCurve, HPLCAnalysis, User, SharePointFileCache, WizardSession, WizardMeasurement, peptide_methods, blend_components, ServiceGroup, service_group_members, SamplePriority, Worksheet, WorksheetItem, instrument_methods, SampleAnalyteAlias, LimsSample, LimsSubSample
+from sla_engine import BusinessSchedule, compute_business_minutes, sla_status_dict
+from models import AuditLog, Settings, Job, Sample, Result, Instrument, AnalysisService, HplcMethod, Peptide, PeptideAnalyte, CalibrationCurve, HPLCAnalysis, User, SharePointFileCache, WizardSession, WizardMeasurement, peptide_methods, blend_components, ServiceGroup, service_group_members, SamplePriority, Worksheet, WorksheetItem, instrument_methods, SampleAnalyteAlias, SlaTier, SlaPriorityTier, BusinessHoursConfig, LabHoliday, LimsSample, LimsSubSample
 from auth import (
     get_current_user, require_admin, create_access_token,
     verify_password, get_password_hash, seed_admin_user,
@@ -1792,6 +1795,7 @@ class ServiceGroupCreate(BaseModel):
     color: str = "blue"
     sort_order: int = 0
     is_default: bool = False
+    sla_tier_id: Optional[int] = None
 
 
 class ServiceGroupUpdate(BaseModel):
@@ -1801,6 +1805,7 @@ class ServiceGroupUpdate(BaseModel):
     color: Optional[str] = None
     sort_order: Optional[int] = None
     is_default: Optional[bool] = None
+    sla_tier_id: Optional[int] = None
 
 
 class ServiceGroupResponse(BaseModel):
@@ -1811,6 +1816,7 @@ class ServiceGroupResponse(BaseModel):
     color: str
     sort_order: int
     is_default: bool = False
+    sla_tier_id: Optional[int] = None
     member_count: int = 0
     member_ids: list[int] = []
     created_at: datetime
@@ -1823,6 +1829,138 @@ class ServiceGroupResponse(BaseModel):
 class ServiceGroupMembersRequest(BaseModel):
     """Schema for setting service group membership."""
     analysis_service_ids: list[int]
+
+
+# ─── SLA tier schemas (sub-project A, revised to tiers) ───
+
+# Priority tiers mirror SamplePriority/WorksheetItem.priority. Validated here at
+# the API edge — the DB columns are unconstrained VARCHAR.
+SlaPriority = Literal["normal", "high", "expedited"]
+
+
+class SlaTierCreate(BaseModel):
+    name: str
+    target_minutes: int
+    business_hours_only: bool = False
+    is_default: bool = False
+    amber_threshold_percent: int = Field(20, ge=1, le=100)
+
+
+class SlaTierUpdate(BaseModel):
+    name: Optional[str] = None
+    target_minutes: Optional[int] = None
+    business_hours_only: Optional[bool] = None
+    is_default: Optional[bool] = None
+    amber_threshold_percent: Optional[int] = Field(None, ge=1, le=100)
+
+
+class SlaTierResponse(BaseModel):
+    id: int
+    name: str
+    target_minutes: int
+    business_hours_only: bool
+    is_default: bool
+    amber_threshold_percent: int
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+# Consumed by the /sla-priority-tiers endpoints.
+# Multi-tier follow-on: `service_group_id` scopes the override to a single
+# service group. NULL means the row applies globally (precedence falls through
+# (priority, group_id) → (priority, NULL) → group's own tier → default).
+class SlaPriorityTierResponse(BaseModel):
+    id: int
+    priority: str
+    sla_tier_id: int
+    service_group_id: int | None = None
+
+    class Config:
+        from_attributes = True
+
+
+class SlaPriorityTierSet(BaseModel):
+    sla_tier_id: int
+    # Omit / null => the global override row for this priority. Specify a group
+    # id to scope the override to that group (e.g. expedited + HPLC group).
+    service_group_id: int | None = None
+
+
+# ── D2: bulk per-sample priority lookup ────────────────────────────────────
+
+class SamplePriorityLookupRequest(BaseModel):
+    sample_uids: list[str] = Field(..., min_length=1, max_length=500)
+
+
+class SamplePriorityResponseItem(BaseModel):
+    sample_uid: str
+    priority: SlaPriority
+
+    class Config:
+        from_attributes = True
+
+
+class SamplePriorityLookupResponse(BaseModel):
+    items: list[SamplePriorityResponseItem]
+
+
+class BusinessHoursConfigResponse(BaseModel):
+    open_time: time
+    close_time: time
+    timezone: str
+    working_days: list[int]
+
+    class Config:
+        from_attributes = True
+
+
+class BusinessHoursConfigUpdate(BaseModel):
+    open_time: time
+    close_time: time
+    timezone: str
+    working_days: list[int]
+
+
+class LabHolidayResponse(BaseModel):
+    id: int
+    holiday_date: date
+    name: str
+    source: str
+
+    class Config:
+        from_attributes = True
+
+
+class LabHolidayCreate(BaseModel):
+    holiday_date: date
+    name: str
+
+
+class SlaStatusRequestItem(BaseModel):
+    key: str
+    received_at: Optional[datetime] = None
+    target_minutes: int
+    business_hours_only: bool = False
+    # Historical mode for published samples: when set, the server uses this as
+    # the "now" instead of `datetime.utcnow()`. Lets the UI render frozen-in-time
+    # SLA results ("took 28h, Met/Missed") on the Sample Details header.
+    now_override: Optional[datetime] = None
+
+
+class SlaStatusRequest(BaseModel):
+    items: list[SlaStatusRequestItem]
+
+
+class SlaStatusResultItem(BaseModel):
+    key: str
+    status: Optional[dict] = None
+
+
+class SlaStatusResponse(BaseModel):
+    items: list[SlaStatusResultItem]
 
 
 # ─── HPLC Method schemas ───
@@ -6837,20 +6975,70 @@ def get_explorer_status(_current_user=Depends(get_current_user)):
 
 
 @app.get("/explorer/orders", response_model=list[ExplorerOrderResponse])
-def get_explorer_orders(
+async def get_explorer_orders(
     search: Optional[str] = None,
     limit: int = 50,
     offset: int = 0,
+    customer_id: Optional[int] = None,
+    # UX revision (post-Phase 30): three independent search axes, AND-combined
+    # at the IS SQL layer. We forward verbatim — the IS enforces per-axis
+    # max_length=256 (T-30-02) and the per-axis SQL-safety pipeline (T-30-01).
+    # None = "axis not requested"; empty string is forwarded as-is so the IS
+    # sees the same absent-vs-empty semantics it would from a direct caller.
+    search_order_number: Optional[str] = None,
+    search_sample_id: Optional[str] = None,
+    search_analyte: Optional[str] = None,
+    sort: Optional[str] = None,
     _current_user=Depends(get_current_user),
 ):
     """
     Get orders from Integration Service database.
-    
+
     Query params:
     - search: Filter by order_id or order_number (partial match)
     - limit: Max records to return (default 50)
     - offset: Pagination offset (default 0)
+    - customer_id: When present, scopes the list to that WC customer (Phase 29).
+      Local fetch_orders does not support this filter, so the request is
+      proxied to the Integration Service which owns customer-scoped queries.
+    - search_order_number / search_sample_id / search_analyte: UX-revision
+      three-input AND search (Customer Detail → Customer Orders tab). Each is
+      independently optional; the IS AND-combines whichever are set. Each is
+      forwarded only when explicitly provided so an absent param stays absent.
+    - sort: Phase 30 sort key (open_first | date_desc | date_asc); forwarded
+      to the IS for customer-scoped requests.
     """
+    # Phase 29: customer-scoped listing must round-trip to Integration Service.
+    if customer_id is not None:
+        import httpx as _httpx
+        params: dict[str, str] = {
+            "customer_id": str(customer_id),
+            "limit": str(limit),
+            "offset": str(offset),
+        }
+        # Forward UX-revision search axes + sort only when set so the IS sees
+        # the same absent-vs-empty semantics it would from a direct caller.
+        # Empty string ('') IS forwarded as-is (back-compat with debounce-flush).
+        if search_order_number is not None:
+            params["search_order_number"] = search_order_number
+        if search_sample_id is not None:
+            params["search_sample_id"] = search_sample_id
+        if search_analyte is not None:
+            params["search_analyte"] = search_analyte
+        if sort is not None:
+            params["sort"] = sort
+        url = f"{os.environ.get('INTEGRATION_SERVICE_URL', 'http://host.docker.internal:8000')}/explorer/orders"
+        api_key = os.environ.get("ACCU_MK1_API_KEY", "")
+        try:
+            async with _httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.get(url, params=params, headers={"X-API-Key": api_key})
+                resp.raise_for_status()
+                return resp.json()
+        except _httpx.HTTPStatusError as e:
+            raise HTTPException(status_code=e.response.status_code, detail=e.response.text)
+        except Exception as e:
+            raise HTTPException(status_code=503, detail=f"Integration Service unavailable: {e}")
+
     try:
         orders = fetch_orders(search=search, limit=limit, offset=offset)
         # Convert UUID to string for JSON serialization
@@ -6862,6 +7050,67 @@ def get_explorer_orders(
             status_code=503,
             detail=f"Failed to connect to Integration Service database: {e}"
         )
+
+
+@app.get("/explorer/customers")
+async def get_explorer_customers(
+    search: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+    include_test_emails: bool = False,
+    _current_user=Depends(get_current_user),
+):
+    """
+    Get WC customers with aggregate stats from Integration Service (Phase 29).
+
+    Pure proxy — the Integration Service owns the aggregate query (`UNION` of
+    registered customers + guest billing-email bucket) and the test-email
+    filter. The backend forwards limit/offset/include_test_emails verbatim
+    (matching the IS shape at integration-service/app/api/desktop.py) and
+    returns the raw response: { customers: ExplorerCustomer[], total_count: int }.
+    """
+    import httpx as _httpx
+    params: dict[str, str] = {
+        "limit": str(limit),
+        "offset": str(offset),
+        "include_test_emails": "true" if include_test_emails else "false",
+    }
+    if search:
+        params["search"] = search
+    url = f"{os.environ.get('INTEGRATION_SERVICE_URL', 'http://host.docker.internal:8000')}/explorer/customers"
+    api_key = os.environ.get("ACCU_MK1_API_KEY", "")
+    try:
+        async with _httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(url, params=params, headers={"X-API-Key": api_key})
+            resp.raise_for_status()
+            return resp.json()
+    except _httpx.HTTPStatusError as e:
+        raise HTTPException(status_code=e.response.status_code, detail=e.response.text)
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Integration Service unavailable: {e}")
+
+
+@app.get("/explorer/customers/{customer_id}")
+async def get_explorer_customer(customer_id: int, _current_user=Depends(get_current_user)):
+    """Get a single WC customer (+ aggregate stats) by id from Integration Service.
+
+    Pure proxy to IS /explorer/customers/{id}. Used by the customer-detail header
+    on cold load (deep-link / refresh) when the customers-list cache is empty.
+    """
+    import httpx as _httpx
+    url = f"{os.environ.get('INTEGRATION_SERVICE_URL', 'http://host.docker.internal:8000')}/explorer/customers/{customer_id}"
+    api_key = os.environ.get("ACCU_MK1_API_KEY", "")
+    try:
+        async with _httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(url, headers={"X-API-Key": api_key})
+            if resp.status_code == 404:
+                raise HTTPException(status_code=404, detail=f"Customer {customer_id} not found")
+            resp.raise_for_status()
+            return resp.json()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Integration Service unavailable: {e}")
 
 
 @app.get("/explorer/orders/{order_id}", response_model=ExplorerOrderResponse)
@@ -7112,6 +7361,223 @@ async def reports_purity_trend(
                 ]
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Reports database error: {e}")
+
+
+class CheckInRecord(BaseModel):
+    sample_id: str
+    sample_uid: str
+    date_received: str          # ISO 8601 UTC, trailing "Z"
+    product_label: Optional[str] = None
+    priority: str
+    is_test_order: bool = False  # sample belongs to a TEST_EMAILS order (see inbox)
+
+
+def _test_order_senaite_ids() -> set[str]:
+    """SENAITE sample IDs that belong to a test order (billing email in TEST_EMAILS).
+
+    Mirrors the /worksheets/inbox test-order definition: read order_submissions
+    from the integration DB, map each order's sample_results → senaite_id, and
+    flag those whose payload.billing.email is a known test email. Returns an
+    empty set on any failure (graceful degradation — nothing flagged as test).
+    """
+    TEST_EMAILS = {"forrestp@outlook.com", "forrest@valenceanalytical.com"}
+    test_ids: set[str] = set()
+
+    def _as_dict(val):
+        if isinstance(val, dict):
+            return val
+        if isinstance(val, str):
+            try:
+                parsed = json.loads(val)
+                return parsed if isinstance(parsed, dict) else {}
+            except (ValueError, TypeError):
+                return {}
+        return {}
+
+    try:
+        with get_integration_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT sample_results, payload FROM order_submissions WHERE sample_results IS NOT NULL"
+                )
+                for sample_results, payload in cur.fetchall():
+                    billing = _as_dict(payload).get("billing", {})
+                    email = (billing.get("email") or "").lower() if isinstance(billing, dict) else ""
+                    if email not in TEST_EMAILS:
+                        continue
+                    for entry in _as_dict(sample_results).values():
+                        if isinstance(entry, dict) and entry.get("senaite_id"):
+                            test_ids.add(str(entry["senaite_id"]))
+    except Exception:
+        pass
+    return test_ids
+
+
+def _parse_day_bound(val: Optional[str], *, end: bool) -> Optional[datetime]:
+    """Parse a YYYY-MM-DD string into a naive day boundary (start or end of day).
+
+    Returns None on missing/invalid input so callers can skip the filter.
+    date_received is stored naive (UTC), so bounds are naive to match.
+    """
+    if not val:
+        return None
+    from datetime import time as _time
+    try:
+        d = datetime.strptime(val[:10], "%Y-%m-%d").date()
+    except (ValueError, TypeError):
+        return None
+    return datetime.combine(d, _time.max if end else _time.min)
+
+
+@app.get("/reports/checkin-times", response_model=list[CheckInRecord])
+async def reports_checkin_times(
+    from_date: Optional[str] = Query(None, alias="from"),
+    to_date: Optional[str] = Query(None, alias="to"),
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Sample check-in events sourced from worksheet_items.date_received.
+
+    Returns raw UTC timestamps (one row per sample); time-of-day bucketing is done
+    client-side in the browser's local timezone. worksheet_items holds one row per
+    (sample, analysis), so a sample with multiple analyses produces several rows
+    sharing one date_received — results are deduped by sample_uid (earliest
+    date_received kept, product labels merged). Rows with a null date_received are
+    excluded. Optional `from`/`to` are inclusive YYYY-MM-DD day bounds.
+    """
+    stmt = select(WorksheetItem).where(WorksheetItem.date_received.is_not(None))
+    lo = _parse_day_bound(from_date, end=False)
+    hi = _parse_day_bound(to_date, end=True)
+    if lo is not None:
+        stmt = stmt.where(WorksheetItem.date_received >= lo)
+    if hi is not None:
+        stmt = stmt.where(WorksheetItem.date_received <= hi)
+
+    rows = db.execute(stmt.order_by(WorksheetItem.date_received.desc())).scalars().all()
+
+    test_ids = _test_order_senaite_ids()
+
+    by_uid: dict[str, dict] = {}
+    for it in rows:
+        names: list[str] = []
+        if it.analyses_json:
+            try:
+                for a in json.loads(it.analyses_json):
+                    pn = (a.get("peptide_name") or "").strip()
+                    if pn and pn not in names:
+                        names.append(pn)
+            except (ValueError, TypeError):
+                pass
+        entry = by_uid.get(it.sample_uid)
+        if entry is None:
+            by_uid[it.sample_uid] = {
+                "sample_id": it.sample_id,
+                "sample_uid": it.sample_uid,
+                "date_received": it.date_received,
+                "priority": it.priority,
+                "names": names,
+            }
+        else:
+            if it.date_received < entry["date_received"]:
+                entry["date_received"] = it.date_received
+            for pn in names:
+                if pn not in entry["names"]:
+                    entry["names"].append(pn)
+
+    records = [
+        CheckInRecord(
+            sample_id=e["sample_id"],
+            sample_uid=e["sample_uid"],
+            date_received=e["date_received"].isoformat() + "Z",
+            product_label=", ".join(e["names"]) if e["names"] else None,
+            priority=e["priority"],
+            is_test_order=e["sample_id"] in test_ids,
+        )
+        for e in by_uid.values()
+    ]
+    records.sort(key=lambda r: r.date_received, reverse=True)
+    return records
+
+
+class TurnaroundSample(BaseModel):
+    sample_id: str
+    ordered_at: Optional[str] = None
+    received_at: Optional[str] = None
+    submitted_at: Optional[str] = None
+    verified_at: Optional[str] = None
+    published_at: Optional[str] = None
+    is_test_order: bool = False
+
+
+@app.get("/reports/turnaround", response_model=list[TurnaroundSample])
+async def reports_turnaround(
+    _current_user=Depends(get_current_user),
+):
+    """Per-sample SENAITE milestone timestamps for phase-turnaround (bottleneck) analysis.
+
+    Pivots sample_status_events to first-occurrence milestone timestamps
+    (receive / submit|partial_submit / verify|partial_verify / publish), left-joins
+    the order for the Ordered milestone + test-order flag, and returns raw per-sample
+    rows. Phase durations and percentiles are aggregated client-side. event_timestamp
+    (Unix seconds — SENAITE's real time) is preferred over our created_at. Both
+    source tables live in the integration DB.
+    """
+    sql = """
+        WITH m AS (
+            SELECT
+                sample_id,
+                -- Postgres has no MAX(uuid); a sample's events share one order, so
+                -- take the first non-null order_submission_id.
+                (array_agg(order_submission_id) FILTER (WHERE order_submission_id IS NOT NULL))[1] AS order_id,
+                MIN(COALESCE(to_timestamp(event_timestamp), created_at))
+                    FILTER (WHERE transition = 'receive') AS received_at,
+                MIN(COALESCE(to_timestamp(event_timestamp), created_at))
+                    FILTER (WHERE transition IN ('submit', 'partial_submit')) AS submitted_at,
+                MIN(COALESCE(to_timestamp(event_timestamp), created_at))
+                    FILTER (WHERE transition IN ('verify', 'partial_verify')) AS verified_at,
+                MIN(COALESCE(to_timestamp(event_timestamp), created_at))
+                    FILTER (WHERE transition = 'publish') AS published_at
+            FROM sample_status_events
+            GROUP BY sample_id
+        )
+        SELECT m.sample_id, os.created_at AS ordered_at,
+               m.received_at, m.submitted_at, m.verified_at, m.published_at,
+               (LOWER(os.payload->'billing'->>'email') IN
+                  ('forrestp@outlook.com', 'forrest@valenceanalytical.com')) AS is_test_order
+        FROM m
+        LEFT JOIN order_submissions os ON os.id = m.order_id
+    """
+
+    from datetime import timezone as _tz
+
+    def _iso(dt):
+        if dt is None:
+            return None
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=_tz.utc)
+        return dt.astimezone(_tz.utc).isoformat().replace("+00:00", "Z")
+
+    try:
+        with get_integration_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql)
+                rows = cur.fetchall()
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Reports database error: {e}")
+
+    return [
+        TurnaroundSample(
+            sample_id=sample_id,
+            ordered_at=_iso(ordered_at),
+            received_at=_iso(received_at),
+            submitted_at=_iso(submitted_at),
+            verified_at=_iso(verified_at),
+            published_at=_iso(published_at),
+            is_test_order=bool(is_test),
+        )
+        for (sample_id, ordered_at, received_at, submitted_at,
+             verified_at, published_at, is_test) in rows
+    ]
 
 
 class ReportsSyncStatus(BaseModel):
@@ -7620,6 +8086,7 @@ class SampleCOAActionResponse(BaseModel):
     success: bool
     message: str
     verification_code: str | None = None
+    warning: str | None = None
 
 
 class AnalyteAliasSet(BaseModel):
@@ -7900,6 +8367,7 @@ async def publish_sample_coa(
         )
 
     verification_code: str | None = data.get("verification_code")
+    warning: str | None = None
 
     # 3 & 4. Write verification code and transition SENAITE workflow — guaranteed
     if senaite_uid:
@@ -7954,6 +8422,13 @@ async def publish_sample_coa(
                     "to_be_verified",
                     "waiting_for_addon_results",
                 }
+                # Pre-publish review states — the COA is live in our system
+                # (IS marked it published, verification code is in SENAITE),
+                # but SENAITE's workflow hasn't been advanced because the lab
+                # tech hasn't run a verify transition. We surface this as a
+                # warning rather than a hard error: the customer-facing COA
+                # is published, but ops should advance the SENAITE state.
+                pre_publish_states = {"ready_for_initial_review"}
                 if actual_state not in accepted_states:
                     verify_resp = await client.get(
                         f"{SENAITE_URL}/senaite/@@API/senaite/v1/AnalysisRequest"
@@ -7963,7 +8438,15 @@ async def publish_sample_coa(
                         verify_items = verify_resp.json().get("items", [])
                         if verify_items:
                             actual_state = verify_items[0].get("review_state", "")
-                    if actual_state not in accepted_states:
+                    if actual_state in pre_publish_states:
+                        warning = (
+                            f"Warning: Sample should not typically be published "
+                            f"from the '{actual_state}' state. The COA is live "
+                            f"but SENAITE's workflow remains at "
+                            f"'{actual_state}' — verify the sample in SENAITE "
+                            f"to advance it."
+                        )
+                    elif actual_state not in accepted_states:
                         raise HTTPException(
                             status_code=502,
                             detail=(
@@ -7986,6 +8469,7 @@ async def publish_sample_coa(
         success=True,
         message=data.get("message", "COA published"),
         verification_code=verification_code,
+        warning=warning,
     )
 
 
@@ -11626,6 +12110,7 @@ async def get_service_groups(
             color=group.color,
             sort_order=group.sort_order,
             is_default=group.is_default,
+            sla_tier_id=group.sla_tier_id,
             member_count=len(group.analysis_services),
             member_ids=[s.id for s in group.analysis_services],
             created_at=group.created_at,
@@ -11664,6 +12149,7 @@ async def create_service_group(
         color=group.color,
         sort_order=group.sort_order,
         is_default=group.is_default,
+        sla_tier_id=group.sla_tier_id,
         member_count=0,
         created_at=group.created_at,
         updated_at=group.updated_at,
@@ -11703,6 +12189,7 @@ async def update_service_group(
         color=group.color,
         sort_order=group.sort_order,
         is_default=group.is_default,
+        sla_tier_id=group.sla_tier_id,
         member_count=len(group.analysis_services),
         member_ids=[s.id for s in group.analysis_services],
         created_at=group.created_at,
@@ -11772,6 +12259,331 @@ async def set_service_group_members(
     group.analysis_services = list(services)
     db.commit()
     return {"count": len(services)}
+
+
+# ─── SLA tiers (sub-project A, revised to tiers) ──────────────────────────────
+
+
+def _demote_other_default_tiers(db: Session, keep_id: Optional[int] = None) -> None:
+    """Clear is_default on every tier except keep_id, flushing before the caller
+    inserts/updates the promoted row (the partial unique index is immediate)."""
+    q = db.query(SlaTier).filter(SlaTier.is_default == True)  # noqa: E712
+    if keep_id is not None:
+        q = q.filter(SlaTier.id != keep_id)
+    q.update({"is_default": False})
+    db.flush()
+
+
+@app.get("/sla-tiers", response_model=list[SlaTierResponse])
+async def list_sla_tiers(
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """All SLA tiers, default first. Consumed by the settings UI (C) and, cached,
+    by D2 (which resolves client-side)."""
+    return db.execute(
+        select(SlaTier).order_by(SlaTier.is_default.desc(), SlaTier.name)
+    ).scalars().all()
+
+
+@app.post("/sla-tiers", response_model=SlaTierResponse, status_code=201)
+async def create_sla_tier(
+    data: SlaTierCreate,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Create a tier. Setting is_default demotes any existing default."""
+    tier = SlaTier(**data.model_dump())
+    if tier.is_default:
+        _demote_other_default_tiers(db)
+    db.add(tier)
+    db.commit()
+    db.refresh(tier)
+    return tier
+
+
+@app.put("/sla-tiers/{tier_id}", response_model=SlaTierResponse)
+async def update_sla_tier(
+    tier_id: int,
+    data: SlaTierUpdate,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Update a tier. Promoting demotes the rest; demoting the only default is
+    rejected (it's the 24h backstop for unmatched samples)."""
+    tier = db.get(SlaTier, tier_id)
+    if not tier:
+        raise HTTPException(404, f"SLA tier {tier_id} not found")
+    update_data = data.model_dump(exclude_unset=True)
+    if "is_default" in update_data:
+        if update_data["is_default"]:
+            _demote_other_default_tiers(db, keep_id=tier_id)
+        elif tier.is_default:
+            raise HTTPException(
+                409,
+                "Cannot unset the only default SLA tier; set another as default instead",
+            )
+    for field, value in update_data.items():
+        setattr(tier, field, value)
+    db.commit()
+    db.refresh(tier)
+    return tier
+
+
+@app.delete("/sla-tiers/{tier_id}")
+async def delete_sla_tier(
+    tier_id: int,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Delete a tier. The default cannot be deleted. Groups referencing it have
+    sla_tier_id set NULL (FK); priority overrides referencing it cascade-delete."""
+    tier = db.get(SlaTier, tier_id)
+    if not tier:
+        raise HTTPException(404, f"SLA tier {tier_id} not found")
+    if tier.is_default:
+        raise HTTPException(409, "Cannot delete the default SLA tier; promote another first")
+    db.delete(tier)
+    db.commit()
+    return {"message": f"SLA tier {tier_id} deleted"}
+
+
+@app.get("/sla-priority-tiers", response_model=list[SlaPriorityTierResponse])
+async def list_sla_priority_tiers(
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """The sparse priority -> tier override map (only overriding priorities)."""
+    return db.execute(select(SlaPriorityTier)).scalars().all()
+
+
+@app.put("/sla-priority-tiers/{priority}", response_model=SlaPriorityTierResponse)
+async def set_sla_priority_tier(
+    priority: SlaPriority,
+    data: SlaPriorityTierSet,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Upsert a priority -> tier override.
+
+    The override is identified by (priority, service_group_id). Omit
+    service_group_id to upsert the global override; supply it to scope the
+    override to a single service group.
+    """
+    if not db.get(SlaTier, data.sla_tier_id):
+        raise HTTPException(404, f"SLA tier {data.sla_tier_id} not found")
+    if data.service_group_id is not None and not db.get(
+        ServiceGroup, data.service_group_id
+    ):
+        raise HTTPException(
+            404, f"Service group {data.service_group_id} not found"
+        )
+    # SQL NULL semantics — `=` against NULL never matches, so the global-row
+    # branch must use IS NULL explicitly. Both code paths return at most one
+    # row courtesy of the two partial unique indexes from _run_migrations.
+    q = select(SlaPriorityTier).where(SlaPriorityTier.priority == priority)
+    if data.service_group_id is None:
+        q = q.where(SlaPriorityTier.service_group_id.is_(None))
+    else:
+        q = q.where(SlaPriorityTier.service_group_id == data.service_group_id)
+    row = db.execute(q).scalar_one_or_none()
+    if row:
+        row.sla_tier_id = data.sla_tier_id
+    else:
+        row = SlaPriorityTier(
+            priority=priority,
+            sla_tier_id=data.sla_tier_id,
+            service_group_id=data.service_group_id,
+        )
+        db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+@app.delete("/sla-priority-tiers/{priority}")
+async def delete_sla_priority_tier(
+    priority: SlaPriority,
+    service_group_id: int | None = None,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Remove a priority override.
+
+    Without `service_group_id`, removes the global (NULL group) override.
+    With `service_group_id`, removes the override scoped to that group only.
+    """
+    q = select(SlaPriorityTier).where(SlaPriorityTier.priority == priority)
+    if service_group_id is None:
+        q = q.where(SlaPriorityTier.service_group_id.is_(None))
+    else:
+        q = q.where(SlaPriorityTier.service_group_id == service_group_id)
+    row = db.execute(q).scalar_one_or_none()
+    if not row:
+        scope = "global" if service_group_id is None else f"group_id={service_group_id}"
+        raise HTTPException(404, f"No override for priority '{priority}' ({scope})")
+    db.delete(row)
+    db.commit()
+    scope = "global" if service_group_id is None else f"group_id={service_group_id}"
+    return {"message": f"Priority override '{priority}' ({scope}) removed"}
+
+
+# ── Business-hours config (sub-project B) ──────────────────────────────────
+
+@app.get("/business-hours-config", response_model=BusinessHoursConfigResponse)
+async def get_business_hours_config(
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """The singleton business-hours schedule. Read-only for non-admins (UI-gated)."""
+    cfg = db.get(BusinessHoursConfig, 1)
+    if not cfg:
+        raise HTTPException(500, "Business-hours config not initialized")
+    return cfg
+
+
+@app.put("/business-hours-config", response_model=BusinessHoursConfigResponse)
+async def update_business_hours_config(
+    data: BusinessHoursConfigUpdate,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Update the schedule. Validates IANA timezone, close>open, working_days ⊆ 0..6."""
+    try:
+        ZoneInfo(data.timezone)
+    except Exception:
+        raise HTTPException(422, f"Unknown timezone: {data.timezone}")
+    if data.close_time <= data.open_time:
+        raise HTTPException(422, "close_time must be after open_time")
+    if not data.working_days or any(d < 0 or d > 6 for d in data.working_days):
+        raise HTTPException(422, "working_days must be a non-empty subset of 0..6")
+    cfg = db.get(BusinessHoursConfig, 1)
+    if not cfg:
+        raise HTTPException(500, "Business-hours config not initialized")
+    cfg.open_time = data.open_time
+    cfg.close_time = data.close_time
+    cfg.timezone = data.timezone
+    cfg.working_days = sorted(set(data.working_days))
+    db.commit()
+    db.refresh(cfg)
+    return cfg
+
+
+# ── Lab holidays (sub-project B) ───────────────────────────────────────────
+
+@app.get("/lab-holidays", response_model=list[LabHolidayResponse])
+async def list_lab_holidays(
+    year: Optional[int] = None,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """All stored closures for `year` (defaults to current), federal + custom, ordered by date."""
+    y = year if year is not None else date.today().year
+    return db.execute(
+        select(LabHoliday)
+        .where(extract("year", LabHoliday.holiday_date) == y)
+        .order_by(LabHoliday.holiday_date)
+    ).scalars().all()
+
+
+@app.post("/lab-holidays", response_model=LabHolidayResponse, status_code=201)
+async def create_lab_holiday(
+    data: LabHolidayCreate,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Add a custom closure (source='custom'). 409 if a closure already exists on that date."""
+    existing = db.execute(
+        select(LabHoliday).where(LabHoliday.holiday_date == data.holiday_date)
+    ).scalar_one_or_none()
+    if existing:
+        raise HTTPException(409, f"A closure already exists on {data.holiday_date}")
+    row = LabHoliday(holiday_date=data.holiday_date, name=data.name, source="custom")
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+@app.delete("/lab-holidays/{holiday_date}")
+async def delete_lab_holiday(
+    holiday_date: date,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Remove any closure (federal or custom). Deleting a federal row = the lab works that day."""
+    row = db.execute(
+        select(LabHoliday).where(LabHoliday.holiday_date == holiday_date)
+    ).scalar_one_or_none()
+    if not row:
+        raise HTTPException(404, f"No closure on {holiday_date}")
+    db.delete(row)
+    db.commit()
+    return {"message": f"Closure on {holiday_date} removed"}
+
+
+@app.post("/lab-holidays/generate-federal")
+async def generate_federal_holidays_endpoint(
+    year: int,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Insert any missing federal closures for `year`. Primary use: extend
+    coverage into a new year. Caveat: this re-adds ANY missing federal date for
+    that year — including ones the lab previously deleted — because it's a
+    deliberate, user-triggered action. (Startup seeding does NOT do this; it is
+    first-boot-only, so deletions survive restarts.)"""
+    from database import seed_federal_holidays
+
+    added = seed_federal_holidays(db.connection(), year)
+    db.commit()
+    return {"year": year, "added": added}
+
+
+# ─── SLA Status Batch ─────────────────────────────────────────────────────────
+
+@app.post("/sla/status", response_model=SlaStatusResponse)
+async def compute_sla_statuses(
+    req: SlaStatusRequest,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Batch SLA status for a page of rows (the render endpoint).
+
+    Loads the schedule + holiday set ONCE, then maps over items — O(items) with
+    O(1) DB reads. `now` is server time; the response is a snapshot. `key` is
+    opaque and echoed (the client correlates by key, not array order). `status`
+    is null iff `received_at` is null.
+    """
+    now = datetime.utcnow()  # naive UTC, codebase convention
+    cfg = db.get(BusinessHoursConfig, 1)
+    schedule = BusinessSchedule.from_orm(cfg) if cfg else None
+    holiday_dates = {r[0] for r in db.execute(select(LabHoliday.holiday_date)).all()}
+    is_holiday = lambda d: d in holiday_dates  # noqa: E731
+
+    results: list[SlaStatusResultItem] = []
+    for item in req.items:
+        recv = item.received_at
+        if recv is None:
+            results.append(SlaStatusResultItem(key=item.key, status=None))
+            continue
+        # Normalize to naive UTC (an offset-aware ISO string is converted).
+        if recv.tzinfo is not None:
+            recv = recv.astimezone(timezone.utc).replace(tzinfo=None)
+        # Per-item "now": published samples send `now_override` (their
+        # publication date) so elapsed = (published - received). Live samples
+        # leave it null and get the request-time wall clock.
+        item_now = item.now_override or now
+        if item_now.tzinfo is not None:
+            item_now = item_now.astimezone(timezone.utc).replace(tzinfo=None)
+        if item.business_hours_only and schedule is not None:
+            elapsed = compute_business_minutes(recv, item_now, schedule, is_holiday)
+        else:
+            elapsed = (item_now - recv).total_seconds() / 60.0
+        results.append(
+            SlaStatusResultItem(key=item.key, status=sla_status_dict(item.target_minutes, elapsed))
+        )
+    return SlaStatusResponse(items=results)
 
 
 # ─── SENAITE Analyst Proxy ────────────────────────────────────────────────────
@@ -12514,6 +13326,29 @@ async def update_inbox_priority(
 
     db.commit()
     return {"sample_uid": sample_uid, "priority": data.priority}
+
+
+# ── D2: bulk per-sample priority lookup ────────────────────────────────────
+
+@app.post("/sample-priorities/lookup", response_model=SamplePriorityLookupResponse)
+async def lookup_sample_priorities(
+    req: SamplePriorityLookupRequest,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Sparse bulk read of sample_priorities for the order-list SLA cell.
+
+    Returns only rows that exist; absent UIDs are omitted (the client treats
+    absence as the default 'normal', matching the tier-resolution model).
+    Hard cap 500 UIDs per request — a sanity bound that more than covers the
+    visible-orders page at tens-to-low-hundreds of samples.
+    """
+    rows = db.execute(
+        select(SamplePriority).where(SamplePriority.sample_uid.in_(req.sample_uids))
+    ).scalars().all()
+    return SamplePriorityLookupResponse(
+        items=[SamplePriorityResponseItem.model_validate(r, from_attributes=True) for r in rows]
+    )
 
 
 @app.get("/worksheets/users")

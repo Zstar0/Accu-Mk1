@@ -205,16 +205,26 @@ def test_show_xtra_on_includes_xtra_vials(client, auth_headers):
 def test_sub_samples_appear_in_inbox(client, auth_headers):
     """A sub-sample of a linked parent should surface as its own inbox item.
 
-    Picks a parent with at least one sub-sample whose assignment_role matches
-    a known filter; verifies the sub appears as a separate inbox card.
+    Picks a sub-sample with a real bench role that isn't already on an open
+    worksheet (the `assigned_pairs` filter in the route correctly hides those).
     """
+    from models import Worksheet, WorksheetItem  # local import to avoid top-level cycle in test setup
     with SessionLocal() as db:
-        # Find a sub-sample with a role we can filter on (hplc/ster/endo)
-        candidate = db.query(LimsSubSample).filter(
-            LimsSubSample.assignment_role.in_(["hplc", "ster", "endo"])
-        ).first()
+        # Sub-sample UIDs already on an open or staging worksheet
+        worksheeted_uids = {
+            row[0] for row in db.query(WorksheetItem.sample_uid)
+            .join(Worksheet, WorksheetItem.worksheet_id == Worksheet.id)
+            .filter(Worksheet.status.in_(("open", "staging")))
+            .all()
+        }
+        candidate = (
+            db.query(LimsSubSample)
+            .filter(LimsSubSample.assignment_role.in_(["hplc", "ster", "endo"]))
+            .filter(~LimsSubSample.external_lims_uid.in_(worksheeted_uids or {""}))
+            .first()
+        )
         if candidate is None:
-            pytest.skip("no role-assigned sub-samples in subvial stack")
+            pytest.skip("no inbox-eligible role-assigned sub-samples in subvial stack")
         parent = candidate.parent_sample
         target_role = (
             "hplc" if candidate.assignment_role == "hplc" else "microbiology"

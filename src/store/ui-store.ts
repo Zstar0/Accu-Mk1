@@ -40,10 +40,12 @@ export type AccuMarkToolsSubSection =
   | 'overview'
   | 'order-explorer'
   | 'order-status'
+  | 'customers'
+  | 'customer-detail'
   | 'coa-explorer'
   | 'chromatographs'
   | 'digital-coa'
-export type ReportsSubSection = 'dashboard' | 'sync-debug'
+export type ReportsSubSection = 'dashboard' | 'checkin-times' | 'bottlenecks' | 'sync-debug'
 export type AccountSubSection = 'profile' | 'user-management'
 export type PeptideRequestsSubSection = 'list' | 'detail'
 export type ActiveSubSection =
@@ -72,6 +74,20 @@ interface UIState {
   samplePrepTargetId: number | null
   methodsTargetId: number | null
   peptideRequestTargetId: string | null
+  customerDetailTargetId: number | null
+  customerListPage: number
+  customerSearchTerm: string
+  hideTestAccounts: boolean
+  // Customer detail page — Phase 30
+  customerDetailTab: 'orders' | 'dashboard'
+  // UX revision: three independent search slots, AND-combined server-side.
+  // Each slot is the raw committed value (post-debounce) for one input. Empty
+  // string = "no filter on that axis" (back-compat with debounce-flush flow).
+  customerOrderSearch: {
+    order_number: string
+    sample_id: string
+    analyte: string
+  }
   updateVersion: string | null
   updateReady: boolean
 
@@ -93,6 +109,21 @@ interface UIState {
   navigateToSamplePrep: (prepId: number) => void
   navigateToMethod: (methodId: number) => void
   navigateToPeptideRequest: (requestId: string) => void
+  navigateToCustomer: (id: number) => void
+  navigateToCustomers: () => void
+  setCustomerListPage: (page: number) => void
+  setHideTestAccounts: (hide: boolean) => void
+  setSearchAndResetPage: (term: string) => void
+  setCustomerDetailTab: (tab: 'orders' | 'dashboard') => void
+  // Per-axis setter: writes ONE slot, leaves the other two unchanged. This is
+  // how the three-input UI commits debounced values independently per axis.
+  setCustomerOrderSearchField: (
+    field: 'order_number' | 'sample_id' | 'analyte',
+    value: string,
+  ) => void
+  // Clears all three slots. Used by navigateToCustomers and any explicit
+  // "clear filters" affordance the UI exposes.
+  setCustomerOrderSearchReset: () => void
   setUpdateVersion: (version: string | null) => void
   setUpdateReady: (ready: boolean) => void
 
@@ -134,6 +165,12 @@ export const useUIStore = create<UIState>()(
       samplePrepTargetId: null,
       methodsTargetId: null,
       peptideRequestTargetId: null,
+      customerDetailTargetId: null,
+      customerListPage: 0,
+      customerSearchTerm: '',
+      hideTestAccounts: true,
+      customerDetailTab: 'orders',
+      customerOrderSearch: { order_number: '', sample_id: '', analyte: '' },
       updateVersion: null,
       updateReady: false,
       worksheetDrawerOpen: false,
@@ -282,6 +319,82 @@ export const useUIStore = create<UIState>()(
           }),
           undefined,
           'navigateToPeptideRequest'
+        ),
+
+      navigateToCustomer: id =>
+        set(
+          state => ({
+            activeSection: 'accumark-tools',
+            activeSubSection: 'customer-detail',
+            customerDetailTargetId: id,
+            navigationKey: state.navigationKey + 1,
+          }),
+          undefined,
+          'navigateToCustomer'
+        ),
+
+      // Back-nav from detail view (D-11). Explicitly clears customerDetailTargetId
+      // but PRESERVES customerListPage + customerSearchTerm so the user returns
+      // to the exact list slice they left (D-08).
+      navigateToCustomers: () =>
+        set(
+          state => ({
+            activeSection: 'accumark-tools',
+            activeSubSection: 'customers',
+            customerDetailTargetId: null,
+            // Phase 30 (T-30-03): reset customer-detail page state when going
+            // back to the list so search/tab state never leaks between
+            // customer drill-throughs.
+            customerDetailTab: 'orders',
+            // UX revision: clear all three search slots when navigating back
+            // to the customer list — same intent as the old single-field
+            // reset, just applied per-axis.
+            customerOrderSearch: { order_number: '', sample_id: '', analyte: '' },
+            navigationKey: state.navigationKey + 1,
+          }),
+          undefined,
+          'navigateToCustomers'
+        ),
+
+      setCustomerListPage: page =>
+        set({ customerListPage: page }, undefined, 'setCustomerListPage'),
+
+      setHideTestAccounts: hide =>
+        set({ hideTestAccounts: hide }, undefined, 'setHideTestAccounts'),
+
+      // Atomic single-set primitive (D-12, RESEARCH §6). Writes BOTH fields in
+      // one render cycle to avoid the 1-render race where the query key would
+      // briefly carry (new search, old page).
+      setSearchAndResetPage: term =>
+        set(
+          { customerSearchTerm: term, customerListPage: 0 },
+          undefined,
+          'setSearchAndResetPage'
+        ),
+
+      setCustomerDetailTab: tab =>
+        set({ customerDetailTab: tab }, undefined, 'setCustomerDetailTab'),
+
+      // UX revision: per-axis setter. Writes ONE slot and preserves the other
+      // two via spread — this is what lets the three inputs commit
+      // independently from their own per-input debounce timers without
+      // stomping each other.
+      setCustomerOrderSearchField: (field, value) =>
+        set(
+          state => ({
+            customerOrderSearch: { ...state.customerOrderSearch, [field]: value },
+          }),
+          undefined,
+          'setCustomerOrderSearchField',
+        ),
+
+      // Clears all three slots in one render cycle. Used by clear-filters
+      // affordances; navigateToCustomers does the equivalent inline.
+      setCustomerOrderSearchReset: () =>
+        set(
+          { customerOrderSearch: { order_number: '', sample_id: '', analyte: '' } },
+          undefined,
+          'setCustomerOrderSearchReset',
         ),
 
       setUpdateVersion: version =>

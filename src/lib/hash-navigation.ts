@@ -11,6 +11,7 @@
  * Sub-sections that carry a target ID:
  *  - dashboard/sample-details   → sampleDetailsTargetId
  *  - accumark-tools/order-explorer → orderExplorerTargetOrderId
+ *  - accumark-tools/customer-detail → customerDetailTargetId
  *  - lims/peptide-config            → peptideConfigTargetId
  */
 
@@ -79,6 +80,15 @@ function applyNavToStore(nav: ParsedNav) {
     store.navigateToSample(targetId.toUpperCase())
   } else if (subSection === 'order-explorer' && targetId) {
     store.navigateToOrderExplorer(targetId)
+  } else if (
+    subSection === 'customer-detail' &&
+    targetId &&
+    !Number.isNaN(Number(targetId))
+  ) {
+    // Customer IDs are numeric. A non-numeric id would set customerDetailTargetId
+    // to NaN, which slips past the page's `!== null` query gate and fires a bad
+    // request — so reject it here and fall through to a plain navigate.
+    store.navigateToCustomer(Number(targetId))
   } else if (subSection === 'peptide-config' && targetId) {
     store.navigateToPeptide(Number(targetId))
   } else if (subSection === 'worksheet-detail' && targetId) {
@@ -94,6 +104,7 @@ function buildHash(state: {
   activeSubSection: string
   sampleDetailsTargetId: string | null
   orderExplorerTargetOrderId: string | null
+  customerDetailTargetId: number | null
   peptideConfigTargetId: number | null
 }): string {
   let hash = `#${state.activeSection}/${state.activeSubSection}`
@@ -109,6 +120,11 @@ function buildHash(state: {
     state.orderExplorerTargetOrderId
   ) {
     hash += `?id=${encodeURIComponent(state.orderExplorerTargetOrderId)}`
+  } else if (
+    state.activeSubSection === 'customer-detail' &&
+    state.customerDetailTargetId != null
+  ) {
+    hash += `?id=${encodeURIComponent(String(state.customerDetailTargetId))}`
   } else if (
     state.activeSubSection === 'peptide-config' &&
     state.peptideConfigTargetId != null
@@ -144,6 +160,7 @@ export function useHashNavigation() {
         state.activeSubSection !== prev.activeSubSection ||
         state.sampleDetailsTargetId !== prev.sampleDetailsTargetId ||
         state.orderExplorerTargetOrderId !== prev.orderExplorerTargetOrderId ||
+        state.customerDetailTargetId !== prev.customerDetailTargetId ||
         state.peptideConfigTargetId !== prev.peptideConfigTargetId
       ) {
         const newHash = buildHash(state)

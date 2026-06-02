@@ -909,6 +909,9 @@ export interface WooOrder {
   number: string
   status: string
   date_created: string
+  date_paid: string | null
+  currency: string
+  currency_symbol: string
   discount_total: string
   discount_tax: string
   shipping_total: string
@@ -1199,6 +1202,181 @@ export async function getExplorerOrderById(orderId: string): Promise<ExplorerOrd
     return response.json()
   } catch (error) {
     console.error('Get order by ID error:', error)
+    throw error
+  }
+}
+
+// --- Phase 29: Explorer Customers (LINK-04/05/06 consumed by UI-02..UI-07) ---
+
+/**
+ * Aggregated customer record from /explorer/customers (Phase 28 LINK-04/05/06).
+ *
+ * Field shape mirrors the backend Pydantic `ExplorerCustomerResponse` at
+ * `integration-service/app/api/desktop.py:108-123`. Snake_case is intentional
+ * (CONTEXT D-06) — no camelCase translation layer.
+ *
+ * `customer_id` is `null` for the guest bucket (orders with `customer_id IS NULL`,
+ * grouped by billing email — Phase 28 D-12). Guest rows are non-clickable in the
+ * list view (CONTEXT D-14).
+ */
+export interface ExplorerCustomer {
+  customer_id: number | null
+  email: string
+  display_name: string
+  company_name: string | null
+  total_orders: number
+  outstanding_orders: number
+  total_coas: number
+  most_recent_order_at: string | null
+}
+
+/**
+ * Paginated response for /explorer/customers.
+ *
+ * `total_count` is unconditionally returned by the backend (Phase 28 D-22), but
+ * the TS type keeps it optional (`?:`) per CONTEXT D-06 — forward-compat hedge
+ * if the endpoint ever drops it for streaming/large-page modes.
+ */
+export interface ExplorerCustomersResponse {
+  customers: ExplorerCustomer[]
+  total_count?: number
+}
+
+/**
+ * Get aggregated customers from Integration Service database.
+ *
+ * Mirrors the `getExplorerOrders` envelope (try/catch + 401 branch + URLSearchParams
+ * + getAuthHeaders + API_BASE_URL). Server owns all filters (CONTEXT D-07);
+ * no client-side re-filtering.
+ *
+ * @param search - Optional search term; backend matches email/first_name/last_name/company_name (Phase 28 D-15)
+ * @param page - 0-indexed page (converted to backend offset via page * perPage)
+ * @param perPage - Page size (default 50)
+ * @param includeTestEmails - When false (default), backend excludes TEST_EMAILS list (Phase 28 D-17)
+ */
+export async function getExplorerCustomers(
+  search?: string,
+  page = 0,
+  perPage = 50,
+  includeTestEmails = false
+): Promise<ExplorerCustomersResponse> {
+  try {
+    const params = new URLSearchParams()
+    if (search) params.set('search', search)
+    params.set('limit', String(perPage))
+    params.set('offset', String(page * perPage))
+    params.set('include_test_emails', String(includeTestEmails))
+
+    const response = await fetch(
+      `${API_BASE_URL()}/explorer/customers?${params}`,
+      {
+        headers: getAuthHeaders(),
+      }
+    )
+    if (!response.ok) {
+      if (response.status === 401) {
+        throw new Error('API key required or invalid')
+      }
+      throw new Error(`Get explorer customers failed: ${response.status}`)
+    }
+    return response.json()
+  } catch (error) {
+    console.error('Get explorer customers error:', error)
+    throw error
+  }
+}
+
+/**
+ * Get a single customer (+ aggregate stats) by WC customer ID.
+ *
+ * Authoritative read from wc_customers via IS `/explorer/customers/{id}`. Used by
+ * the customer-detail header on cold load (deep-link / refresh) when the
+ * customers-list cache is empty. Returns null on 404 (unknown / soft-deleted).
+ */
+export async function getExplorerCustomerById(
+  customerId: number
+): Promise<ExplorerCustomer | null> {
+  try {
+    const response = await fetch(
+      `${API_BASE_URL()}/explorer/customers/${customerId}`,
+      { headers: getAuthHeaders() }
+    )
+    if (response.status === 404) return null
+    if (!response.ok) {
+      if (response.status === 401) {
+        throw new Error('API key required or invalid')
+      }
+      throw new Error(`Get explorer customer failed: ${response.status}`)
+    }
+    return (await response.json()) as ExplorerCustomer
+  } catch (error) {
+    console.error('getExplorerCustomerById error:', error)
+    throw error
+  }
+}
+
+/**
+ * Get orders filtered by a specific WooCommerce customer ID.
+ *
+ * Thin wrapper over `/explorer/orders?customer_id=X` (Phase 28 LINK-07).
+ * Implemented inline rather than delegating to `getExplorerOrders` to keep the
+ * URL shape explicit and avoid coupling the customer-detail path to the
+ * generic-orders signature.
+ *
+ * @param customerId - WC customer ID (guest aggregation is not supported here; see DEFERRED-01)
+ * @param limit - Max records to return (default 200 — covers heavy-customer accounts in one round-trip)
+ * @param offset - Pagination offset (default 0)
+ */
+export async function getExplorerOrdersByCustomer(
+  customerId: number,
+  // UX revision (post-Phase 30): three independent search axes, AND-combined
+  // server-side. Each axis is independently optional, and each is gated on a
+  // 2-char minimum HERE in the client (the backend treats '' as "no filter on
+  // that axis" but doesn't enforce a minimum length — the gate is purely a UX
+  // anti-flicker convention).
+  search?: {
+    order_number?: string
+    sample_id?: string
+    analyte?: string
+  },
+  sort: 'open_first' | 'date_desc' | 'date_asc' = 'open_first',
+  page = 0,
+  perPage = 50
+): Promise<ExplorerOrder[]> {
+  try {
+    const params = new URLSearchParams()
+    params.set('customer_id', String(customerId))
+    params.set('limit', String(perPage))
+    params.set('offset', String(page * perPage))
+    params.set('sort', sort)
+    // Per-axis 2-char minimum gate — prevents "no results" flicker as the user
+    // types in each input independently. A fully-typed sample_id is forwarded
+    // even if analyte is still 1 char (each axis gates itself).
+    if (search) {
+      if (search.order_number && search.order_number.length >= 2) {
+        params.set('search_order_number', search.order_number)
+      }
+      if (search.sample_id && search.sample_id.length >= 2) {
+        params.set('search_sample_id', search.sample_id)
+      }
+      if (search.analyte && search.analyte.length >= 2) {
+        params.set('search_analyte', search.analyte)
+      }
+    }
+
+    const res = await fetch(
+      `${API_BASE_URL()}/explorer/orders?${params.toString()}`,
+      { headers: getAuthHeaders() }
+    )
+    if (res.status === 401) {
+      throw new Error('API key required or invalid')
+    }
+    if (!res.ok) {
+      throw new Error(`Get explorer orders by customer failed: ${res.status}`)
+    }
+    return (await res.json()) as ExplorerOrder[]
+  } catch (error) {
+    console.error('getExplorerOrdersByCustomer error:', error)
     throw error
   }
 }
@@ -1589,6 +1767,7 @@ export interface SampleCOAActionResponse {
   success: boolean
   message: string
   verification_code: string | null
+  warning?: string | null
 }
 
 async function extractErrorMessage(response: Response, fallback: string): Promise<string> {
@@ -2077,6 +2256,14 @@ export interface AnalysisServiceRecord {
   updated_at: string
 }
 
+/**
+ * Fetch the local AccuMark `analysis_services` table (id + keyword + metadata).
+ *
+ * NOTE: This is the LOCAL endpoint at backend/main.py:2401, NOT
+ * `/explorer/analysis-services` (backend/main.py:7605), which proxies to the
+ * Integration Service for SENAITE data. Consumers needing keyword → service-id
+ * mapping (e.g., the order-SLA cell in D2) must use this local one.
+ */
 export async function getAnalysisServices(opts?: { search?: string; category?: string }): Promise<AnalysisServiceRecord[]> {
   const searchParams = new URLSearchParams()
   if (opts?.search) searchParams.set('search', opts.search)
@@ -3633,6 +3820,7 @@ export interface ServiceGroup {
   color: string
   sort_order: number
   is_default: boolean
+  sla_tier_id: number | null
   member_count: number
   member_ids: number[]
   created_at: string
@@ -3645,6 +3833,7 @@ export interface ServiceGroupCreate {
   color?: string
   sort_order?: number
   is_default?: boolean
+  sla_tier_id?: number | null
 }
 
 export interface ServiceGroupUpdate {
@@ -3653,6 +3842,7 @@ export interface ServiceGroupUpdate {
   color?: string
   sort_order?: number
   is_default?: boolean
+  sla_tier_id?: number | null
 }
 
 export interface SenaiteAnalyst {
@@ -3716,6 +3906,244 @@ export async function setServiceGroupMembers(
   })
   if (!response.ok) throw new Error(`Failed to update service group members: ${response.status}`)
   return response.json()
+}
+
+// ─── SLA tiers (sub-project A revised + C) ──────────────────────────────────
+
+export interface SlaTier {
+  id: number
+  name: string
+  target_minutes: number
+  business_hours_only: boolean
+  is_default: boolean
+  amber_threshold_percent: number
+  created_at: string
+  updated_at: string
+}
+
+export interface SlaTierCreate {
+  name: string
+  target_minutes: number
+  business_hours_only?: boolean
+  is_default?: boolean
+  amber_threshold_percent?: number
+}
+
+export interface SlaTierUpdate {
+  name?: string
+  target_minutes?: number
+  business_hours_only?: boolean
+  is_default?: boolean
+  amber_threshold_percent?: number
+}
+
+export interface SlaPriorityTier {
+  id: number
+  priority: InboxPriority
+  sla_tier_id: number
+  // Multi-tier follow-on: null = global override for this priority; an integer
+  // scopes the override to a single service group. Precedence on the resolver:
+  // (priority, group_id) > (priority, NULL) > group's own tier > default.
+  service_group_id: number | null
+}
+
+export async function getSlaTiers(): Promise<SlaTier[]> {
+  const response = await fetch(`${API_BASE_URL()}/sla-tiers`, { headers: getBearerHeaders() })
+  if (!response.ok) throw new Error(`Failed to load SLA tiers: ${response.status}`)
+  return response.json()
+}
+
+export async function createSlaTier(data: SlaTierCreate): Promise<SlaTier> {
+  const response = await fetch(`${API_BASE_URL()}/sla-tiers`, {
+    method: 'POST', headers: getBearerHeaders('application/json'), body: JSON.stringify(data),
+  })
+  if (!response.ok) throw new Error(`Failed to create SLA tier: ${response.status}`)
+  return response.json()
+}
+
+export async function updateSlaTier(id: number, data: SlaTierUpdate): Promise<SlaTier> {
+  const response = await fetch(`${API_BASE_URL()}/sla-tiers/${id}`, {
+    method: 'PUT', headers: getBearerHeaders('application/json'), body: JSON.stringify(data),
+  })
+  if (!response.ok) throw new Error(`Failed to update SLA tier: ${response.status}`)
+  return response.json()
+}
+
+export async function deleteSlaTier(id: number): Promise<void> {
+  const response = await fetch(`${API_BASE_URL()}/sla-tiers/${id}`, {
+    method: 'DELETE', headers: getBearerHeaders(),
+  })
+  if (!response.ok) throw new Error(`Failed to delete SLA tier: ${response.status}`)
+}
+
+export async function getSlaPriorityTiers(): Promise<SlaPriorityTier[]> {
+  const response = await fetch(`${API_BASE_URL()}/sla-priority-tiers`, { headers: getBearerHeaders() })
+  if (!response.ok) throw new Error(`Failed to load priority overrides: ${response.status}`)
+  return response.json()
+}
+
+export async function setSlaPriorityTier(
+  priority: InboxPriority,
+  slaTierId: number,
+  serviceGroupId?: number | null,
+): Promise<SlaPriorityTier> {
+  // Omit service_group_id entirely (rather than send null) when the caller is
+  // setting the global override — matches the existing single-arg call sites
+  // and keeps the request body slim.
+  const body: { sla_tier_id: number; service_group_id?: number | null } = { sla_tier_id: slaTierId }
+  if (serviceGroupId != null) body.service_group_id = serviceGroupId
+  const response = await fetch(`${API_BASE_URL()}/sla-priority-tiers/${priority}`, {
+    method: 'PUT', headers: getBearerHeaders('application/json'), body: JSON.stringify(body),
+  })
+  if (!response.ok) throw new Error(`Failed to set priority override: ${response.status}`)
+  return response.json()
+}
+
+export async function deleteSlaPriorityTier(
+  priority: InboxPriority,
+  serviceGroupId?: number | null,
+): Promise<void> {
+  // Without serviceGroupId, deletes the global (NULL group) override; with it,
+  // deletes only the per-group row.
+  const url = new URL(`${API_BASE_URL()}/sla-priority-tiers/${priority}`)
+  if (serviceGroupId != null) url.searchParams.set('service_group_id', String(serviceGroupId))
+  const response = await fetch(url.toString(), {
+    method: 'DELETE', headers: getBearerHeaders(),
+  })
+  if (!response.ok) throw new Error(`Failed to remove priority override: ${response.status}`)
+}
+
+/**
+ * Client-side SLA resolution — TS mirror of the Python resolve_sla_tier.
+ * Precedence: priority override > group tier > default. priorityMap is sparse
+ * (a key exists only for overriding priorities). D2 caches getSlaTiers() +
+ * getSlaPriorityTiers() and resolves per sample here. Keep in lockstep with
+ * backend/sla_engine.py.
+ */
+export function resolveSlaTier(
+  priorityMap: Partial<Record<InboxPriority, SlaTier>>,
+  groupTier: SlaTier | null,
+  priority: InboxPriority | null,
+  defaultTier: SlaTier | null
+): SlaTier | null {
+  const prioTier = priority ? priorityMap[priority] : undefined
+  if (prioTier) return prioTier
+  if (groupTier) return groupTier
+  return defaultTier
+}
+
+// ─── Business-hours config + holidays + batch status (sub-project B) ──────────
+
+export interface BusinessHoursConfig {
+  open_time: string // "HH:MM:SS"
+  close_time: string
+  timezone: string
+  working_days: number[] // Python weekday ints, Mon=0..Sun=6
+}
+
+export interface LabHoliday {
+  id: number
+  holiday_date: string // "YYYY-MM-DD"
+  name: string
+  source: 'federal' | 'custom'
+}
+
+export interface SlaStatusRequestItem {
+  key: string
+  received_at: string | null
+  target_minutes: number
+  business_hours_only: boolean
+  /** Historical mode for published samples — when set, the server uses this as
+   *  "now" instead of wall-clock UTC so elapsed = (published - received). Used
+   *  by SampleHeaderSla on published samples to show "took Xh / Met / Missed". */
+  now_override?: string | null
+}
+
+export interface SlaStatus {
+  target_minutes: number
+  elapsed_minutes: number
+  remaining_minutes: number
+  breached: boolean
+}
+
+export interface SlaStatusResultItem {
+  key: string
+  status: SlaStatus | null
+}
+
+export async function getBusinessHoursConfig(): Promise<BusinessHoursConfig> {
+  const response = await fetch(`${API_BASE_URL()}/business-hours-config`, { headers: getBearerHeaders() })
+  if (!response.ok) throw new Error(`Failed to load business hours: ${response.status}`)
+  return response.json()
+}
+
+export async function updateBusinessHoursConfig(data: BusinessHoursConfig): Promise<BusinessHoursConfig> {
+  const response = await fetch(`${API_BASE_URL()}/business-hours-config`, {
+    method: 'PUT', headers: getBearerHeaders('application/json'), body: JSON.stringify(data),
+  })
+  if (!response.ok) throw new Error(`Failed to save business hours: ${response.status}`)
+  return response.json()
+}
+
+export async function getLabHolidays(year: number): Promise<LabHoliday[]> {
+  const response = await fetch(`${API_BASE_URL()}/lab-holidays?year=${year}`, { headers: getBearerHeaders() })
+  if (!response.ok) throw new Error(`Failed to load holidays: ${response.status}`)
+  return response.json()
+}
+
+export async function createLabHoliday(data: { holiday_date: string; name: string }): Promise<LabHoliday> {
+  const response = await fetch(`${API_BASE_URL()}/lab-holidays`, {
+    method: 'POST', headers: getBearerHeaders('application/json'), body: JSON.stringify(data),
+  })
+  if (!response.ok) throw new Error(`Failed to add holiday: ${response.status}`)
+  return response.json()
+}
+
+export async function deleteLabHoliday(holidayDate: string): Promise<void> {
+  const response = await fetch(`${API_BASE_URL()}/lab-holidays/${holidayDate}`, {
+    method: 'DELETE', headers: getBearerHeaders(),
+  })
+  if (!response.ok) throw new Error(`Failed to remove holiday: ${response.status}`)
+}
+
+export async function generateFederalHolidays(year: number): Promise<{ year: number; added: number }> {
+  const response = await fetch(`${API_BASE_URL()}/lab-holidays/generate-federal?year=${year}`, {
+    method: 'POST', headers: getBearerHeaders(),
+  })
+  if (!response.ok) throw new Error(`Failed to generate federal holidays: ${response.status}`)
+  return response.json()
+}
+
+export async function fetchSlaStatuses(items: SlaStatusRequestItem[]): Promise<SlaStatusResultItem[]> {
+  const response = await fetch(`${API_BASE_URL()}/sla/status`, {
+    method: 'POST', headers: getBearerHeaders('application/json'), body: JSON.stringify({ items }),
+  })
+  if (!response.ok) throw new Error(`Failed to fetch SLA statuses: ${response.status}`)
+  const data = await response.json()
+  return data.items
+}
+
+// ─── D2: bulk per-sample priority lookup ─────────────────────────────────────
+
+export interface SamplePriorityLookupItem {
+  sample_uid: string
+  priority: InboxPriority
+}
+
+export async function samplePrioritiesLookup(
+  sampleUids: string[]
+): Promise<SamplePriorityLookupItem[]> {
+  if (sampleUids.length === 0) return []
+  const response = await fetch(`${API_BASE_URL()}/sample-priorities/lookup`, {
+    method: 'POST',
+    headers: getBearerHeaders('application/json'),
+    body: JSON.stringify({ sample_uids: sampleUids }),
+  })
+  if (!response.ok) {
+    throw new Error(`Failed to lookup sample priorities: ${response.status}`)
+  }
+  const data = await response.json()
+  return data.items
 }
 
 export async function getSenaiteAnalysts(): Promise<SenaiteAnalyst[]> {
@@ -4090,6 +4518,49 @@ export async function getReportsPurityTrend(analyteName: string, isBlend = false
     { headers: getBearerHeaders() }
   )
   if (!response.ok) throw new Error(`Purity trend failed: ${response.status}`)
+  return response.json()
+}
+
+// ─── Check-In Times ──────────────────────────────────────────────────────────
+
+export interface CheckInRecord {
+  sample_id: string
+  sample_uid: string
+  date_received: string // ISO 8601 UTC, trailing "Z"
+  product_label: string | null
+  priority: string
+  is_test_order: boolean
+}
+
+export async function getCheckInTimes(from?: string, to?: string): Promise<CheckInRecord[]> {
+  const qs = new URLSearchParams()
+  if (from) qs.set('from', from)
+  if (to) qs.set('to', to)
+  const suffix = qs.toString() ? `?${qs.toString()}` : ''
+  const response = await fetch(`${API_BASE_URL()}/reports/checkin-times${suffix}`, {
+    headers: getBearerHeaders(),
+  })
+  if (!response.ok) throw new Error(`Check-in times failed: ${response.status}`)
+  return response.json()
+}
+
+// ─── Phase Turnaround (Bottlenecks) ──────────────────────────────────────────
+
+export interface TurnaroundSample {
+  sample_id: string
+  ordered_at: string | null
+  received_at: string | null
+  submitted_at: string | null
+  verified_at: string | null
+  published_at: string | null
+  is_test_order: boolean
+}
+
+export async function getTurnaround(): Promise<TurnaroundSample[]> {
+  const response = await fetch(`${API_BASE_URL()}/reports/turnaround`, {
+    headers: getBearerHeaders(),
+  })
+  if (!response.ok) throw new Error(`Turnaround failed: ${response.status}`)
   return response.json()
 }
 

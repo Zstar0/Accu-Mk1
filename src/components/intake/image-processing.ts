@@ -196,6 +196,57 @@ export function processVialPhoto(
 }
 
 /**
+ * Process an image file (chosen via file picker as a webcam fallback) into
+ * the same 500 x 496 preview shape as `processVialPhoto`.
+ *
+ * Center-crops the source to a square, then high-quality downscales. Skips
+ * the auto-levels / white-balance pass — the operator chose this image
+ * deliberately and presumably already adjusted it.
+ */
+export function processFileImage(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    if (!file.type.startsWith('image/')) {
+      reject(new Error('Selected file is not an image'))
+      return
+    }
+    const reader = new FileReader()
+    reader.onerror = () => reject(new Error('Failed to read file'))
+    reader.onload = () => {
+      const img = new Image()
+      img.onerror = () => reject(new Error('Failed to load image'))
+      img.onload = () => {
+        try {
+          const shorter = Math.min(img.width, img.height)
+          if (shorter === 0) {
+            reject(new Error('Image has no dimensions'))
+            return
+          }
+          const sx = Math.round((img.width - shorter) / 2)
+          const sy = Math.round((img.height - shorter) / 2)
+          const square = document.createElement('canvas')
+          square.width = shorter
+          square.height = shorter
+          const sctx = square.getContext('2d')
+          if (!sctx) {
+            reject(new Error('Canvas 2D context unavailable'))
+            return
+          }
+          sctx.imageSmoothingEnabled = true
+          sctx.imageSmoothingQuality = 'high'
+          sctx.drawImage(img, sx, sy, shorter, shorter, 0, 0, shorter, shorter)
+          const preview = stepDownScale(square, PREVIEW_WIDTH, PREVIEW_HEIGHT)
+          resolve(preview.toDataURL('image/png'))
+        } catch (err) {
+          reject(err instanceof Error ? err : new Error('Image processing failed'))
+        }
+      }
+      img.src = reader.result as string
+    }
+    reader.readAsDataURL(file)
+  })
+}
+
+/**
  * Downscale a preview data URL to the final COA dimensions (125 x 124).
  * Call this at export time, not at capture time.
  */

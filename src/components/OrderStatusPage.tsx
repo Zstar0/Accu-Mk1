@@ -1,10 +1,9 @@
 import { useState, useEffect, useMemo } from 'react'
-import { useQuery, useQueries, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Activity,
   AlertTriangle,
   CheckCircle2,
-  ExternalLink,
   RefreshCw,
   XCircle,
   AlertCircle,
@@ -14,13 +13,14 @@ import {
   Layers,
   ArrowUpDown,
   ListTree,
+  ChevronDown,
+  ChevronRight,
 } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
 import {
   getExplorerStatus,
   getExplorerOrders,
-  lookupSenaiteSample,
   clearSenaiteLookupCache,
   type ExplorerOrder,
   type SenaiteLookupResult,
@@ -44,7 +44,25 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card'
-import { SampleIdBadge } from '@/components/samples/SampleIdBadge'
+import {
+  formatProcessingTime,
+  getOrderEmail,
+  groupAnalysisStates,
+  sampleMatchesAnalysisFilter,
+  COL_COUNT_LABEL,
+  TEST_EMAILS,
+  type AnalysisStateCounts,
+} from '@/components/explorer/helpers'
+import { toggleFilterKey, isOrderAtRisk } from '@/components/explorer/order-filters'
+import { OrderRow } from '@/components/explorer/OrderRow'
+import { SampleSlaIndicator } from '@/components/explorer/SampleSlaIndicator'
+import { useOrderSlaStatuses, type SampleSlaSnapshot } from '@/services/order-sla'
+import { useSenaiteLookupMap } from '@/services/senaite-lookup-map'
+
+// Re-export TEST_EMAILS so the existing import surface
+// `import { TEST_EMAILS } from '@/components/OrderStatusPage'` keeps working
+// (Plan 29-00 CONTEXT D-03).
+export { TEST_EMAILS } from '@/components/explorer/helpers'
 
 // --- Relative time formatter ---
 function formatRelativeTime(isoStr: string): string {
@@ -57,524 +75,6 @@ function formatRelativeTime(isoStr: string): string {
   return `${hours}h ago`
 }
 
-// --- Senaite sequential fetch queue ---
-// Serializes lookups so only one hits Senaite at a time (single-threaded Zope)
-let _senaiteQueue: Promise<void> = Promise.resolve()
-
-function enqueueSenaiteLookup(id: string) {
-  // Order Status page opts into the 15-min cache (noCache=false) to avoid hammering Zope.
-  const task = _senaiteQueue.then(() => lookupSenaiteSample(id, false))
-  _senaiteQueue = task.then(Function.prototype as () => void, Function.prototype as () => void)
-  return task
-}
-
-// --- Analysis state helpers ---
-
-type AnalysisStateCounts = {
-  sample_due: number
-  received: number
-  assigned: number
-  to_verify: number
-  waiting_for_addon: number
-  ready_for_review: number
-  verified: number
-  published: number
-  pending: number
-}
-
-function groupAnalysisStates(analyses: SenaiteAnalysis[], sampleReviewState?: string | null): AnalysisStateCounts {
-  const counts: AnalysisStateCounts = {
-    sample_due: 0,
-    received: 0,
-    assigned: 0,
-    to_verify: 0,
-    waiting_for_addon: 0,
-    ready_for_review: 0,
-    verified: 0,
-    published: 0,
-    pending: 0,
-  }
-  for (const a of analyses) {
-    const state = a.review_state?.toLowerCase()
-    if (state === 'assigned') counts.assigned++
-    else if (state === 'to_be_verified') counts.to_verify++
-    else if (state === 'published') counts.published++
-    else if (state === 'verified') counts.verified++
-    else if (state === 'rejected' || state === 'cancelled' || state === 'invalid' || state === 'retracted') { /* terminal — skip */ }
-    else counts.pending++ // registered, unassigned, etc.
-  }
-  // Sample-level states
-  const sState = sampleReviewState?.toLowerCase()
-  if (sState === 'sample_due') counts.sample_due = 1
-  if (sState === 'received' || sState === 'sample_received') counts.received = 1
-  if (sState === 'waiting_for_addon_results') counts.waiting_for_addon = 1
-  if (sState === 'ready_for_review') counts.ready_for_review = 1
-  if (sState === 'published') counts.published = 1
-  return counts
-}
-
-// --- Formatters (shared with OrderExplorer) ---
-
-function formatDate(dateStr: string | null): string {
-  if (!dateStr) return '\u2014'
-  const date = new Date(dateStr)
-  return date.toLocaleString('en-US', {
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
-}
-
-function formatProcessingTime(
-  createdAt: string,
-  completedAt: string | null
-): string {
-  const start = new Date(createdAt)
-  const end = completedAt ? new Date(completedAt) : new Date()
-  const ms = end.getTime() - start.getTime()
-  if (ms < 0) return '\u2014'
-  const seconds = Math.floor(ms / 1000)
-  const minutes = Math.floor(seconds / 60)
-  const hours = Math.floor(minutes / 60)
-  const days = Math.floor(hours / 24)
-  if (days > 0) return `${days}d ${hours % 24}h`
-  if (hours > 0) return `${hours}h ${minutes % 60}m`
-  if (minutes > 0) return `${minutes}m ${seconds % 60}s`
-  if (seconds > 0) return `${seconds}s`
-  return `${ms}ms`
-}
-
-const TEST_EMAILS = ['forrestp@outlook.com', 'forrest@valenceanalytical.com']
-
-function getOrderEmail(order: ExplorerOrder): string | null {
-  const p = order.payload as Record<string, unknown> | null
-  if (!p?.billing || typeof p.billing !== 'object') return null
-  return ((p.billing as Record<string, unknown>).email as string) ?? null
-}
-
-// --- Sub-components ---
-
-function SampleStateBadge({ state }: { state: string | null }) {
-  const s = state?.toLowerCase() ?? 'unknown'
-  const config: Record<
-    string,
-    { variant: 'default' | 'secondary' | 'destructive' | 'outline'; label: string }
-  > = {
-    received: { variant: 'secondary', label: 'Received' },
-    sample_received: { variant: 'secondary', label: 'Received' },
-    to_be_verified: { variant: 'default', label: 'To Verify' },
-    verified: { variant: 'default', label: 'Verified' },
-    published: { variant: 'default', label: 'Published' },
-    sample_due: { variant: 'outline', label: 'Sample Due' },
-    waiting_for_addon_results: { variant: 'secondary', label: 'Waiting Addon' },
-    ready_for_review: { variant: 'default', label: 'Ready for Review' },
-    registered: { variant: 'outline', label: 'Registered' },
-    sample_registered: { variant: 'outline', label: 'Registered' },
-    invalid: { variant: 'destructive', label: 'Invalid' },
-    rejected: { variant: 'destructive', label: 'Rejected' },
-    cancelled: { variant: 'destructive', label: 'Cancelled' },
-  }
-  const c = config[s] || {
-    variant: 'outline' as const,
-    label: state ?? 'Unknown',
-  }
-  return (
-    <Badge variant={c.variant} className="text-xs">
-      {c.label}
-    </Badge>
-  )
-}
-
-function AnalysisCounts({
-  counts,
-  needsAttention,
-}: {
-  counts: AnalysisStateCounts
-  needsAttention: boolean
-}) {
-  return (
-    <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
-      {counts.assigned > 0 && (
-        <span>
-          Assigned <span className="font-mono">{counts.assigned}</span>
-        </span>
-      )}
-      {counts.to_verify > 0 && (
-        <span className={cn(needsAttention && 'text-amber-500 font-medium')}>
-          To verify <span className="font-mono">{counts.to_verify}</span>
-        </span>
-      )}
-      {counts.verified > 0 && (
-        <span className="text-green-600">
-          Verified <span className="font-mono">{counts.verified}</span>
-        </span>
-      )}
-      {counts.pending > 0 && (
-        <span>
-          Pending <span className="font-mono">{counts.pending}</span>
-        </span>
-      )}
-    </div>
-  )
-}
-
-function SampleCard({
-  sampleId,
-  lookup,
-  isLoading,
-  isError,
-}: {
-  sampleId: string
-  lookup: SenaiteLookupResult | undefined
-  isLoading: boolean
-  isError: boolean
-}) {
-  const navigateToSample = useUIStore(state => state.navigateToSample)
-
-  if (isLoading) {
-    return (
-      <div className="rounded-md border border-border/50 bg-muted/30 px-3 py-2 min-w-[160px]">
-        <div className="flex items-center gap-2 text-xs text-muted-foreground">
-          <RefreshCw className="h-3 w-3 animate-spin" />
-          <SampleIdBadge id={sampleId} />
-        </div>
-      </div>
-    )
-  }
-
-  if (isError || !lookup) {
-    return (
-      <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 min-w-[160px]">
-        <span className="text-xs font-mono text-destructive">{sampleId}</span>
-        <div className="text-xs text-muted-foreground">Failed to load</div>
-      </div>
-    )
-  }
-
-  const counts = groupAnalysisStates(lookup.analyses, lookup.review_state)
-  const needsAttention = counts.to_verify > 0
-
-  return (
-    <div
-      className={cn(
-        'rounded-md border px-3 py-2 min-w-[160px] transition-colors',
-        needsAttention
-          ? 'border-amber-500/50 bg-amber-500/5'
-          : 'border-border/50 bg-card'
-      )}
-    >
-      <div className="flex items-center gap-2 mb-1">
-        <button
-          type="button"
-          className="hover:underline cursor-pointer"
-          onClick={() => navigateToSample(sampleId)}
-        >
-          <SampleIdBadge id={sampleId} />
-        </button>
-        <SampleStateBadge state={lookup.review_state} />
-        {needsAttention && (
-          <AlertTriangle className="h-3.5 w-3.5 text-amber-500 shrink-0" />
-        )}
-      </div>
-      <div className="flex items-center gap-2">
-        <AnalysisCounts counts={counts} needsAttention={needsAttention} />
-        {lookup.date_received && lookup.review_state !== 'published' && (() => {
-          const hrs = (Date.now() - new Date(lookup.date_received).getTime()) / 3_600_000
-          const timeStr = formatTimeSince(lookup.date_received)
-          const goalNote = hrs > 48
-            ? 'Over 48h — exceeds processing goal'
-            : hrs > 24
-            ? 'Over 24h — approaching processing goal limit'
-            : 'Within 24h processing goal'
-          return (
-            <span className={cn(
-              'text-[10px] font-mono ml-auto shrink-0',
-              hrs > 48 ? 'text-red-400' : hrs > 24 ? 'text-amber-400' : 'text-muted-foreground'
-            )} title={`Time since received in lab: ${timeStr}. ${goalNote}`}>
-              {timeStr}
-            </span>
-          )
-        })()}
-      </div>
-    </div>
-  )
-}
-
-// --- Order row ---
-
-function sampleMatchesAnalysisFilter(
-  senaiteId: string,
-  activeStates: string[],
-  sampleLookupMap: Map<string, { data?: SenaiteLookupResult; isLoading: boolean; isError: boolean }>
-): boolean {
-  if (activeStates.length === 0) return true
-  const lookup = sampleLookupMap.get(senaiteId)
-  if (!lookup?.data) return true // still loading — keep visible
-  const counts = groupAnalysisStates(lookup.data.analyses, lookup.data.review_state)
-  return activeStates.some(state => {
-    if (state === 'sample_due') return counts.sample_due > 0
-    if (state === 'received') return counts.received > 0
-    if (state === 'pending') return counts.pending > 0
-    if (state === 'assigned') return counts.assigned > 0
-    if (state === 'to_verify') return counts.to_verify > 0
-    if (state === 'waiting_for_addon') return counts.waiting_for_addon > 0
-    if (state === 'ready_for_review') return counts.ready_for_review > 0
-    if (state === 'verified') return counts.verified > 0
-    if (state === 'published') return counts.published > 0
-    return false
-  })
-}
-
-// Priority of states — lower = earlier in pipeline = "more behind"
-const STATE_PRIORITY: Record<string, number> = {
-  sample_due: 0,
-  received: 1,
-  pending: 2,
-  assigned: 3,
-  to_verify: 4,
-  waiting_for_addon: 5,
-  ready_for_review: 6,
-  verified: 7,
-  published: 8,
-}
-
-// Left border color for the "worst" (most behind) state in an order
-const STATE_BORDER_CLASS: Record<string, string> = {
-  sample_due: 'border-l-yellow-500',
-  received: 'border-l-cyan-500',
-  pending: 'border-l-zinc-500',
-  assigned: 'border-l-blue-500',
-  to_verify: 'border-l-amber-500',
-  waiting_for_addon: 'border-l-indigo-500',
-  ready_for_review: 'border-l-teal-500',
-  verified: 'border-l-green-500',
-  published: 'border-l-purple-500',
-}
-
-function getOrderWorstState(
-  order: ExplorerOrder,
-  sampleLookupMap: Map<string, { data?: SenaiteLookupResult; isLoading: boolean; isError: boolean }>
-): string | null {
-  let worst: string | null = null
-  let worstPri = Infinity
-  if (!order.sample_results) return null
-  for (const entry of Object.values(order.sample_results)) {
-    const lookup = sampleLookupMap.get(entry.senaite_id)
-    if (!lookup?.data) continue
-    const counts = groupAnalysisStates(lookup.data.analyses, lookup.data.review_state)
-    for (const [key, val] of Object.entries(counts)) {
-      if (val > 0 && (STATE_PRIORITY[key] ?? 99) < worstPri) {
-        worstPri = STATE_PRIORITY[key] ?? 99
-        worst = key
-      }
-    }
-  }
-  return worst
-}
-
-function isOrderDone(
-  order: ExplorerOrder,
-  sampleLookupMap: Map<string, { data?: SenaiteLookupResult; isLoading: boolean; isError: boolean }>
-): boolean {
-  if (!order.sample_results) return false
-  const entries = Object.values(order.sample_results)
-  if (entries.length === 0) return false
-  return entries.every(entry => {
-    const lookup = sampleLookupMap.get(entry.senaite_id)
-    if (!lookup?.data) return false
-    const counts = groupAnalysisStates(lookup.data.analyses, lookup.data.review_state)
-    const total = counts.verified + counts.published
-    const all = Object.values(counts).reduce((a, b) => a + b, 0)
-    return total > 0 && total === all
-  })
-}
-
-function getOrderProgress(
-  order: ExplorerOrder,
-  sampleLookupMap: Map<string, { data?: SenaiteLookupResult; isLoading: boolean; isError: boolean }>
-): { done: number; total: number } {
-  let done = 0
-  let total = 0
-  if (!order.sample_results) return { done: 0, total: 0 }
-  for (const entry of Object.values(order.sample_results)) {
-    const lookup = sampleLookupMap.get(entry.senaite_id)
-    if (!lookup?.data) continue
-    for (const a of lookup.data.analyses) {
-      const s = a.review_state?.toLowerCase()
-      if (s === 'rejected' || s === 'cancelled' || s === 'invalid' || s === 'retracted') continue
-      total++
-      if (s === 'verified' || s === 'published') done++
-    }
-  }
-  return { done, total }
-}
-
-function formatTimeSince(dateStr: string | null): string | null {
-  if (!dateStr) return null
-  const ms = Date.now() - new Date(dateStr).getTime()
-  if (ms < 0) return null
-  const hours = Math.floor(ms / 3_600_000)
-  if (hours < 24) return `${hours}h`
-  const days = Math.floor(hours / 24)
-  return `${days}d ${hours % 24}h`
-}
-
-function OrderRow({
-  order,
-  wordpressHost,
-  sampleLookupMap,
-  activeAnalysisStates,
-}: {
-  order: ExplorerOrder
-  wordpressHost: string
-  sampleLookupMap: Map<
-    string,
-    {
-      data?: SenaiteLookupResult
-      isLoading: boolean
-      isError: boolean
-    }
-  >
-  activeAnalysisStates: string[]
-}) {
-  const wpUrl = `${wordpressHost}/wp-admin/post.php?post=${order.order_id}&action=edit`
-
-  const sampleEntries = order.sample_results
-    ? Object.entries(order.sample_results).map(([key, val]) => ({
-        name: key,
-        senaiteId: val.senaite_id,
-        integrationStatus: val.status,
-      }))
-    : []
-
-  const visibleSampleEntries = sampleEntries.filter(s => {
-    if (s.integrationStatus === 'failed' || !s.senaiteId) return activeAnalysisStates.length === 0
-    return sampleMatchesAnalysisFilter(s.senaiteId, activeAnalysisStates, sampleLookupMap)
-  })
-
-  const hasAttention = sampleEntries.some(s => {
-    const lookup = sampleLookupMap.get(s.senaiteId)
-    if (!lookup?.data) return false
-    return groupAnalysisStates(lookup.data.analyses, lookup.data.review_state).to_verify > 0
-  })
-
-  const worstState = getOrderWorstState(order, sampleLookupMap)
-  const done = isOrderDone(order, sampleLookupMap)
-  const progress = getOrderProgress(order, sampleLookupMap)
-
-  const email = (() => {
-    const p = order.payload as Record<string, unknown> | null
-    if (!p?.billing || typeof p.billing !== 'object') return null
-    return ((p.billing as Record<string, unknown>).email as string) ?? null
-  })()
-
-  const worstLabel = worstState ? (COL_COUNT_LABEL[worstState] ?? worstState) : null
-
-  return (
-    <tr className={cn(
-      'align-top border-l-3',
-      done && 'opacity-45',
-      hasAttention && 'bg-amber-500/[0.03]',
-      worstState ? STATE_BORDER_CLASS[worstState] ?? 'border-l-transparent' : 'border-l-transparent',
-    )}
-      title={worstLabel ? `Earliest sample stage: ${worstLabel}` : undefined}
-    >
-      <td className="py-3 px-3 whitespace-nowrap">
-        <a
-          href={wpUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="inline-flex items-center gap-1 font-mono text-sm text-primary hover:underline"
-        >
-          {order.order_id}
-          <ExternalLink className="h-3 w-3" />
-        </a>
-      </td>
-      <td className="py-3 px-3">
-        {email ? (
-          <span className="text-sm block" title={email}>
-            {email}
-          </span>
-        ) : (
-          <span className="text-muted-foreground">{'\u2014'}</span>
-        )}
-      </td>
-      <td className="py-3 px-3 whitespace-nowrap">
-        {progress.total > 0 ? (
-          <div className="flex items-center gap-2">
-            <div className="w-16 h-1.5 rounded-full bg-muted overflow-hidden">
-              <div
-                className={cn(
-                  'h-full rounded-full transition-all',
-                  progress.done === progress.total ? 'bg-green-500' : 'bg-blue-500'
-                )}
-                style={{ width: `${(progress.done / progress.total) * 100}%` }}
-              />
-            </div>
-            <span className="text-xs font-mono text-muted-foreground">
-              {progress.done}/{progress.total}
-            </span>
-          </div>
-        ) : (
-          <span className="text-xs text-muted-foreground">{'\u2014'}</span>
-        )}
-      </td>
-      <td className="py-3 px-3 whitespace-nowrap text-sm text-muted-foreground">
-        {formatDate(order.created_at)}
-      </td>
-      <td className="py-3 px-3 whitespace-nowrap">
-        <span
-          className={cn(
-            'font-mono text-sm',
-            order.completed_at ? 'text-green-600' : 'text-yellow-600'
-          )}
-        >
-          {formatProcessingTime(order.created_at, order.completed_at)}
-        </span>
-      </td>
-      <td className="py-3 px-3">
-        {visibleSampleEntries.length === 0 ? (
-          <span className="text-muted-foreground text-xs">
-            {sampleEntries.length === 0 ? 'No samples' : 'No matching samples'}
-          </span>
-        ) : (
-          <div className="flex flex-wrap gap-2 max-w-[1060px]">
-            {visibleSampleEntries.map(s => {
-              // Sample never created in SENAITE (integration failure)
-              if (s.integrationStatus === 'failed' || !s.senaiteId) {
-                return (
-                  <div
-                    key={s.name}
-                    className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 min-w-[160px]"
-                  >
-                    <span className="text-xs font-medium text-destructive">
-                      {s.senaiteId || `Sample ${s.name}`}
-                    </span>
-                    <div className="text-xs text-muted-foreground">
-                      Failed to create in SENAITE
-                    </div>
-                  </div>
-                )
-              }
-              const lookup = sampleLookupMap.get(s.senaiteId)
-              return (
-                <SampleCard
-                  key={s.senaiteId}
-                  sampleId={s.senaiteId}
-                  lookup={lookup?.data}
-                  isLoading={lookup?.isLoading ?? true}
-                  isError={lookup?.isError ?? false}
-                />
-              )
-            })}
-          </div>
-        )}
-      </td>
-    </tr>
-  )
-}
-
 // --- Kanban types & components ---
 
 type KanbanCol = { key: string; label: string; countKey: keyof AnalysisStateCounts }
@@ -582,7 +82,6 @@ type KanbanCol = { key: string; label: string; countKey: keyof AnalysisStateCoun
 const KANBAN_COLUMNS: KanbanCol[] = [
   { key: 'sample_due', label: 'Sample Due', countKey: 'sample_due' },
   { key: 'received', label: 'Received', countKey: 'received' },
-  { key: 'pending', label: 'Pending', countKey: 'pending' },
   { key: 'assigned', label: 'Assigned', countKey: 'assigned' },
   { key: 'to_verify', label: 'To Verify', countKey: 'to_verify' },
   { key: 'waiting_for_addon', label: 'Waiting Addon', countKey: 'waiting_for_addon' },
@@ -605,24 +104,10 @@ interface KanbanSampleItem {
   analysisServices?: string[]  // names of analyses matching this column's state
 }
 
-// Human-readable label for the count in each column
-const COL_COUNT_LABEL: Record<string, string> = {
-  sample_due: 'due',
-  received: 'received',
-  pending: 'pending',
-  assigned: 'assigned',
-  to_verify: 'to verify',
-  waiting_for_addon: 'waiting addon',
-  ready_for_review: 'ready for review',
-  verified: 'verified',
-  published: 'published',
-}
-
 // Tailwind classes for count pill background per column
 const COL_PILL_CLASS: Record<string, string> = {
   sample_due: 'bg-yellow-500/15 text-yellow-400',
   received: 'bg-cyan-500/15 text-cyan-400',
-  pending: 'bg-muted/60 text-muted-foreground',
   assigned: 'bg-blue-500/15 text-blue-400',
   to_verify: 'bg-amber-500/15 text-amber-400',
   waiting_for_addon: 'bg-indigo-500/15 text-indigo-400',
@@ -637,7 +122,6 @@ const COL_ANALYSIS_STATES: Record<string, string[]> = {
   to_verify: ['to_be_verified'],
   verified: ['verified'],
   published: ['published'],
-  pending: ['registered', 'unassigned', 'sample_registered'],
 }
 
 const COMPLETED_ANALYSIS_STATES = new Set(['verified', 'published', 'rejected', 'cancelled', 'invalid', 'retracted'])
@@ -705,10 +189,15 @@ function KanbanSampleCard({
   item,
   showOrder,
   showAnalysisServices,
+  sampleSlaStatusesMap,
 }: {
   item: KanbanSampleItem
   showOrder: boolean
   showAnalysisServices: boolean
+  // Multi-tier follow-on: each sample now has an array of snapshots (one per
+  // service group). Until the indicator itself renders stacked rows, we pick
+  // the first element so behavior stays single-tier-visible.
+  sampleSlaStatusesMap?: Map<string, SampleSlaSnapshot[]>
 }) {
   const navigateToSample = useUIStore(state => state.navigateToSample)
   const navigateToOrderExplorer = useUIStore(state => state.navigateToOrderExplorer)
@@ -717,7 +206,7 @@ function KanbanSampleCard({
     return (
       <div className="rounded border border-border/50 bg-muted/20 px-2 py-1 flex items-center gap-1.5 text-muted-foreground">
         <RefreshCw className="h-2.5 w-2.5 animate-spin shrink-0" />
-        <SampleIdBadge id={item.sampleId} />
+        <span className="font-mono text-[11px]">{item.sampleId}</span>
       </div>
     )
   }
@@ -745,10 +234,10 @@ function KanbanSampleCard({
         <div className="flex items-center gap-1.5 min-w-0">
           <button
             type="button"
-            className="leading-none cursor-pointer shrink-0"
+            className="text-[11px] font-mono font-semibold text-primary hover:underline leading-none cursor-pointer shrink-0"
             onClick={() => navigateToSample(item.sampleId)}
           >
-            <SampleIdBadge id={item.sampleId} />
+            {item.sampleId}
           </button>
           {item.email && (
             <span className="text-[10px] text-muted-foreground/60 leading-none truncate">{item.email}</span>
@@ -791,23 +280,7 @@ function KanbanSampleCard({
               </>
             )}
           </div>
-          {item.lookup?.date_received && item.lookup.review_state !== 'published' ? (() => {
-            const hrs = (Date.now() - new Date(item.lookup.date_received).getTime()) / 3_600_000
-            const timeStr = formatTimeSince(item.lookup.date_received)
-            const goalNote = hrs > 48
-              ? 'Over 48h — exceeds processing goal'
-              : hrs > 24
-              ? 'Over 24h — approaching processing goal limit'
-              : 'Within 24h processing goal'
-            return (
-              <span className={cn(
-                'text-[10px] font-mono leading-none tabular-nums',
-                hrs > 48 ? 'text-red-400' : hrs > 24 ? 'text-amber-400' : 'text-muted-foreground/70'
-              )} title={`Time since received in lab: ${timeStr}. ${goalNote}`}>
-                {timeStr}
-              </span>
-            )
-          })() : (
+          {!(item.lookup?.date_received && item.lookup.review_state !== 'published') && (
             <span className={cn(
               'text-[10px] font-mono leading-none tabular-nums',
               item.completedAt ? 'text-green-600/70' : 'text-amber-500/70'
@@ -815,6 +288,11 @@ function KanbanSampleCard({
               {formatProcessingTime(item.createdAt, item.completedAt)}
             </span>
           )}
+        </div>
+      )}
+      {item.lookup?.date_received && item.lookup.review_state !== 'published' && (
+        <div className="mt-0.5">
+          <SampleSlaIndicator snapshots={sampleSlaStatusesMap?.get(item.sampleId)} />
         </div>
       )}
       {showAnalysisServices && item.colKey !== 'published' && item.analysisServices && item.analysisServices.length > 0 && (
@@ -836,12 +314,18 @@ function KanbanView({
   groupByOrder,
   activeStates,
   showAnalysisServices,
+  sampleSlaStatusesMap,
+  collapsedCols,
+  onToggleCollapse,
 }: {
   orders: ExplorerOrder[]
   sampleLookupMap: Map<string, { data?: SenaiteLookupResult; isLoading: boolean; isError: boolean }>
   groupByOrder: boolean
   activeStates: string[]
   showAnalysisServices: boolean
+  sampleSlaStatusesMap?: Map<string, SampleSlaSnapshot[]>
+  collapsedCols: string[]
+  onToggleCollapse: (key: string) => void
 }) {
   // Determine which columns to show — all if no filter, else just the active one
   const visibleCols = activeStates.length > 0
@@ -904,33 +388,55 @@ function KanbanView({
     return (
       <div
         className="grid gap-3 min-w-0"
-        style={{ gridTemplateColumns: `repeat(${visibleCols.length}, minmax(180px, 1fr))` }}
+        style={{
+          gridTemplateColumns: visibleCols
+            .map(c => (collapsedCols.includes(c.key) ? 'minmax(40px, auto)' : 'minmax(180px, 1fr)'))
+            .join(' '),
+        }}
       >
         {visibleCols.map(col => {
           const colItems = allItems.filter(i => i.colKey === col.key)
+          const collapsed = collapsedCols.includes(col.key)
           return (
             <div key={col.key} className="flex flex-col gap-2 min-w-0">
-              <div className="flex items-center justify-between px-1 pb-1 border-b border-border/50">
-                <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-                  {col.label}
+              <button
+                type="button"
+                onClick={() => onToggleCollapse(col.key)}
+                title={collapsed ? `Expand ${col.label}` : `Collapse ${col.label}`}
+                className="flex w-full items-center justify-between gap-1 px-1 pb-1 border-b border-border/50 hover:text-foreground transition-colors"
+              >
+                <span className="flex items-center gap-1 min-w-0">
+                  {collapsed ? (
+                    <ChevronRight className="h-3 w-3 shrink-0" />
+                  ) : (
+                    <ChevronDown className="h-3 w-3 shrink-0" />
+                  )}
+                  {!collapsed && (
+                    <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide truncate">
+                      {col.label}
+                    </span>
+                  )}
                 </span>
                 <Badge variant="secondary" className="text-xs tabular-nums">
                   {colItems.filter(i => !i.isLoading).length}
                 </Badge>
-              </div>
-              <div className="flex flex-col gap-1">
-                {colItems.length === 0 && (
-                  <div className="text-xs text-muted-foreground/50 text-center py-4">Empty</div>
-                )}
-                {colItems.map(item => (
-                  <KanbanSampleCard
-                    key={`${item.sampleId}-${item.colKey}`}
-                    item={item}
-                    showOrder={true}
-                    showAnalysisServices={showAnalysisServices}
-                  />
-                ))}
-              </div>
+              </button>
+              {!collapsed && (
+                <div className="flex flex-col gap-1">
+                  {colItems.length === 0 && (
+                    <div className="text-xs text-muted-foreground/50 text-center py-4">Empty</div>
+                  )}
+                  {colItems.map(item => (
+                    <KanbanSampleCard
+                      key={`${item.sampleId}-${item.colKey}`}
+                      item={item}
+                      showOrder={true}
+                      showAnalysisServices={showAnalysisServices}
+                      sampleSlaStatusesMap={sampleSlaStatusesMap}
+                    />
+                  ))}
+                </div>
+              )}
             </div>
           )
         })}
@@ -980,6 +486,7 @@ function KanbanView({
                           item={item}
                           showOrder={false}
                           showAnalysisServices={showAnalysisServices}
+                          sampleSlaStatusesMap={sampleSlaStatusesMap}
                         />
                       ))
                     )}
@@ -999,7 +506,6 @@ function KanbanView({
 const ANALYSIS_STATE_BUTTONS = [
   { key: 'sample_due', label: 'Sample Due', tooltip: 'Sample expected but not yet received in the lab (being mailed in)' },
   { key: 'received', label: 'Received', tooltip: 'Sample physically received in the lab and ready for analysis' },
-  { key: 'pending', label: 'Pending', tooltip: 'Analyses exist but have not been assigned to a tech yet' },
   { key: 'assigned', label: 'Assigned', tooltip: 'Analyses assigned to a lab tech via a SENAITE worksheet' },
   { key: 'to_verify', label: 'To Verify', tooltip: 'Tech has submitted results, waiting for supervisor verification' },
   { key: 'waiting_for_addon', label: 'Waiting Addon', tooltip: 'Initial analyses verified, waiting for outsourced/addon test results to come back' },
@@ -1017,7 +523,10 @@ interface OrderFilters {
   sampleIdFilter: string
   emailFilter: string
   orderIdFilter: string
+  analyteFilter: string
   hideTestOrders: boolean
+  slaAtRisk: boolean
+  collapsedKanbanCols: string[]
   viewMode: 'table' | 'kanban'
   groupByOrder: boolean
   showAnalysisServices: boolean
@@ -1028,7 +537,15 @@ interface OrderFilters {
 function loadOrderFilters(): OrderFilters {
   try {
     const raw = localStorage.getItem(FILTERS_LS_KEY)
-    if (raw) return JSON.parse(raw) as OrderFilters
+    if (raw) {
+      const parsed = JSON.parse(raw) as OrderFilters
+      return {
+        ...parsed,
+        activeStates: (parsed.activeStates ?? []).filter(s => s !== 'pending'),
+        collapsedKanbanCols: parsed.collapsedKanbanCols ?? [],
+        analyteFilter: parsed.analyteFilter ?? '',
+      }
+    }
   } catch {
     // ignore parse errors
   }
@@ -1037,7 +554,10 @@ function loadOrderFilters(): OrderFilters {
     sampleIdFilter: '',
     emailFilter: '',
     orderIdFilter: '',
+    analyteFilter: '',
     hideTestOrders: true,
+    slaAtRisk: false,
+    collapsedKanbanCols: [],
     viewMode: 'table',
     groupByOrder: true,
     showAnalysisServices: false,
@@ -1071,7 +591,13 @@ export function OrderStatusPage() {
 
   const toggleState = (key: string) => {
     updateFilters({
-      activeStates: orderFilters.activeStates[0] === key ? [] : [key],
+      activeStates: toggleFilterKey(orderFilters.activeStates, key),
+    })
+  }
+
+  const toggleCollapsedCol = (key: string) => {
+    updateFilters({
+      collapsedKanbanCols: toggleFilterKey(orderFilters.collapsedKanbanCols, key),
     })
   }
   const wordpressHost = getWordpressUrl()
@@ -1132,54 +658,12 @@ export function OrderStatusPage() {
     return filtered
   }, [allOrders, showAll, orderFilters])
 
-  // Collect all unique sample IDs from displayed orders (skip failed/empty ones)
-  const sampleIds = useMemo(() => {
-    const ids: string[] = []
-    for (const order of orders) {
-      if (order.sample_results) {
-        for (const entry of Object.values(order.sample_results)) {
-          if (
-            entry.senaite_id &&
-            entry.status !== 'failed' &&
-            !ids.includes(entry.senaite_id)
-          ) {
-            ids.push(entry.senaite_id)
-          }
-        }
-      }
-    }
-    return ids
-  }, [orders])
-
-  // Fetch sample details from SENAITE — serialized to avoid overwhelming Zope
-  const sampleQueries = useQueries({
-    queries: sampleIds.map(id => ({
-      queryKey: ['senaite', 'lookup', id],
-      queryFn: () => enqueueSenaiteLookup(id),
-      staleTime: 15 * 60_000,
-      retry: 1,
-    })),
-  })
-
-  // Build lookup map: sampleId → query result
-  const sampleLookupMap = useMemo(() => {
-    const map = new Map<
-      string,
-      {
-        data?: SenaiteLookupResult
-        isLoading: boolean
-        isError: boolean
-      }
-    >()
-    sampleIds.forEach((id, idx) => {
-      map.set(id, {
-        data: sampleQueries[idx]?.data,
-        isLoading: sampleQueries[idx]?.isLoading ?? true,
-        isError: sampleQueries[idx]?.isError ?? false,
-      })
-    })
-    return map
-  }, [sampleIds, sampleQueries])
+  // Per-sample SENAITE lookup map (shared hook — see useSenaiteLookupMap).
+  // `sampleLookupMap` is consumed below by the analysis-state filter
+  // (filteredOrders) and by useOrderSlaStatuses; built from the full `orders`
+  // set so filtered lookups are always present.
+  const { sampleLookupMap, isFetching: sampleLookupFetching, lastCachedAt } =
+    useSenaiteLookupMap(orders)
 
   // Hide orders where no samples match the active analysis state filter
   const filteredOrders = useMemo(() => {
@@ -1190,6 +674,24 @@ export function OrderStatusPage() {
         return Object.values(o.sample_results).some(v =>
           v.senaite_id && sampleMatchesAnalysisFilter(v.senaite_id, orderFilters.activeStates, sampleLookupMap)
         )
+      })
+    }
+    // Analyte filter — match the analysis names shown on the cards
+    // (formatAnalysisTitle) against the query, case-insensitive substring. Only
+    // loaded sample lookups can match; results refine as SENAITE lookups arrive.
+    const analyteQ = orderFilters.analyteFilter.trim().toLowerCase()
+    if (analyteQ) {
+      result = result.filter(o => {
+        if (!o.sample_results) return false
+        return Object.values(o.sample_results).some(v => {
+          if (!v.senaite_id) return false
+          const lookup = sampleLookupMap.get(v.senaite_id)?.data
+          if (!lookup) return false
+          const nameMap = buildAnalyteNameMap(lookup)
+          return lookup.analyses.some(a =>
+            formatAnalysisTitle(a.title, nameMap).toLowerCase().includes(analyteQ)
+          )
+        })
       })
     }
     // Apply kanban sort when in grouped kanban mode
@@ -1205,6 +707,36 @@ export function OrderStatusPage() {
     }
     return result
   }, [orders, orderFilters, sampleLookupMap])
+
+  // D2: order-aggregated SLA verdicts + per-sample status snapshots for the
+  // table-view SLA column and the card-view SampleSlaIndicator. The hook is
+  // useMemo-aggregated; only its one /sla/status batch query re-runs on data
+  // changes (sharpenings #3, #4).
+  const orderSla = useOrderSlaStatuses(filteredOrders, sampleLookupMap)
+
+  // Count of at-risk orders in the current filtered set — drives the toggle's
+  // badge regardless of whether the toggle is on.
+  const atRiskCount = useMemo(
+    () =>
+      filteredOrders.filter(o =>
+        isOrderAtRisk(orderSla.verdictByOrderId.get(o.order_id))
+      ).length,
+    [filteredOrders, orderSla.verdictByOrderId]
+  )
+
+  // When the SLA toggle is on, narrow to orders approaching/over their target.
+  // Computed AFTER orderSla (which runs on the full filteredOrders), so verdicts
+  // for the narrowed subset are always present. Loading-SLA orders are excluded
+  // while the toggle is on (only known-at-risk shown).
+  const displayedOrders = useMemo(
+    () =>
+      orderFilters.slaAtRisk
+        ? filteredOrders.filter(o =>
+            isOrderAtRisk(orderSla.verdictByOrderId.get(o.order_id))
+          )
+        : filteredOrders,
+    [filteredOrders, orderFilters.slaAtRisk, orderSla.verdictByOrderId]
+  )
 
   // Count orders needing attention (have samples with to_verify analyses)
   const attentionCount = useMemo(() => {
@@ -1242,15 +774,7 @@ export function OrderStatusPage() {
     return totals
   }, [orders, sampleLookupMap])
 
-  // Oldest cached_at from settled queries — shows when data was last fetched from Senaite
-  const lastUpdated = useMemo(() => {
-    let oldest: string | null = null
-    for (const q of sampleQueries) {
-      const ts = q.data?.cached_at
-      if (ts && (!oldest || ts < oldest)) oldest = ts
-    }
-    return oldest
-  }, [sampleQueries])
+  const lastUpdated = lastCachedAt
 
   const openCount = useMemo(() => {
     if (!allOrders) return 0
@@ -1265,7 +789,7 @@ export function OrderStatusPage() {
   }, [allOrders, orderFilters])
 
   // True while any senaite lookup is actively fetching
-  const isRefreshing = sampleQueries.some(q => q.isFetching)
+  const isRefreshing = sampleLookupFetching
 
   const handleRefresh = async () => {
     // Clear server-side cache, then invalidate all client queries
@@ -1379,6 +903,23 @@ export function OrderStatusPage() {
                 </Badge>
               )}
             </Button>
+            <Button
+              variant={orderFilters.slaAtRisk ? 'default' : 'outline'}
+              size="sm"
+              onClick={() => updateFilters({ slaAtRisk: !orderFilters.slaAtRisk })}
+              title="Show only orders approaching or past their SLA target"
+              className={cn(
+                orderFilters.slaAtRisk &&
+                  'bg-amber-500 text-white border-amber-500 hover:bg-amber-600'
+              )}
+            >
+              ⚠ SLA at-risk
+              {!ordersLoading && atRiskCount > 0 && (
+                <Badge variant="secondary" className="ml-1.5">
+                  {atRiskCount}
+                </Badge>
+              )}
+            </Button>
 
             <label className="flex items-center gap-2 text-sm text-muted-foreground whitespace-nowrap cursor-pointer ml-1">
               <Checkbox
@@ -1425,7 +966,7 @@ export function OrderStatusPage() {
                     <div className="flex items-center gap-0.5 border border-border rounded-md overflow-hidden">
                       {([
                         { key: 'order_id', label: 'Order ID' },
-                        { key: 'processing_time', label: 'Outstanding' },
+                        { key: 'processing_time', label: 'Since order' },
                       ] as const).map(opt => {
                         const isActive = orderFilters.kanbanSort === opt.key
                         return (
@@ -1565,10 +1106,16 @@ export function OrderStatusPage() {
               onChange={e => updateFilters({ sampleIdFilter: e.target.value })}
               className="h-7 w-32 text-xs"
             />
-            {(orderFilters.orderIdFilter || orderFilters.emailFilter || orderFilters.sampleIdFilter) && (
+            <Input
+              placeholder="Analyte"
+              value={orderFilters.analyteFilter}
+              onChange={e => updateFilters({ analyteFilter: e.target.value })}
+              className="h-7 w-36 text-xs"
+            />
+            {(orderFilters.orderIdFilter || orderFilters.emailFilter || orderFilters.sampleIdFilter || orderFilters.analyteFilter) && (
               <button
                 type="button"
-                onClick={() => updateFilters({ orderIdFilter: '', emailFilter: '', sampleIdFilter: '' })}
+                onClick={() => updateFilters({ orderIdFilter: '', emailFilter: '', sampleIdFilter: '', analyteFilter: '' })}
                 className="text-xs text-muted-foreground hover:text-foreground underline"
               >
                 Clear
@@ -1590,7 +1137,7 @@ export function OrderStatusPage() {
                 <CardDescription>
                   {ordersLoading
                     ? 'Loading orders...'
-                    : `${filteredOrders.length} order${filteredOrders.length !== 1 ? 's' : ''} displayed`}
+                    : `${displayedOrders.length} order${displayedOrders.length !== 1 ? 's' : ''} displayed`}
                 </CardDescription>
               </div>
             </div>
@@ -1610,13 +1157,15 @@ export function OrderStatusPage() {
               </div>
             )}
 
-            {filteredOrders.length === 0 && !ordersLoading && (
+            {displayedOrders.length === 0 && !ordersLoading && (
               <div className="text-muted-foreground py-8 text-center">
-                {showAll ? 'No orders found' : 'No open orders'}
+                {orderFilters.slaAtRisk
+                  ? 'No at-risk orders in current filter'
+                  : showAll ? 'No orders found' : 'No open orders'}
               </div>
             )}
 
-            {filteredOrders.length > 0 && orderFilters.viewMode === 'table' && (
+            {displayedOrders.length > 0 && orderFilters.viewMode === 'table' && (
               <div className="overflow-auto max-h-[850px]">
                 <table className="w-full text-sm">
                   <thead className="sticky top-0 z-10 bg-card border-b">
@@ -1625,18 +1174,21 @@ export function OrderStatusPage() {
                       <th className="py-2 px-3 font-medium whitespace-nowrap">Email</th>
                       <th className="py-2 px-3 font-medium whitespace-nowrap">Progress</th>
                       <th className="py-2 px-3 font-medium whitespace-nowrap">Created</th>
-                      <th className="py-2 px-3 font-medium whitespace-nowrap">Processing Time</th>
+                      <th className="py-2 px-3 font-medium whitespace-nowrap">Timing</th>
+                      <th className="py-2 px-3 font-medium whitespace-nowrap">SLA</th>
                       <th className="py-2 px-3 font-medium">Sample Details</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border/50">
-                    {filteredOrders.map(order => (
+                    {displayedOrders.map(order => (
                       <OrderRow
                         key={order.id}
                         order={order}
                         wordpressHost={wordpressHost}
                         sampleLookupMap={sampleLookupMap}
                         activeAnalysisStates={orderFilters.activeStates}
+                        slaVerdict={orderSla.verdictByOrderId.get(order.order_id)}
+                        sampleSlaStatusesMap={orderSla.sampleStatusesBySampleId}
                       />
                     ))}
                   </tbody>
@@ -1644,14 +1196,17 @@ export function OrderStatusPage() {
               </div>
             )}
 
-            {filteredOrders.length > 0 && orderFilters.viewMode === 'kanban' && (
+            {displayedOrders.length > 0 && orderFilters.viewMode === 'kanban' && (
               <div className="overflow-auto max-h-[850px]">
                 <KanbanView
-                  orders={filteredOrders}
+                  orders={displayedOrders}
                   sampleLookupMap={sampleLookupMap}
                   groupByOrder={orderFilters.groupByOrder}
                   activeStates={orderFilters.activeStates}
                   showAnalysisServices={orderFilters.showAnalysisServices}
+                  sampleSlaStatusesMap={orderSla.sampleStatusesBySampleId}
+                  collapsedCols={orderFilters.collapsedKanbanCols}
+                  onToggleCollapse={toggleCollapsedCol}
                 />
               </div>
             )}

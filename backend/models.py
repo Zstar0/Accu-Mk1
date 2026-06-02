@@ -3,9 +3,9 @@ SQLAlchemy models for Accu-Mk1 database.
 Uses SQLAlchemy 2.0 style with mapped_column.
 """
 
-from datetime import datetime
+from datetime import datetime, time, date
 from typing import Optional, List
-from sqlalchemy import String, Text, Float, Integer, Boolean, DateTime, ForeignKey, JSON, Column, Table, UniqueConstraint, CheckConstraint
+from sqlalchemy import String, Text, Float, Integer, Boolean, DateTime, Time, Date, ForeignKey, JSON, Column, Table, UniqueConstraint, CheckConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from database import Base
@@ -181,12 +181,16 @@ class ServiceGroup(Base):
     color: Mapped[str] = mapped_column(String(50), nullable=False, default="blue")
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     is_default: Mapped[bool] = mapped_column(Boolean, default=False)
+    sla_tier_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("sla_tiers.id", ondelete="SET NULL"), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     analysis_services: Mapped[list["AnalysisService"]] = relationship(
         "AnalysisService", secondary="service_group_members"
     )
+    sla_tier: Mapped[Optional["SlaTier"]] = relationship("SlaTier")
 
     def __repr__(self) -> str:
         return f"<ServiceGroup(id={self.id}, name='{self.name}')>"
@@ -758,3 +762,115 @@ class LimsSubSample(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     parent_sample: Mapped["LimsSample"] = relationship("LimsSample", back_populates="sub_samples")
+
+
+class SlaTier(Base):
+    """A named SLA turnaround target. Sub-project A (revised to tiers).
+
+    Referenced by ServiceGroup.sla_tier_id and by SlaPriorityTier. Exactly one
+    row has is_default=true (the catch-all, enforced by the partial unique index
+    uq_sla_tier_single_default created in database._run_migrations).
+    """
+
+    __tablename__ = "sla_tiers"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    target_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Stored now; honored by the business-hours calendar in sub-project B.
+    business_hours_only: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
+    is_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # D2: per-tier amber threshold. Sample is amber when remaining/target * 100 < this.
+    amber_threshold_percent: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=20
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+    def __repr__(self) -> str:
+        return f"<SlaTier(id={self.id}, name='{self.name}', target_minutes={self.target_minutes})>"
+
+
+class SlaPriorityTier(Base):
+    """Priority -> SLA tier override, optionally scoped to a single service group.
+
+    - service_group_id IS NULL: the row is a "global" override — applies to any
+      group's analyses unless a more specific (priority, group_id) row exists.
+    - service_group_id = <id>: applies ONLY when resolving analyses in that
+      group; lets the lab express e.g. "expedited speeds up HPLC but does
+      nothing for sterility (which still takes 7d)".
+
+    Resolution precedence (per service-group): (priority, group_id) wins, then
+    (priority, NULL), then the group's own tier, then the default tier. A row
+    exists only for combinations that actually override; absence means no
+    override at that precedence level.
+
+    Schema notes: `priority` is no longer the primary key — multiple rows can
+    share a priority (one per group + optionally one global). Two PARTIAL
+    UNIQUE indexes enforce at most one global-per-priority and at most one
+    per-(priority, group) row; see _run_migrations.
+    """
+
+    __tablename__ = "sla_priority_tiers"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    priority: Mapped[str] = mapped_column(String(20), nullable=False)
+    sla_tier_id: Mapped[int] = mapped_column(
+        ForeignKey("sla_tiers.id", ondelete="CASCADE"), nullable=False
+    )
+    service_group_id: Mapped[int | None] = mapped_column(
+        ForeignKey("service_groups.id", ondelete="CASCADE"), nullable=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+    tier: Mapped["SlaTier"] = relationship("SlaTier")
+
+    def __repr__(self) -> str:
+        return (
+            f"<SlaPriorityTier(id={self.id}, priority='{self.priority}', "
+            f"service_group_id={self.service_group_id}, sla_tier_id={self.sla_tier_id})>"
+        )
+
+
+class BusinessHoursConfig(Base):
+    """Singleton (id=1) global lab business-hours schedule (sub-project B).
+
+    The business-minutes engine reads open/close/timezone/working_days; the
+    per-tier business_hours_only flag (sub-project A) selects whether a tier uses
+    it. Exactly one row, enforced by id=1 + the seed guard in _run_migrations.
+    """
+
+    __tablename__ = "business_hours_config"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=False)  # always 1; no sequence
+    open_time: Mapped[time] = mapped_column(Time, nullable=False)
+    close_time: Mapped[time] = mapped_column(Time, nullable=False)
+    timezone: Mapped[str] = mapped_column(String(64), nullable=False, default="America/Los_Angeles")
+    working_days: Mapped[list[int]] = mapped_column(JSON, nullable=False, default=lambda: [0, 1, 2, 3, 4])
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def __repr__(self) -> str:
+        return f"<BusinessHoursConfig(open={self.open_time}, close={self.close_time}, tz='{self.timezone}')>"
+
+
+class LabHoliday(Base):
+    """A lab closure date — federal (seeded) or custom (user-added). Every row is
+    removable; deleting a federal row means the lab works that day (sub-project B)."""
+
+    __tablename__ = "lab_holidays"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    holiday_date: Mapped[date] = mapped_column(Date, nullable=False, unique=True)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    source: Mapped[str] = mapped_column(String(10), nullable=False, default="custom")  # 'federal' | 'custom'
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    def __repr__(self) -> str:
+        return f"<LabHoliday(date={self.holiday_date}, name='{self.name}', source='{self.source}')>"
