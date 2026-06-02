@@ -1,6 +1,7 @@
 # Worksheet Sub-Sample Grouping + Variance Set — Design
 
 **Date:** 2026-06-02
+**Status:** Phase 1-2 (variance set) **shipped**. Phase 3-4 (family card) **superseded** by `2026-06-02-worksheet-vial-inbox-redesign.md` — read that doc for the current direction on the inbox.
 **Scope:** Group sub-samples on the worksheet inbox so a parent's vials present as a single draggable family card; add a per-parent variance set with selectable membership, lockable for downstream COA aggregation. Mk1-only changes; SENAITE, integration-service, and coabuilder untouched in this phase.
 **Repos touched:** `Accu-Mk1` only.
 **Predecessor phases:** `feat/sub-samples` (vial intake), `feat/vial-assignment-step` (HPLC / ENDO / STER / XTRA role assignment).
