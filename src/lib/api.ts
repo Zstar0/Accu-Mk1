@@ -4495,6 +4495,49 @@ export async function getReportsPurityTrend(analyteName: string, isBlend = false
   return response.json()
 }
 
+// ─── Check-In Times ──────────────────────────────────────────────────────────
+
+export interface CheckInRecord {
+  sample_id: string
+  sample_uid: string
+  date_received: string // ISO 8601 UTC, trailing "Z"
+  product_label: string | null
+  priority: string
+  is_test_order: boolean
+}
+
+export async function getCheckInTimes(from?: string, to?: string): Promise<CheckInRecord[]> {
+  const qs = new URLSearchParams()
+  if (from) qs.set('from', from)
+  if (to) qs.set('to', to)
+  const suffix = qs.toString() ? `?${qs.toString()}` : ''
+  const response = await fetch(`${API_BASE_URL()}/reports/checkin-times${suffix}`, {
+    headers: getBearerHeaders(),
+  })
+  if (!response.ok) throw new Error(`Check-in times failed: ${response.status}`)
+  return response.json()
+}
+
+// ─── Phase Turnaround (Bottlenecks) ──────────────────────────────────────────
+
+export interface TurnaroundSample {
+  sample_id: string
+  ordered_at: string | null
+  received_at: string | null
+  submitted_at: string | null
+  verified_at: string | null
+  published_at: string | null
+  is_test_order: boolean
+}
+
+export async function getTurnaround(): Promise<TurnaroundSample[]> {
+  const response = await fetch(`${API_BASE_URL()}/reports/turnaround`, {
+    headers: getBearerHeaders(),
+  })
+  if (!response.ok) throw new Error(`Turnaround failed: ${response.status}`)
+  return response.json()
+}
+
 // ─── Sample Activity Timeline ────────────────────────────────────────────────
 
 export interface SampleActivityEvent {
