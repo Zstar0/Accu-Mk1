@@ -108,7 +108,6 @@ interface KanbanSampleItem {
 const COL_PILL_CLASS: Record<string, string> = {
   sample_due: 'bg-yellow-500/15 text-yellow-400',
   received: 'bg-cyan-500/15 text-cyan-400',
-  pending: 'bg-muted/60 text-muted-foreground',
   assigned: 'bg-blue-500/15 text-blue-400',
   to_verify: 'bg-amber-500/15 text-amber-400',
   waiting_for_addon: 'bg-indigo-500/15 text-indigo-400',
@@ -123,7 +122,6 @@ const COL_ANALYSIS_STATES: Record<string, string[]> = {
   to_verify: ['to_be_verified'],
   verified: ['verified'],
   published: ['published'],
-  pending: ['registered', 'unassigned', 'sample_registered'],
 }
 
 const COMPLETED_ANALYSIS_STATES = new Set(['verified', 'published', 'rejected', 'cancelled', 'invalid', 'retracted'])
