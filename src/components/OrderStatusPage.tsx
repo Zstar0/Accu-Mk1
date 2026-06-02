@@ -13,6 +13,8 @@ import {
   Layers,
   ArrowUpDown,
   ListTree,
+  ChevronDown,
+  ChevronRight,
 } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
@@ -51,6 +53,7 @@ import {
   TEST_EMAILS,
   type AnalysisStateCounts,
 } from '@/components/explorer/helpers'
+import { toggleFilterKey, isOrderAtRisk } from '@/components/explorer/order-filters'
 import { OrderRow } from '@/components/explorer/OrderRow'
 import { SampleSlaIndicator } from '@/components/explorer/SampleSlaIndicator'
 import { useOrderSlaStatuses, type SampleSlaSnapshot } from '@/services/order-sla'
@@ -79,7 +82,6 @@ type KanbanCol = { key: string; label: string; countKey: keyof AnalysisStateCoun
 const KANBAN_COLUMNS: KanbanCol[] = [
   { key: 'sample_due', label: 'Sample Due', countKey: 'sample_due' },
   { key: 'received', label: 'Received', countKey: 'received' },
-  { key: 'pending', label: 'Pending', countKey: 'pending' },
   { key: 'assigned', label: 'Assigned', countKey: 'assigned' },
   { key: 'to_verify', label: 'To Verify', countKey: 'to_verify' },
   { key: 'waiting_for_addon', label: 'Waiting Addon', countKey: 'waiting_for_addon' },
@@ -106,7 +108,6 @@ interface KanbanSampleItem {
 const COL_PILL_CLASS: Record<string, string> = {
   sample_due: 'bg-yellow-500/15 text-yellow-400',
   received: 'bg-cyan-500/15 text-cyan-400',
-  pending: 'bg-muted/60 text-muted-foreground',
   assigned: 'bg-blue-500/15 text-blue-400',
   to_verify: 'bg-amber-500/15 text-amber-400',
   waiting_for_addon: 'bg-indigo-500/15 text-indigo-400',
@@ -121,7 +122,6 @@ const COL_ANALYSIS_STATES: Record<string, string[]> = {
   to_verify: ['to_be_verified'],
   verified: ['verified'],
   published: ['published'],
-  pending: ['registered', 'unassigned', 'sample_registered'],
 }
 
 const COMPLETED_ANALYSIS_STATES = new Set(['verified', 'published', 'rejected', 'cancelled', 'invalid', 'retracted'])
@@ -280,9 +280,7 @@ function KanbanSampleCard({
               </>
             )}
           </div>
-          {item.lookup?.date_received && item.lookup.review_state !== 'published' ? (
-            <SampleSlaIndicator snapshots={sampleSlaStatusesMap?.get(item.sampleId)} />
-          ) : (
+          {!(item.lookup?.date_received && item.lookup.review_state !== 'published') && (
             <span className={cn(
               'text-[10px] font-mono leading-none tabular-nums',
               item.completedAt ? 'text-green-600/70' : 'text-amber-500/70'
@@ -290,6 +288,11 @@ function KanbanSampleCard({
               {formatProcessingTime(item.createdAt, item.completedAt)}
             </span>
           )}
+        </div>
+      )}
+      {item.lookup?.date_received && item.lookup.review_state !== 'published' && (
+        <div className="mt-0.5">
+          <SampleSlaIndicator snapshots={sampleSlaStatusesMap?.get(item.sampleId)} />
         </div>
       )}
       {showAnalysisServices && item.colKey !== 'published' && item.analysisServices && item.analysisServices.length > 0 && (
@@ -312,6 +315,8 @@ function KanbanView({
   activeStates,
   showAnalysisServices,
   sampleSlaStatusesMap,
+  collapsedCols,
+  onToggleCollapse,
 }: {
   orders: ExplorerOrder[]
   sampleLookupMap: Map<string, { data?: SenaiteLookupResult; isLoading: boolean; isError: boolean }>
@@ -319,6 +324,8 @@ function KanbanView({
   activeStates: string[]
   showAnalysisServices: boolean
   sampleSlaStatusesMap?: Map<string, SampleSlaSnapshot[]>
+  collapsedCols: string[]
+  onToggleCollapse: (key: string) => void
 }) {
   // Determine which columns to show — all if no filter, else just the active one
   const visibleCols = activeStates.length > 0
@@ -381,34 +388,55 @@ function KanbanView({
     return (
       <div
         className="grid gap-3 min-w-0"
-        style={{ gridTemplateColumns: `repeat(${visibleCols.length}, minmax(180px, 1fr))` }}
+        style={{
+          gridTemplateColumns: visibleCols
+            .map(c => (collapsedCols.includes(c.key) ? 'minmax(40px, auto)' : 'minmax(180px, 1fr)'))
+            .join(' '),
+        }}
       >
         {visibleCols.map(col => {
           const colItems = allItems.filter(i => i.colKey === col.key)
+          const collapsed = collapsedCols.includes(col.key)
           return (
             <div key={col.key} className="flex flex-col gap-2 min-w-0">
-              <div className="flex items-center justify-between px-1 pb-1 border-b border-border/50">
-                <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-                  {col.label}
+              <button
+                type="button"
+                onClick={() => onToggleCollapse(col.key)}
+                title={collapsed ? `Expand ${col.label}` : `Collapse ${col.label}`}
+                className="flex w-full items-center justify-between gap-1 px-1 pb-1 border-b border-border/50 hover:text-foreground transition-colors"
+              >
+                <span className="flex items-center gap-1 min-w-0">
+                  {collapsed ? (
+                    <ChevronRight className="h-3 w-3 shrink-0" />
+                  ) : (
+                    <ChevronDown className="h-3 w-3 shrink-0" />
+                  )}
+                  {!collapsed && (
+                    <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide truncate">
+                      {col.label}
+                    </span>
+                  )}
                 </span>
                 <Badge variant="secondary" className="text-xs tabular-nums">
                   {colItems.filter(i => !i.isLoading).length}
                 </Badge>
-              </div>
-              <div className="flex flex-col gap-1">
-                {colItems.length === 0 && (
-                  <div className="text-xs text-muted-foreground/50 text-center py-4">Empty</div>
-                )}
-                {colItems.map(item => (
-                  <KanbanSampleCard
-                    key={`${item.sampleId}-${item.colKey}`}
-                    item={item}
-                    showOrder={true}
-                    showAnalysisServices={showAnalysisServices}
-                    sampleSlaStatusesMap={sampleSlaStatusesMap}
-                  />
-                ))}
-              </div>
+              </button>
+              {!collapsed && (
+                <div className="flex flex-col gap-1">
+                  {colItems.length === 0 && (
+                    <div className="text-xs text-muted-foreground/50 text-center py-4">Empty</div>
+                  )}
+                  {colItems.map(item => (
+                    <KanbanSampleCard
+                      key={`${item.sampleId}-${item.colKey}`}
+                      item={item}
+                      showOrder={true}
+                      showAnalysisServices={showAnalysisServices}
+                      sampleSlaStatusesMap={sampleSlaStatusesMap}
+                    />
+                  ))}
+                </div>
+              )}
             </div>
           )
         })}
@@ -478,7 +506,6 @@ function KanbanView({
 const ANALYSIS_STATE_BUTTONS = [
   { key: 'sample_due', label: 'Sample Due', tooltip: 'Sample expected but not yet received in the lab (being mailed in)' },
   { key: 'received', label: 'Received', tooltip: 'Sample physically received in the lab and ready for analysis' },
-  { key: 'pending', label: 'Pending', tooltip: 'Analyses exist but have not been assigned to a tech yet' },
   { key: 'assigned', label: 'Assigned', tooltip: 'Analyses assigned to a lab tech via a SENAITE worksheet' },
   { key: 'to_verify', label: 'To Verify', tooltip: 'Tech has submitted results, waiting for supervisor verification' },
   { key: 'waiting_for_addon', label: 'Waiting Addon', tooltip: 'Initial analyses verified, waiting for outsourced/addon test results to come back' },
@@ -496,7 +523,10 @@ interface OrderFilters {
   sampleIdFilter: string
   emailFilter: string
   orderIdFilter: string
+  analyteFilter: string
   hideTestOrders: boolean
+  slaAtRisk: boolean
+  collapsedKanbanCols: string[]
   viewMode: 'table' | 'kanban'
   groupByOrder: boolean
   showAnalysisServices: boolean
@@ -507,7 +537,15 @@ interface OrderFilters {
 function loadOrderFilters(): OrderFilters {
   try {
     const raw = localStorage.getItem(FILTERS_LS_KEY)
-    if (raw) return JSON.parse(raw) as OrderFilters
+    if (raw) {
+      const parsed = JSON.parse(raw) as OrderFilters
+      return {
+        ...parsed,
+        activeStates: (parsed.activeStates ?? []).filter(s => s !== 'pending'),
+        collapsedKanbanCols: parsed.collapsedKanbanCols ?? [],
+        analyteFilter: parsed.analyteFilter ?? '',
+      }
+    }
   } catch {
     // ignore parse errors
   }
@@ -516,7 +554,10 @@ function loadOrderFilters(): OrderFilters {
     sampleIdFilter: '',
     emailFilter: '',
     orderIdFilter: '',
+    analyteFilter: '',
     hideTestOrders: true,
+    slaAtRisk: false,
+    collapsedKanbanCols: [],
     viewMode: 'table',
     groupByOrder: true,
     showAnalysisServices: false,
@@ -550,7 +591,13 @@ export function OrderStatusPage() {
 
   const toggleState = (key: string) => {
     updateFilters({
-      activeStates: orderFilters.activeStates[0] === key ? [] : [key],
+      activeStates: toggleFilterKey(orderFilters.activeStates, key),
+    })
+  }
+
+  const toggleCollapsedCol = (key: string) => {
+    updateFilters({
+      collapsedKanbanCols: toggleFilterKey(orderFilters.collapsedKanbanCols, key),
     })
   }
   const wordpressHost = getWordpressUrl()
@@ -629,6 +676,24 @@ export function OrderStatusPage() {
         )
       })
     }
+    // Analyte filter — match the analysis names shown on the cards
+    // (formatAnalysisTitle) against the query, case-insensitive substring. Only
+    // loaded sample lookups can match; results refine as SENAITE lookups arrive.
+    const analyteQ = orderFilters.analyteFilter.trim().toLowerCase()
+    if (analyteQ) {
+      result = result.filter(o => {
+        if (!o.sample_results) return false
+        return Object.values(o.sample_results).some(v => {
+          if (!v.senaite_id) return false
+          const lookup = sampleLookupMap.get(v.senaite_id)?.data
+          if (!lookup) return false
+          const nameMap = buildAnalyteNameMap(lookup)
+          return lookup.analyses.some(a =>
+            formatAnalysisTitle(a.title, nameMap).toLowerCase().includes(analyteQ)
+          )
+        })
+      })
+    }
     // Apply kanban sort when in grouped kanban mode
     if (orderFilters.viewMode === 'kanban') {
       const dir = orderFilters.kanbanSortDir === 'asc' ? 1 : -1
@@ -648,6 +713,30 @@ export function OrderStatusPage() {
   // useMemo-aggregated; only its one /sla/status batch query re-runs on data
   // changes (sharpenings #3, #4).
   const orderSla = useOrderSlaStatuses(filteredOrders, sampleLookupMap)
+
+  // Count of at-risk orders in the current filtered set — drives the toggle's
+  // badge regardless of whether the toggle is on.
+  const atRiskCount = useMemo(
+    () =>
+      filteredOrders.filter(o =>
+        isOrderAtRisk(orderSla.verdictByOrderId.get(o.order_id))
+      ).length,
+    [filteredOrders, orderSla.verdictByOrderId]
+  )
+
+  // When the SLA toggle is on, narrow to orders approaching/over their target.
+  // Computed AFTER orderSla (which runs on the full filteredOrders), so verdicts
+  // for the narrowed subset are always present. Loading-SLA orders are excluded
+  // while the toggle is on (only known-at-risk shown).
+  const displayedOrders = useMemo(
+    () =>
+      orderFilters.slaAtRisk
+        ? filteredOrders.filter(o =>
+            isOrderAtRisk(orderSla.verdictByOrderId.get(o.order_id))
+          )
+        : filteredOrders,
+    [filteredOrders, orderFilters.slaAtRisk, orderSla.verdictByOrderId]
+  )
 
   // Count orders needing attention (have samples with to_verify analyses)
   const attentionCount = useMemo(() => {
@@ -811,6 +900,23 @@ export function OrderStatusPage() {
               {!ordersLoading && allOrders && (
                 <Badge variant="secondary" className="ml-1.5">
                   {allOrders.length}
+                </Badge>
+              )}
+            </Button>
+            <Button
+              variant={orderFilters.slaAtRisk ? 'default' : 'outline'}
+              size="sm"
+              onClick={() => updateFilters({ slaAtRisk: !orderFilters.slaAtRisk })}
+              title="Show only orders approaching or past their SLA target"
+              className={cn(
+                orderFilters.slaAtRisk &&
+                  'bg-amber-500 text-white border-amber-500 hover:bg-amber-600'
+              )}
+            >
+              ⚠ SLA at-risk
+              {!ordersLoading && atRiskCount > 0 && (
+                <Badge variant="secondary" className="ml-1.5">
+                  {atRiskCount}
                 </Badge>
               )}
             </Button>
@@ -1000,10 +1106,16 @@ export function OrderStatusPage() {
               onChange={e => updateFilters({ sampleIdFilter: e.target.value })}
               className="h-7 w-32 text-xs"
             />
-            {(orderFilters.orderIdFilter || orderFilters.emailFilter || orderFilters.sampleIdFilter) && (
+            <Input
+              placeholder="Analyte"
+              value={orderFilters.analyteFilter}
+              onChange={e => updateFilters({ analyteFilter: e.target.value })}
+              className="h-7 w-36 text-xs"
+            />
+            {(orderFilters.orderIdFilter || orderFilters.emailFilter || orderFilters.sampleIdFilter || orderFilters.analyteFilter) && (
               <button
                 type="button"
-                onClick={() => updateFilters({ orderIdFilter: '', emailFilter: '', sampleIdFilter: '' })}
+                onClick={() => updateFilters({ orderIdFilter: '', emailFilter: '', sampleIdFilter: '', analyteFilter: '' })}
                 className="text-xs text-muted-foreground hover:text-foreground underline"
               >
                 Clear
@@ -1025,7 +1137,7 @@ export function OrderStatusPage() {
                 <CardDescription>
                   {ordersLoading
                     ? 'Loading orders...'
-                    : `${filteredOrders.length} order${filteredOrders.length !== 1 ? 's' : ''} displayed`}
+                    : `${displayedOrders.length} order${displayedOrders.length !== 1 ? 's' : ''} displayed`}
                 </CardDescription>
               </div>
             </div>
@@ -1045,13 +1157,15 @@ export function OrderStatusPage() {
               </div>
             )}
 
-            {filteredOrders.length === 0 && !ordersLoading && (
+            {displayedOrders.length === 0 && !ordersLoading && (
               <div className="text-muted-foreground py-8 text-center">
-                {showAll ? 'No orders found' : 'No open orders'}
+                {orderFilters.slaAtRisk
+                  ? 'No at-risk orders in current filter'
+                  : showAll ? 'No orders found' : 'No open orders'}
               </div>
             )}
 
-            {filteredOrders.length > 0 && orderFilters.viewMode === 'table' && (
+            {displayedOrders.length > 0 && orderFilters.viewMode === 'table' && (
               <div className="overflow-auto max-h-[850px]">
                 <table className="w-full text-sm">
                   <thead className="sticky top-0 z-10 bg-card border-b">
@@ -1066,7 +1180,7 @@ export function OrderStatusPage() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border/50">
-                    {filteredOrders.map(order => (
+                    {displayedOrders.map(order => (
                       <OrderRow
                         key={order.id}
                         order={order}
@@ -1082,15 +1196,17 @@ export function OrderStatusPage() {
               </div>
             )}
 
-            {filteredOrders.length > 0 && orderFilters.viewMode === 'kanban' && (
+            {displayedOrders.length > 0 && orderFilters.viewMode === 'kanban' && (
               <div className="overflow-auto max-h-[850px]">
                 <KanbanView
-                  orders={filteredOrders}
+                  orders={displayedOrders}
                   sampleLookupMap={sampleLookupMap}
                   groupByOrder={orderFilters.groupByOrder}
                   activeStates={orderFilters.activeStates}
                   showAnalysisServices={orderFilters.showAnalysisServices}
                   sampleSlaStatusesMap={orderSla.sampleStatusesBySampleId}
+                  collapsedCols={orderFilters.collapsedKanbanCols}
+                  onToggleCollapse={toggleCollapsedCol}
                 />
               </div>
             )}

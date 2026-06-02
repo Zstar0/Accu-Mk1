@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.38.0 — 2026-06-02 — Order Status page filters & Kanban refinements
+
+### Added
+
+- **Multi-select stage filters** on the Order Status page — stage chips now toggle
+  independently (OR-matching) instead of single-select, via the pure
+  `toggleFilterKey` helper (`src/components/explorer/order-filters.ts`, unit-tested).
+- **SLA at-risk toggle** ("⚠ SLA at-risk") — narrows the list to amber + red orders
+  through a `displayedOrders` memo; empty-state copy clarified when it matches none.
+- **Client-side analyte filter** — a text input matching each card's displayed
+  analysis names (case-insensitive), composing (AND) with stage / SLA / text filters
+  across both table and Kanban views.
+
+### Changed
+
+- **Kanban refinements** — "Pending" hidden everywhere (removed from columns and
+  state buttons; stale `pending` stripped from persisted filters); flat-Kanban
+  columns are now collapsible (persisted `collapsedKanbanCols`, per-column chevron);
+  the SLA indicator moved to its own full-width card row.
+
 ## v0.37.1 — 2026-06-02 — Bottlenecks bar order fix
 
 ### Fixed
