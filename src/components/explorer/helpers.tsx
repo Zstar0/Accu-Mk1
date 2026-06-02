@@ -306,6 +306,32 @@ export function getOrderProgress(
   return { done, total }
 }
 
+// Earliest date_received across an order's samples = when the lab first
+// received anything for this order. Drives the order-level "Outstanding"
+// (time-since-received) display. Returns null when no sample is received yet.
+export function getOrderReceivedAt(
+  order: ExplorerOrder,
+  sampleLookupMap: Map<
+    string,
+    { data?: SenaiteLookupResult; isLoading: boolean; isError: boolean }
+  >
+): string | null {
+  let earliest: number | null = null
+  let earliestStr: string | null = null
+  if (!order.sample_results) return null
+  for (const entry of Object.values(order.sample_results)) {
+    const received = sampleLookupMap.get(entry.senaite_id)?.data?.date_received
+    if (!received) continue
+    const t = new Date(received).getTime()
+    if (Number.isNaN(t)) continue
+    if (earliest === null || t < earliest) {
+      earliest = t
+      earliestStr = received
+    }
+  }
+  return earliestStr
+}
+
 export function formatTimeSince(dateStr: string | null): string | null {
   if (!dateStr) return null
   const ms = Date.now() - new Date(dateStr).getTime()

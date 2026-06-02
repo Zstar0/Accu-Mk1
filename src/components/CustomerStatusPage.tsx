@@ -36,13 +36,11 @@
  *   `include_test_emails`. The inversion is at the call site: `!hideTestAccounts`.
  *
  * No manual useMemo/useCallback in this plan. React Compiler handles
- *   memoization for the list view's render output. The one load-bearing
- *   useMemo exception (RESEARCH §11 #1, sampleIds for useQueries identity)
- *   lands in Plan 29-05's CustomerDetailView replacement.
+ *   memoization for the list view's render output.
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useQuery, useQueries, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   AlertCircle,
   ChevronLeft,
@@ -87,7 +85,8 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { formatDate } from '@/components/explorer/helpers'
 import { OrderRow } from '@/components/explorer/OrderRow'
-import { enqueueSenaiteLookup } from '@/components/explorer/senaite-queue'
+import { useOrderSlaStatuses } from '@/services/order-sla'
+import { useSenaiteLookupMap } from '@/services/senaite-lookup-map'
 
 const PER_PAGE = 50
 
@@ -493,11 +492,9 @@ function CustomerRow({
  * useMemo invariants — LOAD-BEARING (RESEARCH §11 #1, PATTERNS):
  *   - sortedOrders   — feeds OrderRow.map; identity stability avoids extra
  *                      OrderRow renders.
- *   - sampleIds      — feeds the useQueries `queries:` config; identity churn
- *                      causes TanStack to rebuild query state every render →
- *                      infinite refetch loop on heavy customers.
- *   - sampleLookupMap — feeds OrderRow's `sampleLookupMap` prop; built off the
- *                      memo'd sampleIds + sampleQueries.
+ *   - sampleLookupMap — from useSenaiteLookupMap(orders); feeds
+ *                      useOrderSlaStatuses + CustomerOrdersTab's
+ *                      sampleLookupMap prop.
  *
  * Selector syntax mandate (AGENTS.md): every useUIStore call uses
  * `state => state.x`. ast-grep enforces.
@@ -666,56 +663,8 @@ function CustomerDetailView() {
     })
   }, [orders])
 
-  // --- SENAITE fan-out (LOAD-BEARING useMemo per RESEARCH §11 #1) ---
-  // Copy of OrderStatusPage:619-665. Deps are `[orders]` (NOT sortedOrders)
-  // to match the OrderStatusPage analog and keep identity stable across sort
-  // changes (sort doesn't affect which sample ids exist).
-  const sampleIds = useMemo(() => {
-    const ids: string[] = []
-    if (!orders) return ids
-    for (const order of orders) {
-      if (order.sample_results) {
-        for (const entry of Object.values(order.sample_results)) {
-          if (
-            entry.senaite_id &&
-            entry.status !== 'failed' &&
-            !ids.includes(entry.senaite_id)
-          ) {
-            ids.push(entry.senaite_id)
-          }
-        }
-      }
-    }
-    return ids
-  }, [orders])
-
-  const sampleQueries = useQueries({
-    queries: sampleIds.map(id => ({
-      queryKey: ['senaite', 'lookup', id],
-      queryFn: () => enqueueSenaiteLookup(id),
-      staleTime: 15 * 60_000,
-      retry: 1,
-    })),
-  })
-
-  const sampleLookupMap = useMemo(() => {
-    const map = new Map<
-      string,
-      {
-        data?: SenaiteLookupResult
-        isLoading: boolean
-        isError: boolean
-      }
-    >()
-    sampleIds.forEach((id, idx) => {
-      map.set(id, {
-        data: sampleQueries[idx]?.data,
-        isLoading: sampleQueries[idx]?.isLoading ?? true,
-        isError: sampleQueries[idx]?.isError ?? false,
-      })
-    })
-    return map
-  }, [sampleIds, sampleQueries])
+  // Per-sample SENAITE lookup map (shared hook — see useSenaiteLookupMap).
+  const { sampleLookupMap } = useSenaiteLookupMap(orders ?? [])
 
   // wordpressHost is read here and threaded into CustomerOrdersTab (the
   // derived render flags hasError/hasOrders/showLoading/showEmpty now live
@@ -1014,6 +963,9 @@ function CustomerOrdersTab({
   const showLoading = ordersLoading && isConnected
   const showEmpty = isConnected && !showLoading && !hasError && !hasOrders
 
+  // D2: order-aggregated SLA verdicts for the table-view SLA column.
+  const orderSla = useOrderSlaStatuses(orders, sampleLookupMap)
+
   const handleClearAll = () => {
     setCustomerOrderSearchReset()
     setOrderNumberInput('')
@@ -1157,8 +1109,9 @@ function CustomerOrdersTab({
                       Created
                     </th>
                     <th className="py-2 px-3 font-medium whitespace-nowrap">
-                      Processing Time
+                      Timing
                     </th>
+                    <th className="py-2 px-3 font-medium whitespace-nowrap">SLA</th>
                     <th className="py-2 px-3 font-medium whitespace-nowrap">
                       Sample Details
                     </th>
@@ -1175,6 +1128,8 @@ function CustomerOrdersTab({
                       defaultExpanded={searchActive ? true : undefined}
                       highlightSampleId={highlightSampleId}
                       showFinance
+                      slaVerdict={orderSla.verdictByOrderId.get(order.order_id)}
+                      sampleSlaStatusesMap={orderSla.sampleStatusesBySampleId}
                     />
                   ))}
                 </tbody>

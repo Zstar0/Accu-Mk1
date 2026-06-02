@@ -102,6 +102,8 @@ import { getSenaiteUrl, getWordpressUrl } from '@/lib/api-profiles'
 import { cn } from '@/lib/utils'
 import { EditableDataRow } from '@/components/dashboard/EditableField'
 import { AnalysisTable, StatusBadge } from '@/components/senaite/AnalysisTable'
+import { SampleHeaderSla } from '@/components/senaite/SampleHeaderSla'
+import { useAnalysisSlaMap } from '@/services/analysis-sla'
 import { SamplePrepHplcFlyout } from '@/components/hplc/SamplePrepHplcFlyout'
 import { SampleActivityLog } from '@/components/senaite/SampleActivityLog'
 import { Microscope, Plus, Search, Trash2, ScrollText } from 'lucide-react'
@@ -1711,6 +1713,8 @@ export function SampleDetails() {
   const [addingService, setAddingService] = useState<string | null>(null)
   const [removingKeyword, setRemovingKeyword] = useState<string | null>(null)
 
+  const analysisSla = useAnalysisSlaMap(data)
+
   async function openHplcResults() {
     if (!sampleId) return
     try {
@@ -2264,28 +2268,7 @@ export function SampleDetails() {
               </div>
               <p className="text-xs text-muted-foreground mt-0.5">
                 Received {formatDate(data.date_received)}
-                {data.date_received && data.review_state !== 'published' && (() => {
-                  const hrs = (Date.now() - new Date(data.date_received).getTime()) / 3_600_000
-                  const days = Math.floor(hrs / 24)
-                  const remHrs = Math.floor(hrs % 24)
-                  const timeStr = days > 0 ? `${days}d ${remHrs}h` : `${Math.floor(hrs)}h`
-                  const goalNote = hrs > 48
-                    ? 'Over 48h — exceeds processing goal'
-                    : hrs > 24
-                    ? 'Over 24h — approaching processing goal limit'
-                    : 'Within 24h processing goal'
-                  return (
-                    <span
-                      className={cn(
-                        'ml-1.5 font-mono',
-                        hrs > 48 ? 'text-red-400' : hrs > 24 ? 'text-amber-400' : 'text-muted-foreground'
-                      )}
-                      title={`Time since received in lab: ${timeStr}. ${goalNote}`}
-                    >
-                      ({timeStr})
-                    </span>
-                  )
-                })()}
+                <SampleHeaderSla lookup={data} />
                 {' · '}Client:{' '}
                 <span className="text-foreground/80">{data.client ?? '—'}</span>
                 {!retestInfo?.is_retest && retestInfo?.retested_as && retestInfo.retested_as.length > 0 && (
@@ -3151,6 +3134,11 @@ export function SampleDetails() {
             })
           }}
           onTransitionComplete={() => refreshSample(data.sample_id)}
+          analysisSlaMap={analysisSla.byKeyword}
+          isAnalysisSlaLoading={analysisSla.isLoading}
+          isAnalysisSlaError={analysisSla.isError}
+          isAnalysisSlaPublished={analysisSla.isPublished}
+          analysisSlaPriority={analysisSla.priority}
         />
 
       {/* Woo Order flyout */}

@@ -15,6 +15,7 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { Checkbox } from '@/components/ui/checkbox'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import {
   Table,
   TableBody,
@@ -38,8 +39,10 @@ import {
   getServiceGroupMembers,
   setServiceGroupMembers,
   getAnalysisServices,
+  getSlaTiers,
   type ServiceGroup,
   type AnalysisServiceRecord,
+  type SlaTier,
 } from '@/lib/api'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -50,6 +53,7 @@ interface FormState {
   color: ServiceGroupColor
   sort_order: string
   is_default: boolean
+  sla_tier_id: string
 }
 
 const DEFAULT_FORM: FormState = {
@@ -58,6 +62,7 @@ const DEFAULT_FORM: FormState = {
   color: 'blue',
   sort_order: '0',
   is_default: false,
+  sla_tier_id: '',
 }
 
 // ─── Main Page ────────────────────────────────────────────────────────────────
@@ -73,6 +78,8 @@ export default function ServiceGroupsPage() {
   const [editingGroup, setEditingGroup] = useState<ServiceGroup | null>(null)
   const [saving, setSaving] = useState(false)
   const [form, setForm] = useState<FormState>(DEFAULT_FORM)
+
+  const [tiers, setTiers] = useState<SlaTier[]>([])
 
   // Membership editor state
   const [allServices, setAllServices] = useState<AnalysisServiceRecord[]>([])
@@ -98,6 +105,7 @@ export default function ServiceGroupsPage() {
 
   useEffect(() => {
     loadGroups()
+    getSlaTiers().then(setTiers).catch(_err => { /* non-critical: tiers default to empty */ })
   }, [loadGroups])
 
   // ── Panel helpers ──
@@ -119,6 +127,7 @@ export default function ServiceGroupsPage() {
       color: (group.color as ServiceGroupColor) ?? 'blue',
       sort_order: String(group.sort_order),
       is_default: group.is_default,
+      sla_tier_id: group.sla_tier_id != null ? String(group.sla_tier_id) : '',
     })
     setMemberSearch('')
     setPanelOpen(true)
@@ -162,6 +171,7 @@ export default function ServiceGroupsPage() {
         color: form.color,
         sort_order: parseInt(form.sort_order, 10) || 0,
         is_default: form.is_default,
+        sla_tier_id: form.sla_tier_id ? Number(form.sla_tier_id) : null,
       }
       if (editingGroup) {
         await updateServiceGroup(editingGroup.id, payload)
@@ -426,6 +436,25 @@ export default function ServiceGroupsPage() {
                     value={form.description}
                     onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
                   />
+                </div>
+
+                {/* SLA tier */}
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium">SLA tier</label>
+                  <Select
+                    value={form.sla_tier_id || 'default'}
+                    onValueChange={v =>
+                      setForm(f => ({ ...f, sla_tier_id: v === 'default' ? '' : v }))
+                    }
+                  >
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="default">Use default SLA</SelectItem>
+                      {tiers.map(ti => (
+                        <SelectItem key={ti.id} value={String(ti.id)}>{ti.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
 
                 {/* Sort order */}

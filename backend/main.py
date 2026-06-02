@@ -11,9 +11,10 @@ import secrets
 import subprocess
 import sys
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, date, time, timezone
+from zoneinfo import ZoneInfo
 from pathlib import Path
-from typing import Optional, Union
+from typing import Literal, Optional, Union
 from uuid import UUID
 
 # App version: prefer APP_VERSION env var (set by Docker build-arg),
@@ -31,12 +32,14 @@ APP_VERSION = _read_app_version()
 
 from fastapi import FastAPI, Body, Depends, Form, HTTPException, Header, Query, Request, Response, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, validator
+from pydantic import BaseModel, Field, validator
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import select, desc, delete, update, func
+from sqlalchemy import select, desc, delete, update, func, extract
+from sqlalchemy.exc import IntegrityError
 
 from database import get_db, init_db
-from models import AuditLog, Settings, Job, Sample, Result, Instrument, AnalysisService, HplcMethod, Peptide, PeptideAnalyte, CalibrationCurve, HPLCAnalysis, User, SharePointFileCache, WizardSession, WizardMeasurement, peptide_methods, blend_components, ServiceGroup, service_group_members, SamplePriority, Worksheet, WorksheetItem, instrument_methods, SampleAnalyteAlias
+from sla_engine import BusinessSchedule, compute_business_minutes, sla_status_dict
+from models import AuditLog, Settings, Job, Sample, Result, Instrument, AnalysisService, HplcMethod, Peptide, PeptideAnalyte, CalibrationCurve, HPLCAnalysis, User, SharePointFileCache, WizardSession, WizardMeasurement, peptide_methods, blend_components, ServiceGroup, service_group_members, SamplePriority, Worksheet, WorksheetItem, instrument_methods, SampleAnalyteAlias, SlaTier, SlaPriorityTier, BusinessHoursConfig, LabHoliday
 from auth import (
     get_current_user, require_admin, create_access_token,
     verify_password, get_password_hash, seed_admin_user,
@@ -1786,6 +1789,7 @@ class ServiceGroupCreate(BaseModel):
     color: str = "blue"
     sort_order: int = 0
     is_default: bool = False
+    sla_tier_id: Optional[int] = None
 
 
 class ServiceGroupUpdate(BaseModel):
@@ -1795,6 +1799,7 @@ class ServiceGroupUpdate(BaseModel):
     color: Optional[str] = None
     sort_order: Optional[int] = None
     is_default: Optional[bool] = None
+    sla_tier_id: Optional[int] = None
 
 
 class ServiceGroupResponse(BaseModel):
@@ -1805,6 +1810,7 @@ class ServiceGroupResponse(BaseModel):
     color: str
     sort_order: int
     is_default: bool = False
+    sla_tier_id: Optional[int] = None
     member_count: int = 0
     member_ids: list[int] = []
     created_at: datetime
@@ -1817,6 +1823,138 @@ class ServiceGroupResponse(BaseModel):
 class ServiceGroupMembersRequest(BaseModel):
     """Schema for setting service group membership."""
     analysis_service_ids: list[int]
+
+
+# ─── SLA tier schemas (sub-project A, revised to tiers) ───
+
+# Priority tiers mirror SamplePriority/WorksheetItem.priority. Validated here at
+# the API edge — the DB columns are unconstrained VARCHAR.
+SlaPriority = Literal["normal", "high", "expedited"]
+
+
+class SlaTierCreate(BaseModel):
+    name: str
+    target_minutes: int
+    business_hours_only: bool = False
+    is_default: bool = False
+    amber_threshold_percent: int = Field(20, ge=1, le=100)
+
+
+class SlaTierUpdate(BaseModel):
+    name: Optional[str] = None
+    target_minutes: Optional[int] = None
+    business_hours_only: Optional[bool] = None
+    is_default: Optional[bool] = None
+    amber_threshold_percent: Optional[int] = Field(None, ge=1, le=100)
+
+
+class SlaTierResponse(BaseModel):
+    id: int
+    name: str
+    target_minutes: int
+    business_hours_only: bool
+    is_default: bool
+    amber_threshold_percent: int
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+# Consumed by the /sla-priority-tiers endpoints.
+# Multi-tier follow-on: `service_group_id` scopes the override to a single
+# service group. NULL means the row applies globally (precedence falls through
+# (priority, group_id) → (priority, NULL) → group's own tier → default).
+class SlaPriorityTierResponse(BaseModel):
+    id: int
+    priority: str
+    sla_tier_id: int
+    service_group_id: int | None = None
+
+    class Config:
+        from_attributes = True
+
+
+class SlaPriorityTierSet(BaseModel):
+    sla_tier_id: int
+    # Omit / null => the global override row for this priority. Specify a group
+    # id to scope the override to that group (e.g. expedited + HPLC group).
+    service_group_id: int | None = None
+
+
+# ── D2: bulk per-sample priority lookup ────────────────────────────────────
+
+class SamplePriorityLookupRequest(BaseModel):
+    sample_uids: list[str] = Field(..., min_length=1, max_length=500)
+
+
+class SamplePriorityResponseItem(BaseModel):
+    sample_uid: str
+    priority: SlaPriority
+
+    class Config:
+        from_attributes = True
+
+
+class SamplePriorityLookupResponse(BaseModel):
+    items: list[SamplePriorityResponseItem]
+
+
+class BusinessHoursConfigResponse(BaseModel):
+    open_time: time
+    close_time: time
+    timezone: str
+    working_days: list[int]
+
+    class Config:
+        from_attributes = True
+
+
+class BusinessHoursConfigUpdate(BaseModel):
+    open_time: time
+    close_time: time
+    timezone: str
+    working_days: list[int]
+
+
+class LabHolidayResponse(BaseModel):
+    id: int
+    holiday_date: date
+    name: str
+    source: str
+
+    class Config:
+        from_attributes = True
+
+
+class LabHolidayCreate(BaseModel):
+    holiday_date: date
+    name: str
+
+
+class SlaStatusRequestItem(BaseModel):
+    key: str
+    received_at: Optional[datetime] = None
+    target_minutes: int
+    business_hours_only: bool = False
+    # Historical mode for published samples: when set, the server uses this as
+    # the "now" instead of `datetime.utcnow()`. Lets the UI render frozen-in-time
+    # SLA results ("took 28h, Met/Missed") on the Sample Details header.
+    now_override: Optional[datetime] = None
+
+
+class SlaStatusRequest(BaseModel):
+    items: list[SlaStatusRequestItem]
+
+
+class SlaStatusResultItem(BaseModel):
+    key: str
+    status: Optional[dict] = None
+
+
+class SlaStatusResponse(BaseModel):
+    items: list[SlaStatusResultItem]
 
 
 # ─── HPLC Method schemas ───
@@ -11654,6 +11792,7 @@ async def get_service_groups(
             color=group.color,
             sort_order=group.sort_order,
             is_default=group.is_default,
+            sla_tier_id=group.sla_tier_id,
             member_count=len(group.analysis_services),
             member_ids=[s.id for s in group.analysis_services],
             created_at=group.created_at,
@@ -11692,6 +11831,7 @@ async def create_service_group(
         color=group.color,
         sort_order=group.sort_order,
         is_default=group.is_default,
+        sla_tier_id=group.sla_tier_id,
         member_count=0,
         created_at=group.created_at,
         updated_at=group.updated_at,
@@ -11731,6 +11871,7 @@ async def update_service_group(
         color=group.color,
         sort_order=group.sort_order,
         is_default=group.is_default,
+        sla_tier_id=group.sla_tier_id,
         member_count=len(group.analysis_services),
         member_ids=[s.id for s in group.analysis_services],
         created_at=group.created_at,
@@ -11800,6 +11941,331 @@ async def set_service_group_members(
     group.analysis_services = list(services)
     db.commit()
     return {"count": len(services)}
+
+
+# ─── SLA tiers (sub-project A, revised to tiers) ──────────────────────────────
+
+
+def _demote_other_default_tiers(db: Session, keep_id: Optional[int] = None) -> None:
+    """Clear is_default on every tier except keep_id, flushing before the caller
+    inserts/updates the promoted row (the partial unique index is immediate)."""
+    q = db.query(SlaTier).filter(SlaTier.is_default == True)  # noqa: E712
+    if keep_id is not None:
+        q = q.filter(SlaTier.id != keep_id)
+    q.update({"is_default": False})
+    db.flush()
+
+
+@app.get("/sla-tiers", response_model=list[SlaTierResponse])
+async def list_sla_tiers(
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """All SLA tiers, default first. Consumed by the settings UI (C) and, cached,
+    by D2 (which resolves client-side)."""
+    return db.execute(
+        select(SlaTier).order_by(SlaTier.is_default.desc(), SlaTier.name)
+    ).scalars().all()
+
+
+@app.post("/sla-tiers", response_model=SlaTierResponse, status_code=201)
+async def create_sla_tier(
+    data: SlaTierCreate,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Create a tier. Setting is_default demotes any existing default."""
+    tier = SlaTier(**data.model_dump())
+    if tier.is_default:
+        _demote_other_default_tiers(db)
+    db.add(tier)
+    db.commit()
+    db.refresh(tier)
+    return tier
+
+
+@app.put("/sla-tiers/{tier_id}", response_model=SlaTierResponse)
+async def update_sla_tier(
+    tier_id: int,
+    data: SlaTierUpdate,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Update a tier. Promoting demotes the rest; demoting the only default is
+    rejected (it's the 24h backstop for unmatched samples)."""
+    tier = db.get(SlaTier, tier_id)
+    if not tier:
+        raise HTTPException(404, f"SLA tier {tier_id} not found")
+    update_data = data.model_dump(exclude_unset=True)
+    if "is_default" in update_data:
+        if update_data["is_default"]:
+            _demote_other_default_tiers(db, keep_id=tier_id)
+        elif tier.is_default:
+            raise HTTPException(
+                409,
+                "Cannot unset the only default SLA tier; set another as default instead",
+            )
+    for field, value in update_data.items():
+        setattr(tier, field, value)
+    db.commit()
+    db.refresh(tier)
+    return tier
+
+
+@app.delete("/sla-tiers/{tier_id}")
+async def delete_sla_tier(
+    tier_id: int,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Delete a tier. The default cannot be deleted. Groups referencing it have
+    sla_tier_id set NULL (FK); priority overrides referencing it cascade-delete."""
+    tier = db.get(SlaTier, tier_id)
+    if not tier:
+        raise HTTPException(404, f"SLA tier {tier_id} not found")
+    if tier.is_default:
+        raise HTTPException(409, "Cannot delete the default SLA tier; promote another first")
+    db.delete(tier)
+    db.commit()
+    return {"message": f"SLA tier {tier_id} deleted"}
+
+
+@app.get("/sla-priority-tiers", response_model=list[SlaPriorityTierResponse])
+async def list_sla_priority_tiers(
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """The sparse priority -> tier override map (only overriding priorities)."""
+    return db.execute(select(SlaPriorityTier)).scalars().all()
+
+
+@app.put("/sla-priority-tiers/{priority}", response_model=SlaPriorityTierResponse)
+async def set_sla_priority_tier(
+    priority: SlaPriority,
+    data: SlaPriorityTierSet,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Upsert a priority -> tier override.
+
+    The override is identified by (priority, service_group_id). Omit
+    service_group_id to upsert the global override; supply it to scope the
+    override to a single service group.
+    """
+    if not db.get(SlaTier, data.sla_tier_id):
+        raise HTTPException(404, f"SLA tier {data.sla_tier_id} not found")
+    if data.service_group_id is not None and not db.get(
+        ServiceGroup, data.service_group_id
+    ):
+        raise HTTPException(
+            404, f"Service group {data.service_group_id} not found"
+        )
+    # SQL NULL semantics — `=` against NULL never matches, so the global-row
+    # branch must use IS NULL explicitly. Both code paths return at most one
+    # row courtesy of the two partial unique indexes from _run_migrations.
+    q = select(SlaPriorityTier).where(SlaPriorityTier.priority == priority)
+    if data.service_group_id is None:
+        q = q.where(SlaPriorityTier.service_group_id.is_(None))
+    else:
+        q = q.where(SlaPriorityTier.service_group_id == data.service_group_id)
+    row = db.execute(q).scalar_one_or_none()
+    if row:
+        row.sla_tier_id = data.sla_tier_id
+    else:
+        row = SlaPriorityTier(
+            priority=priority,
+            sla_tier_id=data.sla_tier_id,
+            service_group_id=data.service_group_id,
+        )
+        db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+@app.delete("/sla-priority-tiers/{priority}")
+async def delete_sla_priority_tier(
+    priority: SlaPriority,
+    service_group_id: int | None = None,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Remove a priority override.
+
+    Without `service_group_id`, removes the global (NULL group) override.
+    With `service_group_id`, removes the override scoped to that group only.
+    """
+    q = select(SlaPriorityTier).where(SlaPriorityTier.priority == priority)
+    if service_group_id is None:
+        q = q.where(SlaPriorityTier.service_group_id.is_(None))
+    else:
+        q = q.where(SlaPriorityTier.service_group_id == service_group_id)
+    row = db.execute(q).scalar_one_or_none()
+    if not row:
+        scope = "global" if service_group_id is None else f"group_id={service_group_id}"
+        raise HTTPException(404, f"No override for priority '{priority}' ({scope})")
+    db.delete(row)
+    db.commit()
+    scope = "global" if service_group_id is None else f"group_id={service_group_id}"
+    return {"message": f"Priority override '{priority}' ({scope}) removed"}
+
+
+# ── Business-hours config (sub-project B) ──────────────────────────────────
+
+@app.get("/business-hours-config", response_model=BusinessHoursConfigResponse)
+async def get_business_hours_config(
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """The singleton business-hours schedule. Read-only for non-admins (UI-gated)."""
+    cfg = db.get(BusinessHoursConfig, 1)
+    if not cfg:
+        raise HTTPException(500, "Business-hours config not initialized")
+    return cfg
+
+
+@app.put("/business-hours-config", response_model=BusinessHoursConfigResponse)
+async def update_business_hours_config(
+    data: BusinessHoursConfigUpdate,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Update the schedule. Validates IANA timezone, close>open, working_days ⊆ 0..6."""
+    try:
+        ZoneInfo(data.timezone)
+    except Exception:
+        raise HTTPException(422, f"Unknown timezone: {data.timezone}")
+    if data.close_time <= data.open_time:
+        raise HTTPException(422, "close_time must be after open_time")
+    if not data.working_days or any(d < 0 or d > 6 for d in data.working_days):
+        raise HTTPException(422, "working_days must be a non-empty subset of 0..6")
+    cfg = db.get(BusinessHoursConfig, 1)
+    if not cfg:
+        raise HTTPException(500, "Business-hours config not initialized")
+    cfg.open_time = data.open_time
+    cfg.close_time = data.close_time
+    cfg.timezone = data.timezone
+    cfg.working_days = sorted(set(data.working_days))
+    db.commit()
+    db.refresh(cfg)
+    return cfg
+
+
+# ── Lab holidays (sub-project B) ───────────────────────────────────────────
+
+@app.get("/lab-holidays", response_model=list[LabHolidayResponse])
+async def list_lab_holidays(
+    year: Optional[int] = None,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """All stored closures for `year` (defaults to current), federal + custom, ordered by date."""
+    y = year if year is not None else date.today().year
+    return db.execute(
+        select(LabHoliday)
+        .where(extract("year", LabHoliday.holiday_date) == y)
+        .order_by(LabHoliday.holiday_date)
+    ).scalars().all()
+
+
+@app.post("/lab-holidays", response_model=LabHolidayResponse, status_code=201)
+async def create_lab_holiday(
+    data: LabHolidayCreate,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Add a custom closure (source='custom'). 409 if a closure already exists on that date."""
+    existing = db.execute(
+        select(LabHoliday).where(LabHoliday.holiday_date == data.holiday_date)
+    ).scalar_one_or_none()
+    if existing:
+        raise HTTPException(409, f"A closure already exists on {data.holiday_date}")
+    row = LabHoliday(holiday_date=data.holiday_date, name=data.name, source="custom")
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+@app.delete("/lab-holidays/{holiday_date}")
+async def delete_lab_holiday(
+    holiday_date: date,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Remove any closure (federal or custom). Deleting a federal row = the lab works that day."""
+    row = db.execute(
+        select(LabHoliday).where(LabHoliday.holiday_date == holiday_date)
+    ).scalar_one_or_none()
+    if not row:
+        raise HTTPException(404, f"No closure on {holiday_date}")
+    db.delete(row)
+    db.commit()
+    return {"message": f"Closure on {holiday_date} removed"}
+
+
+@app.post("/lab-holidays/generate-federal")
+async def generate_federal_holidays_endpoint(
+    year: int,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Insert any missing federal closures for `year`. Primary use: extend
+    coverage into a new year. Caveat: this re-adds ANY missing federal date for
+    that year — including ones the lab previously deleted — because it's a
+    deliberate, user-triggered action. (Startup seeding does NOT do this; it is
+    first-boot-only, so deletions survive restarts.)"""
+    from database import seed_federal_holidays
+
+    added = seed_federal_holidays(db.connection(), year)
+    db.commit()
+    return {"year": year, "added": added}
+
+
+# ─── SLA Status Batch ─────────────────────────────────────────────────────────
+
+@app.post("/sla/status", response_model=SlaStatusResponse)
+async def compute_sla_statuses(
+    req: SlaStatusRequest,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Batch SLA status for a page of rows (the render endpoint).
+
+    Loads the schedule + holiday set ONCE, then maps over items — O(items) with
+    O(1) DB reads. `now` is server time; the response is a snapshot. `key` is
+    opaque and echoed (the client correlates by key, not array order). `status`
+    is null iff `received_at` is null.
+    """
+    now = datetime.utcnow()  # naive UTC, codebase convention
+    cfg = db.get(BusinessHoursConfig, 1)
+    schedule = BusinessSchedule.from_orm(cfg) if cfg else None
+    holiday_dates = {r[0] for r in db.execute(select(LabHoliday.holiday_date)).all()}
+    is_holiday = lambda d: d in holiday_dates  # noqa: E731
+
+    results: list[SlaStatusResultItem] = []
+    for item in req.items:
+        recv = item.received_at
+        if recv is None:
+            results.append(SlaStatusResultItem(key=item.key, status=None))
+            continue
+        # Normalize to naive UTC (an offset-aware ISO string is converted).
+        if recv.tzinfo is not None:
+            recv = recv.astimezone(timezone.utc).replace(tzinfo=None)
+        # Per-item "now": published samples send `now_override` (their
+        # publication date) so elapsed = (published - received). Live samples
+        # leave it null and get the request-time wall clock.
+        item_now = item.now_override or now
+        if item_now.tzinfo is not None:
+            item_now = item_now.astimezone(timezone.utc).replace(tzinfo=None)
+        if item.business_hours_only and schedule is not None:
+            elapsed = compute_business_minutes(recv, item_now, schedule, is_holiday)
+        else:
+            elapsed = (item_now - recv).total_seconds() / 60.0
+        results.append(
+            SlaStatusResultItem(key=item.key, status=sla_status_dict(item.target_minutes, elapsed))
+        )
+    return SlaStatusResponse(items=results)
 
 
 # ─── SENAITE Analyst Proxy ────────────────────────────────────────────────────
@@ -12383,6 +12849,29 @@ async def update_inbox_priority(
 
     db.commit()
     return {"sample_uid": sample_uid, "priority": data.priority}
+
+
+# ── D2: bulk per-sample priority lookup ────────────────────────────────────
+
+@app.post("/sample-priorities/lookup", response_model=SamplePriorityLookupResponse)
+async def lookup_sample_priorities(
+    req: SamplePriorityLookupRequest,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Sparse bulk read of sample_priorities for the order-list SLA cell.
+
+    Returns only rows that exist; absent UIDs are omitted (the client treats
+    absence as the default 'normal', matching the tier-resolution model).
+    Hard cap 500 UIDs per request — a sanity bound that more than covers the
+    visible-orders page at tens-to-low-hundreds of samples.
+    """
+    rows = db.execute(
+        select(SamplePriority).where(SamplePriority.sample_uid.in_(req.sample_uids))
+    ).scalars().all()
+    return SamplePriorityLookupResponse(
+        items=[SamplePriorityResponseItem.model_validate(r, from_attributes=True) for r in rows]
+    )
 
 
 @app.get("/worksheets/users")

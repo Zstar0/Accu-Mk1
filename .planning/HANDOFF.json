@@ -1,0 +1,83 @@
+{
+  "version": "1.0",
+  "timestamp": "2026-05-27T22:00:00Z",
+  "context": "superpowers-writing-plans",
+  "phase": "D2",
+  "phase_name": "sla-order-list-column",
+  "phase_dir": "docs/superpowers/specs/2026-05-27-d2-sla-column-design.md",
+  "branch": "feat/order-status-processing-time",
+  "worktree": "C:/tmp/accu-mk1-wave1",
+  "head": "23a0840",
+  "status": "paused",
+  "current_skill": "superpowers:writing-plans (mid-execution; orientation + advisor done; plan NOT yet written)",
+  "completed_subprojects": [
+    {"name": "A (SLA tier model + endpoints)", "status": "done", "commits_through": "43cc693"},
+    {"name": "C (SlaPane + service-group tier dropdown)", "status": "done", "commits_through": "43cc693"},
+    {"name": "B (business-hours engine + calendar + batch endpoint)", "status": "done", "commits_through": "c8841d2", "spec": "docs/superpowers/specs/2026-05-27-sla-business-hours-design.md", "plan": "docs/superpowers/plans/2026-05-27-sla-business-hours.md"}
+  ],
+  "current_subproject": {
+    "name": "D2 (order-list SLA column + per-tier amber threshold)",
+    "spec": "docs/superpowers/specs/2026-05-27-d2-sla-column-design.md",
+    "spec_status": "finalized + pushed (23a0840)",
+    "plan": "docs/superpowers/plans/2026-05-27-d2-sla-column.md",
+    "plan_status": "NOT WRITTEN — paused before writing due to context exhaustion at 96%"
+  },
+  "decisions_locked_for_d2": [
+    {"decision": "New SLA column on OrderRow (table view) + replace OrderStatusPage card-view hardcoded 24/48h goalNote with same logic", "rationale": "user chose 'new column' over coloring existing Lab time"},
+    {"decision": "Full tier fidelity: priority > group-tier > default; multi-group sample takes tightest group tier", "rationale": "user chose 'Full model' over MVP-lean"},
+    {"decision": "Worst-active-sample drives the order verdict; published excluded; not-received => awaiting", "rationale": "matches existing worstState pattern; user-confirmed simultaneous check-ins make aggregation by tier-tightness the discriminator"},
+    {"decision": "Clock = per-sample date_received (check-in)", "rationale": "user confirmed; matches D1 Lab line"},
+    {"decision": "Amber threshold is per-tier (sla_tiers.amber_threshold_percent INTEGER NOT NULL DEFAULT 20, 1-100)", "rationale": "user chose per-tier over global"},
+    {"decision": "Color: red if breached; amber if (remaining/target)*100 < tier.amber_threshold_percent; else green. Palette mirrors processing-time field", "rationale": "user-approved"},
+    {"decision": "POST /sample-priorities/lookup with body {sample_uids:[...]}, cap 500, sparse response {items:[{sample_uid,priority}]}", "rationale": "advisor caught GET URL-length issue at 500 UIDs x 32 chars; switched to POST to match B's /sla/status pattern"},
+    {"decision": "Bulk priority client query keyed by sorted-UID hash with staleTime 5min; scaling-out path (per-UID useQueries, localStorage hydration) documented but deferred", "rationale": "user wants performance; lean now with explicit scaling path"},
+    {"decision": "No live ticking; refetch with orders query + 'Refresh all data' button only", "rationale": "snapshot semantics match B"}
+  ],
+  "advisor_sharpenings_to_bake_into_plan": [
+    "Bulk priorities = POST /sample-priorities/lookup (DONE in spec; use POST in plan).",
+    "i18n keys co-commit with consuming task (NOT a consolidated late task): orderStatus.sla.* with OrderSlaCell task; preferences.sla.amberThreshold/percentRemaining with SlaPane task.",
+    "useOrderSlaStatuses queryKey MUST be stable hash: ['order-sla-status', sortedUidsHash, sortedReceivedAtHash, tierConfigHash] - else re-render thrash wastes the 5min stale.",
+    "Verdict aggregation is useMemo, not another useQuery (pure transform of cached inputs + the one snapshot query).",
+    "Two cell components: OrderSlaCell (order-aggregated, table view) + SampleSlaIndicator (per-sample, card-view goalNote replacement) sharing a color-classification primitive.",
+    "Named test: test_unmapped_analysis_keyword_falls_through_to_default in resolveSampleTier suite.",
+    "Task 12 (verification sweep) MUST note the 2 pre-existing dev-DB tier-drift failures (test_default_tier_encodes_old_24h_goal, test_list_returns_seeded_default) are KNOWN out-of-scope; do not bisect D2 looking for them."
+  ],
+  "proposed_plan_tasks": [
+    {"id": 1, "name": "Backend: amber_threshold_percent on sla_tiers (model + migration + Pydantic + 1-100 validation + tests)"},
+    {"id": 2, "name": "Backend: POST /sample-priorities/lookup (Pydantic + endpoint + tests with cap/empty/auth)"},
+    {"id": 3, "name": "Frontend api.ts: extend SlaTier types with amber_threshold_percent; add getAnalysisServices(); add bulk samplePrioritiesLookup(uids)"},
+    {"id": 4, "name": "Frontend services: useAnalysisServices + useSamplePriorities (5min stale, sorted-UID hash key)"},
+    {"id": 5, "name": "Frontend lib: src/lib/sla-resolution.ts (buildServiceToGroupTierMap, resolveSampleTier with priority>group>default + multi-group tightest, classifySampleColor, aggregateOrderSlaVerdict) + unit tests INCLUDING test_unmapped_analysis_keyword_falls_through_to_default"},
+    {"id": 6, "name": "Frontend hook: useOrderSlaStatuses (stable queryKey hash; useMemo aggregation NOT useQuery) + hook test"},
+    {"id": 7, "name": "Frontend components: OrderSlaCell + SampleSlaIndicator (share color primitive) + orderStatus.sla.* i18n keys (en/fr/ar) + render tests for all 7 states"},
+    {"id": 8, "name": "Frontend integration: OrderRow.tsx gains SLA <td> + slaVerdict? prop + order-row.test.tsx update"},
+    {"id": 9, "name": "Frontend integration: OrderStatusPage.tsx wires useOrderSlaStatuses + table header + REPLACES card-view goalNote block (lines 277-292) with SampleSlaIndicator"},
+    {"id": 10, "name": "Frontend integration: CustomerStatusPage.tsx wires hook + adds SLA column header"},
+    {"id": 11, "name": "SlaPane TierCard: amber-threshold input + preferences.sla.amberThreshold/percentRemaining i18n keys (en/fr/ar)"},
+    {"id": 12, "name": "Full verification sweep (backend SLA suite + frontend typecheck/vitest/lint changed files + live smoke; NOTE the 2 pre-existing tier-drift failures are KNOWN out-of-scope)"}
+  ],
+  "key_orientation_facts_for_planner": [
+    "Worktree C:/tmp/accu-mk1-wave1 (containers bind-mount). Branch feat/order-status-processing-time.",
+    "Docker containers: accu-mk1-backend, accu-mk1-frontend. Tests at /app/tests in container.",
+    "Backend SamplePriority model: sample_priorities(sample_uid PK String(50), priority String(20) default 'normal', updated_at). Existing endpoint /worksheets/inbox/{sample_uid}/priority (singleton PUT). No bulk read endpoint yet.",
+    "Existing bulk IN(...) SQL pattern at backend/main.py:12510 - mirror for new endpoint.",
+    "Local /analysis-services endpoint at backend/main.py:2401 returns AnalysisServiceResponse list (has id + keyword - what we need for keyword->id mapping). NO TS GET client yet (only PUT for peptide and POST for sync). Add one.",
+    "DO NOT confuse with /explorer/analysis-services (line 7605) which PROXIES to Integration Service for SENAITE data - wrong endpoint for our needs.",
+    "ServiceGroup TS interface (src/lib/api.ts:3805) already has sla_tier_id + member_ids: number[]. getServiceGroups() exists.",
+    "OrderRow rendered by OrderStatusPage.tsx AND CustomerStatusPage.tsx - SLA column goes in both. Header updates in both parents.",
+    "Card-view goalNote to replace: src/components/OrderStatusPage.tsx lines 277-292. Uses item.lookup.date_received per item; sample-level not order-level.",
+    "sampleLookupMap construction in OrderStatusPage at line 648 (useMemo over useQueries result) - hook input source.",
+    "Backend main.py imports (already from B) at top: 'from datetime import datetime, date, time, timezone'; 'from sqlalchemy import select, desc, delete, update, func, extract'; 'from zoneinfo import ZoneInfo'; models import includes BusinessHoursConfig, LabHoliday, SlaTier, SlaPriorityTier, SamplePriority.",
+    "i18n convention: flat dotted keys in locales/{en,fr,ar}.json - ALL THREE get identical English (translation deferred, matches existing SLA convention).",
+    "ESLint: Array<T> forbidden (use T[]); Zustand selectors only (no destructuring). 3 pre-existing baseline errors in api.ts (~1730/3224/3757) - ignore.",
+    "B's POST /sla/status batch endpoint already shipped (commit 7f4c365 + 7aa20ec) - D2 just calls fetchSlaStatuses(items) from api.ts.",
+    "Color palette to mirror: text-green-600, text-amber-500 (from-D1: text-amber-400/text-yellow-600), text-red-500/text-red-400, text-muted-foreground."
+  ],
+  "blockers": [],
+  "human_actions_pending": [
+    {"action": "Decide whether to reset pre-existing dev-DB SLA tier drift (default=2880 + Microbiology id=21 tier) before/after D2 ships", "context": "2 A/C tests (test_default_tier_encodes_old_24h_goal, test_list_returns_seeded_default) fail in isolation because the DB default is 2880 not the seeded 1440. NOT a B regression. May be real lab config OR leftover from a crashed A/C test run.", "blocking": false}
+  ],
+  "uncommitted_files": [".planning/STATE.md", "docs/superpowers/handoffs/ (untracked from prior session)"],
+  "next_action": "Run /gsd-resume-work or open a fresh session. Resuming agent reads spec at docs/superpowers/specs/2026-05-27-d2-sla-column-design.md + this handoff, then invokes superpowers:writing-plans skill to write the D2 plan to docs/superpowers/plans/2026-05-27-d2-sla-column.md (~12 tasks per proposed_plan_tasks). After plan written + committed, ask user to choose execution mode (subagent-driven recommended, matching B's flow).",
+  "context_notes": "Mid-writing-plans for D2. Spec is finalized and pushed (23a0840 - the POST switch was advisor-driven). Orientation + advisor done; plan-writing itself paused before any plan content was written. The 7 advisor sharpenings list is the most important reference - those caught real issues (POST not GET, stable queryKey, useMemo aggregation, two components). The proposed_plan_tasks list is the executor's task scaffold; flesh out each with TDD bite-sized steps + complete code blocks like B's plan did. B's plan at docs/superpowers/plans/2026-05-27-sla-business-hours.md is the structural template."
+}

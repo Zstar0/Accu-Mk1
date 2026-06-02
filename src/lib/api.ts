@@ -2256,6 +2256,14 @@ export interface AnalysisServiceRecord {
   updated_at: string
 }
 
+/**
+ * Fetch the local AccuMark `analysis_services` table (id + keyword + metadata).
+ *
+ * NOTE: This is the LOCAL endpoint at backend/main.py:2401, NOT
+ * `/explorer/analysis-services` (backend/main.py:7605), which proxies to the
+ * Integration Service for SENAITE data. Consumers needing keyword → service-id
+ * mapping (e.g., the order-SLA cell in D2) must use this local one.
+ */
 export async function getAnalysisServices(opts?: { search?: string; category?: string }): Promise<AnalysisServiceRecord[]> {
   const searchParams = new URLSearchParams()
   if (opts?.search) searchParams.set('search', opts.search)
@@ -3808,6 +3816,7 @@ export interface ServiceGroup {
   color: string
   sort_order: number
   is_default: boolean
+  sla_tier_id: number | null
   member_count: number
   member_ids: number[]
   created_at: string
@@ -3820,6 +3829,7 @@ export interface ServiceGroupCreate {
   color?: string
   sort_order?: number
   is_default?: boolean
+  sla_tier_id?: number | null
 }
 
 export interface ServiceGroupUpdate {
@@ -3828,6 +3838,7 @@ export interface ServiceGroupUpdate {
   color?: string
   sort_order?: number
   is_default?: boolean
+  sla_tier_id?: number | null
 }
 
 export interface SenaiteAnalyst {
@@ -3891,6 +3902,244 @@ export async function setServiceGroupMembers(
   })
   if (!response.ok) throw new Error(`Failed to update service group members: ${response.status}`)
   return response.json()
+}
+
+// ─── SLA tiers (sub-project A revised + C) ──────────────────────────────────
+
+export interface SlaTier {
+  id: number
+  name: string
+  target_minutes: number
+  business_hours_only: boolean
+  is_default: boolean
+  amber_threshold_percent: number
+  created_at: string
+  updated_at: string
+}
+
+export interface SlaTierCreate {
+  name: string
+  target_minutes: number
+  business_hours_only?: boolean
+  is_default?: boolean
+  amber_threshold_percent?: number
+}
+
+export interface SlaTierUpdate {
+  name?: string
+  target_minutes?: number
+  business_hours_only?: boolean
+  is_default?: boolean
+  amber_threshold_percent?: number
+}
+
+export interface SlaPriorityTier {
+  id: number
+  priority: InboxPriority
+  sla_tier_id: number
+  // Multi-tier follow-on: null = global override for this priority; an integer
+  // scopes the override to a single service group. Precedence on the resolver:
+  // (priority, group_id) > (priority, NULL) > group's own tier > default.
+  service_group_id: number | null
+}
+
+export async function getSlaTiers(): Promise<SlaTier[]> {
+  const response = await fetch(`${API_BASE_URL()}/sla-tiers`, { headers: getBearerHeaders() })
+  if (!response.ok) throw new Error(`Failed to load SLA tiers: ${response.status}`)
+  return response.json()
+}
+
+export async function createSlaTier(data: SlaTierCreate): Promise<SlaTier> {
+  const response = await fetch(`${API_BASE_URL()}/sla-tiers`, {
+    method: 'POST', headers: getBearerHeaders('application/json'), body: JSON.stringify(data),
+  })
+  if (!response.ok) throw new Error(`Failed to create SLA tier: ${response.status}`)
+  return response.json()
+}
+
+export async function updateSlaTier(id: number, data: SlaTierUpdate): Promise<SlaTier> {
+  const response = await fetch(`${API_BASE_URL()}/sla-tiers/${id}`, {
+    method: 'PUT', headers: getBearerHeaders('application/json'), body: JSON.stringify(data),
+  })
+  if (!response.ok) throw new Error(`Failed to update SLA tier: ${response.status}`)
+  return response.json()
+}
+
+export async function deleteSlaTier(id: number): Promise<void> {
+  const response = await fetch(`${API_BASE_URL()}/sla-tiers/${id}`, {
+    method: 'DELETE', headers: getBearerHeaders(),
+  })
+  if (!response.ok) throw new Error(`Failed to delete SLA tier: ${response.status}`)
+}
+
+export async function getSlaPriorityTiers(): Promise<SlaPriorityTier[]> {
+  const response = await fetch(`${API_BASE_URL()}/sla-priority-tiers`, { headers: getBearerHeaders() })
+  if (!response.ok) throw new Error(`Failed to load priority overrides: ${response.status}`)
+  return response.json()
+}
+
+export async function setSlaPriorityTier(
+  priority: InboxPriority,
+  slaTierId: number,
+  serviceGroupId?: number | null,
+): Promise<SlaPriorityTier> {
+  // Omit service_group_id entirely (rather than send null) when the caller is
+  // setting the global override — matches the existing single-arg call sites
+  // and keeps the request body slim.
+  const body: { sla_tier_id: number; service_group_id?: number | null } = { sla_tier_id: slaTierId }
+  if (serviceGroupId != null) body.service_group_id = serviceGroupId
+  const response = await fetch(`${API_BASE_URL()}/sla-priority-tiers/${priority}`, {
+    method: 'PUT', headers: getBearerHeaders('application/json'), body: JSON.stringify(body),
+  })
+  if (!response.ok) throw new Error(`Failed to set priority override: ${response.status}`)
+  return response.json()
+}
+
+export async function deleteSlaPriorityTier(
+  priority: InboxPriority,
+  serviceGroupId?: number | null,
+): Promise<void> {
+  // Without serviceGroupId, deletes the global (NULL group) override; with it,
+  // deletes only the per-group row.
+  const url = new URL(`${API_BASE_URL()}/sla-priority-tiers/${priority}`)
+  if (serviceGroupId != null) url.searchParams.set('service_group_id', String(serviceGroupId))
+  const response = await fetch(url.toString(), {
+    method: 'DELETE', headers: getBearerHeaders(),
+  })
+  if (!response.ok) throw new Error(`Failed to remove priority override: ${response.status}`)
+}
+
+/**
+ * Client-side SLA resolution — TS mirror of the Python resolve_sla_tier.
+ * Precedence: priority override > group tier > default. priorityMap is sparse
+ * (a key exists only for overriding priorities). D2 caches getSlaTiers() +
+ * getSlaPriorityTiers() and resolves per sample here. Keep in lockstep with
+ * backend/sla_engine.py.
+ */
+export function resolveSlaTier(
+  priorityMap: Partial<Record<InboxPriority, SlaTier>>,
+  groupTier: SlaTier | null,
+  priority: InboxPriority | null,
+  defaultTier: SlaTier | null
+): SlaTier | null {
+  const prioTier = priority ? priorityMap[priority] : undefined
+  if (prioTier) return prioTier
+  if (groupTier) return groupTier
+  return defaultTier
+}
+
+// ─── Business-hours config + holidays + batch status (sub-project B) ──────────
+
+export interface BusinessHoursConfig {
+  open_time: string // "HH:MM:SS"
+  close_time: string
+  timezone: string
+  working_days: number[] // Python weekday ints, Mon=0..Sun=6
+}
+
+export interface LabHoliday {
+  id: number
+  holiday_date: string // "YYYY-MM-DD"
+  name: string
+  source: 'federal' | 'custom'
+}
+
+export interface SlaStatusRequestItem {
+  key: string
+  received_at: string | null
+  target_minutes: number
+  business_hours_only: boolean
+  /** Historical mode for published samples — when set, the server uses this as
+   *  "now" instead of wall-clock UTC so elapsed = (published - received). Used
+   *  by SampleHeaderSla on published samples to show "took Xh / Met / Missed". */
+  now_override?: string | null
+}
+
+export interface SlaStatus {
+  target_minutes: number
+  elapsed_minutes: number
+  remaining_minutes: number
+  breached: boolean
+}
+
+export interface SlaStatusResultItem {
+  key: string
+  status: SlaStatus | null
+}
+
+export async function getBusinessHoursConfig(): Promise<BusinessHoursConfig> {
+  const response = await fetch(`${API_BASE_URL()}/business-hours-config`, { headers: getBearerHeaders() })
+  if (!response.ok) throw new Error(`Failed to load business hours: ${response.status}`)
+  return response.json()
+}
+
+export async function updateBusinessHoursConfig(data: BusinessHoursConfig): Promise<BusinessHoursConfig> {
+  const response = await fetch(`${API_BASE_URL()}/business-hours-config`, {
+    method: 'PUT', headers: getBearerHeaders('application/json'), body: JSON.stringify(data),
+  })
+  if (!response.ok) throw new Error(`Failed to save business hours: ${response.status}`)
+  return response.json()
+}
+
+export async function getLabHolidays(year: number): Promise<LabHoliday[]> {
+  const response = await fetch(`${API_BASE_URL()}/lab-holidays?year=${year}`, { headers: getBearerHeaders() })
+  if (!response.ok) throw new Error(`Failed to load holidays: ${response.status}`)
+  return response.json()
+}
+
+export async function createLabHoliday(data: { holiday_date: string; name: string }): Promise<LabHoliday> {
+  const response = await fetch(`${API_BASE_URL()}/lab-holidays`, {
+    method: 'POST', headers: getBearerHeaders('application/json'), body: JSON.stringify(data),
+  })
+  if (!response.ok) throw new Error(`Failed to add holiday: ${response.status}`)
+  return response.json()
+}
+
+export async function deleteLabHoliday(holidayDate: string): Promise<void> {
+  const response = await fetch(`${API_BASE_URL()}/lab-holidays/${holidayDate}`, {
+    method: 'DELETE', headers: getBearerHeaders(),
+  })
+  if (!response.ok) throw new Error(`Failed to remove holiday: ${response.status}`)
+}
+
+export async function generateFederalHolidays(year: number): Promise<{ year: number; added: number }> {
+  const response = await fetch(`${API_BASE_URL()}/lab-holidays/generate-federal?year=${year}`, {
+    method: 'POST', headers: getBearerHeaders(),
+  })
+  if (!response.ok) throw new Error(`Failed to generate federal holidays: ${response.status}`)
+  return response.json()
+}
+
+export async function fetchSlaStatuses(items: SlaStatusRequestItem[]): Promise<SlaStatusResultItem[]> {
+  const response = await fetch(`${API_BASE_URL()}/sla/status`, {
+    method: 'POST', headers: getBearerHeaders('application/json'), body: JSON.stringify({ items }),
+  })
+  if (!response.ok) throw new Error(`Failed to fetch SLA statuses: ${response.status}`)
+  const data = await response.json()
+  return data.items
+}
+
+// ─── D2: bulk per-sample priority lookup ─────────────────────────────────────
+
+export interface SamplePriorityLookupItem {
+  sample_uid: string
+  priority: InboxPriority
+}
+
+export async function samplePrioritiesLookup(
+  sampleUids: string[]
+): Promise<SamplePriorityLookupItem[]> {
+  if (sampleUids.length === 0) return []
+  const response = await fetch(`${API_BASE_URL()}/sample-priorities/lookup`, {
+    method: 'POST',
+    headers: getBearerHeaders('application/json'),
+    body: JSON.stringify({ sample_uids: sampleUids }),
+  })
+  if (!response.ok) {
+    throw new Error(`Failed to lookup sample priorities: ${response.status}`)
+  }
+  const data = await response.json()
+  return data.items
 }
 
 export async function getSenaiteAnalysts(): Promise<SenaiteAnalyst[]> {

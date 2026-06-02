@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react'
-import { useQuery, useQueries, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Activity,
   AlertTriangle,
@@ -46,14 +46,15 @@ import {
   formatProcessingTime,
   getOrderEmail,
   groupAnalysisStates,
-  formatTimeSince,
   sampleMatchesAnalysisFilter,
   COL_COUNT_LABEL,
   TEST_EMAILS,
   type AnalysisStateCounts,
 } from '@/components/explorer/helpers'
-import { enqueueSenaiteLookup } from '@/components/explorer/senaite-queue'
 import { OrderRow } from '@/components/explorer/OrderRow'
+import { SampleSlaIndicator } from '@/components/explorer/SampleSlaIndicator'
+import { useOrderSlaStatuses, type SampleSlaSnapshot } from '@/services/order-sla'
+import { useSenaiteLookupMap } from '@/services/senaite-lookup-map'
 
 // Re-export TEST_EMAILS so the existing import surface
 // `import { TEST_EMAILS } from '@/components/OrderStatusPage'` keeps working
@@ -188,10 +189,15 @@ function KanbanSampleCard({
   item,
   showOrder,
   showAnalysisServices,
+  sampleSlaStatusesMap,
 }: {
   item: KanbanSampleItem
   showOrder: boolean
   showAnalysisServices: boolean
+  // Multi-tier follow-on: each sample now has an array of snapshots (one per
+  // service group). Until the indicator itself renders stacked rows, we pick
+  // the first element so behavior stays single-tier-visible.
+  sampleSlaStatusesMap?: Map<string, SampleSlaSnapshot[]>
 }) {
   const navigateToSample = useUIStore(state => state.navigateToSample)
   const navigateToOrderExplorer = useUIStore(state => state.navigateToOrderExplorer)
@@ -274,23 +280,9 @@ function KanbanSampleCard({
               </>
             )}
           </div>
-          {item.lookup?.date_received && item.lookup.review_state !== 'published' ? (() => {
-            const hrs = (Date.now() - new Date(item.lookup.date_received).getTime()) / 3_600_000
-            const timeStr = formatTimeSince(item.lookup.date_received)
-            const goalNote = hrs > 48
-              ? 'Over 48h — exceeds processing goal'
-              : hrs > 24
-              ? 'Over 24h — approaching processing goal limit'
-              : 'Within 24h processing goal'
-            return (
-              <span className={cn(
-                'text-[10px] font-mono leading-none tabular-nums',
-                hrs > 48 ? 'text-red-400' : hrs > 24 ? 'text-amber-400' : 'text-muted-foreground/70'
-              )} title={`Time since received in lab: ${timeStr}. ${goalNote}`}>
-                {timeStr}
-              </span>
-            )
-          })() : (
+          {item.lookup?.date_received && item.lookup.review_state !== 'published' ? (
+            <SampleSlaIndicator snapshots={sampleSlaStatusesMap?.get(item.sampleId)} />
+          ) : (
             <span className={cn(
               'text-[10px] font-mono leading-none tabular-nums',
               item.completedAt ? 'text-green-600/70' : 'text-amber-500/70'
@@ -319,12 +311,14 @@ function KanbanView({
   groupByOrder,
   activeStates,
   showAnalysisServices,
+  sampleSlaStatusesMap,
 }: {
   orders: ExplorerOrder[]
   sampleLookupMap: Map<string, { data?: SenaiteLookupResult; isLoading: boolean; isError: boolean }>
   groupByOrder: boolean
   activeStates: string[]
   showAnalysisServices: boolean
+  sampleSlaStatusesMap?: Map<string, SampleSlaSnapshot[]>
 }) {
   // Determine which columns to show — all if no filter, else just the active one
   const visibleCols = activeStates.length > 0
@@ -411,6 +405,7 @@ function KanbanView({
                     item={item}
                     showOrder={true}
                     showAnalysisServices={showAnalysisServices}
+                    sampleSlaStatusesMap={sampleSlaStatusesMap}
                   />
                 ))}
               </div>
@@ -463,6 +458,7 @@ function KanbanView({
                           item={item}
                           showOrder={false}
                           showAnalysisServices={showAnalysisServices}
+                          sampleSlaStatusesMap={sampleSlaStatusesMap}
                         />
                       ))
                     )}
@@ -615,54 +611,12 @@ export function OrderStatusPage() {
     return filtered
   }, [allOrders, showAll, orderFilters])
 
-  // Collect all unique sample IDs from displayed orders (skip failed/empty ones)
-  const sampleIds = useMemo(() => {
-    const ids: string[] = []
-    for (const order of orders) {
-      if (order.sample_results) {
-        for (const entry of Object.values(order.sample_results)) {
-          if (
-            entry.senaite_id &&
-            entry.status !== 'failed' &&
-            !ids.includes(entry.senaite_id)
-          ) {
-            ids.push(entry.senaite_id)
-          }
-        }
-      }
-    }
-    return ids
-  }, [orders])
-
-  // Fetch sample details from SENAITE — serialized to avoid overwhelming Zope
-  const sampleQueries = useQueries({
-    queries: sampleIds.map(id => ({
-      queryKey: ['senaite', 'lookup', id],
-      queryFn: () => enqueueSenaiteLookup(id),
-      staleTime: 15 * 60_000,
-      retry: 1,
-    })),
-  })
-
-  // Build lookup map: sampleId → query result
-  const sampleLookupMap = useMemo(() => {
-    const map = new Map<
-      string,
-      {
-        data?: SenaiteLookupResult
-        isLoading: boolean
-        isError: boolean
-      }
-    >()
-    sampleIds.forEach((id, idx) => {
-      map.set(id, {
-        data: sampleQueries[idx]?.data,
-        isLoading: sampleQueries[idx]?.isLoading ?? true,
-        isError: sampleQueries[idx]?.isError ?? false,
-      })
-    })
-    return map
-  }, [sampleIds, sampleQueries])
+  // Per-sample SENAITE lookup map (shared hook — see useSenaiteLookupMap).
+  // `sampleLookupMap` is consumed below by the analysis-state filter
+  // (filteredOrders) and by useOrderSlaStatuses; built from the full `orders`
+  // set so filtered lookups are always present.
+  const { sampleLookupMap, isFetching: sampleLookupFetching, lastCachedAt } =
+    useSenaiteLookupMap(orders)
 
   // Hide orders where no samples match the active analysis state filter
   const filteredOrders = useMemo(() => {
@@ -688,6 +642,12 @@ export function OrderStatusPage() {
     }
     return result
   }, [orders, orderFilters, sampleLookupMap])
+
+  // D2: order-aggregated SLA verdicts + per-sample status snapshots for the
+  // table-view SLA column and the card-view SampleSlaIndicator. The hook is
+  // useMemo-aggregated; only its one /sla/status batch query re-runs on data
+  // changes (sharpenings #3, #4).
+  const orderSla = useOrderSlaStatuses(filteredOrders, sampleLookupMap)
 
   // Count orders needing attention (have samples with to_verify analyses)
   const attentionCount = useMemo(() => {
@@ -725,15 +685,7 @@ export function OrderStatusPage() {
     return totals
   }, [orders, sampleLookupMap])
 
-  // Oldest cached_at from settled queries — shows when data was last fetched from Senaite
-  const lastUpdated = useMemo(() => {
-    let oldest: string | null = null
-    for (const q of sampleQueries) {
-      const ts = q.data?.cached_at
-      if (ts && (!oldest || ts < oldest)) oldest = ts
-    }
-    return oldest
-  }, [sampleQueries])
+  const lastUpdated = lastCachedAt
 
   const openCount = useMemo(() => {
     if (!allOrders) return 0
@@ -748,7 +700,7 @@ export function OrderStatusPage() {
   }, [allOrders, orderFilters])
 
   // True while any senaite lookup is actively fetching
-  const isRefreshing = sampleQueries.some(q => q.isFetching)
+  const isRefreshing = sampleLookupFetching
 
   const handleRefresh = async () => {
     // Clear server-side cache, then invalidate all client queries
@@ -908,7 +860,7 @@ export function OrderStatusPage() {
                     <div className="flex items-center gap-0.5 border border-border rounded-md overflow-hidden">
                       {([
                         { key: 'order_id', label: 'Order ID' },
-                        { key: 'processing_time', label: 'Outstanding' },
+                        { key: 'processing_time', label: 'Since order' },
                       ] as const).map(opt => {
                         const isActive = orderFilters.kanbanSort === opt.key
                         return (
@@ -1108,7 +1060,8 @@ export function OrderStatusPage() {
                       <th className="py-2 px-3 font-medium whitespace-nowrap">Email</th>
                       <th className="py-2 px-3 font-medium whitespace-nowrap">Progress</th>
                       <th className="py-2 px-3 font-medium whitespace-nowrap">Created</th>
-                      <th className="py-2 px-3 font-medium whitespace-nowrap">Processing Time</th>
+                      <th className="py-2 px-3 font-medium whitespace-nowrap">Timing</th>
+                      <th className="py-2 px-3 font-medium whitespace-nowrap">SLA</th>
                       <th className="py-2 px-3 font-medium">Sample Details</th>
                     </tr>
                   </thead>
@@ -1120,6 +1073,8 @@ export function OrderStatusPage() {
                         wordpressHost={wordpressHost}
                         sampleLookupMap={sampleLookupMap}
                         activeAnalysisStates={orderFilters.activeStates}
+                        slaVerdict={orderSla.verdictByOrderId.get(order.order_id)}
+                        sampleSlaStatusesMap={orderSla.sampleStatusesBySampleId}
                       />
                     ))}
                   </tbody>
@@ -1135,6 +1090,7 @@ export function OrderStatusPage() {
                   groupByOrder={orderFilters.groupByOrder}
                   activeStates={orderFilters.activeStates}
                   showAnalysisServices={orderFilters.showAnalysisServices}
+                  sampleSlaStatusesMap={orderSla.sampleStatusesBySampleId}
                 />
               </div>
             )}
