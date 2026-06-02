@@ -124,10 +124,12 @@ git commit -m "feat(order-status): pure filter helpers (toggleFilterKey, isOrder
 In `src/components/OrderStatusPage.tsx`, add to the import block near the other `@/components/explorer/*` imports (e.g. after the `OrderRow` import, line 54):
 
 ```ts
-import { toggleFilterKey, isOrderAtRisk } from '@/components/explorer/order-filters'
+import { toggleFilterKey } from '@/components/explorer/order-filters'
 ```
 
-(`isOrderAtRisk` is used in Task 3; importing both now keeps one import line.)
+NOTE: `noUnusedLocals` is enabled, so import ONLY what each task consumes.
+Task 2 uses only `toggleFilterKey`; Task 3 Step 0 extends this line to add
+`isOrderAtRisk`.
 
 - [ ] **Step 2: Rewrite `toggleState` to add/remove**
 
@@ -171,6 +173,21 @@ git commit -m "feat(order-status): multi-select stage filters via toggleFilterKe
 
 **Files:**
 - Modify: `src/components/OrderStatusPage.tsx` (`OrderFilters` interface ~494; `loadOrderFilters` default ~514; after `orderSla` ~650; button after line 816; render consumers at 1028, 1048, 1054, 1069, 1085, 1088)
+
+- [ ] **Step 0: Extend the import to add `isOrderAtRisk`**
+
+Task 2 imports only `toggleFilterKey` (because `noUnusedLocals` is on). Now that
+Task 3 consumes `isOrderAtRisk`, change the import line (added in Task 2) from:
+
+```ts
+import { toggleFilterKey } from '@/components/explorer/order-filters'
+```
+
+to:
+
+```ts
+import { toggleFilterKey, isOrderAtRisk } from '@/components/explorer/order-filters'
+```
 
 - [ ] **Step 1: Add `slaAtRisk` to the `OrderFilters` interface**
 
