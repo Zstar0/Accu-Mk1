@@ -3733,6 +3733,10 @@ export async function getSenaiteAnalysts(): Promise<SenaiteAnalyst[]> {
 
 export type InboxPriority = 'normal' | 'high' | 'expedited'
 
+export type InboxRole = 'hplc' | 'microbiology'
+
+// Aligns with backend Pydantic InboxAnalysisItem after the vial-inbox
+// redesign — service group context now travels per-analysis.
 export interface InboxAnalysisItem {
   uid: string | null
   title: string
@@ -3740,21 +3744,21 @@ export interface InboxAnalysisItem {
   peptide_name: string | null
   method: string | null
   review_state: string | null
-}
-
-export interface InboxServiceGroupSection {
   group_id: number
   group_name: string
   group_color: string
-  assigned_analyst_id: number | null
-  assigned_analyst_email: string | null
-  instrument_uid: string | null
-  analyses: InboxAnalysisItem[]
 }
 
-export interface InboxSampleItem {
+// One inbox card == one vial (parent AR or sub-sample AR). Replaces the
+// old InboxSampleItem + analyses_by_group nesting.
+export interface InboxVialItem {
   uid: string
-  id: string
+  sample_id: string
+  is_parent: boolean
+  parent_sample_id: string
+  assignment_role: string | null
+  vial_sequence: number
+  vial_total: number
   title: string
   client_id: string | null
   client_order_number: string | null
@@ -3762,12 +3766,13 @@ export interface InboxSampleItem {
   review_state: string
   priority: InboxPriority
   assignment_summary: string
-  analyses_by_group: InboxServiceGroupSection[]
+  analyses: InboxAnalysisItem[]
 }
 
 export interface InboxResponse {
-  items: InboxSampleItem[]
+  items: InboxVialItem[]
   total: number
+  filter_role: InboxRole | null
 }
 
 export interface WorksheetUser {
@@ -3784,11 +3789,28 @@ export interface WorksheetCreateResponse {
 
 // ─── Inbox API Functions ──────────────────────────────────────────────────────
 
-export async function getInboxSamples(hideTestOrders = true, forceRefresh = false, hidePrepped = true): Promise<InboxResponse> {
+export interface GetInboxOptions {
+  hideTestOrders?: boolean
+  forceRefresh?: boolean
+  hidePrepped?: boolean
+  role?: InboxRole | null
+  showXtra?: boolean
+}
+
+export async function getInboxSamples(opts: GetInboxOptions = {}): Promise<InboxResponse> {
+  const {
+    hideTestOrders = true,
+    forceRefresh = false,
+    hidePrepped = true,
+    role = null,
+    showXtra = false,
+  } = opts
   const params = new URLSearchParams()
   params.set('hide_test_orders', String(hideTestOrders))
   params.set('hide_prepped', String(hidePrepped))
   if (forceRefresh) params.set('force_refresh', 'true')
+  if (role) params.set('role', role)
+  if (showXtra) params.set('show_xtra', 'true')
   const response = await fetch(`${API_BASE_URL()}/worksheets/inbox?${params}`, {
     headers: getBearerHeaders(),
   })
