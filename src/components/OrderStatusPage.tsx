@@ -1091,7 +1091,9 @@ export function OrderStatusPage() {
 
             {displayedOrders.length === 0 && !ordersLoading && (
               <div className="text-muted-foreground py-8 text-center">
-                {showAll ? 'No orders found' : 'No open orders'}
+                {orderFilters.slaAtRisk
+                  ? 'No at-risk orders in current filter'
+                  : showAll ? 'No orders found' : 'No open orders'}
               </div>
             )}
 
