@@ -118,7 +118,7 @@ function VarianceSummaryBody({ parentSampleId }: { parentSampleId: string }) {
       </p>
 
       {locked && (
-        <div className="rounded-md border-2 border-amber-400 bg-amber-50 p-3 text-sm flex items-center gap-2">
+        <div className="rounded-md border-2 border-amber-400 bg-amber-50 text-amber-900 dark:border-amber-500/40 dark:bg-amber-950/30 dark:text-amber-200 p-3 text-sm flex items-center gap-2">
           <Lock className="w-4 h-4" />
           <span className="flex-1">
             Locked at {new Date(data.locked_at!).toLocaleString()} by user #{data.locked_by_user_id}.
