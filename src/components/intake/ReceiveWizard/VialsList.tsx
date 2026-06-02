@@ -11,6 +11,32 @@ interface Props {
   onSelect: (sampleId: string | null) => void
 }
 
+// Role badge palette — uses the same tint family as SenaiteDashboard.tsx
+// (sky/emerald/violet/zinc/amber) but with full labels instead of letters
+// since the wizard's right column has the space for it.
+const ROLE_BADGES: Record<string, { label: string; cls: string }> = {
+  hplc:       { label: 'HPLC',       cls: 'bg-sky-500/15 text-sky-700 border-sky-500/40 dark:text-sky-300' },
+  endo:       { label: 'ENDO',       cls: 'bg-emerald-500/15 text-emerald-700 border-emerald-500/40 dark:text-emerald-300' },
+  ster:       { label: 'STERYL',     cls: 'bg-violet-500/15 text-violet-700 border-violet-500/40 dark:text-violet-300' },
+  xtra:       { label: 'XTRA',       cls: 'bg-zinc-500/15 text-zinc-700 border-zinc-500/40 dark:text-zinc-300' },
+  unassigned: { label: 'Unassigned', cls: 'bg-amber-500/15 text-amber-700 border-amber-500/40 dark:text-amber-300' },
+}
+
+function RoleBadge({ role }: { role: string | null | undefined }) {
+  const b = ROLE_BADGES[role ?? 'unassigned'] ?? ROLE_BADGES.unassigned!
+  return (
+    <span
+      className={cn(
+        'inline-block mt-1 text-[10px] leading-none px-1.5 py-0.5 rounded border uppercase tracking-wide font-medium',
+        b.cls
+      )}
+      title={`Assigned to ${b.label}`}
+    >
+      {b.label}
+    </span>
+  )
+}
+
 function VialThumb({ sampleId, hasPhoto }: { sampleId: string; hasPhoto: boolean }) {
   const [url, setUrl] = useState<string | null>(null)
 
@@ -80,7 +106,7 @@ export function VialsList({
                 works here. hasPhoto is true once the parent has been
                 received — pre-receive parents won't have one yet. */}
             <VialThumb sampleId={parentVial.sampleId} hasPhoto={true} />
-            <div className="min-w-0">
+            <div className="min-w-0 flex-1">
               <div className="font-mono text-sm truncate">{parentVial.sampleId}</div>
               <div className="text-xs text-muted-foreground flex items-center gap-1">
                 <span>Vial 1</span>
@@ -89,6 +115,8 @@ export function VialsList({
                   {parentVial.receivedThisSession ? 'received' : 'previously received'}
                 </span>
               </div>
+              {/* Parent's assignment_role defaults to 'hplc' per the system. */}
+              <RoleBadge role="hplc" />
             </div>
           </li>
         )}
@@ -122,11 +150,7 @@ export function VialsList({
                     <div className="text-xs text-muted-foreground">
                       Vial {v.sub.vial_sequence + 1}
                     </div>
-                    {v.sub.assignment_role && (
-                      <span className="inline-block mt-1 text-[9px] px-1.5 py-0.5 rounded bg-muted/50 uppercase tracking-wide font-mono">
-                        {v.sub.assignment_role === 'ster' ? 'STERYL' : v.sub.assignment_role.toUpperCase()}
-                      </span>
-                    )}
+                    <RoleBadge role={v.sub.assignment_role} />
                   </div>
                 </button>
               ) : (
@@ -139,11 +163,7 @@ export function VialsList({
                       <span aria-hidden>·</span>
                       <span>read-only</span>
                     </div>
-                    {v.sub.assignment_role && (
-                      <span className="inline-block mt-1 text-[9px] px-1.5 py-0.5 rounded bg-muted/50 uppercase tracking-wide font-mono">
-                        {v.sub.assignment_role === 'ster' ? 'STERYL' : v.sub.assignment_role.toUpperCase()}
-                      </span>
-                    )}
+                    <RoleBadge role={v.sub.assignment_role} />
                   </div>
                 </div>
               )}
