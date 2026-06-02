@@ -51,6 +51,7 @@ import {
   TEST_EMAILS,
   type AnalysisStateCounts,
 } from '@/components/explorer/helpers'
+import { toggleFilterKey } from '@/components/explorer/order-filters'
 import { OrderRow } from '@/components/explorer/OrderRow'
 import { SampleSlaIndicator } from '@/components/explorer/SampleSlaIndicator'
 import { useOrderSlaStatuses, type SampleSlaSnapshot } from '@/services/order-sla'
@@ -550,7 +551,7 @@ export function OrderStatusPage() {
 
   const toggleState = (key: string) => {
     updateFilters({
-      activeStates: orderFilters.activeStates[0] === key ? [] : [key],
+      activeStates: toggleFilterKey(orderFilters.activeStates, key),
     })
   }
   const wordpressHost = getWordpressUrl()
