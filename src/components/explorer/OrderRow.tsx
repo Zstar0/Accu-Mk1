@@ -3,15 +3,20 @@ import { ChevronDown, ChevronRight, ExternalLink } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
 import type { ExplorerOrder, SenaiteLookupResult } from '@/lib/api'
+import type { OrderSlaVerdict } from '@/lib/sla-resolution'
+import type { SampleSlaSnapshot } from '@/services/order-sla'
 import { OrderFinancePanel } from './OrderFinancePanel'
+import { OrderSlaCell } from './OrderSlaCell'
 import { SampleCard } from './SampleCard'
 import {
   COL_COUNT_LABEL,
   STATE_BORDER_CLASS,
   formatDate,
   formatProcessingTime,
+  formatTimeSince,
   getOrderEmail,
   getOrderProgress,
+  getOrderReceivedAt,
   getOrderWorstState,
   groupAnalysisStates,
   isOrderDone,
@@ -26,6 +31,8 @@ export function OrderRow({
   defaultExpanded,
   highlightSampleId,
   showFinance,
+  slaVerdict,
+  sampleSlaStatusesMap,
 }: {
   order: ExplorerOrder
   wordpressHost: string
@@ -56,6 +63,16 @@ export function OrderRow({
   // cell that toggles a live WooCommerce finance disclosure row beneath this one.
   // Off by default so the shared /explorer OrderStatusPage view is unchanged.
   showFinance?: boolean
+  // D2: order-aggregated SLA verdict. Undefined means "loading" (the cell renders
+  // a muted loading dot). The parent passes verdicts from useOrderSlaStatuses.
+  slaVerdict?: OrderSlaVerdict
+  // D2 follow-on: per-sample SLA snapshots keyed by senaiteId. Each value is
+  // an array (one entry per service group the sample touches) per the multi-
+  // tier reshape; OrderRow forwards the first entry to SampleCard which still
+  // renders a single indicator. Multi-row UI lands in a follow-on commit.
+  // Undefined when the page hasn't plumbed it yet; SampleCard renders no
+  // indicator in that case.
+  sampleSlaStatusesMap?: Map<string, SampleSlaSnapshot[]>
 }) {
   const [financeExpanded, setFinanceExpanded] = useState(false)
   const wpUrl = `${wordpressHost}/wp-admin/post.php?post=${order.order_id}&action=edit`
@@ -110,6 +127,11 @@ export function OrderRow({
   const worstState = getOrderWorstState(order, sampleLookupMap)
   const done = isOrderDone(order, sampleLookupMap)
   const progress = getOrderProgress(order, sampleLookupMap)
+  // D1: order-level "Outstanding" = time since the lab first received a sample.
+  // null until any sample is received — surfaced as "Awaiting sample" so orders
+  // placed long ago but never received stand out for follow-up.
+  const receivedAt = getOrderReceivedAt(order, sampleLookupMap)
+  const outstanding = formatTimeSince(receivedAt)
 
   // Behavior-preserving cleanup per RESEARCH §11 #3: the inline IIFE at the
   // former OrderStatusPage:465-469 duplicated getOrderEmail. Collapsing to a
@@ -205,15 +227,45 @@ export function OrderRow({
       <td className="py-3 px-3 whitespace-nowrap text-sm text-muted-foreground">
         {formatDate(order.created_at)}
       </td>
-      <td className="py-3 px-3 whitespace-nowrap">
-        <span
-          className={cn(
-            'font-mono text-sm',
-            order.completed_at ? 'text-green-600' : 'text-yellow-600'
-          )}
-        >
-          {formatProcessingTime(order.created_at, order.completed_at)}
-        </span>
+      <td className="py-3 px-3 whitespace-nowrap align-top">
+        <div className="flex flex-col gap-0.5 text-xs">
+          <span
+            title={
+              order.completed_at
+                ? 'Total time from order placed to completion'
+                : 'Elapsed since the order was placed'
+            }
+          >
+            <span className="text-muted-foreground mr-1">Order</span>
+            <span
+              data-testid="order-time-since-order"
+              className={cn(
+                'font-mono',
+                order.completed_at ? 'text-green-600' : 'text-yellow-600'
+              )}
+            >
+              {formatProcessingTime(order.created_at, order.completed_at)}
+            </span>
+          </span>
+          <span
+            title={
+              receivedAt
+                ? 'Elapsed since the lab received a sample (outstanding)'
+                : 'No sample received yet'
+            }
+          >
+            <span className="text-muted-foreground mr-1">Lab</span>
+            <span
+              data-testid="order-outstanding"
+              className="font-mono text-muted-foreground"
+            >
+              {outstanding ?? 'Awaiting sample'}
+            </span>
+          </span>
+        </div>
+      </td>
+      <td className="py-3 px-3 whitespace-nowrap align-top">
+        <OrderSlaCell verdict={slaVerdict ?? { color: 'awaiting' }} isLoading={!slaVerdict} />
       </td>
       <td className="py-3 px-3">
         {visibleSampleEntries.length === 0 ? (
@@ -256,6 +308,7 @@ export function OrderRow({
                   isLoading={lookup?.isLoading ?? true}
                   isError={lookup?.isError ?? false}
                   analyte={s.analyte}
+                  slaSnapshots={sampleSlaStatusesMap?.get(s.senaiteId)}
                   className={cn(
                     highlightSampleId === s.senaiteId &&
                       'ring-2 ring-primary ring-offset-2'
@@ -269,7 +322,7 @@ export function OrderRow({
     </tr>
     {showFinance && financeExpanded && (
       <tr data-testid="order-finance-row" className="bg-muted/20">
-        <td colSpan={6} className="p-0">
+        <td colSpan={7} className="p-0">
           <OrderFinancePanel
             orderId={order.order_id}
             enabled={financeExpanded}

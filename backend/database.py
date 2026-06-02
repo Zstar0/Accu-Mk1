@@ -52,6 +52,67 @@ def get_db():
         db.close()
 
 
+def seed_federal_holidays(conn, year: int) -> int:
+    """Insert any missing federal holiday rows for `year`.
+
+    Idempotent via ON CONFLICT (holiday_date) DO NOTHING. `conn` is a SQLAlchemy
+    Connection; the caller owns the transaction (engine.begin() at startup, or the
+    request session's connection in the generate-federal endpoint). Returns the
+    number of rows actually inserted. Shared by startup seeding and the endpoint.
+    """
+    from sqlalchemy import text
+    from holidays_us import us_federal_holidays
+
+    added = 0
+    for d, name in sorted(us_federal_holidays(year).items()):
+        result = conn.execute(
+            text(
+                "INSERT INTO lab_holidays (holiday_date, name, source, created_at) "
+                "VALUES (:d, :n, 'federal', NOW()) "
+                "ON CONFLICT (holiday_date) DO NOTHING"
+            ),
+            {"d": d, "n": name},
+        )
+        added += result.rowcount or 0
+    return added
+
+
+def _seed_federal_holidays_window() -> None:
+    """First-boot-ONLY seed of federal holidays for the rolling window
+    (current + next 2 years), gated by a settings flag.
+
+    Why first-boot-only: deleting a federal row is how the lab opts out of a
+    holiday it works. If this re-ran every boot, ON CONFLICT DO NOTHING would
+    re-insert any deleted (absent) row — resurrecting opt-outs. The settings
+    flag makes the seeder a no-op after the first successful run, so deletions
+    survive restarts. New years enter coverage only via the explicit
+    POST /lab-holidays/generate-federal action. Wrapped so a failure never
+    blocks boot.
+    """
+    from sqlalchemy import text
+    from datetime import date as _date
+
+    try:
+        with engine.begin() as conn:
+            already = conn.execute(
+                text("SELECT value FROM settings WHERE key='business_hours_federal_initial_seeded'")
+            ).scalar()
+            if already == "true":
+                return
+            base = _date.today().year
+            for year in (base, base + 1, base + 2):
+                seed_federal_holidays(conn, year)
+            conn.execute(
+                text(
+                    "INSERT INTO settings (key, value, updated_at) "
+                    "VALUES ('business_hours_federal_initial_seeded', 'true', NOW()) "
+                    "ON CONFLICT (key) DO UPDATE SET value='true', updated_at=NOW()"
+                )
+            )
+    except Exception as e:
+        log.warning("federal_holiday_seed_skipped err=%s", e)
+
+
 def init_db():
     """Initialize database tables."""
     # Import models to register them with Base
@@ -59,6 +120,7 @@ def init_db():
     # Run column migrations before create_all so ORM mappings match the DB schema
     _run_migrations()
     Base.metadata.create_all(bind=engine)
+    _seed_federal_holidays_window()
 
 
 def _run_migrations():
@@ -216,6 +278,88 @@ def _run_migrations():
         JOIN analysis_services ans ON ans.keyword = 'Benzyl_Alcohol_Assay'
         WHERE p.abbreviation = 'Benzyl Alcohol'
         ON CONFLICT (peptide_id, slot) DO NOTHING
+        """,
+        # ── SLA tiers (revises the former sla_targets model) ──
+        # Drop the old per-(service,priority) model and its indexes.
+        "DROP TABLE IF EXISTS sla_targets CASCADE",
+        # Named SLA tier = a turnaround target. Referenced by service groups and
+        # by the priority map. Raw DDL before create_all so the seed/index below
+        # can run on first boot; the SlaTier ORM model maps the same table.
+        """
+        CREATE TABLE IF NOT EXISTS sla_tiers (
+            id                  SERIAL PRIMARY KEY,
+            name                VARCHAR(100) NOT NULL,
+            target_minutes      INTEGER NOT NULL,
+            business_hours_only BOOLEAN NOT NULL DEFAULT FALSE,
+            is_default          BOOLEAN NOT NULL DEFAULT FALSE,
+            created_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        # At most one default (catch-all) tier.
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_sla_tier_single_default ON sla_tiers (is_default) WHERE is_default",
+        # Sparse priority -> tier override map. A row exists ONLY for priorities
+        # that override; absence means "does not override".
+        """
+        CREATE TABLE IF NOT EXISTS sla_priority_tiers (
+            priority    VARCHAR(20) PRIMARY KEY,
+            sla_tier_id INTEGER NOT NULL REFERENCES sla_tiers(id) ON DELETE CASCADE,
+            updated_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        # Service groups reference a tier (NULL -> resolves to the default tier).
+        "ALTER TABLE service_groups ADD COLUMN IF NOT EXISTS sla_tier_id INTEGER REFERENCES sla_tiers(id) ON DELETE SET NULL",
+        # Seed the default tier at 48h (2d). Idempotent — only inserts when no
+        # default exists yet, so it sets the starting target on a fresh DB.
+        """
+        INSERT INTO sla_tiers (name, target_minutes, business_hours_only, is_default, created_at, updated_at)
+        SELECT 'Standard', 2880, FALSE, TRUE, NOW(), NOW()
+        WHERE NOT EXISTS (SELECT 1 FROM sla_tiers WHERE is_default)
+        """,
+        # D2: per-tier amber threshold (idempotent ALTER, existing rows get 20).
+        "ALTER TABLE sla_tiers ADD COLUMN IF NOT EXISTS amber_threshold_percent INTEGER NOT NULL DEFAULT 20",
+        # Multi-tier follow-on: priority overrides can now be scoped to a single
+        # service group. service_group_id IS NULL preserves the original
+        # "applies globally" semantics for any existing rows. Precedence on the
+        # frontend resolver becomes (priority, group_id) > (priority, NULL) >
+        # group's own tier > default. The old PRIMARY KEY (priority) no longer
+        # suffices because multiple rows can share a priority; a SERIAL `id`
+        # becomes the new PK, and two PARTIAL UNIQUE indexes enforce
+        # one-global-per-priority + one-per-(priority,group). Each statement is
+        # idempotent or harmless when re-run (per-statement isolation already
+        # in place below).
+        "ALTER TABLE sla_priority_tiers ADD COLUMN IF NOT EXISTS service_group_id INTEGER REFERENCES service_groups(id) ON DELETE CASCADE",
+        "ALTER TABLE sla_priority_tiers DROP CONSTRAINT IF EXISTS sla_priority_tiers_pkey",
+        "ALTER TABLE sla_priority_tiers ADD COLUMN IF NOT EXISTS id SERIAL",
+        "ALTER TABLE sla_priority_tiers ADD CONSTRAINT sla_priority_tiers_pkey PRIMARY KEY (id)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_sla_priority_global ON sla_priority_tiers (priority) WHERE service_group_id IS NULL",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_sla_priority_per_group ON sla_priority_tiers (priority, service_group_id) WHERE service_group_id IS NOT NULL",
+        # ── Business-hours SLA calendar (sub-project B) ──
+        """
+        CREATE TABLE IF NOT EXISTS business_hours_config (
+            id           INTEGER PRIMARY KEY,
+            open_time    TIME NOT NULL,
+            close_time   TIME NOT NULL,
+            timezone     VARCHAR(64) NOT NULL DEFAULT 'America/Los_Angeles',
+            working_days JSON NOT NULL,
+            created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        # Seed the singleton: 09:00-17:00, Mon-Fri, Pacific. Idempotent.
+        """
+        INSERT INTO business_hours_config (id, open_time, close_time, timezone, working_days, created_at, updated_at)
+        SELECT 1, '09:00', '17:00', 'America/Los_Angeles', '[0,1,2,3,4]', NOW(), NOW()
+        WHERE NOT EXISTS (SELECT 1 FROM business_hours_config)
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS lab_holidays (
+            id           SERIAL PRIMARY KEY,
+            holiday_date DATE NOT NULL UNIQUE,
+            name         VARCHAR(100) NOT NULL,
+            source       VARCHAR(10) NOT NULL DEFAULT 'custom',
+            created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
         """,
     ]
     # Per-statement isolation: a failure in one statement (e.g., a table that

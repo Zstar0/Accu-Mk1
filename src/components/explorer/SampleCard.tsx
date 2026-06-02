@@ -3,12 +3,13 @@ import { AlertTriangle, RefreshCw } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useUIStore } from '@/store/ui-store'
 import type { SenaiteLookupResult } from '@/lib/api'
+import type { SampleSlaSnapshot } from '@/services/order-sla'
 import {
   AnalysisCounts,
   SampleStateBadge,
-  formatTimeSince,
   groupAnalysisStates,
 } from './helpers'
+import { SampleSlaIndicator } from './SampleSlaIndicator'
 
 export function SampleCard({
   sampleId,
@@ -17,6 +18,7 @@ export function SampleCard({
   isError,
   className,
   analyte,
+  slaSnapshots,
 }: {
   sampleId: string
   lookup: SenaiteLookupResult | undefined
@@ -35,6 +37,15 @@ export function SampleCard({
   // while the lookup is loading or has errored. When undefined/empty the
   // sub-row is omitted so empty orders don't get a whitespace gap.
   analyte?: string
+  // Multi-tier follow-on — per-sample SLA snapshots, one entry per service
+  // group the sample's analyses touch. Replaces the legacy hardcoded 24h/48h
+  // goalNote with the real tier-resolved indicator (priority>group>default
+  // precedence, business-hours math, configurable amber threshold). Only used
+  // on the normal render branch when the sample is non-published with a
+  // date_received — same gate as the legacy timer. useOrderSlaStatuses
+  // returns undefined for published or unresolved samples; when the prop is
+  // omitted (or empty array) the indicator simply doesn't render.
+  slaSnapshots?: SampleSlaSnapshot[]
 }) {
   const navigateToSample = useUIStore(state => state.navigateToSample)
   const hasAnalyte = typeof analyte === 'string' && analyte.length > 0
@@ -112,35 +123,11 @@ export function SampleCard({
       {analyteEl}
       <div className="flex items-center gap-2">
         <AnalysisCounts counts={counts} needsAttention={needsAttention} />
-        {lookup.date_received &&
-          lookup.review_state !== 'published' &&
-          (() => {
-            const hrs =
-              (Date.now() - new Date(lookup.date_received).getTime()) /
-              3_600_000
-            const timeStr = formatTimeSince(lookup.date_received)
-            const goalNote =
-              hrs > 48
-                ? 'Over 48h — exceeds processing goal'
-                : hrs > 24
-                  ? 'Over 24h — approaching processing goal limit'
-                  : 'Within 24h processing goal'
-            return (
-              <span
-                className={cn(
-                  'text-[10px] font-mono ml-auto shrink-0',
-                  hrs > 48
-                    ? 'text-red-400'
-                    : hrs > 24
-                      ? 'text-amber-400'
-                      : 'text-muted-foreground'
-                )}
-                title={`Time since received in lab: ${timeStr}. ${goalNote}`}
-              >
-                {timeStr}
-              </span>
-            )
-          })()}
+        {lookup.date_received && lookup.review_state !== 'published' && (
+          <span className="ml-auto shrink-0">
+            <SampleSlaIndicator snapshots={slaSnapshots} />
+          </span>
+        )}
       </div>
     </div>
   )

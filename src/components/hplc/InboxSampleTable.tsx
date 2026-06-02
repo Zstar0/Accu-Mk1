@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { ChevronRight } from 'lucide-react'
 import {
   Table,
@@ -17,8 +17,9 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { PriorityBadge } from '@/components/hplc/PriorityBadge'
-import { AgingTimer } from '@/components/hplc/AgingTimer'
+import { SlaAgeIndicator } from '@/components/hplc/SlaAgeIndicator'
 import { StateBadge } from '@/components/senaite/senaite-utils'
+import { useSlaForSubjects, type SlaSubject, type SlaSubjectSnapshot } from '@/services/sla-subjects'
 import {
   SERVICE_GROUP_COLORS,
   type ServiceGroupColor,
@@ -182,6 +183,21 @@ export function InboxSampleTable({
 }: InboxSampleTableProps) {
   const [expandedUids, setExpandedUids] = useState<Set<string>>(new Set())
 
+  const slaSubjects = useMemo<SlaSubject[]>(
+    () =>
+      samples.flatMap(sample =>
+        sample.analyses_by_group.map(group => ({
+          key: `${sample.uid}|${group.group_id}`,
+          priority: sample.priority,
+          groupId: group.group_id,
+          receivedAt: sample.date_received,
+        })),
+      ),
+    [samples],
+  )
+  const { byKey: slaByKey, isLoading: slaLoading, isError: slaError } =
+    useSlaForSubjects(slaSubjects)
+
   const allSelected = samples.length > 0 && selectedUids.size === samples.length
   const someSelected = selectedUids.size > 0 && selectedUids.size < samples.length
 
@@ -233,7 +249,7 @@ export function InboxSampleTable({
           <TableHead>Client</TableHead>
           <TableHead>Priority</TableHead>
           <TableHead>Assignments</TableHead>
-          <TableHead>Age</TableHead>
+          <TableHead>SLA</TableHead>
           <TableHead>Status</TableHead>
         </TableRow>
       </TableHeader>
@@ -321,9 +337,15 @@ export function InboxSampleTable({
                   </span>
                 </TableCell>
 
-                {/* Age */}
+                {/* SLA */}
                 <TableCell>
-                  <AgingTimer dateReceived={sample.date_received} />
+                  <SlaAgeIndicator
+                    snapshots={sample.analyses_by_group
+                      .map(g => slaByKey.get(`${sample.uid}|${g.group_id}`))
+                      .filter((s): s is SlaSubjectSnapshot => s != null)}
+                    isLoading={slaLoading}
+                    isError={slaError}
+                  />
                 </TableCell>
 
                 {/* Status */}

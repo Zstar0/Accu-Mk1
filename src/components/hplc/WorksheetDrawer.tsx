@@ -263,6 +263,7 @@ export function WorksheetDrawer() {
                 worksheetId={activeWorksheet.id}
                 openWorksheets={openWorksheets}
                 isCompleted={!!isCompleted}
+                worksheetCompletedAtProp={activeWorksheet.completed_at}
                 prepStartedItems={prepStartedItems}
                 onRemove={(uid, gid) =>
                   removeMutation.mutate({
