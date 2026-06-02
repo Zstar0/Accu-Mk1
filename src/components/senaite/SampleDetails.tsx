@@ -111,7 +111,8 @@ import { EditableDataRow } from '@/components/dashboard/EditableField'
 import { AnalysisTable, StatusBadge } from '@/components/senaite/AnalysisTable'
 import { SamplePrepHplcFlyout } from '@/components/hplc/SamplePrepHplcFlyout'
 import { SampleActivityLog } from '@/components/senaite/SampleActivityLog'
-import { Microscope, Plus, Printer, Search, Trash2, ScrollText } from 'lucide-react'
+import { Microscope, Plus, Printer, Search, Trash2, ScrollText, Sigma } from 'lucide-react'
+import { VarianceSummary } from '@/components/samples/VarianceSummary'
 import { usePrintLabel } from '@/components/samples/usePrintLabel'
 import { PrintLabelPortal } from '@/components/samples/PrintLabelPortal'
 
@@ -1771,6 +1772,9 @@ export function SampleDetails() {
   // Activity log flyout
   const [activityLogOpen, setActivityLogOpen] = useState(false)
 
+  // Variance summary dialog (worksheet-variance design 2026-06-02)
+  const [varianceSummaryOpen, setVarianceSummaryOpen] = useState(false)
+
   // Print Label — single-label print for this sample / its sub-samples
   const { printLabel, target: printTarget } = usePrintLabel()
 
@@ -1859,13 +1863,51 @@ export function SampleDetails() {
     return set
   }, [data, currentAssignment])
 
-  function openSubSampleWizard() {
-    if (!data?.sample_id || !data.sample_uid) return
-    setWizardParent({
-      uid: data.sample_uid,
-      sample_id: data.sample_id,
-      status: data.review_state,
-    })
+  async function openSubSampleWizard() {
+    // On a parent page, open the wizard for the current sample.
+    // On a sub-sample page, open it for the parent. The parent summary
+    // returned by listSubSamples only carries external_lims_uid when the
+    // parent has been previously cached in lims_samples (i.e. someone
+    // created a sub-sample for it). For a fresh parent we fall back to
+    // a direct SENAITE lookup to get the UID.
+    if (isParent) {
+      if (!data?.sample_id || !data.sample_uid) return
+      setWizardParent({
+        uid: data.sample_uid,
+        sample_id: data.sample_id,
+        status: data.review_state,
+      })
+      return
+    }
+
+    if (!parentSampleId) return
+    const cached = parentSummary?.parent
+    if (cached?.external_lims_uid) {
+      setWizardParent({
+        uid: cached.external_lims_uid,
+        sample_id: cached.sample_id,
+        status: cached.status ?? null,
+      })
+      return
+    }
+
+    // Cold-cache path — fetch parent metadata from SENAITE on demand.
+    try {
+      const parentLookup = await lookupSenaiteSample(parentSampleId)
+      if (!parentLookup.sample_uid) {
+        toast.error('Parent sample not found in SENAITE')
+        return
+      }
+      setWizardParent({
+        uid: parentLookup.sample_uid,
+        sample_id: parentLookup.sample_id,
+        status: parentLookup.review_state,
+      })
+    } catch (e) {
+      toast.error('Could not load parent sample', {
+        description: e instanceof Error ? e.message : String(e),
+      })
+    }
   }
 
   async function openHplcResults() {
@@ -2294,30 +2336,37 @@ export function SampleDetails() {
               <ScrollText size={13} />
               Activity
             </Button>
-            {isParent && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-1.5 cursor-pointer"
+              onClick={openSubSampleWizard}
+              disabled={isParent ? !data?.sample_uid : !parentSampleId}
+            >
+              <Plus size={13} />
+              Manage Sub-Samples
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-1.5 cursor-pointer"
+              onClick={() => printLabel({
+                sampleId: sampleId!,
+                orderNumber: data?.client_order_number ?? null,
+              })}
+            >
+              <Printer size={13} />
+              Print Label
+            </Button>
+            {isParent && subCount >= 1 && (
               <Button
                 variant="outline"
                 size="sm"
                 className="gap-1.5 cursor-pointer"
-                onClick={openSubSampleWizard}
-                disabled={!data?.sample_uid}
+                onClick={() => setVarianceSummaryOpen(true)}
               >
-                <Plus size={13} />
-                Add Sub-Sample
-              </Button>
-            )}
-            {!isParent && (
-              <Button
-                variant="outline"
-                size="sm"
-                className="gap-1.5 cursor-pointer"
-                onClick={() => printLabel({
-                  sampleId: sampleId!,
-                  orderNumber: data?.client_order_number ?? null,
-                })}
-              >
-                <Printer size={13} />
-                Print Label
+                <Sigma size={13} />
+                Variance Summary
               </Button>
             )}
             <div className="relative">
@@ -3519,6 +3568,15 @@ export function SampleDetails() {
 
       {/* Single-label print portal — off-screen DOM the print CSS reveals */}
       <PrintLabelPortal target={printTarget} />
+
+      {/* Variance summary dialog */}
+      {isParent && sampleId && (
+        <VarianceSummary
+          parentSampleId={sampleId}
+          open={varianceSummaryOpen}
+          onOpenChange={setVarianceSummaryOpen}
+        />
+      )}
     </div>
   )
 }
