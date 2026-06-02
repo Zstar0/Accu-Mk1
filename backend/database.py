@@ -263,6 +263,20 @@ def _run_migrations():
         "UPDATE lims_samples SET assignment_role = 'hplc' WHERE assignment_role IS NULL",
         # lims_sub_samples: nullable. NULL means "auto-assign hasn't run yet".
         "ALTER TABLE lims_sub_samples ADD COLUMN IF NOT EXISTS assignment_role VARCHAR(8)",
+        # Variance set membership + lock state (worksheet-variance design 2026-06-02)
+        "ALTER TABLE lims_sub_samples ADD COLUMN IF NOT EXISTS in_variance_set BOOLEAN NOT NULL DEFAULT TRUE",
+        "ALTER TABLE lims_sub_samples ADD COLUMN IF NOT EXISTS variance_exclusion_reason TEXT",
+        "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS in_variance_set BOOLEAN NOT NULL DEFAULT TRUE",
+        "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS variance_exclusion_reason TEXT",
+        "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS variance_locked_at TIMESTAMP",
+        "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS variance_locked_by_user_id INTEGER REFERENCES users(id)",
+        # Backfill — non-HPLC sub-samples are not variance candidates by default.
+        # Idempotent: re-running matches no rows once already flipped.
+        """UPDATE lims_sub_samples
+              SET in_variance_set = FALSE,
+                  variance_exclusion_reason = 'auto: assignment_role != hplc'
+            WHERE assignment_role IN ('endo', 'ster', 'xtra')
+              AND in_variance_set = TRUE""",
     ]
     # Per-statement isolation: a failure in one statement (e.g., a table that
     # create_all hasn't built yet on first run) must not skip subsequent
