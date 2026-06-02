@@ -2,8 +2,16 @@
   .print-area {
     display: flex;
     flex-wrap: wrap;
-    gap: 8px;
-    padding: 16px;
+    gap: 12px;
+    padding: 0;
+  }
+  .label-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .label-row-unchecked .label {
+    opacity: 0.35;
   }
   .print-area .label {
     display: flex;
@@ -68,6 +76,17 @@
   .print-area,
   .print-area * {
     visibility: visible !important;
+  }
+  /* Unchecked labels skip print. display:none beats visibility, so the page
+     break attached to .label doesn't trigger an empty page either. */
+  .label-row-unchecked,
+  .label-checkbox {
+    display: none !important;
+  }
+  /* Let .label participate directly in the print-area flow (page-break-after
+     lives on .label, and a wrapper box would break the per-page sizing). */
+  .label-row {
+    display: contents !important;
   }
   /* Anchor the labels at top-left and let page breaks lay them out. */
   .print-area {

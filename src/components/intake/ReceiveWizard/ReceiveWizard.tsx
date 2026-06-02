@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Printer, ArrowRight, ArrowLeft } from 'lucide-react'
+import { ArrowRight, ArrowLeft, Check } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useReceiveWizard, type ParentInfo } from './useReceiveWizard'
@@ -12,7 +12,7 @@ import { PrintStep } from './PrintStep'
 import { AssignStep } from './AssignStep'
 import { VialDetailsTab, useCloseAndNavigate } from './VialDetailsTab'
 
-type Phase = 'capture' | 'assign' | 'details' | 'print'
+type Phase = 'capture' | 'assign' | 'print' | 'details'
 
 interface Props {
   parent: ParentInfo
@@ -42,28 +42,18 @@ export function ReceiveWizard({ parent, onClose, initialPhase = 'capture' }: Pro
 
   const closeAndNavigate = useCloseAndNavigate(onClose)
 
-  // Print is a terminal step with its own self-contained layout (no shared
-  // header/tabs/sidebar). Render it standalone.
-  if (phase === 'print') {
-    const printList = wiz.parentReceivedThisSession
-      ? [{ sample_id: parent.sample_id }, ...wiz.sessionVials]
-      : wiz.sessionVials
-    return (
-      <PrintStep
-        parentSampleId={parent.sample_id}
-        vials={printList}
-        orderNumber={parentDetails.details?.client_order_number ?? null}
-        onDone={onClose}
-        onBack={() => setPhase('assign')}
-      />
-    )
-  }
-
   const editingSub = editingSampleId
     ? (wiz.vials.find(v => v.sub.sample_id === editingSampleId)?.sub ?? null)
     : null
 
   const hasSessionVials = wiz.sessionVials.length > 0 || wiz.parentReceivedThisSession
+
+  // Print Labels tab prints what was captured this session (matching the
+  // previous standalone Print phase). When there are no session vials yet,
+  // the tab disables — there's nothing to print.
+  const printList = wiz.parentReceivedThisSession
+    ? [{ sample_id: parent.sample_id }, ...wiz.sessionVials]
+    : wiz.sessionVials
 
   const phaseTabs = (
     <div className="px-6 py-2 border-b bg-muted/10">
@@ -71,10 +61,18 @@ export function ReceiveWizard({ parent, onClose, initialPhase = 'capture' }: Pro
         <TabsList>
           <TabsTrigger value="capture">Vial Management</TabsTrigger>
           <TabsTrigger value="assign" disabled={!assignmentEnabled}>Assignment</TabsTrigger>
+          <TabsTrigger value="print" disabled={!hasSessionVials}>Print Labels</TabsTrigger>
           <TabsTrigger value="details" disabled={wiz.vials.length === 0}>Sub Sample Details</TabsTrigger>
         </TabsList>
       </Tabs>
     </div>
+  )
+
+  const finishButton = (
+    <Button type="button" variant="outline" onClick={onClose} className="gap-2">
+      <Check className="w-4 h-4" aria-hidden="true" />
+      Finish
+    </Button>
   )
 
   const sidebar = (
@@ -132,6 +130,14 @@ export function ReceiveWizard({ parent, onClose, initialPhase = 'capture' }: Pro
         <AssignStep parentSampleId={parent.sample_id} />
       </div>
     )
+  } else if (phase === 'print') {
+    body = (
+      <PrintStep
+        parentSampleId={parent.sample_id}
+        vials={printList}
+        orderNumber={parentDetails.details?.client_order_number ?? null}
+      />
+    )
   } else if (phase === 'details') {
     body = (
       <VialDetailsTab
@@ -142,34 +148,56 @@ export function ReceiveWizard({ parent, onClose, initialPhase = 'capture' }: Pro
     )
   }
 
-  // Per-phase footer (only assign + capture have one; details is terminal-ish).
+  // Every footer carries Finish so a tech can close the wizard from any tab
+  // — capturing alone is a valid stopping point, you don't have to walk
+  // through assign + print to be "done".
   let footer: React.ReactNode = null
   if (phase === 'capture') {
     footer = (
       <footer className="flex justify-end gap-2 px-6 py-3 border-t bg-muted/20 transition-colors">
+        {finishButton}
         <Button
           type="button"
           onClick={() => setPhase('assign')}
           disabled={!hasSessionVials}
           title={hasSessionVials ? undefined : 'Save at least one vial first'}
-          className="disabled:opacity-50"
+          className="disabled:opacity-50 gap-2"
         >
-          <ArrowRight className="w-4 h-4" aria-hidden="true" />
           Continue
+          <ArrowRight className="w-4 h-4" aria-hidden="true" />
         </Button>
       </footer>
     )
   } else if (phase === 'assign') {
     footer = (
       <footer className="flex justify-between gap-2 px-6 py-3 border-t bg-muted/20 transition-colors">
-        <Button type="button" variant="outline" onClick={() => setPhase('capture')}>
+        <Button type="button" variant="outline" onClick={() => setPhase('capture')} className="gap-2">
           <ArrowLeft className="w-4 h-4" aria-hidden="true" />
           Back
         </Button>
-        <Button type="button" onClick={() => setPhase('print')}>
-          <Printer className="w-4 h-4" aria-hidden="true" />
-          Print labels
+        <div className="flex gap-2">
+          {finishButton}
+          <Button type="button" onClick={() => setPhase('print')} className="gap-2">
+            Print Labels
+            <ArrowRight className="w-4 h-4" aria-hidden="true" />
+          </Button>
+        </div>
+      </footer>
+    )
+  } else if (phase === 'print') {
+    footer = (
+      <footer className="flex justify-between gap-2 px-6 py-3 border-t bg-muted/20 transition-colors">
+        <Button type="button" variant="outline" onClick={() => setPhase('assign')} className="gap-2">
+          <ArrowLeft className="w-4 h-4" aria-hidden="true" />
+          Back
         </Button>
+        {finishButton}
+      </footer>
+    )
+  } else if (phase === 'details') {
+    footer = (
+      <footer className="flex justify-end gap-2 px-6 py-3 border-t bg-muted/20 transition-colors">
+        {finishButton}
       </footer>
     )
   }
