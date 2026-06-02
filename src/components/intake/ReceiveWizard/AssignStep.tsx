@@ -160,7 +160,7 @@ export function AssignStep({ parentSampleId }: Props) {
             <Bucket
               id="xtra"
               label="Xtra"
-              vials={plan.vials.filter(v => v.assignment_role === 'xtra')}
+              vials={plan.vials.filter(v => v.assignment_role === 'xtra' || v.assignment_role == null)}
               demand={null}
               onReset={null}
             />

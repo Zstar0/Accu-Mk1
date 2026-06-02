@@ -162,7 +162,7 @@ export function VialsList({
                   <div className="min-w-0 flex-1">
                     <div className="font-mono text-sm truncate">{v.sub.sample_id}</div>
                     <div className="text-xs text-muted-foreground flex items-center gap-1">
-                      <span>Vial {v.sub.vial_sequence}</span>
+                      <span>Vial {v.sub.vial_sequence + 1}</span>
                       <span aria-hidden>·</span>
                       <span>read-only</span>
                     </div>
