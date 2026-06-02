@@ -447,3 +447,52 @@ def fetch_secondaries(parent_sample_id: str) -> List[dict]:
         raise RuntimeError(f"SENAITE fetch_secondaries failed ({resp.status_code}): {resp.text}")
     pattern = re.compile(rf"^{re.escape(parent_sample_id)}-S\d{{2}}$")
     return [it for it in resp.json().get("items", []) if pattern.match(it.get("id", ""))]
+
+
+def fetch_results_by_keyword(sample_id: str) -> dict:
+    """Fetch SENAITE analysis results for one sample, keyed by analysis keyword.
+
+    Returns the shape consumed by sub_samples.variance.compute_variance_stats:
+        { "<keyword>": {"value": str, "kind": "numeric"|"categorical", "spec": None} }
+
+    Rules:
+      * No review_state filter — to_be_verified results are still results.
+      * Result field has three SENAITE name variants (Result, getResult, result).
+      * Selection-type analyses (non-empty ResultOptions) → categorical; else numeric.
+      * Specs are NOT inline in the Analysis response (ResultsRange comes back null);
+        spec stays None pending a follow-up AnalysisSpec fetch.
+      * Analyses with no result are omitted — they show as "no results yet" downstream.
+    Soft-fails to {} on transport / SENAITE errors so the variance summary can still
+    render membership + lock state when result fetch is degraded."""
+    url = f"{SENAITE_BASE_URL}/@@API/senaite/v1/Analysis"
+    try:
+        resp = _get(
+            url,
+            params={"getRequestID": sample_id, "complete": "yes", "limit": "100"},
+        )
+    except requests.RequestException as e:
+        log.warning("sub_samples.fetch_results_transport sample=%s err=%s", sample_id, e)
+        return {}
+    if resp.status_code >= 300:
+        log.warning(
+            "sub_samples.fetch_results_http sample=%s status=%d",
+            sample_id, resp.status_code,
+        )
+        return {}
+
+    out: dict = {}
+    for an in resp.json().get("items", []):
+        keyword = an.get("getKeyword")
+        if not keyword:
+            continue
+        raw = an.get("Result")
+        if raw is None:
+            raw = an.get("getResult")
+        if raw is None:
+            raw = an.get("result")
+        if raw in (None, ""):
+            continue
+        opts = an.get("ResultOptions") or an.get("getResultOptions") or []
+        kind = "categorical" if (isinstance(opts, list) and len(opts) > 0) else "numeric"
+        out[str(keyword)] = {"value": str(raw), "kind": kind, "spec": None}
+    return out

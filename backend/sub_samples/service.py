@@ -620,9 +620,10 @@ class VarianceTooFewVialsError(ValueError):
 def get_variance_set(db: Session, parent_sample_id: str) -> Optional[dict]:
     """Return variance set view for a parent: vials + stats + lock state.
 
-    `results` per vial is empty in this phase — the SENAITE result fetch
-    will populate it in a follow-on task. Stats compute over whatever is
-    present (currently nothing, until per-vial result entry lands).
+    Per-vial `results` are fetched from SENAITE (Analysis endpoint, keyed by
+    keyword). Fetch is soft-fail: a transport error leaves results={} for that
+    vial and the variance summary still renders membership + lock state.
+    Specs are not yet populated (separate AnalysisSpec fetch — follow-up).
     """
     parent = db.execute(
         select(LimsSample).where(LimsSample.sample_id == parent_sample_id)
@@ -640,7 +641,7 @@ def get_variance_set(db: Session, parent_sample_id: str) -> Optional[dict]:
             "in_variance_set": parent.in_variance_set,
             "exclusion_reason": parent.variance_exclusion_reason,
             "review_state": parent.status,
-            "results": {},
+            "results": senaite.fetch_results_by_keyword(parent.sample_id),
         }
     ] + [
         {
@@ -650,7 +651,7 @@ def get_variance_set(db: Session, parent_sample_id: str) -> Optional[dict]:
             "in_variance_set": s.in_variance_set,
             "exclusion_reason": s.variance_exclusion_reason,
             "review_state": None,
-            "results": {},
+            "results": senaite.fetch_results_by_keyword(s.sample_id),
         }
         for s in subs
     ]
