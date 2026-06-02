@@ -21,15 +21,21 @@ interface Props {
 
 export function LabelTemplate({ sampleId, orderNumber, vialPosition, vialTotal, role }: Props) {
   const roleText = role ? ROLE_SHORT[role] : null
+  const hasVial = vialPosition && vialTotal
+  // The second line carries order # and vial position, independently. Either
+  // (or both) may render — order # alone for the parent of a single-vial
+  // family with no role, vial # alone when no client order # is on file.
+  const showSecondLine = orderNumber || hasVial
   return (
     <div className="label">
       <QRCodeSVG value={sampleId} size={96} level="M" marginSize={0} />
       <div className="label-text">
         <div className="label-id">{sampleId}</div>
-        {orderNumber && (
+        {showSecondLine && (
           <div className="label-order">
             {orderNumber}
-            {vialPosition && vialTotal && ` · Vial ${vialPosition}/${vialTotal}`}
+            {orderNumber && hasVial && ' · '}
+            {hasVial && `Vial ${vialPosition}/${vialTotal}`}
           </div>
         )}
         {roleText && <div className="label-role">{roleText}</div>}

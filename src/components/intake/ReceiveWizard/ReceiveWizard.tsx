@@ -48,12 +48,20 @@ export function ReceiveWizard({ parent, onClose, initialPhase = 'capture' }: Pro
 
   const hasSessionVials = wiz.sessionVials.length > 0 || wiz.parentReceivedThisSession
 
-  // Print Labels tab prints what was captured this session (matching the
-  // previous standalone Print phase). When there are no session vials yet,
-  // the tab disables — there's nothing to print.
-  const printList = wiz.parentReceivedThisSession
-    ? [{ sample_id: parent.sample_id }, ...wiz.sessionVials]
+  // Print Labels tab shows ALL labels for the family whenever the parent has
+  // been received — so a tech entering from sample details can reprint any
+  // existing label, not just session ones. The checkbox row on the print
+  // tab lets them skip labels they don't actually want.
+  const printList: { sample_id: string }[] = wiz.parentReceived
+    ? [{ sample_id: parent.sample_id }, ...wiz.vials.map(v => ({ sample_id: v.sub.sample_id }))]
     : wiz.sessionVials
+
+  // Finish is the intake-flow's "I'm done capturing" verb. When the wizard is
+  // opened from sample details (initialPhase='details') against an already-
+  // received sample, Finish doesn't read right — there's nothing to finish.
+  // Show it again the moment session activity starts (new vial saved this
+  // session) since the tech is now actively doing intake work.
+  const showFinish = hasSessionVials || initialPhase !== 'details'
 
   const phaseTabs = (
     <div className="px-6 py-2 border-b bg-muted/10">
@@ -61,7 +69,7 @@ export function ReceiveWizard({ parent, onClose, initialPhase = 'capture' }: Pro
         <TabsList>
           <TabsTrigger value="capture">Vial Management</TabsTrigger>
           <TabsTrigger value="assign" disabled={!assignmentEnabled}>Assignment</TabsTrigger>
-          <TabsTrigger value="print" disabled={!hasSessionVials}>Print Labels</TabsTrigger>
+          <TabsTrigger value="print" disabled={printList.length === 0}>Print Labels</TabsTrigger>
           <TabsTrigger value="details" disabled={wiz.vials.length === 0}>Sub Sample Details</TabsTrigger>
         </TabsList>
       </Tabs>
@@ -149,13 +157,15 @@ export function ReceiveWizard({ parent, onClose, initialPhase = 'capture' }: Pro
   }
 
   // Every footer carries Finish so a tech can close the wizard from any tab
-  // — capturing alone is a valid stopping point, you don't have to walk
-  // through assign + print to be "done".
+  // during intake — capturing alone is a valid stopping point, you don't
+  // have to walk through assign + print to be "done". When viewing from
+  // sample details (showFinish=false), Finish drops out and the Dialog X
+  // is the close affordance.
   let footer: React.ReactNode = null
   if (phase === 'capture') {
     footer = (
       <footer className="flex justify-end gap-2 px-6 py-3 border-t bg-muted/20 transition-colors">
-        {finishButton}
+        {showFinish && finishButton}
         <Button
           type="button"
           onClick={() => setPhase('assign')}
@@ -176,7 +186,7 @@ export function ReceiveWizard({ parent, onClose, initialPhase = 'capture' }: Pro
           Back
         </Button>
         <div className="flex gap-2">
-          {finishButton}
+          {showFinish && finishButton}
           <Button type="button" onClick={() => setPhase('print')} className="gap-2">
             Print Labels
             <ArrowRight className="w-4 h-4" aria-hidden="true" />
@@ -191,10 +201,10 @@ export function ReceiveWizard({ parent, onClose, initialPhase = 'capture' }: Pro
           <ArrowLeft className="w-4 h-4" aria-hidden="true" />
           Back
         </Button>
-        {finishButton}
+        {showFinish && finishButton}
       </footer>
     )
-  } else if (phase === 'details') {
+  } else if (phase === 'details' && showFinish) {
     footer = (
       <footer className="flex justify-end gap-2 px-6 py-3 border-t bg-muted/20 transition-colors">
         {finishButton}
