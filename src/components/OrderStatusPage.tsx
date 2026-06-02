@@ -523,6 +523,7 @@ interface OrderFilters {
   sampleIdFilter: string
   emailFilter: string
   orderIdFilter: string
+  analyteFilter: string
   hideTestOrders: boolean
   slaAtRisk: boolean
   collapsedKanbanCols: string[]
@@ -542,6 +543,7 @@ function loadOrderFilters(): OrderFilters {
         ...parsed,
         activeStates: (parsed.activeStates ?? []).filter(s => s !== 'pending'),
         collapsedKanbanCols: parsed.collapsedKanbanCols ?? [],
+        analyteFilter: parsed.analyteFilter ?? '',
       }
     }
   } catch {
@@ -552,6 +554,7 @@ function loadOrderFilters(): OrderFilters {
     sampleIdFilter: '',
     emailFilter: '',
     orderIdFilter: '',
+    analyteFilter: '',
     hideTestOrders: true,
     slaAtRisk: false,
     collapsedKanbanCols: [],
@@ -671,6 +674,24 @@ export function OrderStatusPage() {
         return Object.values(o.sample_results).some(v =>
           v.senaite_id && sampleMatchesAnalysisFilter(v.senaite_id, orderFilters.activeStates, sampleLookupMap)
         )
+      })
+    }
+    // Analyte filter — match the analysis names shown on the cards
+    // (formatAnalysisTitle) against the query, case-insensitive substring. Only
+    // loaded sample lookups can match; results refine as SENAITE lookups arrive.
+    const analyteQ = orderFilters.analyteFilter.trim().toLowerCase()
+    if (analyteQ) {
+      result = result.filter(o => {
+        if (!o.sample_results) return false
+        return Object.values(o.sample_results).some(v => {
+          if (!v.senaite_id) return false
+          const lookup = sampleLookupMap.get(v.senaite_id)?.data
+          if (!lookup) return false
+          const nameMap = buildAnalyteNameMap(lookup)
+          return lookup.analyses.some(a =>
+            formatAnalysisTitle(a.title, nameMap).toLowerCase().includes(analyteQ)
+          )
+        })
       })
     }
     // Apply kanban sort when in grouped kanban mode
@@ -1085,10 +1106,16 @@ export function OrderStatusPage() {
               onChange={e => updateFilters({ sampleIdFilter: e.target.value })}
               className="h-7 w-32 text-xs"
             />
-            {(orderFilters.orderIdFilter || orderFilters.emailFilter || orderFilters.sampleIdFilter) && (
+            <Input
+              placeholder="Analyte"
+              value={orderFilters.analyteFilter}
+              onChange={e => updateFilters({ analyteFilter: e.target.value })}
+              className="h-7 w-36 text-xs"
+            />
+            {(orderFilters.orderIdFilter || orderFilters.emailFilter || orderFilters.sampleIdFilter || orderFilters.analyteFilter) && (
               <button
                 type="button"
-                onClick={() => updateFilters({ orderIdFilter: '', emailFilter: '', sampleIdFilter: '' })}
+                onClick={() => updateFilters({ orderIdFilter: '', emailFilter: '', sampleIdFilter: '', analyteFilter: '' })}
                 className="text-xs text-muted-foreground hover:text-foreground underline"
               >
                 Clear
