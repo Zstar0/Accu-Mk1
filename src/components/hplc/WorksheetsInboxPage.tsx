@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { DndContext, DragOverlay, type DragEndEvent, type DragStartEvent } from '@dnd-kit/core'
 import { useEffect, useState } from 'react'
-import { Inbox, RefreshCw } from 'lucide-react'
+import { HelpCircle, Inbox, RefreshCw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { cn } from '@/lib/utils'
@@ -261,6 +261,18 @@ export default function WorksheetsInboxPage() {
                   <RefreshCw className={`size-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
                   <span className="text-xs">Refresh</span>
                 </Button>
+                {/* Worksheets SOP — served from public/guides/ via Vite. Path
+                    matches the file the build script mirrors there. */}
+                <a
+                  href="/guides/lab-tech-worksheets-variance.html"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors shrink-0"
+                  title="Open the lab-tech worksheets &amp; variance SOP in a new tab"
+                >
+                  <HelpCircle className="size-3.5" aria-hidden="true" />
+                  Worksheets SOP
+                </a>
               </div>
             </div>
 
