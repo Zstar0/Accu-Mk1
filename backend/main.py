@@ -71,6 +71,7 @@ from calculations.hplc_processor import (
 )
 from file_watcher import FileWatcher
 from sub_samples.routes import router as sub_samples_router
+from lims_analyses.routes import router as lims_analyses_router
 
 
 # --- API Key Configuration ---
@@ -382,6 +383,7 @@ file_watcher = FileWatcher()
 
 # Register sub-samples router
 app.include_router(sub_samples_router)
+app.include_router(lims_analyses_router)
 
 # --- Endpoints ---
 
