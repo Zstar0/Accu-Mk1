@@ -5,7 +5,9 @@ Uses SQLAlchemy 2.0 style with mapped_column.
 
 from datetime import datetime, time, date
 from typing import Optional, List
+import uuid
 from sqlalchemy import String, Text, Float, Integer, Boolean, DateTime, Time, Date, ForeignKey, JSON, Column, Table, UniqueConstraint, CheckConstraint
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from database import Base
@@ -874,3 +876,118 @@ class LabHoliday(Base):
 
     def __repr__(self) -> str:
         return f"<LabHoliday(date={self.holiday_date}, name='{self.name}', source='{self.source}')>"
+
+
+# ── COA roll-up (spec 2026-06-02-coa-rollup-override-design.md) ──
+
+
+class CoaResultPin(Base):
+    """
+    Manager intent for which sub-sample's analysis result a parent's COA
+    should report for a given analyte. Mutable — one row per
+    (parent_sample_id, analyte_keyword), upserted by the override panel.
+    Audit history lives in SampleActivityLog, not here.
+    """
+
+    __tablename__ = "coa_result_pins"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    parent_sample_id: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    analyte_keyword: Mapped[str] = mapped_column(Text, nullable=False)
+    # 'pin' | 'auto' | 'variance_set'. CHECK constraint lives at the DB layer
+    # in the migration; mirrored here as plain text so SQLAlchemy doesn't
+    # complain about an Enum mismatch on different envs.
+    mode: Mapped[str] = mapped_column(Text, nullable=False)
+    source_sample_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    source_analysis_uid: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    pinned_by_user_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("users.id"), nullable=True
+    )
+    pinned_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "parent_sample_id", "analyte_keyword",
+            name="uq_coa_result_pins_parent_analyte",
+        ),
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<CoaResultPin(parent={self.parent_sample_id}, "
+            f"analyte={self.analyte_keyword}, mode={self.mode})>"
+        )
+
+
+class CoaGenerationSource(Base):
+    """
+    Frozen per-generation manifest row. Written once at COA generation time;
+    immutable afterwards. One row per (generation, analyte). `generation_id`
+    references coa_generations.id in the integration DB (no FK because the
+    two databases are separate).
+    """
+
+    __tablename__ = "coa_generation_sources"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    generation_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), nullable=False, index=True
+    )
+    generation_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    parent_sample_id: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    analyte_keyword: Mapped[str] = mapped_column(Text, nullable=False)
+    source_sample_id: Mapped[str] = mapped_column(Text, nullable=False)
+    source_analysis_uid: Mapped[str] = mapped_column(Text, nullable=False)
+    result_value: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    result_unit: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    candidates_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    resolution_mode: Mapped[str] = mapped_column(Text, nullable=False)
+    # Audit snapshot of the candidate list at generation time. Inlined so
+    # historical-mode reads don't have to reconstruct from SENAITE.
+    candidates_snapshot: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, nullable=False
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "generation_id", "analyte_keyword",
+            name="uq_coa_generation_sources_gen_analyte",
+        ),
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<CoaGenerationSource(gen={self.generation_id}, "
+            f"analyte={self.analyte_keyword}, source={self.source_sample_id})>"
+        )
+
+
+class AnalysisReportable(Base):
+    """
+    Mk1-side sidecar for the "fit to report" boolean on a specific analysis
+    instance. SENAITE analyses have no Mk1 mirror table, so the flag lives
+    here keyed by (sample_id, analysis_uid). Default TRUE — absence of a row
+    means the analysis IS reportable. Rows are only inserted when a tech /
+    manager toggles the flag.
+    """
+
+    __tablename__ = "analysis_reportable"
+
+    sample_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    analysis_uid: Mapped[str] = mapped_column(Text, primary_key=True)
+    reportable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    changed_by_user_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("users.id"), nullable=True
+    )
+    changed_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, nullable=False
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<AnalysisReportable(sample={self.sample_id}, "
+            f"uid={self.analysis_uid}, reportable={self.reportable})>"
+        )
