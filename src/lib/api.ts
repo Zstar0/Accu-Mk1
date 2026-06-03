@@ -3589,6 +3589,35 @@ export async function setAnalysisResult(
   uid: string,
   result: string
 ): Promise<AnalysisResultResponse> {
+  // Phase 3: route mk1:<id> UIDs to the Mk1 transitions endpoint with
+  // kind=submit + result_value inline. The result-set + state-advance
+  // happen atomically in one Mk1 transition.
+  if (uid.startsWith('mk1:')) {
+    const limsId = parseInt(uid.slice('mk1:'.length), 10)
+    const response = await fetch(
+      `${API_BASE_URL()}/api/lims-analyses/${limsId}/transitions`,
+      {
+        method: 'POST',
+        headers: getBearerHeaders('application/json'),
+        body: JSON.stringify({
+          kind: 'submit',
+          result_value: result,
+          reason: 'bench-tech result entry',
+        }),
+      }
+    )
+    if (!response.ok) {
+      const err = await response.json().catch(() => null)
+      throw new Error(err?.detail || `Set result (mk1) failed: ${response.status}`)
+    }
+    const row = await response.json()
+    return {
+      success: true,
+      message: 'Result submitted via Mk1',
+      new_review_state: row.review_state ?? null,
+      keyword: row.keyword ?? null,
+    }
+  }
   const response = await fetch(
     `${API_BASE_URL()}/wizard/senaite/analyses/${encodeURIComponent(uid)}/result`,
     {
@@ -3628,6 +3657,34 @@ export async function transitionAnalysis(
   uid: string,
   transition: 'submit' | 'verify' | 'retract' | 'reject' | 'retest'
 ): Promise<AnalysisResultResponse> {
+  // Phase 3: route mk1:<id> UIDs to the Mk1 transitions endpoint. The
+  // 'retest' kind is not yet wired on the Mk1 side (creates a NEW row;
+  // service-layer work for a future phase) — surfaces as 409 from Mk1.
+  if (uid.startsWith('mk1:')) {
+    const limsId = parseInt(uid.slice('mk1:'.length), 10)
+    const response = await fetch(
+      `${API_BASE_URL()}/api/lims-analyses/${limsId}/transitions`,
+      {
+        method: 'POST',
+        headers: getBearerHeaders('application/json'),
+        body: JSON.stringify({
+          kind: transition,
+          reason: `bench-tech ${transition}`,
+        }),
+      }
+    )
+    if (!response.ok) {
+      const err = await response.json().catch(() => null)
+      throw new Error(err?.detail || `Transition (mk1) failed: ${response.status}`)
+    }
+    const row = await response.json()
+    return {
+      success: true,
+      message: `Transition '${transition}' applied via Mk1`,
+      new_review_state: row.review_state ?? null,
+      keyword: row.keyword ?? null,
+    }
+  }
   const response = await fetch(
     `${API_BASE_URL()}/wizard/senaite/analyses/${encodeURIComponent(uid)}/transition`,
     {
@@ -4688,6 +4745,27 @@ export async function listSubSamples(parentSampleId: string): Promise<SubSampleL
     { headers: getBearerHeaders() }
   )
   if (!response.ok) throw new Error(`listSubSamples failed: ${response.status}`)
+  return response.json()
+}
+
+/**
+ * Phase 3: fetch lims_analyses rows for a sub-sample, projected to the
+ * SenaiteAnalysis shape so AnalysisTable renders them unchanged. UIDs
+ * carry a `mk1:` prefix; setAnalysisResult / transitionAnalysis detect
+ * the prefix and dispatch to Mk1 endpoints instead of the SENAITE proxy.
+ */
+export async function listLimsAnalysesForSubSample(
+  subSamplePk: number
+): Promise<SenaiteAnalysis[]> {
+  const url = new URL(`${API_BASE_URL()}/api/lims-analyses`)
+  url.searchParams.set('host_kind', 'sub_sample')
+  url.searchParams.set('host_pk', String(subSamplePk))
+  url.searchParams.set('as', 'senaite_shape')
+  url.searchParams.set('include_retests', 'false')
+  const response = await fetch(url.toString(), { headers: getBearerHeaders() })
+  if (!response.ok) {
+    throw new Error(`listLimsAnalysesForSubSample failed: ${response.status}`)
+  }
   return response.json()
 }
 
