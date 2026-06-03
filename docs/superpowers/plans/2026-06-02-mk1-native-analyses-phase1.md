@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Land the foundation that every later phase depends on — the `lims_analyses` + `lims_analysis_transitions` tables, their ORM models, a pure state-machine validator, a service layer that creates analyses and applies transitions (with audit-log writes), Pydantic schemas, and a REST router that exposes the transitions for Phase 2/3 to call. No Receive Wizard changes, no worksheet changes, no UI changes. Zero risk to existing flows.
+**Goal:** Land the foundation that every later phase depends on — the `lims_analyses` + `lims_analysis_transitions` tables, their ORM models, a pure state-machine validator with **tier discrimination** (vial-tier vs parent-tier — see spec §"Two tiers, two roles"), a service layer that creates analyses and applies transitions (with audit-log writes + tier-aware guards), Pydantic schemas, and a REST router that exposes the transitions for Phase 2/3 to call. No Receive Wizard changes, no worksheet changes, no UI changes, no promote-to-parent service yet (that ships in Phase 4). Zero risk to existing flows.
 
-**Architecture:** New package `backend/lims_analyses/` mirroring the `sub_samples/` layout (`__init__.py`, `state_machine.py`, `service.py`, `schemas.py`, `routes.py`). Pure state-machine module owns the allowed-transitions table; service layer wraps DB writes + audit; routes are thin HTTP shells. Two new tables added to `_run_migrations()` as plain SQL strings. No SENAITE round-trips at all in this phase.
+**Architecture:** New package `backend/lims_analyses/` mirroring the `sub_samples/` layout (`__init__.py`, `state_machine.py`, `service.py`, `schemas.py`, `routes.py`). Pure state-machine module owns the allowed-transitions table + a `tier_of(row)` discriminator + a `tier_allows(tier, kind)` matrix; service layer wraps DB writes + audit + tier guards; routes are thin HTTP shells. Two new tables added to `_run_migrations()` as plain SQL strings. No SENAITE round-trips at all in this phase. The `lims_analysis_promotions` join table (which materializes the vial→parent verification act) is NOT shipped here — it lands in Phase 4 alongside the `promote_to_parent` service.
 
 **Tech Stack:** FastAPI + SQLAlchemy 2.0 + Postgres (Accu-Mk1 backend), pytest. No frontend.
 
@@ -411,28 +411,56 @@ Write `backend/lims_analyses/__init__.py`:
 ```python
 """
 Pure state-machine for lims_analyses. No DB, no I/O — just the
-allowed-transitions table and a validator.
+allowed-transitions table, a tier discriminator, and validators.
 
 States and transitions mirror SENAITE's vocabulary so the existing UI
 palette + transition handlers in AnalysisTable.tsx work unchanged when
 the result-entry hooks swap to the Mk1 endpoint.
 
-Decision flow per kind:
+Tier discrimination: rows belong to one of two tiers per the spec
+(spec §"Two tiers, two roles"). The state machine is shared but the
+legal-from-state-x transitions DIFFER per tier:
+
+  vial-tier (run): lims_sub_sample_pk set OR lims_sample_pk set with
+                   the parent acting as a vial in a variance set.
+                   These represent bench data — runs that happen and
+                   produce results. Lifecycle:
+                     unassigned → assigned → to_be_verified
+                   plus reset, retract, reject.
+                   CANNOT publish — only parent-tier rows publish.
+
+  parent-tier (canonical): lims_sample_pk set with the row NOT being
+                   a vial-tier run. These are created by the future
+                   promote_to_parent service (Phase 4) in 'verified'
+                   state directly. Lifecycle:
+                     verified → published
+                   plus admin retract.
+                   CANNOT assign/submit — bench data is at the vial tier.
+
+Phase 1 ships the discriminator + the tier_allows() matrix; promote_to_parent
+that actually creates parent-tier rows lands in Phase 4.
+
+Decision flow per kind (vial-tier):
   assign:   unassigned -> assigned
   submit:   assigned -> to_be_verified         (requires result_value)
             unassigned -> to_be_verified       (autoEdit shortcut from UI)
-  verify:   to_be_verified -> verified
   retract:  to_be_verified -> retracted
-            verified -> retracted              (admin override)
   reject:   unassigned -> rejected
             assigned -> rejected
             to_be_verified -> rejected
-  publish:  verified -> published
   reset:    assigned -> unassigned             (clear without saving)
+
+Decision flow per kind (parent-tier):
+  publish:  verified -> published
+  retract:  verified -> retracted              (admin override)
+
+Cross-tier:
+  auto:     reserved for system-driven transitions (audit-only writes
+            like reportable flip). Allowed from any non-terminal state
+            to itself, both tiers.
   retest:   (creates a NEW analysis row pointing at the old one via
-             retest_of_id; not a transition on the old row)
-  auto:     reserved for system-driven transitions (e.g. order-priority
-            recompute). Allowed from any non-terminal state to itself.
+             retest_of_id; not a transition on the old row. Service-
+             layer concern, not a state machine edge.)
 
 Terminal states: rejected, published.
 """
@@ -461,6 +489,11 @@ TRANSITION_KINDS: FrozenSet[str] = frozenset({
     "retest", "publish", "reset", "auto",
 })
 
+# Tier discriminator constants. Service layer reads these.
+TIER_VIAL = "vial"
+TIER_PARENT = "parent"
+TIERS: FrozenSet[str] = frozenset({TIER_VIAL, TIER_PARENT})
+
 
 # ─── Allowed-transitions table ───────────────────────────────────────────────
 # (from_state, kind) -> to_state
@@ -482,6 +515,24 @@ _ALLOWED: Dict[Tuple[str, str], str] = {
     ("verified",       "retract"):  "retracted",
 }
 
+# Tier × kind matrix. Which kinds are legal at which tier?
+# Vial-tier rows do bench work (assign through to_be_verified, plus retract/
+# reject/reset). Parent-tier rows hold canonical results — only publish
+# and admin-retract apply. The 'verify' kind exists in the state machine
+# but is NOT directly invoked on a vial-tier row in the two-tier model:
+# verification is the act of promoting a vial row to a parent-tier row,
+# which lands in Phase 4. The kind stays in the matrix for completeness
+# and for the rare admin path where a single-vial result is verified in
+# place without going through promote.
+_TIER_ALLOWED_KINDS: Dict[str, FrozenSet[str]] = {
+    TIER_VIAL: frozenset({
+        "assign", "submit", "retract", "reject", "reset", "verify", "auto",
+    }),
+    TIER_PARENT: frozenset({
+        "publish", "retract", "auto",
+    }),
+}
+
 
 # ─── Public API ──────────────────────────────────────────────────────────────
 
@@ -497,6 +548,17 @@ class InvalidTransitionError(ValueError):
         )
 
 
+class TierMismatchError(ValueError):
+    """Raised when a transition kind is not allowed at the row's tier."""
+
+    def __init__(self, tier: str, kind: str, message: Optional[str] = None):
+        self.tier = tier
+        self.kind = kind
+        super().__init__(
+            message or f"transition {kind!r} is not allowed at tier {tier!r}"
+        )
+
+
 class UnknownStateError(ValueError):
     """Raised when an unknown state is supplied."""
 
@@ -505,22 +567,80 @@ class UnknownKindError(ValueError):
     """Raised when an unknown transition kind is supplied."""
 
 
-def allowed_kinds(from_state: str) -> FrozenSet[str]:
-    """Return the set of transition kinds legal from this state."""
+class UnknownTierError(ValueError):
+    """Raised when an unknown tier is supplied."""
+
+
+def tier_of(*, lims_sample_pk: Optional[int],
+            lims_sub_sample_pk: Optional[int],
+            review_state: str) -> str:
+    """
+    Discriminate a row's tier from its host FKs + state.
+
+    Vial-tier: lims_sub_sample_pk set (always vial), OR lims_sample_pk
+        set with the row currently in unassigned/assigned/to_be_verified
+        (the parent acting as a vial in a variance set, mid-run).
+    Parent-tier: lims_sample_pk set with the row in verified/published
+        (canonical chosen result, created by promote_to_parent).
+
+    Edge: a parent-attached row in retracted is parent-tier — it was
+    promoted then retracted by admin. A vial-attached row in retracted/
+    rejected is vial-tier (the run failed/was abandoned).
+    """
+    if (lims_sample_pk is None) == (lims_sub_sample_pk is None):
+        raise ValueError(
+            "tier_of() requires exactly one of lims_sample_pk / lims_sub_sample_pk"
+        )
+    if lims_sub_sample_pk is not None:
+        return TIER_VIAL
+    # Parent-attached. State decides whether it's a vial-style run or canonical.
+    if review_state in ("verified", "published", "retracted"):
+        return TIER_PARENT
+    return TIER_VIAL
+
+
+def tier_allows(tier: str, kind: str) -> bool:
+    """True iff the kind is legal at the tier (independent of from_state)."""
+    if tier not in TIERS:
+        raise UnknownTierError(tier)
+    if kind not in TRANSITION_KINDS:
+        raise UnknownKindError(kind)
+    return kind in _TIER_ALLOWED_KINDS[tier]
+
+
+def allowed_kinds(from_state: str, tier: Optional[str] = None) -> FrozenSet[str]:
+    """Return the set of transition kinds legal from this state.
+
+    If `tier` is provided, intersect with the tier's allowed kinds so the
+    caller sees only transitions that are simultaneously legal for the
+    state machine AND the tier.
+    """
     if from_state not in STATES:
         raise UnknownStateError(from_state)
-    return frozenset(k for (s, k) in _ALLOWED if s == from_state)
+    sm_legal = frozenset(k for (s, k) in _ALLOWED if s == from_state)
+    if tier is None:
+        return sm_legal
+    if tier not in TIERS:
+        raise UnknownTierError(tier)
+    return frozenset(sm_legal & _TIER_ALLOWED_KINDS[tier])
 
 
-def next_state(from_state: str, kind: str) -> str:
+def next_state(from_state: str, kind: str, tier: Optional[str] = None) -> str:
     """
-    Apply a transition. Returns the new state. Raises if the (from, kind)
-    pair isn't in the allowed table.
+    Apply a transition. Returns the new state. Raises:
+      UnknownStateError / UnknownKindError / UnknownTierError on bad inputs.
+      TierMismatchError when `tier` is provided and the kind isn't legal at it.
+      InvalidTransitionError when the (from_state, kind) pair isn't in the table.
     """
     if from_state not in STATES:
         raise UnknownStateError(from_state)
     if kind not in TRANSITION_KINDS:
         raise UnknownKindError(kind)
+    if tier is not None:
+        if tier not in TIERS:
+            raise UnknownTierError(tier)
+        if kind not in _TIER_ALLOWED_KINDS[tier]:
+            raise TierMismatchError(tier, kind)
     try:
         return _ALLOWED[(from_state, kind)]
     except KeyError:
@@ -539,16 +659,31 @@ def is_terminal(state: str) -> bool:
 ```bash
 docker exec accumark-subvial-accu-mk1-backend python -c "
 from lims_analyses.state_machine import (
-    STATES, TERMINAL_STATES, TRANSITION_KINDS,
-    allowed_kinds, next_state, is_terminal,
-    InvalidTransitionError, UnknownStateError, UnknownKindError,
+    STATES, TERMINAL_STATES, TRANSITION_KINDS, TIERS,
+    TIER_VIAL, TIER_PARENT,
+    allowed_kinds, next_state, is_terminal, tier_of, tier_allows,
+    InvalidTransitionError, TierMismatchError,
+    UnknownStateError, UnknownKindError, UnknownTierError,
 )
 print('STATES:', sorted(STATES))
 print('TERMINAL:', sorted(TERMINAL_STATES))
 print('KINDS:', sorted(TRANSITION_KINDS))
+print('TIERS:', sorted(TIERS))
 print('unassigned -> assign ->', next_state('unassigned', 'assign'))
 print('terminal published?', is_terminal('published'))
 print('allowed from to_be_verified:', sorted(allowed_kinds('to_be_verified')))
+print('allowed from to_be_verified at vial tier:',
+      sorted(allowed_kinds('to_be_verified', tier=TIER_VIAL)))
+print('allowed from verified at parent tier:',
+      sorted(allowed_kinds('verified', tier=TIER_PARENT)))
+print('tier_of(sub=1, state=unassigned):',
+      tier_of(lims_sample_pk=None, lims_sub_sample_pk=1, review_state='unassigned'))
+print('tier_of(parent=1, state=verified):',
+      tier_of(lims_sample_pk=1, lims_sub_sample_pk=None, review_state='verified'))
+print('tier_of(parent=1, state=to_be_verified):',
+      tier_of(lims_sample_pk=1, lims_sub_sample_pk=None, review_state='to_be_verified'))
+print('tier_allows(parent, publish):', tier_allows(TIER_PARENT, 'publish'))
+print('tier_allows(vial, publish):', tier_allows(TIER_VIAL, 'publish'))
 "
 ```
 
@@ -556,9 +691,17 @@ Expected:
 - `STATES`: 7 states
 - `TERMINAL`: `['published', 'rejected']`
 - `KINDS`: 9 kinds
+- `TIERS`: `['parent', 'vial']`
 - `unassigned -> assign -> assigned`
 - `terminal published? True`
 - `allowed from to_be_verified: ['reject', 'retract', 'verify']`
+- `allowed from to_be_verified at vial tier: ['reject', 'retract', 'verify']`
+- `allowed from verified at parent tier: ['publish', 'retract']`
+- `tier_of(sub=1, state=unassigned): vial`
+- `tier_of(parent=1, state=verified): parent`
+- `tier_of(parent=1, state=to_be_verified): vial` (parent acting as a vial in a variance set)
+- `tier_allows(parent, publish): True`
+- `tier_allows(vial, publish): False`
 
 - [ ] **Step 4: Commit**
 
@@ -725,6 +868,86 @@ def test_allowed_kinds_from_published_is_empty():
 def test_allowed_kinds_unknown_state_raises():
     with pytest.raises(UnknownStateError):
         allowed_kinds("not_a_state")
+
+
+# ── tier discrimination ─────────────────────────────────────────────────────
+
+
+from lims_analyses.state_machine import (
+    TIER_PARENT, TIER_VIAL, TIERS,
+    TierMismatchError, UnknownTierError,
+    tier_allows, tier_of,
+)
+
+
+def test_tier_of_sub_sample_attached_is_vial():
+    assert tier_of(
+        lims_sample_pk=None, lims_sub_sample_pk=1, review_state="unassigned"
+    ) == TIER_VIAL
+
+
+def test_tier_of_parent_attached_in_run_states_is_vial():
+    # Parent acting as a vial in a variance set.
+    for s in ("unassigned", "assigned", "to_be_verified"):
+        assert tier_of(
+            lims_sample_pk=1, lims_sub_sample_pk=None, review_state=s
+        ) == TIER_VIAL
+
+
+def test_tier_of_parent_attached_in_canonical_states_is_parent():
+    for s in ("verified", "published", "retracted"):
+        assert tier_of(
+            lims_sample_pk=1, lims_sub_sample_pk=None, review_state=s
+        ) == TIER_PARENT
+
+
+def test_tier_of_rejects_both_or_neither_host():
+    with pytest.raises(ValueError):
+        tier_of(lims_sample_pk=None, lims_sub_sample_pk=None,
+                review_state="unassigned")
+    with pytest.raises(ValueError):
+        tier_of(lims_sample_pk=1, lims_sub_sample_pk=1,
+                review_state="unassigned")
+
+
+def test_tier_allows_vial_can_assign_submit_but_not_publish():
+    assert tier_allows(TIER_VIAL, "assign")
+    assert tier_allows(TIER_VIAL, "submit")
+    assert not tier_allows(TIER_VIAL, "publish")
+
+
+def test_tier_allows_parent_can_publish_but_not_assign_submit():
+    assert tier_allows(TIER_PARENT, "publish")
+    assert tier_allows(TIER_PARENT, "retract")
+    assert not tier_allows(TIER_PARENT, "assign")
+    assert not tier_allows(TIER_PARENT, "submit")
+
+
+def test_next_state_with_tier_raises_tier_mismatch_on_disallowed_kind():
+    # publish from 'verified' is valid state-machine-wise, but illegal at vial
+    with pytest.raises(TierMismatchError):
+        next_state("verified", "publish", tier=TIER_VIAL)
+
+
+def test_next_state_with_tier_allows_legal_kind():
+    assert next_state("verified", "publish", tier=TIER_PARENT) == "published"
+
+
+def test_allowed_kinds_filtered_by_tier():
+    # At to_be_verified, the state machine allows {verify, retract, reject}
+    # vial-tier also allows them all (verify is a vial-tier kind for the
+    # rare single-vial-verify-in-place admin path); parent-tier doesn't
+    # support any since to_be_verified is never reached at the parent tier
+    # in normal flow.
+    assert allowed_kinds("to_be_verified", tier=TIER_VIAL) == {
+        "verify", "retract", "reject",
+    }
+    assert allowed_kinds("to_be_verified", tier=TIER_PARENT) == set()
+
+
+def test_unknown_tier_raises():
+    with pytest.raises(UnknownTierError):
+        tier_allows("not_a_tier", "publish")
 ```
 
 - [ ] **Step 2: Run the tests**
@@ -734,7 +957,7 @@ docker exec -e MSYS_NO_PATHCONV=1 accumark-subvial-accu-mk1-backend \
   bash -c "cd /app && python -m pytest tests/test_lims_analyses_state_machine.py -v"
 ```
 
-Expected: ~22 passed, 0 failures.
+Expected: ~30 passed (22 base + 8 tier-discrimination), 0 failures.
 
 - [ ] **Step 3: Commit**
 
@@ -922,8 +1145,10 @@ from sqlalchemy.orm import Session
 
 from lims_analyses.state_machine import (
     InvalidTransitionError,
+    TierMismatchError,
     is_terminal,
     next_state,
+    tier_of,
 )
 from models import LimsAnalysis, LimsAnalysisTransition
 
@@ -1060,7 +1285,15 @@ def apply_transition(
             message=f"analysis is in terminal state {from_state!r}; no transitions allowed",
         )
 
-    to_state = next_state(from_state, kind)
+    # Tier guard. Vial-tier rows can't publish; parent-tier rows can't accept
+    # assign/submit. The state machine's tier-aware next_state() raises
+    # TierMismatchError on a violation — surfaced as 409 by the route layer.
+    row_tier = tier_of(
+        lims_sample_pk=row.lims_sample_pk,
+        lims_sub_sample_pk=row.lims_sub_sample_pk,
+        review_state=from_state,
+    )
+    to_state = next_state(from_state, kind, tier=row_tier)
 
     # Semantic guards
     if kind == "submit":
@@ -1480,6 +1713,57 @@ def test_list_analyses_for_host_returns_only_that_hosts_rows(
 def test_get_analysis_not_found_raises(db):
     with pytest.raises(NotFoundError):
         get_analysis(db, 99_999_999)
+
+
+# ── tier guards (service layer) ─────────────────────────────────────────────
+
+
+from lims_analyses.state_machine import TierMismatchError
+
+
+def test_publish_on_vial_tier_row_raises_tier_mismatch(db, sub_sample, analysis_service):
+    """A vial-tier row in 'verified' state (rare admin path) cannot publish —
+    publishing is a parent-tier transition."""
+    row = _create(db, sub_sample, analysis_service)
+    apply_transition(db, analysis_id=row.id, kind="assign",
+                     reason="TEST")
+    apply_transition(db, analysis_id=row.id, kind="submit",
+                     result_value="42", reason="TEST")
+    apply_transition(db, analysis_id=row.id, kind="verify", reason="TEST")
+    # State is now 'verified' but the row is vial-tier (lims_sub_sample_pk set).
+    with pytest.raises(TierMismatchError):
+        apply_transition(db, analysis_id=row.id, kind="publish",
+                         reason="TEST: cannot publish vial-tier")
+
+
+def test_assign_on_parent_tier_row_raises_tier_mismatch(db, analysis_service):
+    """A parent-tier row created directly in 'verified' (simulating a future
+    promote_to_parent insert) cannot accept assign/submit — those are
+    vial-tier kinds."""
+    parent = db.execute(select(LimsSample)).scalars().first()
+    if parent is None:
+        pytest.skip("no lims_samples row available")
+    # Simulate a Phase 4 promote-to-parent direct insert.
+    row = LimsAnalysis(
+        lims_sample_pk=parent.id,
+        lims_sub_sample_pk=None,
+        analysis_service_id=analysis_service.id,
+        keyword=analysis_service.keyword,
+        title="TEST: parent-tier direct",
+        review_state="verified",
+        result_value="98.55",
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    try:
+        with pytest.raises(TierMismatchError):
+            apply_transition(db, analysis_id=row.id, kind="assign",
+                             reason="TEST: cannot assign parent-tier")
+    finally:
+        # Manually clean (cleanup fixture only matches title='TEST:%')
+        # which DOES match here, so the autouse cleanup will handle it.
+        pass
 ```
 
 - [ ] **Step 2: Run the tests**
@@ -1489,7 +1773,7 @@ docker exec -e MSYS_NO_PATHCONV=1 accumark-subvial-accu-mk1-backend \
   bash -c "cd /app && python -m pytest tests/test_lims_analyses_service.py -v"
 ```
 
-Expected: all tests pass (count depends on parametrize; aim for >= 12 passed). Skipped if no `analysis_services` or `lims_sub_samples` rows in the test DB.
+Expected: all tests pass (count depends on parametrize; aim for >= 14 passed including the 2 tier-guard tests). Skipped if no `analysis_services` / `lims_sub_samples` / `lims_samples` rows in the test DB.
 
 - [ ] **Step 3: Commit**
 
@@ -1537,8 +1821,10 @@ from lims_analyses.schemas import (
 )
 from lims_analyses.state_machine import (
     InvalidTransitionError,
+    TierMismatchError,
     UnknownKindError,
     UnknownStateError,
+    UnknownTierError,
 )
 
 
@@ -1564,7 +1850,17 @@ def _handle_service_error(e: Exception) -> HTTPException:
                 "message": str(e),
             },
         )
-    if isinstance(e, (UnknownStateError, UnknownKindError)):
+    if isinstance(e, TierMismatchError):
+        return HTTPException(
+            status_code=409,
+            detail={
+                "code": "tier_mismatch",
+                "tier": e.tier,
+                "kind": e.kind,
+                "message": str(e),
+            },
+        )
+    if isinstance(e, (UnknownStateError, UnknownKindError, UnknownTierError)):
         return HTTPException(status_code=400, detail=str(e))
     # Unknown — let FastAPI 500 it
     raise e
@@ -2012,11 +2308,11 @@ Expected:
 - [ ] `lims_analyses` + `lims_analysis_transitions` tables exist with the expected columns + indexes (Task 1 step 3).
 - [ ] CHECK constraints enforce polymorphic host (Task 1 step 4).
 - [ ] ORM models import cleanly (Task 2 step 2).
-- [ ] State machine unit tests: ~22 passed (Task 4 step 2).
-- [ ] Service layer integration tests: >= 12 passed (Task 7 step 2).
+- [ ] State machine unit tests: ~30 passed including 8 tier-discrimination tests (Task 4 step 2).
+- [ ] Service layer integration tests: >= 14 passed including 2 tier-guard tests (Task 7 step 2).
 - [ ] HTTP route tests: 7+ passed (Task 9 step 3).
 - [ ] OpenAPI lists 5 new endpoints under `/api/lims-analyses` (Task 8 step 3).
-- [ ] curl smoke walk creates a row, traverses to `published`, the audit chain has the right 5 transitions in order (Task 10).
+- [ ] curl smoke walk creates a row, traverses to `published`, the audit chain has the right 5 transitions in order (Task 10). Note: walking a single vial-tier row through to `published` exercises both tiers via the `verify` transition; the in-place verify path is the rare admin shortcut documented in the state machine module. Normal flow under the two-tier model goes through `promote_to_parent` in Phase 4.
 - [ ] Full suite has no NEW regressions beyond the existing baseline failures from the current handoff.
 
 ## Risks and unknowns
@@ -2040,9 +2336,11 @@ These are SPEC open questions Phase 1 leaves untouched:
 - Receive Wizard backend rewrite (Phase 2).
 - Worksheet routing (`worksheet_items.lims_analysis_id`, inbox query rewrite) — Phase 3.
 - `AnalysisTable.tsx` adapter (Phase 3).
-- COA resolver `_gather_candidates_for` upgrade (Phase 4).
-- Family-state derivation + WP signaling (Phase 4).
-- Prelim-COA opt-in customer flow (Phase 5).
+- **`promote_to_parent` service function + `lims_analysis_promotions` table** (Phase 4). This is the heart of the two-tier verification model — Phase 1 ships the foundation (tier-aware state machine + guards) but NOT the verification action itself.
+- **Verification UI** — variance-aware promotion screen for the supervisor (Phase 4 + Open Question 8).
+- COA resolver default-path simplification (Phase 5).
+- Family-state derivation + WP signaling (Phase 5).
+- Prelim-COA opt-in customer flow (Phase 6).
 - Retest creation in the service layer (deferred until first real case).
 - SLA timing for vial analyses (Open Question 6).
 - Customer-facing UI for sub-samples (Open Question 7 — recommend drop).
