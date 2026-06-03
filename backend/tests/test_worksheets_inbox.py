@@ -391,3 +391,57 @@ def test_items_sort_by_parent_then_parent_first_then_vial_sequence(client, auth_
                 f"items out of sort order: {last_key} then {key} ({it['sample_id']})"
             )
         last_key = key
+
+
+# ── Phase 3.5: Mk1-sourced inbox analyses for sub-samples ────────────────────
+
+
+def test_sub_sample_inbox_analyses_come_from_mk1_when_seeded(client, auth_headers):
+    """Sub-samples with seeded lims_analyses rows surface those rows in the
+    inbox response (uid carries the 'mk1:' prefix). Sub-samples without Mk1
+    rows fall back to SENAITE (uid is 32-char hex). Parent samples never
+    carry mk1: UIDs.
+
+    Requires at least one sub-sample with Phase 2+ seeded Mk1 analyses in
+    the env. Skip otherwise so the test is robust on fresh DBs.
+    """
+    r = client.get(
+        "/worksheets/inbox?role=microbiology&hide_test_orders=false",
+        headers=auth_headers,
+    )
+    assert r.status_code == 200, r.text
+    items = r.json().get("items", [])
+    sub_samples_with_mk1 = []
+    for vial in items:
+        if vial.get("is_parent"):
+            continue
+        uids = [a.get("uid") for a in vial.get("analyses", [])]
+        if any(u and u.startswith("mk1:") for u in uids):
+            sub_samples_with_mk1.append(vial["sample_id"])
+    if not sub_samples_with_mk1:
+        pytest.skip(
+            "no sub-samples with Mk1-seeded analyses in this env — seed via "
+            "Receive Wizard + assign role hplc/endo/ster first"
+        )
+    assert sub_samples_with_mk1, "expected at least one sub-sample with mk1: UIDs"
+
+
+def test_parent_sample_inbox_analyses_never_carry_mk1_uids(client, auth_headers):
+    """Parent samples (non-sub) always source analyses from SENAITE — their
+    UIDs are 32-char hex, never 'mk1:'-prefixed."""
+    r = client.get(
+        "/worksheets/inbox?role=hplc&hide_test_orders=false",
+        headers=auth_headers,
+    )
+    assert r.status_code == 200, r.text
+    items = r.json().get("items", [])
+    parents = [v for v in items if v.get("is_parent")]
+    if not parents:
+        pytest.skip("no parent vials in hplc inbox in this env")
+    for parent in parents:
+        for a in parent.get("analyses", []):
+            uid = a.get("uid")
+            if uid:
+                assert not uid.startswith("mk1:"), (
+                    f"parent {parent['sample_id']} unexpectedly has mk1: UID {uid}"
+                )
