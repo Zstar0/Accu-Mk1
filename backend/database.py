@@ -421,6 +421,67 @@ def _run_migrations():
             created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
         """,
+        # ── COA roll-up Phase 1: pins + per-generation manifest + reportable sidecar ──
+        # See docs/superpowers/specs/2026-06-02-coa-rollup-override-design.md
+        # Manager intent: one pin per (parent, analyte), upserted from the
+        # COA Sources override panel. Audit history lives in SampleActivityLog.
+        """
+        CREATE TABLE IF NOT EXISTS coa_result_pins (
+            id                    SERIAL PRIMARY KEY,
+            parent_sample_id      TEXT NOT NULL,
+            analyte_keyword       TEXT NOT NULL,
+            mode                  TEXT NOT NULL
+                                  CHECK (mode IN ('pin', 'auto', 'variance_set')),
+            source_sample_id      TEXT,
+            source_analysis_uid   TEXT,
+            reason                TEXT,
+            pinned_by_user_id     INTEGER REFERENCES users(id),
+            pinned_at             TIMESTAMP NOT NULL DEFAULT NOW(),
+            UNIQUE (parent_sample_id, analyte_keyword)
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS ix_coa_result_pins_parent ON coa_result_pins (parent_sample_id)",
+        # Frozen per-generation manifest. generation_id is the integration-DB
+        # coa_generations.id (UUID); no FK because the two databases are
+        # separate (IS migrations gated on Phase 3b).
+        """
+        CREATE TABLE IF NOT EXISTS coa_generation_sources (
+            id                          SERIAL PRIMARY KEY,
+            generation_id               UUID NOT NULL,
+            generation_number           INTEGER NOT NULL,
+            parent_sample_id            TEXT NOT NULL,
+            analyte_keyword             TEXT NOT NULL,
+            source_sample_id            TEXT NOT NULL,
+            source_analysis_uid         TEXT NOT NULL,
+            result_value                TEXT,
+            result_unit                 TEXT,
+            candidates_count            INTEGER NOT NULL,
+            resolution_mode             TEXT NOT NULL
+                                        CHECK (resolution_mode IN
+                                          ('auto', 'pin', 'variance_set',
+                                           'stale_pin_fallback')),
+            candidates_snapshot         JSONB,
+            created_at                  TIMESTAMP NOT NULL DEFAULT NOW(),
+            UNIQUE (generation_id, analyte_keyword)
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS ix_coa_generation_sources_parent ON coa_generation_sources (parent_sample_id)",
+        "CREATE INDEX IF NOT EXISTS ix_coa_generation_sources_gen ON coa_generation_sources (generation_id)",
+        # Per-instance "fit to report" boolean. SENAITE analyses have no Mk1
+        # mirror table, so the flag lives in a sidecar keyed by
+        # (sample_id, analysis_uid). Default TRUE — absence of a row means
+        # the analysis IS reportable. Rows are only inserted on flip.
+        """
+        CREATE TABLE IF NOT EXISTS analysis_reportable (
+            sample_id           TEXT NOT NULL,
+            analysis_uid        TEXT NOT NULL,
+            reportable          BOOLEAN NOT NULL DEFAULT TRUE,
+            reason              TEXT,
+            changed_by_user_id  INTEGER REFERENCES users(id),
+            changed_at          TIMESTAMP NOT NULL DEFAULT NOW(),
+            PRIMARY KEY (sample_id, analysis_uid)
+        )
+        """,
     ]
     # Per-statement isolation: a failure in one statement (e.g., a table that
     # create_all hasn't built yet on first run) must not skip subsequent
