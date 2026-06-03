@@ -291,6 +291,31 @@ def get_sub_sample_photo(
     if sub:
         if not sub.photo_external_uid:
             raise HTTPException(404, f"No photo on file for {sample_id}")
+
+        # Phase 2.5: dispatch on storage URI. Mk1-stored photos come back
+        # directly from disk; legacy SENAITE-AR-path values fall through to
+        # the existing proxy code below.
+        if sub.photo_external_uid.startswith("mk1://"):
+            from fastapi.responses import Response
+            from sub_samples.photo_storage import (
+                PhotoNotFoundError, get_storage,
+            )
+            key = sub.photo_external_uid[len("mk1://"):]
+            try:
+                photo_bytes = get_storage().fetch_photo(key)
+            except PhotoNotFoundError:
+                raise HTTPException(404, f"Photo missing from storage for {sample_id}")
+            ext = key.rsplit(".", 1)[-1].lower() if "." in key else ""
+            content_type = {
+                "png": "image/png",
+                "jpg": "image/jpeg",
+                "jpeg": "image/jpeg",
+                "gif": "image/gif",
+                "webp": "image/webp",
+                "heic": "image/heic",
+            }.get(ext, "application/octet-stream")
+            return Response(content=photo_bytes, media_type=content_type)
+
         ar_uid = sub.external_lims_uid
     else:
         parent = db.execute(
