@@ -161,3 +161,115 @@ def test_pin_mode_auto_falls_through_to_needs_decision(db, parent_id, clean_pins
     # mode='auto' pin means "explicitly let the resolver decide" — with >1
     # eligible candidates and no actionable pin, we still need a human.
     assert d.blocked == "needs_decision"
+
+
+# ── Phase 5a: _apply_pin_override unit tests ────────────────────────────────
+
+
+def test_apply_pin_override_no_pin_returns_base_unchanged(db, parent_id, clean_pins):
+    from coa.source_resolver import _apply_pin_override
+    from coa.schemas import SourceDecision, ResolvedSource
+    base = SourceDecision(
+        analyte_keyword="IDENTITY_HPLC",
+        mode="auto",
+        chosen=ResolvedSource(
+            source_sample_id=parent_id,
+            source_analysis_uid="uid-1",
+            value="98.5",
+            unit="%",
+        ),
+        candidates=[_make_candidate(sample_id=parent_id, analysis_uid="uid-1")],
+        blocked=None,
+    )
+    out = _apply_pin_override(db, parent_id, "IDENTITY_HPLC", base)
+    assert out is base or out.mode == "auto"
+    assert out.chosen and out.chosen.value == "98.5"
+
+
+def test_apply_pin_override_mk1_pin_with_stale_uid_blocks_stale_pin(db, parent_id, clean_pins):
+    """Pin targets a mk1:N row that doesn't exist → blocked='stale_pin'."""
+    from coa.source_resolver import _apply_pin_override
+    from coa.schemas import SourceDecision
+    db.add(CoaResultPin(
+        parent_sample_id=parent_id,
+        analyte_keyword="IDENTITY_HPLC",
+        mode="pin",
+        source_sample_id=parent_id,
+        source_analysis_uid="mk1:99999999",
+    ))
+    db.commit()
+    base = SourceDecision(
+        analyte_keyword="IDENTITY_HPLC", mode="auto", chosen=None,
+        candidates=[], blocked=None,
+    )
+    out = _apply_pin_override(db, parent_id, "IDENTITY_HPLC", base)
+    assert out.blocked == "stale_pin"
+    assert out.chosen is None
+
+
+def test_apply_pin_override_mk1_pin_with_unparseable_uid_blocks_stale_pin(db, parent_id, clean_pins):
+    """Pin source_analysis_uid is 'mk1:not_an_int' → stale_pin."""
+    from coa.source_resolver import _apply_pin_override
+    from coa.schemas import SourceDecision
+    db.add(CoaResultPin(
+        parent_sample_id=parent_id,
+        analyte_keyword="IDENTITY_HPLC",
+        mode="pin",
+        source_sample_id=parent_id,
+        source_analysis_uid="mk1:not_an_int",
+    ))
+    db.commit()
+    base = SourceDecision(
+        analyte_keyword="IDENTITY_HPLC", mode="auto", chosen=None,
+        candidates=[], blocked=None,
+    )
+    out = _apply_pin_override(db, parent_id, "IDENTITY_HPLC", base)
+    assert out.blocked == "stale_pin"
+
+
+def test_apply_pin_override_senaite_pin_matches_candidate_resolves_to_pin(db, parent_id, clean_pins):
+    """Pin targets a SENAITE uid that's still in base.candidates → mode='pin'."""
+    from coa.source_resolver import _apply_pin_override
+    from coa.schemas import SourceDecision, ResolvedSource
+    db.add(CoaResultPin(
+        parent_sample_id=parent_id,
+        analyte_keyword="IDENTITY_HPLC",
+        mode="pin",
+        source_sample_id=parent_id,
+        source_analysis_uid="senaite-uid-match",
+    ))
+    db.commit()
+    base = SourceDecision(
+        analyte_keyword="IDENTITY_HPLC", mode="auto", chosen=None,
+        candidates=[
+            _make_candidate(sample_id=parent_id, analysis_uid="senaite-uid-match",
+                            value="99.0"),
+        ],
+        blocked="needs_decision",
+    )
+    out = _apply_pin_override(db, parent_id, "IDENTITY_HPLC", base)
+    assert out.blocked is None
+    assert out.mode == "pin"
+    assert out.chosen is not None
+    assert out.chosen.value == "99.0"
+
+
+def test_apply_pin_override_senaite_pin_no_live_candidate_blocks_stale_pin(db, parent_id, clean_pins):
+    """SENAITE pin with no matching candidate in base → stale_pin."""
+    from coa.source_resolver import _apply_pin_override
+    from coa.schemas import SourceDecision
+    db.add(CoaResultPin(
+        parent_sample_id=parent_id,
+        analyte_keyword="IDENTITY_HPLC",
+        mode="pin",
+        source_sample_id=parent_id,
+        source_analysis_uid="senaite-uid-gone",
+    ))
+    db.commit()
+    base = SourceDecision(
+        analyte_keyword="IDENTITY_HPLC", mode="auto", chosen=None,
+        candidates=[_make_candidate(sample_id=parent_id, analysis_uid="different-uid")],
+        blocked="needs_decision",
+    )
+    out = _apply_pin_override(db, parent_id, "IDENTITY_HPLC", base)
+    assert out.blocked == "stale_pin"
