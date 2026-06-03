@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, text
 
 import auth
 from database import SessionLocal
@@ -229,3 +229,148 @@ def test_patch_method_instrument_404_on_missing_analysis():
         json={"method_id": None, "instrument_id": None},
     )
     assert r.status_code == 404
+
+
+# ── Phase 4a: POST /promote ─────────────────────────────────────────────────
+
+
+def _find_clean_sub_for_route(db, svc, *, exclude_ids=(), parent_pk=None):
+    """Pick a sub-sample with no non-retest row for svc.keyword."""
+    stmt = (
+        select(LimsSubSample)
+        .where(LimsSubSample.id.notin_(exclude_ids) if exclude_ids else True)
+        .where(~select(LimsAnalysis.id).where(
+            LimsAnalysis.lims_sub_sample_pk == LimsSubSample.id,
+            LimsAnalysis.keyword == svc.keyword,
+            LimsAnalysis.retest_of_id.is_(None),
+        ).exists())
+    )
+    if parent_pk is not None:
+        stmt = stmt.where(LimsSubSample.parent_sample_pk == parent_pk)
+    return db.execute(stmt).scalars().first()
+
+
+def _find_parent_with_n_clean_subs_route(db, svc, n):
+    """Find parent_pk with at least n sub-samples free of svc.keyword."""
+    from sqlalchemy import func
+    stmt = (
+        select(LimsSubSample.parent_sample_pk)
+        .where(~select(LimsAnalysis.id).where(
+            LimsAnalysis.lims_sub_sample_pk == LimsSubSample.id,
+            LimsAnalysis.keyword == svc.keyword,
+            LimsAnalysis.retest_of_id.is_(None),
+        ).exists())
+        .group_by(LimsSubSample.parent_sample_pk)
+        .having(func.count(LimsSubSample.id) >= n)
+        .limit(1)
+    )
+    return db.execute(stmt).scalar_one_or_none()
+
+
+def _walk_to_to_be_verified(aid: int, result: str = "98.55"):
+    """Helper: assign + submit a freshly-created analysis via HTTP."""
+    r = client.post(f"/api/lims-analyses/{aid}/transitions",
+                    json={"kind": "assign", "reason": "HTTP-TEST: assign"})
+    assert r.status_code == 200, r.text
+    r = client.post(f"/api/lims-analyses/{aid}/transitions",
+                    json={"kind": "submit", "result_value": result,
+                          "reason": "HTTP-TEST: submit"})
+    assert r.status_code == 200, r.text
+
+
+def _rename_parent_for_cleanup(parent_id: int):
+    """Re-title the parent-tier row so the HTTP-TEST:% autouse cleanup catches it."""
+    db = SessionLocal()
+    db.execute(text("UPDATE lims_analyses SET title = 'HTTP-TEST: ' || title WHERE id = :id"),
+               {"id": parent_id})
+    db.commit()
+    db.close()
+
+
+def test_promote_endpoint_happy_path_single_vial(analysis_service):
+    db = SessionLocal()
+    clean_sub = _find_clean_sub_for_route(db, analysis_service)
+    db.close()
+    if clean_sub is None:
+        pytest.skip("no sub-sample free of keyword for promote happy-path test")
+    created = client.post("/api/lims-analyses", json=_create_payload(clean_sub, analysis_service)).json()
+    aid = created["id"]
+    _walk_to_to_be_verified(aid)
+    r = client.post(
+        "/api/lims-analyses/promote",
+        json={
+            "keyword": analysis_service.keyword,
+            "result_value": "98.55",
+            "sources": [{"analysis_id": aid, "contribution_kind": "chosen"}],
+            "reason": "HTTP-TEST: promote single",
+        },
+    )
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["parent"]["review_state"] == "verified"
+    assert body["parent"]["lims_sub_sample_pk"] is None
+    assert len(body["promotions"]) == 1
+    _rename_parent_for_cleanup(body["parent"]["id"])
+
+
+def test_promote_endpoint_empty_sources_returns_422():
+    """Pydantic validates min_length=1 on sources — 422 before service runs."""
+    r = client.post(
+        "/api/lims-analyses/promote",
+        json={"keyword": "X", "result_value": "1", "sources": []},
+    )
+    assert r.status_code == 422, r.text
+
+
+def test_promote_endpoint_missing_source_returns_404(analysis_service):
+    r = client.post(
+        "/api/lims-analyses/promote",
+        json={
+            "keyword": analysis_service.keyword,
+            "result_value": "1",
+            "sources": [{"analysis_id": 99_999_999, "contribution_kind": "chosen"}],
+        },
+    )
+    assert r.status_code == 404, r.text
+
+
+def test_promote_endpoint_409_on_existing_parent_row(analysis_service):
+    """Re-promoting against an existing parent-tier row hits the partial
+    unique index and surfaces as 409 with code=parent_row_already_exists."""
+    db = SessionLocal()
+    parent_pk = _find_parent_with_n_clean_subs_route(db, analysis_service, 2)
+    if parent_pk is None:
+        db.close()
+        pytest.skip("need a parent with 2+ free sub-samples for 409 test")
+    clean_a = _find_clean_sub_for_route(db, analysis_service, parent_pk=parent_pk)
+    clean_b = _find_clean_sub_for_route(
+        db, analysis_service, exclude_ids=(clean_a.id,), parent_pk=parent_pk,
+    )
+    db.close()
+
+    created = client.post("/api/lims-analyses", json=_create_payload(clean_a, analysis_service)).json()
+    _walk_to_to_be_verified(created["id"])
+    r1 = client.post(
+        "/api/lims-analyses/promote",
+        json={
+            "keyword": analysis_service.keyword,
+            "result_value": "98.55",
+            "sources": [{"analysis_id": created["id"], "contribution_kind": "chosen"}],
+        },
+    )
+    assert r1.status_code == 201, r1.text
+    parent_id = r1.json()["parent"]["id"]
+    _rename_parent_for_cleanup(parent_id)
+
+    created2 = client.post("/api/lims-analyses", json=_create_payload(clean_b, analysis_service)).json()
+    _walk_to_to_be_verified(created2["id"])
+    r2 = client.post(
+        "/api/lims-analyses/promote",
+        json={
+            "keyword": analysis_service.keyword,
+            "result_value": "99.0",
+            "sources": [{"analysis_id": created2["id"], "contribution_kind": "chosen"}],
+        },
+    )
+    assert r2.status_code == 409, r2.text
+    assert r2.json()["detail"]["code"] == "parent_row_already_exists"
