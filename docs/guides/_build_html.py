@@ -27,6 +27,13 @@ except ImportError:
 # inside the docs/guides directory.
 HERE = Path(__file__).resolve().parent
 GUIDES_DIR = HERE if HERE.name == "guides" else HERE / "docs" / "guides"
+# Also publish each HTML next to the static assets Vite serves at the
+# webroot so the running app can deep-link to a guide (e.g. an SOP link
+# inside the Receive Wizard). Vite copies files under `public/` verbatim
+# into the build output, so `public/guides/<name>.html` is reachable at
+# `/guides/<name>.html` in dev and prod.
+REPO_ROOT = GUIDES_DIR.parent.parent
+PUBLIC_GUIDES_DIR = REPO_ROOT / "public" / "guides"
 
 
 def derive_title(md_path: Path, html_body: str) -> str:
@@ -298,13 +305,14 @@ SCREENSHOT_RE = re.compile(r"<!--\s*screenshot:\s*(.*?)\s*-->", re.IGNORECASE | 
 
 
 def render_screenshots(html_body: str) -> str:
-    """Turn `<!-- screenshot: ... -->` markers into visible placeholders so the
-    HTML version surfaces them as intentional "screenshot goes here" affordances
-    rather than hiding them in comments where editors will miss them."""
-    def repl(match: re.Match[str]) -> str:
-        caption = html.escape(match.group(1).strip())
-        return f'<div class="screenshot-placeholder">{caption}</div>'
-    return SCREENSHOT_RE.sub(repl, html_body)
+    """Strip `<!-- screenshot: ... -->` markers from the HTML output.
+
+    The markers stay in the markdown source as editor hints — anyone updating
+    the guide can see exactly where a screenshot belongs. But end readers
+    shouldn't see "screenshot goes here" affordances in the published HTML,
+    so we drop them at render time. A trailing newline cleanup avoids leaving
+    a blank gap where the marker used to be."""
+    return re.sub(r"\s*" + SCREENSHOT_RE.pattern + r"\s*", "\n\n", html_body, flags=re.IGNORECASE | re.DOTALL)
 
 
 def convert(md_path: Path) -> Path:
@@ -322,20 +330,22 @@ def convert(md_path: Path) -> Path:
     )
     body = render_screenshots(body)
     title = derive_title(md_path, body)
-    out_path = md_path.with_suffix(".html")
-    out_path.write_text(
-        PAGE_TMPL.format(
-            title=html.escape(title),
-            css=CSS,
-            body=body,
-            src_rel=md_path.name,
-            # Static label — workflows can't call Date.now(); keep this stable
-            # across rebuilds. Edit by hand at release time if precise dating is
-            # wanted.
-            generated_label="from the latest markdown source",
-        ),
-        encoding="utf-8",
+    rendered = PAGE_TMPL.format(
+        title=html.escape(title),
+        css=CSS,
+        body=body,
+        src_rel=md_path.name,
+        # Static label — workflows can't call Date.now(); keep this stable
+        # across rebuilds. Edit by hand at release time if precise dating is
+        # wanted.
+        generated_label="from the latest markdown source",
     )
+    out_path = md_path.with_suffix(".html")
+    out_path.write_text(rendered, encoding="utf-8")
+    # Mirror into public/guides/ so the running app can serve and deep-link.
+    PUBLIC_GUIDES_DIR.mkdir(parents=True, exist_ok=True)
+    public_path = PUBLIC_GUIDES_DIR / out_path.name
+    public_path.write_text(rendered, encoding="utf-8")
     return out_path
 
 

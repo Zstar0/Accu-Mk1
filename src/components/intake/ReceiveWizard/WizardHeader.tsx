@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { HelpCircle } from 'lucide-react'
 import { getVialDemand, type VialDemandResponse } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
@@ -6,6 +7,10 @@ interface Props {
   parentSampleId: string
   receivedCount: number
 }
+
+// Path is served by Vite from `public/guides/` — the build script
+// (docs/guides/_build_html.py) mirrors the rendered HTML there.
+const CHECKIN_SOP_PATH = '/guides/front-desk-sample-check-in.html'
 
 function totalDemand(d: VialDemandResponse['demand'] | null): number {
   if (!d) return 0
@@ -72,6 +77,16 @@ export function WizardHeader({ parentSampleId, receivedCount }: Props) {
           <span className="text-xs text-muted-foreground">Loading…</span>
         )}
       </div>
+      <a
+        href={CHECKIN_SOP_PATH}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors shrink-0"
+        title="Open the front-desk check-in SOP in a new tab"
+      >
+        <HelpCircle className="h-3.5 w-3.5" aria-hidden="true" />
+        Check-In SOP
+      </a>
       <div className="flex flex-col items-end gap-0.5 shrink-0">
         <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
           Received

@@ -9,6 +9,7 @@ A heads-up: the **Receive Wizard** and the **sub-samples workflow** described he
 ## What this workflow gives you
 
 > **At a glance:**
+>
 > - **One wizard to check in every vial in a shipment.** Live camera capture, photo retake, optional remarks, save. The wizard remembers where you are if you come back to add more vials later.
 > - **A persistent sample-info sidebar** during capture (Client, Contact, Peptide, Quantity, etc.) so you keep full context while the camera has your attention.
 > - **The first vial of a multi-vial shipment lands on the parent sample directly.** Vial 2 and beyond become sub-samples named `<parent>-S01`, `<parent>-S02`, etc. Single-vial shipments stay clean — no sub-samples created.
