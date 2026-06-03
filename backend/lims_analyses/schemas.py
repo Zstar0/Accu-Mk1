@@ -59,6 +59,17 @@ class SetReportableRequest(BaseModel):
     reason: Optional[str] = None
 
 
+class SetMethodInstrumentRequest(BaseModel):
+    """Phase 3.6: bench-tech picks a method + instrument for a Mk1 analysis.
+
+    Either field may be None — caller can clear a previously-set choice or
+    set just one. Field types match the FK columns on lims_analyses
+    (Integer references to hplc_methods.id / instruments.id).
+    """
+    method_id: Optional[int] = None
+    instrument_id: Optional[int] = None
+
+
 class TransitionInfo(BaseModel):
     """One audit-log row."""
     id: int
