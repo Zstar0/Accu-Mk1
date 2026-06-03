@@ -347,3 +347,28 @@ def test_assign_on_parent_tier_row_raises_tier_mismatch(db, analysis_service):
     with pytest.raises(TierMismatchError):
         apply_transition(db, analysis_id=row.id, kind="assign",
                          reason="TEST: cannot assign parent-tier")
+
+
+# ── Phase 3 adapter ─────────────────────────────────────────────────────────
+
+
+def test_list_analyses_in_senaite_shape_returns_mk1_prefixed_uids(db, sub_sample, analysis_service):
+    from lims_analyses.service import list_analyses_in_senaite_shape
+    row = _create(db, sub_sample, analysis_service)
+    rows = list_analyses_in_senaite_shape(
+        db, host_kind="sub_sample", host_pk=sub_sample.id,
+    )
+    matching = [r for r in rows if r.uid == f"mk1:{row.id}"]
+    assert matching, f"expected uid=mk1:{row.id}; got uids={[r.uid for r in rows]}"
+    r = matching[0]
+    assert r.keyword == row.keyword
+    assert r.title == row.title
+    assert r.review_state == "unassigned"
+
+
+def test_list_analyses_in_senaite_shape_returns_empty_for_unknown_host(db):
+    from lims_analyses.service import list_analyses_in_senaite_shape
+    rows = list_analyses_in_senaite_shape(
+        db, host_kind="sub_sample", host_pk=99_999_999,
+    )
+    assert rows == []

@@ -169,3 +169,32 @@ def test_list_for_host_returns_created_row(sub_sample, analysis_service):
     assert r.status_code == 200
     ids = {row["id"] for row in r.json()}
     assert created["id"] in ids
+
+
+# ── Phase 3 senaite_shape flavor ────────────────────────────────────────────
+
+
+def test_list_for_host_default_flavor_returns_phase1_shape(sub_sample, analysis_service):
+    create_resp = client.post("/api/lims-analyses", json=_create_payload(sub_sample, analysis_service))
+    assert create_resp.status_code == 201
+    r = client.get(f"/api/lims-analyses?host_kind=sub_sample&host_pk={sub_sample.id}")
+    assert r.status_code == 200
+    rows = r.json()
+    assert rows
+    # Default shape has `id` (Phase 1)
+    assert "id" in rows[0]
+    assert "uid" not in rows[0]  # not the senaite_shape
+
+
+def test_list_for_host_senaite_shape_returns_phase3_shape(sub_sample, analysis_service):
+    create_resp = client.post("/api/lims-analyses", json=_create_payload(sub_sample, analysis_service))
+    assert create_resp.status_code == 201
+    r = client.get(f"/api/lims-analyses?host_kind=sub_sample&host_pk={sub_sample.id}&as=senaite_shape")
+    assert r.status_code == 200
+    rows = r.json()
+    assert rows
+    # FE shape has `uid` with mk1: prefix
+    assert rows[0]["uid"].startswith("mk1:")
+    assert "method_options" in rows[0]
+    assert "instrument_options" in rows[0]
+    assert "review_state" in rows[0]
