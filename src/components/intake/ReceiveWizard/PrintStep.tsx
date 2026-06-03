@@ -8,6 +8,9 @@ import './PrintStep.css'
 
 interface PrintLabel {
   sample_id: string
+  /** ISO string of when this vial was checked in. Optional — label falls
+   *  back to today's date if omitted. */
+  received_at?: string | null
 }
 
 interface Props {
@@ -153,6 +156,7 @@ export function PrintStep({ parentSampleId, vials, orderNumber }: Props) {
                     vialPosition={position}
                     vialTotal={vialTotal}
                     role={role}
+                    receivedAt={v.received_at ?? null}
                   />
                 </div>
               )

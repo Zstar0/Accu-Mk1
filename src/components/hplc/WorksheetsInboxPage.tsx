@@ -28,6 +28,7 @@ import {
 // localStorage keys for filter persistence (per the spec UI section)
 const STORAGE_ROLE_KEY = 'accu_mk1_worksheet_inbox_role'
 const STORAGE_SHOW_XTRA_KEY = 'accu_mk1_worksheet_inbox_show_xtra'
+const STORAGE_HIDE_TEST_KEY = 'accu_mk1_worksheet_inbox_hide_test_orders'
 
 function loadStoredRole(): InboxRole {
   const v = typeof window !== 'undefined' ? window.localStorage.getItem(STORAGE_ROLE_KEY) : null
@@ -37,6 +38,14 @@ function loadStoredRole(): InboxRole {
 function loadStoredShowXtra(): boolean {
   if (typeof window === 'undefined') return false
   return window.localStorage.getItem(STORAGE_SHOW_XTRA_KEY) === 'true'
+}
+
+function loadStoredHideTestOrders(): boolean {
+  // Default to true (the production-safe behavior). Persisted so a tester who
+  // unchecks it once doesn't get reset every page load.
+  if (typeof window === 'undefined') return true
+  const v = window.localStorage.getItem(STORAGE_HIDE_TEST_KEY)
+  return v === null ? true : v === 'true'
 }
 
 // ─── Skeleton ────────────────────────────────────────────────────────────────
@@ -71,7 +80,7 @@ function CardSkeleton() {
 
 export default function WorksheetsInboxPage() {
   const queryClient = useQueryClient()
-  const [hideTestOrders, setHideTestOrders] = useState(true)
+  const [hideTestOrders, setHideTestOrders] = useState<boolean>(loadStoredHideTestOrders)
   const [hidePrepped, setHidePrepped] = useState(true)
   const [role, setRole] = useState<InboxRole>(loadStoredRole)
   const [showXtra, setShowXtra] = useState<boolean>(loadStoredShowXtra)
@@ -84,6 +93,9 @@ export default function WorksheetsInboxPage() {
   useEffect(() => {
     window.localStorage.setItem(STORAGE_SHOW_XTRA_KEY, String(showXtra))
   }, [showXtra])
+  useEffect(() => {
+    window.localStorage.setItem(STORAGE_HIDE_TEST_KEY, String(hideTestOrders))
+  }, [hideTestOrders])
 
   const {
     data: inboxData,

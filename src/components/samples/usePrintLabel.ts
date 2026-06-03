@@ -3,6 +3,9 @@ import { useEffect, useState } from 'react'
 interface PrintTarget {
   sampleId: string
   orderNumber?: string | null
+  /** Check-in date for the label. Defaults to today inside LabelTemplate
+   *  if omitted. */
+  receivedAt?: string | Date | null
 }
 
 /**

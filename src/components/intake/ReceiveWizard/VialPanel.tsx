@@ -1,8 +1,10 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { Camera, CheckCircle2, RotateCcw, Upload } from 'lucide-react'
+import { Camera, CheckCircle2, Crosshair, Printer, RotateCcw, Upload } from 'lucide-react'
 import { fetchSubSamplePhotoUrl, type SenaiteLookupResult, type SubSample } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
+import { usePrintLabel } from '@/components/samples/usePrintLabel'
+import { PrintLabelPortal } from '@/components/samples/PrintLabelPortal'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -61,10 +63,24 @@ export function VialPanel({
   // returned sample ID until the user clicks "Receive another vial". Edit
   // mode does not use this — editingSub takes precedence below.
   const [savedSampleId, setSavedSampleId] = useState<string | null>(null)
+  // Single-label print from the confirmation card. Lets the tech print →
+  // label-and-apply → click "Receive another vial" without leaving the panel.
+  const { printLabel, target: printTarget } = usePrintLabel()
   // When editing an existing vial, prefer-existing-photo unless the user
   // explicitly clicks Retake. This lets us treat "load existing photo" as
   // captured-equivalent state without forcing a new shot.
   const [editPhotoOverride, setEditPhotoOverride] = useState(false)
+
+  // Crosshair guide for centering the vial in the frame. Persisted across
+  // sessions so techs don't have to re-enable it every check-in.
+  const [showGuides, setShowGuides] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false
+    return localStorage.getItem('wizard-camera-guides') === '1'
+  })
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    localStorage.setItem('wizard-camera-guides', showGuides ? '1' : '0')
+  }, [showGuides])
 
   const videoRef = useRef<HTMLVideoElement>(null)
   // Persist the camera stream across renders so we can re-attach it when the
@@ -293,12 +309,26 @@ export function VialPanel({
               <p className="text-base font-medium">Vial saved</p>
               <p className="text-lg font-mono">{savedSampleId}</p>
             </div>
-            <Button type="button" onClick={startAnotherVial} autoFocus>
-              <Camera className="w-4 h-4" aria-hidden="true" />
-              Receive another vial
-            </Button>
+            <div className="flex flex-wrap items-center justify-center gap-2">
+              <Button type="button" onClick={startAnotherVial} autoFocus>
+                <Camera className="w-4 h-4" aria-hidden="true" />
+                Receive another vial
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => printLabel({
+                  sampleId: savedSampleId,
+                  orderNumber: parentDetails?.client_order_number ?? null,
+                })}
+              >
+                <Printer className="w-4 h-4" aria-hidden="true" />
+                Print label
+              </Button>
+            </div>
           </div>
         </div>
+        <PrintLabelPortal target={printTarget} />
       </main>
     )
   }
@@ -337,17 +367,40 @@ export function VialPanel({
                 can swap back to live mode instantly on retake — no
                 getUserMedia round-trip. Hide it via CSS rather than
                 unmount. */}
-            <video
-              ref={setVideoRef}
-              autoPlay
-              playsInline
-              muted
+            <div
               className={
                 cameraPhase === 'live'
-                  ? 'block w-full max-w-md rounded bg-black aspect-[4/3] object-contain transition-opacity'
+                  ? 'relative block w-full max-w-md'
                   : 'hidden'
               }
-            />
+            >
+              <video
+                ref={setVideoRef}
+                autoPlay
+                playsInline
+                muted
+                className="block w-full rounded bg-black aspect-[4/3] object-contain transition-opacity"
+              />
+              {showGuides && (
+                <div
+                  aria-hidden="true"
+                  className="pointer-events-none absolute inset-0 rounded overflow-hidden"
+                >
+                  {/* Horizontal centerline */}
+                  <div
+                    className="absolute left-0 right-0 top-1/2 h-px bg-emerald-400/60 mix-blend-screen"
+                  />
+                  {/* Vertical centerline */}
+                  <div
+                    className="absolute top-0 bottom-0 left-1/2 w-px bg-emerald-400/60 mix-blend-screen"
+                  />
+                  {/* Center crosshair dot for visibility on busy backgrounds */}
+                  <div
+                    className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-3 h-3 rounded-full border border-emerald-400/80 mix-blend-screen"
+                  />
+                </div>
+              )}
+            </div>
             {cameraPhase === 'captured' && photoDataUrl && (
               <img
                 src={photoDataUrl}
@@ -373,7 +426,7 @@ export function VialPanel({
                 </div>
               )}
             <canvas ref={canvasRef} className="hidden" />
-            <div>
+            <div className="flex flex-wrap items-center gap-2">
               {cameraPhase === 'live' ? (
                 <Button type="button" onClick={capture} disabled={busy}>
                   <Camera className="w-4 h-4" aria-hidden="true" />
@@ -388,6 +441,20 @@ export function VialPanel({
                 >
                   <RotateCcw className="w-4 h-4" aria-hidden="true" />
                   Retake photo
+                </Button>
+              )}
+              {cameraPhase === 'live' && (
+                <Button
+                  type="button"
+                  variant={showGuides ? 'default' : 'outline'}
+                  size="sm"
+                  onClick={() => setShowGuides(v => !v)}
+                  disabled={busy}
+                  aria-pressed={showGuides}
+                  title="Toggle center crosshair guides"
+                >
+                  <Crosshair className="w-4 h-4" aria-hidden="true" />
+                  Guides {showGuides ? 'on' : 'off'}
                 </Button>
               )}
             </div>

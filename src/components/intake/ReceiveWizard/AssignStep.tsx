@@ -8,18 +8,26 @@ import {
   useDraggable,
   type DragEndEvent,
 } from '@dnd-kit/core'
-import { Loader2, RotateCcw } from 'lucide-react'
+import { Loader2, MessageSquare, RotateCcw } from 'lucide-react'
+import { toast } from 'sonner'
 import {
   getVialPlan,
   patchVialAssignment,
+  updateSenaiteSampleFields,
   type VialPlanResponse,
   type VialPlanItem,
   type AssignmentRole,
 } from '@/lib/api'
+import { Button } from '@/components/ui/button'
+import { Textarea } from '@/components/ui/textarea'
+import { Spinner } from '@/components/ui/spinner'
 import { cn } from '@/lib/utils'
 
 interface Props {
   parentSampleId: string
+  /** SENAITE UID of the parent — required for saving remarks to the AR.
+   *  Optional so the component still renders if the lookup is in flight. */
+  parentSampleUid?: string | null
 }
 
 const ROLE_SHORT: Record<string, string> = {
@@ -31,7 +39,7 @@ const ROLE_SHORT: Record<string, string> = {
 
 type BucketId = AssignmentRole
 
-export function AssignStep({ parentSampleId }: Props) {
+export function AssignStep({ parentSampleId, parentSampleUid }: Props) {
   const [plan, setPlan] = useState<VialPlanResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -166,8 +174,113 @@ export function AssignStep({ parentSampleId }: Props) {
             />
           )}
         </div>
+        <AssignRemarksBlock
+          parentSampleId={parentSampleId}
+          parentSampleUid={parentSampleUid}
+        />
       </div>
     </DndContext>
+  )
+}
+
+/**
+ * Add Remarks block — saves to the parent SENAITE AR. Vial assignment is the
+ * step where missing vials, broken seals, mislabeled containers, etc. tend to
+ * surface, so the assignment-tab gets the same remarks affordance as the
+ * sample-detail page (the form text + save path mirror SampleDetails.AddRemarkForm).
+ */
+function AssignRemarksBlock({
+  parentSampleId,
+  parentSampleUid,
+}: {
+  parentSampleId: string
+  parentSampleUid: string | null | undefined
+}) {
+  const [open, setOpen] = useState(false)
+  const [text, setText] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  async function handleSubmit() {
+    const trimmed = text.trim()
+    if (!trimmed) return
+    if (!parentSampleUid) {
+      toast.error('Parent sample not loaded yet — try again in a moment.')
+      return
+    }
+    setSaving(true)
+    try {
+      const result = await updateSenaiteSampleFields(parentSampleUid, { Remarks: trimmed })
+      if (!result.success) throw new Error(result.message)
+      toast.success(`Remark added to ${parentSampleId}`)
+      setText('')
+      setOpen(false)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Unknown error'
+      toast.error('Failed to add remark', { description: msg })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="mt-6 pt-4 border-t border-border/60 max-w-2xl">
+      {!open ? (
+        <button
+          type="button"
+          onClick={() => setOpen(true)}
+          className="text-xs text-muted-foreground hover:text-foreground transition-colors cursor-pointer flex items-center gap-1.5"
+        >
+          <MessageSquare size={12} />
+          Add remark to {parentSampleId}
+        </button>
+      ) : (
+        <div className="space-y-2">
+          <p className="text-xs text-muted-foreground">
+            Remarks save to the parent sample ({parentSampleId}).
+          </p>
+          <Textarea
+            value={text}
+            onChange={e => setText(e.target.value)}
+            placeholder="Missing vial, broken seal, label mismatch — note anything that came up during assignment..."
+            disabled={saving}
+            className="min-h-20 text-sm"
+            aria-label={`Add remark to ${parentSampleId}`}
+            onKeyDown={e => {
+              if (e.key === 'Escape') {
+                e.preventDefault()
+                setOpen(false)
+                setText('')
+              }
+            }}
+          />
+          <div className="flex items-center gap-2 justify-end">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                setOpen(false)
+                setText('')
+              }}
+              disabled={saving}
+              className="cursor-pointer"
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              onClick={handleSubmit}
+              disabled={saving || !text.trim() || !parentSampleUid}
+              className="cursor-pointer gap-1.5"
+            >
+              {saving && <Spinner className="size-3.5" />}
+              Add Remark
+            </Button>
+          </div>
+        </div>
+      )}
+    </div>
   )
 }
 

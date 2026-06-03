@@ -161,6 +161,7 @@ export function VialDetailsTab({ vials, orderNumber, onCloseAndNavigate }: Props
                         onClick={() => printLabel({
                           sampleId: s.sample_id,
                           orderNumber,
+                          receivedAt: s.received_at,
                         })}
                         className="text-sm underline"
                       >

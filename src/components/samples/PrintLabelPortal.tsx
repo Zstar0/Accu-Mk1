@@ -2,7 +2,13 @@ import { LabelTemplate } from '@/components/intake/ReceiveWizard/LabelTemplate'
 import '@/components/intake/ReceiveWizard/PrintStep.css'
 
 interface Props {
-  target: { sampleId: string; orderNumber?: string | null } | null
+  target: {
+    sampleId: string
+    orderNumber?: string | null
+    /** Check-in date for the label. Defaults to today inside LabelTemplate
+     *  if omitted, so callers that don't have it still get a dated label. */
+    receivedAt?: string | Date | null
+  } | null
 }
 
 /**
@@ -17,7 +23,11 @@ export function PrintLabelPortal({ target }: Props) {
   if (!target) return null
   return (
     <div className="print-area" style={{ position: 'fixed', left: '-9999px', top: 0 }}>
-      <LabelTemplate sampleId={target.sampleId} orderNumber={target.orderNumber} />
+      <LabelTemplate
+        sampleId={target.sampleId}
+        orderNumber={target.orderNumber}
+        receivedAt={target.receivedAt ?? null}
+      />
     </div>
   )
 }

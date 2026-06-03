@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { ArrowRight, ArrowLeft, Check } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -29,6 +29,14 @@ export function ReceiveWizard({ parent, onClose, initialPhase = 'capture' }: Pro
   const [phase, setPhase] = useState<Phase>(initialPhase)
   const [editingSampleId, setEditingSampleId] = useState<string | null>(null)
 
+  // Sub Sample Details table reads assignment_role off the wizard's local
+  // vials state. AssignStep mutates roles via its own PATCH calls and never
+  // tells us, so without this re-fetch the Role column shows stale values
+  // (typically "Unassigned") after a tech assigns and switches tabs.
+  useEffect(() => {
+    if (phase === 'details') void wiz.refresh()
+  }, [phase, wiz.refresh])
+
   // Received count = parent (if received) + sub-samples in the list.
   // The receive count is identical across all phases since it tracks the
   // parent's vial set, not phase-local state.
@@ -51,10 +59,20 @@ export function ReceiveWizard({ parent, onClose, initialPhase = 'capture' }: Pro
   // Print Labels tab shows ALL labels for the family whenever the parent has
   // been received — so a tech entering from sample details can reprint any
   // existing label, not just session ones. The checkbox row on the print
-  // tab lets them skip labels they don't actually want.
-  const printList: { sample_id: string }[] = wiz.parentReceived
-    ? [{ sample_id: parent.sample_id }, ...wiz.vials.map(v => ({ sample_id: v.sub.sample_id }))]
-    : wiz.sessionVials
+  // tab lets them skip labels they don't actually want. Each entry carries
+  // received_at so the label can render the check-in date.
+  const printList: { sample_id: string; received_at?: string | null }[] = wiz.parentReceived
+    ? [
+        {
+          sample_id: parent.sample_id,
+          received_at: parentDetails.details?.date_received ?? null,
+        },
+        ...wiz.vials.map(v => ({
+          sample_id: v.sub.sample_id,
+          received_at: v.sub.received_at,
+        })),
+      ]
+    : wiz.sessionVials.map(s => ({ sample_id: s.sample_id, received_at: s.received_at }))
 
   // Finish is the intake-flow's "I'm done capturing" verb. When the wizard is
   // opened from sample details (initialPhase='details') against an already-
@@ -135,7 +153,10 @@ export function ReceiveWizard({ parent, onClose, initialPhase = 'capture' }: Pro
   } else if (phase === 'assign') {
     body = (
       <div className="overflow-y-auto">
-        <AssignStep parentSampleId={parent.sample_id} />
+        <AssignStep
+          parentSampleId={parent.sample_id}
+          parentSampleUid={parent.uid}
+        />
       </div>
     )
   } else if (phase === 'print') {
