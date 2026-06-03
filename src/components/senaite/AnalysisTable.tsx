@@ -78,6 +78,18 @@ export const STATUS_LABELS: Record<string, string> = {
   ready_for_review: 'Ready for Review',
 }
 
+/**
+ * Title-text color when an analysis matches the viewing sample's vial-assignment
+ * role (i.e. is in the primaryAnalysisUids set). Same palette family as the
+ * role badges elsewhere in the app — keeps the visual language consistent.
+ */
+const PRIMARY_TITLE_COLOR: Record<string, string> = {
+  hplc: 'text-sky-700 dark:text-sky-300',
+  endo: 'text-emerald-700 dark:text-emerald-300',
+  ster: 'text-violet-700 dark:text-violet-300',
+  xtra: 'text-zinc-700 dark:text-zinc-300',
+}
+
 /** Row-level tint: colored left border + subtle background, inspired by SENAITE. */
 const ROW_STATUS_STYLE: Record<string, string> = {
   verified:
@@ -696,6 +708,8 @@ function AnalysisRow({
   isSlaError,
   isSlaPublished,
   slaPriority,
+  primaryAnalysisUids,
+  primaryRole,
 }: {
   analysis: SenaiteAnalysis
   analyteNameMap: Map<number, string>
@@ -713,6 +727,8 @@ function AnalysisRow({
   isSlaError: boolean
   isSlaPublished: boolean
   slaPriority: InboxPriority | null
+  primaryAnalysisUids?: Set<string>
+  primaryRole?: string | null
 }) {
   const rowTint = ROW_STATUS_STYLE[analysis.review_state ?? ''] ?? ''
   const { display, original } = formatAnalysisTitle(analysis.title, analyteNameMap)
@@ -727,6 +743,14 @@ function AnalysisRow({
         )
       : []
   const isPending = !!analysis.uid && transition.pendingUids.has(analysis.uid)
+  // Highlight the title text when this analysis is one of the "primary"
+  // analyses for the sample's vial-assignment role (e.g. ENDO analyses on
+  // the endo sub-sample, HPLC analyses on the parent / hplc sub).
+  const isPrimary =
+    !!analysis.uid && !!primaryAnalysisUids?.has(analysis.uid)
+  const primaryTitleClass = isPrimary && primaryRole
+    ? (PRIMARY_TITLE_COLOR[primaryRole] ?? '')
+    : ''
 
   return (
     <tr className={`border-b border-border/50 hover:bg-muted/30 transition-colors ${rowTint}`}>
@@ -742,7 +766,10 @@ function AnalysisRow({
       </td>
       <td className="py-2.5 px-3 text-sm text-foreground font-medium">
         <div className="flex items-center gap-1.5 flex-wrap">
-          <span title={wasRenamed ? original : undefined}>
+          <span
+            title={wasRenamed ? original : undefined}
+            className={isPrimary ? `font-semibold ${primaryTitleClass}` : ''}
+          >
             {display}
             {wasRenamed && (
               <span className="ml-1.5 text-[10px] text-muted-foreground font-normal">
@@ -941,6 +968,19 @@ interface AnalysisTableProps {
   isAnalysisSlaError?: boolean
   isAnalysisSlaPublished?: boolean
   analysisSlaPriority?: InboxPriority | null
+  /**
+   * UIDs of analyses that are "primary" for the viewing sample's vial-
+   * assignment role. Used to tint the analysis title — does NOT filter
+   * rows. Caller is responsible for deriving the set; this component
+   * just renders the highlight when an analysis is in it.
+   */
+  primaryAnalysisUids?: Set<string>
+  /**
+   * Role string (hplc / endo / ster / xtra) driving the tint color.
+   * Required for the highlight to actually colorize; without it the
+   * primary rows render with normal title styling.
+   */
+  primaryRole?: string | null
 }
 
 export function AnalysisTable({
@@ -954,6 +994,8 @@ export function AnalysisTable({
   isAnalysisSlaError = false,
   isAnalysisSlaPublished = false,
   analysisSlaPriority = null,
+  primaryAnalysisUids,
+  primaryRole,
 }: AnalysisTableProps) {
   const [analysisFilter, setAnalysisFilter] = useState<'all' | 'verified' | 'pending' | 'invalid'>('all')
   const [sortConfig, setSortConfig] = useState<SortConfig | null>(null)
@@ -1245,6 +1287,8 @@ export function AnalysisTable({
                       isSlaError={isAnalysisSlaError}
                       isSlaPublished={isAnalysisSlaPublished}
                       slaPriority={analysisSlaPriority}
+                      primaryAnalysisUids={primaryAnalysisUids}
+                      primaryRole={primaryRole}
                     />
                     {isExpanded && group.history.map(h => (
                       <HistoryRow

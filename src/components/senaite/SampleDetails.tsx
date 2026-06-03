@@ -1110,6 +1110,33 @@ function formatDate(dateStr: string | null | undefined): string {
   })
 }
 
+// --- Role header badge ---
+// Mirrors the palette in VialDetailsTab.tsx / VialsList.tsx / SenaiteDashboard.tsx /
+// InboxVialCard.tsx (fifth inline copy). Kept inline to stay additive — dedup is a
+// tracked fast-follow, not in scope here.
+const ROLE_HEADER_BADGES: Record<string, { label: string; cls: string }> = {
+  hplc: { label: 'HPLC',   cls: 'bg-sky-500/15 text-sky-700 border-sky-500/40 dark:text-sky-300' },
+  endo: { label: 'ENDO',   cls: 'bg-emerald-500/15 text-emerald-700 border-emerald-500/40 dark:text-emerald-300' },
+  ster: { label: 'STERYL', cls: 'bg-violet-500/15 text-violet-700 border-violet-500/40 dark:text-violet-300' },
+  xtra: { label: 'XTRA',   cls: 'bg-zinc-500/15 text-zinc-700 border-zinc-500/40 dark:text-zinc-300' },
+}
+
+function RoleHeaderBadge({ role }: { role: string }) {
+  const b = ROLE_HEADER_BADGES[role]
+  if (!b) return null
+  return (
+    <span
+      className={cn(
+        'inline-block text-[10px] leading-none px-1.5 py-0.5 rounded border uppercase tracking-wide font-medium',
+        b.cls,
+      )}
+      title={`Vial assignment: ${b.label}`}
+    >
+      {b.label}
+    </span>
+  )
+}
+
 // --- Add Remark Form ---
 
 function AddRemarkForm({
@@ -1757,11 +1784,12 @@ export function SampleDetails() {
   })
 
   // Resolve this sample's vial-assignment role for the header label.
-  // Parent pages: always 'hplc' per the "primary always HPLC for now" rule.
-  // Sub-sample pages: look up in the parent's sub-samples list (which carries
-  // assignment_role on each entry).
+  // Parent pages: pull from lims_samples.assignment_role (defaults to 'hplc'
+  // per migration; can change after AssignStep moves the parent into another
+  // bucket). Sub-sample pages: look up in the parent's sub-samples list which
+  // carries assignment_role on each entry.
   const currentAssignment: string | null = isParent
-    ? 'hplc'
+    ? subData?.parent.assignment_role ?? 'hplc'
     : parentSummary?.sub_samples.find(s => s.sample_id === sampleId)
         ?.assignment_role ?? null
   const assignmentLabel = (() => {
@@ -2297,6 +2325,7 @@ export function SampleDetails() {
               onClick={() => printLabel({
                 sampleId: sampleId!,
                 orderNumber: data?.client_order_number ?? null,
+                receivedAt: data?.date_received ?? null,
               })}
             >
               <Printer size={13} />
@@ -2450,15 +2479,38 @@ export function SampleDetails() {
                   </button>
                   {parentSummary && (() => {
                     const me = parentSummary.sub_samples.find(s => s.sample_id === sampleId)
-                    const total = parentSummary.parent.sub_sample_count
-                    if (!me || !total) return null
+                    if (!me) return null
+                    // Display 1-indexed across the whole family: parent is vial 1,
+                    // sub-samples come after. sub_sample_count excludes the parent,
+                    // so total = sub_sample_count + 1.
+                    const total = parentSummary.parent.sub_sample_count + 1
                     return (
                       <>
                         <span aria-hidden>·</span>
-                        <span>Vial {me.vial_sequence} of {total}</span>
+                        <span>Vial {me.vial_sequence + 1} of {total}</span>
                       </>
                     )
                   })()}
+                  {currentAssignment && (
+                    <>
+                      <span aria-hidden>·</span>
+                      <RoleHeaderBadge role={currentAssignment} />
+                    </>
+                  )}
+                </div>
+              )}
+              {isParent && subCount > 0 && (
+                <div className="flex items-center gap-2 text-sm text-muted-foreground mt-1 flex-wrap">
+                  <Package className="h-3.5 w-3.5 shrink-0" />
+                  <span>Parent Sample</span>
+                  <span aria-hidden>·</span>
+                  <span>Vial 1 of {subCount + 1}</span>
+                  {currentAssignment && (
+                    <>
+                      <span aria-hidden>·</span>
+                      <RoleHeaderBadge role={currentAssignment} />
+                    </>
+                  )}
                 </div>
               )}
               <p className="text-xs text-muted-foreground mt-0.5">
@@ -3314,6 +3366,7 @@ export function SampleDetails() {
           analyses={analyses}
           analyteNameMap={analyteNameMap}
           primaryAnalysisUids={primaryAnalysisUids}
+          primaryRole={currentAssignment}
           onResultSaved={(uid, newResult, newReviewState) => {
             setData(prev => {
               if (!prev) return prev
@@ -3353,37 +3406,35 @@ export function SampleDetails() {
         {/* Sub-Samples + Sub-Sample Analyses sections moved into the wizard's
             "Sub Sample Details" tab (open via "Manage Sub-Samples" button).
             Entry from the sample-details page defaults to that tab so techs
-            land on the table they came in for, not the new-vial form. */}
-        {isParent && (
-          <>
-            {wizardParent && (
-              <Dialog
-                open={Boolean(wizardParent)}
-                onOpenChange={open => {
-                  if (!open) {
+            land on the table they came in for, not the new-vial form. Hosted
+            unconditionally so the button also works on sub-sample pages —
+            openSubSampleWizard resolves the parent UID for that case. */}
+        {wizardParent && (
+          <Dialog
+            open={Boolean(wizardParent)}
+            onOpenChange={open => {
+              if (!open) {
+                setWizardParent(null)
+                void refetchSubs()
+              }
+            }}
+          >
+            <DialogContent className="max-w-6xl w-full p-0 sm:max-w-6xl h-[90vh] overflow-hidden">
+              <DialogHeader className="px-6 pt-4 pb-2 border-b">
+                <DialogTitle>Receive {wizardParent.sample_id}</DialogTitle>
+              </DialogHeader>
+              <div className="h-[calc(90vh-3.5rem)] overflow-hidden">
+                <ReceiveWizard
+                  parent={wizardParent}
+                  initialPhase="details"
+                  onClose={() => {
                     setWizardParent(null)
                     void refetchSubs()
-                  }
-                }}
-              >
-                <DialogContent className="max-w-6xl w-full p-0 sm:max-w-6xl h-[90vh] overflow-hidden">
-                  <DialogHeader className="px-6 pt-4 pb-2 border-b">
-                    <DialogTitle>Receive {wizardParent.sample_id}</DialogTitle>
-                  </DialogHeader>
-                  <div className="h-[calc(90vh-3.5rem)] overflow-hidden">
-                    <ReceiveWizard
-                      parent={wizardParent}
-                      initialPhase="details"
-                      onClose={() => {
-                        setWizardParent(null)
-                        void refetchSubs()
-                      }}
-                    />
-                  </div>
-                </DialogContent>
-              </Dialog>
-            )}
-          </>
+                  }}
+                />
+              </div>
+            </DialogContent>
+          </Dialog>
         )}
 
       {/* Woo Order flyout */}
