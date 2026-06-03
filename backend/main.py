@@ -13431,6 +13431,22 @@ async def get_worksheets_inbox(
                 )
             )
 
+        # Phase 3.5 (mk1-native-analyses): for sub-sample vials with seeded
+        # Mk1 lims_analyses rows, use Mk1 as the source of truth for the
+        # inbox view. Pre-Phase-2 sub-samples (no Mk1 rows) keep the
+        # SENAITE-derived flat_analyses built above. Parent vials are
+        # untouched. Role-filtering already happened in Phase 2's seeder
+        # (vial only has rows matching its role) so no extra filter needed.
+        if vial_meta is not None and not vial_meta.get("is_parent"):
+            sub_pk = vial_meta.get("sub_sample_pk")
+            if sub_pk:
+                mk1_rows = _fetch_mk1_inbox_analyses_for_sub_sample(
+                    db, sub_pk, vial_meta.get("assignment_role"),
+                    keyword_to_peptide,
+                )
+                if mk1_rows:
+                    flat_analyses = mk1_rows
+
         if not flat_analyses:
             # No analyses survive filtering — hide this vial
             continue
