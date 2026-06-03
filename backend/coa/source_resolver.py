@@ -289,56 +289,54 @@ async def resolve_sources(
     senaite_reader: SenaiteAnalysesReader,
 ) -> ResolverResult:
     """
-    Gather candidates for the parent + every linked sub-sample, then apply
-    the per-analyte decision rule.
+    Phase 5a: Mk1-first dispatch. Resolution precedence per analyte is:
+      1. Pin override (admin path)         → mode='pin' or blocked='stale_pin'
+      2. Mk1 parent-tier verified row      → mode='auto' (the happy path)
+      3. SENAITE-side parent AR candidate  → existing _resolve_analyte rules
+      4. None of the above                 → analyte simply isn't in decisions
+
+    Sub-sample SENAITE ARs are no longer queried — Phase 4a moved their
+    decisions into parent-tier rows via promote_to_parent. The supervisor's
+    decision is recorded once at promote time, not re-derived per COA gen.
     """
-    # 1. Load parent + sub-samples from Mk1 DB to know what ARs to fetch.
+    # 1. Load parent from Mk1 DB.
     parent = db.execute(
         select(LimsSample).where(LimsSample.sample_id == parent_sample_id)
     ).scalar_one_or_none()
 
-    sample_ids: List[str] = [parent_sample_id]
-    is_parent_lookup: Dict[str, bool] = {parent_sample_id: True}
-    variance_lookup: Dict[str, bool] = {
-        parent_sample_id: bool(parent.in_variance_set) if parent else True
+    # If the parent doesn't exist in Mk1, the SENAITE reader can still
+    # surface candidates — fall through with no Mk1 layer.
+    mk1_decisions: Dict[str, SourceDecision] = (
+        _resolve_mk1_parent_tier(db, parent) if parent else {}
+    )
+
+    # 2. Pull SENAITE analyses for the parent AR only. Subs no longer fetched.
+    reader_payload: Dict[str, List[Dict]] = {
+        parent_sample_id: await senaite_reader.list_for_sample(parent_sample_id)
     }
-    if parent:
-        subs = db.execute(
-            select(LimsSubSample).where(
-                LimsSubSample.parent_sample_pk == parent.id
-            )
-        ).scalars().all()
-        for s in subs:
-            sample_ids.append(s.sample_id)
-            is_parent_lookup[s.sample_id] = False
-            variance_lookup[s.sample_id] = bool(s.in_variance_set)
 
-    # 2. Pull analyses for every AR in one round-trip per AR. (Future: bulk
-    #    endpoint on the senaite_reader; not premature for Phase 1.)
-    reader_payload: Dict[str, List[Dict]] = {}
-    for sid in sample_ids:
-        reader_payload[sid] = await senaite_reader.list_for_sample(sid)
+    # 3. Build SENAITE candidate map (parent AR only).
+    senaite_candidates: Dict[str, List[CandidateInfo]] = _gather_candidates_for(
+        sample_id=parent_sample_id,
+        is_parent_ar=True,
+        reader_payload=reader_payload,
+        in_variance_set=(bool(parent.in_variance_set) if parent else True),
+    )
+    senaite_candidates = _apply_reportable(db, senaite_candidates)
 
-    # 3. Build candidate map (analyte_keyword -> list[CandidateInfo]) from
-    #    every AR's analyses, merging by analyte across ARs.
-    merged: Dict[str, List[CandidateInfo]] = {}
-    for sid in sample_ids:
-        per_ar = _gather_candidates_for(
-            sample_id=sid,
-            is_parent_ar=is_parent_lookup[sid],
-            reader_payload=reader_payload,
-            in_variance_set=variance_lookup[sid],
-        )
-        for kw, cs in per_ar.items():
-            merged.setdefault(kw, []).extend(cs)
-
-    # 4. Stamp reportable from the Mk1 sidecar.
-    merged = _apply_reportable(db, merged)
-
-    # 5. Decision rule per analyte.
+    # 4. Merge: every analyte that has a Mk1 row OR a SENAITE candidate.
+    all_keywords = set(mk1_decisions.keys()) | set(senaite_candidates.keys())
     decisions: List[SourceDecision] = []
-    for kw, cs in merged.items():
-        decisions.append(_resolve_analyte(kw, cs, db, parent_sample_id))
+    for kw in sorted(all_keywords):
+        # Decide the base (no-pin) decision:
+        if kw in mk1_decisions:
+            base = mk1_decisions[kw]
+        else:
+            # Fall through to the legacy decision rule for SENAITE-only analytes.
+            base = _resolve_analyte(kw, senaite_candidates[kw], db, parent_sample_id)
+        # Layer pin override on top. _apply_pin_override may rewrite mode to
+        # 'pin' or 'stale_pin'; otherwise returns base unchanged.
+        decisions.append(_apply_pin_override(db, parent_sample_id, kw, base))
 
     return ResolverResult(
         parent_sample_id=parent_sample_id,
