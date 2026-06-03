@@ -7,7 +7,7 @@ directly.
 
 from __future__ import annotations
 
-from typing import List
+from typing import List, Literal, Union
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
@@ -20,6 +20,7 @@ from lims_analyses.schemas import (
     AnalysisWithTransitions,
     CreateAnalysisRequest,
     HostKind,
+    SenaiteShapeAnalysisResponse,
     SetReportableRequest,
     TransitionInfo,
     TransitionRequest,
@@ -99,15 +100,23 @@ def create_analysis(
         raise _handle_service_error(e)
 
 
-@router.get("", response_model=List[AnalysisResponse])
+@router.get("", response_model=Union[List[AnalysisResponse], List[SenaiteShapeAnalysisResponse]])
 def list_for_host(
     host_kind: HostKind = Query(...),
     host_pk: int = Query(...),
     include_retests: bool = Query(True),
+    as_: Literal["default", "senaite_shape"] = Query("default", alias="as"),
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
     try:
+        if as_ == "senaite_shape":
+            return service.list_analyses_in_senaite_shape(
+                db,
+                host_kind=host_kind,
+                host_pk=host_pk,
+                include_retests=include_retests,
+            )
         rows = service.list_analyses_for_host(
             db,
             host_kind=host_kind,
