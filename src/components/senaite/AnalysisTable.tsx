@@ -21,9 +21,16 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import { useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import type { SenaiteAnalysis, InboxPriority } from '@/lib/api'
-import { setAnalysisMethodInstrument } from '@/lib/api'
+import { setAnalysisMethodInstrument, promoteAnalyses } from '@/lib/api'
 import type { SampleSlaSnapshot } from '@/services/order-sla'
 import { AnalysisSlaCell } from '@/components/senaite/AnalysisSlaCell'
 import { useAnalysisEditing, type UseAnalysisEditingReturn } from '@/hooks/use-analysis-editing'
@@ -689,6 +696,91 @@ function HistoryRow({
   )
 }
 
+// --- Phase 4b: Promote dialog ---
+
+function PromoteDialog({
+  analysis,
+  open,
+  onOpenChange,
+  onPromoted,
+}: {
+  analysis: SenaiteAnalysis
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  onPromoted: () => void
+}) {
+  const [resultValue, setResultValue] = useState(analysis.result ?? '')
+  const [pending, setPending] = useState(false)
+
+  // Reset the field when the dialog reopens for a different row
+  useEffect(() => {
+    if (open) setResultValue(analysis.result ?? '')
+  }, [open, analysis.result])
+
+  const handle = async () => {
+    if (!analysis.uid?.startsWith('mk1:')) return
+    if (!resultValue) {
+      toast.error('Result value is required')
+      return
+    }
+    const limsId = parseInt(analysis.uid.slice('mk1:'.length), 10)
+    setPending(true)
+    try {
+      await promoteAnalyses({
+        keyword: analysis.keyword ?? '',
+        result_value: resultValue,
+        result_unit: analysis.unit ?? null,
+        method_id: analysis.method_uid ? parseInt(analysis.method_uid, 10) : null,
+        instrument_id: analysis.instrument_uid ? parseInt(analysis.instrument_uid, 10) : null,
+        sources: [{ analysis_id: limsId, contribution_kind: 'chosen' }],
+        reason: 'Single-vial promote from AnalysisTable',
+      })
+      toast.success('Promoted to parent')
+      onOpenChange(false)
+      onPromoted()
+    } catch (e) {
+      toast.error((e as Error).message)
+    } finally {
+      setPending(false)
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Promote {analysis.keyword} to parent</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-3 pt-2">
+          <p className="text-sm text-muted-foreground">
+            Create a parent-tier verified row for <code>{analysis.keyword}</code> with the
+            chosen value. The vial-tier row stays in <code>to_be_verified</code>; an audit
+            row records the promotion. To undo, retract the parent row.
+          </p>
+          <label className="text-sm font-medium block">
+            Result value
+            <input
+              type="text"
+              value={resultValue}
+              onChange={(e) => setResultValue(e.target.value)}
+              className="mt-1 w-full px-2 py-1 border rounded bg-background text-sm font-mono"
+              autoFocus
+            />
+          </label>
+          <div className="flex gap-2 justify-end">
+            <Button variant="outline" onClick={() => onOpenChange(false)} disabled={pending}>
+              Cancel
+            </Button>
+            <Button onClick={handle} disabled={pending || !resultValue}>
+              {pending ? 'Promoting…' : 'Promote'}
+            </Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 // --- Analysis row ---
 
 function AnalysisRow({
@@ -742,6 +834,17 @@ function AnalysisRow({
           t => t !== 'submit' || !!analysis.result
         )
       : []
+  // Phase 4b: Promote affordance — additive to the existing Verify admin
+  // button. Only for mk1: vial-tier rows in to_be_verified that haven't
+  // been promoted yet.
+  const canPromote =
+    !!analysis.uid
+    && analysis.uid.startsWith('mk1:')
+    && analysis.review_state === 'to_be_verified'
+    && (analysis.promoted_to_parent_id == null)
+  const isPromoted = analysis.promoted_to_parent_id != null
+  const [promoteOpen, setPromoteOpen] = useState(false)
+  const queryClient = useQueryClient()
   const isPending = !!analysis.uid && transition.pendingUids.has(analysis.uid)
   // Highlight the title text when this analysis is one of the "primary"
   // analyses for the sample's vial-assignment role (e.g. ENDO analyses on
@@ -816,6 +919,14 @@ function AnalysisRow({
       <td className="py-2.5 px-3 text-xs text-muted-foreground">{analysis.analyst || '\u2014'}</td>
       <td className="py-2.5 px-3">
         {analysis.review_state && <StatusBadge state={analysis.review_state} />}
+        {isPromoted && (
+          <span
+            className="ml-2 text-[10px] font-mono text-emerald-700 dark:text-emerald-400"
+            title="This vial-tier row has been promoted to a parent-tier canonical result"
+          >
+            Promoted → #{analysis.promoted_to_parent_id}
+          </span>
+        )}
       </td>
       <td className="py-2.5 px-3">
         <AnalysisSlaCell
@@ -830,7 +941,7 @@ function AnalysisRow({
         {formatDate(analysis.captured)}
       </td>
       <td className="py-2 px-3 text-right">
-        {analysis.uid && allowedTransitions.length > 0 && (
+        {analysis.uid && (allowedTransitions.length > 0 || canPromote) && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <button
@@ -846,6 +957,13 @@ function AnalysisRow({
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
+              {canPromote && (
+                <DropdownMenuItem
+                  onClick={() => setPromoteOpen(true)}
+                >
+                  Promote
+                </DropdownMenuItem>
+              )}
               {allowedTransitions.map(t => (
                 <DropdownMenuItem
                   key={t}
@@ -864,6 +982,20 @@ function AnalysisRow({
               ))}
             </DropdownMenuContent>
           </DropdownMenu>
+        )}
+        {canPromote && (
+          <PromoteDialog
+            analysis={analysis}
+            open={promoteOpen}
+            onOpenChange={setPromoteOpen}
+            onPromoted={() => {
+              // Phase 4b: invalidate the mk1 senaite_shape query so the row
+              // refreshes with promoted_to_parent_id populated. The exact
+              // query key depends on the consuming hook; broad invalidate
+              // is cheap here.
+              queryClient.invalidateQueries()
+            }}
+          />
         )}
       </td>
     </tr>
