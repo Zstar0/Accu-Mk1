@@ -85,3 +85,64 @@ def test_lock_and_unlock_round_trip(db, parent_with_subs):
     unlocked = unlock_variance_set(db, parent.sample_id)
     assert unlocked.variance_locked_at is None
     assert unlocked.variance_locked_by_user_id is None
+
+
+# ── Phase 4b: variance results sourced from Mk1 with uid ────────────────────
+
+
+def test_get_variance_set_surfaces_mk1_results_with_uid(db, parent_with_subs):
+    """A vial with a lims_analyses row carrying a result_value should appear
+    in the variance-set response with uid='mk1:<N>' and the value populated.
+    Mk1 takes precedence over any SENAITE-side entry for the same keyword."""
+    from datetime import datetime
+    from models import (
+        AnalysisService, LimsAnalysis, LimsAnalysisTransition,
+    )
+    svc = db.execute(
+        select(AnalysisService).where(AnalysisService.keyword.isnot(None))
+    ).scalars().first()
+    if svc is None:
+        pytest.skip("no analysis_services with keyword")
+    sub = parent_with_subs.sub_samples[0]
+    # Don't collide with the per-sub-sample unique index on (sub, keyword).
+    # Use a unique TEST keyword so cleanup is straightforward.
+    test_keyword = f"P4B_TEST_{sub.id}"
+    test_title = f"TEST: variance Mk1 sourcing {sub.id}"
+    row = LimsAnalysis(
+        lims_sample_pk=None,
+        lims_sub_sample_pk=sub.id,
+        analysis_service_id=svc.id,
+        keyword=test_keyword,
+        title=test_title,
+        result_value="42.5",
+        review_state="to_be_verified",
+        created_at=datetime.utcnow(),
+        updated_at=datetime.utcnow(),
+    )
+    db.add(row)
+    db.flush()
+    db.add(LimsAnalysisTransition(
+        analysis_id=row.id, from_state=None, to_state="to_be_verified",
+        transition_kind="auto", user_id=None, reason="TEST: P4b variance fixture",
+    ))
+    db.commit()
+
+    try:
+        vs = get_variance_set(db, parent_with_subs.sample_id)
+        assert vs is not None
+        target_vial = next(v for v in vs["vials"] if v["sample_id"] == sub.sample_id)
+        assert test_keyword in target_vial["results"], \
+            f"expected {test_keyword!r} in vial results; got {list(target_vial['results'].keys())}"
+        entry = target_vial["results"][test_keyword]
+        assert entry["uid"] == f"mk1:{row.id}"
+        assert entry["value"] == "42.5"
+        assert entry["kind"] == "numeric"
+        assert entry["promoted_to_parent_id"] is None
+    finally:
+        # Cleanup
+        from sqlalchemy import delete
+        db.execute(delete(LimsAnalysisTransition).where(
+            LimsAnalysisTransition.analysis_id == row.id
+        ))
+        db.execute(delete(LimsAnalysis).where(LimsAnalysis.id == row.id))
+        db.commit()
