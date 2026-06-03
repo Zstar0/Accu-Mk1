@@ -15,17 +15,25 @@
 
 ---
 
-## Scope decisions (made up-front; flag if you disagree before executing)
+## Scope decisions
 
-These are the three decisions I baked in that the SPEC left partially open. Each cites the SPEC line it's anchored to.
+**REVISED 2026-06-03 after Task 1 RED verdict.** The original plan assumed SENAITE's `@@attachments_view/add` form accepts a `Description` (or `Title`) field that round-trips into the attachment listing. Task 1's live probe found: neither `Description`, `AttachmentDescription`, `Title`, nor `title` are consumed by the add form. SENAITE only allows description editing via a separate `attachments_update_form` post-upload, which means 2 round-trips per photo. That's enough friction to be worth avoiding.
 
-1. **XTRA vials seed no `lims_analyses` rows at create-time.** Seeding happens at the *moment of role assignment* (the wizard's Assign step, or `compute_vial_plan` auto-assignment). This is SPEC §"After" option (a) — "Mk1 inserts no analyses; the Assign step's later patch can populate them". The alternative (speculative-seed + reportable flip per Open Question 1 recommendation b) is deferred to a follow-up because it materially expands the role-flip code path and isn't needed for Phase 2 acceptance.
+The pivot: keep the SENAITE secondary AR creation path (sample_id generation + photo storage both stay there, unchanged from today). Only the analyses-cloning-on-the-SENAITE-side becomes dead weight; Mk1 inserts its own `lims_analyses` rows in parallel and those become the source of truth for Phase 3 onwards.
 
-2. **The SENAITE secondary AR is NOT created.** No `senaite.create_secondary()` call, no analysis cloning, no `senaite.update_secondary_fields()` call, no `senaite.delete_secondary()` compensation. Sample ID generation moves to Mk1. This matches SPEC §"After" literally ("no SENAITE AR call"). `lims_sub_samples.external_lims_uid` becomes NULL for new vials — existing rows keep their non-NULL value. SPEC §Migration explicitly endorses this cutover ("no data migration script is required").
+Maximally additive — preserves the "additive only" preference. Trade-off: the SPEC §After's literal "no SENAITE AR call" is deferred to a future phase (likely Phase 5 alongside the parent-AR migration into Mk1).
 
-3. **Photo upload retargets to the parent AR.** The attachment's `Description` (or `Title`, whichever SENAITE supports — verified in Task 1) carries the vial's sample_id as a tag (e.g. `vial:P-0134-S01`). `lims_sub_samples.photo_external_uid` stores `{parent_path}|vial:{sample_id}`. The photo-fetch route splits on `|`, fetches the parent AR's attachments, and filters by Description. Existing vials with a secondary-AR-path-only `photo_external_uid` keep working (the absence of `|vial:` indicates the legacy path). Per SPEC §Open Question 3 recommendation, with a fallback to "keep secondary AR for photo only" if Description-field tagging proves unworkable.
+**Revised decisions in force for execution:**
 
-If any of these is wrong, redirect before Task 1.
+1. **XTRA vials seed no `lims_analyses` rows at create-time.** Seeding happens at the *moment of role assignment* (the wizard's Assign step, or `compute_vial_plan` auto-assignment). SPEC §"After" option (a).
+
+2. **The SENAITE secondary AR continues to be created** (unchanged from today). Sample ID generation stays SENAITE-driven. `external_lims_uid` continues to be populated on new vials. The SENAITE-side cloned analyses are accepted as dead weight — Mk1 ignores them and reads only from `lims_analyses`. Phase 3's `AnalysisTable.tsx` adapter will read from Mk1 only.
+
+3. **Photo upload stays on the secondary AR** (unchanged from today). `photo_external_uid` continues to store the secondary AR path. Photo fetch route unchanged.
+
+4. **Mk1 ALSO inserts `lims_analyses` rows** in `create_sub_sample` after the SENAITE secondary is created. This is the only net-new behavioral change in Phase 2. The role-flip hook (Task 6) covers the case where role is assigned after vial creation.
+
+**Tasks 3 and 5 are SKIPPED** under the revised scope (sample_id generator and photo retarget are both unnecessary). Remaining: Task 2 (seeder), Task 4 (additive create_sub_sample hook), Task 6 (role-flip hook), Task 7 (live verification).
 
 ---
 
