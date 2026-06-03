@@ -2,23 +2,23 @@
 
 ## At a glance
 
-This guide walks you through planning worksheets from the inbox, running items through the bench, and locking variance sets on multi-vial parents. The June 2026 release reworked the inbox from grouped families to flat vials and added a proper variance membership workflow, so even if you've been doing this for months, a few of the clicks have moved.
+This guide walks you through planning worksheets from the inbox, running items through the bench, and locking variance sets on multi-vial parents. The sub-samples / vial workflow and the **Variance Summary** dialog described here are new — Accu-Mk1 now tracks each physical vial as its own unit, and you'll be the one assigning vials to worksheets and deciding which ones count toward Mean / SD / CV statistics. Read this once end-to-end before your first multi-vial parent comes through.
 
-## What's new in this release
+## What this workflow gives you
 
-> **What's new:**
+> **At a glance:**
 >
-> - The inbox is now one card per **vial** (parent or sub-sample), not one card per `(parent x service_group)` family. Vials from the same parent are connected visually but no longer collapse.
-> - **Sub-samples now show up in the inbox.** Previously only parents appeared.
-> - **Role filtering is a single-select chip pair: HPLC or Microbiology.** A separate **Show XTRA** toggle reveals XTRA-role vials. Your last choice sticks via localStorage.
-> - **Variance Summary dialog** on each parent sample page. You pick which vials count toward Mean / SD / CV%, lock the set, and (if you're an admin) unlock it for corrections.
-> - **SLA age column** on the worksheet items table, banded red / amber / green.
-> - **Print Labels now includes the parent** when it's received in the same session as sub-samples — one pass, not two.
-> - **First vial of a never-received parent stays on the parent AR** (no `-S01` is created). Sub-samples start at vial 2.
+> - **One inbox card per vial.** A parent sample with three vials becomes three cards — one for the parent, two for sub-samples. Cards from the same parent stack adjacent with a visual connector so you can see the family at a glance.
+> - **Sub-samples show up in the inbox** alongside their parent. Each carries its own bench-role assignment, so an HPLC vial and a Sterility vial from the same shipment route to different benches independently.
+> - **A bench filter chip pair — HPLC or Microbiology.** Single-select; your choice is remembered between sessions. A separate **Show XTRA** toggle reveals XTRA-role vials when you need extra capacity.
+> - **Each card shows only the analyses for its role.** An HPLC vial's card lists Analytics analyses; a Microbiology vial's card lists Endo / Ster. No mental filtering required.
+> - **Variance Summary dialog** on every parent sample page. Pick which vials count toward Mean / SD / CV%, set exclusion reasons for the ones you skip, and lock the set so results can't drift under you.
+> - **SLA age column** on the worksheet items table, banded red / amber / green by the SLA tier you've configured. Surfaces the overdue items so they don't slip.
+> - **Drag-to-worksheet** from the inbox to the right-hand worksheet panel. Drop on **New Worksheet** to spin one up, or onto an existing card to add the vial there.
 
 ## Before you start
 
-You'll want the LIMS open in your usual browser, signed in with the role that matches the bench you're working from (HPLC technician or Microbiologist). The inbox auto-routes you based on role, but you can flip the filter chips manually any time. Have your tablet or label printer reachable if you'll be reprinting.
+You'll want the LIMS open in your usual browser. From the **HPLC Automation → Inbox** nav, the filter chip you pick (HPLC or Microbiology) is remembered between sessions, so you'll land on the bench you worked from last. Have your tablet or label printer reachable if you'll be reprinting.
 
 - Logged into the LIMS web app with your tech account
 - Role: HPLC technician, Microbiologist, or Lab admin (admin needed to unlock variance sets)
@@ -181,7 +181,7 @@ Pencil icon to rename inline (Enter saves, Escape cancels). Trash icon to delete
 - **`Show XTRA` is OFF by default.** XTRA-role vials won't appear under either HPLC or Microbiology until you flip this.
 - **Sub-samples without an assignment role stay invisible.** They surface once the Vial Plan auto-assigns or you manually override.
 - **Variance lock is immutable.** Once locked, no member vial can be added, removed, or have its results edited. Admin unlock is the only way back; the two-click gate is intentional.
-- **Legacy pre-wizard parents default to `role = hplc`.** If their analyses include Microbiology tests, those analyses won't appear on Microbiology filter cards until a vial is manually assigned `endo` or `ster`.
+- **Samples received before the sub-samples workflow shipped default to `role = hplc`.** They surface under the HPLC filter even if they have Microbiology analyses on them. To work the Microbiology side on those older samples, the front desk needs to manually assign a vial role (or add a vial) so a `ster` / `endo` card appears.
 - **Decimal quantities don't inherit parent to sub.** DeclaredTotalQuantity and similar fields must be set manually in SENAITE UI due to a known SENAITE / Plone validator bug. Most other fields inherit fine.
 - **Cold-cache parents on first inbox load.** When a parent is linked for the first time, SENAITE fetch can return stale data. Hit **Refresh** to force a re-pull.
 

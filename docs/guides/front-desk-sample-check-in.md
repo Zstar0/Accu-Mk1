@@ -2,18 +2,21 @@
 
 ## At a glance
 
-This guide walks you through receiving a sample shipment and checking each vial into Accu-Mk1 using the Receive Wizard. It covers the dominant happy path (open a sample, capture each vial, assign roles, print labels) plus the variants and recovery steps you'll actually hit. Read this if you're new to the desk or if you've been away for a release or two and the screens look different.
+This guide walks you through receiving a sample shipment and checking each vial into Accu-Mk1 using the Receive Wizard. It covers the dominant happy path (open a sample, capture each vial, assign roles, print labels) plus the variants and recovery steps you'll actually hit.
 
-## What's new in this release
+A heads-up: the **Receive Wizard** and the **sub-samples workflow** described here are new — Accu-Mk1 now treats every physical vial in a shipment as its own tracked unit, with a photo, an assignment role, and a label. Read this once end-to-end before your first big shipment.
 
-> **What's new:**
-> - **Assignment tab with drag-and-drop role buckets** (HPLC, ENDO, STERYL, XTRA). Roles persist per-vial for downstream worksheet routing.
-> - **Single-vial check-in policy:** the first vial lands on the parent sample alone. No more redundant `-S01` for 1-vial orders. Sub-samples start at vial 2.
-> - **Print Labels is its own tab,** no longer a forced final step. [Finish] is available from any tab, and the parent label is included in the print list when received in this session.
-> - **Wizard sidebar shows full sample context** (Client, Contact, Peptide, Quantity, etc.) so you don't lose it while the camera has your attention.
-> - **Existing photo previews** when you re-open a sub-sample for editing (fetches the actual SENAITE attachment).
-> - **Bac Water HPLC filter:** when sample type is "Bacteriostatic Water", the HPLC wizard Step 1 now filters to additive-class analytes (currently Benzyl Alcohol).
-> - **Styled [Upload] button** replaces the raw file input in the camera-failure branch.
+## What this workflow gives you
+
+> **At a glance:**
+> - **One wizard to check in every vial in a shipment.** Live camera capture, photo retake, optional remarks, save. The wizard remembers where you are if you come back to add more vials later.
+> - **A persistent sample-info sidebar** during capture (Client, Contact, Peptide, Quantity, etc.) so you keep full context while the camera has your attention.
+> - **The first vial of a multi-vial shipment lands on the parent sample directly.** Vial 2 and beyond become sub-samples named `<parent>-S01`, `<parent>-S02`, etc. Single-vial shipments stay clean — no sub-samples created.
+> - **Assignment tab with drag-and-drop role buckets** (HPLC, ENDO, STERYL, XTRA). Whichever bucket you drop a vial into is where the lab tech finds it later.
+> - **Print Labels tab** with per-label checkboxes. By default every vial in the session is selected; uncheck any you don't need. The parent's label prints alongside the sub-sample labels in one pass.
+> - **A [Finish] button on every tab** — you don't have to walk through every step. Capture vials, assign roles, finish; or capture and finish; or capture, assign, print, finish. Whatever the situation calls for.
+> - **File picker fallback** when the camera fails or is denied — pick a JPEG / PNG of the vial from disk and the wizard treats it identically.
+> - **Bac Water HPLC filter** — when the parent's sample type is "Bacteriostatic Water," the HPLC wizard Step 1 filters its analyte dropdown to additives (currently just Benzyl Alcohol), so the list looks short on purpose.
 
 ## Before you start
 
@@ -114,7 +117,7 @@ This tab is disabled until at least one sub-sample exists. Parent-only sessions 
 ### Wizard footer behavior
 
 - **[Back]** appears on all tabs except Vial Management.
-- **[Finish]** is available whenever the session has vials, or the wizard didn't open in the legacy read-only details view. Use it to close out of any tab.
+- **[Finish]** is available on every tab whenever you've saved at least one vial in the current session. (When the wizard is opened from a sample's detail page just to view its existing sub-samples — no new check-in work — [Finish] is hidden and the X in the dialog corner is the close affordance.)
 - **[Continue]** appears on Vial Management (disabled until a vial is saved).
 - On Assignment, the forward button becomes **[Print Labels]**.
 - Print Labels has no forward button beyond **[Finish]**.
@@ -150,9 +153,8 @@ When the parent sample type is **Bacteriostatic Water**, the HPLC wizard Step 1 
 - **"Show Test Samples" is off by default.** Internal test orders (forrest@valenceanalytical.com and similar) won't appear until you tick the checkbox.
 - **XTRA is a real role, not a placeholder.** It's the fourth bucket on Assignment and is meant for vials held for future use. Drag vials into it intentionally.
 - **No undo on Assignment drops.** A drop persists immediately. To change a role, drag to a different bucket. To clear it entirely, you need a backend admin.
-- **Decimal quantity fields don't inherit to sub-samples.** Plone-5 validators reject Python 3 types, so `Analyte{N}DeclaredQuantity` and `DeclaredTotalQuantity` won't carry from parent to sub. Enter them manually on the SENAITE AR page.
-- **Legacy single-vial parents still carry `-S01`.** Pre-existing parents checked in under the old behavior have a redundant `-S01` from the same vial. New additions to those parents become vial 2 onward; the orphan `-S01` can be cleaned up manually if needed.
-- **Print Labels does not block sub-sample persistence.** If the printer dies, the vial is still saved. Reprint later.
+- **Decimal quantity fields don't inherit to sub-samples.** Plone-5 validators reject Python 3 types, so `Analyte{N}DeclaredQuantity` and `DeclaredTotalQuantity` won't carry from parent to sub. Enter them manually on the SENAITE AR page if you need them populated.
+- **Print Labels does not block sub-sample persistence.** If the printer dies, the vial is still saved. Reprint later from **Sub Sample Details** or the parent sample page.
 
 ## Edge cases & recovery
 

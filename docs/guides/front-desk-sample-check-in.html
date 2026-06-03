@@ -242,17 +242,19 @@ footer.page {
     </header>
     <h1 id="front-desk-sample-check-in-guide">Front-Desk Sample Check-in Guide</h1>
 <h2 id="at-a-glance">At a glance</h2>
-<p>This guide walks you through receiving a sample shipment and checking each vial into Accu-Mk1 using the Receive Wizard. It covers the dominant happy path (open a sample, capture each vial, assign roles, print labels) plus the variants and recovery steps you&rsquo;ll actually hit. Read this if you&rsquo;re new to the desk or if you&rsquo;ve been away for a release or two and the screens look different.</p>
-<h2 id="whats-new-in-this-release">What&rsquo;s new in this release</h2>
+<p>This guide walks you through receiving a sample shipment and checking each vial into Accu-Mk1 using the Receive Wizard. It covers the dominant happy path (open a sample, capture each vial, assign roles, print labels) plus the variants and recovery steps you&rsquo;ll actually hit.</p>
+<p>A heads-up: the <strong>Receive Wizard</strong> and the <strong>sub-samples workflow</strong> described here are new — Accu-Mk1 now treats every physical vial in a shipment as its own tracked unit, with a photo, an assignment role, and a label. Read this once end-to-end before your first big shipment.</p>
+<h2 id="what-this-workflow-gives-you">What this workflow gives you</h2>
 <blockquote>
-<p><strong>What&rsquo;s new:</strong>
-- <strong>Assignment tab with drag-and-drop role buckets</strong> (HPLC, ENDO, STERYL, XTRA). Roles persist per-vial for downstream worksheet routing.
-- <strong>Single-vial check-in policy:</strong> the first vial lands on the parent sample alone. No more redundant <code>-S01</code> for 1-vial orders. Sub-samples start at vial 2.
-- <strong>Print Labels is its own tab,</strong> no longer a forced final step. [Finish] is available from any tab, and the parent label is included in the print list when received in this session.
-- <strong>Wizard sidebar shows full sample context</strong> (Client, Contact, Peptide, Quantity, etc.) so you don&rsquo;t lose it while the camera has your attention.
-- <strong>Existing photo previews</strong> when you re-open a sub-sample for editing (fetches the actual SENAITE attachment).
-- <strong>Bac Water HPLC filter:</strong> when sample type is &ldquo;Bacteriostatic Water&rdquo;, the HPLC wizard Step 1 now filters to additive-class analytes (currently Benzyl Alcohol).
-- <strong>Styled [Upload] button</strong> replaces the raw file input in the camera-failure branch.</p>
+<p><strong>At a glance:</strong>
+- <strong>One wizard to check in every vial in a shipment.</strong> Live camera capture, photo retake, optional remarks, save. The wizard remembers where you are if you come back to add more vials later.
+- <strong>A persistent sample-info sidebar</strong> during capture (Client, Contact, Peptide, Quantity, etc.) so you keep full context while the camera has your attention.
+- <strong>The first vial of a multi-vial shipment lands on the parent sample directly.</strong> Vial 2 and beyond become sub-samples named <code>&lt;parent&gt;-S01</code>, <code>&lt;parent&gt;-S02</code>, etc. Single-vial shipments stay clean — no sub-samples created.
+- <strong>Assignment tab with drag-and-drop role buckets</strong> (HPLC, ENDO, STERYL, XTRA). Whichever bucket you drop a vial into is where the lab tech finds it later.
+- <strong>Print Labels tab</strong> with per-label checkboxes. By default every vial in the session is selected; uncheck any you don&rsquo;t need. The parent&rsquo;s label prints alongside the sub-sample labels in one pass.
+- <strong>A [Finish] button on every tab</strong> — you don&rsquo;t have to walk through every step. Capture vials, assign roles, finish; or capture and finish; or capture, assign, print, finish. Whatever the situation calls for.
+- <strong>File picker fallback</strong> when the camera fails or is denied — pick a JPEG / PNG of the vial from disk and the wizard treats it identically.
+- <strong>Bac Water HPLC filter</strong> — when the parent&rsquo;s sample type is &ldquo;Bacteriostatic Water,&rdquo; the HPLC wizard Step 1 filters its analyte dropdown to additives (currently just Benzyl Alcohol), so the list looks short on purpose.</p>
 </blockquote>
 <h2 id="before-you-start">Before you start</h2>
 <p>Have Accu-Mk1 open and signed in. You&rsquo;ll be moving between the <strong>Intake</strong> area and the <strong>Cab label printer</strong> at your station, so make sure both are reachable before you open the first box. If your station camera permission was reset (new browser, new profile), expect a permission prompt the first time you hit the capture screen.</p>
@@ -409,7 +411,7 @@ footer.page {
 <h3 id="wizard-footer-behavior">Wizard footer behavior</h3>
 <ul>
 <li><strong>[Back]</strong> appears on all tabs except Vial Management.</li>
-<li><strong>[Finish]</strong> is available whenever the session has vials, or the wizard didn&rsquo;t open in the legacy read-only details view. Use it to close out of any tab.</li>
+<li><strong>[Finish]</strong> is available on every tab whenever you&rsquo;ve saved at least one vial in the current session. (When the wizard is opened from a sample&rsquo;s detail page just to view its existing sub-samples — no new check-in work — [Finish] is hidden and the X in the dialog corner is the close affordance.)</li>
 <li><strong>[Continue]</strong> appears on Vial Management (disabled until a vial is saved).</li>
 <li>On Assignment, the forward button becomes <strong>[Print Labels]</strong>.</li>
 <li>Print Labels has no forward button beyond <strong>[Finish]</strong>.</li>
@@ -438,9 +440,8 @@ footer.page {
 <li><strong>&ldquo;Show Test Samples&rdquo; is off by default.</strong> Internal test orders (forrest@valenceanalytical.com and similar) won&rsquo;t appear until you tick the checkbox.</li>
 <li><strong>XTRA is a real role, not a placeholder.</strong> It&rsquo;s the fourth bucket on Assignment and is meant for vials held for future use. Drag vials into it intentionally.</li>
 <li><strong>No undo on Assignment drops.</strong> A drop persists immediately. To change a role, drag to a different bucket. To clear it entirely, you need a backend admin.</li>
-<li><strong>Decimal quantity fields don&rsquo;t inherit to sub-samples.</strong> Plone-5 validators reject Python 3 types, so <code>Analyte{N}DeclaredQuantity</code> and <code>DeclaredTotalQuantity</code> won&rsquo;t carry from parent to sub. Enter them manually on the SENAITE AR page.</li>
-<li><strong>Legacy single-vial parents still carry <code>-S01</code>.</strong> Pre-existing parents checked in under the old behavior have a redundant <code>-S01</code> from the same vial. New additions to those parents become vial 2 onward; the orphan <code>-S01</code> can be cleaned up manually if needed.</li>
-<li><strong>Print Labels does not block sub-sample persistence.</strong> If the printer dies, the vial is still saved. Reprint later.</li>
+<li><strong>Decimal quantity fields don&rsquo;t inherit to sub-samples.</strong> Plone-5 validators reject Python 3 types, so <code>Analyte{N}DeclaredQuantity</code> and <code>DeclaredTotalQuantity</code> won&rsquo;t carry from parent to sub. Enter them manually on the SENAITE AR page if you need them populated.</li>
+<li><strong>Print Labels does not block sub-sample persistence.</strong> If the printer dies, the vial is still saved. Reprint later from <strong>Sub Sample Details</strong> or the parent sample page.</li>
 </ul>
 <h2 id="edge-cases-recovery">Edge cases &amp; recovery</h2>
 <ul>
