@@ -21,6 +21,7 @@ from lims_analyses.schemas import (
     CreateAnalysisRequest,
     HostKind,
     SenaiteShapeAnalysisResponse,
+    SetMethodInstrumentRequest,
     SetReportableRequest,
     TransitionInfo,
     TransitionRequest,
@@ -180,6 +181,26 @@ def patch_reportable(
             analysis_id=analysis_id,
             reportable=req.reportable,
             reason=req.reason,
+            user_id=getattr(current_user, "id", None),
+        )
+        return AnalysisResponse.model_validate(row)
+    except Exception as e:
+        raise _handle_service_error(e)
+
+
+@router.patch("/{analysis_id}/method-instrument", response_model=AnalysisResponse)
+def patch_method_instrument(
+    analysis_id: int,
+    req: SetMethodInstrumentRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    try:
+        row = service.set_method_instrument(
+            db,
+            analysis_id=analysis_id,
+            method_id=req.method_id,
+            instrument_id=req.instrument_id,
             user_id=getattr(current_user, "id", None),
         )
         return AnalysisResponse.model_validate(row)
