@@ -258,6 +258,42 @@ def set_reportable(
     return row
 
 
+def set_method_instrument(
+    db: Session,
+    *,
+    analysis_id: int,
+    method_id: Optional[int],
+    instrument_id: Optional[int],
+    user_id: Optional[int] = None,
+) -> LimsAnalysis:
+    """Phase 3.6: update method_id + instrument_id on a lims_analyses row.
+
+    Either may be None (clear). No-op + early-return if both match the
+    current row state. Writes an 'auto' audit transition with a
+    machine-parseable reason — same pattern as set_reportable.
+    """
+    row = get_analysis(db, analysis_id)
+
+    if row.method_id == method_id and row.instrument_id == instrument_id:
+        return row
+
+    row.method_id = method_id
+    row.instrument_id = instrument_id
+    row.updated_at = datetime.utcnow()
+
+    db.add(LimsAnalysisTransition(
+        analysis_id=row.id,
+        from_state=row.review_state,
+        to_state=row.review_state,
+        transition_kind="auto",
+        user_id=user_id,
+        reason=f"method_id={method_id},instrument_id={instrument_id}",
+    ))
+    db.commit()
+    db.refresh(row)
+    return row
+
+
 # ─── Phase 3 adapter: SenaiteAnalysis-shape projection ──────────────────────
 
 
