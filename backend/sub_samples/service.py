@@ -231,7 +231,41 @@ def create_sub_sample(
     parent.last_synced_at = datetime.utcnow()
     db.commit()
     db.refresh(sub)
+
+    # Phase 2 (mk1-native-analyses): seed lims_analyses rows in parallel with
+    # the SENAITE-side cloned analyses. Defensive — at the moment, the wizard
+    # doesn't pre-assign a role at create time, so this is usually a no-op
+    # here and the actual seeding fires from the role-flip hook in
+    # set_assignment_role. Best-effort: failure to seed must not roll back
+    # the vial create.
+    if sub.assignment_role and sub.assignment_role != "xtra":
+        try:
+            wp_services = _fetch_wp_services_for_parent(parent_sample_id) or {}
+            from lims_analyses.seeder import seed_analyses_for_vial
+            seed_analyses_for_vial(
+                db,
+                sub_sample=sub,
+                role=sub.assignment_role,
+                wp_services=wp_services,
+                created_by_user_id=user_id,
+            )
+            db.refresh(sub)
+        except Exception as e:
+            log.warning(
+                "sub_samples.create_seed_failed sub=%s role=%s err=%s",
+                sub.sample_id, sub.assignment_role, e,
+            )
     return sub
+
+
+def _fetch_wp_services_for_parent(parent_sample_id: str) -> Optional[dict]:
+    """Wrapper around fetch_sample_services that returns the services dict
+    or None. Lifted to its own helper so the role-flip hook in
+    set_assignment_role can reuse it without duplicating the None-handling."""
+    raw = fetch_sample_services(parent_sample_id)
+    if not raw:
+        return None
+    return raw.get("services") or {}
 
 
 def list_sub_samples(db: Session, parent_sample_id: str) -> Tuple[Optional[LimsSample], List[LimsSubSample]]:
