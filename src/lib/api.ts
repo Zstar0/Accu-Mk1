@@ -3318,6 +3318,10 @@ export interface SenaiteAnalysis {
    * Drives the "primary for this vial" highlight on the detail page. */
   service_group_id: number | null
   service_group_name: string | null
+  // Phase 4b: when this vial-tier row has been promoted to a parent-tier
+  // canonical result, this is the parent-tier row's id. Used to render
+  // the "Promoted → #N" badge in AnalysisTable.
+  promoted_to_parent_id?: number | null
 }
 
 export interface SenaiteAttachment {
@@ -3726,6 +3730,67 @@ export async function transitionAnalysis(
   if (!response.ok) {
     const err = await response.json().catch(() => null)
     throw new Error(err?.detail || `Transition failed: ${response.status}`)
+  }
+  return response.json()
+}
+
+// ─── Phase 4b: promote_to_parent client ──────────────────────────────────────
+
+export interface PromoteSourceRef {
+  analysis_id: number
+  contribution_kind: 'chosen' | 'aggregated_in' | 'reference'
+}
+
+export interface PromoteRequest {
+  keyword: string
+  result_value: string
+  result_unit?: string | null
+  method_id?: number | null
+  instrument_id?: number | null
+  sources: PromoteSourceRef[]
+  reason?: string | null
+}
+
+export interface PromoteResponse {
+  parent: {
+    id: number
+    review_state: string
+    result_value: string | null
+    result_unit: string | null
+    keyword: string
+    title: string
+    lims_sample_pk: number | null
+    [k: string]: unknown
+  }
+  promotions: Array<{
+    id: number
+    parent_analysis_id: number
+    source_analysis_id: number
+    contribution_kind: string
+    promoted_at: string
+    reason: string | null
+  }>
+}
+
+/**
+ * Phase 4b: promote N vial-tier sources to a single parent-tier verified row.
+ *
+ * Throws on non-2xx with a structured Error message including the backend's
+ * detail (404 missing source, 409 parent_row_already_exists, 400 validation).
+ */
+export async function promoteAnalyses(req: PromoteRequest): Promise<PromoteResponse> {
+  const response = await fetch(`${API_BASE_URL()}/api/lims-analyses/promote`, {
+    method: 'POST',
+    headers: getBearerHeaders('application/json'),
+    body: JSON.stringify(req),
+  })
+  if (!response.ok) {
+    const err = await response.json().catch(() => null)
+    const detail = err?.detail
+    const message = typeof detail === 'string'
+      ? detail
+      : detail?.message ?? `Promote failed: ${response.status}`
+    throw new Error(message)
   }
   return response.json()
 }
