@@ -221,6 +221,65 @@ def _resolve_analyte(
     )
 
 
+def _resolve_mk1_parent_tier(
+    db: Session,
+    parent: LimsSample,
+) -> Dict[str, SourceDecision]:
+    """Phase 5a: read parent-tier verified rows directly from lims_analyses.
+
+    These rows ARE the canonical results — the supervisor already chose them
+    at verification time via promote_to_parent. One SourceDecision per row,
+    mode='auto', keyed by analyte_keyword for the merge layer.
+
+    Filters:
+      lims_sample_pk = parent.id
+      review_state IN ('verified', 'published')
+      reportable = TRUE
+      retest_of_id IS NULL  (canonical, not a retest sibling)
+
+    Sub-sample rows are intentionally not queried — they fed into the parent
+    row at promote time; reading them again would re-introduce the Phase 1
+    multi-candidate decision the two-tier model eliminates.
+    """
+    from models import LimsAnalysis
+
+    rows = db.execute(
+        select(LimsAnalysis).where(
+            LimsAnalysis.lims_sample_pk == parent.id,
+            LimsAnalysis.review_state.in_(("verified", "published")),
+            LimsAnalysis.reportable == True,  # noqa: E712 — SQL equality
+            LimsAnalysis.retest_of_id.is_(None),
+        )
+    ).scalars().all()
+
+    decisions: Dict[str, SourceDecision] = {}
+    for r in rows:
+        uid = f"mk1:{r.id}"
+        candidate = CandidateInfo(
+            source_sample_id=parent.sample_id,
+            source_analysis_uid=uid,
+            value=r.result_value,
+            unit=r.result_unit,
+            state=r.review_state,
+            reportable=True,
+            in_variance_set=False,
+            is_parent_ar=True,
+        )
+        decisions[r.keyword] = SourceDecision(
+            analyte_keyword=r.keyword,
+            mode="auto",
+            chosen=ResolvedSource(
+                source_sample_id=parent.sample_id,
+                source_analysis_uid=uid,
+                value=r.result_value,
+                unit=r.result_unit,
+            ),
+            candidates=[candidate],
+            blocked=None,
+        )
+    return decisions
+
+
 # ─── Orchestration ───────────────────────────────────────────────────────────
 
 
