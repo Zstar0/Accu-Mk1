@@ -313,7 +313,11 @@ def list_analyses_in_senaite_shape(
     state transitions DO work via the Phase 1 transitions endpoint.
     """
     from models import AnalysisService, HplcMethod, Instrument
-    from lims_analyses.schemas import SenaiteShapeAnalysisResponse
+    from lims_analyses.schemas import (
+        SenaiteShapeAnalysisResponse,
+        SenaiteShapeInstrumentOption,
+        SenaiteShapeMethodOption,
+    )
 
     rows = list_analyses_for_host(
         db, host_kind=host_kind, host_pk=host_pk,
@@ -331,26 +335,27 @@ def list_analyses_in_senaite_shape(
         ).scalars().all()
     }
 
-    # Bulk-load chosen method/instrument display names (only for the FKs
-    # actually referenced by these rows — typically empty for new vials)
-    method_ids = {r.method_id for r in rows if r.method_id}
-    methods_by_id = {}
-    if method_ids:
-        methods_by_id = {
-            m.id: m
-            for m in db.execute(
-                select(HplcMethod).where(HplcMethod.id.in_(method_ids))
-            ).scalars().all()
-        }
-    instrument_ids = {r.instrument_id for r in rows if r.instrument_id}
-    instruments_by_id = {}
-    if instrument_ids:
-        instruments_by_id = {
-            i.id: i
-            for i in db.execute(
-                select(Instrument).where(Instrument.id.in_(instrument_ids))
-            ).scalars().all()
-        }
+    # Phase 3.6: bulk-load ALL hplc_methods + instruments for the option
+    # arrays the FE dropdowns render. Wider scope than the per-row chosen
+    # FK lookup — but the catalog is small (~3-10 of each in practice), so
+    # the full load is cheap.
+    methods_by_id = {
+        m.id: m
+        for m in db.execute(select(HplcMethod)).scalars().all()
+    }
+    instruments_by_id = {
+        i.id: i
+        for i in db.execute(select(Instrument)).scalars().all()
+    }
+
+    method_options = [
+        SenaiteShapeMethodOption(uid=str(m.id), title=getattr(m, "name", None) or f"Method {m.id}")
+        for m in sorted(methods_by_id.values(), key=lambda m: m.id)
+    ]
+    instrument_options = [
+        SenaiteShapeInstrumentOption(uid=str(i.id), title=getattr(i, "name", None) or f"Instrument {i.id}")
+        for i in sorted(instruments_by_id.values(), key=lambda i: i.id)
+    ]
 
     out = []
     for r in rows:
@@ -371,10 +376,10 @@ def list_analyses_in_senaite_shape(
             unit=r.result_unit or (svc.unit if svc else None),
             method=method_name,
             method_uid=str(r.method_id) if r.method_id else None,
-            method_options=[],          # Phase 3.5: lift method editing
+            method_options=method_options,
             instrument=instrument_name,
             instrument_uid=str(r.instrument_id) if r.instrument_id else None,
-            instrument_options=[],      # Phase 3.5: lift instrument editing
+            instrument_options=instrument_options,
             analyst=None,
             review_state=r.review_state,
             sort_key=None,
