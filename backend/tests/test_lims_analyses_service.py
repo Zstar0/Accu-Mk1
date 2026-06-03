@@ -763,3 +763,42 @@ def test_promote_succeeds_again_after_parent_row_retracted(db, sub_sample, analy
     assert parent_row2.id != parent_row.id
     parent_row2.title = "TEST: parent " + parent_row2.title
     db.commit()
+
+
+# ── Phase 4b: promoted_to_parent_id in senaite_shape ────────────────────────
+
+
+def test_senaite_shape_carries_null_promoted_to_parent_id_for_unpromoted_row(db, sub_sample, analysis_service):
+    """A freshly-created vial-tier row has no promotion link → field is None."""
+    from lims_analyses.service import list_analyses_in_senaite_shape
+    row = _create(db, sub_sample, analysis_service)
+    rows = list_analyses_in_senaite_shape(
+        db, host_kind="sub_sample", host_pk=sub_sample.id,
+    )
+    matching = [r for r in rows if r.uid == f"mk1:{row.id}"]
+    assert matching, f"expected uid=mk1:{row.id}; got {[r.uid for r in rows]}"
+    assert matching[0].promoted_to_parent_id is None
+
+
+def test_senaite_shape_carries_parent_id_for_promoted_row(db, sub_sample, analysis_service):
+    """After promote_to_parent, the source vial's senaite_shape row carries
+    promoted_to_parent_id = parent.id."""
+    from lims_analyses.service import list_analyses_in_senaite_shape, promote_to_parent
+    parent_pk = _find_parent_with_n_clean_subs(db, analysis_service, 1)
+    if parent_pk is None:
+        pytest.skip("no parent with a free sub-sample for promoted-shape test")
+    fresh = _find_clean_sub_sample(db, analysis_service, parent_pk=parent_pk)
+    src = _make_vial_in_to_be_verified(db, fresh, analysis_service)
+    parent_row, _ = promote_to_parent(
+        db, keyword=src.keyword, result_value="98.55", result_unit=None,
+        method_id=None, instrument_id=None,
+        sources=[{"analysis_id": src.id, "contribution_kind": "chosen"}],
+    )
+    parent_row.title = "TEST: parent " + parent_row.title
+    db.commit()
+    rows = list_analyses_in_senaite_shape(
+        db, host_kind="sub_sample", host_pk=fresh.id,
+    )
+    promoted = [r for r in rows if r.uid == f"mk1:{src.id}"]
+    assert promoted, f"expected source row in senaite_shape output"
+    assert promoted[0].promoted_to_parent_id == parent_row.id

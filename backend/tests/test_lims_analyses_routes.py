@@ -374,3 +374,19 @@ def test_promote_endpoint_409_on_existing_parent_row(analysis_service):
     )
     assert r2.status_code == 409, r2.text
     assert r2.json()["detail"]["code"] == "parent_row_already_exists"
+
+
+# ── Phase 4b: senaite_shape promoted_to_parent_id ───────────────────────────
+
+
+def test_senaite_shape_response_includes_promoted_to_parent_id_field(sub_sample, analysis_service):
+    """The new field appears in the JSON response even when null. The FE
+    treats this as the discriminator for rendering the Promoted badge."""
+    created = client.post("/api/lims-analyses", json=_create_payload(sub_sample, analysis_service)).json()
+    r = client.get(f"/api/lims-analyses?host_kind=sub_sample&host_pk={sub_sample.id}&as=senaite_shape")
+    assert r.status_code == 200
+    rows = r.json()
+    assert rows
+    assert all("promoted_to_parent_id" in row for row in rows)
+    new_row = next(row for row in rows if row["uid"] == f"mk1:{created['id']}")
+    assert new_row["promoted_to_parent_id"] is None
