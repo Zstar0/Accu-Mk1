@@ -384,7 +384,7 @@ def promote_to_parent(
             sub = db.get(LimsSubSample, row.lims_sub_sample_pk)
             if sub is None:
                 raise NotFoundError(f"sub-sample id={row.lims_sub_sample_pk} not found")
-            this_parent_pk = sub.lims_sample_pk
+            this_parent_pk = sub.parent_sample_pk
         elif row.lims_sample_pk is not None:
             this_parent_pk = row.lims_sample_pk
         else:
