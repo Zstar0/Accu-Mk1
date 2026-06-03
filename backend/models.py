@@ -1132,3 +1132,38 @@ class LimsAnalysisTransition(Base):
             f"<LimsAnalysisTransition(analysis_id={self.analysis_id}, "
             f"{self.from_state}->{self.to_state} kind={self.transition_kind})>"
         )
+
+
+class LimsAnalysisPromotion(Base):
+    """Phase 4a: one row per (parent-tier row, contributing vial-tier row).
+
+    Written atomically by promote_to_parent. contribution_kind discriminates:
+      'chosen' — this source's value was copied verbatim to the parent row.
+      'aggregated_in' — this source was one of N inputs to a computed aggregate.
+      'reference' — this source informed the decision but its value isn't part
+                    of the parent's result (variance sibling not picked).
+    """
+
+    __tablename__ = "lims_analysis_promotions"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    parent_analysis_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("lims_analyses.id", ondelete="CASCADE"), nullable=False
+    )
+    source_analysis_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("lims_analyses.id", ondelete="CASCADE"), nullable=False
+    )
+    contribution_kind: Mapped[str] = mapped_column(Text, nullable=False)
+    promoted_by_user_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("users.id"), nullable=True
+    )
+    promoted_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, nullable=False
+    )
+    reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    def __repr__(self) -> str:
+        return (
+            f"<LimsAnalysisPromotion(parent_id={self.parent_analysis_id}, "
+            f"source_id={self.source_analysis_id}, kind={self.contribution_kind})>"
+        )

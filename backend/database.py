@@ -560,6 +560,27 @@ def _run_migrations():
         )
         """,
         "CREATE INDEX IF NOT EXISTS ix_lims_analysis_transitions_analysis ON lims_analysis_transitions (analysis_id)",
+        # Phase 4a: promotion link table. Records which vial-tier source rows
+        # contributed to a parent-tier canonical result, and how (chosen vs
+        # reference vs aggregated_in). Written atomically by promote_to_parent.
+        """
+        CREATE TABLE IF NOT EXISTS lims_analysis_promotions (
+            id                       SERIAL PRIMARY KEY,
+            parent_analysis_id       INTEGER NOT NULL
+                                     REFERENCES lims_analyses(id) ON DELETE CASCADE,
+            source_analysis_id       INTEGER NOT NULL
+                                     REFERENCES lims_analyses(id) ON DELETE CASCADE,
+            contribution_kind        TEXT NOT NULL
+                                     CHECK (contribution_kind IN
+                                         ('chosen', 'aggregated_in', 'reference')),
+            promoted_by_user_id      INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            promoted_at              TIMESTAMP NOT NULL DEFAULT NOW(),
+            reason                   TEXT,
+            UNIQUE (parent_analysis_id, source_analysis_id)
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS ix_lims_analysis_promotions_parent ON lims_analysis_promotions (parent_analysis_id)",
+        "CREATE INDEX IF NOT EXISTS ix_lims_analysis_promotions_source ON lims_analysis_promotions (source_analysis_id)",
     ]
     # Per-statement isolation: a failure in one statement (e.g., a table that
     # create_all hasn't built yet on first run) must not skip subsequent
