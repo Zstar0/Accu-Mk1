@@ -70,6 +70,35 @@ class SetMethodInstrumentRequest(BaseModel):
     instrument_id: Optional[int] = None
 
 
+class PromoteSourceRef(BaseModel):
+    """One contributing vial-tier row for a promote_to_parent call."""
+    analysis_id: int
+    contribution_kind: Literal["chosen", "aggregated_in", "reference"]
+
+
+class PromoteRequest(BaseModel):
+    """Phase 4a: promote one or more vial-tier rows to a single parent-tier row.
+
+    The parent's identity is derived from the sources' host — every source
+    must share the same parent_sample_pk (directly or via sub-sample). The
+    keyword must match every source's keyword.
+
+    Caller supplies the chosen result_value + result_unit. method_id /
+    instrument_id are optional copies onto the new parent-tier row.
+
+    contribution_kind rules (enforced in the service):
+      - Exactly one source with 'chosen'  OR  every source with 'aggregated_in'.
+      - 'reference' may accompany 'chosen' but not 'aggregated_in'.
+    """
+    keyword: str
+    result_value: str
+    result_unit: Optional[str] = None
+    method_id: Optional[int] = None
+    instrument_id: Optional[int] = None
+    sources: List[PromoteSourceRef] = Field(..., min_length=1)
+    reason: Optional[str] = None
+
+
 class TransitionInfo(BaseModel):
     """One audit-log row."""
     id: int
@@ -166,3 +195,25 @@ class SenaiteShapeAnalysisResponse(BaseModel):
     retested: bool
     service_group_id: Optional[int] = None
     service_group_name: Optional[str] = None
+
+
+# ─── Phase 4a: promote_to_parent response shapes ─────────────────────────────
+
+
+class PromotionRow(BaseModel):
+    """One lims_analysis_promotions row, returned in PromoteResponse."""
+    id: int
+    parent_analysis_id: int
+    source_analysis_id: int
+    contribution_kind: str
+    promoted_by_user_id: Optional[int]
+    promoted_at: datetime
+    reason: Optional[str]
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class PromoteResponse(BaseModel):
+    """Returns the new parent-tier row and the promotion link rows."""
+    parent: AnalysisResponse
+    promotions: List[PromotionRow]
