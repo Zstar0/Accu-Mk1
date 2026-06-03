@@ -13,7 +13,7 @@ The route layer translates them to HTTP responses.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -292,6 +292,182 @@ def set_method_instrument(
     db.commit()
     db.refresh(row)
     return row
+
+
+# ─── Phase 4a: promote_to_parent ────────────────────────────────────────────
+
+
+def promote_to_parent(
+    db: Session,
+    *,
+    keyword: str,
+    result_value: str,
+    result_unit: Optional[str],
+    method_id: Optional[int],
+    instrument_id: Optional[int],
+    sources: List[Dict[str, Any]],
+    user_id: Optional[int] = None,
+    reason: Optional[str] = None,
+) -> Tuple[LimsAnalysis, List["LimsAnalysisPromotion"]]:
+    """Phase 4a: create a parent-tier verified row from N vial-tier sources.
+
+    sources is a list of {analysis_id: int, contribution_kind: str}. The
+    parent_sample_pk is derived from the first source's host (sub-sample →
+    parent). All sources must:
+      - exist
+      - be in 'to_be_verified' state
+      - share the same keyword (matching the `keyword` arg)
+      - hang off the same parent_sample_pk
+
+    contribution_kind rules:
+      - exactly one source with 'chosen'  OR  every source with 'aggregated_in'
+      - 'reference' may accompany 'chosen' but not 'aggregated_in'
+
+    Performs in one transaction:
+      1. INSERT parent-tier lims_analyses row (review_state='verified',
+         verified_at=NOW, analyst_user_id=user_id).
+      2. INSERT one lims_analysis_promotions per source.
+      3. INSERT one audit transition per source (state-unchanged 'auto'
+         kind, reason='promoted to parent #N (kind=...)').
+
+    Raises:
+      - BadRequestError on validation failures.
+      - sqlalchemy.exc.IntegrityError if an existing non-retest parent-tier
+        row for (parent, keyword) blocks the partial unique index. The route
+        layer translates this to 409.
+    """
+    from models import LimsAnalysisPromotion, LimsSubSample
+
+    if not sources:
+        raise BadRequestError("promote_to_parent requires at least one source")
+
+    kinds = [s["contribution_kind"] for s in sources]
+    n_chosen = sum(1 for k in kinds if k == "chosen")
+    n_agg = sum(1 for k in kinds if k == "aggregated_in")
+    n_ref = sum(1 for k in kinds if k == "reference")
+    if n_agg > 0 and (n_chosen > 0 or n_ref > 0):
+        raise BadRequestError(
+            "aggregated_in cannot mix with chosen or reference; "
+            "use either pick-one (one 'chosen' + Ns of 'reference') "
+            "or aggregate (every source 'aggregated_in')"
+        )
+    if n_agg == 0 and n_chosen != 1:
+        raise BadRequestError(
+            f"pick-one promotion requires exactly one 'chosen' source; "
+            f"got {n_chosen}"
+        )
+
+    source_ids = [s["analysis_id"] for s in sources]
+    source_rows = {
+        r.id: r for r in db.execute(
+            select(LimsAnalysis).where(LimsAnalysis.id.in_(source_ids))
+        ).scalars().all()
+    }
+    missing = [sid for sid in source_ids if sid not in source_rows]
+    if missing:
+        raise NotFoundError(f"source analyses not found: {missing}")
+
+    parent_sample_pk: Optional[int] = None
+    for sid in source_ids:
+        row = source_rows[sid]
+        if row.keyword != keyword:
+            raise BadRequestError(
+                f"source {sid} has keyword={row.keyword!r}, "
+                f"expected {keyword!r}"
+            )
+        if row.review_state != "to_be_verified":
+            raise BadRequestError(
+                f"source {sid} is in {row.review_state!r}; "
+                f"only 'to_be_verified' rows can be promoted"
+            )
+        if row.lims_sub_sample_pk is not None:
+            sub = db.get(LimsSubSample, row.lims_sub_sample_pk)
+            if sub is None:
+                raise NotFoundError(f"sub-sample id={row.lims_sub_sample_pk} not found")
+            this_parent_pk = sub.lims_sample_pk
+        elif row.lims_sample_pk is not None:
+            this_parent_pk = row.lims_sample_pk
+        else:
+            raise BadRequestError(
+                f"source {sid} has neither lims_sample_pk nor lims_sub_sample_pk"
+            )
+        if parent_sample_pk is None:
+            parent_sample_pk = this_parent_pk
+        elif parent_sample_pk != this_parent_pk:
+            raise BadRequestError(
+                f"sources hang off different parents: "
+                f"{parent_sample_pk} vs {this_parent_pk}"
+            )
+
+    if parent_sample_pk is None:
+        raise BadRequestError("could not derive parent_sample_pk from sources")
+
+    first_source = source_rows[source_ids[0]]
+    analysis_service_id = first_source.analysis_service_id
+    title = first_source.title
+
+    now = datetime.utcnow()
+
+    parent_row = LimsAnalysis(
+        lims_sample_pk=parent_sample_pk,
+        lims_sub_sample_pk=None,
+        analysis_service_id=analysis_service_id,
+        keyword=keyword,
+        title=title,
+        result_value=result_value,
+        result_unit=result_unit,
+        review_state="verified",
+        method_id=method_id,
+        instrument_id=instrument_id,
+        analyst_user_id=user_id,
+        verified_at=now,
+        created_by_user_id=user_id,
+    )
+    db.add(parent_row)
+    db.flush()
+
+    db.add(LimsAnalysisTransition(
+        analysis_id=parent_row.id,
+        from_state=None,
+        to_state="verified",
+        transition_kind="auto",
+        user_id=user_id,
+        reason=f"promoted from sources {source_ids}",
+    ))
+
+    promotion_rows: List[LimsAnalysisPromotion] = []
+    for s in sources:
+        sid = s["analysis_id"]
+        kind = s["contribution_kind"]
+        prom = LimsAnalysisPromotion(
+            parent_analysis_id=parent_row.id,
+            source_analysis_id=sid,
+            contribution_kind=kind,
+            promoted_by_user_id=user_id,
+            promoted_at=now,
+            reason=reason,
+        )
+        db.add(prom)
+        promotion_rows.append(prom)
+
+    for s in sources:
+        sid = s["analysis_id"]
+        kind = s["contribution_kind"]
+        src = source_rows[sid]
+        db.add(LimsAnalysisTransition(
+            analysis_id=sid,
+            from_state=src.review_state,
+            to_state=src.review_state,
+            transition_kind="auto",
+            user_id=user_id,
+            reason=f"promoted to parent #{parent_row.id} (kind={kind})",
+        ))
+
+    db.commit()
+    db.refresh(parent_row)
+    for p in promotion_rows:
+        db.refresh(p)
+    return parent_row, promotion_rows
 
 
 # ─── Phase 3 adapter: SenaiteAnalysis-shape projection ──────────────────────
