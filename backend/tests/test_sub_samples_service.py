@@ -121,13 +121,16 @@ def test_create_sub_sample_propagates_fallthrough_with_orphan_info(db):
     assert db.query(LimsSubSample).count() == 0
 
 
-def test_create_sub_sample_compensates_on_photo_upload_failure(db):
-    """If photo upload fails after create succeeded, delete the secondary so we don't leave a vial without a photo."""
+def test_create_sub_sample_compensates_on_photo_storage_failure(db):
+    """Phase 2.5: if Mk1 photo storage fails after the SENAITE secondary was
+    created, delete the secondary so we don't leave a vial without a photo."""
     cr = _create_result("UID1", "P-0134-S01")
+    failing_storage = MagicMock()
+    failing_storage.save_photo.side_effect = RuntimeError("disk full")
     with patch("sub_samples.service.senaite.fetch_parent_metadata", return_value=_meta()), \
          patch("sub_samples.service.senaite.uid_exists", return_value=True), \
          patch("sub_samples.service.senaite.create_secondary", return_value=cr), \
-         patch("sub_samples.service.senaite.upload_photo", side_effect=RuntimeError("upload boom")), \
+         patch("sub_samples.photo_storage.get_storage", return_value=failing_storage), \
          patch("sub_samples.service.senaite.update_secondary_fields", return_value=None), \
          patch("sub_samples.service.senaite.delete_secondary") as ds:
         with pytest.raises(RuntimeError):
@@ -136,6 +139,27 @@ def test_create_sub_sample_compensates_on_photo_upload_failure(db):
                               remarks=None, user_id=1)
     ds.assert_called_once_with("UID1")
     assert db.query(LimsSubSample).count() == 0
+
+
+def test_create_sub_sample_persists_mk1_uri_to_photo_external_uid(db):
+    """Phase 2.5: photo_external_uid carries mk1://{key} (not the legacy
+    SENAITE secondary-AR path) so the photo-fetch route can dispatch to
+    Mk1 storage."""
+    cr = _create_result("UID1", "P-0134-S01")
+    fake_storage = MagicMock()
+    fake_storage.save_photo.return_value = "P-0134-S01/deadbeef.png"
+    with patch("sub_samples.service.senaite.fetch_parent_metadata", return_value=_meta()), \
+         patch("sub_samples.service.senaite.uid_exists", return_value=True), \
+         patch("sub_samples.service.senaite.create_secondary", return_value=cr), \
+         patch("sub_samples.photo_storage.get_storage", return_value=fake_storage), \
+         patch("sub_samples.service.senaite.update_secondary_fields", return_value=None):
+        sub = create_sub_sample(db, parent_sample_id="P-0134",
+                                photo_bytes=b"\x89PNG", photo_filename="vial.png",
+                                remarks=None, user_id=1)
+    fake_storage.save_photo.assert_called_once_with(
+        "P-0134-S01", b"\x89PNG", "vial.png",
+    )
+    assert sub.photo_external_uid == "mk1://P-0134-S01/deadbeef.png"
 
 
 def test_create_sub_sample_inherits_custom_fields_from_parent(db):
