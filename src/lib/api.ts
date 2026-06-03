@@ -5073,6 +5073,18 @@ export async function fetchSubSamplePhotoUrl(
 
 // ── Variance set (worksheet-variance design 2026-06-02) ──────────────────────
 
+export interface VarianceResultEntry {
+  value: number | string | null
+  kind: 'numeric' | 'categorical'
+  spec?: Record<string, number> | null
+  // Phase 4b: present for Mk1-sourced results (uid='mk1:<N>'). null for
+  // legacy SENAITE-sourced rows since only Mk1 vial-tier rows can be
+  // promoted. promoted_to_parent_id is set once a successful promote has
+  // landed for this source.
+  uid?: string | null
+  promoted_to_parent_id?: number | null
+}
+
 export interface VarianceVial {
   sample_id: string
   vial_sequence: number
@@ -5080,7 +5092,7 @@ export interface VarianceVial {
   in_variance_set: boolean
   exclusion_reason: string | null
   review_state: string | null
-  results: Record<string, { value: number | string | null; kind: 'numeric' | 'categorical'; spec?: Record<string, number> }>
+  results: Record<string, VarianceResultEntry>
 }
 
 export interface VarianceStatsEntry {

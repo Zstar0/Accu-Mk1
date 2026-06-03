@@ -15,6 +15,7 @@ import {
   patchVarianceMembership,
   lockVarianceSet,
   unlockVarianceSet,
+  promoteAnalyses,
   type VarianceVial,
   type VarianceStatsEntry,
 } from '@/lib/api'
@@ -221,6 +222,15 @@ function VarianceSummaryBody({ parentSampleId }: { parentSampleId: string }) {
           </span>
         )}
       </div>
+
+      {locked && (
+        <PromoteStage
+          parentSampleId={parentSampleId}
+          vials={data.vials}
+          stats={data.stats}
+          onPromoted={() => queryClient.invalidateQueries({ queryKey: ['variance-set', parentSampleId] })}
+        />
+      )}
     </div>
   )
 }
@@ -267,6 +277,198 @@ function VialRow({
           className="text-xs px-2 py-1 border rounded w-40 bg-background"
         />
       )}
+    </li>
+  )
+}
+
+
+// ─── Phase 4b: Promote stage (post-lock) ────────────────────────────────────
+
+function PromoteStage({
+  parentSampleId,
+  vials,
+  stats,
+  onPromoted,
+}: {
+  parentSampleId: string
+  vials: VarianceVial[]
+  stats: Record<string, VarianceStatsEntry>
+  onPromoted: () => void
+}) {
+  const inSet = vials.filter(v => v.in_variance_set)
+  return (
+    <section className="border rounded-md">
+      <header className="px-4 py-2 border-b font-semibold text-sm bg-muted/50">
+        Promote variance results to parent {parentSampleId}
+      </header>
+      <ul className="divide-y">
+        {Object.entries(stats).map(([keyword, stat]) => (
+          <PromoteAnalyteRow
+            key={keyword}
+            keyword={keyword}
+            stat={stat}
+            vials={inSet}
+            onPromoted={onPromoted}
+          />
+        ))}
+        {Object.keys(stats).length === 0 && (
+          <li className="p-4 text-center text-muted-foreground text-sm">
+            No analyte stats — no vials in the variance set, or no results entered.
+          </li>
+        )}
+      </ul>
+    </section>
+  )
+}
+
+function PromoteAnalyteRow({
+  keyword,
+  stat,
+  vials,
+  onPromoted,
+}: {
+  keyword: string
+  stat: VarianceStatsEntry
+  vials: VarianceVial[]
+  onPromoted: () => void
+}) {
+  // Only Mk1-sourced result entries can be promoted (need uid starting with mk1:).
+  // Build a list of (vial, entry, analysis_id) tuples upfront so the entry type
+  // is narrowed and we don't re-index v.results[keyword] elsewhere.
+  type Eligible = { vial: VarianceVial; value: number | string | null; analysis_id: number; promoted_to_parent_id: number | null | undefined }
+  const eligible: Eligible[] = []
+  for (const v of vials) {
+    const entry = v.results?.[keyword]
+    if (entry?.uid && entry.uid.startsWith('mk1:')) {
+      eligible.push({
+        vial: v,
+        value: entry.value,
+        analysis_id: parseInt(entry.uid.slice('mk1:'.length), 10),
+        promoted_to_parent_id: entry.promoted_to_parent_id,
+      })
+    }
+  }
+  const eligibleIds = eligible.map(e => e.analysis_id)
+
+  const meanVal = stat.kind !== 'categorical' && stat.mean !== null
+    ? stat.mean.toFixed(2)
+    : ''
+
+  const [mode, setMode] = useState<'pick' | 'mean'>('pick')
+  const [chosenId, setChosenId] = useState<number | null>(eligibleIds[0] ?? null)
+  const [resultValue, setResultValue] = useState<string>(() => {
+    const first = eligible[0]
+    return first ? String(first.value ?? '') : ''
+  })
+  const [pending, setPending] = useState(false)
+  const [done, setDone] = useState(false)
+
+  // Detect if any of the eligible sources are already promoted — display
+  // the badge and skip the picker if so. (Variance set may have been promoted
+  // already; the modal should reflect that without offering a re-promote.)
+  const promotedSourceParentId = eligible
+    .map(e => e.promoted_to_parent_id)
+    .find(p => p != null) ?? null
+
+  const handleUseMean = () => {
+    setMode('mean')
+    setResultValue(meanVal)
+    setChosenId(null)
+  }
+  const handlePickRadio = (id: number) => {
+    setMode('pick')
+    setChosenId(id)
+    const picked = eligible.find(e => e.analysis_id === id)
+    if (picked) setResultValue(String(picked.value ?? ''))
+  }
+
+  const handlePromote = async () => {
+    if (!resultValue || eligibleIds.length === 0) return
+    setPending(true)
+    try {
+      const sources = eligibleIds.map(id => ({
+        analysis_id: id,
+        contribution_kind:
+          mode === 'mean' ? 'aggregated_in' as const :
+          id === chosenId ? 'chosen' as const : 'reference' as const,
+      }))
+      await promoteAnalyses({
+        keyword,
+        result_value: resultValue,
+        sources,
+        reason: `Variance promote (${mode === 'mean' ? 'aggregate' : 'pick'})`,
+      })
+      toast.success(`Promoted ${keyword} to parent`)
+      setDone(true)
+      onPromoted()
+    } catch (e) {
+      toast.error((e as Error).message)
+    } finally {
+      setPending(false)
+    }
+  }
+
+  if (done || promotedSourceParentId != null) {
+    return (
+      <li className="px-4 py-3 text-sm bg-emerald-50 dark:bg-emerald-950/20">
+        <span className="font-medium text-emerald-700 dark:text-emerald-400">
+          ✓ {keyword} promoted{promotedSourceParentId != null ? ` → #${promotedSourceParentId}` : ''}
+        </span>
+      </li>
+    )
+  }
+  if (eligible.length === 0) {
+    return (
+      <li className="px-4 py-3 text-sm text-muted-foreground">
+        {keyword}: no Mk1 vial-tier results to promote
+      </li>
+    )
+  }
+
+  return (
+    <li className="px-4 py-3 space-y-2">
+      <div className="font-medium text-sm">{keyword}</div>
+      <ul className="space-y-1 ml-2">
+        {eligible.map(e => (
+          <li key={e.vial.sample_id} className="flex items-center gap-2 text-sm">
+            <input
+              type="radio"
+              name={`pick-${keyword}`}
+              checked={mode === 'pick' && chosenId === e.analysis_id}
+              onChange={() => handlePickRadio(e.analysis_id)}
+            />
+            <code className="min-w-[8rem]">{e.vial.sample_id}</code>
+            <span className="text-muted-foreground">
+              {String(e.value ?? '—')}
+            </span>
+          </li>
+        ))}
+      </ul>
+      <div className="flex items-center gap-3 mt-2">
+        {meanVal && (
+          <Button
+            variant={mode === 'mean' ? 'default' : 'outline'}
+            size="sm"
+            onClick={handleUseMean}
+          >
+            Use mean ({meanVal})
+          </Button>
+        )}
+        <input
+          type="text"
+          value={resultValue}
+          onChange={(e) => setResultValue(e.target.value)}
+          placeholder="result value"
+          className="px-2 py-1 border rounded text-sm font-mono flex-1"
+        />
+        <Button
+          size="sm"
+          onClick={handlePromote}
+          disabled={pending || !resultValue || (mode === 'pick' && chosenId === null)}
+        >
+          {pending ? 'Promoting…' : 'Promote'}
+        </Button>
+      </div>
     </li>
   )
 }
