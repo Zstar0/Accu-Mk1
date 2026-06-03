@@ -931,8 +931,12 @@ class CoaGenerationSource(Base):
     __tablename__ = "coa_generation_sources"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    # UUID column on Postgres; falls back to String(36) on SQLite so the
+    # test fixture in test_sub_samples_service.py (which targets SQLite)
+    # can still create_all this table.
     generation_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), nullable=False, index=True
+        UUID(as_uuid=True).with_variant(String(36), "sqlite"),
+        nullable=False, index=True,
     )
     generation_number: Mapped[int] = mapped_column(Integer, nullable=False)
     parent_sample_id: Mapped[str] = mapped_column(Text, nullable=False, index=True)
@@ -944,8 +948,13 @@ class CoaGenerationSource(Base):
     candidates_count: Mapped[int] = mapped_column(Integer, nullable=False)
     resolution_mode: Mapped[str] = mapped_column(Text, nullable=False)
     # Audit snapshot of the candidate list at generation time. Inlined so
-    # historical-mode reads don't have to reconstruct from SENAITE.
-    candidates_snapshot: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
+    # historical-mode reads don't have to reconstruct from SENAITE. JSONB
+    # on Postgres for native indexing potential; plain JSON on SQLite for
+    # cross-dialect test fixtures.
+    candidates_snapshot: Mapped[Optional[list]] = mapped_column(
+        JSONB().with_variant(JSON(), "sqlite"),
+        nullable=True,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, nullable=False
     )
