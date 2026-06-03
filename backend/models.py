@@ -1000,3 +1000,135 @@ class AnalysisReportable(Base):
             f"<AnalysisReportable(sample={self.sample_id}, "
             f"uid={self.analysis_uid}, reportable={self.reportable})>"
         )
+
+
+# ── Mk1-native analyses (spec 2026-06-02-mk1-native-analyses-design.md) ──
+
+
+class LimsAnalysis(Base):
+    """
+    Mk1-owned analysis instance. Polymorphic host: belongs to either a
+    parent (lims_sample_pk) or a sub-sample (lims_sub_sample_pk) — CHECK
+    constraint at the DB layer enforces exactly-one.
+
+    Sub-sample analyses live entirely in Mk1 (no SENAITE round-trip).
+    Parent analyses will migrate here in a future phase; today they
+    still live in SENAITE.
+    """
+
+    __tablename__ = "lims_analyses"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+
+    lims_sample_pk: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("lims_samples.id", ondelete="CASCADE"), nullable=True
+    )
+    lims_sub_sample_pk: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("lims_sub_samples.id", ondelete="CASCADE"), nullable=True
+    )
+
+    analysis_service_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("analysis_services.id"), nullable=False
+    )
+    keyword: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+
+    result_value: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    result_unit: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    review_state: Mapped[str] = mapped_column(
+        Text, nullable=False, default="unassigned", server_default="unassigned",
+        index=True,
+    )
+
+    method_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("hplc_methods.id"), nullable=True
+    )
+    instrument_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("instruments.id"), nullable=True
+    )
+    analyst_user_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("users.id"), nullable=True
+    )
+
+    captured_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    submitted_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    verified_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    published_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    retested: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    retest_of_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("lims_analyses.id"), nullable=True
+    )
+
+    reportable: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true"
+    )
+    reportable_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+    )
+    created_by_user_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("users.id"), nullable=True
+    )
+
+    transitions: Mapped[list["LimsAnalysisTransition"]] = relationship(
+        "LimsAnalysisTransition",
+        back_populates="analysis",
+        cascade="all, delete-orphan",
+        order_by="LimsAnalysisTransition.occurred_at",
+    )
+
+    def __repr__(self) -> str:
+        host = (
+            f"parent_pk={self.lims_sample_pk}" if self.lims_sample_pk is not None
+            else f"sub_pk={self.lims_sub_sample_pk}"
+        )
+        return (
+            f"<LimsAnalysis(id={self.id}, {host}, "
+            f"kw={self.keyword!r}, state={self.review_state})>"
+        )
+
+
+class LimsAnalysisTransition(Base):
+    """
+    One row per state change on a LimsAnalysis. Append-only audit log.
+
+    transition_kind tracks the verb that caused the state change (assign,
+    submit, verify, retract, reject, retest, publish, reset, auto). The
+    state-machine module enforces which kinds are legal from which
+    from_states.
+    """
+
+    __tablename__ = "lims_analysis_transitions"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    analysis_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("lims_analyses.id", ondelete="CASCADE"), nullable=False
+    )
+    from_state: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    to_state: Mapped[str] = mapped_column(Text, nullable=False)
+    transition_kind: Mapped[str] = mapped_column(Text, nullable=False)
+    user_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("users.id"), nullable=True
+    )
+    reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, nullable=False
+    )
+
+    analysis: Mapped["LimsAnalysis"] = relationship(
+        "LimsAnalysis", back_populates="transitions"
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<LimsAnalysisTransition(analysis_id={self.analysis_id}, "
+            f"{self.from_state}->{self.to_state} kind={self.transition_kind})>"
+        )
