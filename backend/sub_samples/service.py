@@ -477,6 +477,7 @@ def compute_vial_plan(db: Session, parent_sample_id: str) -> dict:
     # Persist newly-set roles for sub-samples (parent never NULLs, so we never
     # write back to lims_samples here — Reset-to-auto goes through the PATCH endpoint).
     sub_by_id = {s.sample_id: s for s in subs}
+    role_changed_subs: List[LimsSubSample] = []
     for v in assigned:
         if v["is_parent"]:
             continue
@@ -485,7 +486,31 @@ def compute_vial_plan(db: Session, parent_sample_id: str) -> dict:
             continue
         if original.assignment_role != v["assignment_role"]:
             original.assignment_role = v["assignment_role"]
+            role_changed_subs.append(original)
     db.commit()
+
+    # Phase 2 (mk1-native-analyses): seed lims_analyses for any vial whose
+    # role flipped into a real bucket. Mirrors the hook in set_assignment_role
+    # — compute_vial_plan writes to assignment_role directly so we need a
+    # second seeding site. Idempotent; best-effort.
+    if role_changed_subs:
+        wp_services = (services_resp.get("services") if services_resp else None) or {}
+        from lims_analyses.seeder import seed_analyses_for_vial
+        for s in role_changed_subs:
+            if not s.assignment_role or s.assignment_role == "xtra":
+                continue
+            try:
+                seed_analyses_for_vial(
+                    db,
+                    sub_sample=s,
+                    role=s.assignment_role,
+                    wp_services=wp_services,
+                )
+            except Exception as e:
+                log.warning(
+                    "vial_plan.seed_failed sub=%s role=%s err=%s",
+                    s.sample_id, s.assignment_role, e,
+                )
 
     return {
         "demand": demand,
