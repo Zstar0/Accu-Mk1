@@ -256,3 +256,95 @@ def set_reportable(
     db.commit()
     db.refresh(row)
     return row
+
+
+# ─── Phase 3 adapter: SenaiteAnalysis-shape projection ──────────────────────
+
+
+def list_analyses_in_senaite_shape(
+    db: Session,
+    *,
+    host_kind: str,
+    host_pk: int,
+    include_retests: bool = False,
+):
+    """List analyses for a host, projected to the FE's SenaiteAnalysis shape.
+
+    UID carries the 'mk1:' prefix so the FE can dispatch transitions to the
+    Mk1 endpoints. method_options + instrument_options are left empty in
+    Phase 3 — editing method/instrument on Mk1 vials would need new Mk1
+    PATCH endpoints; deferred to a later phase. Bench-tech result-entry +
+    state transitions DO work via the Phase 1 transitions endpoint.
+    """
+    from models import AnalysisService, HplcMethod, Instrument
+    from lims_analyses.schemas import SenaiteShapeAnalysisResponse
+
+    rows = list_analyses_for_host(
+        db, host_kind=host_kind, host_pk=host_pk,
+        include_retests=include_retests,
+    )
+    if not rows:
+        return []
+
+    # Bulk-load services for unit / method-name display
+    service_ids = {r.analysis_service_id for r in rows}
+    services_by_id = {
+        s.id: s
+        for s in db.execute(
+            select(AnalysisService).where(AnalysisService.id.in_(service_ids))
+        ).scalars().all()
+    }
+
+    # Bulk-load chosen method/instrument display names (only for the FKs
+    # actually referenced by these rows — typically empty for new vials)
+    method_ids = {r.method_id for r in rows if r.method_id}
+    methods_by_id = {}
+    if method_ids:
+        methods_by_id = {
+            m.id: m
+            for m in db.execute(
+                select(HplcMethod).where(HplcMethod.id.in_(method_ids))
+            ).scalars().all()
+        }
+    instrument_ids = {r.instrument_id for r in rows if r.instrument_id}
+    instruments_by_id = {}
+    if instrument_ids:
+        instruments_by_id = {
+            i.id: i
+            for i in db.execute(
+                select(Instrument).where(Instrument.id.in_(instrument_ids))
+            ).scalars().all()
+        }
+
+    out = []
+    for r in rows:
+        svc = services_by_id.get(r.analysis_service_id)
+        method_name = None
+        if r.method_id and r.method_id in methods_by_id:
+            method_name = getattr(methods_by_id[r.method_id], "name", None)
+        instrument_name = None
+        if r.instrument_id and r.instrument_id in instruments_by_id:
+            instrument_name = getattr(instruments_by_id[r.instrument_id], "name", None)
+
+        out.append(SenaiteShapeAnalysisResponse(
+            uid=f"mk1:{r.id}",
+            keyword=r.keyword,
+            title=r.title,
+            result=r.result_value,
+            result_options=[],
+            unit=r.result_unit or (svc.unit if svc else None),
+            method=method_name,
+            method_uid=str(r.method_id) if r.method_id else None,
+            method_options=[],          # Phase 3.5: lift method editing
+            instrument=instrument_name,
+            instrument_uid=str(r.instrument_id) if r.instrument_id else None,
+            instrument_options=[],      # Phase 3.5: lift instrument editing
+            analyst=None,
+            review_state=r.review_state,
+            sort_key=None,
+            captured=r.captured_at.isoformat() if r.captured_at else None,
+            retested=r.retested,
+            service_group_id=None,
+            service_group_name=None,
+        ))
+    return out
