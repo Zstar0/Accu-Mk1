@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import List, Literal, Union
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from auth import get_current_user
@@ -20,6 +21,9 @@ from lims_analyses.schemas import (
     AnalysisWithTransitions,
     CreateAnalysisRequest,
     HostKind,
+    PromoteRequest,
+    PromoteResponse,
+    PromotionRow,
     SenaiteShapeAnalysisResponse,
     SetMethodInstrumentRequest,
     SetReportableRequest,
@@ -69,6 +73,21 @@ def _handle_service_error(e: Exception) -> HTTPException:
         )
     if isinstance(e, (UnknownStateError, UnknownKindError, UnknownTierError)):
         return HTTPException(status_code=400, detail=str(e))
+    if isinstance(e, IntegrityError):
+        # The most common case is the partial unique index on
+        # (lims_sample_pk, keyword) WHERE retest_of_id IS NULL — i.e. a
+        # parent-tier row already exists for this (parent, analyte).
+        return HTTPException(
+            status_code=409,
+            detail={
+                "code": "parent_row_already_exists",
+                "message": (
+                    "A parent-tier row already exists for this parent + "
+                    "keyword. Retract the existing parent row first, then "
+                    "re-promote."
+                ),
+            },
+        )
     # Unknown — let FastAPI 500 it
     raise e
 
@@ -204,5 +223,31 @@ def patch_method_instrument(
             user_id=getattr(current_user, "id", None),
         )
         return AnalysisResponse.model_validate(row)
+    except Exception as e:
+        raise _handle_service_error(e)
+
+
+@router.post("/promote", response_model=PromoteResponse, status_code=status.HTTP_201_CREATED)
+def promote(
+    req: PromoteRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    try:
+        parent_row, promotion_rows = service.promote_to_parent(
+            db,
+            keyword=req.keyword,
+            result_value=req.result_value,
+            result_unit=req.result_unit,
+            method_id=req.method_id,
+            instrument_id=req.instrument_id,
+            sources=[s.model_dump() for s in req.sources],
+            user_id=getattr(current_user, "id", None),
+            reason=req.reason,
+        )
+        return PromoteResponse(
+            parent=AnalysisResponse.model_validate(parent_row),
+            promotions=[PromotionRow.model_validate(p) for p in promotion_rows],
+        )
     except Exception as e:
         raise _handle_service_error(e)
