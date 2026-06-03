@@ -193,15 +193,22 @@ def create_sub_sample(
                     parent_sample_id, create_result.sample_id, e,
                 )
 
-    # 2. Upload photo. Compensate (delete the secondary) on failure so we don't
-    #    leave a vial without a photo.
+    # 2. Persist photo to Mk1 storage (Phase 2.5 — see
+    #    docs/superpowers/plans/2026-06-03-mk1-native-analyses-phase2.5-photo-storage.md).
+    #    Compensate (delete the SENAITE secondary) on failure so we don't
+    #    leave a vial without a photo. The SENAITE secondary AR is kept for
+    #    sample_id discoverability; only the photo write goes to Mk1 now.
+    from sub_samples.photo_storage import get_storage
+    photo_key: Optional[str] = None
     try:
-        senaite.upload_photo(create_result.path, photo_bytes, photo_filename)
+        photo_key = get_storage().save_photo(
+            create_result.sample_id, photo_bytes, photo_filename,
+        )
     except Exception:
         try:
             senaite.delete_secondary(create_result.uid)
         except Exception as cleanup_err:
-            log.error("sub_samples.photo_upload_orphan uid=%s cleanup_err=%s",
+            log.error("sub_samples.photo_save_orphan uid=%s cleanup_err=%s",
                       create_result.uid, cleanup_err)
         raise
 
@@ -221,9 +228,9 @@ def create_sub_sample(
         sample_id=create_result.sample_id,
         vial_sequence=vial_seq,
         received_by_user_id=user_id,
-        # The HTML form upload doesn't return an attachment UID, so we store
-        # the AR's path; a backend proxy resolves attachments on demand.
-        photo_external_uid=create_result.path,
+        # Phase 2.5: mk1://{key} URI scheme distinguishes Mk1-stored photos
+        # from legacy SENAITE secondary-AR paths during fetch-route dispatch.
+        photo_external_uid=f"mk1://{photo_key}",
         remarks=remarks,
     )
     db.add(sub)
