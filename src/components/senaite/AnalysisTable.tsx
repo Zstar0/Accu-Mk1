@@ -795,6 +795,7 @@ function AnalysisRow({
   isHistoryExpanded,
   onToggleHistory,
   onMethodInstrumentSaved,
+  onPromoted,
   slaSnapshot,
   isSlaLoading,
   isSlaError,
@@ -814,6 +815,7 @@ function AnalysisRow({
   isHistoryExpanded?: boolean
   onToggleHistory?: () => void
   onMethodInstrumentSaved?: (uid: string, field: 'method' | 'instrument', newUid: string | null, newTitle: string | null) => void
+  onPromoted?: () => void
   slaSnapshot: SampleSlaSnapshot | null
   isSlaLoading: boolean
   isSlaError: boolean
@@ -989,11 +991,12 @@ function AnalysisRow({
             open={promoteOpen}
             onOpenChange={setPromoteOpen}
             onPromoted={() => {
-              // Phase 4b: invalidate the mk1 senaite_shape query so the row
-              // refreshes with promoted_to_parent_id populated. The exact
-              // query key depends on the consuming hook; broad invalidate
-              // is cheap here.
+              // Phase 4b: invalidate react-query (for hooks-backed callers)
+              // AND fire the parent's onPromoted (SampleDetails uses
+              // useState/useEffect, not react-query, so this is needed
+              // to drive a re-fetch of the senaite_shape rows).
               queryClient.invalidateQueries()
+              onPromoted?.()
             }}
           />
         )}
@@ -1410,6 +1413,7 @@ export function AnalysisTable({
                       isHistoryExpanded={isExpanded}
                       onToggleHistory={() => toggleGroup(groupKey)}
                       onMethodInstrumentSaved={onMethodInstrumentSaved}
+                      onPromoted={onTransitionComplete}
                       slaSnapshot={
                         analysisSlaMap && group.current.keyword
                           ? analysisSlaMap.get(group.current.keyword) ?? null
