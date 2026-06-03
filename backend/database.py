@@ -482,6 +482,84 @@ def _run_migrations():
             PRIMARY KEY (sample_id, analysis_uid)
         )
         """,
+        # ── Mk1-native analyses (spec 2026-06-02-mk1-native-analyses-design.md) ──
+        # Polymorphic host: each row belongs to either a parent (lims_sample_pk) or
+        # a sub-sample (lims_sub_sample_pk), enforced by CHECK + the partial unique
+        # indexes below. Service identity is denormalized for fast filtering.
+        """
+        CREATE TABLE IF NOT EXISTS lims_analyses (
+            id                    SERIAL PRIMARY KEY,
+            lims_sample_pk        INTEGER REFERENCES lims_samples(id) ON DELETE CASCADE,
+            lims_sub_sample_pk    INTEGER REFERENCES lims_sub_samples(id) ON DELETE CASCADE,
+            CHECK ((lims_sample_pk IS NULL) <> (lims_sub_sample_pk IS NULL)),
+
+            analysis_service_id   INTEGER NOT NULL REFERENCES analysis_services(id) ON DELETE RESTRICT,
+            keyword               TEXT NOT NULL,
+            title                 TEXT NOT NULL,
+
+            result_value          TEXT,
+            result_unit           TEXT,
+
+            review_state          TEXT NOT NULL DEFAULT 'unassigned'
+                                  CHECK (review_state IN (
+                                      'unassigned', 'assigned', 'to_be_verified',
+                                      'verified', 'published', 'rejected', 'retracted'
+                                  )),
+
+            method_id             INTEGER REFERENCES hplc_methods(id) ON DELETE SET NULL,
+            instrument_id         INTEGER REFERENCES instruments(id) ON DELETE SET NULL,
+            analyst_user_id       INTEGER REFERENCES users(id) ON DELETE SET NULL,
+
+            captured_at           TIMESTAMP,
+            submitted_at          TIMESTAMP,
+            verified_at           TIMESTAMP,
+            published_at          TIMESTAMP,
+
+            retested              BOOLEAN NOT NULL DEFAULT FALSE,
+            retest_of_id          INTEGER REFERENCES lims_analyses(id) ON DELETE SET NULL,
+
+            reportable            BOOLEAN NOT NULL DEFAULT TRUE,
+            reportable_reason     TEXT,
+
+            created_at            TIMESTAMP NOT NULL DEFAULT NOW(),
+            updated_at            TIMESTAMP NOT NULL DEFAULT NOW(),
+            created_by_user_id    INTEGER REFERENCES users(id) ON DELETE SET NULL
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS ix_lims_analyses_sample        ON lims_analyses (lims_sample_pk)",
+        "CREATE INDEX IF NOT EXISTS ix_lims_analyses_sub_sample    ON lims_analyses (lims_sub_sample_pk)",
+        "CREATE INDEX IF NOT EXISTS ix_lims_analyses_keyword       ON lims_analyses (keyword)",
+        "CREATE INDEX IF NOT EXISTS ix_lims_analyses_review_state  ON lims_analyses (review_state)",
+        # One non-retest row per (host, keyword). Retests share keyword but
+        # are linked via retest_of_id and excluded from the uniqueness check
+        # via the partial index predicate.
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_lims_analyses_sub_service_root
+            ON lims_analyses (lims_sub_sample_pk, keyword)
+            WHERE retest_of_id IS NULL AND lims_sub_sample_pk IS NOT NULL
+        """,
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_lims_analyses_parent_service_root
+            ON lims_analyses (lims_sample_pk, keyword)
+            WHERE retest_of_id IS NULL AND lims_sample_pk IS NOT NULL
+        """,
+        # Per-transition audit log. Every state change writes a row.
+        """
+        CREATE TABLE IF NOT EXISTS lims_analysis_transitions (
+            id                SERIAL PRIMARY KEY,
+            analysis_id       INTEGER NOT NULL REFERENCES lims_analyses(id) ON DELETE CASCADE,
+            from_state        TEXT,
+            to_state          TEXT NOT NULL,
+            transition_kind   TEXT NOT NULL
+                              CHECK (transition_kind IN
+                                  ('assign','submit','verify','retract','reject',
+                                   'retest','publish','reset','auto')),
+            user_id           INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            reason            TEXT,
+            occurred_at       TIMESTAMP NOT NULL DEFAULT NOW()
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS ix_lims_analysis_transitions_analysis ON lims_analysis_transitions (analysis_id)",
     ]
     # Per-statement isolation: a failure in one statement (e.g., a table that
     # create_all hasn't built yet on first run) must not skip subsequent
