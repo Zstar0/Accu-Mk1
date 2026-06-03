@@ -280,6 +280,117 @@ def _resolve_mk1_parent_tier(
     return decisions
 
 
+def _apply_pin_override(
+    db: Session,
+    parent_sample_id: str,
+    analyte_keyword: str,
+    base: SourceDecision,
+) -> SourceDecision:
+    """Phase 5a: layer admin pin overrides on top of a Mk1-or-SENAITE base.
+
+    Decision matrix (given a base decision already computed):
+      no pin row                  → return base unchanged
+      pin.mode != 'pin'           → return base unchanged (treat as 'auto')
+      pin source matches base     → mode='pin' (override credited but same value)
+      pin source matches another  → mode='pin' with the pinned candidate's value
+        live candidate in base       (Mk1 row lookup or SENAITE candidate match)
+      pin source no longer valid  → blocked='stale_pin'
+
+    For pins targeting a Mk1 row (uid like 'mk1:N'), we look up the row by
+    id and verify it's still verified/published + reportable + non-retest.
+    For SENAITE-side pins (32-char hex uid), we match against the base's
+    candidates list (which carries SENAITE candidates when the base came
+    from _resolve_analyte).
+    """
+    pin = db.execute(
+        select(CoaResultPin).where(
+            CoaResultPin.parent_sample_id == parent_sample_id,
+            CoaResultPin.analyte_keyword == analyte_keyword,
+        )
+    ).scalar_one_or_none()
+    if pin is None or pin.mode != "pin":
+        return base
+    if not (pin.source_sample_id and pin.source_analysis_uid):
+        return base
+
+    pin_uid = pin.source_analysis_uid
+    pin_sid = pin.source_sample_id
+
+    # Mk1 pin path: look up the lims_analyses row directly.
+    if pin_uid.startswith("mk1:"):
+        from models import LimsAnalysis
+        try:
+            row_id = int(pin_uid[len("mk1:"):])
+        except ValueError:
+            return base.model_copy(update={
+                "blocked": "stale_pin",
+                "blocked_detail": (
+                    f"pin source_analysis_uid {pin_uid!r} is not a parseable mk1 id"
+                ),
+                "chosen": None,
+            })
+        row = db.get(LimsAnalysis, row_id)
+        if (
+            row is None
+            or row.review_state not in ("verified", "published")
+            or not row.reportable
+            or row.retest_of_id is not None
+            or row.keyword != analyte_keyword
+        ):
+            return base.model_copy(update={
+                "blocked": "stale_pin",
+                "blocked_detail": (
+                    f"pin on {pin_sid}/{pin_uid} no longer matches a "
+                    "reportable verified parent-tier row"
+                ),
+                "chosen": None,
+            })
+        return base.model_copy(update={
+            "mode": "pin",
+            "blocked": None,
+            "blocked_detail": None,
+            "chosen": ResolvedSource(
+                source_sample_id=pin_sid,
+                source_analysis_uid=pin_uid,
+                value=row.result_value,
+                unit=row.result_unit,
+            ),
+        })
+
+    # SENAITE pin path: match the pinned (sample_id, uid) against base.candidates.
+    # base.candidates always carries the candidates the base decision considered
+    # (Mk1 path stamps one synthetic candidate; SENAITE path carries the real
+    # SENAITE candidates).
+    match = next(
+        (c for c in base.candidates
+         if c.source_sample_id == pin_sid
+         and c.source_analysis_uid == pin_uid
+         and c.reportable
+         and c.state in ("verified", "published")),
+        None,
+    )
+    if match is None:
+        return base.model_copy(update={
+            "blocked": "stale_pin",
+            "blocked_detail": (
+                f"pin on {pin_sid}/{pin_uid} no longer matches a "
+                "reportable verified candidate"
+            ),
+            "chosen": None,
+        })
+    return base.model_copy(update={
+        "mode": "pin",
+        "blocked": None,
+        "blocked_detail": None,
+        "chosen": ResolvedSource(
+            source_sample_id=pin_sid,
+            source_analysis_uid=pin_uid,
+            value=match.value,
+            unit=match.unit,
+        ),
+    })
+
+
 # ─── Orchestration ───────────────────────────────────────────────────────────
 
 
