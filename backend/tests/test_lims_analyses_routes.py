@@ -198,3 +198,34 @@ def test_list_for_host_senaite_shape_returns_phase3_shape(sub_sample, analysis_s
     assert "method_options" in rows[0]
     assert "instrument_options" in rows[0]
     assert "review_state" in rows[0]
+
+
+# ── Phase 3.6: method-instrument PATCH ──────────────────────────────────────
+
+
+def test_patch_method_instrument_happy_path(sub_sample, analysis_service):
+    from models import HplcMethod, Instrument
+    db = SessionLocal()
+    method = db.execute(select(HplcMethod)).scalars().first()
+    instrument = db.execute(select(Instrument)).scalars().first()
+    db.close()
+    if method is None or instrument is None:
+        pytest.skip("no hplc_methods / instruments in this env")
+    created = client.post("/api/lims-analyses", json=_create_payload(sub_sample, analysis_service)).json()
+    aid = created["id"]
+    r = client.patch(
+        f"/api/lims-analyses/{aid}/method-instrument",
+        json={"method_id": method.id, "instrument_id": instrument.id},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["method_id"] == method.id
+    assert body["instrument_id"] == instrument.id
+
+
+def test_patch_method_instrument_404_on_missing_analysis():
+    r = client.patch(
+        "/api/lims-analyses/99999999/method-instrument",
+        json={"method_id": None, "instrument_id": None},
+    )
+    assert r.status_code == 404

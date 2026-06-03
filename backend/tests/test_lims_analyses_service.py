@@ -372,3 +372,44 @@ def test_list_analyses_in_senaite_shape_returns_empty_for_unknown_host(db):
         db, host_kind="sub_sample", host_pk=99_999_999,
     )
     assert rows == []
+
+
+# ── Phase 3.6: set_method_instrument ────────────────────────────────────────
+
+
+def test_set_method_instrument_persists_and_writes_audit(db, sub_sample, analysis_service):
+    from lims_analyses.service import set_method_instrument
+    from models import HplcMethod, Instrument
+    row = _create(db, sub_sample, analysis_service)
+    method = db.execute(select(HplcMethod)).scalars().first()
+    instrument = db.execute(select(Instrument)).scalars().first()
+    if method is None or instrument is None:
+        pytest.skip("no hplc_methods / instruments in this env")
+    updated = set_method_instrument(
+        db, analysis_id=row.id,
+        method_id=method.id, instrument_id=instrument.id,
+    )
+    assert updated.method_id == method.id
+    assert updated.instrument_id == instrument.id
+    # Audit chain: initial 'auto' + the new 'auto' for method/instrument
+    txns = db.execute(
+        select(LimsAnalysisTransition)
+        .where(LimsAnalysisTransition.analysis_id == row.id)
+        .order_by(LimsAnalysisTransition.occurred_at)
+    ).scalars().all()
+    assert len(txns) == 2
+    assert txns[-1].transition_kind == "auto"
+    assert f"method_id={method.id}" in (txns[-1].reason or "")
+    assert f"instrument_id={instrument.id}" in (txns[-1].reason or "")
+
+
+def test_set_method_instrument_is_noop_when_unchanged(db, sub_sample, analysis_service):
+    from lims_analyses.service import set_method_instrument
+    row = _create(db, sub_sample, analysis_service)
+    # Both fields None on a fresh row — setting to None should be a no-op
+    set_method_instrument(db, analysis_id=row.id, method_id=None, instrument_id=None)
+    txns = db.execute(
+        select(LimsAnalysisTransition).where(LimsAnalysisTransition.analysis_id == row.id)
+    ).scalars().all()
+    # Just the initial 'auto' — no spurious second audit row
+    assert len(txns) == 1
