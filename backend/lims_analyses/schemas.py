@@ -103,3 +103,55 @@ class AnalysisResponse(BaseModel):
 class AnalysisWithTransitions(AnalysisResponse):
     """AnalysisResponse + the full audit-log chain. Used by GET-by-id."""
     transitions: List[TransitionInfo] = Field(default_factory=list)
+
+
+# ─── SenaiteAnalysis-compatible response (Phase 3 adapter) ───────────────────
+
+
+class SenaiteShapeMethodOption(BaseModel):
+    """One method option in the dropdown. Matches SENAITE proxy shape."""
+    uid: str
+    title: str
+
+
+class SenaiteShapeInstrumentOption(BaseModel):
+    """One instrument option in the dropdown. Matches SENAITE proxy shape."""
+    uid: str
+    title: str
+
+
+class SenaiteShapeResultOption(BaseModel):
+    """One result option for selection-type analyses. Matches SENAITE shape."""
+    value: str
+    label: str
+
+
+class SenaiteShapeAnalysisResponse(BaseModel):
+    """lims_analyses row reshaped to match the FE's SenaiteAnalysis TS type.
+
+    The FE (src/lib/api.ts) treats uid as opaque. We prefix Mk1 ids with
+    'mk1:' so the FE's setAnalysisResult / transitionAnalysis dispatch
+    functions can detect them and route to the Mk1 endpoints. SENAITE
+    UIDs are 32-char hex and never carry the prefix, so the two address
+    spaces don't collide.
+    """
+    uid: str                              # "mk1:144"
+    keyword: Optional[str]
+    title: str
+    result: Optional[str]                 # the chosen result_value
+    result_options: List[SenaiteShapeResultOption] = Field(default_factory=list)
+    unit: Optional[str]
+    method: Optional[str]
+    method_uid: Optional[str]
+    method_options: List[SenaiteShapeMethodOption] = Field(default_factory=list)
+    instrument: Optional[str]
+    instrument_uid: Optional[str]
+    instrument_options: List[SenaiteShapeInstrumentOption] = Field(default_factory=list)
+    analyst: Optional[str]
+    due_date: Optional[str] = None        # not tracked in lims_analyses yet
+    review_state: Optional[str]
+    sort_key: Optional[int] = None
+    captured: Optional[str]               # ISO string of captured_at
+    retested: bool
+    service_group_id: Optional[int] = None
+    service_group_name: Optional[str] = None
