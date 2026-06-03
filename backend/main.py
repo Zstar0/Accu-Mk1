@@ -8215,12 +8215,66 @@ async def generate_sample_coa(
 
     Mirrors the SENAITE addon flow: call COA Builder, then immediately write
     the verification code back to the SENAITE sample.
+
+    COA roll-up Phase 1: before invoking COABuilder, runs the source resolver
+    over the parent + every linked sub-sample. The resolver:
+      - auto-resolves analytes with a single reportable verified candidate
+      - blocks (HTTP 422) when an analyte has >1 candidates with no actionable
+        pin (or a stale pin / no candidates at all)
+    After a successful generation, persists a per-generation manifest row
+    per resolved analyte. Resolver runtime errors are non-fatal — they log
+    and fall through so single-vial behavior is unchanged on a resolver bug.
     """
+    import logging as _logging
+    _logger = _logging.getLogger(__name__)
+
     if not COA_BUILDER_URL:
         return SampleCOAActionResponse(
             success=False,
             message="COA Builder not configured (COA_BUILDER_URL env var not set)",
         )
+
+    # --- COA roll-up Phase 1: resolver pre-flight (parents only) ---
+    # Sub-sample COAs aren't covered by the parent-level roll-up; their
+    # generation path is independent and remains unchanged.
+    from coa.source_resolver import resolve_sources, SenaiteAnalysesHttpReader
+    from coa.manifest import write_generation_manifest
+
+    is_sub = bool(re.search(r"-S\d{2,}$", sample_id))
+    resolver_result = None
+    if not is_sub and SENAITE_URL:
+        try:
+            reader = SenaiteAnalysesHttpReader(
+                base_url=SENAITE_URL,
+                auth=_get_senaite_auth(current_user),
+            )
+            resolver_result = await resolve_sources(sample_id, db, reader)
+        except Exception as e:
+            # Resolver failure is non-fatal in Phase 1; log and fall through.
+            _logger.warning("COA resolver pre-flight failed for %s: %s", sample_id, e)
+            resolver_result = None
+
+        if resolver_result is not None and resolver_result.is_blocked:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "unresolved_sources",
+                    "message": (
+                        "COA cannot be generated until the source for each "
+                        "analyte is resolved. See COA Sources panel."
+                    ),
+                    "unresolved": [
+                        {
+                            "analyte_keyword": d.analyte_keyword,
+                            "blocked": d.blocked,
+                            "detail": d.blocked_detail,
+                            "candidates_count": len(d.candidates),
+                        }
+                        for d in resolver_result.decisions
+                        if d.blocked is not None
+                    ],
+                },
+            )
 
     # Enrich with per-sample analyte display alias picks so the COA renders
     # the customer-facing name (real name still drives conformance).
@@ -8293,6 +8347,40 @@ async def generate_sample_coa(
 
     if warnings:
         message += f" (warnings: {'; '.join(warnings)})"
+
+    # --- COA roll-up Phase 1: write the per-generation manifest ---
+    # Best-effort. COABuilder's response shape may or may not include the
+    # integration-DB generation UUID; fall back to a generated UUID + log
+    # warning so the manifest is still queryable by (parent, generation_number).
+    if (
+        resolver_result is not None
+        and not resolver_result.is_blocked
+        and verification_code
+        and generation_number
+    ):
+        import uuid as _uuid
+        gen_id_str = data.get("generation_id")
+        try:
+            gen_id = _uuid.UUID(gen_id_str) if gen_id_str else _uuid.uuid4()
+        except (TypeError, ValueError):
+            _logger.warning(
+                "COA generation_id from COABuilder is not a valid UUID (%r); "
+                "manifest will be keyed by a generated UUID",
+                gen_id_str,
+            )
+            gen_id = _uuid.uuid4()
+        try:
+            write_generation_manifest(
+                db,
+                generation_id=gen_id,
+                generation_number=generation_number,
+                result=resolver_result,
+            )
+        except Exception as e:
+            _logger.warning(
+                "COA manifest write failed for %s gen %s: %s",
+                sample_id, generation_number, e,
+            )
 
     return SampleCOAActionResponse(
         success=True,
