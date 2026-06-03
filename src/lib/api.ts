@@ -3638,6 +3638,36 @@ export async function setAnalysisMethodInstrument(
   methodUid: string | null,
   instrumentUid: string | null
 ): Promise<AnalysisResultResponse> {
+  // Phase 3.6: route mk1:<id> UIDs to the Mk1 method-instrument PATCH
+  // endpoint. The Mk1 option uids are int-as-string (e.g. "1", "2");
+  // parse them back to integers for the request body. Either may be
+  // null (clear). The SENAITE-uid code path below is unchanged.
+  if (uid.startsWith('mk1:')) {
+    const limsId = parseInt(uid.slice('mk1:'.length), 10)
+    const body = {
+      method_id: methodUid ? parseInt(methodUid, 10) : null,
+      instrument_id: instrumentUid ? parseInt(instrumentUid, 10) : null,
+    }
+    const response = await fetch(
+      `${API_BASE_URL()}/api/lims-analyses/${limsId}/method-instrument`,
+      {
+        method: 'PATCH',
+        headers: getBearerHeaders('application/json'),
+        body: JSON.stringify(body),
+      }
+    )
+    if (!response.ok) {
+      const err = await response.json().catch(() => null)
+      throw new Error(err?.detail || `Set method/instrument (mk1) failed: ${response.status}`)
+    }
+    const row = await response.json()
+    return {
+      success: true,
+      message: 'Method/instrument updated via Mk1',
+      new_review_state: row.review_state ?? null,
+      keyword: row.keyword ?? null,
+    }
+  }
   const response = await fetch(
     `${API_BASE_URL()}/wizard/senaite/analyses/${encodeURIComponent(uid)}/method-instrument`,
     {
