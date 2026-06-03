@@ -85,6 +85,7 @@ import {
   getWooOrder,
   fetchChromatogramLttb,
   listSubSamples,
+  listLimsAnalysesForSubSample,
 } from '@/lib/api'
 import { ReceiveWizard } from '@/components/intake/ReceiveWizard/ReceiveWizard'
 import type { ParentInfo } from '@/components/intake/ReceiveWizard/useReceiveWizard'
@@ -2000,6 +2001,32 @@ export function SampleDetails() {
       cancelled = true
     }
   }, [sampleId])
+
+  // Phase 3 (mk1-native-analyses): for sub-samples, replace data.analyses
+  // with the Mk1-sourced rows. AnalysisTable renders the same SenaiteAnalysis
+  // shape; UIDs in the Mk1 rows carry an 'mk1:' prefix so the dispatch shims
+  // in setAnalysisResult / transitionAnalysis route writes to the Mk1
+  // endpoints. Parent samples are untouched — their analyses stay SENAITE.
+  useEffect(() => {
+    if (!parentSampleId || !sampleId || !data) return
+    let cancelled = false
+    ;(async () => {
+      try {
+        const subs = await listSubSamples(parentSampleId)
+        const me = subs.sub_samples.find(s => s.sample_id === sampleId)
+        if (!me) return
+        const mk1Analyses = await listLimsAnalysesForSubSample(me.id)
+        if (cancelled) return
+        setData(prev => (prev ? { ...prev, analyses: mk1Analyses } : prev))
+      } catch (e) {
+        // Best-effort: leave SENAITE-sourced analyses in place on failure.
+        console.error('Phase 3: failed to load Mk1 analyses for sub-sample', sampleId, e)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [parentSampleId, sampleId, data?.sample_uid])
 
   // Fetch additional COAs from integration service
   useEffect(() => {
