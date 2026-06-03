@@ -12810,6 +12810,80 @@ _inbox_senaite_cache_time: float = 0
 _INBOX_CACHE_TTL_SECONDS = 30 * 60  # 30 minutes
 
 
+# ── Phase 3.5: Mk1-sourced inbox analyses for sub-samples ───────────────────
+
+
+# Color fallback when the ServiceGroup join misses (rare — only if a vial's
+# analysis_service has no service_group_members row). Mirrors the FE's role
+# palette.
+_INBOX_ROLE_COLOR_FALLBACK = {
+    "hplc": "sky",
+    "endo": "violet",
+    "ster": "violet",
+    "xtra": "zinc",
+}
+
+
+def _fetch_mk1_inbox_analyses_for_sub_sample(
+    db: Session,
+    sub_sample_pk: int,
+    role: Optional[str],
+    keyword_to_peptide: dict,
+) -> list["InboxAnalysisItem"]:
+    """Build the per-vial inbox analysis list from Mk1 lims_analyses.
+
+    Returns the same InboxAnalysisItem shape as the existing SENAITE-derived
+    builder. UIDs carry the 'mk1:' prefix so any downstream write-path
+    dispatches to the Mk1 endpoints (Phase 3 adapter).
+
+    Filtering parity with the SENAITE path: excluded review_states dropped,
+    retests excluded (Mk1 retest is service-layer not state-edge).
+
+    Returns an empty list if the vial has no Mk1 rows — caller falls back
+    to the SENAITE path.
+    """
+    from models import LimsAnalysis  # local import; not at module top
+
+    rows = db.execute(
+        select(LimsAnalysis, AnalysisService, ServiceGroup)
+        .join(AnalysisService, AnalysisService.id == LimsAnalysis.analysis_service_id)
+        .outerjoin(
+            service_group_members,
+            service_group_members.c.analysis_service_id == AnalysisService.id,
+        )
+        .outerjoin(ServiceGroup, ServiceGroup.id == service_group_members.c.service_group_id)
+        .where(LimsAnalysis.lims_sub_sample_pk == sub_sample_pk)
+        .where(LimsAnalysis.retest_of_id.is_(None))
+    ).all()
+
+    EXCLUDED_STATES = {"rejected", "retracted"}
+    out: list[InboxAnalysisItem] = []
+    for la, svc, sg in rows:
+        if la.review_state in EXCLUDED_STATES:
+            continue
+        if sg is not None:
+            grp_id = sg.id
+            grp_name = sg.name or ""
+            grp_color = getattr(sg, "color", None) or _INBOX_ROLE_COLOR_FALLBACK.get(role or "", "zinc")
+        else:
+            grp_id = 0
+            grp_name = ""
+            grp_color = _INBOX_ROLE_COLOR_FALLBACK.get(role or "", "zinc")
+
+        out.append(InboxAnalysisItem(
+            uid=f"mk1:{la.id}",
+            title=la.title or la.keyword or "",
+            keyword=la.keyword,
+            peptide_name=keyword_to_peptide.get(la.keyword or "") if keyword_to_peptide else None,
+            method=None,                  # Mk1 vial method not yet wired
+            review_state=la.review_state,
+            group_id=grp_id,
+            group_name=grp_name,
+            group_color=grp_color,
+        ))
+    return out
+
+
 @app.get("/worksheets/inbox", response_model=InboxResponse)
 async def get_worksheets_inbox(
     hide_test_orders: bool = True,
@@ -13119,6 +13193,7 @@ async def get_worksheets_inbox(
             LimsSubSample.sample_id,
             LimsSubSample.assignment_role,
             LimsSubSample.vial_sequence,
+            LimsSubSample.id,             # Phase 3.5: needed for Mk1 inbox source
         ).where(
             (LimsSubSample.external_lims_uid.in_(uids))
             | (LimsSubSample.parent_sample_pk.in_(parent_ids) if parent_ids else False)
@@ -13158,6 +13233,7 @@ async def get_worksheets_inbox(
                 "is_parent": False,
                 "parent_sample_id": parent_sid,
                 "parent_lims_id": r.parent_sample_pk,
+                "sub_sample_pk": r.id,    # Phase 3.5: needed for Mk1 inbox source
                 "assignment_role": r.assignment_role,
                 "vial_sequence": r.vial_sequence,
             }
