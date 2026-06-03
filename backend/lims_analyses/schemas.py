@@ -195,6 +195,12 @@ class SenaiteShapeAnalysisResponse(BaseModel):
     retested: bool
     service_group_id: Optional[int] = None
     service_group_name: Optional[str] = None
+    # Phase 4b: when this vial-tier row has been promoted to a parent-tier
+    # canonical result, this is the parent-tier row's id. Joined from
+    # lims_analysis_promotions.source_analysis_id. None for un-promoted
+    # rows and for parent-tier rows themselves (only vial-tier rows can
+    # be sources of a promotion).
+    promoted_to_parent_id: Optional[int] = None
 
 
 # ─── Phase 4a: promote_to_parent response shapes ─────────────────────────────
