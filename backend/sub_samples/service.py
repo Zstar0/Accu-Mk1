@@ -705,13 +705,92 @@ class VarianceTooFewVialsError(ValueError):
     """Raised when attempting to lock with fewer than 2 selected vials."""
 
 
+def _fetch_mk1_results_for_host(
+    db: Session, *, host_kind: str, host_pk: int
+) -> dict:
+    """Phase 4b: collect lims_analyses rows for a vial host and project them
+    into the variance result shape.
+
+    Returns: { "<keyword>": {"value": str, "kind": "numeric"|"categorical",
+                              "spec": None, "uid": "mk1:<N>",
+                              "promoted_to_parent_id": int|None} }
+
+    Skips:
+      - rows without a result_value (no result entered yet)
+      - retest siblings (we only show the canonical non-retest row)
+    """
+    from models import LimsAnalysis, LimsAnalysisPromotion
+
+    if host_kind == "sample":
+        stmt = select(LimsAnalysis).where(
+            LimsAnalysis.lims_sample_pk == host_pk,
+            LimsAnalysis.retest_of_id.is_(None),
+            LimsAnalysis.result_value.is_not(None),
+        )
+    elif host_kind == "sub_sample":
+        stmt = select(LimsAnalysis).where(
+            LimsAnalysis.lims_sub_sample_pk == host_pk,
+            LimsAnalysis.retest_of_id.is_(None),
+            LimsAnalysis.result_value.is_not(None),
+        )
+    else:
+        return {}
+    rows = db.execute(stmt).scalars().all()
+    if not rows:
+        return {}
+
+    # Bulk-load promotion links for these rows
+    row_ids = [r.id for r in rows]
+    promo_by_source: dict[int, int] = {}
+    for p in db.execute(
+        select(LimsAnalysisPromotion).where(
+            LimsAnalysisPromotion.source_analysis_id.in_(row_ids)
+        )
+    ).scalars().all():
+        promo_by_source[p.source_analysis_id] = p.parent_analysis_id
+
+    out: dict = {}
+    for r in rows:
+        # Heuristic: numeric vs categorical. Mk1 doesn't currently track this
+        # explicitly per analysis. Try float-parse the result; if it parses,
+        # call it numeric. Otherwise categorical. Matches what SENAITE-side
+        # fetch_results_by_keyword does indirectly via ResultOptions.
+        kind = "numeric"
+        try:
+            float(r.result_value)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            kind = "categorical"
+        out[r.keyword] = {
+            "value": str(r.result_value),
+            "kind": kind,
+            "spec": None,
+            "uid": f"mk1:{r.id}",
+            "promoted_to_parent_id": promo_by_source.get(r.id),
+        }
+    return out
+
+
+def _merge_variance_results(mk1_results: dict, senaite_results: dict) -> dict:
+    """Merge Mk1-sourced + SENAITE-sourced result dicts. Mk1 takes precedence
+    per the long-term Mk1-replaces-SENAITE direction. SENAITE entries that
+    don't appear in Mk1 are carried through with uid=None (the FE filters
+    these out of the Promote stage since only mk1: UIDs can promote)."""
+    out = dict(mk1_results)
+    for kw, entry in senaite_results.items():
+        if kw not in out:
+            # Carry forward without uid; FE won't render a Promote affordance
+            # but the value still shows in the variance summary table.
+            out[kw] = {**entry, "uid": None, "promoted_to_parent_id": None}
+    return out
+
+
 def get_variance_set(db: Session, parent_sample_id: str) -> Optional[dict]:
     """Return variance set view for a parent: vials + stats + lock state.
 
-    Per-vial `results` are fetched from SENAITE (Analysis endpoint, keyed by
-    keyword). Fetch is soft-fail: a transport error leaves results={} for that
-    vial and the variance summary still renders membership + lock state.
-    Specs are not yet populated (separate AnalysisSpec fetch — follow-up).
+    Per-vial `results` come from Mk1 lims_analyses first (with uid prefixed
+    "mk1:<N>" and a `promoted_to_parent_id` field for the Phase 4b promote UI),
+    falling back to SENAITE for any keywords missing in Mk1. SENAITE fetch is
+    soft-fail: a transport error leaves Mk1-only results.
     """
     parent = db.execute(
         select(LimsSample).where(LimsSample.sample_id == parent_sample_id)
@@ -721,6 +800,10 @@ def get_variance_set(db: Session, parent_sample_id: str) -> Optional[dict]:
 
     subs = sorted(parent.sub_samples, key=lambda s: s.vial_sequence)
 
+    parent_results = _merge_variance_results(
+        _fetch_mk1_results_for_host(db, host_kind="sample", host_pk=parent.id),
+        senaite.fetch_results_by_keyword(parent.sample_id),
+    )
     vial_dicts: list[dict] = [
         {
             "sample_id": parent.sample_id,
@@ -729,7 +812,7 @@ def get_variance_set(db: Session, parent_sample_id: str) -> Optional[dict]:
             "in_variance_set": parent.in_variance_set,
             "exclusion_reason": parent.variance_exclusion_reason,
             "review_state": parent.status,
-            "results": senaite.fetch_results_by_keyword(parent.sample_id),
+            "results": parent_results,
         }
     ] + [
         {
@@ -739,7 +822,10 @@ def get_variance_set(db: Session, parent_sample_id: str) -> Optional[dict]:
             "in_variance_set": s.in_variance_set,
             "exclusion_reason": s.variance_exclusion_reason,
             "review_state": None,
-            "results": senaite.fetch_results_by_keyword(s.sample_id),
+            "results": _merge_variance_results(
+                _fetch_mk1_results_for_host(db, host_kind="sub_sample", host_pk=s.id),
+                senaite.fetch_results_by_keyword(s.sample_id),
+            ),
         }
         for s in subs
     ]
