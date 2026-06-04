@@ -109,6 +109,7 @@ import { getSenaiteUrl, getWordpressUrl } from '@/lib/api-profiles'
 import { cn } from '@/lib/utils'
 import { EditableDataRow } from '@/components/dashboard/EditableField'
 import { AnalysisTable, StatusBadge } from '@/components/senaite/AnalysisTable'
+import { needsMk1AnalysesSwap } from '@/lib/mk1-analyses-swap'
 import { SampleHeaderSla } from '@/components/senaite/SampleHeaderSla'
 import { useAnalysisSlaMap } from '@/services/analysis-sla'
 import { SamplePrepHplcFlyout } from '@/components/hplc/SamplePrepHplcFlyout'
@@ -2007,8 +2008,16 @@ export function SampleDetails() {
   // shape; UIDs in the Mk1 rows carry an 'mk1:' prefix so the dispatch shims
   // in setAnalysisResult / transitionAnalysis route writes to the Mk1
   // endpoints. Parent samples are untouched — their analyses stay SENAITE.
+  // Re-derived each render so the swap effect can self-heal: it re-runs
+  // whenever the analyses revert to SENAITE-sourced (e.g. a refetch after a
+  // result-entry transition reset them), and no-ops once they're Mk1-sourced.
+  const analysesNeedMk1Swap = !!data && needsMk1AnalysesSwap(data.analyses)
   useEffect(() => {
     if (!parentSampleId || !sampleId || !data) return
+    // Only swap while the analyses are still SENAITE-sourced. Once swapped,
+    // every row is mk1:-prefixed so this is false and the effect no-ops —
+    // which is why analysesNeedMk1Swap is a safe (non-looping) dependency.
+    if (!analysesNeedMk1Swap) return
     let cancelled = false
     ;(async () => {
       try {
@@ -2026,7 +2035,7 @@ export function SampleDetails() {
     return () => {
       cancelled = true
     }
-  }, [parentSampleId, sampleId, data?.sample_uid])
+  }, [parentSampleId, sampleId, data?.sample_uid, analysesNeedMk1Swap])
 
   // Fetch additional COAs from integration service
   useEffect(() => {
