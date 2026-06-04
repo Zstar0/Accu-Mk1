@@ -1,4 +1,4 @@
-import { useState, useEffect, useId, useRef, useMemo } from 'react'
+import { useState, useEffect, useId, useRef, useMemo, useCallback } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import DOMPurify from 'dompurify'
 import { useTheme } from '@/hooks/use-theme'
@@ -1780,7 +1780,7 @@ export function SampleDetails() {
     return m ? m[1] : null
   }, [sampleId])
 
-  const { data: parentSummary, isLoading: parentSummaryLoading } = useQuery({
+  const { data: parentSummary } = useQuery({
     queryKey: ['sub-samples', parentSampleId],
     queryFn: () => listSubSamples(parentSampleId!),
     enabled: !!parentSampleId,
@@ -1948,11 +1948,36 @@ export function SampleDetails() {
     }
   }
 
+  /**
+   * Native-aware sample loader shared by the initial load, the Retry handler,
+   * and the silent post-transition refresh. A Model-D native vial (mk1:// uid)
+   * has no SENAITE AR, so it loads entirely from Mk1 and never calls SENAITE —
+   * without this, every transition's refresh 404s. Parent samples and legacy
+   * SENAITE-backed vials use the SENAITE lookup as before. If the Mk1 sub-sample
+   * lookup fails, falls through to SENAITE so legacy vials still load.
+   */
+  const resolveSampleData = useCallback(async (id: string): Promise<SenaiteLookupResult> => {
+    const parentId = id.match(/^(.*)-S\d{2,}$/)?.[1]
+    if (parentId) {
+      try {
+        const list = await listSubSamples(parentId)
+        const me = list.sub_samples.find(s => s.sample_id === id)
+        if (me?.external_lims_uid?.startsWith('mk1://')) {
+          const mk1Analyses = await listLimsAnalysesForSubSample(me.id)
+          return { ...buildNativeSubSampleLookup(me, list.parent), analyses: mk1Analyses }
+        }
+      } catch {
+        // Mk1 lookup failed — fall through to the SENAITE lookup (legacy path).
+      }
+    }
+    return lookupSenaiteSample(id)
+  }, [])
+
   const fetchSample = (id: string) => {
     setLoading(true)
     setError(null)
 
-    lookupSenaiteSample(id)
+    resolveSampleData(id)
       .then(result => setData(result))
       .catch(e => setError(e instanceof Error ? e.message : 'Failed to load sample'))
       .finally(() => setLoading(false))
@@ -1960,7 +1985,7 @@ export function SampleDetails() {
 
   /** Silent re-fetch: updates data without triggering full-page loading state. */
   const refreshSample = (id: string) => {
-    lookupSenaiteSample(id)
+    resolveSampleData(id)
       .then(result => setData(result))
       .catch(e => toast.error('Refresh failed', { description: e instanceof Error ? e.message : String(e) }))
   }
@@ -1988,48 +2013,21 @@ export function SampleDetails() {
     setLoading(true)
     setError(null)
 
-    void (async () => {
-      // Native-vial fast path: a Model-D vial has no SENAITE AR, so load the
-      // whole page from Mk1 and never call SENAITE. Provenance comes from the
-      // parent's sub-sample list (already fetched); wait for it before deciding.
-      if (!isParent) {
-        if (parentSummaryLoading) return // keep the spinner; re-runs when it resolves
-        const me = parentSummary?.sub_samples.find(s => s.sample_id === sampleId)
-        if (me?.external_lims_uid?.startsWith('mk1://')) {
-          try {
-            // Load the Mk1 analyses directly — the native base starts with an
-            // empty analyses array, which the Phase 3 swap effect intentionally
-            // skips (it only re-swaps SENAITE-sourced lists).
-            const mk1Analyses = await listLimsAnalysesForSubSample(me.id)
-            if (cancelled) return
-            setData({
-              ...buildNativeSubSampleLookup(me, parentSummary!.parent),
-              analyses: mk1Analyses,
-            })
-          } catch (e) {
-            if (!cancelled) setError(e instanceof Error ? e.message : 'Failed to load sample')
-          } finally {
-            if (!cancelled) setLoading(false)
-          }
-          return
-        }
-      }
-
-      // Parent samples and legacy (SENAITE-backed) sub-samples: load from SENAITE.
-      try {
-        const result = await lookupSenaiteSample(sampleId)
+    resolveSampleData(sampleId)
+      .then(result => {
         if (!cancelled) setData(result)
-      } catch (e) {
+      })
+      .catch(e => {
         if (!cancelled) setError(e instanceof Error ? e.message : 'Failed to load sample')
-      } finally {
+      })
+      .finally(() => {
         if (!cancelled) setLoading(false)
-      }
-    })()
+      })
 
     return () => {
       cancelled = true
     }
-  }, [sampleId, isParent, parentSummary, parentSummaryLoading])
+  }, [sampleId, resolveSampleData])
 
   // Phase 3 (mk1-native-analyses): for sub-samples, replace data.analyses
   // with the Mk1-sourced rows. AnalysisTable renders the same SenaiteAnalysis
