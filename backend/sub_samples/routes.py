@@ -47,6 +47,7 @@ def _serialize(sub) -> SubSampleResponse:
         photo_external_uid=sub.photo_external_uid,
         remarks=sub.remarks,
         assignment_role=sub.assignment_role,
+        external_lims_uid=sub.external_lims_uid,
     )
 
 

@@ -4783,6 +4783,10 @@ export interface SubSample {
   photo_external_uid: string | null
   remarks: string | null
   assignment_role: AssignmentRole | null
+  // Provenance: 'mk1://...' for Model-D native vials (no SENAITE AR), a SENAITE
+  // hex UID for legacy dual-written vials. Used to load native vials from Mk1
+  // without calling SENAITE. Optional for back-compat with older responses.
+  external_lims_uid?: string | null
 }
 
 export interface ParentSampleSummary {

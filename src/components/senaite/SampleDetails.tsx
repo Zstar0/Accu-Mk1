@@ -110,6 +110,7 @@ import { cn } from '@/lib/utils'
 import { EditableDataRow } from '@/components/dashboard/EditableField'
 import { AnalysisTable, StatusBadge } from '@/components/senaite/AnalysisTable'
 import { needsMk1AnalysesSwap } from '@/lib/mk1-analyses-swap'
+import { buildNativeSubSampleLookup } from '@/lib/native-sub-sample'
 import { SampleHeaderSla } from '@/components/senaite/SampleHeaderSla'
 import { useAnalysisSlaMap } from '@/services/analysis-sla'
 import { SamplePrepHplcFlyout } from '@/components/hplc/SamplePrepHplcFlyout'
@@ -1779,7 +1780,7 @@ export function SampleDetails() {
     return m ? m[1] : null
   }, [sampleId])
 
-  const { data: parentSummary } = useQuery({
+  const { data: parentSummary, isLoading: parentSummaryLoading } = useQuery({
     queryKey: ['sub-samples', parentSampleId],
     queryFn: () => listSubSamples(parentSampleId!),
     enabled: !!parentSampleId,
@@ -1987,21 +1988,48 @@ export function SampleDetails() {
     setLoading(true)
     setError(null)
 
-    lookupSenaiteSample(sampleId)
-      .then(result => {
+    void (async () => {
+      // Native-vial fast path: a Model-D vial has no SENAITE AR, so load the
+      // whole page from Mk1 and never call SENAITE. Provenance comes from the
+      // parent's sub-sample list (already fetched); wait for it before deciding.
+      if (!isParent) {
+        if (parentSummaryLoading) return // keep the spinner; re-runs when it resolves
+        const me = parentSummary?.sub_samples.find(s => s.sample_id === sampleId)
+        if (me?.external_lims_uid?.startsWith('mk1://')) {
+          try {
+            // Load the Mk1 analyses directly — the native base starts with an
+            // empty analyses array, which the Phase 3 swap effect intentionally
+            // skips (it only re-swaps SENAITE-sourced lists).
+            const mk1Analyses = await listLimsAnalysesForSubSample(me.id)
+            if (cancelled) return
+            setData({
+              ...buildNativeSubSampleLookup(me, parentSummary!.parent),
+              analyses: mk1Analyses,
+            })
+          } catch (e) {
+            if (!cancelled) setError(e instanceof Error ? e.message : 'Failed to load sample')
+          } finally {
+            if (!cancelled) setLoading(false)
+          }
+          return
+        }
+      }
+
+      // Parent samples and legacy (SENAITE-backed) sub-samples: load from SENAITE.
+      try {
+        const result = await lookupSenaiteSample(sampleId)
         if (!cancelled) setData(result)
-      })
-      .catch(e => {
+      } catch (e) {
         if (!cancelled) setError(e instanceof Error ? e.message : 'Failed to load sample')
-      })
-      .finally(() => {
+      } finally {
         if (!cancelled) setLoading(false)
-      })
+      }
+    })()
 
     return () => {
       cancelled = true
     }
-  }, [sampleId])
+  }, [sampleId, isParent, parentSummary, parentSummaryLoading])
 
   // Phase 3 (mk1-native-analyses): for sub-samples, replace data.analyses
   // with the Mk1-sourced rows. AnalysisTable renders the same SenaiteAnalysis

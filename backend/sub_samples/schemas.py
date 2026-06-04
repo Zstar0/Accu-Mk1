@@ -25,6 +25,10 @@ class SubSampleResponse(BaseModel):
     photo_external_uid: Optional[str]
     remarks: Optional[str]
     assignment_role: Optional[str] = None
+    # Provenance: 'mk1://...' for Model-D native vials (no SENAITE AR),
+    # a SENAITE hex UID for legacy dual-written vials. Lets the frontend
+    # load native vials from Mk1 without calling SENAITE.
+    external_lims_uid: Optional[str] = None
 
     class Config:
         from_attributes = True
