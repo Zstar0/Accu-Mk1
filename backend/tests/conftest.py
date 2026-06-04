@@ -13,10 +13,27 @@ import os
 import sys
 
 import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 _BACKEND_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if _BACKEND_DIR not in sys.path:
     sys.path.insert(0, _BACKEND_DIR)
+
+
+@pytest.fixture
+def db_session():
+    """In-memory SQLite session for unit tests. Mirrors the local `db` fixtures
+    used in test_sub_samples_service.py and test_sub_samples_integration.py."""
+    from database import Base
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine)
+    s = Session()
+    try:
+        yield s
+    finally:
+        s.close()
 
 
 def pytest_configure(config):

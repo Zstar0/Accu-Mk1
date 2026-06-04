@@ -16,6 +16,7 @@ from typing import Optional, Tuple, List
 from sqlalchemy import select, func
 from sqlalchemy.orm import Session
 from models import LimsSample, LimsSubSample
+from sub_samples import native
 from sub_samples import senaite
 from sub_samples.senaite import SecondaryFalloutError
 
@@ -113,8 +114,71 @@ def create_sub_sample(
     remarks: Optional[str],
     user_id: int,
 ) -> LimsSubSample:
-    """Create a sub-sample atomically with defense-in-depth protections."""
+    """Create a sub-sample. Native path (flag ON) skips SENAITE entirely;
+    legacy path (flag OFF) creates a SENAITE secondary AR as before."""
     parent = ensure_sample_row(db, parent_sample_id)
+
+    if native.native_create_enabled():
+        return _create_sub_sample_native(
+            db, parent, photo_bytes, photo_filename, remarks, user_id,
+        )
+    return _create_sub_sample_legacy(
+        db, parent, parent_sample_id, photo_bytes, photo_filename, remarks, user_id,
+    )
+
+
+def _create_sub_sample_native(
+    db: Session,
+    parent: LimsSample,
+    photo_bytes: bytes,
+    photo_filename: str,
+    remarks: Optional[str],
+    user_id: int,
+) -> LimsSubSample:
+    """Model-D create path. No SENAITE AR. sample_id + external_lims_uid
+    generated locally; photo to Mk1 storage; remarks stored on the row.
+
+    Ordering: assign vial_sequence + sample_id under the parent row lock, then
+    persist the photo (raise before inserting on failure — no SENAITE orphan to
+    clean up since we never created one), then insert the row and seed analyses.
+    """
+    vial_seq = _next_vial_sequence(db, parent.id)
+    sample_id = native.next_native_sample_id(parent.sample_id, vial_seq)
+    external_uid = native.generate_native_uid()
+
+    from sub_samples.photo_storage import get_storage
+    photo_key = get_storage().save_photo(sample_id, photo_bytes, photo_filename)
+
+    sub = LimsSubSample(
+        parent_sample_pk=parent.id,
+        external_lims_uid=external_uid,
+        sample_id=sample_id,
+        vial_sequence=vial_seq,
+        received_by_user_id=user_id,
+        photo_external_uid=f"mk1://{photo_key}",
+        remarks=remarks,
+    )
+    db.add(sub)
+    parent.last_synced_at = datetime.utcnow()
+    db.commit()
+    db.refresh(sub)
+
+    _seed_analyses_if_role(db, sub, parent.sample_id, user_id)
+    return sub
+
+
+def _create_sub_sample_legacy(
+    db: Session,
+    parent: LimsSample,
+    parent_sample_id: str,
+    photo_bytes: bytes,
+    photo_filename: str,
+    remarks: Optional[str],
+    user_id: int,
+) -> LimsSubSample:
+    """Legacy SENAITE dual-write path. Caller has already called ensure_sample_row
+    and passes parent as a parameter. Everything else is verbatim from the
+    original create_sub_sample body."""
 
     # Defense in depth #1: parent must have a contact. Children inherit it.
     # Cheap local check; fail fast before any SENAITE round-trip.
@@ -239,12 +303,16 @@ def create_sub_sample(
     db.commit()
     db.refresh(sub)
 
-    # Phase 2 (mk1-native-analyses): seed lims_analyses rows in parallel with
-    # the SENAITE-side cloned analyses. Defensive — at the moment, the wizard
-    # doesn't pre-assign a role at create time, so this is usually a no-op
-    # here and the actual seeding fires from the role-flip hook in
-    # set_assignment_role. Best-effort: failure to seed must not roll back
-    # the vial create.
+    _seed_analyses_if_role(db, sub, parent_sample_id, user_id)
+    return sub
+
+
+def _seed_analyses_if_role(
+    db: Session, sub: LimsSubSample, parent_sample_id: str, user_id: int,
+) -> None:
+    """Seed lims_analyses for a freshly-created vial IF it already has a
+    real (non-xtra) role. Usually a no-op at create time — the role-flip
+    hooks do the real seeding. Best-effort: never rolls back the vial."""
     if sub.assignment_role and sub.assignment_role != "xtra":
         try:
             wp_services = _fetch_wp_services_for_parent(parent_sample_id) or {}
@@ -262,7 +330,6 @@ def create_sub_sample(
                 "sub_samples.create_seed_failed sub=%s role=%s err=%s",
                 sub.sample_id, sub.assignment_role, e,
             )
-    return sub
 
 
 def _fetch_wp_services_for_parent(parent_sample_id: str) -> Optional[dict]:
