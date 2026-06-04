@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, Fragment } from 'react'
-import { Activity, ArrowDownUp, ArrowUpDown, Check, ChevronDown, ChevronRight, MoreHorizontal, Pencil, X } from 'lucide-react'
+import { Activity, ArrowDownUp, ArrowUpDown, Check, ChevronDown, ChevronRight, Database, MoreHorizontal, Pencil, X } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Spinner } from '@/components/ui/spinner'
@@ -207,6 +207,20 @@ function formatDate(dateStr: string | null | undefined): string {
 }
 
 /** Replace "Analyte N" prefix with the mapped peptide name when available. */
+/**
+ * Marks analysis line items served from a Mk1 lims_analyses row (uid prefixed
+ * "mk1:") versus a legacy SENAITE analysis (32-char hex uid). A transition-era
+ * cue while both data sources coexist; renders nothing for SENAITE rows.
+ */
+export function Mk1NativeBadge({ uid }: { uid?: string | null }) {
+  if (!uid?.startsWith('mk1:')) return null
+  return (
+    <span title="Stored in Accu-Mk1 (no SENAITE record)" className="inline-flex shrink-0">
+      <Database size={10} className="text-muted-foreground/60" aria-label="Stored in Accu-Mk1" />
+    </span>
+  )
+}
+
 function formatAnalysisTitle(title: string, nameMap: Map<number, string>): { display: string; original: string } {
   const match = title.match(/^Analyte\s+(\d)\s*(.*)/i)
   if (match?.[1]) {
@@ -882,6 +896,7 @@ function AnalysisRow({
               </span>
             )}
           </span>
+          <Mk1NativeBadge uid={analysis.uid} />
           {!!historyCount && (
             <button
               onClick={onToggleHistory}
