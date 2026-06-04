@@ -360,9 +360,27 @@ def _reconcile_from_senaite(db: Session, parent: LimsSample) -> None:
 
     Never deletes local rows based on absence in SENAITE — surface to a human
     via WARN log instead.
+
+    Model-D exception: if any vial in the family is native (mk1:// prefix) OR
+    the family is empty while the native-create flag is on, Mk1 is canonical
+    and the SENAITE pull is skipped. This prevents the BW-0013 IntegrityError
+    (orphan SENAITE secondaries being re-inserted against the unique index).
     """
     if not parent.external_lims_uid:
         return
+
+    # Model-D guard: if any vial in this family is native, OR the family is
+    # empty while the native flag is on, Mk1 owns the sub-sample set. Pulling
+    # from SENAITE would re-insert orphan secondaries — exactly the BW-0013
+    # IntegrityError. Skip the pull; just refresh the sync timestamp.
+    subs = list(parent.sub_samples)
+    any_native = any(native.is_native_vial(s) for s in subs)
+    empty_and_native_mode = not subs and native.native_create_enabled()
+    if any_native or empty_and_native_mode:
+        parent.last_synced_at = datetime.utcnow()
+        db.flush()
+        return
+
     remote = senaite.fetch_secondaries(parent.sample_id)
     local_uids = {s.external_lims_uid for s in parent.sub_samples}
     remote_uids = set()
