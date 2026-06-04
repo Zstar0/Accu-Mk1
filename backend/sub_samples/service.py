@@ -408,7 +408,9 @@ def update_sub_sample(
         select(LimsSubSample).where(LimsSubSample.sample_id == sample_id)
     ).scalar_one()
     if remarks is not None:
-        senaite.update_remarks(sub.external_lims_uid, remarks)
+        # Native vials store remarks locally only; legacy vials mirror to SENAITE.
+        if not native.is_native_vial(sub):
+            senaite.update_remarks(sub.external_lims_uid, remarks)
         sub.remarks = remarks
     if photo_bytes is not None:
         senaite.upload_photo(sub.photo_external_uid, photo_bytes, photo_filename or "vial.jpg")
@@ -422,7 +424,9 @@ def delete_sub_sample(db: Session, sample_id: str) -> None:
     sub = db.execute(
         select(LimsSubSample).where(LimsSubSample.sample_id == sample_id)
     ).scalar_one()
-    senaite.delete_secondary(sub.external_lims_uid)
+    # Native vials have no SENAITE AR to delete; legacy vials do.
+    if not native.is_native_vial(sub):
+        senaite.delete_secondary(sub.external_lims_uid)
     parent = sub.parent_sample
     db.delete(sub)
     parent.last_synced_at = datetime.utcnow()
