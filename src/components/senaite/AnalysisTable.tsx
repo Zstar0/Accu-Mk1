@@ -362,6 +362,7 @@ function EditableResultCell({
             <Input
               ref={inputRef}
               type={isNumeric ? 'number' : 'text'}
+              step={isNumeric ? 'any' : undefined}
               value={autoValue}
               onChange={e => setAutoValue(e.target.value)}
               onKeyDown={handleAutoKeyDown}
@@ -435,6 +436,7 @@ function EditableResultCell({
             <Input
               ref={inputRef}
               type={isNumeric ? 'number' : 'text'}
+              step={isNumeric ? 'any' : undefined}
               value={editing.draft}
               onChange={e => editing.setDraft(e.target.value)}
               onKeyDown={e => { if (analysis.uid) editing.handleKeyDown(e, analysis.uid) }}
