@@ -2254,6 +2254,8 @@ export interface AnalysisServiceRecord {
   senaite_id: string | null
   senaite_uid: string | null
   active: boolean
+  result_type?: string | null
+  result_options?: { value: string; label: string }[] | null
   created_at: string
   updated_at: string
 }
@@ -2288,6 +2290,22 @@ export async function updateAnalysisServicePeptide(
     body: JSON.stringify({ peptide_id: peptideId }),
   })
   if (!response.ok) throw new Error(`Update peptide link failed: ${response.status}`)
+  return response.json()
+}
+
+export async function updateAnalysisServiceResultType(
+  serviceId: number,
+  body: {
+    result_type: string | null
+    result_options: { value: string; label: string }[] | null
+  },
+): Promise<AnalysisServiceRecord> {
+  const response = await fetch(`${API_BASE_URL()}/analysis-services/${serviceId}/result-type`, {
+    method: 'PATCH',
+    headers: getBearerHeaders('application/json'),
+    body: JSON.stringify(body),
+  })
+  if (!response.ok) throw new Error(`Update result type failed: ${response.status}`)
   return response.json()
 }
 
