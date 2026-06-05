@@ -1,11 +1,17 @@
 """Task 2: fail-closed SENAITE write-back on promote.
+Task 3: promotions read endpoint + parent activity events.
 
-Tests:
+Tests (Task 2):
   1. Happy path: writeback succeeds → 201, parent row persisted, write-back
      called with correct parent_sample_id / keyword / result / remark.
   2. Write-back raises SenaiteWritebackError → 502, no parent-tier row left,
      source vial still in to_be_verified.
   3. Validation error (wrong-state source) → 400-family, write-back NOT called.
+
+Tests (Task 3):
+  4. GET /promotions returns keyword/sources/email for a promoted parent.
+  5. GET /promotions?parent_sample_id=unknown → [].
+  6. GET /samples/{sample_id}/activity includes analysis_promoted event.
 """
 from __future__ import annotations
 
@@ -18,8 +24,12 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from contextlib import contextmanager
+from unittest.mock import MagicMock as _MagicMock
+
 from auth import get_current_user
 from database import Base, get_db
+from lims_analyses import service as lims_service
 from lims_analyses.senaite_writeback import SenaiteWritebackError
 from main import app
 from models import (
@@ -27,6 +37,7 @@ from models import (
     LimsAnalysis,
     LimsSample,
     LimsSubSample,
+    User,
 )
 
 
@@ -230,3 +241,145 @@ def test_promote_wrong_state_source_never_calls_writeback(
 
     assert resp.status_code in (400, 409, 422), resp.text
     assert call_count[0] == 0, "writeback_promotion should NOT have been called"
+
+
+# ─── Task 3: promotions read endpoint ─────────────────────────────────────────
+
+
+@pytest.fixture
+def promoted_fixture(route_client):
+    """Seed a promoted state: parent LimsSample + sub + analysis already
+    promoted to a parent-tier row via service.promote_to_parent.
+
+    Returns (db, parent, sub, vial_analysis, parent_analysis, user).
+    No write-back is involved — direct service call with commit=True.
+    """
+    db = route_client._test_session
+
+    svc = AnalysisService(title="Sterility", keyword="STERILITY")
+    db.add(svc)
+    db.flush()
+
+    # Seed a User so promoted_by_email resolves
+    user = User(
+        email="promoter@accumark.test",
+        hashed_password="x",
+        role="standard",
+    )
+    db.add(user)
+    db.flush()
+
+    parent = LimsSample(sample_id="PP-0001", external_lims_uid="uid-PP-0001")
+    db.add(parent)
+    db.flush()
+
+    sub = LimsSubSample(
+        parent_sample_pk=parent.id,
+        external_lims_uid="uid-PP-0001-S01",
+        sample_id="PP-0001-S01",
+        vial_sequence=1,
+    )
+    db.add(sub)
+    db.flush()
+
+    vial_analysis = LimsAnalysis(
+        lims_sub_sample_pk=sub.id,
+        analysis_service_id=svc.id,
+        keyword="STERILITY",
+        title="Sterility",
+        review_state="to_be_verified",
+        result_value="Pass",
+    )
+    db.add(vial_analysis)
+    db.commit()
+    db.refresh(vial_analysis)
+
+    # Promote via service (commit=True, no SENAITE write-back)
+    parent_analysis, _ = lims_service.promote_to_parent(
+        db,
+        keyword="STERILITY",
+        result_value="Pass",
+        result_unit=None,
+        method_id=None,
+        instrument_id=None,
+        sources=[{"analysis_id": vial_analysis.id, "contribution_kind": "chosen"}],
+        user_id=user.id,
+        reason=None,
+        commit=True,
+    )
+
+    return db, parent, sub, vial_analysis, parent_analysis, user
+
+
+def test_list_promotions_returns_keyword_sources_email(route_client, promoted_fixture):
+    """GET /api/lims-analyses/promotions?parent_sample_id=PP-0001 returns one
+    ParentPromotionInfo with the keyword, vial source, and promoter email."""
+    db, parent, sub, vial_analysis, parent_analysis, user = promoted_fixture
+
+    resp = route_client.get(
+        "/api/lims-analyses/promotions",
+        params={"parent_sample_id": parent.sample_id},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert isinstance(body, list)
+    assert len(body) == 1
+
+    item = body[0]
+    assert item["keyword"] == "STERILITY"
+    assert item["parent_analysis_id"] == parent_analysis.id
+    assert item["result_value"] == "Pass"
+    assert item["promoted_by_email"] == user.email
+
+    sources = item["sources"]
+    assert len(sources) == 1
+    assert sources[0]["sample_id"] == sub.sample_id
+    assert sources[0]["contribution_kind"] == "chosen"
+
+
+def test_list_promotions_unknown_sample_returns_empty(route_client):
+    """GET /promotions?parent_sample_id=DOES-NOT-EXIST → [] (not 404)."""
+    resp = route_client.get(
+        "/api/lims-analyses/promotions",
+        params={"parent_sample_id": "DOES-NOT-EXIST"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == []
+
+
+def test_activity_includes_analysis_promoted_event(route_client, promoted_fixture):
+    """GET /samples/{sample_id}/activity for the parent sample includes an
+    analysis_promoted event sourced from lims_analysis_promotions."""
+    db, parent, sub, vial_analysis, parent_analysis, user = promoted_fixture
+
+    # Patch out the mk1_db calls (no Postgres in test env)
+    fake_cursor = _MagicMock()
+    fake_cursor.__enter__ = lambda s: s
+    fake_cursor.__exit__ = _MagicMock(return_value=False)
+    fake_cursor.execute = _MagicMock()
+    fake_cursor.fetchall = _MagicMock(return_value=[])
+    fake_cursor.fetchone = _MagicMock(return_value=None)
+
+    @contextmanager
+    def _fake_mk1_conn():
+        conn = _MagicMock()
+        conn.cursor = _MagicMock(return_value=fake_cursor)
+        yield conn
+
+    with (
+        patch("mk1_db.ensure_sample_preps_table", return_value=None),
+        patch("mk1_db.get_mk1_db", side_effect=_fake_mk1_conn),
+    ):
+        resp = route_client.get(f"/samples/{parent.sample_id}/activity")
+
+    assert resp.status_code == 200, resp.text
+    events = resp.json()["events"]
+    promoted_events = [e for e in events if e["event"] == "analysis_promoted"]
+    assert len(promoted_events) >= 1, f"No analysis_promoted event found; events={events}"
+
+    ev = promoted_events[0]
+    assert ev["source"] == "lims_analysis_promotions"
+    assert "STERILITY" in ev["label"]
+    assert ev["details"]["keyword"] == "STERILITY"
+    assert ev["details"]["result_value"] == "Pass"
+    assert "PP-0001-S01" in ev["label"]

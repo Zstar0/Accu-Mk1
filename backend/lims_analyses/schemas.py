@@ -12,6 +12,25 @@ from typing import List, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field
 
 
+# ─── Phase 4b: parent promotions read shapes ──────────────────────────────────
+
+
+class PromotionSourceInfo(BaseModel):
+    """One contributing vial-tier source in a ParentPromotionInfo."""
+    sample_id: Optional[str] = None     # vial label, e.g. P-0143-S01
+    contribution_kind: str
+
+
+class ParentPromotionInfo(BaseModel):
+    """One promotion: a parent-tier analysis row created from vial sources."""
+    keyword: str
+    parent_analysis_id: int
+    result_value: Optional[str] = None
+    promoted_at: datetime
+    promoted_by_email: Optional[str] = None
+    sources: List[PromotionSourceInfo]
+
+
 # ─── Enums (string-literal aliases for documentation) ────────────────────────
 
 ReviewState = Literal[

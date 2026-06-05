@@ -472,6 +472,84 @@ def promote_to_parent(
     return parent_row, promotion_rows
 
 
+# ─── Phase 4b: parent promotions read ───────────────────────────────────────
+
+
+def list_promotions_for_parent(
+    db: Session,
+    parent_sample_id: str,
+) -> list:
+    """Return a list of ParentPromotionInfo for all promoted analyses on a
+    parent LimsSample identified by *parent_sample_id*.
+
+    Empty list when the sample is unknown — not a 404, because parent pages
+    for samples that were never promoted call this too.
+    """
+    from models import LimsAnalysisPromotion, LimsSubSample, User
+    from lims_analyses.schemas import ParentPromotionInfo, PromotionSourceInfo
+    from models import LimsSample
+
+    parent = db.execute(
+        select(LimsSample).where(LimsSample.sample_id == parent_sample_id)
+    ).scalar_one_or_none()
+    if parent is None:
+        return []
+
+    # Parent-tier analyses = rows with lims_sample_pk set (no sub-sample) and
+    # at least one promotion link.
+    parent_analyses = db.execute(
+        select(LimsAnalysis).where(
+            LimsAnalysis.lims_sample_pk == parent.id,
+            LimsAnalysis.lims_sub_sample_pk.is_(None),
+        )
+    ).scalars().all()
+
+    result = []
+    for pa in parent_analyses:
+        promo_rows = db.execute(
+            select(LimsAnalysisPromotion).where(
+                LimsAnalysisPromotion.parent_analysis_id == pa.id
+            )
+        ).scalars().all()
+        if not promo_rows:
+            # Directly-created parent analyses are not promotions — skip.
+            continue
+
+        # Use the first promotion row for metadata (all share same user/time).
+        first_prom = promo_rows[0]
+
+        # Resolve promoter email (nullable FK)
+        promoted_by_email: Optional[str] = None
+        if first_prom.promoted_by_user_id is not None:
+            user_obj = db.get(User, first_prom.promoted_by_user_id)
+            if user_obj is not None:
+                promoted_by_email = user_obj.email
+
+        sources = []
+        for prom in promo_rows:
+            src_analysis = db.get(LimsAnalysis, prom.source_analysis_id)
+            vial_sample_id: Optional[str] = None
+            if src_analysis and src_analysis.lims_sub_sample_pk is not None:
+                sub = db.get(LimsSubSample, src_analysis.lims_sub_sample_pk)
+                if sub is not None:
+                    vial_sample_id = sub.sample_id
+            sources.append(PromotionSourceInfo(
+                sample_id=vial_sample_id,
+                contribution_kind=prom.contribution_kind,
+            ))
+
+        result.append(ParentPromotionInfo(
+            keyword=pa.keyword,
+            parent_analysis_id=pa.id,
+            result_value=pa.result_value,
+            promoted_at=first_prom.promoted_at,
+            promoted_by_email=promoted_by_email,
+            sources=sources,
+        ))
+
+    return result
+
+
 # ─── Phase 3 adapter: SenaiteAnalysis-shape projection ──────────────────────
 
 

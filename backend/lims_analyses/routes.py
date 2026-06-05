@@ -24,6 +24,7 @@ from lims_analyses.schemas import (
     AnalysisWithTransitions,
     CreateAnalysisRequest,
     HostKind,
+    ParentPromotionInfo,
     PromoteRequest,
     PromoteResponse,
     PromotionRow,
@@ -147,6 +148,20 @@ def list_for_host(
             include_retests=include_retests,
         )
         return [AnalysisResponse.model_validate(r) for r in rows]
+    except Exception as e:
+        raise _handle_service_error(e)
+
+
+@router.get("/promotions", response_model=List[ParentPromotionInfo])
+def list_promotions(
+    parent_sample_id: str = Query(...),
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Return promotions (parent-tier analyses with their vial sources) for a
+    parent LimsSample. Returns [] when the sample is unknown."""
+    try:
+        return service.list_promotions_for_parent(db, parent_sample_id)
     except Exception as e:
         raise _handle_service_error(e)
 

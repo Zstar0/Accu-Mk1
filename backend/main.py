@@ -821,6 +821,25 @@ async def get_sample_activity(
             "source": "hplc_analyses",
         })
 
+    # --- Mk1 DB: lims_analysis_promotions (analysis promoted from vials) ---
+    from lims_analyses.service import list_promotions_for_parent
+    for p in list_promotions_for_parent(db, sample_id):
+        events.append({
+            "timestamp": p.promoted_at.isoformat(),
+            "event": "analysis_promoted",
+            "label": (
+                f"{p.keyword} promoted from "
+                f"{', '.join(s.sample_id or '?' for s in p.sources)}"
+            ),
+            "details": {
+                "keyword": p.keyword,
+                "result_value": p.result_value,
+                "by": p.promoted_by_email,
+                "sources": [s.model_dump() for s in p.sources],
+            },
+            "source": "lims_analysis_promotions",
+        })
+
     # --- Integration DB: sample_status_events ---
     try:
         with get_integration_db() as int_conn:
