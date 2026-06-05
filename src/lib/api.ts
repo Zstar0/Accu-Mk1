@@ -1775,7 +1775,22 @@ export interface SampleCOAActionResponse {
 async function extractErrorMessage(response: Response, fallback: string): Promise<string> {
   try {
     const body = await response.json()
-    return body?.detail ?? body?.message ?? fallback
+    const detail = body?.detail ?? body?.message ?? fallback
+    if (typeof detail === 'string') return detail
+    // Structured detail (e.g. the COA resolver's unresolved_sources 422):
+    // render the message + offending analytes instead of [object Object].
+    if (detail && typeof detail === 'object') {
+      let msg: string = detail.message ?? fallback
+      if (Array.isArray(detail.unresolved) && detail.unresolved.length > 0) {
+        const kws = detail.unresolved
+          .map((u: { analyte_keyword?: string }) => u.analyte_keyword)
+          .filter(Boolean)
+          .join(', ')
+        if (kws) msg += ` Unresolved: ${kws}`
+      }
+      return msg
+    }
+    return fallback
   } catch {
     return fallback
   }
