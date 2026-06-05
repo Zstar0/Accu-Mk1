@@ -12328,6 +12328,7 @@ EXPECTED_POST_STATES: dict[str, str] = {
 async def transition_analysis(
     uid: str,
     req: AnalysisTransitionRequest,
+    db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
     """Trigger a workflow transition on a SENAITE analysis.
@@ -12335,6 +12336,10 @@ async def transition_analysis(
     Proxies to SENAITE REST API: POST /update/{uid} with {"transition": action}.
     Validates post-transition review_state against EXPECTED_POST_STATES to catch
     silent rejections (SENAITE returns 200 OK even when transitions are skipped).
+
+    When the transition is 'retest', cascades the retest to source vial-tier
+    analyses via cascade_parent_retest_to_sources (best-effort, wrapped in
+    try/except — cascade failure never fails the SENAITE transition).
     """
     if SENAITE_URL is None:
         return AnalysisResultResponse(
@@ -12385,6 +12390,76 @@ async def transition_analysis(
                     new_review_state=actual_state,
                     keyword=keyword,
                 )
+
+            # ── Parent-retest cascade (best-effort) ──────────────────────────
+            # When a SENAITE analysis is successfully retested, find its Mk1
+            # parent-tier row and cascade the retest to all source vial-tier
+            # analyses so the bench sees the work requests.
+            #
+            # sample_id resolution:
+            #   1. Try item["getRequestID"] — available when the update endpoint
+            #      returns a full catalog-aware item (usually the case).
+            #   2. Fallback: fetch the Analysis object by uid and read
+            #      getRequestID from there (one extra GET, always reliable).
+            #   3. If still absent, log a warning and skip — the cascade is
+            #      best-effort and must not fail the SENAITE transition.
+            if req.transition == "retest":
+                import logging as _logging
+                _cascade_logger = _logging.getLogger(__name__)
+                try:
+                    from lims_analyses.service import cascade_parent_retest_to_sources
+
+                    _parent_sample_id: Optional[str] = (
+                        item.get("getRequestID") or item.get("RequestID") or None
+                    )
+                    if not _parent_sample_id:
+                        # Fallback: re-fetch the analysis object for its request ID
+                        try:
+                            _fetch_url = (
+                                f"{SENAITE_URL}/senaite/@@API/senaite/v1/Analysis/{uid}"
+                            )
+                            _fetch_resp = await client.get(_fetch_url)
+                            if _fetch_resp.status_code == 200:
+                                _fetch_data = _fetch_resp.json()
+                                _fetch_items = _fetch_data.get("items", [])
+                                if _fetch_items:
+                                    _parent_sample_id = (
+                                        _fetch_items[0].get("getRequestID")
+                                        or _fetch_items[0].get("RequestID")
+                                        or None
+                                    )
+                        except Exception as _fetch_err:
+                            _cascade_logger.warning(
+                                "cascade_parent_retest: fallback fetch for uid=%s failed: %s",
+                                uid, _fetch_err,
+                            )
+
+                    if _parent_sample_id and keyword:
+                        _user_id = getattr(current_user, "id", None)
+                        _new_ids = cascade_parent_retest_to_sources(
+                            db,
+                            parent_sample_id=_parent_sample_id,
+                            keyword=keyword,
+                            user_id=_user_id,
+                        )
+                        if _new_ids:
+                            _cascade_logger.info(
+                                "cascade_parent_retest: parent=%s keyword=%s → "
+                                "created vial retest rows %s",
+                                _parent_sample_id, keyword, _new_ids,
+                            )
+                    else:
+                        _cascade_logger.warning(
+                            "cascade_parent_retest: could not resolve parent_sample_id "
+                            "for uid=%s keyword=%r — cascade skipped",
+                            uid, keyword,
+                        )
+                except Exception as _cascade_err:
+                    _cascade_logger.warning(
+                        "cascade_parent_retest: unexpected error for uid=%s: %s",
+                        uid, _cascade_err,
+                    )
+            # ── end parent-retest cascade ─────────────────────────────────────
 
             return AnalysisResultResponse(
                 success=True,

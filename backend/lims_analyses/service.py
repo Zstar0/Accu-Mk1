@@ -652,6 +652,93 @@ def list_promotions_for_parent(
     return result
 
 
+# ─── Phase 4c: parent-retest cascade ────────────────────────────────────────
+
+
+def cascade_parent_retest_to_sources(
+    db: Session,
+    *,
+    parent_sample_id: str,
+    keyword: str,
+    user_id: Optional[int],
+) -> list[int]:
+    """When a PARENT-tier analysis is retested (via SENAITE), cascade the retest
+    down to each source vial-tier analysis that was promoted into that parent.
+
+    Resolution chain:
+      parent_sample_id → LimsSample → active parent-tier LimsAnalysis
+        (lims_sub_sample_pk IS NULL, retest_of_id IS NULL, not retracted/rejected)
+        with matching keyword
+      → LimsAnalysisPromotion.source_analysis_id rows
+      → source LimsAnalysis rows that are eligible for retest
+        (state in to_be_verified/verified AND not already retested)
+      → apply_transition(kind="retest") on each eligible source
+
+    Returns a list of the newly-created vial retest row ids (may be empty when
+    any link in the chain is missing, or all sources are already retested).
+
+    Never raises — caller wraps in try/except. Each source's retest commits
+    independently; if one fails (should not happen for eligible rows), the
+    others still proceed.
+    """
+    from models import LimsAnalysisPromotion, LimsSample
+
+    # 1. Resolve parent LimsSample
+    parent_sample = db.execute(
+        select(LimsSample).where(LimsSample.sample_id == parent_sample_id)
+    ).scalar_one_or_none()
+    if parent_sample is None:
+        return []
+
+    # 2. Find the active parent-tier analysis for this keyword
+    #    (lims_sub_sample_pk IS NULL, retest_of_id IS NULL, state not terminal-bad)
+    parent_analysis = db.execute(
+        select(LimsAnalysis).where(
+            LimsAnalysis.lims_sample_pk == parent_sample.id,
+            LimsAnalysis.lims_sub_sample_pk.is_(None),
+            LimsAnalysis.keyword == keyword,
+            LimsAnalysis.retest_of_id.is_(None),
+            LimsAnalysis.review_state.not_in(("retracted", "rejected")),
+        )
+    ).scalars().first()
+    if parent_analysis is None:
+        return []
+
+    # 3. Find all promotion sources for this parent analysis
+    promo_rows = db.execute(
+        select(LimsAnalysisPromotion).where(
+            LimsAnalysisPromotion.parent_analysis_id == parent_analysis.id
+        )
+    ).scalars().all()
+    if not promo_rows:
+        return []
+
+    # 4. Apply retest to each eligible source
+    new_row_ids: list[int] = []
+    for prom in promo_rows:
+        src = db.get(LimsAnalysis, prom.source_analysis_id)
+        if src is None:
+            continue
+        if src.retested:
+            continue  # already retested — skip
+        if src.review_state not in ("to_be_verified", "verified"):
+            continue  # not retest-eligible
+        try:
+            new_row = apply_transition(
+                db,
+                analysis_id=src.id,
+                kind="retest",
+                reason="cascaded from parent SENAITE retest",
+                user_id=user_id,
+            )
+            new_row_ids.append(new_row.id)
+        except Exception:
+            # Log at call site; don't let one bad source kill the rest.
+            pass
+
+    return new_row_ids
+
+
 # ─── Native vial add/remove (Phase 6 — native Manage Analyses) ──────────────
 
 
