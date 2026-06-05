@@ -201,6 +201,8 @@ class SenaiteShapeAnalysisResponse(BaseModel):
     # rows and for parent-tier rows themselves (only vial-tier rows can
     # be sources of a promotion).
     promoted_to_parent_id: Optional[int] = None
+    # Result type + dropdown options, sourced from the analysis_service.
+    result_type: Optional[str] = None
 
 
 # ─── Phase 4a: promote_to_parent response shapes ─────────────────────────────

@@ -493,6 +493,7 @@ def list_analyses_in_senaite_shape(
         SenaiteShapeAnalysisResponse,
         SenaiteShapeInstrumentOption,
         SenaiteShapeMethodOption,
+        SenaiteShapeResultOption,
     )
 
     rows = list_analyses_for_host(
@@ -555,12 +556,19 @@ def list_analyses_in_senaite_shape(
         if r.instrument_id and r.instrument_id in instruments_by_id:
             instrument_name = getattr(instruments_by_id[r.instrument_id], "name", None)
 
+        svc_options = [
+            SenaiteShapeResultOption(value=o["value"], label=o["label"])
+            for o in (getattr(svc, "result_options", None) or [])
+            if isinstance(o, dict) and "value" in o and "label" in o
+        ]
+
         out.append(SenaiteShapeAnalysisResponse(
             uid=f"mk1:{r.id}",
             keyword=r.keyword,
             title=r.title,
             result=r.result_value,
-            result_options=[],
+            result_options=svc_options,
+            result_type=getattr(svc, "result_type", None),
             unit=r.result_unit or (svc.unit if svc else None),
             method=method_name,
             method_uid=str(r.method_id) if r.method_id else None,
