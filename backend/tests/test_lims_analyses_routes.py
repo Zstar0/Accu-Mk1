@@ -18,11 +18,26 @@ class _FakeUser:
     """Minimal stand-in for the authed user; only id is read.
     id=None avoids a created_by_user_id FK target requirement."""
     id = None
+    email = "test@accumark.test"
 
 
 # Module-level override, same convention as test_api_business_hours.py.
 app.dependency_overrides[auth.get_current_user] = lambda: _FakeUser()
 client = TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def _stub_senaite_writeback(monkeypatch):
+    """Stub out SENAITE write-back so promote tests don't require a live SENAITE.
+
+    This is an autouse function-scoped fixture so every test in this module
+    gets a clean stub without touching call sites individually.  Tests that
+    want to test the write-back failure path live in test_promote_writeback_route.py.
+    """
+    import lims_analyses.routes as _routes
+
+    monkeypatch.setattr(_routes.senaite_writeback, "writeback_promotion",
+                        lambda *args, **kwargs: "stub-senaite-uid")
 
 
 @pytest.fixture

@@ -7,15 +7,18 @@ directly.
 
 from __future__ import annotations
 
+from datetime import date
 from typing import List, Literal, Union
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from auth import get_current_user
 from database import get_db
-from lims_analyses import service
+from lims_analyses import senaite_writeback, service
+from lims_analyses.senaite_writeback import SenaiteWritebackError
 from lims_analyses.schemas import (
     AnalysisResponse,
     AnalysisWithTransitions,
@@ -233,6 +236,8 @@ def promote(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
+    from models import LimsAnalysis, LimsAnalysisPromotion, LimsSample, LimsSubSample
+
     try:
         parent_row, promotion_rows = service.promote_to_parent(
             db,
@@ -244,10 +249,51 @@ def promote(
             sources=[s.model_dump() for s in req.sources],
             user_id=getattr(current_user, "id", None),
             reason=req.reason,
-        )
-        return PromoteResponse(
-            parent=AnalysisResponse.model_validate(parent_row),
-            promotions=[PromotionRow.model_validate(p) for p in promotion_rows],
+            commit=False,
         )
     except Exception as e:
         raise _handle_service_error(e)
+
+    # ── SENAITE write-back (fail-closed) ──────────────────────────────────────
+    # Derive the parent's SENAITE sample_id label for the write-back call.
+    parent_sample_obj = db.get(LimsSample, parent_row.lims_sample_pk)
+    parent_sample_id = parent_sample_obj.sample_id if parent_sample_obj else str(parent_row.lims_sample_pk)
+
+    # Collect source-vial sample_id labels from sub-sample rows.
+    vial_ids: list[str] = []
+    for prom in promotion_rows:
+        src_analysis = db.get(LimsAnalysis, prom.source_analysis_id)
+        if src_analysis and src_analysis.lims_sub_sample_pk is not None:
+            sub = db.get(LimsSubSample, src_analysis.lims_sub_sample_pk)
+            if sub is not None:
+                vial_ids.append(sub.sample_id)
+
+    email = getattr(current_user, "email", None) or "unknown"
+    remark = (
+        f"Promoted from {', '.join(vial_ids) if vial_ids else '(unknown vials)'} "
+        f"(Accu-Mk1) by {email} on {date.today().isoformat()}"
+    )
+
+    try:
+        senaite_writeback.writeback_promotion(
+            parent_sample_id,
+            req.keyword,
+            req.result_value,
+            remark,
+        )
+    except SenaiteWritebackError as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=502,
+            detail=f"SENAITE write-back failed — promote aborted: {e}",
+        )
+
+    db.commit()
+    db.refresh(parent_row)
+    for p in promotion_rows:
+        db.refresh(p)
+
+    return PromoteResponse(
+        parent=AnalysisResponse.model_validate(parent_row),
+        promotions=[PromotionRow.model_validate(p) for p in promotion_rows],
+    )

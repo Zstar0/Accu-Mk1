@@ -308,6 +308,7 @@ def promote_to_parent(
     sources: List[Dict[str, Any]],
     user_id: Optional[int] = None,
     reason: Optional[str] = None,
+    commit: bool = True,
 ) -> Tuple[LimsAnalysis, List["LimsAnalysisPromotion"]]:
     """Phase 4a: create a parent-tier verified row from N vial-tier sources.
 
@@ -463,10 +464,11 @@ def promote_to_parent(
             reason=f"promoted to parent #{parent_row.id} (kind={kind})",
         ))
 
-    db.commit()
-    db.refresh(parent_row)
-    for p in promotion_rows:
-        db.refresh(p)
+    if commit:
+        db.commit()
+        db.refresh(parent_row)
+        for p in promotion_rows:
+            db.refresh(p)
     return parent_row, promotion_rows
 
 
