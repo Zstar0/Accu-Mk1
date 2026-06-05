@@ -71,3 +71,67 @@ def test_shape_defaults_when_no_result_type(db_session):
     assert len(rows) == 1
     assert rows[0].result_type is None
     assert rows[0].result_options == []
+
+
+def test_shape_retest_chain_with_include_retests(db_session):
+    """include_retests=True returns both the original and retest rows, ordered
+    oldest-first (by id), with retested=True on the original.
+
+    This is the FE grouping contract: groupAnalysesByTitle takes
+    rows[rows.length-1] as 'current' and rows.slice(0,-1) as 'history'.
+    Oldest-first ordering means the newest row lands last (current), and
+    the retested original lands in history with retested=True.
+    """
+    svc = AnalysisService(
+        title="Endotoxin", keyword="ENDO-LAL",
+        result_type="numeric", result_options=None,
+    )
+    db_session.add(svc)
+    db_session.flush()
+    parent = LimsSample(sample_id="CH-0001", external_lims_uid="uid-CH-0001")
+    db_session.add(parent)
+    db_session.flush()
+    sub = LimsSubSample(parent_sample_pk=parent.id, external_lims_uid="mk1://ch",
+                        sample_id="CH-0001-S01", vial_sequence=1)
+    db_session.add(sub)
+    db_session.flush()
+
+    # Original row — will be marked retested
+    old = LimsAnalysis(lims_sub_sample_pk=sub.id, analysis_service_id=svc.id,
+                       keyword="ENDO-LAL", title="Endotoxin",
+                       review_state="to_be_verified", result_value="6.1",
+                       retested=True)
+    db_session.add(old)
+    db_session.flush()
+
+    # Retest row — points back at old, starts fresh
+    new_row = LimsAnalysis(lims_sub_sample_pk=sub.id, analysis_service_id=svc.id,
+                           keyword="ENDO-LAL", title="Endotoxin",
+                           review_state="unassigned", result_value=None,
+                           retest_of_id=old.id, retested=False)
+    db_session.add(new_row)
+    db_session.commit()
+
+    # include_retests=False: only the original (retest_of_id IS NULL) comes back
+    rows_no_retests = list_analyses_in_senaite_shape(
+        db_session, host_kind="sub_sample", host_pk=sub.id, include_retests=False,
+    )
+    assert len(rows_no_retests) == 1
+    assert rows_no_retests[0].uid == f"mk1:{old.id}"
+
+    # include_retests=True: both rows returned, oldest first (old.id < new_row.id)
+    rows_with_retests = list_analyses_in_senaite_shape(
+        db_session, host_kind="sub_sample", host_pk=sub.id, include_retests=True,
+    )
+    assert len(rows_with_retests) == 2
+
+    # Oldest row first: the original (retested=True) is at index 0
+    assert rows_with_retests[0].uid == f"mk1:{old.id}"
+    assert rows_with_retests[0].retested is True
+    assert rows_with_retests[0].result == "6.1"
+
+    # Newest row last: the fresh retest (retested=False) is at index 1 — this
+    # is what groupAnalysesByTitle selects as 'current'
+    assert rows_with_retests[1].uid == f"mk1:{new_row.id}"
+    assert rows_with_retests[1].retested is False
+    assert rows_with_retests[1].result is None

@@ -4881,7 +4881,7 @@ export async function listLimsAnalysesForSubSample(
   url.searchParams.set('host_kind', 'sub_sample')
   url.searchParams.set('host_pk', String(subSamplePk))
   url.searchParams.set('as', 'senaite_shape')
-  url.searchParams.set('include_retests', 'false')
+  url.searchParams.set('include_retests', 'true')
   const response = await fetch(url.toString(), { headers: getBearerHeaders() })
   if (!response.ok) {
     throw new Error(`listLimsAnalysesForSubSample failed: ${response.status}`)

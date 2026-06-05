@@ -70,7 +70,7 @@ def list_analyses_for_host(
         raise BadRequestError(f"invalid host_kind={host_kind!r}")
     if not include_retests:
         stmt = stmt.where(LimsAnalysis.retest_of_id.is_(None))
-    return list(db.execute(stmt.order_by(LimsAnalysis.keyword)).scalars().all())
+    return list(db.execute(stmt.order_by(LimsAnalysis.keyword, LimsAnalysis.id)).scalars().all())
 
 
 # ─── Creation ────────────────────────────────────────────────────────────────
