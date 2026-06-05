@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, fireEvent, waitFor, screen } from '@testing-library/react'
 import {
   isPromotable,
@@ -118,6 +118,10 @@ describe('deriveBulkPromoteBlockers', () => {
 })
 
 describe('BulkPromoteDialog', () => {
+  beforeEach(() => {
+    vi.mocked(api.promoteAnalyses).mockClear().mockResolvedValue({} as never)
+  })
+
   it('lists keyword and value per row, read-only', () => {
     render(
       <BulkPromoteDialog
@@ -162,5 +166,26 @@ describe('BulkPromoteDialog', () => {
     expect(vi.mocked(api.promoteAnalyses)).toHaveBeenCalledWith(
       expect.objectContaining({ keyword: 'STER-PCR', result_value: '11', reason: 'Bulk promote from AnalysisTable' }),
     )
+    const calls = vi.mocked(api.promoteAnalyses).mock.calls
+    expect(calls[0]![0].keyword).toBe('STER-PCR')
+    expect(calls[1]![0].keyword).toBe('ENDO')
+  })
+
+  it('continues past a failed row and still fires onPromoted', async () => {
+    vi.mocked(api.promoteAnalyses)
+      .mockRejectedValueOnce(new Error('boom'))
+      .mockResolvedValueOnce({} as never)
+    const onPromoted = vi.fn()
+    render(
+      <BulkPromoteDialog
+        analyses={[promotable, mk({ uid: 'mk1:821', review_state: 'to_be_verified', keyword: 'ENDO', result: '0.4' })]}
+        open
+        onOpenChange={() => {}}
+        onPromoted={onPromoted}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', { name: /^Promote 2/ }))
+    await waitFor(() => expect(onPromoted).toHaveBeenCalled())
+    expect(vi.mocked(api.promoteAnalyses)).toHaveBeenCalledTimes(2)
   })
 })

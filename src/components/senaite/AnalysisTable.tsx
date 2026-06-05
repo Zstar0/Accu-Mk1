@@ -895,29 +895,34 @@ export function BulkPromoteDialog({
   const handle = async () => {
     setProgress({ current: 0, total: analyses.length })
     let failed = 0
-    for (let i = 0; i < analyses.length; i++) {
-      const a = analyses[i]!
-      setProgress({ current: i + 1, total: analyses.length })
-      if (!a.uid?.startsWith('mk1:') || !a.result) continue
-      const limsId = parseInt(a.uid.slice('mk1:'.length), 10)
-      try {
-        await promoteAnalyses({
-          keyword: a.keyword ?? '',
-          result_value: a.result,
-          result_unit: a.unit ?? null,
-          method_id: a.method_uid ? parseInt(a.method_uid, 10) : null,
-          instrument_id: a.instrument_uid ? parseInt(a.instrument_uid, 10) : null,
-          sources: [{ analysis_id: limsId, contribution_kind: 'chosen' }],
-          reason: 'Bulk promote from AnalysisTable',
-        })
-      } catch (e) {
-        failed++
-        toast.error(`${a.keyword ?? a.title}: ${(e as Error).message}`)
+    let promoted = 0
+    try {
+      for (let i = 0; i < analyses.length; i++) {
+        const a = analyses[i]!
+        setProgress({ current: i + 1, total: analyses.length })
+        if (!a.uid?.startsWith('mk1:') || !a.result) continue
+        const limsId = parseInt(a.uid.slice('mk1:'.length), 10)
+        try {
+          await promoteAnalyses({
+            keyword: a.keyword ?? '',
+            result_value: a.result,
+            result_unit: a.unit ?? null,
+            method_id: a.method_uid ? parseInt(a.method_uid, 10) : null,
+            instrument_id: a.instrument_uid ? parseInt(a.instrument_uid, 10) : null,
+            sources: [{ analysis_id: limsId, contribution_kind: 'chosen' }],
+            reason: 'Bulk promote from AnalysisTable',
+          })
+          promoted++
+        } catch (e) {
+          failed++
+          toast.error(`${a.keyword ?? a.title}: ${(e as Error).message}`)
+        }
       }
+    } finally {
+      setProgress(null)
     }
-    setProgress(null)
-    if (failed === 0) toast.success(`Promoted ${analyses.length} to parent`)
-    else toast.warning(`Promoted ${analyses.length - failed} of ${analyses.length}; ${failed} failed`)
+    if (failed === 0 && promoted === analyses.length) toast.success(`Promoted ${promoted} to parent`)
+    else toast.warning(`Promoted ${promoted} of ${analyses.length}; ${failed} failed`)
     onOpenChange(false)
     onPromoted()
   }
