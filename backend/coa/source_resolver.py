@@ -34,6 +34,10 @@ from models import (
     LimsSubSample,
 )
 
+# Analyte review states that carry a usable (live) result.
+# Retracted / rejected / invalid / no-result states are intentionally absent.
+_LIVE_RESULT_STATES = ("submitted", "to_be_verified", "verified", "published")
+
 
 class SenaiteAnalysesReader(Protocol):
     """
@@ -135,7 +139,9 @@ def _resolve_analyte(
     """
     eligible = [
         c for c in candidates
-        if c.reportable and c.state in ("verified", "published")
+        if c.reportable
+        and c.state in _LIVE_RESULT_STATES
+        and c.value not in (None, "")
     ]
 
     if not eligible:
@@ -146,7 +152,7 @@ def _resolve_analyte(
             candidates=candidates,
             blocked="missing",
             blocked_detail=(
-                f"no reportable verified result for {analyte_keyword!r} "
+                f"no reportable result for {analyte_keyword!r} "
                 "across parent + sub-samples"
             ),
         )
@@ -203,7 +209,7 @@ def _resolve_analyte(
             blocked="stale_pin",
             blocked_detail=(
                 f"pin on {pin.source_sample_id}/{pin.source_analysis_uid} "
-                "no longer matches a reportable verified candidate"
+                "no longer matches a reportable live candidate"
             ),
         )
 
@@ -215,7 +221,7 @@ def _resolve_analyte(
         candidates=candidates,
         blocked="needs_decision",
         blocked_detail=(
-            f"{len(eligible)} reportable verified candidates for "
+            f"{len(eligible)} reportable live candidates for "
             f"{analyte_keyword!r}; pick one via the COA Sources panel"
         ),
     )
@@ -246,9 +252,11 @@ def _resolve_mk1_parent_tier(
     rows = db.execute(
         select(LimsAnalysis).where(
             LimsAnalysis.lims_sample_pk == parent.id,
-            LimsAnalysis.review_state.in_(("verified", "published")),
+            LimsAnalysis.review_state.in_(_LIVE_RESULT_STATES),
             LimsAnalysis.reportable == True,  # noqa: E712 — SQL equality
             LimsAnalysis.retest_of_id.is_(None),
+            LimsAnalysis.result_value.isnot(None),
+            LimsAnalysis.result_value != "",
         )
     ).scalars().all()
 
@@ -332,16 +340,17 @@ def _apply_pin_override(
         row = db.get(LimsAnalysis, row_id)
         if (
             row is None
-            or row.review_state not in ("verified", "published")
+            or row.review_state not in _LIVE_RESULT_STATES
             or not row.reportable
             or row.retest_of_id is not None
             or row.keyword != analyte_keyword
+            or row.result_value in (None, "")
         ):
             return base.model_copy(update={
                 "blocked": "stale_pin",
                 "blocked_detail": (
                     f"pin on {pin_sid}/{pin_uid} no longer matches a "
-                    "reportable verified parent-tier row"
+                    "reportable live parent-tier row"
                 ),
                 "chosen": None,
             })
@@ -366,7 +375,8 @@ def _apply_pin_override(
          if c.source_sample_id == pin_sid
          and c.source_analysis_uid == pin_uid
          and c.reportable
-         and c.state in ("verified", "published")),
+         and c.state in _LIVE_RESULT_STATES
+         and c.value not in (None, "")),
         None,
     )
     if match is None:
@@ -374,7 +384,7 @@ def _apply_pin_override(
             "blocked": "stale_pin",
             "blocked_detail": (
                 f"pin on {pin_sid}/{pin_uid} no longer matches a "
-                "reportable verified candidate"
+                "reportable live candidate"
             ),
             "chosen": None,
         })

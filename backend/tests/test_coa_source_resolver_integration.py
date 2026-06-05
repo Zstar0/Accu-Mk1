@@ -234,6 +234,34 @@ def test_resolve_sources_senaite_only_parent_uses_legacy_path(db, analysis_servi
     assert d.chosen.value == "42.0"
 
 
+def test_resolve_sources_mk1_to_be_verified_row_resolves(db, clean_sub, analysis_service):
+    """A parent-tier row in to_be_verified state (not yet verified) now resolves
+    as mode='auto' under the relaxed policy. Previously would have been blocked."""
+    # Insert a parent-tier row directly at to_be_verified to exercise the state
+    # gate in _resolve_mk1_parent_tier without going through the full promote path.
+    parent = db.get(LimsSample, clean_sub.parent_sample_pk)
+    parent_row = create_analysis(
+        db, host_kind="sample", host_pk=parent.id,
+        analysis_service_id=analysis_service.id, keyword=analysis_service.keyword,
+        title=f"TEST: tbv {analysis_service.keyword}",
+    )
+    parent_row.review_state = "to_be_verified"
+    parent_row.result_value = "95.1"
+    parent_row.reportable = True
+    db.commit()
+
+    reader = _FakeSenaiteReader()
+    res = asyncio.run(resolve_sources(parent.sample_id, db, reader))
+
+    matching = [d for d in res.decisions if d.analyte_keyword == analysis_service.keyword]
+    assert matching, f"no decision for {analysis_service.keyword!r}"
+    d = matching[0]
+    assert d.blocked is None, f"expected resolved, got blocked={d.blocked!r}: {d.blocked_detail}"
+    assert d.mode == "auto"
+    assert d.chosen is not None
+    assert d.chosen.value == "95.1"
+
+
 def test_resolve_sources_mk1_pin_override_marks_decision_as_pin(db, clean_sub, analysis_service):
     """A pin pointing at the existing Mk1 parent-tier row flips mode='auto' to
     mode='pin' while keeping the same value. Simulates the post-publish admin

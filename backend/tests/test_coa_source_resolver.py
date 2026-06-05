@@ -72,10 +72,58 @@ def test_zero_candidates_blocks_missing(db, parent_id, clean_pins):
     assert d.chosen is None
 
 
-def test_zero_eligible_after_state_filter_blocks_missing(db, parent_id, clean_pins):
-    cs = [_make_candidate(state="to_be_verified", reportable=True)]
+def test_to_be_verified_with_result_auto_resolves(db, parent_id, clean_pins):
+    """to_be_verified + non-empty result is now a live candidate → resolves."""
+    cs = [_make_candidate(state="to_be_verified", value="97.3", reportable=True)]
+    d = _resolve_analyte("IDENTITY_HPLC", cs, db, parent_id)
+    assert d.blocked is None
+    assert d.mode == "auto"
+    assert d.chosen is not None
+    assert d.chosen.value == "97.3"
+
+
+def test_submitted_with_result_auto_resolves(db, parent_id, clean_pins):
+    """submitted + non-empty result is a live candidate → resolves."""
+    cs = [_make_candidate(state="submitted", value="95.0", reportable=True)]
+    d = _resolve_analyte("IDENTITY_HPLC", cs, db, parent_id)
+    assert d.blocked is None
+    assert d.mode == "auto"
+    assert d.chosen is not None
+
+
+def test_live_state_but_empty_result_blocks_missing(db, parent_id, clean_pins):
+    """A live-state candidate with an empty/None result still blocks."""
+    cs = [_make_candidate(state="to_be_verified", value="", reportable=True)]
     d = _resolve_analyte("IDENTITY_HPLC", cs, db, parent_id)
     assert d.blocked == "missing"
+
+
+def test_live_state_but_none_result_blocks_missing(db, parent_id, clean_pins):
+    """A live-state candidate with value=None still blocks."""
+    cs = [_make_candidate(state="verified", value=None, reportable=True)]
+    d = _resolve_analyte("IDENTITY_HPLC", cs, db, parent_id)
+    assert d.blocked == "missing"
+
+
+def test_retracted_state_blocks_missing(db, parent_id, clean_pins):
+    """Retracted result is excluded regardless of value."""
+    cs = [_make_candidate(state="retracted", value="98.5", reportable=True)]
+    d = _resolve_analyte("IDENTITY_HPLC", cs, db, parent_id)
+    assert d.blocked == "missing"
+
+
+def test_rejected_state_blocks_missing(db, parent_id, clean_pins):
+    """Rejected result is excluded regardless of value."""
+    cs = [_make_candidate(state="rejected", value="98.5", reportable=True)]
+    d = _resolve_analyte("IDENTITY_HPLC", cs, db, parent_id)
+    assert d.blocked == "missing"
+
+
+def test_blocked_detail_text_uses_no_reportable_result(db, parent_id, clean_pins):
+    """Blocked detail message no longer says 'verified'."""
+    d = _resolve_analyte("IDENTITY_HPLC", [], db, parent_id)
+    assert "no reportable result" in d.blocked_detail
+    assert "verified" not in d.blocked_detail
 
 
 def test_zero_eligible_after_reportable_filter_blocks_missing(db, parent_id, clean_pins):
