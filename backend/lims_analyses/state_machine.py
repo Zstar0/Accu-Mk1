@@ -115,7 +115,7 @@ _ALLOWED: Dict[Tuple[str, str], str] = {
 # place without going through promote.
 _TIER_ALLOWED_KINDS: Dict[str, FrozenSet[str]] = {
     TIER_VIAL: frozenset({
-        "assign", "submit", "retract", "reject", "reset", "verify", "auto",
+        "assign", "submit", "retract", "reject", "reset", "verify", "retest", "auto",
     }),
     TIER_PARENT: frozenset({
         "publish", "retract", "auto",

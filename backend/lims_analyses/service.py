@@ -23,6 +23,7 @@ from lims_analyses.state_machine import (
     TierMismatchError,
     is_terminal,
     next_state,
+    tier_allows,
     tier_of,
 )
 from models import LimsAnalysis, LimsAnalysisTransition
@@ -168,6 +169,65 @@ def apply_transition(
         lims_sub_sample_pk=row.lims_sub_sample_pk,
         review_state=from_state,
     )
+
+    # ── retest branch ────────────────────────────────────────────────────────
+    # Retest is NOT a regular state transition. It creates a new linked row,
+    # sets old.retested=True, writes audit on the old row, and returns the
+    # NEW row — all in one transaction. Only legal on vial-tier rows from
+    # 'to_be_verified' or 'verified'.
+    if kind == "retest":
+        if not tier_allows(row_tier, "retest"):
+            raise TierMismatchError(row_tier, kind)
+        if from_state not in ("to_be_verified", "verified"):
+            raise InvalidTransitionError(from_state, kind)
+
+        now = datetime.utcnow()
+
+        new_row = LimsAnalysis(
+            lims_sample_pk=row.lims_sample_pk,
+            lims_sub_sample_pk=row.lims_sub_sample_pk,
+            analysis_service_id=row.analysis_service_id,
+            keyword=row.keyword,
+            title=row.title,
+            result_value=None,
+            result_unit=row.result_unit,
+            review_state="unassigned",
+            retest_of_id=row.id,
+            created_by_user_id=user_id,
+        )
+        db.add(new_row)
+        db.flush()  # populate new_row.id before audit rows
+
+        # Audit on the new row (mirrors create_analysis initial audit)
+        db.add(LimsAnalysisTransition(
+            analysis_id=new_row.id,
+            from_state=None,
+            to_state="unassigned",
+            transition_kind="auto",
+            user_id=user_id,
+            reason="initial insert",
+        ))
+
+        # Mark old row as retested + write audit on old row
+        row.retested = True
+        row.updated_at = now
+        db.add(LimsAnalysisTransition(
+            analysis_id=row.id,
+            from_state=from_state,
+            to_state=from_state,
+            transition_kind="retest",
+            user_id=user_id,
+            reason=(
+                f"retested: new analysis #{new_row.id}"
+                + (f"; {reason}" if reason else "")
+            ),
+        ))
+
+        db.commit()
+        db.refresh(new_row)
+        return new_row
+    # ── end retest branch ────────────────────────────────────────────────────
+
     to_state = next_state(from_state, kind, tier=row_tier)
 
     # Semantic guards
