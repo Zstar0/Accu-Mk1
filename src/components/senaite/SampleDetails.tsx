@@ -2664,11 +2664,21 @@ export function SampleDetails() {
                 />
               </div>
               <div className="flex items-center justify-between">
-                <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                <div className="flex items-center gap-2 text-muted-foreground">
                   {assignmentLabel ? (
                     <>
-                      <span className="uppercase tracking-wider">Assigned to</span>
-                      <span className="font-medium text-foreground">
+                      <span className="uppercase tracking-wider text-[11px]">Assigned to</span>
+                      <span
+                        className={`text-sm font-semibold ${
+                          {
+                            // Matches PRIMARY_TITLE_COLOR role tints in AnalysisTable
+                            hplc: 'text-sky-700 dark:text-sky-300',
+                            endo: 'text-emerald-700 dark:text-emerald-300',
+                            ster: 'text-violet-700 dark:text-violet-300',
+                            xtra: 'text-zinc-700 dark:text-zinc-300',
+                          }[currentAssignment ?? ''] ?? 'text-foreground'
+                        }`}
+                      >
                         {assignmentLabel}
                       </span>
                     </>
