@@ -10211,6 +10211,12 @@ SENAITE_URL = os.environ.get("SENAITE_URL")          # None = disabled
 SENAITE_USER = os.environ.get("SENAITE_USER", "")
 SENAITE_PASSWORD = os.environ.get("SENAITE_PASSWORD", "")
 SENAITE_TIMEOUT = httpx.Timeout(30.0, connect=10.0)
+# Host used when constructing browser-facing SENAITE deep-links returned to
+# the frontend.  Each dev stack publishes SENAITE on a different port so this
+# lets the stack override the host without touching SENAITE_URL (which is the
+# internal container-to-container address).  Falls back to None (relative path
+# only) when unset, preserving previous behaviour.
+SENAITE_PUBLIC_URL = os.environ.get("SENAITE_PUBLIC_URL", "").rstrip("/") or None
 
 # ── Senaite per-user credential helpers ──────────────────────────────────────
 
@@ -10355,11 +10361,22 @@ class SenaiteStatusResponse(BaseModel):
 
 
 def _senaite_path(item: dict) -> Optional[str]:
-    """Extract the SENAITE-relative path (e.g. '/clients/client-8/PB-0057') from a sample item."""
+    """Build the browser-facing SENAITE URL for a sample item.
+
+    Extracts the SENAITE-relative path (e.g. '/clients/client-8/PB-0057') and,
+    when SENAITE_PUBLIC_URL is configured, prepends it to form an absolute URL
+    (e.g. 'http://localhost:5538/clients/client-8/PB-0057').  When
+    SENAITE_PUBLIC_URL is not set the relative path is returned unchanged —
+    the frontend is expected to prepend its own senaiteBaseUrl in that case.
+    """
     raw = item.get("path") or ""
     if raw.startswith("/senaite/"):
-        return raw[len("/senaite"):]  # strip '/senaite' prefix, keep leading slash
-    return raw or None
+        path = raw[len("/senaite"):]  # strip '/senaite' prefix, keep leading slash
+    else:
+        path = raw or None
+    if SENAITE_PUBLIC_URL and path:
+        return f"{SENAITE_PUBLIC_URL}{path}"
+    return path
 
 
 def _strip_method_suffix(name: str) -> str:
