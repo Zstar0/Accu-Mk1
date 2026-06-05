@@ -319,6 +319,25 @@ function formatFileSize(bytes: number | null): string {
   return `${(bytes / (1024 * 1024)).toFixed(2)} MB`
 }
 
+/**
+ * Select root (primary) COA generations — those with no parent generation —
+ * sorted newest first. Used as a fallback for the "Generated COAs" card when
+ * SENAITE has no attached ARReport (e.g. dev stacks lacking the prod-only
+ * @@accumark-attach-coa addon).
+ */
+export function selectRootGenerations(
+  gens: ExplorerCOAGeneration[]
+): ExplorerCOAGeneration[] {
+  return gens
+    .filter(g => g.parent_generation_id == null)
+    .sort((a, b) => {
+      const ta = new Date(a.created_at).getTime()
+      const tb = new Date(b.created_at).getTime()
+      if (tb !== ta) return tb - ta
+      return b.generation_number - a.generation_number
+    })
+}
+
 /** Derive a human-readable release status from the generation + ingestion records. */
 function coaReleaseStatus(gen: ExplorerCOAGeneration | null | undefined): {
   label: string
@@ -334,6 +353,86 @@ function coaReleaseStatus(gen: ExplorerCOAGeneration | null | undefined): {
   if (gen.ingestion_status === 'uploaded') return { label: 'Published (pending notify)', color: 'amber', title: 'PDF uploaded — WordPress notification pending' }
   // published with no ingestion record (desktop flow without WP order)
   return { label: 'Published', color: 'emerald', title: 'Published in system' }
+}
+
+/**
+ * Fallback list for the "Generated COAs" card when SENAITE has no attached
+ * ARReport (data.published_coa is null) but Integration Service has root
+ * generations. Mirrors the visual language of PublishedCOACard / the Additional
+ * COAs section without the SENAITE-only PDF/regen actions.
+ */
+function GeneratedCOAFallbackList({
+  generations,
+}: {
+  generations: ExplorerCOAGeneration[]
+}) {
+  const allDraft = generations.every(g => g.status === 'draft')
+  return (
+    <div className="space-y-2">
+      {generations.map(gen => {
+        const release = coaReleaseStatus(gen)
+        return (
+          <div
+            key={gen.id}
+            className="flex items-start gap-3 p-3 rounded-lg bg-muted/40 border border-border/40"
+          >
+            <div className="flex items-center justify-center w-9 h-9 rounded-lg bg-muted text-muted-foreground border border-border/40 shrink-0 mt-0.5">
+              <FileText size={16} />
+            </div>
+            <div className="flex-1 min-w-0 space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="text-sm font-medium truncate">
+                    Generation #{gen.generation_number}
+                  </span>
+                  <span
+                    title={release.title}
+                    className={cn(
+                      'shrink-0 text-[10px] font-medium px-1.5 py-0.5 rounded-full border',
+                      {
+                        'bg-amber-500/10 text-amber-600 border-amber-500/30 dark:text-amber-400':
+                          release.color === 'amber',
+                        'bg-emerald-500/10 text-emerald-600 border-emerald-500/30 dark:text-emerald-400':
+                          release.color === 'emerald',
+                        'bg-red-500/10 text-red-500 border-red-500/30': release.color === 'red',
+                        'bg-muted text-muted-foreground border-border/40': release.color === 'zinc',
+                      }
+                    )}
+                  >
+                    {release.label}
+                  </span>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-x-3 gap-y-1">
+                <div className="flex flex-col">
+                  <span className="text-[11px] text-muted-foreground">Verification Code</span>
+                  {gen.verification_code ? (
+                    <a
+                      href={accuverifyUrl(gen.verification_code)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-[11px] font-mono text-foreground hover:underline truncate"
+                    >
+                      {gen.verification_code}
+                    </a>
+                  ) : (
+                    <span className="text-[11px] font-mono text-muted-foreground">—</span>
+                  )}
+                </div>
+                <div className="flex flex-col">
+                  <span className="text-[11px] text-muted-foreground">Created</span>
+                  <span className="text-[11px] text-foreground">{formatDate(gen.created_at)}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        )
+      })}
+      {allDraft && (
+        <p className="text-[11px] text-muted-foreground pl-1">Not yet attached to SENAITE</p>
+      )}
+    </div>
+  )
 }
 
 function PublishedCOACard({
@@ -3008,9 +3107,17 @@ export function SampleDetails() {
                       getSampleAdditionalCOAs(sampleId).then(setAdditionalCoas).catch(() => {})
                     }}
                   />
-                ) : (
-                  <p className="text-sm text-muted-foreground">No COA generated yet</p>
-                )}
+                ) : (() => {
+                  // No SENAITE-attached ARReport (e.g. dev stacks lack the
+                  // prod-only @@accumark-attach-coa addon). Fall back to the
+                  // root generations Integration Service already has.
+                  const rootGens = selectRootGenerations(coaGenerations)
+                  return rootGens.length > 0 ? (
+                    <GeneratedCOAFallbackList generations={rootGens} />
+                  ) : (
+                    <p className="text-sm text-muted-foreground">No COA generated yet</p>
+                  )
+                })()}
               </SectionHeader>
             </Card>
 

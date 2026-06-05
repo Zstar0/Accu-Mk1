@@ -8625,8 +8625,11 @@ async def generate_sample_coa(
                         "verification_code": verification_code or "",
                     },
                 )
-        except Exception:
-            pass  # Non-fatal — COA is generated; SENAITE attach is best-effort
+        except Exception as e:
+            # Non-fatal — COA is generated; SENAITE attach is best-effort.
+            # The custom @@accumark-attach-coa addon only exists on prod SENAITE,
+            # so this 404s on dev stacks. Log instead of swallowing silently.
+            _logger.warning("SENAITE COA attach failed for %s: %s", sample_id, e)
 
     # Build a meaningful message from the COA Builder response
     warnings = data.get("warnings", [])
@@ -8935,8 +8938,13 @@ async def regen_primary_coa(
                         "verification_code": verification_code,
                     },
                 )
-        except Exception:
-            pass  # Non-fatal — COA is in S3 already
+        except Exception as e:
+            # Non-fatal — COA is in S3 already; SENAITE attach is best-effort.
+            # The @@accumark-attach-coa addon is prod-only, so this 404s on dev.
+            import logging as _logging
+            _logging.getLogger(__name__).warning(
+                "SENAITE COA attach failed for %s: %s", sample_id, e
+            )
 
     # 3. Publish the new primary — reuses publish_sample_coa's flow so
     # integration service marks the new generation as published,
