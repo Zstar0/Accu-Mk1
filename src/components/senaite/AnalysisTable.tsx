@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, Fragment } from 'react'
-import { Activity, ArrowDownUp, ArrowUpDown, Check, ChevronDown, ChevronRight, Database, MoreHorizontal, Pencil, X } from 'lucide-react'
+import { Activity, ArrowDownUp, ArrowUpDown, Check, ChevronDown, ChevronRight, Database, Lock, MoreHorizontal, Pencil, X } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Spinner } from '@/components/ui/spinner'
@@ -160,11 +160,32 @@ export function isPromoted(a: SenaiteAnalysis): boolean {
   return a.promoted_to_parent_id != null
 }
 
+/**
+ * True when the parent SENAITE AR's analysis line for this row's keyword is
+ * already 'verified'. A verified parent line is immutable — no corrections
+ * can start from the vial; they must start from the parent (retest there
+ * cascades down). The states map is optional so existing callers that don't
+ * have parent context are unaffected.
+ */
+export function isLockedByParent(
+  a: SenaiteAnalysis,
+  parentLineStates?: Record<string, string>,
+): boolean {
+  if (!parentLineStates) return false
+  return parentLineStates[a.keyword ?? ''] === 'verified'
+}
+
 /** Row-menu transitions: submit needs a result; verify is hidden when Promote
  *  is the correct action (promotable native vial rows dead-end on verify), and
- *  also hidden once the row has already been promoted to a parent. */
-export function visibleRowTransitions(a: SenaiteAnalysis): string[] {
+ *  also hidden once the row has already been promoted to a parent.
+ *  When parentLineStates is provided and the parent's line is verified, all
+ *  transitions are hidden (locked row). */
+export function visibleRowTransitions(
+  a: SenaiteAnalysis,
+  parentLineStates?: Record<string, string>,
+): string[] {
   if (!a.uid || !a.review_state) return []
+  if (isLockedByParent(a, parentLineStates)) return []
   return (ALLOWED_TRANSITIONS[a.review_state] ?? []).filter(
     t => (t !== 'submit' || !!a.result) && !(t === 'verify' && (isPromotable(a) || isPromoted(a))),
   )
@@ -175,16 +196,24 @@ export type BulkTransition = (typeof BULK_TRANSITIONS)[number]
 
 /** Bulk toolbar actions: intersection of allowed transitions, except verify is
  *  suppressed when ANY selected row is promotable OR already promoted; Promote
- *  shows when ALL selected rows are promotable (not yet promoted). */
-export function deriveBulkActions(selected: SenaiteAnalysis[]): {
+ *  shows when ALL selected rows are promotable (not yet promoted).
+ *  When parentLineStates is provided, any locked row causes retest/retract/
+ *  reject/promote to be dropped from the bulk action set (simplest safe rule). */
+export function deriveBulkActions(
+  selected: SenaiteAnalysis[],
+  parentLineStates?: Record<string, string>,
+): {
   actions: BulkTransition[]
   showPromote: boolean
 } {
+  const anyLocked = selected.some(a => isLockedByParent(a, parentLineStates))
   const anyPromotableOrPromoted = selected.some(a => isPromotable(a) || isPromoted(a))
+  const LOCKED_DROP = new Set<BulkTransition>(['retest', 'retract', 'reject'])
   const actions = BULK_TRANSITIONS.filter(
     t =>
       selected.length > 0 &&
       !(t === 'verify' && anyPromotableOrPromoted) &&
+      !(anyLocked && (LOCKED_DROP.has(t) || t === 'verify')) &&
       selected.every(
         a =>
           a.review_state !== null &&
@@ -193,7 +222,9 @@ export function deriveBulkActions(selected: SenaiteAnalysis[]): {
           (t !== 'submit' || !!a.result),
       ),
   )
-  return { actions, showPromote: selected.length > 0 && selected.every(isPromotable) }
+  const showPromote =
+    !anyLocked && selected.length > 0 && selected.every(isPromotable)
+  return { actions, showPromote }
 }
 
 /**
@@ -1013,6 +1044,7 @@ function AnalysisRow({
   primaryAnalysisUids,
   primaryRole,
   promotionsByKeyword,
+  parentLineStates,
 }: {
   analysis: SenaiteAnalysis
   analyteNameMap: Map<number, string>
@@ -1034,6 +1066,7 @@ function AnalysisRow({
   primaryAnalysisUids?: Set<string>
   primaryRole?: string | null
   promotionsByKeyword?: Map<string, ParentPromotionInfo>
+  parentLineStates?: Record<string, string>
 }) {
   const rowTint = ROW_STATUS_STYLE[analysis.review_state ?? ''] ?? ''
   const { display, original } = formatAnalysisTitle(analysis.title, analyteNameMap)
@@ -1043,8 +1076,9 @@ function AnalysisRow({
     : null
   // Phase 4b promote affordance — see isPromotable; verify is hidden on
   // promotable rows via visibleRowTransitions.
-  const allowedTransitions = visibleRowTransitions(analysis)
-  const canPromote = isPromotable(analysis)
+  const locked = isLockedByParent(analysis, parentLineStates)
+  const allowedTransitions = visibleRowTransitions(analysis, parentLineStates)
+  const canPromote = isPromotable(analysis) && !locked
   const isPromoted = analysis.promoted_to_parent_id != null
   const [promoteOpen, setPromoteOpen] = useState(false)
   const queryClient = useQueryClient()
@@ -1123,15 +1157,25 @@ function AnalysisRow({
       />
       <td className="py-2.5 px-3 text-xs text-muted-foreground">{analysis.analyst || '\u2014'}</td>
       <td className="py-2.5 px-3">
-        {analysis.review_state && <StatusBadge state={analysis.review_state} />}
-        {isPromoted && (
-          <span
-            className="ml-2 text-[10px] font-mono text-emerald-700 dark:text-emerald-400"
-            title="This vial-tier row has been promoted to a parent-tier canonical result"
-          >
-            Promoted → #{analysis.promoted_to_parent_id}
-          </span>
-        )}
+        <div className="flex items-center gap-1.5 flex-wrap">
+          {analysis.review_state && <StatusBadge state={analysis.review_state} />}
+          {isPromoted && (
+            <span
+              className="text-[10px] font-mono text-emerald-700 dark:text-emerald-400"
+              title="This vial-tier row has been promoted to a parent-tier canonical result"
+            >
+              Promoted → #{analysis.promoted_to_parent_id}
+            </span>
+          )}
+          {locked && (
+            <span
+              className="inline-flex items-center gap-0.5 text-muted-foreground/50"
+              title="Parent result verified in SENAITE — retest on the parent to supersede"
+            >
+              <Lock size={11} />
+            </span>
+          )}
+        </div>
       </td>
       <td className="py-2.5 px-3">
         <AnalysisSlaCell
@@ -1325,6 +1369,13 @@ interface AnalysisTableProps {
    * Omit (undefined) on sub-sample pages; no behavior change for existing callers.
    */
   promotionsByKeyword?: Map<string, ParentPromotionInfo>
+  /**
+   * SENAITE parent-line states for sub-sample pages — keyword → review_state.
+   * When a keyword maps to 'verified', the vial row is locked: all mutating
+   * actions (Promote / Retest / Retract / Reject) are hidden. Corrections must
+   * start from the parent AR. Omit on parent pages.
+   */
+  parentLineStates?: Record<string, string>
 }
 
 export function AnalysisTable({
@@ -1341,6 +1392,7 @@ export function AnalysisTable({
   primaryAnalysisUids,
   primaryRole,
   promotionsByKeyword,
+  parentLineStates,
 }: AnalysisTableProps) {
   const [analysisFilter, setAnalysisFilter] = useState<'all' | 'verified' | 'pending' | 'invalid'>('all')
   const [sortConfig, setSortConfig] = useState<SortConfig | null>(null)
@@ -1426,7 +1478,7 @@ export function AnalysisTable({
     .filter(g => g.current.uid && bulk.selectedUids.has(g.current.uid))
     .map(g => g.current)
   const { actions: bulkAvailableActions, showPromote: bulkShowPromote } =
-    deriveBulkActions(selectedAnalyses)
+    deriveBulkActions(selectedAnalyses, parentLineStates)
 
   // Disable toolbar when any per-row transition is in-flight
   const toolbarDisabled = transition.pendingUids.size > 0
@@ -1641,6 +1693,7 @@ export function AnalysisTable({
                       primaryAnalysisUids={primaryAnalysisUids}
                       primaryRole={primaryRole}
                       promotionsByKeyword={promotionsByKeyword}
+                      parentLineStates={parentLineStates}
                     />
                     {isExpanded && group.history.map(h => (
                       <HistoryRow

@@ -182,6 +182,62 @@ def _transition(uid: str, action: str) -> str:
     return new_state
 
 
+def list_parent_line_states(parent_sample_id: str) -> dict[str, str]:
+    """Return a mapping of keyword → SENAITE review_state for all analysis lines
+    on the parent AR identified by *parent_sample_id*.
+
+    Per-keyword logic (mirrors ``find_parent_analysis_line`` preference order,
+    but REPORTS rather than raises on verified):
+      - Skip retracted/rejected lines entirely.
+      - If any non-verified active line exists → return its state (prefer active
+        over verified; mirrors write-back target preference).
+      - Else if a verified line exists → return 'verified' (the lock signal).
+      - Else (only retracted/rejected lines for the keyword) → omit the keyword.
+
+    Raises SenaiteWritebackError on transport failure or non-2xx response.
+    Best-effort callers (the route) catch that and return {"states": {}}.
+    """
+    url = f"{SENAITE_BASE_URL}/@@API/senaite/v1/Analysis"
+    try:
+        resp = _get(url, params={"getRequestID": parent_sample_id})
+    except requests.RequestException as exc:
+        raise SenaiteWritebackError(
+            f"SENAITE transport error fetching analysis lines for {parent_sample_id}: {exc}"
+        ) from exc
+
+    if resp.status_code >= 300:
+        raise SenaiteWritebackError(
+            f"SENAITE list_parent_line_states HTTP {resp.status_code} for "
+            f"{parent_sample_id}: {resp.text[:300]}"
+        )
+
+    items = resp.json().get("items", [])
+
+    # Group items by keyword, skipping retracted/rejected.
+    keyword_lines: dict[str, list[str]] = {}
+    for item in items:
+        item_kw = item.get("Keyword") or item.get("getKeyword")
+        if not item_kw:
+            continue
+        state = item.get("review_state")
+        if state in ("retracted", "rejected") or state is None:
+            continue
+        keyword_lines.setdefault(item_kw, []).append(state)
+
+    result: dict[str, str] = {}
+    for kw, states in keyword_lines.items():
+        # Prefer any non-verified state (active line in flight).
+        active = [s for s in states if s != "verified"]
+        if active:
+            result[kw] = active[0]
+        elif "verified" in states:
+            result[kw] = "verified"
+        # else: only retracted/rejected → omit (already skipped above,
+        # but guard is here for completeness)
+
+    return result
+
+
 def writeback_promotion(
     parent_sample_id: str,
     keyword: str,

@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, fireEvent, waitFor, screen } from '@testing-library/react'
 import {
   isPromotable,
+  isLockedByParent,
   isPromoted,
   visibleRowTransitions,
   deriveBulkActions,
@@ -246,5 +247,62 @@ describe('promotedDestructiveNote', () => {
     expect(promotedDestructiveNote([promoted, second])).toBe(
       '2 selected analyses were promoted to the parent — the parent keeps its promoted value.',
     )
+  })
+})
+
+// --- Parent-line lock gating ---
+
+const verifiedStates: Record<string, string> = { 'STER-PCR': 'verified' }
+const tbvStates: Record<string, string> = { 'STER-PCR': 'to_be_verified' }
+
+describe('isLockedByParent', () => {
+  it('true when keyword maps to verified in parentLineStates', () => {
+    expect(isLockedByParent(promotable, verifiedStates)).toBe(true)
+  })
+  it('false when keyword maps to to_be_verified', () => {
+    expect(isLockedByParent(promotable, tbvStates)).toBe(false)
+  })
+  it('false when parentLineStates is undefined', () => {
+    expect(isLockedByParent(promotable, undefined)).toBe(false)
+  })
+  it('false when keyword absent from states', () => {
+    expect(isLockedByParent(promotable, {})).toBe(false)
+  })
+})
+
+describe('visibleRowTransitions — locked by parent', () => {
+  it('returns [] when row is locked (parent verified)', () => {
+    expect(visibleRowTransitions(promotable, verifiedStates)).toEqual([])
+  })
+  it('returns normal transitions when parent is to_be_verified (not locked)', () => {
+    const t = visibleRowTransitions(promotable, tbvStates)
+    expect(t).toContain('retract')
+  })
+  it('existing single-arg call is unaffected (regression)', () => {
+    const t = visibleRowTransitions(promotable)
+    expect(t).toContain('retract')
+    expect(t).not.toContain('verify')
+  })
+})
+
+describe('deriveBulkActions — locked rows', () => {
+  it('drops retest/retract/reject when ANY selected row is locked', () => {
+    // promotable is for STER-PCR which is verified — should be locked
+    const r = deriveBulkActions([promotable], verifiedStates)
+    expect(r.actions).not.toContain('retest')
+    expect(r.actions).not.toContain('retract')
+    expect(r.actions).not.toContain('reject')
+  })
+  it('showPromote is false when ANY selected row is locked', () => {
+    const r = deriveBulkActions([promotable], verifiedStates)
+    expect(r.showPromote).toBe(false)
+  })
+  it('unlocked promotable row keeps normal behavior (regression)', () => {
+    const r = deriveBulkActions([promotable], tbvStates)
+    expect(r.showPromote).toBe(true)
+  })
+  it('no parentLineStates: existing behavior unchanged (regression)', () => {
+    const r = deriveBulkActions([promotable])
+    expect(r.showPromote).toBe(true)
   })
 })

@@ -4919,6 +4919,24 @@ export async function listParentPromotions(
 }
 
 /**
+ * Fetch SENAITE analysis states for all lines on a parent AR, keyed by keyword.
+ * Returns {"states": {"STER-PCR": "verified", ...}}.
+ * The backend is best-effort: any SENAITE error returns {"states": {}}.
+ * The frontend mirrors this: .catch(() => ({states: {}})).
+ */
+export async function listParentLineStates(
+  parentSampleId: string
+): Promise<{ states: Record<string, string> }> {
+  const url = new URL(`${API_BASE_URL()}/api/lims-analyses/parent-line-states`)
+  url.searchParams.set('parent_sample_id', parentSampleId)
+  const response = await fetch(url.toString(), { headers: getBearerHeaders() })
+  if (!response.ok) {
+    throw new Error(`listParentLineStates failed: ${response.status}`)
+  }
+  return response.json()
+}
+
+/**
  * Create a new sub-sample for a parent sample.
  * May throw SecondaryFalloutError if SENAITE silently created an orphan AR.
  */

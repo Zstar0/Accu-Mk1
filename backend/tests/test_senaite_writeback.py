@@ -10,6 +10,7 @@ from unittest.mock import MagicMock, patch, call
 from lims_analyses.senaite_writeback import (
     SenaiteWritebackError,
     find_parent_analysis_line,
+    list_parent_line_states,
     writeback_promotion,
     _update,
     _transition,
@@ -261,3 +262,75 @@ def test_find_parent_analysis_line_only_verified_raises_with_correct_message():
     assert "retest or retract there first" in msg
     mock_update.assert_not_called()
     mock_transition.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# list_parent_line_states tests
+# ---------------------------------------------------------------------------
+
+def test_list_parent_line_states_maps_verified_keyword():
+    """A keyword with only a verified line → mapped to 'verified' in the dict."""
+    items = [
+        _analysis_item("uid-a", "STER-PCR", "verified"),
+        _analysis_item("uid-b", "ENDO-LAL", "to_be_verified"),
+    ]
+    with patch("lims_analyses.senaite_writeback._get", return_value=_ok_resp(items)):
+        states = list_parent_line_states("P-0144")
+
+    assert states["STER-PCR"] == "verified"
+    assert states["ENDO-LAL"] == "to_be_verified"
+
+
+def test_list_parent_line_states_prefers_non_verified_when_both_present():
+    """Verified + active for same keyword → active state wins (retest in flight)."""
+    items = [
+        _analysis_item("uid-old", "STER-PCR", "verified"),
+        _analysis_item("uid-new", "STER-PCR", "to_be_verified"),
+    ]
+    with patch("lims_analyses.senaite_writeback._get", return_value=_ok_resp(items)):
+        states = list_parent_line_states("P-0144")
+
+    # Active (non-verified) line takes precedence; vial row should NOT be locked.
+    assert states["STER-PCR"] == "to_be_verified"
+
+
+def test_list_parent_line_states_skips_retracted_and_rejected():
+    """Retracted and rejected lines do not contribute to the result."""
+    items = [
+        _analysis_item("uid-r1", "STER-PCR", "retracted"),
+        _analysis_item("uid-r2", "ENDO-LAL", "rejected"),
+        _analysis_item("uid-a", "HPLC_ASSAY", "to_be_verified"),
+    ]
+    with patch("lims_analyses.senaite_writeback._get", return_value=_ok_resp(items)):
+        states = list_parent_line_states("P-0144")
+
+    assert "STER-PCR" not in states
+    assert "ENDO-LAL" not in states
+    assert states["HPLC_ASSAY"] == "to_be_verified"
+
+
+def test_list_parent_line_states_transport_error_raises():
+    """Transport failure → SenaiteWritebackError (best-effort route must catch)."""
+    with patch(
+        "lims_analyses.senaite_writeback._get",
+        side_effect=_requests.ConnectionError("timeout"),
+    ):
+        with pytest.raises(SenaiteWritebackError):
+            list_parent_line_states("P-0144")
+
+
+def test_list_parent_line_states_http_error_raises():
+    """Non-2xx HTTP response → SenaiteWritebackError."""
+    bad_resp = MagicMock(status_code=503)
+    bad_resp.text = "service unavailable"
+    with patch("lims_analyses.senaite_writeback._get", return_value=bad_resp):
+        with pytest.raises(SenaiteWritebackError):
+            list_parent_line_states("P-0144")
+
+
+def test_list_parent_line_states_empty_items_returns_empty_dict():
+    """No items (new AR) → empty dict, no error."""
+    with patch("lims_analyses.senaite_writeback._get", return_value=_ok_resp([])):
+        states = list_parent_line_states("P-0144")
+
+    assert states == {}

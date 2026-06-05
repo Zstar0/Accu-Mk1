@@ -383,3 +383,41 @@ def test_activity_includes_analysis_promoted_event(route_client, promoted_fixtur
     assert ev["details"]["keyword"] == "STERILITY"
     assert ev["details"]["result_value"] == "Pass"
     assert "PP-0001-S01" in ev["label"]
+
+
+# ─── parent-line-states endpoint ─────────────────────────────────────────────
+
+
+def test_parent_line_states_best_effort_returns_200_empty_on_senaite_error(route_client):
+    """GET /api/lims-analyses/parent-line-states → 200 {"states": {}} when
+    list_parent_line_states raises SenaiteWritebackError (best-effort)."""
+    from lims_analyses.senaite_writeback import SenaiteWritebackError as _SWE
+
+    with patch(
+        "lims_analyses.routes.list_parent_line_states",
+        side_effect=_SWE("SENAITE down (test)"),
+    ):
+        resp = route_client.get(
+            "/api/lims-analyses/parent-line-states",
+            params={"parent_sample_id": "P-9999"},
+        )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"states": {}}
+
+
+def test_parent_line_states_happy_path_returns_states(route_client):
+    """GET /api/lims-analyses/parent-line-states → 200 {"states": <dict>} on success."""
+    fake_states = {"STER-PCR": "verified", "ENDO-LAL": "to_be_verified"}
+
+    with patch(
+        "lims_analyses.routes.list_parent_line_states",
+        return_value=fake_states,
+    ):
+        resp = route_client.get(
+            "/api/lims-analyses/parent-line-states",
+            params={"parent_sample_id": "P-0144"},
+        )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"states": fake_states}

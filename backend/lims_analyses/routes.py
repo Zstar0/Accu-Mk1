@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 from auth import get_current_user
 from database import get_db
 from lims_analyses import senaite_writeback, service
-from lims_analyses.senaite_writeback import SenaiteWritebackError
+from lims_analyses.senaite_writeback import SenaiteWritebackError, list_parent_line_states
 from lims_analyses.schemas import (
     AnalysisResponse,
     AnalysisWithTransitions,
@@ -153,6 +153,28 @@ def list_for_host(
         return [AnalysisResponse.model_validate(r) for r in rows]
     except Exception as e:
         raise _handle_service_error(e)
+
+
+@router.get("/parent-line-states")
+def get_parent_line_states(
+    parent_sample_id: str = Query(...),
+    current_user=Depends(get_current_user),
+):
+    """Return SENAITE analysis states keyed by keyword for a parent AR.
+
+    Best-effort: transport or SENAITE errors return {"states": {}} rather
+    than propagating as 5xx.  The frontend uses this to lock vial rows whose
+    parent line is already verified.
+    """
+    try:
+        states = list_parent_line_states(parent_sample_id)
+        return {"states": states}
+    except SenaiteWritebackError:
+        logger.warning(
+            "list_parent_line_states failed for %s — returning empty states",
+            parent_sample_id,
+        )
+        return {"states": {}}
 
 
 @router.get("/promotions", response_model=List[ParentPromotionInfo])

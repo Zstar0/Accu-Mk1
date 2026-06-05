@@ -87,6 +87,7 @@ import {
   listSubSamples,
   listLimsAnalysesForSubSample,
   listParentPromotions,
+  listParentLineStates,
   type ParentPromotionInfo,
 } from '@/lib/api'
 import { ReceiveWizard } from '@/components/intake/ReceiveWizard/ReceiveWizard'
@@ -1757,6 +1758,11 @@ export function SampleDetails() {
   // !parentSampleId, which is null only when we ARE the parent).
   const [promotionsByKeyword, setPromotionsByKeyword] = useState<Map<string, ParentPromotionInfo>>(new Map())
 
+  // Parent-line states for sub-sample pages — keyword → SENAITE review_state.
+  // Populated via useEffect below; empty object on parent pages (gated by
+  // parentSampleId !== null, i.e. we ARE a sub-sample).
+  const [parentLineStates, setParentLineStates] = useState<Record<string, string>>({})
+
   // Manage analyses panel
   const [manageAnalysesOpen, setManageAnalysesOpen] = useState(false)
   const [availableServices, setAvailableServices] = useState<AnalysisService[]>([])
@@ -1806,6 +1812,16 @@ export function SampleDetails() {
         // Non-fatal: badge simply won't appear if the fetch fails
       })
   }, [sampleId, parentSampleId])
+
+  // Fetch parent AR analysis states for native sub-sample pages.
+  // parentSampleId is non-null only when we are a sub-sample (have -SNN suffix).
+  // Best-effort: catch → empty states, UI degrades gracefully (no locking).
+  useEffect(() => {
+    if (!parentSampleId) return
+    listParentLineStates(parentSampleId)
+      .then(({ states }) => setParentLineStates(states))
+      .catch(() => setParentLineStates({}))
+  }, [parentSampleId])
 
   // Resolve this sample's vial-assignment role for the header label.
   // Parent pages: pull from lims_samples.assignment_role (defaults to 'hplc'
@@ -3465,6 +3481,7 @@ export function SampleDetails() {
           primaryAnalysisUids={primaryAnalysisUids}
           primaryRole={currentAssignment}
           promotionsByKeyword={parentSampleId === null ? promotionsByKeyword : undefined}
+          parentLineStates={parentSampleId !== null ? parentLineStates : undefined}
           onResultSaved={(uid, newResult, newReviewState) => {
             setData(prev => {
               if (!prev) return prev
