@@ -2,9 +2,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, fireEvent, waitFor, screen } from '@testing-library/react'
 import {
   isPromotable,
+  isPromoted,
   visibleRowTransitions,
   deriveBulkActions,
   deriveBulkPromoteBlockers,
+  promotedDestructiveNote,
   BulkPromoteDialog,
 } from '@/components/senaite/AnalysisTable'
 import type { SenaiteAnalysis } from '@/lib/api'
@@ -187,5 +189,62 @@ describe('BulkPromoteDialog', () => {
     fireEvent.click(screen.getByRole('button', { name: /^Promote 2/ }))
     await waitFor(() => expect(onPromoted).toHaveBeenCalled())
     expect(vi.mocked(api.promoteAnalyses)).toHaveBeenCalledTimes(2)
+  })
+})
+
+// --- Task 4: promoted row gating ---
+
+const promoted = mk({ uid: 'mk1:820', review_state: 'to_be_verified', promoted_to_parent_id: 1260 })
+
+describe('isPromoted', () => {
+  it('true when promoted_to_parent_id is set', () => {
+    expect(isPromoted(promoted)).toBe(true)
+  })
+  it('false when promoted_to_parent_id is null', () => {
+    expect(isPromoted(promotable)).toBe(false)
+  })
+})
+
+describe('visibleRowTransitions — promoted row', () => {
+  it('hides verify on a promoted row', () => {
+    const t = visibleRowTransitions(promoted)
+    expect(t).not.toContain('verify')
+  })
+  it('keeps retract on a promoted row (escape hatch)', () => {
+    const t = visibleRowTransitions(promoted)
+    expect(t).toContain('retract')
+  })
+})
+
+describe('deriveBulkActions — promoted rows', () => {
+  it('excludes verify when ANY selected row is promoted', () => {
+    const r = deriveBulkActions([promoted, senaiteTbv])
+    expect(r.actions).not.toContain('verify')
+  })
+  it('promoted + SENAITE mix: no verify, showPromote false', () => {
+    const r = deriveBulkActions([promoted, senaiteTbv])
+    expect(r.actions).not.toContain('verify')
+    expect(r.showPromote).toBe(false)
+  })
+  it('pure SENAITE selection still offers verify (regression)', () => {
+    const r = deriveBulkActions([senaiteTbv])
+    expect(r.actions).toContain('verify')
+  })
+})
+
+describe('promotedDestructiveNote', () => {
+  it('returns null when no promoted rows in selection', () => {
+    expect(promotedDestructiveNote([promotable, senaiteTbv])).toBeNull()
+  })
+  it('returns singular form for exactly 1 promoted row', () => {
+    expect(promotedDestructiveNote([promoted])).toBe(
+      '1 selected analysis was promoted to the parent — the parent keeps its promoted value.',
+    )
+  })
+  it('returns plural form for 2+ promoted rows', () => {
+    const second = mk({ uid: 'mk1:821', review_state: 'to_be_verified', promoted_to_parent_id: 1261, keyword: 'ENDO' })
+    expect(promotedDestructiveNote([promoted, second])).toBe(
+      '2 selected analyses were promoted to the parent — the parent keeps its promoted value.',
+    )
   })
 })

@@ -152,12 +152,18 @@ export function isPromotable(a: SenaiteAnalysis): boolean {
   )
 }
 
+/** True when a vial row has already been promoted to a parent-tier row. */
+export function isPromoted(a: SenaiteAnalysis): boolean {
+  return a.promoted_to_parent_id != null
+}
+
 /** Row-menu transitions: submit needs a result; verify is hidden when Promote
- *  is the correct action (promotable native vial rows dead-end on verify). */
+ *  is the correct action (promotable native vial rows dead-end on verify), and
+ *  also hidden once the row has already been promoted to a parent. */
 export function visibleRowTransitions(a: SenaiteAnalysis): string[] {
   if (!a.uid || !a.review_state) return []
   return (ALLOWED_TRANSITIONS[a.review_state] ?? []).filter(
-    t => (t !== 'submit' || !!a.result) && !(t === 'verify' && isPromotable(a)),
+    t => (t !== 'submit' || !!a.result) && !(t === 'verify' && (isPromotable(a) || isPromoted(a))),
   )
 }
 
@@ -165,16 +171,17 @@ const BULK_TRANSITIONS = ['submit', 'retest', 'verify', 'retract', 'reject'] as 
 export type BulkTransition = (typeof BULK_TRANSITIONS)[number]
 
 /** Bulk toolbar actions: intersection of allowed transitions, except verify is
- *  suppressed when ANY selected row is promotable; Promote shows when ALL are. */
+ *  suppressed when ANY selected row is promotable OR already promoted; Promote
+ *  shows when ALL selected rows are promotable (not yet promoted). */
 export function deriveBulkActions(selected: SenaiteAnalysis[]): {
   actions: BulkTransition[]
   showPromote: boolean
 } {
-  const anyPromotable = selected.some(isPromotable)
+  const anyPromotableOrPromoted = selected.some(a => isPromotable(a) || isPromoted(a))
   const actions = BULK_TRANSITIONS.filter(
     t =>
       selected.length > 0 &&
-      !(t === 'verify' && anyPromotable) &&
+      !(t === 'verify' && anyPromotableOrPromoted) &&
       selected.every(
         a =>
           a.review_state !== null &&
@@ -184,6 +191,17 @@ export function deriveBulkActions(selected: SenaiteAnalysis[]): {
       ),
   )
   return { actions, showPromote: selected.length > 0 && selected.every(isPromotable) }
+}
+
+/**
+ * Returns the note string to append to the bulk destructive confirm dialog when
+ * the selection includes promoted rows, or null when no rows are promoted.
+ * Exported for unit-testing the exact message text.
+ */
+export function promotedDestructiveNote(selected: SenaiteAnalysis[]): string | null {
+  const n = selected.filter(a => a.promoted_to_parent_id != null).length
+  if (n === 0) return null
+  return `${n} selected ${n === 1 ? 'analysis was' : 'analyses were'} promoted to the parent — the parent keeps its promoted value.`
 }
 
 /** Reasons bulk promote cannot proceed (empty array = good to go). */
@@ -1708,6 +1726,9 @@ export function AnalysisTable({
                 ? 'retracted back to unassigned state'
                 : 'permanently rejected'}
               . This action cannot be undone from this application.
+              {promotedDestructiveNote(selectedAnalyses) && (
+                <span className="block mt-2">{promotedDestructiveNote(selectedAnalyses)}</span>
+              )}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
