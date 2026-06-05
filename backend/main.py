@@ -968,6 +968,130 @@ async def get_sample_activity(
     except Exception:
         pass  # Integration DB unavailable — return Mk1 events only
 
+    # --- Mk1 DB: sub-sample activity (Section A + B from spec) ---
+    # Self-gates: only runs when sample_id belongs to a lims_sub_samples row.
+    sub_row = db.execute(
+        select(LimsSubSample).where(LimsSubSample.sample_id == sample_id)
+    ).scalar_one_or_none()
+    if sub_row is not None:
+        from models import (
+            LimsAnalysis,
+            LimsAnalysisTransition,
+            LimsAnalysisPromotion,
+            LimsSubSampleEvent,
+        )
+
+        # Section A1: lims_analysis_transitions for analyses on this sub-sample
+        # Join: lims_analyses → lims_analysis_transitions; email join for user.
+        analyses_on_sub = db.execute(
+            select(LimsAnalysis).where(
+                LimsAnalysis.lims_sub_sample_pk == sub_row.id
+            )
+        ).scalars().all()
+        analysis_ids = [a.id for a in analyses_on_sub]
+        keyword_by_id = {a.id: a.keyword for a in analyses_on_sub}
+
+        if analysis_ids:
+            transitions = db.execute(
+                select(LimsAnalysisTransition).where(
+                    LimsAnalysisTransition.analysis_id.in_(analysis_ids)
+                )
+            ).scalars().all()
+            for t in transitions:
+                kw = keyword_by_id.get(t.analysis_id, "?")
+                actor_email = None
+                if t.user_id:
+                    actor = db.execute(
+                        select(User).where(User.id == t.user_id)
+                    ).scalar_one_or_none()
+                    actor_email = actor.email if actor else None
+
+                if t.from_state is None and t.reason == "initial insert":
+                    # Seeded / manually added
+                    label = f"Analysis added: {kw}"
+                    event_name = "analysis_added"
+                    details: dict = {"keyword": kw, "by": actor_email}
+                else:
+                    label = f"{kw}: {t.from_state}→{t.to_state}"
+                    event_name = "analysis_transition"
+                    details = {
+                        "keyword": kw,
+                        "from": t.from_state,
+                        "to": t.to_state,
+                        "kind": t.transition_kind,
+                        "reason": t.reason,
+                        "by": actor_email,
+                    }
+                events.append({
+                    "timestamp": t.occurred_at.isoformat() if t.occurred_at else None,
+                    "event": event_name,
+                    "label": label,
+                    "details": details,
+                    "source": "lims_analysis_transitions",
+                })
+
+            # Section A2: lims_analysis_promotions (vial side — source_analysis_id)
+            promotions = db.execute(
+                select(LimsAnalysisPromotion).where(
+                    LimsAnalysisPromotion.source_analysis_id.in_(analysis_ids)
+                )
+            ).scalars().all()
+            for p in promotions:
+                src_kw = keyword_by_id.get(p.source_analysis_id, "?")
+                promoter_email = None
+                if p.promoted_by_user_id:
+                    promoter = db.execute(
+                        select(User).where(User.id == p.promoted_by_user_id)
+                    ).scalar_one_or_none()
+                    promoter_email = promoter.email if promoter else None
+                events.append({
+                    "timestamp": p.promoted_at.isoformat() if p.promoted_at else None,
+                    "event": "analysis_promoted_to_parent",
+                    "label": f"Promoted {src_kw} to parent",
+                    "details": {
+                        "keyword": src_kw,
+                        "parent_analysis_id": p.parent_analysis_id,
+                        "contribution_kind": p.contribution_kind,
+                        "by": promoter_email,
+                    },
+                    "source": "lims_analysis_promotions",
+                })
+
+        # Section B: lims_sub_sample_events (role changes, remarks, analysis_removed)
+        sub_events = db.execute(
+            select(LimsSubSampleEvent).where(
+                LimsSubSampleEvent.sub_sample_pk == sub_row.id
+            )
+        ).scalars().all()
+        for se in sub_events:
+            actor_email = None
+            if se.user_id:
+                actor = db.execute(
+                    select(User).where(User.id == se.user_id)
+                ).scalar_one_or_none()
+                actor_email = actor.email if actor else None
+
+            if se.event == "role_assigned":
+                d = se.details or {}
+                label = f"Role: {d.get('from')} → {d.get('to')}"
+            elif se.event == "remarks_updated":
+                label = "Remarks updated"
+            elif se.event == "analysis_removed":
+                d = se.details or {}
+                label = f"Analysis removed: {d.get('keyword', '?')}"
+            else:
+                label = se.event
+
+            event_details = dict(se.details or {})
+            event_details["by"] = actor_email
+            events.append({
+                "timestamp": se.created_at.isoformat() if se.created_at else None,
+                "event": se.event,
+                "label": label,
+                "details": event_details,
+                "source": "lims_sub_sample_events",
+            })
+
     # Sort all events reverse-chronological, nulls last
     events.sort(key=lambda e: e["timestamp"] or "", reverse=True)
 
