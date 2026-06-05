@@ -78,3 +78,16 @@ def test_apply_does_not_overwrite_existing(db_session):
 
     assert svc.result_type == "numeric"
     assert svc.result_options == [{"value": "x", "label": "y"}]
+
+
+def test_apply_seeds_from_get_prefixed_keys(db_session):
+    svc = AnalysisService(title="Ster", keyword="STER-PCR")
+    db_session.add(svc)
+    db_session.flush()
+    item = {"getResultType": "select",
+            "getResultOptions": [{"ResultValue": 1, "ResultText": "Conforms"}]}
+
+    _apply_service_result_type(svc, item)
+
+    assert svc.result_type == "select"
+    assert svc.result_options == [{"value": "1", "label": "Conforms"}]

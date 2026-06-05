@@ -2507,7 +2507,7 @@ def _parse_service_result_options(raw) -> list[dict]:
             if isinstance(opt, dict) and opt.get("ResultValue") is not None:
                 out.append({
                     "value": str(opt["ResultValue"]),
-                    "label": str(opt.get("ResultText", opt["ResultValue"])),
+                    "label": str(opt.get("ResultText") or opt["ResultValue"]),
                 })
     return out
 
