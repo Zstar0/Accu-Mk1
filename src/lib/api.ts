@@ -3713,8 +3713,8 @@ export async function transitionAnalysis(
   transition: 'submit' | 'verify' | 'retract' | 'reject' | 'retest'
 ): Promise<AnalysisResultResponse> {
   // Phase 3: route mk1:<id> UIDs to the Mk1 transitions endpoint. The
-  // 'retest' kind is not yet wired on the Mk1 side (creates a NEW row;
-  // service-layer work for a future phase) — surfaces as 409 from Mk1.
+  // 'retest' kind creates a linked retest row on the Mk1 side and returns
+  // the NEW row (retest-aware promote phase).
   if (uid.startsWith('mk1:')) {
     const limsId = parseInt(uid.slice('mk1:'.length), 10)
     const response = await fetch(

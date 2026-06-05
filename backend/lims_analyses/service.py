@@ -489,16 +489,20 @@ def promote_to_parent(
                 LimsAnalysis.lims_sample_pk == parent_sample_pk,
                 LimsAnalysis.keyword == keyword,
                 LimsAnalysis.retest_of_id.is_(None),
-                LimsAnalysis.review_state.not_in(("retracted", "rejected")),
+                # Only VERIFIED parents are superseded. A published parent is
+                # a citable COA source — superseding it silently could invalidate
+                # an issued COA; that conflict surfaces as the 409 instead.
+                LimsAnalysis.review_state == "verified",
                 LimsAnalysis.lims_sub_sample_pk.is_(None),
             )
         ).scalars().first()
         if old_parent is not None:
+            prior_state = old_parent.review_state
             old_parent.review_state = "retracted"
             old_parent.updated_at = now
             db.add(LimsAnalysisTransition(
                 analysis_id=old_parent.id,
-                from_state="verified",
+                from_state=prior_state,
                 to_state="retracted",
                 transition_kind="auto",
                 user_id=user_id,

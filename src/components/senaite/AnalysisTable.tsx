@@ -128,6 +128,9 @@ const ALLOWED_TRANSITIONS: Record<string, readonly string[]> = {
   unassigned: ['submit', 'reject'],
   assigned: ['submit', 'reject'],
   to_be_verified: ['retest', 'verify', 'retract', 'reject'],
+  // Retest-aware promote: a verified row can be retested (vial tier in Mk1;
+  // SENAITE allows it on parent lines too).
+  verified: ['retest'],
 }
 
 const TRANSITION_LABELS: Record<string, string> = {
