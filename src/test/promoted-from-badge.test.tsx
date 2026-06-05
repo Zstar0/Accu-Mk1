@@ -19,8 +19,10 @@ describe('PromotedFromBadge', () => {
       sources: [{ sample_id: 'P-0143-S01', contribution_kind: 'chosen' }],
     }
     const { getByLabelText, getByText } = render(<PromotedFromBadge promotion={promotion} />)
-    // text content
-    expect(getByText(/from P-0143-S01/)).toBeTruthy()
+    // sample id renders as a link to the sub-sample page
+    const link = getByText('P-0143-S01') as HTMLAnchorElement
+    expect(link.tagName).toBe('A')
+    expect(link.getAttribute('href')).toBe('/#senaite/sample-details?id=P-0143-S01')
     // aria-label
     expect(getByLabelText('Promoted from sub-sample')).toBeTruthy()
   })
@@ -53,8 +55,14 @@ describe('PromotedFromBadge', () => {
         { sample_id: 'P-0143-S02', contribution_kind: 'checked' },
       ],
     }
-    const { getByText } = render(<PromotedFromBadge promotion={promotion} />)
-    expect(getByText(/from P-0143-S01, P-0143-S02/)).toBeTruthy()
+    const { getByText, getByLabelText } = render(<PromotedFromBadge promotion={promotion} />)
+    // each source is its own link; the joined text still reads "from a, b"
+    expect((getByText('P-0143-S01') as HTMLAnchorElement).getAttribute('href'))
+      .toBe('/#senaite/sample-details?id=P-0143-S01')
+    expect((getByText('P-0143-S02') as HTMLAnchorElement).getAttribute('href'))
+      .toBe('/#senaite/sample-details?id=P-0143-S02')
+    expect(getByLabelText('Promoted from sub-sample').textContent)
+      .toContain('from P-0143-S01, P-0143-S02')
   })
 
   it('falls back to "sub-sample" for null sample_ids', () => {
