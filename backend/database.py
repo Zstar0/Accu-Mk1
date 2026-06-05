@@ -588,6 +588,15 @@ def _run_migrations():
         # re-promotion — "retract the parent row, then re-promote" is the
         # documented undo. Rebuild the parent-tier root index with a state
         # exclusion (drop+create is idempotent as a pair).
+        # native-manage-analyses: retracted/rejected vial rows must not block
+        # re-adding the same service (mirrors the parent-tier index fix).
+        "DROP INDEX IF EXISTS uq_lims_analyses_sub_service_root",
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_lims_analyses_sub_service_root
+            ON lims_analyses (lims_sub_sample_pk, keyword)
+            WHERE retest_of_id IS NULL AND lims_sub_sample_pk IS NOT NULL
+              AND review_state NOT IN ('retracted', 'rejected')
+        """,
         "DROP INDEX IF EXISTS uq_lims_analyses_parent_service_root",
         """
         CREATE UNIQUE INDEX IF NOT EXISTS uq_lims_analyses_parent_service_root

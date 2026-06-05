@@ -681,7 +681,7 @@ def add_analysis_to_native_vial(
     if senaite_service_uid is not None:
         svc = db.execute(
             select(AnalysisService).where(AnalysisService.senaite_uid == senaite_service_uid)
-        ).scalar_one_or_none()
+        ).scalars().first()
         if svc is None:
             raise NotFoundError(
                 f"AnalysisService with senaite_uid={senaite_service_uid!r} not found"
@@ -689,7 +689,7 @@ def add_analysis_to_native_vial(
     elif keyword is not None:
         svc = db.execute(
             select(AnalysisService).where(AnalysisService.keyword == keyword)
-        ).scalar_one_or_none()
+        ).scalars().first()
         if svc is None:
             raise NotFoundError(
                 f"AnalysisService with keyword={keyword!r} not found"

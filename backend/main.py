@@ -7966,6 +7966,7 @@ async def add_sample_analysis(
     Non-native fallthrough: proxied to the Integration Service unchanged.
     """
     from sqlalchemy import select as _select
+    from sqlalchemy.exc import IntegrityError as SQLIntegrityError
     from lims_analyses.service import (
         add_analysis_to_native_vial,
         BadRequestError as _BadRequestError,
@@ -7994,6 +7995,14 @@ async def add_sample_analysis(
             raise HTTPException(status_code=404, detail=str(e))
         except _BadRequestError as e:
             raise HTTPException(status_code=409, detail=str(e))
+        except SQLIntegrityError:
+            # Unique-index collision (e.g. concurrent add). The index now
+            # excludes retracted/rejected rows, so this is a true duplicate.
+            db.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail=f"analysis already exists on {sample_id}",
+            )
         return {"success": True, "message": "Analysis added"}
 
     # Non-native: proxy to Integration Service
