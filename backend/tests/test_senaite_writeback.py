@@ -29,7 +29,9 @@ def _ok_resp(items):
 
 
 def _analysis_item(uid, keyword, review_state):
-    return {"uid": uid, "Keyword": keyword, "review_state": review_state}
+    # Live SENAITE Analysis items carry getKeyword (verified against dev
+    # GET /Analysis?getRequestID=...). Use it as the primary shape in fixtures.
+    return {"uid": uid, "getKeyword": keyword, "review_state": review_state}
 
 
 # ---------------------------------------------------------------------------
@@ -46,6 +48,22 @@ def test_find_parent_analysis_line_returns_uid_and_state_for_matching_keyword():
         result = find_parent_analysis_line("P-0042", "Identity")
 
     assert result == {"uid": "uid-bbb", "review_state": "verified"}
+
+
+# ---------------------------------------------------------------------------
+# Test 1b: find_parent_analysis_line — also matches the legacy 'Keyword' shape
+# ---------------------------------------------------------------------------
+
+def test_find_parent_analysis_line_matches_legacy_Keyword_shape():
+    # Catalog/brain form of an Analysis item uses 'Keyword' instead of
+    # 'getKeyword'; the helper must match both.
+    items = [
+        {"uid": "uid-legacy", "Keyword": "Identity", "review_state": "unassigned"},
+    ]
+    with patch("lims_analyses.senaite_writeback._get", return_value=_ok_resp(items)):
+        result = find_parent_analysis_line("P-0042", "Identity")
+
+    assert result == {"uid": "uid-legacy", "review_state": "unassigned"}
 
 
 # ---------------------------------------------------------------------------

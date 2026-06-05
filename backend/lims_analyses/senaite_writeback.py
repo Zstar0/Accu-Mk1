@@ -87,7 +87,11 @@ def find_parent_analysis_line(parent_sample_id: str, keyword: str) -> dict:
         )
 
     for item in items:
-        if item.get("Keyword") == keyword:
+        # Live SENAITE returns getKeyword on Analysis items; the catalog/brain
+        # form uses Keyword. Match both shapes (same dual-key pattern main.py
+        # uses for ResultType/getResultType).
+        item_kw = item.get("Keyword") or item.get("getKeyword")
+        if item_kw == keyword:
             return {"uid": item["uid"], "review_state": item["review_state"]}
 
     raise SenaiteWritebackError(
