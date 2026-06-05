@@ -8612,23 +8612,32 @@ async def generate_sample_coa(
     # Reports tab.  Best-effort — generation already succeeded at this point.
     if SENAITE_URL and pdf_base64:
         try:
-            async with httpx.AsyncClient(
-                timeout=httpx.Timeout(30.0, connect=5.0),
-                auth=_get_senaite_auth(current_user),
-                follow_redirects=True,
-            ) as senaite_client:
-                await senaite_client.post(
-                    f"{SENAITE_URL}/senaite/@@accumark-attach-coa",
-                    json={
-                        "sample_id": sample_id,
-                        "pdf_base64": pdf_base64,
-                        "verification_code": verification_code or "",
-                    },
+            attach_payload = {
+                "sample_id": sample_id,
+                "pdf_base64": pdf_base64,
+                "verification_code": verification_code or "",
+            }
+            attach_url = f"{SENAITE_URL}/senaite/@@accumark-attach-coa"
+            # Try the user's own SENAITE creds first (audit attribution); a
+            # stale stored password makes SENAITE treat the call as anonymous
+            # (404/401 without raising), so check status and retry once with
+            # the service account.
+            for attach_auth in (_get_senaite_auth(current_user), httpx.BasicAuth(SENAITE_USER, SENAITE_PASSWORD)):
+                async with httpx.AsyncClient(
+                    timeout=httpx.Timeout(30.0, connect=5.0),
+                    auth=attach_auth,
+                    follow_redirects=True,
+                ) as senaite_client:
+                    resp = await senaite_client.post(attach_url, json=attach_payload)
+                if resp.status_code < 300:
+                    break
+                _logger.warning(
+                    "SENAITE COA attach HTTP %s for %s (auth=%s)",
+                    resp.status_code, sample_id,
+                    "user" if attach_auth is not None else "service",
                 )
         except Exception as e:
             # Non-fatal — COA is generated; SENAITE attach is best-effort.
-            # The custom @@accumark-attach-coa addon only exists on prod SENAITE,
-            # so this 404s on dev stacks. Log instead of swallowing silently.
             _logger.warning("SENAITE COA attach failed for %s: %s", sample_id, e)
 
     # Build a meaningful message from the COA Builder response
