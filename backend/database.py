@@ -581,6 +581,19 @@ def _run_migrations():
         """,
         "CREATE INDEX IF NOT EXISTS ix_lims_analysis_promotions_parent ON lims_analysis_promotions (parent_analysis_id)",
         "CREATE INDEX IF NOT EXISTS ix_lims_analysis_promotions_source ON lims_analysis_promotions (source_analysis_id)",
+        # Sub-sample event log: lightweight audit for actions with no other trail.
+        # Writers: set_assignment_role, update_sub_sample, delete_pristine_analysis.
+        """
+        CREATE TABLE IF NOT EXISTS lims_sub_sample_events (
+            id              SERIAL PRIMARY KEY,
+            sub_sample_pk   INTEGER NOT NULL REFERENCES lims_sub_samples(id) ON DELETE CASCADE,
+            event           TEXT NOT NULL,
+            details         JSONB,
+            user_id         INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            created_at      TIMESTAMP NOT NULL DEFAULT NOW()
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS ix_lims_sub_sample_events_sub ON lims_sub_sample_events (sub_sample_pk)",
         # result-type Task 1: result type + options on analysis_services
         "ALTER TABLE analysis_services ADD COLUMN IF NOT EXISTS result_type TEXT",
         "ALTER TABLE analysis_services ADD COLUMN IF NOT EXISTS result_options JSONB",

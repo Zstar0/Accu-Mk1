@@ -1141,6 +1141,42 @@ class LimsAnalysisTransition(Base):
         )
 
 
+class LimsSubSampleEvent(Base):
+    """
+    Lightweight event log for sub-sample actions that have no other audit trail.
+
+    Writers (all in the same transaction as the action they record):
+      - set_assignment_role   → event='role_assigned'   details={from, to}
+      - update_sub_sample     → event='remarks_updated' details={preview}
+      - delete_pristine_analysis → event='analysis_removed' details={keyword}
+
+    user_id is nullable so automated / system-initiated paths can still write rows.
+    """
+
+    __tablename__ = "lims_sub_sample_events"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    sub_sample_pk: Mapped[int] = mapped_column(
+        Integer, ForeignKey("lims_sub_samples.id", ondelete="CASCADE"), nullable=False
+    )
+    event: Mapped[str] = mapped_column(Text, nullable=False)
+    details: Mapped[Optional[dict]] = mapped_column(
+        JSONB().with_variant(JSON(), "sqlite"), nullable=True
+    )
+    user_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, nullable=False
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<LimsSubSampleEvent(id={self.id}, sub_sample_pk={self.sub_sample_pk}, "
+            f"event={self.event!r})>"
+        )
+
+
 class LimsAnalysisPromotion(Base):
     """Phase 4a: one row per (parent-tier row, contributing vial-tier row).
 
