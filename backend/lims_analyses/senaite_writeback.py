@@ -86,6 +86,10 @@ def find_parent_analysis_line(parent_sample_id: str, keyword: str) -> dict:
             f"(keyword={keyword})"
         )
 
+    # A retract in SENAITE leaves the retracted line in place and adds a
+    # retest copy with the same keyword — prefer ACTIVE lines so write-back
+    # never targets a retracted/rejected one.
+    matched: list[dict] = []
     for item in items:
         # Live SENAITE returns getKeyword on Analysis items; the catalog/brain
         # form uses Keyword. Match both shapes (same dual-key pattern main.py
@@ -99,7 +103,15 @@ def find_parent_analysis_line(parent_sample_id: str, keyword: str) -> dict:
                     f"SENAITE analysis item for keyword={keyword} missing "
                     f"uid or review_state: {item}"
                 )
-            return {"uid": uid, "review_state": state}
+            matched.append({"uid": uid, "review_state": state})
+    for line in matched:
+        if line["review_state"] not in ("retracted", "rejected"):
+            return line
+    if matched:
+        raise SenaiteWritebackError(
+            f"all {len(matched)} SENAITE lines for keyword={keyword} on "
+            f"parent={parent_sample_id} are retracted/rejected"
+        )
 
     raise SenaiteWritebackError(
         f"SENAITE has no analysis line with keyword={keyword} on parent={parent_sample_id}"
