@@ -41,3 +41,33 @@ def test_shape_carries_result_type_and_options(db_session):
         {"value": "1", "label": "Conforms"},
         {"value": "0", "label": "Does Not Conform"},
     ]
+
+
+def test_shape_defaults_when_no_result_type(db_session):
+    """A service with no configured result type yields result_type=None and
+    result_options=[] — the FE text-input fallback path (no dropdown)."""
+    svc = AnalysisService(
+        title="Plain Numeric", keyword="PLAIN",
+        result_type=None, result_options=None,
+    )
+    db_session.add(svc)
+    db_session.flush()
+    parent = LimsSample(sample_id="PL-0001", external_lims_uid="uid-PL-0001")
+    db_session.add(parent)
+    db_session.flush()
+    sub = LimsSubSample(parent_sample_pk=parent.id, external_lims_uid="mk1://pl",
+                        sample_id="PL-0001-S01", vial_sequence=1)
+    db_session.add(sub)
+    db_session.flush()
+    a = LimsAnalysis(lims_sub_sample_pk=sub.id, analysis_service_id=svc.id,
+                     keyword="PLAIN", title="Plain Numeric",
+                     review_state="to_be_verified", result_value=None)
+    db_session.add(a)
+    db_session.commit()
+
+    rows = list_analyses_in_senaite_shape(
+        db_session, host_kind="sub_sample", host_pk=sub.id, include_retests=False,
+    )
+    assert len(rows) == 1
+    assert rows[0].result_type is None
+    assert rows[0].result_options == []
