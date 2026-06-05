@@ -25,7 +25,7 @@ type EventLevel = 'info' | 'dim' | 'warn' | 'success' | 'error' | 'accent'
 
 const levelColor: Record<EventLevel, string> = {
   info:    'text-zinc-300',
-  dim:     'text-zinc-600',
+  dim:     'text-zinc-400',
   warn:    'text-amber-400',
   success: 'text-emerald-400',
   error:   'text-red-400',
@@ -45,6 +45,13 @@ function eventToLevel(event: string): EventLevel {
     case 'added_to_worksheet': return 'info'
     case 'retest_created':    return 'accent'
     case 'retested_as':       return 'warn'
+    case 'analysis_added':    return 'info'
+    case 'analysis_transition': return 'info'
+    case 'analysis_promoted': return 'success'
+    case 'analysis_promoted_to_parent': return 'success'
+    case 'role_assigned':     return 'accent'
+    case 'remarks_updated':   return 'info'
+    case 'analysis_removed':  return 'warn'
     default:                  return 'dim'
   }
 }
@@ -62,6 +69,11 @@ function eventIcon(event: string): string {
     case 'added_to_worksheet':  return '\u002b' // +
     case 'retest_created':      return '↻' // ↻
     case 'retested_as':         return '↪' // ↪
+    case 'analysis_added':      return '+'
+    case 'analysis_promoted':   return '↑'
+    case 'analysis_promoted_to_parent': return '↑'
+    case 'role_assigned':       return '◈'
+    case 'analysis_removed':    return '−'
     default:                    return '\u2022' // •
   }
 }
@@ -117,14 +129,19 @@ function DetailLine({ event }: { event: SampleActivityEvent }) {
       if (d.wp_notified) parts.push('wp_notified=true')
       break
     }
-    default:
+    default: {
+      // Vial events (analysis_added/transition/promoted, role_assigned,
+      // remarks_updated, analysis_removed) carry user attribution in `by`.
+      if (d.by) parts.push(<span key="u">by <UserTag email={d.by as string} /></span>)
+      if (d.reason) parts.push(`reason=${d.reason}`)
       break
+    }
   }
 
   if (parts.length === 0) return null
 
   return (
-    <div className="font-mono text-[11px] leading-snug text-zinc-600 whitespace-pre-wrap ps-[21ch]">
+    <div className="font-mono text-[11px] leading-snug text-zinc-500 whitespace-pre-wrap ps-[21ch]">
       {'  '}{parts.map((p, i) => (
         <span key={i}>{i > 0 ? '  ' : ''}{p}</span>
       ))}
