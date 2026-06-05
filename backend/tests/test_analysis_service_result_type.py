@@ -91,3 +91,65 @@ def test_apply_seeds_from_get_prefixed_keys(db_session):
 
     assert svc.result_type == "select"
     assert svc.result_options == [{"value": "1", "label": "Conforms"}]
+
+
+# ─── PATCH /analysis-services/{id}/result-type ───────────────────────────────
+
+import pytest
+from unittest.mock import MagicMock
+from sqlalchemy import create_engine, event
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
+from fastapi.testclient import TestClient
+from main import app
+from auth import get_current_user
+from database import get_db, Base
+
+
+@pytest.fixture
+def route_client():
+    """TestClient with a single-connection in-memory SQLite engine.
+
+    Uses StaticPool so every session (test thread + ASGI handler thread) shares
+    the exact same underlying connection, which keeps in-memory tables visible
+    across the boundary.  check_same_thread=False allows the ASGI worker thread
+    to use the connection created in the test thread.
+    """
+    engine = create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine)
+    shared_session = Session()
+
+    def _override_get_db():
+        yield shared_session
+
+    app.dependency_overrides[get_db] = _override_get_db
+    app.dependency_overrides[get_current_user] = lambda: MagicMock(id=1)
+    tc = TestClient(app)
+    # Bundle session onto client object for convenience in tests
+    tc._test_session = shared_session
+    yield tc
+    app.dependency_overrides.pop(get_db, None)
+    app.dependency_overrides.pop(get_current_user, None)
+    shared_session.close()
+
+
+def test_update_result_type_endpoint(route_client):
+    db = route_client._test_session
+    svc = AnalysisService(title="Ster", keyword="STER-PCR")
+    db.add(svc)
+    db.commit()
+
+    resp = route_client.patch(
+        f"/analysis-services/{svc.id}/result-type",
+        json={"result_type": "select",
+              "result_options": [{"value": "1", "label": "Conforms"}]},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["result_type"] == "select"
+    assert body["result_options"] == [{"value": "1", "label": "Conforms"}]

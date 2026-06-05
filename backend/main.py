@@ -1785,6 +1785,8 @@ class AnalysisServiceResponse(BaseModel):
     active: bool
     created_at: datetime
     updated_at: datetime
+    result_type: Optional[str] = None
+    result_options: Optional[list] = None
 
     class Config:
         from_attributes = True
@@ -2494,6 +2496,31 @@ async def update_analysis_service_peptide(
         service.peptide_id = None
         service.peptide_name = None
 
+    db.commit()
+    db.refresh(service)
+    return AnalysisServiceResponse.model_validate(service)
+
+
+class AnalysisServiceResultTypeUpdate(BaseModel):
+    result_type: Optional[str] = None
+    result_options: Optional[list] = None
+
+
+@app.patch("/analysis-services/{service_id}/result-type", response_model=AnalysisServiceResponse)
+async def update_analysis_service_result_type(
+    service_id: int,
+    data: AnalysisServiceResultTypeUpdate,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Set a service's result type + options (local-authoritative once set)."""
+    service = db.execute(
+        select(AnalysisService).where(AnalysisService.id == service_id)
+    ).scalar_one_or_none()
+    if not service:
+        raise HTTPException(404, f"Analysis service {service_id} not found")
+    service.result_type = data.result_type
+    service.result_options = data.result_options
     db.commit()
     db.refresh(service)
     return AnalysisServiceResponse.model_validate(service)
