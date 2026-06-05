@@ -153,3 +153,34 @@ def test_update_result_type_endpoint(route_client):
     body = resp.json()
     assert body["result_type"] == "select"
     assert body["result_options"] == [{"value": "1", "label": "Conforms"}]
+
+
+def test_update_result_type_explicit_null_clears(route_client):
+    """Explicit nulls clear both fields (re-arms SENAITE sync seeding)."""
+    db = route_client._test_session
+    svc = AnalysisService(
+        title="Ster", keyword="STER-PCR",
+        result_type="select",
+        result_options=[{"value": "1", "label": "Conforms"}],
+    )
+    db.add(svc)
+    db.commit()
+
+    resp = route_client.patch(
+        f"/analysis-services/{svc.id}/result-type",
+        json={"result_type": None, "result_options": None},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["result_type"] is None
+    assert body["result_options"] is None
+
+
+def test_update_result_type_404_when_missing(route_client):
+    """PATCH against a nonexistent service returns 404."""
+    resp = route_client.patch(
+        "/analysis-services/99999/result-type",
+        json={"result_type": "select",
+              "result_options": [{"value": "1", "label": "Conforms"}]},
+    )
+    assert resp.status_code == 404

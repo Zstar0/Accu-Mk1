@@ -2519,8 +2519,10 @@ async def update_analysis_service_result_type(
     ).scalar_one_or_none()
     if not service:
         raise HTTPException(404, f"Analysis service {service_id} not found")
-    service.result_type = data.result_type
-    service.result_options = data.result_options
+    if "result_type" in data.model_fields_set:
+        service.result_type = data.result_type
+    if "result_options" in data.model_fields_set:
+        service.result_options = data.result_options
     db.commit()
     db.refresh(service)
     return AnalysisServiceResponse.model_validate(service)
