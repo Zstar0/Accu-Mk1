@@ -584,6 +584,17 @@ def _run_migrations():
         # result-type Task 1: result type + options on analysis_services
         "ALTER TABLE analysis_services ADD COLUMN IF NOT EXISTS result_type TEXT",
         "ALTER TABLE analysis_services ADD COLUMN IF NOT EXISTS result_options JSONB",
+        # senaite-writeback: retracted/rejected parent rows must not block
+        # re-promotion — "retract the parent row, then re-promote" is the
+        # documented undo. Rebuild the parent-tier root index with a state
+        # exclusion (drop+create is idempotent as a pair).
+        "DROP INDEX IF EXISTS uq_lims_analyses_parent_service_root",
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_lims_analyses_parent_service_root
+            ON lims_analyses (lims_sample_pk, keyword)
+            WHERE retest_of_id IS NULL AND lims_sample_pk IS NOT NULL
+              AND review_state NOT IN ('retracted', 'rejected')
+        """,
     ]
     # Per-statement isolation: a failure in one statement (e.g., a table that
     # create_all hasn't built yet on first run) must not skip subsequent
