@@ -2527,7 +2527,7 @@ export function SampleDetails() {
                 <h1 className="text-xl font-bold tracking-tight font-mono">
                   {data.senaite_url ? (
                     <a
-                      href={`${senaiteBaseUrl}${data.senaite_url}`}
+                      href={data.senaite_url.startsWith('http') ? data.senaite_url : `${senaiteBaseUrl}${data.senaite_url}`}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="hover:text-blue-700 dark:hover:text-blue-400 transition-colors inline-flex items-center gap-1.5 cursor-pointer"
