@@ -1647,6 +1647,8 @@ export interface AnalysisService {
   uid: string
   title: string
   keyword: string
+  result_type?: string | null
+  result_options?: { value: string; label: string }[] | null
 }
 
 export interface ManageAnalysisResult {
@@ -3300,6 +3302,7 @@ export interface SenaiteAnalysis {
   keyword: string | null
   title: string
   result: string | null
+  result_type?: string | null
   result_options: SenaiteResultOption[]  // always present from backend; [] if no predefined options
   unit: string | null
   method: string | null

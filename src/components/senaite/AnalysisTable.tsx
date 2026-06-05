@@ -291,6 +291,7 @@ function EditableResultCell({
   const [autoValue, setAutoValue] = useState('')
   const options = analysis.result_options ?? []
   const hasOptions = options.length > 0
+  const isNumeric = analysis.result_type === 'numeric'
   const displayLabel = conformsValue
     ? resolveIdentityLabel(analysis.result, conformsValue)
     : resolveResultLabel(analysis.result, options)
@@ -360,7 +361,7 @@ function EditableResultCell({
           ) : (
             <Input
               ref={inputRef}
-              type="text"
+              type={isNumeric ? 'number' : 'text'}
               value={autoValue}
               onChange={e => setAutoValue(e.target.value)}
               onKeyDown={handleAutoKeyDown}
@@ -433,7 +434,7 @@ function EditableResultCell({
           ) : (
             <Input
               ref={inputRef}
-              type="text"
+              type={isNumeric ? 'number' : 'text'}
               value={editing.draft}
               onChange={e => editing.setDraft(e.target.value)}
               onKeyDown={e => { if (analysis.uid) editing.handleKeyDown(e, analysis.uid) }}
