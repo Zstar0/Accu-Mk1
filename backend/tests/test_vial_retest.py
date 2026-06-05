@@ -1,17 +1,25 @@
 """Task 1: Vial-tier retest — state machine + service tests.
+Task 2: Promote supersession for retest sources.
 
-Tests (≥5 per plan):
+Tests (≥5 per plan, Task 1):
   1. retest from to_be_verified creates linked row + flags old row
   2. retest from verified works
   3. old row's review_state is unchanged after retest
   4. vial retract/reject/verify behavior unchanged (regression)
   5. parent-tier retest raises TierMismatchError (regression)
   + extras: audit chain, initial state of new row, from-unassigned illegal
+
+Tests (≥3 per plan, Task 2):
+  T2-1. retest-source promote supersedes old parent row
+  T2-2. non-retest second promote still raises IntegrityError
+  T2-3. supersession respects commit=False (rollback leaves old parent active)
 """
 from __future__ import annotations
 
 import pytest
 from sqlalchemy import delete, select
+
+from sqlalchemy.exc import IntegrityError
 
 from database import SessionLocal
 from lims_analyses.service import (
@@ -20,6 +28,7 @@ from lims_analyses.service import (
     apply_transition,
     create_analysis,
     get_analysis,
+    promote_to_parent,
 )
 from lims_analyses.state_machine import (
     InvalidTransitionError,
@@ -28,6 +37,7 @@ from lims_analyses.state_machine import (
 from models import (
     AnalysisService,
     LimsAnalysis,
+    LimsAnalysisPromotion,
     LimsAnalysisTransition,
     LimsSample,
     LimsSubSample,
@@ -309,3 +319,253 @@ def test_retest_from_assigned_raises_invalid_transition(db, sub_sample, analysis
     with pytest.raises(InvalidTransitionError):
         apply_transition(db, analysis_id=row.id, kind="retest",
                          reason="TEST: illegal retest from assigned")
+
+
+# ─── Task 2: Promote supersession for retest sources ─────────────────────────
+
+
+@pytest.fixture
+def parent_sample(db):
+    """Find an existing LimsSample with at least one sub-sample."""
+    parent = db.execute(
+        select(LimsSample)
+        .join(LimsSubSample, LimsSubSample.parent_sample_pk == LimsSample.id)
+    ).scalars().first()
+    if parent is None:
+        pytest.skip("no lims_samples with sub-samples available")
+    return parent
+
+
+def _find_free_sub_sample(db, parent, svc):
+    """Find a sub-sample under parent that has no non-retest row for svc.keyword."""
+    subs = db.execute(
+        select(LimsSubSample).where(LimsSubSample.parent_sample_pk == parent.id)
+    ).scalars().all()
+    for sub in subs:
+        existing = db.execute(
+            select(LimsAnalysis).where(
+                LimsAnalysis.lims_sub_sample_pk == sub.id,
+                LimsAnalysis.keyword == svc.keyword,
+                LimsAnalysis.retest_of_id.is_(None),
+            )
+        ).scalars().first()
+        if existing is None:
+            return sub
+    return None
+
+
+def _seed_parent_tier_row(db, parent_sample_pk, svc):
+    """Insert a synthetic verified parent-tier row for (parent, keyword).
+
+    Returns the row. Used to pre-populate the index slot before re-promoting.
+    Marked TEST: for cleanup.
+    """
+    row = LimsAnalysis(
+        lims_sample_pk=parent_sample_pk,
+        lims_sub_sample_pk=None,
+        analysis_service_id=svc.id,
+        keyword=svc.keyword,
+        title="TEST: parent-tier " + (svc.title or svc.keyword),
+        review_state="verified",
+        result_value="98.55",
+        retest_of_id=None,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+# ─── T2-1: retest-source promote supersedes old parent row ───────────────────
+
+
+def test_retest_source_promote_supersedes_old_parent_row(
+    db, parent_sample, analysis_service
+):
+    """A retest-source promotion retracts the prior active parent-tier row in
+    the same transaction and inserts the new one — no IntegrityError."""
+    sub = _find_free_sub_sample(db, parent_sample, analysis_service)
+    if sub is None:
+        pytest.skip("no free sub-sample under parent for retest-source promote test")
+
+    # Pre-populate an active parent-tier row for this (parent, keyword)
+    old_parent = _seed_parent_tier_row(db, parent_sample.id, analysis_service)
+    old_parent_id = old_parent.id
+    assert old_parent.review_state == "verified"
+
+    # Create a vial row, walk it to to_be_verified, then retest → new_row
+    vial = _walk_to_tbv(db, sub, analysis_service)
+    new_vial = apply_transition(db, analysis_id=vial.id, kind="retest",
+                                reason="TEST: retest for supersession test")
+    new_vial.title = "TEST: retest-" + (new_vial.title or "")
+    db.commit()
+
+    # Walk the new vial to to_be_verified so it can be promoted
+    apply_transition(db, analysis_id=new_vial.id, kind="assign",
+                     reason="TEST: assign retest vial")
+    apply_transition(db, analysis_id=new_vial.id, kind="submit",
+                     result_value="99.00", reason="TEST: submit retest vial")
+    new_vial_tbv = get_analysis(db, new_vial.id)
+    assert new_vial_tbv.review_state == "to_be_verified"
+    assert new_vial_tbv.retest_of_id is not None  # IS a retest row
+
+    # Promote the retest vial — must supersede old_parent, not 409
+    new_parent, promotions = promote_to_parent(
+        db,
+        keyword=analysis_service.keyword,
+        result_value="99.00",
+        result_unit=None,
+        method_id=None,
+        instrument_id=None,
+        sources=[{"analysis_id": new_vial_tbv.id, "contribution_kind": "chosen"}],
+        user_id=None,
+        reason="TEST: retest supersession",
+        commit=True,
+    )
+
+    # New parent row is verified
+    assert new_parent.review_state == "verified"
+    assert new_parent.id != old_parent_id
+    new_parent.title = "TEST: parent-" + (new_parent.title or "")
+    db.commit()
+
+    # Old parent row is now retracted
+    db.expire(old_parent)
+    db.refresh(old_parent)
+    assert old_parent.review_state == "retracted"
+
+    # Audit row written on old parent with the supersession reason
+    audit = db.execute(
+        select(LimsAnalysisTransition).where(
+            LimsAnalysisTransition.analysis_id == old_parent_id,
+            LimsAnalysisTransition.reason == "superseded by retest promotion",
+        )
+    ).scalars().first()
+    assert audit is not None
+    assert audit.to_state == "retracted"
+
+
+# ─── T2-2: non-retest second promote still raises IntegrityError ─────────────
+
+
+def test_non_retest_second_promote_raises_integrity_error(
+    db, parent_sample, analysis_service
+):
+    """Re-promoting a non-retest source against an existing parent-tier row
+    still hits the partial unique index → IntegrityError (no supersession)."""
+    sub = _find_free_sub_sample(db, parent_sample, analysis_service)
+    if sub is None:
+        pytest.skip("no free sub-sample for double-promote test")
+
+    # Find a second free sub-sample for the second promote attempt
+    sub2 = None
+    subs = db.execute(
+        select(LimsSubSample).where(LimsSubSample.parent_sample_pk == parent_sample.id)
+    ).scalars().all()
+    for candidate in subs:
+        if candidate.id == sub.id:
+            continue
+        existing = db.execute(
+            select(LimsAnalysis).where(
+                LimsAnalysis.lims_sub_sample_pk == candidate.id,
+                LimsAnalysis.keyword == analysis_service.keyword,
+                LimsAnalysis.retest_of_id.is_(None),
+            )
+        ).scalars().first()
+        if existing is None:
+            sub2 = candidate
+            break
+    if sub2 is None:
+        pytest.skip("need 2 free sub-samples under parent for double-promote test")
+
+    # First promote: vial from sub (non-retest source)
+    vial1 = _walk_to_tbv(db, sub, analysis_service)
+    parent_row, _ = promote_to_parent(
+        db,
+        keyword=analysis_service.keyword,
+        result_value="98.55",
+        result_unit=None,
+        method_id=None,
+        instrument_id=None,
+        sources=[{"analysis_id": vial1.id, "contribution_kind": "chosen"}],
+        user_id=None,
+        reason="TEST: first promote",
+        commit=True,
+    )
+    parent_row.title = "TEST: parent-" + (parent_row.title or "")
+    db.commit()
+
+    # Second promote: vial from sub2 (also non-retest source) — must IntegrityError
+    vial2 = _walk_to_tbv(db, sub2, analysis_service)
+    with pytest.raises(IntegrityError):
+        promote_to_parent(
+            db,
+            keyword=analysis_service.keyword,
+            result_value="99.00",
+            result_unit=None,
+            method_id=None,
+            instrument_id=None,
+            sources=[{"analysis_id": vial2.id, "contribution_kind": "chosen"}],
+            user_id=None,
+            reason="TEST: second promote should 409",
+            commit=True,
+        )
+
+    # Rollback the failed transaction so subsequent tests can still use the session
+    db.rollback()
+
+
+# ─── T2-3: supersession respects commit=False path ───────────────────────────
+
+
+def test_retest_supersession_respects_commit_false(
+    db, parent_sample, analysis_service
+):
+    """With commit=False, the supersession flush happens but the whole
+    transaction is uncommitted. After rollback(), the old parent row is
+    still active (not retracted)."""
+    sub = _find_free_sub_sample(db, parent_sample, analysis_service)
+    if sub is None:
+        pytest.skip("no free sub-sample for commit=False supersession test")
+
+    # Pre-populate an active parent-tier row
+    old_parent = _seed_parent_tier_row(db, parent_sample.id, analysis_service)
+    old_parent_id = old_parent.id
+
+    # Create a retest vial and walk it to to_be_verified
+    vial = _walk_to_tbv(db, sub, analysis_service)
+    new_vial = apply_transition(db, analysis_id=vial.id, kind="retest",
+                                reason="TEST: retest for commit=False test")
+    new_vial.title = "TEST: retest-" + (new_vial.title or "")
+    db.commit()
+
+    apply_transition(db, analysis_id=new_vial.id, kind="assign",
+                     reason="TEST: assign")
+    apply_transition(db, analysis_id=new_vial.id, kind="submit",
+                     result_value="99.00", reason="TEST: submit")
+    new_vial_tbv = get_analysis(db, new_vial.id)
+    assert new_vial_tbv.retest_of_id is not None
+
+    # Promote with commit=False — supersession flush runs but nothing committed
+    promote_to_parent(
+        db,
+        keyword=analysis_service.keyword,
+        result_value="99.00",
+        result_unit=None,
+        method_id=None,
+        instrument_id=None,
+        sources=[{"analysis_id": new_vial_tbv.id, "contribution_kind": "chosen"}],
+        user_id=None,
+        reason="TEST: commit=False supersession",
+        commit=False,
+    )
+
+    # Rollback — everything in the transaction is discarded
+    db.rollback()
+
+    # Old parent row must still be active (not retracted)
+    db.expire(old_parent)
+    db.refresh(old_parent)
+    assert old_parent.review_state == "verified", (
+        f"Expected verified after rollback, got {old_parent.review_state!r}"
+    )

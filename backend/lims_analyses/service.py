@@ -391,6 +391,14 @@ def promote_to_parent(
       3. INSERT one audit transition per source (state-unchanged 'auto'
          kind, reason='promoted to parent #N (kind=...)').
 
+    Retest-source supersession: if ALL sources carry retest_of_id IS NOT NULL
+    (retest promotion), any active (non-retracted/non-rejected) non-retest
+    parent-tier row for (parent_sample_pk, keyword) is retracted inside the
+    same transaction before the new parent row is inserted — vacating the
+    partial unique index slot. An audit transition (reason="superseded by
+    retest promotion") is written on the old row. Non-retest sources leave
+    the existing 409 protection intact.
+
     Raises:
       - BadRequestError on validation failures.
       - sqlalchemy.exc.IntegrityError if an existing non-retest parent-tier
@@ -468,6 +476,36 @@ def promote_to_parent(
     title = first_source.title
 
     now = datetime.utcnow()
+
+    # ── Retest-source supersession ────────────────────────────────────────────
+    # When ALL sources are retest rows (retest_of_id IS NOT NULL), the caller
+    # is re-promoting after a vial retest. The old canonical (non-retest) parent
+    # row for (parent_sample_pk, keyword) — if active — must be retracted inside
+    # this same transaction to vacate the partial unique index before the new
+    # parent row is inserted. Non-retest sources leave the existing 409 guard.
+    if all(source_rows[sid].retest_of_id is not None for sid in source_ids):
+        old_parent = db.execute(
+            select(LimsAnalysis).where(
+                LimsAnalysis.lims_sample_pk == parent_sample_pk,
+                LimsAnalysis.keyword == keyword,
+                LimsAnalysis.retest_of_id.is_(None),
+                LimsAnalysis.review_state.not_in(("retracted", "rejected")),
+                LimsAnalysis.lims_sub_sample_pk.is_(None),
+            )
+        ).scalars().first()
+        if old_parent is not None:
+            old_parent.review_state = "retracted"
+            old_parent.updated_at = now
+            db.add(LimsAnalysisTransition(
+                analysis_id=old_parent.id,
+                from_state="verified",
+                to_state="retracted",
+                transition_kind="auto",
+                user_id=user_id,
+                reason="superseded by retest promotion",
+            ))
+            db.flush()   # emit UPDATE before INSERT so Postgres sees vacated index slot
+    # ── end retest-source supersession ───────────────────────────────────────
 
     parent_row = LimsAnalysis(
         lims_sample_pk=parent_sample_pk,
