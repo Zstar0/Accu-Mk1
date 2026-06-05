@@ -2499,6 +2499,33 @@ async def update_analysis_service_peptide(
     return AnalysisServiceResponse.model_validate(service)
 
 
+def _parse_service_result_options(raw) -> list[dict]:
+    """SENAITE ResultOptions [{ResultValue, ResultText}] -> [{value, label}]."""
+    out: list[dict] = []
+    if raw and isinstance(raw, list):
+        for opt in raw:
+            if isinstance(opt, dict) and opt.get("ResultValue") is not None:
+                out.append({
+                    "value": str(opt["ResultValue"]),
+                    "label": str(opt.get("ResultText", opt["ResultValue"])),
+                })
+    return out
+
+
+def _apply_service_result_type(svc, item: dict) -> None:
+    """Seed svc.result_type / result_options from a SENAITE service item, but
+    ONLY when svc.result_type is NULL (local-wins). No-op otherwise."""
+    if svc.result_type is not None:
+        return
+    rtype = item.get("ResultType") or item.get("getResultType")
+    if not rtype:
+        return
+    svc.result_type = str(rtype)
+    svc.result_options = _parse_service_result_options(
+        item.get("ResultOptions") or item.get("getResultOptions") or []
+    ) or None
+
+
 @app.post("/analysis-services/sync")
 async def sync_analysis_services(db: Session = Depends(get_db), _current_user=Depends(get_current_user)):
     """Sync analysis services from Senaite. Adds new services, does not overwrite existing."""
@@ -2574,6 +2601,7 @@ async def sync_analysis_services(db: Session = Depends(get_db), _current_user=De
             if not existing.category and category:
                 existing.category = category
                 updated += 1
+            _apply_service_result_type(existing, item)  # local-wins seed
             continue
 
         svc = AnalysisService(
@@ -2587,6 +2615,7 @@ async def sync_analysis_services(db: Session = Depends(get_db), _current_user=De
             senaite_uid=item.get("uid"),
         )
         db.add(svc)
+        _apply_service_result_type(svc, item)
         created += 1
 
     db.commit()
