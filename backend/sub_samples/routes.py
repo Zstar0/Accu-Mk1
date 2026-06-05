@@ -182,6 +182,7 @@ def update_sub_sample(
             photo_bytes,
             _filename_from_request() if photo_bytes else None,
             body.remarks,
+            user_id=user.id,
         )
     except RuntimeError as e:
         raise HTTPException(status_code=502, detail=str(e))
@@ -252,7 +253,7 @@ def patch_assignment(
     sample_id: str,
     body: AssignmentPatchRequest,
     db: Session = Depends(get_db),
-    _user=Depends(get_current_user),
+    user=Depends(get_current_user),
 ):
     """Set the assignment_role on a vial.
 
@@ -260,7 +261,7 @@ def patch_assignment(
     - Parent AR: null role is coerced to 'hplc' (preserves "primary always HPLC").
     """
     try:
-        return service.set_assignment_role(db, sample_id, body.role)
+        return service.set_assignment_role(db, sample_id, body.role, user_id=user.id)
     except LookupError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except ValueError as e:

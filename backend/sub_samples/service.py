@@ -15,7 +15,7 @@ from datetime import datetime, timedelta
 from typing import Optional, Tuple, List
 from sqlalchemy import select, func
 from sqlalchemy.orm import Session
-from models import LimsSample, LimsSubSample
+from models import LimsSample, LimsSubSample, LimsSubSampleEvent
 from sub_samples import native
 from sub_samples import senaite
 from sub_samples.senaite import SecondaryFalloutError
@@ -421,6 +421,7 @@ def update_sub_sample(
     photo_bytes: Optional[bytes],
     photo_filename: Optional[str],
     remarks: Optional[str],
+    user_id: Optional[int] = None,
 ) -> LimsSubSample:
     sub = db.execute(
         select(LimsSubSample).where(LimsSubSample.sample_id == sample_id)
@@ -430,6 +431,12 @@ def update_sub_sample(
         if not native.is_native_vial(sub):
             senaite.update_remarks(sub.external_lims_uid, remarks)
         sub.remarks = remarks
+        db.add(LimsSubSampleEvent(
+            sub_sample_pk=sub.id,
+            event="remarks_updated",
+            details={"preview": remarks[:120]},
+            user_id=user_id,
+        ))
     if photo_bytes is not None:
         senaite.upload_photo(sub.photo_external_uid, photo_bytes, photo_filename or "vial.jpg")
     sub.parent_sample.last_synced_at = datetime.utcnow()
@@ -671,7 +678,7 @@ def auto_assign(vials: list[dict], demand: dict) -> list[dict]:
 _VALID_ROLES = {"hplc", "endo", "ster", "xtra"}
 
 
-def set_assignment_role(db: Session, sample_id: str, role: Optional[str]) -> dict:
+def set_assignment_role(db: Session, sample_id: str, role: Optional[str], user_id: Optional[int] = None) -> dict:
     """Set assignment_role on a sub-sample or parent. Routes by sample existence.
 
     For sub-samples: role can be None (resets, next /vial-plan auto-assigns).
@@ -684,7 +691,14 @@ def set_assignment_role(db: Session, sample_id: str, role: Optional[str]) -> dic
         select(LimsSubSample).where(LimsSubSample.sample_id == sample_id)
     ).scalar_one_or_none()
     if sub is not None:
+        old_role = sub.assignment_role
         sub.assignment_role = role
+        db.add(LimsSubSampleEvent(
+            sub_sample_pk=sub.id,
+            event="role_assigned",
+            details={"from": old_role, "to": role},
+            user_id=user_id,
+        ))
         db.commit()
         # Phase 2 (mk1-native-analyses): if this assignment transitioned the
         # vial into a real (non-XTRA) role, seed its lims_analyses rows.

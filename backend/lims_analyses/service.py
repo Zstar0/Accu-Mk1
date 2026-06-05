@@ -26,7 +26,7 @@ from lims_analyses.state_machine import (
     tier_allows,
     tier_of,
 )
-from models import LimsAnalysis, LimsAnalysisTransition
+from models import LimsAnalysis, LimsAnalysisTransition, LimsSubSampleEvent
 
 
 # ─── Typed exceptions ────────────────────────────────────────────────────────
@@ -782,6 +782,14 @@ def delete_pristine_analysis(
             "analysis has activity (promotion link exists) — retract it instead"
         )
 
+    # Write event before hard-delete: the analysis row is gone after commit,
+    # but the event preserves the fact that it existed and was removed.
+    db.add(LimsSubSampleEvent(
+        sub_sample_pk=sub_sample_pk,
+        event="analysis_removed",
+        details={"keyword": keyword},
+        user_id=user_id,
+    ))
     # Hard-delete: transition rows first (FK), then the row itself.
     db.execute(
         sa_delete(LimsAnalysisTransition).where(
