@@ -12,6 +12,11 @@ Internal helpers (exposed for testing):
 Fail-closed: every network error and every unexpected SENAITE response is
 converted to SenaiteWritebackError so the calling promote route can abort
 cleanly.
+
+Write-back flow: after result+remarks are posted and the line is submitted,
+the parent AR analysis line is left at ``to_be_verified`` so the lab manager
+can review and verify it manually in SENAITE (or on the parent AR page).
+The verify transition is NOT performed automatically.
 """
 import os
 import logging
@@ -179,7 +184,10 @@ def writeback_promotion(
          SENAITE first.
       3. POST result + remark to the analysis line (_update).
       4. If not already ``to_be_verified``: submit the line (_transition).
-      5. Verify the line (_transition).
+
+    The line is intentionally left at ``to_be_verified`` after write-back so
+    the lab manager can verify it manually in SENAITE (or on the parent AR
+    page).  The verify transition is NOT performed automatically.
 
     Returns the analysis line UID on success.
     All failures raise SenaiteWritebackError (fail-closed).
@@ -198,7 +206,5 @@ def writeback_promotion(
 
     if initial_state != "to_be_verified":
         _transition(uid, "submit")
-
-    _transition(uid, "verify")
 
     return uid

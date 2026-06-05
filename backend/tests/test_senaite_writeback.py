@@ -113,7 +113,8 @@ def test_find_parent_analysis_line_wraps_transport_error():
 
 # ---------------------------------------------------------------------------
 # Test 3: writeback_promotion happy path from state 'unassigned'
-#   Sequence must be: result+remarks _update → submit _transition → verify _transition
+#   Sequence must be: result+remarks _update → submit _transition
+#   (line is left at to_be_verified; lab manager verifies manually)
 # ---------------------------------------------------------------------------
 
 def test_writeback_promotion_full_sequence_from_unassigned():
@@ -127,8 +128,6 @@ def test_writeback_promotion_full_sequence_from_unassigned():
         transition = payload.get("transition")
         if transition == "submit":
             items = [{"review_state": "to_be_verified"}]
-        elif transition == "verify":
-            items = [{"review_state": "verified"}]
         else:
             # result+remarks update — review_state in response is irrelevant per spec
             items = [{"review_state": "unassigned"}]
@@ -141,19 +140,18 @@ def test_writeback_promotion_full_sequence_from_unassigned():
         uid = writeback_promotion("P-0042", "HPLC_ASSAY", "98.5", "Promoted from vial")
 
     assert uid == "uid-xyz"
-    assert len(call_log) == 3
+    assert len(call_log) == 2
     # First call: result + remarks update (no 'transition' key)
     assert "transition" not in call_log[0]
     assert call_log[0].get("Result") == "98.5"
     assert call_log[0].get("Remarks") == "Promoted from vial"
-    # Second call: submit transition
+    # Second call: submit transition — line left at to_be_verified for manual verify
     assert call_log[1].get("transition") == "submit"
-    # Third call: verify transition
-    assert call_log[2].get("transition") == "verify"
 
 
 # ---------------------------------------------------------------------------
 # Test 4: writeback_promotion skips submit when line is already 'to_be_verified'
+#         — only result+remarks update is performed; line stays at to_be_verified
 # ---------------------------------------------------------------------------
 
 def test_writeback_promotion_skips_submit_when_already_to_be_verified():
@@ -164,13 +162,8 @@ def test_writeback_promotion_skips_submit_when_already_to_be_verified():
     def fake_post_json(url, **kwargs):
         payload = kwargs.get("json", {})
         call_log.append(payload)
-        transition = payload.get("transition")
-        if transition == "verify":
-            items = [{"review_state": "verified"}]
-        else:
-            items = [{"review_state": "to_be_verified"}]
         r = MagicMock(status_code=200)
-        r.json.return_value = {"items": items}
+        r.json.return_value = {"items": [{"review_state": "to_be_verified"}]}
         return r
 
     with patch("lims_analyses.senaite_writeback._get", return_value=find_resp), \
@@ -178,10 +171,10 @@ def test_writeback_promotion_skips_submit_when_already_to_be_verified():
         uid = writeback_promotion("P-0042", "HPLC_ASSAY", "98.5", "remark")
 
     assert uid == "uid-xyz"
-    assert len(call_log) == 2
-    # No submit call — only result update then verify
+    assert len(call_log) == 1
+    # Only the result+remarks update — no submit, no verify transitions
     transitions = [c.get("transition") for c in call_log if "transition" in c]
-    assert transitions == ["verify"]
+    assert transitions == []
 
 
 # ---------------------------------------------------------------------------
