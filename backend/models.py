@@ -159,7 +159,9 @@ class AnalysisService(Base):
     # result_type stores SENAITE's value verbatim (numeric/select/multiselect/string/...).
     # result_options is a list of {"value": str, "label": str} (select/multiselect only).
     result_type: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    result_options: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    result_options: Mapped[Optional[list]] = mapped_column(
+        JSONB().with_variant(JSON(), "sqlite"), nullable=True
+    )
     peptide_name: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)  # derived: "AICAR" (legacy)
     peptide_id: Mapped[Optional[int]] = mapped_column(ForeignKey("peptides.id", ondelete="SET NULL"), nullable=True)
     senaite_id: Mapped[Optional[str]] = mapped_column(String(200), nullable=True, unique=True)
