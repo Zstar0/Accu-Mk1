@@ -127,14 +127,22 @@ def route_client():
     def _override_get_db():
         yield shared_session
 
+    prev_db = app.dependency_overrides.get(get_db)
+    prev_user = app.dependency_overrides.get(get_current_user)
     app.dependency_overrides[get_db] = _override_get_db
     app.dependency_overrides[get_current_user] = lambda: MagicMock(id=1)
     tc = TestClient(app)
     # Bundle session onto client object for convenience in tests
     tc._test_session = shared_session
     yield tc
-    app.dependency_overrides.pop(get_db, None)
-    app.dependency_overrides.pop(get_current_user, None)
+    if prev_db is None:
+        app.dependency_overrides.pop(get_db, None)
+    else:
+        app.dependency_overrides[get_db] = prev_db
+    if prev_user is None:
+        app.dependency_overrides.pop(get_current_user, None)
+    else:
+        app.dependency_overrides[get_current_user] = prev_user
     shared_session.close()
 
 
