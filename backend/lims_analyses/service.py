@@ -585,15 +585,19 @@ def list_analyses_in_senaite_shape(
 
     # Phase 4b: bulk-load promotion links so we can surface promoted_to_parent_id
     # on each vial-tier row. Single-query, indexed lookup on source_analysis_id.
+    # senaite-writeback: ignore links whose parent row was retracted/rejected —
+    # "retract the parent row, then re-promote" must restore promotability.
     from models import LimsAnalysisPromotion
     row_ids = [r.id for r in rows]
     promo_by_source: Dict[int, int] = {}
     if row_ids:
-        for p in db.execute(
-            select(LimsAnalysisPromotion)
+        for p, parent_state in db.execute(
+            select(LimsAnalysisPromotion, LimsAnalysis.review_state)
+            .join(LimsAnalysis, LimsAnalysis.id == LimsAnalysisPromotion.parent_analysis_id)
             .where(LimsAnalysisPromotion.source_analysis_id.in_(row_ids))
-        ).scalars().all():
-            promo_by_source[p.source_analysis_id] = p.parent_analysis_id
+        ).all():
+            if parent_state not in ("retracted", "rejected"):
+                promo_by_source[p.source_analysis_id] = p.parent_analysis_id
 
     # Bulk-load services for unit / method-name display
     service_ids = {r.analysis_service_id for r in rows}
