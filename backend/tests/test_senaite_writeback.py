@@ -35,19 +35,23 @@ def _analysis_item(uid, keyword, review_state):
 
 
 # ---------------------------------------------------------------------------
-# Test 1: find_parent_analysis_line — keyword match among multiple items
+# Test 1: find_parent_analysis_line — keyword match among multiple items;
+#         prefers an active (non-retracted/rejected/verified) line when present.
 # ---------------------------------------------------------------------------
 
 def test_find_parent_analysis_line_returns_uid_and_state_for_matching_keyword():
+    # uid-bbb is verified; uid-ccc is unassigned — the helper must prefer uid-bbb
+    # was previously returning the verified line, which is now wrong.  The
+    # correct behaviour is to skip verified and return the active line.
     items = [
         _analysis_item("uid-aaa", "HPLC_ASSAY", "to_be_verified"),
-        _analysis_item("uid-bbb", "Identity", "verified"),
+        _analysis_item("uid-bbb", "Identity", "to_be_verified"),
         _analysis_item("uid-ccc", "Water_Content", "unassigned"),
     ]
     with patch("lims_analyses.senaite_writeback._get", return_value=_ok_resp(items)):
         result = find_parent_analysis_line("P-0042", "Identity")
 
-    assert result == {"uid": "uid-bbb", "review_state": "verified"}
+    assert result == {"uid": "uid-bbb", "review_state": "to_be_verified"}
 
 
 # ---------------------------------------------------------------------------
@@ -209,3 +213,51 @@ def test_transition_raises_on_silent_rejection():
     assert "silently rejected" in msg
     assert "to_be_verified" in msg   # expected state
     assert "unassigned" in msg        # actual state
+
+
+# ---------------------------------------------------------------------------
+# Task 3: new preference tests — active line preferred over verified
+# ---------------------------------------------------------------------------
+
+# Test 7: [verified, unassigned] in verified-first order → returns the
+#          unassigned uid, NOT the verified one.
+def test_find_parent_analysis_line_prefers_unassigned_over_verified_verified_first():
+    items = [
+        _analysis_item("uid-verified", "Identity", "verified"),
+        _analysis_item("uid-active", "Identity", "unassigned"),
+    ]
+    with patch("lims_analyses.senaite_writeback._get", return_value=_ok_resp(items)):
+        result = find_parent_analysis_line("P-0042", "Identity")
+
+    assert result == {"uid": "uid-active", "review_state": "unassigned"}
+
+
+# Test 8: [unassigned, verified] in active-first order → same result.
+def test_find_parent_analysis_line_prefers_unassigned_over_verified_active_first():
+    items = [
+        _analysis_item("uid-active", "Identity", "unassigned"),
+        _analysis_item("uid-verified", "Identity", "verified"),
+    ]
+    with patch("lims_analyses.senaite_writeback._get", return_value=_ok_resp(items)):
+        result = find_parent_analysis_line("P-0042", "Identity")
+
+    assert result == {"uid": "uid-active", "review_state": "unassigned"}
+
+
+# Test 9: only-verified line(s) → SenaiteWritebackError with SENAITE-retest
+#          message; _update and _transition are NEVER called.
+def test_find_parent_analysis_line_only_verified_raises_with_correct_message():
+    items = [
+        _analysis_item("uid-verified", "Identity", "verified"),
+    ]
+    with patch("lims_analyses.senaite_writeback._get", return_value=_ok_resp(items)), \
+         patch("lims_analyses.senaite_writeback._update") as mock_update, \
+         patch("lims_analyses.senaite_writeback._transition") as mock_transition:
+        with pytest.raises(SenaiteWritebackError) as exc_info:
+            find_parent_analysis_line("P-0042", "Identity")
+
+    msg = str(exc_info.value)
+    assert "already verified in SENAITE" in msg
+    assert "retest or retract there first" in msg
+    mock_update.assert_not_called()
+    mock_transition.assert_not_called()

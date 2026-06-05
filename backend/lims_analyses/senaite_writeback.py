@@ -93,7 +93,12 @@ def find_parent_analysis_line(parent_sample_id: str, keyword: str) -> dict:
 
     # A retract in SENAITE leaves the retracted line in place and adds a
     # retest copy with the same keyword — prefer ACTIVE lines so write-back
-    # never targets a retracted/rejected one.
+    # never targets a retracted/rejected/verified one.  Preference order:
+    #   1. Lines not in (retracted, rejected, verified) — write-back targets
+    #      these directly.
+    #   2. If only verified lines remain → error: caller must retest or retract
+    #      in SENAITE first.
+    #   3. All retracted/rejected → error unchanged.
     matched: list[dict] = []
     for item in items:
         # Live SENAITE returns getKeyword on Analysis items; the catalog/brain
@@ -109,9 +114,16 @@ def find_parent_analysis_line(parent_sample_id: str, keyword: str) -> dict:
                     f"uid or review_state: {item}"
                 )
             matched.append({"uid": uid, "review_state": state})
+    # First preference: active (non-retracted/rejected/verified) line.
     for line in matched:
-        if line["review_state"] not in ("retracted", "rejected"):
+        if line["review_state"] not in ("retracted", "rejected", "verified"):
             return line
+    # No active line — check for verified line(s) before falling through.
+    if any(line["review_state"] == "verified" for line in matched):
+        raise SenaiteWritebackError(
+            f"Analysis {keyword} on {parent_sample_id} is already verified in "
+            f"SENAITE — retest or retract there first"
+        )
     if matched:
         raise SenaiteWritebackError(
             f"all {len(matched)} SENAITE lines for keyword={keyword} on "
