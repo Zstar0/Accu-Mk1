@@ -1,11 +1,19 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
+import { render, fireEvent, waitFor, screen } from '@testing-library/react'
 import {
   isPromotable,
   visibleRowTransitions,
   deriveBulkActions,
   deriveBulkPromoteBlockers,
+  BulkPromoteDialog,
 } from '@/components/senaite/AnalysisTable'
 import type { SenaiteAnalysis } from '@/lib/api'
+import * as api from '@/lib/api'
+
+vi.mock('@/lib/api', async importOriginal => {
+  const actual = await importOriginal<typeof import('@/lib/api')>()
+  return { ...actual, promoteAnalyses: vi.fn().mockResolvedValue({}) }
+})
 
 const base: Partial<SenaiteAnalysis> = {
   title: 'Rapid Sterility Screening (PCR)',
@@ -106,5 +114,53 @@ describe('deriveBulkPromoteBlockers', () => {
   it('flags rows with no keyword', () => {
     const blockers = deriveBulkPromoteBlockers([mk({ uid: 'mk1:9', review_state: 'to_be_verified', keyword: null })])
     expect(blockers.some(b => b.includes('no keyword'))).toBe(true)
+  })
+})
+
+describe('BulkPromoteDialog', () => {
+  it('lists keyword and value per row, read-only', () => {
+    render(
+      <BulkPromoteDialog
+        analyses={[promotable, mk({ uid: 'mk1:821', review_state: 'to_be_verified', keyword: 'ENDO', result: '0.4' })]}
+        open
+        onOpenChange={() => {}}
+        onPromoted={() => {}}
+      />,
+    )
+    expect(screen.getByText('STER-PCR')).toBeTruthy()
+    expect(screen.getByText('11')).toBeTruthy()
+    expect(screen.getByText('ENDO')).toBeTruthy()
+    expect(screen.getByText('0.4')).toBeTruthy()
+  })
+
+  it('shows blocker and disables confirm when a result is missing', () => {
+    render(
+      <BulkPromoteDialog
+        analyses={[mk({ uid: 'mk1:9', review_state: 'to_be_verified', result: null })]}
+        open
+        onOpenChange={() => {}}
+        onPromoted={() => {}}
+      />,
+    )
+    expect(screen.getByText(/no result/)).toBeTruthy()
+    expect((screen.getByRole('button', { name: /^Promote \d/ }) as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('promotes each row sequentially then fires onPromoted', async () => {
+    const onPromoted = vi.fn()
+    render(
+      <BulkPromoteDialog
+        analyses={[promotable, mk({ uid: 'mk1:821', review_state: 'to_be_verified', keyword: 'ENDO', result: '0.4' })]}
+        open
+        onOpenChange={() => {}}
+        onPromoted={onPromoted}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', { name: /^Promote 2/ }))
+    await waitFor(() => expect(onPromoted).toHaveBeenCalled())
+    expect(vi.mocked(api.promoteAnalyses)).toHaveBeenCalledTimes(2)
+    expect(vi.mocked(api.promoteAnalyses)).toHaveBeenCalledWith(
+      expect.objectContaining({ keyword: 'STER-PCR', result_value: '11', reason: 'Bulk promote from AnalysisTable' }),
+    )
   })
 })

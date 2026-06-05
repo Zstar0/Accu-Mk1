@@ -34,7 +34,7 @@ A row is **promotable** = the existing `canPromote` predicate: `uid` starts with
      - any selected row has no result value
      - duplicate keywords in the selection (one parent row per keyword; multi-source merges go through per-row Promote)
 2. Confirm → sequential `promoteAnalyses` calls, one per row: `{keyword, result_value: row.result, result_unit, method_id, instrument_id, sources: [{analysis_id, contribution_kind: 'chosen'}], reason: 'Bulk promote from AnalysisTable'}`.
-3. Progress text in the toolbar like existing bulk transitions ("Promoting 2/4…").
+3. Progress text on the dialog's confirm button ("Promoting 2/4…") — the modal covers the toolbar, so in-dialog progress replaces the toolbar treatment.
 4. Per-row failures: toast the error, continue with remaining rows.
 5. One refresh at the end via `onTransitionComplete`.
 

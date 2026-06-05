@@ -875,6 +875,94 @@ function PromoteDialog({
   )
 }
 
+// --- Bulk promote: read-only confirm dialog, sequential execution ---
+
+export function BulkPromoteDialog({
+  analyses,
+  open,
+  onOpenChange,
+  onPromoted,
+}: {
+  analyses: SenaiteAnalysis[]
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  onPromoted: () => void
+}) {
+  const [progress, setProgress] = useState<{ current: number; total: number } | null>(null)
+  const blockers = deriveBulkPromoteBlockers(analyses)
+  const pending = progress !== null
+
+  const handle = async () => {
+    setProgress({ current: 0, total: analyses.length })
+    let failed = 0
+    for (let i = 0; i < analyses.length; i++) {
+      const a = analyses[i]!
+      setProgress({ current: i + 1, total: analyses.length })
+      if (!a.uid?.startsWith('mk1:') || !a.result) continue
+      const limsId = parseInt(a.uid.slice('mk1:'.length), 10)
+      try {
+        await promoteAnalyses({
+          keyword: a.keyword ?? '',
+          result_value: a.result,
+          result_unit: a.unit ?? null,
+          method_id: a.method_uid ? parseInt(a.method_uid, 10) : null,
+          instrument_id: a.instrument_uid ? parseInt(a.instrument_uid, 10) : null,
+          sources: [{ analysis_id: limsId, contribution_kind: 'chosen' }],
+          reason: 'Bulk promote from AnalysisTable',
+        })
+      } catch (e) {
+        failed++
+        toast.error(`${a.keyword ?? a.title}: ${(e as Error).message}`)
+      }
+    }
+    setProgress(null)
+    if (failed === 0) toast.success(`Promoted ${analyses.length} to parent`)
+    else toast.warning(`Promoted ${analyses.length - failed} of ${analyses.length}; ${failed} failed`)
+    onOpenChange(false)
+    onPromoted()
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={o => { if (!pending) onOpenChange(o) }}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Promote {analyses.length} analyses to parent</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-3 pt-2">
+          <p className="text-sm text-muted-foreground">
+            Each row creates a parent-tier verified row with the vial&apos;s current value. Vial-tier
+            rows stay in <code>to_be_verified</code>; audit rows record each promotion. To undo,
+            retract the parent row.
+          </p>
+          <table className="w-full text-sm">
+            <tbody>
+              {analyses.map(a => (
+                <tr key={a.uid} className="border-b border-border/50">
+                  <td className="py-1.5 pr-3 font-medium">{a.keyword ?? a.title}</td>
+                  <td className="py-1.5 font-mono">{a.result ?? '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {blockers.map(b => (
+            <p key={b} className="text-sm text-destructive">{b}</p>
+          ))}
+          <div className="flex gap-2 justify-end">
+            <Button variant="outline" onClick={() => onOpenChange(false)} disabled={pending}>
+              Cancel
+            </Button>
+            <Button onClick={handle} disabled={pending || blockers.length > 0}>
+              {pending && progress
+                ? `Promoting ${progress.current}/${progress.total}…`
+                : `Promote ${analyses.length} to parent`}
+            </Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 // --- Analysis row ---
 
 function AnalysisRow({
