@@ -15,7 +15,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
-from sqlalchemy import select
+from sqlalchemy import delete as sa_delete, select
 from sqlalchemy.orm import Session
 
 from lims_analyses.state_machine import (
@@ -650,6 +650,146 @@ def list_promotions_for_parent(
         ))
 
     return result
+
+
+# ─── Native vial add/remove (Phase 6 — native Manage Analyses) ──────────────
+
+
+def add_analysis_to_native_vial(
+    db: Session,
+    *,
+    sub_sample_pk: int,
+    senaite_service_uid: Optional[str],
+    keyword: Optional[str],
+    user_id: Optional[int],
+) -> "LimsAnalysis":
+    """Add an analysis to a native (mk1://) sub-sample.
+
+    Resolution order:
+      1. If senaite_service_uid is given → match analysis_services.senaite_uid.
+      2. Else if keyword is given → match analysis_services.keyword.
+      3. Else → BadRequestError (no identifier).
+
+    Raises:
+      - BadRequestError when no identifier is supplied.
+      - NotFoundError when the AnalysisService cannot be resolved.
+      - BadRequestError (409-style) when an active non-retest row for that
+        keyword already exists on the vial (idempotent guard).
+    """
+    from models import AnalysisService
+
+    if senaite_service_uid is not None:
+        svc = db.execute(
+            select(AnalysisService).where(AnalysisService.senaite_uid == senaite_service_uid)
+        ).scalar_one_or_none()
+        if svc is None:
+            raise NotFoundError(
+                f"AnalysisService with senaite_uid={senaite_service_uid!r} not found"
+            )
+    elif keyword is not None:
+        svc = db.execute(
+            select(AnalysisService).where(AnalysisService.keyword == keyword)
+        ).scalar_one_or_none()
+        if svc is None:
+            raise NotFoundError(
+                f"AnalysisService with keyword={keyword!r} not found"
+            )
+    else:
+        raise BadRequestError(
+            "add_analysis_to_native_vial requires either senaite_service_uid or keyword"
+        )
+
+    # Duplicate guard: active (non-retest) row with same keyword on this vial
+    existing = db.execute(
+        select(LimsAnalysis).where(
+            LimsAnalysis.lims_sub_sample_pk == sub_sample_pk,
+            LimsAnalysis.keyword == svc.keyword,
+            LimsAnalysis.retest_of_id.is_(None),
+            LimsAnalysis.review_state.notin_(["retracted", "rejected"]),
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        raise BadRequestError(
+            f"vial already has an active analysis with keyword={svc.keyword!r} "
+            f"(id={existing.id}); remove or retract it first"
+        )
+
+    return create_analysis(
+        db,
+        host_kind="sub_sample",
+        host_pk=sub_sample_pk,
+        analysis_service_id=svc.id,
+        keyword=svc.keyword,
+        title=svc.title,
+        result_unit=svc.unit,
+        created_by_user_id=user_id,
+    )
+
+
+def delete_pristine_analysis(
+    db: Session,
+    *,
+    sub_sample_pk: int,
+    keyword: str,
+    user_id: Optional[int],
+) -> None:
+    """Hard-delete a pristine (mistake-correction) analysis from a native vial.
+
+    "Pristine" means: review_state == 'unassigned' AND result_value IS NULL
+    AND not retested AND no promotion link. Any other state raises BadRequestError.
+
+    Raises:
+      - NotFoundError when no active row with that keyword exists on the vial.
+      - BadRequestError when the row has activity (result, non-unassigned state,
+        retested flag, or promotion link) — instruct caller to retract instead.
+    """
+    from models import LimsAnalysisPromotion
+
+    row = db.execute(
+        select(LimsAnalysis).where(
+            LimsAnalysis.lims_sub_sample_pk == sub_sample_pk,
+            LimsAnalysis.keyword == keyword,
+            LimsAnalysis.retest_of_id.is_(None),
+            LimsAnalysis.review_state.notin_(["retracted", "rejected"]),
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        raise NotFoundError(
+            f"no active lims_analysis with keyword={keyword!r} on sub_sample_pk={sub_sample_pk}"
+        )
+
+    # Pristine guards
+    if row.review_state != "unassigned":
+        raise BadRequestError(
+            f"analysis has activity (state={row.review_state!r}) — retract it instead"
+        )
+    if row.result_value is not None:
+        raise BadRequestError(
+            "analysis has activity (result_value set) — retract it instead"
+        )
+    if row.retested:
+        raise BadRequestError(
+            "analysis has activity (retested=True) — retract it instead"
+        )
+    # Promotion-link guard: this row is a source in any promotion
+    promo_link = db.execute(
+        select(LimsAnalysisPromotion).where(
+            LimsAnalysisPromotion.source_analysis_id == row.id
+        )
+    ).scalar_one_or_none()
+    if promo_link is not None:
+        raise BadRequestError(
+            "analysis has activity (promotion link exists) — retract it instead"
+        )
+
+    # Hard-delete: transition rows first (FK), then the row itself.
+    db.execute(
+        sa_delete(LimsAnalysisTransition).where(
+            LimsAnalysisTransition.analysis_id == row.id
+        )
+    )
+    db.delete(row)
+    db.commit()
 
 
 # ─── Phase 3 adapter: SenaiteAnalysis-shape projection ──────────────────────
