@@ -29,8 +29,9 @@ import {
 } from '@/components/ui/dialog'
 import { useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
-import type { SenaiteAnalysis, InboxPriority } from '@/lib/api'
+import type { SenaiteAnalysis, InboxPriority, ParentPromotionInfo } from '@/lib/api'
 import { setAnalysisMethodInstrument, promoteAnalyses } from '@/lib/api'
+import { PromotedFromBadge } from '@/components/senaite/PromotedFromBadge'
 import type { SampleSlaSnapshot } from '@/services/order-sla'
 import { AnalysisSlaCell } from '@/components/senaite/AnalysisSlaCell'
 import { useAnalysisEditing, type UseAnalysisEditingReturn } from '@/hooks/use-analysis-editing'
@@ -990,6 +991,7 @@ function AnalysisRow({
   slaPriority,
   primaryAnalysisUids,
   primaryRole,
+  promotionsByKeyword,
 }: {
   analysis: SenaiteAnalysis
   analyteNameMap: Map<number, string>
@@ -1010,6 +1012,7 @@ function AnalysisRow({
   slaPriority: InboxPriority | null
   primaryAnalysisUids?: Set<string>
   primaryRole?: string | null
+  promotionsByKeyword?: Map<string, ParentPromotionInfo>
 }) {
   const rowTint = ROW_STATUS_STYLE[analysis.review_state ?? ''] ?? ''
   const { display, original } = formatAnalysisTitle(analysis.title, analyteNameMap)
@@ -1060,6 +1063,7 @@ function AnalysisRow({
             )}
           </span>
           <Mk1NativeBadge uid={analysis.uid} />
+          <PromotedFromBadge promotion={analysis.keyword ? promotionsByKeyword?.get(analysis.keyword) : undefined} />
           {!!historyCount && (
             <button
               onClick={onToggleHistory}
@@ -1294,6 +1298,12 @@ interface AnalysisTableProps {
    * primary rows render with normal title styling.
    */
   primaryRole?: string | null
+  /**
+   * Promotion provenance map for parent pages — keyword → ParentPromotionInfo.
+   * When provided, matching analysis rows render a "from <sub-sample>" badge.
+   * Omit (undefined) on sub-sample pages; no behavior change for existing callers.
+   */
+  promotionsByKeyword?: Map<string, ParentPromotionInfo>
 }
 
 export function AnalysisTable({
@@ -1309,6 +1319,7 @@ export function AnalysisTable({
   analysisSlaPriority = null,
   primaryAnalysisUids,
   primaryRole,
+  promotionsByKeyword,
 }: AnalysisTableProps) {
   const [analysisFilter, setAnalysisFilter] = useState<'all' | 'verified' | 'pending' | 'invalid'>('all')
   const [sortConfig, setSortConfig] = useState<SortConfig | null>(null)
@@ -1608,6 +1619,7 @@ export function AnalysisTable({
                       slaPriority={analysisSlaPriority}
                       primaryAnalysisUids={primaryAnalysisUids}
                       primaryRole={primaryRole}
+                      promotionsByKeyword={promotionsByKeyword}
                     />
                     {isExpanded && group.history.map(h => (
                       <HistoryRow

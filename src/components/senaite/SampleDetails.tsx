@@ -86,6 +86,8 @@ import {
   fetchChromatogramLttb,
   listSubSamples,
   listLimsAnalysesForSubSample,
+  listParentPromotions,
+  type ParentPromotionInfo,
 } from '@/lib/api'
 import { ReceiveWizard } from '@/components/intake/ReceiveWizard/ReceiveWizard'
 import type { ParentInfo } from '@/components/intake/ReceiveWizard/useReceiveWizard'
@@ -1750,6 +1752,11 @@ export function SampleDetails() {
   // Retest relationship metadata (banner + chain links)
   const [retestInfo, setRetestInfo] = useState<import('@/lib/api').SampleRetestInfo | null>(null)
 
+  // Phase senaite-writeback Task 4: promotion provenance for parent pages.
+  // Populated via useEffect below; empty Map on sub-sample pages (gated by
+  // !parentSampleId, which is null only when we ARE the parent).
+  const [promotionsByKeyword, setPromotionsByKeyword] = useState<Map<string, ParentPromotionInfo>>(new Map())
+
   // Manage analyses panel
   const [manageAnalysesOpen, setManageAnalysesOpen] = useState(false)
   const [availableServices, setAvailableServices] = useState<AnalysisService[]>([])
@@ -1785,6 +1792,20 @@ export function SampleDetails() {
     queryFn: () => listSubSamples(parentSampleId!),
     enabled: !!parentSampleId,
   })
+
+  // Phase senaite-writeback Task 4: fetch promotion provenance on parent pages.
+  // parentSampleId is null on parent pages (no -SNN suffix), so !parentSampleId
+  // is the correct gate. No refetch-on-transition needed — badge is informational.
+  useEffect(() => {
+    if (!sampleId || parentSampleId !== null) return
+    listParentPromotions(sampleId)
+      .then(records => {
+        setPromotionsByKeyword(new Map(records.map(r => [r.keyword, r])))
+      })
+      .catch(() => {
+        // Non-fatal: badge simply won't appear if the fetch fails
+      })
+  }, [sampleId, parentSampleId])
 
   // Resolve this sample's vial-assignment role for the header label.
   // Parent pages: pull from lims_samples.assignment_role (defaults to 'hplc'
@@ -3429,6 +3450,7 @@ export function SampleDetails() {
           analyteNameMap={analyteNameMap}
           primaryAnalysisUids={primaryAnalysisUids}
           primaryRole={currentAssignment}
+          promotionsByKeyword={parentSampleId === null ? promotionsByKeyword : undefined}
           onResultSaved={(uid, newResult, newReviewState) => {
             setData(prev => {
               if (!prev) return prev

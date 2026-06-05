@@ -4890,6 +4890,35 @@ export async function listLimsAnalysesForSubSample(
 }
 
 /**
+ * Phase senaite-writeback Task 4: provenance records written by promote.
+ * One entry per keyword that has been promoted to the parent's SENAITE AR.
+ */
+export interface ParentPromotionInfo {
+  keyword: string
+  parent_analysis_id: number
+  result_value?: string | null
+  promoted_at: string
+  promoted_by_email?: string | null
+  sources: { sample_id?: string | null; contribution_kind: string }[]
+}
+
+/**
+ * Fetch all promotion records for a parent sample.
+ * GET /api/lims-analyses/promotions?parent_sample_id=<id>
+ */
+export async function listParentPromotions(
+  parentSampleId: string
+): Promise<ParentPromotionInfo[]> {
+  const url = new URL(`${API_BASE_URL()}/api/lims-analyses/promotions`)
+  url.searchParams.set('parent_sample_id', parentSampleId)
+  const response = await fetch(url.toString(), { headers: getBearerHeaders() })
+  if (!response.ok) {
+    throw new Error(`listParentPromotions failed: ${response.status}`)
+  }
+  return response.json()
+}
+
+/**
  * Create a new sub-sample for a parent sample.
  * May throw SecondaryFalloutError if SENAITE silently created an orphan AR.
  */
