@@ -155,6 +155,11 @@ class AnalysisService(Base):
     category: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)  # "HPLC"
     unit: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)  # "%", "mg", "EU/mL"
     methods: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)  # [{uid, title}, ...]
+    # Result type + options, synced from SENAITE (local-wins) or curated locally.
+    # result_type stores SENAITE's value verbatim (numeric/select/multiselect/string/...).
+    # result_options is a list of {"value": str, "label": str} (select/multiselect only).
+    result_type: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    result_options: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
     peptide_name: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)  # derived: "AICAR" (legacy)
     peptide_id: Mapped[Optional[int]] = mapped_column(ForeignKey("peptides.id", ondelete="SET NULL"), nullable=True)
     senaite_id: Mapped[Optional[str]] = mapped_column(String(200), nullable=True, unique=True)

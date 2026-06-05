@@ -581,6 +581,9 @@ def _run_migrations():
         """,
         "CREATE INDEX IF NOT EXISTS ix_lims_analysis_promotions_parent ON lims_analysis_promotions (parent_analysis_id)",
         "CREATE INDEX IF NOT EXISTS ix_lims_analysis_promotions_source ON lims_analysis_promotions (source_analysis_id)",
+        # result-type Task 1: result type + options on analysis_services
+        "ALTER TABLE analysis_services ADD COLUMN IF NOT EXISTS result_type TEXT",
+        "ALTER TABLE analysis_services ADD COLUMN IF NOT EXISTS result_options JSONB",
     ]
     # Per-statement isolation: a failure in one statement (e.g., a table that
     # create_all hasn't built yet on first run) must not skip subsequent
