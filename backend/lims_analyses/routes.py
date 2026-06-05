@@ -7,6 +7,7 @@ directly.
 
 from __future__ import annotations
 
+import logging
 from datetime import date
 from typing import List, Literal, Union
 
@@ -44,6 +45,8 @@ from lims_analyses.state_machine import (
 
 
 router = APIRouter(prefix="/api/lims-analyses", tags=["lims-analyses"])
+
+logger = logging.getLogger(__name__)
 
 
 # ─── Error translation helpers ───────────────────────────────────────────────
@@ -303,7 +306,18 @@ def promote(
             detail=f"SENAITE write-back failed — promote aborted: {e}",
         )
 
-    db.commit()
+    try:
+        db.commit()
+    except Exception:
+        # SENAITE is now AHEAD of Mk1: the parent AR line was written and
+        # verified but the Mk1 promote failed to persist. Surface loudly so
+        # an operator reconciles (a retry will 502 with "already verified").
+        logger.error(
+            "SENAITE write-back committed but Mk1 commit failed for "
+            "parent=%s keyword=%s — manual reconciliation required",
+            parent_sample_id, req.keyword,
+        )
+        raise
     db.refresh(parent_row)
     for p in promotion_rows:
         db.refresh(p)
