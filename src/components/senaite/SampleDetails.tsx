@@ -2698,7 +2698,10 @@ export function SampleDetails() {
           </div>{/* end: sample ID + counters + progress */}
         </div>{/* end: sticky header band */}
 
-        {/* Main Grid: 2-column layout — metadata left, analytes right */}
+        {/* Main Grid: 2-column layout — metadata left, analytes right.
+            Hidden on sub-sample pages: these are parent-level sections
+            (sample/order/COA metadata + analytes live on the parent AR). */}
+        {parentSampleId === null && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
           {/* Left column: Sample Info + Order Details stacked */}
           <div className="space-y-4">
@@ -3182,6 +3185,7 @@ export function SampleDetails() {
 
           </div>
         </div>
+        )}
 
         {/* Remarks — full width */}
         <Card className="p-4 mb-6">
