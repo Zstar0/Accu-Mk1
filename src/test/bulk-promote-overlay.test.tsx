@@ -35,6 +35,9 @@ describe('isPromotable', () => {
       isPromotable(mk({ uid: 'mk1:820', review_state: 'to_be_verified', promoted_to_parent_id: 1260 })),
     ).toBe(false)
   })
+  it('isPromotable returns false for null uid', () => {
+    expect(isPromotable(mk({ uid: null, review_state: 'to_be_verified' }))).toBe(false)
+  })
 })
 
 describe('visibleRowTransitions', () => {
@@ -49,6 +52,9 @@ describe('visibleRowTransitions', () => {
   it('still gates submit on having a result', () => {
     const unsubmitted = mk({ uid: 'mk1:9', review_state: 'unassigned', result: null })
     expect(visibleRowTransitions(unsubmitted)).not.toContain('submit')
+  })
+  it('visibleRowTransitions returns [] for null uid', () => {
+    expect(visibleRowTransitions(mk({ uid: null, review_state: 'to_be_verified' }))).toEqual([])
   })
 })
 
@@ -73,6 +79,11 @@ describe('deriveBulkActions', () => {
     expect(r.actions).toEqual([])
     expect(r.showPromote).toBe(false)
   })
+  it('deriveBulkActions excludes null-review_state rows from all actions', () => {
+    const r = deriveBulkActions([mk({ uid: 'mk1:1', review_state: null })])
+    expect(r.actions).toEqual([])
+    expect(r.showPromote).toBe(false)
+  })
 })
 
 describe('deriveBulkPromoteBlockers', () => {
@@ -91,5 +102,9 @@ describe('deriveBulkPromoteBlockers', () => {
       mk({ uid: 'mk1:9', review_state: 'to_be_verified', keyword: 'STER-PCR' }),
     ])
     expect(blockers.some(b => b.includes('STER-PCR'))).toBe(true)
+  })
+  it('flags rows with no keyword', () => {
+    const blockers = deriveBulkPromoteBlockers([mk({ uid: 'mk1:9', review_state: 'to_be_verified', keyword: null })])
+    expect(blockers.some(b => b.includes('no keyword'))).toBe(true)
   })
 })

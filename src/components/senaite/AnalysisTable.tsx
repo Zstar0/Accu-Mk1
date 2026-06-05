@@ -194,10 +194,17 @@ export function deriveBulkPromoteBlockers(selected: SenaiteAnalysis[]): string[]
       `${missing.length} selected ${missing.length === 1 ? 'analysis has' : 'analyses have'} no result value`,
     )
   }
+  const noKeyword = selected.filter(a => !a.keyword)
+  if (noKeyword.length > 0) {
+    blockers.push(
+      `${noKeyword.length} selected ${noKeyword.length === 1 ? 'analysis has' : 'analyses have'} no keyword`,
+    )
+  }
   const seen = new Set<string>()
   const dups = new Set<string>()
   for (const a of selected) {
-    const k = a.keyword ?? ''
+    const k = a.keyword
+    if (!k) continue
     if (seen.has(k)) dups.add(k)
     seen.add(k)
   }
