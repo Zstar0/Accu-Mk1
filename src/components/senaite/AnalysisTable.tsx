@@ -1017,20 +1017,10 @@ function AnalysisRow({
   const conformsValue = /Identity\s*\(HPLC\)/i.test(display)
     ? (display.match(/^(.+?)\s*[-–]\s*Identity\s*\(HPLC\)/i)?.[1]?.trim() ?? null)
     : null
-  const allowedTransitions =
-    analysis.uid && analysis.review_state
-      ? (ALLOWED_TRANSITIONS[analysis.review_state] ?? []).filter(
-          t => t !== 'submit' || !!analysis.result
-        )
-      : []
-  // Phase 4b: Promote affordance — additive to the existing Verify admin
-  // button. Only for mk1: vial-tier rows in to_be_verified that haven't
-  // been promoted yet.
-  const canPromote =
-    !!analysis.uid
-    && analysis.uid.startsWith('mk1:')
-    && analysis.review_state === 'to_be_verified'
-    && (analysis.promoted_to_parent_id == null)
+  // Phase 4b promote affordance — see isPromotable; verify is hidden on
+  // promotable rows via visibleRowTransitions.
+  const allowedTransitions = visibleRowTransitions(analysis)
+  const canPromote = isPromotable(analysis)
   const isPromoted = analysis.promoted_to_parent_id != null
   const [promoteOpen, setPromoteOpen] = useState(false)
   const queryClient = useQueryClient()
@@ -1323,6 +1313,7 @@ export function AnalysisTable({
   const [analysisFilter, setAnalysisFilter] = useState<'all' | 'verified' | 'pending' | 'invalid'>('all')
   const [sortConfig, setSortConfig] = useState<SortConfig | null>(null)
   const [bulkPendingConfirm, setBulkPendingConfirm] = useState<{ transition: string; count: number } | null>(null)
+  const [bulkPromoteOpen, setBulkPromoteOpen] = useState(false)
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set())
   const [isCardVisible, setIsCardVisible] = useState(true)
   const cardRef = useRef<HTMLDivElement>(null)
@@ -1398,19 +1389,12 @@ export function AnalysisTable({
   const headerChecked: boolean | 'indeterminate' =
     allSelected ? true : someSelected ? 'indeterminate' : false
 
-  // Bulk available actions — intersection of ALLOWED_TRANSITIONS for all selected analyses
+  // Bulk available actions — promote-aware intersection (see deriveBulkActions)
   const selectedAnalyses = groups
     .filter(g => g.current.uid && bulk.selectedUids.has(g.current.uid))
     .map(g => g.current)
-  const bulkAvailableActions = (['submit', 'retest', 'verify', 'retract', 'reject'] as const).filter(t =>
-    selectedAnalyses.length > 0 &&
-    selectedAnalyses.every(a =>
-      a.review_state !== null &&
-      a.review_state !== undefined &&
-      (ALLOWED_TRANSITIONS[a.review_state] ?? []).includes(t) &&
-      (t !== 'submit' || !!a.result)
-    )
-  )
+  const { actions: bulkAvailableActions, showPromote: bulkShowPromote } =
+    deriveBulkActions(selectedAnalyses)
 
   // Disable toolbar when any per-row transition is in-flight
   const toolbarDisabled = transition.pendingUids.size > 0
@@ -1518,25 +1502,36 @@ export function AnalysisTable({
                 </span>
               </div>
             ) : (
-              bulkAvailableActions.map(t => (
-                <Button
-                  key={t}
-                  size="sm"
-                  variant={DESTRUCTIVE_TRANSITIONS.has(t) ? 'destructive' : 'default'}
-                  disabled={toolbarDisabled}
-                  onClick={() => {
-                    if (DESTRUCTIVE_TRANSITIONS.has(t)) {
-                      setBulkPendingConfirm({ transition: t, count: bulk.selectedUids.size })
-                    } else {
-                      void bulk.executeBulk([...bulk.selectedUids], t)
-                    }
-                  }}
-                >
-                  {TRANSITION_LABELS[t] ?? t} selected
-                </Button>
-              ))
+              <>
+                {bulkShowPromote && (
+                  <Button
+                    size="sm"
+                    disabled={toolbarDisabled}
+                    onClick={() => setBulkPromoteOpen(true)}
+                  >
+                    Promote selected
+                  </Button>
+                )}
+                {bulkAvailableActions.map(t => (
+                  <Button
+                    key={t}
+                    size="sm"
+                    variant={DESTRUCTIVE_TRANSITIONS.has(t) ? 'destructive' : 'default'}
+                    disabled={toolbarDisabled}
+                    onClick={() => {
+                      if (DESTRUCTIVE_TRANSITIONS.has(t)) {
+                        setBulkPendingConfirm({ transition: t, count: bulk.selectedUids.size })
+                      } else {
+                        void bulk.executeBulk([...bulk.selectedUids], t)
+                      }
+                    }}
+                  >
+                    {TRANSITION_LABELS[t] ?? t} selected
+                  </Button>
+                ))}
+              </>
             )}
-            {bulkAvailableActions.length === 0 && !bulk.isBulkProcessing && (
+            {bulkAvailableActions.length === 0 && !bulkShowPromote && !bulk.isBulkProcessing && (
               <span className="text-xs text-muted-foreground italic">
                 No common actions for selection
               </span>
@@ -1671,6 +1666,17 @@ export function AnalysisTable({
           </AlertDialogContent>
         </AlertDialog>
       </div>
+
+      {/* Bulk promote confirm */}
+      <BulkPromoteDialog
+        analyses={selectedAnalyses}
+        open={bulkPromoteOpen}
+        onOpenChange={setBulkPromoteOpen}
+        onPromoted={() => {
+          bulk.clearSelection()
+          onTransitionComplete?.()
+        }}
+      />
 
       {/* Bulk destructive transition confirmation */}
       <AlertDialog
