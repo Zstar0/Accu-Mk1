@@ -243,6 +243,7 @@ export function AnalysisServicesPage() {
             {/* Content */}
             <div className="flex-1 overflow-y-auto px-6 py-4">
               <ServicePanel
+                key={selectedService.id}
                 service={selectedService}
                 peptides={peptides}
                 onPeptideChange={async (peptideId) => {
@@ -302,27 +303,34 @@ function ServicePanel({
 }) {
   const isSlotService = /^ANALYTE-\d/i.test(service.keyword ?? '')
 
-  // Result-type editor state. ServicePanel does not remount per service
-  // (no `key`), so re-seed from props whenever the selected service changes.
+  // Result-type editor state. The parent keys <ServicePanel> by service.id, so
+  // the panel remounts on service switch and these initializers re-seed cleanly.
+  // No effect — unrelated refetches (peptide save, Sync) must not clobber
+  // in-progress edits.
   const [rtType, setRtType] = useState<string>(service.result_type ?? '')
   const [rtOptions, setRtOptions] = useState<ResultOption[]>(
     service.result_options ?? [],
   )
   const [rtSaving, setRtSaving] = useState(false)
 
-  useEffect(() => {
-    setRtType(service.result_type ?? '')
-    setRtOptions(service.result_options ?? [])
-  }, [service.id, service.result_type, service.result_options])
-
   const hasOptions = rtType === 'select' || rtType === 'multiselect'
 
   const handleSaveResultType = async () => {
     setRtSaving(true)
     try {
+      // Sanitize option rows: trim, drop empty values, dedup by value (first wins).
+      // Empty value collides with the result cell's "— Select —" placeholder;
+      // duplicates produce duplicate React keys + wrong resolveResultLabel matches;
+      // untrimmed " 1 " never matches a stored "1".
+      const cleaned = rtOptions
+        .map(o => ({ value: o.value.trim(), label: o.label.trim() || o.value.trim() }))
+        .filter(o => o.value)
+      const deduped = cleaned.filter(
+        (o, i) => cleaned.findIndex(x => x.value === o.value) === i,
+      )
       await onResultTypeChange({
         result_type: rtType || null,
-        result_options: hasOptions ? rtOptions : null,
+        result_options: hasOptions ? deduped : null,
       })
     } finally {
       setRtSaving(false)
