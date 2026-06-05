@@ -139,6 +139,76 @@ const TRANSITION_LABELS: Record<string, string> = {
 
 const DESTRUCTIVE_TRANSITIONS = new Set(['retract', 'reject'])
 
+// --- Bulk-overlay redesign: promote-aware gating helpers (exported for tests) ---
+
+/** Phase-4b promotable discriminator, lifted so row + bulk logic share it. */
+export function isPromotable(a: SenaiteAnalysis): boolean {
+  return (
+    !!a.uid &&
+    a.uid.startsWith('mk1:') &&
+    a.review_state === 'to_be_verified' &&
+    a.promoted_to_parent_id == null
+  )
+}
+
+/** Row-menu transitions: submit needs a result; verify is hidden when Promote
+ *  is the correct action (promotable native vial rows dead-end on verify). */
+export function visibleRowTransitions(a: SenaiteAnalysis): string[] {
+  if (!a.uid || !a.review_state) return []
+  return (ALLOWED_TRANSITIONS[a.review_state] ?? []).filter(
+    t => (t !== 'submit' || !!a.result) && !(t === 'verify' && isPromotable(a)),
+  )
+}
+
+const BULK_TRANSITIONS = ['submit', 'retest', 'verify', 'retract', 'reject'] as const
+export type BulkTransition = (typeof BULK_TRANSITIONS)[number]
+
+/** Bulk toolbar actions: intersection of allowed transitions, except verify is
+ *  suppressed when ANY selected row is promotable; Promote shows when ALL are. */
+export function deriveBulkActions(selected: SenaiteAnalysis[]): {
+  actions: BulkTransition[]
+  showPromote: boolean
+} {
+  const anyPromotable = selected.some(isPromotable)
+  const actions = BULK_TRANSITIONS.filter(
+    t =>
+      selected.length > 0 &&
+      !(t === 'verify' && anyPromotable) &&
+      selected.every(
+        a =>
+          a.review_state !== null &&
+          a.review_state !== undefined &&
+          (ALLOWED_TRANSITIONS[a.review_state] ?? []).includes(t) &&
+          (t !== 'submit' || !!a.result),
+      ),
+  )
+  return { actions, showPromote: selected.length > 0 && selected.every(isPromotable) }
+}
+
+/** Reasons bulk promote cannot proceed (empty array = good to go). */
+export function deriveBulkPromoteBlockers(selected: SenaiteAnalysis[]): string[] {
+  const blockers: string[] = []
+  const missing = selected.filter(a => !a.result)
+  if (missing.length > 0) {
+    blockers.push(
+      `${missing.length} selected ${missing.length === 1 ? 'analysis has' : 'analyses have'} no result value`,
+    )
+  }
+  const seen = new Set<string>()
+  const dups = new Set<string>()
+  for (const a of selected) {
+    const k = a.keyword ?? ''
+    if (seen.has(k)) dups.add(k)
+    seen.add(k)
+  }
+  if (dups.size > 0) {
+    blockers.push(
+      `Duplicate keywords selected (${[...dups].join(', ')}) — one parent row per keyword; use the row menu Promote to merge multiple vials`,
+    )
+  }
+  return blockers
+}
+
 // --- Shared components ---
 
 export function StatusBadge({ state }: { state: string }) {
