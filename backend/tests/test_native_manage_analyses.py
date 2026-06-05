@@ -304,19 +304,35 @@ class TestDeletePristineAnalysis:
 
 
 @pytest.fixture
-def route_client(db_session):
-    """TestClient with the in-memory SQLite session bound via dependency override.
+def route_client():
+    """TestClient with a single-connection in-memory SQLite engine.
 
-    Uses StaticPool so test thread + ASGI handler share one connection.
-    Restores previous overrides on teardown.
+    Uses StaticPool so every session (test thread + ASGI handler thread) shares
+    the exact same underlying connection, which keeps in-memory tables visible
+    across the boundary.  check_same_thread=False allows the ASGI worker thread
+    to use the connection created in the test thread.
+
+    Restores previous dependency overrides on teardown.
     """
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from sqlalchemy.pool import StaticPool
     from fastapi.testclient import TestClient
     from main import app
     from auth import get_current_user
-    from database import get_db
+    from database import get_db, Base
+
+    engine = create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine)
+    shared_session = Session()
 
     def _override_get_db():
-        yield db_session
+        yield shared_session
 
     prev_db = app.dependency_overrides.get(get_db)
     prev_user = app.dependency_overrides.get(get_current_user)
@@ -324,7 +340,7 @@ def route_client(db_session):
     app.dependency_overrides[get_current_user] = lambda: MagicMock(id=42)
 
     tc = TestClient(app)
-    tc._test_session = db_session
+    tc._test_session = shared_session
     yield tc
 
     if prev_db is None:
@@ -335,6 +351,7 @@ def route_client(db_session):
         app.dependency_overrides.pop(get_current_user, None)
     else:
         app.dependency_overrides[get_current_user] = prev_user
+    shared_session.close()
 
 
 class TestNativeAddEndpoint:

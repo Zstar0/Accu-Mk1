@@ -7951,8 +7951,52 @@ async def get_analysis_services(_current_user=Depends(get_current_user)):
 
 
 @app.post("/explorer/samples/{sample_id}/analyses")
-async def add_sample_analysis(sample_id: str, body: dict, _current_user=Depends(get_current_user)):
-    """Add an analysis service to a sample (proxied to Integration Service)."""
+async def add_sample_analysis(
+    sample_id: str,
+    body: dict,
+    _current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Add an analysis service to a sample.
+
+    Native branch: if sample_id maps to a lims_sub_samples row whose
+    external_lims_uid starts with 'mk1://', the analysis is created
+    directly in Mk1 via add_analysis_to_native_vial.
+
+    Non-native fallthrough: proxied to the Integration Service unchanged.
+    """
+    from sqlalchemy import select as _select
+    from lims_analyses.service import (
+        add_analysis_to_native_vial,
+        BadRequestError as _BadRequestError,
+        NotFoundError as _NotFoundError,
+    )
+
+    sub = db.execute(
+        _select(LimsSubSample).where(
+            LimsSubSample.sample_id == sample_id,
+            LimsSubSample.external_lims_uid.like("mk1://%"),
+        )
+    ).scalar_one_or_none()
+
+    if sub is not None:
+        # Native branch
+        senaite_service_uid = body.get("service_uid")
+        try:
+            add_analysis_to_native_vial(
+                db,
+                sub_sample_pk=sub.id,
+                senaite_service_uid=senaite_service_uid,
+                keyword=None,
+                user_id=_current_user.id,
+            )
+        except _NotFoundError as e:
+            raise HTTPException(status_code=404, detail=str(e))
+        except _BadRequestError as e:
+            raise HTTPException(status_code=409, detail=str(e))
+        return {"success": True, "message": "Analysis added"}
+
+    # Non-native: proxy to Integration Service
     try:
         url = f"{INTEGRATION_SERVICE_URL}/explorer/samples/{sample_id}/analyses"
         async with httpx.AsyncClient(timeout=30.0) as client:
@@ -7966,8 +8010,50 @@ async def add_sample_analysis(sample_id: str, body: dict, _current_user=Depends(
 
 
 @app.delete("/explorer/samples/{sample_id}/analyses/{keyword}")
-async def remove_sample_analysis(sample_id: str, keyword: str, _current_user=Depends(get_current_user)):
-    """Remove an analysis from a sample (proxied to Integration Service)."""
+async def remove_sample_analysis(
+    sample_id: str,
+    keyword: str,
+    _current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Remove an analysis from a sample.
+
+    Native branch: if sample_id maps to a lims_sub_samples row whose
+    external_lims_uid starts with 'mk1://', the analysis is hard-deleted
+    (if pristine) via delete_pristine_analysis.
+
+    Non-native fallthrough: proxied to the Integration Service unchanged.
+    """
+    from sqlalchemy import select as _select
+    from lims_analyses.service import (
+        delete_pristine_analysis,
+        BadRequestError as _BadRequestError,
+        NotFoundError as _NotFoundError,
+    )
+
+    sub = db.execute(
+        _select(LimsSubSample).where(
+            LimsSubSample.sample_id == sample_id,
+            LimsSubSample.external_lims_uid.like("mk1://%"),
+        )
+    ).scalar_one_or_none()
+
+    if sub is not None:
+        # Native branch
+        try:
+            delete_pristine_analysis(
+                db,
+                sub_sample_pk=sub.id,
+                keyword=keyword,
+                user_id=_current_user.id,
+            )
+        except _NotFoundError as e:
+            raise HTTPException(status_code=404, detail=str(e))
+        except _BadRequestError as e:
+            raise HTTPException(status_code=409, detail=str(e))
+        return {"success": True, "message": "Analysis removed"}
+
+    # Non-native: proxy to Integration Service
     try:
         url = f"{INTEGRATION_SERVICE_URL}/explorer/samples/{sample_id}/analyses/{keyword}"
         async with httpx.AsyncClient(timeout=30.0) as client:
