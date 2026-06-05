@@ -97,7 +97,7 @@ def test_apply_seeds_from_get_prefixed_keys(db_session):
 
 import pytest
 from unittest.mock import MagicMock
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 from fastapi.testclient import TestClient
