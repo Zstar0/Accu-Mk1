@@ -92,7 +92,14 @@ def find_parent_analysis_line(parent_sample_id: str, keyword: str) -> dict:
         # uses for ResultType/getResultType).
         item_kw = item.get("Keyword") or item.get("getKeyword")
         if item_kw == keyword:
-            return {"uid": item["uid"], "review_state": item["review_state"]}
+            uid = item.get("uid")
+            state = item.get("review_state")
+            if not uid or state is None:
+                raise SenaiteWritebackError(
+                    f"SENAITE analysis item for keyword={keyword} missing "
+                    f"uid or review_state: {item}"
+                )
+            return {"uid": uid, "review_state": state}
 
     raise SenaiteWritebackError(
         f"SENAITE has no analysis line with keyword={keyword} on parent={parent_sample_id}"

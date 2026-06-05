@@ -84,6 +84,34 @@ def test_find_parent_analysis_line_raises_when_keyword_absent():
 
 
 # ---------------------------------------------------------------------------
+# Test 2b: find_parent_analysis_line — matched item missing uid → fail-closed
+# ---------------------------------------------------------------------------
+
+def test_find_parent_analysis_line_raises_on_matched_item_missing_uid():
+    items = [
+        {"getKeyword": "Identity", "review_state": "unassigned"},  # no uid
+    ]
+    with patch("lims_analyses.senaite_writeback._get", return_value=_ok_resp(items)):
+        with pytest.raises(SenaiteWritebackError) as exc_info:
+            find_parent_analysis_line("P-0042", "Identity")
+
+    assert "missing" in str(exc_info.value).lower()
+
+
+# ---------------------------------------------------------------------------
+# Test 2c: find_parent_analysis_line — transport error wrapped, not leaked
+# ---------------------------------------------------------------------------
+
+def test_find_parent_analysis_line_wraps_transport_error():
+    with patch(
+        "lims_analyses.senaite_writeback._get",
+        side_effect=_requests.ConnectionError("connection refused"),
+    ):
+        with pytest.raises(SenaiteWritebackError):
+            find_parent_analysis_line("P-0042", "Identity")
+
+
+# ---------------------------------------------------------------------------
 # Test 3: writeback_promotion happy path from state 'unassigned'
 #   Sequence must be: result+remarks _update → submit _transition → verify _transition
 # ---------------------------------------------------------------------------
