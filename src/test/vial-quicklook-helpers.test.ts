@@ -62,4 +62,10 @@ describe('patchAnalysisInList', () => {
     const out = patchAnalysisInList(list, 'mk1:1', '1.0', undefined)
     expect(out[0]).toMatchObject({ result: '1.0', review_state: 'unassigned' })
   })
+
+  it('keeps the existing review_state when newReviewState is null', () => {
+    const list = [mkAnalysis({ uid: 'mk1:1', review_state: 'unassigned' })]
+    const out = patchAnalysisInList(list, 'mk1:1', '1.0', null)
+    expect(out[0]).toMatchObject({ result: '1.0', review_state: 'unassigned' })
+  })
 })

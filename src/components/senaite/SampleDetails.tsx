@@ -125,7 +125,7 @@ import { PrintLabelPortal } from '@/components/samples/PrintLabelPortal'
 import {
   RoleHeaderBadge,
   computePrimaryAnalysisUids,
-} from './vial-quicklook-helpers'
+} from '@/components/senaite/vial-quicklook-helpers'
 
 // --- COA Console ---
 

@@ -70,7 +70,7 @@ export function patchAnalysisInList(
   list: SenaiteAnalysis[],
   uid: string,
   newResult: string,
-  newReviewState: string | undefined
+  newReviewState: string | null | undefined
 ): SenaiteAnalysis[] {
   return list.map(a =>
     a.uid === uid
