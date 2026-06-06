@@ -118,7 +118,8 @@ import { SampleHeaderSla } from '@/components/senaite/SampleHeaderSla'
 import { useAnalysisSlaMap } from '@/services/analysis-sla'
 import { SamplePrepHplcFlyout } from '@/components/hplc/SamplePrepHplcFlyout'
 import { SampleActivityLog } from '@/components/senaite/SampleActivityLog'
-import { Microscope, Plus, Printer, Search, Trash2, ScrollText, Sigma } from 'lucide-react'
+import { VialsQuickLookDialog } from '@/components/senaite/VialsQuickLookDialog'
+import { Eye, Microscope, Plus, Printer, Search, Trash2, ScrollText, Sigma } from 'lucide-react'
 import { VarianceSummary } from '@/components/samples/VarianceSummary'
 import { usePrintLabel } from '@/components/samples/usePrintLabel'
 import { PrintLabelPortal } from '@/components/samples/PrintLabelPortal'
@@ -1841,6 +1842,7 @@ export function SampleDetails() {
 
   // Manage analyses panel
   const [manageAnalysesOpen, setManageAnalysesOpen] = useState(false)
+  const [vialsQuickLookOpen, setVialsQuickLookOpen] = useState(false)
   const [availableServices, setAvailableServices] = useState<AnalysisService[]>([])
   const [servicesLoading, setServicesLoading] = useState(false)
   const [serviceSearch, setServiceSearch] = useState('')
@@ -3431,9 +3433,9 @@ export function SampleDetails() {
           </SectionHeader>
         </Card>
 
-        {/* Manage Analyses */}
+        {/* Manage Analyses + Vials Quick Look */}
         {data.review_state && (
-          <div className="mb-2">
+          <div className="mb-2 flex items-center gap-2">
             <Button
               variant="outline"
               size="sm"
@@ -3443,6 +3445,19 @@ export function SampleDetails() {
               <Plus size={13} />
               Manage Analyses
             </Button>
+            {parentSampleId === null && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-1.5 text-xs"
+                disabled={subSamples.length === 0}
+                title={subSamples.length === 0 ? 'No vials yet' : undefined}
+                onClick={() => setVialsQuickLookOpen(true)}
+              >
+                <Eye size={13} />
+                Vials Quick Look
+              </Button>
+            )}
           </div>
         )}
 
@@ -3581,6 +3596,16 @@ export function SampleDetails() {
           isAnalysisSlaPublished={analysisSla.isPublished}
           analysisSlaPriority={analysisSla.priority}
         />
+
+        {parentSampleId === null && data.sample_id && (
+          <VialsQuickLookDialog
+            open={vialsQuickLookOpen}
+            onOpenChange={setVialsQuickLookOpen}
+            parentSampleId={data.sample_id}
+            analyteNameMap={analyteNameMap}
+            onParentDataStale={() => refreshSample(data.sample_id)}
+          />
+        )}
 
         {/* Sub-Samples + Sub-Sample Analyses sections moved into the wizard's
             "Sub Sample Details" tab (open via "Manage Sub-Samples" button).
