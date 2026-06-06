@@ -2730,14 +2730,16 @@ export function SampleDetails() {
           )}
 
           {/* Vial photo (vial pages only) — far right of the top row, hover to
-              enlarge. Photo presence comes from the parent summary's vial record. */}
+              enlarge. Photo presence comes from the parent summary's vial record.
+              Unlike the quick-look dialog, photo-less vials render nothing here —
+              the "no photo" placeholder is illegible at w-11 and wastes header space. */}
           {!isParent && parentSampleId && (() => {
             const me = parentSummary?.sub_samples.find(s => s.sample_id === sampleId)
-            if (!me) return null
+            if (!me?.photo_external_uid) return null
             return (
               <VialPhotoThumb
                 sampleId={me.sample_id}
-                hasPhoto={!!me.photo_external_uid}
+                hasPhoto
                 sizeClass="w-11 h-11"
                 hoverZoom
               />
