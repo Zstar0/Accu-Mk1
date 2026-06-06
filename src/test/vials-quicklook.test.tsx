@@ -99,6 +99,7 @@ import {
   patchVialAssignment,
 } from '@/lib/api'
 import { useAnalysisSlaMap } from '@/services/analysis-sla'
+import { VialPhotoThumb } from '@/components/senaite/vial-quicklook-helpers'
 
 const mkAnalysis = (over: Partial<SenaiteAnalysis>): SenaiteAnalysis =>
   ({
@@ -281,8 +282,9 @@ describe('VialsQuickLookDialog', () => {
   it('shows "Vial N of X" in each vial header', async () => {
     renderDialog()
     const headers = await screen.findAllByTestId('quicklook-vial-header')
-    expect(headers[0]).toHaveTextContent('Vial 1 of 2')
-    expect(headers[1]).toHaveTextContent('Vial 2 of 2')
+    // family-indexed: parent is vial 1, so seq+1 of count+1 (count=2 → total 3)
+    expect(headers[0]).toHaveTextContent('Vial 2 of 3')
+    expect(headers[1]).toHaveTextContent('Vial 3 of 3')
   })
 
   it('re-assign: selecting a role patches the vial and refetches sub-samples', async () => {
@@ -314,5 +316,37 @@ describe('VialsQuickLookDialog', () => {
         ]),
       })
     )
+  })
+})
+
+describe('VialPhotoThumb', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(fetchSubSamplePhotoUrl).mockResolvedValue('blob:z')
+  })
+
+  it('renders a hover-zoom enlarged preview when hoverZoom and a photo loads', async () => {
+    render(<VialPhotoThumb sampleId="X" hasPhoto hoverZoom />)
+    // base thumb image
+    expect(await screen.findByAltText('X photo')).toHaveAttribute('src', 'blob:z')
+    // enlarged preview node exists, hidden until group-hover (jsdom can't :hover)
+    const preview = await screen.findByAltText('X photo (enlarged)')
+    expect(preview).toHaveAttribute('src', 'blob:z')
+    const wrapper = preview.parentElement!
+    expect(wrapper).toHaveClass('hidden')
+    expect(wrapper).toHaveClass('group-hover:block')
+  })
+
+  it('renders no enlarged preview when hoverZoom is false', async () => {
+    render(<VialPhotoThumb sampleId="X" hasPhoto />)
+    expect(await screen.findByAltText('X photo')).toBeInTheDocument()
+    expect(screen.queryByAltText('X photo (enlarged)')).not.toBeInTheDocument()
+  })
+
+  it('shows the placeholder and fetches nothing when hasPhoto is false', async () => {
+    render(<VialPhotoThumb sampleId="X" hasPhoto={false} hoverZoom />)
+    expect(await screen.findByText('no photo')).toBeInTheDocument()
+    expect(screen.queryByAltText('X photo (enlarged)')).not.toBeInTheDocument()
+    expect(fetchSubSamplePhotoUrl).not.toHaveBeenCalled()
   })
 })

@@ -8,7 +8,7 @@
  * The vial pages load analyses with local state and refetch on mount, so the
  * dialog's 'quicklook-*' query keys are private to this surface.
  */
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useQuery, useQueries, useQueryClient } from '@tanstack/react-query'
 import { ChevronDown, ChevronRight, Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
@@ -29,7 +29,6 @@ import {
   listSubSamples,
   listLimsAnalysesForSubSample,
   listParentLineStates,
-  fetchSubSamplePhotoUrl,
   patchVialAssignment,
 } from '@/lib/api'
 import type {
@@ -44,6 +43,7 @@ import { buildNativeSubSampleLookup } from '@/lib/native-sub-sample'
 import { useAnalysisSlaMap } from '@/services/analysis-sla'
 import {
   RoleHeaderBadge,
+  VialPhotoThumb,
   computePrimaryAnalysisUids,
   patchAnalysisInList,
 } from '@/components/senaite/vial-quicklook-helpers'
@@ -74,44 +74,6 @@ interface VialsQuickLookDialogProps {
 
 const vialAnalysesKey = (subSamplePk: number) =>
   ['quicklook-vial-analyses', subSamplePk] as const
-
-/**
- * Vial photo thumbnail. Mirrors the private VialThumb in
- * intake/ReceiveWizard/VialsList.tsx:44 (fetchSubSamplePhotoUrl is
- * module-level cached, so repeated opens are free). Kept local — VialThumb
- * is not exported and dedup of the wizard copies is out of scope.
- */
-function VialPhotoThumb({ sampleId, hasPhoto }: { sampleId: string; hasPhoto: boolean }) {
-  const [url, setUrl] = useState<string | null>(null)
-
-  useEffect(() => {
-    if (!hasPhoto) {
-      setUrl(null)
-      return
-    }
-    let cancelled = false
-    void fetchSubSamplePhotoUrl(sampleId)
-      .then(u => {
-        if (!cancelled) setUrl(u)
-      })
-      .catch(() => {
-        if (!cancelled) setUrl(null)
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [sampleId, hasPhoto])
-
-  return (
-    <div className="w-12 h-12 rounded bg-muted/60 border shrink-0 overflow-hidden flex items-center justify-center">
-      {url ? (
-        <img src={url} alt={`${sampleId} photo`} className="w-full h-full object-cover" />
-      ) : (
-        <span className="text-[8px] text-muted-foreground">no photo</span>
-      )}
-    </div>
-  )
-}
 
 export function VialsQuickLookDialog({
   open,
@@ -318,7 +280,9 @@ function VialSection({
           {vial.sample_id}
         </Button>
         <span className="text-xs text-muted-foreground">
-          Vial {vial.vial_sequence} of {parent.sub_sample_count}
+          {/* Family-indexed: parent is vial 1, so seq+1 of count+1 (matches the
+              SampleDetails header convention). */}
+          Vial {vial.vial_sequence + 1} of {parent.sub_sample_count + 1}
         </span>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>

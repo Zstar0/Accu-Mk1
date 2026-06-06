@@ -125,6 +125,7 @@ import { usePrintLabel } from '@/components/samples/usePrintLabel'
 import { PrintLabelPortal } from '@/components/samples/PrintLabelPortal'
 import {
   RoleHeaderBadge,
+  VialPhotoThumb,
   computePrimaryAnalysisUids,
 } from '@/components/senaite/vial-quicklook-helpers'
 
@@ -2727,6 +2728,21 @@ export function SampleDetails() {
               </div>
             </div>
           )}
+
+          {/* Vial photo (vial pages only) — far right of the top row, hover to
+              enlarge. Photo presence comes from the parent summary's vial record. */}
+          {!isParent && parentSampleId && (() => {
+            const me = parentSummary?.sub_samples.find(s => s.sample_id === sampleId)
+            if (!me) return null
+            return (
+              <VialPhotoThumb
+                sampleId={me.sample_id}
+                hasPhoto={!!me.photo_external_uid}
+                sizeClass="w-11 h-11"
+                hoverZoom
+              />
+            )
+          })()}
 
           {/* Progress bar + legend — w-full forces wrap to bottom row */}
           {analyses.length > 0 && (

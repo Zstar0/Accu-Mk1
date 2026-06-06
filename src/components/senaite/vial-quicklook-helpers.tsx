@@ -3,8 +3,83 @@
  * VialsQuickLookDialog). Extracted from SampleDetails.tsx so the quick-look
  * dialog can use them without a circular import.
  */
+import { useEffect, useState } from 'react'
 import { cn } from '@/lib/utils'
+import { fetchSubSamplePhotoUrl } from '@/lib/api'
 import type { SenaiteAnalysis } from '@/lib/api'
+
+/**
+ * Vial photo thumbnail. Mirrors the private VialThumb in
+ * intake/ReceiveWizard/VialsList.tsx:44 (fetchSubSamplePhotoUrl is
+ * module-level cached, so repeated opens are free). Shared by the Quick Look
+ * dialog and the SampleDetails sticky header.
+ *
+ * `hoverZoom` adds an enlarged preview that appears on hover (CSS group-hover),
+ * absolutely positioned and right-anchored so it doesn't clip off the right
+ * edge of a header row.
+ */
+export function VialPhotoThumb({
+  sampleId,
+  hasPhoto,
+  sizeClass = 'w-12 h-12',
+  hoverZoom = false,
+}: {
+  sampleId: string
+  hasPhoto: boolean
+  sizeClass?: string
+  hoverZoom?: boolean
+}) {
+  const [url, setUrl] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!hasPhoto) {
+      setUrl(null)
+      return
+    }
+    let cancelled = false
+    void fetchSubSamplePhotoUrl(sampleId)
+      .then(u => {
+        if (!cancelled) setUrl(u)
+      })
+      .catch(() => {
+        if (!cancelled) setUrl(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [sampleId, hasPhoto])
+
+  return (
+    <div
+      className={cn(
+        'rounded bg-muted/60 border shrink-0 overflow-hidden flex items-center justify-center',
+        hoverZoom && url && 'relative group overflow-visible',
+        sizeClass,
+      )}
+    >
+      {url ? (
+        <>
+          <img
+            src={url}
+            alt={`${sampleId} photo`}
+            className="w-full h-full object-cover rounded"
+          />
+          {hoverZoom && (
+            <div className="absolute right-0 top-full mt-2 z-50 hidden group-hover:block">
+              <img
+                src={url}
+                alt={`${sampleId} photo (enlarged)`}
+                className="w-72 max-h-96 object-contain rounded-lg border shadow-xl bg-background"
+              />
+            </div>
+          )}
+        </>
+      ) : (
+        <span className="text-[8px] text-muted-foreground">no photo</span>
+      )}
+    </div>
+  )
+}
 
 // --- Role header badge ---
 // Mirrors the palette in VialDetailsTab.tsx / VialsList.tsx / SenaiteDashboard.tsx /
