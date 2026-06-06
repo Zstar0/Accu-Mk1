@@ -8,9 +8,10 @@
  * The vial pages load analyses with local state and refetch on mount, so the
  * dialog's 'quicklook-*' query keys are private to this surface.
  */
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useQuery, useQueries, useQueryClient } from '@tanstack/react-query'
 import { ChevronDown, ChevronRight, Loader2 } from 'lucide-react'
+import { toast } from 'sonner'
 import {
   Dialog,
   DialogContent,
@@ -19,19 +20,43 @@ import {
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+} from '@/components/ui/dropdown-menu'
+import {
   listSubSamples,
   listLimsAnalysesForSubSample,
   listParentLineStates,
   fetchSubSamplePhotoUrl,
+  patchVialAssignment,
 } from '@/lib/api'
-import type { SenaiteAnalysis, SubSample } from '@/lib/api'
+import type {
+  AssignmentRole,
+  ParentSampleSummary,
+  SenaiteAnalysis,
+  SubSample,
+} from '@/lib/api'
 import { useUIStore } from '@/store/ui-store'
 import { AnalysisTable } from '@/components/senaite/AnalysisTable'
+import { buildNativeSubSampleLookup } from '@/lib/native-sub-sample'
+import { useAnalysisSlaMap } from '@/services/analysis-sla'
 import {
   RoleHeaderBadge,
   computePrimaryAnalysisUids,
   patchAnalysisInList,
 } from '@/components/senaite/vial-quicklook-helpers'
+
+/** Role options for the quick re-assign dropdown — labels match SampleDetails'
+ *  assignmentLabel switch (em-dashes, verbatim). `null` = Unassigned. */
+const REASSIGN_OPTIONS: { label: string; role: AssignmentRole | null }[] = [
+  { label: 'Analytical HPLC', role: 'hplc' },
+  { label: 'Microbiology — Endotoxin', role: 'endo' },
+  { label: 'Microbiology — Sterility', role: 'ster' },
+  { label: 'Extra (unassigned)', role: 'xtra' },
+  { label: 'Unassigned', role: null },
+]
 
 interface VialsQuickLookDialogProps {
   open: boolean
@@ -153,10 +178,13 @@ export function VialsQuickLookDialog({
               No vials found.
             </p>
           ) : null}
-          {vials.map((vial, i) => (
+          {subData?.parent &&
+            vials.map((vial, i) => (
             <VialSection
               key={vial.id}
               vial={vial}
+              parent={subData.parent}
+              parentSampleId={parentSampleId}
               query={analysesQueries[i]!}
               analyteNameMap={analyteNameMap}
               parentLineStates={parentLineStates}
@@ -197,6 +225,8 @@ export function VialsQuickLookDialog({
 
 interface VialSectionProps {
   vial: SubSample
+  parent: ParentSampleSummary
+  parentSampleId: string
   query: {
     data?: SenaiteAnalysis[]
     isLoading: boolean
@@ -220,6 +250,8 @@ interface VialSectionProps {
 
 function VialSection({
   vial,
+  parent,
+  parentSampleId,
   query,
   analyteNameMap,
   parentLineStates,
@@ -230,8 +262,33 @@ function VialSection({
   onMethodInstrumentSaved,
   onTransitionComplete,
 }: VialSectionProps) {
+  const queryClient = useQueryClient()
+  const [isReassigning, setIsReassigning] = useState(false)
   const analyses = query.data ?? []
   const primaryUids = computePrimaryAnalysisUids(analyses, vial.assignment_role)
+
+  // Per-vial SLA — same code path the vial detail page uses (native-built
+  // lookup + the vial's analyses), so the SLA column matches the vial page.
+  const slaLookup = useMemo(
+    () => ({ ...buildNativeSubSampleLookup(vial, parent), analyses }),
+    [vial, parent, analyses]
+  )
+  const sla = useAnalysisSlaMap(slaLookup)
+
+  const handleReassign = async (role: AssignmentRole | null) => {
+    setIsReassigning(true)
+    try {
+      await patchVialAssignment(vial.sample_id, role)
+      toast.success(`Re-assigned ${vial.sample_id}`)
+      // assignment PATCH auto-seeds analyses server-side; refetch both surfaces
+      void queryClient.invalidateQueries({ queryKey: ['sub-samples', parentSampleId] })
+      void queryClient.invalidateQueries({ queryKey: vialAnalysesKey(vial.id) })
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Re-assignment failed')
+    } finally {
+      setIsReassigning(false)
+    }
+  }
 
   return (
     <div className="rounded-md border">
@@ -260,7 +317,40 @@ function VialSection({
         >
           {vial.sample_id}
         </Button>
-        {vial.assignment_role && <RoleHeaderBadge role={vial.assignment_role} />}
+        <span className="text-xs text-muted-foreground">
+          Vial {vial.vial_sequence} of {parent.sub_sample_count}
+        </span>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-auto gap-1 px-1.5 py-0.5"
+              title="Re-assign vial"
+              aria-label="Re-assign vial"
+              disabled={isReassigning}
+            >
+              {vial.assignment_role ? (
+                <RoleHeaderBadge role={vial.assignment_role} />
+              ) : (
+                <span className="inline-block text-[10px] leading-none px-1.5 py-0.5 rounded border uppercase tracking-wide font-medium bg-zinc-500/15 text-zinc-700 border-zinc-500/40 dark:text-zinc-300">
+                  Unassigned
+                </span>
+              )}
+              <ChevronDown size={12} />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start">
+            {REASSIGN_OPTIONS.map(opt => (
+              <DropdownMenuItem
+                key={opt.label}
+                onSelect={() => void handleReassign(opt.role)}
+              >
+                {opt.label}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
         <span className="text-xs text-muted-foreground ml-auto">
           {analyses.length} {analyses.length === 1 ? 'analysis' : 'analyses'}
           {' · received '}
@@ -291,6 +381,11 @@ function VialSection({
               primaryAnalysisUids={primaryUids}
               primaryRole={vial.assignment_role}
               parentLineStates={parentLineStates}
+              analysisSlaMap={sla.byKeyword}
+              isAnalysisSlaLoading={sla.isLoading}
+              isAnalysisSlaError={sla.isError}
+              isAnalysisSlaPublished={sla.isPublished}
+              analysisSlaPriority={sla.priority}
               onResultSaved={onResultSaved}
               onMethodInstrumentSaved={onMethodInstrumentSaved}
               onTransitionComplete={onTransitionComplete}

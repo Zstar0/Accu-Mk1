@@ -7,6 +7,7 @@ import i18n from '@/i18n/config'
 import { VialsQuickLookDialog } from '@/components/senaite/VialsQuickLookDialog'
 import { useUIStore } from '@/store/ui-store'
 import type { SenaiteAnalysis, SubSampleListResponse } from '@/lib/api'
+import type { SampleSlaSnapshot } from '@/services/order-sla'
 
 // AnalysisTable uses IntersectionObserver for its sticky-toolbar effect; jsdom doesn't have it.
 // Must be a real class (not arrow function) since AnalysisTable does `new IntersectionObserver(...)`.
@@ -22,6 +23,13 @@ Object.defineProperty(window, 'IntersectionObserver', {
   value: MockIntersectionObserver,
 })
 
+// Radix DropdownMenu (vial re-assign trigger) drives pointer-capture APIs jsdom lacks.
+// Without these shims the menu never opens under userEvent.
+window.HTMLElement.prototype.hasPointerCapture = vi.fn()
+window.HTMLElement.prototype.setPointerCapture = vi.fn()
+window.HTMLElement.prototype.releasePointerCapture = vi.fn()
+window.HTMLElement.prototype.scrollIntoView = vi.fn()
+
 vi.mock('@/lib/api', async importOriginal => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
   return {
@@ -30,8 +38,41 @@ vi.mock('@/lib/api', async importOriginal => {
     listLimsAnalysesForSubSample: vi.fn(),
     listParentLineStates: vi.fn(),
     fetchSubSamplePhotoUrl: vi.fn(),
+    patchVialAssignment: vi.fn(),
   }
 })
+
+// Mock the SLA hook wholesale: (1) protect existing tests from VialSection's new
+// useAnalysisSlaMap firing real services/groups/sample-sla queries, and (2) give
+// test #3 a spy. The hook's internals are covered by analysis-sla.test.tsx.
+const fakeSlaSnapshot: SampleSlaSnapshot = {
+  groupKey: 100,
+  groupName: 'Analytics',
+  tier: {
+    id: 2,
+    name: 'HPLC fast',
+    target_minutes: 240,
+    business_hours_only: false,
+    is_default: false,
+    amber_threshold_percent: 80,
+    created_at: '2026-01-01T00:00:00',
+    updated_at: '2026-01-01T00:00:00',
+  },
+  status: { elapsed_minutes: 60, remaining_minutes: 180, target_minutes: 240, breached: false },
+  color: 'green',
+  reason: { tierSource: 'group', unmappedKeywords: [] },
+  priority: 'normal',
+} as SampleSlaSnapshot
+
+vi.mock('@/services/analysis-sla', () => ({
+  useAnalysisSlaMap: vi.fn(() => ({
+    byKeyword: new Map([['PUR-HPLC', fakeSlaSnapshot]]),
+    isLoading: false,
+    isError: false,
+    isPublished: false,
+    priority: null,
+  })),
+}))
 
 // AnalysisTable calls useSidebar internally; stub it so tests don't need a full SidebarProvider.
 vi.mock('@/components/ui/sidebar', async importOriginal => {
@@ -55,7 +96,9 @@ import {
   listLimsAnalysesForSubSample,
   listParentLineStates,
   fetchSubSamplePhotoUrl,
+  patchVialAssignment,
 } from '@/lib/api'
+import { useAnalysisSlaMap } from '@/services/analysis-sla'
 
 const mkAnalysis = (over: Partial<SenaiteAnalysis>): SenaiteAnalysis =>
   ({
@@ -155,6 +198,10 @@ beforeEach(() => {
       ? [mkAnalysis({ uid: 'mk1:101', keyword: 'PUR-HPLC', title: 'Purity (HPLC)', service_group_name: 'Analytics' })]
       : [mkAnalysis({ uid: 'mk1:201', keyword: 'ENDO', title: 'Endotoxin' })]
   )
+  vi.mocked(patchVialAssignment).mockResolvedValue({
+    sample_id: 'P-0144-S01',
+    assignment_role: 'endo',
+  })
 })
 
 describe('VialsQuickLookDialog', () => {
@@ -229,5 +276,43 @@ describe('VialsQuickLookDialog', () => {
     expect(await screen.findByText('No vials found.')).toBeInTheDocument()
     // the loading spinner (Loader2 renders an svg with animate-spin) must be gone
     expect(container.querySelector('.animate-spin')).toBeNull()
+  })
+
+  it('shows "Vial N of X" in each vial header', async () => {
+    renderDialog()
+    const headers = await screen.findAllByTestId('quicklook-vial-header')
+    expect(headers[0]).toHaveTextContent('Vial 1 of 2')
+    expect(headers[1]).toHaveTextContent('Vial 2 of 2')
+  })
+
+  it('re-assign: selecting a role patches the vial and refetches sub-samples', async () => {
+    renderDialog()
+    await screen.findByText('Purity (HPLC)')
+    // first re-assign trigger is S01 (vials sorted ascending by vial_sequence)
+    const triggers = screen.getAllByRole('button', { name: /re-assign vial/i })
+    await userEvent.click(triggers[0]!)
+    const endoItem = await screen.findByText('Microbiology — Endotoxin')
+    await userEvent.click(endoItem)
+    await waitFor(() => {
+      expect(patchVialAssignment).toHaveBeenCalledWith('P-0144-S01', 'endo')
+    })
+    // invalidating ['sub-samples', parentSampleId] (active) refetches it
+    await waitFor(() => {
+      expect(listSubSamples).toHaveBeenCalledTimes(2)
+    })
+  })
+
+  it('wires per-vial SLA into AnalysisTable via useAnalysisSlaMap', async () => {
+    renderDialog()
+    // wait for S01's analyses so the hook has been called with the populated lookup
+    await screen.findByText('Purity (HPLC)')
+    expect(useAnalysisSlaMap).toHaveBeenCalledWith(
+      expect.objectContaining({
+        date_received: '2026-06-01T00:00:00Z',
+        analyses: expect.arrayContaining([
+          expect.objectContaining({ keyword: 'PUR-HPLC' }),
+        ]),
+      })
+    )
   })
 })
