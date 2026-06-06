@@ -349,4 +349,22 @@ describe('VialPhotoThumb', () => {
     expect(screen.queryByAltText('X photo (enlarged)')).not.toBeInTheDocument()
     expect(fetchSubSamplePhotoUrl).not.toHaveBeenCalled()
   })
+
+  it('hideWhenEmpty renders nothing when there is no photo', () => {
+    const { container } = render(
+      <VialPhotoThumb sampleId="X" hasPhoto={false} hideWhenEmpty />
+    )
+    expect(container).toBeEmptyDOMElement()
+  })
+
+  it('hideWhenEmpty renders nothing when the optimistic fetch fails, the thumb once it loads', async () => {
+    vi.mocked(fetchSubSamplePhotoUrl).mockRejectedValueOnce(new Error('404'))
+    const failed = render(<VialPhotoThumb sampleId="X" hasPhoto hideWhenEmpty />)
+    await waitFor(() => expect(fetchSubSamplePhotoUrl).toHaveBeenCalled())
+    expect(failed.container).toBeEmptyDOMElement()
+    failed.unmount()
+
+    render(<VialPhotoThumb sampleId="Y" hasPhoto hideWhenEmpty />)
+    expect(await screen.findByAltText('Y photo')).toHaveAttribute('src', 'blob:z')
+  })
 })

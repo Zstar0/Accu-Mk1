@@ -17,17 +17,24 @@ import type { SenaiteAnalysis } from '@/lib/api'
  * `hoverZoom` adds an enlarged preview that appears on hover (CSS group-hover),
  * absolutely positioned and right-anchored so it doesn't clip off the right
  * edge of a header row.
+ *
+ * `hideWhenEmpty` renders nothing (no placeholder box) until a photo URL has
+ * actually loaded — for surfaces like the sticky header where an optimistic
+ * fetch may 404 (the photo endpoint falls back to the parent AR's last
+ * attachment for non-sub-sample IDs, which may not exist).
  */
 export function VialPhotoThumb({
   sampleId,
   hasPhoto,
   sizeClass = 'w-12 h-12',
   hoverZoom = false,
+  hideWhenEmpty = false,
 }: {
   sampleId: string
   hasPhoto: boolean
   sizeClass?: string
   hoverZoom?: boolean
+  hideWhenEmpty?: boolean
 }) {
   const [url, setUrl] = useState<string | null>(null)
 
@@ -48,6 +55,8 @@ export function VialPhotoThumb({
       cancelled = true
     }
   }, [sampleId, hasPhoto])
+
+  if (hideWhenEmpty && !url) return null
 
   return (
     <div

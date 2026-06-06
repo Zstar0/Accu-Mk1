@@ -2729,19 +2729,28 @@ export function SampleDetails() {
             </div>
           )}
 
-          {/* Vial photo (vial pages only) — far right of the top row, hover to
-              enlarge. Photo presence comes from the parent summary's vial record.
-              Unlike the quick-look dialog, photo-less vials render nothing here —
-              the "no photo" placeholder is illegible at w-11 and wastes header space. */}
-          {!isParent && parentSampleId && (() => {
-            const me = parentSummary?.sub_samples.find(s => s.sample_id === sampleId)
-            if (!me?.photo_external_uid) return null
+          {/* Vial photo — far right of the top row, hover to enlarge.
+              Vial pages: photo presence comes from the parent summary's vial
+              record. Parent pages: the parent IS vial 1, and the photo endpoint
+              falls back to the parent AR's last attachment for non-sub-sample
+              IDs (see VialsList.tsx), so we fetch optimistically. Either way,
+              hideWhenEmpty keeps photo-less samples from rendering the "no
+              photo" box — illegible at w-11 and wasted header space. */}
+          {data.sample_id && (() => {
+            const me = parentSampleId
+              ? parentSummary?.sub_samples.find(s => s.sample_id === sampleId)
+              : null
+            // Vial pages skip the fetch entirely when the vial record says
+            // there's no photo; parent pages always try (404 → hidden).
+            const hasPhoto = parentSampleId ? !!me?.photo_external_uid : true
             return (
               <VialPhotoThumb
-                sampleId={me.sample_id}
-                hasPhoto
-                sizeClass="w-11 h-11"
+                sampleId={data.sample_id}
+                hasPhoto={hasPhoto}
+                // self-stretch: span the full height of the header's top row
+                sizeClass="self-stretch w-24 min-h-16"
                 hoverZoom
+                hideWhenEmpty
               />
             )
           })()}
