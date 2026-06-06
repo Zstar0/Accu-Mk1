@@ -55,6 +55,8 @@ Queries are `enabled: open` — nothing fetches until the dialog opens.
 
 Header (collapsible, default expanded; chevron toggle):
 
+- Vial photo thumbnail — mirrors `VialThumb` (`VialsList.tsx:44`): `fetchSubSamplePhotoUrl`
+  gated on `photo_external_uid`, "no photo" placeholder otherwise (user request 2026-06-05)
 - Vial sample ID — clickable, calls `onNavigateToVial` (lab UX: clickable IDs)
 - Role badge with existing role tint (hplc/endo/ster/xtra), same colors as the
   sub-sample pages
