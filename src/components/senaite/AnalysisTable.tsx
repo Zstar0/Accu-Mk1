@@ -1556,13 +1556,19 @@ export function AnalysisTable({
         <div
           className="fixed bottom-4 z-50 flex items-center justify-between px-4 py-2.5 rounded-lg bg-slate-900 border border-slate-500 shadow-xl"
           style={{
+            // var() needs 0px fallbacks: in portaled contexts (e.g. the Vials
+            // Quick Look dialog, which portals to document.body OUTSIDE the
+            // SidebarProvider) these CSS vars don't resolve, the calc() goes
+            // invalid, left collapses to 0, and the toolbar jumps bottom-left.
+            // Falling back to 0px centers it on the viewport — correct for the
+            // 90vw dialog and a no-op on the page (where the var resolves).
             left: sidebarOpen
-              ? 'calc(50% + var(--sidebar-width) / 2)'
-              : 'calc(50% + var(--sidebar-width-icon) / 2)',
+              ? 'calc(50% + var(--sidebar-width, 0px) / 2)'
+              : 'calc(50% + var(--sidebar-width-icon, 0px) / 2)',
             transform: 'translateX(-50%)',
             width: sidebarOpen
-              ? 'min(calc(100vw - var(--sidebar-width) - 3rem), 64rem)'
-              : 'min(calc(100vw - var(--sidebar-width-icon) - 3rem), 64rem)',
+              ? 'min(calc(100vw - var(--sidebar-width, 0px) - 3rem), 64rem)'
+              : 'min(calc(100vw - var(--sidebar-width-icon, 0px) - 3rem), 64rem)',
           }}
         >
           <div className="flex items-center gap-3">
