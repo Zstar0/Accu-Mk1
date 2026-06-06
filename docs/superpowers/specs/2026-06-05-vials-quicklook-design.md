@@ -107,6 +107,21 @@ In the Analyses section header row next to Manage Analyses
   sub-samples section uses)
 - Disabled with tooltip "No vials yet" when `subSamples.length === 0`
 
+## v1.1 — UAT follow-ups (user request, 2026-06-05 evening)
+
+1. **Quick re-assign from the dialog.** The role badge in each vial header becomes a
+   dropdown (current badge + chevron): HPLC / ENDO / STERYL / XTRA / Unassigned →
+   `patchVialAssignment(sample_id, role)`. On success: toast + invalidate
+   `['sub-samples', parentSampleId]` AND that vial's analyses key (assignment PATCH
+   auto-seeds analyses). On failure: error toast, no local state change.
+   Multiple vials per role are allowed (matches AssignStep semantics).
+2. **"Vial N of X" in the header** — `vial_sequence` of `parent.sub_sample_count`.
+3. **SLA wiring (supersedes the v1 "omit SLA" decision).** Per-vial, `VialSection`
+   builds `{...buildNativeSubSampleLookup(vial, parent), analyses}` and calls
+   `useAnalysisSlaMap` — the exact code path vial pages use — and passes the five
+   SLA props to AnalysisTable. (Legacy SENAITE-backed vials may see minor input
+   differences vs their own page (native-built lookup); accepted.)
+
 ## Out of scope (explicit)
 
 - No backend changes (Approach B parked; revisit only if vial counts grow).
