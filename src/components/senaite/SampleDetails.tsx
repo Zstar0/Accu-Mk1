@@ -122,6 +122,10 @@ import { Microscope, Plus, Printer, Search, Trash2, ScrollText, Sigma } from 'lu
 import { VarianceSummary } from '@/components/samples/VarianceSummary'
 import { usePrintLabel } from '@/components/samples/usePrintLabel'
 import { PrintLabelPortal } from '@/components/samples/PrintLabelPortal'
+import {
+  RoleHeaderBadge,
+  computePrimaryAnalysisUids,
+} from './vial-quicklook-helpers'
 
 // --- COA Console ---
 
@@ -1215,33 +1219,6 @@ function formatDate(dateStr: string | null | undefined): string {
   })
 }
 
-// --- Role header badge ---
-// Mirrors the palette in VialDetailsTab.tsx / VialsList.tsx / SenaiteDashboard.tsx /
-// InboxVialCard.tsx (fifth inline copy). Kept inline to stay additive — dedup is a
-// tracked fast-follow, not in scope here.
-const ROLE_HEADER_BADGES: Record<string, { label: string; cls: string }> = {
-  hplc: { label: 'HPLC',   cls: 'bg-sky-500/15 text-sky-700 border-sky-500/40 dark:text-sky-300' },
-  endo: { label: 'ENDO',   cls: 'bg-emerald-500/15 text-emerald-700 border-emerald-500/40 dark:text-emerald-300' },
-  ster: { label: 'STERYL', cls: 'bg-violet-500/15 text-violet-700 border-violet-500/40 dark:text-violet-300' },
-  xtra: { label: 'XTRA',   cls: 'bg-zinc-500/15 text-zinc-700 border-zinc-500/40 dark:text-zinc-300' },
-}
-
-function RoleHeaderBadge({ role }: { role: string }) {
-  const b = ROLE_HEADER_BADGES[role]
-  if (!b) return null
-  return (
-    <span
-      className={cn(
-        'inline-block text-[10px] leading-none px-1.5 py-0.5 rounded border uppercase tracking-wide font-medium',
-        b.cls,
-      )}
-      title={`Vial assignment: ${b.label}`}
-    >
-      {b.label}
-    </span>
-  )
-}
-
 // --- Add Remark Form ---
 
 function AddRemarkForm({
@@ -1946,30 +1923,10 @@ export function SampleDetails() {
     }
   })()
 
-  // Build the set of analysis UIDs that are "primary" for this sample's
-  // vial assignment — used to highlight (not filter) rows in the analyses
-  // table. Mapping:
-  //   hplc → analyses in service_group 'Analytics'
-  //   endo → keyword starts with 'ENDO' (within Microbiology)
-  //   ster → keyword starts with 'STER' (within Microbiology)
-  //   xtra → no primary analyses (vial parked for backup)
-  const primaryAnalysisUids = useMemo(() => {
-    const set = new Set<string>()
-    if (!data || !currentAssignment) return set
-    for (const a of data.analyses) {
-      if (!a.uid) continue
-      const kw = (a.keyword ?? '').toUpperCase()
-      const groupName = a.service_group_name ?? ''
-      if (currentAssignment === 'hplc') {
-        if (groupName === 'Analytics') set.add(a.uid)
-      } else if (currentAssignment === 'endo') {
-        if (kw.startsWith('ENDO')) set.add(a.uid)
-      } else if (currentAssignment === 'ster') {
-        if (kw.startsWith('STER')) set.add(a.uid)
-      }
-    }
-    return set
-  }, [data, currentAssignment])
+  const primaryAnalysisUids = useMemo(
+    () => computePrimaryAnalysisUids(data?.analyses ?? [], currentAssignment),
+    [data, currentAssignment]
+  )
 
   async function openSubSampleWizard() {
     // On a parent page, open the wizard for the current sample.
