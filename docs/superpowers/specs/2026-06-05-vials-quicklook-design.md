@@ -122,6 +122,19 @@ In the Analyses section header row next to Manage Analyses
    SLA props to AnalysisTable. (Legacy SENAITE-backed vials may see minor input
    differences vs their own page (native-built lookup); accepted.)
 
+## v1.2 — UAT follow-ups round 2 (user request, 2026-06-05 late)
+
+1. **Vial photo in the SampleDetails sticky header** (vial pages): thumbnail on the
+   right side of the sticky band (next to the counters), hover shows an enlarged
+   preview (CSS group-hover absolute overlay, right-anchored, ~w-72). Photo presence
+   from `parentSummary.sub_samples.find(me).photo_external_uid` (already fetched on
+   vial pages); same `fetchSubSamplePhotoUrl` path. The thumb component moves from
+   VialsQuickLookDialog-local into the shared helpers file with `size`/`hoverZoom`
+   props; the dialog reuses it.
+2. **Vial numbering consistency**: the dialog header adopts the page convention —
+   family-indexed `Vial {vial_sequence + 1} of {sub_sample_count + 1}` (parent is
+   vial 1), matching SampleDetails' header lines (~2643-2647, ~2664).
+
 ## Out of scope (explicit)
 
 - No backend changes (Approach B parked; revisit only if vial counts grow).
