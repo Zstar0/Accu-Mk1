@@ -99,7 +99,7 @@ export function VialsQuickLookDialog({
   const queryClient = useQueryClient()
   const [collapsed, setCollapsed] = useState<Set<number>>(new Set())
 
-  const { data: subData } = useQuery({
+  const { data: subData, isPending: subsLoading } = useQuery({
     queryKey: ['sub-samples', parentSampleId],
     queryFn: () => listSubSamples(parentSampleId),
     enabled: open,
@@ -144,11 +144,15 @@ export function VialsQuickLookDialog({
           <DialogTitle>Vials — {parentSampleId}</DialogTitle>
         </DialogHeader>
         <div className="overflow-y-auto flex-1 space-y-4 pr-1">
-          {vials.length === 0 && (
+          {subsLoading ? (
             <div className="flex justify-center py-8">
               <Loader2 size={18} className="animate-spin text-muted-foreground" />
             </div>
-          )}
+          ) : vials.length === 0 ? (
+            <p className="text-sm text-muted-foreground text-center py-8">
+              No vials found.
+            </p>
+          ) : null}
           {vials.map((vial, i) => (
             <VialSection
               key={vial.id}

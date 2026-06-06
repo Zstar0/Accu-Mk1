@@ -123,7 +123,7 @@ function renderDialog(onOpenChange = vi.fn()) {
   const qc = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   })
-  render(
+  const utils = render(
     <I18nextProvider i18n={i18n}>
       <QueryClientProvider client={qc}>
         <VialsQuickLookDialog
@@ -135,7 +135,7 @@ function renderDialog(onOpenChange = vi.fn()) {
       </QueryClientProvider>
     </I18nextProvider>
   )
-  return { onOpenChange }
+  return { onOpenChange, container: utils.container }
 }
 
 beforeEach(() => {
@@ -211,5 +211,16 @@ describe('VialsQuickLookDialog', () => {
       expect(screen.queryByText('Purity (HPLC)')).not.toBeInTheDocument()
     })
     expect(screen.getByText('Endotoxin')).toBeInTheDocument()
+  })
+
+  it('shows the empty state (not a spinner) for a zero-vial parent', async () => {
+    vi.mocked(listSubSamples).mockResolvedValue({
+      parent: { ...SUBS.parent, sub_sample_count: 0 },
+      sub_samples: [],
+    })
+    const { container } = renderDialog()
+    expect(await screen.findByText('No vials found.')).toBeInTheDocument()
+    // the loading spinner (Loader2 renders an svg with animate-spin) must be gone
+    expect(container.querySelector('.animate-spin')).toBeNull()
   })
 })
