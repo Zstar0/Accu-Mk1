@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -137,6 +137,13 @@ function renderDialog(onOpenChange = vi.fn()) {
   )
   return { onOpenChange, container: utils.container }
 }
+
+// The nav test stubs the store's navigateToSample; snapshot it and restore after
+// every test so module-level store state doesn't leak between tests.
+const originalNavigateToSample = useUIStore.getState().navigateToSample
+afterEach(() => {
+  useUIStore.setState({ navigateToSample: originalNavigateToSample })
+})
 
 beforeEach(() => {
   vi.clearAllMocks()
