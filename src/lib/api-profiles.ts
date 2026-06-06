@@ -22,6 +22,7 @@ export interface ApiEnvironment {
   name: string
   url: string
   senaiteUrl: string
+  wordpressUrl: string
 }
 
 export const KNOWN_ENVIRONMENTS: ApiEnvironment[] = [
@@ -30,18 +31,21 @@ export const KNOWN_ENVIRONMENTS: ApiEnvironment[] = [
     name: 'Local Development',
     url: 'http://127.0.0.1:8012',
     senaiteUrl: 'http://localhost:8080/senaite',
+    wordpressUrl: 'https://accumarklabs.local',
   },
   {
     id: 'docker',
     name: 'Docker (local)',
     url: '/api',
     senaiteUrl: 'http://localhost:8080/senaite',
+    wordpressUrl: 'https://accumarklabs.local',
   },
   {
     id: 'production',
     name: 'Production',
     url: 'https://accumk1.valenceanalytical.com/api',
     senaiteUrl: 'https://senaite.valenceanalytical.com',
+    wordpressUrl: 'https://accumarklabs.com',
   },
 ]
 
@@ -122,13 +126,29 @@ export function getActiveEnvironmentName(): string {
   return 'Unknown'
 }
 
-// ── WordPress URL (from env var) ───────────────────────────────
+// ── WordPress URL ──────────────────────────────────────────────
+
+const WP_SESSION_OVERRIDE_KEY = 'accu_mk1_wp_url_override'
 
 /**
  * Get the WordPress URL for admin links (Order Explorer, etc.).
- * Comes from the VITE_WORDPRESS_URL env var.
+ *
+ * Resolution order:
+ *   1. sessionStorage override (for dev stacks whose WP lives on a
+ *      non-standard port, e.g. http://localhost:5535)
+ *   2. KNOWN_ENVIRONMENTS match on the active API URL — follows the
+ *      admin environment switcher, like getSenaiteUrl()
+ *   3. VITE_WORDPRESS_URL env var (baked at build time)
+ *   4. Fallback to the local DevKinsta instance
  */
 export function getWordpressUrl(): string {
+  if (typeof window !== 'undefined') {
+    const override = sessionStorage.getItem(WP_SESSION_OVERRIDE_KEY)
+    if (override) return override
+  }
+  const activeUrl = getServerUrl()
+  const known = KNOWN_ENVIRONMENTS.find(e => e.url === activeUrl)
+  if (known) return known.wordpressUrl
   return import.meta.env.VITE_WORDPRESS_URL || 'https://accumarklabs.local'
 }
 
