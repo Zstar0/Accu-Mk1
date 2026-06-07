@@ -318,7 +318,11 @@ function VialSection({
           ))}
         </DropdownMenuContent>
       </DropdownMenu>
-      <span className="text-xs text-muted-foreground">
+      {/* ml-auto right-pins this in the slim (collapsed/loading/error/empty)
+          wrapper, where the header row spans full width. Inside AnalysisTable's
+          justify-between header the left block is content-sized, so it's a
+          no-op there. */}
+      <span className="text-xs text-muted-foreground ml-auto">
         {analyses.length} {analyses.length === 1 ? 'analysis' : 'analyses'}
         {' · received '}
         {new Date(vial.received_at).toLocaleDateString()}
