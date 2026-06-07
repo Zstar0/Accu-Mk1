@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, Fragment } from 'react'
+import { useState, useEffect, useRef, Fragment, type ReactNode } from 'react'
 import { Activity, ArrowDownUp, ArrowUpDown, Check, ChevronDown, ChevronRight, Database, Lock, MoreHorizontal, Pencil, X } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -1376,6 +1376,19 @@ interface AnalysisTableProps {
    * start from the parent AR. Omit on parent pages.
    */
   parentLineStates?: Record<string, string>
+  /**
+   * When provided, REPLACES the default left block of the card header row
+   * (the "Activity icon · ANALYSES · n of m" group). The filter tabs on the
+   * right stay regardless. Used by the Vials Quick Look dialog to fold each
+   * vial's header into the table's own Card. Omit for byte-identical default.
+   */
+  headerContent?: ReactNode
+  /**
+   * When true, the progress-bar block under the header is not rendered. Used
+   * by the Quick Look dialog (per-vial progress is noise in the stacked view).
+   * Default false → unchanged for sample pages.
+   */
+  hideProgress?: boolean
 }
 
 export function AnalysisTable({
@@ -1393,6 +1406,8 @@ export function AnalysisTable({
   primaryRole,
   promotionsByKeyword,
   parentLineStates,
+  headerContent,
+  hideProgress = false,
 }: AnalysisTableProps) {
   const [analysisFilter, setAnalysisFilter] = useState<'all' | 'verified' | 'pending' | 'invalid'>('all')
   const [sortConfig, setSortConfig] = useState<SortConfig | null>(null)
@@ -1488,15 +1503,17 @@ export function AnalysisTable({
   return (
     <Card ref={cardRef} className="p-4 mb-6">
       <div className="flex items-center justify-between mb-3">
-        <div className="flex items-center gap-2">
-          <Activity size={15} className="text-muted-foreground" />
-          <span className="text-sm font-semibold text-foreground tracking-wide uppercase">
-            Analyses
-          </span>
-          <span className="text-xs text-muted-foreground ml-1">
-            {filteredAnalyses.length} of {validCount}
-          </span>
-        </div>
+        {headerContent ?? (
+          <div className="flex items-center gap-2">
+            <Activity size={15} className="text-muted-foreground" />
+            <span className="text-sm font-semibold text-foreground tracking-wide uppercase">
+              Analyses
+            </span>
+            <span className="text-xs text-muted-foreground ml-1">
+              {filteredAnalyses.length} of {validCount}
+            </span>
+          </div>
+        )}
         <div
           className="flex items-center gap-2"
           role="tablist"
@@ -1538,18 +1555,20 @@ export function AnalysisTable({
       </div>
 
       {/* Progress bar */}
-      <div className="mb-4">
-        <div className="h-1.5 rounded-full bg-muted overflow-hidden">
-          <div
-            className="h-full rounded-full bg-gradient-to-r from-emerald-500 to-emerald-400 transition-all duration-700 ease-out"
-            style={{ width: `${progressPct}%` }}
-          />
+      {!hideProgress && (
+        <div className="mb-4">
+          <div className="h-1.5 rounded-full bg-muted overflow-hidden">
+            <div
+              className="h-full rounded-full bg-gradient-to-r from-emerald-500 to-emerald-400 transition-all duration-700 ease-out"
+              style={{ width: `${progressPct}%` }}
+            />
+          </div>
+          <div className="flex justify-between mt-1.5">
+            <span className="text-[11px] text-muted-foreground">Analysis Progress</span>
+            <span className="text-[11px] text-muted-foreground">{progressPct}% complete</span>
+          </div>
         </div>
-        <div className="flex justify-between mt-1.5">
-          <span className="text-[11px] text-muted-foreground">Analysis Progress</span>
-          <span className="text-[11px] text-muted-foreground">{progressPct}% complete</span>
-        </div>
-      </div>
+      )}
 
       {/* Bulk action toolbar — fixed at browser bottom while table is visible */}
       {bulk.selectedUids.size > 0 && isCardVisible && (

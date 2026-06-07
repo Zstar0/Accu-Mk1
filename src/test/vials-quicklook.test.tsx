@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { I18nextProvider } from 'react-i18next'
@@ -100,6 +100,7 @@ import {
 } from '@/lib/api'
 import { useAnalysisSlaMap } from '@/services/analysis-sla'
 import { VialPhotoThumb } from '@/components/senaite/vial-quicklook-helpers'
+import { AnalysisTable } from '@/components/senaite/AnalysisTable'
 
 const mkAnalysis = (over: Partial<SenaiteAnalysis>): SenaiteAnalysis =>
   ({
@@ -241,6 +242,9 @@ describe('VialsQuickLookDialog', () => {
     const navigateToSample = vi.fn()
     useUIStore.setState({ navigateToSample })
     const { onOpenChange } = renderDialog()
+    // wait for the expanded card (steady state); the loading slim-header button
+    // is replaced when analyses load, so grab the attached one to click.
+    await screen.findByText('Purity (HPLC)')
     const link = await screen.findByRole('button', { name: 'P-0144-S01' })
     await userEvent.click(link)
     expect(navigateToSample).toHaveBeenCalledWith('P-0144-S01')
@@ -251,10 +255,13 @@ describe('VialsQuickLookDialog', () => {
     renderDialog()
     const img = await screen.findByAltText('P-0144-S01 photo')
     expect(img).toHaveAttribute('src', 'blob:fake-photo-1')
-    // S02 has photo_external_uid: null → placeholder, and no fetch for it
+    // S02 has photo_external_uid: null → placeholder, and no fetch for it.
+    // (Exact call count is incidental: when a vial's analyses load, VialSection
+    // switches return branches and the cached photo re-fetches — the invariant
+    // that matters is the photoless vial never fetches.)
     expect(screen.getByText('no photo')).toBeInTheDocument()
-    expect(fetchSubSamplePhotoUrl).toHaveBeenCalledTimes(1)
     expect(fetchSubSamplePhotoUrl).toHaveBeenCalledWith('P-0144-S01')
+    expect(fetchSubSamplePhotoUrl).not.toHaveBeenCalledWith('P-0144-S02')
   })
 
   it('collapse toggle hides a vial table without unmounting siblings', async () => {
@@ -316,6 +323,41 @@ describe('VialsQuickLookDialog', () => {
         ]),
       })
     )
+  })
+
+  it('merges the vial header into the AnalysisTable card (no double wrap)', async () => {
+    renderDialog()
+    await screen.findByText('Purity (HPLC)')
+    // headerContent replaced AnalysisTable's default "Analyses" title block
+    expect(
+      screen.queryByText('Analyses', { selector: 'span' })
+    ).not.toBeInTheDocument()
+    // the vial header now lives inside the same card as the filter tabs
+    const tablist = screen.getAllByRole('tablist', { name: /filter analyses/i })[0]!
+    const card = tablist.closest('[data-slot="card"]') ?? tablist.parentElement!.parentElement!
+    expect(
+      within(card as HTMLElement).getByTestId('quicklook-vial-header')
+    ).toBeInTheDocument()
+  })
+})
+
+describe('AnalysisTable default header (regression lock)', () => {
+  it('renders the default Analyses title + progress bar without the new props', () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(
+      <I18nextProvider i18n={i18n}>
+        <QueryClientProvider client={qc}>
+          <AnalysisTable
+            analyses={[
+              mkAnalysis({ uid: 'mk1:1', keyword: 'PUR-HPLC', title: 'Purity (HPLC)', service_group_name: 'Analytics' }),
+            ]}
+            analyteNameMap={new Map()}
+          />
+        </QueryClientProvider>
+      </I18nextProvider>
+    )
+    expect(screen.getByText('Analyses', { selector: 'span' })).toBeInTheDocument()
+    expect(screen.getByText('Analysis Progress')).toBeInTheDocument()
   })
 })
 

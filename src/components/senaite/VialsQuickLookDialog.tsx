@@ -252,75 +252,109 @@ function VialSection({
     }
   }
 
+  // The per-vial header row. Used both as AnalysisTable's headerContent (when
+  // expanded with analyses, so the table's own Card becomes the section) and as
+  // the slim header for the collapsed/loading/error/empty states. Always carries
+  // data-testid="quicklook-vial-header" so tests find one header per vial.
+  const vialHeader = (
+    <div
+      data-testid="quicklook-vial-header"
+      className="flex items-center gap-2 flex-wrap min-w-0"
+    >
+      <Button
+        variant="ghost"
+        size="sm"
+        className="h-6 w-6 p-0"
+        aria-label={isCollapsed ? 'Expand vial' : 'Collapse vial'}
+        onClick={onToggleCollapsed}
+      >
+        {isCollapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
+      </Button>
+      <VialPhotoThumb
+        sampleId={vial.sample_id}
+        hasPhoto={!!vial.photo_external_uid}
+      />
+      <Button
+        variant="link"
+        size="sm"
+        className="h-auto p-0 font-mono text-sm"
+        onClick={onNavigate}
+      >
+        {vial.sample_id}
+      </Button>
+      <span className="text-xs text-muted-foreground">
+        {/* Family-indexed: parent is vial 1, so seq+1 of count+1 (matches the
+            SampleDetails header convention). */}
+        Vial {vial.vial_sequence + 1} of {parent.sub_sample_count + 1}
+      </span>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-auto gap-1 px-1.5 py-0.5"
+            title="Re-assign vial"
+            aria-label="Re-assign vial"
+            disabled={isReassigning}
+          >
+            {vial.assignment_role ? (
+              <RoleHeaderBadge role={vial.assignment_role} />
+            ) : (
+              <span className="inline-block text-[10px] leading-none px-1.5 py-0.5 rounded border uppercase tracking-wide font-medium bg-zinc-500/15 text-zinc-700 border-zinc-500/40 dark:text-zinc-300">
+                Unassigned
+              </span>
+            )}
+            <ChevronDown size={12} />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start">
+          {REASSIGN_OPTIONS.map(opt => (
+            <DropdownMenuItem
+              key={opt.label}
+              onSelect={() => void handleReassign(opt.role)}
+            >
+              {opt.label}
+            </DropdownMenuItem>
+          ))}
+        </DropdownMenuContent>
+      </DropdownMenu>
+      <span className="text-xs text-muted-foreground">
+        {analyses.length} {analyses.length === 1 ? 'analysis' : 'analyses'}
+        {' · received '}
+        {new Date(vial.received_at).toLocaleDateString()}
+      </span>
+    </div>
+  )
+
+  // Expanded with analyses: fold the header into AnalysisTable's own Card so
+  // there's ONE section per vial (no double-wrapping border + table Card).
+  if (!isCollapsed && !query.isLoading && !query.isError && analyses.length > 0) {
+    return (
+      <AnalysisTable
+        analyses={analyses}
+        analyteNameMap={analyteNameMap}
+        primaryAnalysisUids={primaryUids}
+        primaryRole={vial.assignment_role}
+        parentLineStates={parentLineStates}
+        analysisSlaMap={sla.byKeyword}
+        isAnalysisSlaLoading={sla.isLoading}
+        isAnalysisSlaError={sla.isError}
+        isAnalysisSlaPublished={sla.isPublished}
+        analysisSlaPriority={sla.priority}
+        headerContent={vialHeader}
+        hideProgress
+        onResultSaved={onResultSaved}
+        onMethodInstrumentSaved={onMethodInstrumentSaved}
+        onTransitionComplete={onTransitionComplete}
+      />
+    )
+  }
+
+  // Collapsed / loading / error / empty: slim wrapper keeps the header visible
+  // and toggleable without mounting the table.
   return (
     <div className="rounded-md border">
-      <div
-        data-testid="quicklook-vial-header"
-        className="flex items-center gap-2 px-3 py-2 bg-muted/40"
-      >
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-6 w-6 p-0"
-          aria-label={isCollapsed ? 'Expand vial' : 'Collapse vial'}
-          onClick={onToggleCollapsed}
-        >
-          {isCollapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
-        </Button>
-        <VialPhotoThumb
-          sampleId={vial.sample_id}
-          hasPhoto={!!vial.photo_external_uid}
-        />
-        <Button
-          variant="link"
-          size="sm"
-          className="h-auto p-0 font-mono text-sm"
-          onClick={onNavigate}
-        >
-          {vial.sample_id}
-        </Button>
-        <span className="text-xs text-muted-foreground">
-          {/* Family-indexed: parent is vial 1, so seq+1 of count+1 (matches the
-              SampleDetails header convention). */}
-          Vial {vial.vial_sequence + 1} of {parent.sub_sample_count + 1}
-        </span>
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-auto gap-1 px-1.5 py-0.5"
-              title="Re-assign vial"
-              aria-label="Re-assign vial"
-              disabled={isReassigning}
-            >
-              {vial.assignment_role ? (
-                <RoleHeaderBadge role={vial.assignment_role} />
-              ) : (
-                <span className="inline-block text-[10px] leading-none px-1.5 py-0.5 rounded border uppercase tracking-wide font-medium bg-zinc-500/15 text-zinc-700 border-zinc-500/40 dark:text-zinc-300">
-                  Unassigned
-                </span>
-              )}
-              <ChevronDown size={12} />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="start">
-            {REASSIGN_OPTIONS.map(opt => (
-              <DropdownMenuItem
-                key={opt.label}
-                onSelect={() => void handleReassign(opt.role)}
-              >
-                {opt.label}
-              </DropdownMenuItem>
-            ))}
-          </DropdownMenuContent>
-        </DropdownMenu>
-        <span className="text-xs text-muted-foreground ml-auto">
-          {analyses.length} {analyses.length === 1 ? 'analysis' : 'analyses'}
-          {' · received '}
-          {new Date(vial.received_at).toLocaleDateString()}
-        </span>
-      </div>
+      <div className="px-3 py-2 bg-muted/40">{vialHeader}</div>
       {!isCollapsed && (
         <div className="p-2">
           {query.isLoading ? (
@@ -334,26 +368,10 @@ function VialSection({
                 Retry
               </Button>
             </div>
-          ) : analyses.length === 0 ? (
+          ) : (
             <p className="px-2 py-3 text-sm text-muted-foreground">
               No analyses assigned
             </p>
-          ) : (
-            <AnalysisTable
-              analyses={analyses}
-              analyteNameMap={analyteNameMap}
-              primaryAnalysisUids={primaryUids}
-              primaryRole={vial.assignment_role}
-              parentLineStates={parentLineStates}
-              analysisSlaMap={sla.byKeyword}
-              isAnalysisSlaLoading={sla.isLoading}
-              isAnalysisSlaError={sla.isError}
-              isAnalysisSlaPublished={sla.isPublished}
-              analysisSlaPriority={sla.priority}
-              onResultSaved={onResultSaved}
-              onMethodInstrumentSaved={onMethodInstrumentSaved}
-              onTransitionComplete={onTransitionComplete}
-            />
           )}
         </div>
       )}
