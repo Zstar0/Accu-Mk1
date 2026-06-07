@@ -253,13 +253,18 @@ describe('VialsQuickLookDialog', () => {
 
   it('shows the photo thumb for vials with a photo, placeholder otherwise', async () => {
     renderDialog()
+    // wait for steady state (both expanded cards mounted) so the transient
+    // loading slim-headers have unmounted — otherwise a vial's header briefly
+    // exists twice during the load→loaded branch switch (v1.3 remount).
+    await screen.findByText('Purity (HPLC)')
+    await screen.findByText('Endotoxin')
     const img = await screen.findByAltText('P-0144-S01 photo')
     expect(img).toHaveAttribute('src', 'blob:fake-photo-1')
     // S02 has photo_external_uid: null → placeholder, and no fetch for it.
     // (Exact call count is incidental: when a vial's analyses load, VialSection
     // switches return branches and the cached photo re-fetches — the invariant
     // that matters is the photoless vial never fetches.)
-    expect(screen.getByText('no photo')).toBeInTheDocument()
+    expect(screen.getAllByText('no photo').length).toBeGreaterThan(0)
     expect(fetchSubSamplePhotoUrl).toHaveBeenCalledWith('P-0144-S01')
     expect(fetchSubSamplePhotoUrl).not.toHaveBeenCalledWith('P-0144-S02')
   })
@@ -367,22 +372,29 @@ describe('VialPhotoThumb', () => {
     vi.mocked(fetchSubSamplePhotoUrl).mockResolvedValue('blob:z')
   })
 
-  it('grows the single image in place on hover (no duplicate preview)', async () => {
-    render(<VialPhotoThumb sampleId="X" hasPhoto hoverZoom />)
-    const img = await screen.findByAltText('X photo')
-    expect(img).toHaveAttribute('src', 'blob:z')
-    // no separate (enlarged) node anymore — one img only
+  it('uses an always-absolute aria-hidden overlay for hover zoom (no layout shift)', async () => {
+    const { container } = render(<VialPhotoThumb sampleId="X" hasPhoto hoverZoom />)
+    const base = await screen.findByAltText('X photo')
+    expect(base).toHaveAttribute('src', 'blob:z')
+    // base thumb stays static/in-flow: no hover-expansion, no transition
+    expect(base).not.toHaveClass('group-hover:absolute')
+    expect(base).not.toHaveClass('transition-all')
+    // no '(enlarged)' accessible node anywhere
     expect(screen.queryByAltText('X photo (enlarged)')).not.toBeInTheDocument()
-    // the same img carries the hover-expansion variants (jsdom can't :hover)
-    expect(img).toHaveClass('group-hover:absolute')
-    expect(img).toHaveClass('group-hover:w-72')
-    expect(img).toHaveClass('group-hover:object-contain')
+    // the overlay is aria-hidden (empty alt), always absolute + pointer-events-none,
+    // hidden at rest, revealed on group-hover
+    const overlay = container.querySelector('img[aria-hidden="true"]')
+    expect(overlay).not.toBeNull()
+    expect(overlay).toHaveClass('absolute')
+    expect(overlay).toHaveClass('pointer-events-none')
+    expect(overlay).toHaveClass('opacity-0')
+    expect(overlay).toHaveClass('group-hover:opacity-100')
   })
 
-  it('does not apply hover-expansion classes when hoverZoom is false', async () => {
-    render(<VialPhotoThumb sampleId="X" hasPhoto />)
-    const img = await screen.findByAltText('X photo')
-    expect(img).not.toHaveClass('group-hover:absolute')
+  it('renders no overlay when hoverZoom is false', async () => {
+    const { container } = render(<VialPhotoThumb sampleId="X" hasPhoto />)
+    await screen.findByAltText('X photo')
+    expect(container.querySelector('img[aria-hidden="true"]')).toBeNull()
     expect(screen.queryByAltText('X photo (enlarged)')).not.toBeInTheDocument()
   })
 
