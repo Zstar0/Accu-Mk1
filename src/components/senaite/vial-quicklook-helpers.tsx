@@ -14,9 +14,10 @@ import type { SenaiteAnalysis } from '@/lib/api'
  * module-level cached, so repeated opens are free). Shared by the Quick Look
  * dialog and the SampleDetails sticky header.
  *
- * `hoverZoom` adds an enlarged preview that appears on hover (CSS group-hover),
- * absolutely positioned and right-anchored so it doesn't clip off the right
- * edge of a header row.
+ * `hoverZoom`: on hover the single thumbnail image grows in place — it goes
+ * absolute and anchored top-right (so it grows leftward/down and doesn't clip
+ * off the right edge of a header row). There is no separate preview node; the
+ * same <img> expands via group-hover variants.
  *
  * `hideWhenEmpty` renders nothing (no placeholder box) until a photo URL has
  * actually loaded — for surfaces like the sticky header where an optimistic
@@ -67,22 +68,19 @@ export function VialPhotoThumb({
       )}
     >
       {url ? (
-        <>
-          <img
-            src={url}
-            alt={`${sampleId} photo`}
-            className="w-full h-full object-cover rounded"
-          />
-          {hoverZoom && (
-            <div className="absolute right-0 top-full mt-2 z-50 hidden group-hover:block">
-              <img
-                src={url}
-                alt={`${sampleId} photo (enlarged)`}
-                className="w-72 max-h-96 object-contain rounded-lg border shadow-xl bg-background"
-              />
-            </div>
+        <img
+          src={url}
+          alt={`${sampleId} photo`}
+          className={cn(
+            'w-full h-full object-cover rounded',
+            // On hover, the same image grows in place: go absolute, anchor
+            // top-right, and expand. group-hover variants carry higher
+            // specificity than the base utilities (the `.group:hover` ancestor),
+            // so each same-property override wins while hovered.
+            hoverZoom &&
+              'transition-all duration-150 group-hover:absolute group-hover:top-0 group-hover:right-0 group-hover:w-72 group-hover:max-w-[70vw] group-hover:h-auto group-hover:max-h-96 group-hover:object-contain group-hover:z-50 group-hover:rounded-lg group-hover:border group-hover:shadow-xl group-hover:bg-background',
           )}
-        </>
+        />
       ) : (
         <span className="text-[8px] text-muted-foreground">no photo</span>
       )}

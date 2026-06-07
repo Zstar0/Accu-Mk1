@@ -367,21 +367,22 @@ describe('VialPhotoThumb', () => {
     vi.mocked(fetchSubSamplePhotoUrl).mockResolvedValue('blob:z')
   })
 
-  it('renders a hover-zoom enlarged preview when hoverZoom and a photo loads', async () => {
+  it('grows the single image in place on hover (no duplicate preview)', async () => {
     render(<VialPhotoThumb sampleId="X" hasPhoto hoverZoom />)
-    // base thumb image
-    expect(await screen.findByAltText('X photo')).toHaveAttribute('src', 'blob:z')
-    // enlarged preview node exists, hidden until group-hover (jsdom can't :hover)
-    const preview = await screen.findByAltText('X photo (enlarged)')
-    expect(preview).toHaveAttribute('src', 'blob:z')
-    const wrapper = preview.parentElement!
-    expect(wrapper).toHaveClass('hidden')
-    expect(wrapper).toHaveClass('group-hover:block')
+    const img = await screen.findByAltText('X photo')
+    expect(img).toHaveAttribute('src', 'blob:z')
+    // no separate (enlarged) node anymore — one img only
+    expect(screen.queryByAltText('X photo (enlarged)')).not.toBeInTheDocument()
+    // the same img carries the hover-expansion variants (jsdom can't :hover)
+    expect(img).toHaveClass('group-hover:absolute')
+    expect(img).toHaveClass('group-hover:w-72')
+    expect(img).toHaveClass('group-hover:object-contain')
   })
 
-  it('renders no enlarged preview when hoverZoom is false', async () => {
+  it('does not apply hover-expansion classes when hoverZoom is false', async () => {
     render(<VialPhotoThumb sampleId="X" hasPhoto />)
-    expect(await screen.findByAltText('X photo')).toBeInTheDocument()
+    const img = await screen.findByAltText('X photo')
+    expect(img).not.toHaveClass('group-hover:absolute')
     expect(screen.queryByAltText('X photo (enlarged)')).not.toBeInTheDocument()
   })
 
