@@ -135,6 +135,23 @@ In the Analyses section header row next to Manage Analyses
    family-indexed `Vial {vial_sequence + 1} of {sub_sample_count + 1}` (parent is
    vial 1), matching SampleDetails' header lines (~2643-2647, ~2664).
 
+## v1.3 — UAT follow-up round 3 (user request, 2026-06-06)
+
+**Merge the per-vial wrapper into AnalysisTable's card** — the dialog double-wraps
+(VialSection border + AnalysisTable's own Card with "ANALYSES" heading + progress
+block), wasting vertical space. Additive change:
+
+- `AnalysisTable` gains optional `headerContent?: ReactNode` (replaces the default
+  icon/"Analyses"/count title block on the header row's LEFT; filter tabs stay on
+  the right) and `hideProgress?: boolean` (drops the progress-bar block). Defaults
+  preserve current rendering everywhere else.
+- The dialog's expanded vial sections render `AnalysisTable` directly (no outer
+  border div) with `headerContent` = the vial header (collapse chevron, photo, ID,
+  role dropdown, vial count, analyses·received) and `hideProgress` (status tabs +
+  counts already convey state). Collapsed / loading / error / empty states keep the
+  slim standalone header row as today.
+- The `data-testid="quicklook-vial-header"` stays on the header row in both states.
+
 ## Out of scope (explicit)
 
 - No backend changes (Approach B parked; revisit only if vial counts grow).
