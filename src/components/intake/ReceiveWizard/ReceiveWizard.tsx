@@ -83,7 +83,16 @@ export function ReceiveWizard({ parent, onClose, initialPhase = 'capture' }: Pro
 
   const phaseTabs = (
     <div className="px-6 py-2 border-b bg-muted/10">
-      <Tabs value={phase} onValueChange={(v) => setPhase(v as Phase)}>
+      {/* activationMode="manual": the Radix Dialog autofocuses the first
+          focusable element on open — the first tab trigger — and automatic
+          activation would select it on focus, stomping initialPhase (the
+          sample-details entry opens on "details"). Manual = switch on
+          click/Enter only. */}
+      <Tabs
+        value={phase}
+        onValueChange={(v) => setPhase(v as Phase)}
+        activationMode="manual"
+      >
         <TabsList>
           <TabsTrigger value="capture">Vial Management</TabsTrigger>
           <TabsTrigger value="assign" disabled={!assignmentEnabled}>Assignment</TabsTrigger>
