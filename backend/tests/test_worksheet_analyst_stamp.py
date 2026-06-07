@@ -272,3 +272,12 @@ def test_senaite_shape_surfaces_analyst_email(db_session):
     by_kw = {s.keyword: s for s in shaped}
     assert by_kw["K1"].analyst == "tech@lab.test"
     assert by_kw["K2"].analyst is None
+
+
+def test_hooks_import(db_session):
+    """The main.py hooks import the module lazily — lock the import path."""
+    from lims_analyses.worksheet_analyst import (  # noqa: F401
+        clear_for_item,
+        restamp_for_worksheet,
+        stamp_for_item,
+    )

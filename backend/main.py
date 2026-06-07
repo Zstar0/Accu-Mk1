@@ -14348,6 +14348,11 @@ async def update_worksheet(
         ).scalars().all()
         for item in items:
             item.assigned_analyst_id = data.assigned_analyst
+        # Analyst-from-worksheet: re-stamp vial-tier analyses to the new analyst.
+        from lims_analyses.worksheet_analyst import restamp_for_worksheet
+        restamp_for_worksheet(
+            db, worksheet=ws, acting_user_id=getattr(_current_user, "id", None)
+        )
     if data.notes is not None:
         ws.notes = data.notes
 
@@ -14445,6 +14450,19 @@ async def add_group_to_worksheet(
         analyses_json=json.dumps([a.model_dump() for a in data.analyses]) if data.analyses else None,
     )
     db.add(item)
+
+    # Analyst-from-worksheet (spec 2026-06-07): stamp vial-tier analyses.
+    # No-ops for parent-AR uids (resolver matches lims_sub_samples only).
+    from lims_analyses.worksheet_analyst import stamp_for_item
+    stamp_for_item(
+        db,
+        sample_uid=data.sample_uid,
+        service_group_id=data.service_group_id,
+        analyst_user_id=analyst_id,
+        acting_user_id=getattr(_current_user, "id", None),
+        worksheet_id=worksheet_id,
+        worksheet_title=ws.title,
+    )
 
     # Remove staging item if picked up
     if staging_item:
@@ -14553,6 +14571,21 @@ async def delete_worksheet(
     if not ws:
         raise HTTPException(404, "Worksheet not found")
 
+    # Analyst-from-worksheet: deleting a worksheet returns analyses to the
+    # inbox — clear their stamps, like per-item removal.
+    from lims_analyses.worksheet_analyst import clear_for_item
+    acting_id = getattr(_current_user, "id", None)
+    ws_items = db.execute(
+        select(WorksheetItem).where(WorksheetItem.worksheet_id == worksheet_id)
+    ).scalars().all()
+    for ws_item in ws_items:
+        clear_for_item(
+            db, sample_uid=ws_item.sample_uid,
+            service_group_id=ws_item.service_group_id,
+            acting_user_id=acting_id, worksheet_id=worksheet_id,
+            worksheet_title=ws.title,
+        )
+
     # Delete items first (CASCADE should handle it, but be explicit)
     db.execute(
         WorksheetItem.__table__.delete().where(WorksheetItem.worksheet_id == worksheet_id)
@@ -14582,6 +14615,16 @@ async def remove_worksheet_item(
     ).scalar_one_or_none()
     if not item:
         raise HTTPException(404, "Item not found")
+
+    # Analyst-from-worksheet: clear vial-tier stamps; analysis returns to inbox.
+    from lims_analyses.worksheet_analyst import clear_for_item
+    clear_for_item(
+        db,
+        sample_uid=sample_uid,
+        service_group_id=gid,
+        acting_user_id=getattr(_current_user, "id", None),
+        worksheet_id=worksheet_id,
+    )
 
     db.delete(item)
     db.commit()
@@ -14637,7 +14680,23 @@ async def reassign_worksheet_item(
     ).scalar_one_or_none()
     if not target:
         raise HTTPException(404, "Target worksheet not found or not open")
+    # Analyst-from-worksheet: reassign = remove from source + add to target.
+    from lims_analyses.worksheet_analyst import clear_for_item, stamp_for_item
+    acting_id = getattr(_current_user, "id", None)
+    clear_for_item(
+        db, sample_uid=sample_uid, service_group_id=gid,
+        acting_user_id=acting_id, worksheet_id=worksheet_id,
+    )
     item.worksheet_id = data.target_worksheet_id
+    # Target's worksheet-level analyst wins; else keep the item's own.
+    if target.assigned_analyst_id:
+        item.assigned_analyst_id = target.assigned_analyst_id
+    stamp_for_item(
+        db, sample_uid=sample_uid, service_group_id=gid,
+        analyst_user_id=target.assigned_analyst_id or item.assigned_analyst_id,
+        acting_user_id=acting_id,
+        worksheet_id=target.id, worksheet_title=target.title,
+    )
     db.commit()
     return {"status": "reassigned", "target_worksheet_id": data.target_worksheet_id}
 
