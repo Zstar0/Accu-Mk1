@@ -14341,13 +14341,16 @@ async def update_worksheet(
     if data.title is not None:
         ws.title = data.title
     if data.assigned_analyst is not None:
-        ws.assigned_analyst_id = data.assigned_analyst
+        # null = not-provided (PATCH semantics, handled by the `is not None`
+        # gate); a FE-sent 0 means UNASSIGN — coerce to None so we clear the
+        # stamp rather than FK-exploding on user_id=0.
+        ws.assigned_analyst_id = data.assigned_analyst or None
         # Also reassign all items in this worksheet to the new analyst
         items = db.execute(
             select(WorksheetItem).where(WorksheetItem.worksheet_id == worksheet_id)
         ).scalars().all()
         for item in items:
-            item.assigned_analyst_id = data.assigned_analyst
+            item.assigned_analyst_id = data.assigned_analyst or None
         # Analyst-from-worksheet: re-stamp vial-tier analyses to the new analyst.
         from lims_analyses.worksheet_analyst import restamp_for_worksheet
         restamp_for_worksheet(
@@ -14574,17 +14577,25 @@ async def delete_worksheet(
     # Analyst-from-worksheet: deleting a worksheet returns analyses to the
     # inbox — clear their stamps, like per-item removal.
     from lims_analyses.worksheet_analyst import clear_for_item
+    import logging as _logging
     acting_id = getattr(_current_user, "id", None)
     ws_items = db.execute(
         select(WorksheetItem).where(WorksheetItem.worksheet_id == worksheet_id)
     ).scalars().all()
     for ws_item in ws_items:
-        clear_for_item(
-            db, sample_uid=ws_item.sample_uid,
-            service_group_id=ws_item.service_group_id,
-            acting_user_id=acting_id, worksheet_id=worksheet_id,
-            worksheet_title=ws.title,
-        )
+        try:
+            clear_for_item(
+                db, sample_uid=ws_item.sample_uid,
+                service_group_id=ws_item.service_group_id,
+                acting_user_id=acting_id, worksheet_id=worksheet_id,
+                worksheet_title=ws.title,
+            )
+        except Exception:
+            # Stamps are best-effort relative to worksheet deletion (module
+            # caller contract) — the delete must complete regardless.
+            _logging.getLogger(__name__).warning(
+                "analyst stamp clear failed during worksheet delete", exc_info=True
+            )
 
     # Delete items first (CASCADE should handle it, but be explicit)
     db.execute(

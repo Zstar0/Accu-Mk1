@@ -281,3 +281,40 @@ def test_hooks_import(db_session):
         restamp_for_worksheet,
         stamp_for_item,
     )
+
+
+def test_restamp_unassign_clears_stamp(db_session):
+    """Unassigning the worksheet analyst (effective None) clears the vial stamp
+    and emits a worksheet_analyst_changed event with to_email None — the
+    semantics update_worksheet's `0 → None` coercion now relies on."""
+    from models import Worksheet, WorksheetItem
+
+    parent = _mk_parent(db_session)
+    sub = _mk_sub(db_session, parent)
+    g = _mk_group(db_session, "Analytics")
+    a = _mk_analysis(db_session, sub, _mk_service(db_session, "K1", "T1", g))
+    tech = _mk_user(db_session, "tech@lab.test")
+    a.analyst_user_id = tech.id
+
+    ws = Worksheet(title="Bench", assigned_analyst_id=tech.id)
+    db_session.add(ws); db_session.flush()
+    item = WorksheetItem(
+        worksheet_id=ws.id, sample_uid="mk1://sub-1", sample_id=sub.sample_id,
+        service_group_id=g.id, assigned_analyst_id=tech.id,
+    )
+    db_session.add(item)
+    db_session.flush()
+
+    # Simulate the endpoint's unassign: both worksheet- and item-level → None.
+    ws.assigned_analyst_id = None
+    item.assigned_analyst_id = None
+    db_session.flush()
+
+    n = restamp_for_worksheet(db_session, worksheet=ws, acting_user_id=tech.id)
+    assert n == 1
+    db_session.refresh(a)
+    assert a.analyst_user_id is None
+    evs = [e for e in _events(db_session, sub) if e.event == "worksheet_analyst_changed"]
+    assert len(evs) == 1
+    assert evs[0].details["to_email"] is None
+    assert evs[0].details["from_email"] == "tech@lab.test"
