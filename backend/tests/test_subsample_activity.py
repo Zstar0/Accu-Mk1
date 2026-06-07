@@ -490,3 +490,34 @@ def test_activity_endpoint_promotion_label(activity_client):
     promos = [e for e in events if e["event"] == "analysis_promoted_to_parent"]
     assert len(promos) == 1
     assert promos[0]["label"] == "Promoted HPLC-PUR to parent"
+
+
+def test_activity_endpoint_worksheet_assigned_label(activity_client):
+    """A worksheet_assigned event (written by stamp_for_item) surfaces in the
+    activity endpoint with label='Added to worksheet ...'."""
+    from lims_analyses.worksheet_analyst import stamp_for_item
+
+    db = activity_client._test_session
+    sub, user = _seed_activity_scenario(db)
+
+    # The seed gives the sub external_lims_uid="SENAITE-SUB". Stamp all live
+    # analyses on the vial (group None) — writes one worksheet_assigned event.
+    stamp_for_item(
+        db,
+        sample_uid=sub.external_lims_uid,
+        service_group_id=None,
+        analyst_user_id=user.id,
+        acting_user_id=user.id,
+        worksheet_id=42,
+        worksheet_title="HPLC Bench A",
+    )
+    db.commit()
+
+    resp = activity_client.get("/samples/P-0144-S01/activity")
+    assert resp.status_code == 200
+    events = resp.json()["events"]
+
+    assigned = [e for e in events if e["event"] == "worksheet_assigned"]
+    assert len(assigned) == 1
+    assert assigned[0]["label"].startswith("Added to worksheet")
+    assert "HPLC Bench A" in assigned[0]["label"]

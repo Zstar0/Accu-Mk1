@@ -1079,6 +1079,21 @@ async def get_sample_activity(
             elif se.event == "analysis_removed":
                 d = se.details or {}
                 label = f"Analysis removed: {d.get('keyword', '?')}"
+            elif se.event == "worksheet_assigned":
+                d = se.details or {}
+                ws_label = d.get("worksheet_title") or f"#{d.get('worksheet_id')}"
+                analyst = d.get("analyst_email") or "unassigned"
+                label = f"Added to worksheet {ws_label} — analyst {analyst}"
+            elif se.event == "worksheet_removed":
+                d = se.details or {}
+                ws_label = d.get("worksheet_title") or f"#{d.get('worksheet_id')}"
+                label = f"Removed from worksheet {ws_label}"
+            elif se.event == "worksheet_analyst_changed":
+                d = se.details or {}
+                label = (
+                    f"Worksheet analyst: {d.get('from_email') or '—'} → "
+                    f"{d.get('to_email') or '—'}"
+                )
             else:
                 label = se.event
 
