@@ -161,6 +161,25 @@ img becomes absolutely positioned (anchored top-right so it grows leftward/down)
 ~w-72/max-h-96, `object-contain`, elevated z, with a short transition. No duplicate
 img node.
 
+## v1.5 — UAT follow-up round 5 (user report, 2026-06-06)
+
+**Hover zoom flickers on right-exit and jerks the header height.** Root cause of
+both: v1.4 transitions ONE img between in-flow and absolute. `position` is not
+transitionable — it snaps — so on hover-out the still-large image re-enters layout
+flow for the shrink transition (header balloons + snaps back), and on right-exit
+that in-flow large image lands back under the cursor → re-hover loop (flashing).
+
+Fix (supersedes v1.4's single-node constraint — the constraint that matters is the
+VISUAL, one image growing, not the node count):
+- Base thumb img: static, in flow, never changes — container size is constant.
+- Enlarged overlay img: ALWAYS `absolute top-0 right-0` (never in flow → zero
+  layout shift), `pointer-events-none` (can never capture hover → loop impossible
+  by construction), `aria-hidden` + empty alt (no duplicate a11y node), animates
+  ONLY `opacity-0 scale-50 origin-top-right` → `group-hover:opacity-100
+  group-hover:scale-100` with a short transition (GPU-composited, smooth).
+- Hover trigger region is exactly the small thumb. The overlay covers the thumb and
+  scales from its top-right corner, so it reads as the image itself growing.
+
 ## Out of scope (explicit)
 
 - No backend changes (Approach B parked; revisit only if vial counts grow).
