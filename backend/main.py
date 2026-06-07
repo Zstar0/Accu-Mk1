@@ -14367,10 +14367,17 @@ async def update_worksheet(
         for item in items:
             item.assigned_analyst_id = data.assigned_analyst or None
         # Analyst-from-worksheet: re-stamp vial-tier analyses to the new analyst.
+        # Best-effort: stamping failures must not break the worksheet update.
         from lims_analyses.worksheet_analyst import restamp_for_worksheet
-        restamp_for_worksheet(
-            db, worksheet=ws, acting_user_id=getattr(_current_user, "id", None)
-        )
+        import logging as _logging
+        try:
+            restamp_for_worksheet(
+                db, worksheet=ws, acting_user_id=getattr(_current_user, "id", None)
+            )
+        except Exception:
+            _logging.getLogger(__name__).warning(
+                "analyst restamp failed during worksheet update", exc_info=True
+            )
     if data.notes is not None:
         ws.notes = data.notes
 
@@ -14471,16 +14478,23 @@ async def add_group_to_worksheet(
 
     # Analyst-from-worksheet (spec 2026-06-07): stamp vial-tier analyses.
     # No-ops for parent-AR uids (resolver matches lims_sub_samples only).
+    # Best-effort: stamping failures must not break the worksheet operation.
     from lims_analyses.worksheet_analyst import stamp_for_item
-    stamp_for_item(
-        db,
-        sample_uid=data.sample_uid,
-        service_group_id=data.service_group_id,
-        analyst_user_id=analyst_id,
-        acting_user_id=getattr(_current_user, "id", None),
-        worksheet_id=worksheet_id,
-        worksheet_title=ws.title,
-    )
+    import logging as _logging
+    try:
+        stamp_for_item(
+            db,
+            sample_uid=data.sample_uid,
+            service_group_id=data.service_group_id,
+            analyst_user_id=analyst_id,
+            acting_user_id=getattr(_current_user, "id", None),
+            worksheet_id=worksheet_id,
+            worksheet_title=ws.title,
+        )
+    except Exception:
+        _logging.getLogger(__name__).warning(
+            "analyst stamp failed during add-group-to-worksheet", exc_info=True
+        )
 
     # Remove staging item if picked up
     if staging_item:
@@ -14565,6 +14579,25 @@ async def create_worksheet_from_drop(
     )
     db.add(item)
 
+    # Analyst-from-worksheet: stamp vial-tier analyses (analyst comes from the
+    # staging pre-assignment via item.assigned_analyst_id). Best-effort.
+    from lims_analyses.worksheet_analyst import stamp_for_item
+    import logging as _logging
+    try:
+        stamp_for_item(
+            db,
+            sample_uid=data.sample_uid,
+            service_group_id=gid,
+            analyst_user_id=item.assigned_analyst_id,
+            acting_user_id=getattr(current_user, "id", None),
+            worksheet_id=ws.id,
+            worksheet_title=ws.title,
+        )
+    except Exception:
+        _logging.getLogger(__name__).warning(
+            "analyst stamp failed during create-worksheet-from-drop", exc_info=True
+        )
+
     if staging_item:
         db.delete(staging_item)
 
@@ -14643,14 +14676,25 @@ async def remove_worksheet_item(
         raise HTTPException(404, "Item not found")
 
     # Analyst-from-worksheet: clear vial-tier stamps; analysis returns to inbox.
+    # Best-effort: stamping failures must not break item removal.
     from lims_analyses.worksheet_analyst import clear_for_item
-    clear_for_item(
-        db,
-        sample_uid=sample_uid,
-        service_group_id=gid,
-        acting_user_id=getattr(_current_user, "id", None),
-        worksheet_id=worksheet_id,
-    )
+    import logging as _logging
+    ws_title = db.execute(
+        select(Worksheet.title).where(Worksheet.id == worksheet_id)
+    ).scalar_one_or_none()
+    try:
+        clear_for_item(
+            db,
+            sample_uid=sample_uid,
+            service_group_id=gid,
+            acting_user_id=getattr(_current_user, "id", None),
+            worksheet_id=worksheet_id,
+            worksheet_title=ws_title,
+        )
+    except Exception:
+        _logging.getLogger(__name__).warning(
+            "analyst stamp clear failed during remove-worksheet-item", exc_info=True
+        )
 
     db.delete(item)
     db.commit()
@@ -14707,22 +14751,35 @@ async def reassign_worksheet_item(
     if not target:
         raise HTTPException(404, "Target worksheet not found or not open")
     # Analyst-from-worksheet: reassign = remove from source + add to target.
+    # Best-effort: stamping failures must not break the reassign. The
+    # item.worksheet_id move stays OUTSIDE the try so the reassign always
+    # happens; only the stamp side-effects are guarded.
     from lims_analyses.worksheet_analyst import clear_for_item, stamp_for_item
+    import logging as _logging
     acting_id = getattr(_current_user, "id", None)
-    clear_for_item(
-        db, sample_uid=sample_uid, service_group_id=gid,
-        acting_user_id=acting_id, worksheet_id=worksheet_id,
-    )
+    src_ws_title = db.execute(
+        select(Worksheet.title).where(Worksheet.id == worksheet_id)
+    ).scalar_one_or_none()
     item.worksheet_id = data.target_worksheet_id
     # Target's worksheet-level analyst wins; else keep the item's own.
     if target.assigned_analyst_id:
         item.assigned_analyst_id = target.assigned_analyst_id
-    stamp_for_item(
-        db, sample_uid=sample_uid, service_group_id=gid,
-        analyst_user_id=target.assigned_analyst_id or item.assigned_analyst_id,
-        acting_user_id=acting_id,
-        worksheet_id=target.id, worksheet_title=target.title,
-    )
+    try:
+        clear_for_item(
+            db, sample_uid=sample_uid, service_group_id=gid,
+            acting_user_id=acting_id, worksheet_id=worksheet_id,
+            worksheet_title=src_ws_title,
+        )
+        stamp_for_item(
+            db, sample_uid=sample_uid, service_group_id=gid,
+            analyst_user_id=target.assigned_analyst_id or item.assigned_analyst_id,
+            acting_user_id=acting_id,
+            worksheet_id=target.id, worksheet_title=target.title,
+        )
+    except Exception:
+        _logging.getLogger(__name__).warning(
+            "analyst stamp failed during reassign-worksheet-item", exc_info=True
+        )
     db.commit()
     return {"status": "reassigned", "target_worksheet_id": data.target_worksheet_id}
 
