@@ -14,10 +14,11 @@ import type { SenaiteAnalysis } from '@/lib/api'
  * module-level cached, so repeated opens are free). Shared by the Quick Look
  * dialog and the SampleDetails sticky header.
  *
- * `hoverZoom`: on hover the single thumbnail image grows in place — it goes
- * absolute and anchored top-right (so it grows leftward/down and doesn't clip
- * off the right edge of a header row). There is no separate preview node; the
- * same <img> expands via group-hover variants.
+ * `hoverZoom`: on hover the thumbnail appears to grow in place. The base thumb
+ * stays static and in flow (constant container size); a second, ALWAYS-absolute
+ * overlay img (pointer-events-none, aria-hidden) fades + scales up from the
+ * top-right corner on group-hover. Transitioning only opacity/transform (not
+ * `position`, which snaps) avoids the v1.4 layout-shift + right-exit flicker.
  *
  * `hideWhenEmpty` renders nothing (no placeholder box) until a photo URL has
  * actually loaded — for surfaces like the sticky header where an optimistic
@@ -68,19 +69,28 @@ export function VialPhotoThumb({
       )}
     >
       {url ? (
-        <img
-          src={url}
-          alt={`${sampleId} photo`}
-          className={cn(
-            'w-full h-full object-cover rounded',
-            // On hover, the same image grows in place: go absolute, anchor
-            // top-right, and expand. group-hover variants carry higher
-            // specificity than the base utilities (the `.group:hover` ancestor),
-            // so each same-property override wins while hovered.
-            hoverZoom &&
-              'transition-all duration-150 group-hover:absolute group-hover:top-0 group-hover:right-0 group-hover:w-72 group-hover:max-w-[70vw] group-hover:h-auto group-hover:max-h-96 group-hover:object-contain group-hover:z-50 group-hover:rounded-lg group-hover:border group-hover:shadow-xl group-hover:bg-background',
+        <>
+          {/* Base thumb: static, in flow, never changes — container size is
+              constant, so the header never shifts. */}
+          <img
+            src={url}
+            alt={`${sampleId} photo`}
+            className="w-full h-full object-cover rounded"
+          />
+          {/* Enlarged overlay: ALWAYS absolute (never in flow → zero layout
+              shift), pointer-events-none (can never capture hover → no flicker
+              loop), aria-hidden + empty alt (no duplicate a11y node). Animates
+              only opacity+transform (GPU-composited, smooth), scaling from the
+              top-right corner so it reads as the thumb itself growing. */}
+          {hoverZoom && (
+            <img
+              src={url}
+              alt=""
+              aria-hidden
+              className="pointer-events-none absolute top-0 right-0 z-50 w-[360px] max-w-[70vw] max-h-[480px] object-contain rounded-lg border shadow-xl bg-background opacity-0 scale-50 origin-top-right transition-[opacity,transform] duration-150 group-hover:opacity-100 group-hover:scale-100"
+            />
           )}
-        />
+        </>
       ) : (
         <span className="text-[8px] text-muted-foreground">no photo</span>
       )}
