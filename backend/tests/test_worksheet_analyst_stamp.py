@@ -251,3 +251,24 @@ def test_restamp_falls_back_to_item_analyst(db_session):
     evs = [e for e in _events(db_session, sub) if e.event == "worksheet_analyst_changed"]
     assert len(evs) == 1
     assert evs[0].details["to_email"] == "tech@lab.test"
+
+
+def test_senaite_shape_surfaces_analyst_email(db_session):
+    """Serializer returns the analyst's email for stamped rows, None otherwise."""
+    from lims_analyses.service import list_analyses_in_senaite_shape
+
+    parent = _mk_parent(db_session)
+    sub = _mk_sub(db_session, parent)
+    g = _mk_group(db_session, "Analytics")
+    a1 = _mk_analysis(db_session, sub, _mk_service(db_session, "K1", "T1", g))
+    a2 = _mk_analysis(db_session, sub, _mk_service(db_session, "K2", "T2", g))
+    tech = _mk_user(db_session, "tech@lab.test")
+    a1.analyst_user_id = tech.id
+    db_session.flush()
+
+    shaped = list_analyses_in_senaite_shape(
+        db_session, host_kind="sub_sample", host_pk=sub.id
+    )
+    by_kw = {s.keyword: s for s in shaped}
+    assert by_kw["K1"].analyst == "tech@lab.test"
+    assert by_kw["K2"].analyst is None

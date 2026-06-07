@@ -958,6 +958,17 @@ def list_analyses_in_senaite_shape(
         for i in db.execute(select(Instrument)).scalars().all()
     }
 
+    # Analyst display: User has no name column — surface the email (matches
+    # the activity log's by-<email> convention).
+    from models import User
+    analyst_ids = {r.analyst_user_id for r in rows if r.analyst_user_id}
+    analyst_email_by_id = {}
+    if analyst_ids:
+        analyst_email_by_id = {
+            u.id: u.email
+            for u in db.execute(select(User).where(User.id.in_(analyst_ids))).scalars()
+        }
+
     method_options = [
         SenaiteShapeMethodOption(uid=str(m.id), title=getattr(m, "name", None) or f"Method {m.id}")
         for m in sorted(methods_by_id.values(), key=lambda m: m.id)
@@ -997,7 +1008,7 @@ def list_analyses_in_senaite_shape(
             instrument=instrument_name,
             instrument_uid=str(r.instrument_id) if r.instrument_id else None,
             instrument_options=instrument_options,
-            analyst=None,
+            analyst=analyst_email_by_id.get(r.analyst_user_id),
             review_state=r.review_state,
             sort_key=None,
             captured=r.captured_at.isoformat() if r.captured_at else None,
