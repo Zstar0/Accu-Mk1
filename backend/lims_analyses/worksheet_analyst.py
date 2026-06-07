@@ -6,6 +6,10 @@ worksheet's effective analyst changes, clear on removal. Resolution is by exact
 string match WorksheetItem.sample_uid == lims_sub_samples.external_lims_uid —
 covers mk1:// native vials and legacy SENAITE-uid vials; a parent AR uid matches
 nothing and the call no-ops (parent-tier attribution stays in SENAITE).
+
+Callers are responsible for wrapping these calls in try/except if stamping is
+best-effort relative to the host operation; plain DB errors roll back with the
+host transaction.
 """
 from typing import List, Optional, Tuple
 
@@ -59,7 +63,7 @@ def _email(db: Session, user_id: Optional[int]) -> Optional[str]:
     return u.email if u else None
 
 
-def _emit(db, sub_pk: int, event: str, details: dict, user_id: Optional[int]) -> None:
+def _emit(db: Session, sub_pk: int, event: str, details: dict, user_id: Optional[int]) -> None:
     db.add(LimsSubSampleEvent(
         sub_sample_pk=sub_pk, event=event, details=details, user_id=user_id,
     ))
@@ -143,9 +147,11 @@ def restamp_for_worksheet(
         changed = [r for r in rows if r.analyst_user_id != effective]
         if not changed:
             continue
-        # from_email: attribution before this restamp (rows agree in practice;
-        # take the first changed row's prior analyst as the representative).
+        # from_email is representative-only (first changed row's prior analyst);
+        # from_emails is the complete set when rows had mixed prior analysts
+        # (multi-group partial stamps). Compute both BEFORE overwriting.
         from_email = _email(db, changed[0].analyst_user_id)
+        from_emails = sorted({e for e in (_email(db, r.analyst_user_id) for r in changed) if e})
         for r in changed:
             r.analyst_user_id = effective
         db.flush()
@@ -153,6 +159,7 @@ def restamp_for_worksheet(
             "worksheet_id": worksheet.id,
             "worksheet_title": worksheet.title,
             "from_email": from_email,
+            "from_emails": from_emails,
             "to_email": _email(db, effective),
             "keywords": sorted(r.keyword for r in changed),
         }, acting_user_id)

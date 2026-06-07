@@ -223,3 +223,31 @@ def test_restamp_emits_changed_only_when_values_change(db_session):
     assert n2 == 0
     evs2 = [e for e in _events(db_session, sub) if e.event == "worksheet_analyst_changed"]
     assert len(evs2) == 1
+
+
+def test_restamp_falls_back_to_item_analyst(db_session):
+    """Worksheet with no worksheet-level analyst → restamp uses the item's
+    own assigned_analyst_id (the `or` fallback branch)."""
+    from models import Worksheet, WorksheetItem
+
+    parent = _mk_parent(db_session)
+    sub = _mk_sub(db_session, parent)
+    g = _mk_group(db_session, "Analytics")
+    a = _mk_analysis(db_session, sub, _mk_service(db_session, "K1", "T1", g))
+    tech = _mk_user(db_session, "tech@lab.test")
+
+    ws = Worksheet(title="Bench", assigned_analyst_id=None)
+    db_session.add(ws); db_session.flush()
+    db_session.add(WorksheetItem(
+        worksheet_id=ws.id, sample_uid="mk1://sub-1", sample_id=sub.sample_id,
+        service_group_id=g.id, assigned_analyst_id=tech.id,
+    ))
+    db_session.flush()
+
+    n = restamp_for_worksheet(db_session, worksheet=ws, acting_user_id=tech.id)
+    assert n == 1
+    db_session.refresh(a)
+    assert a.analyst_user_id == tech.id
+    evs = [e for e in _events(db_session, sub) if e.event == "worksheet_analyst_changed"]
+    assert len(evs) == 1
+    assert evs[0].details["to_email"] == "tech@lab.test"
