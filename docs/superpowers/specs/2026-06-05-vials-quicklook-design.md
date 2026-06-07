@@ -152,6 +152,15 @@ block), wasting vertical space. Additive change:
   slim standalone header row as today.
 - The `data-testid="quicklook-vial-header"` stays on the header row in both states.
 
+## v1.4 — UAT follow-up round 4 (user request, 2026-06-06)
+
+**Hover = grow in place, not a second preview.** The v1.2 hover renders a SECOND
+enlarged img below the thumb (reads as two stacked images). Replace with a single
+image that expands on hover: the container keeps its layout size; on group-hover the
+img becomes absolutely positioned (anchored top-right so it grows leftward/down),
+~w-72/max-h-96, `object-contain`, elevated z, with a short transition. No duplicate
+img node.
+
 ## Out of scope (explicit)
 
 - No backend changes (Approach B parked; revisit only if vial counts grow).
