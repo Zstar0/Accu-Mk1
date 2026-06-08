@@ -6,7 +6,8 @@
  * used by the HPLC debug overlay.
  */
 
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import {
   Sheet,
   SheetContent,
@@ -18,6 +19,8 @@ import { cn } from '@/lib/utils'
 import { X, RefreshCw } from 'lucide-react'
 import { getSampleActivity, type SampleActivityEvent } from '@/lib/api'
 import { getWordpressUrl } from '@/lib/api-profiles'
+import { getUserDirectory } from '@/lib/auth-api'
+import { displayName, resolveUserName } from '@/lib/user-display'
 
 // ─── Color mapping (matches DebugConsole palette) ────────────────────────────
 
@@ -95,35 +98,34 @@ function accuverifyUrl(code: string): string {
   return `${getWordpressUrl()}/accuverify/?accuverify_code=${encodeURIComponent(code)}`
 }
 
-/** Extract the short username from an email (before @) */
-function shortUser(email: string | null | undefined): string | null {
-  if (!email) return null
-  const at = email.indexOf('@')
-  return at > 0 ? email.slice(0, at) : email
-}
-
 // ─── Detail line builder (returns ReactNode[] for mixed text + links) ────────
 
-function DetailLine({ event }: { event: SampleActivityEvent }) {
+function DetailLine({
+  event,
+  directory,
+}: {
+  event: SampleActivityEvent
+  directory: Map<string, string>
+}) {
   const d = event.details
   const parts: React.ReactNode[] = []
 
   switch (event.event) {
     case 'hplc_analysis': {
       if (d.purity != null) parts.push(`purity=${Number(d.purity).toFixed(2)}%`)
-      if (d.processed_by) parts.push(<UserTag key="u" email={d.processed_by as string} />)
+      if (d.processed_by) parts.push(<UserTag key="u" email={d.processed_by as string} directory={directory} />)
       break
     }
     case 'prep_record_created': {
       if (d.prep_id) parts.push(`prep=${d.prep_id}`)
       if (d.status) parts.push(`status=${d.status}`)
-      if (d.by) parts.push(<UserTag key="u" email={d.by as string} />)
+      if (d.by) parts.push(<UserTag key="u" email={d.by as string} directory={directory} />)
       break
     }
     case 'added_to_worksheet': {
       if (d.worksheet_title) parts.push(`ws=${d.worksheet_title}`)
-      if (d.analyst) parts.push(<span key="a">analyst=<UserTag email={d.analyst as string} /></span>)
-      else if (d.created_by) parts.push(<span key="c">by <UserTag email={d.created_by as string} /></span>)
+      if (d.analyst) parts.push(<span key="a">analyst=<UserTag email={d.analyst as string} directory={directory} /></span>)
+      else if (d.created_by) parts.push(<span key="c">by <UserTag email={d.created_by as string} directory={directory} /></span>)
       break
     }
     case 'coa_generated':
@@ -138,7 +140,7 @@ function DetailLine({ event }: { event: SampleActivityEvent }) {
     default: {
       // Vial events (analysis_added/transition/promoted, role_assigned,
       // remarks_updated, analysis_removed) carry user attribution in `by`.
-      if (d.by) parts.push(<span key="u">by <UserTag email={d.by as string} /></span>)
+      if (d.by) parts.push(<span key="u">by <UserTag email={d.by as string} directory={directory} /></span>)
       if (d.reason) parts.push(`reason=${d.reason}`)
       break
     }
@@ -155,8 +157,8 @@ function DetailLine({ event }: { event: SampleActivityEvent }) {
   )
 }
 
-function UserTag({ email }: { email: string }) {
-  const name = shortUser(email)
+function UserTag({ email, directory }: { email: string; directory: Map<string, string> }) {
+  const name = resolveUserName(email, directory)
   return (
     <span className="text-violet-400/80" title={email}>
       @{name}
@@ -191,6 +193,19 @@ export function SampleActivityLog({ open, onClose, sampleId }: Props) {
   const [events, setEvents] = useState<SampleActivityEvent[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  // User directory for resolving @mention emails to display names. Unknown
+  // emails (deleted/legacy) fall back to the email local-part in resolveUserName.
+  const { data: directoryRows } = useQuery({
+    queryKey: ['user-directory'],
+    queryFn: getUserDirectory,
+    staleTime: 5 * 60 * 1000,
+  })
+  const directory = useMemo(() => {
+    const m = new Map<string, string>()
+    for (const u of directoryRows ?? []) m.set(u.email, displayName(u))
+    return m
+  }, [directoryRows])
 
   async function load() {
     setLoading(true)
@@ -316,7 +331,7 @@ export function SampleActivityLog({ open, onClose, sampleId }: Props) {
                       <>{'  '}<VerificationLink code={vcode} /></>
                     )}
                   </div>
-                  <DetailLine event={ev} />
+                  <DetailLine event={ev} directory={directory} />
                 </div>
               )
             })}

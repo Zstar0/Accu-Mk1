@@ -37,6 +37,7 @@ import {
   type AuthUser,
 } from '@/lib/auth-api'
 import { useAuthStore } from '@/store/auth-store'
+import { displayName } from '@/lib/user-display'
 
 export function UserManagement() {
   const [users, setUsers] = useState<AuthUser[]>([])
@@ -214,7 +215,8 @@ export function UserManagement() {
               {users.map(user => (
                 <TableRow key={user.id}>
                   <TableCell className="font-medium">
-                    {user.email}
+                    {displayName(user)}
+                    <span className="block text-xs text-muted-foreground">{user.email}</span>
                     {user.id === currentUser?.id && (
                       <span className="ml-2 text-xs text-muted-foreground">
                         (you)
