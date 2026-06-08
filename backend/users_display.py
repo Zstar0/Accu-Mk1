@@ -4,7 +4,6 @@ src/lib/user-display.ts — keep the two in sync.
 Rule: "First Last" when both set; the single name when only one set;
 the email when neither set (names are optional — email is the identity key).
 """
-from typing import Optional
 
 
 def user_display_name(user) -> str:

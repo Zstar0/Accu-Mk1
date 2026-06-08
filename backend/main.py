@@ -44,7 +44,7 @@ from auth import (
     get_current_user, require_admin, create_access_token,
     verify_password, get_password_hash, seed_admin_user,
     require_internal_service_token,
-    UserCreate, UserRead, UserUpdate, PasswordChange, TokenResponse,
+    UserCreate, UserRead, UserUpdate, MeUpdate, PasswordChange, TokenResponse,
     SenaiteCredentials,
 )
 from models_peptide_request import (
@@ -429,6 +429,26 @@ async def get_me(current_user=Depends(get_current_user)):
     return _user_to_read(current_user)
 
 
+@app.patch("/auth/me", response_model=UserRead)
+async def update_me(
+    data: MeUpdate,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Self-serve update of the caller's own name fields. Empty string clears
+    to NULL. Cannot change role / active / email (not in MeUpdate)."""
+    fields = data.model_dump(exclude_unset=True)
+    if "first_name" in fields:
+        v = (fields["first_name"] or "").strip()
+        current_user.first_name = v or None
+    if "last_name" in fields:
+        v = (fields["last_name"] or "").strip()
+        current_user.last_name = v or None
+    db.commit()
+    db.refresh(current_user)
+    return _user_to_read(current_user)
+
+
 @app.put("/auth/change-password")
 async def change_password(
     data: PasswordChange,
@@ -503,6 +523,23 @@ async def list_users(
     return [_user_to_read(u) for u in users]
 
 
+@app.get("/auth/directory")
+async def user_directory(
+    _current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Lightweight id/email/name list for ALL users (active + inactive) so the
+    FE can resolve historical analyst emails to names. Auth-only, not admin."""
+    rows = db.execute(
+        select(User.id, User.email, User.first_name, User.last_name)
+        .order_by(User.email)
+    ).all()
+    return [
+        {"id": r.id, "email": r.email, "first_name": r.first_name, "last_name": r.last_name}
+        for r in rows
+    ]
+
+
 @app.post("/auth/users", response_model=UserRead)
 async def create_user(
     data: UserCreate,
@@ -557,6 +594,11 @@ async def update_user(
         if existing:
             raise HTTPException(status_code=400, detail="Email already in use")
         user.email = data.email
+
+    if data.first_name is not None:
+        user.first_name = data.first_name.strip() or None
+    if data.last_name is not None:
+        user.last_name = data.last_name.strip() or None
 
     db.commit()
     db.refresh(user)
@@ -10506,6 +10548,8 @@ def _user_to_read(user) -> UserRead:
         is_active=user.is_active,
         created_at=user.created_at,
         senaite_configured=user.senaite_password_encrypted is not None,
+        first_name=user.first_name,
+        last_name=user.last_name,
     )
 
 
@@ -13979,10 +14023,13 @@ async def get_worksheets_users(
 ):
     """Return active users for analyst assignment. Accessible to all authenticated users (not admin-only)."""
     users = db.execute(
-        select(User.id, User.email).where(User.is_active == True)  # noqa: E712
+        select(User.id, User.email, User.first_name, User.last_name).where(User.is_active == True)  # noqa: E712
         .order_by(User.email)
     ).all()
-    return [{"id": row.id, "email": row.email} for row in users]
+    return [
+        {"id": row.id, "email": row.email, "first_name": row.first_name, "last_name": row.last_name}
+        for row in users
+    ]
 
 
 @app.put("/worksheets/inbox/bulk")

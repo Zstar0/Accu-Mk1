@@ -64,6 +64,8 @@ class UserRead(BaseModel):
     is_active: bool
     created_at: datetime
     senaite_configured: bool = False
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -72,6 +74,12 @@ class UserUpdate(BaseModel):
     email: Optional[str] = None
     role: Optional[str] = None
     is_active: Optional[bool] = None
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+
+class MeUpdate(BaseModel):
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
 
 class PasswordChange(BaseModel):
     current_password: str
