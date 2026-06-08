@@ -26,6 +26,7 @@ import { PriorityBadge } from '@/components/hplc/PriorityBadge'
 import { SlaAgeIndicator } from '@/components/hplc/SlaAgeIndicator'
 import { useSlaForSubjects, type SlaSubject } from '@/services/sla-subjects'
 import type { WorksheetUser, InboxPriority } from '@/lib/api'
+import { itemRoleBadges, type InboxRoleTag } from '@/lib/inbox-filters'
 
 export interface WorksheetSummaryItem {
   sample_id: string
@@ -35,6 +36,7 @@ export interface WorksheetSummaryItem {
   priority: string
   added_at: string | null
   date_received: string | null
+  analyses?: { keyword?: string | null; title?: string | null; peptide_name?: string | null }[]
 }
 
 export interface WorksheetSummary {
@@ -45,6 +47,31 @@ export interface WorksheetSummary {
   assigned_analyst_email: string | null
   item_count: number
   items: WorksheetSummaryItem[]
+}
+
+// Role pill palette — mirrors InboxVialCard.ROLE_BADGES (copy #5; dedup is a
+// tracked fast-follow). Endotoxin / Sterility / HPLC tints.
+const ROLE_PILL: Record<InboxRoleTag, { label: string; cls: string }> = {
+  endo: { label: 'ENDO', cls: 'bg-emerald-500/15 text-emerald-700 border-emerald-500/40 dark:text-emerald-300' },
+  ster: { label: 'STER', cls: 'bg-violet-500/15 text-violet-700 border-violet-500/40 dark:text-violet-300' },
+  hplc: { label: 'HPLC', cls: 'bg-sky-500/15 text-sky-700 border-sky-500/40 dark:text-sky-300' },
+}
+
+function ItemRolePills({ item }: { item: WorksheetSummaryItem }) {
+  const roles = itemRoleBadges({ service_group_id: item.service_group_id, analyses: item.analyses })
+  if (roles.length === 0) return null
+  return (
+    <span className="flex items-center gap-1 shrink-0">
+      {roles.map(r => (
+        <span
+          key={r}
+          className={`inline-flex items-center rounded border px-1 py-0 text-[9px] font-medium uppercase tracking-wide ${ROLE_PILL[r].cls}`}
+        >
+          {ROLE_PILL[r].label}
+        </span>
+      ))}
+    </span>
+  )
 }
 
 function NewWorksheetDropZone() {
@@ -206,6 +233,7 @@ function WorksheetDropZone({
               </button>
               <span className="text-muted-foreground/50">·</span>
               <span className="truncate text-muted-foreground">{item.group_name}</span>
+              <ItemRolePills item={item} />
               <div className="flex-1" />
               <PriorityBadge priority={item.priority as InboxPriority} />
               <SlaAgeIndicator
