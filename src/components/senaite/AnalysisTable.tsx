@@ -928,7 +928,7 @@ function PromoteDialog({
         <div className="space-y-3 pt-2">
           <p className="text-sm text-muted-foreground">
             Create a parent-tier verified row for <code>{analysis.keyword}</code> with the
-            chosen value. The vial-tier row stays in <code>to_be_verified</code>; an audit
+            chosen value. The vial-tier row moves to <code>promoted</code>; an audit
             row records the promotion. To undo, retract the parent row.
           </p>
           <label className="text-sm font-medium block">
@@ -1016,7 +1016,7 @@ export function BulkPromoteDialog({
         <div className="space-y-3 pt-2">
           <p className="text-sm text-muted-foreground">
             Each row creates a parent-tier verified row with the vial&apos;s current value. Vial-tier
-            rows stay in <code>to_be_verified</code>; audit rows record each promotion. To undo,
+            rows move to <code>promoted</code>; audit rows record each promotion. To undo,
             retract the parent row.
           </p>
           <table className="w-full text-sm">
