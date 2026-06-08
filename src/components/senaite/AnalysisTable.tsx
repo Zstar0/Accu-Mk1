@@ -681,11 +681,11 @@ function EditableSelectCell({
   const canEdit = ov
     ? (mk1OverrideEditable && !!ov.uid && EDITABLE_STATES.has(ov.review_state))
     : (!!analysis.uid && EDITABLE_STATES.has(analysis.review_state))
-  // Editable single-match override → show the vial's true (possibly empty) value
-  // so display, editor preselection, and write target all agree. Otherwise
-  // (read-only multi-vial, or no override) show the SENAITE value rather than an
-  // arbitrary vial's.
-  const currentValue = ov ? (canEdit ? ovValue : senaiteValue) : senaiteValue
+  // Single-match override (one definitive vial — editable OR verified/locked) →
+  // show that vial's true (possibly empty) value, so display, editor preselection,
+  // and write target all agree and a verified vial shows its real Mk1 method/
+  // instrument read-only. Multi-vial (no single vial) or no override → SENAITE value.
+  const currentValue = ov ? (mk1OverrideEditable ? ovValue : senaiteValue) : senaiteValue
   const currentUid = ov ? ovUid : (field === 'method' ? analysis.method_uid : analysis.instrument_uid)
 
   useEffect(() => {

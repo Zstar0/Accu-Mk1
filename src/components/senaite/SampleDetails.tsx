@@ -1891,7 +1891,11 @@ export function SampleDetails() {
     queries: overlayVials.map(v => ({
       queryKey: [VIAL_OVERLAY_QUERY_KEY, v.id] as const,
       queryFn: () => listLimsAnalysesForSubSample(v.id),
-      enabled: parentSampleId === null && v.external_lims_uid?.startsWith('mk1://') === true,
+      // Fetch every vial's Mk1 analyses. A vial's external_lims_uid is a SENAITE
+      // hex when it was synced from SENAITE, yet it can still own lims_analyses
+      // rows — so we must NOT gate on an 'mk1://' prefix. Vials with no Mk1 rows
+      // return [] and simply contribute no matches.
+      enabled: parentSampleId === null,
       staleTime: 30_000,
     })),
   })
