@@ -130,6 +130,10 @@ import {
   computePrimaryAnalysisUids,
 } from '@/components/senaite/vial-quicklook-helpers'
 
+// Shared between the parent-overlay useQueries fan-out and its invalidate call —
+// they must stay identical or the post-edit refetch silently no-ops.
+const VIAL_OVERLAY_QUERY_KEY = 'parent-overlay-vial-analyses' as const
+
 // --- COA Console ---
 
 type StepStatus = 'waiting' | 'running' | 'ok' | 'error'
@@ -1879,25 +1883,32 @@ export function SampleDetails() {
   // rows can show their assigned vial + Mk1 method/instrument/analyst.
   // Gated to parent pages (parentSampleId === null); sub-sample pages do their
   // own full Mk1 swap and never need this.
+  // The parent-page gate (parentSampleId === null) is intentionally repeated on
+  // each of overlayVials / enabled / the computed const below — each needs its
+  // own guard, so don't "simplify" one away.
   const overlayVials = parentSampleId === null ? (subData?.sub_samples ?? []) : []
   const overlayAnalysesQueries = useQueries({
     queries: overlayVials.map(v => ({
-      queryKey: ['parent-overlay-vial-analyses', v.id] as const,
+      queryKey: [VIAL_OVERLAY_QUERY_KEY, v.id] as const,
       queryFn: () => listLimsAnalysesForSubSample(v.id),
       enabled: parentSampleId === null && v.external_lims_uid?.startsWith('mk1://') === true,
       staleTime: 30_000,
     })),
   })
 
-  const vialAssignmentByKeyword = useMemo(() => {
-    if (parentSampleId !== null || !data?.analyses) return undefined
-    const vialInputs = overlayVials.map((v, i) => ({
-      sampleId: v.sample_id,
-      label: `Vial ${v.vial_sequence + 1}`,
-      analyses: overlayAnalysesQueries[i]?.data ?? [],
-    }))
-    return buildVialAssignmentMap(data.analyses, vialInputs)
-  }, [parentSampleId, data?.analyses, overlayVials, overlayAnalysesQueries])
+  // Parent-page only (memo would not help: useQueries' outer array churns each
+  // render). The join is a cheap pure function.
+  const vialAssignmentByKeyword =
+    parentSampleId !== null || !data?.analyses
+      ? undefined
+      : buildVialAssignmentMap(
+          data.analyses,
+          overlayVials.map((v, i) => ({
+            sampleId: v.sample_id,
+            label: `Vial ${v.vial_sequence + 1}`,
+            analyses: overlayAnalysesQueries[i]?.data ?? [],
+          })),
+        )
 
   const { data: parentSummary } = useQuery({
     queryKey: ['sub-samples', parentSampleId],
@@ -3614,9 +3625,9 @@ export function SampleDetails() {
           primaryAnalysisUids={primaryAnalysisUids}
           primaryRole={currentAssignment}
           promotionsByKeyword={parentSampleId === null ? promotionsByKeyword : undefined}
-          vialAssignmentByKeyword={vialAssignmentByKeyword}
+          vialAssignmentByKeyword={parentSampleId === null ? vialAssignmentByKeyword : undefined}
           onVialMethodInstrumentSaved={() => {
-            queryClient.invalidateQueries({ queryKey: ['parent-overlay-vial-analyses'] })
+            queryClient.invalidateQueries({ queryKey: [VIAL_OVERLAY_QUERY_KEY] })
           }}
           parentLineStates={parentSampleId !== null ? parentLineStates : undefined}
           onResultSaved={(uid, newResult, newReviewState) => {
