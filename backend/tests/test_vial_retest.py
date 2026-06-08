@@ -3,9 +3,9 @@ Task 2: Promote supersession for retest sources.
 
 Tests (≥5 per plan, Task 1):
   1. retest from to_be_verified creates linked row + flags old row
-  2. retest from verified works
+  2. retest from promoted works
   3. old row's review_state is unchanged after retest
-  4. vial retract/reject/verify behavior unchanged (regression)
+  4. vial retract/reject behavior unchanged (regression)
   5. parent-tier retest raises TierMismatchError (regression)
   + extras: audit chain, initial state of new row, from-unassigned illegal
 
@@ -106,11 +106,17 @@ def _walk_to_tbv(db, sub, svc, result="98.55"):
     return get_analysis(db, row.id)
 
 
-def _walk_to_verified(db, sub, svc, result="98.55"):
-    """Create a fresh vial-tier row and walk it to verified."""
+def _walk_to_promoted(db, sub, svc, result="98.55"):
+    """Create a fresh vial-tier row and put it in 'promoted' (post-promote).
+
+    Sets review_state directly to 'promoted' without running the full promote
+    machinery — isolates retest-from-promoted without requiring a parent sample.
+    """
     row = _walk_to_tbv(db, sub, svc, result=result)
-    apply_transition(db, analysis_id=row.id, kind="verify", reason="TEST: verify")
-    return get_analysis(db, row.id)
+    row.review_state = "promoted"
+    db.commit()
+    db.refresh(row)
+    return row
 
 
 # ─── Test 1: retest from to_be_verified creates linked row + flags old ────────
@@ -170,15 +176,15 @@ def test_retest_from_to_be_verified_creates_linked_row(db, sub_sample, analysis_
     db.commit()
 
 
-# ─── Test 2: retest from verified works ─────────────────────────────────────
+# ─── Test 2: retest from promoted works ──────────────────────────────────────
 
 
-def test_retest_from_verified_creates_linked_row(db, sub_sample, analysis_service):
-    old = _walk_to_verified(db, sub_sample, analysis_service)
-    assert old.review_state == "verified"
+def test_retest_from_promoted_creates_linked_row(db, sub_sample, analysis_service):
+    old = _walk_to_promoted(db, sub_sample, analysis_service)
+    assert old.review_state == "promoted"
 
     new_row = apply_transition(db, analysis_id=old.id, kind="retest",
-                               reason="TEST: retest verified")
+                               reason="TEST: retest promoted")
 
     assert new_row.id != old.id
     assert new_row.retest_of_id == old.id
@@ -213,22 +219,22 @@ def test_retest_does_not_change_old_row_state(db, sub_sample, analysis_service):
     db.commit()
 
 
-def test_retest_from_verified_does_not_change_old_row_state(db, sub_sample, analysis_service):
-    old = _walk_to_verified(db, sub_sample, analysis_service)
+def test_retest_from_promoted_does_not_change_old_row_state(db, sub_sample, analysis_service):
+    old = _walk_to_promoted(db, sub_sample, analysis_service)
     old_id = old.id
 
     new_row = apply_transition(db, analysis_id=old.id, kind="retest",
-                               reason="TEST: check verified state preserved")
+                               reason="TEST: check promoted state preserved")
 
     old_reloaded = get_analysis(db, old_id)
-    assert old_reloaded.review_state == "verified"  # unchanged
+    assert old_reloaded.review_state == "promoted"  # unchanged
 
     # Tag new row for cleanup
     new_row.title = "TEST: retest-" + (new_row.title or "")
     db.commit()
 
 
-# ─── Test 4: vial retract/reject/verify behavior unchanged (regression) ──────
+# ─── Test 4: vial retract/reject behavior unchanged (regression) ─────────────
 
 
 def test_vial_retract_from_to_be_verified_still_works(db, sub_sample, analysis_service):
@@ -248,14 +254,13 @@ def test_vial_reject_from_unassigned_still_works(db, sub_sample, analysis_servic
     assert result.review_state == "rejected"
 
 
-def test_vial_verify_from_to_be_verified_still_works(db, sub_sample, analysis_service):
-    """Regression: verify from to_be_verified works as before."""
+def test_vial_verify_raises_tier_mismatch(db, sub_sample, analysis_service):
+    """Task 1 removed 'verify' from the vial tier — it must now raise
+    TierMismatchError instead of succeeding."""
     row = _walk_to_tbv(db, sub_sample, analysis_service)
-    result = apply_transition(db, analysis_id=row.id, kind="verify",
-                              reason="TEST: verify regression")
-    assert result.review_state == "verified"
-    # verify on a normal row does NOT set retested
-    assert result.retested is False
+    with pytest.raises(TierMismatchError):
+        apply_transition(db, analysis_id=row.id, kind="verify",
+                         reason="TEST: verify blocked on vial")
 
 
 # ─── Test 5: parent-tier retest raises TierMismatchError (regression) ────────

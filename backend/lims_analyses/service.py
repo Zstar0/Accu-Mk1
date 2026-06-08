@@ -178,7 +178,7 @@ def apply_transition(
     if kind == "retest":
         if not tier_allows(row_tier, "retest"):
             raise TierMismatchError(row_tier, kind)
-        if from_state not in ("to_be_verified", "verified"):
+        if from_state not in ("to_be_verified", "verified", "promoted"):
             raise InvalidTransitionError(from_state, kind)
 
         now = datetime.utcnow()
@@ -557,10 +557,13 @@ def promote_to_parent(
         sid = s["analysis_id"]
         kind = s["contribution_kind"]
         src = source_rows[sid]
+        prev_state = src.review_state
+        src.review_state = "promoted"
+        src.updated_at = now
         db.add(LimsAnalysisTransition(
             analysis_id=sid,
-            from_state=src.review_state,
-            to_state=src.review_state,
+            from_state=prev_state,
+            to_state="promoted",
             transition_kind="auto",
             user_id=user_id,
             reason=f"promoted to parent #{parent_row.id} (kind={kind})",
@@ -721,7 +724,7 @@ def cascade_parent_retest_to_sources(
             continue
         if src.retested:
             continue  # already retested — skip
-        if src.review_state not in ("to_be_verified", "verified"):
+        if src.review_state not in ("to_be_verified", "verified", "promoted"):
             continue  # not retest-eligible
         try:
             new_row = apply_transition(

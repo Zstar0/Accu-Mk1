@@ -527,7 +527,7 @@ def test_promote_single_vial_creates_parent_row_and_one_promotion(db, sub_sample
     ).scalars().first()
     assert src_audit.transition_kind == "auto"
     assert src_audit.from_state == "to_be_verified"
-    assert src_audit.to_state == "to_be_verified"
+    assert src_audit.to_state == "promoted"  # Task 3: source moves to 'promoted'
     assert f"promoted to parent #{parent_row.id}" in (src_audit.reason or "")
     parent_row.title = "TEST: parent " + parent_row.title
     db.commit()
