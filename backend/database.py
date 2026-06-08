@@ -131,6 +131,8 @@ def _run_migrations():
     from sqlalchemy import text
     migrations = [
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS senaite_password_encrypted TEXT",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS first_name VARCHAR(100)",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_name VARCHAR(100)",
         "ALTER TABLE peptides ADD COLUMN IF NOT EXISTS is_blend BOOLEAN DEFAULT FALSE",
         "ALTER TABLE peptide_analytes ADD COLUMN IF NOT EXISTS component_peptide_id INTEGER REFERENCES peptides(id) ON DELETE SET NULL",
         # Multi-vial blend support
