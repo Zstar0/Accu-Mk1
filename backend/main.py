@@ -4054,6 +4054,28 @@ async def run_hplc_analysis(
     db.commit()
     db.refresh(analysis)
 
+    # Bridge: a vial-scoped sample prep pushes its HPLC result onto the vial's
+    # lims_analyses row(s) and submits. The analysis above is already committed
+    # (db.commit at the line prior), so a bridge failure can never lose it — we
+    # roll back any partial bridge mutation and continue.
+    if request.sample_prep_id is not None:
+        try:
+            import mk1_db
+            _prep = mk1_db.get_sample_prep(request.sample_prep_id)
+            _sub_pk = _prep.get("lims_sub_sample_pk") if _prep else None
+            if _sub_pk is not None:
+                from lims_analyses.prep_bridge import bridge_prep_result_to_vial
+                bridge_prep_result_to_vial(
+                    db,
+                    lims_sub_sample_pk=_sub_pk,
+                    analysis=analysis,
+                    peptide=peptide,
+                    user_id=current_user.id,
+                )
+        except Exception:
+            db.rollback()
+            logger.exception("prep_bridge: failed for sample_prep_id=%s", request.sample_prep_id)
+
     return _analysis_to_response(analysis, peptide.abbreviation)
 
 
