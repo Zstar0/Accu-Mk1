@@ -28,11 +28,13 @@ export function itemBench(serviceGroupId: number | null): 'hplc' | 'micro' | nul
  *  title-substring fallback for null-keyword Mk1-native analyses, then
  *  peptide_name => hplc. Moisture (KF, no peptide) and blanks => null. */
 export function analysisRole(a: AnalysisLike): InboxRoleTag | null {
+  // Prefix match (ENDO*, STER*) is intentionally broader than MICRO_CATEGORIES'
+  // exact-keyword match — it catches future endotoxin/sterility method variants.
   const kw = (a.keyword ?? '').toUpperCase()
   const title = a.title ?? ''
   if (kw.startsWith('ENDO') || /endotoxin/i.test(title)) return 'endo'
   if (kw.startsWith('STER') || /sterilit/i.test(title)) return 'ster'
-  if (a.peptide_name) return 'hplc'
+  if (a.peptide_name) return 'hplc' // only reached if no ENDO/STER keyword/title match
   return null
 }
 

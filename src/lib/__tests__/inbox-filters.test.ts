@@ -58,6 +58,12 @@ describe('itemRoleBadges', () => {
   it('null group + no derivable role -> []', () => {
     expect(itemRoleBadges({ service_group_id: null, analyses: [] })).toEqual([])
   })
+  it('unknown bench with derivable hplc analysis -> [hplc]', () => {
+    expect(itemRoleBadges({
+      service_group_id: null,
+      analyses: [{ keyword: 'BPC-157-PUR', title: 'Purity', peptide_name: 'BPC-157' }],
+    })).toEqual(['hplc'])
+  })
 })
 
 describe('vialHasMicroCategory', () => {
@@ -86,6 +92,10 @@ describe('vialMatchesSampleId', () => {
     expect(vialMatchesSampleId(vial, 's03')).toBe(true)
     expect(vialMatchesSampleId(vial, '0142')).toBe(true)
     expect(vialMatchesSampleId(vial, 'X999')).toBe(false)
+  })
+  it('empty query -> true (no constraint)', () => {
+    expect(vialMatchesSampleId(vial, '')).toBe(true)
+    expect(vialMatchesSampleId(vial, '  ')).toBe(true)
   })
 })
 
