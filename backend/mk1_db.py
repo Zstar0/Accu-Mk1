@@ -470,6 +470,7 @@ def update_sample_prep(sample_prep_id: int, data: dict) -> Optional[dict]:
         "is_standard", "is_blend", "components_json", "vial_data",
         "created_by_user_id", "created_by_email",
         "updated_by_user_id", "updated_by_email",
+        "lims_sub_sample_pk",
     }
     updates = {k: v for k, v in data.items() if k in allowed}
     if not updates:
