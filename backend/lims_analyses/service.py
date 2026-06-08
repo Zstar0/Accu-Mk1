@@ -178,6 +178,8 @@ def apply_transition(
     if kind == "retest":
         if not tier_allows(row_tier, "retest"):
             raise TierMismatchError(row_tier, kind)
+        # "verified": grandfathered vial rows from before vial-verify was removed
+        # (kept for backward-compat); "promoted": the post-promote normal path.
         if from_state not in ("to_be_verified", "verified", "promoted"):
             raise InvalidTransitionError(from_state, kind)
 
@@ -560,6 +562,8 @@ def promote_to_parent(
         prev_state = src.review_state
         src.review_state = "promoted"
         src.updated_at = now
+        # "auto": a promote is a system-driven side-effect, not a user-initiated
+        # transition kind (the reason string records the promote).
         db.add(LimsAnalysisTransition(
             analysis_id=sid,
             from_state=prev_state,
@@ -674,7 +678,7 @@ def cascade_parent_retest_to_sources(
         with matching keyword
       → LimsAnalysisPromotion.source_analysis_id rows
       → source LimsAnalysis rows that are eligible for retest
-        (state in to_be_verified/verified AND not already retested)
+        (state in to_be_verified/verified/promoted AND not already retested)
       → apply_transition(kind="retest") on each eligible source
 
     Returns a list of the newly-created vial retest row ids (may be empty when
@@ -724,6 +728,8 @@ def cascade_parent_retest_to_sources(
             continue
         if src.retested:
             continue  # already retested — skip
+        # "verified": grandfathered vial rows from before vial-verify was removed
+        # (kept for backward-compat); "promoted": the post-promote normal path.
         if src.review_state not in ("to_be_verified", "verified", "promoted"):
             continue  # not retest-eligible
         try:

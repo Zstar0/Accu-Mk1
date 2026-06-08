@@ -3,8 +3,9 @@
 Tests:
   1. test_promote_moves_source_to_promoted: after promote_to_parent, source
      row's review_state is 'promoted' (not still 'to_be_verified').
-  2. test_verify_blocked_on_vial: apply_transition kind='verify' on a vial-tier
-     row raises TierMismatchError (Task 1 removed vial verify).
+
+(Vial-tier verify being blocked is covered by
+test_vial_retest.py::test_vial_verify_raises_tier_mismatch.)
 """
 from __future__ import annotations
 
@@ -18,7 +19,6 @@ from lims_analyses.service import (
     get_analysis,
     promote_to_parent,
 )
-from lims_analyses.state_machine import TierMismatchError
 from models import (
     AnalysisService,
     LimsAnalysis,
@@ -125,17 +125,3 @@ def test_promote_moves_source_to_promoted(db, sub_sample, analysis_service):
 
     # Parent-tier row is in 'verified'
     assert parent_row.review_state == "verified"
-
-
-# ─── Test 2: verify blocked on vial tier ──────────────────────────────────────
-
-
-def test_verify_blocked_on_vial(db, sub_sample, analysis_service):
-    """apply_transition kind='verify' on a vial-tier row raises TierMismatchError.
-
-    Task 1 removed 'verify' from the vial tier; only parent-tier rows can verify.
-    """
-    src = _walk_to_tbv(db, sub_sample, analysis_service)
-    with pytest.raises(TierMismatchError):
-        apply_transition(db, analysis_id=src.id, kind="verify",
-                         reason="TEST: verify should be blocked on vial")
