@@ -46,6 +46,8 @@ import { useUIStore } from '@/store/ui-store'
 export const STATUS_COLORS: Record<string, string> = {
   verified:
     'bg-emerald-100 text-emerald-700 border-emerald-200 dark:bg-emerald-500/15 dark:text-emerald-400 dark:border-emerald-500/20',
+  promoted:
+    'bg-teal-100 text-teal-700 border-teal-200 dark:bg-teal-500/15 dark:text-teal-400 dark:border-teal-500/20',
   published:
     'bg-purple-100 text-purple-700 border-purple-200 dark:bg-purple-500/15 dark:text-purple-400 dark:border-purple-500/20',
   to_be_verified:
@@ -74,6 +76,7 @@ export const STATUS_COLORS: Record<string, string> = {
 
 export const STATUS_LABELS: Record<string, string> = {
   verified: 'Verified',
+  promoted: 'Promoted',
   published: 'Published',
   to_be_verified: 'To Verify',
   sample_received: 'Received',
@@ -104,6 +107,8 @@ const PRIMARY_TITLE_COLOR: Record<string, string> = {
 const ROW_STATUS_STYLE: Record<string, string> = {
   verified:
     'border-l-2 border-l-blue-500 bg-blue-50/60 dark:bg-blue-500/[0.06]',
+  promoted:
+    'border-l-2 border-l-teal-500 bg-teal-50/60 dark:bg-teal-500/[0.06]',
   published:
     'border-l-2 border-l-emerald-500 bg-emerald-50/60 dark:bg-emerald-500/[0.06]',
   to_be_verified:
@@ -130,6 +135,9 @@ const ALLOWED_TRANSITIONS: Record<string, readonly string[]> = {
   unassigned: ['submit', 'reject'],
   assigned: ['submit', 'reject'],
   to_be_verified: ['retest', 'verify', 'retract', 'reject'],
+  // A promoted sub-sample (its result rolled up to the parent) can be retested
+  // to correct it (re-run, re-promote). verified stays for parent-tier rows.
+  promoted: ['retest'],
   // Retest-aware promote: a verified row can be retested (vial tier in Mk1;
   // SENAITE allows it on parent lines too).
   verified: ['retest'],
@@ -1500,7 +1508,7 @@ export function AnalysisTable({
   const INVALID_STATES = new Set(['rejected', 'retracted'])
   const invalidCount = analyses.filter(a => INVALID_STATES.has(a.review_state ?? '')).length
   const verifiedCount = analyses.filter(
-    a => a.review_state === 'verified' || a.review_state === 'published'
+    a => a.review_state === 'verified' || a.review_state === 'published' || a.review_state === 'promoted'
   ).length
   const validCount = analyses.length - invalidCount
   const pendingCount = validCount - verifiedCount
@@ -1509,9 +1517,9 @@ export function AnalysisTable({
 
   const filteredAnalyses = analyses.filter(a => {
     if (analysisFilter === 'verified')
-      return a.review_state === 'verified' || a.review_state === 'published'
+      return a.review_state === 'verified' || a.review_state === 'published' || a.review_state === 'promoted'
     if (analysisFilter === 'pending')
-      return a.review_state !== 'verified' && a.review_state !== 'published' && !INVALID_STATES.has(a.review_state ?? '')
+      return a.review_state !== 'verified' && a.review_state !== 'published' && a.review_state !== 'promoted' && !INVALID_STATES.has(a.review_state ?? '')
     if (analysisFilter === 'invalid')
       return INVALID_STATES.has(a.review_state ?? '')
     // 'all' — exclude invalid by default, matching SENAITE's "Valid" view
