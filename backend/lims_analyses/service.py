@@ -958,14 +958,15 @@ def list_analyses_in_senaite_shape(
         for i in db.execute(select(Instrument)).scalars().all()
     }
 
-    # Analyst display: User has no name column — surface the email (matches
-    # the activity log's by-<email> convention).
+    # Analyst display: "First Last" (email fallback). Mirrors the FE rule in
+    # src/lib/user-display.ts; helper in backend/users_display.py.
     from models import User
+    from users_display import user_display_name
     analyst_ids = {r.analyst_user_id for r in rows if r.analyst_user_id}
-    analyst_email_by_id = {}
+    analyst_name_by_id = {}
     if analyst_ids:
-        analyst_email_by_id = {
-            u.id: u.email
+        analyst_name_by_id = {
+            u.id: user_display_name(u)
             for u in db.execute(select(User).where(User.id.in_(analyst_ids))).scalars()
         }
 
@@ -1008,7 +1009,7 @@ def list_analyses_in_senaite_shape(
             instrument=instrument_name,
             instrument_uid=str(r.instrument_id) if r.instrument_id else None,
             instrument_options=instrument_options,
-            analyst=analyst_email_by_id.get(r.analyst_user_id),
+            analyst=analyst_name_by_id.get(r.analyst_user_id),
             review_state=r.review_state,
             sort_key=None,
             captured=r.captured_at.isoformat() if r.captured_at else None,

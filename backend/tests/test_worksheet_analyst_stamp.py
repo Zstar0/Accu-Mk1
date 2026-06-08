@@ -318,3 +318,33 @@ def test_restamp_unassign_clears_stamp(db_session):
     assert len(evs) == 1
     assert evs[0].details["to_email"] is None
     assert evs[0].details["from_email"] == "tech@lab.test"
+
+
+def test_senaite_shape_analyst_uses_display_name(db_session):
+    """Analyst column shows 'First Last' when set, single name with one, email when none."""
+    from lims_analyses.service import list_analyses_in_senaite_shape
+
+    parent = _mk_parent(db_session)
+    sub = _mk_sub(db_session, parent)
+    g = _mk_group(db_session, "Analytics")
+    a_full = _mk_analysis(db_session, sub, _mk_service(db_session, "K1", "T1", g))
+    a_first = _mk_analysis(db_session, sub, _mk_service(db_session, "K2", "T2", g))
+    a_none = _mk_analysis(db_session, sub, _mk_service(db_session, "K3", "T3", g))
+
+    full = _mk_user(db_session, "full@lab.test")
+    full.first_name = "Ada"; full.last_name = "Lovelace"
+    first_only = _mk_user(db_session, "first@lab.test")
+    first_only.first_name = "Grace"
+    nameless = _mk_user(db_session, "nameless@lab.test")
+    db_session.flush()
+
+    a_full.analyst_user_id = full.id
+    a_first.analyst_user_id = first_only.id
+    a_none.analyst_user_id = nameless.id
+    db_session.flush()
+
+    by_kw = {s.keyword: s for s in list_analyses_in_senaite_shape(
+        db_session, host_kind="sub_sample", host_pk=sub.id)}
+    assert by_kw["K1"].analyst == "Ada Lovelace"
+    assert by_kw["K2"].analyst == "Grace"
+    assert by_kw["K3"].analyst == "nameless@lab.test"
