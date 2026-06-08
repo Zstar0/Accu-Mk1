@@ -5,7 +5,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { toast } from 'sonner'
 import { CheckCircle2, Loader2, User } from 'lucide-react'
-import { changePassword, setSenaitePassword, clearSenaitePassword } from '@/lib/auth-api'
+import { changePassword, setSenaitePassword, clearSenaitePassword, updateMe } from '@/lib/auth-api'
 import { useAuthStore } from '@/store/auth-store'
 
 export function ProfilePage() {
@@ -23,9 +23,55 @@ export function ProfilePage() {
         </div>
       </div>
 
+      <NameSection />
       <ChangePasswordSection />
       <SenaiteCredentialsSection />
     </div>
+  )
+}
+
+function NameSection() {
+  const user = useAuthStore(state => state.user)
+  const [firstName, setFirstName] = useState(user?.first_name ?? '')
+  const [lastName, setLastName] = useState(user?.last_name ?? '')
+  const [savingName, setSavingName] = useState(false)
+
+  const handleSaveName = async (e: FormEvent) => {
+    e.preventDefault()
+    setSavingName(true)
+    try {
+      await updateMe({ first_name: firstName, last_name: lastName })
+      toast.success('Name updated')
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to update name')
+    } finally {
+      setSavingName(false)
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Name</CardTitle>
+        <CardDescription>Shown as the analyst on samples and worksheets.</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <form onSubmit={handleSaveName} className="flex flex-col gap-4">
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="first-name">First name</Label>
+            <Input id="first-name" value={firstName} onChange={e => setFirstName(e.target.value)} placeholder="Ada" />
+          </div>
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="last-name">Last name</Label>
+            <Input id="last-name" value={lastName} onChange={e => setLastName(e.target.value)} placeholder="Lovelace" />
+          </div>
+          <Button type="submit" disabled={savingName} className="w-fit gap-2">
+            {savingName ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
+            Save name
+          </Button>
+        </form>
+      </CardContent>
+    </Card>
   )
 }
 
