@@ -164,7 +164,7 @@ export default function WorksheetsInboxPage() {
   const visibleVials = vials
     .filter(v => !pendingDropKeys.has(`${v.uid}::${v.analyses[0]?.group_id ?? 0}`))
     .filter(v => !sampleIdFilter.trim() || vialMatchesSampleId(v, sampleIdFilter))
-    .filter(v => role !== 'hplc' || vialMatchesAnalyte(v, analyteFilter))
+    .filter(v => role !== 'hplc' || !analyteFilter.trim() || vialMatchesAnalyte(v, analyteFilter))
     .filter(v => role !== 'microbiology' || !microCategory || vialHasMicroCategory(v, microCategory))
     // Priority pass on top of the server's family-sort. Stable: same-parent
     // vials stay adjacent because the secondary sort key is preserved.
@@ -191,6 +191,12 @@ export default function WorksheetsInboxPage() {
 
   function handlePriorityChange(sampleUid: string, priority: InboxPriority) {
     priorityMutation.mutate({ sampleUid, priority })
+  }
+
+  function clearFilters() {
+    setSampleIdFilter('')
+    setAnalyteFilter('')
+    setMicroCategory('')
   }
 
   function handleDragStart(event: DragStartEvent) {
@@ -380,7 +386,7 @@ export default function WorksheetsInboxPage() {
               {filtersActive && (
                 <button
                   type="button"
-                  onClick={() => { setSampleIdFilter(''); setAnalyteFilter(''); setMicroCategory('') }}
+                  onClick={clearFilters}
                   className="text-xs text-muted-foreground hover:text-foreground underline-offset-2 hover:underline"
                 >
                   Clear
