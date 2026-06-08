@@ -4,10 +4,24 @@ import { useEffect, useState } from 'react'
 import { HelpCircle, Inbox, RefreshCw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
+import { Input } from '@/components/ui/input'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
 import { InboxVialCard, type DragData } from '@/components/hplc/InboxVialCard'
 import { WorksheetDropPanel } from '@/components/hplc/WorksheetDropPanel'
+import {
+  MICRO_CATEGORIES,
+  vialHasMicroCategory,
+  vialMatchesSampleId,
+  vialMatchesAnalyte,
+} from '@/lib/inbox-filters'
 import {
   useInboxSamples,
   usePriorityMutation,
@@ -86,6 +100,12 @@ export default function WorksheetsInboxPage() {
   const [showXtra, setShowXtra] = useState<boolean>(loadStoredShowXtra)
   const [isRefreshing, setIsRefreshing] = useState(false)
 
+  // Client-side inbox filters (transient — not persisted). Sample-ID applies to
+  // both benches; analyte is HPLC-only; micro-category is Micro-only.
+  const [sampleIdFilter, setSampleIdFilter] = useState('')
+  const [analyteFilter, setAnalyteFilter] = useState('')
+  const [microCategory, setMicroCategory] = useState('') // '' = all categories
+
   // Persist filter selections so the tech's last filter sticks across sessions
   useEffect(() => {
     window.localStorage.setItem(STORAGE_ROLE_KEY, role)
@@ -143,6 +163,9 @@ export default function WorksheetsInboxPage() {
   const total = inboxData?.total ?? 0
   const visibleVials = vials
     .filter(v => !pendingDropKeys.has(`${v.uid}::${v.analyses[0]?.group_id ?? 0}`))
+    .filter(v => !sampleIdFilter.trim() || vialMatchesSampleId(v, sampleIdFilter))
+    .filter(v => role !== 'hplc' || vialMatchesAnalyte(v, analyteFilter))
+    .filter(v => role !== 'microbiology' || !microCategory || vialHasMicroCategory(v, microCategory))
     // Priority pass on top of the server's family-sort. Stable: same-parent
     // vials stay adjacent because the secondary sort key is preserved.
     .slice()
@@ -159,6 +182,12 @@ export default function WorksheetsInboxPage() {
       if (a.is_parent !== b.is_parent) return a.is_parent ? -1 : 1
       return a.vial_sequence - b.vial_sequence
     })
+
+  const filtersActive =
+    sampleIdFilter.trim().length > 0 ||
+    (role === 'hplc' && analyteFilter.trim().length > 0) ||
+    (role === 'microbiology' && microCategory.length > 0)
+  const displayCount = filtersActive ? visibleVials.length : total
 
   function handlePriorityChange(sampleUid: string, priority: InboxPriority) {
     priorityMutation.mutate({ sampleUid, priority })
@@ -232,7 +261,7 @@ export default function WorksheetsInboxPage() {
                   <h1 className="text-2xl font-semibold tracking-tight">Inbox</h1>
                   {!isLoading && !isError && (
                     <span className="inline-flex items-center rounded-full bg-muted px-2.5 py-0.5 text-sm font-medium text-muted-foreground">
-                      {total} vial{total === 1 ? '' : 's'}
+                      {displayCount} vial{displayCount === 1 ? '' : 's'}
                     </span>
                   )}
                 </div>
@@ -314,6 +343,49 @@ export default function WorksheetsInboxPage() {
               >
                 Microbiology
               </button>
+            </div>
+
+            {/* Client-side filters */}
+            <div className="mb-6 flex flex-wrap items-center gap-2">
+              <Input
+                placeholder="Sample ID"
+                value={sampleIdFilter}
+                onChange={e => setSampleIdFilter(e.target.value)}
+                className="h-8 w-40 text-sm"
+              />
+              {role === 'hplc' && (
+                <Input
+                  placeholder="Analyte"
+                  value={analyteFilter}
+                  onChange={e => setAnalyteFilter(e.target.value)}
+                  className="h-8 w-44 text-sm"
+                />
+              )}
+              {role === 'microbiology' && (
+                <Select
+                  value={microCategory || 'all'}
+                  onValueChange={v => setMicroCategory(v === 'all' ? '' : v)}
+                >
+                  <SelectTrigger size="sm" className="h-8 w-56 text-sm">
+                    <SelectValue placeholder="All categories" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All categories</SelectItem>
+                    {MICRO_CATEGORIES.map(c => (
+                      <SelectItem key={c.value} value={c.value}>{c.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+              {filtersActive && (
+                <button
+                  type="button"
+                  onClick={() => { setSampleIdFilter(''); setAnalyteFilter(''); setMicroCategory('') }}
+                  className="text-xs text-muted-foreground hover:text-foreground underline-offset-2 hover:underline"
+                >
+                  Clear
+                </button>
+              )}
             </div>
 
             {/* Loading state */}
