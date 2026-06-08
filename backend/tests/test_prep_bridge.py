@@ -115,3 +115,75 @@ def test_skips_ambiguous_same_category(db_session):
     ids = bridge_prep_result_to_vial(db, lims_sub_sample_pk=vial.id, analysis=a, peptide=pep, user_id=1)
 
     assert ids == []  # two same-category rows -> ambiguous -> skipped
+
+
+def test_real_seeder_shape_specific_id_wins_generic_left_unassigned(db_session):
+    # Real vial shape: seeder puts HPLC-ID + ID_<PEPTIDE> on every HPLC vial.
+    # The specific ID_BPC157 row must win; the generic HPLC-ID row stays unassigned.
+    db = db_session
+    pep = _peptide(db)
+    vial = _vial(db)
+    pur = create_analysis(db, host_kind="sub_sample", host_pk=vial.id,
+                          analysis_service_id=73, keyword="HPLC-PUR", title="Peptide Purity (HPLC)")
+    gen_id = create_analysis(db, host_kind="sub_sample", host_pk=vial.id,
+                             analysis_service_id=29, keyword="HPLC-ID", title="Identity (HPLC)")
+    spec_id = create_analysis(db, host_kind="sub_sample", host_pk=vial.id,
+                              analysis_service_id=30, keyword="ID_BPC157", title="BPC-157 - Identity (HPLC)")
+    a = _hplc(db, pep, purity=98.5, conforms=True)
+
+    ids = bridge_prep_result_to_vial(db, lims_sub_sample_pk=vial.id, analysis=a, peptide=pep, user_id=1)
+
+    assert set(ids) == {pur.id, spec_id.id}
+    db.refresh(pur); db.refresh(gen_id); db.refresh(spec_id)
+    assert pur.review_state == "to_be_verified" and pur.result_value == "98.5"
+    assert spec_id.review_state == "to_be_verified" and spec_id.result_value == "BPC-157"
+    # The generic HPLC-ID row must be LEFT UNASSIGNED (not double-written).
+    assert gen_id.review_state == "unassigned" and gen_id.result_value is None
+
+
+def test_generic_identity_used_when_no_specific_row(db_session):
+    # Vial with only the generic HPLC-ID (no ID_*) -> identity goes to HPLC-ID.
+    db = db_session
+    pep = _peptide(db)
+    vial = _vial(db)
+    pur = create_analysis(db, host_kind="sub_sample", host_pk=vial.id,
+                          analysis_service_id=73, keyword="HPLC-PUR", title="Peptide Purity (HPLC)")
+    gen_id = create_analysis(db, host_kind="sub_sample", host_pk=vial.id,
+                             analysis_service_id=29, keyword="HPLC-ID", title="Identity (HPLC)")
+    a = _hplc(db, pep, purity=99.0, conforms=True)
+
+    ids = bridge_prep_result_to_vial(db, lims_sub_sample_pk=vial.id, analysis=a, peptide=pep, user_id=1)
+
+    assert set(ids) == {pur.id, gen_id.id}
+    db.refresh(gen_id)
+    assert gen_id.review_state == "to_be_verified" and gen_id.result_value == "BPC-157"
+
+
+def test_non_conforming_identity(db_session):
+    db = db_session
+    pep = _peptide(db)
+    vial = _vial(db)
+    idr = create_analysis(db, host_kind="sub_sample", host_pk=vial.id,
+                          analysis_service_id=30, keyword="ID_BPC157", title="BPC-157 - Identity (HPLC)")
+    a = _hplc(db, pep, conforms=False)
+
+    ids = bridge_prep_result_to_vial(db, lims_sub_sample_pk=vial.id, analysis=a, peptide=pep, user_id=1)
+
+    assert ids == [idr.id]
+    db.refresh(idr)
+    assert idr.review_state == "to_be_verified" and idr.result_value == "Non-conforming"
+
+
+def test_quantity_is_written(db_session):
+    db = db_session
+    pep = _peptide(db)
+    vial = _vial(db)
+    qty = create_analysis(db, host_kind="sub_sample", host_pk=vial.id,
+                          analysis_service_id=40, keyword="QTY_BPC157", title="BPC-157 - Quantity (HPLC)")
+    a = _hplc(db, pep, qty=12.34)
+
+    ids = bridge_prep_result_to_vial(db, lims_sub_sample_pk=vial.id, analysis=a, peptide=pep, user_id=1)
+
+    assert ids == [qty.id]
+    db.refresh(qty)
+    assert qty.review_state == "to_be_verified" and qty.result_value == "12.34"

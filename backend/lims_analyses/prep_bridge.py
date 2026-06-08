@@ -62,6 +62,24 @@ def _result_for(category: str, analysis: HPLCAnalysis, peptide: Optional[Peptide
     return None
 
 
+def _pick_target(category: str, candidates: list[LimsAnalysis]) -> Optional[LimsAnalysis]:
+    """Choose the single target row for a category, or None if ambiguous/empty.
+
+    Identity: a peptide-specific ID_<PEPTIDE> row wins over the generic HPLC-ID
+    row (the seeder puts both on every HPLC vial). Fall back to the generic row
+    only when no specific row matched. Purity/quantity: require exactly one row.
+    """
+    if category == "identity":
+        specific = [r for r in candidates if (r.keyword or "").upper().startswith("ID_")]
+        generic = [r for r in candidates if (r.keyword or "").upper() == "HPLC-ID"]
+        if len(specific) == 1:
+            return specific[0]
+        if not specific and len(generic) == 1:
+            return generic[0]
+        return None
+    return candidates[0] if len(candidates) == 1 else None
+
+
 def bridge_prep_result_to_vial(
     db: Session,
     *,
@@ -95,7 +113,7 @@ def bridge_prep_result_to_vial(
         if category is None:
             continue
         if category == "identity" and (row.keyword or "").upper().startswith("ID_"):
-            row_token = _norm((row.keyword or "").upper()[3:])
+            row_token = _norm(row.keyword[3:])
             if pep_token and row_token and row_token != pep_token:
                 logger.info(
                     "prep_bridge: skip vial=%s row=%s kw=%s — analyte %s != prep %s",
@@ -106,13 +124,13 @@ def bridge_prep_result_to_vial(
 
     submitted: list[int] = []
     for category, candidates in by_category.items():
-        if len(candidates) != 1:
+        row = _pick_target(category, candidates)
+        if row is None:
             logger.warning(
-                "prep_bridge: ambiguous %s match for vial=%s (%d rows) — skipping",
+                "prep_bridge: ambiguous/unresolved %s match for vial=%s (%d candidates) — skipping",
                 category, lims_sub_sample_pk, len(candidates),
             )
             continue
-        row = candidates[0]
         value = _result_for(category, analysis, peptide)
         if value is None:
             continue
@@ -120,7 +138,6 @@ def bridge_prep_result_to_vial(
         # (left for the bench/overlay to set).
         if analysis.instrument_id is not None:
             row.instrument_id = analysis.instrument_id
-        db.flush()
         apply_transition(
             db,
             analysis_id=row.id,
