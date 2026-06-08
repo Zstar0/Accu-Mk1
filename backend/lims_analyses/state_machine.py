@@ -14,9 +14,11 @@ legal-from-state-x transitions DIFFER per tier:
                    the parent acting as a vial in a variance set.
                    These represent bench data — runs that happen and
                    produce results. Lifecycle:
-                     unassigned → assigned → to_be_verified
+                     unassigned → assigned → to_be_verified → promoted
                    plus reset, retract, reject.
-                   CANNOT publish — only parent-tier rows publish.
+                   CANNOT self-verify or publish — bench rows are promoted to
+                   parent-tier by promote_to_parent, which creates a 'verified'
+                   parent-tier row; the source sub-sample moves to 'promoted'.
 
   parent-tier (canonical): lims_sample_pk set with the row NOT being
                    a vial-tier run. These are created by the future
@@ -51,7 +53,8 @@ Cross-tier:
              retest_of_id; not a transition on the old row. Service-
              layer concern, not a state machine edge.)
 
-Terminal states: rejected, published.
+Terminal states: rejected, published. ('promoted' is a non-terminal
+sub-sample resting state — retest is still legal from it at the service layer.)
 """
 
 from __future__ import annotations
@@ -180,6 +183,8 @@ def tier_of(*, lims_sample_pk: Optional[int],
     if lims_sub_sample_pk is not None:
         return TIER_VIAL
     # Parent-attached. State decides whether it's a vial-style run or canonical.
+    # 'promoted' is a sub-sample-tier state only (promote sets it on the source
+    # sub-sample), so it correctly falls through to TIER_VIAL below.
     if review_state in ("verified", "published", "retracted"):
         return TIER_PARENT
     return TIER_VIAL

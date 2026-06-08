@@ -226,14 +226,10 @@ def test_unknown_tier_raises():
 
 
 def test_promoted_is_a_known_nonterminal_state():
-    from lims_analyses.state_machine import STATES, is_terminal
     assert "promoted" in STATES
     assert is_terminal("promoted") is False
 
 
 def test_verify_not_allowed_on_vial_tier():
-    from lims_analyses.state_machine import (
-        next_state, TIER_VIAL, TierMismatchError,
-    )
     with pytest.raises(TierMismatchError):
         next_state("to_be_verified", "verify", tier=TIER_VIAL)
