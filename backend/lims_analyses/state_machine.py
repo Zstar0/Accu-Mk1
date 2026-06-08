@@ -67,6 +67,7 @@ STATES: FrozenSet[str] = frozenset({
     "to_be_verified",
     "verified",
     "published",
+    "promoted",
     "rejected",
     "retracted",
 })
@@ -104,18 +105,14 @@ _ALLOWED: Dict[Tuple[str, str], str] = {
     ("verified",       "retract"):  "retracted",
 }
 
-# Tier × kind matrix. Which kinds are legal at which tier?
-# Vial-tier rows do bench work (assign through to_be_verified, plus retract/
-# reject/reset). Parent-tier rows hold canonical results — only publish
-# and admin-retract apply. The 'verify' kind exists in the state machine
-# but is NOT directly invoked on a vial-tier row in the two-tier model:
-# verification is the act of promoting a vial row to a parent-tier row,
-# which lands in Phase 4. The kind stays in the matrix for completeness
-# and for the rare admin path where a single-vial result is verified in
-# place without going through promote.
+# Tier × kind matrix. Sub-sample (vial) rows do bench work (assign through
+# to_be_verified, plus retract/reject/reset/retest); they NEVER self-verify —
+# verification is promotion (promote_to_parent moves the source to 'promoted').
+# 'verify'/'publish' are parent-tier concerns; parent rows are created in
+# 'verified' by promote and only publish or admin-retract from there.
 _TIER_ALLOWED_KINDS: Dict[str, FrozenSet[str]] = {
     TIER_VIAL: frozenset({
-        "assign", "submit", "retract", "reject", "reset", "verify", "retest", "auto",
+        "assign", "submit", "retract", "reject", "reset", "retest", "auto",
     }),
     TIER_PARENT: frozenset({
         "publish", "retract", "auto",

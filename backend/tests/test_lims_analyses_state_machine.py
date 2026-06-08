@@ -20,7 +20,7 @@ from lims_analyses.state_machine import (
 def test_states_set_is_complete():
     assert STATES == {
         "unassigned", "assigned", "to_be_verified",
-        "verified", "published", "rejected", "retracted",
+        "verified", "published", "promoted", "rejected", "retracted",
     }
 
 
@@ -211,15 +211,11 @@ def test_next_state_with_tier_allows_legal_kind():
 
 
 def test_allowed_kinds_filtered_by_tier():
-    # At to_be_verified, the state machine allows {verify, retract, reject}.
-    # vial-tier allows all three (verify is a vial-tier kind for the rare
-    # single-vial-verify-in-place admin path). parent-tier shares only
-    # retract — publish doesn't apply until 'verified', and assign/submit/
-    # reject aren't parent-tier kinds. In normal flow a parent-tier row
-    # never reaches to_be_verified anyway (tier_of() routes by host+state),
-    # but the matrix itself is pure logic and reports the intersection.
+    # Sub-sample (vial) tier no longer self-verifies — verification is the
+    # promote act; the vial moves to_be_verified -> promoted. So 'verify' is
+    # gone from the vial-tier kinds. parent-tier shares only retract here.
     assert allowed_kinds("to_be_verified", tier=TIER_VIAL) == {
-        "verify", "retract", "reject",
+        "retract", "reject",
     }
     assert allowed_kinds("to_be_verified", tier=TIER_PARENT) == {"retract"}
 
@@ -227,3 +223,17 @@ def test_allowed_kinds_filtered_by_tier():
 def test_unknown_tier_raises():
     with pytest.raises(UnknownTierError):
         tier_allows("not_a_tier", "publish")
+
+
+def test_promoted_is_a_known_nonterminal_state():
+    from lims_analyses.state_machine import STATES, is_terminal
+    assert "promoted" in STATES
+    assert is_terminal("promoted") is False
+
+
+def test_verify_not_allowed_on_vial_tier():
+    from lims_analyses.state_machine import (
+        next_state, TIER_VIAL, TierMismatchError,
+    )
+    with pytest.raises(TierMismatchError):
+        next_state("to_be_verified", "verify", tier=TIER_VIAL)
