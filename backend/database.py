@@ -503,6 +503,7 @@ def _run_migrations():
             result_unit           TEXT,
 
             review_state          TEXT NOT NULL DEFAULT 'unassigned'
+                                  CONSTRAINT lims_analyses_review_state_check
                                   CHECK (review_state IN (
                                       'unassigned', 'assigned', 'to_be_verified',
                                       'verified', 'published', 'rejected', 'retracted',
@@ -628,22 +629,25 @@ def _run_migrations():
         """
         ALTER TABLE lims_analyses ADD CONSTRAINT lims_analyses_review_state_check
             CHECK (review_state IN (
-                'unassigned','assigned','to_be_verified','verified',
-                'published','rejected','retracted','promoted'
+                'unassigned', 'assigned', 'to_be_verified', 'verified',
+                'published', 'rejected', 'retracted', 'promoted'
             ))
         """,
+        # Old model left promoted sub-samples at 'to_be_verified' — re-home them.
         """
         UPDATE lims_analyses SET review_state='promoted'
          WHERE lims_sub_sample_pk IS NOT NULL
            AND review_state='to_be_verified'
            AND id IN (SELECT source_analysis_id FROM lims_analysis_promotions)
         """,
+        # Defensive: a promoted sub-sample should never be 'verified' — re-home it.
         """
         UPDATE lims_analyses SET review_state='promoted'
          WHERE lims_sub_sample_pk IS NOT NULL
            AND review_state='verified'
            AND id IN (SELECT source_analysis_id FROM lims_analysis_promotions)
         """,
+        # Defensive: a vial-tier 'verified' that was never promoted shouldn't exist — reopen it.
         """
         UPDATE lims_analyses SET review_state='to_be_verified'
          WHERE lims_sub_sample_pk IS NOT NULL
