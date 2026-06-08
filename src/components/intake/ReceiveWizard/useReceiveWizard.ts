@@ -5,6 +5,7 @@ import {
   updateSubSample,
   deleteSubSample,
   receiveSenaiteSample,
+  seedSubSamplePhoto,
   type SubSample,
 } from '@/lib/api'
 
@@ -105,6 +106,11 @@ export function useReceiveWizard(parent: ParentInfo) {
           photoBase64,
           remarks ?? null,
         )
+        // The parent photo lives on the SENAITE AR, whose attachment listing
+        // has a read-after-write window — seed the cache with the captured
+        // bytes so Vial 1's thumbnail shows immediately instead of racing the
+        // photo-endpoint round-trip.
+        seedSubSamplePhoto(parent.sample_id, photoBytes)
         setParentReceivedThisSession(true)
         return { sampleId: parent.sample_id }
       }
@@ -116,6 +122,7 @@ export function useReceiveWizard(parent: ParentInfo) {
         remarks,
       })
 
+      seedSubSamplePhoto(sub.sample_id, photoBytes)
       sessionSampleIdsRef.current.add(sub.sample_id)
       setVials(prev => [...prev, { sub, isThisSession: true }])
       return { sampleId: sub.sample_id }
@@ -132,6 +139,8 @@ export function useReceiveWizard(parent: ParentInfo) {
     async (sampleId: string, photoBytes?: Uint8Array, remarks?: string) => {
       const photoBase64 = photoBytes ? bytesToBase64(photoBytes) : undefined
       const sub = await updateSubSample(sampleId, { photoBase64, remarks })
+      // Retake within the session: refresh the cached thumbnail to the new shot.
+      if (photoBytes) seedSubSamplePhoto(sampleId, photoBytes)
       setVials(prev =>
         prev.map(v =>
           v.sub.sample_id === sampleId ? { sub, isThisSession: true } : v,

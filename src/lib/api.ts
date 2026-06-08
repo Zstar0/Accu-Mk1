@@ -5145,6 +5145,29 @@ export async function patchVialAssignment(
  */
 const _subSamplePhotoCache = new Map<string, string>()
 
+/**
+ * Prime the photo cache with a just-captured image so the thumbnail renders
+ * instantly, without round-tripping the photo endpoint.
+ *
+ * The first vial's photo is stored on the parent AR in SENAITE, whose
+ * attachment listing has a read-after-write window — a fetch fired the instant
+ * the parent row appears can miss it, and the thumbnail components fetch once
+ * with no retry. Seeding the cache at save time sidesteps that race entirely:
+ * the bytes are the exact photo the user just took. (`<img>` content-sniffs the
+ * blob, so the declared type need only be a plausible image type.) Sub-sample
+ * photos read from Mk1 disk immediately and don't need this, but seeding them
+ * too is harmless and saves a round-trip.
+ */
+export function seedSubSamplePhoto(sampleId: string, bytes: Uint8Array): void {
+  const prev = _subSamplePhotoCache.get(sampleId)
+  if (prev?.startsWith('blob:')) URL.revokeObjectURL(prev)
+  // Copy into a fresh ArrayBuffer so the Blob part is unambiguously typed.
+  const buf = new ArrayBuffer(bytes.byteLength)
+  new Uint8Array(buf).set(bytes)
+  const blob = new Blob([buf], { type: 'image/jpeg' })
+  _subSamplePhotoCache.set(sampleId, URL.createObjectURL(blob))
+}
+
 export async function fetchSubSamplePhotoUrl(
   sampleId: string
 ): Promise<string | null> {
