@@ -14353,6 +14353,20 @@ async def list_worksheets(
             ).all()
             item_analyst_email_map = {u.id: u.email for u in item_analyst_users}
 
+        # Resolve each item's sub-sample (vial) pk so a worksheet "Start Prep"
+        # can tag the wizard session as vial-scoped. Join on sample_id
+        # (P-XXXX-SNN) — naturally null for parent-sample ids (P-XXXX), which
+        # have no lims_sub_samples row. Additive; parents stay unaffected.
+        item_sample_ids = {it.sample_id for it in items if it.sample_id}
+        sub_sample_pk_map: dict[str, int] = {}
+        if item_sample_ids:
+            sub_rows = db.execute(
+                select(LimsSubSample.sample_id, LimsSubSample.id).where(
+                    LimsSubSample.sample_id.in_(item_sample_ids)
+                )
+            ).all()
+            sub_sample_pk_map = {r.sample_id: r.id for r in sub_rows}
+
         def _resolve_method(it_instrument_uid: str | None, it_service_group_id: int | None) -> str | None:
             """Resolve HPLC method name from instrument + peptide (via service group)."""
             if not it_instrument_uid or not it_service_group_id:
@@ -14398,6 +14412,7 @@ async def list_worksheets(
                     "notes": it.notes,
                     "peptide_id": group_peptide_map.get(it.service_group_id) if it.service_group_id else None,
                     "method_name": _resolve_method(it.instrument_uid, it.service_group_id),
+                    "lims_sub_sample_pk": sub_sample_pk_map.get(it.sample_id),
                     "analyses": json.loads(it.analyses_json) if it.analyses_json else (group_analyses_map.get(it.service_group_id, []) if it.service_group_id else []),
                     "prep_status": it.prep_status,
                 }

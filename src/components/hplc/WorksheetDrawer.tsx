@@ -302,6 +302,7 @@ export function WorksheetDrawer() {
                     instrumentId: item.instrumentUid
                       ? instruments.find(i => i.senaite_uid === item.instrumentUid)?.id ?? null
                       : null,
+                    limsSubSamplePk: item.limsSubSamplePk ?? null,
                   })
                 }}
                 instruments={instruments}

@@ -4515,6 +4515,7 @@ export interface WorksheetListItem {
     notes: string | null
     peptide_id: number | null
     method_name: string | null
+    lims_sub_sample_pk: number | null
     analyses: {
       title: string
       keyword: string | null

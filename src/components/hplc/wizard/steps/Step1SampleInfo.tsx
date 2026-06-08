@@ -55,6 +55,9 @@ export function Step1SampleInfo() {
 
   const [peptideId, setPeptideId] = useState<number | null>(null)
   const [sampleIdLabel, setSampleIdLabel] = useState('')
+  // Vial-scoped prep: set when "Start Prep" originates from a sub-sample (vial)
+  // worksheet item. Null for parent-sample preps (unchanged behavior).
+  const [limsSubSamplePk, setLimsSubSamplePk] = useState<number | null>(null)
   const [declaredWeightMg, setDeclaredWeightMg] = useState('')
   const [targetConcUgMl, setTargetConcUgMl] = useState('')
   const [targetTotalVolUl, setTargetTotalVolUl] = useState('')
@@ -170,6 +173,8 @@ export function Step1SampleInfo() {
     if (prefill.instrumentId) {
       setInstrumentId(String(prefill.instrumentId))
     }
+    // Carry the vial pk so this prep is tagged vial-scoped (null for parents)
+    setLimsSubSamplePk(prefill.limsSubSamplePk ?? null)
     // Mark prefill as applied so tab switch doesn't clear peptide
     prefillAppliedRef.current = true
     // Clear prefill so it doesn't re-apply
@@ -298,6 +303,7 @@ export function Step1SampleInfo() {
       }
       if (sampleIdLabel.trim()) data.sample_id_label = sampleIdLabel.trim()
       if (instrumentId) data.instrument_id = Number(instrumentId)
+      if (limsSubSamplePk != null) data.lims_sub_sample_pk = limsSubSamplePk
 
       // Standard prep metadata
       if (isStandard) {
@@ -409,12 +415,14 @@ export function Step1SampleInfo() {
       setDeclaredWeightMg('')
       setLookupResult(null)
       setLookupError(null)
+      setLimsSubSamplePk(null)
     }
     if (tab === 'lookup') {
       // Clear manual-entered values when switching back to lookup
       setPeptideId(null)
       setSampleIdLabel('')
       setDeclaredWeightMg('')
+      setLimsSubSamplePk(null)
     }
     setActiveTab(tab as 'lookup' | 'manual')
   }
