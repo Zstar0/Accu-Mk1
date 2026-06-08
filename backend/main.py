@@ -9244,6 +9244,7 @@ class WizardSessionCreate(BaseModel):
     standard_notes: Optional[str] = None
     instrument_name: Optional[str] = None
     instrument_id: Optional[int] = None
+    lims_sub_sample_pk: Optional[int] = None
 
 
 class WizardSessionUpdate(BaseModel):
@@ -9313,6 +9314,7 @@ class WizardSessionResponse(BaseModel):
     standard_notes: Optional[str] = None
     instrument_name: Optional[str] = None
     instrument_id: Optional[int] = None
+    lims_sub_sample_pk: Optional[int] = None
 
     class Config:
         from_attributes = True
@@ -9690,6 +9692,7 @@ def _build_session_response(session: WizardSession, db: Session) -> WizardSessio
         standard_notes=session.standard_notes,
         instrument_name=session.instrument_name,
         instrument_id=session.instrument_id,
+        lims_sub_sample_pk=session.lims_sub_sample_pk,
     )
 
 
@@ -9795,6 +9798,7 @@ async def create_wizard_session(
         standard_notes=data.standard_notes,
         instrument_name=resolved_inst_name,
         instrument_id=resolved_inst_id,
+        lims_sub_sample_pk=data.lims_sub_sample_pk,
     )
     db.add(session)
     db.commit()
@@ -10130,6 +10134,7 @@ async def create_sample_prep_endpoint(
         "peptide_name": session.peptide.name if session.peptide else None,
         "peptide_abbreviation": session.peptide.abbreviation if session.peptide else None,
         "senaite_sample_id": session.sample_id_label,
+        "lims_sub_sample_pk": session.lims_sub_sample_pk,
         "declared_weight_mg": float(session.declared_weight_mg) if session.declared_weight_mg else None,
         "target_conc_ug_ml": float(session.target_conc_ug_ml) if session.target_conc_ug_ml else None,
         "target_total_vol_ul": float(session.target_total_vol_ul) if session.target_total_vol_ul else None,

@@ -2882,6 +2882,7 @@ export interface WizardSessionResponse {
   standard_notes: string | null
   instrument_name: string | null
   instrument_id: number | null
+  lims_sub_sample_pk?: number | null
 }
 
 export interface WizardSessionListItem {
@@ -2910,6 +2911,7 @@ export async function createWizardSession(data: {
   standard_notes?: string
   instrument_name?: string
   instrument_id?: number
+  lims_sub_sample_pk?: number | null
 }): Promise<WizardSessionResponse> {
   try {
     const response = await fetch(`${API_BASE_URL()}/wizard/sessions`, {
@@ -3121,6 +3123,7 @@ export interface SamplePrep {
   peptide_name: string | null
   peptide_abbreviation: string | null
   senaite_sample_id: string | null
+  lims_sub_sample_pk: number | null
   declared_weight_mg: number | null
   target_conc_ug_ml: number | null
   target_total_vol_ul: number | null
