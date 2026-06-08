@@ -232,7 +232,7 @@ function WorksheetDropZone({
                 {item.sample_id}
               </button>
               <span className="text-muted-foreground/50">·</span>
-              <span className="truncate text-muted-foreground">{item.group_name}</span>
+              <span className="truncate min-w-0 text-muted-foreground">{item.group_name}</span>
               <ItemRolePills item={item} />
               <div className="flex-1" />
               <PriorityBadge priority={item.priority as InboxPriority} />
