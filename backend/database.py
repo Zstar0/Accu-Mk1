@@ -505,7 +505,8 @@ def _run_migrations():
             review_state          TEXT NOT NULL DEFAULT 'unassigned'
                                   CHECK (review_state IN (
                                       'unassigned', 'assigned', 'to_be_verified',
-                                      'verified', 'published', 'rejected', 'retracted'
+                                      'verified', 'published', 'rejected', 'retracted',
+                                      'promoted'
                                   )),
 
             method_id             INTEGER REFERENCES hplc_methods(id) ON DELETE SET NULL,
@@ -618,6 +619,36 @@ def _run_migrations():
             ON lims_analyses (lims_sample_pk, keyword)
             WHERE retest_of_id IS NULL AND lims_sample_pk IS NOT NULL
               AND review_state NOT IN ('retracted', 'rejected')
+        """,
+        # Sub-sample 'promoted' workflow state. Re-create the review_state CHECK
+        # to allow 'promoted', then backfill: sub-samples promoted under the old
+        # model were left at 'to_be_verified'; defensively re-home any stray
+        # vial-tier 'verified' rows (verification is now parent-only).
+        "ALTER TABLE lims_analyses DROP CONSTRAINT IF EXISTS lims_analyses_review_state_check",
+        """
+        ALTER TABLE lims_analyses ADD CONSTRAINT lims_analyses_review_state_check
+            CHECK (review_state IN (
+                'unassigned','assigned','to_be_verified','verified',
+                'published','rejected','retracted','promoted'
+            ))
+        """,
+        """
+        UPDATE lims_analyses SET review_state='promoted'
+         WHERE lims_sub_sample_pk IS NOT NULL
+           AND review_state='to_be_verified'
+           AND id IN (SELECT source_analysis_id FROM lims_analysis_promotions)
+        """,
+        """
+        UPDATE lims_analyses SET review_state='promoted'
+         WHERE lims_sub_sample_pk IS NOT NULL
+           AND review_state='verified'
+           AND id IN (SELECT source_analysis_id FROM lims_analysis_promotions)
+        """,
+        """
+        UPDATE lims_analyses SET review_state='to_be_verified'
+         WHERE lims_sub_sample_pk IS NOT NULL
+           AND review_state='verified'
+           AND id NOT IN (SELECT source_analysis_id FROM lims_analysis_promotions)
         """,
     ]
     # Per-statement isolation: a failure in one statement (e.g., a table that
