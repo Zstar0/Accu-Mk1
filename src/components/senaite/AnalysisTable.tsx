@@ -31,6 +31,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import type { SenaiteAnalysis, InboxPriority, ParentPromotionInfo } from '@/lib/api'
 import { setAnalysisMethodInstrument, promoteAnalyses } from '@/lib/api'
+import type { VialAssignment } from '@/lib/vial-assignment'
 import { PromotedFromBadge } from '@/components/senaite/PromotedFromBadge'
 import type { SampleSlaSnapshot } from '@/services/order-sla'
 import { AnalysisSlaCell } from '@/components/senaite/AnalysisSlaCell'
@@ -38,6 +39,7 @@ import { useAnalysisEditing, type UseAnalysisEditingReturn } from '@/hooks/use-a
 import { useAnalysisTransition, type UseAnalysisTransitionReturn } from '@/hooks/use-analysis-transition'
 import { useBulkAnalysisTransition } from '@/hooks/use-bulk-analysis-transition'
 import { useSidebar } from '@/components/ui/sidebar'
+import { useUIStore } from '@/store/ui-store'
 
 // --- Status styling constants ---
 
@@ -1044,6 +1046,8 @@ function AnalysisRow({
   primaryAnalysisUids,
   primaryRole,
   promotionsByKeyword,
+  vialAssignmentByKeyword,
+  onVialMethodInstrumentSaved,
   parentLineStates,
 }: {
   analysis: SenaiteAnalysis
@@ -1066,6 +1070,8 @@ function AnalysisRow({
   primaryAnalysisUids?: Set<string>
   primaryRole?: string | null
   promotionsByKeyword?: Map<string, ParentPromotionInfo>
+  vialAssignmentByKeyword?: Map<string, VialAssignment>
+  onVialMethodInstrumentSaved?: () => void
   parentLineStates?: Record<string, string>
 }) {
   const rowTint = ROW_STATUS_STYLE[analysis.review_state ?? ''] ?? ''
@@ -1080,6 +1086,11 @@ function AnalysisRow({
   const allowedTransitions = visibleRowTransitions(analysis, parentLineStates)
   const canPromote = isPromotable(analysis) && !locked
   const isPromoted = analysis.promoted_to_parent_id != null
+  const vialAssign = analysis.keyword ? vialAssignmentByKeyword?.get(analysis.keyword) : undefined
+  const vialOverlay = vialAssign?.matches[0]?.mk1Analysis ?? null
+  const vialOverlayEditable = vialAssign?.editable ?? false
+  // vialOverlay, vialOverlayEditable, onVialMethodInstrumentSaved consumed in Task 4
+  void vialOverlay; void vialOverlayEditable; void onVialMethodInstrumentSaved
   const [promoteOpen, setPromoteOpen] = useState(false)
   const queryClient = useQueryClient()
   const isPending = !!analysis.uid && transition.pendingUids.has(analysis.uid)
@@ -1119,6 +1130,17 @@ function AnalysisRow({
           </span>
           <Mk1NativeBadge uid={analysis.uid} />
           <PromotedFromBadge promotion={analysis.keyword ? promotionsByKeyword?.get(analysis.keyword) : undefined} />
+          {vialAssign && vialAssign.matches.map(m => (
+            <button
+              key={m.vialSampleId}
+              type="button"
+              onClick={e => { e.stopPropagation(); useUIStore.getState().navigateToSample(m.vialSampleId) }}
+              className="inline-flex items-center gap-0.5 text-[10px] text-muted-foreground hover:text-foreground underline underline-offset-2 shrink-0"
+              title={`Assigned to ${m.vialSampleId}`}
+            >
+              {m.vialLabel} — {m.vialSampleId}
+            </button>
+          ))}
           {!!historyCount && (
             <button
               onClick={onToggleHistory}
@@ -1370,6 +1392,15 @@ interface AnalysisTableProps {
    */
   promotionsByKeyword?: Map<string, ParentPromotionInfo>
   /**
+   * Parent-page vial assignment overlay — keyword → VialAssignment. When a row's
+   * keyword maps here, the row shows an inline assigned-vial link and overlays
+   * Method/Instrument/Analyst from that vial's Mk1 analysis. Omit on sub-sample pages.
+   */
+  vialAssignmentByKeyword?: Map<string, VialAssignment>
+  /** Called after a Method/Instrument edit that was routed to a vial's Mk1 row,
+   *  so the caller can refetch the overlay. */
+  onVialMethodInstrumentSaved?: () => void
+  /**
    * SENAITE parent-line states for sub-sample pages — keyword → review_state.
    * When a keyword maps to 'verified', the vial row is locked: all mutating
    * actions (Promote / Retest / Retract / Reject) are hidden. Corrections must
@@ -1405,6 +1436,8 @@ export function AnalysisTable({
   primaryAnalysisUids,
   primaryRole,
   promotionsByKeyword,
+  vialAssignmentByKeyword,
+  onVialMethodInstrumentSaved,
   parentLineStates,
   headerContent,
   hideProgress = false,
@@ -1718,6 +1751,8 @@ export function AnalysisTable({
                       primaryAnalysisUids={primaryAnalysisUids}
                       primaryRole={primaryRole}
                       promotionsByKeyword={promotionsByKeyword}
+                      vialAssignmentByKeyword={vialAssignmentByKeyword}
+                      onVialMethodInstrumentSaved={onVialMethodInstrumentSaved}
                       parentLineStates={parentLineStates}
                     />
                     {isExpanded && group.history.map(h => (

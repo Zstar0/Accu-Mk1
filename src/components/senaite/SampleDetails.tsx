@@ -1,5 +1,5 @@
 import { useState, useEffect, useId, useRef, useMemo, useCallback } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueries, useQueryClient } from '@tanstack/react-query'
 import DOMPurify from 'dompurify'
 import { useTheme } from '@/hooks/use-theme'
 import {
@@ -114,6 +114,7 @@ import { EditableDataRow } from '@/components/dashboard/EditableField'
 import { AnalysisTable, StatusBadge } from '@/components/senaite/AnalysisTable'
 import { needsMk1AnalysesSwap } from '@/lib/mk1-analyses-swap'
 import { buildNativeSubSampleLookup } from '@/lib/native-sub-sample'
+import { buildVialAssignmentMap } from '@/lib/vial-assignment'
 import { SampleHeaderSla } from '@/components/senaite/SampleHeaderSla'
 import { useAnalysisSlaMap } from '@/services/analysis-sla'
 import { SamplePrepHplcFlyout } from '@/components/hplc/SamplePrepHplcFlyout'
@@ -1872,6 +1873,32 @@ export function SampleDetails() {
     return m ? m[1] : null
   }, [sampleId])
 
+  const queryClient = useQueryClient()
+
+  // Parent-page overlay: fan out each vial's Mk1 analyses so parent analysis
+  // rows can show their assigned vial + Mk1 method/instrument/analyst.
+  // Gated to parent pages (parentSampleId === null); sub-sample pages do their
+  // own full Mk1 swap and never need this.
+  const overlayVials = parentSampleId === null ? (subData?.sub_samples ?? []) : []
+  const overlayAnalysesQueries = useQueries({
+    queries: overlayVials.map(v => ({
+      queryKey: ['parent-overlay-vial-analyses', v.id] as const,
+      queryFn: () => listLimsAnalysesForSubSample(v.id),
+      enabled: parentSampleId === null && v.external_lims_uid?.startsWith('mk1://') === true,
+      staleTime: 30_000,
+    })),
+  })
+
+  const vialAssignmentByKeyword = useMemo(() => {
+    if (parentSampleId !== null || !data?.analyses) return undefined
+    const vialInputs = overlayVials.map((v, i) => ({
+      sampleId: v.sample_id,
+      label: `Vial ${v.vial_sequence + 1}`,
+      analyses: overlayAnalysesQueries[i]?.data ?? [],
+    }))
+    return buildVialAssignmentMap(data.analyses, vialInputs)
+  }, [parentSampleId, data?.analyses, overlayVials, overlayAnalysesQueries])
+
   const { data: parentSummary } = useQuery({
     queryKey: ['sub-samples', parentSampleId],
     queryFn: () => listSubSamples(parentSampleId!),
@@ -3587,6 +3614,10 @@ export function SampleDetails() {
           primaryAnalysisUids={primaryAnalysisUids}
           primaryRole={currentAssignment}
           promotionsByKeyword={parentSampleId === null ? promotionsByKeyword : undefined}
+          vialAssignmentByKeyword={vialAssignmentByKeyword}
+          onVialMethodInstrumentSaved={() => {
+            queryClient.invalidateQueries({ queryKey: ['parent-overlay-vial-analyses'] })
+          }}
           parentLineStates={parentSampleId !== null ? parentLineStates : undefined}
           onResultSaved={(uid, newResult, newReviewState) => {
             setData(prev => {
