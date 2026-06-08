@@ -2713,31 +2713,36 @@ export function SampleDetails() {
                   )}
                 </div>
               )}
-              <p className="text-xs text-muted-foreground mt-0.5">
-                Received {formatDate(data.date_received)}
+              <div className="text-xs text-muted-foreground mt-0.5">
+                <p>
+                  Received {formatDate(data.date_received)}
+                  {' · '}Client:{' '}
+                  <span className="text-foreground/80">{data.client ?? '—'}</span>
+                  {!retestInfo?.is_retest && retestInfo?.retested_as && retestInfo.retested_as.length > 0 && (
+                    <>
+                      {' · '}
+                      <span className="text-violet-700 dark:text-violet-300">↳ Retested as:</span>{' '}
+                      {retestInfo.retested_as.map((r, i) => (
+                        <span key={r.sample_id}>
+                          {i > 0 && ', '}
+                          <button
+                            type="button"
+                            onClick={() => navigateToSample(r.sample_id)}
+                            className="font-mono font-semibold text-violet-700 dark:text-violet-300 hover:underline underline-offset-2"
+                            title={r.created_at ? `Created ${formatDate(r.created_at)}` : undefined}
+                          >
+                            {r.sample_id}
+                          </button>
+                        </span>
+                      ))}
+                    </>
+                  )}
+                </p>
+                {/* SLA below the Received line — stacked one indicator per line
+                    so multi-tier samples don't run a long inline string that
+                    widens the header and wraps the photo thumbnail. */}
                 <SampleHeaderSla lookup={data} />
-                {' · '}Client:{' '}
-                <span className="text-foreground/80">{data.client ?? '—'}</span>
-                {!retestInfo?.is_retest && retestInfo?.retested_as && retestInfo.retested_as.length > 0 && (
-                  <>
-                    {' · '}
-                    <span className="text-violet-700 dark:text-violet-300">↳ Retested as:</span>{' '}
-                    {retestInfo.retested_as.map((r, i) => (
-                      <span key={r.sample_id}>
-                        {i > 0 && ', '}
-                        <button
-                          type="button"
-                          onClick={() => navigateToSample(r.sample_id)}
-                          className="font-mono font-semibold text-violet-700 dark:text-violet-300 hover:underline underline-offset-2"
-                          title={r.created_at ? `Created ${formatDate(r.created_at)}` : undefined}
-                        >
-                          {r.sample_id}
-                        </button>
-                      </span>
-                    ))}
-                  </>
-                )}
-              </p>
+              </div>
             </div>
           </div>
 

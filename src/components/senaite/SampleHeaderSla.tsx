@@ -124,7 +124,7 @@ function SampleHeaderSlaImpl({ lookup }: SampleHeaderSlaProps) {
       <span
         data-testid="sample-header-sla"
         data-sla-color="loading"
-        className="ml-1.5 font-mono text-muted-foreground"
+        className="font-mono text-muted-foreground"
       >
         …
       </span>
@@ -141,7 +141,7 @@ function SampleHeaderSlaImpl({ lookup }: SampleHeaderSlaProps) {
   )
   const showGroupLabel = sorted.length > 1
   return (
-    <span className="ml-1.5 inline-flex items-baseline gap-1.5">
+    <span className="flex flex-col items-start gap-0.5">
       {sorted.map(s =>
         renderSnapshotSpan({
           snapshot: s,
