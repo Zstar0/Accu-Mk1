@@ -254,7 +254,8 @@ def test_restamp_falls_back_to_item_analyst(db_session):
 
 
 def test_senaite_shape_surfaces_analyst_email(db_session):
-    """Serializer returns the analyst's email for stamped rows, None otherwise."""
+    """Nameless analyst → display name falls back to email; unstamped rows → None.
+    (Locks the email-fallback branch of user_display_name through the serializer.)"""
     from lims_analyses.service import list_analyses_in_senaite_shape
 
     parent = _mk_parent(db_session)

@@ -34,3 +34,21 @@ def test_strips_surrounding_whitespace():
 
 def test_none_user_returns_empty_string():
     assert user_display_name(None) == ""
+
+
+def test_migration_idempotent_and_columns_present():
+    """_run_migrations is safe to re-run; users.first_name/last_name exist after."""
+    from sqlalchemy import inspect, text
+    import database
+
+    # Run twice — IF NOT EXISTS makes the ALTERs idempotent.
+    database._run_migrations()
+    database._run_migrations()
+
+    cols = {c["name"] for c in inspect(database.engine).get_columns("users")}
+    assert "first_name" in cols
+    assert "last_name" in cols
+
+    # Sanity: the columns are usable (no exception writing/reading them).
+    with database.engine.connect() as conn:
+        conn.execute(text("SELECT first_name, last_name FROM users LIMIT 1"))
