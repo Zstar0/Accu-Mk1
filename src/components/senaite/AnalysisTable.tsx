@@ -656,20 +656,35 @@ function EditableSelectCell({
   analysis,
   field,
   onSaved,
+  mk1Override = null,
+  mk1OverrideEditable = false,
 }: {
   analysis: SenaiteAnalysis
   field: 'method' | 'instrument'
   onSaved?: (uid: string | null, title: string | null) => void
+  mk1Override?: SenaiteAnalysis | null
+  mk1OverrideEditable?: boolean
 }) {
-  const options = field === 'method' ? (analysis.method_options ?? []) : (analysis.instrument_options ?? [])
+  const ov = mk1Override
+  const options = ov
+    ? (field === 'method' ? (ov.method_options ?? []) : (ov.instrument_options ?? []))
+    : (field === 'method' ? (analysis.method_options ?? []) : (analysis.instrument_options ?? []))
   const [isEditing, setIsEditing] = useState(false)
   const [draft, setDraft] = useState('')
   const [isSaving, setIsSaving] = useState(false)
   const selectRef = useRef<HTMLSelectElement>(null)
 
-  const currentValue = field === 'method' ? analysis.method : analysis.instrument
-  const currentUid = field === 'method' ? analysis.method_uid : analysis.instrument_uid
-  const canEdit = !!analysis.uid && EDITABLE_STATES.has(analysis.review_state)
+  const senaiteValue = field === 'method' ? analysis.method : analysis.instrument
+  const ovValue = ov ? (field === 'method' ? ov.method : ov.instrument) : null
+  const ovUid = ov ? (field === 'method' ? ov.method_uid : ov.instrument_uid) : null
+  // Replace-only-when-the-vial-has-a-value: don't blank a real SENAITE value
+  // when the matched vial row has no method/instrument set.
+  const currentValue = ov ? (ovValue ?? senaiteValue) : senaiteValue
+  const currentUid = ov ? ovUid : (field === 'method' ? analysis.method_uid : analysis.instrument_uid)
+  const writeUid = ov ? ov.uid : analysis.uid
+  const canEdit = ov
+    ? (mk1OverrideEditable && !!ov.uid && EDITABLE_STATES.has(ov.review_state ?? ''))
+    : (!!analysis.uid && EDITABLE_STATES.has(analysis.review_state))
 
   useEffect(() => {
     if (isEditing && selectRef.current) {
@@ -687,12 +702,12 @@ function EditableSelectCell({
   }
 
   async function handleSave() {
-    if (!analysis.uid) return
+    if (!writeUid) return
     setIsSaving(true)
     try {
       const selectedUid = draft || null
       const response = await setAnalysisMethodInstrument(
-        analysis.uid,
+        writeUid,
         field === 'method' ? selectedUid : null,
         field === 'instrument' ? selectedUid : null,
       )
@@ -1089,8 +1104,6 @@ function AnalysisRow({
   const vialAssign = analysis.keyword ? vialAssignmentByKeyword?.get(analysis.keyword) : undefined
   const vialOverlay = vialAssign?.matches[0]?.mk1Analysis ?? null
   const vialOverlayEditable = vialAssign?.editable ?? false
-  // vialOverlay, vialOverlayEditable, onVialMethodInstrumentSaved consumed in Task 4
-  void vialOverlay; void vialOverlayEditable; void onVialMethodInstrumentSaved
   const [promoteOpen, setPromoteOpen] = useState(false)
   const queryClient = useQueryClient()
   const isPending = !!analysis.uid && transition.pendingUids.has(analysis.uid)
@@ -1166,18 +1179,24 @@ function AnalysisRow({
       <EditableSelectCell
         analysis={analysis}
         field="method"
+        mk1Override={vialOverlay}
+        mk1OverrideEditable={vialOverlayEditable}
         onSaved={(newUid, newTitle) => {
-          if (analysis.uid) onMethodInstrumentSaved?.(analysis.uid, 'method', newUid, newTitle)
+          if (vialOverlay) onVialMethodInstrumentSaved?.()
+          else if (analysis.uid) onMethodInstrumentSaved?.(analysis.uid, 'method', newUid, newTitle)
         }}
       />
       <EditableSelectCell
         analysis={analysis}
         field="instrument"
+        mk1Override={vialOverlay}
+        mk1OverrideEditable={vialOverlayEditable}
         onSaved={(newUid, newTitle) => {
-          if (analysis.uid) onMethodInstrumentSaved?.(analysis.uid, 'instrument', newUid, newTitle)
+          if (vialOverlay) onVialMethodInstrumentSaved?.()
+          else if (analysis.uid) onMethodInstrumentSaved?.(analysis.uid, 'instrument', newUid, newTitle)
         }}
       />
-      <td className="py-2.5 px-3 text-xs text-muted-foreground">{analysis.analyst || '\u2014'}</td>
+      <td className="py-2.5 px-3 text-xs text-muted-foreground">{(vialOverlay?.analyst ?? analysis.analyst) || '\u2014'}</td>
       <td className="py-2.5 px-3">
         <div className="flex items-center gap-1.5 flex-wrap">
           {analysis.review_state && <StatusBadge state={analysis.review_state} />}
