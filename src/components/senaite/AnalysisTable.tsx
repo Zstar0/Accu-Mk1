@@ -677,14 +677,16 @@ function EditableSelectCell({
   const senaiteValue = field === 'method' ? analysis.method : analysis.instrument
   const ovValue = ov ? (field === 'method' ? ov.method : ov.instrument) : null
   const ovUid = ov ? (field === 'method' ? ov.method_uid : ov.instrument_uid) : null
-  // Replace-only-when-the-vial-has-a-value: don't blank a real SENAITE value
-  // when the matched vial row has no method/instrument set.
-  const currentValue = ov ? (ovValue ?? senaiteValue) : senaiteValue
-  const currentUid = ov ? ovUid : (field === 'method' ? analysis.method_uid : analysis.instrument_uid)
   const writeUid = ov ? ov.uid : analysis.uid
   const canEdit = ov
-    ? (mk1OverrideEditable && !!ov.uid && EDITABLE_STATES.has(ov.review_state ?? ''))
+    ? (mk1OverrideEditable && !!ov.uid && EDITABLE_STATES.has(ov.review_state))
     : (!!analysis.uid && EDITABLE_STATES.has(analysis.review_state))
+  // Editable single-match override → show the vial's true (possibly empty) value
+  // so display, editor preselection, and write target all agree. Otherwise
+  // (read-only multi-vial, or no override) show the SENAITE value rather than an
+  // arbitrary vial's.
+  const currentValue = ov ? (canEdit ? ovValue : senaiteValue) : senaiteValue
+  const currentUid = ov ? ovUid : (field === 'method' ? analysis.method_uid : analysis.instrument_uid)
 
   useEffect(() => {
     if (isEditing && selectRef.current) {
@@ -1196,7 +1198,7 @@ function AnalysisRow({
           else if (analysis.uid) onMethodInstrumentSaved?.(analysis.uid, 'instrument', newUid, newTitle)
         }}
       />
-      <td className="py-2.5 px-3 text-xs text-muted-foreground">{(vialOverlay?.analyst ?? analysis.analyst) || '\u2014'}</td>
+      <td className="py-2.5 px-3 text-xs text-muted-foreground">{((vialOverlayEditable ? vialOverlay?.analyst : null) ?? analysis.analyst) || '\u2014'}</td>
       <td className="py-2.5 px-3">
         <div className="flex items-center gap-1.5 flex-wrap">
           {analysis.review_state && <StatusBadge state={analysis.review_state} />}
