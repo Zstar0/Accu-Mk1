@@ -23,11 +23,11 @@ export interface VialInput {
 const DEAD_STATES = new Set(['retracted', 'rejected'])
 
 /** Identity-type analysis: generic vial keyword HPLC-ID, per-peptide parent
- *  keyword ID_*, or a title ending in "Identity (HPLC)" / "ID (HPLC)". */
+ *  keyword ID_*, or a per-peptide title ending in "Identity (HPLC)". */
 export function isIdentityAnalysis(a: { keyword?: string | null; title?: string | null }): boolean {
   const kw = (a.keyword ?? '').toUpperCase()
   if (kw === 'HPLC-ID' || kw.startsWith('ID_')) return true
-  return /\b(identity|id)\s*\(hplc\)/i.test(a.title ?? '')
+  return /\bidentity\s*\(hplc\)/i.test(a.title ?? '')
 }
 
 /** Pick the single live row per keyword on one vial: drop retracted/rejected,

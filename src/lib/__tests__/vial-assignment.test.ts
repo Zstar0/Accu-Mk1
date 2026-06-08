@@ -88,4 +88,23 @@ describe('buildVialAssignmentMap', () => {
     expect(a.matches).toHaveLength(1)
     expect(a.matches[0]!.mk1Analysis.uid).toBe('mk1:51')
   })
+
+  it('returns an empty map when there are no vials', () => {
+    const parent = [an({ keyword: 'HPLC-PUR', title: 'Peptide Purity (HPLC)' })]
+    expect(buildVialAssignmentMap(parent, []).size).toBe(0)
+  })
+
+  it('mixed parent: identity bridges and a non-identity row matches exactly', () => {
+    const parent = [
+      an({ keyword: 'ID_BPC157', title: 'BPC-157 - Identity (HPLC)' }),
+      an({ keyword: 'HPLC-PUR', title: 'Peptide Purity (HPLC)' }),
+    ]
+    const vials = [vial('P-1-S02', 'Vial 3', [
+      an({ uid: 'mk1:60', keyword: 'HPLC-ID' }),
+      an({ uid: 'mk1:61', keyword: 'HPLC-PUR' }),
+    ])]
+    const map = buildVialAssignmentMap(parent, vials)
+    expect(map.get('ID_BPC157')!.matches[0]!.mk1Analysis.uid).toBe('mk1:60')
+    expect(map.get('HPLC-PUR')!.matches[0]!.mk1Analysis.uid).toBe('mk1:61')
+  })
 })
