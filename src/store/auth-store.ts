@@ -8,6 +8,8 @@ export interface AuthUser {
   is_active: boolean
   created_at: string
   senaite_configured: boolean
+  first_name?: string | null
+  last_name?: string | null
 }
 
 interface AuthState {
