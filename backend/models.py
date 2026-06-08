@@ -546,6 +546,7 @@ class WizardSession(Base):
 
     # Step 1: Sample info
     sample_id_label: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    lims_sub_sample_pk: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     declared_weight_mg: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
 
     # Phase 09: Standard prep metadata

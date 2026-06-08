@@ -654,6 +654,8 @@ def _run_migrations():
            AND review_state='verified'
            AND id NOT IN (SELECT source_analysis_id FROM lims_analysis_promotions)
         """,
+        # Sub-vial support: tag a wizard session to the specific vial it was prepped for
+        "ALTER TABLE wizard_sessions ADD COLUMN IF NOT EXISTS lims_sub_sample_pk INTEGER",
     ]
     # Per-statement isolation: a failure in one statement (e.g., a table that
     # create_all hasn't built yet on first run) must not skip subsequent

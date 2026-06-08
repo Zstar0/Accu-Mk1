@@ -131,6 +131,8 @@ def ensure_sample_preps_table() -> None:
             cur.execute("ALTER TABLE sample_preps ADD COLUMN IF NOT EXISTS created_by_email VARCHAR(320)")
             cur.execute("ALTER TABLE sample_preps ADD COLUMN IF NOT EXISTS updated_by_user_id INTEGER")
             cur.execute("ALTER TABLE sample_preps ADD COLUMN IF NOT EXISTS updated_by_email VARCHAR(320)")
+            # Sub-vial support: tag a prep to the specific vial it was prepped for
+            cur.execute("ALTER TABLE sample_preps ADD COLUMN IF NOT EXISTS lims_sub_sample_pk INTEGER")
         conn.commit()
 
 
@@ -385,6 +387,7 @@ def create_sample_prep(data: dict) -> dict:
         "is_blend", "components_json", "vial_data",
         "is_standard", "manufacturer", "standard_notes", "instrument_name", "instrument_id",
         "created_by_user_id", "created_by_email", "updated_by_user_id", "updated_by_email",
+        "lims_sub_sample_pk",
     ]
     with get_mk1_db() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
