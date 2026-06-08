@@ -8,7 +8,11 @@
 
 **Tech Stack:** FastAPI + SQLAlchemy (main app, `models.py`) and raw psycopg2 (`mk1_db.py`) — both against the same `accumark_mk1` Postgres DB. React + TanStack Query frontend. pytest (in-memory SQLite fixture) + vitest.
 
-**Trigger decision (resolves the spec's open question):** the bridge fires in `POST /hplc/analyses` right after the `HPLCAnalysis` is persisted — the moment the analytical `result_value` (purity_percent / identity_conforms / quantity_mg) actually exists. Not the FE-driven prep status flip (which is a label, set client-side, and may precede the result). The bridge is idempotent (only touches `unassigned` rows), so HPLC re-runs don't double-submit.
+**Trigger decision (resolves the spec's open question):** the bridge fires in `POST /hplc/analyze` (handler `run_hplc_analysis`, `main.py:3891`) right after the `HPLCAnalysis` is persisted — the moment the analytical `result_value` (purity_percent / identity_conforms / quantity_mg) actually exists. This is the **sole** `HPLCAnalysis` creation path in non-test code (verified: only one `HPLCAnalysis(` construction site, `main.py:4001`; `scan_sample_preps_hplc` only matches folders, creates nothing). The FE bench flow records through this same endpoint (`src/lib/api.ts:2614`). Not the FE-driven prep status flip (a client-side label that may precede the result). The bridge is idempotent (only touches `unassigned` rows), so HPLC re-runs don't double-submit.
+
+**Ambiguity rule (spec compliance):** the bridge buckets the vial's unassigned rows by result category (purity / identity / quantity). A category with exactly ONE matching row is written + submitted; a category with 0 or 2+ rows is skipped with a logged warning (never guess). Different categories on the same vial (purity + identity from one run) are all written — that is not ambiguity.
+
+**Known limitation (flagged, not built):** blend preps are not explicitly bridged. A blend would only bridge correctly if `run_hplc_analysis` fires once per component peptide; that is not exercised or tested here. Single-peptide preps are the supported path. Do not treat the absence of blend bridging as a regression.
 
 **Key conventions discovered (don't re-derive):**
 - All eight tables (`sample_preps`, `wizard_sessions`, `hplc_analyses`, `lims_analyses`, `lims_sub_samples`, `instruments`, `hplc_methods`, `analysis_services`) live in `accumark_mk1`. `sample_preps` is reached via raw SQL (`mk1_db.py`); the rest via SQLAlchemy. Same DB, two access layers — **no cross-DB problem**, but **no real FK** on `sample_preps` columns (match the existing `instrument_id INTEGER` convention).
@@ -189,9 +193,24 @@ def test_no_matching_rows_returns_empty(db_session):
     ids = bridge_prep_result_to_vial(db, lims_sub_sample_pk=vial.id, analysis=a, peptide=pep, user_id=1)
 
     assert ids == []
+
+
+def test_skips_ambiguous_same_category(db_session):
+    db = db_session
+    pep = _peptide(db)
+    vial = _vial(db)
+    create_analysis(db, host_kind="sub_sample", host_pk=vial.id,
+                    analysis_service_id=73, keyword="HPLC-PUR", title="Peptide Purity (HPLC)")
+    create_analysis(db, host_kind="sub_sample", host_pk=vial.id,
+                    analysis_service_id=73, keyword="HPLC-PUR", title="Peptide Purity (HPLC)")
+    a = _hplc(db, pep, purity=98.5)
+
+    ids = bridge_prep_result_to_vial(db, lims_sub_sample_pk=vial.id, analysis=a, peptide=pep, user_id=1)
+
+    assert ids == []  # two same-category rows -> ambiguous -> skipped
 ```
 
-(If `LimsSubSample` / `Peptide` / `HPLCAnalysis` have additional NOT NULL columns, read `models.py` and add minimal values in the helpers — do NOT change the assertions.)
+(If `LimsSubSample` / `Peptide` / `HPLCAnalysis` have additional NOT NULL columns, read `models.py` and add minimal values in the helpers — do NOT change the assertions. **If the in-memory SQLite `db_session` fixture fights this object graph** — e.g. Postgres-isms or relationship constraints — switch to the real-DB `db` fixture pattern used in `backend/tests/test_promote_sets_source_promoted.py` (build the vial + analyses against the live `accumark_mk1` connection, skip-if-empty), rather than grinding on SQLite.)
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
@@ -290,8 +309,10 @@ def bridge_prep_result_to_vial(
     ).scalars().all()
 
     pep_token = _norm(peptide.abbreviation or peptide.name) if peptide else ""
-    submitted: list[int] = []
 
+    # Bucket candidate rows by result category, applying the peptide guard for
+    # analyte-specific identity rows (ID_<PEPTIDE>).
+    by_category: dict[str, list[LimsAnalysis]] = {}
     for row in rows:
         category = _category(row.keyword)
         if category is None:
@@ -304,9 +325,23 @@ def bridge_prep_result_to_vial(
                     lims_sub_sample_pk, row.id, row.keyword, row_token, pep_token,
                 )
                 continue
+        by_category.setdefault(category, []).append(row)
+
+    submitted: list[int] = []
+    for category, candidates in by_category.items():
+        if len(candidates) != 1:
+            # Spec: never guess on an ambiguous (0 handled by absence, 2+ here) match.
+            logger.warning(
+                "prep_bridge: ambiguous %s match for vial=%s (%d rows) — skipping",
+                category, lims_sub_sample_pk, len(candidates),
+            )
+            continue
+        row = candidates[0]
         value = _result_for(category, analysis, peptide)
         if value is None:
             continue
+        # Instrument from the HPLC run; method is not carried on HPLCAnalysis
+        # (left for the bench/overlay to set).
         if analysis.instrument_id is not None:
             row.instrument_id = analysis.instrument_id
         db.flush()
@@ -322,7 +357,7 @@ def bridge_prep_result_to_vial(
 
     if not submitted:
         logger.warning(
-            "prep_bridge: no unassigned HPLC lims_analyses rows matched for vial=%s (analysis #%s)",
+            "prep_bridge: no unambiguous HPLC lims_analyses rows matched for vial=%s (analysis #%s)",
             lims_sub_sample_pk, analysis.id,
         )
     return submitted
@@ -331,7 +366,7 @@ def bridge_prep_result_to_vial(
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `MSYS_NO_PATHCONV=1 docker exec accumark-subvial-accu-mk1-backend bash -c "cd /app && python -m pytest tests/test_prep_bridge.py -q"`
-Expected: 4 passed. (If a NOT NULL model column is missing, fix the test helper, not the assertions.)
+Expected: 5 passed. (If a NOT NULL model column is missing, fix the test helper, not the assertions.)
 
 - [ ] **Step 5: Commit**
 
@@ -342,14 +377,14 @@ git commit -m "feat(prep): bridge service — write vial-prep HPLC result onto l
 
 ---
 
-## Task 3: Wire the bridge into `POST /hplc/analyses`
+## Task 3: Wire the bridge into `POST /hplc/analyze`
 
 **Files:**
-- Modify: `backend/main.py` (the `POST /hplc/analyses` handler — `HPLCAnalysis(...)` build + commit, ~4000-4060)
+- Modify: `backend/main.py` (handler `run_hplc_analysis`, `@app.post("/hplc/analyze")` at 3891; `HPLCAnalysis(...)` build at 4001, `db.commit()` at 4054, `db.refresh(analysis)` at 4055, `return` at 4057)
 
-- [ ] **Step 1: Call the bridge after the analysis is persisted**
+- [ ] **Step 1: Call the bridge after the analysis is committed**
 
-In the `POST /hplc/analyses` handler, after the `analysis` row is committed (and `analysis.id` populated — add a `db.refresh(analysis)` if the handler doesn't already), insert:
+In `run_hplc_analysis`, insert the block **after `db.refresh(analysis)` (line 4055) and before `return _analysis_to_response(...)` (line 4057)**. At this point the analysis is already durably committed (4054) and has its id — so the try/except below cannot lose it:
 
 ```python
     # Bridge: a vial-scoped sample prep pushes its HPLC result onto the vial's
@@ -384,7 +419,7 @@ Expected: no output (clean import). Backend auto-reloads.
 
 ```bash
 git add backend/main.py
-git commit -m "feat(prep): fire vial-prep bridge on HPLC analysis creation"
+git commit -m "feat(prep): fire vial-prep bridge on HPLC analysis creation (/hplc/analyze)"
 ```
 
 ---
@@ -509,9 +544,9 @@ git commit -m "feat(prep): wizard Step1 sub-sample (vial) picker"
 MSYS_NO_PATHCONV=1 docker exec accumark-subvial-postgres psql -U postgres -d accumark_mk1 -c "SELECT la.lims_sub_sample_pk, ss.sample_id, la.keyword, la.review_state FROM lims_analyses la JOIN lims_sub_samples ss ON ss.id = la.lims_sub_sample_pk WHERE la.review_state='unassigned' AND (la.keyword='HPLC-PUR' OR la.keyword LIKE 'ID\_%' OR la.keyword='HPLC-ID') ORDER BY 1 LIMIT 10;"
 ```
 
-- [ ] **Step 2: Create a vial prep end-to-end**
+- [ ] **Step 2: Create a vial prep end-to-end through the real bench UI**
 
-Start a prep for that vial via the worksheet "Start Prep" (or Step1 picker), complete the wizard, and record the HPLC result (`POST /hplc/analyses`).
+Drive the actual app (not curl): start a prep for that vial via the worksheet "Start Prep" (or the Step1 picker), complete the wizard, and **record the HPLC result through the wizard's result step** — the UI path that calls `/hplc/analyze` (`api.ts:2614`). This confirms the hook fires on the real workflow, which unit tests cannot (they call the bridge directly). Capture the network call to confirm `sample_prep_id` is sent.
 
 - [ ] **Step 3: Confirm the write-through**
 
