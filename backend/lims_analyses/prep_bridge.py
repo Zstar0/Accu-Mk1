@@ -7,6 +7,14 @@ HPLCAnalysis (purity_percent / identity_conforms / quantity_mg), this writes the
 matching result onto the vial's unassigned HPLC lims_analyses rows and runs the
 existing 'submit' transition (-> to_be_verified). Verify/promote stay manual.
 
+Purity/quantity routing is PRIMARY by per-substance keyword: the prep peptide's
+own PUR_<X>/QTY_<X> row is resolved via a catalog lookup (analysis_services.
+peptide_id -> keyword) and matched directly — no SENAITE/slot resolution. This
+disambiguates blend vials carrying multiple PUR_<X>/QTY_<X> rows. Legacy shapes
+remain as fallbacks: per-analyte ANALYTE-{slot}-* (route by SENAITE-resolved
+slot) and the generic HPLC-PUR / single QTY_* row, for vials seeded before the
+per-substance mirror.
+
 Idempotent: only 'unassigned' rows are touched.
 """
 from __future__ import annotations
@@ -18,7 +26,7 @@ from typing import Optional
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from models import HPLCAnalysis, LimsAnalysis, LimsSample, LimsSubSample, Peptide
+from models import AnalysisService, HPLCAnalysis, LimsAnalysis, LimsSample, LimsSubSample, Peptide
 from lims_analyses.service import apply_transition
 
 logger = logging.getLogger(__name__)
@@ -32,13 +40,26 @@ def _norm(s: Optional[str]) -> str:
     return re.sub(r"[^A-Z0-9]", "", (s or "").upper())
 
 
+def _peptide_service_keyword(db: Session, *, peptide: Optional[Peptide], prefix: str) -> Optional[str]:
+    """The per-substance service keyword for `peptide` and prefix ('PUR_'/'QTY_'),
+    e.g. PUR_BPC157, or None. Catalog lookup by peptide_id — no SENAITE."""
+    if not peptide:
+        return None
+    return db.execute(
+        select(AnalysisService.keyword).where(
+            AnalysisService.peptide_id == peptide.id,
+            AnalysisService.keyword.like(prefix.replace("_", r"\_") + "%", escape="\\"),
+        ).limit(1)
+    ).scalar_one_or_none()
+
+
 def _category(keyword: Optional[str]) -> Optional[str]:
     # Note: there is intentionally no ANALYTE-N-IDENT branch. Parent ARs express
     # identity via the per-peptide ID_* keywords (e.g. ID_GHKCU) and the generic
     # HPLC-ID — never as ANALYTE-N-IDENT — so that form is not a categorized/
     # bridged shape. Its absence here is deliberate, not a gap.
     kw = (keyword or "").upper()
-    if kw == "HPLC-PUR" or _ANALYTE_PUR.match(kw):
+    if kw == "HPLC-PUR" or kw.startswith("PUR_") or _ANALYTE_PUR.match(kw):
         return "purity"
     if kw == "HPLC-ID" or kw.startswith("ID_"):
         return "identity"
@@ -88,14 +109,20 @@ def _result_for(category: str, analysis: HPLCAnalysis, peptide: Optional[Peptide
     return None
 
 
-def _pick_target(category: str, candidates: list[LimsAnalysis], *, slot: Optional[int]) -> Optional[LimsAnalysis]:
+def _pick_target(category: str, candidates: list[LimsAnalysis], *, slot: Optional[int],
+                 peptide_kw: Optional[str]) -> Optional[LimsAnalysis]:
     """Choose the single target row for a category, or None if ambiguous/empty.
 
     Identity: a peptide-specific ID_<PEPTIDE> row wins over the generic HPLC-ID
     row (the seeder puts both on every HPLC vial). Fall back to the generic row
-    only when no specific row matched. Purity/quantity: prefer per-analyte
-    ANALYTE-{slot}-* rows when present (route by resolved slot); else fall back
-    to the legacy generic row (exactly one).
+    only when no specific row matched.
+
+    Purity/quantity routing, in order:
+      1. per-substance: the prep peptide's OWN PUR_<X>/QTY_<X> row, matched by
+         the catalog-resolved `peptide_kw`. This is primary and handles blends
+         with multiple PUR_/QTY_ rows (the peptide selects which).
+      2. legacy per-analyte ANALYTE-{slot}-* rows (route by SENAITE-resolved slot).
+      3. legacy generic row (HPLC-PUR, or a single QTY_* row) — exactly one.
     """
     if category == "identity":
         specific = [r for r in candidates if (r.keyword or "").upper().startswith("ID_")]
@@ -106,6 +133,14 @@ def _pick_target(category: str, candidates: list[LimsAnalysis], *, slot: Optiona
             return generic[0]
         return None
     # purity / quantity
+    # 1. per-substance: the prep peptide's own PUR_<X>/QTY_<X> row.
+    if peptide_kw:
+        ps = [r for r in candidates if (r.keyword or "").upper() == peptide_kw.upper()]
+        if len(ps) == 1:
+            return ps[0]
+        if ps:
+            return None
+    # 2. legacy per-analyte ANALYTE-{slot}-*
     suffix = "PUR" if category == "purity" else "QTY"
     analyte = [r for r in candidates if re.match(r"^ANALYTE-[1-4]-" + suffix + "$", (r.keyword or "").upper())]
     if analyte:
@@ -114,10 +149,20 @@ def _pick_target(category: str, candidates: list[LimsAnalysis], *, slot: Optiona
         want = f"ANALYTE-{slot}-{suffix}"
         match = [r for r in analyte if (r.keyword or "").upper() == want]
         return match[0] if len(match) == 1 else None
+    # 3. legacy generic
     if category == "purity":
+        # HPLC-PUR is a disjoint, peptide-agnostic generic keyword — safe to use
+        # as the legacy fallback even when a per-substance pur_kw exists.
         generic = [r for r in candidates if (r.keyword or "").upper() == "HPLC-PUR"]
-    else:
+    elif peptide_kw is None:
+        # Quantity has no distinct generic keyword — QTY_<X> IS the per-substance
+        # namespace. Only fall back to a lone QTY_ row when we have NO per-substance
+        # keyword for this peptide (true legacy vial); otherwise tier 1 is
+        # authoritative and substituting a foreign peptide's QTY_ row would be a
+        # wrong-result guess.
         generic = [r for r in candidates if (r.keyword or "").upper().startswith("QTY_")]
+    else:
+        generic = []
     return generic[0] if len(generic) == 1 else None
 
 
@@ -181,9 +226,15 @@ def bridge_prep_result_to_vial(
                 lims_sub_sample_pk, (peptide.name if peptide else None),
             )
 
+    # Per-substance keywords for THIS prep's peptide (catalog lookup, no SENAITE).
+    # Primary routing target — selects the peptide's own PUR_<X>/QTY_<X> row.
+    pur_kw = _peptide_service_keyword(db, peptide=peptide, prefix="PUR_")
+    qty_kw = _peptide_service_keyword(db, peptide=peptide, prefix="QTY_")
+
     submitted: list[int] = []
     for category, candidates in by_category.items():
-        row = _pick_target(category, candidates, slot=slot)
+        peptide_kw = pur_kw if category == "purity" else (qty_kw if category == "quantity" else None)
+        row = _pick_target(category, candidates, slot=slot, peptide_kw=peptide_kw)
         if row is None:
             logger.warning(
                 "prep_bridge: ambiguous/unresolved %s match for vial=%s (%d candidates) — skipping",

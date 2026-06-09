@@ -1,7 +1,7 @@
 """Unit tests for the vial-prep result bridge."""
 from sqlalchemy import select
 
-from models import HPLCAnalysis, LimsAnalysis, LimsSample, LimsSubSample, Peptide
+from models import AnalysisService, HPLCAnalysis, LimsAnalysis, LimsSample, LimsSubSample, Peptide
 from lims_analyses.service import create_analysis
 from lims_analyses.prep_bridge import bridge_prep_result_to_vial
 
@@ -264,6 +264,65 @@ def test_resolves_slot_when_abbreviation_differs_from_name(db_session, monkeypat
     assert ids == [a2p.id]
     db.refresh(a2p)
     assert a2p.review_state == "to_be_verified" and a2p.result_value == "95"
+
+
+def _svc(db, *, keyword, peptide, title):
+    s = AnalysisService(keyword=keyword, peptide_id=peptide.id, title=title)
+    db.add(s); db.flush()
+    return s
+
+
+def test_routes_to_per_substance_by_peptide(db_session):
+    db = db_session
+    pep = _peptide(db, name="BPC-157", abbr="BPC-157")
+    other = _peptide(db, name="GHK-Cu", abbr="GHK-Cu")
+    vial = _vial(db)  # no ANALYTE-* rows -> no SENAITE
+    _svc(db, keyword="PUR_BPC157", peptide=pep, title="BPC-157 - Purity")
+    _svc(db, keyword="QTY_BPC157", peptide=pep, title="BPC-157 - Quantity")
+    pur_b = create_analysis(db, host_kind="sub_sample", host_pk=vial.id,
+                            analysis_service_id=200, keyword="PUR_BPC157", title="BPC-157 - Purity")
+    qty_b = create_analysis(db, host_kind="sub_sample", host_pk=vial.id,
+                            analysis_service_id=201, keyword="QTY_BPC157", title="BPC-157 - Quantity")
+    pur_g = create_analysis(db, host_kind="sub_sample", host_pk=vial.id,
+                            analysis_service_id=202, keyword="PUR_GHKCU", title="GHK-Cu - Purity")
+    idr = create_analysis(db, host_kind="sub_sample", host_pk=vial.id,
+                          analysis_service_id=30, keyword="ID_BPC157", title="BPC-157 - Identity (HPLC)")
+    a = _hplc(db, pep, purity=98.5, conforms=True, qty=4.2)
+    ids = bridge_prep_result_to_vial(db, lims_sub_sample_pk=vial.id, analysis=a, peptide=pep, user_id=1)
+    assert set(ids) == {pur_b.id, qty_b.id, idr.id}
+    db.refresh(pur_b); db.refresh(qty_b); db.refresh(pur_g)
+    assert pur_b.result_value == "98.5" and pur_b.review_state == "to_be_verified"
+    assert qty_b.result_value == "4.2"
+    assert pur_g.review_state == "unassigned"   # other analyte untouched
+
+
+def test_per_substance_does_not_call_senaite(db_session, monkeypatch):
+    db = db_session
+    pep = _peptide(db, name="BPC-157", abbr="BPC-157")
+    vial = _vial(db)
+    _svc(db, keyword="PUR_BPC157", peptide=pep, title="BPC-157 - Purity")
+    create_analysis(db, host_kind="sub_sample", host_pk=vial.id,
+                    analysis_service_id=200, keyword="PUR_BPC157", title="BPC-157 - Purity")
+    a = _hplc(db, pep, purity=90.0)
+    monkeypatch.setattr("sub_samples.senaite.fetch_parent_analyte_slots",
+                        lambda pid: (_ for _ in ()).throw(AssertionError("SENAITE must not be called")))
+    ids = bridge_prep_result_to_vial(db, lims_sub_sample_pk=vial.id, analysis=a, peptide=pep, user_id=1)
+    assert len(ids) == 1
+
+
+def test_quantity_not_routed_to_foreign_per_substance(db_session):
+    db = db_session
+    pep = _peptide(db, name="BPC-157", abbr="BPC-157")
+    other = _peptide(db, name="GHK-Cu", abbr="GHK-Cu")
+    vial = _vial(db)
+    _svc(db, keyword="QTY_BPC157", peptide=pep, title="BPC-157 - Quantity")   # catalog has prep's QTY service
+    qty_foreign = create_analysis(db, host_kind="sub_sample", host_pk=vial.id,
+                                  analysis_service_id=300, keyword="QTY_GHKCU", title="GHK-Cu - Quantity")
+    a = _hplc(db, pep, qty=4.2)
+    ids = bridge_prep_result_to_vial(db, lims_sub_sample_pk=vial.id, analysis=a, peptide=pep, user_id=1)
+    assert qty_foreign.id not in ids
+    db.refresh(qty_foreign)
+    assert qty_foreign.review_state == "unassigned"   # foreign analyte untouched
 
 
 def test_analyte_purity_skipped_when_slot_unresolved(db_session, monkeypatch):
