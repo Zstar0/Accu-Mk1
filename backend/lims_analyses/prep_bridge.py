@@ -44,15 +44,20 @@ def _category(keyword: Optional[str]) -> Optional[str]:
 
 
 def _resolve_slot(db: Session, *, parent_sample_id: Optional[str], peptide: Optional[Peptide]) -> Optional[int]:
-    """Return the parent's analyte slot (1-4) for `peptide`, else None."""
+    """Return the parent's analyte slot (1-4) for `peptide`, else None.
+
+    Matches the parent AR's Analyte{N}Peptide TITLE (which is built from the
+    peptide *name*) against the prep peptide's name OR abbreviation — either may
+    be the form the parent used. First matching slot wins (a parent should never
+    list the same analyte twice)."""
     if not parent_sample_id or not peptide:
         return None
     from sub_samples.senaite import fetch_parent_analyte_slots
     slots = fetch_parent_analyte_slots(parent_sample_id)
-    want = _norm(peptide.abbreviation or peptide.name)
+    wants = {_norm(t) for t in (peptide.name, peptide.abbreviation) if t}
     for n, title in slots.items():
         name = re.sub(r"\s*-\s*identity\s*\(hplc\)\s*$", "", title or "", flags=re.I)
-        if _norm(name) == want:
+        if _norm(name) in wants:
             return n
     return None
 
@@ -99,15 +104,16 @@ def _pick_target(category: str, candidates: list[LimsAnalysis], *, slot: Optiona
     # purity / quantity
     suffix = "PUR" if category == "purity" else "QTY"
     analyte = [r for r in candidates if re.match(r"^ANALYTE-[1-4]-" + suffix + "$", (r.keyword or "").upper())]
-    generic = [r for r in candidates
-               if (r.keyword or "").upper() == "HPLC-PUR"
-               or (r.keyword or "").upper().startswith("QTY_")]
     if analyte:
         if slot is None:
             return None
         want = f"ANALYTE-{slot}-{suffix}"
         match = [r for r in analyte if (r.keyword or "").upper() == want]
         return match[0] if len(match) == 1 else None
+    if category == "purity":
+        generic = [r for r in candidates if (r.keyword or "").upper() == "HPLC-PUR"]
+    else:
+        generic = [r for r in candidates if (r.keyword or "").upper().startswith("QTY_")]
     return generic[0] if len(generic) == 1 else None
 
 
@@ -164,6 +170,12 @@ def bridge_prep_result_to_vial(
         parent = db.get(LimsSample, sub.parent_sample_pk) if sub else None
         parent_sample_id = parent.sample_id if parent else None
         slot = _resolve_slot(db, parent_sample_id=parent_sample_id, peptide=peptide)
+        if slot is None:
+            logger.warning(
+                "prep_bridge: vial=%s peptide=%s could not be matched to a parent "
+                "analyte slot — analyte rows skipped",
+                lims_sub_sample_pk, (peptide.name if peptide else None),
+            )
 
     submitted: list[int] = []
     for category, candidates in by_category.items():

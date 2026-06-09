@@ -250,6 +250,22 @@ def test_resolves_parenthesized_peptide_name_to_slot(db_session, monkeypatch):
     assert a3p.review_state == "to_be_verified" and a3p.result_value == "97"
 
 
+def test_resolves_slot_when_abbreviation_differs_from_name(db_session, monkeypatch):
+    db = db_session
+    pep = _peptide(db, name="Thymosin Beta 4", abbr="TB500")
+    vial = _vial_with_parent(db, "P-DIVERGE")
+    a2p = create_analysis(db, host_kind="sub_sample", host_pk=vial.id,
+                          analysis_service_id=86, keyword="ANALYTE-2-PUR", title="Analyte 2 (Purity)")
+    a = _hplc(db, pep, purity=95.0)
+    monkeypatch.setattr("sub_samples.senaite.fetch_parent_analyte_slots",
+                        lambda pid: {1: "GHK-Cu - Identity (HPLC)",
+                                     2: "Thymosin Beta 4 - Identity (HPLC)"})
+    ids = bridge_prep_result_to_vial(db, lims_sub_sample_pk=vial.id, analysis=a, peptide=pep, user_id=1)
+    assert ids == [a2p.id]
+    db.refresh(a2p)
+    assert a2p.review_state == "to_be_verified" and a2p.result_value == "95"
+
+
 def test_analyte_purity_skipped_when_slot_unresolved(db_session, monkeypatch):
     db = db_session
     pep = _peptide(db, name="BPC-157", abbr="BPC-157")
