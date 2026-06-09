@@ -33,6 +33,10 @@ def _norm(s: Optional[str]) -> str:
 
 
 def _category(keyword: Optional[str]) -> Optional[str]:
+    # Note: there is intentionally no ANALYTE-N-IDENT branch. Parent ARs express
+    # identity via the per-peptide ID_* keywords (e.g. ID_GHKCU) and the generic
+    # HPLC-ID — never as ANALYTE-N-IDENT — so that form is not a categorized/
+    # bridged shape. Its absence here is deliberate, not a gap.
     kw = (keyword or "").upper()
     if kw == "HPLC-PUR" or _ANALYTE_PUR.match(kw):
         return "purity"
