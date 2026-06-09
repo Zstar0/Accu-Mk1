@@ -114,7 +114,7 @@ import { EditableDataRow } from '@/components/dashboard/EditableField'
 import { AnalysisTable, StatusBadge } from '@/components/senaite/AnalysisTable'
 import { needsMk1AnalysesSwap } from '@/lib/mk1-analyses-swap'
 import { buildNativeSubSampleLookup } from '@/lib/native-sub-sample'
-import { buildVialAssignmentMap } from '@/lib/vial-assignment'
+import { buildVialAssignmentMap, PARENT_OVERLAY_QUERY_KEY } from '@/lib/vial-assignment'
 import { SampleHeaderSla } from '@/components/senaite/SampleHeaderSla'
 import { useAnalysisSlaMap } from '@/services/analysis-sla'
 import { SamplePrepHplcFlyout } from '@/components/hplc/SamplePrepHplcFlyout'
@@ -131,8 +131,9 @@ import {
 } from '@/components/senaite/vial-quicklook-helpers'
 
 // Shared between the parent-overlay useQueries fan-out and its invalidate call —
-// they must stay identical or the post-edit refetch silently no-ops.
-const VIAL_OVERLAY_QUERY_KEY = 'parent-overlay-vial-analyses' as const
+// they must stay identical or the post-edit refetch silently no-ops. Sourced
+// from lib/vial-assignment so the role-change invalidate helper can't drift.
+const VIAL_OVERLAY_QUERY_KEY = PARENT_OVERLAY_QUERY_KEY
 
 // --- COA Console ---
 

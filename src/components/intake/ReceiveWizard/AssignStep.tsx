@@ -18,10 +18,12 @@ import {
   type VialPlanItem,
   type AssignmentRole,
 } from '@/lib/api'
+import { useQueryClient } from '@tanstack/react-query'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { Spinner } from '@/components/ui/spinner'
 import { cn } from '@/lib/utils'
+import { invalidateVialAssignmentCaches } from '@/lib/vial-assignment'
 
 interface Props {
   parentSampleId: string
@@ -43,6 +45,7 @@ export function AssignStep({ parentSampleId, parentSampleUid }: Props) {
   const [plan, setPlan] = useState<VialPlanResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const queryClient = useQueryClient()
 
   const refresh = useCallback(async () => {
     setLoading(true)
@@ -79,13 +82,16 @@ export function AssignStep({ parentSampleId, parentSampleUid }: Props) {
       setPlan(next)
       try {
         await patchVialAssignment(sampleId, target)
+        // PATCH re-seeds/drops the vial's analyses server-side; refresh the
+        // parent sample page's assignment caches so its AR overlay isn't stale.
+        invalidateVialAssignmentCaches(queryClient, parentSampleId)
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e))
         // Roll back by re-fetching
         void refresh()
       }
     },
-    [plan, refresh],
+    [plan, refresh, queryClient, parentSampleId],
   )
 
   const handleResetBucket = useCallback(
@@ -99,13 +105,14 @@ export function AssignStep({ parentSampleId, parentSampleUid }: Props) {
         await Promise.all(
           inBucket.map(v => patchVialAssignment(v.sample_id, null))
         )
+        invalidateVialAssignmentCaches(queryClient, parentSampleId)
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e))
       } finally {
         void refresh()
       }
     },
-    [plan, refresh],
+    [plan, refresh, queryClient, parentSampleId],
   )
 
   if (loading && !plan) {

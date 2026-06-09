@@ -1,7 +1,36 @@
 // Pure join logic for the parent analyses vial-assignment overlay. Maps each
 // parent analysis keyword to the vial(s) currently carrying that analysis in
 // Accu-Mk1. See docs/superpowers/specs/2026-06-08-parent-analyses-vial-assignment-design.md.
+import type { QueryClient } from '@tanstack/react-query'
 import type { SenaiteAnalysis } from '@/lib/api'
+
+// Query-key roots that render vial-assignment state. The per-vial overlay (the
+// parent AR table's "assigned vial" column) and the quicklook dialog's analyses
+// are both keyed by vial pk, so they live here as the single source of truth —
+// SampleDetails and VialsQuickLookDialog import these instead of re-declaring
+// the literal, which kept silently drifting from the invalidate call.
+export const PARENT_OVERLAY_QUERY_KEY = 'parent-overlay-vial-analyses' as const
+export const QUICKLOOK_VIAL_ANALYSES_QUERY_KEY = 'quicklook-vial-analyses' as const
+
+/**
+ * Refetch every active query that renders a vial's assignment after a role
+ * change (re-assign in quicklook, drag-to-bucket / reset in the receive wizard).
+ *
+ * The role PATCH mutates server state immediately, but three caches feed the
+ * parent sample page and would otherwise serve stale rows until their staleTime
+ * elapsed (and `refetchOnWindowFocus` is off globally, so tabbing away won't
+ * save us): the parent-scoped sub-samples list, the per-vial parent-AR overlay,
+ * and the quicklook per-vial analyses. The latter two are vial-pk-keyed, so they
+ * invalidate by key prefix; sub-samples is scoped to this parent only.
+ */
+export function invalidateVialAssignmentCaches(
+  queryClient: QueryClient,
+  parentSampleId: string,
+): void {
+  void queryClient.invalidateQueries({ queryKey: ['sub-samples', parentSampleId] })
+  void queryClient.invalidateQueries({ queryKey: [PARENT_OVERLAY_QUERY_KEY] })
+  void queryClient.invalidateQueries({ queryKey: [QUICKLOOK_VIAL_ANALYSES_QUERY_KEY] })
+}
 
 export interface VialMatch {
   vialSampleId: string        // e.g. 'P-0142-S02'

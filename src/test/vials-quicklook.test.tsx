@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query'
 import { I18nextProvider } from 'react-i18next'
 import i18n from '@/i18n/config'
 import { VialsQuickLookDialog } from '@/components/senaite/VialsQuickLookDialog'
@@ -313,6 +313,48 @@ describe('VialsQuickLookDialog', () => {
     // invalidating ['sub-samples', parentSampleId] (active) refetches it
     await waitFor(() => {
       expect(listSubSamples).toHaveBeenCalledTimes(2)
+    })
+  })
+
+  it('re-assign: refetches the parent page overlay queries (parent-overlay-vial-analyses)', async () => {
+    // Probe simulating SampleDetails' parent-page overlay query for vial pk 21.
+    // Key is the literal string on purpose — it locks the cross-component
+    // contract (key drift here = stale parent AR table after re-assign).
+    const overlayFn = vi.fn(async () => [])
+    function OverlayProbe() {
+      useQuery({
+        queryKey: ['parent-overlay-vial-analyses', 21],
+        queryFn: overlayFn,
+        staleTime: Infinity,
+      })
+      return null
+    }
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(
+      <I18nextProvider i18n={i18n}>
+        <QueryClientProvider client={qc}>
+          <OverlayProbe />
+          <VialsQuickLookDialog
+            open
+            onOpenChange={vi.fn()}
+            parentSampleId="P-0144"
+            analyteNameMap={new Map()}
+          />
+        </QueryClientProvider>
+      </I18nextProvider>
+    )
+    await screen.findByText('Purity (HPLC)')
+    expect(overlayFn).toHaveBeenCalledTimes(1)
+    const triggers = screen.getAllByRole('button', { name: /re-assign vial/i })
+    await userEvent.click(triggers[0]!)
+    const endoItem = await screen.findByText('Microbiology — Endotoxin')
+    await userEvent.click(endoItem)
+    await waitFor(() => {
+      expect(patchVialAssignment).toHaveBeenCalledWith('P-0144-S01', 'endo')
+    })
+    // staleTime Infinity → only an explicit invalidation can refetch the probe
+    await waitFor(() => {
+      expect(overlayFn).toHaveBeenCalledTimes(2)
     })
   })
 

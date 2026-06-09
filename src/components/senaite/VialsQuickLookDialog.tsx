@@ -40,6 +40,10 @@ import type {
 import { useUIStore } from '@/store/ui-store'
 import { AnalysisTable } from '@/components/senaite/AnalysisTable'
 import { buildNativeSubSampleLookup } from '@/lib/native-sub-sample'
+import {
+  invalidateVialAssignmentCaches,
+  QUICKLOOK_VIAL_ANALYSES_QUERY_KEY,
+} from '@/lib/vial-assignment'
 import { useAnalysisSlaMap } from '@/services/analysis-sla'
 import {
   RoleHeaderBadge,
@@ -73,7 +77,7 @@ interface VialsQuickLookDialogProps {
 }
 
 const vialAnalysesKey = (subSamplePk: number) =>
-  ['quicklook-vial-analyses', subSamplePk] as const
+  [QUICKLOOK_VIAL_ANALYSES_QUERY_KEY, subSamplePk] as const
 
 export function VialsQuickLookDialog({
   open,
@@ -242,9 +246,10 @@ function VialSection({
     try {
       await patchVialAssignment(vial.sample_id, role)
       toast.success(`Re-assigned ${vial.sample_id}`)
-      // assignment PATCH auto-seeds analyses server-side; refetch both surfaces
-      void queryClient.invalidateQueries({ queryKey: ['sub-samples', parentSampleId] })
-      void queryClient.invalidateQueries({ queryKey: vialAnalysesKey(vial.id) })
+      // assignment PATCH auto-seeds + drops analyses server-side; refetch every
+      // surface that renders assignment state, including the parent page's AR
+      // overlay underneath this dialog (not just our own quicklook queries).
+      invalidateVialAssignmentCaches(queryClient, parentSampleId)
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Re-assignment failed')
     } finally {
