@@ -12,6 +12,7 @@ The route layer translates them to HTTP responses.
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -40,6 +41,63 @@ class BadRequestError(ValueError):
     """Request is structurally OK but semantically invalid (e.g. missing
     result on submit). Distinct from state-machine errors which are about
     the (from_state, kind) edge."""
+
+
+# ─── Parent keyword translation ──────────────────────────────────────────────
+
+
+_PER_SUBSTANCE = re.compile(r"^(PUR|QTY)_(.+)$")
+
+
+def resolve_parent_analyte_target(
+    db: Session, *, vial_keyword: str, parent_sample_id: str,
+) -> Tuple[str, Optional[int], Optional[str]]:
+    """Map a vial per-substance keyword (PUR_<X>/QTY_<X>) to the parent AR's
+    generic ANALYTE-{slot} target: (parent_keyword, parent_service_id, parent_title).
+
+    The parent SENAITE AR carries generic ANALYTE-{n}-PUR/QTY (aliased to the
+    substance via Analyte{N}Peptide), not PUR_<X>. Native keywords (ID_<X>,
+    BLEND-*, PEPT-*, HPLC-*) already match the parent -> returns
+    (vial_keyword, None, None) WITHOUT reading SENAITE. Unresolvable per-substance
+    keywords (peptide not in any parent slot) also fall through to
+    (vial_keyword, None, None) so the caller's writeback fails loudly rather than
+    guessing.
+    """
+    from models import AnalysisService
+
+    m = _PER_SUBSTANCE.match(vial_keyword)
+    if not m:
+        return vial_keyword, None, None
+    cat = m.group(1)  # 'PUR' or 'QTY'
+
+    vsvc = db.execute(
+        select(AnalysisService).where(AnalysisService.keyword == vial_keyword)
+    ).scalar_one_or_none()
+    if vsvc is None or vsvc.peptide_id is None:
+        return vial_keyword, None, None
+
+    id_title = db.execute(
+        select(AnalysisService.title).where(
+            AnalysisService.peptide_id == vsvc.peptide_id,
+            AnalysisService.keyword.like("ID" + r"\_" + "%", escape="\\"),
+        ).order_by(AnalysisService.keyword).limit(1)
+    ).scalar_one_or_none()
+    if not id_title:
+        return vial_keyword, None, None
+
+    from sub_samples.senaite import fetch_parent_analyte_slots
+    slots = fetch_parent_analyte_slots(parent_sample_id)  # raises -> fail-closed
+    slot_n = next((n for n, t in slots.items() if t == id_title), None)
+    if slot_n is None:
+        return vial_keyword, None, None
+
+    parent_keyword = f"ANALYTE-{slot_n}-{cat}"
+    psvc = db.execute(
+        select(AnalysisService).where(AnalysisService.keyword == parent_keyword)
+    ).scalar_one_or_none()
+    if psvc is None:
+        return parent_keyword, None, None
+    return parent_keyword, psvc.id, (psvc.title or parent_keyword)
 
 
 # ─── Reads ───────────────────────────────────────────────────────────────────
