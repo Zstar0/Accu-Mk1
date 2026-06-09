@@ -15,7 +15,7 @@ import os
 import re
 import logging
 from dataclasses import dataclass
-from typing import Optional, List
+from typing import Optional, List, Any
 import requests
 
 log = logging.getLogger(__name__)
@@ -256,6 +256,55 @@ def fetch_parent_metadata(parent_sample_id: str) -> dict:
     if not detail_items:
         raise RuntimeError(f"SENAITE detail empty for uid={parent_uid}")
     return detail_items[0]
+
+
+def fetch_parent_analysis_keywords(parent_sample_id: str) -> list[str]:
+    """Return the parent AR's analysis keywords (e.g. ANALYTE-1-PUR, ID_GHKCU,
+    HPLC-ID). Raises on SENAITE HTTP error — callers that must fail-hard rely
+    on this propagating."""
+    url = f"{SENAITE_BASE_URL}/@@API/senaite/v1/search"
+    resp = _get(url, params={
+        "getRequestID": parent_sample_id,
+        "catalog": "senaite_catalog_analysis",
+        "complete": "true",
+    })
+    resp.raise_for_status()
+    out: list[str] = []
+    for item in resp.json().get("items", []):
+        kw = item.get("getKeyword")
+        if kw:
+            out.append(kw)
+    return out
+
+
+def _coerce_label(v: Any) -> Optional[str]:
+    """SENAITE reference fields come back as str or {title/uid} dict."""
+    if isinstance(v, dict):
+        return v.get("title") or v.get("uid")
+    return v or None
+
+
+def fetch_parent_analyte_slots(parent_sample_id: str) -> dict[int, str]:
+    """Return {slot: AnalyteNPeptide title} for slots 1-4 that are populated.
+    Values are identity-service titles, e.g. 'GHK-Cu - Identity (HPLC)'.
+    Raises on SENAITE HTTP error."""
+    url = f"{SENAITE_BASE_URL}/@@API/senaite/v1/search"
+    resp = _get(url, params={
+        "getId": parent_sample_id,
+        "catalog": "senaite_catalog_sample",
+        "complete": "true",
+    })
+    resp.raise_for_status()
+    items = resp.json().get("items", [])
+    if not items:
+        return {}
+    ar = items[0]
+    out: dict[int, str] = {}
+    for n in range(1, 5):
+        label = _coerce_label(ar.get(f"Analyte{n}Peptide"))
+        if label:
+            out[n] = label
+    return out
 
 
 def uid_exists(uid: Optional[str]) -> bool:
