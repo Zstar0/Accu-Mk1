@@ -278,6 +278,29 @@ def promote(
 ):
     from models import LimsAnalysis, LimsAnalysisPromotion, LimsSample, LimsSubSample
 
+    # Resolve the parent SENAITE sample_id + parent-AR target keyword BEFORE
+    # promoting, so per-substance vial keywords (PUR_<X>/QTY_<X>) land on the
+    # parent's generic ANALYTE-{slot} line. Native keywords pass through
+    # unchanged (no SENAITE read).
+    first_src = db.get(LimsAnalysis, req.sources[0].analysis_id)
+    if first_src is None:
+        raise HTTPException(status_code=404, detail="source analysis not found")
+    if first_src.lims_sub_sample_pk is not None:
+        _sub = db.get(LimsSubSample, first_src.lims_sub_sample_pk)
+        _parent = db.get(LimsSample, _sub.parent_sample_pk) if _sub else None
+    else:
+        _parent = db.get(LimsSample, first_src.lims_sample_pk)
+    parent_sample_id = _parent.sample_id if _parent else None
+
+    try:
+        if parent_sample_id:
+            parent_keyword, parent_service_id, parent_title = service.resolve_parent_analyte_target(
+                db, vial_keyword=req.keyword, parent_sample_id=parent_sample_id)
+        else:
+            parent_keyword, parent_service_id, parent_title = req.keyword, None, None
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"parent slot resolution failed: {e}")
+
     try:
         parent_row, promotion_rows = service.promote_to_parent(
             db,
@@ -289,15 +312,20 @@ def promote(
             sources=[s.model_dump() for s in req.sources],
             user_id=getattr(current_user, "id", None),
             reason=req.reason,
+            parent_keyword=parent_keyword,
+            parent_analysis_service_id=parent_service_id,
+            parent_title=parent_title,
             commit=False,
         )
     except Exception as e:
         raise _handle_service_error(e)
 
     # ── SENAITE write-back (fail-closed) ──────────────────────────────────────
-    # Derive the parent's SENAITE sample_id label for the write-back call.
-    parent_sample_obj = db.get(LimsSample, parent_row.lims_sample_pk)
-    parent_sample_id = parent_sample_obj.sample_id if parent_sample_obj else str(parent_row.lims_sample_pk)
+    # parent_sample_id was derived above (one definition). If it could not be
+    # resolved, fall back to the parent-tier row's sample_id label.
+    if parent_sample_id is None:
+        parent_sample_obj = db.get(LimsSample, parent_row.lims_sample_pk)
+        parent_sample_id = parent_sample_obj.sample_id if parent_sample_obj else str(parent_row.lims_sample_pk)
 
     # Collect source-vial sample_id labels from sub-sample rows.
     vial_ids: list[str] = []
@@ -317,7 +345,7 @@ def promote(
     try:
         senaite_writeback.writeback_promotion(
             parent_sample_id,
-            req.keyword,
+            parent_row.keyword,        # parent ANALYTE-{slot} (was req.keyword)
             req.result_value,
             remark,
         )
@@ -337,7 +365,7 @@ def promote(
         logger.error(
             "SENAITE write-back committed but Mk1 commit failed for "
             "parent=%s keyword=%s — manual reconciliation required",
-            parent_sample_id, req.keyword,
+            parent_sample_id, parent_row.keyword,
         )
         raise
     db.refresh(parent_row)

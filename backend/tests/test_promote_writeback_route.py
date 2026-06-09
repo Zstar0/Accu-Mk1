@@ -178,6 +178,67 @@ def test_promote_writeback_success(route_client, promote_fixture):
     assert parent_row.lims_sample_pk == parent.id
 
 
+# ─── Test 1b: per-substance keyword translates to parent ANALYTE-{slot} ───────
+
+
+def test_promote_per_substance_writes_back_under_parent_keyword(
+    route_client, promote_fixture, monkeypatch
+):
+    """Promoting a PUR_BPC157 vial row must write back under the PARENT keyword
+    (ANALYTE-2-PUR), NOT the per-substance vial keyword (PUR_BPC157), and the
+    parent-tier row must be keyed ANALYTE-2-PUR.
+
+    Slot resolution is made deterministic by monkeypatching
+    service.resolve_parent_analyte_target.
+    """
+    db, parent, sub, analysis, _payload = promote_fixture
+
+    # Re-key the seeded vial analysis to a per-substance keyword.
+    analysis.keyword = "PUR_BPC157"
+    analysis.title = "BPC-157 - Purity (HPLC)"
+    db.commit()
+    db.refresh(analysis)
+
+    payload = {
+        "keyword": "PUR_BPC157",
+        "result_value": "98.55",
+        "sources": [{"analysis_id": analysis.id, "contribution_kind": "chosen"}],
+    }
+
+    # Deterministic parent-slot resolution: PUR_BPC157 → ANALYTE-2-PUR.
+    def _fake_resolve(db_, *, vial_keyword, parent_sample_id):
+        assert vial_keyword == "PUR_BPC157"
+        return ("ANALYTE-2-PUR", 4242, "Analyte 2 (Purity)")
+
+    monkeypatch.setattr(
+        "lims_analyses.service.resolve_parent_analyte_target", _fake_resolve
+    )
+
+    captured = {}
+
+    def _fake_writeback(parent_sample_id, keyword, result_value, remark):
+        captured["parent_sample_id"] = parent_sample_id
+        captured["keyword"] = keyword
+        captured["result_value"] = result_value
+        return "senaite-uid-fake"
+
+    with patch("lims_analyses.routes.senaite_writeback.writeback_promotion",
+               side_effect=_fake_writeback):
+        resp = route_client.post("/api/lims-analyses/promote", json=payload)
+
+    assert resp.status_code == 201, resp.text
+
+    # Write-back used the PARENT keyword, not the per-substance vial keyword.
+    assert captured["keyword"] == "ANALYTE-2-PUR"
+    assert captured["keyword"] != "PUR_BPC157"
+    assert captured["parent_sample_id"] == parent.sample_id  # "P-0001"
+
+    # Parent-tier row is keyed under the parent ANALYTE-{slot} keyword.
+    parent_row = db.get(LimsAnalysis, resp.json()["parent"]["id"])
+    assert parent_row is not None
+    assert parent_row.keyword == "ANALYTE-2-PUR"
+
+
 # ─── Test 2: write-back fails → 502, rollback ─────────────────────────────────
 
 
