@@ -114,7 +114,7 @@ import { EditableDataRow } from '@/components/dashboard/EditableField'
 import { AnalysisTable, StatusBadge } from '@/components/senaite/AnalysisTable'
 import { needsMk1AnalysesSwap } from '@/lib/mk1-analyses-swap'
 import { buildNativeSubSampleLookup } from '@/lib/native-sub-sample'
-import { buildVialAssignmentMap, PARENT_OVERLAY_QUERY_KEY } from '@/lib/vial-assignment'
+import { buildVialAssignmentMap, PARENT_OVERLAY_QUERY_KEY, invalidateParentVialOverlay } from '@/lib/vial-assignment'
 import { SampleHeaderSla } from '@/components/senaite/SampleHeaderSla'
 import { useAnalysisSlaMap } from '@/services/analysis-sla'
 import { SamplePrepHplcFlyout } from '@/components/hplc/SamplePrepHplcFlyout'
@@ -1922,18 +1922,24 @@ export function SampleDetails() {
   })
 
   // Phase senaite-writeback Task 4: fetch promotion provenance on parent pages.
-  // parentSampleId is null on parent pages (no -SNN suffix), so !parentSampleId
-  // is the correct gate. No refetch-on-transition needed — badge is informational.
-  useEffect(() => {
-    if (!sampleId || parentSampleId !== null) return
-    listParentPromotions(sampleId)
+  // Extracted into a callable so refreshSample can re-pull it after a QuickLook
+  // promote (the badge would otherwise stay stale until a full page reload).
+  const refreshPromotions = useCallback((id: string) => {
+    listParentPromotions(id)
       .then(records => {
         setPromotionsByKeyword(new Map(records.map(r => [r.keyword, r])))
       })
       .catch(() => {
         // Non-fatal: badge simply won't appear if the fetch fails
       })
-  }, [sampleId, parentSampleId])
+  }, [])
+
+  // parentSampleId is null on parent pages (no -SNN suffix), so !parentSampleId
+  // is the correct gate.
+  useEffect(() => {
+    if (!sampleId || parentSampleId !== null) return
+    refreshPromotions(sampleId)
+  }, [sampleId, parentSampleId, refreshPromotions])
 
   // Fetch parent AR analysis states for native sub-sample pages.
   // parentSampleId is non-null only when we are a sub-sample (have -SNN suffix).
@@ -2122,11 +2128,19 @@ export function SampleDetails() {
       .finally(() => setLoading(false))
   }
 
-  /** Silent re-fetch: updates data without triggering full-page loading state. */
+  /** Silent re-fetch: updates data without triggering full-page loading state.
+   *  Refreshes all three parent-page surfaces a QuickLook mutation can touch —
+   *  the AR rows (`data`), the per-vial overlay column, and the promotion badges
+   *  — so a promote/transition/add/remove reflects immediately without a reload. */
   const refreshSample = (id: string) => {
     resolveSampleData(id)
       .then(result => setData(result))
       .catch(e => toast.error('Refresh failed', { description: e instanceof Error ? e.message : String(e) }))
+    // Overlay + promotion badges only exist on parent pages; skip on sub-samples.
+    if (parentSampleId === null) {
+      invalidateParentVialOverlay(queryClient)
+      refreshPromotions(id)
+    }
   }
 
   const openOrderFlyout = async () => {

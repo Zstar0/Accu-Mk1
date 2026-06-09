@@ -42,6 +42,7 @@ import { AnalysisTable } from '@/components/senaite/AnalysisTable'
 import { buildNativeSubSampleLookup } from '@/lib/native-sub-sample'
 import {
   invalidateVialAssignmentCaches,
+  invalidateParentVialOverlay,
   QUICKLOOK_VIAL_ANALYSES_QUERY_KEY,
 } from '@/lib/vial-assignment'
 import { useAnalysisSlaMap } from '@/services/analysis-sla'
@@ -162,6 +163,9 @@ export function VialsQuickLookDialog({
                   vialAnalysesKey(vial.id),
                   prev => prev && patchAnalysisInList(prev, uid, newResult, newReviewState)
                 )
+                // The parent AR overlay shows this vial's analyst + review state;
+                // a result save changes both, so refresh that vial's overlay.
+                invalidateParentVialOverlay(queryClient, vial.id)
               }}
               onMethodInstrumentSaved={(uid, field, newUid, newTitle) => {
                 queryClient.setQueryData<SenaiteAnalysis[]>(
@@ -175,6 +179,8 @@ export function VialsQuickLookDialog({
                         : a
                     )
                 )
+                // The parent AR overlay shows this vial's method/instrument too.
+                invalidateParentVialOverlay(queryClient, vial.id)
               }}
               onTransitionComplete={() => {
                 queryClient.invalidateQueries({ queryKey: vialAnalysesKey(vial.id) })

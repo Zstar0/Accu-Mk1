@@ -13,6 +13,28 @@ export const PARENT_OVERLAY_QUERY_KEY = 'parent-overlay-vial-analyses' as const
 export const QUICKLOOK_VIAL_ANALYSES_QUERY_KEY = 'quicklook-vial-analyses' as const
 
 /**
+ * Light-tier refresh: refetch the parent AR overlay for a single vial after a
+ * vial-analysis edit inside QuickLook (result / method / instrument). Those
+ * edits change what the parent row's overlay column shows for that vial
+ * (analyst, review state, method, instrument) but touch nothing else, so we
+ * invalidate only that vial's overlay query — not every vial, and not the
+ * heavier sub-samples / quicklook caches (the dialog keeps its own optimistic
+ * update, so refetching those would only cause flicker). Pass no pk to refresh
+ * every vial's overlay (used by the parent-wide refreshSample path).
+ */
+export function invalidateParentVialOverlay(
+  queryClient: QueryClient,
+  subSamplePk?: number,
+): void {
+  void queryClient.invalidateQueries({
+    queryKey:
+      subSamplePk == null
+        ? [PARENT_OVERLAY_QUERY_KEY]
+        : [PARENT_OVERLAY_QUERY_KEY, subSamplePk],
+  })
+}
+
+/**
  * Refetch every active query that renders a vial's assignment after a role
  * change (re-assign in quicklook, drag-to-bucket / reset in the receive wizard).
  *
