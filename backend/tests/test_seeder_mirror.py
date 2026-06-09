@@ -18,9 +18,10 @@ commit=False, so the `db` fixture's teardown rollback discards the throwaway
 rows and every seeded analysis. No live vial is read, mutated, or committed.
 """
 import pytest
+from sqlalchemy import select
 
 from lims_analyses.seeder import seed_analyses_for_vial
-from models import LimsSample, LimsSubSample
+from models import LimsAnalysis, LimsSample, LimsSubSample
 from database import SessionLocal
 
 
@@ -83,6 +84,45 @@ def test_mirror_translates_analyte_to_per_substance(db, monkeypatch):
     assert not any(k.startswith("ANALYTE-") for k in kws)   # generic NOT seeded; slot 4 skipped
     assert "ENDO-LAL" not in kws and "STER-PCR" not in kws
     assert {"ID_GHKCU", "BLEND-PUR", "HPLC-ID", "PEPT-Total"} <= kws
+
+    # Flushed-but-uncommitted rows are queryable within this same session.
+    on_vial = set(db.execute(select(LimsAnalysis.keyword).where(
+        LimsAnalysis.lims_sub_sample_pk == vial.id)).scalars().all())
+    assert {"PUR_GHKCU", "QTY_GHKCU"} <= on_vial
+
+
+def test_mirror_falls_back_to_generic_when_no_per_substance(db, monkeypatch):
+    # Post-migration every ID_<X> has PUR_/QTY_, so force the fallback via a slot
+    # title that maps to NO ID_ service: id_svc None -> per None -> generic kept.
+    vial = _throwaway_vial(db)
+    monkeypatch.setattr(
+        "sub_samples.senaite.fetch_parent_analysis_keywords",
+        lambda pid: ["ANALYTE-2-PUR"])
+    monkeypatch.setattr(
+        "sub_samples.senaite.fetch_parent_analyte_slots",
+        lambda pid: {2: "No Such Substance - Identity (HPLC)"})
+    inserted = seed_analyses_for_vial(
+        db, sub_sample=vial, role="hplc",
+        wp_services={"hplcpurity_identity": True}, parent_sample_id="X", commit=False)
+    kws = {r.keyword for r in inserted}
+    assert "ANALYTE-2-PUR" in kws   # generic kept, not silently dropped
+
+
+def test_mirror_translation_is_idempotent(db, monkeypatch):
+    # The translated path must also dedupe on re-run (existing_kw -> no double-seed).
+    vial = _throwaway_vial(db)
+    monkeypatch.setattr(
+        "sub_samples.senaite.fetch_parent_analysis_keywords",
+        lambda pid: ["ANALYTE-1-PUR", "ANALYTE-1-QTY"])
+    monkeypatch.setattr(
+        "sub_samples.senaite.fetch_parent_analyte_slots",
+        lambda pid: {1: "GHK-Cu - Identity (HPLC)"})
+    first = seed_analyses_for_vial(db, sub_sample=vial, role="hplc",
+        wp_services={"hplcpurity_identity": True}, parent_sample_id="X", commit=False)
+    second = seed_analyses_for_vial(db, sub_sample=vial, role="hplc",
+        wp_services={"hplcpurity_identity": True}, parent_sample_id="X", commit=False)
+    assert {"PUR_GHKCU", "QTY_GHKCU"} <= {r.keyword for r in first}
+    assert second == []   # re-translation hits existing_kw -> no double-seed
 
 
 def test_mirror_skips_unmapped_analyte_slot(db, monkeypatch):

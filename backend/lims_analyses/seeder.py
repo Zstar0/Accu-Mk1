@@ -214,11 +214,15 @@ def mirror_parent_hplc_analyses(
                 svc = per
             else:
                 # Safety fallback: per-substance service missing — keep the generic
-                # row so the analyte is never silently dropped.
+                # row so the analyte is never silently dropped. Two distinct causes,
+                # logged separately so a prod occurrence is diagnosable:
+                #   - no_id_service: slot title matched no ID_<X> service
+                #   - no_per_sibling: ID_<X> resolved but has no PUR_/QTY_ sibling
+                reason = "no_id_service" if id_svc is None else "no_per_sibling"
                 svc = svc_by_kw.get(kw)
                 log.warning(
-                    "seeder.mirror.no_per_substance sub=%s slot=%s title=%r kw=%s — fell back to generic",
-                    sub_sample.sample_id, slot_n, title, kw,
+                    "seeder.mirror.no_per_substance sub=%s slot=%s title=%r kw=%s reason=%s — fell back to generic",
+                    sub_sample.sample_id, slot_n, title, kw, reason,
                 )
                 if svc is None:
                     continue
