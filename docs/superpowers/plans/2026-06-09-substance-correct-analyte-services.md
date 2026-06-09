@@ -517,7 +517,20 @@ MSYS_NO_PATHCONV=1 docker exec accumark-subvial-postgres psql -U postgres -d acc
 ```
 Expected: `PUR_GHKCU, QTY_GHKCU, PUR_BPC157, QTY_BPC157, PUR_TB500BETA4, QTY_TB500BETA4, ID_GHKCU, ID_BPC157, ID_TB500BETA4, BLEND-PUR, PEPT-Total` (and `HPLC-ID` if the parent carries it). **No** `ANALYTE-*`, **no** generic `HPLC-PUR`, **no** Micro, **no** slot-4 row.
 
-- [ ] **Step 3: Bridge — run a BPC-157 prep**
+- [ ] **Step 2b: Regression + Analytics-consumer trace (the riskiest non-self-contained part)**
+
+Grouping ~140 new `PUR_/QTY_` services into Analytics roughly doubles Analytics membership; nothing in THIS feature requires that grouping (mirror translates by keyword, bridge matches by `peptide_id`, exclude-Micro only checks Micro) — it exists for the user's "part of the HPLC group" ask + consistency with `ID_*`. So it's the part most likely to affect other consumers. Two checks:
+
+1. Trace the group-driven consumers for any "iterate/seed ALL Analytics services" pattern that a bigger membership would change: `backend/main.py` around lines 14306 and 14905 (the `select(AnalysisService).join(service_group_members)...where(service_group_id==…)` blocks), the inbox `keyword_to_group` map (~13578), and `compute_vial_plan`. Mitigant: `ID_*` (67 per-peptide services) were ALREADY in Analytics, so these consumers already tolerate per-peptide services. If any consumer SEEDS/acts off full Analytics membership (not just reads for display/routing), STOP and surface it to the user — it's their grouping request, not a silent ship.
+2. Broad regression vs base — confirm zero NEW failures:
+```bash
+MSYS_NO_PATHCONV=1 docker exec accumark-subvial-accu-mk1-backend bash -c "cd /app && python -m pytest tests/ -q -k 'sub_sample or assign or seeder or vial or lims_analyses or worksheet or inbox' 2>&1 | tail -5"
+```
+Compare the failure set to base (`git stash` the in-range source files or check against the known pre-existing failures from the prior arc). Report any failure that is NEW relative to base.
+
+- [ ] **Step 3: Bridge — run a TB500 prep (the discriminating divergent-name case)**
+
+Use TB500 (slot 3; name "TB500 (Thymosin Beta 4)", keyword suffix `TB500BETA4` — `abbr`/`name` diverge from the suffix), not BPC-157, so this exercises the mirror's title→`peptide_id` join and the bridge's `peptide_id` lookup on a non-trivial name. (BPC-157 has `abbr==name` and can't confirm the hard path.)
 
 ```bash
 MSYS_NO_PATHCONV=1 docker exec accumark-subvial-accu-mk1-backend bash -c "cd /app && python -c \"
@@ -526,19 +539,19 @@ from models import Peptide, HPLCAnalysis, LimsSubSample
 from lims_analyses.prep_bridge import bridge_prep_result_to_vial
 db=SessionLocal()
 try:
-    pep=db.execute(select(Peptide).where(Peptide.name=='BPC-157')).scalars().first()
+    pep=db.execute(select(Peptide).where(Peptide.name=='TB500 (Thymosin Beta 4)')).scalars().first()
     sub=db.execute(select(LimsSubSample).where(LimsSubSample.sample_id=='PB-0071-S01')).scalar_one()
     a=HPLCAnalysis(sample_id_label='PB-0071-S01', peptide_id=pep.id,
         stock_vial_empty=1.0,stock_vial_with_diluent=2.0,dil_vial_empty=1.0,
         dil_vial_with_diluent=2.0,dil_vial_with_diluent_and_sample=3.0,
-        purity_percent=98.5, identity_conforms=True, quantity_mg=4.2)
+        purity_percent=97.0, identity_conforms=True, quantity_mg=3.1)
     db.add(a); db.flush()
     print('BRIDGED', bridge_prep_result_to_vial(db, lims_sub_sample_pk=sub.id, analysis=a, peptide=pep, user_id=1))
     db.commit()
 finally: db.close()\""
 MSYS_NO_PATHCONV=1 docker exec accumark-subvial-postgres psql -U postgres -d accumark_mk1 -c "SELECT keyword, review_state, result_value FROM lims_analyses la JOIN lims_sub_samples ss ON ss.id=la.lims_sub_sample_pk WHERE ss.sample_id='PB-0071-S01' ORDER BY keyword;"
 ```
-Expected: `PUR_BPC157`=98.5, `QTY_BPC157`=4.2, `ID_BPC157`="BPC-157" all `to_be_verified`; `PUR_GHKCU`/`QTY_GHKCU`/`PUR_TB500BETA4`/`QTY_TB500BETA4` and blend rows still `unassigned`.
+Expected: `PUR_TB500BETA4`=97, `QTY_TB500BETA4`=3.1 land `to_be_verified` (confirms the title→`peptide_id` + bridge `peptide_id` join works for a divergent name); `PUR_GHKCU`/`QTY_GHKCU`/`PUR_BPC157`/`QTY_BPC157` and blend rows untouched. **Learn-not-fix:** the pre-existing identity-guard (`_norm(keyword[3:])` vs `_norm(abbr or name)`) likely does NOT match `ID_TB500BETA4` for TB500 (suffix `TB500BETA4` ≠ norm "TB500 (Thymosin Beta 4)" = `TB500THYMOSINBETA4`), so the TB500 identity row may stay `unassigned`. That asymmetry is pre-existing and explicitly out of scope (see spec "Out of scope"); record the observed behavior, don't fix it here. Optionally also run a BPC-157 prep to confirm identity DOES land for an `abbr==name` analyte.
 
 - [ ] **Step 4: Clean up the live-test vial**
 
