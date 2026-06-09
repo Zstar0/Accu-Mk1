@@ -89,10 +89,17 @@ def create_analysis(
     method_id: Optional[int] = None,
     instrument_id: Optional[int] = None,
     created_by_user_id: Optional[int] = None,
+    commit: bool = True,
 ) -> LimsAnalysis:
     """Insert a new lims_analyses row in state='unassigned'. Writes the
     initial audit row (from_state=NULL, to_state='unassigned',
-    transition_kind='auto')."""
+    transition_kind='auto').
+
+    commit=True (default) commits per row — the historical behavior every
+    existing caller relies on. Pass commit=False to keep the row pending in
+    the caller's outer transaction (it stays flushed, so row.id is populated);
+    the caller is then responsible for the single commit. This is what makes
+    set_assignment_role's role-flip + seeding genuinely atomic."""
     if host_kind == "sample":
         lims_sample_pk, lims_sub_sample_pk = host_pk, None
     elif host_kind == "sub_sample":
@@ -124,8 +131,11 @@ def create_analysis(
         user_id=created_by_user_id,
         reason="initial insert",
     ))
-    db.commit()
-    db.refresh(row)
+    if commit:
+        db.commit()
+        db.refresh(row)
+    else:
+        db.flush()  # row already has an id from the earlier flush; keep it pending in the outer txn
     return row
 
 

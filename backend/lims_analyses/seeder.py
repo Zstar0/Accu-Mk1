@@ -123,6 +123,7 @@ def mirror_parent_hplc_analyses(
     parent_sample_id: str,
     existing_kw: set,
     created_by_user_id: Optional[int],
+    commit: bool = True,
 ) -> List[LimsAnalysis]:
     """Mirror the parent's HPLC analyses 1:1 onto the HPLC vial.
 
@@ -176,6 +177,7 @@ def mirror_parent_hplc_analyses(
             keyword=svc.keyword,
             title=svc.title or svc.keyword,
             created_by_user_id=created_by_user_id,
+            commit=commit,
         )
         inserted.append(row)
         existing_kw.add(svc.keyword)
@@ -194,11 +196,17 @@ def seed_analyses_for_vial(
     wp_services: Dict[str, bool],
     parent_sample_id: Optional[str] = None,
     created_by_user_id: Optional[int] = None,
+    commit: bool = True,
 ) -> List[LimsAnalysis]:
     """
     Insert lims_analyses rows for this vial based on its role + the parent's
     WP profile. Idempotent: any (sub_sample_pk, keyword) pair that already
     exists is skipped silently.
+
+    commit=True (default) keeps per-row commits — the best-effort create path
+    and compute_vial_plan rely on this. Pass commit=False (set_assignment_role)
+    to leave every seeded row pending in the caller's transaction so the
+    role-flip + audit event + all analyses commit atomically as one unit.
 
     HPLC vials MIRROR the parent's Analytics analyte set — see
     mirror_parent_hplc_analyses. This requires `parent_sample_id`; omitting it
@@ -237,6 +245,7 @@ def seed_analyses_for_vial(
             parent_sample_id=parent_sample_id,
             existing_kw=existing_kw,
             created_by_user_id=created_by_user_id,
+            commit=commit,
         )
 
     # ── endo / ster: fixed single-keyword whitelist (unchanged) ──────────────
@@ -260,6 +269,7 @@ def seed_analyses_for_vial(
             keyword=svc.keyword,
             title=svc.title or svc.keyword,
             created_by_user_id=created_by_user_id,
+            commit=commit,
         )
         inserted.append(row)
         existing_kw.add(svc.keyword)

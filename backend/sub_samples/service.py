@@ -704,10 +704,15 @@ def set_assignment_role(db: Session, sample_id: str, role: Optional[str], user_i
         # Phase 2 (mk1-native-analyses): if this assignment transitioned the
         # vial into a real (non-XTRA) role, seed its lims_analyses rows.
         # Idempotent — re-running on an already-seeded vial is a no-op.
-        # Seed BEFORE commit so role-flip + event + analyses are atomic.
-        # Fail-hard: a seeding/SENAITE failure rolls the whole thing back and
-        # propagates (the create path and compute_vial_plan stay best-effort —
-        # they run after their own commits, where fail-hard would orphan a vial).
+        #
+        # ATOMIC: seed with commit=False so the seeded analysis rows stay
+        # pending in THIS transaction, then the single db.commit() below is the
+        # only commit. Role flip + audit event + every analysis row commit
+        # together or not at all — a SENAITE read error OR a DB error partway
+        # through the seed loop rolls back the whole unit and propagates.
+        # (create path + compute_vial_plan keep commit=True / per-row commits:
+        # they run after their own commits, so fail-hard there would orphan a
+        # committed vial — they stay deliberately best-effort.)
         if role and role != "xtra":
             parent_row = db.get(LimsSample, sub.parent_sample_pk)
             parent_sid = parent_row.sample_id if parent_row else None
@@ -721,6 +726,7 @@ def set_assignment_role(db: Session, sample_id: str, role: Optional[str], user_i
                     wp_services=wp_services,
                     parent_sample_id=parent_sid,
                     created_by_user_id=user_id,
+                    commit=False,
                 )
         db.commit()
         return {"sample_id": sample_id, "assignment_role": role}
