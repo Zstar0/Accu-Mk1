@@ -656,6 +656,19 @@ def _run_migrations():
         """,
         # Sub-vial support: tag a wizard session to the specific vial it was prepped for
         "ALTER TABLE wizard_sessions ADD COLUMN IF NOT EXISTS lims_sub_sample_pk INTEGER",
+        # PCR sterility analyses (PCR-BACTERIA/PCR-FUNGI) were left ungrouped in the
+        # catalog. They are Microbiology analyses; grouping them here makes the HPLC
+        # vial analyte mirror's exclude-Microbiology filter correctly drop them.
+        # Idempotent via the uq_service_group_member unique constraint; a no-op where
+        # those services or the group don't exist (e.g. fresh installs).
+        """
+        INSERT INTO service_group_members (service_group_id, analysis_service_id)
+        SELECT g.id, s.id
+        FROM service_groups g
+        JOIN analysis_services s ON s.keyword IN ('PCR-BACTERIA', 'PCR-FUNGI')
+        WHERE g.name = 'Microbiology'
+        ON CONFLICT (service_group_id, analysis_service_id) DO NOTHING
+        """,
     ]
     # Per-statement isolation: a failure in one statement (e.g., a table that
     # create_all hasn't built yet on first run) must not skip subsequent

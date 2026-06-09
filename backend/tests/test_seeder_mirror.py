@@ -5,12 +5,16 @@ The monkeypatch target is "sub_samples.senaite.fetch_parent_analysis_keywords"
 — mirror_parent_hplc_analyses references it via the module (late import) so the
 patched attribute is the one called.
 
-Catalog note: the Analytics service group in this container carries BLEND-PUR,
-HPLC-ID and the ID_* identity keywords, but NOT the ANALYTE-N-* keywords. The
-assertions below use keywords that actually exist in the catalog's Analytics
-group so the behavioral contract (Analytics mirrored, Micro excluded) is tested
-against real data. Micro keywords (ENDO-LAL/STER-PCR) live in the Microbiology
-group and must be dropped.
+Filter contract: the mirror is EXCLUDE-Microbiology, not include-Analytics.
+The per-analyte services (ANALYTE-N-PUR / ANALYTE-N-QTY) are intentionally
+UNGROUPED in the catalog, so they must still be mirrored. The assertions below
+require those per-analyte rows to land and require the Microbiology-group
+keywords (ENDO-LAL/STER-PCR/PCR-BACTERIA/PCR-FUNGI) to be dropped. PCR-* are
+grouped into Microbiology by a database._run_migrations() statement.
+
+These tests mutate the live fixture vial, so each delete+reseed is committed to
+net to no change (a flush-only reseed would be undone by the fixture rollback,
+permanently stripping the rows the committed delete removed).
 """
 import pytest
 from sqlalchemy import delete, select
@@ -45,18 +49,21 @@ _EXPECTED_ON_VIAL = {
     "ANALYTE-1-PUR", "ANALYTE-1-QTY", "BLEND-PUR",
     "ID_GHKCU", "HPLC-ID", "PEPT-Total",
 }
-_MICRO_EXCLUDED = ("ENDO-LAL", "STER-PCR")
+# Microbiology-group keywords the mirror MUST drop. PCR-BACTERIA/PCR-FUNGI are
+# grouped into Microbiology by a database._run_migrations() statement; before
+# that grouping they were ungrouped and exclude-Micro would wrongly mirror them.
+_MICRO_EXCLUDED = ("ENDO-LAL", "STER-PCR", "PCR-BACTERIA", "PCR-FUNGI")
 
 
 def test_mirror_seeds_analyte_rows_and_excludes_micro(db, sub_sample, monkeypatch):
     # Parent (per SENAITE, e.g. blend PB-0076) carries per-analyte purity/qty
     # rows, blend purity, identities, peptide total, plus Micro rows. The mirror
     # must land every HPLC keyword that exists in the catalog and drop only the
-    # Microbiology-group keywords (ENDO-LAL/STER-PCR).
+    # Microbiology-group keywords (ENDO-LAL/STER-PCR/PCR-BACTERIA/PCR-FUNGI).
     parent_keywords = [
         "ANALYTE-1-PUR", "ANALYTE-1-QTY", "BLEND-PUR",
         "ID_GHKCU", "HPLC-ID", "PEPT-Total",
-        "ENDO-LAL", "STER-PCR",          # Micro — must be excluded
+        *_MICRO_EXCLUDED,                 # Micro — must be excluded
     ]
     monkeypatch.setattr(
         "sub_samples.senaite.fetch_parent_analysis_keywords",
@@ -81,6 +88,10 @@ def test_mirror_seeds_analyte_rows_and_excludes_micro(db, sub_sample, monkeypatc
         wp_services={"hplcpurity_identity": True},
         parent_sample_id="PARENT-X",
     )
+    # create_analysis only flushes within this session; commit so the delete +
+    # reseed nets to NO net change to the live fixture vial (rather than the
+    # fixture rollback stripping the rows the delete already committed).
+    db.commit()
 
     # The insert path actually ran for the load-bearing per-analyte rows.
     inserted_kws = {r.keyword for r in inserted}
@@ -124,10 +135,12 @@ def test_mirror_is_idempotent(db, sub_sample, monkeypatch):
         db, sub_sample=sub_sample, role="hplc",
         wp_services={"hplcpurity_identity": True}, parent_sample_id="P",
     )
+    db.commit()  # persist the reseed so the committed delete above nets to no-op
     second = seed_analyses_for_vial(
         db, sub_sample=sub_sample, role="hplc",
         wp_services={"hplcpurity_identity": True}, parent_sample_id="P",
     )
+    db.commit()
     assert len(first) >= 1 and len(second) == 0
 
 

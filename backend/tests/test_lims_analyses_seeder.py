@@ -113,8 +113,8 @@ def test_select_services_for_xtra_returns_nothing(db):
 
 @pytest.mark.skip(
     reason="HPLC no longer seeds a generic HPLC-PUR/HPLC-ID whitelist; it mirrors "
-    "the parent's Analytics analyte set. Mirror behavior is covered in "
-    "test_seeder_mirror.py (test_mirror_seeds_only_analytics_keywords)."
+    "the parent's analyte set. Mirror behavior is covered in "
+    "test_seeder_mirror.py (test_mirror_seeds_analyte_rows_and_excludes_micro)."
 )
 def test_seed_for_hplc_creates_lims_analyses_rows(db, sub_sample):
     pass
