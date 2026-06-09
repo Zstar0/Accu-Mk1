@@ -12,15 +12,17 @@ created and its cloned analyses remain the source of truth UNTIL Phase 3's
 AnalysisTable adapter cuts reads over to Mk1. The Mk1 rows seeded here are
 the parallel-shadow that becomes authoritative at Phase 3 cutover.
 
-HPLC vials MIRROR the parent SENAITE sample's full Analytics analyte set.
+HPLC vials MIRROR the parent SENAITE sample's full HPLC analyte set.
 Instead of seeding a generic HPLC-PUR/HPLC-ID whitelist, the seeder reads
-the parent AR's analysis keywords (sub_samples.senaite.fetch_parent_analysis_keywords),
-keeps the ones whose Mk1 analysis_service belongs to the "Analytics" service
-group, and creates one lims_analyses row per matching keyword. This captures
-the real per-analyte purity/quantity/identity rows (ANALYTE-N-*, ID_*),
-blend purity (BLEND-PUR), peptide totals (PEPT-Total) and HPLC-ID exactly as
-the parent carries them. Micro keywords (ENDO-LAL, STER-PCR) live in a
-different service group and are excluded by the Analytics filter.
+the parent AR's analysis keywords (sub_samples.senaite.fetch_parent_analysis_keywords)
+and creates one lims_analyses row per keyword that exists in the Mk1 catalog
+EXCEPT those in the "Microbiology" service group. This captures the real
+per-analyte purity/quantity/identity rows (ANALYTE-N-*, ID_*), blend purity
+(BLEND-PUR), peptide totals (PEPT-Total) and HPLC-ID exactly as the parent
+carries them. The predicate is exclude-Microbiology (not include-Analytics)
+because the per-analyte ANALYTE-N-* services are intentionally ungrouped — an
+Analytics-group include filter would silently drop them. Micro keywords
+(ENDO-LAL, STER-PCR, KF) are dropped; those vials get their own role seeding.
 
 The mirror is fail-hard: a SENAITE read error propagates so the caller can
 abort rather than seed a partial/empty analyte set. endo/ster/xtra vials are
@@ -93,11 +95,25 @@ def select_services_for_role(db: Session, role: str) -> List[AnalysisService]:
     return list(rows)
 
 
-def _analytics_group_id(db: Session) -> Optional[int]:
-    """Resolve the Analytics service group id by name (don't hardcode the id)."""
-    return db.execute(
-        select(ServiceGroup.id).where(ServiceGroup.name == "Analytics")
-    ).scalar_one_or_none()
+def _micro_group_keywords(db: Session) -> Set[str]:
+    """Resolve the Microbiology service group's analysis keywords by group name.
+
+    Returns an empty set if the group doesn't exist — so a missing group
+    excludes nothing (default-open). The HPLC mirror uses this as an EXCLUDE
+    list, not an include filter (see mirror_parent_hplc_analyses)."""
+    rows = db.execute(
+        select(AnalysisService.keyword)
+        .join(
+            service_group_members,
+            service_group_members.c.analysis_service_id == AnalysisService.id,
+        )
+        .join(
+            ServiceGroup,
+            ServiceGroup.id == service_group_members.c.service_group_id,
+        )
+        .where(ServiceGroup.name == "Microbiology")
+    ).scalars().all()
+    return {k for k in rows if k}
 
 
 def mirror_parent_hplc_analyses(
@@ -108,15 +124,22 @@ def mirror_parent_hplc_analyses(
     existing_kw: set,
     created_by_user_id: Optional[int],
 ) -> List[LimsAnalysis]:
-    """Mirror the parent's Analytics-group analyses 1:1 onto the HPLC vial.
+    """Mirror the parent's HPLC analyses 1:1 onto the HPLC vial.
 
-    Reads the parent's SENAITE analysis keywords, keeps those whose Mk1
-    analysis_service belongs to the "Analytics" service group, and creates a
-    lims_analyses row per keyword not already present on the vial.
+    Reads the parent's SENAITE analysis keywords and seeds a lims_analyses row
+    for every keyword that exists in the Mk1 catalog EXCEPT those belonging to
+    the Microbiology service group (ENDO-LAL/STER-PCR/KF — those vials get
+    their own role-based seeding).
+
+    The predicate is EXCLUDE-Microbiology, not include-Analytics, on purpose:
+    the per-analyte services (ANALYTE-N-PUR / ANALYTE-N-QTY) are intentionally
+    ungrouped in the catalog, so an Analytics-group include filter would drop
+    exactly the per-analyte rows this feature exists to mirror. Default-open
+    (seed unless it's a known Micro keyword) is the correct error direction —
+    under-inclusion silently loses analyte data.
 
     Fail-hard: a SENAITE read error propagates (the caller aborts rather than
-    seed a partial analyte set). Micro keywords (ENDO-LAL/STER-PCR) live in a
-    different group and are dropped because they have no Analytics service.
+    seed a partial analyte set).
 
     `existing_kw` is the caller-built set of already-seeded keywords for this
     vial; matching rows are skipped (idempotency, also backed by the partial
@@ -126,21 +149,12 @@ def mirror_parent_hplc_analyses(
     # sub_samples.senaite.fetch_parent_analysis_keywords takes effect in tests.
     from sub_samples import senaite as senaite_mod
 
-    group_id = _analytics_group_id(db)
-    if group_id is None:
-        log.warning("seeder.mirror.no_analytics_group sub=%s", sub_sample.sample_id)
-        return []
-
-    # Analytics-group services indexed by keyword.
-    svc_rows = db.execute(
-        select(AnalysisService)
-        .join(
-            service_group_members,
-            service_group_members.c.analysis_service_id == AnalysisService.id,
-        )
-        .where(service_group_members.c.service_group_id == group_id)
-    ).scalars().all()
+    # Whole catalog indexed by keyword (NOT restricted to a group — see docstring).
+    svc_rows = db.execute(select(AnalysisService)).scalars().all()
     svc_by_kw = {s.keyword: s for s in svc_rows if s.keyword}
+
+    # Keywords to drop: the Microbiology group (ENDO-LAL/STER-PCR/KF).
+    micro_kw = _micro_group_keywords(db)
 
     # raises -> fail-hard
     parent_keywords = senaite_mod.fetch_parent_analysis_keywords(parent_sample_id)
@@ -148,7 +162,9 @@ def mirror_parent_hplc_analyses(
     inserted: List[LimsAnalysis] = []
     for kw in parent_keywords:
         svc = svc_by_kw.get(kw)
-        if svc is None:          # not an Analytics service (e.g. ENDO-LAL/STER-PCR)
+        if svc is None:          # keyword not in the Mk1 catalog at all
+            continue
+        if svc.keyword in micro_kw:   # Microbiology analysis (ENDO-LAL/STER-PCR/KF)
             continue
         if svc.keyword in existing_kw:
             continue

@@ -38,30 +38,66 @@ def sub_sample(db):
     return sub
 
 
-def test_mirror_seeds_only_analytics_keywords(db, sub_sample, monkeypatch):
-    # Parent (per SENAITE) carries a blend HPLC set + Micro rows. Mirror must
-    # keep Analytics-group keywords and drop ENDO-LAL/STER-PCR.
+# Keywords the corrected mirror MUST land. ANALYTE-N-* are the load-bearing
+# rows: they exist in the live catalog (e.g. ANALYTE-1-PUR=id 85) but are
+# intentionally UNGROUPED — an include-Analytics filter would drop them.
+_EXPECTED_ON_VIAL = {
+    "ANALYTE-1-PUR", "ANALYTE-1-QTY", "BLEND-PUR",
+    "ID_GHKCU", "HPLC-ID", "PEPT-Total",
+}
+_MICRO_EXCLUDED = ("ENDO-LAL", "STER-PCR")
+
+
+def test_mirror_seeds_analyte_rows_and_excludes_micro(db, sub_sample, monkeypatch):
+    # Parent (per SENAITE, e.g. blend PB-0076) carries per-analyte purity/qty
+    # rows, blend purity, identities, peptide total, plus Micro rows. The mirror
+    # must land every HPLC keyword that exists in the catalog and drop only the
+    # Microbiology-group keywords (ENDO-LAL/STER-PCR).
     parent_keywords = [
-        "BLEND-PUR", "ID_GHKCU", "ID_BPC157", "HPLC-ID", "PEPT-Total",
+        "ANALYTE-1-PUR", "ANALYTE-1-QTY", "BLEND-PUR",
+        "ID_GHKCU", "HPLC-ID", "PEPT-Total",
         "ENDO-LAL", "STER-PCR",          # Micro — must be excluded
     ]
     monkeypatch.setattr(
         "sub_samples.senaite.fetch_parent_analysis_keywords",
         lambda pid: parent_keywords,
     )
-    seed_analyses_for_vial(
+    # Exercise the insert path even if a prior run already seeded these: scoped
+    # hard-delete of the expected keywords (+ audit transitions) on this vial.
+    doomed = db.execute(
+        select(LimsAnalysis.id).where(
+            LimsAnalysis.lims_sub_sample_pk == sub_sample.id,
+            LimsAnalysis.keyword.in_(_EXPECTED_ON_VIAL),
+        )
+    ).scalars().all()
+    if doomed:
+        db.execute(delete(LimsAnalysisTransition).where(
+            LimsAnalysisTransition.analysis_id.in_(doomed)))
+        db.execute(delete(LimsAnalysis).where(LimsAnalysis.id.in_(doomed)))
+        db.commit()
+
+    inserted = seed_analyses_for_vial(
         db, sub_sample=sub_sample, role="hplc",
         wp_services={"hplcpurity_identity": True},
         parent_sample_id="PARENT-X",
     )
-    # All Analytics keywords from the parent now exist on the vial; Micro never
-    # lands (assert on the vial's full set so prior seeds don't mask a leak).
+
+    # The insert path actually ran for the load-bearing per-analyte rows.
+    inserted_kws = {r.keyword for r in inserted}
+    assert _EXPECTED_ON_VIAL <= inserted_kws
+    for mk in _MICRO_EXCLUDED:
+        assert mk not in inserted_kws
+
+    # And the rows are on the vial; Micro never lands (full-set check so prior
+    # seeds can't mask a Micro leak).
     on_vial = set(db.execute(
         select(LimsAnalysis.keyword).where(
             LimsAnalysis.lims_sub_sample_pk == sub_sample.id)
     ).scalars().all())
-    assert "ENDO-LAL" not in on_vial and "STER-PCR" not in on_vial
-    assert {"BLEND-PUR", "ID_GHKCU", "HPLC-ID"} <= on_vial
+    assert _EXPECTED_ON_VIAL <= on_vial
+    assert {"ANALYTE-1-PUR", "ID_GHKCU"} <= on_vial
+    for mk in _MICRO_EXCLUDED:
+        assert mk not in on_vial
 
 
 def test_mirror_is_idempotent(db, sub_sample, monkeypatch):
