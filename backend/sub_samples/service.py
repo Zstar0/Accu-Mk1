@@ -701,30 +701,28 @@ def set_assignment_role(db: Session, sample_id: str, role: Optional[str], user_i
             details={"from": old_role, "to": role},
             user_id=user_id,
         ))
-        db.commit()
         # Phase 2 (mk1-native-analyses): if this assignment transitioned the
         # vial into a real (non-XTRA) role, seed its lims_analyses rows.
         # Idempotent — re-running on an already-seeded vial is a no-op.
-        # Best-effort: failure must NOT roll back the role assignment.
+        # Seed BEFORE commit so role-flip + event + analyses are atomic.
+        # Fail-hard: a seeding/SENAITE failure rolls the whole thing back and
+        # propagates (the create path and compute_vial_plan stay best-effort —
+        # they run after their own commits, where fail-hard would orphan a vial).
         if role and role != "xtra":
-            try:
-                parent_row = db.get(LimsSample, sub.parent_sample_pk)
-                parent_sid = parent_row.sample_id if parent_row else None
-                if parent_sid:
-                    wp_services = _fetch_wp_services_for_parent(parent_sid) or {}
-                    from lims_analyses.seeder import seed_analyses_for_vial
-                    seed_analyses_for_vial(
-                        db,
-                        sub_sample=sub,
-                        role=role,
-                        wp_services=wp_services,
-                        parent_sample_id=parent_sid,
-                    )
-            except Exception as e:
-                log.warning(
-                    "sub_samples.role_flip_seed_failed sub=%s role=%s err=%s",
-                    sample_id, role, e,
+            parent_row = db.get(LimsSample, sub.parent_sample_pk)
+            parent_sid = parent_row.sample_id if parent_row else None
+            if parent_sid:
+                wp_services = _fetch_wp_services_for_parent(parent_sid) or {}
+                from lims_analyses.seeder import seed_analyses_for_vial
+                seed_analyses_for_vial(
+                    db,
+                    sub_sample=sub,
+                    role=role,
+                    wp_services=wp_services,
+                    parent_sample_id=parent_sid,
+                    created_by_user_id=user_id,
                 )
+        db.commit()
         return {"sample_id": sample_id, "assignment_role": role}
 
     parent = db.execute(

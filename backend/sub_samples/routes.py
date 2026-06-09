@@ -260,12 +260,15 @@ def patch_assignment(
     - Sub-samples: role may be null (resets to auto-assign on next /vial-plan).
     - Parent AR: null role is coerced to 'hplc' (preserves "primary always HPLC").
     """
+    import requests as _rq
     try:
         return service.set_assignment_role(db, sample_id, body.role, user_id=user.id)
     except LookupError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    except _rq.RequestException as e:
+        raise HTTPException(status_code=502, detail=f"SENAITE unavailable while seeding analyses: {e}")
 
 
 @router.get("/{sample_id}/photo")
