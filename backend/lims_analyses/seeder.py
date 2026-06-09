@@ -12,19 +12,19 @@ created and its cloned analyses remain the source of truth UNTIL Phase 3's
 AnalysisTable adapter cuts reads over to Mk1. The Mk1 rows seeded here are
 the parallel-shadow that becomes authoritative at Phase 3 cutover.
 
-GENERIC services (HPLC-PUR, HPLC-ID) are seeded for all HPLC vials via the
-ROLE_TO_KEYWORDS whitelist. Per-peptide identity services (e.g.
-"BPC-157 - Identity (HPLC)" / keyword ID_BPC157) are additionally seeded
-for HPLC vials based on the parent's analyte name(s).
+HPLC vials MIRROR the parent SENAITE sample's full Analytics analyte set.
+Instead of seeding a generic HPLC-PUR/HPLC-ID whitelist, the seeder reads
+the parent AR's analysis keywords (sub_samples.senaite.fetch_parent_analysis_keywords),
+keeps the ones whose Mk1 analysis_service belongs to the "Analytics" service
+group, and creates one lims_analyses row per matching keyword. This captures
+the real per-analyte purity/quantity/identity rows (ANALYTE-N-*, ID_*),
+blend purity (BLEND-PUR), peptide totals (PEPT-Total) and HPLC-ID exactly as
+the parent carries them. Micro keywords (ENDO-LAL, STER-PCR) live in a
+different service group and are excluded by the Analytics filter.
 
-Analyte-name source: lims_samples.peptide_name. This column stores the
-value of the SENAITE Analyte1Peptide field as it appeared at sample-create
-time — which matches the analysis_services.title exactly (e.g.
-"BPC-157 - Identity (HPLC)"). Direct exact-match; no transformation needed.
-Limitation: only Analyte1 is captured in lims_samples; samples with 2-4
-analytes (blends) will only get the first analyte's ID service seeded here.
-Blend support can be added in a future phase by joining through
-peptides → peptide_analytes → analysis_services.
+The mirror is fail-hard: a SENAITE read error propagates so the caller can
+abort rather than seed a partial/empty analyte set. endo/ster/xtra vials are
+unaffected — they keep the fixed single-keyword ROLE_TO_KEYWORDS whitelist.
 
 Idempotent: calling twice with the same args is a no-op the second time
 (deduped by the partial unique index on (lims_sub_sample_pk, keyword)).
@@ -39,7 +39,13 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from lims_analyses import service as la_service
-from models import AnalysisService, LimsAnalysis, LimsSubSample
+from models import (
+    AnalysisService,
+    LimsAnalysis,
+    LimsSubSample,
+    ServiceGroup,
+    service_group_members,
+)
 
 log = logging.getLogger(__name__)
 
@@ -56,11 +62,10 @@ ROLE_TO_WP_KEYS: Dict[str, Set[str]] = {
 }
 
 # Role → exact analysis_services.keyword whitelist that selects the right
-# analyses for the role. EXACT match — no substring magic — to avoid
-# accidentally including per-peptide ID_* rows that the SENAITE-side
-# cloning already covers.
+# analyses for the role. EXACT match — no substring magic. HPLC is NOT here:
+# HPLC vials mirror the parent's Analytics analyte set (see
+# mirror_parent_hplc_analyses) rather than seeding a fixed whitelist.
 ROLE_TO_KEYWORDS: Dict[str, List[str]] = {
-    "hplc": ["HPLC-PUR", "HPLC-ID"],
     "endo": ["ENDO-LAL"],
     "ster": ["STER-PCR"],
     "xtra": [],
@@ -88,82 +93,81 @@ def select_services_for_role(db: Session, role: str) -> List[AnalysisService]:
     return list(rows)
 
 
-def select_identity_service_by_title(
-    db: Session, title: str
-) -> Optional[AnalysisService]:
-    """Return the analysis_services row whose title exactly matches `title`,
-    or None when no such row exists.
-
-    lims_samples.peptide_name stores the full SENAITE title string
-    (e.g. "BPC-157 - Identity (HPLC)"), which is identical to
-    analysis_services.title — so an exact-match lookup is sufficient.
-    No normalisation or separator conversion is needed.
-    """
+def _analytics_group_id(db: Session) -> Optional[int]:
+    """Resolve the Analytics service group id by name (don't hardcode the id)."""
     return db.execute(
-        select(AnalysisService).where(AnalysisService.title == title)
-    ).scalars().first()
+        select(ServiceGroup.id).where(ServiceGroup.name == "Analytics")
+    ).scalar_one_or_none()
 
 
-def _seed_peptide_identity_services(
+def mirror_parent_hplc_analyses(
     db: Session,
     *,
     sub_sample: LimsSubSample,
+    parent_sample_id: str,
     existing_kw: set,
     created_by_user_id: Optional[int],
 ) -> List[LimsAnalysis]:
-    """Seed per-peptide identity service(s) onto an HPLC vial.
+    """Mirror the parent's Analytics-group analyses 1:1 onto the HPLC vial.
 
-    Analyte-name source: sub_sample.parent_sample.peptide_name. This field
-    holds the SENAITE Analyte1Peptide title verbatim (e.g. "BPC-157 - Identity
-    (HPLC)"), which is an exact match for analysis_services.title. Only Analyte1
-    is captured; blends with multiple analytes will get only the first analyte's
-    ID service. Multi-analyte support can be added in a future phase via the
-    peptides → peptide_analytes → analysis_services join.
+    Reads the parent's SENAITE analysis keywords, keeps those whose Mk1
+    analysis_service belongs to the "Analytics" service group, and creates a
+    lims_analyses row per keyword not already present on the vial.
 
-    If the parent has no peptide_name, or the catalog has no matching row, the
-    call is a no-op (logs at INFO/WARNING respectively, never raises).
+    Fail-hard: a SENAITE read error propagates (the caller aborts rather than
+    seed a partial analyte set). Micro keywords (ENDO-LAL/STER-PCR) live in a
+    different group and are dropped because they have no Analytics service.
 
     `existing_kw` is the caller-built set of already-seeded keywords for this
-    vial; rows whose keyword appears there are skipped (idempotency).
+    vial; matching rows are skipped (idempotency, also backed by the partial
+    unique index on (lims_sub_sample_pk, keyword)).
     """
-    parent = getattr(sub_sample, "parent_sample", None)
-    peptide_title = getattr(parent, "peptide_name", None) if parent else None
-    if not peptide_title:
+    # Late import + module-attribute reference so monkeypatching
+    # sub_samples.senaite.fetch_parent_analysis_keywords takes effect in tests.
+    from sub_samples import senaite as senaite_mod
+
+    group_id = _analytics_group_id(db)
+    if group_id is None:
+        log.warning("seeder.mirror.no_analytics_group sub=%s", sub_sample.sample_id)
+        return []
+
+    # Analytics-group services indexed by keyword.
+    svc_rows = db.execute(
+        select(AnalysisService)
+        .join(
+            service_group_members,
+            service_group_members.c.analysis_service_id == AnalysisService.id,
+        )
+        .where(service_group_members.c.service_group_id == group_id)
+    ).scalars().all()
+    svc_by_kw = {s.keyword: s for s in svc_rows if s.keyword}
+
+    # raises -> fail-hard
+    parent_keywords = senaite_mod.fetch_parent_analysis_keywords(parent_sample_id)
+
+    inserted: List[LimsAnalysis] = []
+    for kw in parent_keywords:
+        svc = svc_by_kw.get(kw)
+        if svc is None:          # not an Analytics service (e.g. ENDO-LAL/STER-PCR)
+            continue
+        if svc.keyword in existing_kw:
+            continue
+        row = la_service.create_analysis(
+            db,
+            host_kind="sub_sample",
+            host_pk=sub_sample.id,
+            analysis_service_id=svc.id,
+            keyword=svc.keyword,
+            title=svc.title or svc.keyword,
+            created_by_user_id=created_by_user_id,
+        )
+        inserted.append(row)
+        existing_kw.add(svc.keyword)
         log.info(
-            "seeder.peptide_identity.skip_no_analyte sub=%s — parent has no peptide_name",
-            sub_sample.sample_id,
+            "seeder.mirror.seeded sub=%s analysis_id=%s keyword=%s",
+            sub_sample.sample_id, row.id, svc.keyword,
         )
-        return []
-
-    svc = select_identity_service_by_title(db, peptide_title)
-    if svc is None:
-        log.warning(
-            "seeder.peptide_identity.no_service sub=%s title=%r — no matching analysis_service; skipping",
-            sub_sample.sample_id, peptide_title,
-        )
-        return []
-
-    if svc.keyword in existing_kw:
-        log.info(
-            "seeder.peptide_identity.already_seeded sub=%s keyword=%s",
-            sub_sample.sample_id, svc.keyword,
-        )
-        return []
-
-    row = la_service.create_analysis(
-        db,
-        host_kind="sub_sample",
-        host_pk=sub_sample.id,
-        analysis_service_id=svc.id,
-        keyword=svc.keyword,
-        title=svc.title or svc.keyword,
-        created_by_user_id=created_by_user_id,
-    )
-    log.info(
-        "seeder.peptide_identity.seeded sub=%s analysis_id=%s keyword=%s title=%r",
-        sub_sample.sample_id, row.id, svc.keyword, svc.title,
-    )
-    return [row]
+    return inserted
 
 
 def seed_analyses_for_vial(
@@ -172,6 +176,7 @@ def seed_analyses_for_vial(
     sub_sample: LimsSubSample,
     role: str,
     wp_services: Dict[str, bool],
+    parent_sample_id: Optional[str] = None,
     created_by_user_id: Optional[int] = None,
 ) -> List[LimsAnalysis]:
     """
@@ -179,10 +184,13 @@ def seed_analyses_for_vial(
     WP profile. Idempotent: any (sub_sample_pk, keyword) pair that already
     exists is skipped silently.
 
-    For HPLC vials this seeds:
-      1. Generic services (HPLC-PUR, HPLC-ID) from ROLE_TO_KEYWORDS.
-      2. Per-peptide identity service (e.g. ID_BPC157) resolved from
-         parent_sample.peptide_name → analysis_services.title exact match.
+    HPLC vials MIRROR the parent's Analytics analyte set — see
+    mirror_parent_hplc_analyses. This requires `parent_sample_id`; omitting it
+    for an HPLC vial is a programming error (raises ValueError). The SENAITE
+    read inside the mirror is fail-hard and propagates on error.
+
+    endo/ster vials seed their fixed single-keyword ROLE_TO_KEYWORDS whitelist
+    (unchanged). xtra vials seed nothing.
 
     Returns the list of newly-inserted rows (empty if nothing was needed).
     """
@@ -193,14 +201,6 @@ def seed_analyses_for_vial(
         )
         return []
 
-    services = select_services_for_role(db, role)
-    if not services:
-        log.warning(
-            "seeder.no_matching_services sub=%s role=%s — nothing to seed",
-            sub_sample.sample_id, role,
-        )
-        return []
-
     # Already-seeded keywords for this vial — skip them
     existing = db.execute(
         select(LimsAnalysis.keyword).where(
@@ -208,6 +208,29 @@ def seed_analyses_for_vial(
         )
     ).scalars().all()
     existing_kw = set(existing)
+
+    # ── HPLC: mirror the parent's Analytics analyte set ──────────────────────
+    if role == "hplc":
+        if not parent_sample_id:
+            raise ValueError(
+                "seed_analyses_for_vial(role='hplc') requires parent_sample_id"
+            )
+        return mirror_parent_hplc_analyses(
+            db,
+            sub_sample=sub_sample,
+            parent_sample_id=parent_sample_id,
+            existing_kw=existing_kw,
+            created_by_user_id=created_by_user_id,
+        )
+
+    # ── endo / ster: fixed single-keyword whitelist (unchanged) ──────────────
+    services = select_services_for_role(db, role)
+    if not services:
+        log.warning(
+            "seeder.no_matching_services sub=%s role=%s — nothing to seed",
+            sub_sample.sample_id, role,
+        )
+        return []
 
     inserted: List[LimsAnalysis] = []
     for svc in services:
@@ -223,23 +246,10 @@ def seed_analyses_for_vial(
             created_by_user_id=created_by_user_id,
         )
         inserted.append(row)
-        existing_kw.add(svc.keyword)  # keep set current for peptide step
+        existing_kw.add(svc.keyword)
         log.info(
             "seeder.seeded sub=%s analysis_id=%s keyword=%s",
             sub_sample.sample_id, row.id, svc.keyword,
         )
-
-    # For HPLC vials: additionally seed the per-peptide identity service.
-    # Piggybacks the same role_implies_seeding gate already passed above —
-    # no new WP-key check. existing_kw is passed in so the peptide step
-    # inherits idempotency from the generic step in the same call.
-    if role == "hplc":
-        peptide_rows = _seed_peptide_identity_services(
-            db,
-            sub_sample=sub_sample,
-            existing_kw=existing_kw,
-            created_by_user_id=created_by_user_id,
-        )
-        inserted.extend(peptide_rows)
 
     return inserted

@@ -82,13 +82,12 @@ def test_role_implies_seeding_null_role_no():
 # ── live catalog filter ─────────────────────────────────────────────────────
 
 
-def test_select_services_for_hplc_returns_pur_and_id(db):
-    rows = select_services_for_role(db, "hplc")
-    if not rows:
-        pytest.skip("HPLC-PUR / HPLC-ID not in this env's analysis_services")
-    keywords = {r.keyword for r in rows}
-    assert keywords <= {"HPLC-PUR", "HPLC-ID"}
-    assert keywords == {"HPLC-PUR", "HPLC-ID"} or len(keywords) >= 1
+def test_select_services_for_hplc_returns_nothing(db):
+    # HPLC is no longer whitelist-driven: it mirrors the parent's Analytics
+    # analyte set (see mirror_parent_hplc_analyses / test_seeder_mirror.py), so
+    # "hplc" was removed from ROLE_TO_KEYWORDS and select_services_for_role is
+    # empty for it.
+    assert select_services_for_role(db, "hplc") == []
 
 
 def test_select_services_for_endo_returns_endo_lal(db):
@@ -112,40 +111,21 @@ def test_select_services_for_xtra_returns_nothing(db):
 # ── seed_analyses_for_vial integration ──────────────────────────────────────
 
 
+@pytest.mark.skip(
+    reason="HPLC no longer seeds a generic HPLC-PUR/HPLC-ID whitelist; it mirrors "
+    "the parent's Analytics analyte set. Mirror behavior is covered in "
+    "test_seeder_mirror.py (test_mirror_seeds_only_analytics_keywords)."
+)
 def test_seed_for_hplc_creates_lims_analyses_rows(db, sub_sample):
-    inserted = seed_analyses_for_vial(
-        db,
-        sub_sample=sub_sample,
-        role="hplc",
-        wp_services={"bac_water_panel": True},
-    )
-    if not inserted:
-        pytest.skip("no HPLC services in this env's analysis_services")
-    for r in inserted:
-        assert r.lims_sub_sample_pk == sub_sample.id
-        assert r.review_state == "unassigned"
-        assert r.keyword in {"HPLC-PUR", "HPLC-ID"}
-        # tag for cleanup
-        r.title = f"SEEDER-TEST: {r.title}"
-    db.commit()
+    pass
 
 
+@pytest.mark.skip(
+    reason="HPLC seeding is now the parent-mirror path; idempotency is covered in "
+    "test_seeder_mirror.py (test_mirror_is_idempotent)."
+)
 def test_seed_is_idempotent(db, sub_sample):
-    first = seed_analyses_for_vial(
-        db, sub_sample=sub_sample, role="hplc",
-        wp_services={"bac_water_panel": True},
-    )
-    if not first:
-        pytest.skip("no HPLC services in this env's analysis_services")
-    for r in first:
-        r.title = f"SEEDER-TEST: {r.title}"
-    db.commit()
-    # Second call inserts nothing
-    second = seed_analyses_for_vial(
-        db, sub_sample=sub_sample, role="hplc",
-        wp_services={"bac_water_panel": True},
-    )
-    assert second == []
+    pass
 
 
 def test_seed_xtra_inserts_nothing(db, sub_sample):

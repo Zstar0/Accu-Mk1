@@ -1,18 +1,29 @@
-"""Tests for per-peptide identity service seeding.
+"""Tests for per-peptide identity service seeding (RETIRED).
 
-Covers the _seed_peptide_identity_services helper and its integration into
-seed_analyses_for_vial for the hplc role.
+OBSOLETE: this module covered the _seed_peptide_identity_services helper and
+select_identity_service_by_title, which seeded a single Analyte1 identity
+service onto an HPLC vial from lims_samples.peptide_name. That path was
+removed when the HPLC branch was reworked to MIRROR the parent's full
+Analytics analyte set (per-analyte ID_*/PUR/QTY, BLEND-PUR, PEPT-Total,
+HPLC-ID) from the parent SENAITE sample. The replacement behavior — including
+the identity services these tests used to assert — is covered in
+test_seeder_mirror.py.
 
-All tests run against an in-memory SQLite DB to avoid touching the live
-catalog or lims_samples data. The analyte-name source
-(sub_sample.parent_sample.peptide_name) is pre-populated on the fixture
-rows so no external fetch is needed — mirroring how the existing seeder
-tests handle external dependencies.
+The whole module is skipped at collection because its module-top imports
+reference the now-deleted helpers. Kept (rather than deleted) as a tombstone
+documenting the retired contract.
 """
 
 from __future__ import annotations
 
 import pytest
+
+pytest.skip(
+    "per-peptide identity seeding retired by the HPLC parent-mirror; "
+    "behavior now covered in test_seeder_mirror.py",
+    allow_module_level=True,
+)
+
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 

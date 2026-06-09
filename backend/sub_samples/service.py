@@ -322,6 +322,7 @@ def _seed_analyses_if_role(
                 sub_sample=sub,
                 role=sub.assignment_role,
                 wp_services=wp_services,
+                parent_sample_id=parent_sample_id,
                 created_by_user_id=user_id,
             )
             db.refresh(sub)
@@ -608,6 +609,7 @@ def compute_vial_plan(db: Session, parent_sample_id: str) -> dict:
                     sub_sample=s,
                     role=s.assignment_role,
                     wp_services=wp_services,
+                    parent_sample_id=parent_sample_id,
                 )
             except Exception as e:
                 log.warning(
@@ -716,6 +718,7 @@ def set_assignment_role(db: Session, sample_id: str, role: Optional[str], user_i
                         sub_sample=sub,
                         role=role,
                         wp_services=wp_services,
+                        parent_sample_id=parent_sid,
                     )
             except Exception as e:
                 log.warning(
