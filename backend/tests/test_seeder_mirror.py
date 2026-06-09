@@ -53,56 +53,50 @@ def _throwaway_vial(db):
     return v
 
 
-# Keywords the corrected mirror MUST land. ANALYTE-N-* are the load-bearing
-# rows: they exist in the live catalog (e.g. ANALYTE-1-PUR=id 85) but are
-# intentionally UNGROUPED — an include-Analytics filter would drop them.
-_EXPECTED_ON_VIAL = {
-    "ANALYTE-1-PUR", "ANALYTE-1-QTY", "BLEND-PUR",
-    "ID_GHKCU", "HPLC-ID", "PEPT-Total",
-}
 # Microbiology-group keywords the mirror MUST drop. PCR-BACTERIA/PCR-FUNGI are
 # grouped into Microbiology by a database._run_migrations() statement; before
 # that grouping they were ungrouped and exclude-Micro would wrongly mirror them.
 _MICRO_EXCLUDED = ("ENDO-LAL", "STER-PCR", "PCR-BACTERIA", "PCR-FUNGI")
 
 
-def test_mirror_seeds_analyte_rows_and_excludes_micro(db, monkeypatch):
-    # Parent (per SENAITE, e.g. blend PB-0076) carries per-analyte purity/qty
-    # rows, blend purity, identities, peptide total, plus Micro rows. The mirror
-    # must land every HPLC keyword that exists in the catalog and drop only the
-    # Microbiology-group keywords (ENDO-LAL/STER-PCR/PCR-BACTERIA/PCR-FUNGI).
+def test_mirror_translates_analyte_to_per_substance(db, monkeypatch):
+    # Generic ANALYTE-{n}-PUR/QTY are translated to the slot peptide's
+    # per-substance PUR_<X>/QTY_<X> via the parent's Analyte{N}Peptide slot map
+    # (slot title -> ID_<X> service -> peptide_id -> PUR_<X>/QTY_<X>). Empty
+    # slots are skipped; the generic ANALYTE-* services are never seeded.
     vial = _throwaway_vial(db)
     parent_keywords = [
-        "ANALYTE-1-PUR", "ANALYTE-1-QTY", "BLEND-PUR",
-        "ID_GHKCU", "HPLC-ID", "PEPT-Total",
-        *_MICRO_EXCLUDED,                 # Micro — must be excluded
+        "ANALYTE-1-PUR", "ANALYTE-1-QTY",          # slot 1 -> GHK-Cu
+        "ANALYTE-4-PUR",                            # empty slot -> skipped
+        "BLEND-PUR", "ID_GHKCU", "HPLC-ID", "PEPT-Total",
+        "ENDO-LAL", "STER-PCR",                     # Micro -> excluded
     ]
     monkeypatch.setattr(
-        "sub_samples.senaite.fetch_parent_analysis_keywords",
-        lambda pid: parent_keywords,
-    )
-
+        "sub_samples.senaite.fetch_parent_analysis_keywords", lambda pid: parent_keywords)
+    monkeypatch.setattr(
+        "sub_samples.senaite.fetch_parent_analyte_slots",
+        lambda pid: {1: "GHK-Cu - Identity (HPLC)"})   # only slot 1 populated
     inserted = seed_analyses_for_vial(
         db, sub_sample=vial, role="hplc",
-        wp_services={"hplcpurity_identity": True},
-        parent_sample_id="X", commit=False,
-    )
+        wp_services={"hplcpurity_identity": True}, parent_sample_id="X", commit=False)
+    kws = {r.keyword for r in inserted}
+    assert {"PUR_GHKCU", "QTY_GHKCU"} <= kws
+    assert not any(k.startswith("ANALYTE-") for k in kws)   # generic NOT seeded; slot 4 skipped
+    assert "ENDO-LAL" not in kws and "STER-PCR" not in kws
+    assert {"ID_GHKCU", "BLEND-PUR", "HPLC-ID", "PEPT-Total"} <= kws
 
-    # The insert path actually ran for the load-bearing per-analyte rows.
-    inserted_kws = {r.keyword for r in inserted}
-    assert _EXPECTED_ON_VIAL <= inserted_kws
-    for mk in _MICRO_EXCLUDED:
-        assert mk not in inserted_kws
 
-    # The flushed-but-uncommitted rows are visible within this same session.
-    on_vial = set(db.execute(
-        select(LimsAnalysis.keyword).where(
-            LimsAnalysis.lims_sub_sample_pk == vial.id)
-    ).scalars().all())
-    assert _EXPECTED_ON_VIAL <= on_vial
-    assert {"ANALYTE-1-PUR", "ID_GHKCU"} <= on_vial
-    for mk in _MICRO_EXCLUDED:
-        assert mk not in on_vial
+def test_mirror_skips_unmapped_analyte_slot(db, monkeypatch):
+    vial = _throwaway_vial(db)
+    monkeypatch.setattr(
+        "sub_samples.senaite.fetch_parent_analysis_keywords",
+        lambda pid: ["ANALYTE-2-PUR", "ANALYTE-2-QTY"])
+    monkeypatch.setattr(
+        "sub_samples.senaite.fetch_parent_analyte_slots", lambda pid: {})  # no slots
+    inserted = seed_analyses_for_vial(
+        db, sub_sample=vial, role="hplc",
+        wp_services={"hplcpurity_identity": True}, parent_sample_id="X", commit=False)
+    assert inserted == []
 
 
 def test_mirror_is_idempotent(db, monkeypatch):

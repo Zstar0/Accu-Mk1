@@ -35,6 +35,7 @@ Idempotent: calling twice with the same args is a no-op the second time
 from __future__ import annotations
 
 import logging
+import re
 from typing import Dict, List, Optional, Set
 
 from sqlalchemy import select
@@ -50,6 +51,10 @@ from models import (
 )
 
 log = logging.getLogger(__name__)
+
+# Generic per-analyte purity/quantity keyword as carried on the parent blend AR.
+# Translated by the mirror into the slot peptide's per-substance PUR_<X>/QTY_<X>.
+_PARENT_ANALYTE = re.compile(r"^ANALYTE-([1-4])-(PUR|QTY)$")
 
 # Role → set of WP service keys that imply analyses at this role.
 #
@@ -125,12 +130,21 @@ def mirror_parent_hplc_analyses(
     created_by_user_id: Optional[int],
     commit: bool = True,
 ) -> List[LimsAnalysis]:
-    """Mirror the parent's HPLC analyses 1:1 onto the HPLC vial.
+    """Mirror the parent's HPLC analyses onto the HPLC vial.
 
     Reads the parent's SENAITE analysis keywords and seeds a lims_analyses row
     for every keyword that exists in the Mk1 catalog EXCEPT those belonging to
     the Microbiology service group (ENDO-LAL/STER-PCR/KF — those vials get
     their own role-based seeding).
+
+    Generic per-analyte keywords (ANALYTE-{n}-PUR / ANALYTE-{n}-QTY) are
+    TRANSLATED to the slot peptide's per-substance service (PUR_<X> / QTY_<X>)
+    using the parent's Analyte{N}Peptide slot map: slot title → ID_<X> service
+    (exact title match) → peptide_id → PUR_<X>/QTY_<X>. An ANALYTE-{n} whose
+    slot is empty is SKIPPED. If the per-substance service is somehow missing,
+    the generic ANALYTE-{n} service is seeded as a safety fallback (+ warning)
+    so the analyte is never silently dropped. Identity (ID_<X>), BLEND-PUR,
+    PEPT-Total and HPLC-ID are mirrored unchanged.
 
     The predicate is EXCLUDE-Microbiology, not include-Analytics, on purpose:
     the per-analyte services (ANALYTE-N-PUR / ANALYTE-N-QTY) are intentionally
@@ -160,11 +174,58 @@ def mirror_parent_hplc_analyses(
     # raises -> fail-hard
     parent_keywords = senaite_mod.fetch_parent_analysis_keywords(parent_sample_id)
 
+    # Per-substance translation indexes (built from the catalog already loaded).
+    id_svc_by_title = {
+        s.title: s for s in svc_rows
+        if s.keyword and s.keyword.startswith("ID_") and s.title
+    }
+    pur_by_pep = {
+        s.peptide_id: s for s in svc_rows
+        if s.keyword and s.keyword.startswith("PUR_") and s.peptide_id
+    }
+    qty_by_pep = {
+        s.peptide_id: s for s in svc_rows
+        if s.keyword and s.keyword.startswith("QTY_") and s.peptide_id
+    }
+
+    # Slot->substance map: only read SENAITE when a generic ANALYTE-{n} keyword is
+    # present (single-peptide HPLC vials carry HPLC-PUR/HPLC-ID, never ANALYTE-N).
+    # fetch_parent_analyte_slots raises on error -> fail-hard (consistent).
+    needs_slots = any(_PARENT_ANALYTE.match(kw) for kw in parent_keywords)
+    slot_map = senaite_mod.fetch_parent_analyte_slots(parent_sample_id) if needs_slots else {}
+
     inserted: List[LimsAnalysis] = []
     for kw in parent_keywords:
-        svc = svc_by_kw.get(kw)
-        if svc is None:          # keyword not in the Mk1 catalog at all
-            continue
+        m = _PARENT_ANALYTE.match(kw)
+        if m:
+            slot_n, cat = int(m.group(1)), m.group(2)
+            title = slot_map.get(slot_n)
+            if not title:
+                log.info(
+                    "seeder.mirror.skip_empty_slot sub=%s slot=%s kw=%s",
+                    sub_sample.sample_id, slot_n, kw,
+                )
+                continue
+            id_svc = id_svc_by_title.get(title)
+            per = None
+            if id_svc is not None and id_svc.peptide_id is not None:
+                per = (pur_by_pep if cat == "PUR" else qty_by_pep).get(id_svc.peptide_id)
+            if per is not None:
+                svc = per
+            else:
+                # Safety fallback: per-substance service missing — keep the generic
+                # row so the analyte is never silently dropped.
+                svc = svc_by_kw.get(kw)
+                log.warning(
+                    "seeder.mirror.no_per_substance sub=%s slot=%s title=%r kw=%s — fell back to generic",
+                    sub_sample.sample_id, slot_n, title, kw,
+                )
+                if svc is None:
+                    continue
+        else:
+            svc = svc_by_kw.get(kw)
+            if svc is None:          # keyword not in the Mk1 catalog at all
+                continue
         if svc.keyword in micro_kw:   # Microbiology analysis (ENDO-LAL/STER-PCR/KF)
             continue
         if svc.keyword in existing_kw:
