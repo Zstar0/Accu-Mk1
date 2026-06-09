@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, Fragment, type ReactNode } from 'react'
-import { Activity, ArrowDownUp, ArrowUpDown, Check, ChevronDown, ChevronRight, Database, Lock, MoreHorizontal, Pencil, X } from 'lucide-react'
+import { Activity, ArrowDownUp, ArrowUpDown, Check, ChevronDown, ChevronRight, Database, HelpCircle, Lock, MoreHorizontal, Pencil, X } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Spinner } from '@/components/ui/spinner'
@@ -1222,6 +1222,15 @@ function AnalysisRow({
               title="This vial-tier row has been promoted to a parent-tier canonical result"
             >
               Promoted → #{analysis.promoted_to_parent_id}
+            </span>
+          )}
+          {isPromoted && (
+            <span
+              className="inline-flex items-center text-muted-foreground/50 hover:text-muted-foreground transition-colors cursor-help"
+              title="This result has been promoted to the parent. To correct it, retest the line on the parent AR — the retest cascades back down to this vial."
+              aria-label="How to correct a promoted result"
+            >
+              <HelpCircle size={11} />
             </span>
           )}
           {locked && (

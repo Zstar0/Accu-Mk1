@@ -408,6 +408,48 @@ describe('AnalysisTable default header (regression lock)', () => {
   })
 })
 
+describe('AnalysisTable promoted-row correction hint', () => {
+  const renderTable = (analyses: SenaiteAnalysis[]) => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    return render(
+      <I18nextProvider i18n={i18n}>
+        <QueryClientProvider client={qc}>
+          <AnalysisTable analyses={analyses} analyteNameMap={new Map()} />
+        </QueryClientProvider>
+      </I18nextProvider>
+    )
+  }
+
+  it('shows a help affordance whose tooltip explains corrections start at the parent', () => {
+    renderTable([
+      mkAnalysis({
+        uid: 'mk1:9',
+        keyword: 'PUR-HPLC',
+        title: 'Purity (HPLC)',
+        service_group_name: 'Analytics',
+        review_state: 'promoted',
+        promoted_to_parent_id: 4812,
+      }),
+    ])
+    const hint = screen.getByTitle(/retest the line on the parent AR/i)
+    expect(hint).toBeInTheDocument()
+  })
+
+  it('shows no such hint on a non-promoted row', () => {
+    renderTable([
+      mkAnalysis({
+        uid: 'mk1:10',
+        keyword: 'PUR-HPLC',
+        title: 'Purity (HPLC)',
+        service_group_name: 'Analytics',
+        review_state: 'to_be_verified',
+        promoted_to_parent_id: null,
+      }),
+    ])
+    expect(screen.queryByTitle(/retest the line on the parent AR/i)).not.toBeInTheDocument()
+  })
+})
+
 describe('VialPhotoThumb', () => {
   beforeEach(() => {
     vi.clearAllMocks()
