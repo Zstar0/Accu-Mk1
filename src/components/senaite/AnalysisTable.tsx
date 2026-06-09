@@ -5,6 +5,7 @@ import { Input } from '@/components/ui/input'
 import { Spinner } from '@/components/ui/spinner'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Button } from '@/components/ui/button'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -1225,13 +1226,21 @@ function AnalysisRow({
             </span>
           )}
           {isPromoted && (
-            <span
-              className="inline-flex items-center text-muted-foreground/50 hover:text-muted-foreground transition-colors cursor-help"
-              title="This result has been promoted to the parent. To correct it, retest the line on the parent AR — the retest cascades back down to this vial."
-              aria-label="How to correct a promoted result"
-            >
-              <HelpCircle size={11} />
-            </span>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span
+                  className="inline-flex items-center text-muted-foreground/50 hover:text-muted-foreground transition-colors cursor-help"
+                  aria-label="How to correct a promoted result"
+                >
+                  <HelpCircle size={11} />
+                </span>
+              </TooltipTrigger>
+              <TooltipContent className="max-w-xs text-left">
+                This result has been promoted to the parent. To correct it,
+                retest the line on the parent AR — the retest cascades back
+                down to this vial.
+              </TooltipContent>
+            </Tooltip>
           )}
           {locked && (
             <span

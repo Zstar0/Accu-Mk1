@@ -420,7 +420,7 @@ describe('AnalysisTable promoted-row correction hint', () => {
     )
   }
 
-  it('shows a help affordance whose tooltip explains corrections start at the parent', () => {
+  it('shows a help affordance on promoted rows (styled tooltip trigger)', () => {
     renderTable([
       mkAnalysis({
         uid: 'mk1:9',
@@ -431,11 +431,13 @@ describe('AnalysisTable promoted-row correction hint', () => {
         promoted_to_parent_id: 4812,
       }),
     ])
-    const hint = screen.getByTitle(/retest the line on the parent AR/i)
-    expect(hint).toBeInTheDocument()
+    // The Radix tooltip content portals only on hover (jsdom-unfriendly, same
+    // as the SLA cell), so assert the durable trigger contract: the aria-labeled
+    // help affordance is present on a promoted row.
+    expect(screen.getByLabelText('How to correct a promoted result')).toBeInTheDocument()
   })
 
-  it('shows no such hint on a non-promoted row', () => {
+  it('shows no such affordance on a non-promoted row', () => {
     renderTable([
       mkAnalysis({
         uid: 'mk1:10',
@@ -446,7 +448,7 @@ describe('AnalysisTable promoted-row correction hint', () => {
         promoted_to_parent_id: null,
       }),
     ])
-    expect(screen.queryByTitle(/retest the line on the parent AR/i)).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('How to correct a promoted result')).not.toBeInTheDocument()
   })
 })
 
