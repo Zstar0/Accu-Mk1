@@ -18,10 +18,9 @@ commit=False, so the `db` fixture's teardown rollback discards the throwaway
 rows and every seeded analysis. No live vial is read, mutated, or committed.
 """
 import pytest
-from sqlalchemy import select
 
 from lims_analyses.seeder import seed_analyses_for_vial
-from models import LimsAnalysis, LimsSample, LimsSubSample
+from models import LimsSample, LimsSubSample
 from database import SessionLocal
 
 
