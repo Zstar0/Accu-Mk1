@@ -281,11 +281,17 @@ export function deriveBulkPromoteBlockers(selected: SenaiteAnalysis[]): string[]
 
 // --- Shared components ---
 
-export function StatusBadge({ state }: { state: string }) {
+export function StatusBadge({ state, promotable = false }: { state: string; promotable?: boolean }) {
   const color =
     STATUS_COLORS[state] ??
     'bg-zinc-100 text-zinc-600 border-zinc-200 dark:bg-zinc-500/15 dark:text-zinc-400 dark:border-zinc-500/20'
-  const label = STATUS_LABELS[state] ?? state.replace(/_/g, ' ')
+  // Sub-sample (vial) rows can't self-verify — `to_be_verified` there means
+  // "result in, awaiting promotion". Relabel only those; a parent SENAITE line
+  // in to_be_verified is not promotable and keeps "To Verify".
+  const label =
+    promotable && state === 'to_be_verified'
+      ? 'Ready to Promote'
+      : STATUS_LABELS[state] ?? state.replace(/_/g, ' ')
   return (
     <span
       className={`inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium border ${color}`}
@@ -1209,7 +1215,7 @@ function AnalysisRow({
       <td className="py-2.5 px-3 text-xs text-muted-foreground">{((vialOverlayEditable ? vialOverlay?.analyst : null) ?? analysis.analyst) || '\u2014'}</td>
       <td className="py-2.5 px-3">
         <div className="flex items-center gap-1.5 flex-wrap">
-          {analysis.review_state && <StatusBadge state={analysis.review_state} />}
+          {analysis.review_state && <StatusBadge state={analysis.review_state} promotable={isPromotable(analysis)} />}
           {isPromoted && (
             <span
               className="text-[10px] font-mono text-emerald-700 dark:text-emerald-400"
