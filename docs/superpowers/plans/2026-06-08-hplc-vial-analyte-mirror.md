@@ -505,7 +505,7 @@ In `backend/sub_samples/service.py` `set_assignment_role`, sub-sample branch —
 
 (Remove the old `db.commit()` that preceded the try/except and the `try/except` swallow entirely. On any exception the request handler's session teardown rolls back; the exception propagates.)
 
-Apply the same atomic shape to `_seed_analyses_if_role` (the create path): seed before the vial-creating commit, or if the vial is already committed, let a seeding failure propagate (drop the try/except swallow). Keep it consistent — fail-hard, no swallow.
+**Leave `_seed_analyses_if_role` (the create path) best-effort — do NOT make it fail-hard.** It runs *after* `create_sub_sample` has already committed the vial, so propagating a SENAITE failure there would leave a committed vial with no analyses AND throw — strictly worse than the role-flip case. At create time the role is usually `None` (a documented no-op; the role-flip hooks do the real seeding), so its blast radius is tiny. Keep its existing `try/except` swallow + warning log unchanged. Fail-hard applies **only** to the role-flip path (`set_assignment_role`), where seeding is atomic with the flip.
 
 - [ ] **Step 4: Surface the failure in the route**
 
@@ -546,13 +546,25 @@ git commit -m "feat(assign): fail-hard atomic role assignment + analyses seeding
 
 - [ ] **Step 1: Write the failing tests (extend `test_prep_bridge.py`)**
 
-Add to `backend/tests/test_prep_bridge.py` (helpers `_peptide`, `_vial`, `_hplc`, `create_analysis` already exist there):
+Add to `backend/tests/test_prep_bridge.py` (helpers `_peptide`, `_vial`, `_hplc`, `create_analysis` already exist there). **Do NOT modify the shared `_vial` helper** (that would make the existing 9 tests resolve a parent and — once they had `ANALYTE-*` rows — hit SENAITE). Instead add a dedicated helper that creates a vial WITH a backing parent `LimsSample`, used only by the per-analyte tests:
 
 ```python
+from models import LimsSample  # add to imports
+
+def _vial_with_parent(db, parent_sample_id="P-TEST"):
+    parent = LimsSample(sample_id=parent_sample_id, external_lims_uid="uid-"+parent_sample_id)
+    db.add(parent); db.flush()
+    v = LimsSubSample(sample_id=parent_sample_id+"-S01", vial_sequence=0,
+                      parent_sample_pk=parent.id, external_lims_uid="vuid-"+parent_sample_id)
+    db.add(v); db.flush()
+    return v
+# (supply any other NOT NULL columns LimsSample/LimsSubSample require — read models.py)
+
+
 def test_routes_purity_quantity_to_analyte_slot(db_session, monkeypatch):
     db = db_session
     pep = _peptide(db, name="BPC-157", abbr="BPC-157")
-    vial = _vial(db)
+    vial = _vial_with_parent(db, "P-BLEND")
     a1p = create_analysis(db, host_kind="sub_sample", host_pk=vial.id,
                           analysis_service_id=85, keyword="ANALYTE-1-PUR", title="Analyte 1 (Purity)")
     a2p = create_analysis(db, host_kind="sub_sample", host_pk=vial.id,
@@ -587,10 +599,31 @@ def test_legacy_generic_purity_still_routed(db_session, monkeypatch):
     assert ids == [pur.id]
 
 
+def test_resolves_parenthesized_peptide_name_to_slot(db_session, monkeypatch):
+    # Realistic blend member: name has parens and diverges from the ID_ keyword
+    # (ID_TB500BETA4). The slot resolver matches the parent's Analyte{N}Peptide
+    # TITLE (not the keyword), so name-normalization must still land slot 3.
+    db = db_session
+    pep = _peptide(db, name="TB500 (Thymosin Beta 4)", abbr="TB500 (Thymosin Beta 4)")
+    vial = _vial_with_parent(db, "P-TB")
+    a3p = create_analysis(db, host_kind="sub_sample", host_pk=vial.id,
+                          analysis_service_id=88, keyword="ANALYTE-3-PUR", title="Analyte 3 (Purity)")
+    a = _hplc(db, pep, purity=97.0)
+    monkeypatch.setattr("sub_samples.senaite.fetch_parent_analyte_slots",
+                        lambda pid: {1: "GHK-Cu - Identity (HPLC)",
+                                     2: "BPC-157 - Identity (HPLC)",
+                                     3: "TB500 (Thymosin Beta 4) - Identity (HPLC)"})
+    from lims_analyses.prep_bridge import bridge_prep_result_to_vial
+    ids = bridge_prep_result_to_vial(db, lims_sub_sample_pk=vial.id, analysis=a, peptide=pep, user_id=1)
+    assert ids == [a3p.id]
+    db.refresh(a3p)
+    assert a3p.review_state == "to_be_verified" and a3p.result_value == "97"
+
+
 def test_analyte_purity_skipped_when_slot_unresolved(db_session, monkeypatch):
     db = db_session
     pep = _peptide(db, name="BPC-157", abbr="BPC-157")
-    vial = _vial(db)
+    vial = _vial_with_parent(db, "P-NOSLOT")
     create_analysis(db, host_kind="sub_sample", host_pk=vial.id,
                     analysis_service_id=85, keyword="ANALYTE-1-PUR", title="Analyte 1 (Purity)")
     a = _hplc(db, pep, purity=98.5)
@@ -605,7 +638,7 @@ The existing `_vial` helper sets `parent_sample_pk=1`; ensure a parent `LimsSamp
 - [ ] **Step 2: Run, verify fail**
 
 Run: `MSYS_NO_PATHCONV=1 docker exec accumark-subvial-accu-mk1-backend bash -c "cd /app && python -m pytest tests/test_prep_bridge.py -q"`
-Expected: the 3 new tests FAIL (ANALYTE-* not categorized; slot routing absent). Existing 9 still pass.
+Expected: the 4 new tests FAIL (ANALYTE-* not categorized; slot routing absent). Existing 9 still pass.
 
 - [ ] **Step 3: Implement per-analyte routing**
 
@@ -676,25 +709,32 @@ def _pick_target(category: str, candidates: list[LimsAnalysis], *, slot: Optiona
     return generic[0] if len(generic) == 1 else None
 ```
 
-(d) In `bridge_prep_result_to_vial`, resolve the parent + slot before the per-category loop, and pass `slot` to `_pick_target`:
+(d) In `bridge_prep_result_to_vial`, resolve the slot **lazily** — only read SENAITE when a candidate keyword is actually per-analyte. This keeps legacy/generic-only vials (and the existing 9 tests, which have no `ANALYTE-*` rows) from ever touching SENAITE. Insert after `by_category` is built, before the per-category loop:
 
 ```python
-    sub = db.get(LimsSubSample, lims_sub_sample_pk)
-    parent = db.get(LimsSample, sub.parent_sample_pk) if sub else None
-    parent_sample_id = parent.sample_id if parent else None
-    slot = _resolve_slot(db, parent_sample_id=parent_sample_id, peptide=peptide)
-    ...
+    # Lazy slot resolution: only hit SENAITE when a per-analyte row is present.
+    needs_slot = any(
+        _ANALYTE_PUR.match((r.keyword or "").upper()) or _ANALYTE_QTY.match((r.keyword or "").upper())
+        for cands in by_category.values() for r in cands
+    )
+    slot: Optional[int] = None
+    if needs_slot:
+        sub = db.get(LimsSubSample, lims_sub_sample_pk)
+        parent = db.get(LimsSample, sub.parent_sample_pk) if sub else None
+        parent_sample_id = parent.sample_id if parent else None
+        slot = _resolve_slot(db, parent_sample_id=parent_sample_id, peptide=peptide)
+
     for category, candidates in by_category.items():
         row = _pick_target(category, candidates, slot=slot)
         ...
 ```
 
-(Leave the rest — `_result_for`, `_norm`, the peptide guard on `ID_*`, the `instrument_id` set + `apply_transition` — unchanged.)
+(Leave the rest — `_result_for`, `_norm`, the peptide guard on `ID_*`, the `instrument_id` set + `apply_transition` — unchanged. Because resolution is gated on `needs_slot`, the existing 9 tests stay hermetic and `_vial` is NOT modified.)
 
 - [ ] **Step 4: Run the full bridge suite**
 
 Run: `MSYS_NO_PATHCONV=1 docker exec accumark-subvial-accu-mk1-backend bash -c "cd /app && python -m pytest tests/test_prep_bridge.py -q"`
-Expected: all pass (12 = original 9 + 3 new). If an original test broke because `_pick_target` now needs `slot`, pass `slot=None` at those call sites — but the only call site is inside `bridge_prep_result_to_vial`, so they should pass unchanged.
+Expected: all pass (13 = original 9 + 4 new). If an original test broke because `_pick_target` now needs `slot`, pass `slot=None` at those call sites — but the only call site is inside `bridge_prep_result_to_vial`, so they should pass unchanged.
 
 - [ ] **Step 5: Commit**
 
