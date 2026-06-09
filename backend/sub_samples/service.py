@@ -13,7 +13,7 @@ import os
 import requests
 from datetime import datetime, timedelta
 from typing import Optional, Tuple, List
-from sqlalchemy import select, func
+from sqlalchemy import select, func, delete
 from sqlalchemy.orm import Session
 from models import LimsSample, LimsSubSample, LimsSubSampleEvent
 from sub_samples import native
@@ -23,6 +23,16 @@ from sub_samples.senaite import SecondaryFalloutError
 
 CACHE_FRESHNESS = timedelta(minutes=5)
 log = logging.getLogger(__name__)
+
+
+# Sub-sample assignment role -> the service group name(s) whose analyses belong
+# to that role. endo/ster are both Microbiology; hplc is Analytics; xtra has none.
+_ROLE_GROUP_NAMES: dict[str, set[str]] = {
+    "hplc": {"Analytics"},
+    "endo": {"Microbiology"},
+    "ster": {"Microbiology"},
+    "xtra": set(),
+}
 
 
 def ensure_sample_row(db: Session, parent_sample_id: str) -> LimsSample:
@@ -680,6 +690,48 @@ def auto_assign(vials: list[dict], demand: dict) -> list[dict]:
 _VALID_ROLES = {"hplc", "endo", "ster", "xtra"}
 
 
+def _drop_stale_role_rows(db: Session, *, sub: LimsSubSample, old_role: Optional[str], new_role: Optional[str]) -> int:
+    """Delete the vial's UNASSIGNED (no-result) rows whose service group belongs
+    to the OLD role but not the NEW role — so a re-assigned vial sheds the
+    previous role's stale seeded analyses (e.g. a Microbiology STER-PCR left on a
+    now-HPLC vial). Rows that already carry a result/promotion are NEVER touched.
+    Returns the count deleted."""
+    if not old_role:
+        return 0
+    old_groups = _ROLE_GROUP_NAMES.get(old_role, set())
+    new_groups = _ROLE_GROUP_NAMES.get(new_role or "", set())
+    clear_groups = old_groups - new_groups
+    if not clear_groups:
+        return 0
+    from models import LimsAnalysis, LimsAnalysisTransition, AnalysisService, ServiceGroup, service_group_members
+    # candidate analysis_service ids in the groups we're clearing
+    svc_ids = db.execute(
+        select(service_group_members.c.analysis_service_id)
+        .join(ServiceGroup, ServiceGroup.id == service_group_members.c.service_group_id)
+        .where(ServiceGroup.name.in_(clear_groups))
+    ).scalars().all()
+    if not svc_ids:
+        return 0
+    stale = db.execute(
+        select(LimsAnalysis).where(
+            LimsAnalysis.lims_sub_sample_pk == sub.id,
+            LimsAnalysis.analysis_service_id.in_(svc_ids),
+            LimsAnalysis.review_state == "unassigned",
+            LimsAnalysis.result_value.is_(None),
+            LimsAnalysis.retest_of_id.is_(None),
+        )
+    ).scalars().all()
+    n = 0
+    for row in stale:
+        db.execute(delete(LimsAnalysisTransition).where(LimsAnalysisTransition.analysis_id == row.id))
+        db.delete(row)
+        n += 1
+    if n:
+        log.info("sub_samples.role_change_cleanup sub=%s old=%s new=%s dropped=%s",
+                 sub.sample_id, old_role, new_role, n)
+    return n
+
+
 def set_assignment_role(db: Session, sample_id: str, role: Optional[str], user_id: Optional[int] = None) -> dict:
     """Set assignment_role on a sub-sample or parent. Routes by sample existence.
 
@@ -701,6 +753,11 @@ def set_assignment_role(db: Session, sample_id: str, role: Optional[str], user_i
             details={"from": old_role, "to": role},
             user_id=user_id,
         ))
+        # Role re-assignment cleanup: drop the OLD role's stale (unassigned,
+        # no-result) seeded rows so the vial only carries its current role's
+        # analyses. Runs in THIS transaction (before the commit=False seed and
+        # the single db.commit() below), so flip + cleanup + seed are atomic.
+        _drop_stale_role_rows(db, sub=sub, old_role=old_role, new_role=role)
         # Phase 2 (mk1-native-analyses): if this assignment transitioned the
         # vial into a real (non-XTRA) role, seed its lims_analyses rows.
         # Idempotent — re-running on an already-seeded vial is a no-op.
