@@ -1,7 +1,7 @@
 """Unit tests for the vial-prep result bridge."""
 from sqlalchemy import select
 
-from models import HPLCAnalysis, LimsAnalysis, LimsSubSample, Peptide
+from models import HPLCAnalysis, LimsAnalysis, LimsSample, LimsSubSample, Peptide
 from lims_analyses.service import create_analysis
 from lims_analyses.prep_bridge import bridge_prep_result_to_vial
 
@@ -187,3 +187,76 @@ def test_quantity_is_written(db_session):
     assert ids == [qty.id]
     db.refresh(qty)
     assert qty.review_state == "to_be_verified" and qty.result_value == "12.34"
+
+
+def _vial_with_parent(db, parent_sample_id="P-TEST"):
+    parent = LimsSample(sample_id=parent_sample_id, external_lims_uid="uid-" + parent_sample_id)
+    db.add(parent); db.flush()
+    v = LimsSubSample(sample_id=parent_sample_id + "-S01", vial_sequence=0,
+                      parent_sample_pk=parent.id, external_lims_uid="vuid-" + parent_sample_id)
+    db.add(v); db.flush()
+    return v
+
+
+def test_routes_purity_quantity_to_analyte_slot(db_session, monkeypatch):
+    db = db_session
+    pep = _peptide(db, name="BPC-157", abbr="BPC-157")
+    vial = _vial_with_parent(db, "P-BLEND")
+    a1p = create_analysis(db, host_kind="sub_sample", host_pk=vial.id,
+                          analysis_service_id=85, keyword="ANALYTE-1-PUR", title="Analyte 1 (Purity)")
+    a2p = create_analysis(db, host_kind="sub_sample", host_pk=vial.id,
+                          analysis_service_id=86, keyword="ANALYTE-2-PUR", title="Analyte 2 (Purity)")
+    a2q = create_analysis(db, host_kind="sub_sample", host_pk=vial.id,
+                          analysis_service_id=87, keyword="ANALYTE-2-QTY", title="Analyte 2 (Quantity)")
+    idr = create_analysis(db, host_kind="sub_sample", host_pk=vial.id,
+                          analysis_service_id=30, keyword="ID_BPC157", title="BPC-157 - Identity (HPLC)")
+    a = _hplc(db, pep, purity=98.5, conforms=True, qty=4.2)
+    monkeypatch.setattr("sub_samples.senaite.fetch_parent_analyte_slots",
+                        lambda pid: {1: "GHK-Cu - Identity (HPLC)", 2: "BPC-157 - Identity (HPLC)"})
+    ids = bridge_prep_result_to_vial(db, lims_sub_sample_pk=vial.id, analysis=a, peptide=pep, user_id=1)
+    assert set(ids) == {a2p.id, a2q.id, idr.id}
+    db.refresh(a1p); db.refresh(a2p); db.refresh(a2q)
+    assert a1p.review_state == "unassigned"
+    assert a2p.result_value == "98.5" and a2p.review_state == "to_be_verified"
+    assert a2q.result_value == "4.2"
+
+
+def test_legacy_generic_purity_still_routed(db_session, monkeypatch):
+    db = db_session
+    pep = _peptide(db)
+    vial = _vial(db)
+    pur = create_analysis(db, host_kind="sub_sample", host_pk=vial.id,
+                          analysis_service_id=73, keyword="HPLC-PUR", title="Peptide Purity (HPLC)")
+    a = _hplc(db, pep, purity=99.0)
+    monkeypatch.setattr("sub_samples.senaite.fetch_parent_analyte_slots", lambda pid: {})
+    ids = bridge_prep_result_to_vial(db, lims_sub_sample_pk=vial.id, analysis=a, peptide=pep, user_id=1)
+    assert ids == [pur.id]
+
+
+def test_resolves_parenthesized_peptide_name_to_slot(db_session, monkeypatch):
+    db = db_session
+    pep = _peptide(db, name="TB500 (Thymosin Beta 4)", abbr="TB500 (Thymosin Beta 4)")
+    vial = _vial_with_parent(db, "P-TB")
+    a3p = create_analysis(db, host_kind="sub_sample", host_pk=vial.id,
+                          analysis_service_id=88, keyword="ANALYTE-3-PUR", title="Analyte 3 (Purity)")
+    a = _hplc(db, pep, purity=97.0)
+    monkeypatch.setattr("sub_samples.senaite.fetch_parent_analyte_slots",
+                        lambda pid: {1: "GHK-Cu - Identity (HPLC)",
+                                     2: "BPC-157 - Identity (HPLC)",
+                                     3: "TB500 (Thymosin Beta 4) - Identity (HPLC)"})
+    ids = bridge_prep_result_to_vial(db, lims_sub_sample_pk=vial.id, analysis=a, peptide=pep, user_id=1)
+    assert ids == [a3p.id]
+    db.refresh(a3p)
+    assert a3p.review_state == "to_be_verified" and a3p.result_value == "97"
+
+
+def test_analyte_purity_skipped_when_slot_unresolved(db_session, monkeypatch):
+    db = db_session
+    pep = _peptide(db, name="BPC-157", abbr="BPC-157")
+    vial = _vial_with_parent(db, "P-NOSLOT")
+    create_analysis(db, host_kind="sub_sample", host_pk=vial.id,
+                    analysis_service_id=85, keyword="ANALYTE-1-PUR", title="Analyte 1 (Purity)")
+    a = _hplc(db, pep, purity=98.5)
+    monkeypatch.setattr("sub_samples.senaite.fetch_parent_analyte_slots", lambda pid: {})
+    ids = bridge_prep_result_to_vial(db, lims_sub_sample_pk=vial.id, analysis=a, peptide=pep, user_id=1)
+    assert ids == []

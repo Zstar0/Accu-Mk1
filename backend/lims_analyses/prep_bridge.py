@@ -18,10 +18,13 @@ from typing import Optional
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from models import HPLCAnalysis, LimsAnalysis, Peptide
+from models import HPLCAnalysis, LimsAnalysis, LimsSample, LimsSubSample, Peptide
 from lims_analyses.service import apply_transition
 
 logger = logging.getLogger(__name__)
+
+_ANALYTE_PUR = re.compile(r"^ANALYTE-[1-4]-PUR$")
+_ANALYTE_QTY = re.compile(r"^ANALYTE-[1-4]-QTY$")
 
 
 def _norm(s: Optional[str]) -> str:
@@ -31,12 +34,26 @@ def _norm(s: Optional[str]) -> str:
 
 def _category(keyword: Optional[str]) -> Optional[str]:
     kw = (keyword or "").upper()
-    if kw == "HPLC-PUR":
+    if kw == "HPLC-PUR" or _ANALYTE_PUR.match(kw):
         return "purity"
     if kw == "HPLC-ID" or kw.startswith("ID_"):
         return "identity"
-    if kw.startswith("QTY_"):
+    if kw.startswith("QTY_") or _ANALYTE_QTY.match(kw):
         return "quantity"
+    return None
+
+
+def _resolve_slot(db: Session, *, parent_sample_id: Optional[str], peptide: Optional[Peptide]) -> Optional[int]:
+    """Return the parent's analyte slot (1-4) for `peptide`, else None."""
+    if not parent_sample_id or not peptide:
+        return None
+    from sub_samples.senaite import fetch_parent_analyte_slots
+    slots = fetch_parent_analyte_slots(parent_sample_id)
+    want = _norm(peptide.abbreviation or peptide.name)
+    for n, title in slots.items():
+        name = re.sub(r"\s*-\s*identity\s*\(hplc\)\s*$", "", title or "", flags=re.I)
+        if _norm(name) == want:
+            return n
     return None
 
 
@@ -62,12 +79,14 @@ def _result_for(category: str, analysis: HPLCAnalysis, peptide: Optional[Peptide
     return None
 
 
-def _pick_target(category: str, candidates: list[LimsAnalysis]) -> Optional[LimsAnalysis]:
+def _pick_target(category: str, candidates: list[LimsAnalysis], *, slot: Optional[int]) -> Optional[LimsAnalysis]:
     """Choose the single target row for a category, or None if ambiguous/empty.
 
     Identity: a peptide-specific ID_<PEPTIDE> row wins over the generic HPLC-ID
     row (the seeder puts both on every HPLC vial). Fall back to the generic row
-    only when no specific row matched. Purity/quantity: require exactly one row.
+    only when no specific row matched. Purity/quantity: prefer per-analyte
+    ANALYTE-{slot}-* rows when present (route by resolved slot); else fall back
+    to the legacy generic row (exactly one).
     """
     if category == "identity":
         specific = [r for r in candidates if (r.keyword or "").upper().startswith("ID_")]
@@ -77,7 +96,19 @@ def _pick_target(category: str, candidates: list[LimsAnalysis]) -> Optional[Lims
         if not specific and len(generic) == 1:
             return generic[0]
         return None
-    return candidates[0] if len(candidates) == 1 else None
+    # purity / quantity
+    suffix = "PUR" if category == "purity" else "QTY"
+    analyte = [r for r in candidates if re.match(r"^ANALYTE-[1-4]-" + suffix + "$", (r.keyword or "").upper())]
+    generic = [r for r in candidates
+               if (r.keyword or "").upper() == "HPLC-PUR"
+               or (r.keyword or "").upper().startswith("QTY_")]
+    if analyte:
+        if slot is None:
+            return None
+        want = f"ANALYTE-{slot}-{suffix}"
+        match = [r for r in analyte if (r.keyword or "").upper() == want]
+        return match[0] if len(match) == 1 else None
+    return generic[0] if len(generic) == 1 else None
 
 
 def bridge_prep_result_to_vial(
@@ -122,9 +153,21 @@ def bridge_prep_result_to_vial(
                 continue
         by_category.setdefault(category, []).append(row)
 
+    # Lazy slot resolution: only hit SENAITE when a per-analyte row is present.
+    needs_slot = any(
+        _ANALYTE_PUR.match((r.keyword or "").upper()) or _ANALYTE_QTY.match((r.keyword or "").upper())
+        for cands in by_category.values() for r in cands
+    )
+    slot: Optional[int] = None
+    if needs_slot:
+        sub = db.get(LimsSubSample, lims_sub_sample_pk)
+        parent = db.get(LimsSample, sub.parent_sample_pk) if sub else None
+        parent_sample_id = parent.sample_id if parent else None
+        slot = _resolve_slot(db, parent_sample_id=parent_sample_id, peptide=peptide)
+
     submitted: list[int] = []
     for category, candidates in by_category.items():
-        row = _pick_target(category, candidates)
+        row = _pick_target(category, candidates, slot=slot)
         if row is None:
             logger.warning(
                 "prep_bridge: ambiguous/unresolved %s match for vial=%s (%d candidates) — skipping",
