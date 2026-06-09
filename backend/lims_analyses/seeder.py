@@ -175,18 +175,23 @@ def mirror_parent_hplc_analyses(
     parent_keywords = senaite_mod.fetch_parent_analysis_keywords(parent_sample_id)
 
     # Per-substance translation indexes (built from the catalog already loaded).
+    # pur_by_pep/qty_by_pep assume one PUR_/QTY_ service per peptide (the 1:1
+    # invariant the migration establishes). Iterating by ascending keyword with
+    # setdefault makes the pick deterministic (lowest keyword wins) and matches the
+    # prep bridge's `order_by(keyword).limit(1)`, so the row seeded here is the row
+    # the bridge later resolves — even in the (currently nonexistent) two-services-
+    # per-peptide edge.
     id_svc_by_title = {
         s.title: s for s in svc_rows
         if s.keyword and s.keyword.startswith("ID_") and s.title
     }
-    pur_by_pep = {
-        s.peptide_id: s for s in svc_rows
-        if s.keyword and s.keyword.startswith("PUR_") and s.peptide_id
-    }
-    qty_by_pep = {
-        s.peptide_id: s for s in svc_rows
-        if s.keyword and s.keyword.startswith("QTY_") and s.peptide_id
-    }
+    pur_by_pep: dict = {}
+    qty_by_pep: dict = {}
+    for s in sorted((x for x in svc_rows if x.keyword and x.peptide_id), key=lambda x: x.keyword):
+        if s.keyword.startswith("PUR_"):
+            pur_by_pep.setdefault(s.peptide_id, s)
+        elif s.keyword.startswith("QTY_"):
+            qty_by_pep.setdefault(s.peptide_id, s)
 
     # Slot->substance map: only read SENAITE when a generic ANALYTE-{n} keyword is
     # present (single-peptide HPLC vials carry HPLC-PUR/HPLC-ID, never ANALYTE-N).

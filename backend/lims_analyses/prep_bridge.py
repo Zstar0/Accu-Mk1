@@ -42,14 +42,20 @@ def _norm(s: Optional[str]) -> str:
 
 def _peptide_service_keyword(db: Session, *, peptide: Optional[Peptide], prefix: str) -> Optional[str]:
     """The per-substance service keyword for `peptide` and prefix ('PUR_'/'QTY_'),
-    e.g. PUR_BPC157, or None. Catalog lookup by peptide_id — no SENAITE."""
+    e.g. PUR_BPC157, or None. Catalog lookup by peptide_id — no SENAITE.
+
+    Assumes one PUR_/QTY_ service per peptide (the 1:1 invariant the migration
+    establishes). `order_by(keyword)` makes the pick deterministic and matches the
+    seeder mirror's selection (which also picks the lowest keyword per peptide) so
+    the row the mirror seeds is the row the bridge resolves, even in the
+    (currently nonexistent) two-services-per-peptide edge."""
     if not peptide:
         return None
     return db.execute(
         select(AnalysisService.keyword).where(
             AnalysisService.peptide_id == peptide.id,
             AnalysisService.keyword.like(prefix.replace("_", r"\_") + "%", escape="\\"),
-        ).limit(1)
+        ).order_by(AnalysisService.keyword).limit(1)
     ).scalar_one_or_none()
 
 
