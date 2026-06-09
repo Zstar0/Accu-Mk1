@@ -669,6 +669,46 @@ def _run_migrations():
         WHERE g.name = 'Microbiology'
         ON CONFLICT (service_group_id, analysis_service_id) DO NOTHING
         """,
+        # Per-substance purity/quantity services. Derived from the per-peptide
+        # identity services (ID_<X>) so the keyword suffix + peptide_id are
+        # authoritative (the suffix is NOT derivable from the peptide name, e.g.
+        # ID_TB500BETA4). The HPLC vial analyte mirror seeds these so a blend
+        # vial's purity/quantity rows name the real substance instead of the
+        # generic "Analyte N". Idempotent via NOT EXISTS (analysis_services.keyword
+        # is not unique). No-op for the pre-existing PUR_BPC157/QTY_BPC157 and on
+        # fresh installs with no identity services.
+        """
+        INSERT INTO analysis_services (title, keyword, category, unit, peptide_id, active, created_at, updated_at)
+        SELECT p.name || ' - Purity', 'PUR_' || substring(idsvc.keyword from 4), 'HPLC', '%',
+               idsvc.peptide_id, TRUE, NOW(), NOW()
+        FROM analysis_services idsvc
+        JOIN peptides p ON p.id = idsvc.peptide_id
+        WHERE left(idsvc.keyword, 3) = 'ID_' AND idsvc.peptide_id IS NOT NULL
+          AND NOT EXISTS (
+            SELECT 1 FROM analysis_services x
+            WHERE x.keyword = 'PUR_' || substring(idsvc.keyword from 4))
+        """,
+        """
+        INSERT INTO analysis_services (title, keyword, category, unit, peptide_id, active, created_at, updated_at)
+        SELECT p.name || ' - Quantity', 'QTY_' || substring(idsvc.keyword from 4), 'HPLC', 'mg',
+               idsvc.peptide_id, TRUE, NOW(), NOW()
+        FROM analysis_services idsvc
+        JOIN peptides p ON p.id = idsvc.peptide_id
+        WHERE left(idsvc.keyword, 3) = 'ID_' AND idsvc.peptide_id IS NOT NULL
+          AND NOT EXISTS (
+            SELECT 1 FROM analysis_services x
+            WHERE x.keyword = 'QTY_' || substring(idsvc.keyword from 4))
+        """,
+        # Group all per-substance purity/quantity services into Analytics
+        # (consistent with the ID_<X> identity services). Idempotent.
+        """
+        INSERT INTO service_group_members (service_group_id, analysis_service_id)
+        SELECT g.id, s.id
+        FROM service_groups g
+        JOIN analysis_services s ON left(s.keyword, 4) IN ('PUR_', 'QTY_')
+        WHERE g.name = 'Analytics'
+        ON CONFLICT (service_group_id, analysis_service_id) DO NOTHING
+        """,
     ]
     # Per-statement isolation: a failure in one statement (e.g., a table that
     # create_all hasn't built yet on first run) must not skip subsequent
