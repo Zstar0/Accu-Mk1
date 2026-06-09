@@ -765,6 +765,80 @@ def test_promote_succeeds_again_after_parent_row_retracted(db, sub_sample, analy
     db.commit()
 
 
+# ── Phase 3 (per-substance keyword translation): parent-target overrides ────
+
+
+def test_promote_uses_parent_target_for_parent_row(db, sub_sample, analysis_service):
+    """Per-substance promotion: the parent-tier row is stored under a PARENT
+    target keyword/service/title that differs from the source vial keyword.
+
+    Sources are still validated against the source vial `keyword`; only the
+    parent-tier row's identity is decoupled via the parent_* overrides.
+    """
+    from lims_analyses.service import promote_to_parent
+
+    # A distinct seeded service for the override service_id so the
+    # analysis_service_id assertion actually discriminates (the source vial
+    # is created with analysis_service.id).
+    other_svc = db.execute(
+        select(AnalysisService).where(
+            AnalysisService.keyword.isnot(None),
+            AnalysisService.id != analysis_service.id,
+        )
+    ).scalars().first()
+    override_service_id = other_svc.id if other_svc else analysis_service.id
+
+    src = _make_vial_in_to_be_verified(db, sub_sample, analysis_service)
+    parent_row, _ = promote_to_parent(
+        db,
+        keyword=src.keyword,
+        result_value="98.5",
+        result_unit="%",
+        method_id=None,
+        instrument_id=None,
+        sources=[{"analysis_id": src.id, "contribution_kind": "chosen"}],
+        user_id=1,
+        parent_keyword="ANALYTE-2-PUR",
+        parent_analysis_service_id=override_service_id,
+        parent_title="Analyte 2 (Purity)",
+        commit=False,
+    )
+    assert parent_row.keyword == "ANALYTE-2-PUR"
+    assert parent_row.title == "Analyte 2 (Purity)"
+    assert parent_row.analysis_service_id == override_service_id
+    assert parent_row.review_state == "verified"
+    # commit=False: the source's transition to 'promoted' is pending in the
+    # session (not yet committed). Assert the in-memory state directly — a
+    # db.refresh() here would reload the still-committed 'to_be_verified'.
+    assert src.review_state == "promoted"
+
+    # commit=False flushed the parent INSERT into the open transaction; the
+    # autouse cleanup commits afterward. Rename to TEST: so cleanup deletes it.
+    parent_row.title = "TEST: " + parent_row.title
+    db.commit()
+
+
+def test_promote_without_overrides_keeps_source_keyword(db, sub_sample, analysis_service):
+    """Backward-compat: with no parent_* overrides, the parent-tier row keeps
+    the source vial keyword (old behavior unchanged)."""
+    from lims_analyses.service import promote_to_parent
+
+    src = _make_vial_in_to_be_verified(db, sub_sample, analysis_service)
+    parent_row, _ = promote_to_parent(
+        db,
+        keyword=src.keyword,
+        result_value="99",
+        result_unit="%",
+        method_id=None,
+        instrument_id=None,
+        sources=[{"analysis_id": src.id, "contribution_kind": "chosen"}],
+        user_id=1,
+        commit=False,
+    )
+    assert parent_row.keyword == src.keyword
+    db.commit()
+
+
 # ── Phase 4b: promoted_to_parent_id in senaite_shape ────────────────────────
 
 

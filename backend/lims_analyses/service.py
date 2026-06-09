@@ -438,6 +438,9 @@ def promote_to_parent(
     sources: List[Dict[str, Any]],
     user_id: Optional[int] = None,
     reason: Optional[str] = None,
+    parent_keyword: Optional[str] = None,
+    parent_analysis_service_id: Optional[int] = None,
+    parent_title: Optional[str] = None,
     commit: bool = True,
 ) -> Tuple[LimsAnalysis, List["LimsAnalysisPromotion"]]:
     """Phase 4a: create a parent-tier verified row from N vial-tier sources.
@@ -468,6 +471,16 @@ def promote_to_parent(
     partial unique index slot. An audit transition (reason="superseded by
     retest promotion") is written on the old row. Non-retest sources leave
     the existing 409 protection intact.
+
+    Parent-target overrides (per-substance promotion): parent_keyword,
+    parent_analysis_service_id, and parent_title decouple the parent-tier
+    row's identity from the source vial keyword. Used when blend-vial
+    per-substance results (e.g. vial PUR_<X> sources) must be stored under a
+    generic parent-AR slot (e.g. ANALYTE-{slot}, ANALYTE-2-PUR). Sources are
+    still validated against the source `keyword`; only the parent-tier row
+    (and the retest-supersession lookup) use the effective parent target.
+    Each defaults to None → unchanged behavior (parent row inherits the
+    source keyword/service/title).
 
     Raises:
       - BadRequestError on validation failures.
@@ -542,8 +555,12 @@ def promote_to_parent(
         raise BadRequestError("could not derive parent_sample_pk from sources")
 
     first_source = source_rows[source_ids[0]]
-    analysis_service_id = first_source.analysis_service_id
-    title = first_source.title
+    # Effective parent-tier identity: parent_* overrides decouple the
+    # parent row from the source vial keyword (per-substance promotion).
+    # Default None → inherit the source row's keyword/service/title.
+    eff_parent_keyword = parent_keyword or keyword
+    eff_service_id = parent_analysis_service_id or first_source.analysis_service_id
+    eff_title = parent_title or first_source.title
 
     now = datetime.utcnow()
 
@@ -557,7 +574,7 @@ def promote_to_parent(
         old_parent = db.execute(
             select(LimsAnalysis).where(
                 LimsAnalysis.lims_sample_pk == parent_sample_pk,
-                LimsAnalysis.keyword == keyword,
+                LimsAnalysis.keyword == eff_parent_keyword,
                 LimsAnalysis.retest_of_id.is_(None),
                 # Only VERIFIED parents are superseded. A published parent is
                 # a citable COA source — superseding it silently could invalidate
@@ -584,9 +601,9 @@ def promote_to_parent(
     parent_row = LimsAnalysis(
         lims_sample_pk=parent_sample_pk,
         lims_sub_sample_pk=None,
-        analysis_service_id=analysis_service_id,
-        keyword=keyword,
-        title=title,
+        analysis_service_id=eff_service_id,
+        keyword=eff_parent_keyword,
+        title=eff_title,
         result_value=result_value,
         result_unit=result_unit,
         review_state="verified",
