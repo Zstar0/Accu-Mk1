@@ -4,6 +4,9 @@ import {
   canVarianceVerify,
   ALLOWED_TRANSITIONS_TEST_EXPORT as ALLOWED_TRANSITIONS,
   StatusBadge,
+  isVarianceMember,
+  showVarianceChip,
+  VarianceChip,
 } from '@/components/senaite/AnalysisTable'
 import type { SenaiteAnalysis } from '@/lib/api'
 
@@ -46,6 +49,47 @@ describe('canVarianceVerify', () => {
 describe('variance_verified transitions table', () => {
   it('offers retest only', () => {
     expect(ALLOWED_TRANSITIONS['variance_verified']).toEqual(['retest'])
+  })
+})
+
+describe('isVarianceMember (state-independent membership)', () => {
+  it('true for an entitled hplc sub-row regardless of state', () => {
+    expect(isVarianceMember(mk({ review_state: 'unassigned' }), 'hplc', ENTITLED)).toBe(true)
+    expect(isVarianceMember(mk({ review_state: 'received' }), 'hplc', ENTITLED)).toBe(true)
+    expect(isVarianceMember(mk({ review_state: 'to_be_verified' }), 'hplc', ENTITLED)).toBe(true)
+    expect(isVarianceMember(mk({ review_state: 'variance_verified' }), 'hplc', ENTITLED)).toBe(true)
+    expect(isVarianceMember(mk({ promoted_to_parent_id: 5 }), 'hplc', ENTITLED)).toBe(true)
+  })
+  it('false for SENAITE rows, no entitlement, wrong role, null role', () => {
+    expect(isVarianceMember(mk({ uid: 'a8c27e69bfa8' }), 'hplc', ENTITLED)).toBe(false)
+    expect(isVarianceMember(mk({}), 'hplc', {})).toBe(false)
+    expect(isVarianceMember(mk({}), 'hplc', undefined)).toBe(false)
+    expect(isVarianceMember(mk({}), 'endo', ENTITLED)).toBe(false)
+    expect(isVarianceMember(mk({}), null, ENTITLED)).toBe(false)
+  })
+})
+
+describe('showVarianceChip (member, with suppression)', () => {
+  it('true for an entitled member in a pre-signoff state', () => {
+    expect(showVarianceChip(mk({ review_state: 'unassigned' }), 'hplc', ENTITLED)).toBe(true)
+    expect(showVarianceChip(mk({ review_state: 'to_be_verified' }), 'hplc', ENTITLED)).toBe(true)
+  })
+  it('suppressed on promoted rows (became canonical line)', () => {
+    expect(showVarianceChip(mk({ review_state: 'promoted' }), 'hplc', ENTITLED)).toBe(false)
+    expect(showVarianceChip(mk({ promoted_to_parent_id: 5 }), 'hplc', ENTITLED)).toBe(false)
+  })
+  it('suppressed on variance_verified (already badged Verified — Variance)', () => {
+    expect(showVarianceChip(mk({ review_state: 'variance_verified' }), 'hplc', ENTITLED)).toBe(false)
+  })
+  it('false when not a member', () => {
+    expect(showVarianceChip(mk({}), 'hplc', {})).toBe(false)
+  })
+})
+
+describe('VarianceChip', () => {
+  it('renders the Variance label', () => {
+    render(<VarianceChip />)
+    expect(screen.getByText('Variance')).toBeInTheDocument()
   })
 })
 

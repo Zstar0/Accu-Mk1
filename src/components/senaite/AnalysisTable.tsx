@@ -209,6 +209,36 @@ export function canVarianceVerify(
   return typeof n === 'number' && n >= 2
 }
 
+/** True when a row is a MEMBER of a variance series — native (mk1:) sub-row whose
+ *  host vial role maps to a parent-purchased variance key (n>=2). State-INDEPENDENT
+ *  (unlike canVarianceVerify, which also requires to_be_verified & not-promoted).
+ *  Drives the membership chip. */
+export function isVarianceMember(
+  a: SenaiteAnalysis,
+  vialRole: string | null | undefined,
+  entitlement: Record<string, number> | undefined,
+): boolean {
+  if (!a.uid || !a.uid.startsWith('mk1:')) return false
+  const key = vialRole ? ROLE_VARIANCE_KEYS[vialRole] : undefined
+  if (!key || !entitlement) return false
+  const n = entitlement[key]
+  return typeof n === 'number' && n >= 2
+}
+
+/** Whether to render the membership chip on a row: a variance member, EXCEPT on
+ *  rows that already self-describe as variance — promoted (became the canonical
+ *  line) and variance_verified ("Verified — Variance" badge). */
+export function showVarianceChip(
+  a: SenaiteAnalysis,
+  vialRole: string | null | undefined,
+  entitlement: Record<string, number> | undefined,
+): boolean {
+  if (!isVarianceMember(a, vialRole, entitlement)) return false
+  if (isPromoted(a) || a.review_state === 'promoted') return false
+  if (a.review_state === 'variance_verified') return false
+  return true
+}
+
 /** True when a vial row has already been promoted to a parent-tier row. */
 export function isPromoted(a: SenaiteAnalysis): boolean {
   return a.promoted_to_parent_id != null
@@ -343,6 +373,20 @@ export function StatusBadge({ state, promotable = false, varianceReady = false }
       className={`inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium border ${color}`}
     >
       {label}
+    </span>
+  )
+}
+
+/** Small membership chip marking a row as part of a variance series. Visually
+ *  distinct from the colored status badges (sky outline, echoing the AssignStep
+ *  variance annotation). Gate visibility with showVarianceChip(). */
+export function VarianceChip() {
+  return (
+    <span
+      title="Replicate in a variance series — signed off via Verify (Variance), never promoted."
+      className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium border bg-sky-50 text-sky-700 border-sky-200 dark:bg-sky-500/15 dark:text-sky-400 dark:border-sky-500/20"
+    >
+      Variance
     </span>
   )
 }
@@ -1273,6 +1317,7 @@ function AnalysisRow({
               varianceReady={canVarVerify && locked}
             />
           )}
+          {showVarianceChip(analysis, vialRole, varianceEntitlement) && <VarianceChip />}
           {isPromoted && (
             <span
               className="text-[10px] font-mono text-emerald-700 dark:text-emerald-400"
