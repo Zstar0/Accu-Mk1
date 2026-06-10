@@ -171,6 +171,21 @@ interface ColumnFilters {
   analytes: string
 }
 
+/** True when a parent AR has variance testing on any bucket (display flag). */
+export function parentHasVariance(agg: ParentAggregate | undefined): boolean {
+  const v = agg?.variance
+  return !!v && (v.hplc >= 2 || v.endo >= 2 || v.ster >= 2)
+}
+
+/** True when a sub-sample vial's role bucket has variance on its parent.
+ *  Membership-level (the AR list is a vial view; promotion is per-analysis and
+ *  isn't expressible per vial — intentional coarser hint than the analysis table). */
+export function subIsVarianceMember(sub: SubSample, agg: ParentAggregate | undefined): boolean {
+  const role = sub.assignment_role
+  if (role !== 'hplc' && role !== 'endo' && role !== 'ster') return false
+  return (agg?.variance?.[role] ?? 0) >= 2
+}
+
 function SampleTable({
   samples,
   loading,
@@ -612,21 +627,6 @@ function SampleTable({
 // `limit` when sub-samples are interleaved upstream. 50 keeps the visible row
 // count in line with what the page showed before the filter was added.
 const PAGE_SIZE = 50
-
-/** True when a parent AR has variance testing on any bucket (display flag). */
-export function parentHasVariance(agg: ParentAggregate | undefined): boolean {
-  const v = agg?.variance
-  return !!v && (v.hplc >= 2 || v.endo >= 2 || v.ster >= 2)
-}
-
-/** True when a sub-sample vial's role bucket has variance on its parent.
- *  Membership-level (the AR list is a vial view; promotion is per-analysis and
- *  isn't expressible per vial — intentional coarser hint than the analysis table). */
-export function subIsVarianceMember(sub: SubSample, agg: ParentAggregate | undefined): boolean {
-  const role = sub.assignment_role
-  if (role !== 'hplc' && role !== 'endo' && role !== 'ster') return false
-  return (agg?.variance?.[role] ?? 0) >= 2
-}
 
 export function SenaiteDashboard() {
   const navigateToSample = useUIStore(state => state.navigateToSample)
