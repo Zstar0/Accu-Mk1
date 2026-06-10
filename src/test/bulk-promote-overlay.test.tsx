@@ -217,6 +217,25 @@ describe('visibleRowTransitions — promoted row', () => {
   })
 })
 
+// A row in the real `promoted` review_state (its result already rolled up to
+// the parent). Corrections must start at the parent (retest there cascades
+// down), so the sub-level row offers NO transitions — no retest, no menu.
+const promotedState = mk({ uid: 'mk1:830', review_state: 'promoted', promoted_to_parent_id: 1260 })
+
+describe('visibleRowTransitions — promoted-state row (locked from the sub)', () => {
+  it('offers no transitions — retest must be initiated from the parent', () => {
+    expect(visibleRowTransitions(promotedState)).toEqual([])
+  })
+})
+
+describe('deriveBulkActions — promoted-state rows', () => {
+  it('offers no retest when all selected are in the promoted state', () => {
+    const r = deriveBulkActions([promotedState])
+    expect(r.actions).not.toContain('retest')
+    expect(r.actions).toEqual([])
+  })
+})
+
 describe('deriveBulkActions — promoted rows', () => {
   it('excludes verify when ANY selected row is promoted', () => {
     const r = deriveBulkActions([promoted, senaiteTbv])

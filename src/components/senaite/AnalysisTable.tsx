@@ -136,9 +136,14 @@ const ALLOWED_TRANSITIONS: Record<string, readonly string[]> = {
   unassigned: ['submit', 'reject'],
   assigned: ['submit', 'reject'],
   to_be_verified: ['retest', 'verify', 'retract', 'reject'],
-  // A promoted sub-sample (its result rolled up to the parent) can be retested
-  // to correct it (re-run, re-promote). verified stays for parent-tier rows.
-  promoted: ['retest'],
+  // A promoted sub-sample row is locked from the sub side: its result is already
+  // rolled up to the parent. Corrections must start at the PARENT (retest there
+  // cascades back down to the vial). Retesting from the sub while the parent line
+  // is still verified dead-ends on the SENAITE write-back ("Not allowed to set
+  // 'Remarks'", HTTP 401). The parent→sub cascade still retests promoted sources
+  // server-side (cascade_parent_retest_to_sources) — that path is unaffected;
+  // only the user-facing row/bulk option is removed.
+  promoted: [],
   // Retest-aware promote: a verified row can be retested (vial tier in Mk1;
   // SENAITE allows it on parent lines too).
   verified: ['retest'],
