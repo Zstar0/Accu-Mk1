@@ -74,7 +74,11 @@ describe('showVarianceChip (member, with suppression)', () => {
     expect(showVarianceChip(mk({ review_state: 'unassigned' }), 'hplc', ENTITLED)).toBe(true)
     expect(showVarianceChip(mk({ review_state: 'to_be_verified' }), 'hplc', ENTITLED)).toBe(true)
   })
-  it('suppressed on promoted rows (became canonical line)', () => {
+  it('suppressed on promoted rows — both by state and by parent-id', () => {
+    // review_state 'promoted' with promoted_to_parent_id null is the retract-and-
+    // repromote gap (service.py clears the id when the parent line is retracted);
+    // the `|| review_state === 'promoted'` branch in showVarianceChip is load-
+    // bearing for this case, NOT dead code — do not remove it.
     expect(showVarianceChip(mk({ review_state: 'promoted' }), 'hplc', ENTITLED)).toBe(false)
     expect(showVarianceChip(mk({ promoted_to_parent_id: 5 }), 'hplc', ENTITLED)).toBe(false)
   })
