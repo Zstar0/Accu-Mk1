@@ -147,6 +147,17 @@ def test_auto_assign_no_variance_arg_backwards_compatible():
     assert got == [("hplc", "core"), ("endo", "core")]
 
 
+def test_auto_assign_no_variance_fill_for_unordered_service():
+    # A (contract-invalid) variance key on a service with zero core demand
+    # must not fill variance vials — you can't buy variance for a service
+    # that wasn't ordered. Surplus goes to xtra.
+    vials = [_vial("P-S01", seq=1), _vial("P-S02", seq=2)]
+    out = sub_service.auto_assign(vials, demand={"hplc": 0, "endo": 1, "ster": 0},
+                                  variance={"hplc": 2, "endo": 0, "ster": 0})
+    got = [(v["assignment_role"], v["assignment_kind"]) for v in out]
+    assert got == [("endo", "core"), ("xtra", None)]
+
+
 # ─── Task 4: compute_vial_plan respects variance lock (no auto-assign) ───────
 
 @pytest.fixture()
@@ -180,3 +191,74 @@ def test_compute_vial_plan_skips_auto_assign_when_locked(db, locked_fixture, mon
     r = db.execute(text("SELECT assignment_role FROM lims_sub_samples "
                         "WHERE sample_id='ZZTEST-AKLOCK-S01'")).scalar_one()
     assert r is None  # and not persisted
+
+
+# ─── Task 4 review: plan-path persistence through set_assignment_role ────────
+
+PLAN_SERVICES = {
+    "services": {"hplcpurity_identity": True, "endotoxin": True,
+                 "variance": {"endotoxin": 2}},
+    "wp_order_number": "WP-10",
+}
+
+
+@pytest.fixture()
+def plan_fixture(db, monkeypatch):
+    """ZZTEST parent (role hplc) + 2 NULL-role vials. IS/SENAITE-free:
+    fetch_sample_services monkeypatched, seeder stubbed to a no-op."""
+    monkeypatch.setattr(sub_service, "fetch_sample_services",
+                        lambda sid: PLAN_SERVICES)
+    monkeypatch.setattr("lims_analyses.seeder.seed_analyses_for_vial",
+                        lambda *a, **k: None)
+    parent = LimsSample(sample_id="ZZTEST-AKPP", peptide_name="ZZ",
+                        status="received", assignment_role="hplc")
+    db.add(parent); db.flush()
+    for i in (1, 2):
+        db.add(LimsSubSample(sample_id=f"ZZTEST-AKPP-S0{i}", parent_sample_pk=parent.id,
+                             vial_sequence=i, received_at=datetime.utcnow(),
+                             external_lims_uid=f"zz-akpp-s0{i}"))
+    db.commit()
+    yield
+    db.rollback()
+    db.execute(text("DELETE FROM lims_sub_samples WHERE sample_id LIKE 'ZZTEST-AKPP%'"))
+    db.execute(text("DELETE FROM lims_samples WHERE sample_id LIKE 'ZZTEST-AKPP%'"))
+    db.commit()
+
+
+def _stored_assignment(db, sample_id):
+    return db.execute(text(
+        "SELECT assignment_role, assignment_kind FROM lims_sub_samples "
+        "WHERE sample_id = :sid"), {"sid": sample_id}).one()
+
+
+def test_compute_vial_plan_persists_roles_and_kinds(db, plan_fixture):
+    """Happy path: auto-assign fill order lands in the DB (role AND kind).
+    Parent consumes core hplc; S01 → endo core; S02 → endo variance."""
+    plan = sub_service.compute_vial_plan(db, "ZZTEST-AKPP")
+    assert plan["is_unreachable"] is False
+    assert tuple(_stored_assignment(db, "ZZTEST-AKPP-S01")) == ("endo", "core")
+    assert tuple(_stored_assignment(db, "ZZTEST-AKPP-S02")) == ("endo", "variance")
+
+
+def test_compute_vial_plan_persist_failure_is_per_vial(db, plan_fixture, monkeypatch):
+    """One vial's set_assignment_role failing must not block the others:
+    failed vial stays NULL (retried next GET), the rest persist, response
+    stays coherent."""
+    orig = sub_service.set_assignment_role
+
+    def flaky(db_, sid, role, kind=None, user_id=None, wp_services=None):
+        if sid == "ZZTEST-AKPP-S01":
+            raise RuntimeError("boom")
+        return orig(db_, sid, role, kind=kind, user_id=user_id,
+                    wp_services=wp_services)
+
+    monkeypatch.setattr(sub_service, "set_assignment_role", flaky)
+    plan = sub_service.compute_vial_plan(db, "ZZTEST-AKPP")
+    # S01 failed → untouched in the DB; S02 persisted normally.
+    assert tuple(_stored_assignment(db, "ZZTEST-AKPP-S01")) == (None, None)
+    assert tuple(_stored_assignment(db, "ZZTEST-AKPP-S02")) == ("endo", "variance")
+    # Response stays coherent: full vial list with the computed plan.
+    by_id = {v["sample_id"]: v for v in plan["vials"]}
+    assert len(plan["vials"]) == 3
+    assert by_id["ZZTEST-AKPP-S01"]["assignment_role"] == "endo"
+    assert by_id["ZZTEST-AKPP-S02"]["assignment_kind"] == "variance"

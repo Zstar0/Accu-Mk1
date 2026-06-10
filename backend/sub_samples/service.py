@@ -694,9 +694,15 @@ def compute_vial_plan(db: Session, parent_sample_id: str) -> dict:
     # and lims_analyses seeding apply uniformly (previously a direct column
     # write that bypassed all of those). Parent never NULLs, so we never write
     # back to lims_samples here — Reset-to-auto goes through the PATCH endpoint.
-    # Best-effort per vial: set_assignment_role commits (or rolls back) each
-    # vial atomically; a failed vial keeps its NULL role and is retried on the
-    # next /vial-plan call. n is small (one family), so per-vial commits are fine.
+    #
+    # ATOMICITY (accepted decision): each vial's role+seed commit together or
+    # not at all — identical to the manual drag path (PATCH → set_assignment_role
+    # was always atomic; if SENAITE is down, manual assignment fails the same
+    # way). So a SENAITE outage means auto-assigned roles don't persist for
+    # that vial — fail-soft per vial (logged), self-healing on the next GET
+    # /vial-plan which retries the still-NULL roles. n is small (one family),
+    # so per-vial commits are fine. The already-fetched `services` dict is
+    # threaded through so the loop makes no extra IS HTTP calls.
     db.commit()  # persist ensure_sample_row's lazy upsert before per-vial commits
     sub_by_id = {s.sample_id: s for s in subs}
     for v in assigned:
@@ -710,7 +716,7 @@ def compute_vial_plan(db: Session, parent_sample_id: str) -> dict:
             try:
                 set_assignment_role(
                     db, v["sample_id"], v["assignment_role"],
-                    kind=v["assignment_kind"],
+                    kind=v["assignment_kind"], wp_services=services,
                 )
             except Exception as e:
                 db.rollback()
@@ -763,10 +769,15 @@ def auto_assign(vials: list[dict], demand: dict,
 
     Vials are processed in input order (caller orders by vial_sequence with
     parent first). `variance=None` means zero variance targets (legacy call
-    shape — all fills are core).
+    shape — all fills are core). Variance targets only apply to buckets with
+    core demand > 0: you can't buy variance for a service that wasn't ordered,
+    so a (contract-invalid) variance key on a zero-demand bucket never fills.
     """
     remaining = dict(demand)  # copies so we don't mutate caller's dicts
-    remaining_var = dict(variance or {})
+    remaining_var = {
+        bucket: n for bucket, n in (variance or {}).items()
+        if demand.get(bucket, 0) > 0
+    }
     assigned_buckets = set()
 
     # First pass: track existing assignments and decrement targets.
@@ -847,7 +858,8 @@ _VALID_KINDS = {"core", "variance"}
 
 
 def set_assignment_role(db: Session, sample_id: str, role: Optional[str],
-                        kind: Optional[str] = None, user_id: Optional[int] = None) -> dict:
+                        kind: Optional[str] = None, user_id: Optional[int] = None,
+                        wp_services: Optional[dict] = None) -> dict:
     """Set assignment_role on a sub-sample or parent. Routes by sample existence.
 
     For sub-samples: role can be None (resets, next /vial-plan auto-assigns).
@@ -857,6 +869,11 @@ def set_assignment_role(db: Session, sample_id: str, role: Optional[str],
     coerced to None for xtra/unassigned. Blocked when parent's variance_locked_at is set.
     NOTE: a role-only call (kind omitted) clobbers any existing kind to NULL —
     plan-prescribed semantics; kind is ignored on the parent-AR branch.
+
+    wp_services: pre-fetched WP services dict for the seeding hook. None (the
+    PATCH-route default) fetches from IS as before; compute_vial_plan threads
+    its already-fetched dict so an N-vial persist loop doesn't make N extra
+    HTTP calls (or burn N x 15s timeouts during an IS outage).
     """
     if role is not None and role not in _VALID_ROLES:
         raise ValueError(f"Invalid role: {role!r}")
@@ -900,19 +917,23 @@ def set_assignment_role(db: Session, sample_id: str, role: Optional[str],
         # only commit. Role flip + audit event + every analysis row commit
         # together or not at all — a SENAITE read error OR a DB error partway
         # through the seed loop rolls back the whole unit and propagates.
-        # (create path + compute_vial_plan keep commit=True / per-row commits:
-        # they run after their own commits, so fail-hard there would orphan a
-        # committed vial — they stay deliberately best-effort.)
+        # (The create path keeps commit=True per-row seeding: it runs after its
+        # own commit, so fail-hard there would orphan a committed vial — it
+        # stays deliberately best-effort. compute_vial_plan routes through
+        # THIS function and inherits the atomic role+seed unit per vial.)
         if role and role != "xtra":
             parent_sid = parent_row.sample_id if parent_row else None
             if parent_sid:
-                wp_services = _fetch_wp_services_for_parent(parent_sid) or {}
+                services_map = (
+                    wp_services if wp_services is not None
+                    else _fetch_wp_services_for_parent(parent_sid) or {}
+                )
                 from lims_analyses.seeder import seed_analyses_for_vial
                 seed_analyses_for_vial(
                     db,
                     sub_sample=sub,
                     role=role,
-                    wp_services=wp_services,
+                    wp_services=services_map,
                     parent_sample_id=parent_sid,
                     created_by_user_id=user_id,
                     commit=False,
