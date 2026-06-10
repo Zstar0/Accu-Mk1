@@ -271,6 +271,11 @@ def patch_assignment(
         return service.set_assignment_role(db, sample_id, body.role, kind=body.kind, user_id=user.id)
     except LookupError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except service.VarianceLockedError as e:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "variance_locked", "message": str(e)},
+        )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except requests.RequestException as e:

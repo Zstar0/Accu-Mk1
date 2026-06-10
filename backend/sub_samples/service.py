@@ -846,6 +846,8 @@ def set_assignment_role(db: Session, sample_id: str, role: Optional[str],
 
     kind: 'core' | 'variance' | None. Only persisted for testable (non-xtra) roles;
     coerced to None for xtra/unassigned. Blocked when parent's variance_locked_at is set.
+    NOTE: a role-only call (kind omitted) clobbers any existing kind to NULL —
+    plan-prescribed semantics; kind is ignored on the parent-AR branch.
     """
     if role is not None and role not in _VALID_ROLES:
         raise ValueError(f"Invalid role: {role!r}")
@@ -860,15 +862,19 @@ def set_assignment_role(db: Session, sample_id: str, role: Optional[str],
         # Must fire BEFORE any mutation so the transaction is still clean on raise.
         parent_row = db.get(LimsSample, sub.parent_sample_pk)
         if parent_row is not None and parent_row.variance_locked_at is not None:
-            from lims_analyses.service import BadRequestError
-            raise BadRequestError("variance set is locked; unlock before re-assigning vials")
+            raise VarianceLockedError(
+                f"variance set for {parent_row.sample_id} is locked; "
+                "unlock before re-assigning vials"
+            )
         old_role = sub.assignment_role
+        old_kind = sub.assignment_kind
         sub.assignment_role = role
         sub.assignment_kind = kind if (role and role != "xtra") else None
         db.add(LimsSubSampleEvent(
             sub_sample_pk=sub.id,
             event="role_assigned",
-            details={"from": old_role, "to": role},
+            details={"from": old_role, "to": role,
+                     "kind_from": old_kind, "kind_to": sub.assignment_kind},
             user_id=user_id,
         ))
         # Role re-assignment cleanup: drop the OLD role's stale (unassigned,
