@@ -19,11 +19,28 @@ import { getVialPlan, patchVialAssignment } from '@/lib/api'
 
 const PLAN: VialPlanResponse = {
   demand: { hplc: 1, endo: 0, ster: 0 },
+  variance: { hplc: 0, endo: 0, ster: 0 },
+  base_demand: { hplc: 1, endo: 0, ster: 0 },
   wp_order_number: null,
   is_unreachable: false,
   vials: [
     { sample_id: 'P-0144', is_parent: true, vial_sequence: 0, assignment_role: 'hplc' },
     { sample_id: 'P-0144-S01', is_parent: false, vial_sequence: 1, assignment_role: 'hplc' },
+  ],
+}
+
+const VARIANCE_PLAN: VialPlanResponse = {
+  demand: { hplc: 3, endo: 2, ster: 0 },
+  variance: { hplc: 3, endo: 2, ster: 0 },
+  base_demand: { hplc: 1, endo: 1, ster: 0 },
+  wp_order_number: null,
+  is_unreachable: false,
+  vials: [
+    { sample_id: 'P-0144', is_parent: true, vial_sequence: 0, assignment_role: 'hplc' },
+    { sample_id: 'P-0144-S01', is_parent: false, vial_sequence: 1, assignment_role: 'hplc' },
+    { sample_id: 'P-0144-S02', is_parent: false, vial_sequence: 2, assignment_role: 'hplc' },
+    { sample_id: 'P-0144-S03', is_parent: false, vial_sequence: 3, assignment_role: 'endo' },
+    { sample_id: 'P-0144-S04', is_parent: false, vial_sequence: 4, assignment_role: 'endo' },
   ],
 }
 
@@ -55,6 +72,31 @@ function renderStep() {
   )
   return { subsFn, overlayFn }
 }
+
+describe('AssignStep variance sub-rows', () => {
+  it('renders base + VARIANCE count lines in the HPLC bucket', async () => {
+    vi.mocked(getVialPlan).mockResolvedValue(VARIANCE_PLAN)
+    renderStep()
+    await screen.findByText('P-0144-S01')
+    expect(screen.getByText(/HPLC · 1\s*\/\s*1/)).toBeInTheDocument()
+    expect(screen.getByText(/Variance · 2\s*\/\s*2/i)).toBeInTheDocument()
+  })
+
+  it('annotates the Endo sub-zone with the variance multiplier', async () => {
+    vi.mocked(getVialPlan).mockResolvedValue(VARIANCE_PLAN)
+    renderStep()
+    await screen.findByText('P-0144-S03')
+    expect(screen.getByText(/Endo · 2\s*\/\s*2/i)).toBeInTheDocument()
+    expect(screen.getByText(/×2 variance/i)).toBeInTheDocument()
+  })
+
+  it('renders no variance lines for a plan without variance', async () => {
+    renderStep()  // default PLAN fixture (no variance / zeros)
+    await screen.findByText('P-0144-S01')
+    expect(screen.queryByText(/Variance ·/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/×\d variance/i)).not.toBeInTheDocument()
+  })
+})
 
 describe('AssignStep role-change cache invalidation', () => {
   it('reset bucket: patches each vial to null and refetches the parent page caches', async () => {

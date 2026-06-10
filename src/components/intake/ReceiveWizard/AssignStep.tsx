@@ -158,6 +158,8 @@ export function AssignStep({ parentSampleId, parentSampleUid }: Props) {
               label="Analyses Dept."
               vials={plan.vials.filter(v => v.assignment_role === 'hplc')}
               demand={plan.demand.hplc}
+              varianceN={plan.variance?.hplc ?? 0}
+              baseDemand={plan.base_demand?.hplc ?? 0}
               onReset={() => handleResetBucket('hplc')}
             />
           )}
@@ -167,6 +169,8 @@ export function AssignStep({ parentSampleId, parentSampleUid }: Props) {
               ster={plan.vials.filter(v => v.assignment_role === 'ster')}
               endoDemand={plan.demand.endo}
               sterDemand={plan.demand.ster}
+              endoVarianceN={plan.variance?.endo ?? 0}
+              sterVarianceN={plan.variance?.ster ?? 0}
               onResetEndo={() => handleResetBucket('endo')}
               onResetSter={() => handleResetBucket('ster')}
             />
@@ -292,13 +296,20 @@ function AssignRemarksBlock({
 }
 
 function Bucket({
-  id, label, vials, demand, onReset,
+  id, label, vials, demand, onReset, varianceN = 0, baseDemand = 0,
 }: {
   id: BucketId
   label: string
   vials: VialPlanItem[]
   demand: number | null
   onReset: (() => void) | null
+  /** Variance n for this bucket (total replicates incl. canonical, 0 = none).
+   *  Purely presentational: splits the count into base + variance lines.
+   *  Vials are NOT individually designated — first fills base, surplus fills
+   *  variance (spec: demand math, not vial designation). */
+  varianceN?: number
+  /** Pre-variance baseline demand for this bucket (from plan.base_demand). */
+  baseDemand?: number
 }) {
   const { setNodeRef, isOver } = useDroppable({ id })
   const isShort = demand !== null && vials.length < demand
@@ -340,6 +351,14 @@ function Bucket({
           )}
         </div>
       </header>
+      {varianceN >= 2 && demand !== null && demand > baseDemand && (
+        <VarianceCountLines
+          assigned={vials.length}
+          baseSlots={baseDemand}
+          extraSlots={demand - baseDemand}
+          baseLabel={label === 'Analyses Dept.' ? 'HPLC' : label}
+        />
+      )}
       <div className="flex flex-wrap gap-2">
         {vials.length === 0 && (
           <p className="text-xs text-muted-foreground italic">empty</p>
@@ -351,12 +370,14 @@ function Bucket({
 }
 
 function MicroBucket({
-  endo, ster, endoDemand, sterDemand, onResetEndo, onResetSter,
+  endo, ster, endoDemand, sterDemand, endoVarianceN = 0, sterVarianceN = 0, onResetEndo, onResetSter,
 }: {
   endo: VialPlanItem[]
   ster: VialPlanItem[]
   endoDemand: number
   sterDemand: number
+  endoVarianceN?: number
+  sterVarianceN?: number
   onResetEndo: () => void
   onResetSter: () => void
 }) {
@@ -387,6 +408,7 @@ function MicroBucket({
           label="Endo"
           vials={endo}
           demand={endoDemand}
+          varianceN={endoVarianceN}
           onReset={onResetEndo}
         />
       )}
@@ -396,6 +418,7 @@ function MicroBucket({
           label="Sterility"
           vials={ster}
           demand={sterDemand}
+          varianceN={sterVarianceN}
           onReset={onResetSter}
         />
       )}
@@ -406,14 +429,42 @@ function MicroBucket({
   )
 }
 
+/** Presentational base/variance count split for a variance bucket. The first
+ *  `baseSlots` assignments fill the base line; surplus fills the variance
+ *  line. No vial is individually marked — pure demand math (spec §2). */
+function VarianceCountLines({
+  assigned, baseSlots, extraSlots, baseLabel,
+}: {
+  assigned: number
+  baseSlots: number
+  extraSlots: number
+  baseLabel: string
+}) {
+  const baseFilled = Math.min(assigned, baseSlots)
+  const extraFilled = Math.max(0, Math.min(assigned - baseSlots, extraSlots))
+  const baseShort = baseFilled < baseSlots
+  const extraShort = extraFilled < extraSlots
+  return (
+    <div className="mb-2 space-y-0.5 text-[10px] uppercase tracking-wide">
+      <div className={cn(baseShort ? 'text-amber-500' : 'text-muted-foreground')}>
+        {baseLabel} · {baseFilled} / {baseSlots}{baseShort && ' ⚠'}
+      </div>
+      <div className={cn(extraShort ? 'text-amber-500' : 'text-muted-foreground')}>
+        Variance · {extraFilled} / {extraSlots}{extraShort && ' ⚠'}
+      </div>
+    </div>
+  )
+}
+
 function SubDropZone({
-  id, label, vials, demand, onReset,
+  id, label, vials, demand, onReset, varianceN = 0,
 }: {
   id: BucketId
   label: string
   vials: VialPlanItem[]
   demand: number
   onReset: () => void
+  varianceN?: number
 }) {
   const { setNodeRef, isOver } = useDroppable({ id })
   const isShort = vials.length < demand
@@ -430,7 +481,13 @@ function SubDropZone({
         'text-[10px] uppercase tracking-wide mb-1 flex justify-between',
         isShort ? 'text-amber-500' : 'text-muted-foreground'
       )}>
-        <span>{label} · {vials.length} / {demand}{isShort && ' ⚠'}</span>
+        <span>
+          {label} · {vials.length} / {demand}
+          {varianceN >= 2 && (
+            <span className="text-sky-500"> (×{varianceN} variance)</span>
+          )}
+          {isShort && ' ⚠'}
+        </span>
         {vials.length > 0 && (
           <button
             type="button"

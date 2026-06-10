@@ -4857,6 +4857,12 @@ export interface VialPlanItem {
 
 export interface VialPlanResponse {
   demand: { hplc: number; endo: number; ster: number }
+  /** Per-bucket variance n (total replicates incl. canonical); zeros when
+   *  none purchased. Drives the AssignStep VARIANCE sub-rows. */
+  variance: { hplc: number; endo: number; ster: number }
+  /** Pre-variance lab baseline — the FE splits bucket counts into
+   *  base + variance lines from demand/base_demand. */
+  base_demand: { hplc: number; endo: number; ster: number }
   wp_order_number: string | null
   vials: VialPlanItem[]
   is_unreachable: boolean
@@ -5039,6 +5045,8 @@ export async function deleteSubSample(sampleId: string): Promise<void> {
 
 export interface VialDemandResponse {
   demand: { hplc: number; endo: number; ster: number }
+  variance: { hplc: number; endo: number; ster: number }
+  base_demand: { hplc: number; endo: number; ster: number }
   wp_order_number: string | null
   is_unreachable: boolean
 }
