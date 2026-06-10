@@ -574,9 +574,11 @@ VARIANCE_BUCKET_KEYS: dict[str, str] = {
 
 
 def derive_variance_demand(services: dict) -> dict:
-    """Per-bucket variance n (TOTAL replicates incl. the canonical) from a WP
-    services payload. 0 when not purchased. Uses the same normalization as the
-    entitlement endpoint so counts are int-filtered (>= 2) in one place."""
+    """Per-bucket variance target (purchased count n) from a WP services
+    payload. 0 when not purchased. Under the explicit-bucket model this is the
+    auto-assign target for variance-kind vials, a SEPARATE bucket on top of
+    core demand. Uses the same normalization as the entitlement endpoint so
+    counts are int-filtered (>= 2) in one place."""
     entitlement = normalize_variance_entitlement({"variance": (services or {}).get("variance")})
     return {
         bucket: entitlement.get(key, 0)
@@ -597,22 +599,18 @@ def derive_base_demand(services: dict) -> dict:
 
 
 def derive_demand(services: dict) -> dict:
-    """Translate WP services dict to vial demand per bucket.
+    """Translate WP services dict to CORE vial demand per bucket.
 
     HPLC is satisfied by either `hplcpurity_identity` or `bac_water_panel` —
     both result in chromatography vials. Sterility is the only bucket that
     needs more than one vial (2 per the lab's protocol).
 
-    Variance inflation (addon Phase 2): a purchased variance count n (total
-    replicates in the set) raises the bucket to max(base, n). Variance never
-    creates demand for an unordered service (base 0 stays 0).
+    Explicit-bucket model (2026-06-10-variance-bucket-assignment-design.md §2):
+    variance is a SEPARATE bucket with its own target (derive_variance_demand),
+    not an inflation of core demand — the old max(base, n) math is retired.
+    Core demand therefore equals the base lab-protocol demand.
     """
-    base = derive_base_demand(services)
-    variance = derive_variance_demand(services)
-    return {
-        bucket: max(n, variance[bucket]) if n > 0 else 0
-        for bucket, n in base.items()
-    }
+    return derive_base_demand(services)
 
 
 _BUCKET_PRIORITY = ("hplc", "endo", "ster")
@@ -637,6 +635,29 @@ def compute_vial_plan(db: Session, parent_sample_id: str) -> dict:
         log.warning("vial_plan.is_fetch_failed parent=%s err=%s", parent_sample_id, e)
         services_resp = None
 
+    def _current_vials() -> list[dict]:
+        """Parent first, then sub-samples in vial_sequence order, as-stored.
+        Parent's assignment_role is never NULL (default 'hplc' from migration)
+        and the parent has no kind — it IS the canonical."""
+        return [
+            {
+                "sample_id": parent.sample_id,
+                "is_parent": True,
+                "vial_sequence": 0,
+                "assignment_role": parent.assignment_role or "hplc",
+                "assignment_kind": None,
+            }
+        ] + [
+            {
+                "sample_id": s.sample_id,
+                "is_parent": False,
+                "vial_sequence": s.vial_sequence,
+                "assignment_role": s.assignment_role,
+                "assignment_kind": s.assignment_kind,
+            }
+            for s in subs
+        ]
+
     if services_resp is None:
         return {
             "demand": {"hplc": 0, "endo": 0, "ster": 0},
@@ -644,87 +665,58 @@ def compute_vial_plan(db: Session, parent_sample_id: str) -> dict:
             "base_demand": {"hplc": 0, "endo": 0, "ster": 0},
             "wp_order_number": None,
             "is_unreachable": True,
-            "vials": [
-                {
-                    "sample_id": parent.sample_id,
-                    "is_parent": True,
-                    "vial_sequence": 0,
-                    "assignment_role": parent.assignment_role or "hplc",
-                }
-            ] + [
-                {
-                    "sample_id": s.sample_id,
-                    "is_parent": False,
-                    "vial_sequence": s.vial_sequence,
-                    "assignment_role": s.assignment_role,
-                }
-                for s in subs
-            ],
+            "vials": _current_vials(),
         }
 
     services = services_resp.get("services") or {}
-    demand = derive_demand(services)
+    demand = derive_demand(services)  # core demand == base (inflation retired)
     variance = derive_variance_demand(services)
     base_demand = derive_base_demand(services)
 
-    # Build vial list with parent first, then sub-samples in vial_sequence order.
-    # Parent's assignment_role is never NULL (default 'hplc' from migration).
-    vials = [
-        {
-            "sample_id": parent.sample_id,
-            "is_parent": True,
-            "vial_sequence": 0,
-            "assignment_role": parent.assignment_role or "hplc",
+    # Variance lock guard: a locked set blocks re-assignment of its members
+    # (spec §5), so a locked parent must NOT have vials auto-assigned under it.
+    # set_assignment_role enforces this per-call; mirror it here by skipping
+    # auto-assign entirely and returning the stored state.
+    if parent.variance_locked_at is not None:
+        return {
+            "demand": demand,
+            "variance": variance,
+            "base_demand": base_demand,
+            "wp_order_number": services_resp.get("wp_order_number"),
+            "is_unreachable": False,
+            "vials": _current_vials(),
         }
-    ] + [
-        {
-            "sample_id": s.sample_id,
-            "is_parent": False,
-            "vial_sequence": s.vial_sequence,
-            "assignment_role": s.assignment_role,
-        }
-        for s in subs
-    ]
 
-    assigned = auto_assign(vials, demand)
+    assigned = auto_assign(_current_vials(), demand, variance)
 
-    # Persist newly-set roles for sub-samples (parent never NULLs, so we never
-    # write back to lims_samples here — Reset-to-auto goes through the PATCH endpoint).
+    # Persist newly-set (role, kind) for sub-samples through set_assignment_role
+    # so validation, the variance-lock guard, audit events, stale-role cleanup
+    # and lims_analyses seeding apply uniformly (previously a direct column
+    # write that bypassed all of those). Parent never NULLs, so we never write
+    # back to lims_samples here — Reset-to-auto goes through the PATCH endpoint.
+    # Best-effort per vial: set_assignment_role commits (or rolls back) each
+    # vial atomically; a failed vial keeps its NULL role and is retried on the
+    # next /vial-plan call. n is small (one family), so per-vial commits are fine.
+    db.commit()  # persist ensure_sample_row's lazy upsert before per-vial commits
     sub_by_id = {s.sample_id: s for s in subs}
-    role_changed_subs: List[LimsSubSample] = []
     for v in assigned:
         if v["is_parent"]:
             continue
         original = sub_by_id.get(v["sample_id"])
         if original is None:
             continue
-        if original.assignment_role != v["assignment_role"]:
-            original.assignment_role = v["assignment_role"]
-            role_changed_subs.append(original)
-    db.commit()
-
-    # Phase 2 (mk1-native-analyses): seed lims_analyses for any vial whose
-    # role flipped into a real bucket. Mirrors the hook in set_assignment_role
-    # — compute_vial_plan writes to assignment_role directly so we need a
-    # second seeding site. Idempotent; best-effort.
-    if role_changed_subs:
-        wp_services = services  # already extracted as services_resp.get("services") or {}
-        from lims_analyses.seeder import seed_analyses_for_vial
-        for s in role_changed_subs:
-            if not s.assignment_role or s.assignment_role == "xtra":
-                continue
+        if (original.assignment_role != v["assignment_role"]
+                or original.assignment_kind != v["assignment_kind"]):
             try:
-                seed_analyses_for_vial(
-                    db,
-                    sub_sample=s,
-                    role=s.assignment_role,
-                    wp_services=wp_services,
-                    parent_sample_id=parent_sample_id,
+                set_assignment_role(
+                    db, v["sample_id"], v["assignment_role"],
+                    kind=v["assignment_kind"],
                 )
             except Exception as e:
+                db.rollback()
                 log.warning(
-                    "vial_plan.seed_failed sub=%s role=%s err=%s",
-                    s.sample_id, s.assignment_role, e,
+                    "vial_plan.assign_failed sub=%s role=%s kind=%s err=%s",
+                    v["sample_id"], v["assignment_role"], v["assignment_kind"], e,
                 )
 
     return {
@@ -737,54 +729,71 @@ def compute_vial_plan(db: Session, parent_sample_id: str) -> dict:
     }
 
 
-def auto_assign(vials: list[dict], demand: dict) -> list[dict]:
-    """Pure function: assign roles in-place to a list of vial dicts.
+def _take_slot(remaining: dict, assigned_buckets: set) -> Optional[str]:
+    """Pick a bucket with remaining slots: prefer completing buckets that
+    already have assignments, priority order as tiebreaker. Decrements the
+    chosen bucket. Returns None when nothing remains."""
+    for bucket in _BUCKET_PRIORITY:
+        if bucket in assigned_buckets and remaining.get(bucket, 0) > 0:
+            remaining[bucket] -= 1
+            return bucket
+    for bucket in _BUCKET_PRIORITY:
+        if remaining.get(bucket, 0) > 0:
+            remaining[bucket] -= 1
+            return bucket
+    return None
 
-    Mutates vial['assignment_role'] for any vial where it is None. Vials
-    whose role is already set are skipped — but their bucket counts toward
-    decrementing demand so we don't double-fill.
 
-    Vials are processed in input order (which the caller orders by
-    vial_sequence with parent first).
+def auto_assign(vials: list[dict], demand: dict,
+                variance: Optional[dict] = None) -> list[dict]:
+    """Pure function: assign (role, kind) to a list of vial dicts.
 
-    When filling None-role vials, prefer completing buckets that already have
-    user-assigned vials, using priority order as the tiebreaker. Vials that
-    don't fit any remaining demand land in 'xtra'.
+    Fills vial['assignment_role'] / vial['assignment_kind'] for any vial whose
+    role is None. Vials whose role is already set are skipped — but they count
+    toward decrementing the targets so we don't double-fill: a vial with
+    assignment_kind='variance' consumes a variance slot; anything else (core /
+    NULL kind, incl. the parent) consumes a core slot first, overflowing to
+    variance.
+
+    Fill order (explicit-bucket model, spec §2): core buckets to base `demand`
+    first (kind='core'), then variance buckets up to the `variance` target
+    (kind='variance'), then 'xtra' (kind=None). Within each tier, prefer
+    completing buckets that already have user-assigned vials, with priority
+    order as the tiebreaker.
+
+    Vials are processed in input order (caller orders by vial_sequence with
+    parent first). `variance=None` means zero variance targets (legacy call
+    shape — all fills are core).
     """
-    remaining = dict(demand)  # copy so we don't mutate caller's dict
+    remaining = dict(demand)  # copies so we don't mutate caller's dicts
+    remaining_var = dict(variance or {})
     assigned_buckets = set()
 
-    # First pass: track existing assignments and decrement demand.
+    # First pass: track existing assignments and decrement targets.
     for vial in vials:
         role = vial.get("assignment_role")
         if role in _REAL_BUCKETS:
             assigned_buckets.add(role)
-            if remaining.get(role, 0) > 0:
+            if vial.get("assignment_kind") == "variance":
+                if remaining_var.get(role, 0) > 0:
+                    remaining_var[role] -= 1
+            elif remaining.get(role, 0) > 0:
                 remaining[role] -= 1
+            elif remaining_var.get(role, 0) > 0:
+                remaining_var[role] -= 1
 
-    # Second pass: auto-assign None roles. Prefer completing already-assigned
-    # buckets, then fall back to priority order.
+    # Second pass: fill None-role vials — core tier, then variance tier.
     out = []
     for vial in vials:
-        role = vial.get("assignment_role")
-        if role is None:
-            assigned = None
-            # First try to complete buckets that already have assignments.
-            for bucket in _BUCKET_PRIORITY:
-                if bucket in assigned_buckets and remaining.get(bucket, 0) > 0:
-                    assigned = bucket
-                    remaining[bucket] -= 1
-                    break
-            # Then try remaining buckets in priority order.
+        if vial.get("assignment_role") is None:
+            assigned = _take_slot(remaining, assigned_buckets)
+            kind = "core" if assigned else None
             if assigned is None:
-                for bucket in _BUCKET_PRIORITY:
-                    if remaining.get(bucket, 0) > 0:
-                        assigned = bucket
-                        remaining[bucket] -= 1
-                        break
+                assigned = _take_slot(remaining_var, assigned_buckets)
+                kind = "variance" if assigned else None
             if assigned is None:
                 assigned = "xtra"
-            vial = {**vial, "assignment_role": assigned}
+            vial = {**vial, "assignment_role": assigned, "assignment_kind": kind}
         out.append(vial)
     return out
 

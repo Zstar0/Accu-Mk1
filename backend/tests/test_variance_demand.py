@@ -1,6 +1,8 @@
-"""Variance addon Phase 2 — demand inflation + vial-plan breakdown + lock guard.
+"""Variance demand derivation + vial-plan breakdown + lock guard.
 
-Spec: docs/superpowers/specs/2026-06-10-variance-testing-addon-design.md §2, §5.
+Explicit-bucket model (2026-06-10-variance-bucket-assignment-design.md §2):
+core demand = base; variance is a SEPARATE bucket target — the old max(base, n)
+demand inflation (2026-06-10-variance-testing-addon-design.md §2) is retired.
 """
 import pytest
 
@@ -42,28 +44,32 @@ class TestDeriveVarianceDemand:
         assert sub_service.VARIANCE_BUCKET_KEYS == _ROLE_VARIANCE_KEYS
 
 
-class TestDeriveDemandInflation:
+class TestDeriveDemandCore:
+    """Explicit-bucket model: derive_demand is CORE demand only. The old
+    inflation assertions (test_variance_inflates_per_bucket expecting
+    max(base, n)) are intentionally superseded."""
+
     def test_no_variance_unchanged(self):
         assert sub_service.derive_demand(BASE_SERVICES) == {
             "hplc": 1, "endo": 1, "ster": 2,
         }
 
-    def test_variance_inflates_per_bucket(self):
+    def test_variance_does_not_inflate_core_demand(self):
         out = sub_service.derive_demand({
             **BASE_SERVICES,
             "variance": {"hplcpurity_identity": 3, "endotoxin": 2},
         })
-        assert out == {"hplc": 3, "endo": 2, "ster": 2}
+        assert out == {"hplc": 1, "endo": 1, "ster": 2}
 
-    def test_max_semantics_never_shrinks(self):
-        # ster base is 2; a variance n=2 must not change it, and an unordered
-        # service must stay 0 even if a (contract-invalid) variance key shows up.
+    def test_unordered_service_stays_zero(self):
+        # core demand is the lab baseline; a (contract-invalid) variance key
+        # on an unordered service never creates core demand.
         out = sub_service.derive_demand({
             "sterility_pcr": True,
             "variance": {"sterility_pcr": 2, "hplcpurity_identity": 5},
         })
         assert out["ster"] == 2
-        assert out["hplc"] == 0  # base 0: variance never creates demand for an unordered service
+        assert out["hplc"] == 0
 
 
 class TestDeriveBaseDemand:
@@ -117,7 +123,8 @@ class TestVialDemandResponses:
         try:
             plan = sub_service.compute_vial_plan(db, "ZZTEST-VARD")
             assert plan["variance"] == {"hplc": 3, "endo": 0, "ster": 0}
-            assert plan["demand"]["hplc"] == 3
+            # explicit-bucket model: demand is core/base — no max() inflation
+            assert plan["demand"]["hplc"] == 1
             assert plan["base_demand"]["hplc"] == 1
         finally:
             db.rollback()
@@ -345,13 +352,19 @@ class TestApplyVarianceOverride:
         result = sub_service._apply_variance_override("ZZTEST-VAROV", None)
         assert result is None
 
-    def test_chain_inflates_demand(self, db, zztest_varov_parent):
-        """End-to-end chain: override set → _apply → derive_demand inflates."""
+    def test_chain_feeds_variance_target(self, db, zztest_varov_parent):
+        """End-to-end chain: override set → _apply → variance bucket target.
+        (Superseded test_chain_inflates_demand — core demand no longer inflates;
+        the override now drives the separate variance target instead.)"""
         sub_service.set_variance_override(
             db, "ZZTEST-VAROV", {"hplcpurity_identity": 3}
         )
         raw = {"services": {"hplcpurity_identity": True, "endotoxin": True, "sterility_pcr": True}}
         merged = sub_service._apply_variance_override("ZZTEST-VAROV", raw)
-        demand = sub_service.derive_demand(merged["services"])
-        assert demand["hplc"] == 3
-        assert demand["endo"] == 1  # no endo override
+        assert sub_service.derive_variance_demand(merged["services"]) == {
+            "hplc": 3, "endo": 0, "ster": 0,
+        }
+        # core demand untouched by the override
+        assert sub_service.derive_demand(merged["services"]) == {
+            "hplc": 1, "endo": 1, "ster": 2,
+        }

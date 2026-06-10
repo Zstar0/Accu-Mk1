@@ -58,13 +58,20 @@ class VialPlanItem(BaseModel):
     is_parent: bool
     vial_sequence: int
     assignment_role: Optional[str]
+    # 'core' | 'variance' | None. Parent is always None (it has no kind —
+    # it IS the canonical). Set by auto-assign / AssignStep drag.
+    assignment_kind: Optional[str] = None
 
 
 class VialPlanResponse(BaseModel):
+    # Core (base) vial demand per bucket. Since the explicit-bucket model
+    # (2026-06-10-variance-bucket-assignment-design.md) this equals base_demand
+    # — the old max(base, n) inflation is retired; variance is a separate
+    # bucket below. base_demand is kept alongside for FE compatibility.
     demand: dict
-    # Per-bucket variance n (total replicates incl. canonical); zeros when none
-    # purchased. base_demand is the pre-inflation lab baseline — the FE splits
-    # bucket counts into base + variance lines from these two (addon Phase 2).
+    # Per-bucket variance target (purchased count from the order/override);
+    # zeros when none purchased. Informational — auto-assign fills core to
+    # demand first, then the variance bucket up to this target. Never blocks.
     variance: dict = {"hplc": 0, "endo": 0, "ster": 0}
     base_demand: dict = {"hplc": 0, "endo": 0, "ster": 0}
     wp_order_number: Optional[str] = None
