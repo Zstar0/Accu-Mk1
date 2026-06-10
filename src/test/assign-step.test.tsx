@@ -124,6 +124,16 @@ describe('AssignStep role-change cache invalidation', () => {
 })
 
 describe('VarianceOverrideEditor', () => {
+  it('renders an SLA-style help tooltip trigger explaining the count semantics', async () => {
+    renderStep()
+    await screen.findByText('P-0144-S01')
+    // Radix tooltip content portals only on hover (jsdom-unfriendly, same as
+    // the SLA cell tests) — assert the durable trigger contract.
+    const trigger = screen.getByLabelText('What does the variance count mean?')
+    expect(trigger).toBeInTheDocument()
+    expect(trigger).toHaveAttribute('data-slot', 'tooltip-trigger')
+  })
+
   it('renders with HPLC input prefilled from plan.variance', async () => {
     vi.mocked(getVialPlan).mockResolvedValue(VARIANCE_PLAN)
     renderStep()

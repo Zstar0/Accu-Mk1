@@ -8,7 +8,7 @@ import {
   useDraggable,
   type DragEndEvent,
 } from '@dnd-kit/core'
-import { Loader2, MessageSquare, RotateCcw } from 'lucide-react'
+import { HelpCircle, Loader2, MessageSquare, RotateCcw } from 'lucide-react'
 import { toast } from 'sonner'
 import {
   getVialPlan,
@@ -22,6 +22,7 @@ import {
 import { useQueryClient } from '@tanstack/react-query'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { Textarea } from '@/components/ui/textarea'
 import { Spinner } from '@/components/ui/spinner'
 import { cn } from '@/lib/utils'
@@ -261,7 +262,41 @@ function VarianceOverrideEditor({
   return (
     <div className="mt-6 pt-4 border-t border-border/60 max-w-2xl">
       <div className="mb-2">
-        <p className="text-sm font-medium">Variance Testing</p>
+        <div className="flex items-center gap-1.5">
+          <p className="text-sm font-medium">Variance Testing</p>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span
+                className="inline-flex items-center text-muted-foreground/50 hover:text-muted-foreground transition-colors cursor-help"
+                aria-label="What does the variance count mean?"
+              >
+                <HelpCircle size={13} />
+              </span>
+            </TooltipTrigger>
+            <TooltipContent className="max-w-sm text-left space-y-1.5 p-3">
+              <p className="font-semibold">Variance count = total replicates</p>
+              <p>
+                The number is the TOTAL samples tested from the lot,{' '}
+                <span className="font-medium">including the canonical vial</span>.
+                HPLC&nbsp;3 = the primary vial + 2 extra variance vials (the
+                extras are what the client pays for: n&nbsp;−&nbsp;1).
+              </p>
+              <p>
+                0 = no variance testing. 1 is meaningless (one sample is just
+                the normal test) and is treated as none.
+              </p>
+              <p>
+                Sterility already uses 2 vials per test — demand becomes the
+                larger of that baseline and the variance count.
+              </p>
+              <p className="text-muted-foreground">
+                Lab override: while set, it replaces the order&apos;s variance.
+                Clearing all fields falls back to the WP order (none until the
+                addon ships).
+              </p>
+            </TooltipContent>
+          </Tooltip>
+        </div>
         <p className="text-xs text-muted-foreground">
           Lab override — replaces the order's variance until the WP addon ships. 0 = none,
           otherwise total replicates (≥2).
