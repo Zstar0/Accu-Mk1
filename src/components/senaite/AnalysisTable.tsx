@@ -286,9 +286,12 @@ export type BulkTransition = (typeof BULK_TRANSITIONS)[number]
 export function deriveBulkActions(
   selected: SenaiteAnalysis[],
   parentLineStates?: Record<string, string>,
+  vialRole?: string | null,
+  varianceEntitlement?: Record<string, number>,
 ): {
   actions: BulkTransition[]
   showPromote: boolean
+  showVarianceVerify: boolean
 } {
   const anyLocked = selected.some(a => isLockedByParent(a, parentLineStates))
   const anyPromotableOrPromoted = selected.some(a => isPromotable(a) || isPromoted(a))
@@ -308,7 +311,10 @@ export function deriveBulkActions(
   )
   const showPromote =
     !anyLocked && selected.length > 0 && selected.every(isPromotable)
-  return { actions, showPromote }
+  const showVarianceVerify =
+    selected.length > 0 &&
+    selected.every(a => canVarianceVerify(a, vialRole, varianceEntitlement))
+  return { actions, showPromote, showVarianceVerify }
 }
 
 /**
@@ -1694,8 +1700,8 @@ export function AnalysisTable({
   const selectedAnalyses = groups
     .filter(g => g.current.uid && bulk.selectedUids.has(g.current.uid))
     .map(g => g.current)
-  const { actions: bulkAvailableActions, showPromote: bulkShowPromote } =
-    deriveBulkActions(selectedAnalyses, parentLineStates)
+  const { actions: bulkAvailableActions, showPromote: bulkShowPromote, showVarianceVerify: bulkShowVarianceVerify } =
+    deriveBulkActions(selectedAnalyses, parentLineStates, primaryRole, varianceEntitlement)
 
   // Disable toolbar when any per-row transition is in-flight
   const toolbarDisabled = transition.pendingUids.size > 0
@@ -1823,6 +1829,15 @@ export function AnalysisTable({
                     Promote selected
                   </Button>
                 )}
+                {bulkShowVarianceVerify && (
+                  <Button
+                    size="sm"
+                    disabled={toolbarDisabled}
+                    onClick={() => void bulk.executeBulk([...bulk.selectedUids], 'variance_verify')}
+                  >
+                    Verify (Variance) selected
+                  </Button>
+                )}
                 {bulkAvailableActions.map(t => (
                   <Button
                     key={t}
@@ -1842,7 +1857,7 @@ export function AnalysisTable({
                 ))}
               </>
             )}
-            {bulkAvailableActions.length === 0 && !bulkShowPromote && !bulk.isBulkProcessing && (
+            {bulkAvailableActions.length === 0 && !bulkShowPromote && !bulkShowVarianceVerify && !bulk.isBulkProcessing && (
               <span className="text-xs text-muted-foreground italic">
                 No common actions for selection
               </span>

@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import {
   canVarianceVerify,
+  deriveBulkActions,
   ALLOWED_TRANSITIONS_TEST_EXPORT as ALLOWED_TRANSITIONS,
   StatusBadge,
   isVarianceMember,
@@ -94,6 +95,32 @@ describe('VarianceChip', () => {
   it('renders the Variance label', () => {
     render(<VarianceChip />)
     expect(screen.getByText('Variance')).toBeInTheDocument()
+  })
+})
+
+describe('deriveBulkActions — showVarianceVerify', () => {
+  const v = (over: Partial<SenaiteAnalysis>) =>
+    mk({ review_state: 'to_be_verified', promoted_to_parent_id: null, ...over })
+
+  it('true when every selected row passes canVarianceVerify', () => {
+    const sel = [v({ uid: 'mk1:1' }), v({ uid: 'mk1:2' })]
+    expect(deriveBulkActions(sel, {}, 'hplc', ENTITLED).showVarianceVerify).toBe(true)
+  })
+  it('false if any selected row is not entitled / not member', () => {
+    const sel = [v({ uid: 'mk1:1' }), v({ uid: 'a8c27e69bfa8' })] // SENAITE row
+    expect(deriveBulkActions(sel, {}, 'hplc', ENTITLED).showVarianceVerify).toBe(false)
+  })
+  it('false without entitlement', () => {
+    const sel = [v({ uid: 'mk1:1' })]
+    expect(deriveBulkActions(sel, {}, 'hplc', {}).showVarianceVerify).toBe(false)
+    expect(deriveBulkActions(sel, {}, 'hplc', undefined).showVarianceVerify).toBe(false)
+  })
+  it('false on empty selection', () => {
+    expect(deriveBulkActions([], {}, 'hplc', ENTITLED).showVarianceVerify).toBe(false)
+  })
+  it('false if any selected row is promoted (mutually exclusive with promote)', () => {
+    const sel = [v({ uid: 'mk1:1' }), v({ uid: 'mk1:2', promoted_to_parent_id: 9 })]
+    expect(deriveBulkActions(sel, {}, 'hplc', ENTITLED).showVarianceVerify).toBe(false)
   })
 })
 
