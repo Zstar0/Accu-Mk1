@@ -927,6 +927,10 @@ class VarianceTooFewVialsError(ValueError):
     """Raised when attempting to lock with fewer than 2 selected vials."""
 
 
+class VarianceSeriesIncompleteError(Exception):
+    """Lock refused: variance-purchased buckets still have unfinished rows."""
+
+
 def _fetch_mk1_results_for_host(
     db: Session, *, host_kind: str, host_pk: int
 ) -> dict:
@@ -1112,6 +1116,42 @@ def lock_variance_set(db: Session, parent_sample_id: str, user_id: int) -> LimsS
         raise VarianceTooFewVialsError(
             f"need >=2 selected vials, have {selected}"
         )
+    # Series-complete guard (variance addon Phase 2, spec §5): when the order
+    # purchased variance, every live analysis row on in-set sub vials in a
+    # variance-purchased bucket must be signed off (promoted or
+    # variance_verified). Fail-soft: no variance / WP unreachable -> no guard
+    # (lock keeps its original semantics for non-variance work).
+    try:
+        services_resp = fetch_sample_services(parent_sample_id)
+    except Exception:
+        services_resp = None
+    variance = derive_variance_demand(
+        (services_resp or {}).get("services") or {}
+    )
+    variance_buckets = {b for b, n in variance.items() if n >= 2}
+    if variance_buckets:
+        from models import LimsAnalysis
+        unfinished: list[str] = []
+        for s in parent.sub_samples:
+            if not s.in_variance_set:
+                continue
+            if (s.assignment_role or "") not in variance_buckets:
+                continue
+            rows = db.execute(
+                select(LimsAnalysis).where(
+                    LimsAnalysis.lims_sub_sample_pk == s.id,
+                    LimsAnalysis.review_state.not_in(
+                        ("retracted", "rejected", "promoted", "variance_verified")
+                    ),
+                    LimsAnalysis.retested.is_(False),
+                )
+            ).scalars().all()
+            unfinished.extend(f"{s.sample_id}:{r.keyword}" for r in rows)
+        if unfinished:
+            raise VarianceSeriesIncompleteError(
+                "variance series incomplete — unfinished rows: "
+                + ", ".join(sorted(unfinished))
+            )
     parent.variance_locked_at = datetime.utcnow()
     parent.variance_locked_by_user_id = user_id
     db.commit()

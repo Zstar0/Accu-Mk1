@@ -135,3 +135,129 @@ class TestVialDemandResponses:
         finally:
             db.rollback()
             db.close()
+
+
+# ─── Task 2: lock_variance_set series-complete guard ─────────────────────────
+
+from models import LimsAnalysis, LimsSubSample
+
+
+@pytest.fixture()
+def db():
+    s = SessionLocal()
+    try:
+        yield s
+    finally:
+        s.rollback()
+        s.close()
+
+
+@pytest.fixture()
+def lock_fixture(db):
+    """ZZTEST parent (in set) + 2 hplc vials (in set) each with one analysis
+    row. Variance purchased for hplc (n=3) via injected fetch."""
+    parent = LimsSample(sample_id="ZZTEST-VARLOCK", peptide_name="ZZ", status="received")
+    db.add(parent)
+    db.flush()
+    vials, rows = [], []
+    svc_id = db.execute(text("SELECT id FROM analysis_services LIMIT 1")).scalar_one()
+    for i in (1, 2):
+        v = LimsSubSample(
+            sample_id=f"ZZTEST-VARLOCK-S0{i}",
+            parent_sample_pk=parent.id,
+            external_lims_uid=f"zz-uid-varlock-{i}",
+            vial_sequence=i,
+            received_at=datetime.utcnow(),
+            assignment_role="hplc",
+        )
+        db.add(v)
+        db.flush()
+        r = LimsAnalysis(
+            lims_sub_sample_pk=v.id,
+            analysis_service_id=svc_id,
+            keyword=f"ZZTEST-VARLOCK-KW{i}",
+            title="ZZ",
+            result_value="9",
+            review_state="variance_verified",
+        )
+        db.add(r)
+        vials.append(v)
+        rows.append(r)
+    db.commit()
+    yield {"parent": parent, "vials": vials, "rows": rows}
+    db.rollback()
+    db.execute(text("DELETE FROM lims_analyses WHERE keyword LIKE 'ZZTEST-VARLOCK%'"))
+    db.execute(text("DELETE FROM lims_sub_samples WHERE sample_id LIKE 'ZZTEST-VARLOCK%'"))
+    db.execute(text("DELETE FROM lims_samples WHERE sample_id LIKE 'ZZTEST-VARLOCK%'"))
+    db.commit()
+
+
+VARIANCE_SERVICES = {"services": {**BASE_SERVICES, "variance": {"hplcpurity_identity": 3}}}
+
+
+class TestLockSeriesGuard:
+    def test_locks_when_all_rows_signed_off(self, db, lock_fixture, monkeypatch):
+        monkeypatch.setattr(sub_service, "fetch_sample_services",
+                            lambda sid: VARIANCE_SERVICES)
+        parent = sub_service.lock_variance_set(db, "ZZTEST-VARLOCK", user_id=1)
+        assert parent.variance_locked_at is not None
+        # cleanup the lock so teardown deletes cleanly
+        sub_service.unlock_variance_set(db, "ZZTEST-VARLOCK")
+
+    def test_blocks_on_unfinished_row(self, db, lock_fixture, monkeypatch):
+        monkeypatch.setattr(sub_service, "fetch_sample_services",
+                            lambda sid: VARIANCE_SERVICES)
+        row = lock_fixture["rows"][0]
+        row.review_state = "to_be_verified"
+        db.commit()
+        with pytest.raises(sub_service.VarianceSeriesIncompleteError, match="ZZTEST-VARLOCK-S01"):
+            sub_service.lock_variance_set(db, "ZZTEST-VARLOCK", user_id=1)
+
+    def test_promoted_rows_count_as_done(self, db, lock_fixture, monkeypatch):
+        monkeypatch.setattr(sub_service, "fetch_sample_services",
+                            lambda sid: VARIANCE_SERVICES)
+        row = lock_fixture["rows"][0]
+        row.review_state = "promoted"
+        db.commit()
+        parent = sub_service.lock_variance_set(db, "ZZTEST-VARLOCK", user_id=1)
+        assert parent.variance_locked_at is not None
+        sub_service.unlock_variance_set(db, "ZZTEST-VARLOCK")
+
+    def test_retested_rows_exempt(self, db, lock_fixture, monkeypatch):
+        monkeypatch.setattr(sub_service, "fetch_sample_services",
+                            lambda sid: VARIANCE_SERVICES)
+        row = lock_fixture["rows"][0]
+        row.review_state = "to_be_verified"
+        row.retested = True  # superseded by a retest chain
+        db.commit()
+        parent = sub_service.lock_variance_set(db, "ZZTEST-VARLOCK", user_id=1)
+        assert parent.variance_locked_at is not None
+        sub_service.unlock_variance_set(db, "ZZTEST-VARLOCK")
+
+    def test_no_variance_or_unreachable_skips_guard(self, db, lock_fixture, monkeypatch):
+        row = lock_fixture["rows"][0]
+        row.review_state = "to_be_verified"
+        db.commit()
+        # unreachable
+        monkeypatch.setattr(sub_service, "fetch_sample_services", lambda sid: None)
+        parent = sub_service.lock_variance_set(db, "ZZTEST-VARLOCK", user_id=1)
+        assert parent.variance_locked_at is not None
+        sub_service.unlock_variance_set(db, "ZZTEST-VARLOCK")
+        # reachable, no variance purchased
+        monkeypatch.setattr(sub_service, "fetch_sample_services",
+                            lambda sid: {"services": dict(BASE_SERVICES)})
+        parent = sub_service.lock_variance_set(db, "ZZTEST-VARLOCK", user_id=1)
+        assert parent.variance_locked_at is not None
+        sub_service.unlock_variance_set(db, "ZZTEST-VARLOCK")
+
+    def test_excluded_vial_not_checked(self, db, lock_fixture, monkeypatch):
+        monkeypatch.setattr(sub_service, "fetch_sample_services",
+                            lambda sid: VARIANCE_SERVICES)
+        vial = lock_fixture["vials"][0]
+        row = lock_fixture["rows"][0]
+        vial.in_variance_set = False
+        row.review_state = "to_be_verified"
+        db.commit()
+        parent = sub_service.lock_variance_set(db, "ZZTEST-VARLOCK", user_id=1)
+        assert parent.variance_locked_at is not None
+        sub_service.unlock_variance_set(db, "ZZTEST-VARLOCK")

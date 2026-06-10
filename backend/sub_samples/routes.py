@@ -481,6 +481,11 @@ def lock_variance_set_endpoint(
             status_code=422,
             detail={"code": "variance_too_few_vials", "message": str(e)},
         )
+    except service.VarianceSeriesIncompleteError as e:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "variance_series_incomplete", "message": str(e)},
+        )
 
 
 @router.post("/{parent_sample_id}/variance-set/unlock")
