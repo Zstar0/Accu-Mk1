@@ -247,8 +247,10 @@ def apply_transition(
         if not tier_allows(row_tier, "retest"):
             raise TierMismatchError(row_tier, kind)
         # "verified": grandfathered vial rows from before vial-verify was removed
-        # (kept for backward-compat); "promoted": the post-promote normal path.
-        if from_state not in ("to_be_verified", "verified", "promoted"):
+        # (kept for backward-compat); "promoted": cascade-driven (parent retest);
+        # "variance_verified": variance replicates re-run safely — they never
+        # touched the parent, so there is no SENAITE lock to collide with.
+        if from_state not in ("to_be_verified", "verified", "promoted", "variance_verified"):
             raise InvalidTransitionError(from_state, kind)
 
         now = datetime.utcnow()
@@ -313,6 +315,15 @@ def apply_transition(
     elif kind == "verify":
         if not row.result_value:
             raise BadRequestError("verify requires a result_value on the row")
+    elif kind == "variance_verify":
+        if not row.result_value:
+            raise BadRequestError("variance_verify requires a result_value on the row")
+        if row.lims_sub_sample_pk is None:
+            # The parent acting as a vial always PROMOTES (it is the canonical);
+            # variance sign-off exists only for sub-sample replicates.
+            raise BadRequestError(
+                "variance_verify is only valid on sub-sample-hosted rows"
+            )
     elif kind == "reset":
         # Clear any draft result + provenance on the way back to unassigned.
         row.result_value = None
@@ -338,6 +349,8 @@ def apply_transition(
         row.verified_at = now
     elif to_state == "published":
         row.published_at = now
+    elif to_state == "variance_verified":
+        row.verified_at = now
 
     row.review_state = to_state
     row.updated_at = now

@@ -52,3 +52,111 @@ class TestVarianceVerifyStateMachine:
         # variance_verify must NOT re-open the generic verify hole
         with pytest.raises(TierMismatchError):
             next_state("to_be_verified", "verify", tier=TIER_VIAL)
+
+
+# ─── Service-layer tests (live DB, ZZTEST-VARV fixtures) ─────────────────────
+
+from datetime import datetime
+
+from sqlalchemy import text
+
+from database import SessionLocal
+from lims_analyses import service
+from models import LimsAnalysis, LimsSample, LimsSubSample
+
+
+@pytest.fixture()
+def db():
+    s = SessionLocal()
+    try:
+        yield s
+    finally:
+        s.rollback()
+        s.close()
+
+
+@pytest.fixture()
+def variance_fixture(db):
+    """ZZTEST parent + hplc vial + one to_be_verified analysis with a result.
+    Committed (apply_transition commits), torn down by id."""
+    parent = LimsSample(sample_id="ZZTEST-VARV", peptide_name="ZZ Test", status="received")
+    db.add(parent)
+    db.flush()
+    vial = LimsSubSample(
+        sample_id="ZZTEST-VARV-S01",
+        parent_sample_pk=parent.id,
+        vial_sequence=1,
+        received_at=datetime.utcnow(),
+        assignment_role="hplc",
+        external_lims_uid="zz-uid-varv-s01",
+    )
+    db.add(vial)
+    db.flush()
+    svc_id = db.execute(text("SELECT id FROM analysis_services LIMIT 1")).scalar_one()
+    row = LimsAnalysis(
+        lims_sub_sample_pk=vial.id,
+        analysis_service_id=svc_id,
+        keyword="ZZTEST-VARV-KW",
+        title="ZZ Variance Test",
+        result_value="99",
+        review_state="to_be_verified",
+    )
+    db.add(row)
+    db.commit()
+    yield {"parent": parent, "vial": vial, "row": row}
+    db.rollback()
+    db.execute(text(
+        "DELETE FROM lims_analyses WHERE keyword LIKE 'ZZTEST-VARV%'"))
+    db.execute(text(
+        "DELETE FROM lims_sub_samples WHERE sample_id LIKE 'ZZTEST-VARV%'"))
+    db.execute(text(
+        "DELETE FROM lims_samples WHERE sample_id LIKE 'ZZTEST-VARV%'"))
+    db.commit()
+
+
+class TestVarianceVerifyService:
+    def test_happy_path_sets_state_timestamp_and_audit(self, db, variance_fixture):
+        row = variance_fixture["row"]
+        out = service.apply_transition(
+            db, analysis_id=row.id, kind="variance_verify", user_id=None,
+            reason="senior sign-off",
+        )
+        assert out.review_state == "variance_verified"
+        assert out.verified_at is not None
+        kinds = db.execute(text(
+            "SELECT transition_kind FROM lims_analysis_transitions "
+            "WHERE analysis_id=:a ORDER BY id DESC LIMIT 1"), {"a": row.id}).scalar_one()
+        assert kinds == "variance_verify"
+
+    def test_requires_result_value(self, db, variance_fixture):
+        row = variance_fixture["row"]
+        row.result_value = None
+        db.commit()
+        with pytest.raises(service.BadRequestError):
+            service.apply_transition(db, analysis_id=row.id, kind="variance_verify")
+
+    def test_rejected_on_parent_hosted_row(self, db, variance_fixture):
+        parent = variance_fixture["parent"]
+        svc_id = db.execute(text("SELECT id FROM analysis_services LIMIT 1")).scalar_one()
+        prow = LimsAnalysis(
+            lims_sample_pk=parent.id,
+            analysis_service_id=svc_id,
+            keyword="ZZTEST-VARV-PARENT",
+            title="ZZ Parent Row",
+            result_value="1",
+            review_state="to_be_verified",
+        )
+        db.add(prow)
+        db.commit()
+        with pytest.raises(service.BadRequestError, match="sub-sample"):
+            service.apply_transition(db, analysis_id=prow.id, kind="variance_verify")
+
+    def test_retest_legal_from_variance_verified(self, db, variance_fixture):
+        row = variance_fixture["row"]
+        service.apply_transition(db, analysis_id=row.id, kind="variance_verify")
+        new_row = service.apply_transition(db, analysis_id=row.id, kind="retest")
+        assert new_row.retest_of_id == row.id
+        assert new_row.review_state == "unassigned"
+        db.refresh(row)
+        assert row.retested is True
+        assert row.review_state == "variance_verified"  # original keeps its state
