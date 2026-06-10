@@ -153,6 +153,7 @@ const SUBS: SubSampleListResponse = {
       photo_external_uid: null,
       remarks: null,
       assignment_role: 'endo',
+      assignment_kind: 'core',
     },
     {
       id: 21,
@@ -164,6 +165,7 @@ const SUBS: SubSampleListResponse = {
       photo_external_uid: 'attach-uid-1',
       remarks: null,
       assignment_role: 'hplc',
+      assignment_kind: 'variance',
     },
   ],
 }
@@ -395,7 +397,7 @@ describe('VialsQuickLookDialog', () => {
     ).toBeInTheDocument()
   })
 
-  it('offers Verify (Variance) on entitled vial rows and applies the transition', async () => {
+  it('offers Verify (Variance) on variance-kind vial rows and applies the transition', async () => {
     vi.mocked(listLimsAnalysesForSubSample).mockImplementation(async pk =>
       pk === 21
         ? [mkAnalysis({ uid: 'mk1:101', keyword: 'PUR-HPLC', title: 'Purity (HPLC)', service_group_name: 'Analytics', review_state: 'to_be_verified', result: '99' })]
@@ -406,7 +408,7 @@ describe('VialsQuickLookDialog', () => {
     })
     renderDialog()
     await screen.findByText('Purity (HPLC)')
-    // S01 (hplc, entitled, to_be_verified): open its row actions menu
+    // S01 (hplc, assignment_kind='variance', to_be_verified): open its row actions menu
     const menus = screen.getAllByRole('button', { name: /analysis actions/i })
     await userEvent.click(menus[0]!)
     const item = await screen.findByText('Verify (Variance)')

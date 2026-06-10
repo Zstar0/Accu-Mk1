@@ -3,6 +3,7 @@ import { render, screen } from '@testing-library/react'
 import {
   canVarianceVerify,
   deriveBulkActions,
+  isPromotable,
   ALLOWED_TRANSITIONS_TEST_EXPORT as ALLOWED_TRANSITIONS,
   StatusBadge,
   isVarianceMember,
@@ -22,28 +23,31 @@ const mk = (over: Partial<SenaiteAnalysis>): SenaiteAnalysis =>
     ...over,
   }) as SenaiteAnalysis
 
-const ENTITLED = { hplcpurity_identity: 3 }
+describe('canVarianceVerify (kind-based)', () => {
+  it('true for an mk1 to_be_verified row whose vial kind is variance', () => {
+    expect(canVarianceVerify(mk({}), 'variance')).toBe(true)
+  })
+  it('false when the vial kind is core, null, or undefined', () => {
+    expect(canVarianceVerify(mk({}), 'core')).toBe(false)
+    expect(canVarianceVerify(mk({}), null)).toBe(false)
+    expect(canVarianceVerify(mk({}), undefined)).toBe(false)
+  })
+  it('false for SENAITE rows, wrong states, promoted rows regardless of kind', () => {
+    expect(canVarianceVerify(mk({ uid: 'a8c27e69bfa8' }), 'variance')).toBe(false)
+    expect(canVarianceVerify(mk({ review_state: 'unassigned' }), 'variance')).toBe(false)
+    expect(canVarianceVerify(mk({ review_state: 'promoted' }), 'variance')).toBe(false)
+    expect(canVarianceVerify(mk({ promoted_to_parent_id: 77 }), 'variance')).toBe(false)
+  })
+})
 
-describe('canVarianceVerify', () => {
-  it('true for an mk1 to_be_verified row on an entitled hplc vial', () => {
-    expect(canVarianceVerify(mk({}), 'hplc', ENTITLED)).toBe(true)
+describe('isPromotable (kind-aware)', () => {
+  it('false when the vial kind is variance', () => {
+    expect(isPromotable(mk({}), 'variance')).toBe(false)
   })
-  it('false without entitlement for the role', () => {
-    expect(canVarianceVerify(mk({}), 'hplc', {})).toBe(false)
-    expect(canVarianceVerify(mk({}), 'hplc', undefined)).toBe(false)
-  })
-  it('false for endo role when only hplc variance purchased', () => {
-    expect(canVarianceVerify(mk({}), 'endo', ENTITLED)).toBe(false)
-  })
-  it('true for endo role with endotoxin entitlement', () => {
-    expect(canVarianceVerify(mk({}), 'endo', { endotoxin: 2 })).toBe(true)
-  })
-  it('false for SENAITE rows, wrong states, promoted rows, null role', () => {
-    expect(canVarianceVerify(mk({ uid: 'a8c27e69bfa8' }), 'hplc', ENTITLED)).toBe(false)
-    expect(canVarianceVerify(mk({ review_state: 'unassigned' }), 'hplc', ENTITLED)).toBe(false)
-    expect(canVarianceVerify(mk({ review_state: 'promoted' }), 'hplc', ENTITLED)).toBe(false)
-    expect(canVarianceVerify(mk({ promoted_to_parent_id: 77 }), 'hplc', ENTITLED)).toBe(false)
-    expect(canVarianceVerify(mk({}), null, ENTITLED)).toBe(false)
+  it('true for a core / kindless to_be_verified mk1 row', () => {
+    expect(isPromotable(mk({}), 'core')).toBe(true)
+    expect(isPromotable(mk({}), null)).toBe(true)
+    expect(isPromotable(mk({}))).toBe(true)
   })
 })
 
@@ -53,41 +57,40 @@ describe('variance_verified transitions table', () => {
   })
 })
 
-describe('isVarianceMember (state-independent membership)', () => {
-  it('true for an entitled hplc sub-row regardless of state', () => {
-    expect(isVarianceMember(mk({ review_state: 'unassigned' }), 'hplc', ENTITLED)).toBe(true)
-    expect(isVarianceMember(mk({ review_state: 'received' }), 'hplc', ENTITLED)).toBe(true)
-    expect(isVarianceMember(mk({ review_state: 'to_be_verified' }), 'hplc', ENTITLED)).toBe(true)
-    expect(isVarianceMember(mk({ review_state: 'variance_verified' }), 'hplc', ENTITLED)).toBe(true)
-    expect(isVarianceMember(mk({ promoted_to_parent_id: 5 }), 'hplc', ENTITLED)).toBe(true)
+describe('isVarianceMember (state-independent membership, kind-based)', () => {
+  it('true for a variance-kind sub-row regardless of state', () => {
+    expect(isVarianceMember(mk({ review_state: 'unassigned' }), 'variance')).toBe(true)
+    expect(isVarianceMember(mk({ review_state: 'received' }), 'variance')).toBe(true)
+    expect(isVarianceMember(mk({ review_state: 'to_be_verified' }), 'variance')).toBe(true)
+    expect(isVarianceMember(mk({ review_state: 'variance_verified' }), 'variance')).toBe(true)
+    expect(isVarianceMember(mk({ promoted_to_parent_id: 5 }), 'variance')).toBe(true)
   })
-  it('false for SENAITE rows, no entitlement, wrong role, null role', () => {
-    expect(isVarianceMember(mk({ uid: 'a8c27e69bfa8' }), 'hplc', ENTITLED)).toBe(false)
-    expect(isVarianceMember(mk({}), 'hplc', {})).toBe(false)
-    expect(isVarianceMember(mk({}), 'hplc', undefined)).toBe(false)
-    expect(isVarianceMember(mk({}), 'endo', ENTITLED)).toBe(false)
-    expect(isVarianceMember(mk({}), null, ENTITLED)).toBe(false)
+  it('false for SENAITE rows, core kind, null/undefined kind', () => {
+    expect(isVarianceMember(mk({ uid: 'a8c27e69bfa8' }), 'variance')).toBe(false)
+    expect(isVarianceMember(mk({}), 'core')).toBe(false)
+    expect(isVarianceMember(mk({}), null)).toBe(false)
+    expect(isVarianceMember(mk({}), undefined)).toBe(false)
   })
 })
 
 describe('showVarianceChip (member, with suppression)', () => {
-  it('true for an entitled member in a pre-signoff state', () => {
-    expect(showVarianceChip(mk({ review_state: 'unassigned' }), 'hplc', ENTITLED)).toBe(true)
-    expect(showVarianceChip(mk({ review_state: 'to_be_verified' }), 'hplc', ENTITLED)).toBe(true)
+  it('true for a variance-kind member in a pre-signoff state', () => {
+    expect(showVarianceChip(mk({ review_state: 'unassigned' }), 'variance')).toBe(true)
+    expect(showVarianceChip(mk({ review_state: 'to_be_verified' }), 'variance')).toBe(true)
   })
   it('suppressed on promoted rows — both by state and by parent-id', () => {
     // review_state 'promoted' with promoted_to_parent_id null is the retract-and-
     // repromote gap (service.py clears the id when the parent line is retracted);
     // the `|| review_state === 'promoted'` branch in showVarianceChip is load-
     // bearing for this case, NOT dead code — do not remove it.
-    expect(showVarianceChip(mk({ review_state: 'promoted' }), 'hplc', ENTITLED)).toBe(false)
-    expect(showVarianceChip(mk({ promoted_to_parent_id: 5 }), 'hplc', ENTITLED)).toBe(false)
+    expect(showVarianceChip(mk({ review_state: 'promoted' }), 'variance')).toBe(false)
+    expect(showVarianceChip(mk({ promoted_to_parent_id: 5 }), 'variance')).toBe(false)
   })
   it('suppressed on variance_verified (already badged Verified — Variance)', () => {
-    expect(showVarianceChip(mk({ review_state: 'variance_verified' }), 'hplc', ENTITLED)).toBe(false)
+    expect(showVarianceChip(mk({ review_state: 'variance_verified' }), 'variance')).toBe(false)
   })
-  it('false when not a member', () => {
-    expect(showVarianceChip(mk({}), 'hplc', {})).toBe(false)
+  it('false when not a member (core kind)', () => {
+    expect(showVarianceChip(mk({}), 'core')).toBe(false)
   })
 })
 
@@ -98,29 +101,35 @@ describe('VarianceChip', () => {
   })
 })
 
-describe('deriveBulkActions — showVarianceVerify', () => {
+describe('deriveBulkActions — showVarianceVerify (kind-based)', () => {
   const v = (over: Partial<SenaiteAnalysis>) =>
     mk({ review_state: 'to_be_verified', promoted_to_parent_id: null, ...over })
 
-  it('true when every selected row passes canVarianceVerify', () => {
+  it('true when every selected row passes canVarianceVerify on a variance vial', () => {
     const sel = [v({ uid: 'mk1:1' }), v({ uid: 'mk1:2' })]
-    expect(deriveBulkActions(sel, {}, 'hplc', ENTITLED).showVarianceVerify).toBe(true)
+    expect(deriveBulkActions(sel, {}, 'variance').showVarianceVerify).toBe(true)
   })
-  it('false if any selected row is not entitled / not member', () => {
+  it('false if any selected row is not an mk1 native row', () => {
     const sel = [v({ uid: 'mk1:1' }), v({ uid: 'a8c27e69bfa8' })] // SENAITE row
-    expect(deriveBulkActions(sel, {}, 'hplc', ENTITLED).showVarianceVerify).toBe(false)
+    expect(deriveBulkActions(sel, {}, 'variance').showVarianceVerify).toBe(false)
   })
-  it('false without entitlement', () => {
+  it('false on a core / kindless vial', () => {
     const sel = [v({ uid: 'mk1:1' })]
-    expect(deriveBulkActions(sel, {}, 'hplc', {}).showVarianceVerify).toBe(false)
-    expect(deriveBulkActions(sel, {}, 'hplc', undefined).showVarianceVerify).toBe(false)
+    expect(deriveBulkActions(sel, {}, 'core').showVarianceVerify).toBe(false)
+    expect(deriveBulkActions(sel, {}, null).showVarianceVerify).toBe(false)
+    expect(deriveBulkActions(sel, {}).showVarianceVerify).toBe(false)
   })
   it('false on empty selection', () => {
-    expect(deriveBulkActions([], {}, 'hplc', ENTITLED).showVarianceVerify).toBe(false)
+    expect(deriveBulkActions([], {}, 'variance').showVarianceVerify).toBe(false)
   })
   it('false if any selected row is promoted (mutually exclusive with promote)', () => {
     const sel = [v({ uid: 'mk1:1' }), v({ uid: 'mk1:2', promoted_to_parent_id: 9 })]
-    expect(deriveBulkActions(sel, {}, 'hplc', ENTITLED).showVarianceVerify).toBe(false)
+    expect(deriveBulkActions(sel, {}, 'variance').showVarianceVerify).toBe(false)
+  })
+  it('suppresses bulk Promote on a variance vial', () => {
+    const sel = [v({ uid: 'mk1:1' }), v({ uid: 'mk1:2' })]
+    expect(deriveBulkActions(sel, {}, 'variance').showPromote).toBe(false)
+    expect(deriveBulkActions(sel, {}, 'core').showPromote).toBe(true)
   })
 })
 

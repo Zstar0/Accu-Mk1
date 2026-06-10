@@ -177,13 +177,11 @@ export function parentHasVariance(agg: ParentAggregate | undefined): boolean {
   return !!v && (v.hplc >= 2 || v.endo >= 2 || v.ster >= 2)
 }
 
-/** True when a sub-sample vial's role bucket has variance on its parent.
- *  Membership-level (the AR list is a vial view; promotion is per-analysis and
- *  isn't expressible per vial — intentional coarser hint than the analysis table). */
-export function subIsVarianceMember(sub: SubSample, agg: ParentAggregate | undefined): boolean {
-  const role = sub.assignment_role
-  if (role !== 'hplc' && role !== 'endo' && role !== 'ster') return false
-  return (agg?.variance?.[role] ?? 0) >= 2
+/** True when a sub-sample vial is explicitly assigned to a variance bucket
+ *  (assignment_kind, set at check-in). Replaces the implicit role-bucket ×
+ *  entitlement inference — each vial speaks for itself now. */
+export function subIsVarianceMember(sub: SubSample): boolean {
+  return sub.assignment_kind === 'variance'
 }
 
 function SampleTable({
@@ -588,9 +586,9 @@ function SampleTable({
                               onClick={e => { e.stopPropagation(); onSelectSample?.(sub.sample_id) }}
                             >
                               <span className={`font-mono inline-flex items-center gap-1 ${
-                                subIsVarianceMember(sub, agg) ? 'text-sky-600 dark:text-sky-400' : ''
+                                subIsVarianceMember(sub) ? 'text-sky-600 dark:text-sky-400' : ''
                               }`}>
-                                {subIsVarianceMember(sub, agg) && <Layers className="h-3 w-3 shrink-0" aria-hidden="true" />}
+                                {subIsVarianceMember(sub) && <Layers className="h-3 w-3 shrink-0" aria-hidden="true" />}
                                 {sub.sample_id}
                               </span>
                               <span className="text-center text-muted-foreground">{sub.vial_sequence}</span>

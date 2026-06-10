@@ -172,8 +172,10 @@ const DESTRUCTIVE_TRANSITIONS = new Set(['retract', 'reject'])
 
 // --- Bulk-overlay redesign: promote-aware gating helpers (exported for tests) ---
 
-/** Phase-4b promotable discriminator, lifted so row + bulk logic share it. */
-export function isPromotable(a: SenaiteAnalysis): boolean {
+/** Native (mk1:) row awaiting vial-tier sign-off — the kind-agnostic base
+ *  shared by isPromotable and visibleRowTransitions (verify stays hidden on
+ *  ALL native awaiting rows; the variance path uses Verify (Variance)). */
+function isNativeAwaitingSignoff(a: SenaiteAnalysis): boolean {
   return (
     !!a.uid &&
     a.uid.startsWith('mk1:') &&
@@ -182,47 +184,39 @@ export function isPromotable(a: SenaiteAnalysis): boolean {
   )
 }
 
-/** Vial assignment_role → WP service key carrying variance entitlement.
- *  Coarse keys only — never per-analyte (variance addon spec, scoping rule). */
-export const ROLE_VARIANCE_KEYS: Record<string, string> = {
-  hplc: 'hplcpurity_identity',
-  endo: 'endotoxin',
-  ster: 'sterility_pcr',
+/** Phase-4b promotable discriminator, lifted so row + bulk logic share it.
+ *  Kind-aware: a vial assigned to a variance bucket is never promotable —
+ *  its sign-off path is variance_verify (re-assign to core to promote). */
+export function isPromotable(a: SenaiteAnalysis, vialKind?: string | null): boolean {
+  if (vialKind === 'variance') return false
+  return isNativeAwaitingSignoff(a)
 }
 
 /** Verify (Variance) is offered on a native, unpromoted, to_be_verified row
- *  whose host vial's role has purchased variance (n >= 2). Deliberately NOT
- *  gated on isLockedByParent: variance sign-off never touches the parent, so
- *  a verified parent line must not lock replicates out. Backend gate is
- *  authoritative (fail closed); this only controls visibility. */
+ *  whose host vial is assigned to a variance bucket (assignment_kind =
+ *  'variance', set at check-in). Deliberately NOT gated on isLockedByParent
+ *  or the parent variance lock: variance sign-off never touches the parent.
+ *  Backend gate is authoritative (fail closed); this only controls visibility. */
 export function canVarianceVerify(
   a: SenaiteAnalysis,
-  vialRole: string | null | undefined,
-  entitlement: Record<string, number> | undefined,
+  vialKind: string | null | undefined,
 ): boolean {
   if (!a.uid || !a.uid.startsWith('mk1:')) return false
   if (a.review_state !== 'to_be_verified') return false
   if (a.promoted_to_parent_id != null) return false
-  const key = vialRole ? ROLE_VARIANCE_KEYS[vialRole] : undefined
-  if (!key || !entitlement) return false
-  const n = entitlement[key]
-  return typeof n === 'number' && n >= 2
+  return vialKind === 'variance'
 }
 
-/** True when a row is a MEMBER of a variance series — native (mk1:) sub-row whose
- *  host vial role maps to a parent-purchased variance key (n>=2). State-INDEPENDENT
- *  (unlike canVarianceVerify, which also requires to_be_verified & not-promoted).
+/** True when a row is a MEMBER of a variance series — native (mk1:) sub-row
+ *  hosted on a variance-bucket vial. State-INDEPENDENT (unlike
+ *  canVarianceVerify, which also requires to_be_verified & not-promoted).
  *  Drives the membership chip. */
 export function isVarianceMember(
   a: SenaiteAnalysis,
-  vialRole: string | null | undefined,
-  entitlement: Record<string, number> | undefined,
+  vialKind: string | null | undefined,
 ): boolean {
   if (!a.uid || !a.uid.startsWith('mk1:')) return false
-  const key = vialRole ? ROLE_VARIANCE_KEYS[vialRole] : undefined
-  if (!key || !entitlement) return false
-  const n = entitlement[key]
-  return typeof n === 'number' && n >= 2
+  return vialKind === 'variance'
 }
 
 /** Whether to render the membership chip on a row: a variance member, EXCEPT on
@@ -230,10 +224,9 @@ export function isVarianceMember(
  *  line) and variance_verified ("Verified — Variance" badge). */
 export function showVarianceChip(
   a: SenaiteAnalysis,
-  vialRole: string | null | undefined,
-  entitlement: Record<string, number> | undefined,
+  vialKind: string | null | undefined,
 ): boolean {
-  if (!isVarianceMember(a, vialRole, entitlement)) return false
+  if (!isVarianceMember(a, vialKind)) return false
   if (isPromoted(a) || a.review_state === 'promoted') return false
   if (a.review_state === 'variance_verified') return false
   return true
@@ -271,7 +264,7 @@ export function visibleRowTransitions(
   if (!a.uid || !a.review_state) return []
   if (isLockedByParent(a, parentLineStates)) return []
   return (ALLOWED_TRANSITIONS[a.review_state] ?? []).filter(
-    t => (t !== 'submit' || !!a.result) && !(t === 'verify' && (isPromotable(a) || isPromoted(a))),
+    t => (t !== 'submit' || !!a.result) && !(t === 'verify' && (isNativeAwaitingSignoff(a) || isPromoted(a))),
   )
 }
 
@@ -286,15 +279,16 @@ export type BulkTransition = (typeof BULK_TRANSITIONS)[number]
 export function deriveBulkActions(
   selected: SenaiteAnalysis[],
   parentLineStates?: Record<string, string>,
-  vialRole?: string | null,
-  varianceEntitlement?: Record<string, number>,
+  vialKind?: string | null,
 ): {
   actions: BulkTransition[]
   showPromote: boolean
   showVarianceVerify: boolean
 } {
   const anyLocked = selected.some(a => isLockedByParent(a, parentLineStates))
-  const anyPromotableOrPromoted = selected.some(a => isPromotable(a) || isPromoted(a))
+  // Plain bulk verify stays suppressed for ALL native awaiting rows (kind-
+  // agnostic): core rows promote, variance rows variance-verify.
+  const anyPromotableOrPromoted = selected.some(a => isNativeAwaitingSignoff(a) || isPromoted(a))
   const LOCKED_DROP = new Set<BulkTransition>(['retest', 'retract', 'reject'])
   const actions = BULK_TRANSITIONS.filter(
     t =>
@@ -310,10 +304,10 @@ export function deriveBulkActions(
       ),
   )
   const showPromote =
-    !anyLocked && selected.length > 0 && selected.every(isPromotable)
+    !anyLocked && selected.length > 0 && selected.every(a => isPromotable(a, vialKind))
   const showVarianceVerify =
     selected.length > 0 &&
-    selected.every(a => canVarianceVerify(a, vialRole, varianceEntitlement))
+    selected.every(a => canVarianceVerify(a, vialKind))
   return { actions, showPromote, showVarianceVerify }
 }
 
@@ -1176,9 +1170,7 @@ function AnalysisRow({
   vialAssignmentByKeyword,
   onVialMethodInstrumentSaved,
   parentLineStates,
-  varianceEntitlement,
-  vialRole,
-  vialListVarianceEntitlement,
+  vialKind,
 }: {
   analysis: SenaiteAnalysis
   analyteNameMap: Map<number, string>
@@ -1203,9 +1195,9 @@ function AnalysisRow({
   vialAssignmentByKeyword?: Map<string, VialAssignment>
   onVialMethodInstrumentSaved?: () => void
   parentLineStates?: Record<string, string>
-  varianceEntitlement?: Record<string, number>
-  vialRole?: string | null
-  vialListVarianceEntitlement?: Record<string, number>
+  /** The host vial's assignment_kind ('core' | 'variance' | null). Drives the
+   *  promote-vs-variance-verify affordance split and the membership chip. */
+  vialKind?: string | null
 }) {
   const rowTint = ROW_STATUS_STYLE[analysis.review_state ?? ''] ?? ''
   const { display, original } = formatAnalysisTitle(analysis.title, analyteNameMap)
@@ -1217,8 +1209,8 @@ function AnalysisRow({
   // promotable rows via visibleRowTransitions.
   const locked = isLockedByParent(analysis, parentLineStates)
   const allowedTransitions = visibleRowTransitions(analysis, parentLineStates)
-  const canPromote = isPromotable(analysis) && !locked
-  const canVarVerify = canVarianceVerify(analysis, vialRole, varianceEntitlement)
+  const canPromote = isPromotable(analysis, vialKind) && !locked
+  const canVarVerify = canVarianceVerify(analysis, vialKind)
   const isPromoted = analysis.promoted_to_parent_id != null
   const vialAssign = analysis.keyword ? vialAssignmentByKeyword?.get(analysis.keyword) : undefined
   const vialOverlay = vialAssign?.matches[0]?.mk1Analysis ?? null
@@ -1263,12 +1255,10 @@ function AnalysisRow({
           <Mk1NativeBadge uid={analysis.uid} />
           <PromotedFromBadge promotion={analysis.keyword ? promotionsByKeyword?.get(analysis.keyword) : undefined} />
           {vialAssign && vialAssign.matches.map(m => {
-            // Key each overlay vial by ITS OWN bench role (carried on the match),
-            // not the table's single primaryRole — a parent page mixes HPLC/endo/ster
-            // vials, so an endo vial must check endotoxin entitlement, not hplc. Uses
-            // the parent's own entitlement (vialListVarianceEntitlement), since the
-            // gated varianceEntitlement is omitted on parent pages.
-            const vialIsVariance = showVarianceChip(m.mk1Analysis, m.assignmentRole, vialListVarianceEntitlement)
+            // Key each overlay vial by ITS OWN assignment_kind (carried on the
+            // match) — a parent page mixes core and variance vials, so each
+            // vial speaks for itself. No entitlement lookup: kind is explicit.
+            const vialIsVariance = showVarianceChip(m.mk1Analysis, m.assignmentKind)
             return (
               <button
                 key={m.vialSampleId}
@@ -1334,11 +1324,11 @@ function AnalysisRow({
           {analysis.review_state && (
             <StatusBadge
               state={analysis.review_state}
-              promotable={isPromotable(analysis)}
-              varianceReady={canVarVerify && locked}
+              promotable={isPromotable(analysis, vialKind)}
+              varianceReady={canVarVerify}
             />
           )}
-          {showVarianceChip(analysis, vialRole, varianceEntitlement) && <VarianceChip />}
+          {showVarianceChip(analysis, vialKind) && <VarianceChip />}
           {isPromoted && (
             <span
               className="text-[10px] font-mono text-emerald-700 dark:text-emerald-400"
@@ -1605,14 +1595,12 @@ interface AnalysisTableProps {
    * Default false → unchanged for sample pages.
    */
   hideProgress?: boolean
-  /** Per-service variance entitlement for the host vial's parent order.
-   *  Pass only on vial-scoped surfaces (quicklook sections, sub-sample page);
-   *  parent pages omit it and the Verify (Variance) action never appears. */
-  varianceEntitlement?: Record<string, number>
-  /** Parent's own variance entitlement, for the parent-page first-column vial-list
-   *  overlay only (the overlay renders solely on parent pages). Distinct from
-   *  varianceEntitlement so the row chip / Verify action stay vial-page-only. */
-  vialListVarianceEntitlement?: Record<string, number>
+  /** The host vial's assignment_kind ('core' | 'variance' | null). Pass on
+   *  vial-scoped surfaces (quicklook sections, sub-sample page); parent pages
+   *  pass null/omit — parents have no kind, and the Verify (Variance) action
+   *  never appears there. Vial-list overlay entries carry their own kind on
+   *  the match (VialMatch.assignmentKind), independent of this prop. */
+  vialKind?: string | null
 }
 
 export function AnalysisTable({
@@ -1634,8 +1622,7 @@ export function AnalysisTable({
   parentLineStates,
   headerContent,
   hideProgress = false,
-  varianceEntitlement,
-  vialListVarianceEntitlement,
+  vialKind,
 }: AnalysisTableProps) {
   const [analysisFilter, setAnalysisFilter] = useState<'all' | 'verified' | 'pending' | 'invalid'>('all')
   const [sortConfig, setSortConfig] = useState<SortConfig | null>(null)
@@ -1721,7 +1708,7 @@ export function AnalysisTable({
     .filter(g => g.current.uid && bulk.selectedUids.has(g.current.uid))
     .map(g => g.current)
   const { actions: bulkAvailableActions, showPromote: bulkShowPromote, showVarianceVerify: bulkShowVarianceVerify } =
-    deriveBulkActions(selectedAnalyses, parentLineStates, primaryRole, varianceEntitlement)
+    deriveBulkActions(selectedAnalyses, parentLineStates, vialKind)
 
   // Disable toolbar when any per-row transition is in-flight
   const toolbarDisabled = transition.pendingUids.size > 0
@@ -1960,9 +1947,7 @@ export function AnalysisTable({
                       vialAssignmentByKeyword={vialAssignmentByKeyword}
                       onVialMethodInstrumentSaved={onVialMethodInstrumentSaved}
                       parentLineStates={parentLineStates}
-                      varianceEntitlement={varianceEntitlement}
-                      vialListVarianceEntitlement={vialListVarianceEntitlement}
-                      vialRole={primaryRole}
+                      vialKind={vialKind}
                     />
                     {isExpanded && group.history.map(h => (
                       <HistoryRow
