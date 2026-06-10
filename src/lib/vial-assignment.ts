@@ -58,6 +58,7 @@ export interface VialMatch {
   vialSampleId: string        // e.g. 'P-0142-S02'
   vialLabel: string           // e.g. 'Vial 3'  (vial_sequence + 1)
   mk1Analysis: SenaiteAnalysis
+  assignmentRole?: string | null  // the vial's own bench role (hplc/endo/ster); for variance keying
 }
 
 export interface VialAssignment {
@@ -69,6 +70,7 @@ export interface VialInput {
   sampleId: string
   label: string
   analyses: SenaiteAnalysis[]
+  assignmentRole?: string | null  // the sub-sample's bench role; carried onto each VialMatch
 }
 
 const DEAD_STATES = new Set(['retracted', 'rejected'])
@@ -110,7 +112,7 @@ export function buildVialAssignmentMap(
     for (const { v, live } of vialLive) {
       for (const [kw, a] of live) {
         if (predicate(kw, a)) {
-          out.push({ vialSampleId: v.sampleId, vialLabel: v.label, mk1Analysis: a })
+          out.push({ vialSampleId: v.sampleId, vialLabel: v.label, mk1Analysis: a, assignmentRole: v.assignmentRole })
           break // one analysis per vial per parent row
         }
       }

@@ -1913,6 +1913,7 @@ export function SampleDetails() {
             sampleId: v.sample_id,
             label: `Vial ${v.vial_sequence + 1}`,
             analyses: overlayAnalysesQueries[i]?.data ?? [],
+            assignmentRole: v.assignment_role, // carries vial bench role for variance keying
           })),
         )
 
@@ -1923,6 +1924,11 @@ export function SampleDetails() {
   })
 
   const varianceEntitlement = useVarianceEntitlement(parentSampleId)
+  // Parent pages render the first-column vial-list overlay but intentionally omit
+  // `varianceEntitlement` (that drives the row chip / Verify action, which are
+  // vial-page-only). The overlay needs the parent's OWN entitlement to mark
+  // variance vials, so fetch it for sampleId when this IS the parent page.
+  const vialListVarianceEntitlement = useVarianceEntitlement(parentSampleId === null ? sampleId : null)
 
   // Phase senaite-writeback Task 4: fetch promotion provenance on parent pages.
   // Extracted into a callable so refreshSample can re-pull it after a QuickLook
@@ -3692,6 +3698,7 @@ export function SampleDetails() {
           isAnalysisSlaPublished={analysisSla.isPublished}
           analysisSlaPriority={analysisSla.priority}
           varianceEntitlement={parentSampleId !== null ? varianceEntitlement : undefined}
+          vialListVarianceEntitlement={vialListVarianceEntitlement}
         />
 
         {parentSampleId === null && data.sample_id && (

@@ -1178,6 +1178,7 @@ function AnalysisRow({
   parentLineStates,
   varianceEntitlement,
   vialRole,
+  vialListVarianceEntitlement,
 }: {
   analysis: SenaiteAnalysis
   analyteNameMap: Map<number, string>
@@ -1204,6 +1205,7 @@ function AnalysisRow({
   parentLineStates?: Record<string, string>
   varianceEntitlement?: Record<string, number>
   vialRole?: string | null
+  vialListVarianceEntitlement?: Record<string, number>
 }) {
   const rowTint = ROW_STATUS_STYLE[analysis.review_state ?? ''] ?? ''
   const { display, original } = formatAnalysisTitle(analysis.title, analyteNameMap)
@@ -1261,7 +1263,12 @@ function AnalysisRow({
           <Mk1NativeBadge uid={analysis.uid} />
           <PromotedFromBadge promotion={analysis.keyword ? promotionsByKeyword?.get(analysis.keyword) : undefined} />
           {vialAssign && vialAssign.matches.map(m => {
-            const vialIsVariance = showVarianceChip(m.mk1Analysis, vialRole, varianceEntitlement)
+            // Key each overlay vial by ITS OWN bench role (carried on the match),
+            // not the table's single primaryRole — a parent page mixes HPLC/endo/ster
+            // vials, so an endo vial must check endotoxin entitlement, not hplc. Uses
+            // the parent's own entitlement (vialListVarianceEntitlement), since the
+            // gated varianceEntitlement is omitted on parent pages.
+            const vialIsVariance = showVarianceChip(m.mk1Analysis, m.assignmentRole, vialListVarianceEntitlement)
             return (
               <button
                 key={m.vialSampleId}
@@ -1602,6 +1609,10 @@ interface AnalysisTableProps {
    *  Pass only on vial-scoped surfaces (quicklook sections, sub-sample page);
    *  parent pages omit it and the Verify (Variance) action never appears. */
   varianceEntitlement?: Record<string, number>
+  /** Parent's own variance entitlement, for the parent-page first-column vial-list
+   *  overlay only (the overlay renders solely on parent pages). Distinct from
+   *  varianceEntitlement so the row chip / Verify action stay vial-page-only. */
+  vialListVarianceEntitlement?: Record<string, number>
 }
 
 export function AnalysisTable({
@@ -1624,6 +1635,7 @@ export function AnalysisTable({
   headerContent,
   hideProgress = false,
   varianceEntitlement,
+  vialListVarianceEntitlement,
 }: AnalysisTableProps) {
   const [analysisFilter, setAnalysisFilter] = useState<'all' | 'verified' | 'pending' | 'invalid'>('all')
   const [sortConfig, setSortConfig] = useState<SortConfig | null>(null)
@@ -1949,6 +1961,7 @@ export function AnalysisTable({
                       onVialMethodInstrumentSaved={onVialMethodInstrumentSaved}
                       parentLineStates={parentLineStates}
                       varianceEntitlement={varianceEntitlement}
+                      vialListVarianceEntitlement={vialListVarianceEntitlement}
                       vialRole={primaryRole}
                     />
                     {isExpanded && group.history.map(h => (
