@@ -73,6 +73,8 @@ export const STATUS_COLORS: Record<string, string> = {
     'bg-indigo-100 text-indigo-700 border-indigo-200 dark:bg-indigo-500/15 dark:text-indigo-400 dark:border-indigo-500/20',
   ready_for_review:
     'bg-cyan-100 text-cyan-700 border-cyan-200 dark:bg-cyan-500/15 dark:text-cyan-400 dark:border-cyan-500/20',
+  variance_verified:
+    'bg-sky-100 text-sky-700 border-sky-200 dark:bg-sky-500/15 dark:text-sky-400 dark:border-sky-500/20',
 }
 
 export const STATUS_LABELS: Record<string, string> = {
@@ -90,6 +92,7 @@ export const STATUS_LABELS: Record<string, string> = {
   registered: 'Registered',
   waiting_for_addon_results: 'Waiting Addon',
   ready_for_review: 'Ready for Review',
+  variance_verified: 'Verified — Variance',
 }
 
 /**
@@ -147,6 +150,10 @@ const ALLOWED_TRANSITIONS: Record<string, readonly string[]> = {
   // Retest-aware promote: a verified row can be retested (vial tier in Mk1;
   // SENAITE allows it on parent lines too).
   verified: ['retest'],
+  // A variance replicate signed off by a tech. Retest is safe — these rows
+  // never touched the parent, so there is no SENAITE lock to collide with
+  // (unlike `promoted`).
+  variance_verified: ['retest'],
 }
 
 const TRANSITION_LABELS: Record<string, string> = {
@@ -155,7 +162,11 @@ const TRANSITION_LABELS: Record<string, string> = {
   verify: 'Verify',
   retract: 'Retract',
   reject: 'Reject',
+  variance_verify: 'Verify (Variance)',
 }
+
+/** Test-only re-export — keeps the table private to this module otherwise. */
+export const ALLOWED_TRANSITIONS_TEST_EXPORT = ALLOWED_TRANSITIONS
 
 const DESTRUCTIVE_TRANSITIONS = new Set(['retract', 'reject'])
 
@@ -169,6 +180,33 @@ export function isPromotable(a: SenaiteAnalysis): boolean {
     a.review_state === 'to_be_verified' &&
     a.promoted_to_parent_id == null
   )
+}
+
+/** Vial assignment_role → WP service key carrying variance entitlement.
+ *  Coarse keys only — never per-analyte (variance addon spec, scoping rule). */
+export const ROLE_VARIANCE_KEYS: Record<string, string> = {
+  hplc: 'hplcpurity_identity',
+  endo: 'endotoxin',
+  ster: 'sterility_pcr',
+}
+
+/** Verify (Variance) is offered on a native, unpromoted, to_be_verified row
+ *  whose host vial's role has purchased variance (n >= 2). Deliberately NOT
+ *  gated on isLockedByParent: variance sign-off never touches the parent, so
+ *  a verified parent line must not lock replicates out. Backend gate is
+ *  authoritative (fail closed); this only controls visibility. */
+export function canVarianceVerify(
+  a: SenaiteAnalysis,
+  vialRole: string | null | undefined,
+  entitlement: Record<string, number> | undefined,
+): boolean {
+  if (!a.uid || !a.uid.startsWith('mk1:')) return false
+  if (a.review_state !== 'to_be_verified') return false
+  if (a.promoted_to_parent_id != null) return false
+  const key = vialRole ? ROLE_VARIANCE_KEYS[vialRole] : undefined
+  if (!key || !entitlement) return false
+  const n = entitlement[key]
+  return typeof n === 'number' && n >= 2
 }
 
 /** True when a vial row has already been promoted to a parent-tier row. */
@@ -287,17 +325,19 @@ export function deriveBulkPromoteBlockers(selected: SenaiteAnalysis[]): string[]
 
 // --- Shared components ---
 
-export function StatusBadge({ state, promotable = false }: { state: string; promotable?: boolean }) {
+export function StatusBadge({ state, promotable = false, varianceReady = false }: { state: string; promotable?: boolean; varianceReady?: boolean }) {
   const color =
     STATUS_COLORS[state] ??
     'bg-zinc-100 text-zinc-600 border-zinc-200 dark:bg-zinc-500/15 dark:text-zinc-400 dark:border-zinc-500/20'
-  // Sub-sample (vial) rows can't self-verify — `to_be_verified` there means
-  // "result in, awaiting promotion". Relabel only those; a parent SENAITE line
-  // in to_be_verified is not promotable and keeps "To Verify".
+  // Sub-sample rows can't self-verify — to_be_verified there means "awaiting
+  // promotion" ("Ready to Promote") or, on a variance replicate where promote
+  // is no longer the path, "awaiting variance sign-off" ("Ready to Verify").
   const label =
-    promotable && state === 'to_be_verified'
-      ? 'Ready to Promote'
-      : STATUS_LABELS[state] ?? state.replace(/_/g, ' ')
+    state === 'to_be_verified' && varianceReady
+      ? 'Ready to Verify'
+      : promotable && state === 'to_be_verified'
+        ? 'Ready to Promote'
+        : STATUS_LABELS[state] ?? state.replace(/_/g, ' ')
   return (
     <span
       className={`inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium border ${color}`}

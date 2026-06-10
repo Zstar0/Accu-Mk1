@@ -3728,7 +3728,7 @@ export async function setAnalysisMethodInstrument(
 
 export async function transitionAnalysis(
   uid: string,
-  transition: 'submit' | 'verify' | 'retract' | 'reject' | 'retest'
+  transition: 'submit' | 'verify' | 'retract' | 'reject' | 'retest' | 'variance_verify'
 ): Promise<AnalysisResultResponse> {
   // Phase 3: route mk1:<id> UIDs to the Mk1 transitions endpoint. The
   // 'retest' kind creates a linked retest row on the Mk1 side and returns
@@ -5133,6 +5133,21 @@ export async function patchVialAssignment(
   if (!response.ok) {
     const err = await response.json().catch(() => null)
     throw new Error(err?.detail || `Vial assignment update failed: ${response.status}`)
+  }
+  return response.json()
+}
+
+/** Per-service variance counts the parent's order purchased. Empty when none
+ *  or unreachable — callers fail closed (action hidden). */
+export async function fetchVarianceEntitlement(
+  parentSampleId: string,
+): Promise<{ variance: Record<string, number>; unreachable: boolean }> {
+  const response = await fetch(
+    `${API_BASE_URL()}/api/sub-samples/${encodeURIComponent(parentSampleId)}/variance-entitlement`,
+    { headers: getBearerHeaders() },
+  )
+  if (!response.ok) {
+    return { variance: {}, unreachable: true }
   }
   return response.json()
 }

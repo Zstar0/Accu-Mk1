@@ -74,7 +74,7 @@ export function useBulkAnalysisTransition({
         try {
           const response = await transitionAnalysis(
             uids[i]!,
-            transition as 'submit' | 'verify' | 'retract' | 'reject' | 'retest'
+            transition as 'submit' | 'verify' | 'retract' | 'reject' | 'retest' | 'variance_verify'
           )
           if (response.success) succeeded.push(uids[i]!)
           else failed.push(uids[i]!)

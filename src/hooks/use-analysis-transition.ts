@@ -46,7 +46,7 @@ export function useAnalysisTransition({
       try {
         const response = await transitionAnalysis(
           uid,
-          transition as 'submit' | 'verify' | 'retract' | 'reject' | 'retest'
+          transition as 'submit' | 'verify' | 'retract' | 'reject' | 'retest' | 'variance_verify'
         )
         if (response.success) {
           const label = TRANSITION_LABELS[transition] ?? transition
