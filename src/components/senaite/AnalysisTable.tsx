@@ -1274,7 +1274,7 @@ function AnalysisRow({
                 }`}
                 title={vialIsVariance ? `Variance replicate — ${m.vialSampleId}` : `Assigned to ${m.vialSampleId}`}
               >
-                {vialIsVariance && <Layers className="h-3 w-3" />}
+                {vialIsVariance && <Layers className="h-3 w-3" aria-hidden="true" />}
                 {m.vialLabel} — {m.vialSampleId}
               </button>
             )
