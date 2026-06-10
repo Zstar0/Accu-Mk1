@@ -217,6 +217,10 @@ def transition(
     current_user=Depends(get_current_user),
 ):
     try:
+        if req.kind == "variance_verify":
+            # Commercial gate: variance must be purchased for the vial's role.
+            # Fail closed (400 with a clear message) when WP is unreachable.
+            service.ensure_variance_entitlement(db, analysis_id=analysis_id)
         row = service.apply_transition(
             db,
             analysis_id=analysis_id,

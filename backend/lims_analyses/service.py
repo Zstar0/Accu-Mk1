@@ -368,6 +368,70 @@ def apply_transition(
     return row
 
 
+# ─── Variance entitlement gate (Variance Addon Phase 1) ─────────────────────
+
+# Vial assignment_role → the WP service key whose variance entitlement covers
+# rows on that vial. Coarse service keys only — never per-analyte (spec
+# 2026-06-10-variance-testing-addon-design.md, "The scoping rule").
+_ROLE_VARIANCE_KEYS: Dict[str, str] = {
+    "hplc": "hplcpurity_identity",
+    "endo": "endotoxin",
+    "ster": "sterility_pcr",
+}
+
+
+def ensure_variance_entitlement(
+    db: Session,
+    *,
+    analysis_id: int,
+    fetch_services=None,
+) -> None:
+    """Raise BadRequestError unless the parent's WP order purchased variance
+    for the service that covers this row's host vial role. FAIL CLOSED: an
+    unreachable services payload rejects the transition (retry later) — it
+    never silently allows.
+
+    fetch_services is injectable for tests; defaults to the same WP/IS lookup
+    the vial plan uses. Until IS exposes the `variance` map (Phase 3), real
+    payloads lack the key and this gate rejects — which is the correct
+    pre-launch behavior (the FE won't offer the action either).
+    """
+    from models import LimsSample, LimsSubSample
+
+    row = get_analysis(db, analysis_id)
+    if row.lims_sub_sample_pk is None:
+        raise BadRequestError("variance_verify is only valid on sub-sample analyses")
+    vial = db.get(LimsSubSample, row.lims_sub_sample_pk)
+    if vial is None:
+        raise NotFoundError(f"sub-sample id={row.lims_sub_sample_pk} not found")
+    parent = db.get(LimsSample, vial.parent_sample_pk)
+    if parent is None:
+        raise NotFoundError(f"parent sample pk={vial.parent_sample_pk} not found")
+
+    key = _ROLE_VARIANCE_KEYS.get(vial.assignment_role or "")
+    if key is None:
+        raise BadRequestError(
+            f"vial {vial.sample_id} role {vial.assignment_role!r} has "
+            f"no variance service mapping"
+        )
+
+    if fetch_services is None:
+        from sub_samples.service import _fetch_wp_services_for_parent
+        fetch_services = _fetch_wp_services_for_parent
+    services = fetch_services(parent.sample_id)
+    if services is None:
+        raise BadRequestError(
+            "variance entitlement could not be verified (order services "
+            "unreachable) — try again"
+        )
+    variance = services.get("variance") or {}
+    n = variance.get(key)
+    if not isinstance(n, int) or n < 2:
+        raise BadRequestError(
+            f"variance was not purchased for {key} on {parent.sample_id}"
+        )
+
+
 def set_reportable(
     db: Session,
     *,
