@@ -238,11 +238,16 @@ def get_vial_demand(
     if services_resp is None:
         return {
             "demand": {"hplc": 0, "endo": 0, "ster": 0},
+            "variance": {"hplc": 0, "endo": 0, "ster": 0},
+            "base_demand": {"hplc": 0, "endo": 0, "ster": 0},
             "wp_order_number": None,
             "is_unreachable": True,
         }
+    services = services_resp.get("services") or {}
     return {
-        "demand": service.derive_demand(services_resp.get("services") or {}),
+        "demand": service.derive_demand(services),
+        "variance": service.derive_variance_demand(services),
+        "base_demand": service.derive_base_demand(services),
         "wp_order_number": services_resp.get("wp_order_number"),
         "is_unreachable": False,
     }

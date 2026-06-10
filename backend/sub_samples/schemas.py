@@ -61,6 +61,11 @@ class VialPlanItem(BaseModel):
 
 class VialPlanResponse(BaseModel):
     demand: dict
+    # Per-bucket variance n (total replicates incl. canonical); zeros when none
+    # purchased. base_demand is the pre-inflation lab baseline — the FE splits
+    # bucket counts into base + variance lines from these two (addon Phase 2).
+    variance: dict = {"hplc": 0, "endo": 0, "ster": 0}
+    base_demand: dict = {"hplc": 0, "endo": 0, "ster": 0}
     wp_order_number: Optional[str] = None
     vials: list[VialPlanItem]
     is_unreachable: bool = False

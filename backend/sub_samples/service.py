@@ -515,13 +515,30 @@ def fetch_sample_services(sample_id: str) -> Optional[dict]:
     return resp.json()
 
 
-def derive_demand(services: dict) -> dict:
-    """Translate WP services dict to vial demand per bucket.
+# Bucket (== vial assignment_role) -> WP service key carrying variance counts.
+# Must stay identical to lims_analyses.service._ROLE_VARIANCE_KEYS (the
+# variance_verify gate) — a test asserts equality. Coarse keys only, never
+# per-analyte (variance addon spec, "The scoping rule").
+VARIANCE_BUCKET_KEYS: dict[str, str] = {
+    "hplc": "hplcpurity_identity",
+    "endo": "endotoxin",
+    "ster": "sterility_pcr",
+}
 
-    HPLC is satisfied by either `hplcpurity_identity` or `bac_water_panel` —
-    both result in chromatography vials. Sterility is the only bucket that
-    needs more than one vial (2 per the lab's protocol).
-    """
+
+def derive_variance_demand(services: dict) -> dict:
+    """Per-bucket variance n (TOTAL replicates incl. the canonical) from a WP
+    services payload. 0 when not purchased. Uses the same normalization as the
+    entitlement endpoint so counts are int-filtered (>= 2) in one place."""
+    entitlement = normalize_variance_entitlement({"variance": (services or {}).get("variance")})
+    return {
+        bucket: entitlement.get(key, 0)
+        for bucket, key in VARIANCE_BUCKET_KEYS.items()
+    }
+
+
+def derive_base_demand(services: dict) -> dict:
+    """Pre-variance vial demand per bucket (the lab-protocol baseline)."""
     hplc = bool(services.get("hplcpurity_identity") or services.get("bac_water_panel"))
     endo = bool(services.get("endotoxin"))
     ster = bool(services.get("sterility_pcr"))
@@ -529,6 +546,25 @@ def derive_demand(services: dict) -> dict:
         "hplc": 1 if hplc else 0,
         "endo": 1 if endo else 0,
         "ster": 2 if ster else 0,
+    }
+
+
+def derive_demand(services: dict) -> dict:
+    """Translate WP services dict to vial demand per bucket.
+
+    HPLC is satisfied by either `hplcpurity_identity` or `bac_water_panel` —
+    both result in chromatography vials. Sterility is the only bucket that
+    needs more than one vial (2 per the lab's protocol).
+
+    Variance inflation (addon Phase 2): a purchased variance count n (total
+    replicates in the set) raises the bucket to max(base, n). Variance never
+    creates demand for an unordered service (base 0 stays 0).
+    """
+    base = derive_base_demand(services)
+    variance = derive_variance_demand(services)
+    return {
+        bucket: max(n, variance[bucket]) if n > 0 else 0
+        for bucket, n in base.items()
     }
 
 
@@ -557,6 +593,8 @@ def compute_vial_plan(db: Session, parent_sample_id: str) -> dict:
     if services_resp is None:
         return {
             "demand": {"hplc": 0, "endo": 0, "ster": 0},
+            "variance": {"hplc": 0, "endo": 0, "ster": 0},
+            "base_demand": {"hplc": 0, "endo": 0, "ster": 0},
             "wp_order_number": None,
             "is_unreachable": True,
             "vials": [
@@ -577,7 +615,10 @@ def compute_vial_plan(db: Session, parent_sample_id: str) -> dict:
             ],
         }
 
-    demand = derive_demand(services_resp.get("services") or {})
+    services = services_resp.get("services") or {}
+    demand = derive_demand(services)
+    variance = derive_variance_demand(services)
+    base_demand = derive_base_demand(services)
 
     # Build vial list with parent first, then sub-samples in vial_sequence order.
     # Parent's assignment_role is never NULL (default 'hplc' from migration).
@@ -620,7 +661,7 @@ def compute_vial_plan(db: Session, parent_sample_id: str) -> dict:
     # — compute_vial_plan writes to assignment_role directly so we need a
     # second seeding site. Idempotent; best-effort.
     if role_changed_subs:
-        wp_services = (services_resp.get("services") if services_resp else None) or {}
+        wp_services = services  # already extracted as services_resp.get("services") or {}
         from lims_analyses.seeder import seed_analyses_for_vial
         for s in role_changed_subs:
             if not s.assignment_role or s.assignment_role == "xtra":
@@ -641,6 +682,8 @@ def compute_vial_plan(db: Session, parent_sample_id: str) -> dict:
 
     return {
         "demand": demand,
+        "variance": variance,
+        "base_demand": base_demand,
         "wp_order_number": services_resp.get("wp_order_number"),
         "is_unreachable": False,
         "vials": assigned,
