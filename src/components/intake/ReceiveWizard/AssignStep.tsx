@@ -439,6 +439,15 @@ function AssignRemarksBlock({
   )
 }
 
+/** Header pill flagging a bucket as carrying variance demand. */
+function VariancePill({ n }: { n: number }) {
+  return (
+    <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium border border-sky-500/30 bg-sky-500/10 text-sky-600 dark:text-sky-400">
+      Variance ×{n}
+    </span>
+  )
+}
+
 function Bucket({
   id, label, vials, demand, onReset, varianceN = 0, baseDemand = 0,
 }: {
@@ -476,6 +485,7 @@ function Bucket({
       <header className="flex justify-between items-baseline mb-2 text-xs uppercase tracking-wide text-muted-foreground">
         <strong className="text-foreground font-semibold">{label}</strong>
         <div className="flex items-center gap-2">
+          {varianceN >= 2 && <VariancePill n={varianceN} />}
           {demand !== null && (
             <span className={cn(isShort && 'text-amber-500')}>
               {vials.length} / {demand}

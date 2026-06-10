@@ -100,6 +100,20 @@ describe('AssignStep variance sub-rows', () => {
   })
 })
 
+describe('variance HPLC bucket pill', () => {
+  it('renders Variance ×N on the HPLC bucket header when hplc variance >= 2', async () => {
+    vi.mocked(getVialPlan).mockResolvedValue(VARIANCE_PLAN)
+    renderStep()
+    expect(await screen.findByText('Variance ×3')).toBeInTheDocument()
+  })
+  it('no HPLC bucket pill when no variance', async () => {
+    vi.mocked(getVialPlan).mockResolvedValue(PLAN)
+    renderStep()
+    await screen.findByText('Analyses Dept.')
+    expect(screen.queryByText(/Variance ×/)).not.toBeInTheDocument()
+  })
+})
+
 describe('AssignStep role-change cache invalidation', () => {
   it('reset bucket: patches each vial to null and refetches the parent page caches', async () => {
     const { subsFn, overlayFn } = renderStep()
