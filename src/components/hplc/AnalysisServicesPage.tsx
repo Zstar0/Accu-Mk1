@@ -35,10 +35,12 @@ import {
   getAnalysisServices,
   syncAnalysisServices,
   updateAnalysisServicePeptide,
+  updateAnalysisServiceResultType,
   getPeptides,
   type AnalysisServiceRecord,
   type PeptideRecord,
 } from '@/lib/api'
+import { ResultOptionsEditor, type ResultOption } from './ResultOptionsEditor'
 
 export function AnalysisServicesPage() {
   const [services, setServices] = useState<AnalysisServiceRecord[]>([])
@@ -241,6 +243,7 @@ export function AnalysisServicesPage() {
             {/* Content */}
             <div className="flex-1 overflow-y-auto px-6 py-4">
               <ServicePanel
+                key={selectedService.id}
                 service={selectedService}
                 peptides={peptides}
                 onPeptideChange={async (peptideId) => {
@@ -250,6 +253,15 @@ export function AnalysisServicesPage() {
                     await load()
                   } catch (err) {
                     toast.error(err instanceof Error ? err.message : 'Failed to update peptide link')
+                  }
+                }}
+                onResultTypeChange={async (body) => {
+                  try {
+                    await updateAnalysisServiceResultType(selectedService.id, body)
+                    toast.success('Result type updated')
+                    await load()
+                  } catch (err) {
+                    toast.error(err instanceof Error ? err.message : 'Failed to update result type')
                   }
                 }}
               />
@@ -279,12 +291,51 @@ function ServicePanel({
   service,
   peptides,
   onPeptideChange,
+  onResultTypeChange,
 }: {
   service: AnalysisServiceRecord
   peptides: PeptideRecord[]
   onPeptideChange: (peptideId: number | null) => void
+  onResultTypeChange: (body: {
+    result_type: string | null
+    result_options: ResultOption[] | null
+  }) => Promise<void>
 }) {
   const isSlotService = /^ANALYTE-\d/i.test(service.keyword ?? '')
+
+  // Result-type editor state. The parent keys <ServicePanel> by service.id, so
+  // the panel remounts on service switch and these initializers re-seed cleanly.
+  // No effect — unrelated refetches (peptide save, Sync) must not clobber
+  // in-progress edits.
+  const [rtType, setRtType] = useState<string>(service.result_type ?? '')
+  const [rtOptions, setRtOptions] = useState<ResultOption[]>(
+    service.result_options ?? [],
+  )
+  const [rtSaving, setRtSaving] = useState(false)
+
+  const hasOptions = rtType === 'select' || rtType === 'multiselect'
+
+  const handleSaveResultType = async () => {
+    setRtSaving(true)
+    try {
+      // Sanitize option rows: trim, drop empty values, dedup by value (first wins).
+      // Empty value collides with the result cell's "— Select —" placeholder;
+      // duplicates produce duplicate React keys + wrong resolveResultLabel matches;
+      // untrimmed " 1 " never matches a stored "1".
+      const cleaned = rtOptions
+        .map(o => ({ value: o.value.trim(), label: o.label.trim() || o.value.trim() }))
+        .filter(o => o.value)
+      const deduped = cleaned.filter(
+        (o, i) => cleaned.findIndex(x => x.value === o.value) === i,
+      )
+      await onResultTypeChange({
+        result_type: rtType || null,
+        result_options: hasOptions ? deduped : null,
+      })
+    } finally {
+      setRtSaving(false)
+    }
+  }
 
   return (
     <div className="space-y-6">
@@ -364,6 +415,34 @@ function ServicePanel({
             ))}
           </div>
         )}
+      </div>
+
+      {/* Result Type */}
+      <div className="border-t pt-4">
+        <h4 className="mb-3 text-sm font-semibold text-muted-foreground">Result Type</h4>
+        <div className="space-y-3">
+          <Select
+            value={rtType || 'unset'}
+            onValueChange={v => setRtType(v === 'unset' ? '' : v)}
+          >
+            <SelectTrigger className="w-full max-w-xs">
+              <SelectValue placeholder="Result type…" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="unset">— None —</SelectItem>
+              <SelectItem value="numeric">Numeric</SelectItem>
+              <SelectItem value="select">Select (dropdown)</SelectItem>
+              <SelectItem value="multiselect">Multiselect</SelectItem>
+              <SelectItem value="string">String</SelectItem>
+            </SelectContent>
+          </Select>
+          {hasOptions && (
+            <ResultOptionsEditor options={rtOptions} onChange={setRtOptions} />
+          )}
+          <Button size="sm" disabled={rtSaving} onClick={handleSaveResultType}>
+            {rtSaving ? 'Saving…' : 'Save result type'}
+          </Button>
+        </div>
       </div>
 
       {/* Timestamps */}

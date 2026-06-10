@@ -7,7 +7,7 @@ stopped_at: null
 last_updated: "2026-04-06"
 last_activity: 2026-04-06
 progress:
-  total_phases: 5
+  total_phases: 6
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
@@ -61,6 +61,10 @@ Progress: [░░░░░░░░░░] 0%
 ### Blockers/Concerns
 
 - SENAITE field mapping for LAL (EU/mL) and sterility (Pass/Fail): specific analysis service keywords and field types are unverified in this lab's SENAITE instance. Must be confirmed before Phase 22/23 SENAITE push is implemented.
+
+### Roadmap Evolution
+
+- Phase 24 added (2026-05-01): Single-vial check-in policy — receive wizard skips sub-sample creation when one vial is checked in; Add Additional Vial promotes parent to -S01 and creates -S02 atomically (with spec doc amendment)
 
 ### Pending Todos
 

@@ -1647,6 +1647,8 @@ export interface AnalysisService {
   uid: string
   title: string
   keyword: string
+  result_type?: string | null
+  result_options?: { value: string; label: string }[] | null
 }
 
 export interface ManageAnalysisResult {
@@ -1773,7 +1775,22 @@ export interface SampleCOAActionResponse {
 async function extractErrorMessage(response: Response, fallback: string): Promise<string> {
   try {
     const body = await response.json()
-    return body?.detail ?? body?.message ?? fallback
+    const detail = body?.detail ?? body?.message ?? fallback
+    if (typeof detail === 'string') return detail
+    // Structured detail (e.g. the COA resolver's unresolved_sources 422):
+    // render the message + offending analytes instead of [object Object].
+    if (detail && typeof detail === 'object') {
+      let msg: string = detail.message ?? fallback
+      if (Array.isArray(detail.unresolved) && detail.unresolved.length > 0) {
+        const kws = detail.unresolved
+          .map((u: { analyte_keyword?: string }) => u.analyte_keyword)
+          .filter(Boolean)
+          .join(', ')
+        if (kws) msg += ` Unresolved: ${kws}`
+      }
+      return msg
+    }
+    return fallback
   } catch {
     return fallback
   }
@@ -2252,6 +2269,8 @@ export interface AnalysisServiceRecord {
   senaite_id: string | null
   senaite_uid: string | null
   active: boolean
+  result_type?: string | null
+  result_options?: { value: string; label: string }[] | null
   created_at: string
   updated_at: string
 }
@@ -2286,6 +2305,22 @@ export async function updateAnalysisServicePeptide(
     body: JSON.stringify({ peptide_id: peptideId }),
   })
   if (!response.ok) throw new Error(`Update peptide link failed: ${response.status}`)
+  return response.json()
+}
+
+export async function updateAnalysisServiceResultType(
+  serviceId: number,
+  body: {
+    result_type: string | null
+    result_options: { value: string; label: string }[] | null
+  },
+): Promise<AnalysisServiceRecord> {
+  const response = await fetch(`${API_BASE_URL()}/analysis-services/${serviceId}/result-type`, {
+    method: 'PATCH',
+    headers: getBearerHeaders('application/json'),
+    body: JSON.stringify(body),
+  })
+  if (!response.ok) throw new Error(`Update result type failed: ${response.status}`)
   return response.json()
 }
 
@@ -2847,6 +2882,7 @@ export interface WizardSessionResponse {
   standard_notes: string | null
   instrument_name: string | null
   instrument_id: number | null
+  lims_sub_sample_pk?: number | null
 }
 
 export interface WizardSessionListItem {
@@ -2875,6 +2911,7 @@ export async function createWizardSession(data: {
   standard_notes?: string
   instrument_name?: string
   instrument_id?: number
+  lims_sub_sample_pk?: number | null
 }): Promise<WizardSessionResponse> {
   try {
     const response = await fetch(`${API_BASE_URL()}/wizard/sessions`, {
@@ -3086,6 +3123,7 @@ export interface SamplePrep {
   peptide_name: string | null
   peptide_abbreviation: string | null
   senaite_sample_id: string | null
+  lims_sub_sample_pk: number | null
   declared_weight_mg: number | null
   target_conc_ug_ml: number | null
   target_total_vol_ul: number | null
@@ -3300,6 +3338,7 @@ export interface SenaiteAnalysis {
   keyword: string | null
   title: string
   result: string | null
+  result_type?: string | null
   result_options: SenaiteResultOption[]  // always present from backend; [] if no predefined options
   unit: string | null
   method: string | null
@@ -3314,6 +3353,14 @@ export interface SenaiteAnalysis {
   sort_key: number | null
   captured: string | null
   retested: boolean
+  /** Mk1-local: service_group resolved from analysis_services by keyword.
+   * Drives the "primary for this vial" highlight on the detail page. */
+  service_group_id: number | null
+  service_group_name: string | null
+  // Phase 4b: when this vial-tier row has been promoted to a parent-tier
+  // canonical result, this is the parent-tier row's id. Used to render
+  // the "Promoted → #N" badge in AnalysisTable.
+  promoted_to_parent_id?: number | null
 }
 
 export interface SenaiteAttachment {
@@ -3585,6 +3632,35 @@ export async function setAnalysisResult(
   uid: string,
   result: string
 ): Promise<AnalysisResultResponse> {
+  // Phase 3: route mk1:<id> UIDs to the Mk1 transitions endpoint with
+  // kind=submit + result_value inline. The result-set + state-advance
+  // happen atomically in one Mk1 transition.
+  if (uid.startsWith('mk1:')) {
+    const limsId = parseInt(uid.slice('mk1:'.length), 10)
+    const response = await fetch(
+      `${API_BASE_URL()}/api/lims-analyses/${limsId}/transitions`,
+      {
+        method: 'POST',
+        headers: getBearerHeaders('application/json'),
+        body: JSON.stringify({
+          kind: 'submit',
+          result_value: result,
+          reason: 'bench-tech result entry',
+        }),
+      }
+    )
+    if (!response.ok) {
+      const err = await response.json().catch(() => null)
+      throw new Error(err?.detail || `Set result (mk1) failed: ${response.status}`)
+    }
+    const row = await response.json()
+    return {
+      success: true,
+      message: 'Result submitted via Mk1',
+      new_review_state: row.review_state ?? null,
+      keyword: row.keyword ?? null,
+    }
+  }
   const response = await fetch(
     `${API_BASE_URL()}/wizard/senaite/analyses/${encodeURIComponent(uid)}/result`,
     {
@@ -3605,6 +3681,36 @@ export async function setAnalysisMethodInstrument(
   methodUid: string | null,
   instrumentUid: string | null
 ): Promise<AnalysisResultResponse> {
+  // Phase 3.6: route mk1:<id> UIDs to the Mk1 method-instrument PATCH
+  // endpoint. The Mk1 option uids are int-as-string (e.g. "1", "2");
+  // parse them back to integers for the request body. Either may be
+  // null (clear). The SENAITE-uid code path below is unchanged.
+  if (uid.startsWith('mk1:')) {
+    const limsId = parseInt(uid.slice('mk1:'.length), 10)
+    const body = {
+      method_id: methodUid ? parseInt(methodUid, 10) : null,
+      instrument_id: instrumentUid ? parseInt(instrumentUid, 10) : null,
+    }
+    const response = await fetch(
+      `${API_BASE_URL()}/api/lims-analyses/${limsId}/method-instrument`,
+      {
+        method: 'PATCH',
+        headers: getBearerHeaders('application/json'),
+        body: JSON.stringify(body),
+      }
+    )
+    if (!response.ok) {
+      const err = await response.json().catch(() => null)
+      throw new Error(err?.detail || `Set method/instrument (mk1) failed: ${response.status}`)
+    }
+    const row = await response.json()
+    return {
+      success: true,
+      message: 'Method/instrument updated via Mk1',
+      new_review_state: row.review_state ?? null,
+      keyword: row.keyword ?? null,
+    }
+  }
   const response = await fetch(
     `${API_BASE_URL()}/wizard/senaite/analyses/${encodeURIComponent(uid)}/method-instrument`,
     {
@@ -3622,8 +3728,36 @@ export async function setAnalysisMethodInstrument(
 
 export async function transitionAnalysis(
   uid: string,
-  transition: 'submit' | 'verify' | 'retract' | 'reject' | 'retest'
+  transition: 'submit' | 'verify' | 'retract' | 'reject' | 'retest' | 'variance_verify'
 ): Promise<AnalysisResultResponse> {
+  // Phase 3: route mk1:<id> UIDs to the Mk1 transitions endpoint. The
+  // 'retest' kind creates a linked retest row on the Mk1 side and returns
+  // the NEW row (retest-aware promote phase).
+  if (uid.startsWith('mk1:')) {
+    const limsId = parseInt(uid.slice('mk1:'.length), 10)
+    const response = await fetch(
+      `${API_BASE_URL()}/api/lims-analyses/${limsId}/transitions`,
+      {
+        method: 'POST',
+        headers: getBearerHeaders('application/json'),
+        body: JSON.stringify({
+          kind: transition,
+          reason: `bench-tech ${transition}`,
+        }),
+      }
+    )
+    if (!response.ok) {
+      const err = await response.json().catch(() => null)
+      throw new Error(err?.detail || `Transition (mk1) failed: ${response.status}`)
+    }
+    const row = await response.json()
+    return {
+      success: true,
+      message: `Transition '${transition}' applied via Mk1`,
+      new_review_state: row.review_state ?? null,
+      keyword: row.keyword ?? null,
+    }
+  }
   const response = await fetch(
     `${API_BASE_URL()}/wizard/senaite/analyses/${encodeURIComponent(uid)}/transition`,
     {
@@ -3635,6 +3769,67 @@ export async function transitionAnalysis(
   if (!response.ok) {
     const err = await response.json().catch(() => null)
     throw new Error(err?.detail || `Transition failed: ${response.status}`)
+  }
+  return response.json()
+}
+
+// ─── Phase 4b: promote_to_parent client ──────────────────────────────────────
+
+export interface PromoteSourceRef {
+  analysis_id: number
+  contribution_kind: 'chosen' | 'aggregated_in' | 'reference'
+}
+
+export interface PromoteRequest {
+  keyword: string
+  result_value: string
+  result_unit?: string | null
+  method_id?: number | null
+  instrument_id?: number | null
+  sources: PromoteSourceRef[]
+  reason?: string | null
+}
+
+export interface PromoteResponse {
+  parent: {
+    id: number
+    review_state: string
+    result_value: string | null
+    result_unit: string | null
+    keyword: string
+    title: string
+    lims_sample_pk: number | null
+    [k: string]: unknown
+  }
+  promotions: Array<{
+    id: number
+    parent_analysis_id: number
+    source_analysis_id: number
+    contribution_kind: string
+    promoted_at: string
+    reason: string | null
+  }>
+}
+
+/**
+ * Phase 4b: promote N vial-tier sources to a single parent-tier verified row.
+ *
+ * Throws on non-2xx with a structured Error message including the backend's
+ * detail (404 missing source, 409 parent_row_already_exists, 400 validation).
+ */
+export async function promoteAnalyses(req: PromoteRequest): Promise<PromoteResponse> {
+  const response = await fetch(`${API_BASE_URL()}/api/lims-analyses/promote`, {
+    method: 'POST',
+    headers: getBearerHeaders('application/json'),
+    body: JSON.stringify(req),
+  })
+  if (!response.ok) {
+    const err = await response.json().catch(() => null)
+    const detail = err?.detail
+    const message = typeof detail === 'string'
+      ? detail
+      : detail?.message ?? `Promote failed: ${response.status}`
+    throw new Error(message)
   }
   return response.json()
 }
@@ -4157,6 +4352,10 @@ export async function getSenaiteAnalysts(): Promise<SenaiteAnalyst[]> {
 
 export type InboxPriority = 'normal' | 'high' | 'expedited'
 
+export type InboxRole = 'hplc' | 'microbiology'
+
+// Aligns with backend Pydantic InboxAnalysisItem after the vial-inbox
+// redesign — service group context now travels per-analysis.
 export interface InboxAnalysisItem {
   uid: string | null
   title: string
@@ -4164,21 +4363,21 @@ export interface InboxAnalysisItem {
   peptide_name: string | null
   method: string | null
   review_state: string | null
-}
-
-export interface InboxServiceGroupSection {
   group_id: number
   group_name: string
   group_color: string
-  assigned_analyst_id: number | null
-  assigned_analyst_email: string | null
-  instrument_uid: string | null
-  analyses: InboxAnalysisItem[]
 }
 
-export interface InboxSampleItem {
+// One inbox card == one vial (parent AR or sub-sample AR). Replaces the
+// old InboxSampleItem + analyses_by_group nesting.
+export interface InboxVialItem {
   uid: string
-  id: string
+  sample_id: string
+  is_parent: boolean
+  parent_sample_id: string
+  assignment_role: string | null
+  vial_sequence: number
+  vial_total: number
   title: string
   client_id: string | null
   client_order_number: string | null
@@ -4186,17 +4385,20 @@ export interface InboxSampleItem {
   review_state: string
   priority: InboxPriority
   assignment_summary: string
-  analyses_by_group: InboxServiceGroupSection[]
+  analyses: InboxAnalysisItem[]
 }
 
 export interface InboxResponse {
-  items: InboxSampleItem[]
+  items: InboxVialItem[]
   total: number
+  filter_role: InboxRole | null
 }
 
 export interface WorksheetUser {
   id: number
   email: string
+  first_name?: string | null
+  last_name?: string | null
 }
 
 export interface WorksheetCreateResponse {
@@ -4208,11 +4410,28 @@ export interface WorksheetCreateResponse {
 
 // ─── Inbox API Functions ──────────────────────────────────────────────────────
 
-export async function getInboxSamples(hideTestOrders = true, forceRefresh = false, hidePrepped = true): Promise<InboxResponse> {
+export interface GetInboxOptions {
+  hideTestOrders?: boolean
+  forceRefresh?: boolean
+  hidePrepped?: boolean
+  role?: InboxRole | null
+  showXtra?: boolean
+}
+
+export async function getInboxSamples(opts: GetInboxOptions = {}): Promise<InboxResponse> {
+  const {
+    hideTestOrders = true,
+    forceRefresh = false,
+    hidePrepped = true,
+    role = null,
+    showXtra = false,
+  } = opts
   const params = new URLSearchParams()
   params.set('hide_test_orders', String(hideTestOrders))
   params.set('hide_prepped', String(hidePrepped))
   if (forceRefresh) params.set('force_refresh', 'true')
+  if (role) params.set('role', role)
+  if (showXtra) params.set('show_xtra', 'true')
   const response = await fetch(`${API_BASE_URL()}/worksheets/inbox?${params}`, {
     headers: getBearerHeaders(),
   })
@@ -4296,6 +4515,7 @@ export interface WorksheetListItem {
     notes: string | null
     peptide_id: number | null
     method_name: string | null
+    lims_sub_sample_pk: number | null
     analyses: {
       title: string
       keyword: string | null
@@ -4591,4 +4811,563 @@ export async function getSampleRetestInfo(sampleId: string): Promise<SampleRetes
   )
   if (!response.ok) throw new Error(`Sample retest-info failed: ${response.status}`)
   return response.json()
+}
+
+// ─── Sub-samples ──────────────────────────────────────────────────────────
+
+export interface SubSample {
+  id: number
+  sample_id: string
+  parent_sample_id: string
+  /** Kind of assignment for this vial: 'core' | 'variance' | null (null = xtra/unassigned).
+   *  Set by the PATCH /assignment endpoint and returned in vial-plan GET. */
+  assignment_kind?: 'core' | 'variance' | null
+  vial_sequence: number
+  received_at: string
+  received_by_user_id: number | null
+  photo_external_uid: string | null
+  remarks: string | null
+  assignment_role: AssignmentRole | null
+  // Provenance: 'mk1://...' for Model-D native vials (no SENAITE AR), a SENAITE
+  // hex UID for legacy dual-written vials. Used to load native vials from Mk1
+  // without calling SENAITE. Optional for back-compat with older responses.
+  external_lims_uid?: string | null
+}
+
+export interface ParentSampleSummary {
+  sample_id: string
+  external_lims_uid: string | null
+  peptide_name: string | null
+  status: string | null
+  sub_sample_count: number
+  last_synced_at: string
+  assignment_role: string | null
+}
+
+export interface SubSampleListResponse {
+  parent: ParentSampleSummary
+  sub_samples: SubSample[]
+}
+
+export type AssignmentRole = 'hplc' | 'endo' | 'ster' | 'xtra'
+
+export interface VialPlanItem {
+  sample_id: string
+  is_parent: boolean
+  vial_sequence: number
+  assignment_role: AssignmentRole | null
+  /** Kind of assignment: 'core' | 'variance' | null (null = xtra/unassigned).
+   *  Set by the backend auto-assign and PATCH /assignment endpoint. */
+  assignment_kind?: 'core' | 'variance' | null
+}
+
+export interface VialPlanResponse {
+  /** Base (core) vial demand per role — NOT inflated by variance. */
+  demand: { hplc: number; endo: number; ster: number }
+  /** Per-role variance target: count of variance vials IN ADDITION to core
+   *  demand (zeros when none purchased). Display-only paid marker for the
+   *  AssignStep variance drop zones — never a drop blocker. */
+  variance: { hplc: number; endo: number; ster: number }
+  /** Pre-variance lab baseline; equals demand under the separate-bucket
+   *  contract. Kept for back-compat. */
+  base_demand: { hplc: number; endo: number; ster: number }
+  wp_order_number: string | null
+  vials: VialPlanItem[]
+  is_unreachable: boolean
+}
+
+/**
+ * Thrown when SENAITE silently created a non-secondary AR (orphan).
+ * Carries the orphan AR's identifiers so the UI can prompt for manual cleanup.
+ */
+export class SecondaryFalloutError extends Error {
+  readonly orphan_uid: string
+  readonly orphan_sample_id: string
+  constructor(message: string, orphan_uid: string, orphan_sample_id: string) {
+    super(message)
+    this.name = 'SecondaryFalloutError'
+    this.orphan_uid = orphan_uid
+    this.orphan_sample_id = orphan_sample_id
+  }
+}
+
+/**
+ * List all sub-samples for a parent sample.
+ */
+export async function listSubSamples(parentSampleId: string): Promise<SubSampleListResponse> {
+  const response = await fetch(
+    `${API_BASE_URL()}/api/sub-samples?parent_sample_id=${encodeURIComponent(parentSampleId)}`,
+    { headers: getBearerHeaders() }
+  )
+  if (!response.ok) throw new Error(`listSubSamples failed: ${response.status}`)
+  return response.json()
+}
+
+/**
+ * Phase 3: fetch lims_analyses rows for a sub-sample, projected to the
+ * SenaiteAnalysis shape so AnalysisTable renders them unchanged. UIDs
+ * carry a `mk1:` prefix; setAnalysisResult / transitionAnalysis detect
+ * the prefix and dispatch to Mk1 endpoints instead of the SENAITE proxy.
+ */
+export async function listLimsAnalysesForSubSample(
+  subSamplePk: number
+): Promise<SenaiteAnalysis[]> {
+  const url = new URL(`${API_BASE_URL()}/api/lims-analyses`)
+  url.searchParams.set('host_kind', 'sub_sample')
+  url.searchParams.set('host_pk', String(subSamplePk))
+  url.searchParams.set('as', 'senaite_shape')
+  url.searchParams.set('include_retests', 'true')
+  const response = await fetch(url.toString(), { headers: getBearerHeaders() })
+  if (!response.ok) {
+    throw new Error(`listLimsAnalysesForSubSample failed: ${response.status}`)
+  }
+  return response.json()
+}
+
+/**
+ * Phase senaite-writeback Task 4: provenance records written by promote.
+ * One entry per keyword that has been promoted to the parent's SENAITE AR.
+ */
+export interface ParentPromotionInfo {
+  keyword: string
+  parent_analysis_id: number
+  result_value?: string | null
+  promoted_at: string
+  promoted_by_email?: string | null
+  sources: { sample_id?: string | null; contribution_kind: string }[]
+}
+
+/**
+ * Fetch all promotion records for a parent sample.
+ * GET /api/lims-analyses/promotions?parent_sample_id=<id>
+ */
+export async function listParentPromotions(
+  parentSampleId: string
+): Promise<ParentPromotionInfo[]> {
+  const url = new URL(`${API_BASE_URL()}/api/lims-analyses/promotions`)
+  url.searchParams.set('parent_sample_id', parentSampleId)
+  const response = await fetch(url.toString(), { headers: getBearerHeaders() })
+  if (!response.ok) {
+    throw new Error(`listParentPromotions failed: ${response.status}`)
+  }
+  return response.json()
+}
+
+/**
+ * Fetch SENAITE analysis states for all lines on a parent AR, keyed by keyword.
+ * Returns {"states": {"STER-PCR": "verified", ...}}.
+ * The backend is best-effort: any SENAITE error returns {"states": {}}.
+ * The frontend mirrors this: .catch(() => ({states: {}})).
+ */
+export async function listParentLineStates(
+  parentSampleId: string
+): Promise<{ states: Record<string, string> }> {
+  const url = new URL(`${API_BASE_URL()}/api/lims-analyses/parent-line-states`)
+  url.searchParams.set('parent_sample_id', parentSampleId)
+  const response = await fetch(url.toString(), { headers: getBearerHeaders() })
+  if (!response.ok) {
+    throw new Error(`listParentLineStates failed: ${response.status}`)
+  }
+  return response.json()
+}
+
+/**
+ * Create a new sub-sample for a parent sample.
+ * May throw SecondaryFalloutError if SENAITE silently created an orphan AR.
+ */
+export async function createSubSample(args: {
+  parentSampleId: string
+  photoBase64: string
+  remarks?: string
+}): Promise<SubSample> {
+  const response = await fetch(`${API_BASE_URL()}/api/sub-samples`, {
+    method: 'POST',
+    headers: getBearerHeaders('application/json'),
+    body: JSON.stringify({
+      parent_sample_id: args.parentSampleId,
+      photo_base64: args.photoBase64,
+      remarks: args.remarks ?? null,
+    }),
+  })
+
+  if (!response.ok) {
+    if (response.status === 502) {
+      // Try to parse a structured fallout body
+      try {
+        const body = await response.json()
+        const d = body?.detail
+        if (d && typeof d === 'object' && d.code === 'secondary_fallout') {
+          throw new SecondaryFalloutError(
+            d.message ?? 'SENAITE silently created an orphan AR',
+            d.orphan_uid,
+            d.orphan_sample_id,
+          )
+        }
+        throw new Error(
+          `createSubSample failed: ${typeof d === 'string' ? d : JSON.stringify(d)}`
+        )
+      } catch (e) {
+        if (e instanceof SecondaryFalloutError) throw e
+        throw new Error(`createSubSample failed: ${response.status}`)
+      }
+    }
+    throw new Error(`createSubSample failed: ${response.status}`)
+  }
+
+  return response.json()
+}
+
+/**
+ * Update a sub-sample (photo and/or remarks).
+ */
+export async function updateSubSample(
+  sampleId: string,
+  args: { photoBase64?: string; remarks?: string }
+): Promise<SubSample> {
+  const response = await fetch(
+    `${API_BASE_URL()}/api/sub-samples/${encodeURIComponent(sampleId)}`,
+    {
+      method: 'PATCH',
+      headers: getBearerHeaders('application/json'),
+      body: JSON.stringify({
+        photo_base64: args.photoBase64 ?? null,
+        remarks: args.remarks ?? null,
+      }),
+    }
+  )
+  if (!response.ok) throw new Error(`updateSubSample failed: ${response.status}`)
+  return response.json()
+}
+
+/**
+ * Delete a sub-sample.
+ */
+export async function deleteSubSample(sampleId: string): Promise<void> {
+  const response = await fetch(
+    `${API_BASE_URL()}/api/sub-samples/${encodeURIComponent(sampleId)}`,
+    { method: 'DELETE', headers: getBearerHeaders() }
+  )
+  if (!response.ok && response.status !== 204)
+    throw new Error(`deleteSubSample failed: ${response.status}`)
+}
+
+export interface VialDemandResponse {
+  demand: { hplc: number; endo: number; ster: number }
+  variance: { hplc: number; endo: number; ster: number }
+  base_demand: { hplc: number; endo: number; ster: number }
+  wp_order_number: string | null
+  is_unreachable: boolean
+}
+
+/**
+ * Get just the vial demand for a parent sample without running auto-assign.
+ * Used by the wizard header for "expected vs received" counts on the capture step.
+ */
+export async function getVialDemand(parentSampleId: string): Promise<VialDemandResponse> {
+  const response = await fetch(
+    `${API_BASE_URL()}/api/sub-samples/${encodeURIComponent(parentSampleId)}/vial-demand`,
+    { headers: getBearerHeaders() }
+  )
+  if (!response.ok) {
+    const err = await response.json().catch(() => null)
+    throw new Error(err?.detail || `Vial demand fetch failed: ${response.status}`)
+  }
+  return response.json()
+}
+
+/**
+ * Get the vial plan for a parent sample (demand, assignment roles, etc.).
+ */
+export async function getVialPlan(parentSampleId: string): Promise<VialPlanResponse> {
+  const response = await fetch(
+    `${API_BASE_URL()}/api/sub-samples/${encodeURIComponent(parentSampleId)}/vial-plan`,
+    { headers: getBearerHeaders() }
+  )
+  if (!response.ok) {
+    const err = await response.json().catch(() => null)
+    throw new Error(err?.detail || `Vial plan fetch failed: ${response.status}`)
+  }
+  return response.json()
+}
+
+export interface ParentAggregate {
+  /** Total vials = parent + sub-samples. Parents with no sub-samples
+   *  are omitted from the response entirely (caller treats absence as
+   *  "single-vial; render a dash"). */
+  vial_count: number
+  /** The parent AR's own assignment_role. Sub-sample roles are surfaced
+   *  inline on expand via /api/sub-samples/{parent}, not here. */
+  parent_role: 'hplc' | 'endo' | 'ster' | 'xtra' | 'unassigned'
+  /** Per-bucket variance counts from the parent's variance_override (zeros when
+   *  none). AR-list display hint; authoritative gate is server-side. Optional
+   *  for back-compat with older responses. */
+  variance?: { hplc: number; endo: number; ster: number }
+}
+
+export interface SampleAggregatesResponse {
+  /** Keyed by parent sample_id. Sample IDs not in lims_samples are absent —
+   *  callers treat absence as zero. */
+  aggregates: Record<string, ParentAggregate>
+}
+
+/**
+ * Batch fetch sub-sample count + role breakdown for a list of parent sample IDs.
+ * Used by the SENAITE samples list to render the Vials and Assigned columns.
+ */
+export async function fetchSampleAggregates(
+  parentSampleIds: string[]
+): Promise<SampleAggregatesResponse> {
+  if (parentSampleIds.length === 0) {
+    return { aggregates: {} }
+  }
+  const response = await fetch(
+    `${API_BASE_URL()}/api/sub-samples/aggregates`,
+    {
+      method: 'POST',
+      headers: getBearerHeaders('application/json'),
+      body: JSON.stringify({ parent_sample_ids: parentSampleIds }),
+    }
+  )
+  if (!response.ok) {
+    const err = await response.json().catch(() => null)
+    throw new Error(err?.detail || `Sample aggregates fetch failed: ${response.status}`)
+  }
+  return response.json()
+}
+
+/** API error carrying the structured `detail.code` from a non-2xx response
+ *  (e.g. 'variance_locked' on a 409 from PATCH /assignment). Callers branch
+ *  on `code`, never on message text. */
+export class ApiCodeError extends Error {
+  readonly code: string | null
+  constructor(message: string, code: string | null) {
+    super(message)
+    this.name = 'ApiCodeError'
+    this.code = code
+  }
+}
+
+/**
+ * Update the assignment role (and optional kind) for a sub-sample.
+ * @param kind - 'core' | 'variance' | null — omit (undefined) for reset/null calls
+ *   where kind is irrelevant. The server treats absent kind as null.
+ * @throws ApiCodeError with code='variance_locked' when the parent's variance
+ *   set is locked (409).
+ */
+export async function patchVialAssignment(
+  sampleId: string,
+  role: AssignmentRole | null,
+  kind?: 'core' | 'variance' | null,
+): Promise<{ sample_id: string; assignment_role: AssignmentRole | null }> {
+  const response = await fetch(
+    `${API_BASE_URL()}/api/sub-samples/${encodeURIComponent(sampleId)}/assignment`,
+    {
+      method: 'PATCH',
+      headers: getBearerHeaders('application/json'),
+      body: JSON.stringify({ role, kind: kind ?? null }),
+    }
+  )
+  if (!response.ok) {
+    const err = await response.json().catch(() => null)
+    const detail = err?.detail
+    const message =
+      typeof detail === 'object' && detail?.message
+        ? detail.message
+        : typeof detail === 'string'
+        ? detail
+        : `Vial assignment update failed: ${response.status}`
+    const code = typeof detail === 'object' ? detail?.code ?? null : null
+    throw new ApiCodeError(message, code)
+  }
+  return response.json()
+}
+
+/** Per-service variance counts the parent's order purchased. Empty when none
+ *  or unreachable — callers fail closed (action hidden). */
+export async function fetchVarianceEntitlement(
+  parentSampleId: string,
+): Promise<{ variance: Record<string, number>; unreachable: boolean }> {
+  const response = await fetch(
+    `${API_BASE_URL()}/api/sub-samples/${encodeURIComponent(parentSampleId)}/variance-entitlement`,
+    { headers: getBearerHeaders() },
+  )
+  if (!response.ok) {
+    return { variance: {}, unreachable: true }
+  }
+  return response.json()
+}
+
+/** Set/clear the lab-side variance override (interim until the WP addon). */
+export async function putVarianceOverride(
+  parentSampleId: string,
+  variance: Record<string, number> | null,
+): Promise<{ variance: Record<string, number> }> {
+  const response = await fetch(
+    `${API_BASE_URL()}/api/sub-samples/${encodeURIComponent(parentSampleId)}/variance-override`,
+    {
+      method: 'PUT',
+      headers: getBearerHeaders('application/json'),
+      body: JSON.stringify({ variance }),
+    },
+  )
+  if (!response.ok) {
+    const err = await response.json().catch(() => null)
+    throw new Error(
+      typeof err?.detail === 'string'
+        ? err.detail
+        : err?.detail?.message || `Variance override failed: ${response.status}`,
+    )
+  }
+  return response.json()
+}
+
+/**
+ * Resolve a renderable object URL for a sub-sample's most-recent photo.
+ * The backend proxy requires Bearer auth, so a plain `<img src=...>` would
+ * 401; we have to fetch as blob and wrap it in an object URL. Mirrors
+ * fetchSenaiteAttachmentUrl. Returns null if no photo is on file (404).
+ */
+const _subSamplePhotoCache = new Map<string, string>()
+
+/**
+ * Prime the photo cache with a just-captured image so the thumbnail renders
+ * instantly, without round-tripping the photo endpoint.
+ *
+ * The first vial's photo is stored on the parent AR in SENAITE, whose
+ * attachment listing has a read-after-write window — a fetch fired the instant
+ * the parent row appears can miss it, and the thumbnail components fetch once
+ * with no retry. Seeding the cache at save time sidesteps that race entirely:
+ * the bytes are the exact photo the user just took. (`<img>` content-sniffs the
+ * blob, so the declared type need only be a plausible image type.) Sub-sample
+ * photos read from Mk1 disk immediately and don't need this, but seeding them
+ * too is harmless and saves a round-trip.
+ */
+export function seedSubSamplePhoto(sampleId: string, bytes: Uint8Array): void {
+  const prev = _subSamplePhotoCache.get(sampleId)
+  if (prev?.startsWith('blob:')) URL.revokeObjectURL(prev)
+  // Copy into a fresh ArrayBuffer so the Blob part is unambiguously typed.
+  const buf = new ArrayBuffer(bytes.byteLength)
+  new Uint8Array(buf).set(bytes)
+  const blob = new Blob([buf], { type: 'image/jpeg' })
+  _subSamplePhotoCache.set(sampleId, URL.createObjectURL(blob))
+}
+
+export async function fetchSubSamplePhotoUrl(
+  sampleId: string
+): Promise<string | null> {
+  const cached = _subSamplePhotoCache.get(sampleId)
+  if (cached) return cached
+
+  const response = await fetch(
+    `${API_BASE_URL()}/api/sub-samples/${encodeURIComponent(sampleId)}/photo`,
+    { headers: getBearerHeaders() }
+  )
+  if (response.status === 404) return null
+  if (!response.ok)
+    throw new Error(`fetchSubSamplePhotoUrl failed: ${response.status}`)
+  const blob = await response.blob()
+  const url = URL.createObjectURL(blob)
+  _subSamplePhotoCache.set(sampleId, url)
+  return url
+}
+
+// ── Variance set (worksheet-variance design 2026-06-02) ──────────────────────
+
+export interface VarianceResultEntry {
+  value: number | string | null
+  kind: 'numeric' | 'categorical'
+  spec?: Record<string, number> | null
+  // Phase 4b: present for Mk1-sourced results (uid='mk1:<N>'). null for
+  // legacy SENAITE-sourced rows since only Mk1 vial-tier rows can be
+  // promoted. promoted_to_parent_id is set once a successful promote has
+  // landed for this source.
+  uid?: string | null
+  promoted_to_parent_id?: number | null
+}
+
+export interface VarianceVial {
+  sample_id: string
+  vial_sequence: number
+  is_parent: boolean
+  in_variance_set: boolean
+  exclusion_reason: string | null
+  review_state: string | null
+  results: Record<string, VarianceResultEntry>
+}
+
+export interface VarianceStatsEntry {
+  kind: 'numeric' | 'categorical'
+  mean: number | null
+  sd: number | null
+  cv_pct: number | null
+  n: number
+  conforms_count?: number | null
+  total?: number | null
+  spec: Record<string, number> | null
+  pass: boolean | null
+}
+
+export interface VarianceSetResponse {
+  parent: ParentSampleSummary
+  vials: VarianceVial[]
+  stats: Record<string, VarianceStatsEntry>
+  locked: boolean
+  locked_at: string | null
+  locked_by_user_id: number | null
+}
+
+export async function getVarianceSet(parentSampleId: string): Promise<VarianceSetResponse> {
+  const r = await fetch(
+    `${API_BASE_URL()}/api/sub-samples/${encodeURIComponent(parentSampleId)}/variance-set`,
+    { headers: getBearerHeaders() }
+  )
+  if (!r.ok) throw new Error(`getVarianceSet failed: ${r.status}`)
+  return r.json()
+}
+
+export async function patchVarianceMembership(args: {
+  sampleId: string
+  inVarianceSet: boolean
+  exclusionReason?: string | null
+}): Promise<{ sample_id: string; in_variance_set: boolean; exclusion_reason: string | null }> {
+  const r = await fetch(
+    `${API_BASE_URL()}/api/sub-samples/${encodeURIComponent(args.sampleId)}/variance-set`,
+    {
+      method: 'PATCH',
+      headers: getBearerHeaders('application/json'),
+      body: JSON.stringify({
+        in_variance_set: args.inVarianceSet,
+        exclusion_reason: args.exclusionReason ?? null,
+      }),
+    }
+  )
+  if (r.status === 409) {
+    const body = await r.json().catch(() => ({}))
+    throw new Error(body.detail?.message ?? 'variance set is locked')
+  }
+  if (!r.ok) throw new Error(`patchVarianceMembership failed: ${r.status}`)
+  return r.json()
+}
+
+export async function lockVarianceSet(parentSampleId: string): Promise<{ parent_sample_id: string; locked_at: string }> {
+  const r = await fetch(
+    `${API_BASE_URL()}/api/sub-samples/${encodeURIComponent(parentSampleId)}/variance-set/lock`,
+    { method: 'POST', headers: getBearerHeaders() }
+  )
+  if (r.status === 422) {
+    const body = await r.json().catch(() => ({}))
+    throw new Error(body.detail?.message ?? 'need >=2 selected vials to lock')
+  }
+  if (!r.ok) throw new Error(`lockVarianceSet failed: ${r.status}`)
+  return r.json()
+}
+
+export async function unlockVarianceSet(parentSampleId: string): Promise<{ parent_sample_id: string; locked: boolean }> {
+  const r = await fetch(
+    `${API_BASE_URL()}/api/sub-samples/${encodeURIComponent(parentSampleId)}/variance-set/unlock`,
+    { method: 'POST', headers: getBearerHeaders() }
+  )
+  if (r.status === 403) throw new Error('admin role required to unlock variance sets')
+  if (!r.ok) throw new Error(`unlockVarianceSet failed: ${r.status}`)
+  return r.json()
 }

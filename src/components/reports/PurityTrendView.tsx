@@ -22,6 +22,7 @@ import { cn } from '@/lib/utils'
 import { getReportsPurityTrend } from '@/lib/api'
 import type { PurityTrendPoint } from '@/lib/api'
 import { Button } from '@/components/ui/button'
+import { SampleIdBadge } from '@/components/samples/SampleIdBadge'
 import { getWordpressUrl } from '@/lib/api-profiles'
 
 function accuverifyUrl(code: string): string {
@@ -56,7 +57,7 @@ function CustomTooltip({ active, payload }: { active?: boolean; payload?: Array<
         <span className="text-muted-foreground">Purity</span>
         <span className="font-mono font-semibold text-right">{d.purity_percent.toFixed(2)}%</span>
         <span className="text-muted-foreground">Sample</span>
-        <span className="font-mono text-right">{d.sample_id}</span>
+        <div className="text-right"><SampleIdBadge id={d.sample_id} /></div>
         <span className="text-muted-foreground">Code</span>
         <a
           href={accuverifyUrl(d.verification_code)}
@@ -314,7 +315,7 @@ export function PurityTrendView({
                 {[...filteredData].reverse().map(d => (
                   <tr key={d.verification_code} className="border-b border-border/20 hover:bg-muted/30">
                     <td className="py-1.5 px-3 tabular-nums">{d.date}</td>
-                    <td className="py-1.5 px-3 font-mono">{d.sample_id}</td>
+                    <td className="py-1.5 px-3"><SampleIdBadge id={d.sample_id} /></td>
                     <td className="py-1.5 px-3 font-mono">
                       <a
                         href={accuverifyUrl(d.verification_code)}

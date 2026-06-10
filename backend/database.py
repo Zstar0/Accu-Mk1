@@ -131,6 +131,8 @@ def _run_migrations():
     from sqlalchemy import text
     migrations = [
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS senaite_password_encrypted TEXT",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS first_name VARCHAR(100)",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_name VARCHAR(100)",
         "ALTER TABLE peptides ADD COLUMN IF NOT EXISTS is_blend BOOLEAN DEFAULT FALSE",
         "ALTER TABLE peptide_analytes ADD COLUMN IF NOT EXISTS component_peptide_id INTEGER REFERENCES peptides(id) ON DELETE SET NULL",
         # Multi-vial blend support
@@ -244,6 +246,44 @@ def _run_migrations():
                 ALTER TABLE hplc_methods DROP COLUMN instrument_id;
             END IF;
         END $$""",
+        # Sub-Samples feature: LIMS-side master table + sub-samples table
+        """
+        CREATE TABLE IF NOT EXISTS lims_samples (
+            id SERIAL PRIMARY KEY,
+            sample_id VARCHAR(100) NOT NULL UNIQUE,
+            external_lims_uid VARCHAR(100),
+            external_lims_system VARCHAR(50) DEFAULT 'senaite',
+            client_id VARCHAR(100),
+            client_uid VARCHAR(100),
+            contact_uid VARCHAR(100),
+            sample_type VARCHAR(100),
+            status VARCHAR(50),
+            peptide_name VARCHAR(200),
+            client_sample_id VARCHAR(200),
+            date_sampled TIMESTAMP,
+            date_received TIMESTAMP,
+            is_retest BOOLEAN DEFAULT FALSE,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            last_synced_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS ix_lims_samples_external_lims_uid ON lims_samples (external_lims_uid)",
+        """
+        CREATE TABLE IF NOT EXISTS lims_sub_samples (
+            id SERIAL PRIMARY KEY,
+            parent_sample_pk INTEGER NOT NULL REFERENCES lims_samples(id) ON DELETE CASCADE,
+            external_lims_uid VARCHAR(100) NOT NULL UNIQUE,
+            sample_id VARCHAR(100) NOT NULL UNIQUE,
+            vial_sequence INTEGER NOT NULL,
+            received_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            received_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            photo_external_uid VARCHAR(100),
+            remarks TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            CONSTRAINT uq_lims_parent_vial_sequence UNIQUE (parent_sample_pk, vial_sequence)
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS ix_lims_sub_samples_parent_pk ON lims_sub_samples (parent_sample_pk)",
         # Analyte class discriminator: distinguishes peptide rows from non-peptide HPLC analytes (e.g. Benzyl Alcohol additive in Bac Water).
         # Backfills existing rows to 'peptide' on add; new non-peptide entries set 'additive' explicitly.
         "ALTER TABLE peptides ADD COLUMN IF NOT EXISTS analyte_class VARCHAR(20) NOT NULL DEFAULT 'peptide'",
@@ -279,6 +319,37 @@ def _run_migrations():
         WHERE p.abbreviation = 'Benzyl Alcohol'
         ON CONFLICT (peptide_id, slot) DO NOTHING
         """,
+        # Phase 25: vial assignment role columns
+        # lims_samples: parent AR's role. Defaults to 'hplc' per the
+        # "primary always HPLC for now" rule. Backfilled to 'hplc' for
+        # all existing rows.
+        "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS assignment_role VARCHAR(8) DEFAULT 'hplc'",
+        "UPDATE lims_samples SET assignment_role = 'hplc' WHERE assignment_role IS NULL",
+        # lims_sub_samples: nullable. NULL means "auto-assign hasn't run yet".
+        "ALTER TABLE lims_sub_samples ADD COLUMN IF NOT EXISTS assignment_role VARCHAR(8)",
+        # Variance bucket assignment (core|variance) — set at check-in; NULL until then.
+        "ALTER TABLE lims_sub_samples ADD COLUMN IF NOT EXISTS assignment_kind VARCHAR(8)",
+        # Backfill: vials assigned pre-buckets behaved as promote-path -> 'core'.
+        # Idempotent: matches no rows once set. Unassigned (role NULL) stays NULL.
+        """UPDATE lims_sub_samples
+              SET assignment_kind = 'core'
+            WHERE assignment_role IS NOT NULL
+              AND assignment_role <> 'xtra'
+              AND assignment_kind IS NULL""",
+        # Variance set membership + lock state (worksheet-variance design 2026-06-02)
+        "ALTER TABLE lims_sub_samples ADD COLUMN IF NOT EXISTS in_variance_set BOOLEAN NOT NULL DEFAULT TRUE",
+        "ALTER TABLE lims_sub_samples ADD COLUMN IF NOT EXISTS variance_exclusion_reason TEXT",
+        "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS in_variance_set BOOLEAN NOT NULL DEFAULT TRUE",
+        "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS variance_exclusion_reason TEXT",
+        "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS variance_locked_at TIMESTAMP",
+        "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS variance_locked_by_user_id INTEGER REFERENCES users(id)",
+        # Backfill — non-HPLC sub-samples are not variance candidates by default.
+        # Idempotent: re-running matches no rows once already flipped.
+        """UPDATE lims_sub_samples
+              SET in_variance_set = FALSE,
+                  variance_exclusion_reason = 'auto: assignment_role != hplc'
+            WHERE assignment_role IN ('endo', 'ster', 'xtra')
+              AND in_variance_set = TRUE""",
         # ── SLA tiers (revises the former sla_targets model) ──
         # Drop the old per-(service,priority) model and its indexes.
         "DROP TABLE IF EXISTS sla_targets CASCADE",
@@ -361,6 +432,312 @@ def _run_migrations():
             created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
         """,
+        # ── COA roll-up Phase 1: pins + per-generation manifest + reportable sidecar ──
+        # See docs/superpowers/specs/2026-06-02-coa-rollup-override-design.md
+        # Manager intent: one pin per (parent, analyte), upserted from the
+        # COA Sources override panel. Audit history lives in SampleActivityLog.
+        """
+        CREATE TABLE IF NOT EXISTS coa_result_pins (
+            id                    SERIAL PRIMARY KEY,
+            parent_sample_id      TEXT NOT NULL,
+            analyte_keyword       TEXT NOT NULL,
+            mode                  TEXT NOT NULL
+                                  CHECK (mode IN ('pin', 'auto', 'variance_set')),
+            source_sample_id      TEXT,
+            source_analysis_uid   TEXT,
+            reason                TEXT,
+            pinned_by_user_id     INTEGER REFERENCES users(id),
+            pinned_at             TIMESTAMP NOT NULL DEFAULT NOW(),
+            UNIQUE (parent_sample_id, analyte_keyword)
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS ix_coa_result_pins_parent ON coa_result_pins (parent_sample_id)",
+        # Frozen per-generation manifest. generation_id is the integration-DB
+        # coa_generations.id (UUID); no FK because the two databases are
+        # separate (IS migrations gated on Phase 3b).
+        """
+        CREATE TABLE IF NOT EXISTS coa_generation_sources (
+            id                          SERIAL PRIMARY KEY,
+            generation_id               UUID NOT NULL,
+            generation_number           INTEGER NOT NULL,
+            parent_sample_id            TEXT NOT NULL,
+            analyte_keyword             TEXT NOT NULL,
+            source_sample_id            TEXT NOT NULL,
+            source_analysis_uid         TEXT NOT NULL,
+            result_value                TEXT,
+            result_unit                 TEXT,
+            candidates_count            INTEGER NOT NULL,
+            resolution_mode             TEXT NOT NULL
+                                        CHECK (resolution_mode IN
+                                          ('auto', 'pin', 'variance_set',
+                                           'stale_pin_fallback')),
+            candidates_snapshot         JSONB,
+            created_at                  TIMESTAMP NOT NULL DEFAULT NOW(),
+            UNIQUE (generation_id, analyte_keyword)
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS ix_coa_generation_sources_parent ON coa_generation_sources (parent_sample_id)",
+        "CREATE INDEX IF NOT EXISTS ix_coa_generation_sources_gen ON coa_generation_sources (generation_id)",
+        # Per-instance "fit to report" boolean. SENAITE analyses have no Mk1
+        # mirror table, so the flag lives in a sidecar keyed by
+        # (sample_id, analysis_uid). Default TRUE — absence of a row means
+        # the analysis IS reportable. Rows are only inserted on flip.
+        """
+        CREATE TABLE IF NOT EXISTS analysis_reportable (
+            sample_id           TEXT NOT NULL,
+            analysis_uid        TEXT NOT NULL,
+            reportable          BOOLEAN NOT NULL DEFAULT TRUE,
+            reason              TEXT,
+            changed_by_user_id  INTEGER REFERENCES users(id),
+            changed_at          TIMESTAMP NOT NULL DEFAULT NOW(),
+            PRIMARY KEY (sample_id, analysis_uid)
+        )
+        """,
+        # ── Mk1-native analyses (spec 2026-06-02-mk1-native-analyses-design.md) ──
+        # Polymorphic host: each row belongs to either a parent (lims_sample_pk) or
+        # a sub-sample (lims_sub_sample_pk), enforced by CHECK + the partial unique
+        # indexes below. Service identity is denormalized for fast filtering.
+        """
+        CREATE TABLE IF NOT EXISTS lims_analyses (
+            id                    SERIAL PRIMARY KEY,
+            lims_sample_pk        INTEGER REFERENCES lims_samples(id) ON DELETE CASCADE,
+            lims_sub_sample_pk    INTEGER REFERENCES lims_sub_samples(id) ON DELETE CASCADE,
+            CHECK ((lims_sample_pk IS NULL) <> (lims_sub_sample_pk IS NULL)),
+
+            analysis_service_id   INTEGER NOT NULL REFERENCES analysis_services(id) ON DELETE RESTRICT,
+            keyword               TEXT NOT NULL,
+            title                 TEXT NOT NULL,
+
+            result_value          TEXT,
+            result_unit           TEXT,
+
+            review_state          TEXT NOT NULL DEFAULT 'unassigned'
+                                  CONSTRAINT lims_analyses_review_state_check
+                                  CHECK (review_state IN (
+                                      'unassigned', 'assigned', 'to_be_verified',
+                                      'verified', 'published', 'rejected', 'retracted',
+                                      'promoted', 'variance_verified'
+                                  )),
+
+            method_id             INTEGER REFERENCES hplc_methods(id) ON DELETE SET NULL,
+            instrument_id         INTEGER REFERENCES instruments(id) ON DELETE SET NULL,
+            analyst_user_id       INTEGER REFERENCES users(id) ON DELETE SET NULL,
+
+            captured_at           TIMESTAMP,
+            submitted_at          TIMESTAMP,
+            verified_at           TIMESTAMP,
+            published_at          TIMESTAMP,
+
+            retested              BOOLEAN NOT NULL DEFAULT FALSE,
+            retest_of_id          INTEGER REFERENCES lims_analyses(id) ON DELETE SET NULL,
+
+            reportable            BOOLEAN NOT NULL DEFAULT TRUE,
+            reportable_reason     TEXT,
+
+            created_at            TIMESTAMP NOT NULL DEFAULT NOW(),
+            updated_at            TIMESTAMP NOT NULL DEFAULT NOW(),
+            created_by_user_id    INTEGER REFERENCES users(id) ON DELETE SET NULL
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS ix_lims_analyses_sample        ON lims_analyses (lims_sample_pk)",
+        "CREATE INDEX IF NOT EXISTS ix_lims_analyses_sub_sample    ON lims_analyses (lims_sub_sample_pk)",
+        "CREATE INDEX IF NOT EXISTS ix_lims_analyses_keyword       ON lims_analyses (keyword)",
+        "CREATE INDEX IF NOT EXISTS ix_lims_analyses_review_state  ON lims_analyses (review_state)",
+        # One non-retest row per (host, keyword). Retests share keyword but
+        # are linked via retest_of_id and excluded from the uniqueness check
+        # via the partial index predicate.
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_lims_analyses_sub_service_root
+            ON lims_analyses (lims_sub_sample_pk, keyword)
+            WHERE retest_of_id IS NULL AND lims_sub_sample_pk IS NOT NULL
+        """,
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_lims_analyses_parent_service_root
+            ON lims_analyses (lims_sample_pk, keyword)
+            WHERE retest_of_id IS NULL AND lims_sample_pk IS NOT NULL
+        """,
+        # Per-transition audit log. Every state change writes a row.
+        """
+        CREATE TABLE IF NOT EXISTS lims_analysis_transitions (
+            id                SERIAL PRIMARY KEY,
+            analysis_id       INTEGER NOT NULL REFERENCES lims_analyses(id) ON DELETE CASCADE,
+            from_state        TEXT,
+            to_state          TEXT NOT NULL,
+            transition_kind   TEXT NOT NULL
+                              CHECK (transition_kind IN
+                                  ('assign','submit','verify','retract','reject',
+                                   'retest','publish','reset','auto','variance_verify')),
+            user_id           INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            reason            TEXT,
+            occurred_at       TIMESTAMP NOT NULL DEFAULT NOW()
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS ix_lims_analysis_transitions_analysis ON lims_analysis_transitions (analysis_id)",
+        # Phase 4a: promotion link table. Records which vial-tier source rows
+        # contributed to a parent-tier canonical result, and how (chosen vs
+        # reference vs aggregated_in). Written atomically by promote_to_parent.
+        """
+        CREATE TABLE IF NOT EXISTS lims_analysis_promotions (
+            id                       SERIAL PRIMARY KEY,
+            parent_analysis_id       INTEGER NOT NULL
+                                     REFERENCES lims_analyses(id) ON DELETE CASCADE,
+            source_analysis_id       INTEGER NOT NULL
+                                     REFERENCES lims_analyses(id) ON DELETE CASCADE,
+            contribution_kind        TEXT NOT NULL
+                                     CHECK (contribution_kind IN
+                                         ('chosen', 'aggregated_in', 'reference')),
+            promoted_by_user_id      INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            promoted_at              TIMESTAMP NOT NULL DEFAULT NOW(),
+            reason                   TEXT,
+            UNIQUE (parent_analysis_id, source_analysis_id)
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS ix_lims_analysis_promotions_parent ON lims_analysis_promotions (parent_analysis_id)",
+        "CREATE INDEX IF NOT EXISTS ix_lims_analysis_promotions_source ON lims_analysis_promotions (source_analysis_id)",
+        # Sub-sample event log: lightweight audit for actions with no other trail.
+        # Writers: set_assignment_role, update_sub_sample, delete_pristine_analysis.
+        """
+        CREATE TABLE IF NOT EXISTS lims_sub_sample_events (
+            id              SERIAL PRIMARY KEY,
+            sub_sample_pk   INTEGER NOT NULL REFERENCES lims_sub_samples(id) ON DELETE CASCADE,
+            event           TEXT NOT NULL,
+            details         JSONB,
+            user_id         INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            created_at      TIMESTAMP NOT NULL DEFAULT NOW()
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS ix_lims_sub_sample_events_sub ON lims_sub_sample_events (sub_sample_pk)",
+        # result-type Task 1: result type + options on analysis_services
+        "ALTER TABLE analysis_services ADD COLUMN IF NOT EXISTS result_type TEXT",
+        "ALTER TABLE analysis_services ADD COLUMN IF NOT EXISTS result_options JSONB",
+        # senaite-writeback: retracted/rejected parent rows must not block
+        # re-promotion — "retract the parent row, then re-promote" is the
+        # documented undo. Rebuild the parent-tier root index with a state
+        # exclusion (drop+create is idempotent as a pair).
+        # native-manage-analyses: retracted/rejected vial rows must not block
+        # re-adding the same service (mirrors the parent-tier index fix).
+        "DROP INDEX IF EXISTS uq_lims_analyses_sub_service_root",
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_lims_analyses_sub_service_root
+            ON lims_analyses (lims_sub_sample_pk, keyword)
+            WHERE retest_of_id IS NULL AND lims_sub_sample_pk IS NOT NULL
+              AND review_state NOT IN ('retracted', 'rejected')
+        """,
+        "DROP INDEX IF EXISTS uq_lims_analyses_parent_service_root",
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_lims_analyses_parent_service_root
+            ON lims_analyses (lims_sample_pk, keyword)
+            WHERE retest_of_id IS NULL AND lims_sample_pk IS NOT NULL
+              AND review_state NOT IN ('retracted', 'rejected')
+        """,
+        # Sub-sample 'promoted' workflow state. Re-create the review_state CHECK
+        # to allow 'promoted', then backfill: sub-samples promoted under the old
+        # model were left at 'to_be_verified'; defensively re-home any stray
+        # vial-tier 'verified' rows (verification is now parent-only).
+        "ALTER TABLE lims_analyses DROP CONSTRAINT IF EXISTS lims_analyses_review_state_check",
+        """
+        ALTER TABLE lims_analyses ADD CONSTRAINT lims_analyses_review_state_check
+            CHECK (review_state IN (
+                'unassigned', 'assigned', 'to_be_verified', 'verified',
+                'published', 'rejected', 'retracted', 'promoted'
+            ))
+        """,
+        # Old model left promoted sub-samples at 'to_be_verified' — re-home them.
+        """
+        UPDATE lims_analyses SET review_state='promoted'
+         WHERE lims_sub_sample_pk IS NOT NULL
+           AND review_state='to_be_verified'
+           AND id IN (SELECT source_analysis_id FROM lims_analysis_promotions)
+        """,
+        # Defensive: a promoted sub-sample should never be 'verified' — re-home it.
+        """
+        UPDATE lims_analyses SET review_state='promoted'
+         WHERE lims_sub_sample_pk IS NOT NULL
+           AND review_state='verified'
+           AND id IN (SELECT source_analysis_id FROM lims_analysis_promotions)
+        """,
+        # Defensive: a vial-tier 'verified' that was never promoted shouldn't exist — reopen it.
+        """
+        UPDATE lims_analyses SET review_state='to_be_verified'
+         WHERE lims_sub_sample_pk IS NOT NULL
+           AND review_state='verified'
+           AND id NOT IN (SELECT source_analysis_id FROM lims_analysis_promotions)
+        """,
+        # Sub-vial support: tag a wizard session to the specific vial it was prepped for
+        "ALTER TABLE wizard_sessions ADD COLUMN IF NOT EXISTS lims_sub_sample_pk INTEGER",
+        # PCR sterility analyses (PCR-BACTERIA/PCR-FUNGI) were left ungrouped in the
+        # catalog. They are Microbiology analyses; grouping them here makes the HPLC
+        # vial analyte mirror's exclude-Microbiology filter correctly drop them.
+        # Idempotent via the uq_service_group_member unique constraint; a no-op where
+        # those services or the group don't exist (e.g. fresh installs).
+        """
+        INSERT INTO service_group_members (service_group_id, analysis_service_id)
+        SELECT g.id, s.id
+        FROM service_groups g
+        JOIN analysis_services s ON s.keyword IN ('PCR-BACTERIA', 'PCR-FUNGI')
+        WHERE g.name = 'Microbiology'
+        ON CONFLICT (service_group_id, analysis_service_id) DO NOTHING
+        """,
+        # Per-substance purity/quantity services. Derived from the per-peptide
+        # identity services (ID_<X>) so the keyword suffix + peptide_id are
+        # authoritative (the suffix is NOT derivable from the peptide name, e.g.
+        # ID_TB500BETA4). The HPLC vial analyte mirror seeds these so a blend
+        # vial's purity/quantity rows name the real substance instead of the
+        # generic "Analyte N". Idempotent via NOT EXISTS (analysis_services.keyword
+        # is not unique). No-op for the pre-existing PUR_BPC157/QTY_BPC157 and on
+        # fresh installs with no identity services.
+        """
+        INSERT INTO analysis_services (title, keyword, category, unit, peptide_id, active, created_at, updated_at)
+        SELECT p.name || ' - Purity', 'PUR_' || substring(idsvc.keyword from 4), 'HPLC', '%',
+               idsvc.peptide_id, TRUE, NOW(), NOW()
+        FROM analysis_services idsvc
+        JOIN peptides p ON p.id = idsvc.peptide_id
+        WHERE left(idsvc.keyword, 3) = 'ID_' AND idsvc.peptide_id IS NOT NULL
+          AND NOT EXISTS (
+            SELECT 1 FROM analysis_services x
+            WHERE x.keyword = 'PUR_' || substring(idsvc.keyword from 4))
+        """,
+        """
+        INSERT INTO analysis_services (title, keyword, category, unit, peptide_id, active, created_at, updated_at)
+        SELECT p.name || ' - Quantity', 'QTY_' || substring(idsvc.keyword from 4), 'HPLC', 'mg',
+               idsvc.peptide_id, TRUE, NOW(), NOW()
+        FROM analysis_services idsvc
+        JOIN peptides p ON p.id = idsvc.peptide_id
+        WHERE left(idsvc.keyword, 3) = 'ID_' AND idsvc.peptide_id IS NOT NULL
+          AND NOT EXISTS (
+            SELECT 1 FROM analysis_services x
+            WHERE x.keyword = 'QTY_' || substring(idsvc.keyword from 4))
+        """,
+        # Group all per-substance purity/quantity services into Analytics
+        # (consistent with the ID_<X> identity services). Idempotent.
+        """
+        INSERT INTO service_group_members (service_group_id, analysis_service_id)
+        SELECT g.id, s.id
+        FROM service_groups g
+        JOIN analysis_services s ON left(s.keyword, 4) IN ('PUR_', 'QTY_')
+        WHERE g.name = 'Analytics'
+        ON CONFLICT (service_group_id, analysis_service_id) DO NOTHING
+        """,
+        # Variance addon Phase 1: 'variance_verified' sub-sample state +
+        # 'variance_verify' audit kind. Drop+recreate both CHECKs (idempotent).
+        "ALTER TABLE lims_analyses DROP CONSTRAINT IF EXISTS lims_analyses_review_state_check",
+        """
+        ALTER TABLE lims_analyses ADD CONSTRAINT lims_analyses_review_state_check
+            CHECK (review_state IN (
+                'unassigned', 'assigned', 'to_be_verified', 'verified',
+                'published', 'rejected', 'retracted', 'promoted',
+                'variance_verified'
+            ))
+        """,
+        "ALTER TABLE lims_analysis_transitions DROP CONSTRAINT IF EXISTS lims_analysis_transitions_transition_kind_check",
+        """
+        ALTER TABLE lims_analysis_transitions ADD CONSTRAINT lims_analysis_transitions_transition_kind_check
+            CHECK (transition_kind IN
+                ('assign','submit','verify','retract','reject',
+                 'retest','publish','reset','auto','variance_verify'))
+        """,
+        # Variance addon: lab-side override until WP variance addon ships.
+        "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS variance_override TEXT",
     ]
     # Per-statement isolation: a failure in one statement (e.g., a table that
     # create_all hasn't built yet on first run) must not skip subsequent

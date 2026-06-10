@@ -134,6 +134,7 @@ interface UIState {
     peptideId: number | null
     method: string | null
     instrumentId: number | null
+    limsSubSamplePk?: number | null
   } | null
 
   openWorksheetDrawer: (worksheetId?: number) => void
@@ -144,6 +145,7 @@ interface UIState {
     peptideId: number | null
     method: string | null
     instrumentId: number | null
+    limsSubSamplePk?: number | null
   }) => void
   clearWorksheetPrepPrefill: () => void
 }

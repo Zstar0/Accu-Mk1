@@ -24,6 +24,8 @@ export interface UserUpdateInput {
   email?: string
   role?: string
   is_active?: boolean
+  first_name?: string | null
+  last_name?: string | null
 }
 
 export interface PasswordChangeInput {
@@ -88,6 +90,39 @@ export async function fetchCurrentUser(): Promise<AuthUser> {
   const user: AuthUser = await response.json()
   useAuthStore.getState().updateUser(user)
   return user
+}
+
+export async function updateMe(
+  data: { first_name?: string | null; last_name?: string | null }
+): Promise<AuthUser> {
+  const response = await fetch(`${API_BASE_URL()}/auth/me`, {
+    method: 'PATCH',
+    headers: getAuthHeaders(),
+    body: JSON.stringify(data),
+  })
+  if (!response.ok) {
+    await handleAuthError(response)
+  }
+  const user: AuthUser = await response.json()
+  useAuthStore.getState().updateUser(user)
+  return user
+}
+
+export interface DirectoryUser {
+  id: number
+  email: string
+  first_name?: string | null
+  last_name?: string | null
+}
+
+export async function getUserDirectory(): Promise<DirectoryUser[]> {
+  const response = await fetch(`${API_BASE_URL()}/auth/directory`, {
+    headers: getAuthHeaders(),
+  })
+  if (!response.ok) {
+    await handleAuthError(response)
+  }
+  return response.json()
 }
 
 export async function changePassword(

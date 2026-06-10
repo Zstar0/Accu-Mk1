@@ -42,6 +42,7 @@ import {
   CardTitle,
 } from '@/components/ui/card'
 import { DataTable } from '@/components/ui/data-table'
+import { SampleIdBadge } from '@/components/samples/SampleIdBadge'
 
 // --- Helpers ---
 
@@ -320,9 +321,7 @@ export function COAExplorer() {
       header: 'Sample ID',
       size: 110,
       enableSorting: true,
-      cell: ({ row }) => (
-        <span className="font-mono text-sm">{row.original.sample_id}</span>
-      ),
+      cell: ({ row }) => <SampleIdBadge id={row.original.sample_id} />,
     },
     {
       accessorKey: 'generation_number',

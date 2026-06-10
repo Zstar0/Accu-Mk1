@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { ClipboardList, ListChecks, AlertTriangle, Clock } from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
 import {
@@ -23,6 +23,8 @@ import { PriorityBadge } from '@/components/hplc/PriorityBadge'
 import { SlaAgeIndicator } from '@/components/hplc/SlaAgeIndicator'
 import { useSlaForSubjects, type SlaSubject, type SlaSubjectSnapshot } from '@/services/sla-subjects'
 import { listWorksheets, type InboxPriority } from '@/lib/api'
+import { getUserDirectory } from '@/lib/auth-api'
+import { displayName, resolveUserName } from '@/lib/user-display'
 import { useUIStore } from '@/store/ui-store'
 
 // ─── Status badge classes (matching WorksheetDrawerHeader pattern) ─────────────
@@ -58,6 +60,19 @@ export default function WorksheetsListPage() {
     refetchInterval: 30_000,
     staleTime: 0,
   })
+
+  // User directory for resolving analyst emails → display names. Unknown emails
+  // fall back to the email local-part in resolveUserName.
+  const { data: directoryRows } = useQuery({
+    queryKey: ['user-directory'],
+    queryFn: getUserDirectory,
+    staleTime: 5 * 60 * 1000,
+  })
+  const directory = useMemo(() => {
+    const m = new Map<string, string>()
+    for (const u of directoryRows ?? []) m.set(u.email, displayName(u))
+    return m
+  }, [directoryRows])
 
   // ─── Derived data (React Compiler handles memoization) ──────────────────────
 
@@ -222,7 +237,7 @@ export default function WorksheetsListPage() {
               <SelectItem value="all">All analysts</SelectItem>
               {analysts.map(email => (
                 <SelectItem key={email} value={email}>
-                  {email}
+                  {resolveUserName(email, directory)}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -300,7 +315,9 @@ export default function WorksheetsListPage() {
                           </span>
                         </TableCell>
                         <TableCell>
-                          {ws.assigned_analyst_email ?? (
+                          {ws.assigned_analyst_email ? (
+                            resolveUserName(ws.assigned_analyst_email, directory)
+                          ) : (
                             <span className="text-muted-foreground">—</span>
                           )}
                         </TableCell>

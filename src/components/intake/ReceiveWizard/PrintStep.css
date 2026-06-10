@@ -1,0 +1,208 @@
+/* Physical label media: 105.7mm wide × 8.5mm tall strip labels.
+   Layout is QR on the left, single text line on the right packing
+   the sample ID, vial position, role, order #, and check-in date. */
+
+@media screen {
+  .print-area {
+    /* One label per row on screen so the preview mirrors how the
+       roll prints — vertical list, top-to-bottom. */
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 0;
+  }
+  .label-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .label-row-unchecked .label {
+    opacity: 0.35;
+  }
+  .print-area .label {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 1.5mm;
+    border: 1px dashed #ccc;
+    padding: 0.5mm 1mm;
+    width: 105.7mm;
+    height: 8.5mm;
+    box-sizing: border-box;
+    background: var(--background, #fff);
+  }
+  .label svg {
+    width: 7mm;
+    height: 7mm;
+    flex-shrink: 0;
+  }
+  .label-text {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 1.5mm;
+    overflow: hidden;
+  }
+  .label-id {
+    font-family: ui-monospace, monospace;
+    font-weight: 700;
+    font-size: 9pt;
+    line-height: 1;
+    letter-spacing: -0.04em;
+    white-space: nowrap;
+    color: var(--foreground);
+    flex-shrink: 0;
+  }
+  .label-meta {
+    font-family: ui-monospace, monospace;
+    font-size: 6.5pt;
+    color: var(--muted-foreground);
+    line-height: 1;
+    letter-spacing: -0.02em;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex: 1;
+    min-width: 0;
+  }
+  .label-meta .label-meta-sep {
+    opacity: 0.5;
+    margin: 0 0.4em;
+  }
+  .label-role {
+    font-family: ui-monospace, monospace;
+    font-weight: 700;
+    font-size: 7pt;
+    color: var(--foreground);
+    line-height: 1;
+    letter-spacing: 0.04em;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+}
+
+@media print {
+  /* The print page is the label media (105.7mm × 8.5mm) — anything else
+     on screen MUST leave layout entirely or the browser slices the rest
+     of the document (SampleDetails page, Radix Dialog portal, wizard
+     chrome) into more "pages" while position:fixed elements stamp on
+     every one of them. visibility:hidden alone wasn't enough; it kept
+     non-label content in flow and produced 10+ phantom pages.
+
+     Strategy: display:none every body descendant, then surgically
+     re-show .print-area + its subtree, and re-show the chain of
+     ancestors via :has() as transparent passthroughs. */
+
+  body * {
+    display: none !important;
+  }
+  body :has(.print-area) {
+    display: contents !important;
+  }
+  .print-area {
+    display: block !important;
+    position: static !important;
+    left: auto !important;
+    top: auto !important;
+    width: 105.7mm !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #fff !important;
+  }
+  .print-area * {
+    display: revert !important;
+  }
+
+  /* Unchecked labels skip print. display:none beats visibility, so the page
+     break attached to .label doesn't trigger an empty page either. */
+  .label-row-unchecked,
+  .label-checkbox {
+    display: none !important;
+  }
+  /* Let .label participate directly in the print-area flow (page-break
+     lives on .label, and a wrapper box would break the per-page sizing). */
+  .label-row {
+    display: contents !important;
+  }
+
+  html, body { margin: 0 !important; padding: 0 !important; }
+
+  @page {
+    size: 105.7mm 8.5mm;
+    margin: 0;
+  }
+
+  .label {
+    page-break-inside: avoid;
+    width: 105.7mm;
+    height: 8.5mm;
+    padding: 0.5mm 1mm;
+    margin: 0;
+    box-sizing: border-box;
+    display: flex !important;
+    flex-direction: row;
+    align-items: center;
+    gap: 1.5mm;
+    border: none !important;
+    background: #fff !important;
+  }
+  /* Page-break AFTER every label except the last — a trailing always-break
+     would emit an empty final page for single-label prints. */
+  .label:not(:last-child) {
+    page-break-after: always;
+  }
+
+  .label svg {
+    width: 7mm;
+    height: 7mm;
+    flex-shrink: 0;
+    display: block !important;
+  }
+
+  .label-text {
+    flex: 1;
+    min-width: 0;
+    display: flex !important;
+    flex-direction: row;
+    align-items: center;
+    gap: 1.5mm;
+    overflow: hidden;
+  }
+
+  .label-id {
+    font-family: ui-monospace, monospace;
+    font-weight: 700;
+    font-size: 9pt;
+    line-height: 1;
+    letter-spacing: -0.04em;
+    white-space: nowrap;
+    color: #000;
+    flex-shrink: 0;
+  }
+
+  .label-meta {
+    font-family: ui-monospace, monospace;
+    font-size: 6.5pt;
+    color: #000;
+    line-height: 1;
+    letter-spacing: -0.02em;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex: 1;
+    min-width: 0;
+  }
+
+  .label-role {
+    font-family: ui-monospace, monospace;
+    font-weight: 700;
+    font-size: 7pt;
+    color: #000;
+    line-height: 1;
+    letter-spacing: 0.04em;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+}

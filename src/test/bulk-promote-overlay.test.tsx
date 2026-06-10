@@ -1,0 +1,327 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { render, fireEvent, waitFor, screen } from '@testing-library/react'
+import {
+  isPromotable,
+  isLockedByParent,
+  isPromoted,
+  visibleRowTransitions,
+  deriveBulkActions,
+  deriveBulkPromoteBlockers,
+  promotedDestructiveNote,
+  BulkPromoteDialog,
+} from '@/components/senaite/AnalysisTable'
+import type { SenaiteAnalysis } from '@/lib/api'
+import * as api from '@/lib/api'
+
+vi.mock('@/lib/api', async importOriginal => {
+  const actual = await importOriginal<typeof import('@/lib/api')>()
+  return { ...actual, promoteAnalyses: vi.fn().mockResolvedValue({}) }
+})
+
+const base: Partial<SenaiteAnalysis> = {
+  title: 'Rapid Sterility Screening (PCR)',
+  keyword: 'STER-PCR',
+  result: '11',
+}
+
+function mk(overrides: Partial<SenaiteAnalysis>): SenaiteAnalysis {
+  return { ...base, ...overrides } as SenaiteAnalysis
+}
+
+const promotable = mk({ uid: 'mk1:820', review_state: 'to_be_verified', promoted_to_parent_id: null })
+const senaiteTbv = mk({ uid: 'a8c27e69bfa84ff1bf16a3e370a44456', review_state: 'to_be_verified' })
+
+describe('isPromotable', () => {
+  it('true for mk1 uid + to_be_verified + unpromoted', () => {
+    expect(isPromotable(promotable)).toBe(true)
+  })
+  it('false for SENAITE uid', () => {
+    expect(isPromotable(senaiteTbv)).toBe(false)
+  })
+  it('false for wrong state', () => {
+    expect(isPromotable(mk({ uid: 'mk1:820', review_state: 'verified' }))).toBe(false)
+  })
+  it('false when already promoted', () => {
+    expect(
+      isPromotable(mk({ uid: 'mk1:820', review_state: 'to_be_verified', promoted_to_parent_id: 1260 })),
+    ).toBe(false)
+  })
+  it('isPromotable returns false for null uid', () => {
+    expect(isPromotable(mk({ uid: null, review_state: 'to_be_verified' }))).toBe(false)
+  })
+})
+
+describe('visibleRowTransitions', () => {
+  it('drops verify on a promotable row, keeps escape hatches', () => {
+    const t = visibleRowTransitions(promotable)
+    expect(t).not.toContain('verify')
+    expect(t).toContain('retract')
+  })
+  it('keeps verify on a SENAITE to_be_verified row', () => {
+    expect(visibleRowTransitions(senaiteTbv)).toContain('verify')
+  })
+  it('still gates submit on having a result', () => {
+    const unsubmitted = mk({ uid: 'mk1:9', review_state: 'unassigned', result: null })
+    expect(visibleRowTransitions(unsubmitted)).not.toContain('submit')
+  })
+  it('visibleRowTransitions returns [] for null uid', () => {
+    expect(visibleRowTransitions(mk({ uid: null, review_state: 'to_be_verified' }))).toEqual([])
+  })
+})
+
+describe('deriveBulkActions', () => {
+  it('all-promotable selection: no verify, showPromote true', () => {
+    const r = deriveBulkActions([promotable, mk({ uid: 'mk1:821', review_state: 'to_be_verified', keyword: 'ENDO' })])
+    expect(r.actions).not.toContain('verify')
+    expect(r.showPromote).toBe(true)
+  })
+  it('mixed selection (promotable + SENAITE): no verify, no promote', () => {
+    const r = deriveBulkActions([promotable, senaiteTbv])
+    expect(r.actions).not.toContain('verify')
+    expect(r.showPromote).toBe(false)
+  })
+  it('pure SENAITE selection keeps verify', () => {
+    const r = deriveBulkActions([senaiteTbv])
+    expect(r.actions).toContain('verify')
+    expect(r.showPromote).toBe(false)
+  })
+  it('empty selection: nothing', () => {
+    const r = deriveBulkActions([])
+    expect(r.actions).toEqual([])
+    expect(r.showPromote).toBe(false)
+  })
+  it('deriveBulkActions excludes null-review_state rows from all actions', () => {
+    const r = deriveBulkActions([mk({ uid: 'mk1:1', review_state: null })])
+    expect(r.actions).toEqual([])
+    expect(r.showPromote).toBe(false)
+  })
+})
+
+describe('deriveBulkPromoteBlockers', () => {
+  it('no blockers for distinct keywords with results', () => {
+    expect(
+      deriveBulkPromoteBlockers([promotable, mk({ uid: 'mk1:821', review_state: 'to_be_verified', keyword: 'ENDO' })]),
+    ).toEqual([])
+  })
+  it('flags missing result', () => {
+    const blockers = deriveBulkPromoteBlockers([mk({ uid: 'mk1:9', review_state: 'to_be_verified', result: null })])
+    expect(blockers.some(b => b.includes('no result'))).toBe(true)
+  })
+  it('flags duplicate keywords', () => {
+    const blockers = deriveBulkPromoteBlockers([
+      promotable,
+      mk({ uid: 'mk1:9', review_state: 'to_be_verified', keyword: 'STER-PCR' }),
+    ])
+    expect(blockers.some(b => b.includes('STER-PCR'))).toBe(true)
+  })
+  it('flags rows with no keyword', () => {
+    const blockers = deriveBulkPromoteBlockers([mk({ uid: 'mk1:9', review_state: 'to_be_verified', keyword: null })])
+    expect(blockers.some(b => b.includes('no keyword'))).toBe(true)
+  })
+})
+
+describe('BulkPromoteDialog', () => {
+  beforeEach(() => {
+    vi.mocked(api.promoteAnalyses).mockClear().mockResolvedValue({} as never)
+  })
+
+  it('lists keyword and value per row, read-only', () => {
+    render(
+      <BulkPromoteDialog
+        analyses={[promotable, mk({ uid: 'mk1:821', review_state: 'to_be_verified', keyword: 'ENDO', result: '0.4' })]}
+        open
+        onOpenChange={() => {}}
+        onPromoted={() => {}}
+      />,
+    )
+    expect(screen.getByText('STER-PCR')).toBeTruthy()
+    expect(screen.getByText('11')).toBeTruthy()
+    expect(screen.getByText('ENDO')).toBeTruthy()
+    expect(screen.getByText('0.4')).toBeTruthy()
+  })
+
+  it('shows blocker and disables confirm when a result is missing', () => {
+    render(
+      <BulkPromoteDialog
+        analyses={[mk({ uid: 'mk1:9', review_state: 'to_be_verified', result: null })]}
+        open
+        onOpenChange={() => {}}
+        onPromoted={() => {}}
+      />,
+    )
+    expect(screen.getByText(/no result/)).toBeTruthy()
+    expect((screen.getByRole('button', { name: /^Promote \d/ }) as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('promotes each row sequentially then fires onPromoted', async () => {
+    const onPromoted = vi.fn()
+    render(
+      <BulkPromoteDialog
+        analyses={[promotable, mk({ uid: 'mk1:821', review_state: 'to_be_verified', keyword: 'ENDO', result: '0.4' })]}
+        open
+        onOpenChange={() => {}}
+        onPromoted={onPromoted}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', { name: /^Promote 2/ }))
+    await waitFor(() => expect(onPromoted).toHaveBeenCalled())
+    expect(vi.mocked(api.promoteAnalyses)).toHaveBeenCalledTimes(2)
+    expect(vi.mocked(api.promoteAnalyses)).toHaveBeenCalledWith(
+      expect.objectContaining({ keyword: 'STER-PCR', result_value: '11', reason: 'Bulk promote from AnalysisTable' }),
+    )
+    const calls = vi.mocked(api.promoteAnalyses).mock.calls
+    expect(calls[0]![0].keyword).toBe('STER-PCR')
+    expect(calls[1]![0].keyword).toBe('ENDO')
+  })
+
+  it('continues past a failed row and still fires onPromoted', async () => {
+    vi.mocked(api.promoteAnalyses)
+      .mockRejectedValueOnce(new Error('boom'))
+      .mockResolvedValueOnce({} as never)
+    const onPromoted = vi.fn()
+    render(
+      <BulkPromoteDialog
+        analyses={[promotable, mk({ uid: 'mk1:821', review_state: 'to_be_verified', keyword: 'ENDO', result: '0.4' })]}
+        open
+        onOpenChange={() => {}}
+        onPromoted={onPromoted}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', { name: /^Promote 2/ }))
+    await waitFor(() => expect(onPromoted).toHaveBeenCalled())
+    expect(vi.mocked(api.promoteAnalyses)).toHaveBeenCalledTimes(2)
+  })
+})
+
+// --- Task 4: promoted row gating ---
+
+const promoted = mk({ uid: 'mk1:820', review_state: 'to_be_verified', promoted_to_parent_id: 1260 })
+
+describe('isPromoted', () => {
+  it('true when promoted_to_parent_id is set', () => {
+    expect(isPromoted(promoted)).toBe(true)
+  })
+  it('false when promoted_to_parent_id is null', () => {
+    expect(isPromoted(promotable)).toBe(false)
+  })
+})
+
+describe('visibleRowTransitions — promoted row', () => {
+  it('hides verify on a promoted row', () => {
+    const t = visibleRowTransitions(promoted)
+    expect(t).not.toContain('verify')
+  })
+  it('keeps retract on a promoted row (escape hatch)', () => {
+    const t = visibleRowTransitions(promoted)
+    expect(t).toContain('retract')
+  })
+})
+
+// A row in the real `promoted` review_state (its result already rolled up to
+// the parent). Corrections must start at the parent (retest there cascades
+// down), so the sub-level row offers NO transitions — no retest, no menu.
+const promotedState = mk({ uid: 'mk1:830', review_state: 'promoted', promoted_to_parent_id: 1260 })
+
+describe('visibleRowTransitions — promoted-state row (locked from the sub)', () => {
+  it('offers no transitions — retest must be initiated from the parent', () => {
+    expect(visibleRowTransitions(promotedState)).toEqual([])
+  })
+})
+
+describe('deriveBulkActions — promoted-state rows', () => {
+  it('offers no retest when all selected are in the promoted state', () => {
+    const r = deriveBulkActions([promotedState])
+    expect(r.actions).not.toContain('retest')
+    expect(r.actions).toEqual([])
+  })
+})
+
+describe('deriveBulkActions — promoted rows', () => {
+  it('excludes verify when ANY selected row is promoted', () => {
+    const r = deriveBulkActions([promoted, senaiteTbv])
+    expect(r.actions).not.toContain('verify')
+  })
+  it('promoted + SENAITE mix: no verify, showPromote false', () => {
+    const r = deriveBulkActions([promoted, senaiteTbv])
+    expect(r.actions).not.toContain('verify')
+    expect(r.showPromote).toBe(false)
+  })
+  it('pure SENAITE selection still offers verify (regression)', () => {
+    const r = deriveBulkActions([senaiteTbv])
+    expect(r.actions).toContain('verify')
+  })
+})
+
+describe('promotedDestructiveNote', () => {
+  it('returns null when no promoted rows in selection', () => {
+    expect(promotedDestructiveNote([promotable, senaiteTbv])).toBeNull()
+  })
+  it('returns singular form for exactly 1 promoted row', () => {
+    expect(promotedDestructiveNote([promoted])).toBe(
+      '1 selected analysis was promoted to the parent — the parent keeps its promoted value.',
+    )
+  })
+  it('returns plural form for 2+ promoted rows', () => {
+    const second = mk({ uid: 'mk1:821', review_state: 'to_be_verified', promoted_to_parent_id: 1261, keyword: 'ENDO' })
+    expect(promotedDestructiveNote([promoted, second])).toBe(
+      '2 selected analyses were promoted to the parent — the parent keeps its promoted value.',
+    )
+  })
+})
+
+// --- Parent-line lock gating ---
+
+const verifiedStates: Record<string, string> = { 'STER-PCR': 'verified' }
+const tbvStates: Record<string, string> = { 'STER-PCR': 'to_be_verified' }
+
+describe('isLockedByParent', () => {
+  it('true when keyword maps to verified in parentLineStates', () => {
+    expect(isLockedByParent(promotable, verifiedStates)).toBe(true)
+  })
+  it('false when keyword maps to to_be_verified', () => {
+    expect(isLockedByParent(promotable, tbvStates)).toBe(false)
+  })
+  it('false when parentLineStates is undefined', () => {
+    expect(isLockedByParent(promotable, undefined)).toBe(false)
+  })
+  it('false when keyword absent from states', () => {
+    expect(isLockedByParent(promotable, {})).toBe(false)
+  })
+})
+
+describe('visibleRowTransitions — locked by parent', () => {
+  it('returns [] when row is locked (parent verified)', () => {
+    expect(visibleRowTransitions(promotable, verifiedStates)).toEqual([])
+  })
+  it('returns normal transitions when parent is to_be_verified (not locked)', () => {
+    const t = visibleRowTransitions(promotable, tbvStates)
+    expect(t).toContain('retract')
+  })
+  it('existing single-arg call is unaffected (regression)', () => {
+    const t = visibleRowTransitions(promotable)
+    expect(t).toContain('retract')
+    expect(t).not.toContain('verify')
+  })
+})
+
+describe('deriveBulkActions — locked rows', () => {
+  it('drops retest/retract/reject when ANY selected row is locked', () => {
+    // promotable is for STER-PCR which is verified — should be locked
+    const r = deriveBulkActions([promotable], verifiedStates)
+    expect(r.actions).not.toContain('retest')
+    expect(r.actions).not.toContain('retract')
+    expect(r.actions).not.toContain('reject')
+  })
+  it('showPromote is false when ANY selected row is locked', () => {
+    const r = deriveBulkActions([promotable], verifiedStates)
+    expect(r.showPromote).toBe(false)
+  })
+  it('unlocked promotable row keeps normal behavior (regression)', () => {
+    const r = deriveBulkActions([promotable], tbvStates)
+    expect(r.showPromote).toBe(true)
+  })
+  it('no parentLineStates: existing behavior unchanged (regression)', () => {
+    const r = deriveBulkActions([promotable])
+    expect(r.showPromote).toBe(true)
+  })
+})

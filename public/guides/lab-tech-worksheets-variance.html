@@ -1,0 +1,485 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Lab Tech Guide: Worksheets &amp; Variance</title>
+  <style>
+:root {
+  color-scheme: light dark;
+  --bg: #fbfbfa;
+  --fg: #1a1a1a;
+  --muted: #5a5a5a;
+  --border: #e0ddd6;
+  --accent: #2563eb;        /* royal blue */
+  --accent-soft: #dbeafe;
+  --callout-bg: #fef3c7;    /* amber-100 */
+  --callout-border: #f59e0b;
+  --callout-fg: #78350f;
+  --table-header-bg: #f3f1ec;
+  --table-row-alt: #faf8f3;
+  --code-bg: #f5f2eb;
+  --kbd-bg: #ffffff;
+  --kbd-border: #cbc7bd;
+  --link: #1d4ed8;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #181816;
+    --fg: #ededed;
+    --muted: #a8a8a8;
+    --border: #2e2c28;
+    --accent: #60a5fa;
+    --accent-soft: #1e3a8a;
+    --callout-bg: #3f2f0c;
+    --callout-border: #d97706;
+    --callout-fg: #fde68a;
+    --table-header-bg: #232220;
+    --table-row-alt: #1f1e1c;
+    --code-bg: #232220;
+    --kbd-bg: #1f1e1c;
+    --kbd-border: #3f3d38;
+    --link: #93c5fd;
+  }
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen,
+    Ubuntu, Cantarell, "Open Sans", "Helvetica Neue", sans-serif;
+  font-size: 16px;
+  line-height: 1.65;
+}
+
+main {
+  max-width: 840px;
+  margin: 0 auto;
+  padding: 48px 28px 96px;
+}
+
+header.page {
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 16px;
+  margin-bottom: 36px;
+}
+header.page .kicker {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+
+h1 {
+  font-size: 32px;
+  line-height: 1.2;
+  margin: 0;
+  font-weight: 700;
+}
+
+h2 {
+  font-size: 22px;
+  line-height: 1.3;
+  margin: 40px 0 12px;
+  font-weight: 700;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+}
+
+h3 {
+  font-size: 18px;
+  line-height: 1.4;
+  margin: 28px 0 8px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+h4 {
+  font-size: 15px;
+  margin: 20px 0 6px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+p { margin: 8px 0 12px; }
+
+a {
+  color: var(--link);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  text-decoration-thickness: 1px;
+}
+a:hover { text-decoration-thickness: 2px; }
+
+ul, ol { padding-left: 24px; margin: 8px 0 16px; }
+li { margin: 4px 0; }
+li > p { margin: 4px 0; }
+
+blockquote {
+  margin: 18px 0;
+  padding: 14px 18px;
+  background: var(--callout-bg);
+  border-left: 4px solid var(--callout-border);
+  color: var(--callout-fg);
+  border-radius: 4px;
+}
+blockquote p:first-child { margin-top: 0; }
+blockquote p:last-child { margin-bottom: 0; }
+blockquote strong { color: var(--callout-fg); }
+blockquote ul, blockquote ol { padding-left: 22px; }
+
+code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono",
+    monospace;
+  font-size: 0.88em;
+  background: var(--code-bg);
+  padding: 1px 5px;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+}
+pre {
+  background: var(--code-bg);
+  padding: 14px 16px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  overflow-x: auto;
+  font-size: 13px;
+}
+pre code {
+  background: transparent;
+  padding: 0;
+  border: 0;
+}
+
+kbd {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.85em;
+  background: var(--kbd-bg);
+  border: 1px solid var(--kbd-border);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  padding: 1px 6px;
+}
+
+table {
+  width: 100%;
+  margin: 16px 0;
+  border-collapse: collapse;
+  font-size: 0.95em;
+}
+thead th {
+  background: var(--table-header-bg);
+  text-align: left;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+}
+tbody td {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+tbody tr:nth-child(even) td {
+  background: var(--table-row-alt);
+}
+
+hr {
+  border: 0;
+  border-top: 1px solid var(--border);
+  margin: 36px 0;
+}
+
+/* Inline screenshot placeholders rendered from HTML comments */
+.screenshot-placeholder {
+  display: block;
+  margin: 14px 0;
+  padding: 14px 18px;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  background: var(--accent-soft);
+  color: var(--muted);
+  font-size: 13px;
+  font-style: italic;
+}
+.screenshot-placeholder::before {
+  content: "Screenshot — ";
+  font-weight: 600;
+  font-style: normal;
+}
+
+footer.page {
+  margin-top: 64px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 13px;
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+@media print {
+  body { background: #fff; color: #000; }
+  main { max-width: 100%; padding: 24px; }
+  blockquote { background: #fff8e1; }
+  .screenshot-placeholder { display: none; }
+  a { color: #000; text-decoration: underline; }
+}
+</style>
+</head>
+<body>
+  <main>
+    <header class="page">
+      <div class="kicker">Accu-Mk1 user guide</div>
+    </header>
+    <h1 id="lab-tech-guide-worksheets-variance">Lab Tech Guide: Worksheets &amp; Variance</h1>
+<h2 id="at-a-glance">At a glance</h2>
+<p>This guide walks you through planning worksheets from the inbox, running items through the bench, and locking variance sets on multi-vial parents. The sub-samples / vial workflow and the <strong>Variance Summary</strong> dialog described here are new — Accu-Mk1 now tracks each physical vial as its own unit, and you&rsquo;ll be the one assigning vials to worksheets and deciding which ones count toward Mean / SD / CV statistics. Read this once end-to-end before your first multi-vial parent comes through.</p>
+<h2 id="what-this-workflow-gives-you">What this workflow gives you</h2>
+<blockquote>
+<p><strong>At a glance:</strong></p>
+<ul>
+<li><strong>One inbox card per vial.</strong> A parent sample with three vials becomes three cards — one for the parent, two for sub-samples. Cards from the same parent stack adjacent with a visual connector so you can see the family at a glance.</li>
+<li><strong>Sub-samples show up in the inbox</strong> alongside their parent. Each carries its own bench-role assignment, so an HPLC vial and a Sterility vial from the same shipment route to different benches independently.</li>
+<li><strong>A bench filter chip pair — HPLC or Microbiology.</strong> Single-select; your choice is remembered between sessions. A separate <strong>Show XTRA</strong> toggle reveals XTRA-role vials when you need extra capacity.</li>
+<li><strong>Each card shows only the analyses for its role.</strong> An HPLC vial&rsquo;s card lists Analytics analyses; a Microbiology vial&rsquo;s card lists Endo / Ster. No mental filtering required.</li>
+<li><strong>Variance Summary dialog</strong> on every parent sample page. Pick which vials count toward Mean / SD / CV%, set exclusion reasons for the ones you skip, and lock the set so results can&rsquo;t drift under you.</li>
+<li><strong>SLA age column</strong> on the worksheet items table, banded red / amber / green by the SLA tier you&rsquo;ve configured. Surfaces the overdue items so they don&rsquo;t slip.</li>
+<li><strong>Drag-to-worksheet</strong> from the inbox to the right-hand worksheet panel. Drop on <strong>New Worksheet</strong> to spin one up, or onto an existing card to add the vial there.</li>
+</ul>
+</blockquote>
+<h2 id="before-you-start">Before you start</h2>
+<p>You&rsquo;ll want the LIMS open in your usual browser. From the <strong>HPLC Automation → Inbox</strong> nav, the filter chip you pick (HPLC or Microbiology) is remembered between sessions, so you&rsquo;ll land on the bench you worked from last. Have your tablet or label printer reachable if you&rsquo;ll be reprinting.</p>
+<ul>
+<li>Logged into the LIMS web app with your tech account</li>
+<li>Role: HPLC technician, Microbiologist, or Lab admin (admin needed to unlock variance sets)</li>
+<li>SENAITE reachable (the inbox pulls from SENAITE; if cards look stale, you&rsquo;ll hit <strong>Refresh</strong>)</li>
+<li>Label printer paired if you plan to reprint sub-sample labels</li>
+<li>For variance work: at least one parent sample with two or more vials received</li>
+</ul>
+<h2 id="the-main-workflow">The main workflow</h2>
+<h3 id="1-open-the-worksheets-inbox">1. Open the Worksheets Inbox</h3>
+<p>From the main sidebar, expand <strong>HPLC Automation</strong> and click <strong>Inbox</strong>. Your last filter choice (HPLC or Microbiology) is remembered between sessions via <code>localStorage</code>, so you&rsquo;ll usually land on the bench you worked from last.</p>
+
+<p>You&rsquo;ll see vial-flat cards on the left side. Each card is one vial — either a parent AR or a sub-sample AR. Vials that share a <code>parent_sample_id</code> are visually connected with a grouping line but do not collapse into a single card.</p>
+<h3 id="2-set-your-filters-top-right-filter-bar">2. Set your filters (top-right filter bar)</h3>
+<p>Before you drag anything, get the inbox showing only what you care about.</p>
+<ol>
+<li>Click either the <strong>HPLC</strong> chip or the <strong>Microbiology</strong> chip. This is single-select; the last one you used is remembered between sessions.</li>
+<li>Check <strong>Hide test orders</strong> (default ON). Real orders have a linked WordPress order; test orders do not.</li>
+<li>Check <strong>Hide prepped</strong> (default ON). Hides items already through prep.</li>
+<li>Check <strong>Show XTRA</strong> (default OFF) only if you need to see XTRA-role vials in the current filter.</li>
+<li>If you suspect the inbox is stale (rare in production), click <strong>Refresh</strong> to force a re-pull from SENAITE.</li>
+</ol>
+<table>
+<thead>
+<tr>
+<th>Filter</th>
+<th>Default</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>HPLC</strong> chip</td>
+<td>Selected for HPLC role</td>
+<td>Shows only vials with <code>assignment_role = hplc</code> (plus parents whose role is hplc).</td>
+</tr>
+<tr>
+<td><strong>Microbiology</strong> chip</td>
+<td>Selected for Microbiologist role</td>
+<td>Shows only vials with <code>assignment_role</code> in <code>endo</code> or <code>ster</code>.</td>
+</tr>
+<tr>
+<td><strong>Hide test orders</strong></td>
+<td>ON</td>
+<td>Hides any AR not linked to a WordPress order.</td>
+</tr>
+<tr>
+<td><strong>Hide prepped</strong></td>
+<td>ON</td>
+<td>Hides items already marked prepped on a worksheet.</td>
+</tr>
+<tr>
+<td><strong>Show XTRA</strong></td>
+<td>OFF</td>
+<td>When ON, includes XTRA-role vials in the active filter results.</td>
+</tr>
+</tbody>
+</table>
+<p>Each vial card only shows analyses that match its role&rsquo;s service groups. A parent on the HPLC filter will hide its Microbiology analyses; a sub-sample on Microbiology will show only Endo / Ster.</p>
+<h3 id="3-drag-a-vial-onto-a-worksheet">3. Drag a vial onto a worksheet</h3>
+<p>This is the core action. On the right side of the inbox you have a <strong>New Worksheet</strong> drop zone and any open worksheet cards.</p>
+<ol>
+<li>Grab a vial card on the left (drag handle or the card body).</li>
+<li>Drop it on <strong>New Worksheet</strong> to create a blank worksheet with this vial as the first item — or drop it on an existing worksheet card to add it there.</li>
+<li>The vial card optimistically hides from the inbox.</li>
+<li>A toast confirms: &ldquo;Created worksheet&rdquo; or &ldquo;Added to worksheet&rdquo;.</li>
+</ol>
+
+<h3 id="4-set-up-the-worksheet-from-the-right-panel">4. Set up the worksheet from the right panel</h3>
+<p>While still on the inbox page, you can manage worksheets in place from their cards on the right.</p>
+<ul>
+<li>Click the pencil icon to rename the worksheet. Press Enter to save, Escape to cancel.</li>
+<li>Click the <strong>Assign tech</strong> dropdown and pick a technician. The choice is persisted immediately.</li>
+<li>Hover an item in the worksheet card and click the <strong>X</strong> to send it back to the inbox.</li>
+<li>Click the trash icon to delete the entire worksheet. You&rsquo;ll get a confirmation dialog.</li>
+</ul>
+<h3 id="5-open-the-worksheet-detail-page">5. Open the worksheet detail page</h3>
+<p>Click the worksheet card title (or its open arrow) to drop into the detail page. This is where you actually run the bench work.</p>
+
+<p>The items table shows:</p>
+<ul>
+<li><strong>Sample ID</strong></li>
+<li><strong>Service Group</strong></li>
+<li><strong>Priority</strong></li>
+<li><strong>Peptide names</strong></li>
+<li><strong>Method</strong></li>
+<li><strong>Instrument</strong></li>
+<li><strong>SLA age</strong> — banded red (overdue), amber (within the per-tier warning threshold; default 20% of remaining time), green (on track)</li>
+<li><strong>Status</strong></li>
+<li><strong>Actions</strong></li>
+</ul>
+<h3 id="6-work-the-rows">6. Work the rows</h3>
+<p>Each row supports a handful of actions. Most are hover-revealed.</p>
+<ol>
+<li>Drag the left-edge handle to reorder items in the worksheet (only before completion).</li>
+<li>Click the hover <strong>X</strong> to remove an item back to the inbox.</li>
+<li>(HPLC only) Use the <strong>Status</strong> dropdown to move an item between <code>ready</code>, <code>in_progress</code>, and <code>complete</code>. Once the worksheet is completed, this is locked.</li>
+<li>(HPLC only) Use the <strong>Instrument</strong> dropdown to choose which analyzer runs the item.</li>
+<li>(Hover) Click the <strong>Move arrow</strong> to reassign the item to another open worksheet via a dropdown.</li>
+<li>(HPLC only) Click <strong>Start Prep</strong> to launch the prep wizard for that item.</li>
+</ol>
+<h3 id="7-add-more-items-then-complete">7. Add more items, then complete</h3>
+<ul>
+<li>Click <strong>Add Samples</strong> in the worksheet header to open a modal of inbox items not yet on this worksheet; click items to add them.</li>
+<li>When every item is <code>ready</code> (or further along), click <strong>Complete Worksheet</strong>. This locks status changes and marks prep complete.</li>
+</ul>
+<h3 id="8-lock-the-variance-set-parent-samples-with-multiple-vials">8. Lock the variance set (parent samples with multiple vials)</h3>
+<p>Variance lives at the parent sample. After results come in (or even before, see Edge cases), open the parent sample&rsquo;s detail page and click <strong>Variance Summary</strong>.</p>
+
+<p>In the dialog:</p>
+<ol>
+<li>The vial selection table lists every vial on this parent — the parent itself plus any sub-samples. Checkboxes on the left.</li>
+<li>Use the checkboxes to choose which vials are members of the variance set. <strong>Select all</strong> and <strong>Clear all</strong> at the footer are shortcuts (disabled once locked).</li>
+<li>For each unchecked vial, fill in the <strong>Exclusion reason</strong> field (e.g., &ldquo;contaminated&rdquo;, &ldquo;out of range prep&rdquo;).</li>
+<li>Below, the <strong>Stats table</strong> shows one row per analysis (e.g., PURITY), with Mean, SD, CV%, n, spec limits, and PASS / FAIL. It populates as vial results land in SENAITE.</li>
+<li>Click <strong>Lock variance set</strong> at the bottom. The button is only enabled when at least two vials are selected and the set isn&rsquo;t already locked.</li>
+<li>A gold banner appears. Membership and results for these vials are now immutable.</li>
+</ol>
+<p>If you&rsquo;re an admin, an <strong>Unlock</strong> button is available once the set is locked — use it sparingly and only to correct real mistakes.</p>
+<h3 id="9-check-the-sub-sample-details-tab-when-relevant">9. Check the Sub-Sample Details tab when relevant</h3>
+<p>Sub-samples have their own tab inside the Receive Wizard and on the parent detail page. The table columns are:</p>
+<ul>
+<li><strong>Vial #</strong></li>
+<li><strong>Sample ID</strong> (clickable, navigates to that vial&rsquo;s detail)</li>
+<li><strong>Role</strong> — badge shows HPLC, ENDO, STER, or XTRA</li>
+<li><strong>Photo</strong> thumbnail (loads via the authed proxy)</li>
+<li><strong>Received timestamp</strong></li>
+<li><strong>Received by</strong></li>
+<li><strong>Actions</strong> — <strong>Open</strong> and <strong>Print Label</strong></li>
+</ul>
+<p>Empty state reads &ldquo;No sub-samples yet&rdquo; if the parent has no secondaries.</p>
+<table>
+<thead>
+<tr>
+<th>Role badge</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>HPLC</strong></td>
+<td>Vial heads to the HPLC bench.</td>
+</tr>
+<tr>
+<td><strong>ENDO</strong></td>
+<td>Endotoxin testing (Microbiology filter).</td>
+</tr>
+<tr>
+<td><strong>STER</strong></td>
+<td>Sterility testing (Microbiology filter).</td>
+</tr>
+<tr>
+<td><strong>XTRA</strong></td>
+<td>Extra / experimental; hidden unless <strong>Show XTRA</strong> is on.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="variants">Variants</h2>
+<h3 id="adding-a-vial-to-a-parent-thats-already-checked-in">Adding a vial to a parent that&rsquo;s already checked in</h3>
+<p>Use the standard intake / Receive Wizard for the additional vial. The new vial will appear as a sub-sample (vial 2+). The first vial of a never-received parent lands on the parent AR alone (no <code>-S01</code> is created); only subsequent vials become secondaries. Parent shows as &ldquo;Vial 1 / N&rdquo;, sub-samples as &ldquo;Vial 2 / N&rdquo;, etc.</p>
+<h3 id="reprinting-a-label">Reprinting a label</h3>
+<p>From the Sub-Sample Details table, click <strong>Print Label</strong> in the Actions column of the row you want. If you&rsquo;re receiving a parent in the same session as sub-samples, the print step shows the parent label alongside the sub-sample labels in one pass.</p>
+<table>
+<thead>
+<tr>
+<th>Action</th>
+<th>When to use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Check-in (Receive Wizard)</strong></td>
+<td>First time the vial is received.</td>
+</tr>
+<tr>
+<td><strong>Print Label (from row)</strong></td>
+<td>Re-print only — vial is already checked in.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="adjusting-variance-membership-before-locking">Adjusting variance membership before locking</h3>
+<p>Open <strong>Variance Summary</strong> on the parent. Toggle checkboxes freely while the set is unlocked. Add or clear exclusion reasons as you go. Click <strong>Lock variance set</strong> when membership is final. After locking, the only way to change membership is admin unlock.</p>
+<h3 id="reassigning-a-worksheet-item-to-a-different-worksheet">Reassigning a worksheet item to a different worksheet</h3>
+<p>On the worksheet detail page, hover the row and click the <strong>Move arrow</strong>. Pick a target open worksheet from the dropdown. The item moves; status carries with it. Only available while the source worksheet is not completed.</p>
+<h3 id="renaming-or-deleting-a-worksheet-from-the-inbox">Renaming or deleting a worksheet from the inbox</h3>
+<p>Pencil icon to rename inline (Enter saves, Escape cancels). Trash icon to delete entirely (confirmation dialog). Deleting sends all items back to the inbox.</p>
+<h2 id="common-pitfalls">Common pitfalls</h2>
+<ul>
+<li><strong><code>Hide test orders</code> is ON by default.</strong> If the inbox looks empty, this is usually why. Real orders have a linked WordPress order number; test orders do not.</li>
+<li><strong><code>Show XTRA</code> is OFF by default.</strong> XTRA-role vials won&rsquo;t appear under either HPLC or Microbiology until you flip this.</li>
+<li><strong>Sub-samples without an assignment role stay invisible.</strong> They surface once the Vial Plan auto-assigns or you manually override.</li>
+<li><strong>Variance lock is immutable.</strong> Once locked, no member vial can be added, removed, or have its results edited. Admin unlock is the only way back; the two-click gate is intentional.</li>
+<li><strong>Samples received before the sub-samples workflow shipped default to <code>role = hplc</code>.</strong> They surface under the HPLC filter even if they have Microbiology analyses on them. To work the Microbiology side on those older samples, the front desk needs to manually assign a vial role (or add a vial) so a <code>ster</code> / <code>endo</code> card appears.</li>
+<li><strong>Decimal quantities don&rsquo;t inherit parent to sub.</strong> DeclaredTotalQuantity and similar fields must be set manually in SENAITE UI due to a known SENAITE / Plone validator bug. Most other fields inherit fine.</li>
+<li><strong>Cold-cache parents on first inbox load.</strong> When a parent is linked for the first time, SENAITE fetch can return stale data. Hit <strong>Refresh</strong> to force a re-pull.</li>
+</ul>
+<h2 id="edge-cases-recovery">Edge cases &amp; recovery</h2>
+<ul>
+<li><strong>Both camera and file-picker fail during vial capture.</strong> A fallback <strong>Upload</strong> button (styled, with icon) replaces the camera UI. Click it to open the system file picker. If both still fail, skip the photo, add remarks, and save.</li>
+<li><strong>Variance lock with no results yet.</strong> Allowed. The stats table shows &ldquo;No results entered yet — stats will populate as vial results land.&rdquo; Useful for pre-registration workflows where you want membership decided before run-time.</li>
+<li><strong>Sub-sample created without parent contact UID.</strong> The service refuses with a 400 and auto-refreshes the parent from SENAITE once. If it&rsquo;s still missing, you&rsquo;ll get a 502 with <code>code: "secondary_fallout"</code> — frontend prompts for manual cleanup.</li>
+<li><strong>Worksheet moved to completed.</strong> All rows become read-only — no status, instrument, or reorder changes. Items can still be viewed; the only way to remove them is to delete the entire worksheet.</li>
+<li><strong>Orphan sub-sample AR in SENAITE (no local row).</strong> Drift reconciliation on the parent detail page detects this and logs a warning. Happens when a secondary is created in SENAITE but the local DB insert failed (e.g., a network blip). Manual UID cleanup in SENAITE is required.</li>
+<li><strong>Multi-group vials (rare HPLC sub-group split).</strong> When a single vial&rsquo;s analyses span two HPLC service groups, one vial creates two worksheet items (one per group). Dragging a multi-group vial copies it to two items in the target worksheet — that&rsquo;s expected, not a duplicate bug.</li>
+</ul>
+<h2 id="glossary">Glossary</h2>
+<ul>
+<li><strong>Assignment role</strong> — Metadata flag on each vial: <code>hplc</code>, <code>endo</code>, <code>ster</code>, <code>xtra</code>, or <code>NULL</code>. Decides which bench filter shows the vial. Set during the Receive Wizard; can be overridden post-intake.</li>
+<li><strong>Linked order</strong> — A SENAITE sample matched to a WordPress order via <code>order_submissions</code>. Only linked orders appear in the inbox by default.</li>
+<li><strong>Prep status</strong> — Per-worksheet-item flag: <code>ready</code>, <code>in_progress</code>, <code>complete</code>. Locked once the worksheet is completed.</li>
+<li><strong>Secondary AR / Sub-sample</strong> — A SENAITE AR created as a child of a parent, auto-named <code>&lt;parent&gt;-S&lt;NN&gt;</code>. Represents vial 2+ on a multi-vial order.</li>
+<li><strong>Service group</strong> — SENAITE concept: <code>Analytics</code>, <code>Microbiology</code>, <code>Endotoxin</code>, <code>Sterility</code>, etc. Decides which analyses an AR can hold.</li>
+<li><strong>Show XTRA toggle</strong> — Inbox filter checkbox. When ON, XTRA-role vials are included in the active filter. Persisted in localStorage.</li>
+<li><strong>SLA</strong> — Service-level agreement on turnaround time (default 48 hours), tracked from <code>date_received</code>. Inbox bands age red / amber / green.</li>
+<li><strong>Variance set</strong> — Per-parent subset of vials participating in Mean / SD / CV% statistics. Membership is user-controlled via the Variance Summary dialog. Needs at least two selected vials to lock.</li>
+<li><strong>Vial</strong> — A physical sample container, represented as a parent AR or sub-sample AR in SENAITE. Each has its own UID and can carry its own role and results.</li>
+<li><strong>Worksheet</strong> — A grouping of vials for batch processing on an instrument. Created from the inbox by drag-drop. Holds items of <code>(vial_uid, service_group_id, assigned_analyst)</code>.</li>
+<li><strong>XTRA vial</strong> — A vial with <code>assignment_role = 'xtra'</code>. Not assigned to HPLC or Microbiology benches; used for experimental or extra-capacity runs. Hidden until <strong>Show XTRA</strong> is toggled on.</li>
+</ul>
+    <footer class="page">
+      <span>Source: <code>lab-tech-worksheets-variance.md</code></span>
+      <span>Generated from the latest markdown source</span>
+    </footer>
+  </main>
+</body>
+</html>

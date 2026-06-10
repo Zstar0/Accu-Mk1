@@ -6,17 +6,30 @@ import {
   createWorksheet,
   type InboxResponse,
   type InboxPriority,
+  type InboxRole,
 } from '@/lib/api'
 import { toast } from 'sonner'
 
-export function inboxKey(hideTestOrders: boolean, hidePrepped: boolean) {
-  return ['inbox-samples', { hideTestOrders, hidePrepped }] as const
+interface InboxKeyParams {
+  hideTestOrders: boolean
+  hidePrepped: boolean
+  role?: InboxRole | null
+  showXtra?: boolean
 }
 
-export function useInboxSamples(hideTestOrders = true, hidePrepped = true) {
+export function inboxKey(params: InboxKeyParams) {
+  return ['inbox-samples', params] as const
+}
+
+export function useInboxSamples(params: InboxKeyParams) {
   return useQuery({
-    queryKey: inboxKey(hideTestOrders, hidePrepped),
-    queryFn: () => getInboxSamples(hideTestOrders, false, hidePrepped),
+    queryKey: inboxKey(params),
+    queryFn: () => getInboxSamples({
+      hideTestOrders: params.hideTestOrders,
+      hidePrepped: params.hidePrepped,
+      role: params.role ?? null,
+      showXtra: params.showXtra ?? false,
+    }),
     refetchInterval: 30_000, // 30s polling per D-04
     staleTime: 0, // always fresh -- live queue
   })

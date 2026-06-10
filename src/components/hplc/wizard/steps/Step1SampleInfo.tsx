@@ -26,6 +26,7 @@ import {
   updateWizardSession,
   getSenaiteStatus,
   lookupSenaiteSample,
+  listSubSamples,
   type PeptideRecord,
   type SenaiteLookupResult,
   type VialParams,
@@ -55,6 +56,9 @@ export function Step1SampleInfo() {
 
   const [peptideId, setPeptideId] = useState<number | null>(null)
   const [sampleIdLabel, setSampleIdLabel] = useState('')
+  // Vial-scoped prep: set when "Start Prep" originates from a sub-sample (vial)
+  // worksheet item. Null for parent-sample preps (unchanged behavior).
+  const [limsSubSamplePk, setLimsSubSamplePk] = useState<number | null>(null)
   const [declaredWeightMg, setDeclaredWeightMg] = useState('')
   const [targetConcUgMl, setTargetConcUgMl] = useState('')
   const [targetTotalVolUl, setTargetTotalVolUl] = useState('')
@@ -170,6 +174,8 @@ export function Step1SampleInfo() {
     if (prefill.instrumentId) {
       setInstrumentId(String(prefill.instrumentId))
     }
+    // Carry the vial pk so this prep is tagged vial-scoped (null for parents)
+    setLimsSubSamplePk(prefill.limsSubSamplePk ?? null)
     // Mark prefill as applied so tab switch doesn't clear peptide
     prefillAppliedRef.current = true
     // Clear prefill so it doesn't re-apply
@@ -298,6 +304,7 @@ export function Step1SampleInfo() {
       }
       if (sampleIdLabel.trim()) data.sample_id_label = sampleIdLabel.trim()
       if (instrumentId) data.instrument_id = Number(instrumentId)
+      if (limsSubSamplePk != null) data.lims_sub_sample_pk = limsSubSamplePk
 
       // Standard prep metadata
       if (isStandard) {
@@ -409,27 +416,53 @@ export function Step1SampleInfo() {
       setDeclaredWeightMg('')
       setLookupResult(null)
       setLookupError(null)
+      setLimsSubSamplePk(null)
     }
     if (tab === 'lookup') {
       // Clear manual-entered values when switching back to lookup
       setPeptideId(null)
       setSampleIdLabel('')
       setDeclaredWeightMg('')
+      setLimsSubSamplePk(null)
     }
     setActiveTab(tab as 'lookup' | 'manual')
   }
 
   async function handleLookup() {
     if (!lookupId.trim()) return
+    const rawId = lookupId.trim()
     setLookupLoading(true)
     setLookupError(null)
     setLookupResult(null)
+    // Reset on every lookup — covers re-lookup within the same tab (the
+    // tab-change clear does not fire here). Only the vial-found branch re-sets.
+    setLimsSubSamplePk(null)
     try {
-      const result = await lookupSenaiteSample(lookupId.trim())
+      // Vial id (e.g. P-0142-S01): resolve to a sub-sample pk, then auto-populate
+      // from the PARENT (the vial inherits the parent compound). A non-vial id
+      // flows through the existing parent path unchanged (isVial=false).
+      const isVial = /-S\d+$/i.test(rawId)
+      let subSamplePk: number | null = null
+      let parentId = rawId
+      if (isVial) {
+        parentId = rawId.replace(/-S\d+$/i, '')
+        // listSubSamples throwing (parent unknown) or no matching vial → caught
+        // below as a failed lookup; pk stays null (set above).
+        const listing = await listSubSamples(parentId)
+        const match = listing.sub_samples.find(
+          s => s.sample_id.toUpperCase() === rawId.toUpperCase()
+        )
+        if (!match) {
+          throw new Error(`Vial ${rawId} not found for parent ${parentId}`)
+        }
+        subSamplePk = match.id
+      }
+      const result = await lookupSenaiteSample(parentId)
       setLookupResult(result)
       setSenaiteResult(result)  // persist to store so other steps can show it
-      // Auto-populate fields from SENAITE data
-      setSampleIdLabel(result.sample_id)
+      // Auto-populate fields from SENAITE data. For a vial, label the prep with
+      // the vial id; the rest of the populate is identical to the parent path.
+      setSampleIdLabel(isVial ? rawId : result.sample_id)
       if (result.declared_weight_mg != null) {
         setDeclaredWeightMg(String(result.declared_weight_mg))
       }
@@ -453,6 +486,11 @@ export function Step1SampleInfo() {
       } else if (matchedIds.length === 1) {
         // Single analyte — select it directly (could be a standalone peptide)
         setPeptideId(matchedIds[0] as number)
+      }
+      // Tag the session vial-scoped LAST — only after the parent populate fully
+      // succeeded, so a thrown lookup never leaks a stale pk.
+      if (subSamplePk != null) {
+        setLimsSubSamplePk(subSamplePk)
       }
     } catch (err) {
       setLookupError(err instanceof Error ? err.message : 'Lookup failed')

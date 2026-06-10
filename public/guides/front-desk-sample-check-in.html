@@ -1,0 +1,470 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Front-Desk Sample Check-in Guide</title>
+  <style>
+:root {
+  color-scheme: light dark;
+  --bg: #fbfbfa;
+  --fg: #1a1a1a;
+  --muted: #5a5a5a;
+  --border: #e0ddd6;
+  --accent: #2563eb;        /* royal blue */
+  --accent-soft: #dbeafe;
+  --callout-bg: #fef3c7;    /* amber-100 */
+  --callout-border: #f59e0b;
+  --callout-fg: #78350f;
+  --table-header-bg: #f3f1ec;
+  --table-row-alt: #faf8f3;
+  --code-bg: #f5f2eb;
+  --kbd-bg: #ffffff;
+  --kbd-border: #cbc7bd;
+  --link: #1d4ed8;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #181816;
+    --fg: #ededed;
+    --muted: #a8a8a8;
+    --border: #2e2c28;
+    --accent: #60a5fa;
+    --accent-soft: #1e3a8a;
+    --callout-bg: #3f2f0c;
+    --callout-border: #d97706;
+    --callout-fg: #fde68a;
+    --table-header-bg: #232220;
+    --table-row-alt: #1f1e1c;
+    --code-bg: #232220;
+    --kbd-bg: #1f1e1c;
+    --kbd-border: #3f3d38;
+    --link: #93c5fd;
+  }
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen,
+    Ubuntu, Cantarell, "Open Sans", "Helvetica Neue", sans-serif;
+  font-size: 16px;
+  line-height: 1.65;
+}
+
+main {
+  max-width: 840px;
+  margin: 0 auto;
+  padding: 48px 28px 96px;
+}
+
+header.page {
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 16px;
+  margin-bottom: 36px;
+}
+header.page .kicker {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+
+h1 {
+  font-size: 32px;
+  line-height: 1.2;
+  margin: 0;
+  font-weight: 700;
+}
+
+h2 {
+  font-size: 22px;
+  line-height: 1.3;
+  margin: 40px 0 12px;
+  font-weight: 700;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+}
+
+h3 {
+  font-size: 18px;
+  line-height: 1.4;
+  margin: 28px 0 8px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+h4 {
+  font-size: 15px;
+  margin: 20px 0 6px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+p { margin: 8px 0 12px; }
+
+a {
+  color: var(--link);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  text-decoration-thickness: 1px;
+}
+a:hover { text-decoration-thickness: 2px; }
+
+ul, ol { padding-left: 24px; margin: 8px 0 16px; }
+li { margin: 4px 0; }
+li > p { margin: 4px 0; }
+
+blockquote {
+  margin: 18px 0;
+  padding: 14px 18px;
+  background: var(--callout-bg);
+  border-left: 4px solid var(--callout-border);
+  color: var(--callout-fg);
+  border-radius: 4px;
+}
+blockquote p:first-child { margin-top: 0; }
+blockquote p:last-child { margin-bottom: 0; }
+blockquote strong { color: var(--callout-fg); }
+blockquote ul, blockquote ol { padding-left: 22px; }
+
+code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono",
+    monospace;
+  font-size: 0.88em;
+  background: var(--code-bg);
+  padding: 1px 5px;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+}
+pre {
+  background: var(--code-bg);
+  padding: 14px 16px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  overflow-x: auto;
+  font-size: 13px;
+}
+pre code {
+  background: transparent;
+  padding: 0;
+  border: 0;
+}
+
+kbd {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.85em;
+  background: var(--kbd-bg);
+  border: 1px solid var(--kbd-border);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  padding: 1px 6px;
+}
+
+table {
+  width: 100%;
+  margin: 16px 0;
+  border-collapse: collapse;
+  font-size: 0.95em;
+}
+thead th {
+  background: var(--table-header-bg);
+  text-align: left;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+}
+tbody td {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+tbody tr:nth-child(even) td {
+  background: var(--table-row-alt);
+}
+
+hr {
+  border: 0;
+  border-top: 1px solid var(--border);
+  margin: 36px 0;
+}
+
+/* Inline screenshot placeholders rendered from HTML comments */
+.screenshot-placeholder {
+  display: block;
+  margin: 14px 0;
+  padding: 14px 18px;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  background: var(--accent-soft);
+  color: var(--muted);
+  font-size: 13px;
+  font-style: italic;
+}
+.screenshot-placeholder::before {
+  content: "Screenshot — ";
+  font-weight: 600;
+  font-style: normal;
+}
+
+footer.page {
+  margin-top: 64px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 13px;
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+@media print {
+  body { background: #fff; color: #000; }
+  main { max-width: 100%; padding: 24px; }
+  blockquote { background: #fff8e1; }
+  .screenshot-placeholder { display: none; }
+  a { color: #000; text-decoration: underline; }
+}
+</style>
+</head>
+<body>
+  <main>
+    <header class="page">
+      <div class="kicker">Accu-Mk1 user guide</div>
+    </header>
+    <h1 id="front-desk-sample-check-in-guide">Front-Desk Sample Check-in Guide</h1>
+<h2 id="at-a-glance">At a glance</h2>
+<p>This guide walks you through receiving a sample shipment and checking each vial into Accu-Mk1 using the Receive Wizard. It covers the dominant happy path (open a sample, capture each vial, assign roles, print labels) plus the variants and recovery steps you&rsquo;ll actually hit.</p>
+<p>A heads-up: the <strong>Receive Wizard</strong> and the <strong>sub-samples workflow</strong> described here are new — Accu-Mk1 now treats every physical vial in a shipment as its own tracked unit, with a photo, an assignment role, and a label. Read this once end-to-end before your first big shipment.</p>
+<h2 id="what-this-workflow-gives-you">What this workflow gives you</h2>
+<blockquote>
+<p><strong>At a glance:</strong></p>
+<ul>
+<li><strong>One wizard to check in every vial in a shipment.</strong> Live camera capture, photo retake, optional remarks, save. The wizard remembers where you are if you come back to add more vials later.</li>
+<li><strong>A persistent sample-info sidebar</strong> during capture (Client, Contact, Peptide, Quantity, etc.) so you keep full context while the camera has your attention.</li>
+<li><strong>The first vial of a multi-vial shipment lands on the parent sample directly.</strong> Vial 2 and beyond become sub-samples named <code>&lt;parent&gt;-S01</code>, <code>&lt;parent&gt;-S02</code>, etc. Single-vial shipments stay clean — no sub-samples created.</li>
+<li><strong>Assignment tab with drag-and-drop role buckets</strong> (HPLC, ENDO, STERYL, XTRA). Whichever bucket you drop a vial into is where the lab tech finds it later.</li>
+<li><strong>Print Labels tab</strong> with per-label checkboxes. By default every vial in the session is selected; uncheck any you don&rsquo;t need. The parent&rsquo;s label prints alongside the sub-sample labels in one pass.</li>
+<li><strong>A [Finish] button on every tab</strong> — you don&rsquo;t have to walk through every step. Capture vials, assign roles, finish; or capture and finish; or capture, assign, print, finish. Whatever the situation calls for.</li>
+<li><strong>File picker fallback</strong> when the camera fails or is denied — pick a JPEG / PNG of the vial from disk and the wizard treats it identically.</li>
+<li><strong>Bac Water HPLC filter</strong> — when the parent&rsquo;s sample type is &ldquo;Bacteriostatic Water,&rdquo; the HPLC wizard Step 1 filters its analyte dropdown to additives (currently just Benzyl Alcohol), so the list looks short on purpose.</li>
+</ul>
+</blockquote>
+<h2 id="before-you-start">Before you start</h2>
+<p>Have Accu-Mk1 open and signed in. You&rsquo;ll be moving between the <strong>Intake</strong> area and the <strong>Cab label printer</strong> at your station, so make sure both are reachable before you open the first box. If your station camera permission was reset (new browser, new profile), expect a permission prompt the first time you hit the capture screen.</p>
+<p>Prerequisites:</p>
+<ul>
+<li>Accu-Mk1 web app open, logged in.</li>
+<li>Camera permission granted to the browser (or a fallback JPEG/PNG of the vial on disk).</li>
+<li>Cab label printer connected and selected as a printer in the browser.</li>
+<li>Label stock loaded: <strong>30x15mm</strong>.</li>
+<li>The shipment box opened, vials lined up in the order you&rsquo;ll check them in.</li>
+</ul>
+<h2 id="the-main-workflow">The main workflow</h2>
+<h3 id="step-1-find-the-sample-in-the-receive-list">Step 1 - Find the sample in the Receive list</h3>
+<ol>
+<li>Open <strong>Intake -&gt; Receive Sample</strong> from the left sidebar.</li>
+<li>The <strong>Samples</strong> list loads. Columns: <strong>Sample ID</strong>, <strong>Order #</strong>, <strong>Client</strong>, <strong>Sample Type</strong>, <strong>Date Sampled</strong>, <strong>Vials</strong>, <strong>State</strong>, <strong>Age</strong>.</li>
+<li>Click any column header to sort (tri-state: ascending -&gt; descending -&gt; unsorted). Default is SENAITE&rsquo;s order with no client-side sort applied.</li>
+<li>If you don&rsquo;t see the order you&rsquo;re looking for, hit the <strong>Refresh</strong> button in the top-right.</li>
+<li>If you&rsquo;re testing or expecting an internal order, tick <strong>Show Test Samples</strong>. Test contacts (forrest@valenceanalytical.com, etc.) are hidden by default.</li>
+</ol>
+
+<table>
+<thead>
+<tr>
+<th>Control</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Column header click</td>
+<td>Sort tri-state: ascending -&gt; descending -&gt; unsorted</td>
+</tr>
+<tr>
+<td><strong>Refresh</strong></td>
+<td>Re-pulls the list from SENAITE</td>
+</tr>
+<tr>
+<td><strong>Show Test Samples</strong></td>
+<td>Includes orders from internal test contacts (off by default)</td>
+</tr>
+</tbody>
+</table>
+<p>Click the row for the sample you&rsquo;re receiving. The <strong>Receive Wizard</strong> modal opens with that parent pre-selected.</p>
+<h3 id="step-2-vial-management-capture">Step 2 - Vial Management (capture)</h3>
+<p>This is the tab the wizard lands on. Left panel holds the persistent sample info card (Client, Contact, Type, Order #, Client Sample ID, Lot, Profiles, Declared Qty, Date Sampled, Analytes) so you have context while shooting photos.</p>
+
+<ol>
+<li>On the right sidebar, you&rsquo;ll see the vial list. If the parent was received in this session, it&rsquo;s marked <strong>Vial 1</strong>. Sub-samples (vial 2+) appear under it.</li>
+<li>In the main panel:<ul>
+<li>If the camera is available, you&rsquo;ll see a live video preview and a <strong>[Capture]</strong> button.</li>
+<li>If the camera fails or is denied, you&rsquo;ll see a styled <strong>[Upload]</strong> button instead. Pick a JPEG or PNG of the vial from disk.</li>
+</ul>
+</li>
+<li>Tap <strong>[Capture]</strong>. A static preview card replaces the live feed; <strong>[Retake]</strong> lets you redo it.</li>
+<li>Optional: type into the <strong>Remarks</strong> textarea. If you&rsquo;re editing an existing vial, this is pre-populated.</li>
+<li>Click <strong>[Save Vial]</strong>. The button is disabled until a photo is captured.</li>
+<li>On success a confirmation card appears with the new sample ID and a <strong>[Receive another vial]</strong> button. Use it to bang through the rest of the vials.</li>
+</ol>
+<h3 id="step-3-assignment-drag-and-drop-roles">Step 3 - Assignment (drag-and-drop roles)</h3>
+<p>The <strong>Assignment</strong> tab is disabled until at least one vial is saved this session (or the parent has already been received in a prior session).</p>
+
+<ol>
+<li>Drag a vial card from the left into the appropriate role bucket. The four buckets are:</li>
+</ol>
+<table>
+<thead>
+<tr>
+<th>Role</th>
+<th>Used for</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>HPLC</strong></td>
+<td>Identity and quantitation HPLC analyses</td>
+</tr>
+<tr>
+<td><strong>ENDO</strong></td>
+<td>Endotoxin testing</td>
+</tr>
+<tr>
+<td><strong>STERYL</strong></td>
+<td>Sterility testing</td>
+</tr>
+<tr>
+<td><strong>XTRA</strong></td>
+<td>Held for future use / unassigned downstream routing</td>
+</tr>
+</tbody>
+</table>
+<ol start="2">
+<li>The role persists to the database the moment you drop. UI updates optimistically.</li>
+<li>If a drop fails (backend error), the UI rolls back and shows an error. Hit <strong>Refresh</strong> to re-fetch from backend before trying again.</li>
+<li>There is no undo button. To change a role, drag the vial into a different bucket. To clear it entirely, contact a backend admin.</li>
+</ol>
+<h3 id="step-4-print-labels">Step 4 - Print Labels</h3>
+<p>The <strong>Print Labels</strong> tab is disabled until at least one vial exists in the session. The parent vial is included in this list if you received it this session, so one print pass covers everything.</p>
+
+<ol>
+<li>Per-label rows show: checkbox, QR preview, sample ID, order #, vial position.</li>
+<li>The control panel above the list shows <strong>&ldquo;N of M labels selected&rdquo;</strong> with <strong>[Select all]</strong> and <strong>[Clear all]</strong> buttons.</li>
+<li>Tick the labels you want, then click <strong>[Print N labels]</strong>.</li>
+<li>The browser print dialog opens. Select the <strong>Cab printer</strong> and paper size <strong>30x15mm</strong>.</li>
+<li>Confirm in the dialog. Labels include QR code, sample ID, order #, and vial position.</li>
+</ol>
+<p>There is no <strong>[Skip Printing]</strong> button. If you don&rsquo;t need to print, just close the wizard or navigate away.</p>
+<h3 id="step-5-sub-sample-details-read-only">Step 5 - Sub Sample Details (read-only)</h3>
+<p>This tab is disabled until at least one sub-sample exists. Parent-only sessions skip it.</p>
+
+<table>
+<thead>
+<tr>
+<th>Column</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Vial #</strong></td>
+<td>Position within the parent&rsquo;s vial set</td>
+</tr>
+<tr>
+<td><strong>Sample ID</strong></td>
+<td><code>&lt;parent&gt;-S&lt;NN&gt;</code></td>
+</tr>
+<tr>
+<td><strong>Received At</strong></td>
+<td>Timestamp</td>
+</tr>
+<tr>
+<td><strong>Received By</strong></td>
+<td>Staff name</td>
+</tr>
+<tr>
+<td><strong>Status</strong></td>
+<td>Current SENAITE state</td>
+</tr>
+<tr>
+<td><strong>[View Details]</strong></td>
+<td>Opens the sub-sample&rsquo;s detail page</td>
+</tr>
+<tr>
+<td><strong>[Print Label]</strong></td>
+<td>Reprints a single label without leaving this tab</td>
+</tr>
+</tbody>
+</table>
+<h3 id="wizard-footer-behavior">Wizard footer behavior</h3>
+<ul>
+<li><strong>[Back]</strong> appears on all tabs except Vial Management.</li>
+<li><strong>[Finish]</strong> is available on every tab whenever you&rsquo;ve saved at least one vial in the current session. (When the wizard is opened from a sample&rsquo;s detail page just to view its existing sub-samples — no new check-in work — [Finish] is hidden and the X in the dialog corner is the close affordance.)</li>
+<li><strong>[Continue]</strong> appears on Vial Management (disabled until a vial is saved).</li>
+<li>On Assignment, the forward button becomes <strong>[Print Labels]</strong>.</li>
+<li>Print Labels has no forward button beyond <strong>[Finish]</strong>.</li>
+</ul>
+<h2 id="variants">Variants</h2>
+<h3 id="adding-a-vial-to-a-parent-thats-already-checked-in">Adding a vial to a parent that&rsquo;s already checked in</h3>
+<ol>
+<li>Open the parent sample detail page.</li>
+<li>Scroll to the <strong>Sub-Samples</strong> section.</li>
+<li>Click <strong>[Add Sub-Sample]</strong>. The wizard launches with the parent pre-selected and the vial sequence already incremented to the next slot.</li>
+<li>Proceed as in Step 2 above. The wizard sidebar will show all prior vials (read-only, linked) above the new one.</li>
+</ol>
+<p>This is allowed even on already-published parents. Parent state is not touched; the new vial sits with no analyses until a worksheet routes it. COA invalidation is not handled in v1.</p>
+<h3 id="reprinting-a-label">Reprinting a label</h3>
+<p>You have two paths:</p>
+<ul>
+<li>From inside the wizard: open the <strong>Sub Sample Details</strong> tab and use the per-row <strong>[Print Label]</strong> button.</li>
+<li>From the parent sample detail page: each sub-sample row has its own <strong>[Print Label]</strong> action that re-opens the print dialog.</li>
+</ul>
+<h3 id="adjusting-a-vials-role-assignment">Adjusting a vial&rsquo;s role assignment</h3>
+<p>Re-assignment is a drag from the current bucket to a different one. The backend handles it as a PATCH; if it fails, the UI rolls back and you&rsquo;ll see an error. Hit <strong>Refresh</strong> before retrying. There&rsquo;s no explicit lock at intake — once a vial is on a worksheet, the lab tech locks the <strong>variance set</strong> (a separate concept they own; you don&rsquo;t need to touch it).</p>
+<h3 id="bacteriostatic-water-analyte-filter">Bacteriostatic Water analyte filter</h3>
+<p>When the parent sample type is <strong>Bacteriostatic Water</strong>, the HPLC wizard Step 1 filters to <code>'additive'</code>-class analytes (currently just Benzyl Alcohol). Additives are hidden in all other contexts. Nothing for you to do here; the filter is automatic. Flagging it so the list doesn&rsquo;t look &ldquo;wrong&rdquo; when you see only one analyte.</p>
+<h2 id="common-pitfalls">Common pitfalls</h2>
+<ul>
+<li><strong>&ldquo;Show Test Samples&rdquo; is off by default.</strong> Internal test orders (forrest@valenceanalytical.com and similar) won&rsquo;t appear until you tick the checkbox.</li>
+<li><strong>XTRA is a real role, not a placeholder.</strong> It&rsquo;s the fourth bucket on Assignment and is meant for vials held for future use. Drag vials into it intentionally.</li>
+<li><strong>No undo on Assignment drops.</strong> A drop persists immediately. To change a role, drag to a different bucket. To clear it entirely, you need a backend admin.</li>
+<li><strong>Decimal quantity fields don&rsquo;t inherit to sub-samples.</strong> Plone-5 validators reject Python 3 types, so <code>Analyte{N}DeclaredQuantity</code> and <code>DeclaredTotalQuantity</code> won&rsquo;t carry from parent to sub. Enter them manually on the SENAITE AR page if you need them populated.</li>
+<li><strong>Print Labels does not block sub-sample persistence.</strong> If the printer dies, the vial is still saved. Reprint later from <strong>Sub Sample Details</strong> or the parent sample page.</li>
+</ul>
+<h2 id="edge-cases-recovery">Edge cases &amp; recovery</h2>
+<ul>
+<li><strong>Camera and file picker both fail:</strong> photo capture is blocked. There&rsquo;s no path forward in that branch. Resolve the browser/permission state, then retry.</li>
+<li><strong>Drag-to-new-bucket PATCH fails:</strong> UI rolls back, error appears. Click <strong>Refresh</strong> on the Assignment tab to re-sync state with the backend, then redo the drop.</li>
+<li><strong>Wizard closed mid-session with an unsaved vial:</strong> saved vials persist atomically; the in-flight unsaved one is lost. Re-open the wizard from the parent; the sidebar pre-populates with the saved vials, and you can capture the missing one fresh.</li>
+<li><strong>Wizard reopens and you see prior-session vials in the sidebar:</strong> that&rsquo;s expected. They render read-only with links to detail pages. New session vials appear below them.</li>
+<li><strong>Adding a vial to an already-published parent:</strong> allowed unconditionally. Parent state is untouched, the new vial has no analyses until a worksheet routes it, and no COA invalidation happens.</li>
+<li><strong>Cold-cache parent on save:</strong> if <code>lims_samples</code> is more than ~5 min stale, the backend auto-refreshes from SENAITE and reconciles. Rare. If it surfaces in an error, just retry.</li>
+<li><strong>Print dialog fails or you pick the wrong printer:</strong> worst case, write the sample ID on the vial in marker and reprint from <strong>Sub Sample Details</strong> or the parent detail page later.</li>
+</ul>
+<h2 id="glossary">Glossary</h2>
+<ul>
+<li><strong>Additive class:</strong> Analyte discriminator (<code>'peptide'</code> or <code>'additive'</code>). Drives the HPLC Step 1 filter for Bacteriostatic Water.</li>
+<li><strong>Contact (SENAITE Contact field):</strong> Client contact person. Inherits parent -&gt; sub-sample. Required for <code>update_remarks</code> to succeed.</li>
+<li><strong>Secondary AR:</strong> SENAITE&rsquo;s <code>AnalysisRequestSecondary</code>. The technical term for a sub-sample. Auto-named <code>&lt;parent&gt;-S&lt;NN&gt;</code>.</li>
+<li><strong>Service group:</strong> A grouping of tests/analyses. Used downstream in worksheets and SLAs; not shown in the wizard.</li>
+<li><strong>Sub-sample:</strong> One physical vial received as a child of a parent. Represented as <code>&lt;parent&gt;-S&lt;NN&gt;</code> (e.g. <code>P-0134-S02</code>). Vial 1 is the parent; vial 2+ are sub-samples.</li>
+<li><strong>Assignment role:</strong> Which bench a vial goes to: <code>hplc</code>, <code>endo</code>, <code>ster</code>, or <code>xtra</code>. Set via drag-to-bucket on the Assignment tab. Different from the lab tech&rsquo;s &ldquo;variance set&rdquo; (which is about which vials count toward statistics — not your concern at intake).</li>
+<li><strong>Vial sequence:</strong> Integer (1, 2, 3, &hellip;) representing the sub-sample&rsquo;s position within its parent&rsquo;s vial set. Displayed as &ldquo;Vial 2 of 4&rdquo; (vial_sequence + 1). Unique per parent; assigned atomically at save.</li>
+<li><strong>XTRA vial:</strong> Assignment role for vials held for future use, not routed to a specific test yet.</li>
+</ul>
+    <footer class="page">
+      <span>Source: <code>front-desk-sample-check-in.md</code></span>
+      <span>Generated from the latest markdown source</span>
+    </footer>
+  </main>
+</body>
+</html>

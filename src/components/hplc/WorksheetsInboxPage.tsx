@@ -1,12 +1,27 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { DndContext, DragOverlay, type DragEndEvent, type DragStartEvent } from '@dnd-kit/core'
-import { useState } from 'react'
-import { Inbox, RefreshCw } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { HelpCircle, Inbox, RefreshCw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
+import { Input } from '@/components/ui/input'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
-import { InboxServiceGroupCard, type DragData } from '@/components/hplc/InboxServiceGroupCard'
+import { InboxVialCard, type DragData } from '@/components/hplc/InboxVialCard'
 import { WorksheetDropPanel } from '@/components/hplc/WorksheetDropPanel'
+import {
+  MICRO_CATEGORIES,
+  vialHasMicroCategory,
+  vialMatchesSampleId,
+  vialMatchesAnalyte,
+} from '@/lib/inbox-filters'
 import {
   useInboxSamples,
   usePriorityMutation,
@@ -21,9 +36,31 @@ import {
   deleteWorksheet,
   removeWorksheetItem,
   type InboxPriority,
-  type InboxSampleItem,
-  type InboxServiceGroupSection,
+  type InboxRole,
 } from '@/lib/api'
+
+// localStorage keys for filter persistence (per the spec UI section)
+const STORAGE_ROLE_KEY = 'accu_mk1_worksheet_inbox_role'
+const STORAGE_SHOW_XTRA_KEY = 'accu_mk1_worksheet_inbox_show_xtra'
+const STORAGE_HIDE_TEST_KEY = 'accu_mk1_worksheet_inbox_hide_test_orders'
+
+function loadStoredRole(): InboxRole {
+  const v = typeof window !== 'undefined' ? window.localStorage.getItem(STORAGE_ROLE_KEY) : null
+  return v === 'microbiology' ? 'microbiology' : 'hplc'
+}
+
+function loadStoredShowXtra(): boolean {
+  if (typeof window === 'undefined') return false
+  return window.localStorage.getItem(STORAGE_SHOW_XTRA_KEY) === 'true'
+}
+
+function loadStoredHideTestOrders(): boolean {
+  // Default to true (the production-safe behavior). Persisted so a tester who
+  // unchecks it once doesn't get reset every page load.
+  if (typeof window === 'undefined') return true
+  const v = window.localStorage.getItem(STORAGE_HIDE_TEST_KEY)
+  return v === null ? true : v === 'true'
+}
 
 // ─── Skeleton ────────────────────────────────────────────────────────────────
 
@@ -49,58 +86,55 @@ function CardSkeleton() {
   )
 }
 
-// ─── Flatten samples → service group cards ───────────────────────────────────
-
-interface FlatCard {
-  sample: InboxSampleItem
-  group: InboxServiceGroupSection
-  key: string
-}
-
-function flattenToCards(samples: InboxSampleItem[]): FlatCard[] {
-  const cards: FlatCard[] = []
-  for (const sample of samples) {
-    for (const group of sample.analyses_by_group) {
-      cards.push({
-        sample,
-        group,
-        key: `${sample.uid}::${group.group_id}`,
-      })
-    }
-  }
-  // Sort: expedited first, then high, then normal. Within same priority, by age (oldest first).
-  const priorityOrder: Record<string, number> = { expedited: 0, high: 1, normal: 2 }
-  cards.sort((a, b) => {
-    const pa = priorityOrder[a.sample.priority] ?? 2
-    const pb = priorityOrder[b.sample.priority] ?? 2
-    if (pa !== pb) return pa - pb
-    // Older samples first (earlier date_received)
-    const da = a.sample.date_received ?? ''
-    const db = b.sample.date_received ?? ''
-    return da.localeCompare(db)
-  })
-  return cards
-}
-
 // ─── Page ─────────────────────────────────────────────────────────────────────
+//
+// Vial-flat inbox: one card per vial (parent or sub-sample). Server-side
+// sorting groups same-family vials adjacently (parent first, then subs by
+// vial_sequence); the only client-side sort is the priority pass below.
 
 export default function WorksheetsInboxPage() {
   const queryClient = useQueryClient()
-  const [hideTestOrders, setHideTestOrders] = useState(true)
+  const [hideTestOrders, setHideTestOrders] = useState<boolean>(loadStoredHideTestOrders)
   const [hidePrepped, setHidePrepped] = useState(true)
+  const [role, setRole] = useState<InboxRole>(loadStoredRole)
+  const [showXtra, setShowXtra] = useState<boolean>(loadStoredShowXtra)
   const [isRefreshing, setIsRefreshing] = useState(false)
+
+  // Client-side inbox filters (transient — not persisted). Sample-ID applies to
+  // both benches; analyte is HPLC-only; micro-category is Micro-only.
+  const [sampleIdFilter, setSampleIdFilter] = useState('')
+  const [analyteFilter, setAnalyteFilter] = useState('')
+  const [microCategory, setMicroCategory] = useState('') // '' = all categories
+
+  // Persist filter selections so the tech's last filter sticks across sessions
+  useEffect(() => {
+    window.localStorage.setItem(STORAGE_ROLE_KEY, role)
+  }, [role])
+  useEffect(() => {
+    window.localStorage.setItem(STORAGE_SHOW_XTRA_KEY, String(showXtra))
+  }, [showXtra])
+  useEffect(() => {
+    window.localStorage.setItem(STORAGE_HIDE_TEST_KEY, String(hideTestOrders))
+  }, [hideTestOrders])
+
   const {
     data: inboxData,
     isLoading,
     isError,
     error,
     refetch,
-  } = useInboxSamples(hideTestOrders, hidePrepped)
+  } = useInboxSamples({ hideTestOrders, hidePrepped, role, showXtra })
 
   const handleForceRefresh = async () => {
     setIsRefreshing(true)
     try {
-      await getInboxSamples(hideTestOrders, true, hidePrepped)
+      await getInboxSamples({
+        hideTestOrders,
+        forceRefresh: true,
+        hidePrepped,
+        role,
+        showXtra,
+      })
       queryClient.invalidateQueries({ queryKey: ['inbox-samples'] })
     } finally {
       setIsRefreshing(false)
@@ -125,12 +159,44 @@ export default function WorksheetsInboxPage() {
   const [activeDrag, setActiveDrag] = useState<DragData | null>(null)
   const [pendingDropKeys, setPendingDropKeys] = useState<Set<string>>(new Set())
 
-  const samples = inboxData?.items ?? []
+  const vials = inboxData?.items ?? []
   const total = inboxData?.total ?? 0
-  const cards = flattenToCards(samples).filter(c => !pendingDropKeys.has(c.key))
+  const visibleVials = vials
+    .filter(v => !pendingDropKeys.has(`${v.uid}::${v.analyses[0]?.group_id ?? 0}`))
+    .filter(v => !sampleIdFilter.trim() || vialMatchesSampleId(v, sampleIdFilter))
+    .filter(v => role !== 'hplc' || !analyteFilter.trim() || vialMatchesAnalyte(v, analyteFilter))
+    .filter(v => role !== 'microbiology' || !microCategory || vialHasMicroCategory(v, microCategory))
+    // Priority pass on top of the server's family-sort. Stable: same-parent
+    // vials stay adjacent because the secondary sort key is preserved.
+    .slice()
+    .sort((a, b) => {
+      const priorityOrder: Record<string, number> = { expedited: 0, high: 1, normal: 2 }
+      const pa = priorityOrder[a.priority] ?? 2
+      const pb = priorityOrder[b.priority] ?? 2
+      if (pa !== pb) return pa - pb
+      // Within same priority, keep parents + their subs adjacent via
+      // (parent_sample_id, is_parent first, vial_sequence) — same as backend.
+      if (a.parent_sample_id !== b.parent_sample_id) {
+        return a.parent_sample_id.localeCompare(b.parent_sample_id)
+      }
+      if (a.is_parent !== b.is_parent) return a.is_parent ? -1 : 1
+      return a.vial_sequence - b.vial_sequence
+    })
+
+  const filtersActive =
+    sampleIdFilter.trim().length > 0 ||
+    (role === 'hplc' && analyteFilter.trim().length > 0) ||
+    (role === 'microbiology' && microCategory.length > 0)
+  const displayCount = filtersActive ? visibleVials.length : total
 
   function handlePriorityChange(sampleUid: string, priority: InboxPriority) {
     priorityMutation.mutate({ sampleUid, priority })
+  }
+
+  function clearFilters() {
+    setSampleIdFilter('')
+    setAnalyteFilter('')
+    setMicroCategory('')
   }
 
   function handleDragStart(event: DragStartEvent) {
@@ -195,18 +261,18 @@ export default function WorksheetsInboxPage() {
         <div className="flex-1 overflow-y-auto">
           <div className="p-6">
             {/* Header */}
-            <div className="flex items-start justify-between gap-4 mb-6">
+            <div className="flex items-start justify-between gap-4 mb-4">
               <div>
                 <div className="flex items-center gap-3">
-                  <h1 className="text-2xl font-semibold tracking-tight">Received Samples</h1>
+                  <h1 className="text-2xl font-semibold tracking-tight">Inbox</h1>
                   {!isLoading && !isError && (
                     <span className="inline-flex items-center rounded-full bg-muted px-2.5 py-0.5 text-sm font-medium text-muted-foreground">
-                      {cards.length} groups · {total} samples
+                      {displayCount} vial{displayCount === 1 ? '' : 's'}
                     </span>
                   )}
                 </div>
                 <p className="mt-1 text-sm text-muted-foreground">
-                  Drag analysis groups to worksheets on the right
+                  Drag vials to worksheets on the right
                 </p>
               </div>
               <div className="flex items-center gap-3">
@@ -224,6 +290,13 @@ export default function WorksheetsInboxPage() {
                   />
                   <span className="text-sm text-muted-foreground">Hide prepped</span>
                 </label>
+                <label className="flex items-center gap-2 cursor-pointer select-none">
+                  <Checkbox
+                    checked={showXtra}
+                    onCheckedChange={v => setShowXtra(v === true)}
+                  />
+                  <span className="text-sm text-muted-foreground">Show XTRA</span>
+                </label>
                 <Button
                   variant="ghost"
                   size="sm"
@@ -235,7 +308,90 @@ export default function WorksheetsInboxPage() {
                   <RefreshCw className={`size-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
                   <span className="text-xs">Refresh</span>
                 </Button>
+                {/* Worksheets SOP — served from public/guides/ via Vite. Path
+                    matches the file the build script mirrors there. */}
+                <a
+                  href="/guides/lab-tech-worksheets-variance.html"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors shrink-0"
+                  title="Open the lab-tech worksheets &amp; variance SOP in a new tab"
+                >
+                  <HelpCircle className="size-3.5" aria-hidden="true" />
+                  Worksheets SOP
+                </a>
               </div>
+            </div>
+
+            {/* Bench filter chips */}
+            <div className="mb-6 flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setRole('hplc')}
+                className={cn(
+                  'inline-flex items-center rounded-full border px-3 py-1 text-sm font-medium transition-colors',
+                  role === 'hplc'
+                    ? 'bg-sky-500/15 text-sky-700 border-sky-500/40 dark:text-sky-300'
+                    : 'bg-transparent text-muted-foreground border-border hover:bg-muted/40',
+                )}
+              >
+                HPLC
+              </button>
+              <button
+                type="button"
+                onClick={() => setRole('microbiology')}
+                className={cn(
+                  'inline-flex items-center rounded-full border px-3 py-1 text-sm font-medium transition-colors',
+                  role === 'microbiology'
+                    ? 'bg-violet-500/15 text-violet-700 border-violet-500/40 dark:text-violet-300'
+                    : 'bg-transparent text-muted-foreground border-border hover:bg-muted/40',
+                )}
+              >
+                Microbiology
+              </button>
+            </div>
+
+            {/* Client-side filters */}
+            <div className="mb-6 flex flex-wrap items-center gap-2">
+              <Input
+                placeholder="Sample ID"
+                value={sampleIdFilter}
+                onChange={e => setSampleIdFilter(e.target.value)}
+                className="h-8 w-40 text-sm"
+              />
+              {role === 'hplc' && (
+                <Input
+                  placeholder="Analyte"
+                  value={analyteFilter}
+                  onChange={e => setAnalyteFilter(e.target.value)}
+                  className="h-8 w-44 text-sm"
+                />
+              )}
+              {role === 'microbiology' && (
+                <Select
+                  value={microCategory || 'all'}
+                  onValueChange={v => setMicroCategory(v === 'all' ? '' : v)}
+                >
+                  <SelectTrigger size="sm" className="h-8 w-56 text-sm">
+                    <SelectValue placeholder="All categories" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All categories</SelectItem>
+                    {MICRO_CATEGORIES.map(c => (
+                      <SelectItem key={c.value} value={c.value}>{c.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+              {filtersActive && (
+                <button
+                  type="button"
+                  onClick={clearFilters}
+                  className="text-xs text-muted-foreground hover:text-foreground underline-offset-2 hover:underline"
+                >
+                  Clear
+                </button>
+              )}
             </div>
 
             {/* Loading state */}
@@ -255,27 +411,36 @@ export default function WorksheetsInboxPage() {
             )}
 
             {/* Empty state */}
-            {!isLoading && !isError && cards.length === 0 && (
+            {!isLoading && !isError && visibleVials.length === 0 && (
               <div className="flex flex-col items-center justify-center gap-3 rounded-md border py-16 text-center">
                 <Inbox className="size-12 text-muted-foreground/50" />
-                <p className="text-sm font-medium text-muted-foreground">No received samples</p>
+                <p className="text-sm font-medium text-muted-foreground">
+                  No {role === 'hplc' ? 'HPLC' : 'Microbiology'} vials waiting
+                </p>
                 <p className="text-xs text-muted-foreground/60">
-                  Samples with status "Received" will appear here
+                  {role === 'hplc'
+                    ? 'Switch to Microbiology to see those vials.'
+                    : 'Switch to HPLC to see those vials.'}
                 </p>
               </div>
             )}
 
             {/* Cards */}
-            {!isLoading && !isError && cards.length > 0 && (
+            {!isLoading && !isError && visibleVials.length > 0 && (
               <div className="space-y-2">
-                {cards.map(card => (
-                  <InboxServiceGroupCard
-                    key={card.key}
-                    sample={card.sample}
-                    group={card.group}
-                    onPriorityChange={handlePriorityChange}
-                  />
-                ))}
+                {visibleVials.map((vial, idx) => {
+                  const prev = idx > 0 ? visibleVials[idx - 1] : null
+                  const groupedWithPrevious =
+                    prev !== null && prev.parent_sample_id === vial.parent_sample_id
+                  return (
+                    <InboxVialCard
+                      key={vial.uid}
+                      vial={vial}
+                      groupedWithPrevious={groupedWithPrevious}
+                      onPriorityChange={handlePriorityChange}
+                    />
+                  )
+                })}
               </div>
             )}
           </div>

@@ -1,0 +1,218 @@
+# Vials Quick Look Overlay — Design
+
+*2026-06-05 · branch `subvial/continue` · status: approved (Approach A)*
+
+## Problem
+
+On a parent sample page, reviewing the vials' analyses means navigating into each
+sub-sample page one at a time. The lab wants an at-a-glance view: every vial of the
+parent and its analysis services, with the same fields the sample details page shows,
+without leaving the parent page.
+
+## Decision summary (user-approved)
+
+- **Fully interactive** — not read-only. Inline result editing, method/instrument
+  selects, transitions, retest chains, locking all behave exactly as on the vial pages.
+- **Wide stacked dialog** — one modal (~90vw), vials stacked vertically, each with its
+  own `AnalysisTable`. Not a tabbed sheet.
+- **Approach A: frontend-only aggregation.** No new backend endpoints. One
+  `listSubSamples(parent)` + N parallel `listLimsAnalysesForSubSample(pk)` + one shared
+  `listParentLineStates(parent)`.
+- **Button lives in the Analyses section** header row of the parent page, next to
+  Manage Analyses.
+
+## Architecture
+
+### New component: `src/components/senaite/VialsQuickLookDialog.tsx`
+
+Props:
+
+```ts
+interface VialsQuickLookDialogProps {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  parentSampleId: string            // e.g. "P-0144"
+  analyteNameMap: Map<number, string>
+  onNavigateToVial: (sampleId: string) => void  // closes dialog + navigates
+}
+```
+
+Internal data flow (TanStack Query):
+
+1. `useQuery(['sub-samples', parentSampleId], listSubSamples)` — vial list. The parent
+   page already holds this query; the dialog shares the cache key so it is warm.
+2. `useQueries` — one query per vial calling `listLimsAnalysesForSubSample(id)`
+   (senaite-shape, `include_retests=true`). **The query key MUST be the exact key the
+   vial page uses for the same data** (read it from SampleDetails' vial-mode
+   useQuery at plan time — do not invent a new key) so saves made in the dialog and
+   on the vial page invalidate each other.
+3. `useQuery(['parent-line-states', parentSampleId], listParentLineStates)` — shared
+   across all vials for parent-verified locking.
+
+Queries are `enabled: open` — nothing fetches until the dialog opens.
+
+### Per-vial section
+
+Header (collapsible, default expanded; chevron toggle):
+
+- Vial photo thumbnail — mirrors `VialThumb` (`VialsList.tsx:44`): `fetchSubSamplePhotoUrl`
+  gated on `photo_external_uid`, "no photo" placeholder otherwise (user request 2026-06-05)
+- Vial sample ID — clickable, calls `onNavigateToVial` (lab UX: clickable IDs)
+- Role badge with existing role tint (hplc/endo/ster/xtra), same colors as the
+  sub-sample pages
+- Vial status badge (review state from the sub-sample record)
+- Analysis count, e.g. "3 analyses"
+
+Body: the existing `AnalysisTable`, passed per-vial props mirroring what
+`SampleDetails` passes in vial mode (source of truth: the vial-mode wiring around
+`SampleDetails.tsx:3585`):
+
+- `analyses` — that vial's lines (retest folding handled by `include_retests` +
+  AnalysisTable's existing chain UI)
+- `analyteNameMap` — passed through from the parent page
+- `onResultSaved` / `onTransitionComplete` / `onMethodInstrumentSaved` — invalidate
+  that vial's `lims-analyses` query (and parent-line-states after transitions, since
+  promote/retest can change parent rows)
+- `parentLineStates` — the shared query result (lock icons on parent-verified lines)
+- `primaryAnalysisUids` / `primaryRole` — computed per vial from its
+  `assignment_role`, reusing the same matching logic the vial page uses (extract the
+  existing computation into a small exported helper if it is currently inline; the
+  helper move is mechanical, not a refactor of behavior)
+- SLA props (`analysisSlaMap` etc.) — **omitted** in v1. AnalysisTable already treats
+  them as optional; the SLA column renders its loading/absent state. If this reads
+  poorly in UAT, a follow-up can wire per-vial SLA queries.
+
+States:
+
+- **Loading:** per-vial skeleton rows under each header.
+- **Error:** per-vial inline error with retry; one vial failing must not blank the
+  others.
+- **Empty vial:** header + "No analyses assigned".
+- **No vials:** button is disabled (see below), so the dialog never opens empty.
+
+### Dialog shell
+
+shadcn `Dialog`, `DialogContent` with `max-w-[90vw] xl:max-w-[1400px]`,
+`max-h-[85vh]`, internal `overflow-y-auto`. Title: `Vials — {parentSampleId}`.
+Follows BulkPromoteDialog's structure (header / scrollable body), just wider.
+
+### Button
+
+In the Analyses section header row next to Manage Analyses
+(`SampleDetails.tsx:~3480`):
+
+- Label: **Vials Quick Look**, `Eye` icon, `variant="outline" size="sm"` matching
+  Manage Analyses
+- Rendered on **parent pages only** (`parentSampleId === null` guard, same gate the
+  sub-samples section uses)
+- Disabled with tooltip "No vials yet" when `subSamples.length === 0`
+
+## v1.1 — UAT follow-ups (user request, 2026-06-05 evening)
+
+1. **Quick re-assign from the dialog.** The role badge in each vial header becomes a
+   dropdown (current badge + chevron): HPLC / ENDO / STERYL / XTRA / Unassigned →
+   `patchVialAssignment(sample_id, role)`. On success: toast + invalidate
+   `['sub-samples', parentSampleId]` AND that vial's analyses key (assignment PATCH
+   auto-seeds analyses). On failure: error toast, no local state change.
+   Multiple vials per role are allowed (matches AssignStep semantics).
+2. **"Vial N of X" in the header** — `vial_sequence` of `parent.sub_sample_count`.
+3. **SLA wiring (supersedes the v1 "omit SLA" decision).** Per-vial, `VialSection`
+   builds `{...buildNativeSubSampleLookup(vial, parent), analyses}` and calls
+   `useAnalysisSlaMap` — the exact code path vial pages use — and passes the five
+   SLA props to AnalysisTable. (Legacy SENAITE-backed vials may see minor input
+   differences vs their own page (native-built lookup); accepted.)
+
+## v1.2 — UAT follow-ups round 2 (user request, 2026-06-05 late)
+
+1. **Vial photo in the SampleDetails sticky header** (vial pages): thumbnail on the
+   right side of the sticky band (next to the counters), hover shows an enlarged
+   preview (CSS group-hover absolute overlay, right-anchored, ~w-72). Photo presence
+   from `parentSummary.sub_samples.find(me).photo_external_uid` (already fetched on
+   vial pages); same `fetchSubSamplePhotoUrl` path. The thumb component moves from
+   VialsQuickLookDialog-local into the shared helpers file with `size`/`hoverZoom`
+   props; the dialog reuses it.
+2. **Vial numbering consistency**: the dialog header adopts the page convention —
+   family-indexed `Vial {vial_sequence + 1} of {sub_sample_count + 1}` (parent is
+   vial 1), matching SampleDetails' header lines (~2643-2647, ~2664).
+
+## v1.3 — UAT follow-up round 3 (user request, 2026-06-06)
+
+**Merge the per-vial wrapper into AnalysisTable's card** — the dialog double-wraps
+(VialSection border + AnalysisTable's own Card with "ANALYSES" heading + progress
+block), wasting vertical space. Additive change:
+
+- `AnalysisTable` gains optional `headerContent?: ReactNode` (replaces the default
+  icon/"Analyses"/count title block on the header row's LEFT; filter tabs stay on
+  the right) and `hideProgress?: boolean` (drops the progress-bar block). Defaults
+  preserve current rendering everywhere else.
+- The dialog's expanded vial sections render `AnalysisTable` directly (no outer
+  border div) with `headerContent` = the vial header (collapse chevron, photo, ID,
+  role dropdown, vial count, analyses·received) and `hideProgress` (status tabs +
+  counts already convey state). Collapsed / loading / error / empty states keep the
+  slim standalone header row as today.
+- The `data-testid="quicklook-vial-header"` stays on the header row in both states.
+
+## v1.4 — UAT follow-up round 4 (user request, 2026-06-06)
+
+**Hover = grow in place, not a second preview.** The v1.2 hover renders a SECOND
+enlarged img below the thumb (reads as two stacked images). Replace with a single
+image that expands on hover: the container keeps its layout size; on group-hover the
+img becomes absolutely positioned (anchored top-right so it grows leftward/down),
+~w-72/max-h-96, `object-contain`, elevated z, with a short transition. No duplicate
+img node.
+
+## v1.5 — UAT follow-up round 5 (user report, 2026-06-06)
+
+**Hover zoom flickers on right-exit and jerks the header height.** Root cause of
+both: v1.4 transitions ONE img between in-flow and absolute. `position` is not
+transitionable — it snaps — so on hover-out the still-large image re-enters layout
+flow for the shrink transition (header balloons + snaps back), and on right-exit
+that in-flow large image lands back under the cursor → re-hover loop (flashing).
+
+Fix (supersedes v1.4's single-node constraint — the constraint that matters is the
+VISUAL, one image growing, not the node count):
+- Base thumb img: static, in flow, never changes — container size is constant.
+- Enlarged overlay img: ALWAYS `absolute top-0 right-0` (never in flow → zero
+  layout shift), `pointer-events-none` (can never capture hover → loop impossible
+  by construction), `aria-hidden` + empty alt (no duplicate a11y node), animates
+  ONLY `opacity-0 scale-50 origin-top-right` → `group-hover:opacity-100
+  group-hover:scale-100` with a short transition (GPU-composited, smooth).
+- Hover trigger region is exactly the small thumb. The overlay covers the thumb and
+  scales from its top-right corner, so it reads as the image itself growing.
+
+## Out of scope (explicit)
+
+- No backend changes (Approach B parked; revisit only if vial counts grow).
+- No extraction of a shared `VialAnalysesPanel` (Approach C — conflicts with
+  additive-only; the only allowed move is exporting the existing primary-role helper
+  if it is inline).
+- No SLA wiring in v1.
+- No bulk actions *across* vials (each AnalysisTable's selection/bulk bar stays
+  scoped to its own vial, as it is today).
+
+## Testing (vitest, `src/test/vials-quicklook.test.tsx`)
+
+1. Button renders on parent page, absent on sub-sample page.
+2. Button disabled when no vials.
+3. Open dialog → one section per vial, ordered by `vial_sequence`, role badges shown.
+4. Vial with no analyses shows the empty state.
+5. One vial's query failing renders its error state while siblings render rows.
+6. Result save invalidates that vial's `lims-analyses` query key (spy on
+   queryClient).
+7. Vial ID click calls `onNavigateToVial` with the vial sample ID and closes.
+
+Follow the established TestClient/mock patterns in `src/test/` (mock `@/lib/api`,
+not fetch). Keep the new fixture self-contained — remember the auth-override
+snapshot/restore lesson from the backend suite applies conceptually: never mutate
+shared module state without restoring it.
+
+## Risks / gotchas
+
+- **Query-key mismatch** is the main correctness risk: if the dialog's per-vial key
+  differs from the vial page's, edits in one surface look stale in the other. Pin the
+  key by importing/reusing the same key-builder if one exists, else match literally
+  and add a test.
+- N parallel calls: fine at current vial counts (≤8). No batching in v1.
+- `AnalysisTable` was built for one-table-per-page; verify its internal dialogs
+  (BulkPromoteDialog etc.) behave when multiple instances mount under one Dialog
+  (shadcn nested dialogs are supported; test transition flows in UAT).

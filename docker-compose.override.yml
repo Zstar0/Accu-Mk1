@@ -1,0 +1,37 @@
+# docker-compose.override.yml
+# Local dev only: switch frontend to Vite dev server with bind mounts for HMR.
+# Auto-loaded by `docker compose up`. Production deploys use explicit
+# `-f docker-compose.yml -f docker-compose.prod.yml` flags, which bypass this file.
+#
+# Notes:
+#   - target: build stops the multi-stage Dockerfile at the Node 20 stage
+#     (skipping the nginx stage), so node_modules are present.
+#   - The CLI flags --port 5173 --host 0.0.0.0 override vite.config.ts's Tauri
+#     defaults (port 1420, host false) so the dev server is reachable from the
+#     host. strictPort still applies but 5173 is free inside the container.
+#   - The anonymous /app/node_modules volume preserves the image's installed
+#     deps and prevents the host bind-mount from shadowing them.
+#   - VITE_API_URL comes from .env.development (read by `vite` at startup),
+#     pointing the browser at http://127.0.0.1:8012 directly (bypassing nginx).
+
+services:
+  frontend:
+    build:
+      target: build
+    command: ["npm", "run", "dev", "--", "--host", "0.0.0.0", "--port", "5173"]
+    ports:
+      - "3101:5173"
+    volumes:
+      - ./src:/app/src
+      - ./public:/app/public
+      - ./locales:/app/locales
+      - ./index.html:/app/index.html
+      - ./quick-pane.html:/app/quick-pane.html
+      - ./vite.config.ts:/app/vite.config.ts
+      - ./tsconfig.json:/app/tsconfig.json
+      - ./tsconfig.node.json:/app/tsconfig.node.json
+      - ./components.json:/app/components.json
+      - ./eslint.config.js:/app/eslint.config.js
+      - ./prettier.config.js:/app/prettier.config.js
+      - ./.env.development:/app/.env.development
+      - /app/node_modules

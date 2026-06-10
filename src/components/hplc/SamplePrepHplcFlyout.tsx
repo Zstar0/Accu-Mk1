@@ -76,6 +76,7 @@ import { StandardCurveReview } from '@/components/hplc/StandardCurveReview'
 import { useAuthStore } from '@/store/auth-store'
 import { User, Cpu, Calendar, Download } from 'lucide-react'
 import { toast } from 'sonner'
+import { SampleIdBadge } from '@/components/samples/SampleIdBadge'
 
 // ─── Injection tabs ───────────────────────────────────────────────────────────
 
@@ -143,7 +144,7 @@ function PrepDetailsSection({ prep }: { prep: SamplePrep }) {
       <div className="rounded-md border border-border/60 p-3 space-y-1.5">
         <div className="flex items-center justify-between text-xs">
           <span className="text-muted-foreground">Sample ID</span>
-          <span className="font-mono font-medium">{prep.sample_id}</span>
+          <SampleIdBadge id={prep.sample_id} />
         </div>
         {prep.senaite_sample_id && (
           <div className="flex items-center justify-between text-xs">

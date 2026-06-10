@@ -10,11 +10,12 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import type { WorksheetListItem } from '@/lib/api'
+import { displayName } from '@/lib/user-display'
 
 interface WorksheetDrawerHeaderProps {
   worksheet: WorksheetListItem
   userNotes: string
-  users: { id: number; email: string }[]
+  users: { id: number; email: string; first_name?: string | null; last_name?: string | null }[]
   onUpdate: (data: { title?: string; assigned_analyst?: number; notes?: string }) => void
   isCompleted: boolean
 }
@@ -146,7 +147,10 @@ export function WorksheetDrawerHeader({
       {/* Tech dropdown */}
       {isCompleted ? (
         <p className="text-sm text-muted-foreground">
-          {worksheet.assigned_analyst_email ?? 'No tech assigned'}
+          {(() => {
+            const a = users.find(u => u.id === worksheet.assigned_analyst)
+            return a ? displayName(a) : (worksheet.assigned_analyst_email ?? 'No tech assigned')
+          })()}
         </p>
       ) : (
         <Select
@@ -159,7 +163,7 @@ export function WorksheetDrawerHeader({
           <SelectContent>
             {users.map(user => (
               <SelectItem key={user.id} value={String(user.id)}>
-                {user.email}
+                {displayName(user)}
               </SelectItem>
             ))}
           </SelectContent>

@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import {
   Check,
   Loader2,
@@ -27,13 +28,22 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { Checkbox } from '@/components/ui/checkbox'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { cn } from '@/lib/utils'
 import { PhotoCapture } from '@/components/intake/PhotoCapture'
+import { ReceiveWizard } from '@/components/intake/ReceiveWizard/ReceiveWizard'
+import type { ParentInfo } from '@/components/intake/ReceiveWizard/useReceiveWizard'
 import {
   lookupSenaiteSample,
   getSenaiteSamples,
   getSenaiteStatus,
   receiveSenaiteSample,
+  listSubSamples,
   type SenaiteLookupResult,
   type SenaiteSample,
   type SenaiteReceiveSampleResponse,
@@ -53,6 +63,7 @@ type SortColumn =
   | 'sample_type'
   | 'date_sampled'
   | 'review_state'
+  | 'vial_count'
 type SortDir = 'asc' | 'desc'
 
 function SortableHead({
@@ -134,6 +145,25 @@ function StateBadge({ state }: { state: string }) {
   )
 }
 
+function VialCount({ sampleId }: { sampleId: string }) {
+  const { data, isLoading } = useQuery({
+    queryKey: ['sub-samples-count', sampleId],
+    queryFn: () => listSubSamples(sampleId),
+    staleTime: 60_000,
+  })
+
+  if (isLoading) {
+    return <span className="text-muted-foreground">—</span>
+  }
+
+  const count = data?.parent.sub_sample_count ?? 0
+  return count > 0 ? (
+    <span className="text-sm">{count} received</span>
+  ) : (
+    <span className="text-muted-foreground">—</span>
+  )
+}
+
 function formatDate(dateStr: string | null): string {
   if (!dateStr) return '—'
   const d = new Date(dateStr)
@@ -203,6 +233,12 @@ export function ReceiveSample() {
   const [sortDir, setSortDir] = useState<SortDir>('asc')
   const [showTestSamples, setShowTestSamples] = useState(false)
 
+  // Sub-samples receive wizard (modal). Row click in the intake list opens
+  // the wizard for that parent sample; the legacy single-step receive flow
+  // (Step 2 detail view) stays in place and remains reachable through the
+  // sidebar Step nav for cases where a tech wants the read-only detail view.
+  const [wizardParent, setWizardParent] = useState<ParentInfo | null>(null)
+
   function handleSort(col: SortColumn) {
     if (sortColumn === col) {
       setSortDir(prev => (prev === 'asc' ? 'desc' : 'asc'))
@@ -222,11 +258,19 @@ export function ReceiveSample() {
 
   const sortedSamples = sortColumn
     ? [...filteredSamples].sort((a, b) => {
-        const valA = a[sortColumn] ?? ''
-        const valB = b[sortColumn] ?? ''
-        const cmp = String(valA).localeCompare(String(valB), undefined, {
-          numeric: true,
-        })
+        let cmp = 0
+        if (sortColumn === 'vial_count') {
+          // For vial_count, we'll do a client-side placeholder sort
+          // Since vial counts are loaded lazily, this will sort by sample_id for now
+          // The actual vial count data is fetched per-row via useQuery
+          cmp = 0
+        } else {
+          const valA = a[sortColumn as keyof typeof a] ?? ''
+          const valB = b[sortColumn as keyof typeof b] ?? ''
+          cmp = String(valA).localeCompare(String(valB), undefined, {
+            numeric: true,
+          })
+        }
         return sortDir === 'asc' ? cmp : -cmp
       })
     : filteredSamples
@@ -541,6 +585,14 @@ export function ReceiveSample() {
                             className="w-36"
                           />
                           <SortableHead
+                            column="vial_count"
+                            label="Vials"
+                            activeColumn={sortColumn}
+                            direction={sortDir}
+                            onSort={handleSort}
+                            className="w-24 text-center"
+                          />
+                          <SortableHead
                             column="review_state"
                             label="State"
                             activeColumn={sortColumn}
@@ -569,14 +621,11 @@ export function ReceiveSample() {
                                 : 'hover:bg-muted/30'
                             )}
                             onClick={() => {
-                              setSelectedSample(s)
-                              setLookupError(null)
-                              setLookupResult(null)
-                              setPendingLookupId(s.id)
-                              setCompletedSteps(
-                                prev => new Set([...prev, 1 as IntakeStep])
-                              )
-                              setCurrentStep(2)
+                              setWizardParent({
+                                uid: s.uid,
+                                sample_id: s.id,
+                                status: s.review_state ?? null,
+                              })
                             }}
                           >
                             <TableCell className="font-mono text-sm">
@@ -593,6 +642,9 @@ export function ReceiveSample() {
                             </TableCell>
                             <TableCell className="text-sm text-muted-foreground">
                               {formatDate(s.date_sampled)}
+                            </TableCell>
+                            <TableCell className="text-center">
+                              <VialCount sampleId={s.id} />
                             </TableCell>
                             <TableCell className="text-center">
                               <StateBadge state={s.review_state} />
@@ -980,6 +1032,36 @@ export function ReceiveSample() {
           )}
         </div>
       </div>
+
+      {/* Sub-samples receive wizard (modal) */}
+      {wizardParent && (
+        <Dialog
+          open={Boolean(wizardParent)}
+          onOpenChange={open => {
+            if (!open) {
+              setWizardParent(null)
+              // Refresh the due-samples list so the row reflects the new state
+              // (parent may have transitioned to received, vials added, etc.).
+              void loadDueSamples()
+            }
+          }}
+        >
+          <DialogContent className="max-w-6xl w-full p-0 sm:max-w-6xl h-[90vh] overflow-hidden">
+            <DialogHeader className="px-6 pt-4 pb-2 border-b">
+              <DialogTitle>Receive {wizardParent.sample_id}</DialogTitle>
+            </DialogHeader>
+            <div className="h-[calc(90vh-3.5rem)] overflow-hidden">
+              <ReceiveWizard
+                parent={wizardParent}
+                onClose={() => {
+                  setWizardParent(null)
+                  void loadDueSamples()
+                }}
+              />
+            </div>
+          </DialogContent>
+        </Dialog>
+      )}
     </div>
   )
 }

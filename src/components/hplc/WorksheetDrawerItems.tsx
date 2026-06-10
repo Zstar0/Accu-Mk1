@@ -39,6 +39,7 @@ import {
   SERVICE_GROUP_COLORS,
   type ServiceGroupColor,
 } from '@/lib/service-group-colors'
+import { SampleIdBadge } from '@/components/samples/SampleIdBadge'
 import type { WorksheetListItem, Instrument } from '@/lib/api'
 
 /** Extract unique peptide names from analyses — compact display for worksheet */
@@ -61,7 +62,7 @@ interface WorksheetDrawerItemsProps {
   prepStartedItems: Set<string>
   onRemove: (sampleUid: string, serviceGroupId: number) => void
   onReassign: (sampleUid: string, serviceGroupId: number, targetWorksheetId: number) => void
-  onStartPrep: (item: { sampleId: string; serviceGroupId: number | null; groupName: string; peptideId: number | null; instrumentUid: string | null }) => void
+  onStartPrep: (item: { sampleId: string; serviceGroupId: number | null; groupName: string; peptideId: number | null; instrumentUid: string | null; limsSubSamplePk: number | null }) => void
   instruments: Instrument[]
   onUpdateItem: (itemId: number, data: { instrument_uid?: string; prep_status?: string }) => void
   onReorder: (itemIds: number[]) => void
@@ -126,15 +127,17 @@ export function WorksheetDrawerItems({
         </span>
       </div>
 
-      {/* Column headers */}
+      {/* Column headers — widths tuned so sub-sample rows ("BW-0009-S02 ↳ child
+          of BW-0009 (vial 2)") and the Microbiology badge render without
+          collapsing onto multiple wrap-lines. */}
       {items.length > 0 && (
         <div className="flex items-center gap-2 px-4 py-1 border-b text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
           {!isCompleted && <div className="w-4 shrink-0" />}
           {!isCompleted && <div className="w-8 shrink-0" />}
-          <div className="w-[80px] shrink-0">Sample</div>
-          <div className="w-[80px] shrink-0">Group</div>
+          <div className="w-[160px] shrink-0">Sample</div>
+          <div className="w-[110px] shrink-0">Group</div>
           <div className="w-[70px] shrink-0">Priority</div>
-          <div className="flex-1 min-w-[140px]">Peptide</div>
+          <div className="flex-1 min-w-[120px]">Peptide</div>
           <div className="w-[110px] shrink-0">Method</div>
           <div className="w-[120px] shrink-0">Instrument</div>
           <div className="w-[60px] shrink-0">SLA</div>
@@ -198,7 +201,7 @@ interface SortableItemRowProps {
   slaError: boolean
   onRemove: (sampleUid: string, serviceGroupId: number) => void
   onReassign: (sampleUid: string, serviceGroupId: number, targetWorksheetId: number) => void
-  onStartPrep: (item: { sampleId: string; serviceGroupId: number | null; groupName: string; peptideId: number | null; instrumentUid: string | null }) => void
+  onStartPrep: (item: { sampleId: string; serviceGroupId: number | null; groupName: string; peptideId: number | null; instrumentUid: string | null; limsSubSamplePk: number | null }) => void
   onUpdateItem: (itemId: number, data: { instrument_uid?: string; prep_status?: string }) => void
 }
 
@@ -270,19 +273,20 @@ function SortableItemRow({
         </button>
       )}
 
-      {/* Sample ID */}
-      <div className="w-[80px] shrink-0">
+      {/* Sample ID — stacked so sub-samples don't wrap. The parent linkage
+          renders on its own line below the sample ID at 10px. */}
+      <div className="w-[160px] shrink-0">
         <button
-          className="font-mono text-xs font-medium tabular-nums hover:underline hover:text-primary transition-colors"
+          className="text-left hover:underline hover:text-primary transition-colors"
           onClick={() => useUIStore.getState().navigateToSample(item.sample_id)}
         >
-          {item.sample_id}
+          <SampleIdBadge id={item.sample_id} stacked />
         </button>
       </div>
 
       {/* Service group badge */}
-      <div className="w-[80px] shrink-0">
-        <span className={`inline-flex rounded-md border px-1.5 py-0.5 text-[10px] font-semibold ${groupColorClass}`}>
+      <div className="w-[110px] shrink-0">
+        <span className={`inline-flex rounded-md border px-1.5 py-0.5 text-[10px] font-semibold whitespace-nowrap ${groupColorClass}`}>
           {item.group_name}
         </span>
       </div>
@@ -401,6 +405,7 @@ function SortableItemRow({
                   groupName: item.group_name,
                   peptideId: item.peptide_id,
                   instrumentUid: item.instrument_uid ?? null,
+                  limsSubSamplePk: item.lims_sub_sample_pk ?? null,
                 })
               }
             >

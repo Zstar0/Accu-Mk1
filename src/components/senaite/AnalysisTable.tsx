@@ -1,10 +1,11 @@
-import { useState, useEffect, useRef, Fragment } from 'react'
-import { Activity, ArrowDownUp, ArrowUpDown, Check, ChevronDown, ChevronRight, MoreHorizontal, Pencil, X } from 'lucide-react'
+import { useState, useEffect, useRef, Fragment, type ReactNode } from 'react'
+import { Activity, ArrowDownUp, ArrowUpDown, Check, ChevronDown, ChevronRight, Database, HelpCircle, Layers, Lock, MoreHorizontal, Pencil, X } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Spinner } from '@/components/ui/spinner'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Button } from '@/components/ui/button'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -21,21 +22,33 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import { useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
-import type { SenaiteAnalysis, InboxPriority } from '@/lib/api'
-import { setAnalysisMethodInstrument } from '@/lib/api'
+import type { SenaiteAnalysis, InboxPriority, ParentPromotionInfo } from '@/lib/api'
+import { setAnalysisMethodInstrument, promoteAnalyses } from '@/lib/api'
+import type { VialAssignment } from '@/lib/vial-assignment'
+import { PromotedFromBadge } from '@/components/senaite/PromotedFromBadge'
 import type { SampleSlaSnapshot } from '@/services/order-sla'
 import { AnalysisSlaCell } from '@/components/senaite/AnalysisSlaCell'
 import { useAnalysisEditing, type UseAnalysisEditingReturn } from '@/hooks/use-analysis-editing'
 import { useAnalysisTransition, type UseAnalysisTransitionReturn } from '@/hooks/use-analysis-transition'
 import { useBulkAnalysisTransition } from '@/hooks/use-bulk-analysis-transition'
 import { useSidebar } from '@/components/ui/sidebar'
+import { useUIStore } from '@/store/ui-store'
 
 // --- Status styling constants ---
 
 export const STATUS_COLORS: Record<string, string> = {
   verified:
     'bg-emerald-100 text-emerald-700 border-emerald-200 dark:bg-emerald-500/15 dark:text-emerald-400 dark:border-emerald-500/20',
+  promoted:
+    'bg-teal-100 text-teal-700 border-teal-200 dark:bg-teal-500/15 dark:text-teal-400 dark:border-teal-500/20',
   published:
     'bg-purple-100 text-purple-700 border-purple-200 dark:bg-purple-500/15 dark:text-purple-400 dark:border-purple-500/20',
   to_be_verified:
@@ -60,10 +73,13 @@ export const STATUS_COLORS: Record<string, string> = {
     'bg-indigo-100 text-indigo-700 border-indigo-200 dark:bg-indigo-500/15 dark:text-indigo-400 dark:border-indigo-500/20',
   ready_for_review:
     'bg-cyan-100 text-cyan-700 border-cyan-200 dark:bg-cyan-500/15 dark:text-cyan-400 dark:border-cyan-500/20',
+  variance_verified:
+    'bg-sky-100 text-sky-700 border-sky-200 dark:bg-sky-500/15 dark:text-sky-400 dark:border-sky-500/20',
 }
 
 export const STATUS_LABELS: Record<string, string> = {
   verified: 'Verified',
+  promoted: 'Promoted',
   published: 'Published',
   to_be_verified: 'To Verify',
   sample_received: 'Received',
@@ -76,12 +92,27 @@ export const STATUS_LABELS: Record<string, string> = {
   registered: 'Registered',
   waiting_for_addon_results: 'Waiting Addon',
   ready_for_review: 'Ready for Review',
+  variance_verified: 'Verified — Variance',
+}
+
+/**
+ * Title-text color when an analysis matches the viewing sample's vial-assignment
+ * role (i.e. is in the primaryAnalysisUids set). Same palette family as the
+ * role badges elsewhere in the app — keeps the visual language consistent.
+ */
+const PRIMARY_TITLE_COLOR: Record<string, string> = {
+  hplc: 'text-sky-700 dark:text-sky-300',
+  endo: 'text-emerald-700 dark:text-emerald-300',
+  ster: 'text-violet-700 dark:text-violet-300',
+  xtra: 'text-zinc-700 dark:text-zinc-300',
 }
 
 /** Row-level tint: colored left border + subtle background, inspired by SENAITE. */
 const ROW_STATUS_STYLE: Record<string, string> = {
   verified:
     'border-l-2 border-l-blue-500 bg-blue-50/60 dark:bg-blue-500/[0.06]',
+  promoted:
+    'border-l-2 border-l-teal-500 bg-teal-50/60 dark:bg-teal-500/[0.06]',
   published:
     'border-l-2 border-l-emerald-500 bg-emerald-50/60 dark:bg-emerald-500/[0.06]',
   to_be_verified:
@@ -108,6 +139,21 @@ const ALLOWED_TRANSITIONS: Record<string, readonly string[]> = {
   unassigned: ['submit', 'reject'],
   assigned: ['submit', 'reject'],
   to_be_verified: ['retest', 'verify', 'retract', 'reject'],
+  // A promoted sub-sample row is locked from the sub side: its result is already
+  // rolled up to the parent. Corrections must start at the PARENT (retest there
+  // cascades back down to the vial). Retesting from the sub while the parent line
+  // is still verified dead-ends on the SENAITE write-back ("Not allowed to set
+  // 'Remarks'", HTTP 401). The parent→sub cascade still retests promoted sources
+  // server-side (cascade_parent_retest_to_sources) — that path is unaffected;
+  // only the user-facing row/bulk option is removed.
+  promoted: [],
+  // Retest-aware promote: a verified row can be retested (vial tier in Mk1;
+  // SENAITE allows it on parent lines too).
+  verified: ['retest'],
+  // A variance replicate signed off by a tech. Retest is safe — these rows
+  // never touched the parent, so there is no SENAITE lock to collide with
+  // (unlike `promoted`).
+  variance_verified: ['retest'],
 }
 
 const TRANSITION_LABELS: Record<string, string> = {
@@ -116,22 +162,231 @@ const TRANSITION_LABELS: Record<string, string> = {
   verify: 'Verify',
   retract: 'Retract',
   reject: 'Reject',
+  variance_verify: 'Verify (Variance)',
 }
+
+/** Test-only re-export — keeps the table private to this module otherwise. */
+export const ALLOWED_TRANSITIONS_TEST_EXPORT = ALLOWED_TRANSITIONS
 
 const DESTRUCTIVE_TRANSITIONS = new Set(['retract', 'reject'])
 
+// --- Bulk-overlay redesign: promote-aware gating helpers (exported for tests) ---
+
+/** Native (mk1:) row awaiting vial-tier sign-off — the kind-agnostic base
+ *  shared by isPromotable and visibleRowTransitions (verify stays hidden on
+ *  ALL native awaiting rows; the variance path uses Verify (Variance)). */
+function isNativeAwaitingSignoff(a: SenaiteAnalysis): boolean {
+  return (
+    !!a.uid &&
+    a.uid.startsWith('mk1:') &&
+    a.review_state === 'to_be_verified' &&
+    a.promoted_to_parent_id == null
+  )
+}
+
+/** Phase-4b promotable discriminator, lifted so row + bulk logic share it.
+ *  Kind-aware: a vial assigned to a variance bucket is never promotable —
+ *  its sign-off path is variance_verify (re-assign to core to promote). */
+export function isPromotable(a: SenaiteAnalysis, vialKind?: string | null): boolean {
+  if (vialKind === 'variance') return false
+  return isNativeAwaitingSignoff(a)
+}
+
+/** Verify (Variance) is offered on a native, unpromoted, to_be_verified row
+ *  whose host vial is assigned to a variance bucket (assignment_kind =
+ *  'variance', set at check-in). Deliberately NOT gated on isLockedByParent
+ *  or the parent variance lock: variance sign-off never touches the parent.
+ *  Backend gate is authoritative (fail closed); this only controls visibility. */
+export function canVarianceVerify(
+  a: SenaiteAnalysis,
+  vialKind: string | null | undefined,
+): boolean {
+  if (!a.uid || !a.uid.startsWith('mk1:')) return false
+  if (a.review_state !== 'to_be_verified') return false
+  if (a.promoted_to_parent_id != null) return false
+  return vialKind === 'variance'
+}
+
+/** True when a row is a MEMBER of a variance series — native (mk1:) sub-row
+ *  hosted on a variance-bucket vial. State-INDEPENDENT (unlike
+ *  canVarianceVerify, which also requires to_be_verified & not-promoted).
+ *  Drives the membership chip. */
+export function isVarianceMember(
+  a: SenaiteAnalysis,
+  vialKind: string | null | undefined,
+): boolean {
+  if (!a.uid || !a.uid.startsWith('mk1:')) return false
+  return vialKind === 'variance'
+}
+
+/** Whether to render the membership chip on a row: a variance member, EXCEPT on
+ *  rows that already self-describe as variance — promoted (became the canonical
+ *  line) and variance_verified ("Verified — Variance" badge). */
+export function showVarianceChip(
+  a: SenaiteAnalysis,
+  vialKind: string | null | undefined,
+): boolean {
+  if (!isVarianceMember(a, vialKind)) return false
+  if (isPromoted(a) || a.review_state === 'promoted') return false
+  if (a.review_state === 'variance_verified') return false
+  return true
+}
+
+/** True when a vial row has already been promoted to a parent-tier row. */
+export function isPromoted(a: SenaiteAnalysis): boolean {
+  return a.promoted_to_parent_id != null
+}
+
+/**
+ * True when the parent SENAITE AR's analysis line for this row's keyword is
+ * already 'verified'. A verified parent line is immutable — no corrections
+ * can start from the vial; they must start from the parent (retest there
+ * cascades down). The states map is optional so existing callers that don't
+ * have parent context are unaffected.
+ */
+export function isLockedByParent(
+  a: SenaiteAnalysis,
+  parentLineStates?: Record<string, string>,
+): boolean {
+  if (!parentLineStates) return false
+  return parentLineStates[a.keyword ?? ''] === 'verified'
+}
+
+/** Row-menu transitions: submit needs a result; verify is hidden when Promote
+ *  is the correct action (promotable native vial rows dead-end on verify), and
+ *  also hidden once the row has already been promoted to a parent.
+ *  When parentLineStates is provided and the parent's line is verified, all
+ *  transitions are hidden (locked row). */
+export function visibleRowTransitions(
+  a: SenaiteAnalysis,
+  parentLineStates?: Record<string, string>,
+): string[] {
+  if (!a.uid || !a.review_state) return []
+  if (isLockedByParent(a, parentLineStates)) return []
+  return (ALLOWED_TRANSITIONS[a.review_state] ?? []).filter(
+    t => (t !== 'submit' || !!a.result) && !(t === 'verify' && (isNativeAwaitingSignoff(a) || isPromoted(a))),
+  )
+}
+
+const BULK_TRANSITIONS = ['submit', 'retest', 'verify', 'retract', 'reject'] as const
+export type BulkTransition = (typeof BULK_TRANSITIONS)[number]
+
+/** Bulk toolbar actions: intersection of allowed transitions, except verify is
+ *  suppressed when ANY selected row is promotable OR already promoted; Promote
+ *  shows when ALL selected rows are promotable (not yet promoted).
+ *  When parentLineStates is provided, any locked row causes retest/retract/
+ *  reject/promote to be dropped from the bulk action set (simplest safe rule). */
+export function deriveBulkActions(
+  selected: SenaiteAnalysis[],
+  parentLineStates?: Record<string, string>,
+  vialKind?: string | null,
+): {
+  actions: BulkTransition[]
+  showPromote: boolean
+  showVarianceVerify: boolean
+} {
+  const anyLocked = selected.some(a => isLockedByParent(a, parentLineStates))
+  // Plain bulk verify stays suppressed for ALL native awaiting rows (kind-
+  // agnostic): core rows promote, variance rows variance-verify.
+  const anyPromotableOrPromoted = selected.some(a => isNativeAwaitingSignoff(a) || isPromoted(a))
+  const LOCKED_DROP = new Set<BulkTransition>(['retest', 'retract', 'reject'])
+  const actions = BULK_TRANSITIONS.filter(
+    t =>
+      selected.length > 0 &&
+      !(t === 'verify' && anyPromotableOrPromoted) &&
+      !(anyLocked && (LOCKED_DROP.has(t) || t === 'verify')) &&
+      selected.every(
+        a =>
+          a.review_state !== null &&
+          a.review_state !== undefined &&
+          (ALLOWED_TRANSITIONS[a.review_state] ?? []).includes(t) &&
+          (t !== 'submit' || !!a.result),
+      ),
+  )
+  const showPromote =
+    !anyLocked && selected.length > 0 && selected.every(a => isPromotable(a, vialKind))
+  const showVarianceVerify =
+    selected.length > 0 &&
+    selected.every(a => canVarianceVerify(a, vialKind))
+  return { actions, showPromote, showVarianceVerify }
+}
+
+/**
+ * Returns the note string to append to the bulk destructive confirm dialog when
+ * the selection includes promoted rows, or null when no rows are promoted.
+ * Exported for unit-testing the exact message text.
+ */
+export function promotedDestructiveNote(selected: SenaiteAnalysis[]): string | null {
+  const n = selected.filter(a => a.promoted_to_parent_id != null).length
+  if (n === 0) return null
+  return `${n} selected ${n === 1 ? 'analysis was' : 'analyses were'} promoted to the parent — the parent keeps its promoted value.`
+}
+
+/** Reasons bulk promote cannot proceed (empty array = good to go). */
+export function deriveBulkPromoteBlockers(selected: SenaiteAnalysis[]): string[] {
+  const blockers: string[] = []
+  const missing = selected.filter(a => !a.result)
+  if (missing.length > 0) {
+    blockers.push(
+      `${missing.length} selected ${missing.length === 1 ? 'analysis has' : 'analyses have'} no result value`,
+    )
+  }
+  const noKeyword = selected.filter(a => !a.keyword)
+  if (noKeyword.length > 0) {
+    blockers.push(
+      `${noKeyword.length} selected ${noKeyword.length === 1 ? 'analysis has' : 'analyses have'} no keyword`,
+    )
+  }
+  const seen = new Set<string>()
+  const dups = new Set<string>()
+  for (const a of selected) {
+    const k = a.keyword
+    if (!k) continue
+    if (seen.has(k)) dups.add(k)
+    seen.add(k)
+  }
+  if (dups.size > 0) {
+    blockers.push(
+      `Duplicate keywords selected (${[...dups].join(', ')}) — one parent row per keyword; use the row menu Promote to merge multiple vials`,
+    )
+  }
+  return blockers
+}
+
 // --- Shared components ---
 
-export function StatusBadge({ state }: { state: string }) {
+export function StatusBadge({ state, promotable = false, varianceReady = false }: { state: string; promotable?: boolean; varianceReady?: boolean }) {
   const color =
     STATUS_COLORS[state] ??
     'bg-zinc-100 text-zinc-600 border-zinc-200 dark:bg-zinc-500/15 dark:text-zinc-400 dark:border-zinc-500/20'
-  const label = STATUS_LABELS[state] ?? state.replace(/_/g, ' ')
+  // Sub-sample rows can't self-verify — to_be_verified there means "awaiting
+  // promotion" ("Ready to Promote") or, on a variance replicate where promote
+  // is no longer the path, "awaiting variance sign-off" ("Ready to Verify").
+  const label =
+    state === 'to_be_verified' && varianceReady
+      ? 'Ready to Verify'
+      : promotable && state === 'to_be_verified'
+        ? 'Ready to Promote'
+        : STATUS_LABELS[state] ?? state.replace(/_/g, ' ')
   return (
     <span
       className={`inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium border ${color}`}
     >
       {label}
+    </span>
+  )
+}
+
+/** Small membership chip marking a row as part of a variance series. Visually
+ *  distinct from the colored status badges (sky outline, echoing the AssignStep
+ *  variance annotation). Gate visibility with showVarianceChip(). */
+export function VarianceChip() {
+  return (
+    <span
+      title="Replicate in a variance series — signed off via Verify (Variance), never promoted."
+      className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium border bg-sky-50 text-sky-700 border-sky-200 dark:bg-sky-500/15 dark:text-sky-400 dark:border-sky-500/20"
+    >
+      Variance
     </span>
   )
 }
@@ -188,6 +443,20 @@ function formatDate(dateStr: string | null | undefined): string {
 }
 
 /** Replace "Analyte N" prefix with the mapped peptide name when available. */
+/**
+ * Marks analysis line items served from a Mk1 lims_analyses row (uid prefixed
+ * "mk1:") versus a legacy SENAITE analysis (32-char hex uid). A transition-era
+ * cue while both data sources coexist; renders nothing for SENAITE rows.
+ */
+export function Mk1NativeBadge({ uid }: { uid?: string | null }) {
+  if (!uid?.startsWith('mk1:')) return null
+  return (
+    <span title="Stored in Accu-Mk1 (no SENAITE record)" className="inline-flex shrink-0">
+      <Database size={10} className="text-muted-foreground/60" aria-label="Stored in Accu-Mk1" />
+    </span>
+  )
+}
+
 function formatAnalysisTitle(title: string, nameMap: Map<number, string>): { display: string; original: string } {
   const match = title.match(/^Analyte\s+(\d)\s*(.*)/i)
   if (match?.[1]) {
@@ -258,6 +527,7 @@ function EditableResultCell({
   const [autoValue, setAutoValue] = useState('')
   const options = analysis.result_options ?? []
   const hasOptions = options.length > 0
+  const isNumeric = analysis.result_type === 'numeric'
   const displayLabel = conformsValue
     ? resolveIdentityLabel(analysis.result, conformsValue)
     : resolveResultLabel(analysis.result, options)
@@ -327,7 +597,8 @@ function EditableResultCell({
           ) : (
             <Input
               ref={inputRef}
-              type="text"
+              type={isNumeric ? 'number' : 'text'}
+              step={isNumeric ? 'any' : undefined}
               value={autoValue}
               onChange={e => setAutoValue(e.target.value)}
               onKeyDown={handleAutoKeyDown}
@@ -400,7 +671,8 @@ function EditableResultCell({
           ) : (
             <Input
               ref={inputRef}
-              type="text"
+              type={isNumeric ? 'number' : 'text'}
+              step={isNumeric ? 'any' : undefined}
               value={editing.draft}
               onChange={e => editing.setDraft(e.target.value)}
               onKeyDown={e => { if (analysis.uid) editing.handleKeyDown(e, analysis.uid) }}
@@ -488,20 +760,37 @@ function EditableSelectCell({
   analysis,
   field,
   onSaved,
+  mk1Override = null,
+  mk1OverrideEditable = false,
 }: {
   analysis: SenaiteAnalysis
   field: 'method' | 'instrument'
   onSaved?: (uid: string | null, title: string | null) => void
+  mk1Override?: SenaiteAnalysis | null
+  mk1OverrideEditable?: boolean
 }) {
-  const options = field === 'method' ? (analysis.method_options ?? []) : (analysis.instrument_options ?? [])
+  const ov = mk1Override
+  const options = ov
+    ? (field === 'method' ? (ov.method_options ?? []) : (ov.instrument_options ?? []))
+    : (field === 'method' ? (analysis.method_options ?? []) : (analysis.instrument_options ?? []))
   const [isEditing, setIsEditing] = useState(false)
   const [draft, setDraft] = useState('')
   const [isSaving, setIsSaving] = useState(false)
   const selectRef = useRef<HTMLSelectElement>(null)
 
-  const currentValue = field === 'method' ? analysis.method : analysis.instrument
-  const currentUid = field === 'method' ? analysis.method_uid : analysis.instrument_uid
-  const canEdit = !!analysis.uid && EDITABLE_STATES.has(analysis.review_state)
+  const senaiteValue = field === 'method' ? analysis.method : analysis.instrument
+  const ovValue = ov ? (field === 'method' ? ov.method : ov.instrument) : null
+  const ovUid = ov ? (field === 'method' ? ov.method_uid : ov.instrument_uid) : null
+  const writeUid = ov ? ov.uid : analysis.uid
+  const canEdit = ov
+    ? (mk1OverrideEditable && !!ov.uid && EDITABLE_STATES.has(ov.review_state))
+    : (!!analysis.uid && EDITABLE_STATES.has(analysis.review_state))
+  // Single-match override (one definitive vial — editable OR verified/locked) →
+  // show that vial's true (possibly empty) value, so display, editor preselection,
+  // and write target all agree and a verified vial shows its real Mk1 method/
+  // instrument read-only. Multi-vial (no single vial) or no override → SENAITE value.
+  const currentValue = ov ? (mk1OverrideEditable ? ovValue : senaiteValue) : senaiteValue
+  const currentUid = ov ? ovUid : (field === 'method' ? analysis.method_uid : analysis.instrument_uid)
 
   useEffect(() => {
     if (isEditing && selectRef.current) {
@@ -519,12 +808,12 @@ function EditableSelectCell({
   }
 
   async function handleSave() {
-    if (!analysis.uid) return
+    if (!writeUid) return
     setIsSaving(true)
     try {
       const selectedUid = draft || null
       const response = await setAnalysisMethodInstrument(
-        analysis.uid,
+        writeUid,
         field === 'method' ? selectedUid : null,
         field === 'instrument' ? selectedUid : null,
       )
@@ -677,6 +966,184 @@ function HistoryRow({
   )
 }
 
+// --- Phase 4b: Promote dialog ---
+
+function PromoteDialog({
+  analysis,
+  open,
+  onOpenChange,
+  onPromoted,
+}: {
+  analysis: SenaiteAnalysis
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  onPromoted: () => void
+}) {
+  const [resultValue, setResultValue] = useState(analysis.result ?? '')
+  const [pending, setPending] = useState(false)
+
+  // Reset the field when the dialog reopens for a different row
+  useEffect(() => {
+    if (open) setResultValue(analysis.result ?? '')
+  }, [open, analysis.result])
+
+  const handle = async () => {
+    if (!analysis.uid?.startsWith('mk1:')) return
+    if (!resultValue) {
+      toast.error('Result value is required')
+      return
+    }
+    const limsId = parseInt(analysis.uid.slice('mk1:'.length), 10)
+    setPending(true)
+    try {
+      await promoteAnalyses({
+        keyword: analysis.keyword ?? '',
+        result_value: resultValue,
+        result_unit: analysis.unit ?? null,
+        method_id: analysis.method_uid ? parseInt(analysis.method_uid, 10) : null,
+        instrument_id: analysis.instrument_uid ? parseInt(analysis.instrument_uid, 10) : null,
+        sources: [{ analysis_id: limsId, contribution_kind: 'chosen' }],
+        reason: 'Single-vial promote from AnalysisTable',
+      })
+      toast.success('Promoted to parent')
+      onOpenChange(false)
+      onPromoted()
+    } catch (e) {
+      toast.error((e as Error).message)
+    } finally {
+      setPending(false)
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Promote {analysis.keyword} to parent</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-3 pt-2">
+          <p className="text-sm text-muted-foreground">
+            Create a parent-tier verified row for <code>{analysis.keyword}</code> with the
+            chosen value. The vial-tier row moves to <code>promoted</code>; an audit
+            row records the promotion. To undo, retract the parent row.
+          </p>
+          <label className="text-sm font-medium block">
+            Result value
+            <input
+              type="text"
+              value={resultValue}
+              onChange={(e) => setResultValue(e.target.value)}
+              className="mt-1 w-full px-2 py-1 border rounded bg-background text-sm font-mono"
+              autoFocus
+            />
+          </label>
+          <div className="flex gap-2 justify-end">
+            <Button variant="outline" onClick={() => onOpenChange(false)} disabled={pending}>
+              Cancel
+            </Button>
+            <Button onClick={handle} disabled={pending || !resultValue}>
+              {pending ? 'Promoting…' : 'Promote'}
+            </Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// --- Bulk promote: read-only confirm dialog, sequential execution ---
+
+export function BulkPromoteDialog({
+  analyses,
+  open,
+  onOpenChange,
+  onPromoted,
+}: {
+  analyses: SenaiteAnalysis[]
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  onPromoted: () => void
+}) {
+  const [progress, setProgress] = useState<{ current: number; total: number } | null>(null)
+  const blockers = deriveBulkPromoteBlockers(analyses)
+  const pending = progress !== null
+
+  const handle = async () => {
+    setProgress({ current: 0, total: analyses.length })
+    let failed = 0
+    let promoted = 0
+    try {
+      for (let i = 0; i < analyses.length; i++) {
+        const a = analyses[i]!
+        setProgress({ current: i + 1, total: analyses.length })
+        if (!a.uid?.startsWith('mk1:') || !a.result) continue
+        const limsId = parseInt(a.uid.slice('mk1:'.length), 10)
+        try {
+          await promoteAnalyses({
+            keyword: a.keyword ?? '',
+            result_value: a.result,
+            result_unit: a.unit ?? null,
+            method_id: a.method_uid ? parseInt(a.method_uid, 10) : null,
+            instrument_id: a.instrument_uid ? parseInt(a.instrument_uid, 10) : null,
+            sources: [{ analysis_id: limsId, contribution_kind: 'chosen' }],
+            reason: 'Bulk promote from AnalysisTable',
+          })
+          promoted++
+        } catch (e) {
+          failed++
+          toast.error(`${a.keyword ?? a.title}: ${(e as Error).message}`)
+        }
+      }
+    } finally {
+      setProgress(null)
+    }
+    if (failed === 0 && promoted === analyses.length) toast.success(`Promoted ${promoted} to parent`)
+    else toast.warning(`Promoted ${promoted} of ${analyses.length}; ${failed} failed`)
+    onOpenChange(false)
+    onPromoted()
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={o => { if (!pending) onOpenChange(o) }}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Promote {analyses.length} analyses to parent</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-3 pt-2">
+          <p className="text-sm text-muted-foreground">
+            Each row creates a parent-tier verified row with the vial&apos;s current value. Vial-tier
+            rows move to <code>promoted</code>; audit rows record each promotion. To undo,
+            retract the parent row.
+          </p>
+          <table className="w-full text-sm">
+            <tbody>
+              {analyses.map(a => (
+                <tr key={a.uid} className="border-b border-border/50">
+                  <td className="py-1.5 pr-3 font-medium">{a.keyword ?? a.title}</td>
+                  <td className="py-1.5 font-mono">{a.result ?? '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {blockers.map(b => (
+            <p key={b} className="text-sm text-destructive">{b}</p>
+          ))}
+          <div className="flex gap-2 justify-end">
+            <Button variant="outline" onClick={() => onOpenChange(false)} disabled={pending}>
+              Cancel
+            </Button>
+            <Button onClick={handle} disabled={pending || blockers.length > 0}>
+              {pending && progress
+                ? `Promoting ${progress.current}/${progress.total}…`
+                : `Promote ${analyses.length} to parent`}
+            </Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 // --- Analysis row ---
 
 function AnalysisRow({
@@ -691,11 +1158,19 @@ function AnalysisRow({
   isHistoryExpanded,
   onToggleHistory,
   onMethodInstrumentSaved,
+  onPromoted,
   slaSnapshot,
   isSlaLoading,
   isSlaError,
   isSlaPublished,
   slaPriority,
+  primaryAnalysisUids,
+  primaryRole,
+  promotionsByKeyword,
+  vialAssignmentByKeyword,
+  onVialMethodInstrumentSaved,
+  parentLineStates,
+  vialKind,
 }: {
   analysis: SenaiteAnalysis
   analyteNameMap: Map<number, string>
@@ -708,11 +1183,21 @@ function AnalysisRow({
   isHistoryExpanded?: boolean
   onToggleHistory?: () => void
   onMethodInstrumentSaved?: (uid: string, field: 'method' | 'instrument', newUid: string | null, newTitle: string | null) => void
+  onPromoted?: () => void
   slaSnapshot: SampleSlaSnapshot | null
   isSlaLoading: boolean
   isSlaError: boolean
   isSlaPublished: boolean
   slaPriority: InboxPriority | null
+  primaryAnalysisUids?: Set<string>
+  primaryRole?: string | null
+  promotionsByKeyword?: Map<string, ParentPromotionInfo>
+  vialAssignmentByKeyword?: Map<string, VialAssignment>
+  onVialMethodInstrumentSaved?: () => void
+  parentLineStates?: Record<string, string>
+  /** The host vial's assignment_kind ('core' | 'variance' | null). Drives the
+   *  promote-vs-variance-verify affordance split and the membership chip. */
+  vialKind?: string | null
 }) {
   const rowTint = ROW_STATUS_STYLE[analysis.review_state ?? ''] ?? ''
   const { display, original } = formatAnalysisTitle(analysis.title, analyteNameMap)
@@ -720,13 +1205,27 @@ function AnalysisRow({
   const conformsValue = /Identity\s*\(HPLC\)/i.test(display)
     ? (display.match(/^(.+?)\s*[-–]\s*Identity\s*\(HPLC\)/i)?.[1]?.trim() ?? null)
     : null
-  const allowedTransitions =
-    analysis.uid && analysis.review_state
-      ? (ALLOWED_TRANSITIONS[analysis.review_state] ?? []).filter(
-          t => t !== 'submit' || !!analysis.result
-        )
-      : []
+  // Phase 4b promote affordance — see isPromotable; verify is hidden on
+  // promotable rows via visibleRowTransitions.
+  const locked = isLockedByParent(analysis, parentLineStates)
+  const allowedTransitions = visibleRowTransitions(analysis, parentLineStates)
+  const canPromote = isPromotable(analysis, vialKind) && !locked
+  const canVarVerify = canVarianceVerify(analysis, vialKind)
+  const isPromoted = analysis.promoted_to_parent_id != null
+  const vialAssign = analysis.keyword ? vialAssignmentByKeyword?.get(analysis.keyword) : undefined
+  const vialOverlay = vialAssign?.matches[0]?.mk1Analysis ?? null
+  const vialOverlayEditable = vialAssign?.editable ?? false
+  const [promoteOpen, setPromoteOpen] = useState(false)
+  const queryClient = useQueryClient()
   const isPending = !!analysis.uid && transition.pendingUids.has(analysis.uid)
+  // Highlight the title text when this analysis is one of the "primary"
+  // analyses for the sample's vial-assignment role (e.g. ENDO analyses on
+  // the endo sub-sample, HPLC analyses on the parent / hplc sub).
+  const isPrimary =
+    !!analysis.uid && !!primaryAnalysisUids?.has(analysis.uid)
+  const primaryTitleClass = isPrimary && primaryRole
+    ? (PRIMARY_TITLE_COLOR[primaryRole] ?? '')
+    : ''
 
   return (
     <tr className={`border-b border-border/50 hover:bg-muted/30 transition-colors ${rowTint}`}>
@@ -742,7 +1241,10 @@ function AnalysisRow({
       </td>
       <td className="py-2.5 px-3 text-sm text-foreground font-medium">
         <div className="flex items-center gap-1.5 flex-wrap">
-          <span title={wasRenamed ? original : undefined}>
+          <span
+            title={wasRenamed ? original : undefined}
+            className={isPrimary ? `font-semibold ${primaryTitleClass}` : ''}
+          >
             {display}
             {wasRenamed && (
               <span className="ml-1.5 text-[10px] text-muted-foreground font-normal">
@@ -750,6 +1252,30 @@ function AnalysisRow({
               </span>
             )}
           </span>
+          <Mk1NativeBadge uid={analysis.uid} />
+          <PromotedFromBadge promotion={analysis.keyword ? promotionsByKeyword?.get(analysis.keyword) : undefined} />
+          {vialAssign && vialAssign.matches.map(m => {
+            // Key each overlay vial by ITS OWN assignment_kind (carried on the
+            // match) — a parent page mixes core and variance vials, so each
+            // vial speaks for itself. No entitlement lookup: kind is explicit.
+            const vialIsVariance = showVarianceChip(m.mk1Analysis, m.assignmentKind)
+            return (
+              <button
+                key={m.vialSampleId}
+                type="button"
+                onClick={e => { e.stopPropagation(); useUIStore.getState().navigateToSample(m.vialSampleId) }}
+                className={`inline-flex items-center gap-0.5 text-[10px] underline underline-offset-2 shrink-0 ${
+                  vialIsVariance
+                    ? 'text-sky-600 dark:text-sky-400 hover:text-sky-700 dark:hover:text-sky-300'
+                    : 'text-muted-foreground hover:text-foreground'
+                }`}
+                title={vialIsVariance ? `Variance replicate — ${m.vialSampleId}` : `Assigned to ${m.vialSampleId}`}
+              >
+                {vialIsVariance && <Layers className="h-3 w-3" aria-hidden="true" />}
+                {m.vialLabel} — {m.vialSampleId}
+              </button>
+            )
+          })}
           {!!historyCount && (
             <button
               onClick={onToggleHistory}
@@ -775,20 +1301,68 @@ function AnalysisRow({
       <EditableSelectCell
         analysis={analysis}
         field="method"
+        mk1Override={vialOverlay}
+        mk1OverrideEditable={vialOverlayEditable}
         onSaved={(newUid, newTitle) => {
-          if (analysis.uid) onMethodInstrumentSaved?.(analysis.uid, 'method', newUid, newTitle)
+          if (vialOverlay) onVialMethodInstrumentSaved?.()
+          else if (analysis.uid) onMethodInstrumentSaved?.(analysis.uid, 'method', newUid, newTitle)
         }}
       />
       <EditableSelectCell
         analysis={analysis}
         field="instrument"
+        mk1Override={vialOverlay}
+        mk1OverrideEditable={vialOverlayEditable}
         onSaved={(newUid, newTitle) => {
-          if (analysis.uid) onMethodInstrumentSaved?.(analysis.uid, 'instrument', newUid, newTitle)
+          if (vialOverlay) onVialMethodInstrumentSaved?.()
+          else if (analysis.uid) onMethodInstrumentSaved?.(analysis.uid, 'instrument', newUid, newTitle)
         }}
       />
-      <td className="py-2.5 px-3 text-xs text-muted-foreground">{analysis.analyst || '\u2014'}</td>
+      <td className="py-2.5 px-3 text-xs text-muted-foreground">{((vialOverlayEditable ? vialOverlay?.analyst : null) ?? analysis.analyst) || '\u2014'}</td>
       <td className="py-2.5 px-3">
-        {analysis.review_state && <StatusBadge state={analysis.review_state} />}
+        <div className="flex items-center gap-1.5 flex-wrap">
+          {analysis.review_state && (
+            <StatusBadge
+              state={analysis.review_state}
+              promotable={isPromotable(analysis, vialKind)}
+              varianceReady={canVarVerify}
+            />
+          )}
+          {showVarianceChip(analysis, vialKind) && <VarianceChip />}
+          {isPromoted && (
+            <span
+              className="text-[10px] font-mono text-emerald-700 dark:text-emerald-400"
+              title="This vial-tier row has been promoted to a parent-tier canonical result"
+            >
+              Promoted → #{analysis.promoted_to_parent_id}
+            </span>
+          )}
+          {isPromoted && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span
+                  className="inline-flex items-center text-muted-foreground/50 hover:text-muted-foreground transition-colors cursor-help"
+                  aria-label="How to correct a promoted result"
+                >
+                  <HelpCircle size={11} />
+                </span>
+              </TooltipTrigger>
+              <TooltipContent className="max-w-xs text-left">
+                This result has been promoted to the parent. To correct it,
+                retest the line on the parent AR — the retest cascades back
+                down to this vial.
+              </TooltipContent>
+            </Tooltip>
+          )}
+          {locked && (
+            <span
+              className="inline-flex items-center gap-0.5 text-muted-foreground/50"
+              title="Parent result verified in SENAITE — retest on the parent to supersede"
+            >
+              <Lock size={11} />
+            </span>
+          )}
+        </div>
       </td>
       <td className="py-2.5 px-3">
         <AnalysisSlaCell
@@ -803,7 +1377,7 @@ function AnalysisRow({
         {formatDate(analysis.captured)}
       </td>
       <td className="py-2 px-3 text-right">
-        {analysis.uid && allowedTransitions.length > 0 && (
+        {analysis.uid && (allowedTransitions.length > 0 || canPromote || canVarVerify) && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <button
@@ -819,6 +1393,23 @@ function AnalysisRow({
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
+              {canPromote && (
+                <DropdownMenuItem
+                  onClick={() => setPromoteOpen(true)}
+                >
+                  Promote
+                </DropdownMenuItem>
+              )}
+              {canVarVerify && (
+                <DropdownMenuItem
+                  onClick={() => {
+                    if (!analysis.uid) return
+                    void transition.executeTransition(analysis.uid, 'variance_verify')
+                  }}
+                >
+                  Verify (Variance)
+                </DropdownMenuItem>
+              )}
               {allowedTransitions.map(t => (
                 <DropdownMenuItem
                   key={t}
@@ -837,6 +1428,21 @@ function AnalysisRow({
               ))}
             </DropdownMenuContent>
           </DropdownMenu>
+        )}
+        {canPromote && (
+          <PromoteDialog
+            analysis={analysis}
+            open={promoteOpen}
+            onOpenChange={setPromoteOpen}
+            onPromoted={() => {
+              // Phase 4b: invalidate react-query (for hooks-backed callers)
+              // AND fire the parent's onPromoted (SampleDetails uses
+              // useState/useEffect, not react-query, so this is needed
+              // to drive a re-fetch of the senaite_shape rows).
+              queryClient.invalidateQueries()
+              onPromoted?.()
+            }}
+          />
         )}
       </td>
     </tr>
@@ -941,6 +1547,60 @@ interface AnalysisTableProps {
   isAnalysisSlaError?: boolean
   isAnalysisSlaPublished?: boolean
   analysisSlaPriority?: InboxPriority | null
+  /**
+   * UIDs of analyses that are "primary" for the viewing sample's vial-
+   * assignment role. Used to tint the analysis title — does NOT filter
+   * rows. Caller is responsible for deriving the set; this component
+   * just renders the highlight when an analysis is in it.
+   */
+  primaryAnalysisUids?: Set<string>
+  /**
+   * Role string (hplc / endo / ster / xtra) driving the tint color.
+   * Required for the highlight to actually colorize; without it the
+   * primary rows render with normal title styling.
+   */
+  primaryRole?: string | null
+  /**
+   * Promotion provenance map for parent pages — keyword → ParentPromotionInfo.
+   * When provided, matching analysis rows render a "from <sub-sample>" badge.
+   * Omit (undefined) on sub-sample pages; no behavior change for existing callers.
+   */
+  promotionsByKeyword?: Map<string, ParentPromotionInfo>
+  /**
+   * Parent-page vial assignment overlay — keyword → VialAssignment. When a row's
+   * keyword maps here, the row shows an inline assigned-vial link and overlays
+   * Method/Instrument/Analyst from that vial's Mk1 analysis. Omit on sub-sample pages.
+   */
+  vialAssignmentByKeyword?: Map<string, VialAssignment>
+  /** Called after a Method/Instrument edit that was routed to a vial's Mk1 row,
+   *  so the caller can refetch the overlay. */
+  onVialMethodInstrumentSaved?: () => void
+  /**
+   * SENAITE parent-line states for sub-sample pages — keyword → review_state.
+   * When a keyword maps to 'verified', the vial row is locked: all mutating
+   * actions (Promote / Retest / Retract / Reject) are hidden. Corrections must
+   * start from the parent AR. Omit on parent pages.
+   */
+  parentLineStates?: Record<string, string>
+  /**
+   * When provided, REPLACES the default left block of the card header row
+   * (the "Activity icon · ANALYSES · n of m" group). The filter tabs on the
+   * right stay regardless. Used by the Vials Quick Look dialog to fold each
+   * vial's header into the table's own Card. Omit for byte-identical default.
+   */
+  headerContent?: ReactNode
+  /**
+   * When true, the progress-bar block under the header is not rendered. Used
+   * by the Quick Look dialog (per-vial progress is noise in the stacked view).
+   * Default false → unchanged for sample pages.
+   */
+  hideProgress?: boolean
+  /** The host vial's assignment_kind ('core' | 'variance' | null). Pass on
+   *  vial-scoped surfaces (quicklook sections, sub-sample page); parent pages
+   *  pass null/omit — parents have no kind, and the Verify (Variance) action
+   *  never appears there. Vial-list overlay entries carry their own kind on
+   *  the match (VialMatch.assignmentKind), independent of this prop. */
+  vialKind?: string | null
 }
 
 export function AnalysisTable({
@@ -954,10 +1614,20 @@ export function AnalysisTable({
   isAnalysisSlaError = false,
   isAnalysisSlaPublished = false,
   analysisSlaPriority = null,
+  primaryAnalysisUids,
+  primaryRole,
+  promotionsByKeyword,
+  vialAssignmentByKeyword,
+  onVialMethodInstrumentSaved,
+  parentLineStates,
+  headerContent,
+  hideProgress = false,
+  vialKind,
 }: AnalysisTableProps) {
   const [analysisFilter, setAnalysisFilter] = useState<'all' | 'verified' | 'pending' | 'invalid'>('all')
   const [sortConfig, setSortConfig] = useState<SortConfig | null>(null)
   const [bulkPendingConfirm, setBulkPendingConfirm] = useState<{ transition: string; count: number } | null>(null)
+  const [bulkPromoteOpen, setBulkPromoteOpen] = useState(false)
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set())
   const [isCardVisible, setIsCardVisible] = useState(true)
   const cardRef = useRef<HTMLDivElement>(null)
@@ -991,7 +1661,7 @@ export function AnalysisTable({
   const INVALID_STATES = new Set(['rejected', 'retracted'])
   const invalidCount = analyses.filter(a => INVALID_STATES.has(a.review_state ?? '')).length
   const verifiedCount = analyses.filter(
-    a => a.review_state === 'verified' || a.review_state === 'published'
+    a => a.review_state === 'verified' || a.review_state === 'published' || a.review_state === 'promoted'
   ).length
   const validCount = analyses.length - invalidCount
   const pendingCount = validCount - verifiedCount
@@ -1000,9 +1670,9 @@ export function AnalysisTable({
 
   const filteredAnalyses = analyses.filter(a => {
     if (analysisFilter === 'verified')
-      return a.review_state === 'verified' || a.review_state === 'published'
+      return a.review_state === 'verified' || a.review_state === 'published' || a.review_state === 'promoted'
     if (analysisFilter === 'pending')
-      return a.review_state !== 'verified' && a.review_state !== 'published' && !INVALID_STATES.has(a.review_state ?? '')
+      return a.review_state !== 'verified' && a.review_state !== 'published' && a.review_state !== 'promoted' && !INVALID_STATES.has(a.review_state ?? '')
     if (analysisFilter === 'invalid')
       return INVALID_STATES.has(a.review_state ?? '')
     // 'all' — exclude invalid by default, matching SENAITE's "Valid" view
@@ -1033,19 +1703,12 @@ export function AnalysisTable({
   const headerChecked: boolean | 'indeterminate' =
     allSelected ? true : someSelected ? 'indeterminate' : false
 
-  // Bulk available actions — intersection of ALLOWED_TRANSITIONS for all selected analyses
+  // Bulk available actions — promote-aware intersection (see deriveBulkActions)
   const selectedAnalyses = groups
     .filter(g => g.current.uid && bulk.selectedUids.has(g.current.uid))
     .map(g => g.current)
-  const bulkAvailableActions = (['submit', 'retest', 'verify', 'retract', 'reject'] as const).filter(t =>
-    selectedAnalyses.length > 0 &&
-    selectedAnalyses.every(a =>
-      a.review_state !== null &&
-      a.review_state !== undefined &&
-      (ALLOWED_TRANSITIONS[a.review_state] ?? []).includes(t) &&
-      (t !== 'submit' || !!a.result)
-    )
-  )
+  const { actions: bulkAvailableActions, showPromote: bulkShowPromote, showVarianceVerify: bulkShowVarianceVerify } =
+    deriveBulkActions(selectedAnalyses, parentLineStates, vialKind)
 
   // Disable toolbar when any per-row transition is in-flight
   const toolbarDisabled = transition.pendingUids.size > 0
@@ -1055,15 +1718,17 @@ export function AnalysisTable({
   return (
     <Card ref={cardRef} className="p-4 mb-6">
       <div className="flex items-center justify-between mb-3">
-        <div className="flex items-center gap-2">
-          <Activity size={15} className="text-muted-foreground" />
-          <span className="text-sm font-semibold text-foreground tracking-wide uppercase">
-            Analyses
-          </span>
-          <span className="text-xs text-muted-foreground ml-1">
-            {filteredAnalyses.length} of {validCount}
-          </span>
-        </div>
+        {headerContent ?? (
+          <div className="flex items-center gap-2">
+            <Activity size={15} className="text-muted-foreground" />
+            <span className="text-sm font-semibold text-foreground tracking-wide uppercase">
+              Analyses
+            </span>
+            <span className="text-xs text-muted-foreground ml-1">
+              {filteredAnalyses.length} of {validCount}
+            </span>
+          </div>
+        )}
         <div
           className="flex items-center gap-2"
           role="tablist"
@@ -1105,31 +1770,39 @@ export function AnalysisTable({
       </div>
 
       {/* Progress bar */}
-      <div className="mb-4">
-        <div className="h-1.5 rounded-full bg-muted overflow-hidden">
-          <div
-            className="h-full rounded-full bg-gradient-to-r from-emerald-500 to-emerald-400 transition-all duration-700 ease-out"
-            style={{ width: `${progressPct}%` }}
-          />
+      {!hideProgress && (
+        <div className="mb-4">
+          <div className="h-1.5 rounded-full bg-muted overflow-hidden">
+            <div
+              className="h-full rounded-full bg-gradient-to-r from-emerald-500 to-emerald-400 transition-all duration-700 ease-out"
+              style={{ width: `${progressPct}%` }}
+            />
+          </div>
+          <div className="flex justify-between mt-1.5">
+            <span className="text-[11px] text-muted-foreground">Analysis Progress</span>
+            <span className="text-[11px] text-muted-foreground">{progressPct}% complete</span>
+          </div>
         </div>
-        <div className="flex justify-between mt-1.5">
-          <span className="text-[11px] text-muted-foreground">Analysis Progress</span>
-          <span className="text-[11px] text-muted-foreground">{progressPct}% complete</span>
-        </div>
-      </div>
+      )}
 
       {/* Bulk action toolbar — fixed at browser bottom while table is visible */}
       {bulk.selectedUids.size > 0 && isCardVisible && (
         <div
           className="fixed bottom-4 z-50 flex items-center justify-between px-4 py-2.5 rounded-lg bg-slate-900 border border-slate-500 shadow-xl"
           style={{
+            // var() needs 0px fallbacks: in portaled contexts (e.g. the Vials
+            // Quick Look dialog, which portals to document.body OUTSIDE the
+            // SidebarProvider) these CSS vars don't resolve, the calc() goes
+            // invalid, left collapses to 0, and the toolbar jumps bottom-left.
+            // Falling back to 0px centers it on the viewport — correct for the
+            // 90vw dialog and a no-op on the page (where the var resolves).
             left: sidebarOpen
-              ? 'calc(50% + var(--sidebar-width) / 2)'
-              : 'calc(50% + var(--sidebar-width-icon) / 2)',
+              ? 'calc(50% + var(--sidebar-width, 0px) / 2)'
+              : 'calc(50% + var(--sidebar-width-icon, 0px) / 2)',
             transform: 'translateX(-50%)',
             width: sidebarOpen
-              ? 'min(calc(100vw - var(--sidebar-width) - 3rem), 64rem)'
-              : 'min(calc(100vw - var(--sidebar-width-icon) - 3rem), 64rem)',
+              ? 'min(calc(100vw - var(--sidebar-width, 0px) - 3rem), 64rem)'
+              : 'min(calc(100vw - var(--sidebar-width-icon, 0px) - 3rem), 64rem)',
           }}
         >
           <div className="flex items-center gap-3">
@@ -1148,30 +1821,52 @@ export function AnalysisTable({
               <div className="flex items-center gap-2">
                 <Spinner className="size-3.5" />
                 <span className="text-sm text-muted-foreground">
-                  {TRANSITION_LABELS[bulk.bulkProgress.transition] ?? bulk.bulkProgress.transition}ing{' '}
+                  {bulk.bulkProgress.transition === 'variance_verify'
+                    ? 'Verifying (Variance)'
+                    : `${TRANSITION_LABELS[bulk.bulkProgress.transition] ?? bulk.bulkProgress.transition}ing`}{' '}
                   {bulk.bulkProgress.current}/{bulk.bulkProgress.total}...
                 </span>
               </div>
             ) : (
-              bulkAvailableActions.map(t => (
-                <Button
-                  key={t}
-                  size="sm"
-                  variant={DESTRUCTIVE_TRANSITIONS.has(t) ? 'destructive' : 'default'}
-                  disabled={toolbarDisabled}
-                  onClick={() => {
-                    if (DESTRUCTIVE_TRANSITIONS.has(t)) {
-                      setBulkPendingConfirm({ transition: t, count: bulk.selectedUids.size })
-                    } else {
-                      void bulk.executeBulk([...bulk.selectedUids], t)
-                    }
-                  }}
-                >
-                  {TRANSITION_LABELS[t] ?? t} selected
-                </Button>
-              ))
+              <>
+                {bulkShowPromote && (
+                  <Button
+                    size="sm"
+                    disabled={toolbarDisabled}
+                    onClick={() => setBulkPromoteOpen(true)}
+                  >
+                    Promote selected
+                  </Button>
+                )}
+                {bulkShowVarianceVerify && (
+                  <Button
+                    size="sm"
+                    disabled={toolbarDisabled}
+                    onClick={() => void bulk.executeBulk([...bulk.selectedUids], 'variance_verify')}
+                  >
+                    Verify (Variance) selected
+                  </Button>
+                )}
+                {bulkAvailableActions.map(t => (
+                  <Button
+                    key={t}
+                    size="sm"
+                    variant={DESTRUCTIVE_TRANSITIONS.has(t) ? 'destructive' : 'default'}
+                    disabled={toolbarDisabled}
+                    onClick={() => {
+                      if (DESTRUCTIVE_TRANSITIONS.has(t)) {
+                        setBulkPendingConfirm({ transition: t, count: bulk.selectedUids.size })
+                      } else {
+                        void bulk.executeBulk([...bulk.selectedUids], t)
+                      }
+                    }}
+                  >
+                    {TRANSITION_LABELS[t] ?? t} selected
+                  </Button>
+                ))}
+              </>
             )}
-            {bulkAvailableActions.length === 0 && !bulk.isBulkProcessing && (
+            {bulkAvailableActions.length === 0 && !bulkShowPromote && !bulkShowVarianceVerify && !bulk.isBulkProcessing && (
               <span className="text-xs text-muted-foreground italic">
                 No common actions for selection
               </span>
@@ -1236,6 +1931,7 @@ export function AnalysisTable({
                       isHistoryExpanded={isExpanded}
                       onToggleHistory={() => toggleGroup(groupKey)}
                       onMethodInstrumentSaved={onMethodInstrumentSaved}
+                      onPromoted={onTransitionComplete}
                       slaSnapshot={
                         analysisSlaMap && group.current.keyword
                           ? analysisSlaMap.get(group.current.keyword) ?? null
@@ -1245,6 +1941,13 @@ export function AnalysisTable({
                       isSlaError={isAnalysisSlaError}
                       isSlaPublished={isAnalysisSlaPublished}
                       slaPriority={analysisSlaPriority}
+                      primaryAnalysisUids={primaryAnalysisUids}
+                      primaryRole={primaryRole}
+                      promotionsByKeyword={promotionsByKeyword}
+                      vialAssignmentByKeyword={vialAssignmentByKeyword}
+                      onVialMethodInstrumentSaved={onVialMethodInstrumentSaved}
+                      parentLineStates={parentLineStates}
+                      vialKind={vialKind}
                     />
                     {isExpanded && group.history.map(h => (
                       <HistoryRow
@@ -1304,6 +2007,17 @@ export function AnalysisTable({
         </AlertDialog>
       </div>
 
+      {/* Bulk promote confirm */}
+      <BulkPromoteDialog
+        analyses={selectedAnalyses}
+        open={bulkPromoteOpen}
+        onOpenChange={setBulkPromoteOpen}
+        onPromoted={() => {
+          bulk.clearSelection()
+          onTransitionComplete?.()
+        }}
+      />
+
       {/* Bulk destructive transition confirmation */}
       <AlertDialog
         open={bulkPendingConfirm !== null}
@@ -1322,6 +2036,9 @@ export function AnalysisTable({
                 ? 'retracted back to unassigned state'
                 : 'permanently rejected'}
               . This action cannot be undone from this application.
+              {promotedDestructiveNote(selectedAnalyses) && (
+                <span className="block mt-2">{promotedDestructiveNote(selectedAnalyses)}</span>
+              )}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

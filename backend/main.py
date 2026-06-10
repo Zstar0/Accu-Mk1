@@ -39,12 +39,12 @@ from sqlalchemy.exc import IntegrityError
 
 from database import get_db, init_db
 from sla_engine import BusinessSchedule, compute_business_minutes, sla_status_dict
-from models import AuditLog, Settings, Job, Sample, Result, Instrument, AnalysisService, HplcMethod, Peptide, PeptideAnalyte, CalibrationCurve, HPLCAnalysis, User, SharePointFileCache, WizardSession, WizardMeasurement, peptide_methods, blend_components, ServiceGroup, service_group_members, SamplePriority, Worksheet, WorksheetItem, instrument_methods, SampleAnalyteAlias, SlaTier, SlaPriorityTier, BusinessHoursConfig, LabHoliday
+from models import AuditLog, Settings, Job, Sample, Result, Instrument, AnalysisService, HplcMethod, Peptide, PeptideAnalyte, CalibrationCurve, HPLCAnalysis, User, SharePointFileCache, WizardSession, WizardMeasurement, peptide_methods, blend_components, ServiceGroup, service_group_members, SamplePriority, Worksheet, WorksheetItem, instrument_methods, SampleAnalyteAlias, SlaTier, SlaPriorityTier, BusinessHoursConfig, LabHoliday, LimsSample, LimsSubSample
 from auth import (
     get_current_user, require_admin, create_access_token,
     verify_password, get_password_hash, seed_admin_user,
     require_internal_service_token,
-    UserCreate, UserRead, UserUpdate, PasswordChange, TokenResponse,
+    UserCreate, UserRead, UserUpdate, MeUpdate, PasswordChange, TokenResponse,
     SenaiteCredentials,
 )
 from models_peptide_request import (
@@ -70,6 +70,9 @@ from calculations.hplc_processor import (
     process_hplc_analysis, AnalysisInput, WeightInputs, CalibrationParams, PeptideParams
 )
 from file_watcher import FileWatcher
+from sub_samples.routes import router as sub_samples_router
+from lims_analyses.routes import router as lims_analyses_router
+from families.routes import router as families_router  # Phase 5b
 
 
 # --- API Key Configuration ---
@@ -368,6 +371,9 @@ app.add_middleware(
         "https://tauri.localhost",    # Tauri production (v2)
         "http://tauri.localhost",     # Tauri production fallback
     ],
+    # accumark-stack platform mounts the frontend on a per-stack host port
+    # (e.g. 5532 for subvial). Accept any localhost/127.0.0.1 dev port.
+    allow_origin_regex=r"^http://(localhost|127\.0\.0\.1):\d+$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -376,6 +382,10 @@ app.add_middleware(
 # Global file watcher instance
 file_watcher = FileWatcher()
 
+# Register sub-samples router
+app.include_router(sub_samples_router)
+app.include_router(lims_analyses_router)
+app.include_router(families_router)
 
 # --- Endpoints ---
 
@@ -416,6 +426,26 @@ async def login(
 @app.get("/auth/me", response_model=UserRead)
 async def get_me(current_user=Depends(get_current_user)):
     """Get current authenticated user info."""
+    return _user_to_read(current_user)
+
+
+@app.patch("/auth/me", response_model=UserRead)
+async def update_me(
+    data: MeUpdate,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Self-serve update of the caller's own name fields. Empty string clears
+    to NULL. Cannot change role / active / email (not in MeUpdate)."""
+    fields = data.model_dump(exclude_unset=True)
+    if "first_name" in fields:
+        v = (fields["first_name"] or "").strip()
+        current_user.first_name = v or None
+    if "last_name" in fields:
+        v = (fields["last_name"] or "").strip()
+        current_user.last_name = v or None
+    db.commit()
+    db.refresh(current_user)
     return _user_to_read(current_user)
 
 
@@ -493,6 +523,23 @@ async def list_users(
     return [_user_to_read(u) for u in users]
 
 
+@app.get("/auth/directory")
+async def user_directory(
+    _current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Lightweight id/email/name list for ALL users (active + inactive) so the
+    FE can resolve historical analyst emails to names. Auth-only, not admin."""
+    rows = db.execute(
+        select(User.id, User.email, User.first_name, User.last_name)
+        .order_by(User.email)
+    ).all()
+    return [
+        {"id": r.id, "email": r.email, "first_name": r.first_name, "last_name": r.last_name}
+        for r in rows
+    ]
+
+
 @app.post("/auth/users", response_model=UserRead)
 async def create_user(
     data: UserCreate,
@@ -547,6 +594,11 @@ async def update_user(
         if existing:
             raise HTTPException(status_code=400, detail="Email already in use")
         user.email = data.email
+
+    if data.first_name is not None:
+        user.first_name = data.first_name.strip() or None
+    if data.last_name is not None:
+        user.last_name = data.last_name.strip() or None
 
     db.commit()
     db.refresh(user)
@@ -811,6 +863,25 @@ async def get_sample_activity(
             "source": "hplc_analyses",
         })
 
+    # --- Mk1 DB: lims_analysis_promotions (analysis promoted from vials) ---
+    from lims_analyses.service import list_promotions_for_parent
+    for p in list_promotions_for_parent(db, sample_id):
+        events.append({
+            "timestamp": p.promoted_at.isoformat(),
+            "event": "analysis_promoted",
+            "label": (
+                f"{p.keyword} promoted from "
+                f"{', '.join(s.sample_id or '?' for s in p.sources)}"
+            ),
+            "details": {
+                "keyword": p.keyword,
+                "result_value": p.result_value,
+                "by": p.promoted_by_email,
+                "sources": [s.model_dump() for s in p.sources],
+            },
+            "source": "lims_analysis_promotions",
+        })
+
     # --- Integration DB: sample_status_events ---
     try:
         with get_integration_db() as int_conn:
@@ -938,6 +1009,145 @@ async def get_sample_activity(
                         })
     except Exception:
         pass  # Integration DB unavailable — return Mk1 events only
+
+    # --- Mk1 DB: sub-sample activity (Section A + B from spec) ---
+    # Self-gates: only runs when sample_id belongs to a lims_sub_samples row.
+    sub_row = db.execute(
+        select(LimsSubSample).where(LimsSubSample.sample_id == sample_id)
+    ).scalar_one_or_none()
+    if sub_row is not None:
+        from models import (
+            LimsAnalysis,
+            LimsAnalysisTransition,
+            LimsAnalysisPromotion,
+            LimsSubSampleEvent,
+        )
+
+        # Section A1: lims_analysis_transitions for analyses on this sub-sample
+        # Join: lims_analyses → lims_analysis_transitions; email join for user.
+        analyses_on_sub = db.execute(
+            select(LimsAnalysis).where(
+                LimsAnalysis.lims_sub_sample_pk == sub_row.id
+            )
+        ).scalars().all()
+        analysis_ids = [a.id for a in analyses_on_sub]
+        keyword_by_id = {a.id: a.keyword for a in analyses_on_sub}
+
+        if analysis_ids:
+            transitions = db.execute(
+                select(LimsAnalysisTransition).where(
+                    LimsAnalysisTransition.analysis_id.in_(analysis_ids)
+                )
+            ).scalars().all()
+            for t in transitions:
+                kw = keyword_by_id.get(t.analysis_id, "?")
+                actor_email = None
+                if t.user_id:
+                    actor = db.execute(
+                        select(User).where(User.id == t.user_id)
+                    ).scalar_one_or_none()
+                    actor_email = actor.email if actor else None
+
+                if t.from_state is None and t.reason == "initial insert":
+                    # Seeded / manually added
+                    label = f"Analysis added: {kw}"
+                    event_name = "analysis_added"
+                    details: dict = {"keyword": kw, "by": actor_email}
+                else:
+                    label = f"{kw}: {t.from_state}→{t.to_state}"
+                    event_name = "analysis_transition"
+                    details = {
+                        "keyword": kw,
+                        "from": t.from_state,
+                        "to": t.to_state,
+                        "kind": t.transition_kind,
+                        "reason": t.reason,
+                        "by": actor_email,
+                    }
+                events.append({
+                    "timestamp": t.occurred_at.isoformat() if t.occurred_at else None,
+                    "event": event_name,
+                    "label": label,
+                    "details": details,
+                    "source": "lims_analysis_transitions",
+                })
+
+            # Section A2: lims_analysis_promotions (vial side — source_analysis_id)
+            promotions = db.execute(
+                select(LimsAnalysisPromotion).where(
+                    LimsAnalysisPromotion.source_analysis_id.in_(analysis_ids)
+                )
+            ).scalars().all()
+            for p in promotions:
+                src_kw = keyword_by_id.get(p.source_analysis_id, "?")
+                promoter_email = None
+                if p.promoted_by_user_id:
+                    promoter = db.execute(
+                        select(User).where(User.id == p.promoted_by_user_id)
+                    ).scalar_one_or_none()
+                    promoter_email = promoter.email if promoter else None
+                events.append({
+                    "timestamp": p.promoted_at.isoformat() if p.promoted_at else None,
+                    "event": "analysis_promoted_to_parent",
+                    "label": f"Promoted {src_kw} to parent",
+                    "details": {
+                        "keyword": src_kw,
+                        "parent_analysis_id": p.parent_analysis_id,
+                        "contribution_kind": p.contribution_kind,
+                        "by": promoter_email,
+                    },
+                    "source": "lims_analysis_promotions",
+                })
+
+        # Section B: lims_sub_sample_events (role changes, remarks, analysis_removed)
+        sub_events = db.execute(
+            select(LimsSubSampleEvent).where(
+                LimsSubSampleEvent.sub_sample_pk == sub_row.id
+            )
+        ).scalars().all()
+        for se in sub_events:
+            actor_email = None
+            if se.user_id:
+                actor = db.execute(
+                    select(User).where(User.id == se.user_id)
+                ).scalar_one_or_none()
+                actor_email = actor.email if actor else None
+
+            if se.event == "role_assigned":
+                d = se.details or {}
+                label = f"Role: {d.get('from')} → {d.get('to')}"
+            elif se.event == "remarks_updated":
+                label = "Remarks updated"
+            elif se.event == "analysis_removed":
+                d = se.details or {}
+                label = f"Analysis removed: {d.get('keyword', '?')}"
+            elif se.event == "worksheet_assigned":
+                d = se.details or {}
+                ws_label = d.get("worksheet_title") or f"#{d.get('worksheet_id')}"
+                analyst = d.get("analyst_email") or "unassigned"
+                label = f"Added to worksheet {ws_label} — analyst {analyst}"
+            elif se.event == "worksheet_removed":
+                d = se.details or {}
+                ws_label = d.get("worksheet_title") or f"#{d.get('worksheet_id')}"
+                label = f"Removed from worksheet {ws_label}"
+            elif se.event == "worksheet_analyst_changed":
+                d = se.details or {}
+                label = (
+                    f"Worksheet analyst: {d.get('from_email') or '—'} → "
+                    f"{d.get('to_email') or '—'}"
+                )
+            else:
+                label = se.event
+
+            event_details = dict(se.details or {})
+            event_details["by"] = actor_email
+            events.append({
+                "timestamp": se.created_at.isoformat() if se.created_at else None,
+                "event": se.event,
+                "label": label,
+                "details": event_details,
+                "source": "lims_sub_sample_events",
+            })
 
     # Sort all events reverse-chronological, nulls last
     events.sort(key=lambda e: e["timestamp"] or "", reverse=True)
@@ -1775,6 +1985,8 @@ class AnalysisServiceResponse(BaseModel):
     active: bool
     created_at: datetime
     updated_at: datetime
+    result_type: Optional[str] = None
+    result_options: Optional[list] = None
 
     class Config:
         from_attributes = True
@@ -2489,6 +2701,60 @@ async def update_analysis_service_peptide(
     return AnalysisServiceResponse.model_validate(service)
 
 
+class AnalysisServiceResultTypeUpdate(BaseModel):
+    result_type: Optional[str] = None
+    result_options: Optional[list] = None
+
+
+@app.patch("/analysis-services/{service_id}/result-type", response_model=AnalysisServiceResponse)
+async def update_analysis_service_result_type(
+    service_id: int,
+    data: AnalysisServiceResultTypeUpdate,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Set a service's result type + options (local-authoritative once set)."""
+    service = db.execute(
+        select(AnalysisService).where(AnalysisService.id == service_id)
+    ).scalar_one_or_none()
+    if not service:
+        raise HTTPException(404, f"Analysis service {service_id} not found")
+    if "result_type" in data.model_fields_set:
+        service.result_type = data.result_type
+    if "result_options" in data.model_fields_set:
+        service.result_options = data.result_options
+    db.commit()
+    db.refresh(service)
+    return AnalysisServiceResponse.model_validate(service)
+
+
+def _parse_service_result_options(raw) -> list[dict]:
+    """SENAITE ResultOptions [{ResultValue, ResultText}] -> [{value, label}]."""
+    out: list[dict] = []
+    if raw and isinstance(raw, list):
+        for opt in raw:
+            if isinstance(opt, dict) and opt.get("ResultValue") is not None:
+                out.append({
+                    "value": str(opt["ResultValue"]),
+                    "label": str(opt.get("ResultText") or opt["ResultValue"]),
+                })
+    return out
+
+
+def _apply_service_result_type(svc, item: dict) -> None:
+    """Seed svc.result_type / result_options from a SENAITE service item, but
+    ONLY when svc.result_type is NULL (local-wins). No-op otherwise."""
+    if svc.result_type is not None:
+        return
+    rtype = item.get("ResultType") or item.get("getResultType")
+    if not rtype:
+        return
+    svc.result_type = str(rtype)
+    svc.result_options = _parse_service_result_options(
+        item.get("ResultOptions") or item.get("getResultOptions") or []
+    ) or None
+
+
 @app.post("/analysis-services/sync")
 async def sync_analysis_services(db: Session = Depends(get_db), _current_user=Depends(get_current_user)):
     """Sync analysis services from Senaite. Adds new services, does not overwrite existing."""
@@ -2564,6 +2830,7 @@ async def sync_analysis_services(db: Session = Depends(get_db), _current_user=De
             if not existing.category and category:
                 existing.category = category
                 updated += 1
+            _apply_service_result_type(existing, item)  # local-wins seed
             continue
 
         svc = AnalysisService(
@@ -2577,6 +2844,7 @@ async def sync_analysis_services(db: Session = Depends(get_db), _current_user=De
             senaite_uid=item.get("uid"),
         )
         db.add(svc)
+        _apply_service_result_type(svc, item)
         created += 1
 
     db.commit()
@@ -3785,6 +4053,28 @@ async def run_hplc_analysis(
     db.add(audit)
     db.commit()
     db.refresh(analysis)
+
+    # Bridge: a vial-scoped sample prep pushes its HPLC result onto the vial's
+    # lims_analyses row(s) and submits. The analysis above is already committed
+    # (db.commit at the line prior), so a bridge failure can never lose it — we
+    # roll back any partial bridge mutation and continue.
+    if request.sample_prep_id is not None:
+        try:
+            import mk1_db
+            _prep = mk1_db.get_sample_prep(request.sample_prep_id)
+            _sub_pk = _prep.get("lims_sub_sample_pk") if _prep else None
+            if _sub_pk is not None:
+                from lims_analyses.prep_bridge import bridge_prep_result_to_vial
+                bridge_prep_result_to_vial(
+                    db,
+                    lims_sub_sample_pk=_sub_pk,
+                    analysis=analysis,
+                    peptide=peptide,
+                    user_id=current_user.id,
+                )
+        except Exception:
+            db.rollback()
+            logger.exception("prep_bridge: failed for sample_prep_id=%s", request.sample_prep_id)
 
     return _analysis_to_response(analysis, peptide.abbreviation)
 
@@ -7864,8 +8154,61 @@ async def get_analysis_services(_current_user=Depends(get_current_user)):
 
 
 @app.post("/explorer/samples/{sample_id}/analyses")
-async def add_sample_analysis(sample_id: str, body: dict, _current_user=Depends(get_current_user)):
-    """Add an analysis service to a sample (proxied to Integration Service)."""
+async def add_sample_analysis(
+    sample_id: str,
+    body: dict,
+    _current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Add an analysis service to a sample.
+
+    Native branch: if sample_id maps to a lims_sub_samples row whose
+    external_lims_uid starts with 'mk1://', the analysis is created
+    directly in Mk1 via add_analysis_to_native_vial.
+
+    Non-native fallthrough: proxied to the Integration Service unchanged.
+    """
+    from sqlalchemy import select as _select
+    from sqlalchemy.exc import IntegrityError as SQLIntegrityError
+    from lims_analyses.service import (
+        add_analysis_to_native_vial,
+        BadRequestError as _BadRequestError,
+        NotFoundError as _NotFoundError,
+    )
+
+    sub = db.execute(
+        _select(LimsSubSample).where(
+            LimsSubSample.sample_id == sample_id,
+            LimsSubSample.external_lims_uid.like("mk1://%"),
+        )
+    ).scalar_one_or_none()
+
+    if sub is not None:
+        # Native branch
+        senaite_service_uid = body.get("service_uid")
+        try:
+            add_analysis_to_native_vial(
+                db,
+                sub_sample_pk=sub.id,
+                senaite_service_uid=senaite_service_uid,
+                keyword=None,
+                user_id=_current_user.id,
+            )
+        except _NotFoundError as e:
+            raise HTTPException(status_code=404, detail=str(e))
+        except _BadRequestError as e:
+            raise HTTPException(status_code=409, detail=str(e))
+        except SQLIntegrityError:
+            # Unique-index collision (e.g. concurrent add). The index now
+            # excludes retracted/rejected rows, so this is a true duplicate.
+            db.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail=f"analysis already exists on {sample_id}",
+            )
+        return {"success": True, "message": "Analysis added"}
+
+    # Non-native: proxy to Integration Service
     try:
         url = f"{INTEGRATION_SERVICE_URL}/explorer/samples/{sample_id}/analyses"
         async with httpx.AsyncClient(timeout=30.0) as client:
@@ -7879,8 +8222,50 @@ async def add_sample_analysis(sample_id: str, body: dict, _current_user=Depends(
 
 
 @app.delete("/explorer/samples/{sample_id}/analyses/{keyword}")
-async def remove_sample_analysis(sample_id: str, keyword: str, _current_user=Depends(get_current_user)):
-    """Remove an analysis from a sample (proxied to Integration Service)."""
+async def remove_sample_analysis(
+    sample_id: str,
+    keyword: str,
+    _current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Remove an analysis from a sample.
+
+    Native branch: if sample_id maps to a lims_sub_samples row whose
+    external_lims_uid starts with 'mk1://', the analysis is hard-deleted
+    (if pristine) via delete_pristine_analysis.
+
+    Non-native fallthrough: proxied to the Integration Service unchanged.
+    """
+    from sqlalchemy import select as _select
+    from lims_analyses.service import (
+        delete_pristine_analysis,
+        BadRequestError as _BadRequestError,
+        NotFoundError as _NotFoundError,
+    )
+
+    sub = db.execute(
+        _select(LimsSubSample).where(
+            LimsSubSample.sample_id == sample_id,
+            LimsSubSample.external_lims_uid.like("mk1://%"),
+        )
+    ).scalar_one_or_none()
+
+    if sub is not None:
+        # Native branch
+        try:
+            delete_pristine_analysis(
+                db,
+                sub_sample_pk=sub.id,
+                keyword=keyword,
+                user_id=_current_user.id,
+            )
+        except _NotFoundError as e:
+            raise HTTPException(status_code=404, detail=str(e))
+        except _BadRequestError as e:
+            raise HTTPException(status_code=409, detail=str(e))
+        return {"success": True, "message": "Analysis removed"}
+
+    # Non-native: proxy to Integration Service
     try:
         url = f"{INTEGRATION_SERVICE_URL}/explorer/samples/{sample_id}/analyses/{keyword}"
         async with httpx.AsyncClient(timeout=30.0) as client:
@@ -8209,12 +8594,66 @@ async def generate_sample_coa(
 
     Mirrors the SENAITE addon flow: call COA Builder, then immediately write
     the verification code back to the SENAITE sample.
+
+    COA roll-up Phase 1: before invoking COABuilder, runs the source resolver
+    over the parent + every linked sub-sample. The resolver:
+      - auto-resolves analytes with a single reportable verified candidate
+      - blocks (HTTP 422) when an analyte has >1 candidates with no actionable
+        pin (or a stale pin / no candidates at all)
+    After a successful generation, persists a per-generation manifest row
+    per resolved analyte. Resolver runtime errors are non-fatal — they log
+    and fall through so single-vial behavior is unchanged on a resolver bug.
     """
+    import logging as _logging
+    _logger = _logging.getLogger(__name__)
+
     if not COA_BUILDER_URL:
         return SampleCOAActionResponse(
             success=False,
             message="COA Builder not configured (COA_BUILDER_URL env var not set)",
         )
+
+    # --- COA roll-up Phase 1: resolver pre-flight (parents only) ---
+    # Sub-sample COAs aren't covered by the parent-level roll-up; their
+    # generation path is independent and remains unchanged.
+    from coa.source_resolver import resolve_sources, SenaiteAnalysesHttpReader
+    from coa.manifest import write_generation_manifest
+
+    is_sub = bool(re.search(r"-S\d{2,}$", sample_id))
+    resolver_result = None
+    if not is_sub and SENAITE_URL:
+        try:
+            reader = SenaiteAnalysesHttpReader(
+                base_url=SENAITE_URL,
+                auth=_get_senaite_auth(current_user),
+            )
+            resolver_result = await resolve_sources(sample_id, db, reader)
+        except Exception as e:
+            # Resolver failure is non-fatal in Phase 1; log and fall through.
+            _logger.warning("COA resolver pre-flight failed for %s: %s", sample_id, e)
+            resolver_result = None
+
+        if resolver_result is not None and resolver_result.is_blocked:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "unresolved_sources",
+                    "message": (
+                        "COA cannot be generated until the source for each "
+                        "analyte is resolved. See COA Sources panel."
+                    ),
+                    "unresolved": [
+                        {
+                            "analyte_keyword": d.analyte_keyword,
+                            "blocked": d.blocked,
+                            "detail": d.blocked_detail,
+                            "candidates_count": len(d.candidates),
+                        }
+                        for d in resolver_result.decisions
+                        if d.blocked is not None
+                    ],
+                },
+            )
 
     # Enrich with per-sample analyte display alias picks so the COA renders
     # the customer-facing name (real name still drives conformance).
@@ -8252,21 +8691,33 @@ async def generate_sample_coa(
     # Reports tab.  Best-effort — generation already succeeded at this point.
     if SENAITE_URL and pdf_base64:
         try:
-            async with httpx.AsyncClient(
-                timeout=httpx.Timeout(30.0, connect=5.0),
-                auth=_get_senaite_auth(current_user),
-                follow_redirects=True,
-            ) as senaite_client:
-                await senaite_client.post(
-                    f"{SENAITE_URL}/senaite/@@accumark-attach-coa",
-                    json={
-                        "sample_id": sample_id,
-                        "pdf_base64": pdf_base64,
-                        "verification_code": verification_code or "",
-                    },
+            attach_payload = {
+                "sample_id": sample_id,
+                "pdf_base64": pdf_base64,
+                "verification_code": verification_code or "",
+            }
+            attach_url = f"{SENAITE_URL}/senaite/@@accumark-attach-coa"
+            # Try the user's own SENAITE creds first (audit attribution); a
+            # stale stored password makes SENAITE treat the call as anonymous
+            # (404/401 without raising), so check status and retry once with
+            # the service account.
+            for attach_auth in (_get_senaite_auth(current_user), httpx.BasicAuth(SENAITE_USER, SENAITE_PASSWORD)):
+                async with httpx.AsyncClient(
+                    timeout=httpx.Timeout(30.0, connect=5.0),
+                    auth=attach_auth,
+                    follow_redirects=True,
+                ) as senaite_client:
+                    resp = await senaite_client.post(attach_url, json=attach_payload)
+                if resp.status_code < 300:
+                    break
+                _logger.warning(
+                    "SENAITE COA attach HTTP %s for %s (auth=%s)",
+                    resp.status_code, sample_id,
+                    "user" if attach_auth is not None else "service",
                 )
-        except Exception:
-            pass  # Non-fatal — COA is generated; SENAITE attach is best-effort
+        except Exception as e:
+            # Non-fatal — COA is generated; SENAITE attach is best-effort.
+            _logger.warning("SENAITE COA attach failed for %s: %s", sample_id, e)
 
     # Build a meaningful message from the COA Builder response
     warnings = data.get("warnings", [])
@@ -8288,6 +8739,40 @@ async def generate_sample_coa(
     if warnings:
         message += f" (warnings: {'; '.join(warnings)})"
 
+    # --- COA roll-up Phase 1: write the per-generation manifest ---
+    # Best-effort. COABuilder's response shape may or may not include the
+    # integration-DB generation UUID; fall back to a generated UUID + log
+    # warning so the manifest is still queryable by (parent, generation_number).
+    if (
+        resolver_result is not None
+        and not resolver_result.is_blocked
+        and verification_code
+        and generation_number
+    ):
+        import uuid as _uuid
+        gen_id_str = data.get("generation_id")
+        try:
+            gen_id = _uuid.UUID(gen_id_str) if gen_id_str else _uuid.uuid4()
+        except (TypeError, ValueError):
+            _logger.warning(
+                "COA generation_id from COABuilder is not a valid UUID (%r); "
+                "manifest will be keyed by a generated UUID",
+                gen_id_str,
+            )
+            gen_id = _uuid.uuid4()
+        try:
+            write_generation_manifest(
+                db,
+                generation_id=gen_id,
+                generation_number=generation_number,
+                result=resolver_result,
+            )
+        except Exception as e:
+            _logger.warning(
+                "COA manifest write failed for %s gen %s: %s",
+                sample_id, generation_number, e,
+            )
+
     return SampleCOAActionResponse(
         success=True,
         message=message,
@@ -8303,12 +8788,23 @@ async def publish_sample_coa(
     """Publish the latest draft Accumark COA for a SENAITE sample.
 
     Order of operations:
-    1. Resolve SENAITE UID (fail fast before any state changes)
-    2. Publish in Integration Service (marks generation published, publishes additional COAs)
-    3. Write verification code to SENAITE
-    4. Transition SENAITE sample to published workflow state
+    1. Reject sub-sample IDs (they inherit parent's order number, would clobber parent's COA on WP)
+    2. Resolve SENAITE UID (fail fast before any state changes)
+    3. Publish in Integration Service (marks generation published, publishes additional COAs)
+    4. Write verification code to SENAITE
+    5. Transition SENAITE sample to published workflow state
     """
-    # 1. Resolve SENAITE UID upfront so we fail before touching integration service state
+    # 1. Sub-sample suffix matches `-S\d{2}` (canonical from sub_samples/senaite.py:89).
+    if re.search(r"-S\d{2}$", sample_id):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Sub-sample COAs cannot be published to WordPress. "
+                "Publish the parent sample's COA instead."
+            ),
+        )
+
+    # 2. Resolve SENAITE UID upfront so we fail before touching integration service state
     senaite_uid: str | None = None
     if SENAITE_URL:
         try:
@@ -8530,8 +9026,13 @@ async def regen_primary_coa(
                         "verification_code": verification_code,
                     },
                 )
-        except Exception:
-            pass  # Non-fatal — COA is in S3 already
+        except Exception as e:
+            # Non-fatal — COA is in S3 already; SENAITE attach is best-effort.
+            # The @@accumark-attach-coa addon is prod-only, so this 404s on dev.
+            import logging as _logging
+            _logging.getLogger(__name__).warning(
+                "SENAITE COA attach failed for %s: %s", sample_id, e
+            )
 
     # 3. Publish the new primary — reuses publish_sample_coa's flow so
     # integration service marks the new generation as published,
@@ -8743,6 +9244,7 @@ class WizardSessionCreate(BaseModel):
     standard_notes: Optional[str] = None
     instrument_name: Optional[str] = None
     instrument_id: Optional[int] = None
+    lims_sub_sample_pk: Optional[int] = None
 
 
 class WizardSessionUpdate(BaseModel):
@@ -8812,6 +9314,7 @@ class WizardSessionResponse(BaseModel):
     standard_notes: Optional[str] = None
     instrument_name: Optional[str] = None
     instrument_id: Optional[int] = None
+    lims_sub_sample_pk: Optional[int] = None
 
     class Config:
         from_attributes = True
@@ -9189,6 +9692,7 @@ def _build_session_response(session: WizardSession, db: Session) -> WizardSessio
         standard_notes=session.standard_notes,
         instrument_name=session.instrument_name,
         instrument_id=session.instrument_id,
+        lims_sub_sample_pk=session.lims_sub_sample_pk,
     )
 
 
@@ -9294,6 +9798,7 @@ async def create_wizard_session(
         standard_notes=data.standard_notes,
         instrument_name=resolved_inst_name,
         instrument_id=resolved_inst_id,
+        lims_sub_sample_pk=data.lims_sub_sample_pk,
     )
     db.add(session)
     db.commit()
@@ -9629,6 +10134,7 @@ async def create_sample_prep_endpoint(
         "peptide_name": session.peptide.name if session.peptide else None,
         "peptide_abbreviation": session.peptide.abbreviation if session.peptide else None,
         "senaite_sample_id": session.sample_id_label,
+        "lims_sub_sample_pk": session.lims_sub_sample_pk,
         "declared_weight_mg": float(session.declared_weight_mg) if session.declared_weight_mg else None,
         "target_conc_ug_ml": float(session.target_conc_ug_ml) if session.target_conc_ug_ml else None,
         "target_total_vol_ul": float(session.target_total_vol_ul) if session.target_total_vol_ul else None,
@@ -10025,6 +10531,12 @@ SENAITE_URL = os.environ.get("SENAITE_URL")          # None = disabled
 SENAITE_USER = os.environ.get("SENAITE_USER", "")
 SENAITE_PASSWORD = os.environ.get("SENAITE_PASSWORD", "")
 SENAITE_TIMEOUT = httpx.Timeout(30.0, connect=10.0)
+# Host used when constructing browser-facing SENAITE deep-links returned to
+# the frontend.  Each dev stack publishes SENAITE on a different port so this
+# lets the stack override the host without touching SENAITE_URL (which is the
+# internal container-to-container address).  Falls back to None (relative path
+# only) when unset, preserving previous behaviour.
+SENAITE_PUBLIC_URL = os.environ.get("SENAITE_PUBLIC_URL", "").rstrip("/") or None
 
 # ── Senaite per-user credential helpers ──────────────────────────────────────
 
@@ -10063,6 +10575,8 @@ def _user_to_read(user) -> UserRead:
         is_active=user.is_active,
         created_at=user.created_at,
         senaite_configured=user.senaite_password_encrypted is not None,
+        first_name=user.first_name,
+        last_name=user.last_name,
     )
 
 
@@ -10109,6 +10623,11 @@ class SenaiteAnalysis(BaseModel):
     sort_key: Optional[float] = None
     captured: Optional[str] = None
     retested: bool = False
+    # Mk1-local enrichment: which service_group this analysis belongs to
+    # (resolved from analysis_services table by keyword). Drives the
+    # per-vial "primary analysis" highlight on the sample detail page.
+    service_group_id: Optional[int] = None
+    service_group_name: Optional[str] = None
 
 
 class SenaiteAttachment(BaseModel):
@@ -10164,11 +10683,22 @@ class SenaiteStatusResponse(BaseModel):
 
 
 def _senaite_path(item: dict) -> Optional[str]:
-    """Extract the SENAITE-relative path (e.g. '/clients/client-8/PB-0057') from a sample item."""
+    """Build the browser-facing SENAITE URL for a sample item.
+
+    Extracts the SENAITE-relative path (e.g. '/clients/client-8/PB-0057') and,
+    when SENAITE_PUBLIC_URL is configured, prepends it to form an absolute URL
+    (e.g. 'http://localhost:5538/clients/client-8/PB-0057').  When
+    SENAITE_PUBLIC_URL is not set the relative path is returned unchanged —
+    the frontend is expected to prepend its own senaiteBaseUrl in that case.
+    """
     raw = item.get("path") or ""
     if raw.startswith("/senaite/"):
-        return raw[len("/senaite"):]  # strip '/senaite' prefix, keep leading slash
-    return raw or None
+        path = raw[len("/senaite"):]  # strip '/senaite' prefix, keep leading slash
+    else:
+        path = raw or None
+    if SENAITE_PUBLIC_URL and path:
+        return f"{SENAITE_PUBLIC_URL}{path}"
+    return path
 
 
 def _strip_method_suffix(name: str) -> str:
@@ -10861,6 +11391,40 @@ async def lookup_senaite_sample(
         except Exception as exc:
             print(f"[WARN] Failed to fetch ARReport for {sample_id}: {exc}")
 
+        # Enrich each analysis with its service_group_id (Mk1-local, joined by
+        # keyword from the analysis_services table). Drives the "primary
+        # analysis for this vial" highlight on the sample detail page based on
+        # the sample's assignment_role.
+        try:
+            keywords_seen = {a.keyword for a in senaite_analyses if a.keyword}
+            if keywords_seen:
+                rows = db.execute(
+                    select(
+                        AnalysisService.keyword,
+                        ServiceGroup.id,
+                        ServiceGroup.name,
+                    )
+                    .join(
+                        service_group_members,
+                        service_group_members.c.analysis_service_id == AnalysisService.id,
+                    )
+                    .join(
+                        ServiceGroup,
+                        ServiceGroup.id == service_group_members.c.service_group_id,
+                    )
+                    .where(AnalysisService.keyword.in_(keywords_seen))
+                ).all()
+                kw_to_group = {row[0]: (row[1], row[2]) for row in rows}
+                for a in senaite_analyses:
+                    if a.keyword and a.keyword in kw_to_group:
+                        gid, gname = kw_to_group[a.keyword]
+                        a.service_group_id = gid
+                        a.service_group_name = gname
+        except Exception as e:
+            # Best-effort: a service-group lookup failure should never break
+            # the SENAITE lookup. Just log and proceed without enrichment.
+            print(f"[WARN] service_group enrichment failed for {sample_id}: {e}")
+
         from datetime import datetime, timezone
         now_iso = datetime.now(timezone.utc).isoformat()
         result = SenaiteLookupResult(
@@ -11146,6 +11710,7 @@ async def list_senaite_samples(
     b_start: int = 0,
     search: Optional[str] = None,
     search_field: Optional[str] = None,
+    include_sub_samples: bool = False,
     _current_user=Depends(get_current_user),
 ):
     """
@@ -11155,14 +11720,27 @@ async def list_senaite_samples(
     - review_state: Comma-separated state(s) e.g. "sample_received,to_be_verified"
     - limit: Max results (default 50)
     - b_start: Pagination offset (default 0)
-
-    Returns items sorted by DateReceived descending.
+    - include_sub_samples: when False (default), secondary ARs whose ID
+      matches the <parent>-S\\d{2} convention are filtered out so the
+      list shows parent samples only. The receive wizard surfaces
+      sub-samples under their parent rather than as standalone rows.
+      Note: pages can be slightly shorter than `limit` when many
+      sub-samples are interleaved in the SENAITE result; the caller
+      should bump `limit` if a denser display is desired.
     """
     if SENAITE_URL is None:
         raise HTTPException(status_code=503, detail="SENAITE not configured")
 
     url = f"{SENAITE_URL}/senaite/@@API/senaite/v1/AnalysisRequest"
     base_params: dict = {"complete": "yes", "sort_on": "created", "sort_order": "descending"}
+
+    # SENAITE secondary AR ID convention. Used to drop sub-sample rows
+    # from the parent listing unless include_sub_samples=True.
+    _SUB_SAMPLE_RE = re.compile(r"-S\d{2}$")
+    def _is_visible(it: dict) -> bool:
+        if include_sub_samples:
+            return True
+        return not _SUB_SAMPLE_RE.search(str(it.get("id", "")))
 
     # SENAITE supports review_state:list for multiple states
     states = [s.strip() for s in review_state.split(",") if s.strip()] if review_state else []
@@ -11280,6 +11858,10 @@ async def list_senaite_samples(
                 # Sort by creation date descending
                 deduped.sort(key=lambda x: x.get("created", "") or "", reverse=True)
 
+                # Search bypasses the sub-sample filter. If the operator
+                # explicitly searches by a verification code, order number,
+                # or a sub-sample ID directly, they should find that record
+                # — the parents-only filter is for browsing, not lookups.
                 items = [_item_to_model(it) for it in deduped]
                 return SenaiteSamplesResponse(
                     items=items,
@@ -11288,8 +11870,17 @@ async def list_senaite_samples(
                 )
 
             else:
-                # Normal paginated listing (no search)
-                params = {**base_params, "limit": limit, "b_start": b_start}
+                # Normal paginated listing (no search). When filtering
+                # sub-samples server-side, over-fetch from SENAITE so each
+                # page yields close to `limit` parents. b_start is in
+                # user-page-units; translate to SENAITE-row-units by the
+                # same factor so consecutive pages don't overlap.
+                fetch_factor = 1 if include_sub_samples else 2
+                params = {
+                    **base_params,
+                    "limit": limit * fetch_factor,
+                    "b_start": b_start * fetch_factor,
+                }
                 params = _add_state_params(params, states)
                 multi_url = _build_state_url(url, params, states)
                 if multi_url:
@@ -11300,11 +11891,29 @@ async def list_senaite_samples(
             resp.raise_for_status()
             data = resp.json()
 
-            items = [_item_to_model(it) for it in data.get("items", [])]
+            raw = data.get("items", [])
+            visible = [it for it in raw if _is_visible(it)]
+            # Cap at the user's requested `limit` so each page renders the
+            # same density even when over-fetch found more parents than
+            # expected. Anything trimmed here is picked up on the next page
+            # (b_start advances by limit*fetch_factor on the SENAITE side).
+            items = [_item_to_model(it) for it in visible[:limit]]
+
+            # Estimate the parent total. SENAITE's count covers the
+            # unfiltered set; scale by the parent ratio observed in the
+            # current fetch so the frontend's totalPages stays roughly
+            # right after filtering. Falls back to raw_total on an empty
+            # page to avoid div-by-zero.
+            raw_total = data.get("count") or data.get("total") or len(raw)
+            if not include_sub_samples and raw:
+                ratio = len(visible) / len(raw) if len(raw) else 1.0
+                total = int(raw_total * ratio)
+            else:
+                total = raw_total
 
             return SenaiteSamplesResponse(
                 items=items,
-                total=data.get("count") or data.get("total") or len(items),
+                total=total,
                 b_start=b_start,
             )
 
@@ -11822,6 +12431,7 @@ EXPECTED_POST_STATES: dict[str, str] = {
 async def transition_analysis(
     uid: str,
     req: AnalysisTransitionRequest,
+    db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
     """Trigger a workflow transition on a SENAITE analysis.
@@ -11829,6 +12439,10 @@ async def transition_analysis(
     Proxies to SENAITE REST API: POST /update/{uid} with {"transition": action}.
     Validates post-transition review_state against EXPECTED_POST_STATES to catch
     silent rejections (SENAITE returns 200 OK even when transitions are skipped).
+
+    When the transition is 'retest', cascades the retest to source vial-tier
+    analyses via cascade_parent_retest_to_sources (best-effort, wrapped in
+    try/except — cascade failure never fails the SENAITE transition).
     """
     if SENAITE_URL is None:
         return AnalysisResultResponse(
@@ -11879,6 +12493,76 @@ async def transition_analysis(
                     new_review_state=actual_state,
                     keyword=keyword,
                 )
+
+            # ── Parent-retest cascade (best-effort) ──────────────────────────
+            # When a SENAITE analysis is successfully retested, find its Mk1
+            # parent-tier row and cascade the retest to all source vial-tier
+            # analyses so the bench sees the work requests.
+            #
+            # sample_id resolution:
+            #   1. Try item["getRequestID"] — available when the update endpoint
+            #      returns a full catalog-aware item (usually the case).
+            #   2. Fallback: fetch the Analysis object by uid and read
+            #      getRequestID from there (one extra GET, always reliable).
+            #   3. If still absent, log a warning and skip — the cascade is
+            #      best-effort and must not fail the SENAITE transition.
+            if req.transition == "retest":
+                import logging as _logging
+                _cascade_logger = _logging.getLogger(__name__)
+                try:
+                    from lims_analyses.service import cascade_parent_retest_to_sources
+
+                    _parent_sample_id: Optional[str] = (
+                        item.get("getRequestID") or item.get("RequestID") or None
+                    )
+                    if not _parent_sample_id:
+                        # Fallback: re-fetch the analysis object for its request ID
+                        try:
+                            _fetch_url = (
+                                f"{SENAITE_URL}/senaite/@@API/senaite/v1/Analysis/{uid}"
+                            )
+                            _fetch_resp = await client.get(_fetch_url)
+                            if _fetch_resp.status_code == 200:
+                                _fetch_data = _fetch_resp.json()
+                                _fetch_items = _fetch_data.get("items", [])
+                                if _fetch_items:
+                                    _parent_sample_id = (
+                                        _fetch_items[0].get("getRequestID")
+                                        or _fetch_items[0].get("RequestID")
+                                        or None
+                                    )
+                        except Exception as _fetch_err:
+                            _cascade_logger.warning(
+                                "cascade_parent_retest: fallback fetch for uid=%s failed: %s",
+                                uid, _fetch_err,
+                            )
+
+                    if _parent_sample_id and keyword:
+                        _user_id = getattr(current_user, "id", None)
+                        _new_ids = cascade_parent_retest_to_sources(
+                            db,
+                            parent_sample_id=_parent_sample_id,
+                            keyword=keyword,
+                            user_id=_user_id,
+                        )
+                        if _new_ids:
+                            _cascade_logger.info(
+                                "cascade_parent_retest: parent=%s keyword=%s → "
+                                "created vial retest rows %s",
+                                _parent_sample_id, keyword, _new_ids,
+                            )
+                    else:
+                        _cascade_logger.warning(
+                            "cascade_parent_retest: could not resolve parent_sample_id "
+                            "for uid=%s keyword=%r — cascade skipped",
+                            uid, keyword,
+                        )
+                except Exception as _cascade_err:
+                    _cascade_logger.warning(
+                        "cascade_parent_retest: unexpected error for uid=%s: %s",
+                        uid, _cascade_err,
+                    )
+            # ── end parent-retest cascade ─────────────────────────────────────
 
             return AnalysisResultResponse(
                 success=True,
@@ -12538,34 +13222,57 @@ class InboxAnalysisItem(BaseModel):
     peptide_name: Optional[str] = None
     method: Optional[str] = None
     review_state: Optional[str] = None
-
-
-class InboxServiceGroupSection(BaseModel):
+    # Service group context — surfaced per-analysis in the flat list so the
+    # frontend (or AddSamplesModal) can regroup by service group when needed.
     group_id: int
     group_name: str
     group_color: str
-    assigned_analyst_id: Optional[int] = None
-    assigned_analyst_email: Optional[str] = None
-    instrument_uid: Optional[str] = None
-    analyses: list[InboxAnalysisItem]
 
 
-class InboxSampleItem(BaseModel):
+class InboxVialItem(BaseModel):
+    """One inbox card == one vial (parent AR or sub-sample AR).
+
+    Replaces the old InboxSampleItem/InboxServiceGroupSection nesting. The
+    role-filtered analyses are flat and carry their own group metadata.
+    Vial position fields let the frontend stack same-family vials visually.
+    """
     uid: str
-    id: str
+    sample_id: str
+    is_parent: bool
+    parent_sample_id: str
+    assignment_role: Optional[str] = None
+    vial_sequence: int          # 0 for parent, 1+ for subs (lims_sub_samples.vial_sequence)
+    vial_total: int             # parent + sub count in the family
     title: str
     client_id: Optional[str] = None
     client_order_number: Optional[str] = None
     date_received: Optional[str] = None
     review_state: str
     priority: str = "normal"
-    assignment_summary: str = ""  # e.g., "2/3 assigned"
-    analyses_by_group: list[InboxServiceGroupSection] = []
+    analyses: list[InboxAnalysisItem] = []
+    assignment_summary: str = ""  # e.g., "1/1 assigned" — vial-level
 
 
 class InboxResponse(BaseModel):
-    items: list[InboxSampleItem]
+    items: list[InboxVialItem]
     total: int
+    filter_role: Optional[str] = None  # echo of the query param so the frontend can confirm
+
+
+# Role → service_group_name set. Hardcoded — the lab has had Analytics +
+# Microbiology for years and a 2-entry mapping doesn't deserve a table.
+ROLE_TO_GROUP_NAMES: dict[str, set[str]] = {
+    "hplc": {"Analytics"},
+    "microbiology": {"Microbiology"},
+}
+VALID_INBOX_ROLES = set(ROLE_TO_GROUP_NAMES.keys())
+
+# Role-set membership for the assignment_role column. Microbiology covers
+# both 'ster' and 'endo' (collapsed into one filter chip per spec Q1).
+ROLE_TO_VIAL_ROLES: dict[str, set[str]] = {
+    "hplc": {"hplc"},
+    "microbiology": {"ster", "endo"},
+}
 
 
 class PriorityUpdate(BaseModel):
@@ -12596,26 +13303,135 @@ _inbox_senaite_cache_time: float = 0
 _INBOX_CACHE_TTL_SECONDS = 30 * 60  # 30 minutes
 
 
+# ── Phase 3.5: Mk1-sourced inbox analyses for sub-samples ───────────────────
+
+
+# Color fallback when the ServiceGroup join misses (rare — only if a vial's
+# analysis_service has no service_group_members row). Mirrors the FE's role
+# palette.
+_INBOX_ROLE_COLOR_FALLBACK = {
+    "hplc": "sky",
+    "endo": "violet",
+    "ster": "violet",
+    "xtra": "zinc",
+}
+
+
+def _fetch_mk1_inbox_analyses_for_sub_sample(
+    db: Session,
+    sub_sample_pk: int,
+    role: Optional[str],
+    keyword_to_peptide: dict,
+) -> list["InboxAnalysisItem"]:
+    """Build the per-vial inbox analysis list from Mk1 lims_analyses.
+
+    Returns the same InboxAnalysisItem shape as the existing SENAITE-derived
+    builder. UIDs carry the 'mk1:' prefix so any downstream write-path
+    dispatches to the Mk1 endpoints (Phase 3 adapter).
+
+    Filtering parity with the SENAITE path: excluded review_states dropped,
+    retests excluded (Mk1 retest is service-layer not state-edge).
+
+    Returns an empty list if the vial has no Mk1 rows — caller falls back
+    to the SENAITE path.
+    """
+    from models import LimsAnalysis  # local import; not at module top
+
+    rows = db.execute(
+        select(LimsAnalysis, AnalysisService, ServiceGroup)
+        .join(AnalysisService, AnalysisService.id == LimsAnalysis.analysis_service_id)
+        .outerjoin(
+            service_group_members,
+            service_group_members.c.analysis_service_id == AnalysisService.id,
+        )
+        .outerjoin(ServiceGroup, ServiceGroup.id == service_group_members.c.service_group_id)
+        .where(LimsAnalysis.lims_sub_sample_pk == sub_sample_pk)
+        .where(LimsAnalysis.retest_of_id.is_(None))
+    ).all()
+
+    EXCLUDED_STATES = {"rejected", "retracted"}
+    out: list[InboxAnalysisItem] = []
+    for la, svc, sg in rows:
+        if la.review_state in EXCLUDED_STATES:
+            continue
+        if sg is not None:
+            grp_id = sg.id
+            grp_name = sg.name or ""
+            grp_color = getattr(sg, "color", None) or _INBOX_ROLE_COLOR_FALLBACK.get(role or "", "zinc")
+        else:
+            grp_id = 0
+            grp_name = ""
+            grp_color = _INBOX_ROLE_COLOR_FALLBACK.get(role or "", "zinc")
+
+        out.append(InboxAnalysisItem(
+            uid=f"mk1:{la.id}",
+            title=la.title or la.keyword or "",
+            keyword=la.keyword,
+            peptide_name=keyword_to_peptide.get(la.keyword or "") if keyword_to_peptide else None,
+            method=None,                  # Mk1 vial method not yet wired
+            review_state=la.review_state,
+            group_id=grp_id,
+            group_name=grp_name,
+            group_color=grp_color,
+        ))
+    return out
+
+
 @app.get("/worksheets/inbox", response_model=InboxResponse)
 async def get_worksheets_inbox(
     hide_test_orders: bool = True,
     hide_prepped: bool = True,
     force_refresh: bool = False,
+    role: Optional[str] = None,
+    show_xtra: bool = False,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
     """
-    Return received samples from SENAITE enriched with service group analysis grouping,
-    local priorities, and analyst assignments. Only shows samples linked to tracked orders
-    in the integration DB. Excludes samples already assigned to open worksheets.
+    Return inbox items (one per VIAL — parent AR or sub-sample AR) ready for worksheet
+    assignment. Each vial carries its role-filtered analyses, vial-position context, and
+    parent linkage. See `docs/superpowers/specs/2026-06-02-worksheet-vial-inbox-redesign.md`.
 
-    SENAITE responses are cached server-side for 30 minutes to avoid hammering SENAITE.
-    Pass force_refresh=true to bypass the cache.
+    Query params:
+      role         — 'hplc' | 'microbiology' | omitted. Omitted means all roles (used by
+                     AddSamplesModal, which adds across both benches). 400 on invalid value.
+      show_xtra    — when True, append XTRA-role vials to the active filter's results.
+      hide_test_*  — existing behavior.
+      force_refresh — bypass the 30-min SENAITE cache.
     """
     global _inbox_senaite_cache, _inbox_senaite_cache_time
 
+    # Validate role (None == "all roles", legal)
+    if role is not None and role not in VALID_INBOX_ROLES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid role: {role!r}. Expected one of {sorted(VALID_INBOX_ROLES)} or omit.",
+        )
+
     if not SENAITE_URL:
         raise HTTPException(status_code=503, detail="SENAITE not configured")
+
+    # Resolve role → allowed service_group IDs. None means "no filter; pass all groups".
+    allowed_group_ids: Optional[set[int]] = None
+    if role is not None:
+        group_names = ROLE_TO_GROUP_NAMES[role]
+        allowed_group_ids = {
+            r[0] for r in db.execute(
+                select(ServiceGroup.id).where(ServiceGroup.name.in_(group_names))
+            ).all()
+        }
+
+    # Resolve allowed vial assignment_role values. NULL roles always excluded (auto-
+    # assign on /vial-plan is the cure for those). XTRA gated by show_xtra.
+    if role is None:
+        # No bench filter: all known roles. XTRA still gated by the toggle.
+        allowed_vial_roles: set[str] = {"hplc", "ster", "endo"}
+        if show_xtra:
+            allowed_vial_roles.add("xtra")
+    else:
+        allowed_vial_roles = set(ROLE_TO_VIAL_ROLES[role])
+        if show_xtra:
+            allowed_vial_roles.add("xtra")
 
     # Step 1: Fetch sample_received samples from SENAITE (with cache)
     import time as _time
@@ -12697,7 +13513,18 @@ async def get_worksheets_inbox(
                                 linked_senaite_ids.add(sid)
                                 if order_priority and order_priority in ("high", "expedited"):
                                     order_priority_map[sid] = order_priority
-        # Filter SENAITE items to only those with a linked order
+        # Extend with sub-samples of any linked parent. Sub-samples are created
+        # post-order by the Receive Wizard and never appear in order_submissions,
+        # so without this step they'd be dropped from the inbox entirely. One
+        # SQL roundtrip pulls them all.
+        if linked_senaite_ids:
+            sub_rows = db.execute(
+                select(LimsSubSample.sample_id)
+                .join(LimsSample, LimsSubSample.parent_sample_pk == LimsSample.id)
+                .where(LimsSample.sample_id.in_(linked_senaite_ids))
+            ).scalars().all()
+            linked_senaite_ids.update(sub_rows)
+        # Filter SENAITE items to only those with a linked order (now includes subs)
         senaite_items = [
             it for it in senaite_items
             if str(it.get("id", "")) in linked_senaite_ids
@@ -12823,6 +13650,87 @@ async def get_worksheets_inbox(
     if order_priority_map:
         db.commit()
 
+    # Step 4c: Load vial metadata (assignment_role, parent linkage, vial_sequence)
+    # per item.uid. Parents come from lims_samples; sub-samples from lims_sub_samples.
+    # The structure: vial_meta_by_uid[external_lims_uid] = dict(...).
+    # vial_total for each family lets the frontend render "vial K of N" — derived
+    # from a parent + its lims_sub_samples count.
+    vial_meta_by_uid: dict[str, dict] = {}
+    # Bulk-fetch parents that match the inbox items
+    parent_rows = db.execute(
+        select(
+            LimsSample.id,
+            LimsSample.external_lims_uid,
+            LimsSample.sample_id,
+            LimsSample.assignment_role,
+        ).where(LimsSample.external_lims_uid.in_(uids))
+    ).all()
+    parent_id_to_sample_id: dict[int, str] = {r.id: r.sample_id for r in parent_rows}
+    family_sizes: dict[int, int] = {r.id: 1 for r in parent_rows}  # parent itself counts as 1
+    for r in parent_rows:
+        vial_meta_by_uid[r.external_lims_uid] = {
+            "sample_id": r.sample_id,
+            "is_parent": True,
+            "parent_sample_id": r.sample_id,
+            "parent_lims_id": r.id,
+            "assignment_role": r.assignment_role,
+            "vial_sequence": 0,
+        }
+    # Sub-samples: include both subs whose UID is in this fetch (direct hit on the
+    # inbox set) AND any sub of a parent we just loaded (to compute vial_total).
+    parent_ids = list(parent_id_to_sample_id.keys())
+    sub_rows = db.execute(
+        select(
+            LimsSubSample.parent_sample_pk,
+            LimsSubSample.external_lims_uid,
+            LimsSubSample.sample_id,
+            LimsSubSample.assignment_role,
+            LimsSubSample.vial_sequence,
+            LimsSubSample.id,             # Phase 3.5: needed for Mk1 inbox source
+        ).where(
+            (LimsSubSample.external_lims_uid.in_(uids))
+            | (LimsSubSample.parent_sample_pk.in_(parent_ids) if parent_ids else False)
+        )
+    ).all()
+
+    # Sub-samples whose PARENT isn't already in parent_id_to_sample_id
+    # (parent has moved past sample_received, but its sub is still inbox-eligible).
+    # Without this lookup, parent_sample_id would come back empty on those subs.
+    missing_parent_ids = {
+        r.parent_sample_pk for r in sub_rows
+        if r.parent_sample_pk not in parent_id_to_sample_id
+        and r.external_lims_uid in uids
+    }
+    if missing_parent_ids:
+        extra_parents = db.execute(
+            select(LimsSample.id, LimsSample.sample_id).where(
+                LimsSample.id.in_(missing_parent_ids)
+            )
+        ).all()
+        for r in extra_parents:
+            parent_id_to_sample_id[r.id] = r.sample_id
+            family_sizes.setdefault(r.id, 1)
+    seen_sub_ids: set[int] = set()  # avoid double-counting subs that come back from both predicates
+    for r in sub_rows:
+        # Increment family size once per sub
+        # (sub_rows can contain a sub via either predicate; dedup on its db-id via parent+seq pair)
+        key = (r.parent_sample_pk, r.vial_sequence)
+        if key not in seen_sub_ids:
+            family_sizes[r.parent_sample_pk] = family_sizes.get(r.parent_sample_pk, 0) + 1
+            seen_sub_ids.add(key)
+        # Only inbox items keyed by external_lims_uid get vial_meta entries
+        if r.external_lims_uid in uids and r.external_lims_uid not in vial_meta_by_uid:
+            parent_sid = parent_id_to_sample_id.get(r.parent_sample_pk, "")
+            vial_meta_by_uid[r.external_lims_uid] = {
+                "sample_id": r.sample_id,
+                "is_parent": False,
+                "parent_sample_id": parent_sid,
+                "parent_lims_id": r.parent_sample_pk,
+                "sub_sample_pk": r.id,    # Phase 3.5: needed for Mk1 inbox source
+                "assignment_role": r.assignment_role,
+                "vial_sequence": r.vial_sequence,
+            }
+
     # Step 5: Load per-group worksheet_item assignments (analyst + instrument)
     # Key is (sample_uid, service_group_id) → WorksheetItem
     item_rows = db.execute(
@@ -12873,16 +13781,56 @@ async def get_worksheets_inbox(
                 except Exception as fetch_err:
                     print(f"[WARN] Failed to fetch analyses for {sid}: {fetch_err}")
 
-    # Step 7: Build enriched sample items
-    result_items: list[InboxSampleItem] = []
+    # Step 7: Build vial-level inbox items.
+    # Per-vial filters applied in order:
+    #   * vial_meta exists in lims_samples / lims_sub_samples (else skip)
+    #   * vial.assignment_role ∈ allowed_vial_roles (else skip)
+    #   * not fully claimed by a null-group worksheet item (else skip)
+    #   * after analysis filtering, at least one analysis remains (else skip)
+    result_items: list[InboxVialItem] = []
+
+    EXCLUDED_STATES = {"rejected", "retracted", "cancelled"}
 
     for it in filtered_items:
         uid = str(it.get("uid", ""))
         sample_id = str(it.get("id", ""))
+
+        # Look up vial metadata (parent or sub) loaded in step 4c
+        vial_meta = vial_meta_by_uid.get(uid)
+        if vial_meta is None:
+            # Legacy fallback: SENAITE knows this sample but Mk1 has no
+            # lims_samples / lims_sub_samples row for it. This is the dominant
+            # shape on production deploys where lims_samples didn't exist
+            # before the sub-samples feature shipped. Without this fallback the
+            # inbox would be empty until a backfill populates the table.
+            #
+            # Treat a parent-shaped id ("BW-0009", "P-0140") as a parent vial
+            # with the migration-default 'hplc' role. Sub-sample-shaped ids
+            # ("...-S01") are skipped — sub-samples shouldn't exist without a
+            # lims_sub_samples row, and fabricating parent linkage for them
+            # would be wrong.
+            if re.match(r"^.+-S\d{2,}$", sample_id):
+                continue
+            vial_meta = {
+                "sample_id": sample_id,
+                "is_parent": True,
+                "parent_sample_id": sample_id,
+                "parent_lims_id": None,
+                "assignment_role": "hplc",
+                "vial_sequence": 0,
+            }
+
+        vial_role = vial_meta["assignment_role"]
+        if vial_role not in allowed_vial_roles:
+            continue
+
+        if uid in assigned_uids_for_null_group:
+            # Sample with null service_group_id in an open worksheet — fully claimed
+            continue
+
         raw_analyses = analyses_by_sample.get(sample_id, [])
 
         # Build slot → peptide name map for "Analyte N" title renaming
-        # Same pattern as sample details page (Analyte1Peptide through Analyte4Peptide)
         analyte_name_map: dict[int, str] = {}
         for slot, key in enumerate(
             ("Analyte1Peptide", "Analyte2Peptide", "Analyte3Peptide", "Analyte4Peptide"),
@@ -12890,14 +13838,10 @@ async def get_worksheets_inbox(
         ):
             raw_name = it.get(key)
             if raw_name and str(raw_name).strip():
-                # Strip method suffix: "BPC-157 - Identity (HPLC)" → "BPC-157"
                 stripped = re.sub(r"\s*-\s*[^-]+\([^)]+\)\s*$", "", str(raw_name)).strip()
                 analyte_name_map[slot] = stripped
 
-        # Filter and deduplicate analyses:
-        # 1. Skip rejected/retracted/cancelled
-        # 2. When multiple analyses share the same keyword (retests), keep only the most recent
-        EXCLUDED_STATES = {"rejected", "retracted", "cancelled"}
+        # Dedup analyses: skip excluded states, prefer retests over originals on shared keywords.
         seen_keywords: dict[str, dict] = {}
         for analysis in raw_analyses:
             if not isinstance(analysis, dict):
@@ -12907,14 +13851,11 @@ async def get_worksheets_inbox(
                 continue
             kw = analysis.get("getKeyword") or analysis.get("keyword") or ""
             if kw and kw in seen_keywords:
-                # Retest (RetestOf is set) supersedes original
                 is_retest = bool(analysis.get("RetestOf") or analysis.get("getRetestOf"))
                 if is_retest:
-                    seen_keywords[kw] = analysis  # retest replaces original
-                # else keep the existing one (it might be the retest already)
+                    seen_keywords[kw] = analysis
             else:
                 seen_keywords[kw] = analysis
-        # For analyses without keywords, keep all
         deduped_analyses = list(seen_keywords.values())
         for analysis in raw_analyses:
             if not isinstance(analysis, dict):
@@ -12926,14 +13867,14 @@ async def get_worksheets_inbox(
             if not kw:
                 deduped_analyses.append(analysis)
 
-        groups_by_id: dict[int, InboxServiceGroupSection] = {}
+        # Build flat InboxAnalysisItem list with role + assigned-group filters applied inline.
+        flat_analyses: list[InboxAnalysisItem] = []
         for analysis in deduped_analyses:
             if not isinstance(analysis, dict):
                 continue
             keyword = analysis.get("getKeyword") or analysis.get("keyword") or ""
             title = analysis.get("title") or analysis.get("getTitle") or keyword or ""
 
-            # Rename "Analyte N ..." titles to actual peptide names
             analyte_match = re.match(r"^Analyte\s+(\d)\s*(.*)", title, re.IGNORECASE)
             if analyte_match:
                 slot_num = int(analyte_match.group(1))
@@ -12945,19 +13886,14 @@ async def get_worksheets_inbox(
             a_uid = analysis.get("uid") or analysis.get("UID")
             review_state = analysis.get("review_state") or analysis.get("getReviewState")
 
-            # Resolve peptide name: for identity services (ID_*), use local AnalysisService.peptide_name.
-            # For slot services (ANALYTE-N-*), use per-sample analyte_name_map (from AnalyteNPeptide).
-            resolved_peptide: str | None = keyword_to_peptide.get(keyword)
+            resolved_peptide: Optional[str] = keyword_to_peptide.get(keyword)
             if not resolved_peptide and analyte_match:
-                # Already matched "Analyte N" — use the slot map
                 slot_num = int(analyte_match.group(1))
                 resolved_peptide = analyte_name_map.get(slot_num)
 
-            # Resolve method from local peptide → peptide_methods → HplcMethod
-            method: str | None = None
+            method: Optional[str] = None
             if resolved_peptide:
                 method = peptide_to_method.get(resolved_peptide)
-            # Fallback to SENAITE method title if local lookup didn't resolve
             if not method:
                 method = analysis.get("getMethodTitle") or None
                 if not method:
@@ -12965,17 +13901,16 @@ async def get_worksheets_inbox(
                     if isinstance(method_obj, dict):
                         method = method_obj.get("title")
 
-            group_info = keyword_to_group.get(keyword, default_group)
-            group_id, group_name, group_color = group_info
+            group_id, group_name, group_color = keyword_to_group.get(keyword, default_group)
 
-            if group_id not in groups_by_id:
-                groups_by_id[group_id] = InboxServiceGroupSection(
-                    group_id=group_id,
-                    group_name=group_name,
-                    group_color=group_color,
-                    analyses=[],
-                )
-            groups_by_id[group_id].analyses.append(
+            # Role → allowed_group_ids filter (None == pass all)
+            if allowed_group_ids is not None and group_id not in allowed_group_ids:
+                continue
+            # Already on an open worksheet for this (vial, group) — drop the analysis
+            if (uid, group_id) in assigned_pairs:
+                continue
+
+            flat_analyses.append(
                 InboxAnalysisItem(
                     uid=str(a_uid) if a_uid else None,
                     title=str(title),
@@ -12983,48 +13918,60 @@ async def get_worksheets_inbox(
                     peptide_name=resolved_peptide,
                     method=str(method) if method else None,
                     review_state=str(review_state) if review_state else None,
+                    group_id=group_id,
+                    group_name=group_name,
+                    group_color=group_color,
                 )
             )
 
-        # Sort analyses within each group by title
-        for grp in groups_by_id.values():
-            grp.analyses.sort(key=lambda a: a.title.lower())
+        # Phase 3.5 (mk1-native-analyses): for sub-sample vials with seeded
+        # Mk1 lims_analyses rows, use Mk1 as the source of truth for the
+        # inbox view. Pre-Phase-2 sub-samples (no Mk1 rows) keep the
+        # SENAITE-derived flat_analyses built above. Parent vials are
+        # untouched. Role-filtering already happened in Phase 2's seeder
+        # (vial only has rows matching its role) so no extra filter needed.
+        if vial_meta is not None and not vial_meta.get("is_parent"):
+            sub_pk = vial_meta.get("sub_sample_pk")
+            if sub_pk:
+                mk1_rows = _fetch_mk1_inbox_analyses_for_sub_sample(
+                    db, sub_pk, vial_meta.get("assignment_role"),
+                    keyword_to_peptide,
+                )
+                if mk1_rows:
+                    flat_analyses = mk1_rows
 
-        analyses_by_group = list(groups_by_id.values())
-
-        # Filter out groups already in open worksheets
-        if uid in assigned_uids_for_null_group:
-            # Sample with null service_group_id in a worksheet — fully claimed, skip entirely
+        if not flat_analyses:
+            # No analyses survive filtering — hide this vial
             continue
-        analyses_by_group = [
-            grp for grp in analyses_by_group
-            if (uid, grp.group_id) not in assigned_pairs
-        ]
-        if not analyses_by_group:
-            # All groups for this sample are in worksheets — skip
-            continue
 
-        # Attach per-group assignments (analyst + instrument)
+        # Sort by group then title for stable rendering
+        flat_analyses.sort(key=lambda a: (a.group_name.lower(), a.title.lower()))
+
+        # Assignment summary: count unique groups present that have an analyst on the staging item
+        unique_groups = {a.group_id for a in flat_analyses}
         assigned_count = 0
-        for grp in analyses_by_group:
-            assignment = assignment_map.get((uid, grp.group_id))
-            if assignment:
-                grp.assigned_analyst_id = assignment.assigned_analyst_id
-                grp.instrument_uid = assignment.instrument_uid
-                if assignment.assigned_analyst_id:
-                    grp.assigned_analyst_email = analyst_map.get(assignment.assigned_analyst_id)
-                    assigned_count += 1
+        for gid in unique_groups:
+            assignment = assignment_map.get((uid, gid))
+            if assignment and assignment.assigned_analyst_id:
+                assigned_count += 1
+        total_groups = len(unique_groups)
+        summary = (
+            f"{assigned_count}/{total_groups} assigned"
+            if (total_groups > 0 and assigned_count > 0)
+            else ""
+        )
 
-        total_groups = len(analyses_by_group)
-        if total_groups > 0 and assigned_count > 0:
-            summary = f"{assigned_count}/{total_groups} assigned"
-        else:
-            summary = ""
+        family_size = family_sizes.get(vial_meta["parent_lims_id"], 1)
 
         result_items.append(
-            InboxSampleItem(
+            InboxVialItem(
                 uid=uid,
-                id=sample_id,
+                sample_id=sample_id,
+                is_parent=vial_meta["is_parent"],
+                parent_sample_id=vial_meta["parent_sample_id"],
+                assignment_role=vial_role,
+                vial_sequence=vial_meta["vial_sequence"],
+                vial_total=family_size,
                 title=str(it.get("title", "")),
                 client_id=it.get("getClientTitle") or it.get("ClientID") or None,
                 client_order_number=it.get("getClientOrderNumber") or it.get("ClientOrderNumber") or None,
@@ -13032,11 +13979,16 @@ async def get_worksheets_inbox(
                 review_state=str(it.get("review_state", "")),
                 priority=priority_map.get(uid, "normal"),
                 assignment_summary=summary,
-                analyses_by_group=analyses_by_group,
+                analyses=flat_analyses,
             )
         )
 
-    return InboxResponse(items=result_items, total=len(result_items))
+    # Visual grouping is the frontend's job; here we just give it a stable sort:
+    # by parent_sample_id (so same-family vials are adjacent), then is_parent first,
+    # then vial_sequence ascending within the family.
+    result_items.sort(key=lambda v: (v.parent_sample_id, not v.is_parent, v.vial_sequence))
+
+    return InboxResponse(items=result_items, total=len(result_items), filter_role=role)
 
 
 @app.put("/worksheets/inbox/{sample_uid}/priority")
@@ -13098,10 +14050,13 @@ async def get_worksheets_users(
 ):
     """Return active users for analyst assignment. Accessible to all authenticated users (not admin-only)."""
     users = db.execute(
-        select(User.id, User.email).where(User.is_active == True)  # noqa: E712
+        select(User.id, User.email, User.first_name, User.last_name).where(User.is_active == True)  # noqa: E712
         .order_by(User.email)
     ).all()
-    return [{"id": row.id, "email": row.email} for row in users]
+    return [
+        {"id": row.id, "email": row.email, "first_name": row.first_name, "last_name": row.last_name}
+        for row in users
+    ]
 
 
 @app.put("/worksheets/inbox/bulk")
@@ -13398,6 +14353,20 @@ async def list_worksheets(
             ).all()
             item_analyst_email_map = {u.id: u.email for u in item_analyst_users}
 
+        # Resolve each item's sub-sample (vial) pk so a worksheet "Start Prep"
+        # can tag the wizard session as vial-scoped. Join on sample_id
+        # (P-XXXX-SNN) — naturally null for parent-sample ids (P-XXXX), which
+        # have no lims_sub_samples row. Additive; parents stay unaffected.
+        item_sample_ids = {it.sample_id for it in items if it.sample_id}
+        sub_sample_pk_map: dict[str, int] = {}
+        if item_sample_ids:
+            sub_rows = db.execute(
+                select(LimsSubSample.sample_id, LimsSubSample.id).where(
+                    LimsSubSample.sample_id.in_(item_sample_ids)
+                )
+            ).all()
+            sub_sample_pk_map = {r.sample_id: r.id for r in sub_rows}
+
         def _resolve_method(it_instrument_uid: str | None, it_service_group_id: int | None) -> str | None:
             """Resolve HPLC method name from instrument + peptide (via service group)."""
             if not it_instrument_uid or not it_service_group_id:
@@ -13443,6 +14412,7 @@ async def list_worksheets(
                     "notes": it.notes,
                     "peptide_id": group_peptide_map.get(it.service_group_id) if it.service_group_id else None,
                     "method_name": _resolve_method(it.instrument_uid, it.service_group_id),
+                    "lims_sub_sample_pk": sub_sample_pk_map.get(it.sample_id),
                     "analyses": json.loads(it.analyses_json) if it.analyses_json else (group_analyses_map.get(it.service_group_id, []) if it.service_group_id else []),
                     "prep_status": it.prep_status,
                 }
@@ -13475,13 +14445,28 @@ async def update_worksheet(
     if data.title is not None:
         ws.title = data.title
     if data.assigned_analyst is not None:
-        ws.assigned_analyst_id = data.assigned_analyst
+        # null = not-provided (PATCH semantics, handled by the `is not None`
+        # gate); a FE-sent 0 means UNASSIGN — coerce to None so we clear the
+        # stamp rather than FK-exploding on user_id=0.
+        ws.assigned_analyst_id = data.assigned_analyst or None
         # Also reassign all items in this worksheet to the new analyst
         items = db.execute(
             select(WorksheetItem).where(WorksheetItem.worksheet_id == worksheet_id)
         ).scalars().all()
         for item in items:
-            item.assigned_analyst_id = data.assigned_analyst
+            item.assigned_analyst_id = data.assigned_analyst or None
+        # Analyst-from-worksheet: re-stamp vial-tier analyses to the new analyst.
+        # Best-effort: stamping failures must not break the worksheet update.
+        from lims_analyses.worksheet_analyst import restamp_for_worksheet
+        import logging as _logging
+        try:
+            restamp_for_worksheet(
+                db, worksheet=ws, acting_user_id=getattr(_current_user, "id", None)
+            )
+        except Exception:
+            _logging.getLogger(__name__).warning(
+                "analyst restamp failed during worksheet update", exc_info=True
+            )
     if data.notes is not None:
         ws.notes = data.notes
 
@@ -13580,6 +14565,26 @@ async def add_group_to_worksheet(
     )
     db.add(item)
 
+    # Analyst-from-worksheet (spec 2026-06-07): stamp vial-tier analyses.
+    # No-ops for parent-AR uids (resolver matches lims_sub_samples only).
+    # Best-effort: stamping failures must not break the worksheet operation.
+    from lims_analyses.worksheet_analyst import stamp_for_item
+    import logging as _logging
+    try:
+        stamp_for_item(
+            db,
+            sample_uid=data.sample_uid,
+            service_group_id=data.service_group_id,
+            analyst_user_id=analyst_id,
+            acting_user_id=getattr(_current_user, "id", None),
+            worksheet_id=worksheet_id,
+            worksheet_title=ws.title,
+        )
+    except Exception:
+        _logging.getLogger(__name__).warning(
+            "analyst stamp failed during add-group-to-worksheet", exc_info=True
+        )
+
     # Remove staging item if picked up
     if staging_item:
         db.delete(staging_item)
@@ -13663,6 +14668,25 @@ async def create_worksheet_from_drop(
     )
     db.add(item)
 
+    # Analyst-from-worksheet: stamp vial-tier analyses (analyst comes from the
+    # staging pre-assignment via item.assigned_analyst_id). Best-effort.
+    from lims_analyses.worksheet_analyst import stamp_for_item
+    import logging as _logging
+    try:
+        stamp_for_item(
+            db,
+            sample_uid=data.sample_uid,
+            service_group_id=gid,
+            analyst_user_id=item.assigned_analyst_id,
+            acting_user_id=getattr(current_user, "id", None),
+            worksheet_id=ws.id,
+            worksheet_title=ws.title,
+        )
+    except Exception:
+        _logging.getLogger(__name__).warning(
+            "analyst stamp failed during create-worksheet-from-drop", exc_info=True
+        )
+
     if staging_item:
         db.delete(staging_item)
 
@@ -13686,6 +14710,29 @@ async def delete_worksheet(
     ).scalar_one_or_none()
     if not ws:
         raise HTTPException(404, "Worksheet not found")
+
+    # Analyst-from-worksheet: deleting a worksheet returns analyses to the
+    # inbox — clear their stamps, like per-item removal.
+    from lims_analyses.worksheet_analyst import clear_for_item
+    import logging as _logging
+    acting_id = getattr(_current_user, "id", None)
+    ws_items = db.execute(
+        select(WorksheetItem).where(WorksheetItem.worksheet_id == worksheet_id)
+    ).scalars().all()
+    for ws_item in ws_items:
+        try:
+            clear_for_item(
+                db, sample_uid=ws_item.sample_uid,
+                service_group_id=ws_item.service_group_id,
+                acting_user_id=acting_id, worksheet_id=worksheet_id,
+                worksheet_title=ws.title,
+            )
+        except Exception:
+            # Stamps are best-effort relative to worksheet deletion (module
+            # caller contract) — the delete must complete regardless.
+            _logging.getLogger(__name__).warning(
+                "analyst stamp clear failed during worksheet delete", exc_info=True
+            )
 
     # Delete items first (CASCADE should handle it, but be explicit)
     db.execute(
@@ -13716,6 +14763,27 @@ async def remove_worksheet_item(
     ).scalar_one_or_none()
     if not item:
         raise HTTPException(404, "Item not found")
+
+    # Analyst-from-worksheet: clear vial-tier stamps; analysis returns to inbox.
+    # Best-effort: stamping failures must not break item removal.
+    from lims_analyses.worksheet_analyst import clear_for_item
+    import logging as _logging
+    ws_title = db.execute(
+        select(Worksheet.title).where(Worksheet.id == worksheet_id)
+    ).scalar_one_or_none()
+    try:
+        clear_for_item(
+            db,
+            sample_uid=sample_uid,
+            service_group_id=gid,
+            acting_user_id=getattr(_current_user, "id", None),
+            worksheet_id=worksheet_id,
+            worksheet_title=ws_title,
+        )
+    except Exception:
+        _logging.getLogger(__name__).warning(
+            "analyst stamp clear failed during remove-worksheet-item", exc_info=True
+        )
 
     db.delete(item)
     db.commit()
@@ -13771,7 +14839,36 @@ async def reassign_worksheet_item(
     ).scalar_one_or_none()
     if not target:
         raise HTTPException(404, "Target worksheet not found or not open")
+    # Analyst-from-worksheet: reassign = remove from source + add to target.
+    # Best-effort: stamping failures must not break the reassign. The
+    # item.worksheet_id move stays OUTSIDE the try so the reassign always
+    # happens; only the stamp side-effects are guarded.
+    from lims_analyses.worksheet_analyst import clear_for_item, stamp_for_item
+    import logging as _logging
+    acting_id = getattr(_current_user, "id", None)
+    src_ws_title = db.execute(
+        select(Worksheet.title).where(Worksheet.id == worksheet_id)
+    ).scalar_one_or_none()
     item.worksheet_id = data.target_worksheet_id
+    # Target's worksheet-level analyst wins; else keep the item's own.
+    if target.assigned_analyst_id:
+        item.assigned_analyst_id = target.assigned_analyst_id
+    try:
+        clear_for_item(
+            db, sample_uid=sample_uid, service_group_id=gid,
+            acting_user_id=acting_id, worksheet_id=worksheet_id,
+            worksheet_title=src_ws_title,
+        )
+        stamp_for_item(
+            db, sample_uid=sample_uid, service_group_id=gid,
+            analyst_user_id=target.assigned_analyst_id or item.assigned_analyst_id,
+            acting_user_id=acting_id,
+            worksheet_id=target.id, worksheet_title=target.title,
+        )
+    except Exception:
+        _logging.getLogger(__name__).warning(
+            "analyst stamp failed during reassign-worksheet-item", exc_info=True
+        )
     db.commit()
     return {"status": "reassigned", "target_worksheet_id": data.target_worksheet_id}
 

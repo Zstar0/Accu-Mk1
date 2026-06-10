@@ -121,6 +121,16 @@
 **Plans**: TBD
 **UI hint**: yes
 
+### Phase 24: Single-vial check-in policy — receive wizard skips sub-sample creation when one vial is checked in; Add Additional Vial promotes parent to -S01 and creates -S02 atomically (with spec doc amendment)
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 23
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 24 to break down)
+
 ---
 
 ## Progress

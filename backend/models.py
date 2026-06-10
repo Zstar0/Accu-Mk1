@@ -4,8 +4,10 @@ Uses SQLAlchemy 2.0 style with mapped_column.
 """
 
 from datetime import datetime, time, date
-from typing import Optional
+from typing import Optional, List
+import uuid
 from sqlalchemy import String, Text, Float, Integer, Boolean, DateTime, Time, Date, ForeignKey, JSON, Column, Table, UniqueConstraint, CheckConstraint
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from database import Base
@@ -25,6 +27,8 @@ class User(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     senaite_password_encrypted: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    first_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    last_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
 
     def __repr__(self) -> str:
         return f"<User(id={self.id}, email='{self.email}', role='{self.role}')>"
@@ -153,6 +157,13 @@ class AnalysisService(Base):
     category: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)  # "HPLC"
     unit: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)  # "%", "mg", "EU/mL"
     methods: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)  # [{uid, title}, ...]
+    # Result type + options, synced from SENAITE (local-wins) or curated locally.
+    # result_type stores SENAITE's value verbatim (numeric/select/multiselect/string/...).
+    # result_options is a list of {"value": str, "label": str} (select/multiselect only).
+    result_type: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    result_options: Mapped[Optional[list]] = mapped_column(
+        JSONB().with_variant(JSON(), "sqlite"), nullable=True
+    )
     peptide_name: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)  # derived: "AICAR" (legacy)
     peptide_id: Mapped[Optional[int]] = mapped_column(ForeignKey("peptides.id", ondelete="SET NULL"), nullable=True)
     senaite_id: Mapped[Optional[str]] = mapped_column(String(200), nullable=True, unique=True)
@@ -535,6 +546,7 @@ class WizardSession(Base):
 
     # Step 1: Sample info
     sample_id_label: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    lims_sub_sample_pk: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     declared_weight_mg: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
 
     # Phase 09: Standard prep metadata
@@ -700,6 +712,76 @@ class SampleAnalyteAlias(Base):
         return f"<SampleAnalyteAlias(sample='{self.senaite_sample_id}', slot={self.slot}, alias='{self.alias}')>"
 
 
+class LimsSample(Base):
+    """Master sample record (parent of one or more LimsSubSample vials).
+
+    Seeded lazily by the receive wizard from SENAITE today. Designed to become
+    the canonical sample registry once SENAITE is sunset, hence the neutral
+    `external_lims_*` columns rather than `senaite_*`.
+    """
+    __tablename__ = "lims_samples"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    sample_id: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
+    external_lims_uid: Mapped[Optional[str]] = mapped_column(String(100), index=True)
+    external_lims_system: Mapped[Optional[str]] = mapped_column(String(50), default="senaite")
+    client_id: Mapped[Optional[str]] = mapped_column(String(100))
+    client_uid: Mapped[Optional[str]] = mapped_column(String(100))
+    contact_uid: Mapped[Optional[str]] = mapped_column(String(100))
+    sample_type: Mapped[Optional[str]] = mapped_column(String(100))
+    status: Mapped[Optional[str]] = mapped_column(String(50))
+    peptide_name: Mapped[Optional[str]] = mapped_column(String(200))
+    client_sample_id: Mapped[Optional[str]] = mapped_column(String(200))
+    date_sampled: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    date_received: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    is_retest: Mapped[bool] = mapped_column(Boolean, default=False)
+    assignment_role: Mapped[str] = mapped_column(String(8), nullable=False, server_default="hplc")
+    # Variance set: parent shares the membership model — parent IS vial 1.
+    in_variance_set: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true", default=True)
+    variance_exclusion_reason: Mapped[Optional[str]] = mapped_column(Text)
+    variance_locked_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    variance_locked_by_user_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="SET NULL")
+    )
+    # Variance addon: lab-side override until WP variance addon ships (Phase 3/4).
+    # JSON-serialized map e.g. {"hplcpurity_identity": 3}; NULL means no override.
+    variance_override: Mapped[Optional[str]] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    last_synced_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    sub_samples: Mapped[List["LimsSubSample"]] = relationship(
+        "LimsSubSample", back_populates="parent_sample",
+        cascade="all, delete-orphan", order_by="LimsSubSample.vial_sequence",
+    )
+
+
+class LimsSubSample(Base):
+    """One physical vial received under a parent LimsSample. SENAITE id format
+    `<parent>-S<NN>`, e.g. P-0134-S01."""
+    __tablename__ = "lims_sub_samples"
+    __table_args__ = (UniqueConstraint("parent_sample_pk", "vial_sequence", name="uq_lims_parent_vial_sequence"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    parent_sample_pk: Mapped[int] = mapped_column(Integer, ForeignKey("lims_samples.id", ondelete="CASCADE"))
+    external_lims_uid: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
+    sample_id: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
+    vial_sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    received_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    received_by_user_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("users.id", ondelete="SET NULL"))
+    photo_external_uid: Mapped[Optional[str]] = mapped_column(String(100))
+    remarks: Mapped[Optional[str]] = mapped_column(Text)
+    assignment_role: Mapped[Optional[str]] = mapped_column(String(8), nullable=True)
+    # core | variance — workflow bucket set at check-in. NULL = not yet
+    # designated. Orthogonal to in_variance_set (stats inclusion).
+    assignment_kind: Mapped[Optional[str]] = mapped_column(String(8), nullable=True)
+    # Variance set membership (paired with lock state on parent LimsSample).
+    in_variance_set: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true", default=True)
+    variance_exclusion_reason: Mapped[Optional[str]] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    parent_sample: Mapped["LimsSample"] = relationship("LimsSample", back_populates="sub_samples")
+
+
 class SlaTier(Base):
     """A named SLA turnaround target. Sub-project A (revised to tiers).
 
@@ -810,3 +892,330 @@ class LabHoliday(Base):
 
     def __repr__(self) -> str:
         return f"<LabHoliday(date={self.holiday_date}, name='{self.name}', source='{self.source}')>"
+
+
+# ── COA roll-up (spec 2026-06-02-coa-rollup-override-design.md) ──
+
+
+class CoaResultPin(Base):
+    """
+    Manager intent for which sub-sample's analysis result a parent's COA
+    should report for a given analyte. Mutable — one row per
+    (parent_sample_id, analyte_keyword), upserted by the override panel.
+    Audit history lives in SampleActivityLog, not here.
+    """
+
+    __tablename__ = "coa_result_pins"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    parent_sample_id: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    analyte_keyword: Mapped[str] = mapped_column(Text, nullable=False)
+    # 'pin' | 'auto' | 'variance_set'. CHECK constraint lives at the DB layer
+    # in the migration; mirrored here as plain text so SQLAlchemy doesn't
+    # complain about an Enum mismatch on different envs.
+    mode: Mapped[str] = mapped_column(Text, nullable=False)
+    source_sample_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    source_analysis_uid: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    pinned_by_user_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("users.id"), nullable=True
+    )
+    pinned_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "parent_sample_id", "analyte_keyword",
+            name="uq_coa_result_pins_parent_analyte",
+        ),
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<CoaResultPin(parent={self.parent_sample_id}, "
+            f"analyte={self.analyte_keyword}, mode={self.mode})>"
+        )
+
+
+class CoaGenerationSource(Base):
+    """
+    Frozen per-generation manifest row. Written once at COA generation time;
+    immutable afterwards. One row per (generation, analyte). `generation_id`
+    references coa_generations.id in the integration DB (no FK because the
+    two databases are separate).
+    """
+
+    __tablename__ = "coa_generation_sources"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    # UUID column on Postgres; falls back to String(36) on SQLite so the
+    # test fixture in test_sub_samples_service.py (which targets SQLite)
+    # can still create_all this table.
+    generation_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True).with_variant(String(36), "sqlite"),
+        nullable=False, index=True,
+    )
+    generation_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    parent_sample_id: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    analyte_keyword: Mapped[str] = mapped_column(Text, nullable=False)
+    source_sample_id: Mapped[str] = mapped_column(Text, nullable=False)
+    source_analysis_uid: Mapped[str] = mapped_column(Text, nullable=False)
+    result_value: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    result_unit: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    candidates_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    resolution_mode: Mapped[str] = mapped_column(Text, nullable=False)
+    # Audit snapshot of the candidate list at generation time. Inlined so
+    # historical-mode reads don't have to reconstruct from SENAITE. JSONB
+    # on Postgres for native indexing potential; plain JSON on SQLite for
+    # cross-dialect test fixtures.
+    candidates_snapshot: Mapped[Optional[list]] = mapped_column(
+        JSONB().with_variant(JSON(), "sqlite"),
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, nullable=False
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "generation_id", "analyte_keyword",
+            name="uq_coa_generation_sources_gen_analyte",
+        ),
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<CoaGenerationSource(gen={self.generation_id}, "
+            f"analyte={self.analyte_keyword}, source={self.source_sample_id})>"
+        )
+
+
+class AnalysisReportable(Base):
+    """
+    Mk1-side sidecar for the "fit to report" boolean on a specific analysis
+    instance. SENAITE analyses have no Mk1 mirror table, so the flag lives
+    here keyed by (sample_id, analysis_uid). Default TRUE — absence of a row
+    means the analysis IS reportable. Rows are only inserted when a tech /
+    manager toggles the flag.
+    """
+
+    __tablename__ = "analysis_reportable"
+
+    sample_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    analysis_uid: Mapped[str] = mapped_column(Text, primary_key=True)
+    reportable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    changed_by_user_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("users.id"), nullable=True
+    )
+    changed_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, nullable=False
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<AnalysisReportable(sample={self.sample_id}, "
+            f"uid={self.analysis_uid}, reportable={self.reportable})>"
+        )
+
+
+# ── Mk1-native analyses (spec 2026-06-02-mk1-native-analyses-design.md) ──
+
+
+class LimsAnalysis(Base):
+    """
+    Mk1-owned analysis instance. Polymorphic host: belongs to either a
+    parent (lims_sample_pk) or a sub-sample (lims_sub_sample_pk) — CHECK
+    constraint at the DB layer enforces exactly-one.
+
+    Sub-sample analyses live entirely in Mk1 (no SENAITE round-trip).
+    Parent analyses will migrate here in a future phase; today they
+    still live in SENAITE.
+    """
+
+    __tablename__ = "lims_analyses"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+
+    lims_sample_pk: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("lims_samples.id", ondelete="CASCADE"), nullable=True
+    )
+    lims_sub_sample_pk: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("lims_sub_samples.id", ondelete="CASCADE"), nullable=True
+    )
+
+    analysis_service_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("analysis_services.id"), nullable=False
+    )
+    keyword: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+
+    result_value: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    result_unit: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    review_state: Mapped[str] = mapped_column(
+        Text, nullable=False, default="unassigned", server_default="unassigned",
+        index=True,
+    )
+
+    method_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("hplc_methods.id"), nullable=True
+    )
+    instrument_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("instruments.id"), nullable=True
+    )
+    analyst_user_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("users.id"), nullable=True
+    )
+
+    captured_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    submitted_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    verified_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    published_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    retested: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    retest_of_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("lims_analyses.id"), nullable=True
+    )
+
+    reportable: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true"
+    )
+    reportable_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+    )
+    created_by_user_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("users.id"), nullable=True
+    )
+
+    transitions: Mapped[list["LimsAnalysisTransition"]] = relationship(
+        "LimsAnalysisTransition",
+        back_populates="analysis",
+        cascade="all, delete-orphan",
+        order_by="LimsAnalysisTransition.occurred_at",
+    )
+
+    def __repr__(self) -> str:
+        host = (
+            f"parent_pk={self.lims_sample_pk}" if self.lims_sample_pk is not None
+            else f"sub_pk={self.lims_sub_sample_pk}"
+        )
+        return (
+            f"<LimsAnalysis(id={self.id}, {host}, "
+            f"kw={self.keyword!r}, state={self.review_state})>"
+        )
+
+
+class LimsAnalysisTransition(Base):
+    """
+    One row per state change on a LimsAnalysis. Append-only audit log.
+
+    transition_kind tracks the verb that caused the state change (assign,
+    submit, verify, retract, reject, retest, publish, reset, auto). The
+    state-machine module enforces which kinds are legal from which
+    from_states.
+    """
+
+    __tablename__ = "lims_analysis_transitions"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    analysis_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("lims_analyses.id", ondelete="CASCADE"), nullable=False
+    )
+    from_state: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    to_state: Mapped[str] = mapped_column(Text, nullable=False)
+    transition_kind: Mapped[str] = mapped_column(Text, nullable=False)
+    user_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("users.id"), nullable=True
+    )
+    reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, nullable=False
+    )
+
+    analysis: Mapped["LimsAnalysis"] = relationship(
+        "LimsAnalysis", back_populates="transitions"
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<LimsAnalysisTransition(analysis_id={self.analysis_id}, "
+            f"{self.from_state}->{self.to_state} kind={self.transition_kind})>"
+        )
+
+
+class LimsSubSampleEvent(Base):
+    """
+    Lightweight event log for sub-sample actions that have no other audit trail.
+
+    Writers (all in the same transaction as the action they record):
+      - set_assignment_role   → event='role_assigned'   details={from, to}
+      - update_sub_sample     → event='remarks_updated' details={preview}
+      - delete_pristine_analysis → event='analysis_removed' details={keyword}
+
+    user_id is nullable so automated / system-initiated paths can still write rows.
+    """
+
+    __tablename__ = "lims_sub_sample_events"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    sub_sample_pk: Mapped[int] = mapped_column(
+        Integer, ForeignKey("lims_sub_samples.id", ondelete="CASCADE"), nullable=False
+    )
+    event: Mapped[str] = mapped_column(Text, nullable=False)
+    details: Mapped[Optional[dict]] = mapped_column(
+        JSONB().with_variant(JSON(), "sqlite"), nullable=True
+    )
+    user_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, nullable=False
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<LimsSubSampleEvent(id={self.id}, sub_sample_pk={self.sub_sample_pk}, "
+            f"event={self.event!r})>"
+        )
+
+
+class LimsAnalysisPromotion(Base):
+    """Phase 4a: one row per (parent-tier row, contributing vial-tier row).
+
+    Written atomically by promote_to_parent. contribution_kind discriminates:
+      'chosen' — this source's value was copied verbatim to the parent row.
+      'aggregated_in' — this source was one of N inputs to a computed aggregate.
+      'reference' — this source informed the decision but its value isn't part
+                    of the parent's result (variance sibling not picked).
+    """
+
+    __tablename__ = "lims_analysis_promotions"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    parent_analysis_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("lims_analyses.id", ondelete="CASCADE"), nullable=False
+    )
+    source_analysis_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("lims_analyses.id", ondelete="CASCADE"), nullable=False
+    )
+    contribution_kind: Mapped[str] = mapped_column(Text, nullable=False)
+    promoted_by_user_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("users.id"), nullable=True
+    )
+    promoted_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, nullable=False
+    )
+    reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    def __repr__(self) -> str:
+        return (
+            f"<LimsAnalysisPromotion(parent_id={self.parent_analysis_id}, "
+            f"source_id={self.source_analysis_id}, kind={self.contribution_kind})>"
+        )

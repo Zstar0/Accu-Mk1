@@ -1,4 +1,5 @@
-import { useState, useEffect, useId, useRef } from 'react'
+import { useState, useEffect, useId, useRef, useMemo, useCallback } from 'react'
+import { useQuery, useQueries, useQueryClient } from '@tanstack/react-query'
 import DOMPurify from 'dompurify'
 import { useTheme } from '@/hooks/use-theme'
 import {
@@ -28,6 +29,7 @@ import {
   Maximize2,
   FileText,
   Terminal,
+  CornerDownRight,
   type LucideIcon,
 } from 'lucide-react'
 import { Card } from '@/components/ui/card'
@@ -36,6 +38,7 @@ import { Button } from '@/components/ui/button'
 import {
   Dialog,
   DialogContent,
+  DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
 import {
@@ -81,7 +84,14 @@ import {
   type PeptideRecord,
   getWooOrder,
   fetchChromatogramLttb,
+  listSubSamples,
+  listLimsAnalysesForSubSample,
+  listParentPromotions,
+  listParentLineStates,
+  type ParentPromotionInfo,
 } from '@/lib/api'
+import { ReceiveWizard } from '@/components/intake/ReceiveWizard/ReceiveWizard'
+import type { ParentInfo } from '@/components/intake/ReceiveWizard/useReceiveWizard'
 import {
   LineChart,
   Line,
@@ -102,11 +112,28 @@ import { getSenaiteUrl, getWordpressUrl } from '@/lib/api-profiles'
 import { cn } from '@/lib/utils'
 import { EditableDataRow } from '@/components/dashboard/EditableField'
 import { AnalysisTable, StatusBadge } from '@/components/senaite/AnalysisTable'
+import { needsMk1AnalysesSwap } from '@/lib/mk1-analyses-swap'
+import { buildNativeSubSampleLookup } from '@/lib/native-sub-sample'
+import { buildVialAssignmentMap, PARENT_OVERLAY_QUERY_KEY, invalidateParentVialOverlay } from '@/lib/vial-assignment'
 import { SampleHeaderSla } from '@/components/senaite/SampleHeaderSla'
 import { useAnalysisSlaMap } from '@/services/analysis-sla'
 import { SamplePrepHplcFlyout } from '@/components/hplc/SamplePrepHplcFlyout'
 import { SampleActivityLog } from '@/components/senaite/SampleActivityLog'
-import { Microscope, Plus, Search, Trash2, ScrollText } from 'lucide-react'
+import { VialsQuickLookDialog } from '@/components/senaite/VialsQuickLookDialog'
+import { Eye, Microscope, Plus, Printer, Search, Trash2, ScrollText, Sigma } from 'lucide-react'
+import { VarianceSummary } from '@/components/samples/VarianceSummary'
+import { usePrintLabel } from '@/components/samples/usePrintLabel'
+import { PrintLabelPortal } from '@/components/samples/PrintLabelPortal'
+import {
+  RoleHeaderBadge,
+  VialPhotoThumb,
+  computePrimaryAnalysisUids,
+} from '@/components/senaite/vial-quicklook-helpers'
+
+// Shared between the parent-overlay useQueries fan-out and its invalidate call —
+// they must stay identical or the post-edit refetch silently no-ops. Sourced
+// from lib/vial-assignment so the role-change invalidate helper can't drift.
+const VIAL_OVERLAY_QUERY_KEY = PARENT_OVERLAY_QUERY_KEY
 
 // --- COA Console ---
 
@@ -304,6 +331,25 @@ function formatFileSize(bytes: number | null): string {
   return `${(bytes / (1024 * 1024)).toFixed(2)} MB`
 }
 
+/**
+ * Select root (primary) COA generations — those with no parent generation —
+ * sorted newest first. Used as a fallback for the "Generated COAs" card when
+ * SENAITE has no attached ARReport (e.g. dev stacks lacking the prod-only
+ * @@accumark-attach-coa addon).
+ */
+export function selectRootGenerations(
+  gens: ExplorerCOAGeneration[]
+): ExplorerCOAGeneration[] {
+  return gens
+    .filter(g => g.parent_generation_id == null)
+    .sort((a, b) => {
+      const ta = new Date(a.created_at).getTime()
+      const tb = new Date(b.created_at).getTime()
+      if (tb !== ta) return tb - ta
+      return b.generation_number - a.generation_number
+    })
+}
+
 /** Derive a human-readable release status from the generation + ingestion records. */
 function coaReleaseStatus(gen: ExplorerCOAGeneration | null | undefined): {
   label: string
@@ -319,6 +365,86 @@ function coaReleaseStatus(gen: ExplorerCOAGeneration | null | undefined): {
   if (gen.ingestion_status === 'uploaded') return { label: 'Published (pending notify)', color: 'amber', title: 'PDF uploaded — WordPress notification pending' }
   // published with no ingestion record (desktop flow without WP order)
   return { label: 'Published', color: 'emerald', title: 'Published in system' }
+}
+
+/**
+ * Fallback list for the "Generated COAs" card when SENAITE has no attached
+ * ARReport (data.published_coa is null) but Integration Service has root
+ * generations. Mirrors the visual language of PublishedCOACard / the Additional
+ * COAs section without the SENAITE-only PDF/regen actions.
+ */
+function GeneratedCOAFallbackList({
+  generations,
+}: {
+  generations: ExplorerCOAGeneration[]
+}) {
+  const allDraft = generations.every(g => g.status === 'draft')
+  return (
+    <div className="space-y-2">
+      {generations.map(gen => {
+        const release = coaReleaseStatus(gen)
+        return (
+          <div
+            key={gen.id}
+            className="flex items-start gap-3 p-3 rounded-lg bg-muted/40 border border-border/40"
+          >
+            <div className="flex items-center justify-center w-9 h-9 rounded-lg bg-muted text-muted-foreground border border-border/40 shrink-0 mt-0.5">
+              <FileText size={16} />
+            </div>
+            <div className="flex-1 min-w-0 space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="text-sm font-medium truncate">
+                    Generation #{gen.generation_number}
+                  </span>
+                  <span
+                    title={release.title}
+                    className={cn(
+                      'shrink-0 text-[10px] font-medium px-1.5 py-0.5 rounded-full border',
+                      {
+                        'bg-amber-500/10 text-amber-600 border-amber-500/30 dark:text-amber-400':
+                          release.color === 'amber',
+                        'bg-emerald-500/10 text-emerald-600 border-emerald-500/30 dark:text-emerald-400':
+                          release.color === 'emerald',
+                        'bg-red-500/10 text-red-500 border-red-500/30': release.color === 'red',
+                        'bg-muted text-muted-foreground border-border/40': release.color === 'zinc',
+                      }
+                    )}
+                  >
+                    {release.label}
+                  </span>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-x-3 gap-y-1">
+                <div className="flex flex-col">
+                  <span className="text-[11px] text-muted-foreground">Verification Code</span>
+                  {gen.verification_code ? (
+                    <a
+                      href={accuverifyUrl(gen.verification_code)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-[11px] font-mono text-foreground hover:underline truncate"
+                    >
+                      {gen.verification_code}
+                    </a>
+                  ) : (
+                    <span className="text-[11px] font-mono text-muted-foreground">—</span>
+                  )}
+                </div>
+                <div className="flex flex-col">
+                  <span className="text-[11px] text-muted-foreground">Created</span>
+                  <span className="text-[11px] text-foreground">{formatDate(gen.created_at)}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        )
+      })}
+      {allDraft && (
+        <p className="text-[11px] text-muted-foreground pl-1">Not yet attached to SENAITE</p>
+      )}
+    </div>
+  )
 }
 
 function PublishedCOACard({
@@ -1702,11 +1828,28 @@ export function SampleDetails() {
   // Activity log flyout
   const [activityLogOpen, setActivityLogOpen] = useState(false)
 
+  // Variance summary dialog (worksheet-variance design 2026-06-02)
+  const [varianceSummaryOpen, setVarianceSummaryOpen] = useState(false)
+
+  // Print Label — single-label print for this sample / its sub-samples
+  const { printLabel, target: printTarget } = usePrintLabel()
+
   // Retest relationship metadata (banner + chain links)
   const [retestInfo, setRetestInfo] = useState<import('@/lib/api').SampleRetestInfo | null>(null)
 
+  // Phase senaite-writeback Task 4: promotion provenance for parent pages.
+  // Populated via useEffect below; empty Map on sub-sample pages (gated by
+  // !parentSampleId, which is null only when we ARE the parent).
+  const [promotionsByKeyword, setPromotionsByKeyword] = useState<Map<string, ParentPromotionInfo>>(new Map())
+
+  // Parent-line states for sub-sample pages — keyword → SENAITE review_state.
+  // Populated via useEffect below; empty object on parent pages (gated by
+  // parentSampleId !== null, i.e. we ARE a sub-sample).
+  const [parentLineStates, setParentLineStates] = useState<Record<string, string>>({})
+
   // Manage analyses panel
   const [manageAnalysesOpen, setManageAnalysesOpen] = useState(false)
+  const [vialsQuickLookOpen, setVialsQuickLookOpen] = useState(false)
   const [availableServices, setAvailableServices] = useState<AnalysisService[]>([])
   const [servicesLoading, setServicesLoading] = useState(false)
   const [serviceSearch, setServiceSearch] = useState('')
@@ -1714,6 +1857,187 @@ export function SampleDetails() {
   const [removingKeyword, setRemovingKeyword] = useState<string | null>(null)
 
   const analysisSla = useAnalysisSlaMap(data)
+
+  // Sub-samples — only meaningful for parent samples (sample IDs that don't end
+  // in -SNN). Sub-samples don't have sub-sub-samples, so we hide the section
+  // entirely on sub-sample detail pages.
+  const isParent = !!sampleId && !/-S\d{2,}$/.test(sampleId)
+  const [wizardParent, setWizardParent] = useState<ParentInfo | null>(null)
+  const { data: subData, refetch: refetchSubs } = useQuery({
+    queryKey: ['sub-samples', sampleId],
+    queryFn: () => listSubSamples(sampleId ?? ''),
+    enabled: !!sampleId && isParent,
+  })
+  const subSamples = subData?.sub_samples ?? []
+  const subCount = subData?.parent.sub_sample_count ?? 0
+
+  // Parent linkage breadcrumb — only for sub-samples
+  const parentSampleId = useMemo(() => {
+    if (!sampleId) return null
+    const m = sampleId.match(/^(.*)-S\d{2,}$/)
+    return m ? m[1] : null
+  }, [sampleId])
+
+  const queryClient = useQueryClient()
+
+  // Parent-page overlay: fan out each vial's Mk1 analyses so parent analysis
+  // rows can show their assigned vial + Mk1 method/instrument/analyst.
+  // Gated to parent pages (parentSampleId === null); sub-sample pages do their
+  // own full Mk1 swap and never need this.
+  // The parent-page gate (parentSampleId === null) is intentionally repeated on
+  // each of overlayVials / enabled / the computed const below — each needs its
+  // own guard, so don't "simplify" one away.
+  const overlayVials = parentSampleId === null ? (subData?.sub_samples ?? []) : []
+  const overlayAnalysesQueries = useQueries({
+    queries: overlayVials.map(v => ({
+      queryKey: [VIAL_OVERLAY_QUERY_KEY, v.id] as const,
+      queryFn: () => listLimsAnalysesForSubSample(v.id),
+      // Fetch every vial's Mk1 analyses. A vial's external_lims_uid is a SENAITE
+      // hex when it was synced from SENAITE, yet it can still own lims_analyses
+      // rows — so we must NOT gate on an 'mk1://' prefix. Vials with no Mk1 rows
+      // return [] and simply contribute no matches.
+      enabled: parentSampleId === null,
+      staleTime: 30_000,
+    })),
+  })
+
+  // Parent-page only (memo would not help: useQueries' outer array churns each
+  // render). The join is a cheap pure function.
+  const vialAssignmentByKeyword =
+    parentSampleId !== null || !data?.analyses
+      ? undefined
+      : buildVialAssignmentMap(
+          data.analyses,
+          overlayVials.map((v, i) => ({
+            sampleId: v.sample_id,
+            label: `Vial ${v.vial_sequence + 1}`,
+            analyses: overlayAnalysesQueries[i]?.data ?? [],
+            assignmentRole: v.assignment_role, // vial bench role
+            assignmentKind: v.assignment_kind, // explicit variance bucket — drives overlay treatment
+          })),
+        )
+
+  const { data: parentSummary } = useQuery({
+    queryKey: ['sub-samples', parentSampleId],
+    queryFn: () => listSubSamples(parentSampleId!),
+    enabled: !!parentSampleId,
+  })
+
+  // The current vial's explicit assignment_kind ('core' | 'variance' | null).
+  // Sub-sample pages read it from the parent's sub-samples summary; parent
+  // pages have no kind (the parent is the canonical) → null. This replaces the
+  // retired entitlement-based gating (useVarianceEntitlement) for row
+  // affordances — entitlement is a display-only paid marker on AssignStep now.
+  const currentVialKind =
+    parentSampleId !== null
+      ? parentSummary?.sub_samples.find(s => s.sample_id === sampleId)?.assignment_kind ?? null
+      : null
+
+  // Phase senaite-writeback Task 4: fetch promotion provenance on parent pages.
+  // Extracted into a callable so refreshSample can re-pull it after a QuickLook
+  // promote (the badge would otherwise stay stale until a full page reload).
+  const refreshPromotions = useCallback((id: string) => {
+    listParentPromotions(id)
+      .then(records => {
+        setPromotionsByKeyword(new Map(records.map(r => [r.keyword, r])))
+      })
+      .catch(() => {
+        // Non-fatal: badge simply won't appear if the fetch fails
+      })
+  }, [])
+
+  // parentSampleId is null on parent pages (no -SNN suffix), so !parentSampleId
+  // is the correct gate.
+  useEffect(() => {
+    if (!sampleId || parentSampleId !== null) return
+    refreshPromotions(sampleId)
+  }, [sampleId, parentSampleId, refreshPromotions])
+
+  // Fetch parent AR analysis states for native sub-sample pages.
+  // parentSampleId is non-null only when we are a sub-sample (have -SNN suffix).
+  // Best-effort: catch → empty states, UI degrades gracefully (no locking).
+  useEffect(() => {
+    if (!parentSampleId) return
+    listParentLineStates(parentSampleId)
+      .then(({ states }) => setParentLineStates(states))
+      .catch(() => setParentLineStates({}))
+  }, [parentSampleId])
+
+  // Resolve this sample's vial-assignment role for the header label.
+  // Parent pages: pull from lims_samples.assignment_role (defaults to 'hplc'
+  // per migration; can change after AssignStep moves the parent into another
+  // bucket). Sub-sample pages: look up in the parent's sub-samples list which
+  // carries assignment_role on each entry.
+  const currentAssignment: string | null = isParent
+    ? subData?.parent.assignment_role ?? 'hplc'
+    : parentSummary?.sub_samples.find(s => s.sample_id === sampleId)
+        ?.assignment_role ?? null
+  const assignmentLabel = (() => {
+    switch (currentAssignment) {
+      case 'hplc':
+        return 'Analytical HPLC'
+      case 'endo':
+        return 'Microbiology — Endotoxin'
+      case 'ster':
+        return 'Microbiology — Sterility'
+      case 'xtra':
+        return 'Extra (unassigned)'
+      default:
+        return null
+    }
+  })()
+
+  const primaryAnalysisUids = useMemo(
+    () => computePrimaryAnalysisUids(data?.analyses ?? [], currentAssignment),
+    [data, currentAssignment]
+  )
+
+  async function openSubSampleWizard() {
+    // On a parent page, open the wizard for the current sample.
+    // On a sub-sample page, open it for the parent. The parent summary
+    // returned by listSubSamples only carries external_lims_uid when the
+    // parent has been previously cached in lims_samples (i.e. someone
+    // created a sub-sample for it). For a fresh parent we fall back to
+    // a direct SENAITE lookup to get the UID.
+    if (isParent) {
+      if (!data?.sample_id || !data.sample_uid) return
+      setWizardParent({
+        uid: data.sample_uid,
+        sample_id: data.sample_id,
+        status: data.review_state,
+      })
+      return
+    }
+
+    if (!parentSampleId) return
+    const cached = parentSummary?.parent
+    if (cached?.external_lims_uid) {
+      setWizardParent({
+        uid: cached.external_lims_uid,
+        sample_id: cached.sample_id,
+        status: cached.status ?? null,
+      })
+      return
+    }
+
+    // Cold-cache path — fetch parent metadata from SENAITE on demand.
+    try {
+      const parentLookup = await lookupSenaiteSample(parentSampleId)
+      if (!parentLookup.sample_uid) {
+        toast.error('Parent sample not found in SENAITE')
+        return
+      }
+      setWizardParent({
+        uid: parentLookup.sample_uid,
+        sample_id: parentLookup.sample_id,
+        status: parentLookup.review_state,
+      })
+    } catch (e) {
+      toast.error('Could not load parent sample', {
+        description: e instanceof Error ? e.message : String(e),
+      })
+    }
+  }
 
   async function openHplcResults() {
     if (!sampleId) return
@@ -1781,21 +2105,54 @@ export function SampleDetails() {
     }
   }
 
+  /**
+   * Native-aware sample loader shared by the initial load, the Retry handler,
+   * and the silent post-transition refresh. A Model-D native vial (mk1:// uid)
+   * has no SENAITE AR, so it loads entirely from Mk1 and never calls SENAITE —
+   * without this, every transition's refresh 404s. Parent samples and legacy
+   * SENAITE-backed vials use the SENAITE lookup as before. If the Mk1 sub-sample
+   * lookup fails, falls through to SENAITE so legacy vials still load.
+   */
+  const resolveSampleData = useCallback(async (id: string): Promise<SenaiteLookupResult> => {
+    const parentId = id.match(/^(.*)-S\d{2,}$/)?.[1]
+    if (parentId) {
+      try {
+        const list = await listSubSamples(parentId)
+        const me = list.sub_samples.find(s => s.sample_id === id)
+        if (me?.external_lims_uid?.startsWith('mk1://')) {
+          const mk1Analyses = await listLimsAnalysesForSubSample(me.id)
+          return { ...buildNativeSubSampleLookup(me, list.parent), analyses: mk1Analyses }
+        }
+      } catch {
+        // Mk1 lookup failed — fall through to the SENAITE lookup (legacy path).
+      }
+    }
+    return lookupSenaiteSample(id)
+  }, [])
+
   const fetchSample = (id: string) => {
     setLoading(true)
     setError(null)
 
-    lookupSenaiteSample(id)
+    resolveSampleData(id)
       .then(result => setData(result))
       .catch(e => setError(e instanceof Error ? e.message : 'Failed to load sample'))
       .finally(() => setLoading(false))
   }
 
-  /** Silent re-fetch: updates data without triggering full-page loading state. */
+  /** Silent re-fetch: updates data without triggering full-page loading state.
+   *  Refreshes all three parent-page surfaces a QuickLook mutation can touch —
+   *  the AR rows (`data`), the per-vial overlay column, and the promotion badges
+   *  — so a promote/transition/add/remove reflects immediately without a reload. */
   const refreshSample = (id: string) => {
-    lookupSenaiteSample(id)
+    resolveSampleData(id)
       .then(result => setData(result))
       .catch(e => toast.error('Refresh failed', { description: e instanceof Error ? e.message : String(e) }))
+    // Overlay + promotion badges only exist on parent pages; skip on sub-samples.
+    if (parentSampleId === null) {
+      invalidateParentVialOverlay(queryClient)
+      refreshPromotions(id)
+    }
   }
 
   const openOrderFlyout = async () => {
@@ -1821,7 +2178,7 @@ export function SampleDetails() {
     setLoading(true)
     setError(null)
 
-    lookupSenaiteSample(sampleId)
+    resolveSampleData(sampleId)
       .then(result => {
         if (!cancelled) setData(result)
       })
@@ -1835,7 +2192,41 @@ export function SampleDetails() {
     return () => {
       cancelled = true
     }
-  }, [sampleId])
+  }, [sampleId, resolveSampleData])
+
+  // Phase 3 (mk1-native-analyses): for sub-samples, replace data.analyses
+  // with the Mk1-sourced rows. AnalysisTable renders the same SenaiteAnalysis
+  // shape; UIDs in the Mk1 rows carry an 'mk1:' prefix so the dispatch shims
+  // in setAnalysisResult / transitionAnalysis route writes to the Mk1
+  // endpoints. Parent samples are untouched — their analyses stay SENAITE.
+  // Re-derived each render so the swap effect can self-heal: it re-runs
+  // whenever the analyses revert to SENAITE-sourced (e.g. a refetch after a
+  // result-entry transition reset them), and no-ops once they're Mk1-sourced.
+  const analysesNeedMk1Swap = !!data && needsMk1AnalysesSwap(data.analyses)
+  useEffect(() => {
+    if (!parentSampleId || !sampleId || !data) return
+    // Only swap while the analyses are still SENAITE-sourced. Once swapped,
+    // every row is mk1:-prefixed so this is false and the effect no-ops —
+    // which is why analysesNeedMk1Swap is a safe (non-looping) dependency.
+    if (!analysesNeedMk1Swap) return
+    let cancelled = false
+    ;(async () => {
+      try {
+        const subs = await listSubSamples(parentSampleId)
+        const me = subs.sub_samples.find(s => s.sample_id === sampleId)
+        if (!me) return
+        const mk1Analyses = await listLimsAnalysesForSubSample(me.id)
+        if (cancelled) return
+        setData(prev => (prev ? { ...prev, analyses: mk1Analyses } : prev))
+      } catch (e) {
+        // Best-effort: leave SENAITE-sourced analyses in place on failure.
+        console.error('Phase 3: failed to load Mk1 analyses for sub-sample', sampleId, e)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [parentSampleId, sampleId, data?.sample_uid, analysesNeedMk1Swap])
 
   // Fetch additional COAs from integration service
   useEffect(() => {
@@ -2144,6 +2535,40 @@ export function SampleDetails() {
               <ScrollText size={13} />
               Activity
             </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-1.5 cursor-pointer"
+              onClick={openSubSampleWizard}
+              disabled={isParent ? !data?.sample_uid : !parentSampleId}
+            >
+              <Plus size={13} />
+              Manage Sub-Samples
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-1.5 cursor-pointer"
+              onClick={() => printLabel({
+                sampleId: sampleId!,
+                orderNumber: data?.client_order_number ?? null,
+                receivedAt: data?.date_received ?? null,
+              })}
+            >
+              <Printer size={13} />
+              Print Label
+            </Button>
+            {isParent && subCount >= 1 && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-1.5 cursor-pointer"
+                onClick={() => setVarianceSummaryOpen(true)}
+              >
+                <Sigma size={13} />
+                Variance Summary
+              </Button>
+            )}
             <div className="relative">
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
@@ -2169,13 +2594,15 @@ export function SampleDetails() {
                   >
                     Generate Accumark COA
                   </DropdownMenuItem>
-                  <DropdownMenuItem
-                    onClick={handlePublishCOA}
-                    disabled={isPublishingCOA || !hasDraftCOA}
-                    className="cursor-pointer"
-                  >
-                    Publish Accumark COA
-                  </DropdownMenuItem>
+                  {isParent && (
+                    <DropdownMenuItem
+                      onClick={handlePublishCOA}
+                      disabled={isPublishingCOA || !hasDraftCOA}
+                      className="cursor-pointer"
+                    >
+                      Publish Accumark COA
+                    </DropdownMenuItem>
+                  )}
                 </DropdownMenuContent>
               </DropdownMenu>
               <COAConsole
@@ -2244,7 +2671,7 @@ export function SampleDetails() {
                 <h1 className="text-xl font-bold tracking-tight font-mono">
                   {data.senaite_url ? (
                     <a
-                      href={`${senaiteBaseUrl}${data.senaite_url}`}
+                      href={data.senaite_url.startsWith('http') ? data.senaite_url : `${senaiteBaseUrl}${data.senaite_url}`}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="hover:text-blue-700 dark:hover:text-blue-400 transition-colors inline-flex items-center gap-1.5 cursor-pointer"
@@ -2266,31 +2693,83 @@ export function SampleDetails() {
                   </Badge>
                 )}
               </div>
-              <p className="text-xs text-muted-foreground mt-0.5">
-                Received {formatDate(data.date_received)}
+              {!isParent && parentSampleId && (
+                <div className="flex items-center gap-2 text-sm text-muted-foreground mt-1 flex-wrap">
+                  <CornerDownRight className="h-3.5 w-3.5 shrink-0" />
+                  <span>Sub-sample of</span>
+                  <button
+                    type="button"
+                    onClick={() => navigateToSample(parentSampleId)}
+                    className="font-mono underline hover:text-foreground transition-colors cursor-pointer"
+                  >
+                    {parentSampleId}
+                  </button>
+                  {parentSummary && (() => {
+                    const me = parentSummary.sub_samples.find(s => s.sample_id === sampleId)
+                    if (!me) return null
+                    // Display 1-indexed across the whole family: parent is vial 1,
+                    // sub-samples come after. sub_sample_count excludes the parent,
+                    // so total = sub_sample_count + 1.
+                    const total = parentSummary.parent.sub_sample_count + 1
+                    return (
+                      <>
+                        <span aria-hidden>·</span>
+                        <span>Vial {me.vial_sequence + 1} of {total}</span>
+                      </>
+                    )
+                  })()}
+                  {currentAssignment && (
+                    <>
+                      <span aria-hidden>·</span>
+                      <RoleHeaderBadge role={currentAssignment} />
+                    </>
+                  )}
+                </div>
+              )}
+              {isParent && subCount > 0 && (
+                <div className="flex items-center gap-2 text-sm text-muted-foreground mt-1 flex-wrap">
+                  <Package className="h-3.5 w-3.5 shrink-0" />
+                  <span>Parent Sample</span>
+                  <span aria-hidden>·</span>
+                  <span>Vial 1 of {subCount + 1}</span>
+                  {currentAssignment && (
+                    <>
+                      <span aria-hidden>·</span>
+                      <RoleHeaderBadge role={currentAssignment} />
+                    </>
+                  )}
+                </div>
+              )}
+              <div className="text-xs text-muted-foreground mt-0.5">
+                <p>
+                  Received {formatDate(data.date_received)}
+                  {' · '}Client:{' '}
+                  <span className="text-foreground/80">{data.client ?? '—'}</span>
+                  {!retestInfo?.is_retest && retestInfo?.retested_as && retestInfo.retested_as.length > 0 && (
+                    <>
+                      {' · '}
+                      <span className="text-violet-700 dark:text-violet-300">↳ Retested as:</span>{' '}
+                      {retestInfo.retested_as.map((r, i) => (
+                        <span key={r.sample_id}>
+                          {i > 0 && ', '}
+                          <button
+                            type="button"
+                            onClick={() => navigateToSample(r.sample_id)}
+                            className="font-mono font-semibold text-violet-700 dark:text-violet-300 hover:underline underline-offset-2"
+                            title={r.created_at ? `Created ${formatDate(r.created_at)}` : undefined}
+                          >
+                            {r.sample_id}
+                          </button>
+                        </span>
+                      ))}
+                    </>
+                  )}
+                </p>
+                {/* SLA below the Received line — stacked one indicator per line
+                    so multi-tier samples don't run a long inline string that
+                    widens the header and wraps the photo thumbnail. */}
                 <SampleHeaderSla lookup={data} />
-                {' · '}Client:{' '}
-                <span className="text-foreground/80">{data.client ?? '—'}</span>
-                {!retestInfo?.is_retest && retestInfo?.retested_as && retestInfo.retested_as.length > 0 && (
-                  <>
-                    {' · '}
-                    <span className="text-violet-700 dark:text-violet-300">↳ Retested as:</span>{' '}
-                    {retestInfo.retested_as.map((r, i) => (
-                      <span key={r.sample_id}>
-                        {i > 0 && ', '}
-                        <button
-                          type="button"
-                          onClick={() => navigateToSample(r.sample_id)}
-                          className="font-mono font-semibold text-violet-700 dark:text-violet-300 hover:underline underline-offset-2"
-                          title={r.created_at ? `Created ${formatDate(r.created_at)}` : undefined}
-                        >
-                          {r.sample_id}
-                        </button>
-                      </span>
-                    ))}
-                  </>
-                )}
-              </p>
+              </div>
             </div>
           </div>
 
@@ -2324,6 +2803,32 @@ export function SampleDetails() {
             </div>
           )}
 
+          {/* Vial photo — far right of the top row, hover to enlarge.
+              Vial pages: photo presence comes from the parent summary's vial
+              record. Parent pages: the parent IS vial 1, and the photo endpoint
+              falls back to the parent AR's last attachment for non-sub-sample
+              IDs (see VialsList.tsx), so we fetch optimistically. Either way,
+              hideWhenEmpty keeps photo-less samples from rendering the "no
+              photo" box — illegible at w-11 and wasted header space. */}
+          {data.sample_id && (() => {
+            const me = parentSampleId
+              ? parentSummary?.sub_samples.find(s => s.sample_id === sampleId)
+              : null
+            // Vial pages skip the fetch entirely when the vial record says
+            // there's no photo; parent pages always try (404 → hidden).
+            const hasPhoto = parentSampleId ? !!me?.photo_external_uid : true
+            return (
+              <VialPhotoThumb
+                sampleId={data.sample_id}
+                hasPhoto={hasPhoto}
+                // self-stretch: span the full height of the header's top row
+                sizeClass="self-stretch w-24 min-h-16"
+                hoverZoom
+                hideWhenEmpty
+              />
+            )
+          })()}
+
           {/* Progress bar + legend — w-full forces wrap to bottom row */}
           {analyses.length > 0 && (
             <div className="w-full space-y-1.5">
@@ -2334,20 +2839,43 @@ export function SampleDetails() {
                 />
               </div>
               <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <span className="flex items-center gap-1.5 text-[11px] text-emerald-600 dark:text-emerald-400">
-                    <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-500/70" />
-                    {verifiedCount} Verified
-                  </span>
-                  <span className="flex items-center gap-1.5 text-[11px] text-amber-600 dark:text-amber-400">
-                    <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-500/70" />
-                    {pendingCount} Pending
-                  </span>
+                <div className="flex items-center gap-2 text-muted-foreground">
+                  {assignmentLabel ? (
+                    <>
+                      <span className="uppercase tracking-wider text-[11px]">Assigned to</span>
+                      <span
+                        className={`text-sm font-semibold ${
+                          {
+                            // Matches PRIMARY_TITLE_COLOR role tints in AnalysisTable
+                            hplc: 'text-sky-700 dark:text-sky-300',
+                            endo: 'text-emerald-700 dark:text-emerald-300',
+                            ster: 'text-violet-700 dark:text-violet-300',
+                            xtra: 'text-zinc-700 dark:text-zinc-300',
+                          }[currentAssignment ?? ''] ?? 'text-foreground'
+                        }`}
+                      >
+                        {assignmentLabel}
+                      </span>
+                    </>
+                  ) : null}
                 </div>
-                <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
-                  <span>{Math.round((verifiedCount / analyses.length) * 100)}% complete</span>
+                <div className="flex items-center gap-2 text-[11px]">
+                  <span className="text-muted-foreground">
+                    <span className="text-emerald-600 dark:text-emerald-400 font-semibold">
+                      {Math.round((verifiedCount / analyses.length) * 100)}%
+                    </span>{' '}
+                    complete
+                  </span>
                   <span className="text-border">·</span>
-                  <span>{verifiedCount}/{analyses.length} verified</span>
+                  <span className="text-muted-foreground">
+                    <span className="text-emerald-600 dark:text-emerald-400 font-semibold">
+                      {verifiedCount}
+                    </span>
+                    /{analyses.length}{' '}
+                    <span className={pendingCount > 0 ? 'text-amber-600 dark:text-amber-400' : ''}>
+                      verified
+                    </span>
+                  </span>
                 </div>
               </div>
             </div>
@@ -2355,7 +2883,10 @@ export function SampleDetails() {
           </div>{/* end: sample ID + counters + progress */}
         </div>{/* end: sticky header band */}
 
-        {/* Main Grid: 2-column layout — metadata left, analytes right */}
+        {/* Main Grid: 2-column layout — metadata left, analytes right.
+            Hidden on sub-sample pages: these are parent-level sections
+            (sample/order/COA metadata + analytes live on the parent AR). */}
+        {parentSampleId === null && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
           {/* Left column: Sample Info + Order Details stacked */}
           <div className="space-y-4">
@@ -2636,9 +3167,17 @@ export function SampleDetails() {
                       getSampleAdditionalCOAs(sampleId).then(setAdditionalCoas).catch(() => {})
                     }}
                   />
-                ) : (
-                  <p className="text-sm text-muted-foreground">No COA generated yet</p>
-                )}
+                ) : (() => {
+                  // No SENAITE-attached ARReport (e.g. dev stacks lack the
+                  // prod-only @@accumark-attach-coa addon). Fall back to the
+                  // root generations Integration Service already has.
+                  const rootGens = selectRootGenerations(coaGenerations)
+                  return rootGens.length > 0 ? (
+                    <GeneratedCOAFallbackList generations={rootGens} />
+                  ) : (
+                    <p className="text-sm text-muted-foreground">No COA generated yet</p>
+                  )
+                })()}
               </SectionHeader>
             </Card>
 
@@ -2839,6 +3378,7 @@ export function SampleDetails() {
 
           </div>
         </div>
+        )}
 
         {/* Remarks — full width */}
         <Card className="p-4 mb-6">
@@ -2994,9 +3534,9 @@ export function SampleDetails() {
           </SectionHeader>
         </Card>
 
-        {/* Manage Analyses */}
+        {/* Manage Analyses + Vials Quick Look */}
         {data.review_state && (
-          <div className="mb-2">
+          <div className="mb-2 flex items-center gap-2">
             <Button
               variant="outline"
               size="sm"
@@ -3006,6 +3546,19 @@ export function SampleDetails() {
               <Plus size={13} />
               Manage Analyses
             </Button>
+            {parentSampleId === null && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-1.5 text-xs"
+                disabled={subSamples.length === 0}
+                title={subSamples.length === 0 ? 'No vials yet' : undefined}
+                onClick={() => setVialsQuickLookOpen(true)}
+              >
+                <Eye size={13} />
+                Vials Quick Look
+              </Button>
+            )}
           </div>
         )}
 
@@ -3105,6 +3658,14 @@ export function SampleDetails() {
         <AnalysisTable
           analyses={analyses}
           analyteNameMap={analyteNameMap}
+          primaryAnalysisUids={primaryAnalysisUids}
+          primaryRole={currentAssignment}
+          promotionsByKeyword={parentSampleId === null ? promotionsByKeyword : undefined}
+          vialAssignmentByKeyword={parentSampleId === null ? vialAssignmentByKeyword : undefined}
+          onVialMethodInstrumentSaved={() => {
+            queryClient.invalidateQueries({ queryKey: [VIAL_OVERLAY_QUERY_KEY] })
+          }}
+          parentLineStates={parentSampleId !== null ? parentLineStates : undefined}
           onResultSaved={(uid, newResult, newReviewState) => {
             setData(prev => {
               if (!prev) return prev
@@ -3139,7 +3700,52 @@ export function SampleDetails() {
           isAnalysisSlaError={analysisSla.isError}
           isAnalysisSlaPublished={analysisSla.isPublished}
           analysisSlaPriority={analysisSla.priority}
+          vialKind={currentVialKind}
         />
+
+        {parentSampleId === null && data.sample_id && (
+          <VialsQuickLookDialog
+            open={vialsQuickLookOpen}
+            onOpenChange={setVialsQuickLookOpen}
+            parentSampleId={data.sample_id}
+            analyteNameMap={analyteNameMap}
+            onParentDataStale={() => refreshSample(data.sample_id)}
+          />
+        )}
+
+        {/* Sub-Samples + Sub-Sample Analyses sections moved into the wizard's
+            "Sub Sample Details" tab (open via "Manage Sub-Samples" button).
+            Entry from the sample-details page defaults to that tab so techs
+            land on the table they came in for, not the new-vial form. Hosted
+            unconditionally so the button also works on sub-sample pages —
+            openSubSampleWizard resolves the parent UID for that case. */}
+        {wizardParent && (
+          <Dialog
+            open={Boolean(wizardParent)}
+            onOpenChange={open => {
+              if (!open) {
+                setWizardParent(null)
+                void refetchSubs()
+              }
+            }}
+          >
+            <DialogContent className="max-w-6xl w-full p-0 sm:max-w-6xl h-[90vh] overflow-hidden">
+              <DialogHeader className="px-6 pt-4 pb-2 border-b">
+                <DialogTitle>Receive {wizardParent.sample_id}</DialogTitle>
+              </DialogHeader>
+              <div className="h-[calc(90vh-3.5rem)] overflow-hidden">
+                <ReceiveWizard
+                  parent={wizardParent}
+                  initialPhase="details"
+                  onClose={() => {
+                    setWizardParent(null)
+                    void refetchSubs()
+                  }}
+                />
+              </div>
+            </DialogContent>
+          </Dialog>
+        )}
 
       {/* Woo Order flyout */}
       {wooOrderOpen && (
@@ -3170,6 +3776,18 @@ export function SampleDetails() {
         onClose={() => setActivityLogOpen(false)}
         sampleId={sampleId || ''}
       />
+
+      {/* Single-label print portal — off-screen DOM the print CSS reveals */}
+      <PrintLabelPortal target={printTarget} />
+
+      {/* Variance summary dialog */}
+      {isParent && sampleId && (
+        <VarianceSummary
+          parentSampleId={sampleId}
+          open={varianceSummaryOpen}
+          onOpenChange={setVarianceSummaryOpen}
+        />
+      )}
     </div>
   )
 }

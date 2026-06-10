@@ -1,5 +1,81 @@
 # Changelog
 
+## Unreleased — Sub-Samples + Bac Water
+
+### Added — Analyte class & Benzyl Alcohol (Phase A)
+
+- **`peptides.analyte_class` column** (`'peptide'` | `'additive'`, NOT NULL DEFAULT `'peptide'`). All existing peptide rows backfill to `'peptide'` on column add. Discriminates non-peptide HPLC analytes from peptides without renaming the table — keeps the existing `Peptide.id` FK plumbing across `CalibrationCurve`, `peptide_methods`, `instrument_methods`, `SamplePrep`, etc. usable for Benzyl Alcohol.
+- **Benzyl Alcohol seeded as the first `'additive'` row** via startup migration (`name='Benzyl Alcohol'`, `abbreviation='Benzyl Alcohol'`, `is_blend=false`). Idempotent via `ON CONFLICT (abbreviation) DO NOTHING`.
+- **`GET /peptides?analyte_class=peptide|additive`** opt-in query filter. Default unfiltered preserves all existing callers; only the HPLC wizard Step 1 picker uses the filter today.
+- **HPLC wizard Step 1 context-filter** ([Step1SampleInfo.tsx](src/components/hplc/wizard/steps/Step1SampleInfo.tsx)). When the SENAITE lookup returns `sample_type === 'Bacteriostatic Water'`, the peptide dropdown shows **only** `'additive'`-class rows (currently just Benzyl Alcohol). All other contexts hide additives so peptide preps stay clean. Manual / pre-lookup default keeps additives hidden.
+- **`AnalyteClass` type + `analyte_class` field on `PeptideRecord`** (`src/lib/api.ts`). `getPeptides({ analyteClass })` accepts the optional filter parameter.
+
+### Added — Sub-sample publish guards
+
+- **Hide "Publish Accumark COA" menu item on sub-sample detail pages** ([SampleDetails.tsx](src/components/senaite/SampleDetails.tsx)). The `<DropdownMenuItem>` is wrapped in `{isParent && (...)}` so the option simply doesn't render on `-S\d{2}` pages.
+- **Backend 403 on sub-sample publish attempts** ([backend/main.py](backend/main.py) `POST /wizard/senaite/samples/{sample_id}/publish-coa`). Sub-samples inherit `ClientOrderNumber` from the parent via `INHERITABLE_FIELDS`, so publishing one would silently overwrite the parent's COA on the WP order line. Block stays in place until parent/sub linkage is wired through to WordPress.
+
+### Changed — Single-vial check-in policy (revised)
+
+- **First vial of a never-received parent now lands on the parent AR alone** — no `-S01` row created. Sub-samples represent vial 2+. This reverses the earlier "always create -S01" behavior and avoids redundant secondaries on single-vial check-ins. Receive wizard ([useReceiveWizard.ts](src/components/intake/ReceiveWizard/useReceiveWizard.ts)) skips `createSubSample` for the first vial of an unreceived parent and exposes a new `parentReceivedThisSession` flag.
+- **Print labels list now includes the parent** when received this session, so the lab gets the parent's label alongside any sub-sample labels in one print pass. ([ReceiveWizard.tsx](src/components/intake/ReceiveWizard/ReceiveWizard.tsx))
+- **Wizard sidebar renders the parent as Vial 1** (read-only, with "View details" link). Sub-sample vial labels now display `vial_sequence + 1` so `-S01` shows as "Vial 2" — matching the new single-vial policy where parent occupies vial 1. ([WizardSidebar.tsx](src/components/intake/ReceiveWizard/WizardSidebar.tsx))
+- **`onSaveNew` callback returns `{ sampleId: string }` uniformly** (parent OR sub-sample). ([VialPanel.tsx](src/components/intake/ReceiveWizard/VialPanel.tsx), [PrintStep.tsx](src/components/intake/ReceiveWizard/PrintStep.tsx))
+
+### Changed — Vial Panel UI
+
+- **Native `<input type="file">` replaced with a styled `<Button>` + Upload icon** in the camera-failure branch ([VialPanel.tsx](src/components/intake/ReceiveWizard/VialPanel.tsx)). The input is `hidden`; the button triggers it via the existing `fileRef`. Disabled state mirrors `busy` to match the other action buttons.
+- **Existing-photo preview** when editing a sub-sample with `photo_external_uid` now fetches and renders the actual image (via `fetchSubSamplePhotoUrl`) instead of a placeholder card. Renders inline in both camera-OK and camera-failure branches when in edit mode without a fresh capture.
+
+### Schema
+
+- New migrations in `database._run_migrations()` (run at backend startup, after the existing sub-samples tables):
+  ```sql
+  ALTER TABLE peptides ADD COLUMN IF NOT EXISTS analyte_class VARCHAR(20) NOT NULL DEFAULT 'peptide';
+  UPDATE peptides SET abbreviation='Benzyl Alcohol' WHERE abbreviation='BA' AND name='Benzyl Alcohol';
+  INSERT INTO peptides (name, abbreviation, is_blend, analyte_class, active, created_at, updated_at)
+    VALUES ('Benzyl Alcohol', 'Benzyl Alcohol', FALSE, 'additive', TRUE, NOW(), NOW())
+    ON CONFLICT (abbreviation) DO NOTHING;
+  ```
+  See [docs/deploy/2026-05-bw-subsamples-release.md](docs/deploy/2026-05-bw-subsamples-release.md) for the full deploy guide.
+
+### Deferred / post-deploy
+
+- **HplcMethod row + `peptide_methods` + `instrument_methods` links for Benzyl Alcohol** are pending lab-provided method params (RT, wavelength, column, gradient, instruments). BA samples can't be processed through the HPLC wizard until these land.
+- **BA calibration curve.** Lab will run BA standards through the existing standard-prep workflow once the method exists.
+
+---
+
+## Unreleased — Sub-Samples
+
+### Added
+
+- **Receive multiple vials per sample as native SENAITE secondaries.** A new grow-as-you-go wizard launches from the existing intake list (or from "+ Add Sub-Sample" on a parent's detail page for the after-the-fact case). The wizard walks the receiver through each vial: live camera preview, capture (preview swaps to a static still with a Retake button), optional remarks, save. Each save creates an `AnalysisRequestSecondary` in SENAITE under the parent (auto-named `<parent>-S<NN>`), uploads the captured photo as an attachment, and lands a row in the new local `lims_sub_samples` table. After saving, a confirmation card with the new sample ID + a "Receive another vial" primary button starts the next vial cleanly. The wizard's bottom-right footer carries [Print labels] (disabled while no session vials exist) and [Finished].
+- **Parent sample detail page surfaces sub-samples.** A new "Sub-Samples (N)" section lists each child's vial sequence, sample ID, photo thumbnail (rendered through a new `/api/sub-samples/{id}/photo` proxy that streams the latest SENAITE attachment), received-at, received-by, plus per-row Open and Print Label buttons. Empty when zero children. A companion "Sub-Sample Analyses" section is built but intentionally empty in v1 — populates when the worksheet vial-to-test assignment phase ships. Sections only render on parent pages (sample id without `-S<NN>` suffix).
+- **Sub-sample detail header shows parent linkage.** A breadcrumb-style "↳ Sub-sample of `<parent>` · Vial N of M" line sits between the sample ID heading and the Received row. Parent ID is clickable; vial count comes from the parent's children list.
+- **`<SampleIdBadge>` shared component, rolled out across ~14 sites.** Auto-derives parent linkage from any `<parent>-S<NN>` ID format, so dropping `<SampleIdBadge id={sample_id} />` into a list cell, table row, or card automatically renders "↳ child of `<parent>`" inline whenever the ID is a sub-sample. Click on the parent portion navigates to the parent's detail; `stopPropagation()` makes it safe inside outer clickable cards. Swapped into COA Explorer, Order Detail Panel, Order Status (Sample / Kanban cards), Add Samples Modal, Sample Prep flyout, Worksheet Drawer Items, Analysis Results, Calibration Panel, and Purity Trend View.
+- **Vial-count column on the receive intake list.** Each parent row shows "N received" or "—". TanStack Query per-row with a 60 s stale window.
+- **QR-code labels via browser print.** New compact 30 × 15 mm label format: 9 mm QR code on the left, sample ID + WP-order-number on the right (8 pt mono with tightened letter-spacing so 11-character `<parent>-S<NN>` fits without truncation). Replaces the previous Code 39 barcode strip. Print preview hides everything except the labels via visibility-based isolation, so the wizard chrome / SENAITE site shell don't bleed into the printed output. Print Label is also wired into the per-row table button on the parent's Sub-Samples section and a header action "Print Label" on a sub-sample's own detail page. Both reuse a `usePrintLabel` hook + `<PrintLabelPortal>` that mount a single-label `.print-area` off-screen and trigger `window.print()` directly — no wizard round-trip required for reprints.
+- **Sample-info panel in the receive wizard sidebar.** Restores the Client / Contact / Sample Type / Order # / Client Sample ID / Client Lot / Profiles / Declared Qty / Date Sampled / analyte chips that the legacy Step 2 receive panel showed, so the receiver retains full sample context while the camera has their attention. The vial panel header also gains a one-line "Client · Peptide · Qty" summary.
+- **Backend API.** New `POST/GET/PATCH/DELETE /api/sub-samples` endpoints. `POST` creates the secondary in SENAITE, uploads the photo, copies inheritable parent fields onto the new AR (best-effort per-field fallback for the Plone-isDecimal-validator bug), and inserts the local row. The list response carries a `parent` summary block (sub_sample_count, last_synced_at) so the frontend can show counts without a separate fetch. The `GET /{sample_id}/photo` proxy resolves the AR's most-recent attachment and streams it through the existing auth boundary — the browser never needs SENAITE credentials.
+- **Defense-in-depth on sub-sample creation.** Service refuses to create a child if the parent has no `contact_uid` (avoids a downstream 400 the Plone schema validator throws on `update_remarks`); auto-refreshes a stale cached parent UID and retries once before giving up; surfaces SENAITE silent-fallthrough as a structured `502 {code: "secondary_fallout", orphan_uid, orphan_sample_id, ...}` so the frontend can prompt for manual cleanup of the orphan AR (the SENAITE `/delete` route fails for orphans because they auto-receive past `sample_due`).
+- **Drift reconciliation.** When the parent detail page renders the Sub-Samples section, the backend checks `last_synced_at` on the cached `lims_samples` row. If older than 5 min, re-fetches secondaries from SENAITE via `search?q=<parent_id>` (the v1 list endpoint silently drops parent-UID filters, so we filter client-side for `<parent>-S<NN>`), inserts any SENAITE-only secondaries into local cache, and warn-logs any local-only rows for human follow-up.
+
+### Schema
+
+- New tables in `accumark_mk1`: `lims_samples` (master sample registry, lazily populated as parents get sub-samples — designed as the seed of the eventual SENAITE-replacement schema with neutral `external_lims_*` columns) and `lims_sub_samples` (one row per vial, FK'd to `lims_samples.id`, unique constraint on `(parent_sample_pk, vial_sequence)`). Migration is additive via `database._run_migrations()` — no Alembic.
+- ORM classes `LimsSample` and `LimsSubSample` (the `Sample`/`samples` names were taken by the existing HPLC-job-samples model). Convention: new LIMS-side tables use the `lims_` prefix.
+
+### Changed
+
+- The wizard's first vial of a never-received parent fires both the existing `/wizard/senaite/receive-sample` endpoint (parent state transition + WP comms — unchanged) AND the new `/api/sub-samples` endpoint, in that order. Subsequent vials and after-the-fact additions only call `/api/sub-samples`. The frontend orchestrates this; the backend service does not.
+
+### Known limitations
+
+- **Decimal-quantity fields don't inherit to children.** SENAITE/Plone-5's `isDecimal` validator rejects strings, ints, and floats from Python 3 clients on `Analyte{N}DeclaredQuantity` and `DeclaredTotalQuantity` (always returns "expected 'string'" regardless of type sent). All other custom fields inherit; quantities can be set manually in the existing UI until the validator is fixed server-side.
+- **Worksheet inbox sub-sample handling deferred** to its own phase. Sub-samples currently appear individually in the worksheet inbox alongside parents, which is acceptable for v1 but will need grouping work as samples-with-2–6-vials become common.
+- **Sample list grouping (parent rows expandable to children) deferred.** Nice-to-have; out of scope for v1.
+
 ## v0.38.0 — 2026-06-02 — Order Status page filters & Kanban refinements
 
 ### Added
