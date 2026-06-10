@@ -1814,7 +1814,9 @@ export function AnalysisTable({
               <div className="flex items-center gap-2">
                 <Spinner className="size-3.5" />
                 <span className="text-sm text-muted-foreground">
-                  {TRANSITION_LABELS[bulk.bulkProgress.transition] ?? bulk.bulkProgress.transition}ing{' '}
+                  {bulk.bulkProgress.transition === 'variance_verify'
+                    ? 'Verifying (Variance)'
+                    : `${TRANSITION_LABELS[bulk.bulkProgress.transition] ?? bulk.bulkProgress.transition}ing`}{' '}
                   {bulk.bulkProgress.current}/{bulk.bulkProgress.total}...
                 </span>
               </div>
