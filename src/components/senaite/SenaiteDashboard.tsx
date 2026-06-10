@@ -12,6 +12,7 @@ import {
   X,
   ChevronLeft,
   Filter,
+  Layers,
 } from 'lucide-react'
 import {
   Card,
@@ -446,7 +447,14 @@ function SampleTable({
               className="hover:bg-muted/30 cursor-pointer"
               onClick={() => onSelectSample?.(s.id)}
             >
-              <TableCell className="font-mono text-sm">{s.id}</TableCell>
+              <TableCell className="font-mono text-sm">
+                <span className="inline-flex items-center gap-1">
+                  {parentHasVariance(agg) && (
+                    <Layers className="h-3 w-3 text-sky-500 shrink-0" aria-label="Has variance testing" />
+                  )}
+                  {s.id}
+                </span>
+              </TableCell>
               <TableCell className="text-center">
                 {vialCount > 0 ? (
                   <button
@@ -564,7 +572,12 @@ function SampleTable({
                               className="w-full grid grid-cols-[7rem_3rem_5rem_1fr] gap-3 text-xs py-1 px-1 -mx-1 rounded hover:bg-muted/30 transition-colors text-left"
                               onClick={e => { e.stopPropagation(); onSelectSample?.(sub.sample_id) }}
                             >
-                              <span className="font-mono">{sub.sample_id}</span>
+                              <span className={`font-mono inline-flex items-center gap-1 ${
+                                subIsVarianceMember(sub, agg) ? 'text-sky-600 dark:text-sky-400' : ''
+                              }`}>
+                                {subIsVarianceMember(sub, agg) && <Layers className="h-3 w-3 shrink-0" aria-hidden="true" />}
+                                {sub.sample_id}
+                              </span>
                               <span className="text-center text-muted-foreground">{sub.vial_sequence}</span>
                               <span>
                                 <span className={`inline-flex items-center gap-0.5 rounded border px-1 py-0.5 text-[10px] font-medium ${badge.cls}`}>
@@ -599,6 +612,21 @@ function SampleTable({
 // `limit` when sub-samples are interleaved upstream. 50 keeps the visible row
 // count in line with what the page showed before the filter was added.
 const PAGE_SIZE = 50
+
+/** True when a parent AR has variance testing on any bucket (display flag). */
+export function parentHasVariance(agg: ParentAggregate | undefined): boolean {
+  const v = agg?.variance
+  return !!v && (v.hplc >= 2 || v.endo >= 2 || v.ster >= 2)
+}
+
+/** True when a sub-sample vial's role bucket has variance on its parent.
+ *  Membership-level (the AR list is a vial view; promotion is per-analysis and
+ *  isn't expressible per vial — intentional coarser hint than the analysis table). */
+export function subIsVarianceMember(sub: SubSample, agg: ParentAggregate | undefined): boolean {
+  const role = sub.assignment_role
+  if (role !== 'hplc' && role !== 'endo' && role !== 'ster') return false
+  return (agg?.variance?.[role] ?? 0) >= 2
+}
 
 export function SenaiteDashboard() {
   const navigateToSample = useUIStore(state => state.navigateToSample)

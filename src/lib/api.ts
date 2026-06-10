@@ -5090,6 +5090,10 @@ export interface ParentAggregate {
   /** The parent AR's own assignment_role. Sub-sample roles are surfaced
    *  inline on expand via /api/sub-samples/{parent}, not here. */
   parent_role: 'hplc' | 'endo' | 'ster' | 'xtra' | 'unassigned'
+  /** Per-bucket variance counts from the parent's variance_override (zeros when
+   *  none). AR-list display hint; authoritative gate is server-side. Optional
+   *  for back-compat with older responses. */
+  variance?: { hplc: number; endo: number; ster: number }
 }
 
 export interface SampleAggregatesResponse {
