@@ -36,6 +36,7 @@ def _mock_sub(sample_id="P-0134-S01", parent_id="P-0134", vial_seq=1, remarks=No
     sub.photo_external_uid = f"/senaite/clients/client-8/{sample_id}"
     sub.remarks = remarks
     sub.assignment_role = None
+    sub.assignment_kind = None
     sub.external_lims_uid = "a8c27e69bfa84ff1bf16a3e370a44456"  # legacy SENAITE uid
     sub.parent_sample = MagicMock(sample_id=parent_id)
     return sub
