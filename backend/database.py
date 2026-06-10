@@ -727,6 +727,8 @@ def _run_migrations():
                 ('assign','submit','verify','retract','reject',
                  'retest','publish','reset','auto','variance_verify'))
         """,
+        # Variance addon: lab-side override until WP variance addon ships.
+        "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS variance_override TEXT",
     ]
     # Per-statement isolation: a failure in one statement (e.g., a table that
     # create_all hasn't built yet on first run) must not skip subsequent

@@ -153,3 +153,9 @@ class VarianceEntitlementResponse(BaseModel):
     distinguishes 'none' from 'could not check' so the FE can fail closed."""
     variance: dict[str, int]
     unreachable: bool
+
+
+class VarianceOverrideRequest(BaseModel):
+    """Lab-side per-service variance counts (int >= 2; n = total replicates
+    incl. canonical). None or {} clears the override."""
+    variance: Optional[dict] = None

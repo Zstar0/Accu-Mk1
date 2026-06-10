@@ -5160,6 +5160,30 @@ export async function fetchVarianceEntitlement(
   return response.json()
 }
 
+/** Set/clear the lab-side variance override (interim until the WP addon). */
+export async function putVarianceOverride(
+  parentSampleId: string,
+  variance: Record<string, number> | null,
+): Promise<{ variance: Record<string, number> }> {
+  const response = await fetch(
+    `${API_BASE_URL()}/api/sub-samples/${encodeURIComponent(parentSampleId)}/variance-override`,
+    {
+      method: 'PUT',
+      headers: getBearerHeaders('application/json'),
+      body: JSON.stringify({ variance }),
+    },
+  )
+  if (!response.ok) {
+    const err = await response.json().catch(() => null)
+    throw new Error(
+      typeof err?.detail === 'string'
+        ? err.detail
+        : err?.detail?.message || `Variance override failed: ${response.status}`,
+    )
+  }
+  return response.json()
+}
+
 /**
  * Resolve a renderable object URL for a sub-sample's most-recent photo.
  * The backend proxy requires Bearer auth, so a plain `<img src=...>` would

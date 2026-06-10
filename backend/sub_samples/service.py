@@ -8,6 +8,7 @@ Defense-in-depth protections (per Task 5 spike findings):
   2. Pre-validate parent UID with SENAITE; refresh + retry on stale cache.
   3. Surface SecondaryFalloutError with orphan UID for manual cleanup.
 """
+import json
 import logging
 import os
 import requests
@@ -512,7 +513,53 @@ def fetch_sample_services(sample_id: str) -> Optional[dict]:
     if resp.status_code == 404:
         return None
     resp.raise_for_status()
-    return resp.json()
+    return _apply_variance_override(sample_id, resp.json())
+
+
+def set_variance_override(db: Session, parent_sample_id: str, variance: Optional[dict]) -> dict:
+    """Store the lab-side variance override (None/empty clears). Counts are
+    normalized like the WP map (int >= 2 only); invalid entries are dropped.
+    Blocked while the variance set is locked."""
+    parent = db.execute(
+        select(LimsSample).where(LimsSample.sample_id == parent_sample_id)
+    ).scalar_one_or_none()
+    if not parent:
+        raise LookupError(f"parent {parent_sample_id} not found")
+    if parent.variance_locked_at is not None:
+        raise VarianceLockedError(f"variance set for {parent.sample_id} is locked")
+    cleaned = normalize_variance_entitlement({"variance": variance or {}})
+    parent.variance_override = json.dumps(cleaned) if cleaned else None
+    db.commit()
+    return cleaned
+
+
+def _apply_variance_override(sample_id: str, result: Optional[dict]) -> Optional[dict]:
+    """Merge a lab-side variance override into a services payload (override
+    wins when set). Opens its own short session; fail-soft — any error returns
+    the payload unchanged. Called from fetch_sample_services so every consumer
+    (entitlement, verify gate, vial plan/demand, lock guard, seeder) inherits
+    the override with no signature changes."""
+    if not isinstance(result, dict):
+        return result
+    try:
+        from database import SessionLocal
+        db = SessionLocal()
+        try:
+            row = db.execute(
+                select(LimsSample.variance_override)
+                .where(LimsSample.sample_id == sample_id)
+            ).scalar_one_or_none()
+        finally:
+            db.close()
+        if row:
+            override = json.loads(row)
+            if override:
+                services = result.get("services") or {}
+                services["variance"] = override
+                result["services"] = services
+    except Exception:
+        log.warning("variance_override.merge_failed sample=%s", sample_id, exc_info=True)
+    return result
 
 
 # Bucket (== vial assignment_role) -> WP service key carrying variance counts.

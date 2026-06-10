@@ -743,6 +743,9 @@ class LimsSample(Base):
     variance_locked_by_user_id: Mapped[Optional[int]] = mapped_column(
         Integer, ForeignKey("users.id", ondelete="SET NULL")
     )
+    # Variance addon: lab-side override until WP variance addon ships (Phase 3/4).
+    # JSON-serialized map e.g. {"hplcpurity_identity": 3}; NULL means no override.
+    variance_override: Mapped[Optional[str]] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     last_synced_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 

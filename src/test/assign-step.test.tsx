@@ -12,10 +12,11 @@ vi.mock('@/lib/api', async importOriginal => {
     getVialPlan: vi.fn(),
     patchVialAssignment: vi.fn(),
     updateSenaiteSampleFields: vi.fn(),
+    putVarianceOverride: vi.fn(),
   }
 })
 
-import { getVialPlan, patchVialAssignment } from '@/lib/api'
+import { getVialPlan, patchVialAssignment, putVarianceOverride } from '@/lib/api'
 
 const PLAN: VialPlanResponse = {
   demand: { hplc: 1, endo: 0, ster: 0 },
@@ -51,6 +52,7 @@ beforeEach(() => {
     sample_id: 'P-0144-S01',
     assignment_role: null,
   })
+  vi.mocked(putVarianceOverride).mockResolvedValue({ variance: {} })
 })
 
 /** Probes simulating the parent sample-details page's cached queries.
@@ -117,6 +119,63 @@ describe('AssignStep role-change cache invalidation', () => {
     await waitFor(() => {
       expect(subsFn).toHaveBeenCalledTimes(2)
       expect(overlayFn).toHaveBeenCalledTimes(2)
+    })
+  })
+})
+
+describe('VarianceOverrideEditor', () => {
+  it('renders with HPLC input prefilled from plan.variance', async () => {
+    vi.mocked(getVialPlan).mockResolvedValue(VARIANCE_PLAN)
+    renderStep()
+    await screen.findByText('P-0144-S01')
+    const hplcInput = screen.getByRole('spinbutton', { name: /variance hplc/i })
+    expect(hplcInput).toHaveValue(3)
+  })
+
+  it('changing HPLC to 4 + Save calls putVarianceOverride and re-fetches plan', async () => {
+    vi.mocked(getVialPlan).mockResolvedValue(VARIANCE_PLAN)
+    vi.mocked(putVarianceOverride).mockResolvedValue({ variance: { hplcpurity_identity: 4, endotoxin: 2 } })
+    renderStep()
+    await screen.findByText('P-0144-S01')
+
+    const hplcInput = screen.getByRole('spinbutton', { name: /variance hplc/i })
+    await userEvent.clear(hplcInput)
+    await userEvent.type(hplcInput, '4')
+
+    await userEvent.click(screen.getByRole('button', { name: /save variance/i }))
+
+    await waitFor(() => {
+      expect(putVarianceOverride).toHaveBeenCalledWith(
+        'P-0144',
+        expect.objectContaining({ hplcpurity_identity: 4, endotoxin: 2 }),
+      )
+    })
+    // getVialPlan should have been called a second time (refresh after save)
+    await waitFor(() => {
+      expect(getVialPlan).toHaveBeenCalledTimes(2)
+    })
+  })
+
+  it('setting all to 0 + Save calls putVarianceOverride with null', async () => {
+    vi.mocked(getVialPlan).mockResolvedValue(VARIANCE_PLAN)
+    vi.mocked(putVarianceOverride).mockResolvedValue({ variance: {} })
+    renderStep()
+    await screen.findByText('P-0144-S01')
+
+    // Clear HPLC (was 3)
+    const hplcInput = screen.getByRole('spinbutton', { name: /variance hplc/i })
+    await userEvent.clear(hplcInput)
+    await userEvent.type(hplcInput, '0')
+
+    // Clear Endo (was 2)
+    const endoInput = screen.getByRole('spinbutton', { name: /variance endo/i })
+    await userEvent.clear(endoInput)
+    await userEvent.type(endoInput, '0')
+
+    await userEvent.click(screen.getByRole('button', { name: /save variance/i }))
+
+    await waitFor(() => {
+      expect(putVarianceOverride).toHaveBeenCalledWith('P-0144', null)
     })
   })
 })

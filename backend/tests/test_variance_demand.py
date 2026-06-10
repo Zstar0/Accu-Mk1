@@ -261,3 +261,97 @@ class TestLockSeriesGuard:
         parent = sub_service.lock_variance_set(db, "ZZTEST-VARLOCK", user_id=1)
         assert parent.variance_locked_at is not None
         sub_service.unlock_variance_set(db, "ZZTEST-VARLOCK")
+
+
+# ─── Variance override storage + merge ───────────────────────────────────────
+
+import json
+
+
+@pytest.fixture()
+def zztest_varov_parent(db):
+    """Committed ZZTEST parent for variance-override tests."""
+    from sqlalchemy import text
+    row = LimsSample(sample_id="ZZTEST-VAROV", peptide_name="ZZ", status="received")
+    db.add(row)
+    db.commit()
+    yield row
+    db.rollback()
+    db.execute(text("DELETE FROM lims_samples WHERE sample_id = 'ZZTEST-VAROV'"))
+    db.commit()
+
+
+class TestSetVarianceOverride:
+    def test_stores_normalized_json(self, db, zztest_varov_parent):
+        """Stores valid int>=2 entries; drops invalid."""
+        result = sub_service.set_variance_override(
+            db,
+            "ZZTEST-VAROV",
+            {"hplcpurity_identity": 3, "endotoxin": 1, "junk": "x"},
+        )
+        assert result == {"hplcpurity_identity": 3}
+        db.refresh(zztest_varov_parent)
+        stored = json.loads(zztest_varov_parent.variance_override)
+        assert stored == {"hplcpurity_identity": 3}
+
+    def test_clear_with_none_nulls_column(self, db, zztest_varov_parent):
+        """Clearing with None nulls the column."""
+        sub_service.set_variance_override(db, "ZZTEST-VAROV", {"hplcpurity_identity": 3})
+        sub_service.set_variance_override(db, "ZZTEST-VAROV", None)
+        db.refresh(zztest_varov_parent)
+        assert zztest_varov_parent.variance_override is None
+
+    def test_clear_with_empty_dict_nulls_column(self, db, zztest_varov_parent):
+        """Clearing with {} also nulls the column."""
+        sub_service.set_variance_override(db, "ZZTEST-VAROV", {"hplcpurity_identity": 3})
+        sub_service.set_variance_override(db, "ZZTEST-VAROV", {})
+        db.refresh(zztest_varov_parent)
+        assert zztest_varov_parent.variance_override is None
+
+    def test_raises_variance_locked_error_when_locked(self, db, zztest_varov_parent):
+        """Blocked while variance set is locked."""
+        zztest_varov_parent.variance_locked_at = datetime.utcnow()
+        db.commit()
+        with pytest.raises(sub_service.VarianceLockedError):
+            sub_service.set_variance_override(db, "ZZTEST-VAROV", {"hplcpurity_identity": 3})
+        # cleanup
+        zztest_varov_parent.variance_locked_at = None
+        db.commit()
+
+    def test_raises_lookup_error_for_missing_sample(self, db):
+        """LookupError for unknown sample."""
+        with pytest.raises(LookupError, match="ZZTEST-MISSING"):
+            sub_service.set_variance_override(db, "ZZTEST-MISSING", {"hplcpurity_identity": 3})
+
+
+class TestApplyVarianceOverride:
+    def test_merges_override_into_payload(self, db, zztest_varov_parent):
+        """Override is merged into services['variance']."""
+        sub_service.set_variance_override(
+            db, "ZZTEST-VAROV", {"hplcpurity_identity": 4, "endotoxin": 2}
+        )
+        payload = {"services": {"hplcpurity_identity": True}}
+        result = sub_service._apply_variance_override("ZZTEST-VAROV", payload)
+        assert result["services"]["variance"] == {"hplcpurity_identity": 4, "endotoxin": 2}
+
+    def test_no_override_payload_unchanged(self, db, zztest_varov_parent):
+        """No override set → payload passes through unchanged."""
+        payload = {"services": {"hplcpurity_identity": True}}
+        result = sub_service._apply_variance_override("ZZTEST-VAROV", payload)
+        assert "variance" not in result["services"]
+
+    def test_none_payload_passes_through(self):
+        """result=None passes through without error."""
+        result = sub_service._apply_variance_override("ZZTEST-VAROV", None)
+        assert result is None
+
+    def test_chain_inflates_demand(self, db, zztest_varov_parent):
+        """End-to-end chain: override set → _apply → derive_demand inflates."""
+        sub_service.set_variance_override(
+            db, "ZZTEST-VAROV", {"hplcpurity_identity": 3}
+        )
+        raw = {"services": {"hplcpurity_identity": True, "endotoxin": True, "sterility_pcr": True}}
+        merged = sub_service._apply_variance_override("ZZTEST-VAROV", raw)
+        demand = sub_service.derive_demand(merged["services"])
+        assert demand["hplc"] == 3
+        assert demand["endo"] == 1  # no endo override

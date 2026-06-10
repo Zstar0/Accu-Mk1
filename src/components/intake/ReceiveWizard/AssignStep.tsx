@@ -13,6 +13,7 @@ import { toast } from 'sonner'
 import {
   getVialPlan,
   patchVialAssignment,
+  putVarianceOverride,
   updateSenaiteSampleFields,
   type VialPlanResponse,
   type VialPlanItem,
@@ -20,6 +21,7 @@ import {
 } from '@/lib/api'
 import { useQueryClient } from '@tanstack/react-query'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Spinner } from '@/components/ui/spinner'
 import { cn } from '@/lib/utils'
@@ -185,12 +187,119 @@ export function AssignStep({ parentSampleId, parentSampleUid }: Props) {
             />
           )}
         </div>
+        <VarianceOverrideEditor
+          parentSampleId={parentSampleId}
+          plan={plan}
+          refresh={refresh}
+        />
         <AssignRemarksBlock
           parentSampleId={parentSampleId}
           parentSampleUid={parentSampleUid}
         />
       </div>
     </DndContext>
+  )
+}
+
+/** Lab-side variance count override — interim until the WP variance addon ships. */
+const VARIANCE_OVERRIDE_FIELDS = [
+  { key: 'hplcpurity_identity', label: 'HPLC', ariaLabel: 'Variance HPLC' },
+  { key: 'endotoxin', label: 'Endo', ariaLabel: 'Variance Endo' },
+  { key: 'sterility_pcr', label: 'Sterility', ariaLabel: 'Variance Sterility' },
+] as const
+
+function VarianceOverrideEditor({
+  parentSampleId,
+  plan,
+  refresh,
+}: {
+  parentSampleId: string
+  plan: VialPlanResponse
+  refresh: () => void
+}) {
+  const queryClient = useQueryClient()
+  // Effective variance counts from the plan (0 when not set).
+  const initialCounts = Object.fromEntries(
+    VARIANCE_OVERRIDE_FIELDS.map(f => [
+      f.key,
+      plan.variance[f.key === 'hplcpurity_identity' ? 'hplc' : f.key === 'endotoxin' ? 'endo' : 'ster'] ?? 0,
+    ])
+  )
+  const [counts, setCounts] = useState<Record<string, number>>(initialCounts)
+  const [saving, setSaving] = useState(false)
+
+  // Sync when plan changes (e.g. after a refresh)
+  useEffect(() => {
+    setCounts(Object.fromEntries(
+      VARIANCE_OVERRIDE_FIELDS.map(f => [
+        f.key,
+        plan.variance[f.key === 'hplcpurity_identity' ? 'hplc' : f.key === 'endotoxin' ? 'endo' : 'ster'] ?? 0,
+      ])
+    ))
+  }, [plan])
+
+  async function handleSave() {
+    setSaving(true)
+    try {
+      const map: Record<string, number> = {}
+      for (const f of VARIANCE_OVERRIDE_FIELDS) {
+        const n = counts[f.key] ?? 0
+        if (n >= 2) map[f.key] = n
+      }
+      const payload = Object.keys(map).length > 0 ? map : null
+      await putVarianceOverride(parentSampleId, payload)
+      toast.success('Variance override saved')
+      void refresh()
+      queryClient.invalidateQueries({ queryKey: ['variance-entitlement', parentSampleId] })
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to save variance override')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="mt-6 pt-4 border-t border-border/60 max-w-2xl">
+      <div className="mb-2">
+        <p className="text-sm font-medium">Variance Testing</p>
+        <p className="text-xs text-muted-foreground">
+          Lab override — replaces the order's variance until the WP addon ships. 0 = none,
+          otherwise total replicates (≥2).
+        </p>
+      </div>
+      <div className="flex items-end gap-3 flex-wrap">
+        {VARIANCE_OVERRIDE_FIELDS.map(f => (
+          <div key={f.key} className="flex flex-col gap-1">
+            <label className="text-xs text-muted-foreground" htmlFor={`varov-${f.key}`}>
+              {f.label}
+            </label>
+            <Input
+              id={`varov-${f.key}`}
+              type="number"
+              min={0}
+              aria-label={f.ariaLabel}
+              value={counts[f.key] ?? 0}
+              onChange={e =>
+                setCounts(prev => ({ ...prev, [f.key]: parseInt(e.target.value, 10) || 0 }))
+              }
+              disabled={saving}
+              className="w-20 text-sm"
+            />
+          </div>
+        ))}
+        <Button
+          type="button"
+          size="sm"
+          onClick={handleSave}
+          disabled={saving}
+          aria-label="Save variance"
+          className="cursor-pointer gap-1.5 self-end"
+        >
+          {saving && <Spinner className="size-3.5" />}
+          Save
+        </Button>
+      </div>
+    </div>
   )
 }
 

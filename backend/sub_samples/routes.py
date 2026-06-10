@@ -29,6 +29,7 @@ from sub_samples.schemas import (
     AggregatesRequest, AggregatesResponse, ParentAggregate,
     VarianceSetResponse, VarianceVialResult, VarianceStatsEntry,
     PatchVarianceMembershipRequest, VarianceEntitlementResponse,
+    VarianceOverrideRequest,
 )
 
 
@@ -408,6 +409,27 @@ def get_variance_entitlement(
         variance=service.normalize_variance_entitlement(services),
         unreachable=False,
     )
+
+
+@router.put("/{parent_sample_id}/variance-override")
+def put_variance_override(
+    parent_sample_id: str,
+    body: VarianceOverrideRequest,
+    db: Session = Depends(get_db),
+    _user=Depends(get_current_user),
+):
+    """Set/clear the lab-side variance override (UAT + interim until the WP
+    variance addon ships). Stored normalized; returns the effective map."""
+    try:
+        cleaned = service.set_variance_override(db, parent_sample_id, body.variance)
+        return {"variance": cleaned}
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except service.VarianceLockedError as e:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "variance_locked", "message": str(e)},
+        )
 
 
 @router.get("/{parent_sample_id}/variance-set", response_model=VarianceSetResponse)
