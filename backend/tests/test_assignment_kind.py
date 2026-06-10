@@ -35,6 +35,15 @@ def test_assignment_kind_round_trips(db, fixture):
     assert sub == "variance"
 
 
+def test_assignment_kind_serializes_through_api_path(db, fixture):
+    """_serialize is the real API constructor (routes.py builds every
+    SubSampleResponse manually) — raw SQL tests alone would miss an
+    omitted field because of the schema's None default."""
+    from sub_samples.routes import _serialize
+    sub = db.query(LimsSubSample).filter(LimsSubSample.sample_id == "ZZTEST-AK-S01").one()
+    assert _serialize(sub).assignment_kind == "variance"
+
+
 def test_assignment_kind_defaults_null(db, fixture):
     db.execute(text("INSERT INTO lims_sub_samples (sample_id, parent_sample_pk, vial_sequence, received_at, external_lims_uid) "
                     "SELECT 'ZZTEST-AK-S02', id, 2, now(), 'zz-ak-s02' FROM lims_samples WHERE sample_id='ZZTEST-AK'"))
