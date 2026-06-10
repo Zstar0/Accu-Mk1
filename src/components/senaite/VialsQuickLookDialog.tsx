@@ -250,7 +250,11 @@ function VialSection({
   const handleReassign = async (role: AssignmentRole | null) => {
     setIsReassigning(true)
     try {
-      await patchVialAssignment(vial.sample_id, role)
+      // Carry the vial's existing assignment_kind through the role change — a
+      // kind-omitted PATCH clobbers kind to NULL server-side, which would
+      // silently flip a variance vial onto the promote path. (Backend still
+      // coerces kind to NULL for xtra/unassigned targets.)
+      await patchVialAssignment(vial.sample_id, role, vial.assignment_kind ?? null)
       toast.success(`Re-assigned ${vial.sample_id}`)
       // assignment PATCH auto-seeds + drops analyses server-side; refetch every
       // surface that renders assignment state, including the parent page's AR

@@ -106,8 +106,9 @@ class ParentAggregate(BaseModel):
     )
     variance: dict[str, int] = Field(
         default_factory=lambda: {"hplc": 0, "endo": 0, "ster": 0},
-        description="Per-bucket variance counts (total replicates incl. canonical) "
-                    "read from the parent's variance_override. Zeros when none. "
+        description="Per-bucket variance-vial counts (in addition to core "
+                    "demand — additive-bucket contract) read from the parent's "
+                    "variance_override. Zeros when none. "
                     "AR-list display hint — the authoritative gate is server-side "
                     "at sign-off (fail-closed).",
     )
@@ -164,14 +165,16 @@ class PatchVarianceMembershipRequest(BaseModel):
 
 
 class VarianceEntitlementResponse(BaseModel):
-    """Per-service variance counts the parent's order purchased (n = total
-    replicates incl. the canonical). Empty when none purchased; `unreachable`
-    distinguishes 'none' from 'could not check' so the FE can fail closed."""
+    """Per-service variance-vial counts the parent's order purchased (n =
+    variance vials in addition to the core/canonical — additive-bucket
+    contract; display-only paid marker). Empty when none purchased;
+    `unreachable` distinguishes 'none' from 'could not check'."""
     variance: dict[str, int]
     unreachable: bool
 
 
 class VarianceOverrideRequest(BaseModel):
-    """Lab-side per-service variance counts (int >= 2; n = total replicates
-    incl. canonical). None or {} clears the override."""
+    """Lab-side per-service variance-vial counts (int >= 2; n = variance
+    vials in addition to core — additive-bucket contract). None or {} clears
+    the override."""
     variance: Optional[dict] = None

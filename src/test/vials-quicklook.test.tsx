@@ -39,7 +39,6 @@ vi.mock('@/lib/api', async importOriginal => {
     listParentLineStates: vi.fn(),
     fetchSubSamplePhotoUrl: vi.fn(),
     patchVialAssignment: vi.fn(),
-    fetchVarianceEntitlement: vi.fn(),
     transitionAnalysis: vi.fn(),
   }
 })
@@ -99,7 +98,6 @@ import {
   listParentLineStates,
   fetchSubSamplePhotoUrl,
   patchVialAssignment,
-  fetchVarianceEntitlement,
   transitionAnalysis,
 } from '@/lib/api'
 import { useAnalysisSlaMap } from '@/services/analysis-sla'
@@ -210,10 +208,6 @@ beforeEach(() => {
     sample_id: 'P-0144-S01',
     assignment_role: 'endo',
   })
-  vi.mocked(fetchVarianceEntitlement).mockResolvedValue({
-    variance: { hplcpurity_identity: 3 },
-    unreachable: false,
-  })
 })
 
 describe('VialsQuickLookDialog', () => {
@@ -318,7 +312,7 @@ describe('VialsQuickLookDialog', () => {
     const endoItem = await screen.findByText('Microbiology — Endotoxin')
     await userEvent.click(endoItem)
     await waitFor(() => {
-      expect(patchVialAssignment).toHaveBeenCalledWith('P-0144-S01', 'endo')
+      expect(patchVialAssignment).toHaveBeenCalledWith('P-0144-S01', 'endo', 'variance')
     })
     // invalidating ['sub-samples', parentSampleId] (active) refetches it
     await waitFor(() => {
@@ -360,7 +354,7 @@ describe('VialsQuickLookDialog', () => {
     const endoItem = await screen.findByText('Microbiology — Endotoxin')
     await userEvent.click(endoItem)
     await waitFor(() => {
-      expect(patchVialAssignment).toHaveBeenCalledWith('P-0144-S01', 'endo')
+      expect(patchVialAssignment).toHaveBeenCalledWith('P-0144-S01', 'endo', 'variance')
     })
     // staleTime Infinity → only an explicit invalidation can refetch the probe
     await waitFor(() => {

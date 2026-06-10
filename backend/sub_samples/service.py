@@ -356,8 +356,11 @@ def _fetch_wp_services_for_parent(parent_sample_id: str) -> Optional[dict]:
 
 def normalize_variance_entitlement(services: Optional[dict]) -> dict[str, int]:
     """Extract the per-service variance map from a WP services payload.
-    Keeps only int counts >= 2 (n=1 means no variance). Unknown/future service
-    keys pass through — variance support is key-agnostic by design."""
+    Keeps only int counts >= 2 — a WP-product floor (the addon is sold in
+    pairs at minimum); under the additive-bucket contract a target of exactly
+    1 variance vial is therefore unrepresentable via purchase (a lab override
+    can't express it either — deliberate). Unknown/future service keys pass
+    through — variance support is key-agnostic by design."""
     variance = (services or {}).get("variance") or {}
     out: dict[str, int] = {}
     for key, n in variance.items():

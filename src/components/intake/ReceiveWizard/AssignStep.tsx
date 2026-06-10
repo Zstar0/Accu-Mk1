@@ -141,7 +141,9 @@ export function AssignStep({ parentSampleId, parentSampleUid }: Props) {
         )
         invalidateVialAssignmentCaches(queryClient, parentSampleId)
       } catch (e) {
-        setError(e instanceof Error ? e.message : String(e))
+        // setError only renders when the plan failed to load — surface reset
+        // failures (incl. 409 variance_locked) the same way the drag path does.
+        toastAssignmentError(e)
       } finally {
         void refresh()
       }
@@ -319,20 +321,17 @@ function VarianceOverrideEditor({
               </span>
             </TooltipTrigger>
             <TooltipContent className="max-w-sm text-left space-y-1.5 p-3">
-              <p className="font-semibold">Variance count = total replicates</p>
+              <p className="font-semibold">Variance count = variance vials</p>
               <p>
-                The number is the TOTAL samples tested from the lot,{' '}
-                <span className="font-medium">including the canonical vial</span>.
-                HPLC&nbsp;3 = the primary vial + 2 extra variance vials (the
-                extras are what the client pays for: n&nbsp;−&nbsp;1).
+                The number is how many <span className="font-medium">variance
+                vials</span> the bucket gets, in addition to the core demand.
+                HPLC&nbsp;2 = the primary vial + 2 variance replicates (3
+                tested in total). It sets the &quot;paid&quot; marker on the
+                Variance drop zone below — it never blocks assignment.
               </p>
               <p>
-                0 = no variance testing. 1 is meaningless (one sample is just
-                the normal test) and is treated as none.
-              </p>
-              <p>
-                Sterility already uses 2 vials per test — demand becomes the
-                larger of that baseline and the variance count.
+                0 = no variance testing purchased. Counts below 2 are treated
+                as none (WP product floor).
               </p>
               <p className="text-muted-foreground">
                 Lab override: while set, it replaces the order&apos;s variance.
@@ -344,7 +343,7 @@ function VarianceOverrideEditor({
         </div>
         <p className="text-xs text-muted-foreground">
           Lab override — replaces the order's variance until the WP addon ships. 0 = none,
-          otherwise total replicates (≥2).
+          otherwise the number of variance vials (≥2).
         </p>
       </div>
       <div className="flex items-end gap-3 flex-wrap">
