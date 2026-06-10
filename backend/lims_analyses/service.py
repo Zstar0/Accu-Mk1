@@ -400,8 +400,10 @@ def ensure_variance_entitlement(
     never silently allows.
 
     fetch_services is injectable for tests; defaults to the same WP/IS lookup
-    the vial plan uses. Kept for the AssignStep paid-count display endpoint;
-    NOT called from the transition route (assignment_kind gate now governs).
+    the vial plan uses. NO production callers remain — the AssignStep
+    paid-count display uses sub_samples.service.normalize_variance_entitlement,
+    and the transition route is governed by the assignment_kind gate. Retained
+    only as reference for a possible future commercial re-gate.
     """
     from models import LimsSample, LimsSubSample
 
