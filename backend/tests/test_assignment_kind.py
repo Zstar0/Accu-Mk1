@@ -4,6 +4,8 @@ import pytest
 from sqlalchemy import text
 from database import SessionLocal
 from models import LimsSample, LimsSubSample
+from sub_samples import service as sub_service
+from lims_analyses.service import BadRequestError
 
 
 @pytest.fixture()
@@ -50,3 +52,21 @@ def test_assignment_kind_defaults_null(db, fixture):
     db.commit()
     k = db.execute(text("SELECT assignment_kind FROM lims_sub_samples WHERE sample_id='ZZTEST-AK-S02'")).scalar_one()
     assert k is None
+
+
+def test_set_assignment_role_sets_kind(db, fixture):
+    sub_service.set_assignment_role(db, "ZZTEST-AK-S01", "hplc", kind="core")
+    k = db.execute(text("SELECT assignment_kind FROM lims_sub_samples WHERE sample_id='ZZTEST-AK-S01'")).scalar_one()
+    assert k == "core"
+
+
+def test_set_assignment_rejects_bad_kind(db, fixture):
+    with pytest.raises(ValueError):
+        sub_service.set_assignment_role(db, "ZZTEST-AK-S01", "hplc", kind="bogus")
+
+
+def test_reassignment_blocked_when_variance_locked(db, fixture):
+    db.execute(text("UPDATE lims_samples SET variance_locked_at = now() WHERE sample_id='ZZTEST-AK'"))
+    db.commit()
+    with pytest.raises(BadRequestError):
+        sub_service.set_assignment_role(db, "ZZTEST-AK-S01", "endo", kind="core")

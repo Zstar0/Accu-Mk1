@@ -74,6 +74,7 @@ class VialPlanResponse(BaseModel):
 
 class AssignmentPatchRequest(BaseModel):
     role: Optional[str]  # 'hplc' | 'endo' | 'ster' | 'xtra' | None
+    kind: Optional[str] = None  # 'core' | 'variance' | None
 
 
 class AggregatesRequest(BaseModel):

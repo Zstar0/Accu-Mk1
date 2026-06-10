@@ -834,21 +834,37 @@ def _drop_stale_role_rows(db: Session, *, sub: LimsSubSample, old_role: Optional
     return n
 
 
-def set_assignment_role(db: Session, sample_id: str, role: Optional[str], user_id: Optional[int] = None) -> dict:
+_VALID_KINDS = {"core", "variance"}
+
+
+def set_assignment_role(db: Session, sample_id: str, role: Optional[str],
+                        kind: Optional[str] = None, user_id: Optional[int] = None) -> dict:
     """Set assignment_role on a sub-sample or parent. Routes by sample existence.
 
     For sub-samples: role can be None (resets, next /vial-plan auto-assigns).
     For parent (lims_samples): None is coerced to 'hplc' (parent never goes NULL).
+
+    kind: 'core' | 'variance' | None. Only persisted for testable (non-xtra) roles;
+    coerced to None for xtra/unassigned. Blocked when parent's variance_locked_at is set.
     """
     if role is not None and role not in _VALID_ROLES:
         raise ValueError(f"Invalid role: {role!r}")
+    if kind is not None and kind not in _VALID_KINDS:
+        raise ValueError(f"Invalid assignment_kind: {kind!r}")
 
     sub = db.execute(
         select(LimsSubSample).where(LimsSubSample.sample_id == sample_id)
     ).scalar_one_or_none()
     if sub is not None:
+        # Lock guard: block re-assignment while variance set is locked.
+        # Must fire BEFORE any mutation so the transaction is still clean on raise.
+        parent_row = db.get(LimsSample, sub.parent_sample_pk)
+        if parent_row is not None and parent_row.variance_locked_at is not None:
+            from lims_analyses.service import BadRequestError
+            raise BadRequestError("variance set is locked; unlock before re-assigning vials")
         old_role = sub.assignment_role
         sub.assignment_role = role
+        sub.assignment_kind = kind if (role and role != "xtra") else None
         db.add(LimsSubSampleEvent(
             sub_sample_pk=sub.id,
             event="role_assigned",
@@ -873,7 +889,6 @@ def set_assignment_role(db: Session, sample_id: str, role: Optional[str], user_i
         # they run after their own commits, so fail-hard there would orphan a
         # committed vial — they stay deliberately best-effort.)
         if role and role != "xtra":
-            parent_row = db.get(LimsSample, sub.parent_sample_pk)
             parent_sid = parent_row.sample_id if parent_row else None
             if parent_sid:
                 wp_services = _fetch_wp_services_for_parent(parent_sid) or {}
