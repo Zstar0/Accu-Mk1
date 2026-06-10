@@ -1126,6 +1126,8 @@ function AnalysisRow({
   vialAssignmentByKeyword,
   onVialMethodInstrumentSaved,
   parentLineStates,
+  varianceEntitlement,
+  vialRole,
 }: {
   analysis: SenaiteAnalysis
   analyteNameMap: Map<number, string>
@@ -1150,6 +1152,8 @@ function AnalysisRow({
   vialAssignmentByKeyword?: Map<string, VialAssignment>
   onVialMethodInstrumentSaved?: () => void
   parentLineStates?: Record<string, string>
+  varianceEntitlement?: Record<string, number>
+  vialRole?: string | null
 }) {
   const rowTint = ROW_STATUS_STYLE[analysis.review_state ?? ''] ?? ''
   const { display, original } = formatAnalysisTitle(analysis.title, analyteNameMap)
@@ -1162,6 +1166,7 @@ function AnalysisRow({
   const locked = isLockedByParent(analysis, parentLineStates)
   const allowedTransitions = visibleRowTransitions(analysis, parentLineStates)
   const canPromote = isPromotable(analysis) && !locked
+  const canVarVerify = canVarianceVerify(analysis, vialRole, varianceEntitlement)
   const isPromoted = analysis.promoted_to_parent_id != null
   const vialAssign = analysis.keyword ? vialAssignmentByKeyword?.get(analysis.keyword) : undefined
   const vialOverlay = vialAssign?.matches[0]?.mk1Analysis ?? null
@@ -1261,7 +1266,13 @@ function AnalysisRow({
       <td className="py-2.5 px-3 text-xs text-muted-foreground">{((vialOverlayEditable ? vialOverlay?.analyst : null) ?? analysis.analyst) || '\u2014'}</td>
       <td className="py-2.5 px-3">
         <div className="flex items-center gap-1.5 flex-wrap">
-          {analysis.review_state && <StatusBadge state={analysis.review_state} promotable={isPromotable(analysis)} />}
+          {analysis.review_state && (
+            <StatusBadge
+              state={analysis.review_state}
+              promotable={isPromotable(analysis)}
+              varianceReady={canVarVerify && locked}
+            />
+          )}
           {isPromoted && (
             <span
               className="text-[10px] font-mono text-emerald-700 dark:text-emerald-400"
@@ -1310,7 +1321,7 @@ function AnalysisRow({
         {formatDate(analysis.captured)}
       </td>
       <td className="py-2 px-3 text-right">
-        {analysis.uid && (allowedTransitions.length > 0 || canPromote) && (
+        {analysis.uid && (allowedTransitions.length > 0 || canPromote || canVarVerify) && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <button
@@ -1331,6 +1342,16 @@ function AnalysisRow({
                   onClick={() => setPromoteOpen(true)}
                 >
                   Promote
+                </DropdownMenuItem>
+              )}
+              {canVarVerify && (
+                <DropdownMenuItem
+                  onClick={() => {
+                    if (!analysis.uid) return
+                    void transition.executeTransition(analysis.uid, 'variance_verify')
+                  }}
+                >
+                  Verify (Variance)
                 </DropdownMenuItem>
               )}
               {allowedTransitions.map(t => (
@@ -1518,6 +1539,10 @@ interface AnalysisTableProps {
    * Default false → unchanged for sample pages.
    */
   hideProgress?: boolean
+  /** Per-service variance entitlement for the host vial's parent order.
+   *  Pass only on vial-scoped surfaces (quicklook sections, sub-sample page);
+   *  parent pages omit it and the Verify (Variance) action never appears. */
+  varianceEntitlement?: Record<string, number>
 }
 
 export function AnalysisTable({
@@ -1539,6 +1564,7 @@ export function AnalysisTable({
   parentLineStates,
   headerContent,
   hideProgress = false,
+  varianceEntitlement,
 }: AnalysisTableProps) {
   const [analysisFilter, setAnalysisFilter] = useState<'all' | 'verified' | 'pending' | 'invalid'>('all')
   const [sortConfig, setSortConfig] = useState<SortConfig | null>(null)
@@ -1852,6 +1878,8 @@ export function AnalysisTable({
                       vialAssignmentByKeyword={vialAssignmentByKeyword}
                       onVialMethodInstrumentSaved={onVialMethodInstrumentSaved}
                       parentLineStates={parentLineStates}
+                      varianceEntitlement={varianceEntitlement}
+                      vialRole={primaryRole}
                     />
                     {isExpanded && group.history.map(h => (
                       <HistoryRow

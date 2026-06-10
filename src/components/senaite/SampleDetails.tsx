@@ -2,6 +2,7 @@ import { useState, useEffect, useId, useRef, useMemo, useCallback } from 'react'
 import { useQuery, useQueries, useQueryClient } from '@tanstack/react-query'
 import DOMPurify from 'dompurify'
 import { useTheme } from '@/hooks/use-theme'
+import { useVarianceEntitlement } from '@/hooks/use-variance-entitlement'
 import {
   ChevronDown,
   ChevronLeft,
@@ -1921,6 +1922,8 @@ export function SampleDetails() {
     enabled: !!parentSampleId,
   })
 
+  const varianceEntitlement = useVarianceEntitlement(parentSampleId)
+
   // Phase senaite-writeback Task 4: fetch promotion provenance on parent pages.
   // Extracted into a callable so refreshSample can re-pull it after a QuickLook
   // promote (the badge would otherwise stay stale until a full page reload).
@@ -3688,6 +3691,7 @@ export function SampleDetails() {
           isAnalysisSlaError={analysisSla.isError}
           isAnalysisSlaPublished={analysisSla.isPublished}
           analysisSlaPriority={analysisSla.priority}
+          varianceEntitlement={parentSampleId !== null ? varianceEntitlement : undefined}
         />
 
         {parentSampleId === null && data.sample_id && (

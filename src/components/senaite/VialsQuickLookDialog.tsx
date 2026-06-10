@@ -46,6 +46,7 @@ import {
   QUICKLOOK_VIAL_ANALYSES_QUERY_KEY,
 } from '@/lib/vial-assignment'
 import { useAnalysisSlaMap } from '@/services/analysis-sla'
+import { useVarianceEntitlement } from '@/hooks/use-variance-entitlement'
 import {
   RoleHeaderBadge,
   VialPhotoThumb,
@@ -107,6 +108,8 @@ export function VialsQuickLookDialog({
   })
   const parentLineStates = lineStatesData?.states
 
+  const varianceEntitlement = useVarianceEntitlement(open ? parentSampleId : null)
+
   const analysesQueries = useQueries({
     queries: vials.map(v => ({
       queryKey: vialAnalysesKey(v.id),
@@ -158,6 +161,7 @@ export function VialsQuickLookDialog({
               isCollapsed={collapsed.has(vial.id)}
               onToggleCollapsed={() => toggleCollapsed(vial.id)}
               onNavigate={() => goToVial(vial.sample_id)}
+              varianceEntitlement={varianceEntitlement}
               onResultSaved={(uid, newResult, newReviewState) => {
                 queryClient.setQueryData<SenaiteAnalysis[]>(
                   vialAnalysesKey(vial.id),
@@ -218,6 +222,7 @@ interface VialSectionProps {
     newTitle: string | null
   ) => void
   onTransitionComplete: () => void
+  varianceEntitlement?: Record<string, number>
 }
 
 function VialSection({
@@ -233,6 +238,7 @@ function VialSection({
   onResultSaved,
   onMethodInstrumentSaved,
   onTransitionComplete,
+  varianceEntitlement,
 }: VialSectionProps) {
   const queryClient = useQueryClient()
   const [isReassigning, setIsReassigning] = useState(false)
@@ -361,6 +367,7 @@ function VialSection({
         onResultSaved={onResultSaved}
         onMethodInstrumentSaved={onMethodInstrumentSaved}
         onTransitionComplete={onTransitionComplete}
+        varianceEntitlement={varianceEntitlement}
       />
     )
   }

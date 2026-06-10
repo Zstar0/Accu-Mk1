@@ -39,6 +39,8 @@ vi.mock('@/lib/api', async importOriginal => {
     listParentLineStates: vi.fn(),
     fetchSubSamplePhotoUrl: vi.fn(),
     patchVialAssignment: vi.fn(),
+    fetchVarianceEntitlement: vi.fn(),
+    transitionAnalysis: vi.fn(),
   }
 })
 
@@ -97,6 +99,8 @@ import {
   listParentLineStates,
   fetchSubSamplePhotoUrl,
   patchVialAssignment,
+  fetchVarianceEntitlement,
+  transitionAnalysis,
 } from '@/lib/api'
 import { useAnalysisSlaMap } from '@/services/analysis-sla'
 import { VialPhotoThumb } from '@/components/senaite/vial-quicklook-helpers'
@@ -203,6 +207,10 @@ beforeEach(() => {
   vi.mocked(patchVialAssignment).mockResolvedValue({
     sample_id: 'P-0144-S01',
     assignment_role: 'endo',
+  })
+  vi.mocked(fetchVarianceEntitlement).mockResolvedValue({
+    variance: { hplcpurity_identity: 3 },
+    unreachable: false,
   })
 })
 
@@ -385,6 +393,27 @@ describe('VialsQuickLookDialog', () => {
     expect(
       within(card as HTMLElement).getByTestId('quicklook-vial-header')
     ).toBeInTheDocument()
+  })
+
+  it('offers Verify (Variance) on entitled vial rows and applies the transition', async () => {
+    vi.mocked(listLimsAnalysesForSubSample).mockImplementation(async pk =>
+      pk === 21
+        ? [mkAnalysis({ uid: 'mk1:101', keyword: 'PUR-HPLC', title: 'Purity (HPLC)', service_group_name: 'Analytics', review_state: 'to_be_verified', result: '99' })]
+        : [mkAnalysis({ uid: 'mk1:201', keyword: 'ENDO', title: 'Endotoxin' })]
+    )
+    vi.mocked(transitionAnalysis).mockResolvedValue({
+      success: true, message: 'ok', new_review_state: 'variance_verified', keyword: 'PUR-HPLC',
+    })
+    renderDialog()
+    await screen.findByText('Purity (HPLC)')
+    // S01 (hplc, entitled, to_be_verified): open its row actions menu
+    const menus = screen.getAllByRole('button', { name: /analysis actions/i })
+    await userEvent.click(menus[0]!)
+    const item = await screen.findByText('Verify (Variance)')
+    await userEvent.click(item)
+    await waitFor(() => {
+      expect(transitionAnalysis).toHaveBeenCalledWith('mk1:101', 'variance_verify')
+    })
   })
 })
 
