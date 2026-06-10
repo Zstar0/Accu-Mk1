@@ -393,7 +393,7 @@ def get_sub_sample_photo(
 )
 def get_variance_entitlement(
     parent_sample_id: str,
-    current_user=Depends(get_current_user),
+    _user=Depends(get_current_user),
 ):
     """FE gating data for the Verify (Variance) action. Read-only; no DB."""
     services = service._fetch_wp_services_for_parent(parent_sample_id)
