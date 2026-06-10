@@ -12,16 +12,28 @@ interface Props {
 // (docs/guides/_build_html.py) mirrors the rendered HTML there.
 const CHECKIN_SOP_PATH = '/guides/front-desk-sample-check-in.html'
 
-function totalDemand(d: VialDemandResponse['demand'] | null): number {
+function totalDemand(d: VialDemandResponse | null): number {
   if (!d) return 0
-  return d.hplc + d.endo + d.ster
+  // Expected total = base demand + extra variance vials physically expected.
+  // variance.hplc = total replicates purchased (canonical included), so
+  // extra beyond base = max(0, variance - base_demand).
+  const base = d.demand.hplc + d.demand.endo + d.demand.ster
+  const extraHplc = Math.max(0, (d.variance?.hplc ?? 0) - d.demand.hplc)
+  const extraEndo = Math.max(0, (d.variance?.endo ?? 0) - d.demand.endo)
+  const extraSter = Math.max(0, (d.variance?.ster ?? 0) - d.demand.ster)
+  return base + extraHplc + extraEndo + extraSter
 }
 
-function demandBreakdown(d: VialDemandResponse['demand']): string {
+function demandBreakdown(d: VialDemandResponse): string {
+  // Show effective count (base + variance extras) per role so the breakdown
+  // matches the total shown in the header.
   const parts: string[] = []
-  if (d.hplc) parts.push(`${d.hplc} HPLC`)
-  if (d.endo) parts.push(`${d.endo} ENDO`)
-  if (d.ster) parts.push(`${d.ster} STERYL`)
+  const hplcTotal = d.demand.hplc + Math.max(0, (d.variance?.hplc ?? 0) - d.demand.hplc)
+  const endoTotal = d.demand.endo + Math.max(0, (d.variance?.endo ?? 0) - d.demand.endo)
+  const sterTotal = d.demand.ster + Math.max(0, (d.variance?.ster ?? 0) - d.demand.ster)
+  if (hplcTotal) parts.push(`${hplcTotal} HPLC`)
+  if (endoTotal) parts.push(`${endoTotal} ENDO`)
+  if (sterTotal) parts.push(`${sterTotal} STERYL`)
   return parts.join(' · ')
 }
 
@@ -43,8 +55,8 @@ export function WizardHeader({ parentSampleId, receivedCount }: Props) {
     }
   }, [parentSampleId])
 
-  const total = totalDemand(demand?.demand ?? null)
-  const breakdown = demand ? demandBreakdown(demand.demand) : ''
+  const total = totalDemand(demand ?? null)
+  const breakdown = demand ? demandBreakdown(demand) : ''
   const isShort = demand && receivedCount < total
   const isComplete = demand && total > 0 && receivedCount >= total
 

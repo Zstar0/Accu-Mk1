@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query'
-import { AssignStep } from '@/components/intake/ReceiveWizard/AssignStep'
+import { AssignStep, bucketToAssignment } from '@/components/intake/ReceiveWizard/AssignStep'
 import type { VialPlanResponse } from '@/lib/api'
 
 vi.mock('@/lib/api', async importOriginal => {
@@ -31,17 +31,19 @@ const PLAN: VialPlanResponse = {
 }
 
 const VARIANCE_PLAN: VialPlanResponse = {
-  demand: { hplc: 3, endo: 2, ster: 0 },
+  // NEW backend contract (Task 4): demand = base demand (not inflated),
+  // variance is the separate paid-count map.
+  demand: { hplc: 1, endo: 1, ster: 0 },
   variance: { hplc: 3, endo: 2, ster: 0 },
   base_demand: { hplc: 1, endo: 1, ster: 0 },
   wp_order_number: null,
   is_unreachable: false,
   vials: [
-    { sample_id: 'P-0144', is_parent: true, vial_sequence: 0, assignment_role: 'hplc' },
-    { sample_id: 'P-0144-S01', is_parent: false, vial_sequence: 1, assignment_role: 'hplc' },
-    { sample_id: 'P-0144-S02', is_parent: false, vial_sequence: 2, assignment_role: 'hplc' },
-    { sample_id: 'P-0144-S03', is_parent: false, vial_sequence: 3, assignment_role: 'endo' },
-    { sample_id: 'P-0144-S04', is_parent: false, vial_sequence: 4, assignment_role: 'endo' },
+    { sample_id: 'P-0144', is_parent: true, vial_sequence: 0, assignment_role: 'hplc', assignment_kind: 'core' },
+    { sample_id: 'P-0144-S01', is_parent: false, vial_sequence: 1, assignment_role: 'hplc', assignment_kind: 'core' },
+    { sample_id: 'P-0144-S02', is_parent: false, vial_sequence: 2, assignment_role: 'hplc', assignment_kind: 'variance' },
+    { sample_id: 'P-0144-S03', is_parent: false, vial_sequence: 3, assignment_role: 'endo', assignment_kind: 'core' },
+    { sample_id: 'P-0144-S04', is_parent: false, vial_sequence: 4, assignment_role: 'endo', assignment_kind: 'variance' },
   ],
 }
 
@@ -75,28 +77,34 @@ function renderStep() {
   return { subsFn, overlayFn }
 }
 
-describe('AssignStep variance sub-rows', () => {
-  it('renders base + VARIANCE count lines in the HPLC bucket', async () => {
+describe('bucketToAssignment', () => {
+  it('maps variance buckets to (role, variance)', () => {
+    expect(bucketToAssignment('hplc_variance')).toEqual({ role: 'hplc', kind: 'variance' })
+    expect(bucketToAssignment('endo_variance')).toEqual({ role: 'endo', kind: 'variance' })
+    expect(bucketToAssignment('ster_variance')).toEqual({ role: 'ster', kind: 'variance' })
+  })
+  it('maps core buckets to (role, core)', () => {
+    expect(bucketToAssignment('hplc')).toEqual({ role: 'hplc', kind: 'core' })
+    expect(bucketToAssignment('endo')).toEqual({ role: 'endo', kind: 'core' })
+  })
+  it('maps xtra to (xtra, null)', () => {
+    expect(bucketToAssignment('xtra')).toEqual({ role: 'xtra', kind: null })
+  })
+})
+
+describe('variance drop zones', () => {
+  it('renders an HPLC Variance zone with the paid-count marker', async () => {
     vi.mocked(getVialPlan).mockResolvedValue(VARIANCE_PLAN)
     renderStep()
-    await screen.findByText('P-0144-S01')
-    expect(screen.getByText(/HPLC · 1\s*\/\s*1/)).toBeInTheDocument()
-    expect(screen.getByText(/Variance · 2\s*\/\s*2/i)).toBeInTheDocument()
+    expect(await screen.findByText(/HPLC Variance/i)).toBeInTheDocument()
+    expect(screen.getByText(/paid 3/i)).toBeInTheDocument()
   })
 
-  it('annotates the Endo sub-zone with the variance multiplier', async () => {
-    vi.mocked(getVialPlan).mockResolvedValue(VARIANCE_PLAN)
-    renderStep()
-    await screen.findByText('P-0144-S03')
-    expect(screen.getByText(/Endo · 2\s*\/\s*2/i)).toBeInTheDocument()
-    expect(screen.getByText(/×2 variance/i)).toBeInTheDocument()
-  })
-
-  it('renders no variance lines for a plan without variance', async () => {
-    renderStep()  // default PLAN fixture (no variance / zeros)
+  it('renders no HPLC Variance zone when variance is zero', async () => {
+    renderStep()  // default PLAN fixture (variance all zeros)
     await screen.findByText('P-0144-S01')
-    expect(screen.queryByText(/Variance ·/i)).not.toBeInTheDocument()
-    expect(screen.queryByText(/×\d variance/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/HPLC Variance/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/paid/i)).not.toBeInTheDocument()
   })
 })
 

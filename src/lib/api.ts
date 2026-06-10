@@ -4819,6 +4819,9 @@ export interface SubSample {
   id: number
   sample_id: string
   parent_sample_id: string
+  /** Kind of assignment for this vial: 'core' | 'variance' | null (null = xtra/unassigned).
+   *  Set by the PATCH /assignment endpoint and returned in vial-plan GET. */
+  assignment_kind?: 'core' | 'variance' | null
   vial_sequence: number
   received_at: string
   received_by_user_id: number | null
@@ -4853,6 +4856,9 @@ export interface VialPlanItem {
   is_parent: boolean
   vial_sequence: number
   assignment_role: AssignmentRole | null
+  /** Kind of assignment: 'core' | 'variance' | null (null = xtra/unassigned).
+   *  Set by the backend auto-assign and PATCH /assignment endpoint. */
+  assignment_kind?: 'core' | 'variance' | null
 }
 
 export interface VialPlanResponse {
@@ -5128,23 +5134,30 @@ export async function fetchSampleAggregates(
 }
 
 /**
- * Update the assignment role for a sub-sample.
+ * Update the assignment role (and optional kind) for a sub-sample.
+ * @param kind - 'core' | 'variance' | null — omit (undefined) for reset/null calls
+ *   where kind is irrelevant. The server treats absent kind as null.
  */
 export async function patchVialAssignment(
   sampleId: string,
   role: AssignmentRole | null,
+  kind?: 'core' | 'variance' | null,
 ): Promise<{ sample_id: string; assignment_role: AssignmentRole | null }> {
   const response = await fetch(
     `${API_BASE_URL()}/api/sub-samples/${encodeURIComponent(sampleId)}/assignment`,
     {
       method: 'PATCH',
       headers: getBearerHeaders('application/json'),
-      body: JSON.stringify({ role }),
+      body: JSON.stringify({ role, kind: kind ?? null }),
     }
   )
   if (!response.ok) {
     const err = await response.json().catch(() => null)
-    throw new Error(err?.detail || `Vial assignment update failed: ${response.status}`)
+    throw new Error(
+      typeof err?.detail === 'object' && err?.detail?.message
+        ? err.detail.message
+        : err?.detail || `Vial assignment update failed: ${response.status}`
+    )
   }
   return response.json()
 }

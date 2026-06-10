@@ -42,7 +42,16 @@ const ROLE_SHORT: Record<string, string> = {
   xtra: 'XTRA',
 }
 
-type BucketId = AssignmentRole
+type BucketId = AssignmentRole | 'hplc_variance' | 'endo_variance' | 'ster_variance'
+
+/** Maps a droppable bucket id to the (role, kind) tuple sent to the server.
+ *  Variance buckets map to kind='variance'; core buckets to kind='core';
+ *  'xtra' maps to kind=null (never assigned a specific kind). */
+export function bucketToAssignment(b: string): { role: string; kind: 'core' | 'variance' | null } {
+  if (b.endsWith('_variance')) return { role: b.replace('_variance', ''), kind: 'variance' }
+  if (b === 'xtra') return { role: 'xtra', kind: null }
+  return { role: b, kind: 'core' }
+}
 
 export function AssignStep({ parentSampleId, parentSampleUid }: Props) {
   const [plan, setPlan] = useState<VialPlanResponse | null>(null)
@@ -73,25 +82,38 @@ export function AssignStep({ parentSampleId, parentSampleUid }: Props) {
     async (event: DragEndEvent) => {
       if (!plan) return
       const sampleId = String(event.active.id)
-      const target = event.over?.id ? (String(event.over.id) as BucketId) : null
-      if (!target) return
-      // Optimistic update
+      const targetBucket = event.over?.id ? (String(event.over.id) as BucketId) : null
+      if (!targetBucket) return
+      const { role, kind } = bucketToAssignment(targetBucket)
+      const assignRole = role as AssignmentRole
+      // Optimistic update: store role + kind on the vial
+      const prevPlan = plan
       const next = {
         ...plan,
         vials: plan.vials.map(v =>
-          v.sample_id === sampleId ? { ...v, assignment_role: target } : v
+          v.sample_id === sampleId
+            ? { ...v, assignment_role: assignRole, assignment_kind: kind }
+            : v
         ),
       }
       setPlan(next)
       try {
-        await patchVialAssignment(sampleId, target)
+        await patchVialAssignment(sampleId, assignRole, kind ?? undefined)
         // PATCH re-seeds/drops the vial's analyses server-side; refresh the
         // parent sample page's assignment caches so its AR overlay isn't stale.
         invalidateVialAssignmentCaches(queryClient, parentSampleId)
       } catch (e) {
-        setError(e instanceof Error ? e.message : String(e))
-        // Roll back by re-fetching
-        void refresh()
+        const msg = e instanceof Error ? e.message : String(e)
+        // 409 variance_locked: the parent AR is locked for variance changes
+        if (msg.toLowerCase().includes('variance_locked') || msg.toLowerCase().includes('variance locked')) {
+          toast.error('Variance assignment locked', {
+            description: "This order's variance testing is locked. Contact the lab manager to unlock it.",
+          })
+        } else {
+          toast.error('Assignment failed', { description: msg })
+        }
+        // Roll back the optimistic update
+        setPlan(prevPlan)
       }
     },
     [plan, refresh, queryClient, parentSampleId],
@@ -130,10 +152,21 @@ export function AssignStep({ parentSampleId, parentSampleUid }: Props) {
   }
   if (!plan) return null
 
+  // Split vials by role and kind for the new variance drop zones.
+  // Back-compat: vials without assignment_kind are treated as core.
+  const hplcCore = plan.vials.filter(v => v.assignment_role === 'hplc' && v.assignment_kind !== 'variance')
+  const hplcVariance = plan.vials.filter(v => v.assignment_role === 'hplc' && v.assignment_kind === 'variance')
+  const endoCore = plan.vials.filter(v => v.assignment_role === 'endo' && v.assignment_kind !== 'variance')
+  const endoVariance = plan.vials.filter(v => v.assignment_role === 'endo' && v.assignment_kind === 'variance')
+  const sterCore = plan.vials.filter(v => v.assignment_role === 'ster' && v.assignment_kind !== 'variance')
+  const sterVariance = plan.vials.filter(v => v.assignment_role === 'ster' && v.assignment_kind === 'variance')
+
   // Build the bucket list. Microbiology section hidden if neither addon present.
   const showMicro = (plan.demand.endo + plan.demand.ster) > 0 ||
+    (plan.variance?.endo ?? 0) > 0 || (plan.variance?.ster ?? 0) > 0 ||
     plan.vials.some(v => v.assignment_role === 'endo' || v.assignment_role === 'ster')
   const showHplc = plan.demand.hplc > 0 ||
+    (plan.variance?.hplc ?? 0) > 0 ||
     plan.vials.some(v => v.assignment_role === 'hplc')
   // Xtra is always rendered: it doubles as the drop target for manually
   // surplussing a vial that auto-assign placed in HPLC/Endo/Ster. Hiding
@@ -159,17 +192,19 @@ export function AssignStep({ parentSampleId, parentSampleUid }: Props) {
             <Bucket
               id="hplc"
               label="Analyses Dept."
-              vials={plan.vials.filter(v => v.assignment_role === 'hplc')}
+              vials={hplcCore}
+              varianceVials={hplcVariance}
               demand={plan.demand.hplc}
               varianceN={plan.variance?.hplc ?? 0}
-              baseDemand={plan.base_demand?.hplc ?? 0}
               onReset={() => handleResetBucket('hplc')}
             />
           )}
           {showMicro && (
             <MicroBucket
-              endo={plan.vials.filter(v => v.assignment_role === 'endo')}
-              ster={plan.vials.filter(v => v.assignment_role === 'ster')}
+              endo={endoCore}
+              ster={sterCore}
+              endoVariance={endoVariance}
+              sterVariance={sterVariance}
               endoDemand={plan.demand.endo}
               sterDemand={plan.demand.ster}
               endoVarianceN={plan.variance?.endo ?? 0}
@@ -449,21 +484,20 @@ function VariancePill({ n }: { n: number }) {
 }
 
 function Bucket({
-  id, label, vials, demand, onReset, varianceN = 0, baseDemand = 0,
+  id, label, vials, demand, onReset, varianceN = 0, varianceVials,
 }: {
   id: BucketId
   label: string
+  /** Core vials for this bucket (assignment_kind === 'core', or untyped for back-compat). */
   vials: VialPlanItem[]
   demand: number | null
   onReset: (() => void) | null
-  /** Variance n for this bucket (total replicates incl. canonical, 0 = none).
-   *  Purely presentational: splits the count into base + variance lines.
-   *  Vials are NOT individually designated — first fills base, surplus fills
-   *  variance (spec: demand math, not vial designation). */
+  /** Paid variance count for this role (total replicates purchased, 0 = no variance zone). */
   varianceN?: number
-  /** Pre-variance baseline demand for this bucket (from plan.base_demand). */
-  baseDemand?: number
+  /** Variance vials (assignment_kind === 'variance') — shown in the sub-zone when varianceN > 0. */
+  varianceVials?: VialPlanItem[]
 }) {
+  const varianceBucketId = `${id}_variance` as BucketId
   const { setNodeRef, isOver } = useDroppable({ id })
   const isShort = demand !== null && vials.length < demand
   const isFull = demand !== null && vials.length === demand
@@ -505,29 +539,36 @@ function Bucket({
           )}
         </div>
       </header>
-      {varianceN >= 2 && demand !== null && demand > baseDemand && (
-        <VarianceCountLines
-          assigned={vials.length}
-          baseSlots={baseDemand}
-          extraSlots={demand - baseDemand}
-          baseLabel={label === 'Analyses Dept.' ? 'HPLC' : label}
-        />
-      )}
       <div className="flex flex-wrap gap-2">
-        {vials.length === 0 && (
+        {vials.length === 0 && !varianceN && (
           <p className="text-xs text-muted-foreground italic">empty</p>
         )}
         {vials.map(v => <DraggableVial key={v.sample_id} vial={v} />)}
       </div>
+      {varianceN > 0 && (
+        <VarianceDropZone
+          id={varianceBucketId}
+          paidCount={varianceN}
+          vials={varianceVials ?? []}
+          roleLabel={label === 'Analyses Dept.' ? 'HPLC' : label}
+        />
+      )}
     </div>
   )
 }
 
 function MicroBucket({
-  endo, ster, endoDemand, sterDemand, endoVarianceN = 0, sterVarianceN = 0, onResetEndo, onResetSter,
+  endo, ster, endoVariance, sterVariance,
+  endoDemand, sterDemand, endoVarianceN = 0, sterVarianceN = 0, onResetEndo, onResetSter,
 }: {
+  /** Core endo vials (assignment_kind !== 'variance'). */
   endo: VialPlanItem[]
+  /** Core ster vials (assignment_kind !== 'variance'). */
   ster: VialPlanItem[]
+  /** Variance endo vials (assignment_kind === 'variance'). */
+  endoVariance?: VialPlanItem[]
+  /** Variance ster vials (assignment_kind === 'variance'). */
+  sterVariance?: VialPlanItem[]
   endoDemand: number
   sterDemand: number
   endoVarianceN?: number
@@ -566,6 +607,14 @@ function MicroBucket({
           onReset={onResetEndo}
         />
       )}
+      {endoVarianceN > 0 && (
+        <VarianceDropZone
+          id="endo_variance"
+          paidCount={endoVarianceN}
+          vials={endoVariance ?? []}
+          roleLabel="Endo"
+        />
+      )}
       {sterDemand > 0 && (
         <SubDropZone
           id="ster"
@@ -576,6 +625,14 @@ function MicroBucket({
           onReset={onResetSter}
         />
       )}
+      {sterVarianceN > 0 && (
+        <VarianceDropZone
+          id="ster_variance"
+          paidCount={sterVarianceN}
+          vials={sterVariance ?? []}
+          roleLabel="Sterility"
+        />
+      )}
       {endoDemand === 0 && sterDemand === 0 && (
         <p className="text-xs text-muted-foreground italic">no addons</p>
       )}
@@ -583,28 +640,40 @@ function MicroBucket({
   )
 }
 
-/** Presentational base/variance count split for a variance bucket. The first
- *  `baseSlots` assignments fill the base line; surplus fills the variance
- *  line. No vial is individually marked — pure demand math (spec §2). */
-function VarianceCountLines({
-  assigned, baseSlots, extraSlots, baseLabel,
+/** Droppable sub-zone for variance vials within a role bucket.
+ *  Shows "HPLC Variance · paid N" header and accepts drops into `{role}_variance`. */
+function VarianceDropZone({
+  id, paidCount, vials, roleLabel,
 }: {
-  assigned: number
-  baseSlots: number
-  extraSlots: number
-  baseLabel: string
+  id: BucketId
+  paidCount: number
+  vials: VialPlanItem[]
+  roleLabel: string
 }) {
-  const baseFilled = Math.min(assigned, baseSlots)
-  const extraFilled = Math.max(0, Math.min(assigned - baseSlots, extraSlots))
-  const baseShort = baseFilled < baseSlots
-  const extraShort = extraFilled < extraSlots
+  const { setNodeRef, isOver } = useDroppable({ id })
+  const extraCount = Math.max(0, vials.length - paidCount)
   return (
-    <div className="mb-2 space-y-0.5 text-[10px] uppercase tracking-wide">
-      <div className={cn(baseShort ? 'text-amber-500' : 'text-muted-foreground')}>
-        {baseLabel} · {baseFilled} / {baseSlots}{baseShort && ' ⚠'}
+    <div
+      ref={setNodeRef}
+      className={cn(
+        'pl-3 mt-2 border-l-2 transition-colors',
+        isOver ? 'border-l-sky-500' : 'border-l-sky-500/30'
+      )}
+    >
+      <div className="text-[10px] uppercase tracking-wide mb-1 flex justify-between text-sky-600 dark:text-sky-400">
+        <span>
+          {roleLabel} Variance
+          <span className="ml-1 text-muted-foreground normal-case">· paid {paidCount}</span>
+        </span>
+        {extraCount > 0 && (
+          <span className="text-amber-500">+{extraCount} extra</span>
+        )}
       </div>
-      <div className={cn(extraShort ? 'text-amber-500' : 'text-muted-foreground')}>
-        Variance · {extraFilled} / {extraSlots}{extraShort && ' ⚠'}
+      <div className="flex flex-wrap gap-1.5">
+        {vials.length === 0 && (
+          <p className="text-xs text-muted-foreground italic">drop here</p>
+        )}
+        {vials.map(v => <DraggableVial key={v.sample_id} vial={v} />)}
       </div>
     </div>
   )
