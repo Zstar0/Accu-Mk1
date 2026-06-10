@@ -327,6 +327,15 @@ def _run_migrations():
         "UPDATE lims_samples SET assignment_role = 'hplc' WHERE assignment_role IS NULL",
         # lims_sub_samples: nullable. NULL means "auto-assign hasn't run yet".
         "ALTER TABLE lims_sub_samples ADD COLUMN IF NOT EXISTS assignment_role VARCHAR(8)",
+        # Variance bucket assignment (core|variance) — set at check-in; NULL until then.
+        "ALTER TABLE lims_sub_samples ADD COLUMN IF NOT EXISTS assignment_kind VARCHAR(8)",
+        # Backfill: vials assigned pre-buckets behaved as promote-path -> 'core'.
+        # Idempotent: matches no rows once set. Unassigned (role NULL) stays NULL.
+        """UPDATE lims_sub_samples
+              SET assignment_kind = 'core'
+            WHERE assignment_role IS NOT NULL
+              AND assignment_role <> 'xtra'
+              AND assignment_kind IS NULL""",
         # Variance set membership + lock state (worksheet-variance design 2026-06-02)
         "ALTER TABLE lims_sub_samples ADD COLUMN IF NOT EXISTS in_variance_set BOOLEAN NOT NULL DEFAULT TRUE",
         "ALTER TABLE lims_sub_samples ADD COLUMN IF NOT EXISTS variance_exclusion_reason TEXT",

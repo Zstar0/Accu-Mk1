@@ -771,6 +771,9 @@ class LimsSubSample(Base):
     photo_external_uid: Mapped[Optional[str]] = mapped_column(String(100))
     remarks: Mapped[Optional[str]] = mapped_column(Text)
     assignment_role: Mapped[Optional[str]] = mapped_column(String(8), nullable=True)
+    # core | variance — workflow bucket set at check-in. NULL = not yet
+    # designated. Orthogonal to in_variance_set (stats inclusion).
+    assignment_kind: Mapped[Optional[str]] = mapped_column(String(8), nullable=True)
     # Variance set membership (paired with lock state on parent LimsSample).
     in_variance_set: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true", default=True)
     variance_exclusion_reason: Mapped[Optional[str]] = mapped_column(Text)
