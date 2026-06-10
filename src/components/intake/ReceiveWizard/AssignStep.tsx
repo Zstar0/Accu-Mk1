@@ -11,6 +11,7 @@ import {
 import { HelpCircle, Loader2, MessageSquare, RotateCcw } from 'lucide-react'
 import { toast } from 'sonner'
 import {
+  ApiCodeError,
   getVialPlan,
   patchVialAssignment,
   putVarianceOverride,
@@ -51,6 +52,22 @@ export function bucketToAssignment(b: string): { role: string; kind: 'core' | 'v
   if (b.endsWith('_variance')) return { role: b.replace('_variance', ''), kind: 'variance' }
   if (b === 'xtra') return { role: 'xtra', kind: null }
   return { role: b, kind: 'core' }
+}
+
+/** Routes an assignment PATCH failure to the right toast. Branches on the
+ *  structured ApiCodeError.code (never message text) — 409 variance_locked
+ *  gets a distinct, actionable message. Exported for tests: drag simulation
+ *  isn't jsdom-feasible, so the branch is locked via this helper. */
+export function toastAssignmentError(e: unknown): void {
+  if (e instanceof ApiCodeError && e.code === 'variance_locked') {
+    toast.error('Variance assignment locked', {
+      description: "This sample's variance set is locked. Unlock it before re-assigning vials.",
+    })
+    return
+  }
+  toast.error('Assignment failed', {
+    description: e instanceof Error ? e.message : String(e),
+  })
 }
 
 export function AssignStep({ parentSampleId, parentSampleUid }: Props) {
@@ -103,15 +120,7 @@ export function AssignStep({ parentSampleId, parentSampleUid }: Props) {
         // parent sample page's assignment caches so its AR overlay isn't stale.
         invalidateVialAssignmentCaches(queryClient, parentSampleId)
       } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e)
-        // 409 variance_locked: the parent AR is locked for variance changes
-        if (msg.toLowerCase().includes('variance_locked') || msg.toLowerCase().includes('variance locked')) {
-          toast.error('Variance assignment locked', {
-            description: "This order's variance testing is locked. Contact the lab manager to unlock it.",
-          })
-        } else {
-          toast.error('Assignment failed', { description: msg })
-        }
+        toastAssignmentError(e)
         // Roll back the optimistic update
         setPlan(prevPlan)
       }
@@ -196,6 +205,7 @@ export function AssignStep({ parentSampleId, parentSampleUid }: Props) {
               varianceVials={hplcVariance}
               demand={plan.demand.hplc}
               varianceN={plan.variance?.hplc ?? 0}
+              withVarianceZone
               onReset={() => handleResetBucket('hplc')}
             />
           )}
@@ -484,7 +494,7 @@ function VariancePill({ n }: { n: number }) {
 }
 
 function Bucket({
-  id, label, vials, demand, onReset, varianceN = 0, varianceVials,
+  id, label, vials, demand, onReset, varianceN = 0, varianceVials, withVarianceZone = false,
 }: {
   id: BucketId
   label: string
@@ -492,10 +502,15 @@ function Bucket({
   vials: VialPlanItem[]
   demand: number | null
   onReset: (() => void) | null
-  /** Paid variance count for this role (total replicates purchased, 0 = no variance zone). */
+  /** Paid variance count: number of variance vials purchased IN ADDITION to
+   *  core demand. Display-only marker — never blocks drops. */
   varianceN?: number
-  /** Variance vials (assignment_kind === 'variance') — shown in the sub-zone when varianceN > 0. */
+  /** Variance vials (assignment_kind === 'variance') — shown in the variance sub-zone. */
   varianceVials?: VialPlanItem[]
+  /** Render the variance drop zone. On for every testable role bucket even at
+   *  paid 0 — assignment is operational and free (internal QC replicates);
+   *  entitlement is a marker only. Off for xtra. */
+  withVarianceZone?: boolean
 }) {
   const varianceBucketId = `${id}_variance` as BucketId
   const { setNodeRef, isOver } = useDroppable({ id })
@@ -540,12 +555,12 @@ function Bucket({
         </div>
       </header>
       <div className="flex flex-wrap gap-2">
-        {vials.length === 0 && !varianceN && (
+        {vials.length === 0 && !withVarianceZone && (
           <p className="text-xs text-muted-foreground italic">empty</p>
         )}
         {vials.map(v => <DraggableVial key={v.sample_id} vial={v} />)}
       </div>
-      {varianceN > 0 && (
+      {withVarianceZone && (
         <VarianceDropZone
           id={varianceBucketId}
           paidCount={varianceN}
@@ -597,41 +612,44 @@ function MicroBucket({
           {totalAssigned} / {totalDemand}
         </span>
       </header>
+      {/* Variance zones render alongside every core zone, even at paid 0 —
+          assignment is operational and free (internal QC replicates); the
+          paid count is a display-only marker. */}
       {endoDemand > 0 && (
-        <SubDropZone
-          id="endo"
-          label="Endo"
-          vials={endo}
-          demand={endoDemand}
-          varianceN={endoVarianceN}
-          onReset={onResetEndo}
-        />
-      )}
-      {endoVarianceN > 0 && (
-        <VarianceDropZone
-          id="endo_variance"
-          paidCount={endoVarianceN}
-          vials={endoVariance ?? []}
-          roleLabel="Endo"
-        />
+        <>
+          <SubDropZone
+            id="endo"
+            label="Endo"
+            vials={endo}
+            demand={endoDemand}
+            varianceN={endoVarianceN}
+            onReset={onResetEndo}
+          />
+          <VarianceDropZone
+            id="endo_variance"
+            paidCount={endoVarianceN}
+            vials={endoVariance ?? []}
+            roleLabel="Endo"
+          />
+        </>
       )}
       {sterDemand > 0 && (
-        <SubDropZone
-          id="ster"
-          label="Sterility"
-          vials={ster}
-          demand={sterDemand}
-          varianceN={sterVarianceN}
-          onReset={onResetSter}
-        />
-      )}
-      {sterVarianceN > 0 && (
-        <VarianceDropZone
-          id="ster_variance"
-          paidCount={sterVarianceN}
-          vials={sterVariance ?? []}
-          roleLabel="Sterility"
-        />
+        <>
+          <SubDropZone
+            id="ster"
+            label="Sterility"
+            vials={ster}
+            demand={sterDemand}
+            varianceN={sterVarianceN}
+            onReset={onResetSter}
+          />
+          <VarianceDropZone
+            id="ster_variance"
+            paidCount={sterVarianceN}
+            vials={sterVariance ?? []}
+            roleLabel="Sterility"
+          />
+        </>
       )}
       {endoDemand === 0 && sterDemand === 0 && (
         <p className="text-xs text-muted-foreground italic">no addons</p>

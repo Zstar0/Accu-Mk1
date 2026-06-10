@@ -14,23 +14,21 @@ const CHECKIN_SOP_PATH = '/guides/front-desk-sample-check-in.html'
 
 function totalDemand(d: VialDemandResponse | null): number {
   if (!d) return 0
-  // Expected total = base demand + extra variance vials physically expected.
-  // variance.hplc = total replicates purchased (canonical included), so
-  // extra beyond base = max(0, variance - base_demand).
-  const base = d.demand.hplc + d.demand.endo + d.demand.ster
-  const extraHplc = Math.max(0, (d.variance?.hplc ?? 0) - d.demand.hplc)
-  const extraEndo = Math.max(0, (d.variance?.endo ?? 0) - d.demand.endo)
-  const extraSter = Math.max(0, (d.variance?.ster ?? 0) - d.demand.ster)
-  return base + extraHplc + extraEndo + extraSter
+  // Expected physical total = core demand + variance targets. Variance is a
+  // separate ADDITIVE bucket: variance.hplc = number of variance vials on top
+  // of core demand (not total replicates) — Task 4 backend contract.
+  return (
+    d.demand.hplc + d.demand.endo + d.demand.ster +
+    (d.variance?.hplc ?? 0) + (d.variance?.endo ?? 0) + (d.variance?.ster ?? 0)
+  )
 }
 
 function demandBreakdown(d: VialDemandResponse): string {
-  // Show effective count (base + variance extras) per role so the breakdown
-  // matches the total shown in the header.
+  // Per-role count = core demand + variance vials, matching the header total.
   const parts: string[] = []
-  const hplcTotal = d.demand.hplc + Math.max(0, (d.variance?.hplc ?? 0) - d.demand.hplc)
-  const endoTotal = d.demand.endo + Math.max(0, (d.variance?.endo ?? 0) - d.demand.endo)
-  const sterTotal = d.demand.ster + Math.max(0, (d.variance?.ster ?? 0) - d.demand.ster)
+  const hplcTotal = d.demand.hplc + (d.variance?.hplc ?? 0)
+  const endoTotal = d.demand.endo + (d.variance?.endo ?? 0)
+  const sterTotal = d.demand.ster + (d.variance?.ster ?? 0)
   if (hplcTotal) parts.push(`${hplcTotal} HPLC`)
   if (endoTotal) parts.push(`${endoTotal} ENDO`)
   if (sterTotal) parts.push(`${sterTotal} STERYL`)

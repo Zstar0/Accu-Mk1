@@ -4862,12 +4862,14 @@ export interface VialPlanItem {
 }
 
 export interface VialPlanResponse {
+  /** Base (core) vial demand per role — NOT inflated by variance. */
   demand: { hplc: number; endo: number; ster: number }
-  /** Per-bucket variance n (total replicates incl. canonical); zeros when
-   *  none purchased. Drives the AssignStep VARIANCE sub-rows. */
+  /** Per-role variance target: count of variance vials IN ADDITION to core
+   *  demand (zeros when none purchased). Display-only paid marker for the
+   *  AssignStep variance drop zones — never a drop blocker. */
   variance: { hplc: number; endo: number; ster: number }
-  /** Pre-variance lab baseline — the FE splits bucket counts into
-   *  base + variance lines from demand/base_demand. */
+  /** Pre-variance lab baseline; equals demand under the separate-bucket
+   *  contract. Kept for back-compat. */
   base_demand: { hplc: number; endo: number; ster: number }
   wp_order_number: string | null
   vials: VialPlanItem[]
@@ -5133,10 +5135,24 @@ export async function fetchSampleAggregates(
   return response.json()
 }
 
+/** API error carrying the structured `detail.code` from a non-2xx response
+ *  (e.g. 'variance_locked' on a 409 from PATCH /assignment). Callers branch
+ *  on `code`, never on message text. */
+export class ApiCodeError extends Error {
+  readonly code: string | null
+  constructor(message: string, code: string | null) {
+    super(message)
+    this.name = 'ApiCodeError'
+    this.code = code
+  }
+}
+
 /**
  * Update the assignment role (and optional kind) for a sub-sample.
  * @param kind - 'core' | 'variance' | null — omit (undefined) for reset/null calls
  *   where kind is irrelevant. The server treats absent kind as null.
+ * @throws ApiCodeError with code='variance_locked' when the parent's variance
+ *   set is locked (409).
  */
 export async function patchVialAssignment(
   sampleId: string,
@@ -5153,11 +5169,15 @@ export async function patchVialAssignment(
   )
   if (!response.ok) {
     const err = await response.json().catch(() => null)
-    throw new Error(
-      typeof err?.detail === 'object' && err?.detail?.message
-        ? err.detail.message
-        : err?.detail || `Vial assignment update failed: ${response.status}`
-    )
+    const detail = err?.detail
+    const message =
+      typeof detail === 'object' && detail?.message
+        ? detail.message
+        : typeof detail === 'string'
+        ? detail
+        : `Vial assignment update failed: ${response.status}`
+    const code = typeof detail === 'object' ? detail?.code ?? null : null
+    throw new ApiCodeError(message, code)
   }
   return response.json()
 }

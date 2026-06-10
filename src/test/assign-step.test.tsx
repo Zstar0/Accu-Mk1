@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query'
-import { AssignStep, bucketToAssignment } from '@/components/intake/ReceiveWizard/AssignStep'
+import { AssignStep, bucketToAssignment, toastAssignmentError } from '@/components/intake/ReceiveWizard/AssignStep'
 import type { VialPlanResponse } from '@/lib/api'
 
 vi.mock('@/lib/api', async importOriginal => {
@@ -16,7 +16,12 @@ vi.mock('@/lib/api', async importOriginal => {
   }
 })
 
-import { getVialPlan, patchVialAssignment, putVarianceOverride } from '@/lib/api'
+vi.mock('sonner', () => ({
+  toast: { error: vi.fn(), success: vi.fn() },
+}))
+
+import { ApiCodeError, getVialPlan, patchVialAssignment, putVarianceOverride } from '@/lib/api'
+import { toast } from 'sonner'
 
 const PLAN: VialPlanResponse = {
   demand: { hplc: 1, endo: 0, ster: 0 },
@@ -100,11 +105,43 @@ describe('variance drop zones', () => {
     expect(screen.getByText(/paid 3/i)).toBeInTheDocument()
   })
 
-  it('renders no HPLC Variance zone when variance is zero', async () => {
+  it('renders the HPLC Variance zone with paid 0 even when no variance purchased', async () => {
+    // Spec decision: assignment is operational and free — the zone is always
+    // a valid drop target (internal QC replicates); paid count is a marker only.
     renderStep()  // default PLAN fixture (variance all zeros)
     await screen.findByText('P-0144-S01')
-    expect(screen.queryByText(/HPLC Variance/i)).not.toBeInTheDocument()
-    expect(screen.queryByText(/paid/i)).not.toBeInTheDocument()
+    expect(screen.getByText(/HPLC Variance/i)).toBeInTheDocument()
+    expect(screen.getByText(/paid 0/i)).toBeInTheDocument()
+  })
+})
+
+describe('variance_locked 409 handling', () => {
+  it('routes a code=variance_locked rejection to the distinct lock toast', async () => {
+    // Real 409 error shape thrown by patchVialAssignment:
+    // detail = { code: 'variance_locked', message: 'variance set for ... is locked; ...' }
+    const lockErr = new ApiCodeError(
+      'variance set for P-0144 is locked; unlock before re-assigning vials',
+      'variance_locked',
+    )
+    vi.mocked(patchVialAssignment).mockRejectedValue(lockErr)
+
+    // Same flow as handleDragEnd: the PATCH rejection is caught and routed
+    // through toastAssignmentError (drag itself isn't jsdom-simulable).
+    const caught = await patchVialAssignment('P-0144-S02', 'hplc', 'variance').catch(e => e)
+    toastAssignmentError(caught)
+
+    expect(toast.error).toHaveBeenCalledWith(
+      'Variance assignment locked',
+      expect.objectContaining({ description: expect.stringMatching(/locked/i) }),
+    )
+  })
+
+  it('routes other failures to the generic assignment-failed toast', () => {
+    toastAssignmentError(new Error('network down'))
+    expect(toast.error).toHaveBeenCalledWith(
+      'Assignment failed',
+      expect.objectContaining({ description: 'network down' }),
+    )
   })
 })
 
