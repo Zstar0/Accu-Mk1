@@ -901,6 +901,18 @@ def set_assignment_role(db: Session, sample_id: str, role: Optional[str], user_i
     return {"sample_id": sample_id, "assignment_role": coerced}
 
 
+def _variance_buckets_from_override(override: Optional[str]) -> dict:
+    """Bucket map {hplc,endo,ster} from a parent's variance_override JSON.
+    Direct override read (NOT the fetch_sample_services chokepoint) — identical
+    today since WP emits no variance until Phase 3; this is an AR-list display
+    hint, not the authoritative sign-off gate (which stays server-side)."""
+    try:
+        parsed = json.loads(override) if override else {}
+    except (ValueError, TypeError):
+        parsed = {}
+    return derive_variance_demand({"variance": parsed})
+
+
 def aggregate_by_parent(db: Session, parent_sample_ids: list[str]) -> dict[str, dict]:
     """Vial count + role for each requested sample_id.
 
@@ -930,18 +942,24 @@ def aggregate_by_parent(db: Session, parent_sample_ids: list[str]) -> dict[str, 
         select(
             LimsSample.sample_id,
             LimsSample.assignment_role,
+            LimsSample.variance_override,
             func.count(LimsSubSample.id).label("sub_count"),
         )
         .outerjoin(LimsSubSample, LimsSubSample.parent_sample_pk == LimsSample.id)
         .where(LimsSample.sample_id.in_(parent_sample_ids))
-        .group_by(LimsSample.sample_id, LimsSample.assignment_role)
+        .group_by(
+            LimsSample.sample_id,
+            LimsSample.assignment_role,
+            LimsSample.variance_override,
+        )
     ).all()
-    for sample_id, parent_role, sub_count in parent_rows:
+    for sample_id, parent_role, variance_override, sub_count in parent_rows:
         if sub_count == 0:
             continue
         result[sample_id] = {
             "vial_count": sub_count + 1,
             "parent_role": parent_role or "hplc",
+            "variance": _variance_buckets_from_override(variance_override),
         }
 
     # Path 2: sub-sample rows. Skip any IDs already resolved as parents
@@ -956,6 +974,7 @@ def aggregate_by_parent(db: Session, parent_sample_ids: list[str]) -> dict[str, 
             result[sample_id] = {
                 "vial_count": 0,
                 "parent_role": role or "unassigned",
+                "variance": {"hplc": 0, "endo": 0, "ster": 0},
             }
 
     return result

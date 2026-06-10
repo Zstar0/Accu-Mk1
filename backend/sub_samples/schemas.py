@@ -95,6 +95,13 @@ class ParentAggregate(BaseModel):
                     "this badge on the parent row; sub-sample roles are shown "
                     "on expansion. Defaults to 'hplc' if NULL in the DB."
     )
+    variance: dict[str, int] = Field(
+        default_factory=lambda: {"hplc": 0, "endo": 0, "ster": 0},
+        description="Per-bucket variance counts (total replicates incl. canonical) "
+                    "read from the parent's variance_override. Zeros when none. "
+                    "AR-list display hint — the authoritative gate is server-side "
+                    "at sign-off (fail-closed).",
+    )
 
 
 class AggregatesResponse(BaseModel):

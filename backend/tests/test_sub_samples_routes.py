@@ -327,7 +327,8 @@ def test_aggregates_returns_count_and_parent_role_per_parent():
     with patch("sub_samples.routes.service.aggregate_by_parent") as fn:
         fn.return_value = {
             # 1 parent (hplc) + 1 endo + 2 ster sub-samples = 4 vials
-            "BW-0006": {"vial_count": 4, "parent_role": "hplc"},
+            "BW-0006": {"vial_count": 4, "parent_role": "hplc",
+                        "variance": {"hplc": 2, "endo": 0, "ster": 0}},
             # PB-0099 NOT returned — not in lims_samples
             # P-0115 absent because it has no sub-samples (single-vial,
             # nothing to surface on the list)
@@ -343,6 +344,7 @@ def test_aggregates_returns_count_and_parent_role_per_parent():
     assert set(aggs.keys()) == {"BW-0006"}
     assert aggs["BW-0006"]["vial_count"] == 4
     assert aggs["BW-0006"]["parent_role"] == "hplc"
+    assert aggs["BW-0006"]["variance"] == {"hplc": 2, "endo": 0, "ster": 0}
     assert "PB-0099" not in aggs
     assert "P-0115" not in aggs
 
