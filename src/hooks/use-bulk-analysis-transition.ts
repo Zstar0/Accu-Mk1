@@ -30,6 +30,7 @@ const TRANSITION_PAST_TENSE: Record<string, string> = {
   retract: 'retracted',
   reject: 'rejected',
   retest: 'retested',
+  variance_verify: 'variance verified',
 }
 
 // --- Hook ---
