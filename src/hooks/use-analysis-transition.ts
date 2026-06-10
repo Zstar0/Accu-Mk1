@@ -29,6 +29,7 @@ const TRANSITION_LABELS: Record<string, string> = {
   retract: 'Retract',
   reject: 'Reject',
   retest: 'Retest',
+  variance_verify: 'Verify (Variance)',
 }
 
 // --- Hook ---
