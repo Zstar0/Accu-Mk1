@@ -140,3 +140,11 @@ class VarianceSetResponse(BaseModel):
 class PatchVarianceMembershipRequest(BaseModel):
     in_variance_set: bool
     exclusion_reason: Optional[str] = None
+
+
+class VarianceEntitlementResponse(BaseModel):
+    """Per-service variance counts the parent's order purchased (n = total
+    replicates incl. the canonical). Empty when none purchased; `unreachable`
+    distinguishes 'none' from 'could not check' so the FE can fail closed."""
+    variance: dict[str, int]
+    unreachable: bool

@@ -353,6 +353,18 @@ def _fetch_wp_services_for_parent(parent_sample_id: str) -> Optional[dict]:
     return raw.get("services") or {}
 
 
+def normalize_variance_entitlement(services: Optional[dict]) -> dict[str, int]:
+    """Extract the per-service variance map from a WP services payload.
+    Keeps only int counts >= 2 (n=1 means no variance). Unknown/future service
+    keys pass through — variance support is key-agnostic by design."""
+    variance = (services or {}).get("variance") or {}
+    out: dict[str, int] = {}
+    for key, n in variance.items():
+        if isinstance(n, int) and n >= 2:
+            out[key] = n
+    return out
+
+
 def list_sub_samples(db: Session, parent_sample_id: str) -> Tuple[Optional[LimsSample], List[LimsSubSample]]:
     parent = db.execute(
         select(LimsSample).where(LimsSample.sample_id == parent_sample_id)

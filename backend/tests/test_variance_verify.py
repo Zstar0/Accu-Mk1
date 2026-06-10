@@ -6,6 +6,7 @@ explicit teardown (lims_analysis_transitions cascades via FK).
 """
 import pytest
 
+from sub_samples import service as sub_service
 from lims_analyses.state_machine import (
     STATES,
     TRANSITION_KINDS,
@@ -216,3 +217,16 @@ class TestVarianceEntitlementGate:
             db, analysis_id=row.id,
             fetch_services=self._fetch({"variance": {"endotoxin": 2}}),
         )  # no raise
+
+
+class TestVarianceEntitlementNormalize:
+    def test_filters_to_valid_counts(self):
+        out = sub_service.normalize_variance_entitlement({
+            "variance": {"hplcpurity_identity": 3, "endotoxin": 1,
+                         "sterility_pcr": "junk", "future_test": 2},
+        })
+        assert out == {"hplcpurity_identity": 3, "future_test": 2}
+
+    def test_empty_when_absent(self):
+        assert sub_service.normalize_variance_entitlement({}) == {}
+        assert sub_service.normalize_variance_entitlement({"variance": None}) == {}

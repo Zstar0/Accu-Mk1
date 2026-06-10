@@ -28,7 +28,7 @@ from sub_samples.schemas import (
     VialPlanResponse, VialPlanItem, AssignmentPatchRequest,
     AggregatesRequest, AggregatesResponse, ParentAggregate,
     VarianceSetResponse, VarianceVialResult, VarianceStatsEntry,
-    PatchVarianceMembershipRequest,
+    PatchVarianceMembershipRequest, VarianceEntitlementResponse,
 )
 
 
@@ -386,6 +386,24 @@ def get_sub_sample_photo(
 
 
 # ── Variance set endpoints (worksheet-variance design 2026-06-02) ────────────
+
+@router.get(
+    "/{parent_sample_id}/variance-entitlement",
+    response_model=VarianceEntitlementResponse,
+)
+def get_variance_entitlement(
+    parent_sample_id: str,
+    current_user=Depends(get_current_user),
+):
+    """FE gating data for the Verify (Variance) action. Read-only; no DB."""
+    services = service._fetch_wp_services_for_parent(parent_sample_id)
+    if services is None:
+        return VarianceEntitlementResponse(variance={}, unreachable=True)
+    return VarianceEntitlementResponse(
+        variance=service.normalize_variance_entitlement(services),
+        unreachable=False,
+    )
+
 
 @router.get("/{parent_sample_id}/variance-set", response_model=VarianceSetResponse)
 def get_variance_set_endpoint(
