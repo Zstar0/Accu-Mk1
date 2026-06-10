@@ -9,6 +9,34 @@ never be stranded. **Type-agnostic** — identical for every sub-sample physical
 FE-badges **behavior change**; its own PR; needs sign-off. Independent of the two
 unpushed features on `subvial/continue`.*
 
+## Amendment (2026-06-10): `promoted` rows are locked from the sub — recovery is parent-only
+
+The original design (below) made `retest` the recovery path **from the sub-sample's
+own `promoted` row**. Live testing showed that dead-ends: retesting a promoted row
+from the sub leaves the parent AR line still verified/locked, so re-promoting the
+rerun fails the SENAITE write-back with `HTTP 401 "Not allowed to set the field
+'Remarks'"`. Decision: **remove the user-facing retest option from `promoted`
+sub-sample rows.** Corrections start at the **parent** — retest the line on the
+parent AR, which cascades back down to the vial(s) and re-opens them as fresh
+`unassigned` rows (`cascade_parent_retest_to_sources`). This is the path the
+promoted-row help tooltip points to.
+
+What changed vs. the design below:
+- **FE only.** `ALLOWED_TRANSITIONS.promoted` is now `[]` (was `['retest']`), so a
+  `promoted` row offers no row-menu/bulk transitions and its `⋯` menu is hidden.
+- **Backend/state-machine UNCHANGED.** `retest` from `promoted` stays legal at the
+  service layer — the parent→sub cascade (`cascade_parent_retest_to_sources`) still
+  retests promoted sources. Only the manual sub-level option was removed.
+- **Recovery from `promoted` = retest at the parent**, not at the sub.
+
+The sub-`verify` removal and the `promoted` state itself (the rest of this spec) are
+unchanged. The latent re-promote write-back 401 is a separate backend issue (the
+write-back tries to set `Remarks` on a locked parent line); removing the sub-level
+retest keeps users from triggering it, but it remains to be fixed on its own.
+
+The sections below are the original 2026-06-08 design; where they describe retest as
+a sub-level recovery action, read them through this amendment.
+
 ## Why
 
 An audit of the sub-sample (vial-tier) `review_state` workflow found the design
@@ -87,7 +115,9 @@ assigned ──reset──▶ unassigned
 \* `submit` requires a `result_value`.
 
 - **New state `promoted`** — a sub-sample-tier resting/done state. Non-terminal
-  (allows `retest`), otherwise final.
+  (allows `retest` at the service layer — used by the parent→sub cascade; the
+  manual sub-level retest option was removed, see Amendment 2026-06-10), otherwise
+  final.
 - **`verify` removed from the sub-sample tier.** Sub-samples can never reach
   `verified` or `published` — those are **parent-tier-only**.
 - Parent workflow **unchanged** (`…created-verified → published`, admin-retract).
@@ -132,8 +162,10 @@ extending the `transition_kind` CHECK with a new value). Source-state guard stay
 ### FE (`AnalysisTable.tsx`)
 
 - **StatusBadge**: add a `promoted` variant (label "Promoted").
-- **`ALLOWED_TRANSITIONS`**: add `promoted: ['retest']`; remove the sub-sample
-  `verified` entry (`verified: ['retest']`) — sub-samples no longer reach it.
+- **`ALLOWED_TRANSITIONS`**: `promoted: []` (per Amendment 2026-06-10 — was
+  `['retest']`; a promoted row is locked from the sub, corrections go via the
+  parent); remove the sub-sample `verified` entry (`verified: ['retest']`) —
+  sub-samples no longer reach it.
 - **`isPromotable`** unchanged (source = `to_be_verified`). Reconcile `isPromoted` /
   the "Promoted → #" badge / `canPromote` with the new `promoted` *state* (a
   `promoted` row is not re-promotable; the badge can derive from state or the
@@ -148,9 +180,11 @@ extending the `transition_kind` CHECK with a new value). Source-state guard stay
 
 - A sub-sample can **never** reach `verified`/`published` → the stranded-result bug
   is structurally impossible.
-- **Recovery from `promoted`** = `retest` (re-run, re-promote — the standard
-  correction path). Admin "un-promote" (retract that also undoes the parent row) is
-  **out of scope** (follow-up).
+- **Recovery from `promoted`** = retest the line **on the parent AR**, which
+  cascades down to re-open the vial(s) as fresh `unassigned` rows, then re-run +
+  re-promote (per Amendment 2026-06-10; the original sub-level retest was removed
+  because it dead-ends on the SENAITE write-back). Admin "un-promote" (retract that
+  also undoes the parent row) is **out of scope** (follow-up).
 - **Type-agnostic**: identical for vial/capsule/inhaler/gel. No new identifier bakes
   in "vial"; physical type is a separate model.
 - The parent-tier row created by promote is still born `verified` (COA reads
