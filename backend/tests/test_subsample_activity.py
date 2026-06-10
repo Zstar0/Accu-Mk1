@@ -86,7 +86,10 @@ def test_set_assignment_role_writes_event(db_session):
     assert len(events) == 1
     ev = events[0]
     assert ev.event == "role_assigned"
-    assert ev.details == {"from": "hplc", "to": "endo"}
+    # kind_from/kind_to added at 7bc8ae3 (assignment_kind audit): this scenario
+    # never sets a kind, so both are None.
+    assert ev.details == {"from": "hplc", "to": "endo",
+                          "kind_from": None, "kind_to": None}
     assert ev.user_id == 42
 
 
