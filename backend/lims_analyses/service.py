@@ -324,6 +324,12 @@ def apply_transition(
             raise BadRequestError(
                 "variance_verify is only valid on sub-sample-hosted rows"
             )
+        from models import LimsSubSample as _LimsSubSample
+        _vial = db.get(_LimsSubSample, row.lims_sub_sample_pk)
+        if _vial is None or _vial.assignment_kind != "variance":
+            raise BadRequestError(
+                "variance_verify requires the host vial to be assigned to a variance bucket"
+            )
     elif kind == "reset":
         # Clear any draft result + provenance on the way back to unassigned.
         row.result_value = None
@@ -386,15 +392,16 @@ def ensure_variance_entitlement(
     analysis_id: int,
     fetch_services=None,
 ) -> None:
-    """Raise BadRequestError unless the parent's WP order purchased variance
+    """Display-only helper — no longer a transition gate (2026-06-10 variance-bucket-assignment).
+
+    Raise BadRequestError unless the parent's WP order purchased variance
     for the service that covers this row's host vial role. FAIL CLOSED: an
     unreachable services payload rejects the transition (retry later) — it
     never silently allows.
 
     fetch_services is injectable for tests; defaults to the same WP/IS lookup
-    the vial plan uses. Until IS exposes the `variance` map (Phase 3), real
-    payloads lack the key and this gate rejects — which is the correct
-    pre-launch behavior (the FE won't offer the action either).
+    the vial plan uses. Kept for the AssignStep paid-count display endpoint;
+    NOT called from the transition route (assignment_kind gate now governs).
     """
     from models import LimsSample, LimsSubSample
 
@@ -613,6 +620,11 @@ def promote_to_parent(
             sub = db.get(LimsSubSample, row.lims_sub_sample_pk)
             if sub is None:
                 raise NotFoundError(f"sub-sample id={row.lims_sub_sample_pk} not found")
+            if sub.assignment_kind == "variance":
+                raise BadRequestError(
+                    f"{sid} is assigned to a variance bucket and cannot be promoted; "
+                    f"re-assign it to the core bucket first"
+                )
             this_parent_pk = sub.parent_sample_pk
         elif row.lims_sample_pk is not None:
             this_parent_pk = row.lims_sample_pk

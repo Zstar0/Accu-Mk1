@@ -90,6 +90,7 @@ def variance_fixture(db):
         received_at=datetime.utcnow(),
         assignment_role="hplc",
         external_lims_uid="zz-uid-varv-s01",
+        assignment_kind="variance",
     )
     db.add(vial)
     db.flush()
@@ -163,6 +164,7 @@ class TestVarianceVerifyService:
         assert row.review_state == "variance_verified"  # original keeps its state
 
 
+@pytest.mark.skip(reason="superseded: variance_verify gates on assignment_kind, not entitlement (2026-06-10 variance-bucket-assignment)")
 class TestVarianceEntitlementGate:
     def _fetch(self, services):
         return lambda parent_sample_id: services
