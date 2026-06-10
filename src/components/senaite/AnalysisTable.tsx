@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, Fragment, type ReactNode } from 'react'
-import { Activity, ArrowDownUp, ArrowUpDown, Check, ChevronDown, ChevronRight, Database, HelpCircle, Lock, MoreHorizontal, Pencil, X } from 'lucide-react'
+import { Activity, ArrowDownUp, ArrowUpDown, Check, ChevronDown, ChevronRight, Database, HelpCircle, Layers, Lock, MoreHorizontal, Pencil, X } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Spinner } from '@/components/ui/spinner'
@@ -1260,17 +1260,25 @@ function AnalysisRow({
           </span>
           <Mk1NativeBadge uid={analysis.uid} />
           <PromotedFromBadge promotion={analysis.keyword ? promotionsByKeyword?.get(analysis.keyword) : undefined} />
-          {vialAssign && vialAssign.matches.map(m => (
-            <button
-              key={m.vialSampleId}
-              type="button"
-              onClick={e => { e.stopPropagation(); useUIStore.getState().navigateToSample(m.vialSampleId) }}
-              className="inline-flex items-center gap-0.5 text-[10px] text-muted-foreground hover:text-foreground underline underline-offset-2 shrink-0"
-              title={`Assigned to ${m.vialSampleId}`}
-            >
-              {m.vialLabel} — {m.vialSampleId}
-            </button>
-          ))}
+          {vialAssign && vialAssign.matches.map(m => {
+            const vialIsVariance = showVarianceChip(m.mk1Analysis, vialRole, varianceEntitlement)
+            return (
+              <button
+                key={m.vialSampleId}
+                type="button"
+                onClick={e => { e.stopPropagation(); useUIStore.getState().navigateToSample(m.vialSampleId) }}
+                className={`inline-flex items-center gap-0.5 text-[10px] underline underline-offset-2 shrink-0 ${
+                  vialIsVariance
+                    ? 'text-sky-600 dark:text-sky-400 hover:text-sky-700 dark:hover:text-sky-300'
+                    : 'text-muted-foreground hover:text-foreground'
+                }`}
+                title={vialIsVariance ? `Variance replicate — ${m.vialSampleId}` : `Assigned to ${m.vialSampleId}`}
+              >
+                {vialIsVariance && <Layers className="h-3 w-3" />}
+                {m.vialLabel} — {m.vialSampleId}
+              </button>
+            )
+          })}
           {!!historyCount && (
             <button
               onClick={onToggleHistory}
