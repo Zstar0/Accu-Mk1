@@ -41,8 +41,8 @@ Decision flow per kind (vial-tier):
             to_be_verified -> rejected
   reset:    assigned -> unassigned             (clear without saving)
   variance_verify: to_be_verified -> variance_verified   (variance replicate
-            sign-off; requires result_value + sub-sample host + purchased
-            variance — service-layer guards)
+            sign-off; requires result_value + sub-sample host + host vial
+            assignment_kind='variance' — service-layer guards)
 
 Decision flow per kind (parent-tier):
   publish:  verified -> published

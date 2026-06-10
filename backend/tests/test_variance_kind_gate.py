@@ -71,18 +71,22 @@ def test_variance_verify_rejected_on_core_kind(db, fixture):
 
 
 def test_variance_verify_rejected_on_null_kind(db, fixture):
-    """NULL assignment_kind (no bucket assigned) is also rejected — same guard."""
-    # Re-use the core vial but set its kind to NULL directly.
+    """NULL assignment_kind (no bucket assigned) is also rejected — same guard.
+
+    Mutates the VARIANCE vial to NULL: a raise then proves the guard actually
+    saw the NULL (kind='variance' would have been allowed). NULLing the core
+    vial would pass even on a stale 'core' read — same rejection either way.
+    """
     db2 = SessionLocal()
     try:
         db2.execute(
-            text("UPDATE lims_sub_samples SET assignment_kind = NULL WHERE sample_id = 'ZZTEST-VK-S02'")
+            text("UPDATE lims_sub_samples SET assignment_kind = NULL WHERE sample_id = 'ZZTEST-VK-S01'")
         )
         db2.commit()
     finally:
         db2.close()
     with pytest.raises(BadRequestError):
-        service.apply_transition(db, analysis_id=fixture["core"], kind="variance_verify")
+        service.apply_transition(db, analysis_id=fixture["var"], kind="variance_verify")
 
 
 def test_promote_rejected_on_variance_kind(db, fixture):

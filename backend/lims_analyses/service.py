@@ -324,9 +324,9 @@ def apply_transition(
             raise BadRequestError(
                 "variance_verify is only valid on sub-sample-hosted rows"
             )
-        from models import LimsSubSample as _LimsSubSample
-        _vial = db.get(_LimsSubSample, row.lims_sub_sample_pk)
-        if _vial is None or _vial.assignment_kind != "variance":
+        from models import LimsSubSample
+        vial = db.get(LimsSubSample, row.lims_sub_sample_pk)
+        if vial is None or vial.assignment_kind != "variance":
             raise BadRequestError(
                 "variance_verify requires the host vial to be assigned to a variance bucket"
             )
@@ -624,8 +624,9 @@ def promote_to_parent(
                 raise NotFoundError(f"sub-sample id={row.lims_sub_sample_pk} not found")
             if sub.assignment_kind == "variance":
                 raise BadRequestError(
-                    f"{sid} is assigned to a variance bucket and cannot be promoted; "
-                    f"re-assign it to the core bucket first"
+                    f"source {sid} (vial {sub.sample_id}) is assigned to a "
+                    f"variance bucket and cannot be promoted; re-assign it to "
+                    f"the core bucket first"
                 )
             this_parent_pk = sub.parent_sample_pk
         elif row.lims_sample_pk is not None:
