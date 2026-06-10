@@ -40,6 +40,9 @@ Decision flow per kind (vial-tier):
             assigned -> rejected
             to_be_verified -> rejected
   reset:    assigned -> unassigned             (clear without saving)
+  variance_verify: to_be_verified -> variance_verified   (variance replicate
+            sign-off; requires result_value + sub-sample host + purchased
+            variance — service-layer guards)
 
 Decision flow per kind (parent-tier):
   publish:  verified -> published
@@ -71,6 +74,7 @@ STATES: FrozenSet[str] = frozenset({
     "verified",
     "published",
     "promoted",
+    "variance_verified",
     "rejected",
     "retracted",
 })
@@ -79,7 +83,7 @@ TERMINAL_STATES: FrozenSet[str] = frozenset({"published", "rejected"})
 
 TRANSITION_KINDS: FrozenSet[str] = frozenset({
     "assign", "submit", "verify", "retract", "reject",
-    "retest", "publish", "reset", "auto",
+    "retest", "publish", "reset", "auto", "variance_verify",
 })
 
 # Tier discriminator constants. Service layer reads these.
@@ -100,9 +104,10 @@ _ALLOWED: Dict[Tuple[str, str], str] = {
     ("assigned",       "reject"):   "rejected",
     ("assigned",       "reset"):    "unassigned",
 
-    ("to_be_verified", "verify"):   "verified",
-    ("to_be_verified", "retract"):  "retracted",
-    ("to_be_verified", "reject"):   "rejected",
+    ("to_be_verified", "verify"):           "verified",
+    ("to_be_verified", "variance_verify"):  "variance_verified",
+    ("to_be_verified", "retract"):          "retracted",
+    ("to_be_verified", "reject"):           "rejected",
 
     ("verified",       "publish"):  "published",
     ("verified",       "retract"):  "retracted",
@@ -116,6 +121,7 @@ _ALLOWED: Dict[Tuple[str, str], str] = {
 _TIER_ALLOWED_KINDS: Dict[str, FrozenSet[str]] = {
     TIER_VIAL: frozenset({
         "assign", "submit", "retract", "reject", "reset", "retest", "auto",
+        "variance_verify",
     }),
     TIER_PARENT: frozenset({
         "publish", "retract", "auto",

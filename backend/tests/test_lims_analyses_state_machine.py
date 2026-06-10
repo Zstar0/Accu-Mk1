@@ -20,7 +20,8 @@ from lims_analyses.state_machine import (
 def test_states_set_is_complete():
     assert STATES == {
         "unassigned", "assigned", "to_be_verified",
-        "verified", "published", "promoted", "rejected", "retracted",
+        "verified", "published", "promoted", "variance_verified",
+        "rejected", "retracted",
     }
 
 
@@ -35,7 +36,7 @@ def test_terminal_states():
 def test_transition_kinds_set():
     assert TRANSITION_KINDS == {
         "assign", "submit", "verify", "retract", "reject",
-        "retest", "publish", "reset", "auto",
+        "retest", "publish", "reset", "auto", "variance_verify",
     }
 
 
@@ -131,7 +132,7 @@ def test_allowed_kinds_from_unassigned():
 
 
 def test_allowed_kinds_from_to_be_verified():
-    assert allowed_kinds("to_be_verified") == {"verify", "retract", "reject"}
+    assert allowed_kinds("to_be_verified") == {"verify", "variance_verify", "retract", "reject"}
 
 
 def test_allowed_kinds_from_verified():
@@ -214,8 +215,9 @@ def test_allowed_kinds_filtered_by_tier():
     # Sub-sample (vial) tier no longer self-verifies — verification is the
     # promote act; the vial moves to_be_verified -> promoted. So 'verify' is
     # gone from the vial-tier kinds. parent-tier shares only retract here.
+    # variance_verify is the new vial-tier sign-off path for replicate sets.
     assert allowed_kinds("to_be_verified", tier=TIER_VIAL) == {
-        "retract", "reject",
+        "retract", "reject", "variance_verify",
     }
     assert allowed_kinds("to_be_verified", tier=TIER_PARENT) == {"retract"}
 
