@@ -507,7 +507,7 @@ def _run_migrations():
                                   CHECK (review_state IN (
                                       'unassigned', 'assigned', 'to_be_verified',
                                       'verified', 'published', 'rejected', 'retracted',
-                                      'promoted'
+                                      'promoted', 'variance_verified'
                                   )),
 
             method_id             INTEGER REFERENCES hplc_methods(id) ON DELETE SET NULL,
@@ -557,7 +557,7 @@ def _run_migrations():
             transition_kind   TEXT NOT NULL
                               CHECK (transition_kind IN
                                   ('assign','submit','verify','retract','reject',
-                                   'retest','publish','reset','auto')),
+                                   'retest','publish','reset','auto','variance_verify')),
             user_id           INTEGER REFERENCES users(id) ON DELETE SET NULL,
             reason            TEXT,
             occurred_at       TIMESTAMP NOT NULL DEFAULT NOW()
@@ -708,6 +708,24 @@ def _run_migrations():
         JOIN analysis_services s ON left(s.keyword, 4) IN ('PUR_', 'QTY_')
         WHERE g.name = 'Analytics'
         ON CONFLICT (service_group_id, analysis_service_id) DO NOTHING
+        """,
+        # Variance addon Phase 1: 'variance_verified' sub-sample state +
+        # 'variance_verify' audit kind. Drop+recreate both CHECKs (idempotent).
+        "ALTER TABLE lims_analyses DROP CONSTRAINT IF EXISTS lims_analyses_review_state_check",
+        """
+        ALTER TABLE lims_analyses ADD CONSTRAINT lims_analyses_review_state_check
+            CHECK (review_state IN (
+                'unassigned', 'assigned', 'to_be_verified', 'verified',
+                'published', 'rejected', 'retracted', 'promoted',
+                'variance_verified'
+            ))
+        """,
+        "ALTER TABLE lims_analysis_transitions DROP CONSTRAINT IF EXISTS lims_analysis_transitions_transition_kind_check",
+        """
+        ALTER TABLE lims_analysis_transitions ADD CONSTRAINT lims_analysis_transitions_transition_kind_check
+            CHECK (transition_kind IN
+                ('assign','submit','verify','retract','reject',
+                 'retest','publish','reset','auto','variance_verify'))
         """,
     ]
     # Per-statement isolation: a failure in one statement (e.g., a table that
