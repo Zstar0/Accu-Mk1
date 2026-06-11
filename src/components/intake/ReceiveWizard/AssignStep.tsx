@@ -321,17 +321,18 @@ function VarianceOverrideEditor({
               </span>
             </TooltipTrigger>
             <TooltipContent className="max-w-sm text-left space-y-1.5 p-3">
-              <p className="font-semibold">Variance count = variance vials</p>
+              <p className="font-semibold">Variance count = total vials tested</p>
               <p>
-                The number is how many <span className="font-medium">variance
-                vials</span> the bucket gets, in addition to the core demand.
-                HPLC&nbsp;2 = the primary vial + 2 variance replicates (3
-                tested in total). It sets the &quot;paid&quot; marker on the
-                Variance drop zone below — it never blocks assignment.
+                The number is the TOTAL vials tested from the lot. The first
+                vial is part of the <span className="font-medium">core
+                offering</span>, so the client pays for n&nbsp;−&nbsp;1
+                replicates: HPLC&nbsp;2 = the core vial + 1 paid variance
+                replicate. The paid marker on the Variance drop zone below
+                shows the replicate count — it never blocks assignment.
               </p>
               <p>
-                0 = no variance testing purchased. Counts below 2 are treated
-                as none (WP product floor).
+                0 = no variance testing purchased. 1 is meaningless (one vial
+                is just the core test) and is treated as none.
               </p>
               <p className="text-muted-foreground">
                 Lab override: while set, it replaces the order&apos;s variance.
@@ -343,7 +344,7 @@ function VarianceOverrideEditor({
         </div>
         <p className="text-xs text-muted-foreground">
           Lab override — replaces the order's variance until the WP addon ships. 0 = none,
-          otherwise the number of variance vials (≥2).
+          otherwise the TOTAL vials tested (≥2; the first is the core vial).
         </p>
       </div>
       <div className="flex items-end gap-3 flex-wrap">

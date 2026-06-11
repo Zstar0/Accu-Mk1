@@ -171,10 +171,12 @@ interface ColumnFilters {
   analytes: string
 }
 
-/** True when a parent AR has variance testing on any bucket (display flag). */
+/** True when a parent AR has variance testing on any bucket (display flag).
+ *  The aggregates map carries PAID REPLICATES (purchased n - 1; the first
+ *  vial is part of the core offering), so any bucket >= 1 has variance. */
 export function parentHasVariance(agg: ParentAggregate | undefined): boolean {
   const v = agg?.variance
-  return !!v && (v.hplc >= 2 || v.endo >= 2 || v.ster >= 2)
+  return !!v && (v.hplc >= 1 || v.endo >= 1 || v.ster >= 1)
 }
 
 /** True when a sub-sample vial is explicitly assigned to a variance bucket

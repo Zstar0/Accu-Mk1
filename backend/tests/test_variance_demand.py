@@ -17,12 +17,23 @@ BASE_SERVICES = {
 
 
 class TestDeriveVarianceDemand:
-    def test_maps_keys_to_buckets(self):
+    def test_maps_keys_to_buckets_as_paid_replicates(self):
+        # Purchased n = TOTAL vials tested per bucket; the first vial is part
+        # of the core offering, so the variance bucket target is n - 1 paid
+        # replicates (2026-06-10 PB-0077 product-semantics decision).
         out = sub_service.derive_variance_demand({
             **BASE_SERVICES,
             "variance": {"hplcpurity_identity": 3, "endotoxin": 2},
         })
-        assert out == {"hplc": 3, "endo": 2, "ster": 0}
+        assert out == {"hplc": 2, "endo": 1, "ster": 0}
+
+    def test_two_vial_set_targets_one_replicate(self):
+        # The common product: "2-vial variance" = core vial + ONE paid replicate.
+        out = sub_service.derive_variance_demand({
+            **BASE_SERVICES,
+            "variance": {"hplcpurity_identity": 2},
+        })
+        assert out == {"hplc": 1, "endo": 0, "ster": 0}
 
     def test_zero_without_variance(self):
         assert sub_service.derive_variance_demand(BASE_SERVICES) == {
@@ -122,7 +133,8 @@ class TestVialDemandResponses:
         db = SessionLocal()
         try:
             plan = sub_service.compute_vial_plan(db, "ZZTEST-VARD")
-            assert plan["variance"] == {"hplc": 3, "endo": 0, "ster": 0}
+            # purchased 3 => 2 paid replicates on top of the core vial
+            assert plan["variance"] == {"hplc": 2, "endo": 0, "ster": 0}
             # explicit-bucket model: demand is core/base — no max() inflation
             assert plan["demand"]["hplc"] == 1
             assert plan["base_demand"]["hplc"] == 1
@@ -361,8 +373,9 @@ class TestApplyVarianceOverride:
         )
         raw = {"services": {"hplcpurity_identity": True, "endotoxin": True, "sterility_pcr": True}}
         merged = sub_service._apply_variance_override("ZZTEST-VAROV", raw)
+        # purchased 3 (total vials) => 2 paid replicates on top of the core vial
         assert sub_service.derive_variance_demand(merged["services"]) == {
-            "hplc": 3, "endo": 0, "ster": 0,
+            "hplc": 2, "endo": 0, "ster": 0,
         }
         # core demand untouched by the override
         assert sub_service.derive_demand(merged["services"]) == {

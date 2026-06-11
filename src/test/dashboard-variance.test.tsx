@@ -13,10 +13,10 @@ const sub = (
      received_at: '', received_by_user_id: null, photo_external_uid: null,
      remarks: null, assignment_role: role, assignment_kind: kind }) as SubSample
 
-describe('parentHasVariance', () => {
-  it('true when any bucket >= 2', () => {
-    expect(parentHasVariance(agg({ hplc: 2, endo: 0, ster: 0 }))).toBe(true)
-    expect(parentHasVariance(agg({ hplc: 0, endo: 3, ster: 0 }))).toBe(true)
+describe('parentHasVariance (paid-replicates map: purchased n - 1)', () => {
+  it('true when any bucket has a paid replicate', () => {
+    expect(parentHasVariance(agg({ hplc: 1, endo: 0, ster: 0 }))).toBe(true)
+    expect(parentHasVariance(agg({ hplc: 0, endo: 2, ster: 0 }))).toBe(true)
   })
   it('false for all-zero, undefined variance, or undefined agg', () => {
     expect(parentHasVariance(agg({ hplc: 0, endo: 0, ster: 0 }))).toBe(false)

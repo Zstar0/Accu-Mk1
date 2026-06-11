@@ -596,14 +596,19 @@ VARIANCE_BUCKET_KEYS: dict[str, str] = {
 
 
 def derive_variance_demand(services: dict) -> dict:
-    """Per-bucket variance target (purchased count n) from a WP services
-    payload. 0 when not purchased. Under the explicit-bucket model this is the
-    auto-assign target for variance-kind vials, a SEPARATE bucket on top of
-    core demand. Uses the same normalization as the entitlement endpoint so
-    counts are int-filtered (>= 2) in one place."""
+    """Per-bucket variance target (PAID REPLICATES) from a WP services payload.
+
+    Product semantics (PB-0077 decision, 2026-06-10): purchased n = TOTAL
+    vials tested per bucket. The first vial is part of the core offering
+    (base demand) for HPLC/endo/sterility alike, so the variance bucket
+    target — the number of variance-kind vials auto-assign fills and the
+    paid marker counts — is n - 1. A "2-vial variance" purchase = the core
+    vial + ONE paid variance replicate. 0 when not purchased. Uses the same
+    normalization as the entitlement endpoint (counts int-filtered >= 2,
+    so the target is always >= 1 when purchased)."""
     entitlement = normalize_variance_entitlement({"variance": (services or {}).get("variance")})
     return {
-        bucket: entitlement.get(key, 0)
+        bucket: max(0, entitlement.get(key, 0) - 1)
         for bucket, key in VARIANCE_BUCKET_KEYS.items()
     }
 
@@ -1279,7 +1284,8 @@ def lock_variance_set(db: Session, parent_sample_id: str, user_id: int) -> LimsS
     variance = derive_variance_demand(
         (services_resp or {}).get("services") or {}
     )
-    variance_buckets = {b for b, n in variance.items() if n >= 2}
+    # Targets are paid replicates (n - 1): any bucket >= 1 has variance testing.
+    variance_buckets = {b for b, n in variance.items() if n >= 1}
     if variance_buckets:
         from models import LimsAnalysis
         unfinished: list[str] = []

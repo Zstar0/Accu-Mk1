@@ -49,7 +49,8 @@ def aggv_fixture(db):
 
 def test_variance_map_reflects_override(db, aggv_fixture):
     out = sub_service.aggregate_by_parent(db, ["ZZTEST-AGGV-ON", "ZZTEST-AGGV-OFF"])
-    assert out["ZZTEST-AGGV-ON"]["variance"] == {"hplc": 2, "endo": 0, "ster": 0}
+    # override 2 (total vials tested) => 1 paid replicate in the display map
+    assert out["ZZTEST-AGGV-ON"]["variance"] == {"hplc": 1, "endo": 0, "ster": 0}
     assert out["ZZTEST-AGGV-OFF"]["variance"] == {"hplc": 0, "endo": 0, "ster": 0}
 
 
