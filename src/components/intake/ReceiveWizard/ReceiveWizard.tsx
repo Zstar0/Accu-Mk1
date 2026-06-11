@@ -37,11 +37,11 @@ export function ReceiveWizard({ parent, onClose, initialPhase = 'capture' }: Pro
     if (phase === 'details') void wiz.refresh()
   }, [phase, wiz.refresh])
 
-  // Received count = parent (if received) + sub-samples in the list.
-  // The receive count is identical across all phases since it tracks the
-  // parent's vial set, not phase-local state.
+  // Received count: legacy families count the parent as a received vial
+  // (parent IS vial 1); container families count only physical sub-samples.
+  // Identical across all phases since it tracks the parent's vial set.
   const receivedCount =
-    (wiz.parentReceived ? 1 : 0) + wiz.vials.length
+    (wiz.containerMode ? 0 : (wiz.parentReceived ? 1 : 0)) + wiz.vials.length
 
   // Assignment tab is meaningful when the parent already exists (typical for
   // sample detail entry) OR when at least one vial has been saved this session
@@ -146,7 +146,8 @@ export function ReceiveWizard({ parent, onClose, initialPhase = 'capture' }: Pro
         <VialsList
           vials={wiz.vials}
           parentVial={
-            wiz.parentReceived
+            // Container families never render the parent as Vial 1.
+            wiz.parentReceived && !wiz.containerMode
               ? {
                   sampleId: parent.sample_id,
                   receivedThisSession: wiz.parentReceivedThisSession,

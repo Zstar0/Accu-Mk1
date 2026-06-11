@@ -99,25 +99,36 @@ export function useReceiveWizard(parent: ParentInfo) {
       const isFirstVialEver =
         isParentInPreReceivedState && !vials.some(v => v.isThisSession)
 
-      // Single-vial check-in policy: the first vial of a never-received parent
-      // becomes the parent itself. Photo + remarks land on the parent AR; no
-      // sub-sample row is created. Sub-samples represent vials *beyond* the
-      // first (the parent is vial 1). See the design doc's "Single-vial
-      // check-in policy" section under Save semantics.
+      // Single-vial check-in policy (LEGACY families): the first vial of a
+      // never-received parent becomes the parent itself. Photo + remarks land
+      // on the parent AR; no sub-sample row is created. Sub-samples represent
+      // vials *beyond* the first (the parent is vial 1). See the design doc's
+      // "Single-vial check-in policy" section under Save semantics.
+      //
+      // CONTAINER families (container-parent design): the parent is a pure
+      // report depository and never a physical vial — the first photo still
+      // transitions the parent AR to received (bare: no photo/remarks on it),
+      // but the vial itself becomes S01 via the normal sub-sample path below.
       if (isFirstVialEver) {
-        await receiveSenaiteSample(
-          parent.uid,
-          parent.sample_id,
-          photoBase64,
-          remarks ?? null,
-        )
-        // The parent photo lives on the SENAITE AR, whose attachment listing
-        // has a read-after-write window — seed the cache with the captured
-        // bytes so Vial 1's thumbnail shows immediately instead of racing the
-        // photo-endpoint round-trip.
-        seedSubSamplePhoto(parent.sample_id, photoBytes)
-        setParentReceivedThisSession(true)
-        return { sampleId: parent.sample_id }
+        if (containerMode) {
+          await receiveSenaiteSample(parent.uid, parent.sample_id, null, null)
+          setParentReceivedThisSession(true)
+          // fall through: this physical vial is S01, a real sub-sample
+        } else {
+          await receiveSenaiteSample(
+            parent.uid,
+            parent.sample_id,
+            photoBase64,
+            remarks ?? null,
+          )
+          // The parent photo lives on the SENAITE AR, whose attachment listing
+          // has a read-after-write window — seed the cache with the captured
+          // bytes so Vial 1's thumbnail shows immediately instead of racing the
+          // photo-endpoint round-trip.
+          seedSubSamplePhoto(parent.sample_id, photoBytes)
+          setParentReceivedThisSession(true)
+          return { sampleId: parent.sample_id }
+        }
       }
 
       // Subsequent vials → sub-samples. SENAITE assigns the next -SNN id.
@@ -134,6 +145,7 @@ export function useReceiveWizard(parent: ParentInfo) {
     },
     [
       isParentInPreReceivedState,
+      containerMode,
       parent.uid,
       parent.sample_id,
       vials,

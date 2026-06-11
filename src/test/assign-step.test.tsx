@@ -52,6 +52,21 @@ const VARIANCE_PLAN: VialPlanResponse = {
   ],
 }
 
+const CONTAINER_PLAN: VialPlanResponse = {
+  // Container family: parent is a pure depository — no parent entry in
+  // vials, core demand filled by physical sub-samples (S01 IS Vial 1).
+  demand: { hplc: 1, endo: 0, ster: 0 },
+  variance: { hplc: 0, endo: 0, ster: 0 },
+  base_demand: { hplc: 1, endo: 0, ster: 0 },
+  wp_order_number: null,
+  is_unreachable: false,
+  container_mode: true,
+  vials: [
+    { sample_id: 'P-0144-S01', is_parent: false, vial_sequence: 1, assignment_role: 'hplc', assignment_kind: 'core' },
+    { sample_id: 'P-0144-S02', is_parent: false, vial_sequence: 2, assignment_role: null, assignment_kind: null },
+  ],
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
   vi.mocked(getVialPlan).mockResolvedValue(PLAN)
@@ -246,5 +261,17 @@ describe('VarianceOverrideEditor', () => {
     await waitFor(() => {
       expect(putVarianceOverride).toHaveBeenCalledWith('P-0144', null)
     })
+  })
+})
+
+describe('container mode', () => {
+  it('renders no parent chip — only sub-sample vials', async () => {
+    vi.mocked(getVialPlan).mockResolvedValue(CONTAINER_PLAN)
+    renderStep()
+    // step rendered (HPLC bucket + its always-on variance zone)
+    expect(await screen.findByText(/HPLC Variance/i)).toBeInTheDocument()
+    // S01 chip present; the bare parent id is NOT rendered as a vial chip
+    expect(screen.getByText('P-0144-S01')).toBeInTheDocument()
+    expect(screen.queryByText(/^P-0144$/)).not.toBeInTheDocument()
   })
 })
