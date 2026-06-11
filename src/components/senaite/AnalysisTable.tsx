@@ -1262,7 +1262,13 @@ function AnalysisRow({
           </span>
           <Mk1NativeBadge uid={analysis.uid} />
           <PromotedFromBadge promotion={analysis.keyword ? promotionsByKeyword?.get(analysis.keyword) : undefined} />
-          {vialAssign && vialAssign.matches.map(m => {
+          {vialAssign && vialAssign.matches.filter(m => {
+            // The "from <vial>" promotion badge above already names the
+            // source vial — drop its duplicate assignment chip and keep
+            // only the OTHER vials (e.g. the variance replicate).
+            const promo = analysis.keyword ? promotionsByKeyword?.get(analysis.keyword) : undefined
+            return !promo?.sources?.some(s => s.sample_id === m.vialSampleId)
+          }).map(m => {
             // Key each overlay vial by ITS OWN assignment_kind (carried on the
             // match) — a parent page mixes core and variance vials, so each
             // vial speaks for itself. No entitlement lookup: kind is explicit.
