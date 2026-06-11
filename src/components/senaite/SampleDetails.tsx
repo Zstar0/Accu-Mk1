@@ -3601,9 +3601,10 @@ export function SampleDetails() {
                   <div className="text-xs text-muted-foreground space-y-1">
                     <p className="font-medium text-foreground">Changes here also update this sample's vials</p>
                     <ul className="list-disc pl-4 space-y-0.5">
-                      <li><span className="text-foreground">Adding</span> a service puts it on every assigned vial right away.</li>
-                      <li><span className="text-foreground">Removing</span> a service takes it off vials that haven't started it. Vials with results entered keep their work.</li>
-                      <li><span className="text-foreground">Rejecting</span> a service (in the analyses table) works the same way, but keeps a record — use it when the test was part of the offering. Adding the service back later restores it on the vials.</li>
+                      <li><span className="text-foreground">Adding</span> a service puts it on every assigned vial right away. Vials only receive tests that fit their role — micro tests won't be added to HPLC vials.</li>
+                      <li><span className="text-foreground">Removing</span> a service only clears it from vials that haven't touched the test — no value entered and not on a worksheet yet.</li>
+                      <li><span className="text-foreground">Rejecting</span> a service (in the analyses table) also clears tests already sitting on a worksheet, as long as no value was entered — and it keeps a record. Adding the service back later restores it on the vials.</li>
+                      <li><span className="text-foreground">Entered results are never deleted from here.</span> If a vial already has a value for the test, that work stays — clear it on the vial itself if it really needs to go.</li>
                     </ul>
                   </div>
                 </div>
