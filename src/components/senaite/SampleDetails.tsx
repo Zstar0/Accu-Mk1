@@ -1143,6 +1143,15 @@ const PROFILE_THEMES: { pattern: RegExp; theme: ProfileTheme }[] = [
       border: 'border-rose-200 dark:border-rose-500/20',
     },
   },
+  {
+    pattern: /variance/i,
+    theme: {
+      icon: Sigma,
+      bg: 'bg-sky-100 dark:bg-sky-500/15',
+      text: 'text-sky-700 dark:text-sky-400',
+      border: 'border-sky-200 dark:border-sky-500/20',
+    },
+  },
 ]
 
 const DEFAULT_PROFILE_THEME: ProfileTheme = {
@@ -2519,6 +2528,13 @@ export function SampleDetails() {
   ).length
   const pendingCount = countableTotal - verifiedCount
 
+  // Variance is "enabled" for this sample when any vial is explicitly bucketed
+  // as a variance replicate (assignment_kind='variance'). Parent-page only —
+  // subData carries the family's vials. Drives the Products "Variance" chip.
+  const hasVariance = (subData?.sub_samples ?? []).some(
+    s => s.assignment_kind === 'variance'
+  )
+
   const senaiteBaseUrl = getSenaiteUrl()
 
   return (
@@ -2944,18 +2960,6 @@ export function SampleDetails() {
                   />
                   <DataRow label="Date Received" value={formatDate(data.date_received)} />
                 </div>
-                {data.profiles.length > 0 && (
-                  <div className="mt-3 pt-3 border-t border-border">
-                    <span className="text-[11px] text-muted-foreground uppercase tracking-wider">
-                      Analysis Profiles
-                    </span>
-                    <div className="flex flex-wrap gap-2 mt-2">
-                      {data.profiles.map((p, i) => (
-                        <ProfileChip key={p + i} name={p} />
-                      ))}
-                    </div>
-                  </div>
-                )}
               </SectionHeader>
             </Card>
 
@@ -3038,6 +3042,19 @@ export function SampleDetails() {
                     }
                   />
                 </div>
+                {(data.profiles.length > 0 || hasVariance) && (
+                  <div className="mt-3 pt-3 border-t border-border">
+                    <span className="text-[11px] text-muted-foreground uppercase tracking-wider">
+                      Products
+                    </span>
+                    <div className="flex flex-wrap gap-2 mt-2">
+                      {data.profiles.map((p, i) => (
+                        <ProfileChip key={p + i} name={p} />
+                      ))}
+                      {hasVariance && <ProfileChip name="Variance" />}
+                    </div>
+                  </div>
+                )}
               </SectionHeader>
             </Card>
 
