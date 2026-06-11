@@ -1053,6 +1053,81 @@ def cascade_parent_reject_to_vials(
     return rejected_ids
 
 
+# ─── Parent-add cascade ──────────────────────────────────────────────────────
+
+
+def cascade_parent_add_to_vials(
+    db: Session,
+    *,
+    parent_sample_id: str,
+    user_id: Optional[int],
+) -> Dict[str, List[str]]:
+    """When an analysis service is ADDED to a parent AR (Manage Analyses →
+    IS proxy → SENAITE), re-run the idempotent seeder for every non-xtra vial
+    of the family so the new service lands on the bench without an Extra
+    round-trip.
+
+    The seeder skips keywords a vial already carries, so only the addition
+    lands (as an unassigned row). HPLC vials mirror the parent's CURRENT
+    active analysis set (rejected/retracted parent rows and Microbiology
+    keywords stay excluded by the existing mirror predicates); endo/ster
+    vials re-seed their fixed whitelist — a no-op when already seeded.
+
+    Returns {vial_sample_id: [newly seeded keywords]} for vials that gained
+    rows. Never raises — the WP profile fetch and each vial's seed run are
+    individually guarded so one failure doesn't kill the rest (or the add).
+    """
+    from models import LimsSample, LimsSubSample
+
+    parent_sample = db.execute(
+        select(LimsSample).where(LimsSample.sample_id == parent_sample_id)
+    ).scalar_one_or_none()
+    if parent_sample is None:
+        return {}
+
+    subs = db.execute(
+        select(LimsSubSample).where(
+            LimsSubSample.parent_sample_pk == parent_sample.id,
+            LimsSubSample.assignment_role.is_not(None),
+            LimsSubSample.assignment_role != "xtra",
+        ).order_by(LimsSubSample.vial_sequence)
+    ).scalars().all()
+    if not subs:
+        return {}
+
+    # One WP fetch for the whole family (same threading pattern as
+    # compute_vial_plan). None/{} → role_implies_seeding gates everything off.
+    try:
+        from sub_samples import service as ss_service
+        wp_services = ss_service._fetch_wp_services_for_parent(parent_sample_id) or {}
+    except Exception:
+        wp_services = {}
+
+    from lims_analyses.seeder import seed_analyses_for_vial
+
+    out: Dict[str, List[str]] = {}
+    for sub in subs:
+        try:
+            new_rows = seed_analyses_for_vial(
+                db,
+                sub_sample=sub,
+                role=sub.assignment_role,
+                wp_services=wp_services,
+                parent_sample_id=parent_sample_id,
+                created_by_user_id=user_id,
+                commit=True,
+            )
+        except Exception:
+            # Log at call site; the seeder's fail-hard SENAITE read must not
+            # kill the other vials or the parent add itself.
+            db.rollback()
+            continue
+        if new_rows:
+            out[sub.sample_id] = [r.keyword for r in new_rows]
+
+    return out
+
+
 # ─── Native vial add/remove (Phase 6 — native Manage Analyses) ──────────────
 
 

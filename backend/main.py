@@ -8214,11 +8214,35 @@ async def add_sample_analysis(
         async with httpx.AsyncClient(timeout=30.0) as client:
             resp = await client.post(url, json=body, headers={"X-API-Key": INTEGRATION_SERVICE_API_KEY})
             resp.raise_for_status()
-            return resp.json()
+            result = resp.json()
     except httpx.HTTPStatusError as e:
         raise HTTPException(status_code=e.response.status_code, detail=e.response.text)
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Integration Service unavailable: {e}")
+
+    # ── Parent-add cascade (best-effort) ─────────────────────────────────
+    # If the sample is a PARENT with assigned vials, re-run the idempotent
+    # seeder per vial so the new service lands on the bench immediately
+    # (cascade_parent_add_to_vials self-guards: sample_ids that aren't in
+    # lims_samples — e.g. legacy SENAITE secondaries — fall out as no-ops).
+    import logging as _logging
+    _add_logger = _logging.getLogger(__name__)
+    try:
+        from lims_analyses.service import cascade_parent_add_to_vials
+        _seeded = cascade_parent_add_to_vials(
+            db, parent_sample_id=sample_id, user_id=_current_user.id,
+        )
+        if _seeded:
+            _add_logger.info(
+                "cascade_parent_add: parent=%s → seeded %s", sample_id, _seeded,
+            )
+    except Exception as _add_err:
+        _add_logger.warning(
+            "cascade_parent_add: unexpected error for sample=%s: %s",
+            sample_id, _add_err,
+        )
+
+    return result
 
 
 @app.delete("/explorer/samples/{sample_id}/analyses/{keyword}")
