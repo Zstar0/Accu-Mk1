@@ -145,6 +145,55 @@ def test_delete_attachment_removes_row_file_and_writes_event(db_session, storage
         service.delete_attachment(db_session, sub.sample_id, att.id)
 
 
+# ── make-primary swap (service) ───────────────────────────────────────────────
+
+
+def test_make_primary_swaps_photo_and_demotes_old(db_session, storage):
+    sub, old_key = _native_sub_with_photo(db_session, storage)
+    att = service.add_attachment(db_session, sub.sample_id, b"better-shot", "front.png")
+    promoted_key = att.storage_key
+
+    out = service.set_primary_attachment(db_session, sub.sample_id, att.id, user_id=7)
+
+    # Promoted attachment's key now IS the photo; its row is consumed.
+    assert out.photo_external_uid == f"mk1://{promoted_key}"
+    remaining = db_session.query(LimsSubSampleAttachment).all()
+    assert len(remaining) == 1
+    # The old check-in photo survives as a regular attachment, file intact.
+    demoted = remaining[0]
+    assert demoted.storage_key == old_key
+    assert storage.fetch_photo(old_key) == b"original-photo"
+    events = db_session.query(LimsSubSampleEvent).filter_by(
+        sub_sample_pk=sub.id, event="photo_primary_changed").all()
+    assert len(events) == 1
+    assert events[0].details == {"filename": "front.png", "demoted_previous": True}
+
+
+def test_make_primary_with_no_existing_photo(db_session, storage):
+    parent = _make_parent(db_session)
+    sub = _make_sub(db_session, parent, uid="mk1://deadbeef", photo_uid=None)
+    att = service.add_attachment(db_session, sub.sample_id, b"shot", "a.png")
+
+    out = service.set_primary_attachment(db_session, sub.sample_id, att.id)
+
+    assert out.photo_external_uid == f"mk1://{att.storage_key}"
+    # Nothing to demote — no attachment rows remain.
+    assert db_session.query(LimsSubSampleAttachment).count() == 0
+
+
+def test_make_primary_blocked_on_legacy_senaite_photo(db_session, storage):
+    parent = _make_parent(db_session)
+    sub = _make_sub(db_session, parent, uid="SENAITE-SUB",
+                    photo_uid="/senaite/clients/client-8/P-TEST-001-S01")
+    att = service.add_attachment(db_session, sub.sample_id, b"shot", "a.png")
+
+    with pytest.raises(service.PhotoNotMk1Error):
+        service.set_primary_attachment(db_session, sub.sample_id, att.id)
+    # Nothing changed: photo untouched, attachment still a regular row.
+    assert sub.photo_external_uid == "/senaite/clients/client-8/P-TEST-001-S01"
+    assert db_session.query(LimsSubSampleAttachment).count() == 1
+
+
 # ── vial photo remove (service) ───────────────────────────────────────────────
 
 
@@ -290,6 +339,35 @@ def test_route_delete_photo_409_on_legacy():
     with patch("sub_samples.routes.service.delete_sub_sample_photo",
                side_effect=service.PhotoNotMk1Error("legacy")):
         resp = client.delete("/api/sub-samples/P-1-S01/photo")
+    assert resp.status_code == 409
+    assert resp.json()["detail"]["code"] == "photo_not_mk1"
+
+
+def test_route_make_primary_200():
+    sub = MagicMock()
+    sub.id = 1
+    sub.sample_id = "P-1-S01"
+    sub.vial_sequence = 1
+    sub.received_at = __import__("datetime").datetime.utcnow()
+    sub.received_by_user_id = 1
+    sub.photo_external_uid = "mk1://P-1-S01/promoted.png"
+    sub.remarks = None
+    sub.assignment_role = None
+    sub.assignment_kind = None
+    sub.external_lims_uid = "mk1://deadbeef"
+    sub.parent_sample = MagicMock(sample_id="P-1")
+    with patch("sub_samples.routes.service.set_primary_attachment",
+               return_value=sub) as svc:
+        resp = client.post("/api/sub-samples/P-1-S01/attachments/3/make-primary")
+    assert resp.status_code == 200
+    assert resp.json()["photo_external_uid"] == "mk1://P-1-S01/promoted.png"
+    assert svc.call_args.kwargs["user_id"] == 1
+
+
+def test_route_make_primary_409_on_legacy():
+    with patch("sub_samples.routes.service.set_primary_attachment",
+               side_effect=service.PhotoNotMk1Error("legacy")):
+        resp = client.post("/api/sub-samples/P-1-S01/attachments/3/make-primary")
     assert resp.status_code == 409
     assert resp.json()["detail"]["code"] == "photo_not_mk1"
 

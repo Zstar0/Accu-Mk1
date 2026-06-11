@@ -650,6 +650,52 @@ def get_attachment(db: Session, sample_id: str, attachment_id: int):
     return att
 
 
+def set_primary_attachment(
+    db: Session, sample_id: str, attachment_id: int, user_id: Optional[int] = None
+) -> LimsSubSample:
+    """Promote an extra image to be the vial's primary (check-in) photo.
+
+    Swap semantics: the promoted attachment row is consumed by the photo slot
+    (photo_external_uid takes its storage key) and the current primary — if
+    Mk1-stored — is demoted to a regular attachment row so it stays visible.
+    A legacy SENAITE primary can't be demoted (its bytes aren't in Mk1
+    storage) → PhotoNotMk1Error (routes map to 409, FE hides the button)."""
+    from models import LimsSubSampleAttachment
+
+    att = get_attachment(db, sample_id, attachment_id)
+    sub = att.sub_sample
+    if sub.photo_external_uid and not _photo_is_mk1(sub):
+        raise PhotoNotMk1Error(
+            f"{sample_id} primary photo is a SENAITE attachment; can't demote it"
+        )
+    old_key = (
+        sub.photo_external_uid[len("mk1://"):] if sub.photo_external_uid else None
+    )
+    promoted_filename = att.filename
+    sub.photo_external_uid = f"mk1://{att.storage_key}"
+    if old_key:
+        ext = "." + old_key.rsplit(".", 1)[-1].lower() if "." in old_key else ""
+        db.add(LimsSubSampleAttachment(
+            sub_sample_pk=sub.id,
+            storage_key=old_key,
+            filename=old_key.rsplit("/", 1)[-1],
+            # Check-in photos are saved as vial.jpg, so .jpg in practice;
+            # fall back to jpeg for any pre-allowlist key.
+            content_type=_EXT_CONTENT_TYPES.get(ext, "image/jpeg"),
+            user_id=user_id,
+        ))
+    db.delete(att)
+    db.add(LimsSubSampleEvent(
+        sub_sample_pk=sub.id,
+        event="photo_primary_changed",
+        details={"filename": promoted_filename, "demoted_previous": bool(old_key)},
+        user_id=user_id,
+    ))
+    db.commit()
+    db.refresh(sub)
+    return sub
+
+
 def delete_attachment(
     db: Session, sample_id: str, attachment_id: int, user_id: Optional[int] = None
 ) -> None:

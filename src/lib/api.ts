@@ -5399,6 +5399,35 @@ export async function fetchSubSampleAttachmentUrl(
   return url
 }
 
+/**
+ * Promote an extra image to be the vial's primary (check-in) photo. The
+ * previous Mk1-stored photo is demoted to a regular attachment server-side.
+ * Invalidates the photo cache and the promoted attachment's object URL
+ * (its row is consumed by the photo slot).
+ */
+export async function setSubSamplePrimaryAttachment(
+  sampleId: string,
+  attachmentId: number
+): Promise<void> {
+  const response = await fetch(
+    `${API_BASE_URL()}/api/sub-samples/${encodeURIComponent(sampleId)}/attachments/${attachmentId}/make-primary`,
+    { method: 'POST', headers: getBearerHeaders() }
+  )
+  if (!response.ok) {
+    const err = await response.json().catch(() => null)
+    const detail = err?.detail
+    throw new Error(
+      typeof detail === 'string'
+        ? detail
+        : detail?.message ?? `setSubSamplePrimaryAttachment failed: ${response.status}`
+    )
+  }
+  invalidateSubSamplePhoto(sampleId)
+  const prev = _subSampleAttachmentCache.get(attachmentId)
+  if (prev?.startsWith('blob:')) URL.revokeObjectURL(prev)
+  _subSampleAttachmentCache.delete(attachmentId)
+}
+
 export async function deleteSubSampleAttachment(
   sampleId: string,
   attachmentId: number

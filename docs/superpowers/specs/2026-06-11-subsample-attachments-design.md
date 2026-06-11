@@ -91,6 +91,23 @@ attachment list/form remain as-is and are inert on these pages):
 `deleteSubSampleAttachment`, `deleteSubSamplePhoto`,
 `invalidateSubSamplePhoto(sampleId)`.
 
+## Make-primary (added same day)
+
+"Primary" image == `photo_external_uid` — it's what the header thumb, receive
+wizard, and quick-look all serve via the photo endpoint. Promoting an extra
+image swaps it into the photo slot:
+
+- `POST /{sample_id}/attachments/{attachment_id}/make-primary` →
+  `service.set_primary_attachment()`: the promoted attachment row is consumed
+  (its storage key becomes `photo_external_uid`); the previous Mk1-stored
+  photo is demoted to a regular attachment row (filename = key basename) so
+  nothing is lost. Event `photo_primary_changed`.
+- Legacy SENAITE primaries can't be demoted (bytes aren't in Mk1 storage) →
+  409 `photo_not_mk1`, same gate as Remove. FE hides the button unless the
+  current photo is Mk1-stored or absent.
+- FE: "Primary" (star) button on each extra image card; refreshes both the
+  photo slot (header included) and the attachment list.
+
 ## Error handling
 
 - Upload: non-image → 400; missing vial → 404; storage failure → 502.

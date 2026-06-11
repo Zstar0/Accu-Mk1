@@ -524,6 +524,29 @@ def get_sub_sample_attachment(
     return Response(content=image_bytes, media_type=att.content_type)
 
 
+@router.post(
+    "/{sample_id}/attachments/{attachment_id}/make-primary",
+    response_model=SubSampleResponse,
+)
+def make_attachment_primary(
+    sample_id: str,
+    attachment_id: int,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """Promote an extra image to be the vial's primary (check-in) photo.
+    The previous Mk1-stored primary is demoted to a regular attachment."""
+    try:
+        sub = service.set_primary_attachment(db, sample_id, attachment_id, user_id=user.id)
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except service.PhotoNotMk1Error as e:
+        raise HTTPException(status_code=409, detail={
+            "code": "photo_not_mk1", "message": str(e),
+        })
+    return _serialize(sub)
+
+
 @router.delete(
     "/{sample_id}/attachments/{attachment_id}",
     status_code=status.HTTP_204_NO_CONTENT,

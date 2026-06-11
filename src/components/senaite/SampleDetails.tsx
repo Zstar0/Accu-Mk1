@@ -98,6 +98,7 @@ import {
   uploadSubSampleAttachment,
   fetchSubSampleAttachmentUrl,
   deleteSubSampleAttachment,
+  setSubSamplePrimaryAttachment,
   type SubSampleAttachment,
 } from '@/lib/api'
 import { ReceiveWizard } from '@/components/intake/ReceiveWizard/ReceiveWizard'
@@ -131,7 +132,7 @@ import { useAnalysisSlaMap } from '@/services/analysis-sla'
 import { SamplePrepHplcFlyout } from '@/components/hplc/SamplePrepHplcFlyout'
 import { SampleActivityLog } from '@/components/senaite/SampleActivityLog'
 import { VialsQuickLookDialog } from '@/components/senaite/VialsQuickLookDialog'
-import { Eye, Microscope, Plus, Printer, Search, Trash2, ScrollText, Sigma } from 'lucide-react'
+import { Eye, Microscope, Plus, Printer, Search, Star, Trash2, ScrollText, Sigma } from 'lucide-react'
 import { VarianceSummary } from '@/components/samples/VarianceSummary'
 import { usePrintLabel } from '@/components/samples/usePrintLabel'
 import { PrintLabelPortal } from '@/components/samples/PrintLabelPortal'
@@ -1217,13 +1218,18 @@ function VialAttachmentsBlock({
 }: {
   sampleId: string
   photoUrl: string | null
-  /** Remove is only offered for Mk1-stored photos; legacy SENAITE photos
-   *  live on the parent AR and aren't deletable from here. */
+  /** Remove/make-primary are only offered for Mk1-stored photos; legacy
+   *  SENAITE photos live on the parent AR and can't be deleted or demoted
+   *  from here. */
   photoIsMk1: boolean
   attachments: SubSampleAttachment[]
   onPhotoChanged: () => void
   onAttachmentsChanged: () => void
 }) {
+  // Promoting an extra image swaps it into the photo slot, demoting the
+  // current photo to a regular attachment — needs the current photo to be
+  // Mk1-stored (or absent).
+  const canSetPrimary = photoIsMk1 || !photoUrl
   const replaceInputRef = useRef<HTMLInputElement>(null)
   const [busy, setBusy] = useState(false)
 
@@ -1270,6 +1276,24 @@ function VialAttachmentsBlock({
       toast.error('Remove failed', {
         description: err instanceof Error ? err.message : 'Unknown error',
       })
+    }
+  }
+
+  const handleMakePrimary = async (att: SubSampleAttachment) => {
+    setBusy(true)
+    try {
+      await setSubSamplePrimaryAttachment(sampleId, att.id)
+      toast.success(`${att.filename} is now the vial photo`)
+      // Both lists change: photo slot took the promoted image; the old photo
+      // (if any) reappears as a regular attachment.
+      onPhotoChanged()
+      onAttachmentsChanged()
+    } catch (err) {
+      toast.error('Could not set primary', {
+        description: err instanceof Error ? err.message : 'Unknown error',
+      })
+    } finally {
+      setBusy(false)
     }
   }
 
@@ -1327,7 +1351,19 @@ function VialAttachmentsBlock({
                 <ImageIcon size={13} className="text-muted-foreground shrink-0" />
                 <span className="text-xs font-medium text-foreground truncate">{att.filename}</span>
                 <Badge variant="secondary" className="text-[10px] shrink-0">Sample Image</Badge>
-                <div className="ml-auto">
+                <div className="ml-auto flex items-center gap-1.5">
+                  {canSetPrimary && (
+                    <button
+                      type="button"
+                      onClick={e => { e.stopPropagation(); void handleMakePrimary(att) }}
+                      disabled={busy}
+                      title="Make this the vial's primary photo (shown in the header; the current photo becomes a regular attachment)"
+                      className="inline-flex items-center gap-1 px-2 py-1 text-xs rounded-md border border-border bg-background text-muted-foreground hover:bg-muted hover:text-foreground transition-colors cursor-pointer disabled:opacity-50 shrink-0"
+                    >
+                      <Star size={11} />
+                      Primary
+                    </button>
+                  )}
                   <ArmedDeleteButton
                     onConfirm={() => void handleDeleteAttachment(att)}
                     label={att.filename}
