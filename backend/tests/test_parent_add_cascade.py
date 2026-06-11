@@ -246,6 +246,46 @@ def test_cascade_senaite_failure_does_not_raise(seed, monkeypatch):
     assert _vial_keywords(db, sub1) == ["HPLC-PUR", "PEPT-Total"]
 
 
+# ─── Test 8: re-added service resurrects over a rejected mirror ──────────────
+
+
+def test_cascade_resurrects_keyword_over_rejected_row(seed, monkeypatch):
+    """Reject-then-re-add: a vial whose only row for a keyword is REJECTED
+    must get a fresh active row when the parent carries the service again.
+    The dead row stays for audit; the unique index permits the pair (its
+    predicate excludes retracted/rejected rows)."""
+    db, parent, sub1, sub5 = seed
+
+    svc_id = db.query(AnalysisService).filter_by(keyword="HPLC-ID").one()
+    dead = LimsAnalysis(
+        lims_sub_sample_pk=sub1.id,
+        analysis_service_id=svc_id.id,
+        keyword="HPLC-ID",
+        title=svc_id.title,
+        review_state="rejected",
+    )
+    db.add(dead)
+    db.commit()
+
+    _patch_env(monkeypatch, parent_keywords=["HPLC-PUR", "PEPT-Total", "HPLC-ID"])
+    out = cascade_parent_add_to_vials(
+        db, parent_sample_id=parent.sample_id, user_id=None,
+    )
+
+    # Both vials gain a fresh active HPLC-ID row — including sub1, whose
+    # rejected row must NOT block the resurrection.
+    assert out == {
+        sub1.sample_id: ["HPLC-ID"],
+        sub5.sample_id: ["HPLC-ID"],
+    }
+    rows = db.query(LimsAnalysis).filter(
+        LimsAnalysis.lims_sub_sample_pk == sub1.id,
+        LimsAnalysis.keyword == "HPLC-ID",
+    ).all()
+    states = sorted(r.review_state for r in rows)
+    assert states == ["rejected", "unassigned"]
+
+
 # ─── Test 7: WP profile unavailable → no-op, no raise ────────────────────────
 
 

@@ -295,10 +295,15 @@ def seed_analyses_for_vial(
         )
         return []
 
-    # Already-seeded keywords for this vial — skip them
+    # Already-seeded keywords for this vial — skip them. Dead rows
+    # (rejected/retracted) do NOT block: a service rejected on the parent and
+    # later re-added must resurrect as a fresh active row next to the dead
+    # one. Mirrors the uq_lims_analyses_sub_service_root partial-index
+    # predicate, which enforces uniqueness only across active root rows.
     existing = db.execute(
         select(LimsAnalysis.keyword).where(
-            LimsAnalysis.lims_sub_sample_pk == sub_sample.id
+            LimsAnalysis.lims_sub_sample_pk == sub_sample.id,
+            LimsAnalysis.review_state.notin_(["rejected", "retracted"]),
         )
     ).scalars().all()
     existing_kw = set(existing)
