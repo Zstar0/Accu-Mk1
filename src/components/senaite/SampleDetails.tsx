@@ -2507,10 +2507,17 @@ export function SampleDetails() {
   }
 
   const analyses = data.analyses ?? []
-  const verifiedCount = analyses.filter(
+  // Header counters + progress exclude dead analyses (rejected/retracted/
+  // cancelled/invalid) — a rejected test was taken off the offering, so it
+  // isn't part of "X of N verified". The analyses table still renders them.
+  const countableAnalyses = analyses.filter(
+    a => !['rejected', 'retracted', 'cancelled', 'invalid'].includes(a.review_state ?? '')
+  )
+  const countableTotal = countableAnalyses.length
+  const verifiedCount = countableAnalyses.filter(
     a => a.review_state === 'verified' || a.review_state === 'published'
   ).length
-  const pendingCount = analyses.length - verifiedCount
+  const pendingCount = countableTotal - verifiedCount
 
   const senaiteBaseUrl = getSenaiteUrl()
 
@@ -2680,7 +2687,7 @@ export function SampleDetails() {
           </div>
 
           {/* Counters */}
-          {analyses.length > 0 && (
+          {countableTotal > 0 && (
             <div className="flex items-center gap-6 text-center">
               <div>
                 <div className="text-lg font-bold text-emerald-700 dark:text-emerald-400">
@@ -2701,7 +2708,7 @@ export function SampleDetails() {
               </div>
               <div className="w-px h-8 bg-border" />
               <div>
-                <div className="text-lg font-bold text-foreground">{analyses.length}</div>
+                <div className="text-lg font-bold text-foreground">{countableTotal}</div>
                 <div className="text-[11px] text-muted-foreground uppercase tracking-wider">
                   Total
                 </div>
@@ -2859,12 +2866,12 @@ export function SampleDetails() {
           </div>{/* end: SLA + actions row */}
 
           {/* Progress bar + legend — w-full forces wrap to bottom row */}
-          {analyses.length > 0 && (
+          {countableTotal > 0 && (
             <div className="w-full space-y-1.5">
               <div className="h-1.5 bg-muted/60 rounded-full overflow-hidden">
                 <div
                   className="h-full bg-emerald-500/70 rounded-full transition-all duration-700"
-                  style={{ width: `${(verifiedCount / analyses.length) * 100}%` }}
+                  style={{ width: `${(verifiedCount / countableTotal) * 100}%` }}
                 />
               </div>
               <div className="flex items-center justify-between">
@@ -2891,7 +2898,7 @@ export function SampleDetails() {
                 <div className="flex items-center gap-2 text-[11px]">
                   <span className="text-muted-foreground">
                     <span className="text-emerald-600 dark:text-emerald-400 font-semibold">
-                      {Math.round((verifiedCount / analyses.length) * 100)}%
+                      {Math.round((verifiedCount / countableTotal) * 100)}%
                     </span>{' '}
                     complete
                   </span>
@@ -2900,7 +2907,7 @@ export function SampleDetails() {
                     <span className="text-emerald-600 dark:text-emerald-400 font-semibold">
                       {verifiedCount}
                     </span>
-                    /{analyses.length}{' '}
+                    /{countableTotal}{' '}
                     <span className={pendingCount > 0 ? 'text-amber-600 dark:text-amber-400' : ''}>
                       verified
                     </span>
