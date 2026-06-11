@@ -258,10 +258,20 @@ def fetch_parent_metadata(parent_sample_id: str) -> dict:
     return detail_items[0]
 
 
+# Parent analyses in these review states are dead — they must not feed the
+# vial mirror. A rejected service was explicitly removed from the offering;
+# a retracted original always has an active retest sibling carrying the same
+# keyword, so excluding the original never loses the keyword. Items WITHOUT
+# a review_state key are kept (default-open — under-exclusion is the safe
+# error direction here, consistent with the mirror's exclude-Micro stance).
+_INACTIVE_ANALYSIS_STATES = frozenset({"rejected", "retracted", "cancelled"})
+
+
 def fetch_parent_analysis_keywords(parent_sample_id: str) -> list[str]:
-    """Return the parent AR's analysis keywords (e.g. ANALYTE-1-PUR, ID_GHKCU,
-    HPLC-ID). Raises on SENAITE HTTP error — callers that must fail-hard rely
-    on this propagating."""
+    """Return the parent AR's ACTIVE analysis keywords (e.g. ANALYTE-1-PUR,
+    ID_GHKCU, HPLC-ID). Analyses in rejected/retracted/cancelled states are
+    excluded — see _INACTIVE_ANALYSIS_STATES. Raises on SENAITE HTTP error —
+    callers that must fail-hard rely on this propagating."""
     url = f"{SENAITE_BASE_URL}/@@API/senaite/v1/search"
     resp = _get(url, params={
         "getRequestID": parent_sample_id,
@@ -272,8 +282,11 @@ def fetch_parent_analysis_keywords(parent_sample_id: str) -> list[str]:
     out: list[str] = []
     for item in resp.json().get("items", []):
         kw = item.get("getKeyword")
-        if kw:
-            out.append(kw)
+        if not kw:
+            continue
+        if item.get("review_state") in _INACTIVE_ANALYSIS_STATES:
+            continue
+        out.append(kw)
     return out
 
 

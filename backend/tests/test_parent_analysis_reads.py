@@ -28,6 +28,25 @@ def test_fetch_parent_analysis_keywords_parses_getKeyword(monkeypatch):
     assert kws == ["ANALYTE-1-PUR", "ID_GHKCU", "HPLC-ID"]
 
 
+def test_fetch_parent_analysis_keywords_excludes_inactive_states(monkeypatch):
+    """Rejected/retracted/cancelled parent analyses must NOT feed the vial
+    mirror — a service rejected on the parent would otherwise be re-seeded
+    onto HPLC vials on every role (re)assignment. A retracted original is
+    excluded too: SENAITE creates an active retest sibling with the same
+    keyword, which keeps the keyword alive on its own."""
+    payload = {"items": [
+        {"getKeyword": "HPLC-PUR", "review_state": "unassigned"},
+        {"getKeyword": "ID_BPC157", "review_state": "rejected"},     # excluded
+        {"getKeyword": "PEPT-Total", "review_state": "retracted"},   # excluded
+        {"getKeyword": "PEPT-Total", "review_state": "unassigned"},  # retest sibling kept
+        {"getKeyword": "HPLC-ID", "review_state": "cancelled"},      # excluded
+        {"getKeyword": "ID_GHKCU"},  # no state key — default-keep
+    ]}
+    monkeypatch.setattr(sn, "_get", lambda url, **kw: _Resp(payload))
+    kws = sn.fetch_parent_analysis_keywords("P-0146")
+    assert kws == ["HPLC-PUR", "PEPT-Total", "ID_GHKCU"]
+
+
 def test_fetch_parent_analysis_keywords_raises_on_http_error(monkeypatch):
     monkeypatch.setattr(sn, "_get", lambda url, **kw: _Resp({}, status=502))
     with pytest.raises(Exception):
