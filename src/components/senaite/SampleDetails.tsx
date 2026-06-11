@@ -92,8 +92,10 @@ import {
   type ParentPromotionInfo,
   fetchSubSamplePhotoUrl,
   invalidateSubSamplePhoto,
+  seedSubSamplePhoto,
   deleteSubSamplePhoto,
   updateSubSample,
+  type SubSample,
   listSubSampleAttachments,
   uploadSubSampleAttachment,
   fetchSubSampleAttachmentUrl,
@@ -1385,6 +1387,118 @@ function VialAttachmentsBlock({
   )
 }
 
+/**
+ * Parent-page overlay: pick which vial's primary photo to attach to the
+ * parent. Snapshot semantics — the chosen image is uploaded to the parent AR
+ * in SENAITE as a "Sample Image" attachment (becoming the parent's newest
+ * image, which the header thumb and COA flows already consume). Only vials
+ * with Mk1-stored primaries are offered; pre-cutover legacy vial photos
+ * already live on the parent AR.
+ */
+function SelectVialImageDialog({
+  open,
+  onOpenChange,
+  parentSampleId,
+  parentSampleUid,
+  vials,
+  containerMode,
+  onAttached,
+}: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  parentSampleId: string
+  parentSampleUid: string
+  vials: SubSample[]
+  containerMode: boolean
+  onAttached: () => void
+}) {
+  const [attachingId, setAttachingId] = useState<string | null>(null)
+  const eligible = vials.filter(v => v.photo_external_uid?.startsWith('mk1://'))
+
+  const handleSelect = async (vial: SubSample) => {
+    setAttachingId(vial.sample_id)
+    try {
+      const url = await fetchSubSamplePhotoUrl(vial.sample_id)
+      if (!url) throw new Error('Could not load the vial photo')
+      const blob = await (await fetch(url)).blob()
+      const ext =
+        { 'image/png': '.png', 'image/jpeg': '.jpg', 'image/gif': '.gif', 'image/webp': '.webp' }[
+          blob.type
+        ] ?? '.jpg'
+      const file = new File([blob], `${vial.sample_id}-vial-photo${ext}`, {
+        type: blob.type || 'image/jpeg',
+      })
+      const result = await uploadSenaiteAttachment(parentSampleUid, file, 'Sample Image')
+      if (!result.success) throw new Error(result.message)
+      // Seed the parent's photo cache with the exact bytes so the header
+      // thumb updates instantly — the SENAITE attachment listing has a
+      // read-after-write window the immediate refetch would lose to.
+      seedSubSamplePhoto(parentSampleId, new Uint8Array(await blob.arrayBuffer()))
+      toast.success(`${vial.sample_id} photo attached to ${parentSampleId}`)
+      onAttached()
+      onOpenChange(false)
+    } catch (err) {
+      toast.error('Attach failed', {
+        description: err instanceof Error ? err.message : 'Unknown error',
+      })
+    } finally {
+      setAttachingId(null)
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>Select Vial Image</DialogTitle>
+        </DialogHeader>
+        <p className="text-xs text-muted-foreground -mt-2">
+          Choose which vial&apos;s primary photo to attach to {parentSampleId}. The image is
+          uploaded to SENAITE as a Sample Image attachment and becomes the parent&apos;s
+          newest image.
+        </p>
+        {eligible.length === 0 ? (
+          <p className="text-sm text-muted-foreground py-6 text-center">
+            No vial photos available.
+          </p>
+        ) : (
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-3 max-h-[60vh] overflow-y-auto pr-1">
+            {eligible.map(v => (
+              <button
+                key={v.sample_id}
+                type="button"
+                disabled={attachingId !== null}
+                onClick={() => void handleSelect(v)}
+                className="group text-left rounded-lg border border-border/50 bg-muted/20 hover:border-primary/60 hover:bg-muted/50 transition-colors p-2 space-y-1.5 cursor-pointer disabled:opacity-60"
+              >
+                <VialPhotoThumb sampleId={v.sample_id} hasPhoto sizeClass="w-full h-28" />
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <span className="text-xs font-medium text-foreground">
+                    {vialLabel(v.vial_sequence, containerMode)}
+                  </span>
+                  {v.assignment_role && <RoleHeaderBadge role={v.assignment_role} />}
+                  {v.assignment_kind === 'variance' && (
+                    <span className="inline-block text-[10px] leading-none px-1.5 py-0.5 rounded border uppercase tracking-wide font-medium bg-amber-500/15 text-amber-700 border-amber-500/40 dark:text-amber-300">
+                      Variance
+                    </span>
+                  )}
+                  {attachingId === v.sample_id && <Spinner className="size-3" />}
+                </div>
+                <div className="text-[10px] text-muted-foreground font-mono">{v.sample_id}</div>
+                {v.received_at && (
+                  <div className="text-[10px] text-muted-foreground">
+                    Received {new Date(v.received_at).toLocaleDateString()}
+                  </div>
+                )}
+              </button>
+            ))}
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 function DataRow({
   label,
   value,
@@ -2209,6 +2323,8 @@ export function SampleDetails() {
   // Manage analyses panel
   const [manageAnalysesOpen, setManageAnalysesOpen] = useState(false)
   const [vialsQuickLookOpen, setVialsQuickLookOpen] = useState(false)
+  // Parent pages: pick a vial's primary photo to attach to the parent AR
+  const [selectVialImageOpen, setSelectVialImageOpen] = useState(false)
   const [availableServices, setAvailableServices] = useState<AnalysisService[]>([])
   const [servicesLoading, setServicesLoading] = useState(false)
   const [serviceSearch, setServiceSearch] = useState('')
@@ -4004,6 +4120,27 @@ export function SampleDetails() {
                   onUploaded={() => fetchSample(data.sample_id)}
                 />
               )}
+              {/* Parent pages: attach a vial's primary photo to this sample.
+                  Only offered when at least one vial has an Mk1-stored
+                  primary (legacy vial photos already live on this AR). */}
+              {parentSampleId === null &&
+                data.sample_uid &&
+                (subData?.sub_samples.some(v => v.photo_external_uid?.startsWith('mk1://')) ?? false) && (
+                <div className="pt-3 border-t border-border/40 flex items-center gap-2 flex-wrap" onClick={e => e.stopPropagation()}>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="gap-1.5 text-xs"
+                    onClick={() => setSelectVialImageOpen(true)}
+                  >
+                    <ImageIcon size={13} />
+                    Select Vial Image
+                  </Button>
+                  <span className="text-[11px] text-muted-foreground">
+                    Attach a vial&apos;s photo to this sample
+                  </span>
+                </div>
+              )}
             </div>
           </SectionHeader>
         </Card>
@@ -4201,6 +4338,25 @@ export function SampleDetails() {
             parentSampleId={data.sample_id}
             analyteNameMap={analyteNameMap}
             onParentDataStale={() => refreshSample(data.sample_id)}
+          />
+        )}
+
+        {parentSampleId === null && data.sample_id && data.sample_uid && (
+          <SelectVialImageDialog
+            open={selectVialImageOpen}
+            onOpenChange={setSelectVialImageOpen}
+            parentSampleId={data.sample_id}
+            parentSampleUid={data.sample_uid}
+            vials={subData?.sub_samples ?? []}
+            containerMode={subData?.parent.container_mode ?? false}
+            onAttached={() => {
+              // Header thumb: remount → picks up the freshly seeded cache
+              // entry immediately (no SENAITE read-after-write race).
+              setVialPhotoVersion(v => v + 1)
+              // Attachments list: re-pull the lookup. SENAITE's attachment
+              // listing can lag a beat; the next refresh catches up if so.
+              refreshSample(data.sample_id)
+            }}
           />
         )}
 

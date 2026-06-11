@@ -108,6 +108,27 @@ image swaps it into the photo slot:
 - FE: "Primary" (star) button on each extra image card; refreshes both the
   photo slot (header included) and the attachment list.
 
+## Select Vial Image — parent pages (added same day)
+
+Parents (especially container-mode) need a representative vial image. Snapshot
+semantics, FE-orchestrated, zero backend changes:
+
+- Attachments section on parent pages gets a **Select Vial Image** button
+  (shown when ≥1 vial has an Mk1-stored primary). Opens a dialog grid of each
+  vial's primary photo + vial label, role badge, variance chip, sample_id,
+  received date.
+- Selecting fetches the vial's photo bytes via the authed photo endpoint and
+  uploads them to the parent AR via the existing
+  `POST /wizard/senaite/samples/{uid}/attachments` route as a **Sample Image**
+  attachment named `{vial}-vial-photo.{ext}`. The parent's header thumb
+  (last-attachment fallback), SENAITE attachments list, and COA flows all pick
+  it up natively.
+- Header updates instantly via `seedSubSamplePhoto(parent, bytes)` (sidesteps
+  SENAITE's attachment-listing read-after-write window); the attachments list
+  refreshes via `refreshSample` and catches up if SENAITE lags a beat.
+- Only Mk1-stored primaries are offered — pre-cutover legacy vial photos
+  already live on the parent AR.
+
 ## Error handling
 
 - Upload: non-image → 400; missing vial → 404; storage failure → 502.
