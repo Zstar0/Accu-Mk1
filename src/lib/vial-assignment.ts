@@ -100,11 +100,20 @@ function liveByKeyword(analyses: SenaiteAnalysis[]): Map<string, SenaiteAnalysis
   return out
 }
 
+/** Generic per-analyte keyword as carried on the parent blend AR. The vial
+ *  mirror TRANSLATES these to per-substance services (PUR_<X>/QTY_<X>) — see
+ *  backend/lims_analyses/seeder.py `_PARENT_ANALYTE`. Kept in sync by hand. */
+const PARENT_ANALYTE = /^ANALYTE-([1-4])-(PUR|QTY)$/
+
 /** Build parentKeyword → VialAssignment. Exact keyword match first; identity
- *  type-bridge (ID_* ↔ HPLC-ID) only in single-peptide families. */
+ *  type-bridge (ID_* ↔ HPLC-ID) only in single-peptide families; analyte
+ *  bridge (ANALYTE-{n}-PUR/QTY ↔ PUR_/QTY_<X>) when the slot→peptide map is
+ *  provided — anchored on the seeder's "{Peptide} - Purity|Quantity" title
+ *  contract, since the FE has no peptide_id to join on. */
 export function buildVialAssignmentMap(
   parentAnalyses: SenaiteAnalysis[],
   vials: VialInput[],
+  analyteNames?: Map<number, string>,
 ): Map<string, VialAssignment> {
   // Per-vial live keyword index.
   const vialLive = vials.map(v => ({ v, live: liveByKeyword(v.analyses) }))
@@ -134,6 +143,21 @@ export function buildVialAssignmentMap(
     // 2) identity bridge (only if no exact match and single-peptide family).
     if (matches.length === 0 && identityBridgeAllowed && isIdentityAnalysis(pa)) {
       matches = matchToVialMatches((_kw, a) => isIdentityAnalysis(a))
+    }
+    // 3) analyte bridge: a generic ANALYTE-{n}-PUR/QTY parent row joins the
+    //    vial row the seeder translated it to. Slot n → peptide display name
+    //    (same Analyte{N}Peptide source the seeder's slot_map reads), then
+    //    match per-substance keyword prefix + the "{Peptide} - " title anchor.
+    //    Empty slot → no match (mirrors seeder.skip_empty_slot).
+    if (matches.length === 0 && analyteNames) {
+      const m = PARENT_ANALYTE.exec(pa.keyword)
+      const peptide = m ? analyteNames.get(Number(m[1])) : undefined
+      if (m && peptide) {
+        const prefix = m[2] === 'PUR' ? 'PUR_' : 'QTY_'
+        matches = matchToVialMatches(
+          (kw, a) => kw.startsWith(prefix) && (a.title ?? '').startsWith(`${peptide} - `),
+        )
+      }
     }
     if (matches.length === 0) continue
     result.set(pa.keyword, { matches, editable: matches.length === 1 })

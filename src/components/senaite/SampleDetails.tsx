@@ -1911,6 +1911,15 @@ export function SampleDetails() {
     })),
   })
 
+  // Slot number → display peptide name (e.g. { 1: "BPC-157", 2: "TB-500" }).
+  // Built here (pre-early-returns) because the overlay join's analyte bridge
+  // needs it; also consumed by the analyte cards + AnalysisTable renames below.
+  const analyteNameMap = new Map<number, string>()
+  for (const analyte of data?.analytes ?? []) {
+    const displayName = analyte.matched_peptide_name ?? analyte.raw_name.replace(/\s*-\s*[^-]+\([^)]+\)\s*$/, '')
+    analyteNameMap.set(analyte.slot_number, displayName)
+  }
+
   // Parent-page only (memo would not help: useQueries' outer array churns each
   // render). The join is a cheap pure function.
   const vialAssignmentByKeyword =
@@ -1925,6 +1934,7 @@ export function SampleDetails() {
             assignmentRole: v.assignment_role, // vial bench role
             assignmentKind: v.assignment_kind, // explicit variance bucket — drives overlay treatment
           })),
+          analyteNameMap, // analyte bridge: ANALYTE-{n}-PUR/QTY ↔ PUR_/QTY_<X>
         )
 
   const { data: parentSummary } = useQuery({
@@ -1979,7 +1989,11 @@ export function SampleDetails() {
   // bucket). Sub-sample pages: look up in the parent's sub-samples list which
   // carries assignment_role on each entry.
   const currentAssignment: string | null = isParent
-    ? subData?.parent.assignment_role ?? 'hplc'
+    ? subData?.parent.container_mode
+      // Container parent: a pure report depository — it has no bench role,
+      // so no "Assigned to" line / role badge (its vials carry the roles).
+      ? null
+      : subData?.parent.assignment_role ?? 'hplc'
     : parentSummary?.sub_samples.find(s => s.sample_id === sampleId)
         ?.assignment_role ?? null
   const assignmentLabel = (() => {
@@ -2501,14 +2515,6 @@ export function SampleDetails() {
 
   const senaiteBaseUrl = getSenaiteUrl()
 
-  // Build a map from slot number → display peptide name
-  // e.g. { 1: "BPC-157", 2: "TB-500" }
-  const analyteNameMap = new Map<number, string>()
-  for (const analyte of data.analytes) {
-    const displayName = analyte.matched_peptide_name ?? analyte.raw_name.replace(/\s*-\s*[^-]+\([^)]+\)\s*$/, '')
-    analyteNameMap.set(analyte.slot_number, displayName)
-  }
-
   return (
     <div className="max-w-6xl mx-auto px-6 py-6">
         {/* Breadcrumb — scrolls away with the page */}
@@ -2741,7 +2747,12 @@ export function SampleDetails() {
                   <Package className="h-3.5 w-3.5 shrink-0" />
                   <span>Parent Sample</span>
                   <span aria-hidden>·</span>
-                  <span>Vial 1 of {subCount + 1}</span>
+                  {/* Container parent is NOT a vial — show the family size. */}
+                  <span>
+                    {subData?.parent.container_mode
+                      ? `${subCount} vial${subCount === 1 ? '' : 's'}`
+                      : `Vial 1 of ${subCount + 1}`}
+                  </span>
                   {currentAssignment && (
                     <>
                       <span aria-hidden>·</span>
