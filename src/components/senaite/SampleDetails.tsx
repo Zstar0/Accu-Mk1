@@ -1879,6 +1879,11 @@ export function SampleDetails() {
     return m ? m[1] : null
   }, [sampleId])
 
+  // Container-mode parent page = cumulative report view: the parent's rows
+  // are deposit targets, bench affordances hidden (SOFT lock — spec
+  // 2026-06-10-container-parent-design.md). Sub-vial pages unaffected.
+  const depositOnly = parentSampleId === null && (subData?.parent.container_mode ?? false)
+
   const queryClient = useQueryClient()
 
   // Parent-page overlay: fan out each vial's Mk1 analyses so parent analysis
@@ -3702,6 +3707,7 @@ export function SampleDetails() {
           isAnalysisSlaPublished={analysisSla.isPublished}
           analysisSlaPriority={analysisSla.priority}
           vialKind={currentVialKind}
+          depositOnly={depositOnly}
         />
 
         {parentSampleId === null && data.sample_id && (
