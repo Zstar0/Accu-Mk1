@@ -85,7 +85,10 @@ export function useReceiveWizard(parent: ParentInfo) {
       // Backend defaults assignment_role to 'hplc' on lims_samples; preserve
       // that locally when the response carries null (e.g. cold-cache parent).
       setParentRole(data.parent.assignment_role ?? 'hplc')
-      setContainerMode(data.parent.container_mode ?? false)
+      // containerMode is set ONLY by the mount-time ensure call (authoritative;
+      // the flag never changes after row creation). The list endpoint's
+      // missing-parent fallback reports false and must not downgrade the
+      // display value if this refresh races ahead of ensure's commit.
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
