@@ -790,6 +790,32 @@ class LimsSubSample(Base):
     parent_sample: Mapped["LimsSample"] = relationship("LimsSample", back_populates="sub_samples")
 
 
+class LimsSubSampleAttachment(Base):
+    """An extra sample image attached to a vial (beyond the check-in photo,
+    which lives on lims_sub_samples.photo_external_uid). Bytes are stored in
+    the Mk1 photo store (sub_samples/photo_storage.py); storage_key is the
+    raw key (no mk1:// prefix — these are always Mk1-stored).
+
+    See docs/superpowers/specs/2026-06-11-subsample-attachments-design.md.
+    """
+
+    __tablename__ = "lims_sub_sample_attachments"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    sub_sample_pk: Mapped[int] = mapped_column(
+        Integer, ForeignKey("lims_sub_samples.id", ondelete="CASCADE"), nullable=False
+    )
+    storage_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    content_type: Mapped[str] = mapped_column(String(100), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    user_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+    sub_sample: Mapped["LimsSubSample"] = relationship("LimsSubSample")
+
+
 class SlaTier(Base):
     """A named SLA turnaround target. Sub-project A (revised to tiers).
 

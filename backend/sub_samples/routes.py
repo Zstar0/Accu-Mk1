@@ -30,6 +30,8 @@ from sub_samples.schemas import (
     VarianceSetResponse, VarianceVialResult, VarianceStatsEntry,
     PatchVarianceMembershipRequest, VarianceEntitlementResponse,
     VarianceOverrideRequest,
+    SubSampleAttachmentResponse, SubSampleAttachmentListResponse,
+    AddSubSampleAttachmentRequest,
 )
 
 
@@ -426,6 +428,118 @@ def get_sub_sample_photo(
         )
 
     return StreamingResponse(bin_resp.iter_content(8192), media_type=content_type)
+
+
+@router.delete("/{sample_id}/photo", status_code=status.HTTP_204_NO_CONTENT)
+def delete_sub_sample_photo(
+    sample_id: str,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """Remove a vial's check-in photo (Mk1-stored only). Idempotent.
+
+    Legacy SENAITE-attachment photos → 409: they live on the parent AR and
+    deleting them is a SENAITE-side operation we don't perform from here."""
+    try:
+        service.delete_sub_sample_photo(db, sample_id, user_id=user.id)
+    except service.PhotoNotMk1Error as e:
+        raise HTTPException(status_code=409, detail={
+            "code": "photo_not_mk1", "message": str(e),
+        })
+    return None
+
+
+# ── Sub-sample image attachments (2026-06-11 design) ─────────────────────────
+
+def _serialize_attachment(att) -> SubSampleAttachmentResponse:
+    return SubSampleAttachmentResponse(
+        id=att.id,
+        filename=att.filename,
+        content_type=att.content_type,
+        created_at=att.created_at,
+    )
+
+
+@router.get("/{sample_id}/attachments", response_model=SubSampleAttachmentListResponse)
+def list_sub_sample_attachments(
+    sample_id: str,
+    db: Session = Depends(get_db),
+    _user=Depends(get_current_user),
+):
+    """List extra sample images on a vial (excludes the check-in photo,
+    which is served by GET /{sample_id}/photo)."""
+    try:
+        atts = service.list_attachments(db, sample_id)
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return SubSampleAttachmentListResponse(
+        attachments=[_serialize_attachment(a) for a in atts]
+    )
+
+
+@router.post(
+    "/{sample_id}/attachments",
+    status_code=status.HTTP_201_CREATED,
+    response_model=SubSampleAttachmentResponse,
+)
+def add_sub_sample_attachment(
+    sample_id: str,
+    body: AddSubSampleAttachmentRequest,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """Attach an extra sample image to a vial. Images only."""
+    image_bytes = _decode_photo(body.image_base64)
+    try:
+        att = service.add_attachment(
+            db, sample_id, image_bytes, body.filename, user_id=user.id
+        )
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    return _serialize_attachment(att)
+
+
+@router.get("/{sample_id}/attachments/{attachment_id}")
+def get_sub_sample_attachment(
+    sample_id: str,
+    attachment_id: int,
+    db: Session = Depends(get_db),
+    _user=Depends(get_current_user),
+):
+    """Stream an attachment's image bytes."""
+    from fastapi.responses import Response
+    from sub_samples.photo_storage import PhotoNotFoundError, get_storage
+    try:
+        att = service.get_attachment(db, sample_id, attachment_id)
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    try:
+        image_bytes = get_storage().fetch_photo(att.storage_key)
+    except PhotoNotFoundError:
+        raise HTTPException(404, f"Attachment file missing from storage for {sample_id}")
+    return Response(content=image_bytes, media_type=att.content_type)
+
+
+@router.delete(
+    "/{sample_id}/attachments/{attachment_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def delete_sub_sample_attachment(
+    sample_id: str,
+    attachment_id: int,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """Remove an extra sample image (row + stored file)."""
+    try:
+        service.delete_attachment(db, sample_id, attachment_id, user_id=user.id)
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return None
 
 
 # ── Variance set endpoints (worksheet-variance design 2026-06-02) ────────────

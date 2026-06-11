@@ -5304,6 +5304,116 @@ export async function fetchSubSamplePhotoUrl(
   return url
 }
 
+/**
+ * Drop a sample's cached photo object URL so the next fetch hits the server.
+ * Call after the photo is replaced or removed.
+ */
+export function invalidateSubSamplePhoto(sampleId: string): void {
+  const prev = _subSamplePhotoCache.get(sampleId)
+  if (prev?.startsWith('blob:')) URL.revokeObjectURL(prev)
+  _subSamplePhotoCache.delete(sampleId)
+}
+
+/**
+ * Remove a vial's check-in photo (Mk1-stored only; legacy SENAITE photos 409).
+ * Invalidates the local photo cache on success.
+ */
+export async function deleteSubSamplePhoto(sampleId: string): Promise<void> {
+  const response = await fetch(
+    `${API_BASE_URL()}/api/sub-samples/${encodeURIComponent(sampleId)}/photo`,
+    { method: 'DELETE', headers: getBearerHeaders() }
+  )
+  if (!response.ok && response.status !== 204)
+    throw new Error(`deleteSubSamplePhoto failed: ${response.status}`)
+  invalidateSubSamplePhoto(sampleId)
+}
+
+// ── Sub-sample image attachments (2026-06-11 design) ──────────────────────────
+
+export interface SubSampleAttachment {
+  id: number
+  filename: string
+  content_type: string
+  created_at: string
+}
+
+export async function listSubSampleAttachments(
+  sampleId: string
+): Promise<SubSampleAttachment[]> {
+  const response = await fetch(
+    `${API_BASE_URL()}/api/sub-samples/${encodeURIComponent(sampleId)}/attachments`,
+    { headers: getBearerHeaders() }
+  )
+  if (!response.ok)
+    throw new Error(`listSubSampleAttachments failed: ${response.status}`)
+  const body = await response.json()
+  return body.attachments ?? []
+}
+
+export async function uploadSubSampleAttachment(
+  sampleId: string,
+  imageBase64: string,
+  filename: string
+): Promise<SubSampleAttachment> {
+  const response = await fetch(
+    `${API_BASE_URL()}/api/sub-samples/${encodeURIComponent(sampleId)}/attachments`,
+    {
+      method: 'POST',
+      headers: getBearerHeaders('application/json'),
+      body: JSON.stringify({ image_base64: imageBase64, filename }),
+    }
+  )
+  if (!response.ok) {
+    const err = await response.json().catch(() => null)
+    throw new Error(
+      typeof err?.detail === 'string'
+        ? err.detail
+        : `uploadSubSampleAttachment failed: ${response.status}`
+    )
+  }
+  return response.json()
+}
+
+/**
+ * Object URL for an attachment's image (Bearer-authed proxy, same pattern as
+ * fetchSubSamplePhotoUrl). Cached per attachment id.
+ */
+const _subSampleAttachmentCache = new Map<number, string>()
+
+export async function fetchSubSampleAttachmentUrl(
+  sampleId: string,
+  attachmentId: number
+): Promise<string | null> {
+  const cached = _subSampleAttachmentCache.get(attachmentId)
+  if (cached) return cached
+  const response = await fetch(
+    `${API_BASE_URL()}/api/sub-samples/${encodeURIComponent(sampleId)}/attachments/${attachmentId}`,
+    { headers: getBearerHeaders() }
+  )
+  if (response.status === 404) return null
+  if (!response.ok)
+    throw new Error(`fetchSubSampleAttachmentUrl failed: ${response.status}`)
+  const blob = await response.blob()
+  const url = URL.createObjectURL(blob)
+  _subSampleAttachmentCache.set(attachmentId, url)
+  return url
+}
+
+export async function deleteSubSampleAttachment(
+  sampleId: string,
+  attachmentId: number
+): Promise<void> {
+  const response = await fetch(
+    `${API_BASE_URL()}/api/sub-samples/${encodeURIComponent(sampleId)}/attachments/${attachmentId}`,
+    { method: 'DELETE', headers: getBearerHeaders() }
+  )
+  if (!response.ok && response.status !== 204)
+    throw new Error(`deleteSubSampleAttachment failed: ${response.status}`)
+  const prev = _subSampleAttachmentCache.get(attachmentId)
+  if (prev?.startsWith('blob:')) URL.revokeObjectURL(prev)
+  _subSampleAttachmentCache.delete(attachmentId)
+}
+
 // ── Variance set (worksheet-variance design 2026-06-02) ──────────────────────
 
 export interface VarianceResultEntry {

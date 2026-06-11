@@ -129,6 +129,27 @@ class AggregatesResponse(BaseModel):
     )
 
 
+# ── Sub-sample image attachments (2026-06-11 design) ─────────────────────────
+
+class SubSampleAttachmentResponse(BaseModel):
+    id: int
+    filename: str
+    content_type: str
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class SubSampleAttachmentListResponse(BaseModel):
+    attachments: list[SubSampleAttachmentResponse]
+
+
+class AddSubSampleAttachmentRequest(BaseModel):
+    image_base64: str = Field(..., description="Image as base64 (data: URL prefix ok)")
+    filename: str = Field(..., min_length=1, max_length=255)
+
+
 # ── Variance set schemas (worksheet-variance design 2026-06-02) ──────────────
 
 class VarianceVialResult(BaseModel):

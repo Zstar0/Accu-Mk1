@@ -484,11 +484,186 @@ def update_sub_sample(
             user_id=user_id,
         ))
     if photo_bytes is not None:
-        senaite.upload_photo(sub.photo_external_uid, photo_bytes, photo_filename or "vial.jpg")
+        # Mk1 branch also covers photo_external_uid IS NULL (photo previously
+        # removed — only Mk1-stored photos can be removed, and new photos
+        # always land in Mk1 storage) and native vials generally.
+        if _photo_is_mk1(sub) or not sub.photo_external_uid or native.is_native_vial(sub):
+            # Mk1-stored photo: save the new file first, swap the key,
+            # then best-effort delete the old file. (Previously this branch
+            # didn't exist and we called senaite.upload_photo with an mk1://
+            # key — broken for every Mk1-stored vial.)
+            from sub_samples.photo_storage import get_storage
+            old_key = sub.photo_external_uid[len("mk1://"):] if sub.photo_external_uid else None
+            new_key = get_storage().save_photo(
+                sub.sample_id, photo_bytes, photo_filename or "vial.jpg"
+            )
+            sub.photo_external_uid = f"mk1://{new_key}"
+            if old_key:
+                _delete_stored_photo_quietly(old_key, sub.sample_id)
+            db.add(LimsSubSampleEvent(
+                sub_sample_pk=sub.id,
+                event="photo_updated",
+                details={"key": new_key},
+                user_id=user_id,
+            ))
+        else:
+            senaite.upload_photo(sub.photo_external_uid, photo_bytes, photo_filename or "vial.jpg")
     sub.parent_sample.last_synced_at = datetime.utcnow()
     db.commit()
     db.refresh(sub)
     return sub
+
+
+def _photo_is_mk1(sub: LimsSubSample) -> bool:
+    """True when the vial's check-in photo lives in Mk1 storage (mk1:// key).
+
+    Distinct from native.is_native_vial: legacy vials created after the Phase
+    2.5 photo cutover have a SENAITE AR but an Mk1-stored photo."""
+    return bool(sub.photo_external_uid) and sub.photo_external_uid.startswith("mk1://")
+
+
+def _delete_stored_photo_quietly(key: str, sample_id: str) -> None:
+    """Best-effort storage delete — a leaked file must never fail the request."""
+    from sub_samples.photo_storage import PhotoStorageError, get_storage
+    try:
+        get_storage().delete_photo(key)
+    except PhotoStorageError as e:
+        log.warning("sub_samples.photo_cleanup_failed sample=%s key=%s err=%s",
+                    sample_id, key, e)
+
+
+class PhotoNotMk1Error(RuntimeError):
+    """Raised when asked to delete a photo that doesn't live in Mk1 storage."""
+
+
+def delete_sub_sample_photo(db: Session, sample_id: str, user_id: Optional[int] = None) -> LimsSubSample:
+    """Remove a vial's check-in photo (Mk1-stored only).
+
+    Legacy SENAITE-attachment photos live on the parent AR and are not ours
+    to delete — callers get PhotoNotMk1Error (routes map it to 409)."""
+    sub = db.execute(
+        select(LimsSubSample).where(LimsSubSample.sample_id == sample_id)
+    ).scalar_one()
+    if not sub.photo_external_uid:
+        return sub  # already gone — idempotent
+    if not _photo_is_mk1(sub):
+        raise PhotoNotMk1Error(
+            f"{sample_id} photo is a SENAITE attachment, not Mk1-stored"
+        )
+    key = sub.photo_external_uid[len("mk1://"):]
+    sub.photo_external_uid = None
+    _delete_stored_photo_quietly(key, sample_id)
+    db.add(LimsSubSampleEvent(
+        sub_sample_pk=sub.id,
+        event="photo_removed",
+        details={"key": key},
+        user_id=user_id,
+    ))
+    db.commit()
+    db.refresh(sub)
+    return sub
+
+
+# ── Sub-sample image attachments (2026-06-11 design) ─────────────────────────
+
+# Extra sample images beyond the check-in photo. Metadata rows in
+# lims_sub_sample_attachments; bytes in the same Mk1 photo store.
+
+_IMAGE_CONTENT_TYPES = {
+    "image/png", "image/jpeg", "image/gif", "image/webp", "image/heic",
+}
+_EXT_CONTENT_TYPES = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+    ".heic": "image/heic",
+}
+
+
+def _get_sub(db: Session, sample_id: str) -> LimsSubSample:
+    sub = db.execute(
+        select(LimsSubSample).where(LimsSubSample.sample_id == sample_id)
+    ).scalar_one_or_none()
+    if not sub:
+        raise LookupError(f"sub-sample {sample_id} not found")
+    return sub
+
+
+def list_attachments(db: Session, sample_id: str) -> list:
+    from models import LimsSubSampleAttachment
+    sub = _get_sub(db, sample_id)
+    return list(db.execute(
+        select(LimsSubSampleAttachment)
+        .where(LimsSubSampleAttachment.sub_sample_pk == sub.id)
+        .order_by(LimsSubSampleAttachment.created_at, LimsSubSampleAttachment.id)
+    ).scalars())
+
+
+def add_attachment(
+    db: Session,
+    sample_id: str,
+    image_bytes: bytes,
+    filename: str,
+    user_id: Optional[int] = None,
+):
+    """Persist an extra sample image. Images only — content type derives from
+    the filename extension (the storage layer re-validates the extension)."""
+    from models import LimsSubSampleAttachment
+    from sub_samples.photo_storage import get_storage
+
+    sub = _get_sub(db, sample_id)
+    ext = os.path.splitext(filename or "")[1].lower()
+    content_type = _EXT_CONTENT_TYPES.get(ext)
+    if content_type not in _IMAGE_CONTENT_TYPES:
+        raise ValueError(
+            f"unsupported image type {ext or '(none)'} — allowed: "
+            + ", ".join(sorted(_EXT_CONTENT_TYPES))
+        )
+    key = get_storage().save_photo(sample_id, image_bytes, filename)
+    att = LimsSubSampleAttachment(
+        sub_sample_pk=sub.id,
+        storage_key=key,
+        filename=filename,
+        content_type=content_type,
+        user_id=user_id,
+    )
+    db.add(att)
+    db.add(LimsSubSampleEvent(
+        sub_sample_pk=sub.id,
+        event="attachment_added",
+        details={"filename": filename},
+        user_id=user_id,
+    ))
+    db.commit()
+    db.refresh(att)
+    return att
+
+
+def get_attachment(db: Session, sample_id: str, attachment_id: int):
+    from models import LimsSubSampleAttachment
+    sub = _get_sub(db, sample_id)
+    att = db.get(LimsSubSampleAttachment, attachment_id)
+    if not att or att.sub_sample_pk != sub.id:
+        raise LookupError(f"attachment {attachment_id} not found on {sample_id}")
+    return att
+
+
+def delete_attachment(
+    db: Session, sample_id: str, attachment_id: int, user_id: Optional[int] = None
+) -> None:
+    att = get_attachment(db, sample_id, attachment_id)
+    key, filename, sub_pk = att.storage_key, att.filename, att.sub_sample_pk
+    db.delete(att)
+    db.add(LimsSubSampleEvent(
+        sub_sample_pk=sub_pk,
+        event="attachment_removed",
+        details={"filename": filename},
+        user_id=user_id,
+    ))
+    db.commit()
+    _delete_stored_photo_quietly(key, sample_id)
 
 
 def delete_sub_sample(db: Session, sample_id: str) -> None:

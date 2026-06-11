@@ -90,6 +90,15 @@ import {
   listParentPromotions,
   listParentLineStates,
   type ParentPromotionInfo,
+  fetchSubSamplePhotoUrl,
+  invalidateSubSamplePhoto,
+  deleteSubSamplePhoto,
+  updateSubSample,
+  listSubSampleAttachments,
+  uploadSubSampleAttachment,
+  fetchSubSampleAttachmentUrl,
+  deleteSubSampleAttachment,
+  type SubSampleAttachment,
 } from '@/lib/api'
 import { ReceiveWizard } from '@/components/intake/ReceiveWizard/ReceiveWizard'
 import type { ParentInfo } from '@/components/intake/ReceiveWizard/useReceiveWizard'
@@ -1037,6 +1046,309 @@ function AddAttachmentForm({
   )
 }
 
+// ── Vial (Mk1) attachments — sub-sample pages only ───────────────────────────
+// Check-in photo (replace/remove) + extra sample images, all stored Mk1-side.
+// docs/superpowers/specs/2026-06-11-subsample-attachments-design.md
+
+function fileToDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(reader.result as string)
+    reader.onerror = () => reject(new Error('Could not read file'))
+    reader.readAsDataURL(file)
+  })
+}
+
+/** Trash button that arms on first click (avoids window.confirm, which is
+ *  unreliable in the Tauri webview) and fires on the second within 3s. */
+function ArmedDeleteButton({ onConfirm, label }: { onConfirm: () => void; label: string }) {
+  const [armed, setArmed] = useState(false)
+  useEffect(() => {
+    if (!armed) return
+    const t = setTimeout(() => setArmed(false), 3000)
+    return () => clearTimeout(t)
+  }, [armed])
+  return (
+    <button
+      type="button"
+      onClick={e => {
+        e.stopPropagation()
+        if (armed) {
+          setArmed(false)
+          onConfirm()
+        } else {
+          setArmed(true)
+        }
+      }}
+      title={armed ? `Click again to remove ${label}` : `Remove ${label}`}
+      className={cn(
+        'inline-flex items-center gap-1 px-2 py-1 text-xs rounded-md border transition-colors cursor-pointer shrink-0',
+        armed
+          ? 'border-red-500/60 bg-red-500/15 text-red-600 dark:text-red-400'
+          : 'border-border bg-background text-muted-foreground hover:bg-muted hover:text-foreground',
+      )}
+    >
+      <Trash2 size={11} />
+      {armed ? 'Confirm?' : 'Remove'}
+    </button>
+  )
+}
+
+function VialAttachmentImage({
+  sampleId,
+  attachmentId,
+  filename,
+}: {
+  sampleId: string
+  attachmentId: number
+  filename: string
+}) {
+  const [src, setSrc] = useState<string | null>(null)
+  const [error, setError] = useState(false)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    let cancelled = false
+    fetchSubSampleAttachmentUrl(sampleId, attachmentId)
+      .then(url => { if (!cancelled) setSrc(url) })
+      .catch(() => { if (!cancelled) setError(true) })
+      .finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [sampleId, attachmentId])
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center w-full h-48 rounded-lg bg-muted/40 border border-border/30">
+        <Spinner className="size-5" />
+      </div>
+    )
+  }
+  if (error || !src) {
+    return (
+      <div className="flex flex-col items-center justify-center gap-2 w-full h-48 rounded-lg bg-muted/40 border border-border/30">
+        <ImageIcon size={24} className="text-muted-foreground" />
+        <span className="text-xs text-muted-foreground">Failed to load image</span>
+      </div>
+    )
+  }
+  return (
+    <img
+      src={src}
+      alt={filename}
+      className="rounded-lg border border-border/30 max-h-40 w-auto object-contain"
+    />
+  )
+}
+
+function AddVialImageForm({
+  sampleId,
+  onUploaded,
+}: {
+  sampleId: string
+  onUploaded: () => void
+}) {
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const [file, setFile] = useState<File | null>(null)
+  const [isUploading, setIsUploading] = useState(false)
+
+  const handleUpload = async () => {
+    if (!file) return
+    setIsUploading(true)
+    try {
+      const dataUrl = await fileToDataUrl(file)
+      await uploadSubSampleAttachment(sampleId, dataUrl, file.name)
+      toast.success('Image attached')
+      setFile(null)
+      if (fileInputRef.current) fileInputRef.current.value = ''
+      onUploaded()
+    } catch (err) {
+      toast.error('Upload failed', {
+        description: err instanceof Error ? err.message : 'Unknown error',
+      })
+    } finally {
+      setIsUploading(false)
+    }
+  }
+
+  return (
+    <div className="pt-3 border-t border-border/40" onClick={e => e.stopPropagation()}>
+      <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">
+        Add Sample Image
+      </p>
+      <div className="flex items-center gap-2 flex-wrap">
+        <button
+          type="button"
+          onClick={() => fileInputRef.current?.click()}
+          disabled={isUploading}
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-md border border-border bg-muted/40 hover:bg-muted cursor-pointer transition-colors disabled:opacity-50"
+        >
+          <ImageIcon size={13} />
+          {file ? file.name : 'Choose image'}
+        </button>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/*"
+          className="hidden"
+          onChange={e => setFile(e.target.files?.[0] ?? null)}
+          disabled={isUploading}
+        />
+        <Button
+          size="sm"
+          onClick={handleUpload}
+          disabled={!file || isUploading}
+          className="h-8 gap-1.5"
+        >
+          {isUploading ? <Spinner className="size-3.5" /> : <Upload size={13} />}
+          Upload
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+function VialAttachmentsBlock({
+  sampleId,
+  photoUrl,
+  photoIsMk1,
+  attachments,
+  onPhotoChanged,
+  onAttachmentsChanged,
+}: {
+  sampleId: string
+  photoUrl: string | null
+  /** Remove is only offered for Mk1-stored photos; legacy SENAITE photos
+   *  live on the parent AR and aren't deletable from here. */
+  photoIsMk1: boolean
+  attachments: SubSampleAttachment[]
+  onPhotoChanged: () => void
+  onAttachmentsChanged: () => void
+}) {
+  const replaceInputRef = useRef<HTMLInputElement>(null)
+  const [busy, setBusy] = useState(false)
+
+  const handleReplaceFile = async (file: File | null) => {
+    if (!file) return
+    setBusy(true)
+    try {
+      const dataUrl = await fileToDataUrl(file)
+      await updateSubSample(sampleId, { photoBase64: dataUrl })
+      invalidateSubSamplePhoto(sampleId)
+      toast.success(photoUrl ? 'Vial photo replaced' : 'Vial photo added')
+      onPhotoChanged()
+    } catch (err) {
+      toast.error('Photo update failed', {
+        description: err instanceof Error ? err.message : 'Unknown error',
+      })
+    } finally {
+      setBusy(false)
+      if (replaceInputRef.current) replaceInputRef.current.value = ''
+    }
+  }
+
+  const handleRemovePhoto = async () => {
+    setBusy(true)
+    try {
+      await deleteSubSamplePhoto(sampleId)
+      toast.success('Vial photo removed')
+      onPhotoChanged()
+    } catch (err) {
+      toast.error('Remove failed', {
+        description: err instanceof Error ? err.message : 'Unknown error',
+      })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const handleDeleteAttachment = async (att: SubSampleAttachment) => {
+    try {
+      await deleteSubSampleAttachment(sampleId, att.id)
+      toast.success(`Removed ${att.filename}`)
+      onAttachmentsChanged()
+    } catch (err) {
+      toast.error('Remove failed', {
+        description: err instanceof Error ? err.message : 'Unknown error',
+      })
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      <input
+        ref={replaceInputRef}
+        type="file"
+        accept="image/*"
+        className="hidden"
+        onChange={e => void handleReplaceFile(e.target.files?.[0] ?? null)}
+        disabled={busy}
+      />
+      {/* Check-in photo card */}
+      <div className="space-y-1.5">
+        <div className="flex items-center gap-2">
+          <ImageIcon size={13} className="text-muted-foreground shrink-0" />
+          <span className="text-xs font-medium text-foreground truncate">Vial Photo</span>
+          <Badge variant="secondary" className="text-[10px] shrink-0">Check-in</Badge>
+          <div className="ml-auto flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={e => { e.stopPropagation(); replaceInputRef.current?.click() }}
+              disabled={busy}
+              className="inline-flex items-center gap-1 px-2 py-1 text-xs rounded-md border border-border bg-background text-muted-foreground hover:bg-muted hover:text-foreground transition-colors cursor-pointer disabled:opacity-50 shrink-0"
+            >
+              {busy ? <Spinner className="size-3" /> : <RefreshCw size={11} />}
+              {photoUrl ? 'Replace' : 'Add Photo'}
+            </button>
+            {photoUrl && photoIsMk1 && !busy && (
+              <ArmedDeleteButton onConfirm={() => void handleRemovePhoto()} label="vial photo" />
+            )}
+          </div>
+        </div>
+        {photoUrl ? (
+          <img
+            src={photoUrl}
+            alt={`${sampleId} vial photo`}
+            className="rounded-lg border border-border/30 max-h-40 w-auto object-contain"
+          />
+        ) : (
+          <div className="flex flex-col items-center justify-center gap-2 w-full h-24 rounded-lg bg-muted/40 border border-dashed border-border/50">
+            <ImageIcon size={20} className="text-muted-foreground" />
+            <span className="text-xs text-muted-foreground">No vial photo on file</span>
+          </div>
+        )}
+      </div>
+
+      {/* Extra sample images */}
+      {attachments.length > 0 && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {attachments.map(att => (
+            <div key={att.id} className="space-y-1.5">
+              <div className="flex items-center gap-2">
+                <ImageIcon size={13} className="text-muted-foreground shrink-0" />
+                <span className="text-xs font-medium text-foreground truncate">{att.filename}</span>
+                <Badge variant="secondary" className="text-[10px] shrink-0">Sample Image</Badge>
+                <div className="ml-auto">
+                  <ArmedDeleteButton
+                    onConfirm={() => void handleDeleteAttachment(att)}
+                    label={att.filename}
+                  />
+                </div>
+              </div>
+              <VialAttachmentImage
+                sampleId={sampleId}
+                attachmentId={att.id}
+                filename={att.filename}
+              />
+            </div>
+          ))}
+        </div>
+      )}
+
+      <AddVialImageForm sampleId={sampleId} onUploaded={onAttachmentsChanged} />
+    </div>
+  )
+}
+
 function DataRow({
   label,
   value,
@@ -1951,6 +2263,44 @@ export function SampleDetails() {
     enabled: !!parentSampleId,
   })
 
+  // Vial-page Mk1 attachments: the check-in photo URL (also drives the header
+  // thumb after edits) and the extra sample images. vialPhotoVersion bumps
+  // force a refetch after replace/remove (the api.ts object-URL cache is
+  // invalidated by those calls, so a bump means a real server round-trip).
+  const [vialPhotoVersion, setVialPhotoVersion] = useState(0)
+  const [vialPhotoUrl, setVialPhotoUrl] = useState<string | null>(null)
+  const [vialAttachments, setVialAttachments] = useState<SubSampleAttachment[]>([])
+
+  useEffect(() => {
+    if (!parentSampleId || !sampleId) {
+      setVialPhotoUrl(null)
+      setVialAttachments([])
+      return
+    }
+    let cancelled = false
+    fetchSubSamplePhotoUrl(sampleId)
+      .then(u => { if (!cancelled) setVialPhotoUrl(u) })
+      .catch(() => { if (!cancelled) setVialPhotoUrl(null) })
+    listSubSampleAttachments(sampleId)
+      .then(a => { if (!cancelled) setVialAttachments(a) })
+      .catch(() => { if (!cancelled) setVialAttachments([]) })
+    return () => { cancelled = true }
+  }, [parentSampleId, sampleId, vialPhotoVersion])
+
+  const refreshVialPhoto = useCallback(() => {
+    setVialPhotoVersion(v => v + 1)
+    // photo_external_uid (read from the parent summary for hasPhoto / the
+    // Remove-button gate) changed server-side — refetch the summary too.
+    if (parentSampleId) {
+      void queryClient.invalidateQueries({ queryKey: ['sub-samples', parentSampleId] })
+    }
+  }, [parentSampleId, queryClient])
+
+  const refreshVialAttachments = useCallback(() => {
+    if (!sampleId) return
+    listSubSampleAttachments(sampleId).then(setVialAttachments).catch(() => {})
+  }, [sampleId])
+
   // The current vial's explicit assignment_kind ('core' | 'variance' | null).
   // Sub-sample pages read it from the parent's sub-samples summary; parent
   // pages have no kind (the parent is the canonical) → null. This replaces the
@@ -2745,9 +3095,15 @@ export function SampleDetails() {
               : null
             // Vial pages skip the fetch entirely when the vial record says
             // there's no photo; parent pages always try (404 → hidden).
-            const hasPhoto = parentSampleId ? !!me?.photo_external_uid : true
+            // vialPhotoUrl covers photos added/changed from the Attachments
+            // section this session (the summary record may be momentarily
+            // stale); the version key re-mounts the thumb so it refetches.
+            const hasPhoto = parentSampleId
+              ? !!me?.photo_external_uid || !!vialPhotoUrl
+              : true
             return (
               <VialPhotoThumb
+                key={vialPhotoVersion}
                 sampleId={data.sample_id}
                 hasPhoto={hasPhoto}
                 // self-stretch: span the full height of the header's top row
@@ -3480,8 +3836,34 @@ export function SampleDetails() {
 
         {/* Attachments */}
         <Card className="p-4 mb-6">
-          <SectionHeader icon={Paperclip} title={`Attachments (${data.attachments?.length ?? 0})`}>
+          <SectionHeader
+            icon={Paperclip}
+            title={`Attachments (${
+              (data.attachments?.length ?? 0) +
+              // Vial pages also count the Mk1-side items rendered below:
+              // the check-in photo (if any) + extra sample images.
+              (parentSampleId !== null
+                ? (vialPhotoUrl ? 1 : 0) + vialAttachments.length
+                : 0)
+            })`}
+          >
             <div className="space-y-4">
+              {/* Vial pages: Mk1-stored check-in photo + extra sample images.
+                  Legacy SENAITE attachments (if any) still render below. */}
+              {parentSampleId !== null && data.sample_id && (
+                <VialAttachmentsBlock
+                  sampleId={data.sample_id}
+                  photoUrl={vialPhotoUrl}
+                  photoIsMk1={
+                    !!parentSummary?.sub_samples
+                      .find(s => s.sample_id === sampleId)
+                      ?.photo_external_uid?.startsWith('mk1://')
+                  }
+                  attachments={vialAttachments}
+                  onPhotoChanged={refreshVialPhoto}
+                  onAttachmentsChanged={refreshVialAttachments}
+                />
+              )}
               {/* Renderable attachments — newest image + newest HPLC graph side by side */}
               {(() => {
                 const allImages = (data.attachments ?? []).filter(a => a.content_type?.startsWith('image/'))
@@ -3577,7 +3959,10 @@ export function SampleDetails() {
                   )}
                 </div>
               ))}
-              {data.sample_uid && (
+              {/* SENAITE upload form — not for Mk1-native vials, whose
+                  "sample_uid" is an mk1:// provenance marker, not a SENAITE
+                  UID (the upload would 502). They use AddVialImageForm above. */}
+              {data.sample_uid && !data.sample_uid.startsWith('mk1://') && (
                 <AddAttachmentForm
                   sampleUid={data.sample_uid}
                   onUploaded={() => fetchSample(data.sample_id)}
