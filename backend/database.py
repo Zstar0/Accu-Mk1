@@ -336,6 +336,9 @@ def _run_migrations():
             WHERE assignment_role IS NOT NULL
               AND assignment_role <> 'xtra'
               AND assignment_kind IS NULL""",
+        # Container-mode parents (new families only; legacy rows stay FALSE).
+        # 2026-06-10-container-parent-design.md
+        "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS container_mode BOOLEAN NOT NULL DEFAULT FALSE",
         # Variance set membership + lock state (worksheet-variance design 2026-06-02)
         "ALTER TABLE lims_sub_samples ADD COLUMN IF NOT EXISTS in_variance_set BOOLEAN NOT NULL DEFAULT TRUE",
         "ALTER TABLE lims_sub_samples ADD COLUMN IF NOT EXISTS variance_exclusion_reason TEXT",

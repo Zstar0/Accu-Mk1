@@ -61,6 +61,9 @@ def ensure_sample_row(db: Session, parent_sample_id: str) -> LimsSample:
         peptide_name=_extract_label(meta.get("Analyte1Peptide")),
         client_sample_id=meta.get("ClientSampleID"),
         last_synced_at=datetime.utcnow(),
+        # All parents created post-cutover are containers: pure report
+        # depositories, never vial 1 (2026-06-10-container-parent-design.md).
+        container_mode=True,
     )
     db.add(row)
     db.flush()
@@ -669,6 +672,7 @@ def compute_vial_plan(db: Session, parent_sample_id: str) -> dict:
             "wp_order_number": None,
             "is_unreachable": True,
             "vials": _current_vials(),
+            "container_mode": parent.container_mode,
         }
 
     services = services_resp.get("services") or {}
@@ -688,6 +692,7 @@ def compute_vial_plan(db: Session, parent_sample_id: str) -> dict:
             "wp_order_number": services_resp.get("wp_order_number"),
             "is_unreachable": False,
             "vials": _current_vials(),
+            "container_mode": parent.container_mode,
         }
 
     assigned = auto_assign(_current_vials(), demand, variance)
@@ -735,6 +740,7 @@ def compute_vial_plan(db: Session, parent_sample_id: str) -> dict:
         "wp_order_number": services_resp.get("wp_order_number"),
         "is_unreachable": False,
         "vials": assigned,
+        "container_mode": parent.container_mode,
     }
 
 

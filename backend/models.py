@@ -736,7 +736,15 @@ class LimsSample(Base):
     date_received: Mapped[Optional[datetime]] = mapped_column(DateTime)
     is_retest: Mapped[bool] = mapped_column(Boolean, default=False)
     assignment_role: Mapped[str] = mapped_column(String(8), nullable=False, server_default="hplc")
-    # Variance set: parent shares the membership model — parent IS vial 1.
+    # TRUE = parent is a pure report depository (container-mode families,
+    # 2026-06-10-container-parent-design.md): every physical vial is a
+    # sub-sample (S01 = Vial 1), the parent never consumes demand and never
+    # appears as a draggable vial. FALSE = legacy parent-is-vial-1 behavior.
+    container_mode: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="false", default=False
+    )
+    # Variance set: parent shares the membership model — parent IS vial 1
+    # (legacy families; container parents are never variance members).
     in_variance_set: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true", default=True)
     variance_exclusion_reason: Mapped[Optional[str]] = mapped_column(Text)
     variance_locked_at: Mapped[Optional[datetime]] = mapped_column(DateTime)

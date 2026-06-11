@@ -43,6 +43,9 @@ class ParentSampleSummary(BaseModel):
     sub_sample_count: int
     last_synced_at: datetime
     assignment_role: Optional[str] = None
+    # TRUE = container family: parent is a pure report depository, S01 is
+    # Vial 1, no parent bench affordances (container-parent design).
+    container_mode: bool = False
 
     class Config:
         from_attributes = True
@@ -77,6 +80,9 @@ class VialPlanResponse(BaseModel):
     wp_order_number: Optional[str] = None
     vials: list[VialPlanItem]
     is_unreachable: bool = False
+    # Container family: parent is a pure depository — `vials` contains no
+    # parent entry when TRUE (legacy families list the parent first).
+    container_mode: bool = False
 
 
 class AssignmentPatchRequest(BaseModel):
