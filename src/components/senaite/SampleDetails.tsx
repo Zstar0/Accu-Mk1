@@ -314,7 +314,7 @@ function COAConsole({
             <span className="text-emerald-500/70">✓ completed successfully</span>
           )}
           {state.phase === 'error' && (
-            <span className="text-red-400/70">
+            <span className="text-red-400/70 whitespace-pre-line">
               ✗ {state.errorDetail ?? 'operation failed'}
             </span>
           )}

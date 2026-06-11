@@ -1780,13 +1780,24 @@ async function extractErrorMessage(response: Response, fallback: string): Promis
     // Structured detail (e.g. the COA resolver's unresolved_sources 422):
     // render the message + offending analytes instead of [object Object].
     if (detail && typeof detail === 'object') {
+      // The COA resolver's unresolved_sources 422 already formats a
+      // newline-bulleted message (name + plain-English reason per analyte).
+      // Honor it verbatim; only synthesize a fallback list for older shapes
+      // that lack the pre-formatted message.
+      if (typeof detail.message === 'string' && detail.message.includes('\n')) {
+        return detail.message
+      }
       let msg: string = detail.message ?? fallback
       if (Array.isArray(detail.unresolved) && detail.unresolved.length > 0) {
-        const kws = detail.unresolved
-          .map((u: { analyte_keyword?: string }) => u.analyte_keyword)
+        const lines = detail.unresolved
+          .map((u: { analyte_name?: string; analyte_keyword?: string; reason?: string }) => {
+            const name = u.analyte_name ?? u.analyte_keyword
+            if (!name) return null
+            return u.reason ? `- ${name}: ${u.reason}` : `- ${name}`
+          })
           .filter(Boolean)
-          .join(', ')
-        if (kws) msg += ` Unresolved: ${kws}`
+          .join('\n')
+        if (lines) msg += `\n${lines}`
       }
       return msg
     }

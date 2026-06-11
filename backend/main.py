@@ -8545,6 +8545,41 @@ def _load_sample_aliases(db: Session, sample_id: str) -> dict[int, str]:
     return {r.slot: r.alias for r in rows}
 
 
+def _build_coa_analyte_name_resolver(db: Session, sample_id: str, *, alias_map: dict[int, str]):
+    """Build a keyword→display-name function for the COA block message.
+
+    Gathers three name sources (no failure is fatal — each degrades):
+      - Mk1 catalog titles (AnalysisService.keyword → title)
+      - parent analyte-slot peptide names from SENAITE (best-effort)
+      - per-sample customer aliases (passed in)
+
+    Only invoked on the unresolved-block error path, so the one SENAITE
+    slot read here is off the happy path.
+    """
+    from coa.block_summary import build_name_resolver
+    from models import AnalysisService
+
+    catalog_titles: dict[str, str] = {
+        k: t for k, t in db.execute(
+            select(AnalysisService.keyword, AnalysisService.title)
+        ).all() if k and t
+    }
+
+    slot_names: dict[int, str] = {}
+    try:
+        from sub_samples import senaite as senaite_mod
+        for slot, label in senaite_mod.fetch_parent_analyte_slots(sample_id).items():
+            # Strip the "- Identity (HPLC)" service suffix → bare peptide name.
+            stripped = re.sub(r"\s*-\s*[^-]+\([^)]+\)\s*$", "", str(label)).strip()
+            slot_names[slot] = stripped or str(label)
+    except Exception:
+        pass
+
+    return build_name_resolver(
+        catalog_titles=catalog_titles, slot_names=slot_names, aliases=alias_map,
+    )
+
+
 @app.get(
     "/wizard/senaite/samples/{sample_id}/analyte-aliases",
     response_model=list[AnalyteAliasResponse],
@@ -8683,27 +8718,35 @@ async def generate_sample_coa(
             _logger.warning("COA resolver pre-flight failed for %s: %s", sample_id, e)
             resolver_result = None
 
-        if resolver_result is not None and resolver_result.is_blocked:
-            raise HTTPException(
-                status_code=422,
-                detail={
-                    "code": "unresolved_sources",
-                    "message": (
-                        "COA cannot be generated until the source for each "
-                        "analyte is resolved. See COA Sources panel."
-                    ),
-                    "unresolved": [
-                        {
-                            "analyte_keyword": d.analyte_keyword,
-                            "blocked": d.blocked,
-                            "detail": d.blocked_detail,
-                            "candidates_count": len(d.candidates),
-                        }
-                        for d in resolver_result.decisions
-                        if d.blocked is not None
-                    ],
-                },
+        if resolver_result is not None:
+            # Micro analytes (ENDO/STER/KF) never block: the lab finishes them
+            # after the analytical COA and re-generates. Only NON-micro
+            # unresolved analytes hold up generation.
+            from coa.block_summary import (
+                build_name_resolver,
+                has_blocking_unresolved,
+                summarize_unresolved,
             )
+            from lims_analyses.seeder import _micro_group_keywords
+
+            micro_kw = _micro_group_keywords(db)
+            if has_blocking_unresolved(resolver_result, micro_keywords=micro_kw):
+                name_for = _build_coa_analyte_name_resolver(db, sample_id, alias_map=_load_sample_aliases(db, sample_id))
+                unresolved = summarize_unresolved(
+                    resolver_result, micro_keywords=micro_kw, name_for=name_for,
+                )
+                lines = "\n".join(f"- {u['analyte_name']}: {u['reason']}" for u in unresolved)
+                raise HTTPException(
+                    status_code=422,
+                    detail={
+                        "code": "unresolved_sources",
+                        "message": (
+                            "COA can't be generated yet. These results still "
+                            "need a source:\n" + lines
+                        ),
+                        "unresolved": unresolved,
+                    },
+                )
 
     # Enrich with per-sample analyte display alias picks so the COA renders
     # the customer-facing name (real name still drives conformance).
@@ -8793,9 +8836,11 @@ async def generate_sample_coa(
     # Best-effort. COABuilder's response shape may or may not include the
     # integration-DB generation UUID; fall back to a generated UUID + log
     # warning so the manifest is still queryable by (parent, generation_number).
+    # No is_blocked gate here: if we reached this point we passed the
+    # non-micro block check, and write_generation_manifest already skips any
+    # residual blocked decision (e.g. an unfinished micro analyte) defensively.
     if (
         resolver_result is not None
-        and not resolver_result.is_blocked
         and verification_code
         and generation_number
     ):
