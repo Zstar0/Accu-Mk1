@@ -9,6 +9,7 @@ import {
   FlaskConical,
   Package,
   Hash,
+  Info,
   Layers,
   Shield,
   ShieldCheck,
@@ -3591,6 +3592,22 @@ export function SampleDetails() {
                   <X size={14} />
                 </Button>
               </div>
+
+              {/* Cascade help — parent pages with vials only: changes made
+                  here flow down to the sub-sample vials */}
+              {parentSampleId === null && subSamples.length > 0 && (
+                <div className="mb-4 flex gap-2 rounded-md border border-border bg-muted/40 p-2.5">
+                  <Info size={14} className="mt-0.5 shrink-0 text-muted-foreground" />
+                  <div className="text-xs text-muted-foreground space-y-1">
+                    <p className="font-medium text-foreground">Changes here also update this sample's vials</p>
+                    <ul className="list-disc pl-4 space-y-0.5">
+                      <li><span className="text-foreground">Adding</span> a service puts it on every assigned vial right away.</li>
+                      <li><span className="text-foreground">Removing</span> a service takes it off vials that haven't started it. Vials with results entered keep their work.</li>
+                      <li><span className="text-foreground">Rejecting</span> a service (in the analyses table) works the same way, but keeps a record — use it when the test was part of the offering. Adding the service back later restores it on the vials.</li>
+                    </ul>
+                  </div>
+                </div>
+              )}
 
               {/* Current analyses with remove buttons */}
               <div className="mb-4">
