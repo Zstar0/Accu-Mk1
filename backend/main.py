@@ -13242,7 +13242,10 @@ class InboxVialItem(BaseModel):
     parent_sample_id: str
     assignment_role: Optional[str] = None
     vial_sequence: int          # 0 for parent, 1+ for subs (lims_sub_samples.vial_sequence)
-    vial_total: int             # parent + sub count in the family
+    vial_total: int             # family size: legacy = parent + subs; container = subs only
+    # Container family (parent is a pure depository): vial position label is
+    # vial_sequence itself, not vial_sequence + 1.
+    container_mode: bool = False
     title: str
     client_id: Optional[str] = None
     client_order_number: Optional[str] = None
@@ -13315,6 +13318,24 @@ _INBOX_ROLE_COLOR_FALLBACK = {
     "ster": "violet",
     "xtra": "zinc",
 }
+
+
+def _inbox_family_sizes(parent_rows, sub_rows) -> dict[int, int]:
+    """Family size per parent pk for the inbox's "Vial K / N". Legacy parents
+    count as a vial themselves (parent IS vial 1); container parents are pure
+    report depositories and count 0 (container-parent design). Sub rows can
+    arrive via two query predicates — dedup on (parent_pk, vial_sequence)."""
+    sizes: dict[int, int] = {
+        r.id: (0 if r.container_mode else 1) for r in parent_rows
+    }
+    seen: set[tuple[int, int]] = set()
+    for s in sub_rows:
+        key = (s.parent_sample_pk, s.vial_sequence)
+        if key in seen:
+            continue
+        seen.add(key)
+        sizes[s.parent_sample_pk] = sizes.get(s.parent_sample_pk, 0) + 1
+    return sizes
 
 
 def _fetch_mk1_inbox_analyses_for_sub_sample(
@@ -13663,10 +13684,11 @@ async def get_worksheets_inbox(
             LimsSample.external_lims_uid,
             LimsSample.sample_id,
             LimsSample.assignment_role,
+            LimsSample.container_mode,
         ).where(LimsSample.external_lims_uid.in_(uids))
     ).all()
     parent_id_to_sample_id: dict[int, str] = {r.id: r.sample_id for r in parent_rows}
-    family_sizes: dict[int, int] = {r.id: 1 for r in parent_rows}  # parent itself counts as 1
+    parent_container_mode: dict[int, bool] = {r.id: r.container_mode for r in parent_rows}
     for r in parent_rows:
         vial_meta_by_uid[r.external_lims_uid] = {
             "sample_id": r.sample_id,
@@ -13675,6 +13697,7 @@ async def get_worksheets_inbox(
             "parent_lims_id": r.id,
             "assignment_role": r.assignment_role,
             "vial_sequence": 0,
+            "container_mode": r.container_mode,
         }
     # Sub-samples: include both subs whose UID is in this fetch (direct hit on the
     # inbox set) AND any sub of a parent we just loaded (to compute vial_total).
@@ -13701,24 +13724,21 @@ async def get_worksheets_inbox(
         if r.parent_sample_pk not in parent_id_to_sample_id
         and r.external_lims_uid in uids
     }
+    all_parent_rows = list(parent_rows)
     if missing_parent_ids:
         extra_parents = db.execute(
-            select(LimsSample.id, LimsSample.sample_id).where(
+            select(LimsSample.id, LimsSample.sample_id, LimsSample.container_mode).where(
                 LimsSample.id.in_(missing_parent_ids)
             )
         ).all()
         for r in extra_parents:
             parent_id_to_sample_id[r.id] = r.sample_id
-            family_sizes.setdefault(r.id, 1)
-    seen_sub_ids: set[int] = set()  # avoid double-counting subs that come back from both predicates
+            parent_container_mode[r.id] = r.container_mode
+        all_parent_rows += list(extra_parents)
+    family_sizes = _inbox_family_sizes(all_parent_rows, sub_rows)
     for r in sub_rows:
-        # Increment family size once per sub
-        # (sub_rows can contain a sub via either predicate; dedup on its db-id via parent+seq pair)
-        key = (r.parent_sample_pk, r.vial_sequence)
-        if key not in seen_sub_ids:
-            family_sizes[r.parent_sample_pk] = family_sizes.get(r.parent_sample_pk, 0) + 1
-            seen_sub_ids.add(key)
         # Only inbox items keyed by external_lims_uid get vial_meta entries
+        # (family-size counting lives in _inbox_family_sizes).
         if r.external_lims_uid in uids and r.external_lims_uid not in vial_meta_by_uid:
             parent_sid = parent_id_to_sample_id.get(r.parent_sample_pk, "")
             vial_meta_by_uid[r.external_lims_uid] = {
@@ -13729,6 +13749,7 @@ async def get_worksheets_inbox(
                 "sub_sample_pk": r.id,    # Phase 3.5: needed for Mk1 inbox source
                 "assignment_role": r.assignment_role,
                 "vial_sequence": r.vial_sequence,
+                "container_mode": parent_container_mode.get(r.parent_sample_pk, False),
             }
 
     # Step 5: Load per-group worksheet_item assignments (analyst + instrument)
@@ -13972,6 +13993,7 @@ async def get_worksheets_inbox(
                 assignment_role=vial_role,
                 vial_sequence=vial_meta["vial_sequence"],
                 vial_total=family_size,
+                container_mode=vial_meta.get("container_mode", False),
                 title=str(it.get("title", "")),
                 client_id=it.get("getClientTitle") or it.get("ClientID") or None,
                 client_order_number=it.get("getClientOrderNumber") or it.get("ClientOrderNumber") or None,

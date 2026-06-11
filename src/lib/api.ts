@@ -4377,7 +4377,10 @@ export interface InboxVialItem {
   parent_sample_id: string
   assignment_role: string | null
   vial_sequence: number
+  /** Family size: legacy = parent + subs; container = physical subs only. */
   vial_total: number
+  /** Container family: vial position = vial_sequence (S01 IS Vial 1). */
+  container_mode?: boolean
   title: string
   client_id: string | null
   client_order_number: string | null

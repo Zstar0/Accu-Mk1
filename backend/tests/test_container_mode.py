@@ -114,3 +114,26 @@ def test_container_auto_assign_fills_core_with_first_vial(db, cm_plan_fixture):
     prole = db.execute(text(
         "SELECT assignment_role FROM lims_samples WHERE sample_id='ZZTEST-CM-VP'")).scalar_one()
     assert prole == "hplc"  # untouched server_default
+
+
+# --- Task 6: HPLC inbox family size is mode-aware (pure, no DB) ---
+
+def test_inbox_family_size_excludes_container_parent():
+    from main import _inbox_family_sizes
+    from types import SimpleNamespace as NS
+    legacy = NS(id=1, container_mode=False)
+    container = NS(id=2, container_mode=True)
+    subs = [NS(parent_sample_pk=1, vial_sequence=1), NS(parent_sample_pk=1, vial_sequence=2),
+            NS(parent_sample_pk=2, vial_sequence=1), NS(parent_sample_pk=2, vial_sequence=2)]
+    sizes = _inbox_family_sizes([legacy, container], subs)
+    assert sizes[1] == 3   # legacy: parent counts as a vial
+    assert sizes[2] == 2   # container: physical vials only
+
+
+def test_inbox_family_size_dedups_double_fetched_subs():
+    from main import _inbox_family_sizes
+    from types import SimpleNamespace as NS
+    legacy = NS(id=1, container_mode=False)
+    # same (parent, sequence) arriving via both query predicates
+    subs = [NS(parent_sample_pk=1, vial_sequence=1), NS(parent_sample_pk=1, vial_sequence=1)]
+    assert _inbox_family_sizes([legacy], subs)[1] == 2

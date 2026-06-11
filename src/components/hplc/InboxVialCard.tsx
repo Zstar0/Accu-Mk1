@@ -12,6 +12,7 @@ import {
 import { PriorityBadge } from '@/components/hplc/PriorityBadge'
 import { AgingTimer } from '@/components/hplc/AgingTimer'
 import { cn } from '@/lib/utils'
+import { vialLabel } from '@/lib/vial-label'
 import {
   SERVICE_GROUP_COLORS,
   type ServiceGroupColor,
@@ -140,9 +141,11 @@ export function InboxVialCard({
 
   const { peptideLines, standalone } = groupCoreAnalyses(vial.analyses)
 
+  // Container parents never carry bench work, so is_parent cards stay a
+  // legacy-only branch (same reasoning as VarianceSummary's parent row).
   const positionLabel = vial.is_parent
     ? vial.vial_total > 1 ? `Vial 1 / ${vial.vial_total}` : null
-    : `Vial ${vial.vial_sequence + 1} / ${vial.vial_total}`
+    : `${vialLabel(vial.vial_sequence, vial.container_mode ?? false)} / ${vial.vial_total}`
 
   return (
     <div className={cn('flex', groupedWithPrevious && !vial.is_parent && 'pl-6 relative')}>
