@@ -104,6 +104,12 @@ _ALLOWED: Dict[Tuple[str, str], str] = {
     ("assigned",       "reject"):   "rejected",
     ("assigned",       "reset"):    "unassigned",
 
+    # Self-edge: re-submitting a vial that's already entered (to_be_verified)
+    # but not yet promoted/variance-verified is an in-place result correction —
+    # the service layer's submit guard overwrites result_value and the row
+    # stays in to_be_verified. Tier guard keeps this vial-only (parent rows
+    # never submit).
+    ("to_be_verified", "submit"):           "to_be_verified",
     ("to_be_verified", "verify"):           "verified",
     ("to_be_verified", "variance_verify"):  "variance_verified",
     ("to_be_verified", "retract"):          "retracted",

@@ -143,6 +143,24 @@ def test_unassigned_to_verified_full_path(db, sub_sample, analysis_service):
     # parent-tier row in 'verified' is Phase 4 work (promote_to_parent).
 
 
+def test_resubmit_updates_result_in_place_on_to_be_verified(db, sub_sample, analysis_service):
+    """A vial entered but not yet promoted/variance-verified can be corrected:
+    re-submitting overwrites result_value and stays in to_be_verified."""
+    row = _create(db, sub_sample, analysis_service)
+    row = apply_transition(db, analysis_id=row.id, kind="submit",
+                           result_value="95", reason="TEST: first entry")
+    assert row.review_state == "to_be_verified"
+    first_submitted_at = row.submitted_at
+    assert first_submitted_at is not None
+
+    row = apply_transition(db, analysis_id=row.id, kind="submit",
+                           result_value="96", reason="TEST: correction")
+    assert row.review_state == "to_be_verified"
+    assert row.result_value == "96"
+    # submitted_at preserved (not reset by the in-place correction)
+    assert row.submitted_at == first_submitted_at
+
+
 def test_submit_without_result_raises(db, sub_sample, analysis_service):
     row = _create(db, sub_sample, analysis_service)
     apply_transition(db, analysis_id=row.id, kind="assign",

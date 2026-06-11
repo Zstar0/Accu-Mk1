@@ -134,6 +134,22 @@ const ROW_STATUS_STYLE: Record<string, string> = {
 /** States where an analysis result cell is editable. */
 const EDITABLE_STATES = new Set<string | null>(['unassigned', 'assigned', null])
 
+// Mk1 vial-tier rows stay editable through to_be_verified: a result that's
+// been entered but not yet promoted or variance-verified can still be
+// corrected in place (the backend allows a submit self-edit). SENAITE-backed
+// rows keep the stricter set — SENAITE locks a submitted result until it's
+// retracted. Promoted / variance_verified / verified / terminal stay locked.
+const MK1_EDITABLE_STATES = new Set<string | null>([
+  'unassigned', 'assigned', 'to_be_verified', null,
+])
+
+export function isResultEditable(a: { uid?: string | null; review_state: string | null }): boolean {
+  if (!a.uid) return false
+  return a.uid.startsWith('mk1:')
+    ? MK1_EDITABLE_STATES.has(a.review_state)
+    : EDITABLE_STATES.has(a.review_state)
+}
+
 /** Maps review_state to valid transition action names. */
 const ALLOWED_TRANSITIONS: Record<string, readonly string[]> = {
   unassigned: ['submit', 'reject'],
@@ -525,7 +541,7 @@ function EditableResultCell({
   const inputRef = useRef<HTMLInputElement>(null)
   const selectRef = useRef<HTMLSelectElement>(null)
   const isEditing = !readOnly && editing.editingUid === analysis.uid
-  const canEdit = !readOnly && !!analysis.uid && EDITABLE_STATES.has(analysis.review_state)
+  const canEdit = !readOnly && isResultEditable(analysis)
   // autoEdit: always show input when there's no result yet (no click needed)
   const autoEdit = canEdit && !analysis.result && !isEditing
   const [autoValue, setAutoValue] = useState('')
@@ -792,7 +808,7 @@ function EditableSelectCell({
   const writeUid = ov ? ov.uid : analysis.uid
   const canEdit = !readOnly && (ov
     ? (mk1OverrideEditable && !!ov.uid && EDITABLE_STATES.has(ov.review_state))
-    : (!!analysis.uid && EDITABLE_STATES.has(analysis.review_state)))
+    : isResultEditable(analysis))
   // Single-match override (one definitive vial — editable OR verified/locked) →
   // show that vial's true (possibly empty) value, so display, editor preselection,
   // and write target all agree and a verified vial shows its real Mk1 method/

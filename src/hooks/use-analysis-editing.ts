@@ -23,11 +23,20 @@ export interface UseAnalysisEditingReturn {
   savePendingRef: React.RefObject<boolean>
 }
 
-/** States that indicate an analysis is editable (result can be set). */
+/** States that indicate an analysis is editable (result can be set).
+ *  Mk1 vial-tier rows stay editable through to_be_verified (in-place result
+ *  correction before promote/variance-verify); SENAITE-backed rows keep the
+ *  stricter set. Mirrors isResultEditable in AnalysisTable.tsx. */
 const EDITABLE_STATES = new Set<string | null>(['unassigned', 'assigned', null])
+const MK1_EDITABLE_STATES = new Set<string | null>([
+  'unassigned', 'assigned', 'to_be_verified', null,
+])
 
 function isEditable(a: SenaiteAnalysis): boolean {
-  return !!a.uid && EDITABLE_STATES.has(a.review_state)
+  if (!a.uid) return false
+  return a.uid.startsWith('mk1:')
+    ? MK1_EDITABLE_STATES.has(a.review_state)
+    : EDITABLE_STATES.has(a.review_state)
 }
 
 // --- Hook ---

@@ -57,6 +57,21 @@ def test_unassigned_to_to_be_verified_via_submit_autoedit_shortcut():
     assert next_state("unassigned", "submit") == "to_be_verified"
 
 
+def test_to_be_verified_resubmit_stays_to_be_verified():
+    # In-place result correction: re-submitting a vial that's already entered
+    # (to_be_verified) but not yet promoted/variance-verified keeps it in
+    # to_be_verified while the service layer updates the result_value.
+    assert next_state("to_be_verified", "submit") == "to_be_verified"
+
+
+def test_resubmit_allowed_on_vial_tier_only():
+    from lims_analyses.state_machine import next_state as ns, TierMismatchError
+    assert ns("to_be_verified", "submit", tier="vial") == "to_be_verified"
+    # Parent-tier rows never submit (their kinds are publish/retract/auto).
+    with pytest.raises(TierMismatchError):
+        ns("to_be_verified", "submit", tier="parent")
+
+
 def test_to_be_verified_to_verified_via_verify():
     assert next_state("to_be_verified", "verify") == "verified"
 
@@ -132,7 +147,7 @@ def test_allowed_kinds_from_unassigned():
 
 
 def test_allowed_kinds_from_to_be_verified():
-    assert allowed_kinds("to_be_verified") == {"verify", "variance_verify", "retract", "reject"}
+    assert allowed_kinds("to_be_verified") == {"submit", "verify", "variance_verify", "retract", "reject"}
 
 
 def test_allowed_kinds_from_verified():
@@ -216,8 +231,10 @@ def test_allowed_kinds_filtered_by_tier():
     # promote act; the vial moves to_be_verified -> promoted. So 'verify' is
     # gone from the vial-tier kinds. parent-tier shares only retract here.
     # variance_verify is the new vial-tier sign-off path for replicate sets.
+    # 'submit' is allowed as an in-place result correction (self-edge) before
+    # the vial is promoted/variance-verified.
     assert allowed_kinds("to_be_verified", tier=TIER_VIAL) == {
-        "retract", "reject", "variance_verify",
+        "submit", "retract", "reject", "variance_verify",
     }
     assert allowed_kinds("to_be_verified", tier=TIER_PARENT) == {"retract"}
 
