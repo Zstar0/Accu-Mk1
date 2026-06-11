@@ -925,6 +925,134 @@ def cascade_parent_retest_to_sources(
     return new_row_ids
 
 
+# ─── Parent-reject cascade ───────────────────────────────────────────────────
+
+
+# Matches the seeder's generic per-analyte keyword on blend parents
+# (lims_analyses/seeder.py:_PARENT_ANALYTE — kept in sync by hand).
+_PARENT_ANALYTE_KW = re.compile(r"^ANALYTE-([1-4])-(PUR|QTY)$")
+
+
+def _candidate_vial_keywords(
+    db: Session, *, parent_sample_id: str, keyword: str
+) -> set[str]:
+    """Vial-tier keywords that mirror a given PARENT analysis keyword.
+
+    Non-analyte keywords mirror unchanged → {keyword}. Generic per-analyte
+    keywords (ANALYTE-{n}-PUR/QTY) were translated by the seeder to the slot
+    peptide's per-substance PUR_<X>/QTY_<X> service → resolve the same chain
+    (slot map → ID_<X> title → peptide → PUR_/QTY_ sibling) and return BOTH
+    the translated keyword and the generic one (the seeder falls back to the
+    generic row when translation fails, so both shapes can exist on vials).
+
+    Best-effort: a SENAITE slot-read failure degrades to {keyword} rather
+    than raising — the caller never fails the SENAITE transition.
+    """
+    from models import AnalysisService
+
+    m = _PARENT_ANALYTE_KW.match(keyword)
+    if not m:
+        return {keyword}
+
+    out = {keyword}  # generic fallback rows
+    slot_n, cat = int(m.group(1)), m.group(2)
+    try:
+        from sub_samples import senaite as senaite_mod
+        slot_map = senaite_mod.fetch_parent_analyte_slots(parent_sample_id)
+    except Exception:
+        return out
+    title = slot_map.get(slot_n)
+    if not title:
+        return out
+
+    id_svc = db.execute(
+        select(AnalysisService).where(
+            AnalysisService.title == title,
+            AnalysisService.keyword.startswith("ID_"),
+        )
+    ).scalars().first()
+    if id_svc is None or id_svc.peptide_id is None:
+        return out
+
+    prefix = "PUR_" if cat == "PUR" else "QTY_"
+    # Lowest keyword wins — matches the seeder's deterministic pick.
+    per = db.execute(
+        select(AnalysisService)
+        .where(
+            AnalysisService.peptide_id == id_svc.peptide_id,
+            AnalysisService.keyword.startswith(prefix),
+        )
+        .order_by(AnalysisService.keyword)
+    ).scalars().first()
+    if per is not None and per.keyword:
+        out.add(per.keyword)
+    return out
+
+
+def cascade_parent_reject_to_vials(
+    db: Session,
+    *,
+    parent_sample_id: str,
+    keyword: str,
+    user_id: Optional[int],
+) -> list[int]:
+    """When a PARENT analysis is rejected (via SENAITE — service removed from
+    the offering), cascade the reject to the UNPOPULATED vial-tier mirror rows
+    of that service across the family.
+
+    Targets: lims_analyses rows on the parent's sub-samples whose keyword is
+    in the candidate set (analyte-bridge translated for blend parents) AND
+    review_state in (unassigned, assigned) AND result_value IS NULL.
+
+    Rows carrying results (assigned-with-result, to_be_verified, promoted,
+    variance_verified, …) are NEVER touched — discarding submitted bench work
+    is a human decision, not a cascade.
+
+    Returns the list of rejected row ids (empty when nothing matched).
+    Never raises — caller wraps in try/except; each reject commits
+    independently so one bad row doesn't kill the rest.
+    """
+    from models import LimsSample, LimsSubSample
+
+    parent_sample = db.execute(
+        select(LimsSample).where(LimsSample.sample_id == parent_sample_id)
+    ).scalar_one_or_none()
+    if parent_sample is None:
+        return []
+
+    candidate_kws = _candidate_vial_keywords(
+        db, parent_sample_id=parent_sample_id, keyword=keyword
+    )
+
+    targets = db.execute(
+        select(LimsAnalysis)
+        .join(LimsSubSample, LimsSubSample.id == LimsAnalysis.lims_sub_sample_pk)
+        .where(
+            LimsSubSample.parent_sample_pk == parent_sample.id,
+            LimsAnalysis.keyword.in_(candidate_kws),
+            LimsAnalysis.review_state.in_(("unassigned", "assigned")),
+            LimsAnalysis.result_value.is_(None),
+        )
+    ).scalars().all()
+
+    rejected_ids: list[int] = []
+    for row in targets:
+        try:
+            apply_transition(
+                db,
+                analysis_id=row.id,
+                kind="reject",
+                reason="cascaded from parent SENAITE reject",
+                user_id=user_id,
+            )
+            rejected_ids.append(row.id)
+        except Exception:
+            # Log at call site; don't let one bad row kill the rest.
+            pass
+
+    return rejected_ids
+
+
 # ─── Native vial add/remove (Phase 6 — native Manage Analyses) ──────────────
 
 

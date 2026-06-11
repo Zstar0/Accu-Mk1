@@ -12494,10 +12494,12 @@ async def transition_analysis(
                     keyword=keyword,
                 )
 
-            # ── Parent-retest cascade (best-effort) ──────────────────────────
-            # When a SENAITE analysis is successfully retested, find its Mk1
-            # parent-tier row and cascade the retest to all source vial-tier
-            # analyses so the bench sees the work requests.
+            # ── Parent retest/reject cascade (best-effort) ───────────────────
+            # retest: find the Mk1 parent-tier row and cascade the retest to
+            # all source vial-tier analyses so the bench sees the work requests.
+            # reject: the service was removed from the offering — reject the
+            # UNPOPULATED vial-tier mirror rows of that keyword across the
+            # family (rows with results are never touched).
             #
             # sample_id resolution:
             #   1. Try item["getRequestID"] — available when the update endpoint
@@ -12506,11 +12508,15 @@ async def transition_analysis(
             #      getRequestID from there (one extra GET, always reliable).
             #   3. If still absent, log a warning and skip — the cascade is
             #      best-effort and must not fail the SENAITE transition.
-            if req.transition == "retest":
+            if req.transition in ("retest", "reject"):
                 import logging as _logging
                 _cascade_logger = _logging.getLogger(__name__)
+                _cascade_tag = f"cascade_parent_{req.transition}"
                 try:
-                    from lims_analyses.service import cascade_parent_retest_to_sources
+                    from lims_analyses.service import (
+                        cascade_parent_reject_to_vials,
+                        cascade_parent_retest_to_sources,
+                    )
 
                     _parent_sample_id: Optional[str] = (
                         item.get("getRequestID") or item.get("RequestID") or None
@@ -12533,36 +12539,46 @@ async def transition_analysis(
                                     )
                         except Exception as _fetch_err:
                             _cascade_logger.warning(
-                                "cascade_parent_retest: fallback fetch for uid=%s failed: %s",
-                                uid, _fetch_err,
+                                "%s: fallback fetch for uid=%s failed: %s",
+                                _cascade_tag, uid, _fetch_err,
                             )
 
                     if _parent_sample_id and keyword:
                         _user_id = getattr(current_user, "id", None)
-                        _new_ids = cascade_parent_retest_to_sources(
-                            db,
-                            parent_sample_id=_parent_sample_id,
-                            keyword=keyword,
-                            user_id=_user_id,
-                        )
-                        if _new_ids:
+                        if req.transition == "retest":
+                            _row_ids = cascade_parent_retest_to_sources(
+                                db,
+                                parent_sample_id=_parent_sample_id,
+                                keyword=keyword,
+                                user_id=_user_id,
+                            )
+                            _verb = "created vial retest rows"
+                        else:
+                            _row_ids = cascade_parent_reject_to_vials(
+                                db,
+                                parent_sample_id=_parent_sample_id,
+                                keyword=keyword,
+                                user_id=_user_id,
+                            )
+                            _verb = "rejected vial mirror rows"
+                        if _row_ids:
                             _cascade_logger.info(
-                                "cascade_parent_retest: parent=%s keyword=%s → "
-                                "created vial retest rows %s",
-                                _parent_sample_id, keyword, _new_ids,
+                                "%s: parent=%s keyword=%s → %s %s",
+                                _cascade_tag, _parent_sample_id, keyword,
+                                _verb, _row_ids,
                             )
                     else:
                         _cascade_logger.warning(
-                            "cascade_parent_retest: could not resolve parent_sample_id "
+                            "%s: could not resolve parent_sample_id "
                             "for uid=%s keyword=%r — cascade skipped",
-                            uid, keyword,
+                            _cascade_tag, uid, keyword,
                         )
                 except Exception as _cascade_err:
                     _cascade_logger.warning(
-                        "cascade_parent_retest: unexpected error for uid=%s: %s",
-                        uid, _cascade_err,
+                        "%s: unexpected error for uid=%s: %s",
+                        _cascade_tag, uid, _cascade_err,
                     )
-            # ── end parent-retest cascade ─────────────────────────────────────
+            # ── end parent retest/reject cascade ──────────────────────────────
 
             return AnalysisResultResponse(
                 success=True,
