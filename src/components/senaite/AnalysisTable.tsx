@@ -170,6 +170,12 @@ export const ALLOWED_TRANSITIONS_TEST_EXPORT = ALLOWED_TRANSITIONS
 
 const DESTRUCTIVE_TRANSITIONS = new Set(['retract', 'reject'])
 
+/** Transitions that remain available on a depositOnly (container-mode parent)
+ *  page: corrections START at the parent — retest there cascades down to the
+ *  promoted source vials (cascade_parent_retest_to_sources). Bench actions
+ *  (submit/verify) and promote/variance-verify stay hidden. */
+const CORRECTION_TRANSITIONS = new Set(['retest', 'retract', 'reject'])
+
 // --- Bulk-overlay redesign: promote-aware gating helpers (exported for tests) ---
 
 /** Native (mk1:) row awaiting vial-tier sign-off — the kind-agnostic base
@@ -1218,9 +1224,14 @@ function AnalysisRow({
   // Phase 4b promote affordance — see isPromotable; verify is hidden on
   // promotable rows via visibleRowTransitions.
   const locked = isLockedByParent(analysis, parentLineStates)
-  const allowedTransitions = visibleRowTransitions(analysis, parentLineStates)
-  const canPromote = isPromotable(analysis, vialKind) && !locked
-  const canVarVerify = canVarianceVerify(analysis, vialKind)
+  // depositOnly (container parent): corrections only — no submit/verify,
+  // no promote, no variance-verify. Retest/retract/reject stay because the
+  // parent is the correction entry point (cascades to source vials).
+  const allowedTransitions = depositOnly
+    ? visibleRowTransitions(analysis, parentLineStates).filter(t => CORRECTION_TRANSITIONS.has(t))
+    : visibleRowTransitions(analysis, parentLineStates)
+  const canPromote = !depositOnly && isPromotable(analysis, vialKind) && !locked
+  const canVarVerify = !depositOnly && canVarianceVerify(analysis, vialKind)
   const isPromoted = analysis.promoted_to_parent_id != null
   const vialAssign = analysis.keyword ? vialAssignmentByKeyword?.get(analysis.keyword) : undefined
   const vialOverlay = vialAssign?.matches[0]?.mk1Analysis ?? null
@@ -1389,7 +1400,7 @@ function AnalysisRow({
         {formatDate(analysis.captured)}
       </td>
       <td className="py-2 px-3 text-right">
-        {!depositOnly && analysis.uid && (allowedTransitions.length > 0 || canPromote || canVarVerify) && (
+        {analysis.uid && (allowedTransitions.length > 0 || canPromote || canVarVerify) && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <button

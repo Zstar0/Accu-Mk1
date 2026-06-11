@@ -69,9 +69,31 @@ function renderTable(analyses: SenaiteAnalysis[], depositOnly?: boolean) {
 }
 
 describe('AnalysisTable depositOnly (container-mode parent page)', () => {
-  it('hides row action menus', () => {
-    renderTable([mk({})], true)
+  // Corrections start at the parent and cascade to promoted source vials
+  // (cascade_parent_retest_to_sources) — depositOnly must NOT remove them.
+  it('offers ONLY correction transitions (retest/retract/reject)', async () => {
+    renderTable([mk({})], true) // mk1 to_be_verified row
+    const menuBtn = screen.getByRole('button', { name: /analysis actions/i })
+    const user = (await import('@testing-library/user-event')).default
+    await user.click(menuBtn)
+    const items = screen.getAllByRole('menuitem').map(m => m.textContent?.trim())
+    expect(items).toEqual(expect.arrayContaining(['Retest', 'Retract', 'Reject']))
+    expect(items).not.toContain('Promote')
+    expect(items).not.toContain('Verify')
+    expect(items).not.toContain('Verify (Variance)')
+    expect(items).not.toContain('Submit')
+  })
+
+  it('no menu at all when the state offers no corrections', () => {
+    // 'promoted' allows no transitions; depositOnly must not resurrect any
+    renderTable([mk({ review_state: 'promoted', promoted_to_parent_id: 7 })], true)
     expect(screen.queryByRole('button', { name: /analysis actions/i })).not.toBeInTheDocument()
+  })
+
+  it('never offers Promote / Verify (Variance) even on a variance-kind table', () => {
+    renderTable([mk({})], true)
+    expect(screen.queryByText('Promote')).not.toBeInTheDocument()
+    expect(screen.queryByText('Verify (Variance)')).not.toBeInTheDocument()
   })
   it('hides selection checkboxes (no bulk bench actions)', () => {
     renderTable([mk({})], true)
