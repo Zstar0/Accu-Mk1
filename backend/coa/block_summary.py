@@ -28,6 +28,12 @@ _ANALYTE_GENERIC = re.compile(r"^ANALYTE-([1-4])-(PUR|QTY)$")
 
 _CATEGORY_LABEL = {"PUR": "Purity", "QTY": "Quantity"}
 
+# SENAITE states for an analysis that is no longer part of the offering. An
+# analyte whose candidates are ALL in one of these was rejected/invalidated
+# on the parent — it must not gate the COA (mirrors the reject cascade). An
+# analyte with NO candidates is "expected but not started" and still gates.
+_DEAD_CANDIDATE_STATES = frozenset({"rejected", "retracted", "cancelled", "invalid"})
+
 # Plain-English explanation per blocking reason — written for a bench tech,
 # pointing at the concrete next action.
 _REASON_TEXT: Dict[str, str] = {
@@ -78,12 +84,25 @@ def build_name_resolver(
     return name_for
 
 
+def _is_dead_analyte(d) -> bool:
+    """True iff the analyte has candidates and EVERY one is terminally
+    inactive (rejected/retracted/cancelled/invalid) — the analyte was taken
+    off the offering, so it must not gate the COA. Zero candidates means
+    'expected but not started' and still gates; any non-dead candidate (a
+    pending or re-added sibling) keeps it gating too."""
+    return bool(d.candidates) and all(
+        c.state in _DEAD_CANDIDATE_STATES for c in d.candidates
+    )
+
+
 def _blocking_decisions(result: ResolverResult, micro_keywords: Set[str]):
-    """Decisions that should actually hold up COA generation: blocked AND
-    not a micro-group analyte."""
+    """Decisions that should actually hold up COA generation: blocked, not a
+    micro-group analyte, and not a dead (rejected/invalidated) analyte."""
     return [
         d for d in result.decisions
-        if d.blocked is not None and d.analyte_keyword not in micro_keywords
+        if d.blocked is not None
+        and d.analyte_keyword not in micro_keywords
+        and not _is_dead_analyte(d)
     ]
 
 

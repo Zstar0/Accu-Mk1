@@ -13,15 +13,24 @@ from coa.block_summary import (
     has_blocking_unresolved,
     summarize_unresolved,
 )
-from coa.schemas import ResolverResult, SourceDecision
+from coa.schemas import CandidateInfo, ResolverResult, SourceDecision
 
 
-def _decision(kw, blocked=None, detail=None, n_candidates=0):
+def _cand(state, value=None):
+    return CandidateInfo(
+        source_sample_id="PB-0077",
+        source_analysis_uid="uid-x",
+        value=value,
+        state=state,
+    )
+
+
+def _decision(kw, blocked=None, detail=None, n_candidates=0, candidates=None):
     return SourceDecision(
         analyte_keyword=kw,
         mode="auto",
         chosen=None,
-        candidates=[],
+        candidates=candidates if candidates is not None else [],
         blocked=blocked,
         blocked_detail=detail,
     )
@@ -60,6 +69,49 @@ def test_non_blocked_decisions_are_skipped():
     ])
     summary = summarize_unresolved(result, micro_keywords=MICRO, name_for=lambda k: k)
     assert [s["analyte_keyword"] for s in summary] == ["ANALYTE-4-QTY"]
+
+
+# ─── dead-analyte exclusion (rejected/retracted/cancelled/invalid) ───────────
+
+
+def test_all_dead_candidates_never_block():
+    """An analyte whose candidates are ALL rejected/retracted/cancelled was
+    taken off the offering — it must not gate the COA."""
+    result = ResolverResult(parent_sample_id="PB-0077", decisions=[
+        _decision("ANALYTE-4-PUR", blocked="missing",
+                  candidates=[_cand("rejected")]),
+        _decision("ANALYTE-4-QTY", blocked="missing",
+                  candidates=[_cand("rejected")]),
+    ])
+    assert has_blocking_unresolved(result, micro_keywords=MICRO) is False
+    assert summarize_unresolved(result, micro_keywords=MICRO, name_for=lambda k: k) == []
+
+
+def test_genuinely_missing_analyte_with_no_candidates_still_blocks():
+    """blocked='missing' with ZERO candidates is an expected-but-not-started
+    analyte — it must still gate (don't silently drop real work)."""
+    result = ResolverResult(parent_sample_id="P", decisions=[
+        _decision("HPLC-PUR", blocked="missing", candidates=[]),
+    ])
+    assert has_blocking_unresolved(result, micro_keywords=MICRO) is True
+
+
+def test_pending_candidate_still_blocks():
+    """An unassigned/no-value candidate is pending, not dead — still gates."""
+    result = ResolverResult(parent_sample_id="P", decisions=[
+        _decision("HPLC-PUR", blocked="missing", candidates=[_cand("unassigned")]),
+    ])
+    assert has_blocking_unresolved(result, micro_keywords=MICRO) is True
+
+
+def test_mixed_dead_and_pending_still_blocks():
+    """A rejected sibling alongside a pending candidate means the analyte is
+    still expected (e.g. rejected-then-re-added) — still gates."""
+    result = ResolverResult(parent_sample_id="P", decisions=[
+        _decision("HPLC-PUR", blocked="missing",
+                  candidates=[_cand("rejected"), _cand("unassigned")]),
+    ])
+    assert has_blocking_unresolved(result, micro_keywords=MICRO) is True
 
 
 # ─── friendly reason text ────────────────────────────────────────────────────
