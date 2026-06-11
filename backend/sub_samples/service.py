@@ -642,18 +642,13 @@ def compute_vial_plan(db: Session, parent_sample_id: str) -> dict:
         services_resp = None
 
     def _current_vials() -> list[dict]:
-        """Parent first, then sub-samples in vial_sequence order, as-stored.
-        Parent's assignment_role is never NULL (default 'hplc' from migration)
-        and the parent has no kind — it IS the canonical."""
-        return [
-            {
-                "sample_id": parent.sample_id,
-                "is_parent": True,
-                "vial_sequence": 0,
-                "assignment_role": parent.assignment_role or "hplc",
-                "assignment_kind": None,
-            }
-        ] + [
+        """Sub-samples in vial_sequence order, as-stored. Legacy families
+        prepend a synthetic parent entry (the parent IS vial 1 / the
+        canonical; its assignment_role is never NULL — default 'hplc').
+        Container families don't — the parent is a pure report depository
+        and never holds a bench role or consumes demand
+        (2026-06-10-container-parent-design.md)."""
+        sub_entries = [
             {
                 "sample_id": s.sample_id,
                 "is_parent": False,
@@ -663,6 +658,17 @@ def compute_vial_plan(db: Session, parent_sample_id: str) -> dict:
             }
             for s in subs
         ]
+        if parent.container_mode:
+            return sub_entries
+        return [
+            {
+                "sample_id": parent.sample_id,
+                "is_parent": True,
+                "vial_sequence": 0,
+                "assignment_role": parent.assignment_role or "hplc",
+                "assignment_kind": None,
+            }
+        ] + sub_entries
 
     if services_resp is None:
         return {
@@ -1152,11 +1158,10 @@ def get_variance_set(db: Session, parent_sample_id: str) -> Optional[dict]:
 
     subs = sorted(parent.sub_samples, key=lambda s: s.vial_sequence)
 
-    parent_results = _merge_variance_results(
-        _fetch_mk1_results_for_host(db, host_kind="sample", host_pk=parent.id),
-        senaite.fetch_results_by_keyword(parent.sample_id),
-    )
-    vial_dicts: list[dict] = [
+    # Container families: the parent's rows are deposit copies of promoted
+    # vial results — listing it as a variance member would double-count.
+    # Legacy families: parent IS vial 1, a real member.
+    parent_entries: list[dict] = [] if parent.container_mode else [
         {
             "sample_id": parent.sample_id,
             "vial_sequence": 0,
@@ -1164,9 +1169,13 @@ def get_variance_set(db: Session, parent_sample_id: str) -> Optional[dict]:
             "in_variance_set": parent.in_variance_set,
             "exclusion_reason": parent.variance_exclusion_reason,
             "review_state": parent.status,
-            "results": parent_results,
+            "results": _merge_variance_results(
+                _fetch_mk1_results_for_host(db, host_kind="sample", host_pk=parent.id),
+                senaite.fetch_results_by_keyword(parent.sample_id),
+            ),
         }
-    ] + [
+    ]
+    vial_dicts: list[dict] = parent_entries + [
         {
             "sample_id": s.sample_id,
             "vial_sequence": s.vial_sequence,
