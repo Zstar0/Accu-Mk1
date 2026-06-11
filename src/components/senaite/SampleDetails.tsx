@@ -2749,39 +2749,39 @@ export function SampleDetails() {
 
           {/* Action buttons — anchored in the sticky band so they stay
               available while scrolling. */}
-          <div className="flex items-center justify-end gap-1.5 flex-wrap">
+          <div className="flex items-center justify-end gap-1 flex-wrap">
             <Button
               variant="outline"
               size="sm"
-              className="gap-1.5 cursor-pointer"
+              className="h-7 px-2 gap-1 cursor-pointer"
               onClick={openHplcResults}
             >
-              <Microscope size={13} />
+              <Microscope size={12} />
               HPLC Results
             </Button>
             <Button
               variant="outline"
               size="sm"
-              className="gap-1.5 cursor-pointer"
+              className="h-7 px-2 gap-1 cursor-pointer"
               onClick={() => setActivityLogOpen(true)}
             >
-              <ScrollText size={13} />
+              <ScrollText size={12} />
               Activity
             </Button>
             <Button
               variant="outline"
               size="sm"
-              className="gap-1.5 cursor-pointer"
+              className="h-7 px-2 gap-1 cursor-pointer"
               onClick={openSubSampleWizard}
               disabled={isParent ? !data?.sample_uid : !parentSampleId}
             >
-              <Plus size={13} />
+              <Plus size={12} />
               Manage Sub-Samples
             </Button>
             <Button
               variant="outline"
               size="sm"
-              className="gap-1.5 cursor-pointer"
+              className="h-7 px-2 gap-1 cursor-pointer"
               onClick={() => printLabel({
                 sampleId: sampleId!,
                 orderNumber: data?.client_order_number ?? null,
@@ -2795,10 +2795,10 @@ export function SampleDetails() {
               <Button
                 variant="outline"
                 size="sm"
-                className="gap-1.5 cursor-pointer"
+                className="h-7 px-2 gap-1 cursor-pointer"
                 onClick={() => setVarianceSummaryOpen(true)}
               >
-                <Sigma size={13} />
+                <Sigma size={12} />
                 Variance Summary
               </Button>
             )}
@@ -2808,13 +2808,13 @@ export function SampleDetails() {
                   <Button
                     variant="outline"
                     size="sm"
-                    className="gap-1.5 cursor-pointer"
+                    className="h-7 px-2 gap-1 cursor-pointer"
                     disabled={isGeneratingCOA || isPublishingCOA}
                   >
                     {(isGeneratingCOA || isPublishingCOA) ? (
-                      <Loader2 size={13} className="animate-spin" />
+                      <Loader2 size={12} className="animate-spin" />
                     ) : (
-                      <ChevronDown size={13} />
+                      <ChevronDown size={12} />
                     )}
                     Actions
                   </Button>
