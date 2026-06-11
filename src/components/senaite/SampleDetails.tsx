@@ -2531,116 +2531,6 @@ export function SampleDetails() {
             <ChevronRight size={12} className="text-muted-foreground" />
             <span className="text-sm font-medium">{data.sample_id}</span>
           </div>
-          <div className="flex items-center gap-1.5">
-            <Button
-              variant="outline"
-              size="sm"
-              className="gap-1.5 cursor-pointer"
-              onClick={openHplcResults}
-            >
-              <Microscope size={13} />
-              HPLC Results
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              className="gap-1.5 cursor-pointer"
-              onClick={() => setActivityLogOpen(true)}
-            >
-              <ScrollText size={13} />
-              Activity
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              className="gap-1.5 cursor-pointer"
-              onClick={openSubSampleWizard}
-              disabled={isParent ? !data?.sample_uid : !parentSampleId}
-            >
-              <Plus size={13} />
-              Manage Sub-Samples
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              className="gap-1.5 cursor-pointer"
-              onClick={() => printLabel({
-                sampleId: sampleId!,
-                orderNumber: data?.client_order_number ?? null,
-                receivedAt: data?.date_received ?? null,
-              })}
-            >
-              <Printer size={13} />
-              Print Label
-            </Button>
-            {isParent && subCount >= 1 && (
-              <Button
-                variant="outline"
-                size="sm"
-                className="gap-1.5 cursor-pointer"
-                onClick={() => setVarianceSummaryOpen(true)}
-              >
-                <Sigma size={13} />
-                Variance Summary
-              </Button>
-            )}
-            <div className="relative">
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="gap-1.5 cursor-pointer"
-                    disabled={isGeneratingCOA || isPublishingCOA}
-                  >
-                    {(isGeneratingCOA || isPublishingCOA) ? (
-                      <Loader2 size={13} className="animate-spin" />
-                    ) : (
-                      <ChevronDown size={13} />
-                    )}
-                    Actions
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="w-52">
-                  <DropdownMenuItem
-                    onClick={handleGenerateCOA}
-                    disabled={isGeneratingCOA}
-                    className="cursor-pointer"
-                  >
-                    Generate Accumark COA
-                  </DropdownMenuItem>
-                  {isParent && (
-                    <DropdownMenuItem
-                      onClick={handlePublishCOA}
-                      disabled={isPublishingCOA || !hasDraftCOA}
-                      className="cursor-pointer"
-                    >
-                      Publish Accumark COA
-                    </DropdownMenuItem>
-                  )}
-                </DropdownMenuContent>
-              </DropdownMenu>
-              <COAConsole
-                state={coaConsole}
-                onClose={() => setCoaConsole(prev => ({ ...prev, visible: false }))}
-              />
-            </div>
-            {/* Console re-open button — only visible after an operation has run */}
-            {coaConsole.title && !coaConsole.visible && (
-              <button
-                onClick={() => setCoaConsole(prev => ({ ...prev, visible: true }))}
-                className={cn(
-                  'flex items-center justify-center w-7 h-7 rounded-md border transition-colors cursor-pointer',
-                  coaConsole.phase === 'error'
-                    ? 'border-red-500/40 bg-red-500/10 text-red-400 hover:bg-red-500/20'
-                    : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500/20'
-                )}
-                title="Show last operation log"
-              >
-                <Terminal size={12} />
-              </button>
-            )}
-          </div>
         </div>
 
         {/* Sticky header band — bleeds to container edges with -mx-6 px-6 */}
@@ -2848,6 +2738,120 @@ export function SampleDetails() {
               />
             )
           })()}
+
+          {/* Action buttons — anchored in the sticky band so they stay
+              available while scrolling. w-full wraps them onto their own
+              row (right-aligned) between the top row and the progress bar. */}
+          <div className="w-full flex items-center justify-end gap-1.5 flex-wrap">
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-1.5 cursor-pointer"
+              onClick={openHplcResults}
+            >
+              <Microscope size={13} />
+              HPLC Results
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-1.5 cursor-pointer"
+              onClick={() => setActivityLogOpen(true)}
+            >
+              <ScrollText size={13} />
+              Activity
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-1.5 cursor-pointer"
+              onClick={openSubSampleWizard}
+              disabled={isParent ? !data?.sample_uid : !parentSampleId}
+            >
+              <Plus size={13} />
+              Manage Sub-Samples
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-1.5 cursor-pointer"
+              onClick={() => printLabel({
+                sampleId: sampleId!,
+                orderNumber: data?.client_order_number ?? null,
+                receivedAt: data?.date_received ?? null,
+              })}
+            >
+              <Printer size={13} />
+              Print Label
+            </Button>
+            {isParent && subCount >= 1 && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-1.5 cursor-pointer"
+                onClick={() => setVarianceSummaryOpen(true)}
+              >
+                <Sigma size={13} />
+                Variance Summary
+              </Button>
+            )}
+            <div className="relative">
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="gap-1.5 cursor-pointer"
+                    disabled={isGeneratingCOA || isPublishingCOA}
+                  >
+                    {(isGeneratingCOA || isPublishingCOA) ? (
+                      <Loader2 size={13} className="animate-spin" />
+                    ) : (
+                      <ChevronDown size={13} />
+                    )}
+                    Actions
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-52">
+                  <DropdownMenuItem
+                    onClick={handleGenerateCOA}
+                    disabled={isGeneratingCOA}
+                    className="cursor-pointer"
+                  >
+                    Generate Accumark COA
+                  </DropdownMenuItem>
+                  {isParent && (
+                    <DropdownMenuItem
+                      onClick={handlePublishCOA}
+                      disabled={isPublishingCOA || !hasDraftCOA}
+                      className="cursor-pointer"
+                    >
+                      Publish Accumark COA
+                    </DropdownMenuItem>
+                  )}
+                </DropdownMenuContent>
+              </DropdownMenu>
+              <COAConsole
+                state={coaConsole}
+                onClose={() => setCoaConsole(prev => ({ ...prev, visible: false }))}
+              />
+            </div>
+            {/* Console re-open button — only visible after an operation has run */}
+            {coaConsole.title && !coaConsole.visible && (
+              <button
+                onClick={() => setCoaConsole(prev => ({ ...prev, visible: true }))}
+                className={cn(
+                  'flex items-center justify-center w-7 h-7 rounded-md border transition-colors cursor-pointer',
+                  coaConsole.phase === 'error'
+                    ? 'border-red-500/40 bg-red-500/10 text-red-400 hover:bg-red-500/20'
+                    : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500/20'
+                )}
+                title="Show last operation log"
+              >
+                <Terminal size={12} />
+              </button>
+            )}
+          </div>
 
           {/* Progress bar + legend — w-full forces wrap to bottom row */}
           {analyses.length > 0 && (
