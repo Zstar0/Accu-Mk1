@@ -1879,14 +1879,12 @@ export function SampleDetails() {
     return m ? m[1] : null
   }, [sampleId])
 
-  // Container-mode parent page = cumulative report view: the parent's rows
-  // are deposit targets, bench affordances hidden (SOFT lock — spec
-  // 2026-06-10-container-parent-design.md). Sub-vial pages unaffected.
-  // Fail closed while subData loads: parent pages render report-view until
-  // the summary proves the family is legacy (prevents a bench-affordance
-  // flash — and a fast stray click — on container parents).
-  const depositOnly =
-    parentSampleId === null && (subData === undefined || subData.parent.container_mode)
+  // NOTE (container parents): the page keeps its FULL SENAITE bench surface
+  // (result entry, submit/verify, bulk, corrections) — the lab still drives
+  // the parent AR's SENAITE workflow from here, and parent-line retest
+  // cascades to promoted source vials. The bench-hiding "report view" idea
+  // was tried and walked back (2026-06-10); the hard lock on parent-row
+  // writes ships with the SENAITE-elimination arc.
 
   const queryClient = useQueryClient()
 
@@ -3722,7 +3720,6 @@ export function SampleDetails() {
           isAnalysisSlaPublished={analysisSla.isPublished}
           analysisSlaPriority={analysisSla.priority}
           vialKind={currentVialKind}
-          depositOnly={depositOnly}
         />
 
         {parentSampleId === null && data.sample_id && (

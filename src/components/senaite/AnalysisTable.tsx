@@ -170,12 +170,6 @@ export const ALLOWED_TRANSITIONS_TEST_EXPORT = ALLOWED_TRANSITIONS
 
 const DESTRUCTIVE_TRANSITIONS = new Set(['retract', 'reject'])
 
-/** Transitions that remain available on a depositOnly (container-mode parent)
- *  page: corrections START at the parent — retest there cascades down to the
- *  promoted source vials (cascade_parent_retest_to_sources). Bench actions
- *  (submit/verify) and promote/variance-verify stay hidden. */
-const CORRECTION_TRANSITIONS = new Set(['retest', 'retract', 'reject'])
-
 // --- Bulk-overlay redesign: promote-aware gating helpers (exported for tests) ---
 
 /** Native (mk1:) row awaiting vial-tier sign-off — the kind-agnostic base
@@ -524,7 +518,8 @@ function EditableResultCell({
   analysis: SenaiteAnalysis
   editing: UseAnalysisEditingReturn
   conformsValue?: string | null
-  /** depositOnly report view: always render the static value. */
+  /** Render the static value, never the editor (reserved for the future
+   *  hard-lock on container-parent rows — SENAITE-elimination arc). */
   readOnly?: boolean
 }) {
   const inputRef = useRef<HTMLInputElement>(null)
@@ -778,7 +773,8 @@ function EditableSelectCell({
   onSaved?: (uid: string | null, title: string | null) => void
   mk1Override?: SenaiteAnalysis | null
   mk1OverrideEditable?: boolean
-  /** depositOnly report view: always render the static value. */
+  /** Render the static value, never the editor (reserved for the future
+   *  hard-lock on container-parent rows — SENAITE-elimination arc). */
   readOnly?: boolean
 }) {
   const ov = mk1Override
@@ -1183,7 +1179,6 @@ function AnalysisRow({
   onVialMethodInstrumentSaved,
   parentLineStates,
   vialKind,
-  depositOnly = false,
 }: {
   analysis: SenaiteAnalysis
   analyteNameMap: Map<number, string>
@@ -1211,9 +1206,6 @@ function AnalysisRow({
   /** The host vial's assignment_kind ('core' | 'variance' | null). Drives the
    *  promote-vs-variance-verify affordance split and the membership chip. */
   vialKind?: string | null
-  /** Cumulative report view (container-mode parent page): no selection, no
-   *  editors, no action menu. Provenance badges stay. */
-  depositOnly?: boolean
 }) {
   const rowTint = ROW_STATUS_STYLE[analysis.review_state ?? ''] ?? ''
   const { display, original } = formatAnalysisTitle(analysis.title, analyteNameMap)
@@ -1224,14 +1216,9 @@ function AnalysisRow({
   // Phase 4b promote affordance — see isPromotable; verify is hidden on
   // promotable rows via visibleRowTransitions.
   const locked = isLockedByParent(analysis, parentLineStates)
-  // depositOnly (container parent): corrections only — no submit/verify,
-  // no promote, no variance-verify. Retest/retract/reject stay because the
-  // parent is the correction entry point (cascades to source vials).
-  const allowedTransitions = depositOnly
-    ? visibleRowTransitions(analysis, parentLineStates).filter(t => CORRECTION_TRANSITIONS.has(t))
-    : visibleRowTransitions(analysis, parentLineStates)
-  const canPromote = !depositOnly && isPromotable(analysis, vialKind) && !locked
-  const canVarVerify = !depositOnly && canVarianceVerify(analysis, vialKind)
+  const allowedTransitions = visibleRowTransitions(analysis, parentLineStates)
+  const canPromote = isPromotable(analysis, vialKind) && !locked
+  const canVarVerify = canVarianceVerify(analysis, vialKind)
   const isPromoted = analysis.promoted_to_parent_id != null
   const vialAssign = analysis.keyword ? vialAssignmentByKeyword?.get(analysis.keyword) : undefined
   const vialOverlay = vialAssign?.matches[0]?.mk1Analysis ?? null
@@ -1251,7 +1238,7 @@ function AnalysisRow({
   return (
     <tr className={`border-b border-border/50 hover:bg-muted/30 transition-colors ${rowTint}`}>
       <td className="py-2.5 px-3">
-        {!depositOnly && analysis.uid && (
+        {analysis.uid && (
           <Checkbox
             checked={selectedUids.has(analysis.uid)}
             onCheckedChange={() => { if (analysis.uid) onToggleSelection(analysis.uid) }}
@@ -1309,7 +1296,7 @@ function AnalysisRow({
           )}
         </div>
       </td>
-      <EditableResultCell analysis={analysis} editing={editing} conformsValue={conformsValue} readOnly={depositOnly} />
+      <EditableResultCell analysis={analysis} editing={editing} conformsValue={conformsValue} />
       <td className="py-2.5 px-3 text-center">
         {analysis.retested ? (
           <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-medium bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-400">
@@ -1324,7 +1311,6 @@ function AnalysisRow({
         field="method"
         mk1Override={vialOverlay}
         mk1OverrideEditable={vialOverlayEditable}
-        readOnly={depositOnly}
         onSaved={(newUid, newTitle) => {
           if (vialOverlay) onVialMethodInstrumentSaved?.()
           else if (analysis.uid) onMethodInstrumentSaved?.(analysis.uid, 'method', newUid, newTitle)
@@ -1335,7 +1321,6 @@ function AnalysisRow({
         field="instrument"
         mk1Override={vialOverlay}
         mk1OverrideEditable={vialOverlayEditable}
-        readOnly={depositOnly}
         onSaved={(newUid, newTitle) => {
           if (vialOverlay) onVialMethodInstrumentSaved?.()
           else if (analysis.uid) onMethodInstrumentSaved?.(analysis.uid, 'instrument', newUid, newTitle)
@@ -1624,13 +1609,6 @@ interface AnalysisTableProps {
    *  never appears there. Vial-list overlay entries carry their own kind on
    *  the match (VialMatch.assignmentKind), independent of this prop. */
   vialKind?: string | null
-  /** Container-mode parent page: render as the cumulative report view. Hides
-   *  bench affordances (result/method/instrument editing, row transition
-   *  menus, selection + bulk actions) — SOFT lock, the server still accepts
-   *  transitions (SENAITE sync needs them; the hard gate ships with SENAITE
-   *  elimination). Promote provenance, variance indicators, and the vial
-   *  overlay stay. */
-  depositOnly?: boolean
 }
 
 export function AnalysisTable({
@@ -1653,7 +1631,6 @@ export function AnalysisTable({
   headerContent,
   hideProgress = false,
   vialKind,
-  depositOnly = false,
 }: AnalysisTableProps) {
   const [analysisFilter, setAnalysisFilter] = useState<'all' | 'verified' | 'pending' | 'invalid'>('all')
   const [sortConfig, setSortConfig] = useState<SortConfig | null>(null)
@@ -1817,7 +1794,7 @@ export function AnalysisTable({
       )}
 
       {/* Bulk action toolbar — fixed at browser bottom while table is visible */}
-      {!depositOnly && bulk.selectedUids.size > 0 && isCardVisible && (
+      {bulk.selectedUids.size > 0 && isCardVisible && (
         <div
           className="fixed bottom-4 z-50 flex items-center justify-between px-4 py-2.5 rounded-lg bg-slate-900 border border-slate-500 shadow-xl"
           style={{
@@ -1914,7 +1891,7 @@ export function AnalysisTable({
           <thead>
             <tr className="border-b border-border bg-muted/40">
               <th className="py-2 px-3 w-10">
-                {!depositOnly && <Checkbox
+                <Checkbox
                   checked={headerChecked}
                   onCheckedChange={(checked) => {
                     if (checked === true) {
@@ -1925,7 +1902,7 @@ export function AnalysisTable({
                   }}
                   disabled={bulk.isBulkProcessing || toolbarDisabled}
                   aria-label="Select all analyses"
-                />}
+                />
               </th>
               <SortableHeader column="title" label="Analysis" sortConfig={sortConfig} onSort={handleSort} />
               <SortableHeader column="result" label="Result" sortConfig={sortConfig} onSort={handleSort} />
@@ -1979,7 +1956,6 @@ export function AnalysisTable({
                       onVialMethodInstrumentSaved={onVialMethodInstrumentSaved}
                       parentLineStates={parentLineStates}
                       vialKind={vialKind}
-                      depositOnly={depositOnly}
                     />
                     {isExpanded && group.history.map(h => (
                       <HistoryRow

@@ -50,7 +50,7 @@ This ambiguity is the root of repeated workflow confusion (the variance arc remo
 ### 5. UI
 
 - **AssignStep:** no parent chip in any bucket for container families (parent no longer drags, no longer renders in HPLC core zone).
-- **Parent sample page:** the analyses table becomes the cumulative report view when `container_mode` — hide result editors and submit/verify/retest row menus on parent-hosted rows; keep promote-target badges ("Promoted → #id"), provenance, the first-column vial-list overlay, and variance indicators. Bulk toolbar: bench transitions hidden for parent rows in container mode.
+- **Parent sample page:** ~~cumulative report view with hidden bench affordances~~ **AMENDED 2026-06-10 after live use on PB-0077:** the parent page keeps its FULL SENAITE bench surface (result entry, submit/verify, bulk toolbar, retest/retract/reject). The lab still drives the parent AR's SENAITE workflow from this page (COA publish needs parent lines verified; parent-line retest cascades to promoted source vials and is the only correction entry point once a line is verified). The bench-hiding idea was tried, walked back in three steps, and removed; the hard lock on parent-row writes ships with the SENAITE-elimination arc as originally planned for the server side.
 - **Sub-vial pages:** unchanged.
 
 ### 6. Out of scope (later arcs)
