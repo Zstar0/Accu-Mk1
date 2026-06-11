@@ -2675,21 +2675,10 @@ export function SampleDetails() {
                     </>
                   )}
                 </p>
-                {/* SLA below the Received line — stacked one indicator per line
-                    so multi-tier samples don't run a long inline string that
-                    widens the header and wraps the photo thumbnail. */}
-                <SampleHeaderSla lookup={data} />
               </div>
             </div>
           </div>
 
-          {/* Right column: counters + photo on top, action buttons tucked
-              beneath them (beside the left block's SLA lines) to keep the
-              header compact. flex-1 min-w-0 — fill the row's remaining width
-              instead of max-content so the column never forces a wrap; the
-              buttons wrap internally when the window is narrow. */}
-          <div className="flex flex-col items-end gap-2 flex-1 min-w-0">
-          <div className="flex items-stretch gap-4">
           {/* Counters */}
           {analyses.length > 0 && (
             <div className="flex items-center gap-6 text-center">
@@ -2745,10 +2734,18 @@ export function SampleDetails() {
               />
             )
           })()}
-          </div>{/* end: counters + photo row */}
 
-          {/* Action buttons — anchored in the sticky band so they stay
-              available while scrolling. */}
+          {/* SLA + actions row — w-full wraps below the top row. The SLA
+              lines (moved out of the left block) sit on the left, indented
+              to align under the header text; the action buttons take the
+              remaining width, which is enough for a single line. Stays in
+              the sticky band so the actions are available while scrolling. */}
+          <div className="w-full flex items-end justify-between gap-3">
+          <div className="text-xs text-muted-foreground pl-[3.75rem] shrink-0">
+            {/* SLA — stacked one indicator per line so multi-tier samples
+                don't run a long inline string. */}
+            <SampleHeaderSla lookup={data} />
+          </div>
           <div className="flex items-center justify-end gap-1 flex-wrap">
             <Button
               variant="outline"
@@ -2859,7 +2856,7 @@ export function SampleDetails() {
               </button>
             )}
           </div>
-          </div>{/* end: right column (counters + buttons) */}
+          </div>{/* end: SLA + actions row */}
 
           {/* Progress bar + legend — w-full forces wrap to bottom row */}
           {analyses.length > 0 && (
