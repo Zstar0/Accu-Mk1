@@ -26,9 +26,13 @@ export function buildNativeSubSampleLookup(
     client_order_number: null,
     client_sample_id: null,
     client_lot: null,
-    // The vial has no single state of its own; surface the parent's lifecycle
-    // status as a loose indicator.
-    review_state: parent.status ?? null,
+    // The vial has no lifecycle state of its own. Derive it from the vial's
+    // OWN facts first: a vial with received_at was physically checked in, so
+    // it IS received — regardless of the parent's cached status, which goes
+    // stale on container parents (stamped pre-received at lazy first-touch
+    // and never refreshed → vials showed "Due" while sitting in the lab).
+    // Only a vial without received_at borrows the parent's status.
+    review_state: sub.received_at ? 'sample_received' : parent.status ?? null,
     declared_weight_mg: null,
     analytes: [],
     coa: {

@@ -48,6 +48,25 @@ describe('buildNativeSubSampleLookup', () => {
     expect(r.coa.verification_code).toBeNull()
   })
 
+  it('derives review_state from the vial own received_at, not the parent cache', () => {
+    // A vial that exists with received_at was physically checked in — it is
+    // received regardless of the parent's (possibly stale) cached status.
+    // Container parents are stamped pre-received at lazy first-touch and the
+    // cache is never refreshed, so borrowing parent.status shows "Due" on
+    // vials that are sitting in the lab (PB-0077 bug).
+    const staleParent = { ...parent, status: 'sample_due' }
+    const r = buildNativeSubSampleLookup(sub, staleParent)
+    expect(r.review_state).toBe('sample_received')
+  })
+
+  it('falls back to the parent status when the vial has no received_at', () => {
+    // The SubSample type declares received_at non-nullable, but the runtime
+    // guard stays defensive — cast to exercise the fallback branch.
+    const unreceived = { ...sub, received_at: null } as unknown as SubSample
+    const r = buildNativeSubSampleLookup(unreceived, { ...parent, status: 'sample_due' })
+    expect(r.review_state).toBe('sample_due')
+  })
+
   it('carries the parent status through as the vial review_state', () => {
     const r = buildNativeSubSampleLookup(sub, parent)
     expect(r.review_state).toBe('sample_received')
