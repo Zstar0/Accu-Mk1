@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
 import {
   listSubSamples,
+  ensureParentSampleRow,
   createSubSample,
   updateSubSample,
   deleteSubSample,
@@ -53,8 +54,14 @@ export function useReceiveWizard(parent: ParentInfo) {
   const [parentRole, setParentRole] = useState<string | null>('hplc')
   // Container family (parent is a pure report depository — container-parent
   // design): drives vial numbering and the first-vial check-in policy.
-  // Defaults false (legacy) until the first listSubSamples refresh resolves.
+  // Defaults false (legacy) for display until the ensure call resolves; the
+  // first-vial SAVE decision never reads this state — it awaits ensureRef,
+  // the authoritative server answer (a brand-new family has no lims_samples
+  // row yet, so the list endpoint's fallback would wrongly report false).
   const [containerMode, setContainerMode] = useState(false)
+  // Resolves to the authoritative container_mode. On failure resolves false
+  // (legacy path — the safe default; a SENAITE outage fails the save anyway).
+  const ensureRef = useRef<Promise<boolean> | null>(null)
 
   // Track which sub-samples were created in this wizard session so they can
   // be flagged for the print step at the end. Keyed by sample_id (stable
@@ -87,8 +94,16 @@ export function useReceiveWizard(parent: ParentInfo) {
   }, [parent.sample_id])
 
   useEffect(() => {
+    // Materialize the parent row server-side so container_mode is decided
+    // (state-gated at upsert) BEFORE the first vial can be saved.
+    ensureRef.current = ensureParentSampleRow(parent.sample_id)
+      .then(p => {
+        setContainerMode(p.container_mode ?? false)
+        return p.container_mode ?? false
+      })
+      .catch(() => false)
     void refresh()
-  }, [refresh])
+  }, [refresh, parent.sample_id])
 
   const saveNewVial = useCallback(
     async (
@@ -98,6 +113,8 @@ export function useReceiveWizard(parent: ParentInfo) {
       const photoBase64 = bytesToBase64(photoBytes)
       const isFirstVialEver =
         isParentInPreReceivedState && !vials.some(v => v.isThisSession)
+      // Authoritative mode — never the (possibly still-default) state value.
+      const isContainer = ensureRef.current ? await ensureRef.current : containerMode
 
       // Single-vial check-in policy (LEGACY families): the first vial of a
       // never-received parent becomes the parent itself. Photo + remarks land
@@ -110,7 +127,7 @@ export function useReceiveWizard(parent: ParentInfo) {
       // transitions the parent AR to received (bare: no photo/remarks on it),
       // but the vial itself becomes S01 via the normal sub-sample path below.
       if (isFirstVialEver) {
-        if (containerMode) {
+        if (isContainer) {
           await receiveSenaiteSample(parent.uid, parent.sample_id, null, null)
           setParentReceivedThisSession(true)
           // fall through: this physical vial is S01, a real sub-sample

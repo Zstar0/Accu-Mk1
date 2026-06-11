@@ -39,13 +39,25 @@ def test_container_mode_defaults_false_for_existing_rows(db, cleanup):
     assert v is False
 
 
-def test_ensure_sample_row_creates_container_parent(db, cleanup, monkeypatch):
-    # ensure_sample_row is the single parent-creation path — new parents are containers.
+def test_ensure_sample_row_pre_received_is_container(db, cleanup, monkeypatch):
+    # ensure_sample_row is a FIRST-TOUCH upsert, not a creation hook. A family
+    # first touched BEFORE check-in has no parent-as-vial-1 history -> container.
     monkeypatch.setattr(sub_service.senaite, "fetch_parent_metadata", lambda sid: {
-        "uid": "zz-cm-uid", "review_state": "received"})
+        "uid": "zz-cm-uid", "review_state": "sample_due"})
     row = sub_service.ensure_sample_row(db, "ZZTEST-CM-NEW")
     db.commit()
     assert row.container_mode is True
+
+
+def test_ensure_sample_row_already_received_stays_legacy(db, cleanup, monkeypatch):
+    # A family first touched AFTER check-in predates the cutover: its parent AR
+    # physically IS vial 1 (photo/results live there) -> must stay legacy.
+    # This is the prod-dominant shape (rows lazily created on old samples).
+    monkeypatch.setattr(sub_service.senaite, "fetch_parent_metadata", lambda sid: {
+        "uid": "zz-cm-uid2", "review_state": "sample_received"})
+    row = sub_service.ensure_sample_row(db, "ZZTEST-CM-OLD")
+    db.commit()
+    assert row.container_mode is False
 
 
 def test_parent_summary_serializes_container_mode(db, cleanup):
@@ -137,3 +149,14 @@ def test_inbox_family_size_dedups_double_fetched_subs():
     # same (parent, sequence) arriving via both query predicates
     subs = [NS(parent_sample_pk=1, vial_sequence=1), NS(parent_sample_pk=1, vial_sequence=1)]
     assert _inbox_family_sizes([legacy], subs)[1] == 2
+
+
+def test_variance_set_omits_parent_in_container_mode(db, cm_plan_fixture, monkeypatch):
+    """Container parents are never variance members — their rows are deposit
+    copies of promoted vial results (double-count hazard)."""
+    monkeypatch.setattr(sub_service.senaite, "fetch_results_by_keyword", lambda sid: {})
+    result = sub_service.get_variance_set(db, "ZZTEST-CM-VP")
+    assert result is not None
+    assert not any(v["is_parent"] for v in result["vials"])
+    assert [v["sample_id"] for v in result["vials"]] == [
+        "ZZTEST-CM-VP-S01", "ZZTEST-CM-VP-S02"]

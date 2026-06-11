@@ -1882,7 +1882,11 @@ export function SampleDetails() {
   // Container-mode parent page = cumulative report view: the parent's rows
   // are deposit targets, bench affordances hidden (SOFT lock — spec
   // 2026-06-10-container-parent-design.md). Sub-vial pages unaffected.
-  const depositOnly = parentSampleId === null && (subData?.parent.container_mode ?? false)
+  // Fail closed while subData loads: parent pages render report-view until
+  // the summary proves the family is legacy (prevents a bench-affordance
+  // flash — and a fast stray click — on container parents).
+  const depositOnly =
+    parentSampleId === null && (subData === undefined || subData.parent.container_mode)
 
   const queryClient = useQueryClient()
 

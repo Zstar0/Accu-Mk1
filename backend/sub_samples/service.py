@@ -36,8 +36,22 @@ _ROLE_GROUP_NAMES: dict[str, set[str]] = {
 }
 
 
+# SENAITE review states meaning "family not physically checked in yet".
+# Mirrors the FE's PRE_RECEIVED_STATES (useReceiveWizard.ts). A parent first
+# touched while still in one of these states has no parent-as-vial-1 history,
+# so it can safely start life as a container family. A parent first touched
+# already received (or later) predates the cutover — its parent AR physically
+# IS vial 1 (photo/results on the parent) and must stay legacy.
+_PRE_RECEIVED_STATES = {None, "", "sample_due", "sample_registered", "to_be_sampled"}
+
+
 def ensure_sample_row(db: Session, parent_sample_id: str) -> LimsSample:
-    """Lazy upsert: return existing lims_samples row, or fetch from SENAITE."""
+    """Lazy upsert: return existing lims_samples row, or fetch from SENAITE.
+
+    NOTE this is a FIRST-TOUCH path, not a creation-time hook — it can fire
+    years after a family physically existed (prod samples predate the
+    sub-samples feature). container_mode is therefore gated on the SENAITE
+    review_state at upsert time, not set unconditionally."""
     existing = db.execute(
         select(LimsSample).where(LimsSample.sample_id == parent_sample_id)
     ).scalar_one_or_none()
@@ -61,9 +75,11 @@ def ensure_sample_row(db: Session, parent_sample_id: str) -> LimsSample:
         peptide_name=_extract_label(meta.get("Analyte1Peptide")),
         client_sample_id=meta.get("ClientSampleID"),
         last_synced_at=datetime.utcnow(),
-        # All parents created post-cutover are containers: pure report
-        # depositories, never vial 1 (2026-06-10-container-parent-design.md).
-        container_mode=True,
+        # Container family iff this row is born BEFORE check-in: pre-received
+        # families have no parent-as-vial-1 history, so they start as pure
+        # report depositories (2026-06-10-container-parent-design.md).
+        # Already-received families predate the cutover -> legacy.
+        container_mode=meta.get("review_state") in _PRE_RECEIVED_STATES,
     )
     db.add(row)
     db.flush()

@@ -56,7 +56,7 @@ export function invalidateVialAssignmentCaches(
 
 export interface VialMatch {
   vialSampleId: string        // e.g. 'P-0142-S02'
-  vialLabel: string           // e.g. 'Vial 3'  (vial_sequence + 1)
+  vialLabel: string           // e.g. 'Vial 3' — mode-aware (see lib/vial-label.ts)
   mk1Analysis: SenaiteAnalysis
   assignmentRole?: string | null  // the vial's own bench role (hplc/endo/ster)
   assignmentKind?: string | null  // 'core' | 'variance' | null — variance treatment keys off this

@@ -299,8 +299,6 @@ function VialSection({
         {vial.sample_id}
       </Button>
       <span className="text-xs text-muted-foreground">
-        {/* Family-indexed: parent is vial 1, so seq+1 of count+1 (matches the
-            SampleDetails header convention). */}
         {vialLabel(vial.vial_sequence, parent.container_mode ?? false)} of {vialTotal(parent.sub_sample_count, parent.container_mode ?? false)}
       </span>
       <DropdownMenu>

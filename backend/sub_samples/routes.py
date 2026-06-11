@@ -107,6 +107,36 @@ def create_sub_sample(
     return _serialize(sub)
 
 
+@router.post("/{parent_sample_id}/ensure", response_model=ParentSampleSummary)
+def ensure_parent_sample(
+    parent_sample_id: str,
+    db: Session = Depends(get_db),
+    _user=Depends(get_current_user),
+):
+    """Materialize the parent's lims_samples row NOW (lazy upsert) and return
+    its summary. The receive wizard calls this on mount so container_mode is
+    authoritative BEFORE the first-vial save decides between the legacy
+    photo-on-parent path and the container create-S01 path — without it, a
+    brand-new family has no row yet, the list endpoint's fallback reports
+    container_mode=false, and the first vial would take the legacy path on a
+    family that is then flagged container at first plan/print touch."""
+    try:
+        parent = service.ensure_sample_row(db, parent_sample_id)
+        db.commit()
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    return ParentSampleSummary(
+        sample_id=parent.sample_id,
+        external_lims_uid=parent.external_lims_uid,
+        peptide_name=parent.peptide_name,
+        status=parent.status,
+        sub_sample_count=len(parent.sub_samples),
+        last_synced_at=parent.last_synced_at,
+        assignment_role=parent.assignment_role,
+        container_mode=parent.container_mode,
+    )
+
+
 @router.get("", response_model=SubSampleListResponse)
 def list_sub_samples(
     parent_sample_id: str,

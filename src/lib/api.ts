@@ -4903,6 +4903,19 @@ export class SecondaryFalloutError extends Error {
 /**
  * List all sub-samples for a parent sample.
  */
+/** Materialize the parent's lims_samples row (lazy upsert) and return its
+ *  summary with an AUTHORITATIVE container_mode. The receive wizard calls
+ *  this on mount — the list endpoint's missing-parent fallback reports
+ *  container_mode=false, which must not drive the first-vial save decision. */
+export async function ensureParentSampleRow(parentSampleId: string): Promise<ParentSampleSummary> {
+  const response = await fetch(
+    `${API_BASE_URL()}/api/sub-samples/${encodeURIComponent(parentSampleId)}/ensure`,
+    { method: 'POST', headers: getBearerHeaders() }
+  )
+  if (!response.ok) throw new Error(`ensureParentSampleRow failed: ${response.status}`)
+  return response.json()
+}
+
 export async function listSubSamples(parentSampleId: string): Promise<SubSampleListResponse> {
   const response = await fetch(
     `${API_BASE_URL()}/api/sub-samples?parent_sample_id=${encodeURIComponent(parentSampleId)}`,
