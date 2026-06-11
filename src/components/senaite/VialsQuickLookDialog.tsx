@@ -40,6 +40,7 @@ import type {
 import { useUIStore } from '@/store/ui-store'
 import { AnalysisTable } from '@/components/senaite/AnalysisTable'
 import { buildNativeSubSampleLookup } from '@/lib/native-sub-sample'
+import { vialLabel, vialTotal } from '@/lib/vial-label'
 import {
   invalidateVialAssignmentCaches,
   invalidateParentVialOverlay,
@@ -300,7 +301,7 @@ function VialSection({
       <span className="text-xs text-muted-foreground">
         {/* Family-indexed: parent is vial 1, so seq+1 of count+1 (matches the
             SampleDetails header convention). */}
-        Vial {vial.vial_sequence + 1} of {parent.sub_sample_count + 1}
+        {vialLabel(vial.vial_sequence, parent.container_mode ?? false)} of {vialTotal(parent.sub_sample_count, parent.container_mode ?? false)}
       </span>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>

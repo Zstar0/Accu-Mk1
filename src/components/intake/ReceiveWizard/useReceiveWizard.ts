@@ -51,6 +51,10 @@ export function useReceiveWizard(parent: ParentInfo) {
   // Parent's assignment_role pulled from listSubSamples response. Defaults
   // to 'hplc' (matches DB default) until the first refresh resolves.
   const [parentRole, setParentRole] = useState<string | null>('hplc')
+  // Container family (parent is a pure report depository — container-parent
+  // design): drives vial numbering and the first-vial check-in policy.
+  // Defaults false (legacy) until the first listSubSamples refresh resolves.
+  const [containerMode, setContainerMode] = useState(false)
 
   // Track which sub-samples were created in this wizard session so they can
   // be flagged for the print step at the end. Keyed by sample_id (stable
@@ -74,6 +78,7 @@ export function useReceiveWizard(parent: ParentInfo) {
       // Backend defaults assignment_role to 'hplc' on lims_samples; preserve
       // that locally when the response carries null (e.g. cold-cache parent).
       setParentRole(data.parent.assignment_role ?? 'hplc')
+      setContainerMode(data.parent.container_mode ?? false)
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -167,6 +172,7 @@ export function useReceiveWizard(parent: ParentInfo) {
     parentReceived: !isParentInPreReceivedState,
     parentReceivedThisSession,
     parentRole,
+    containerMode,
     refresh,
     saveNewVial,
     editSessionVial,

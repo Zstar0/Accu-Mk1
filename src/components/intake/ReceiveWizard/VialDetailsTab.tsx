@@ -5,6 +5,7 @@ import {
   type SubSample,
 } from '@/lib/api'
 import { cn } from '@/lib/utils'
+import { vialPosition } from '@/lib/vial-label'
 import { useUIStore } from '@/store/ui-store'
 import { usePrintLabel } from '@/components/samples/usePrintLabel'
 import { PrintLabelPortal } from '@/components/samples/PrintLabelPortal'
@@ -39,6 +40,8 @@ interface Props {
   vials: { sub: SubSample; isThisSession: boolean }[]
   orderNumber: string | null
   onCloseAndNavigate: (sampleId: string) => void
+  /** Container family: S01 IS Vial 1 (position = vial_sequence). */
+  containerMode: boolean
 }
 
 /**
@@ -90,7 +93,7 @@ function SubSamplePhotoCell({
   )
 }
 
-export function VialDetailsTab({ vials, orderNumber, onCloseAndNavigate }: Props) {
+export function VialDetailsTab({ vials, orderNumber, onCloseAndNavigate, containerMode }: Props) {
   const { printLabel, target: printTarget } = usePrintLabel()
   const subSamples = vials.map(v => v.sub)
   const subCount = subSamples.length
@@ -123,7 +126,7 @@ export function VialDetailsTab({ vials, orderNumber, onCloseAndNavigate }: Props
               <tbody>
                 {subSamples.map(s => (
                   <tr key={s.sample_id} className="border-t">
-                    <td className="px-3 py-2 font-mono">{s.vial_sequence + 1}</td>
+                    <td className="px-3 py-2 font-mono">{vialPosition(s.vial_sequence, containerMode)}</td>
                     <td className="px-3 py-2 font-mono">
                       <button
                         type="button"

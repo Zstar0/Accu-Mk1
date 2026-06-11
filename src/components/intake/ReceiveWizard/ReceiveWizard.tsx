@@ -156,6 +156,7 @@ export function ReceiveWizard({ parent, onClose, initialPhase = 'capture' }: Pro
           }
           activeSampleId={editingSampleId}
           onSelect={setEditingSampleId}
+          containerMode={wiz.containerMode}
         />
       </div>
     )
@@ -182,6 +183,7 @@ export function ReceiveWizard({ parent, onClose, initialPhase = 'capture' }: Pro
         vials={wiz.vials}
         orderNumber={parentDetails.details?.client_order_number ?? null}
         onCloseAndNavigate={closeAndNavigate}
+        containerMode={wiz.containerMode}
       />
     )
   }

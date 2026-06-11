@@ -23,6 +23,7 @@ const parent: ParentSampleSummary = {
   sub_sample_count: 3,
   last_synced_at: '2026-06-04T02:00:00',
   assignment_role: 'hplc',
+  container_mode: false,
 }
 
 describe('buildNativeSubSampleLookup', () => {

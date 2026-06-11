@@ -139,6 +139,7 @@ const SUBS: SubSampleListResponse = {
     sub_sample_count: 2,
     last_synced_at: '2026-06-05T00:00:00Z',
     assignment_role: 'hplc',
+    container_mode: false,
   },
   sub_samples: [
     {

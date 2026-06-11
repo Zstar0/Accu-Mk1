@@ -10,6 +10,7 @@ import {
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
+import { vialLabel } from '@/lib/vial-label'
 import {
   getVarianceSet,
   patchVarianceMembership,
@@ -145,6 +146,7 @@ function VarianceSummaryBody({ parentSampleId }: { parentSampleId: string }) {
               key={v.sample_id}
               vial={v}
               locked={locked}
+              containerMode={data.parent.container_mode ?? false}
               onToggle={(checked) =>
                 membership.mutate({
                   sampleId: v.sample_id,
@@ -236,10 +238,13 @@ function VarianceSummaryBody({ parentSampleId }: { parentSampleId: string }) {
 }
 
 function VialRow({
-  vial, locked, onToggle, onReasonChange,
+  vial, locked, containerMode, onToggle, onReasonChange,
 }: {
   vial: VarianceVial
   locked: boolean
+  /** Container family: S01 IS Vial 1 (parent rows never occur — the backend
+   *  omits the parent from container variance sets). */
+  containerMode: boolean
   onToggle: (checked: boolean) => void
   onReasonChange: (reason: string) => void
 }) {
@@ -253,7 +258,7 @@ function VialRow({
       />
       <code className="min-w-[10rem]">{vial.sample_id}</code>
       <span className="min-w-[8rem] text-muted-foreground">
-        {vial.is_parent ? `Vial 1 (parent)` : `Vial ${vial.vial_sequence + 1}`}
+        {vial.is_parent ? `Vial 1 (parent)` : vialLabel(vial.vial_sequence, containerMode)}
       </span>
       <span className="flex-1 text-muted-foreground text-xs">
         {Object.entries(vial.results).length === 0

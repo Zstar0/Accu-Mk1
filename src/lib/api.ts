@@ -4842,6 +4842,9 @@ export interface ParentSampleSummary {
   sub_sample_count: number
   last_synced_at: string
   assignment_role: string | null
+  /** TRUE = container family: parent is a pure report depository, S01 is
+   *  Vial 1, no parent bench affordances (container-parent design). */
+  container_mode: boolean
 }
 
 export interface SubSampleListResponse {
@@ -4874,6 +4877,9 @@ export interface VialPlanResponse {
   wp_order_number: string | null
   vials: VialPlanItem[]
   is_unreachable: boolean
+  /** Container family: parent is a pure depository — `vials` contains no
+   *  parent entry when true (legacy families list the parent first). */
+  container_mode?: boolean
 }
 
 /**

@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { LabelTemplate } from './LabelTemplate'
 import { getVialPlan, type VialPlanItem } from '@/lib/api'
+import { vialPosition } from '@/lib/vial-label'
 import './PrintStep.css'
 
 interface PrintLabel {
@@ -29,6 +30,8 @@ interface Props {
 export function PrintStep({ parentSampleId, vials, orderNumber }: Props) {
   const [planByVial, setPlanByVial] = useState<Record<string, VialPlanItem>>({})
   const [vialTotal, setVialTotal] = useState<number | null>(null)
+  // Container family: position = vial_sequence (S01 IS Vial 1); legacy +1.
+  const [containerMode, setContainerMode] = useState(false)
   const [checkedIds, setCheckedIds] = useState<Set<string>>(
     () => new Set(vials.map(v => v.sample_id)),
   )
@@ -46,6 +49,7 @@ export function PrintStep({ parentSampleId, vials, orderNumber }: Props) {
         })
         setPlanByVial(lookup)
         setVialTotal(plan.vials.length)
+        setContainerMode(plan.container_mode ?? false)
       })
       .catch(() => {
         // intentional: print proceeds without role enrichment
@@ -136,8 +140,9 @@ export function PrintStep({ parentSampleId, vials, orderNumber }: Props) {
             {vials.map(v => {
               const planItem = planByVial[v.sample_id]
               const role = planItem?.assignment_role ?? null
-              // vial_sequence is 0-based on the backend; +1 for display
-              const position = planItem ? planItem.vial_sequence + 1 : null
+              const position = planItem
+                ? vialPosition(planItem.vial_sequence, containerMode)
+                : null
               const isChecked = checkedIds.has(v.sample_id)
               return (
                 <div

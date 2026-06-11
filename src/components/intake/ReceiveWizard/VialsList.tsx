@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { fetchSubSamplePhotoUrl, type SubSample } from '@/lib/api'
 import { cn } from '@/lib/utils'
+import { vialLabel } from '@/lib/vial-label'
 
 interface Props {
   vials: { sub: SubSample; isThisSession: boolean }[]
@@ -13,6 +14,8 @@ interface Props {
   } | null
   activeSampleId: string | null
   onSelect: (sampleId: string | null) => void
+  /** Container family: S01 IS Vial 1 (no parent entry, label = vial_sequence). */
+  containerMode: boolean
 }
 
 // Role badge palette — uses the same tint family as SenaiteDashboard.tsx
@@ -80,6 +83,7 @@ function VialThumb({ sampleId, hasPhoto }: { sampleId: string; hasPhoto: boolean
 export function VialsList({
   vials,
   parentVial,
+  containerMode,
   activeSampleId,
   onSelect,
 }: Props) {
@@ -151,7 +155,7 @@ export function VialsList({
                   <div className="min-w-0 flex-1">
                     <div className="font-mono text-sm truncate">{v.sub.sample_id}</div>
                     <div className="text-xs text-muted-foreground">
-                      Vial {v.sub.vial_sequence + 1}
+                      {vialLabel(v.sub.vial_sequence, containerMode)}
                     </div>
                     <RoleBadge role={v.sub.assignment_role} />
                   </div>
@@ -162,7 +166,7 @@ export function VialsList({
                   <div className="min-w-0 flex-1">
                     <div className="font-mono text-sm truncate">{v.sub.sample_id}</div>
                     <div className="text-xs text-muted-foreground flex items-center gap-1">
-                      <span>Vial {v.sub.vial_sequence + 1}</span>
+                      <span>{vialLabel(v.sub.vial_sequence, containerMode)}</span>
                       <span aria-hidden>·</span>
                       <span>read-only</span>
                     </div>

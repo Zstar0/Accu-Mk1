@@ -115,6 +115,7 @@ import { AnalysisTable, StatusBadge } from '@/components/senaite/AnalysisTable'
 import { needsMk1AnalysesSwap } from '@/lib/mk1-analyses-swap'
 import { buildNativeSubSampleLookup } from '@/lib/native-sub-sample'
 import { buildVialAssignmentMap, PARENT_OVERLAY_QUERY_KEY, invalidateParentVialOverlay } from '@/lib/vial-assignment'
+import { vialLabel, vialPosition, vialTotal } from '@/lib/vial-label'
 import { SampleHeaderSla } from '@/components/senaite/SampleHeaderSla'
 import { useAnalysisSlaMap } from '@/services/analysis-sla'
 import { SamplePrepHplcFlyout } from '@/components/hplc/SamplePrepHplcFlyout'
@@ -1910,7 +1911,7 @@ export function SampleDetails() {
           data.analyses,
           overlayVials.map((v, i) => ({
             sampleId: v.sample_id,
-            label: `Vial ${v.vial_sequence + 1}`,
+            label: vialLabel(v.vial_sequence, subData?.parent.container_mode ?? false),
             analyses: overlayAnalysesQueries[i]?.data ?? [],
             assignmentRole: v.assignment_role, // vial bench role
             assignmentKind: v.assignment_kind, // explicit variance bucket — drives overlay treatment
@@ -2707,14 +2708,14 @@ export function SampleDetails() {
                   {parentSummary && (() => {
                     const me = parentSummary.sub_samples.find(s => s.sample_id === sampleId)
                     if (!me) return null
-                    // Display 1-indexed across the whole family: parent is vial 1,
-                    // sub-samples come after. sub_sample_count excludes the parent,
-                    // so total = sub_sample_count + 1.
-                    const total = parentSummary.parent.sub_sample_count + 1
+                    // Mode-aware family numbering: legacy counts the parent
+                    // as Vial 1; container families count physical vials only.
+                    const cm = parentSummary.parent.container_mode ?? false
+                    const total = vialTotal(parentSummary.parent.sub_sample_count, cm)
                     return (
                       <>
                         <span aria-hidden>·</span>
-                        <span>Vial {me.vial_sequence + 1} of {total}</span>
+                        <span>Vial {vialPosition(me.vial_sequence, cm)} of {total}</span>
                       </>
                     )
                   })()}
