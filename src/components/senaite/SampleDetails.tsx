@@ -2683,6 +2683,13 @@ export function SampleDetails() {
             </div>
           </div>
 
+          {/* Right column: counters + photo on top, action buttons tucked
+              beneath them (beside the left block's SLA lines) to keep the
+              header compact. flex-1 min-w-0 — fill the row's remaining width
+              instead of max-content so the column never forces a wrap; the
+              buttons wrap internally when the window is narrow. */}
+          <div className="flex flex-col items-end gap-2 flex-1 min-w-0">
+          <div className="flex items-stretch gap-4">
           {/* Counters */}
           {analyses.length > 0 && (
             <div className="flex items-center gap-6 text-center">
@@ -2738,11 +2745,11 @@ export function SampleDetails() {
               />
             )
           })()}
+          </div>{/* end: counters + photo row */}
 
           {/* Action buttons — anchored in the sticky band so they stay
-              available while scrolling. w-full wraps them onto their own
-              row (right-aligned) between the top row and the progress bar. */}
-          <div className="w-full flex items-center justify-end gap-1.5 flex-wrap">
+              available while scrolling. */}
+          <div className="flex items-center justify-end gap-1.5 flex-wrap">
             <Button
               variant="outline"
               size="sm"
@@ -2852,6 +2859,7 @@ export function SampleDetails() {
               </button>
             )}
           </div>
+          </div>{/* end: right column (counters + buttons) */}
 
           {/* Progress bar + legend — w-full forces wrap to bottom row */}
           {analyses.length > 0 && (
