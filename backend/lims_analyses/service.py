@@ -1053,6 +1053,75 @@ def cascade_parent_reject_to_vials(
     return rejected_ids
 
 
+# ─── Parent-remove cascade ───────────────────────────────────────────────────
+
+
+def cascade_parent_remove_from_vials(
+    db: Session,
+    *,
+    parent_sample_id: str,
+    keyword: str,
+    user_id: Optional[int],
+) -> Dict[str, List[str]]:
+    """When an analysis is REMOVED from a parent AR (Manage Analyses → IS
+    proxy → SENAITE delete), hard-delete the PRISTINE vial-tier mirror rows
+    of that service across the family.
+
+    Remove is a mistake-correction — the rows vanish (each with an
+    analysis_removed event via delete_pristine_analysis, which also defines
+    "pristine": unassigned, no result, not retested, no promotion link).
+    Rows with ANY activity are skipped; reject is the audited path for
+    taking a worked service off the offering.
+
+    Keyword matching reuses the reject cascade's candidate set (analyte-
+    bridge translated for blend parents, generic kept as fallback).
+
+    Returns {vial_sample_id: [removed keywords]}. Never raises — caller
+    wraps in try/except; each delete commits independently.
+    """
+    from models import LimsSample, LimsSubSample
+
+    parent_sample = db.execute(
+        select(LimsSample).where(LimsSample.sample_id == parent_sample_id)
+    ).scalar_one_or_none()
+    if parent_sample is None:
+        return {}
+
+    candidate_kws = _candidate_vial_keywords(
+        db, parent_sample_id=parent_sample_id, keyword=keyword
+    )
+
+    targets = db.execute(
+        select(LimsAnalysis.lims_sub_sample_pk, LimsAnalysis.keyword,
+               LimsSubSample.sample_id)
+        .join(LimsSubSample, LimsSubSample.id == LimsAnalysis.lims_sub_sample_pk)
+        .where(
+            LimsSubSample.parent_sample_pk == parent_sample.id,
+            LimsAnalysis.keyword.in_(candidate_kws),
+            LimsAnalysis.retest_of_id.is_(None),
+            LimsAnalysis.review_state.notin_(["retracted", "rejected"]),
+        )
+    ).all()
+
+    out: Dict[str, List[str]] = {}
+    for sub_pk, kw, vial_sample_id in targets:
+        try:
+            delete_pristine_analysis(
+                db,
+                sub_sample_pk=sub_pk,
+                keyword=kw,
+                user_id=user_id,
+            )
+        except Exception:
+            # Non-pristine (activity) or already gone — skip; log at call
+            # site. One bad row must not kill the rest.
+            db.rollback()
+            continue
+        out.setdefault(vial_sample_id, []).append(kw)
+
+    return out
+
+
 # ─── Parent-add cascade ──────────────────────────────────────────────────────
 
 

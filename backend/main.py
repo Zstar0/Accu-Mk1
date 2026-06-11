@@ -8295,11 +8295,37 @@ async def remove_sample_analysis(
         async with httpx.AsyncClient(timeout=30.0) as client:
             resp = await client.delete(url, headers={"X-API-Key": INTEGRATION_SERVICE_API_KEY})
             resp.raise_for_status()
-            return resp.json()
+            result = resp.json()
     except httpx.HTTPStatusError as e:
         raise HTTPException(status_code=e.response.status_code, detail=e.response.text)
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Integration Service unavailable: {e}")
+
+    # ── Parent-remove cascade (best-effort) ──────────────────────────────
+    # If the sample is a PARENT with vials, hard-delete the PRISTINE vial
+    # mirror rows of the removed service (rows with activity are skipped —
+    # cascade_parent_remove_from_vials self-guards: sample_ids not in
+    # lims_samples fall out as no-ops).
+    import logging as _logging
+    _rm_logger = _logging.getLogger(__name__)
+    try:
+        from lims_analyses.service import cascade_parent_remove_from_vials
+        _removed = cascade_parent_remove_from_vials(
+            db, parent_sample_id=sample_id, keyword=keyword,
+            user_id=_current_user.id,
+        )
+        if _removed:
+            _rm_logger.info(
+                "cascade_parent_remove: parent=%s keyword=%s → removed %s",
+                sample_id, keyword, _removed,
+            )
+    except Exception as _rm_err:
+        _rm_logger.warning(
+            "cascade_parent_remove: unexpected error for sample=%s keyword=%s: %s",
+            sample_id, keyword, _rm_err,
+        )
+
+    return result
 
 
 # ── WooCommerce REST API Proxy ──────────────────────────────────────
