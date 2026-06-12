@@ -252,8 +252,8 @@ export function VialResultsView({ prep, results: hplcResults, onBack, onComplete
                 <Zap size={15} className="text-sky-600 dark:text-sky-400" />
                 <span className="text-sm font-medium">
                   {submittedCount > 0
-                    ? `${submittedCount} vial result${submittedCount !== 1 ? 's' : ''} written by the prep bridge`
-                    : 'No vial results written yet'}
+                    ? `${submittedCount} vial result${submittedCount !== 1 ? 's' : ''} written by the prep bridge to sub sample ${vialId}`
+                    : `No vial results written to sub sample ${vialId} yet`}
                 </span>
               </div>
               <Button
