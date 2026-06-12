@@ -8690,6 +8690,62 @@ async def clear_sample_analyte_alias(
     db.commit()
 
 
+async def _parent_attachment_kinds(sample_id: str, auth) -> Optional[dict]:
+    """Classify a sample's SENAITE attachments for the COA attachments gate.
+
+    Returns {'has_image': bool, 'has_chromatogram': bool}, or None when the
+    check can't be performed (SENAITE error / sample not found) — callers
+    fail OPEN on None, matching the resolver pre-flight's error posture.
+
+    Image = any attachment with an image/* content type. Chromatogram = any
+    attachment typed "HPLC Graph" or with a .csv filename (same predicate the
+    sample-details FE uses for its HPLC Graph cards).
+    """
+    import logging as _logging
+    try:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(30.0, connect=5.0), auth=auth, follow_redirects=True,
+        ) as client:
+            resp = await client.get(
+                f"{SENAITE_URL}/senaite/@@API/senaite/v1/AnalysisRequest",
+                params={"getId": sample_id, "complete": "true"},
+            )
+            resp.raise_for_status()
+            items = resp.json().get("items", [])
+            if not items:
+                return None
+            refs = items[0].get("Attachment") or []
+            has_image = False
+            has_chromatogram = False
+            for ref in refs:
+                api_url = ref.get("api_url") if isinstance(ref, dict) else None
+                if not api_url:
+                    continue
+                att_resp = await client.get(api_url)
+                if att_resp.status_code >= 300:
+                    continue
+                att_data = att_resp.json()
+                att_item = att_data["items"][0] if att_data.get("items") else att_data
+                att_file = att_item.get("AttachmentFile") or {}
+                filename = (att_file.get("filename") or "").lower()
+                content_type = (att_file.get("content_type") or "").lower()
+                att_type = att_item.get("AttachmentType") or att_item.get("getAttachmentType")
+                if isinstance(att_type, dict):
+                    att_type = att_type.get("title") or att_type.get("Title")
+                if content_type.startswith("image/"):
+                    has_image = True
+                if att_type == "HPLC Graph" or filename.endswith(".csv"):
+                    has_chromatogram = True
+                if has_image and has_chromatogram:
+                    break
+            return {"has_image": has_image, "has_chromatogram": has_chromatogram}
+    except Exception as e:
+        _logging.getLogger(__name__).warning(
+            "attachments-gate: could not classify attachments for %s: %s", sample_id, e,
+        )
+        return None
+
+
 @app.post("/wizard/senaite/samples/{sample_id}/generate-coa")
 async def generate_sample_coa(
     sample_id: str,
@@ -8766,6 +8822,61 @@ async def generate_sample_coa(
                             "need a source:\n" + lines
                         ),
                         "unresolved": unresolved,
+                    },
+                )
+
+        # --- Attachments gate: a parent COA requires a sample image on the
+        # AR, and — when the sample carries analytical (non-micro) analytes —
+        # a chromatogram. Both are attached from the sample page pickers
+        # ("Select Vial Image" / "Select Vial Chromatogram") or the legacy
+        # check-in/auto-fill flows. Fail-OPEN when SENAITE can't be read
+        # (same posture as the resolver pre-flight: a flaky check must not
+        # permanently block generation; COABuilder fails loudly anyway if
+        # SENAITE is truly down).
+        kinds = await _parent_attachment_kinds(sample_id, _get_senaite_auth(current_user))
+        if kinds is not None:
+            from lims_analyses.seeder import _micro_group_keywords as _micro_kws
+            if resolver_result is not None:
+                _micro = _micro_kws(db)
+                needs_chromatogram = any(
+                    d.analyte_keyword not in _micro for d in resolver_result.decisions
+                )
+            else:
+                # Resolver unavailable — derive from the AR's active keywords;
+                # fail open (no chromatogram requirement) if that read fails too.
+                try:
+                    from sub_samples.senaite import fetch_parent_analysis_keywords
+                    _micro = _micro_kws(db)
+                    needs_chromatogram = any(
+                        k not in _micro
+                        for k in fetch_parent_analysis_keywords(sample_id)
+                    )
+                except Exception:
+                    needs_chromatogram = False
+            gate_missing = []
+            if not kinds["has_image"]:
+                gate_missing.append({
+                    "kind": "sample_image",
+                    "message": "Sample image — attach one from the sample page "
+                               "(Select Vial Image, or upload a Sample Image attachment).",
+                })
+            if needs_chromatogram and not kinds["has_chromatogram"]:
+                gate_missing.append({
+                    "kind": "chromatogram",
+                    "message": "Chromatogram — attach one from the sample page "
+                               "(Select Vial Chromatogram, after processing the HPLC prep).",
+                })
+            if gate_missing:
+                gate_lines = "\n".join(f"- {m['message']}" for m in gate_missing)
+                raise HTTPException(
+                    status_code=422,
+                    detail={
+                        "code": "missing_attachments",
+                        "message": (
+                            "COA can't be generated yet. The sample is missing "
+                            "required attachments:\n" + gate_lines
+                        ),
+                        "missing": [m["kind"] for m in gate_missing],
                     },
                 )
 
