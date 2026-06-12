@@ -6,6 +6,7 @@ and provides structured error handling for SecondaryFalloutError.
 """
 import base64
 from datetime import datetime
+from typing import Callable, Optional
 import requests
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
@@ -72,6 +73,38 @@ def _filename_from_request() -> str:
     always sends JPEG. If we ever accept PNG or other formats, the schema
     should grow a filename field and we'd derive the extension from there."""
     return "vial.jpg"
+
+
+def _select_photo_attachment(
+    raw_attachments: list,
+    fetch_meta: Callable[[str], Optional[dict]],
+) -> Optional[dict]:
+    """Pick the most-recent IMAGE attachment on an AR, or None.
+
+    `raw_attachments` is the AR's `Attachment` reference list (oldest first);
+    `fetch_meta(api_url)` resolves one reference to its attachment item dict.
+    Iterates newest-first and returns the first reference that is an image —
+    content_type `image/*` or AttachmentType "Sample Image". Non-images (COA
+    PDFs, HPLC-graph CSVs that COA generation appends to the parent AR) are
+    skipped, so the header thumbnail never receives undecodable bytes.
+    """
+    for ref in reversed(raw_attachments):
+        if not isinstance(ref, dict):
+            continue
+        api_url = ref.get("api_url")
+        if not api_url:
+            continue
+        att_item = fetch_meta(api_url)
+        if not att_item:
+            continue
+        att_file = att_item.get("AttachmentFile") or {}
+        content_type = (att_file.get("content_type") or "").lower()
+        att_type = att_item.get("AttachmentType") or att_item.get("getAttachmentType")
+        if isinstance(att_type, dict):
+            att_type = att_type.get("title") or att_type.get("Title")
+        if content_type.startswith("image/") or att_type == "Sample Image":
+            return att_item
+    return None
 
 
 @router.post("", status_code=status.HTTP_201_CREATED, response_model=SubSampleResponse)
@@ -411,24 +444,20 @@ def get_sub_sample_photo(
     if not raw_attachments:
         raise HTTPException(404, f"No attachments on AR for {sample_id}")
 
-    # Each entry is a reference dict with `uid` and `api_url`. Take the last
-    # one — most-recently uploaded (consistent with how the wizard appends).
-    last_ref = raw_attachments[-1]
-    if not isinstance(last_ref, dict):
-        raise HTTPException(502, "Unparsable attachment reference shape")
-    att_api_url = last_ref.get("api_url")
-    if not att_api_url:
-        raise HTTPException(502, "Attachment reference missing api_url")
+    # Pick the most-recent IMAGE attachment — NOT simply the last attachment.
+    # COA generation appends a COA PDF and HPLC-graph CSVs to the parent AR, so
+    # the last attachment is frequently not the vial photo; proxying it streamed
+    # CSV/PDF bytes to the header <img>, which rendered broken.
+    def _fetch_att_meta(api_url: str) -> Optional[dict]:
+        resp = _get(api_url)
+        if resp.status_code >= 300:
+            return None
+        data = resp.json()
+        return data["items"][0] if data.get("items") else data
 
-    # Resolve the attachment's binary download URL + content type.
-    att_resp = _get(att_api_url)
-    if att_resp.status_code >= 300:
-        raise HTTPException(
-            502,
-            f"SENAITE attachment metadata fetch failed ({att_resp.status_code})",
-        )
-    att_data = att_resp.json()
-    att_item = att_data["items"][0] if att_data.get("items") else att_data
+    att_item = _select_photo_attachment(raw_attachments, _fetch_att_meta)
+    if att_item is None:
+        raise HTTPException(404, f"No image attachment on AR for {sample_id}")
     att_file = att_item.get("AttachmentFile") or {}
     download_url = att_file.get("download")
     content_type = att_file.get("content_type") or "image/jpeg"
