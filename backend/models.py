@@ -754,6 +754,10 @@ class LimsSample(Base):
     # Variance addon: lab-side override until WP variance addon ships (Phase 3/4).
     # JSON-serialized map e.g. {"hplcpurity_identity": 3}; NULL means no override.
     variance_override: Mapped[Optional[str]] = mapped_column(Text)
+    # Customer-facing remarks delivered with the published COA (snapshot at
+    # COA generation; re-publish refreshes the customer copy). Distinct from
+    # the SENAITE-backed internal Remarks field.
+    customer_remarks: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     last_synced_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 

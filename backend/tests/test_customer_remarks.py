@@ -1,0 +1,66 @@
+"""Customer remarks: parent-level customer-facing text delivered with the COA.
+set_customer_remarks persists + audit-logs; ParentSampleSummary carries it."""
+from __future__ import annotations
+
+import pytest
+from sqlalchemy import create_engine, select
+from sqlalchemy.orm import sessionmaker
+
+from database import Base
+from models import AuditLog, LimsSample
+from sub_samples.service import set_customer_remarks
+
+
+@pytest.fixture
+def db():
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    s = sessionmaker(bind=engine)()
+    try:
+        yield s
+    finally:
+        s.close()
+
+
+@pytest.fixture
+def parent(db):
+    p = LimsSample(sample_id="P-0700", external_lims_uid="uid-p0700")
+    db.add(p)
+    db.commit()
+    return p
+
+
+def test_set_and_update(db, parent):
+    out = set_customer_remarks(db, "P-0700", "Sample shows minor degradation.", user_id=None)
+    assert out["customer_remarks"] == "Sample shows minor degradation."
+    db.refresh(parent)
+    assert parent.customer_remarks == "Sample shows minor degradation."
+    set_customer_remarks(db, "P-0700", "Updated text.", user_id=None)
+    db.refresh(parent)
+    assert parent.customer_remarks == "Updated text."
+
+
+def test_clear_with_empty_string(db, parent):
+    set_customer_remarks(db, "P-0700", "something", user_id=None)
+    set_customer_remarks(db, "P-0700", "", user_id=None)
+    db.refresh(parent)
+    assert parent.customer_remarks == ""
+
+
+def test_unknown_sample_raises(db):
+    with pytest.raises(LookupError):
+        set_customer_remarks(db, "P-9999", "text", user_id=None)
+
+
+def test_audit_log_written_without_full_text(db, parent):
+    set_customer_remarks(db, "P-0700", "Confidential paragraph.", user_id=None)
+    row = db.execute(
+        select(AuditLog).where(
+            AuditLog.operation == "customer_remarks_updated",
+            AuditLog.entity_id == "P-0700",
+        )
+    ).scalars().first()
+    assert row is not None
+    # Audit details carry lengths, not the text itself
+    assert "Confidential" not in str(row.details)
+    assert row.details.get("new_length") == len("Confidential paragraph.")

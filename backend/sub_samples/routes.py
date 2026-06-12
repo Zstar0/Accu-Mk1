@@ -32,6 +32,7 @@ from sub_samples.schemas import (
     VarianceOverrideRequest,
     SubSampleAttachmentResponse, SubSampleAttachmentListResponse,
     AddSubSampleAttachmentRequest,
+    CustomerRemarksUpdate,
 )
 
 
@@ -136,7 +137,24 @@ def ensure_parent_sample(
         last_synced_at=parent.last_synced_at,
         assignment_role=parent.assignment_role,
         container_mode=parent.container_mode,
+        customer_remarks=parent.customer_remarks,
     )
+
+
+@router.put("/parent/{parent_sample_id}/customer-remarks")
+def update_customer_remarks(
+    parent_sample_id: str,
+    body: CustomerRemarksUpdate,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """Set the parent's customer-facing remarks (delivered with the COA)."""
+    try:
+        return service.set_customer_remarks(
+            db, parent_sample_id, body.remarks, user_id=user.id,
+        )
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 
 @router.get("", response_model=SubSampleListResponse)
@@ -173,6 +191,7 @@ def list_sub_samples(
             last_synced_at=parent.last_synced_at,
             assignment_role=parent.assignment_role,
             container_mode=parent.container_mode,
+            customer_remarks=parent.customer_remarks,
         ),
         sub_samples=[_serialize(s) for s in subs],
     )

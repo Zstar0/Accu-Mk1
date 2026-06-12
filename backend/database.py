@@ -346,6 +346,9 @@ def _run_migrations():
         "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS variance_exclusion_reason TEXT",
         "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS variance_locked_at TIMESTAMP",
         "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS variance_locked_by_user_id INTEGER REFERENCES users(id)",
+        # Customer-facing remarks delivered with the published COA
+        # (2026-06-12-customer-remarks-design.md)
+        "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS customer_remarks TEXT",
         # Backfill — non-HPLC sub-samples are not variance candidates by default.
         # Idempotent: re-running matches no rows once already flipped.
         """UPDATE lims_sub_samples

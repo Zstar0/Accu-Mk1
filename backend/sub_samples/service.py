@@ -1111,6 +1111,37 @@ def _drop_stale_role_rows(db: Session, *, sub: LimsSubSample, old_role: Optional
     return n
 
 
+def set_customer_remarks(db: Session, sample_id: str, remarks: str,
+                         user_id: Optional[int] = None) -> dict:
+    """Set the customer-facing remarks on a parent sample. Audit-logs lengths
+    only (the text is customer-facing but the audit trail doesn't need to
+    duplicate it). Raises LookupError when the parent has no lims_samples row.
+
+    Spec: docs/superpowers/specs/2026-06-12-customer-remarks-design.md
+    """
+    from models import AuditLog
+
+    parent = db.execute(
+        select(LimsSample).where(LimsSample.sample_id == sample_id)
+    ).scalar_one_or_none()
+    if parent is None:
+        raise LookupError(f"sample {sample_id} not found")
+    old = parent.customer_remarks or ""
+    parent.customer_remarks = remarks
+    db.add(AuditLog(
+        operation="customer_remarks_updated",
+        entity_type="lims_sample",
+        entity_id=sample_id,
+        details={
+            "old_length": len(old),
+            "new_length": len(remarks),
+            "user_id": user_id,
+        },
+    ))
+    db.commit()
+    return {"sample_id": sample_id, "customer_remarks": remarks}
+
+
 _VALID_KINDS = {"core", "variance"}
 
 

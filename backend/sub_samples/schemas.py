@@ -46,9 +46,15 @@ class ParentSampleSummary(BaseModel):
     # TRUE = container family: parent is a pure report depository, S01 is
     # Vial 1, no parent bench affordances (container-parent design).
     container_mode: bool = False
+    # Customer-facing remarks delivered with the published COA.
+    customer_remarks: Optional[str] = None
 
     class Config:
         from_attributes = True
+
+
+class CustomerRemarksUpdate(BaseModel):
+    remarks: str
 
 
 class SubSampleListResponse(BaseModel):
