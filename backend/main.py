@@ -10563,6 +10563,68 @@ async def scan_sample_preps_hplc(_current_user=Depends(get_current_user)):
     )
 
 
+@app.get("/sample-preps/hplc-folder-match")
+async def hplc_folder_match(
+    folder_path: str,
+    _current_user=Depends(get_current_user),
+):
+    """Manual HPLC-data override: run the scan's per-folder matching (recursive
+    CSV listing + PeakData/chromatogram filters) against an arbitrary LIMS
+    folder, so the bench can pin any folder's data to a prep — e.g. on test
+    stacks where no folder matches the prep's sample id.
+
+    Returns the same peak_files/chrom_files shapes the scan emits, plus the
+    folder's id/web_url (resolved from the parent listing) so the flyout's
+    chromatogram fallback keeps working.
+
+    Must be defined before /sample-preps/{sample_prep_id} to avoid shadowing.
+    """
+    folder_path = folder_path.strip().strip("/")
+    if not folder_path:
+        raise HTTPException(status_code=400, detail="folder_path is required")
+    try:
+        all_csvs = await sp.list_files_recursive(
+            folder_path, extensions=[".csv"], root="lims",
+        )
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"SharePoint error: {e}")
+
+    # Same filters as the scan above — keep in lockstep.
+    peak_files = [
+        c for c in all_csvs
+        if "_PeakData" in c["name"] and c["name"].endswith(".csv")
+    ]
+    chrom_files = [
+        c for c in all_csvs
+        if c["name"].lower().endswith(".csv") and "dx_dad1a" in c["name"].lower()
+    ]
+
+    # Resolve the folder's own item (id / web_url) from its parent's listing.
+    folder_id = None
+    folder_web_url = None
+    parent_path, _, folder_name = folder_path.rpartition("/")
+    try:
+        siblings = await sp.list_lims_folder(parent_path)
+        me = next(
+            (i for i in siblings if i["type"] == "folder" and i["name"] == folder_name),
+            None,
+        )
+        if me:
+            folder_id = me.get("id")
+            folder_web_url = me.get("web_url")
+    except Exception:
+        pass  # best-effort — the match works without id/web_url
+
+    return {
+        "folder_name": folder_name,
+        "folder_path": folder_path,
+        "folder_id": folder_id,
+        "folder_web_url": folder_web_url,
+        "peak_files": peak_files,
+        "chrom_files": chrom_files,
+    }
+
+
 @app.get("/sample-preps/{sample_prep_id}")
 async def get_sample_prep_endpoint(
     sample_prep_id: int,

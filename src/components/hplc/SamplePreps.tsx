@@ -9,11 +9,19 @@ import {
   Trash2,
   ScanLine,
   Microscope,
+  FolderSearch,
   X,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Alert, AlertDescription } from '@/components/ui/alert'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import {
   listSamplePreps,
@@ -21,6 +29,7 @@ import {
   updateSamplePrep,
   deleteSamplePrep,
   scanSamplePrepsHplc,
+  getHplcFolderMatch,
   type SamplePrep,
   type HplcScanMatch,
   type HplcScanLogLine,
@@ -28,6 +37,7 @@ import {
 import { useUIStore } from '@/store/ui-store'
 import { useWizardStore } from '@/store/wizard-store'
 import { SamplePrepHplcFlyout } from './SamplePrepHplcFlyout'
+import { SharePointBrowser } from './SharePointBrowser'
 
 // ─── Status definitions ───────────────────────────────────────────────────────
 
@@ -198,6 +208,12 @@ export function SamplePreps() {
   const [flyoutPrep, setFlyoutPrep] = useState<SamplePrep | null>(null)
   const [flyoutMatch, setFlyoutMatch] = useState<HplcScanMatch | null>(null)
 
+  // HPLC data folder override — pick any LIMS folder for a prep (testing /
+  // mismatched folder names). The result is a normal scan match in
+  // scanMatches, so Process HPLC works identically downstream.
+  const [overrideTarget, setOverrideTarget] = useState<SamplePrep | null>(null)
+  const [overrideLoading, setOverrideLoading] = useState(false)
+
   const load = useCallback(async (q?: string) => {
     setLoading(true)
     setError(null)
@@ -307,6 +323,42 @@ export function SamplePreps() {
   function openFlyout(prep: SamplePrep, match: HplcScanMatch) {
     setFlyoutPrep(prep)
     setFlyoutMatch(match)
+  }
+
+  // ── HPLC folder override ─────────────────────────────────────────────────────
+
+  async function applyFolderOverride(prep: SamplePrep, path: string, folderName: string) {
+    setOverrideLoading(true)
+    try {
+      const res = await getHplcFolderMatch(path)
+      if (res.peak_files.length === 0) {
+        toast.error(`No *_PeakData.csv files under "${folderName}"`, {
+          description: 'Pick a folder containing HPLC PeakData exports.',
+        })
+        return
+      }
+      const match: HplcScanMatch = {
+        prep_id: prep.id,
+        senaite_sample_id: prep.senaite_sample_id ?? prep.sample_id,
+        folder_name: res.folder_name,
+        folder_id: res.folder_id ?? '',
+        folder_web_url: res.folder_web_url,
+        peak_files: res.peak_files,
+        chrom_files: res.chrom_files,
+        is_override: true,
+      }
+      setScanMatches(prev => new Map(prev).set(prep.id, match))
+      setOverrideTarget(null)
+      toast.success(`"${res.folder_name}" pinned to ${prep.senaite_sample_id ?? prep.sample_id}`, {
+        description: `${res.peak_files.length} PeakData, ${res.chrom_files.length} chromatogram file(s) — use Process HPLC.`,
+      })
+    } catch (e) {
+      toast.error('Folder check failed', {
+        description: e instanceof Error ? e.message : 'Unknown error',
+      })
+    } finally {
+      setOverrideLoading(false)
+    }
   }
 
   // ── Render ────────────────────────────────────────────────────────────────────
@@ -488,17 +540,35 @@ export function SamplePreps() {
                       {/* Actions */}
                       <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
                         <div className="flex items-center justify-end gap-1.5">
-                          {/* Process HPLC — shown when scan found a match */}
+                          {/* Process HPLC — shown when scan found a match (or a
+                              folder was pinned via the override picker) */}
                           {match && (
                             <button
-                              title="Process HPLC data"
-                              className="flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium bg-emerald-500/10 border border-emerald-500/30 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20 transition-colors"
+                              title={match.is_override
+                                ? `Process HPLC data from override folder: ${match.folder_name}`
+                                : 'Process HPLC data'}
+                              className={cn(
+                                'flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium border transition-colors',
+                                match.is_override
+                                  ? 'bg-amber-500/10 border-amber-500/30 text-amber-600 dark:text-amber-400 hover:bg-amber-500/20'
+                                  : 'bg-emerald-500/10 border-emerald-500/30 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20'
+                              )}
                               onClick={() => openFlyout(prep, match)}
                             >
                               <Microscope size={12} />
                               Process HPLC
                             </button>
                           )}
+                          {/* Pick HPLC data folder manually — pins any LIMS
+                              folder's data to this prep (testing / mismatched
+                              folder names) */}
+                          <button
+                            title="Pick HPLC data folder (override)"
+                            className="p-1 rounded text-muted-foreground hover:text-amber-500 hover:bg-amber-500/10 transition-colors"
+                            onClick={e => { e.stopPropagation(); setOverrideTarget(prep) }}
+                          >
+                            <FolderSearch className="h-4 w-4" />
+                          </button>
                           {openingId === prep.id
                             ? <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
                             : <ChevronRight className="h-4 w-4 text-muted-foreground" />}
@@ -534,6 +604,37 @@ export function SamplePreps() {
           match={flyoutMatch}
         />
       )}
+
+      {/* HPLC data folder override picker */}
+      <Dialog open={overrideTarget !== null} onOpenChange={v => { if (!v && !overrideLoading) setOverrideTarget(null) }}>
+        <DialogContent className="sm:max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>
+              Pick HPLC data folder — {overrideTarget?.senaite_sample_id ?? overrideTarget?.sample_id}
+            </DialogTitle>
+          </DialogHeader>
+          <p className="text-xs text-muted-foreground -mt-2">
+            Navigate to any LIMS folder with HPLC data and click &quot;Use this folder&quot; —
+            its PeakData/chromatogram CSVs are pinned to this prep for processing
+            (this session only; nothing is saved to the prep).
+          </p>
+          {overrideLoading && (
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Scanning folder for PeakData CSVs…
+            </div>
+          )}
+          {overrideTarget && (
+            <SharePointBrowser
+              allowSelectAnyFolder
+              disabled={overrideLoading}
+              onFolderSelected={(path, folderName) =>
+                void applyFolderOverride(overrideTarget, path, folderName)
+              }
+            />
+          )}
+        </DialogContent>
+      </Dialog>
 
       {/* Delete confirmation modal */}
       {deleteTarget && (

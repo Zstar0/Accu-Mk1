@@ -3271,6 +3271,42 @@ export interface HplcScanMatch {
   folder_web_url?: string | null
   peak_files: SharePointItem[]
   chrom_files: SharePointItem[]
+  /** TRUE when the folder was hand-picked via the per-prep override (not
+   *  found by the name-prefix scan). Display hint only. */
+  is_override?: boolean
+}
+
+export interface HplcFolderMatchResult {
+  folder_name: string
+  folder_path: string
+  folder_id: string | null
+  folder_web_url: string | null
+  peak_files: SharePointItem[]
+  chrom_files: SharePointItem[]
+}
+
+/**
+ * Manual override for HPLC data discovery: run the scan's per-folder matching
+ * against an arbitrary LIMS folder (recursive CSV listing + PeakData/
+ * chromatogram filters). The caller binds the result to a prep client-side.
+ */
+export async function getHplcFolderMatch(
+  folderPath: string
+): Promise<HplcFolderMatchResult> {
+  const params = new URLSearchParams({ folder_path: folderPath })
+  const response = await fetch(
+    `${API_BASE_URL()}/sample-preps/hplc-folder-match?${params}`,
+    { headers: getBearerHeaders() }
+  )
+  if (!response.ok) {
+    const err = await response.json().catch(() => null)
+    throw new Error(
+      typeof err?.detail === 'string'
+        ? err.detail
+        : `getHplcFolderMatch failed: ${response.status}`
+    )
+  }
+  return response.json()
 }
 
 export interface HplcScanLogLine {

@@ -35,6 +35,12 @@ interface SharePointBrowserProps {
   onFolderSelected: (path: string, folderName: string, files: SharePointItem[]) => void
   /** Whether the browser is in a loading/disabled state */
   disabled?: boolean
+  /**
+   * Allow selecting any non-root folder, even without direct CSVs in it.
+   * For consumers that scan the selection recursively (e.g. the sample-preps
+   * HPLC folder override) — PeakData CSVs often sit in nested run subfolders.
+   */
+  allowSelectAnyFolder?: boolean
 }
 
 interface BreadcrumbSegment {
@@ -45,7 +51,7 @@ interface BreadcrumbSegment {
 type SortField = 'name' | 'size' | 'created' | 'last_modified'
 type SortDir = 'asc' | 'desc'
 
-export function SharePointBrowser({ onFolderSelected, disabled }: SharePointBrowserProps) {
+export function SharePointBrowser({ onFolderSelected, disabled, allowSelectAnyFolder }: SharePointBrowserProps) {
   const [currentPath, setCurrentPath] = useState('')
   const [items, setItems] = useState<SharePointItem[]>([])
   const [loading, setLoading] = useState(false)
@@ -336,13 +342,19 @@ export function SharePointBrowser({ onFolderSelected, disabled }: SharePointBrow
         )}
 
         {/* Selection action */}
-        {hasCSVs && !loading && (
+        {(hasCSVs || (allowSelectAnyFolder && currentPath)) && !loading && (
           <div className="mt-3 pt-3 border-t flex items-center justify-between">
             <div className="text-sm text-muted-foreground">
-              <Badge variant="secondary" className="mr-2">
-                {csvFiles.length} CSV{csvFiles.length !== 1 ? 's' : ''}
-              </Badge>
-              found in this folder
+              {hasCSVs ? (
+                <>
+                  <Badge variant="secondary" className="mr-2">
+                    {csvFiles.length} CSV{csvFiles.length !== 1 ? 's' : ''}
+                  </Badge>
+                  found in this folder
+                </>
+              ) : (
+                'Subfolders will be scanned recursively for CSVs'
+              )}
             </div>
             <Button
               size="sm"
