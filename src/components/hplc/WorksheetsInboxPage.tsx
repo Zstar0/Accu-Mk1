@@ -15,6 +15,8 @@ import {
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
 import { InboxVialCard, type DragData } from '@/components/hplc/InboxVialCard'
+import { InboxFamilyGroup } from '@/components/hplc/InboxFamilyGroup'
+import { groupInboxFamilies, type FamilyDragData } from '@/lib/inbox-families'
 import { WorksheetDropPanel } from '@/components/hplc/WorksheetDropPanel'
 import {
   MICRO_CATEGORIES,
@@ -156,7 +158,7 @@ export default function WorksheetsInboxPage() {
     refetchInterval: 30_000,
   })
 
-  const [activeDrag, setActiveDrag] = useState<DragData | null>(null)
+  const [activeDrag, setActiveDrag] = useState<DragData | FamilyDragData | null>(null)
   const [pendingDropKeys, setPendingDropKeys] = useState<Set<string>>(new Set())
 
   const vials = inboxData?.items ?? []
@@ -166,22 +168,11 @@ export default function WorksheetsInboxPage() {
     .filter(v => !sampleIdFilter.trim() || vialMatchesSampleId(v, sampleIdFilter))
     .filter(v => role !== 'hplc' || !analyteFilter.trim() || vialMatchesAnalyte(v, analyteFilter))
     .filter(v => role !== 'microbiology' || !microCategory || vialHasMicroCategory(v, microCategory))
-    // Priority pass on top of the server's family-sort. Stable: same-parent
-    // vials stay adjacent because the secondary sort key is preserved.
-    .slice()
-    .sort((a, b) => {
-      const priorityOrder: Record<string, number> = { expedited: 0, high: 1, normal: 2 }
-      const pa = priorityOrder[a.priority] ?? 2
-      const pb = priorityOrder[b.priority] ?? 2
-      if (pa !== pb) return pa - pb
-      // Within same priority, keep parents + their subs adjacent via
-      // (parent_sample_id, is_parent first, vial_sequence) — same as backend.
-      if (a.parent_sample_id !== b.parent_sample_id) {
-        return a.parent_sample_id.localeCompare(b.parent_sample_id)
-      }
-      if (a.is_parent !== b.is_parent) return a.is_parent ? -1 : 1
-      return a.vial_sequence - b.vial_sequence
-    })
+
+  // Family-grouped rendering: groupInboxFamilies owns ALL ordering (family
+  // rank = most urgent vial; vials by sequence). A family never splits
+  // across the list — techs grab all of a sample's vials at once.
+  const families = groupInboxFamilies(visibleVials)
 
   const filtersActive =
     sampleIdFilter.trim().length > 0 ||
@@ -200,7 +191,7 @@ export default function WorksheetsInboxPage() {
   }
 
   function handleDragStart(event: DragStartEvent) {
-    setActiveDrag(event.active.data.current as DragData)
+    setActiveDrag(event.active.data.current as DragData | FamilyDragData)
     // Prevent body scroll during drag
     document.body.style.overflow = 'hidden'
   }
@@ -211,8 +202,15 @@ export default function WorksheetsInboxPage() {
     const { over, active } = event
     if (!over) return
 
-    const dragData = active.data.current as DragData
+    const payload = active.data.current as DragData | FamilyDragData
     const dropId = String(over.id)
+
+    if (payload && 'family' in payload) {
+      await handleFamilyDrop(dropId, payload)
+      return
+    }
+
+    const dragData = payload
     const cardKey = `${dragData.sampleUid}::${dragData.groupId}`
 
     // Optimistically hide the card immediately
@@ -250,6 +248,73 @@ export default function WorksheetsInboxPage() {
         return next
       })
       toast.error(err instanceof Error ? err.message : 'Failed to assign to worksheet')
+    }
+  }
+
+  async function handleFamilyDrop(dropId: string, fam: FamilyDragData) {
+    const keys = fam.items.map(i => `${i.sampleUid}::${i.groupId}`)
+    setPendingDropKeys(prev => new Set([...prev, ...keys]))
+    const failed: { sampleUid: string; sampleId: string; groupId: number }[] = []
+    let added = 0
+    try {
+      let worksheetId: number
+      let createdTitle: string | null = null
+      let queue = fam.items
+      if (dropId === 'new-worksheet') {
+        const [first, ...rest] = fam.items
+        if (!first) return
+        const result = await createWorksheetFromDrop({
+          sample_uid: first.sampleUid,
+          sample_id: first.sampleId,
+          service_group_id: first.groupId,
+          date_received: first.dateReceived,
+          analyses: first.analyses,
+        })
+        worksheetId = result.id
+        createdTitle = result.title
+        added += 1
+        queue = rest
+      } else if (dropId.startsWith('worksheet-')) {
+        worksheetId = Number(dropId.replace('worksheet-', ''))
+      } else {
+        return
+      }
+      for (const item of queue) {
+        try {
+          await addGroupToWorksheet(worksheetId, {
+            sample_uid: item.sampleUid,
+            sample_id: item.sampleId,
+            service_group_id: item.groupId,
+            date_received: item.dateReceived,
+            analyses: item.analyses,
+          })
+          added += 1
+        } catch {
+          failed.push(item)
+        }
+      }
+      if (added > 0) {
+        toast.success(
+          createdTitle
+            ? `Created "${createdTitle}" with ${added} vial${added === 1 ? '' : 's'}`
+            : `Added ${added} vial${added === 1 ? '' : 's'} to worksheet`,
+        )
+      }
+      if (failed.length > 0) {
+        toast.error(`${failed.length} vial(s) not added: ${failed.map(f => f.sampleId).join(', ')}`)
+      }
+    } catch (err) {
+      // Worksheet creation itself failed — restore every card
+      failed.push(...fam.items)
+      toast.error(err instanceof Error ? err.message : 'Failed to assign family to worksheet')
+    } finally {
+      setPendingDropKeys(prev => {
+        const next = new Set(prev)
+        for (const f of failed) next.delete(`${f.sampleUid}::${f.groupId}`)
+        return next
+      })
+      queryClient.invalidateQueries({ queryKey: ['inbox-samples'] })
+      queryClient.invalidateQueries({ queryKey: ['worksheets-list'] })
     }
   }
 
@@ -425,21 +490,30 @@ export default function WorksheetsInboxPage() {
               </div>
             )}
 
-            {/* Cards */}
+            {/* Cards — family-grouped. Vial-only families (container mode,
+                no parent row) of 2+ get a draggable group section; legacy
+                parent-led families keep the flat indent treatment. */}
             {!isLoading && !isError && visibleVials.length > 0 && (
               <div className="space-y-2">
-                {visibleVials.map((vial, idx) => {
-                  const prev = idx > 0 ? visibleVials[idx - 1] : null
-                  const groupedWithPrevious =
-                    prev !== null && prev.parent_sample_id === vial.parent_sample_id
-                  return (
+                {families.map(fam => {
+                  const hasParentRow = fam.vials.some(v => v.is_parent)
+                  if (fam.vials.length >= 2 && !hasParentRow) {
+                    return (
+                      <InboxFamilyGroup
+                        key={fam.parentSampleId}
+                        family={fam}
+                        onPriorityChange={handlePriorityChange}
+                      />
+                    )
+                  }
+                  return fam.vials.map((vial, idx) => (
                     <InboxVialCard
                       key={vial.uid}
                       vial={vial}
-                      groupedWithPrevious={groupedWithPrevious}
+                      groupedWithPrevious={idx > 0}
                       onPriorityChange={handlePriorityChange}
                     />
-                  )
+                  ))
                 })}
               </div>
             )}
@@ -497,13 +571,19 @@ export default function WorksheetsInboxPage() {
 
       {/* Drag overlay — shows a ghost card while dragging */}
       <DragOverlay dropAnimation={null}>
-        {activeDrag && (
+        {activeDrag && ('family' in activeDrag ? (
+          <div className="rounded-lg border bg-card shadow-xl px-3 py-2 opacity-90 w-56 pointer-events-none">
+            <span className="font-mono text-xs font-semibold">{activeDrag.parentSampleId}</span>
+            <span className="mx-1.5 text-muted-foreground/50">·</span>
+            <span className="text-xs">{activeDrag.items.length} vials</span>
+          </div>
+        ) : (
           <div className="rounded-lg border bg-card shadow-xl px-3 py-2 opacity-90 w-48 pointer-events-none">
             <span className="font-mono text-xs font-medium">{activeDrag.sampleId}</span>
             <span className="mx-1.5 text-muted-foreground/50">·</span>
             <span className="text-xs">{activeDrag.groupName}</span>
           </div>
-        )}
+        ))}
       </DragOverlay>
     </DndContext>
     </div>
