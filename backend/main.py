@@ -10544,6 +10544,31 @@ async def create_sample_prep_endpoint(
             row = _update_sp(existing_id, data)
         else:
             row = create_sample_prep(data)
+        # Stamp the prep's bench assignment onto the vial's AR rows: the
+        # wizard already knows instrument (picked at Step 1) and method (the
+        # peptide's method chain), so apply both to the vial's unassigned
+        # HPLC rows now — instead of method staying manual and instrument
+        # arriving only at results-bridge time. Best-effort: a stamp failure
+        # must never lose the prep (already saved above).
+        if session.lims_sub_sample_pk is not None:
+            try:
+                from lims_analyses.prep_bridge import stamp_prep_assignment
+                _method_id = None
+                if session.peptide and session.peptide.methods:
+                    _method_id = session.peptide.methods[0].id
+                stamp_prep_assignment(
+                    db,
+                    lims_sub_sample_pk=session.lims_sub_sample_pk,
+                    instrument_id=session.instrument_id,
+                    method_id=_method_id,
+                    user_id=current_user.id,
+                )
+            except Exception:
+                db.rollback()
+                logger.exception(
+                    "prep assignment stamp failed for sub_pk=%s",
+                    session.lims_sub_sample_pk,
+                )
         # Serialize datetime fields
         for k in ("created_at", "updated_at"):
             if row.get(k) and hasattr(row[k], "isoformat"):

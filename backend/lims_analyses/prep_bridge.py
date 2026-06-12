@@ -172,6 +172,56 @@ def _pick_target(category: str, candidates: list[LimsAnalysis], *, slot: Optiona
     return generic[0] if len(generic) == 1 else None
 
 
+def stamp_prep_assignment(
+    db: Session,
+    *,
+    lims_sub_sample_pk: int,
+    instrument_id: Optional[int],
+    method_id: Optional[int],
+    user_id: Optional[int] = None,
+) -> list[int]:
+    """Stamp the prep's instrument + the peptide's method onto the vial's
+    unassigned HPLC-category lims_analyses rows at prep-creation time.
+
+    Before this, method was always manual (the vial page picker) and
+    instrument only landed at results-bridge time on the rows that bridged —
+    even though the wizard already knows both when the prep is saved.
+
+    Fill-only-NULL: a value already on a row (bench overlay, earlier prep) is
+    never overwritten. Micro rows (no HPLC category per _category) and rows
+    past 'unassigned' are untouched. Audit rides set_method_instrument's
+    existing 'auto' transition. Returns the ids of rows that changed.
+    """
+    if instrument_id is None and method_id is None:
+        return []
+    rows = db.execute(
+        select(LimsAnalysis).where(
+            LimsAnalysis.lims_sub_sample_pk == lims_sub_sample_pk,
+            LimsAnalysis.review_state == "unassigned",
+        )
+    ).scalars().all()
+
+    from lims_analyses.service import set_method_instrument
+
+    changed: list[int] = []
+    for row in rows:
+        if _category(row.keyword) is None:
+            continue
+        new_method = row.method_id if row.method_id is not None else method_id
+        new_instrument = row.instrument_id if row.instrument_id is not None else instrument_id
+        if new_method == row.method_id and new_instrument == row.instrument_id:
+            continue
+        set_method_instrument(
+            db,
+            analysis_id=row.id,
+            method_id=new_method,
+            instrument_id=new_instrument,
+            user_id=user_id,
+        )
+        changed.append(row.id)
+    return changed
+
+
 def rebridge_prep(db: Session, *, prep_id: int, user_id: Optional[int] = None) -> list[int]:
     """Re-run the bridge for every HPLC analysis recorded against a vial-scoped
     prep. Used by the flyout's vial-results view "Auto-fill" — covers rows the
