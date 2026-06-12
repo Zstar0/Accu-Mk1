@@ -36,8 +36,9 @@ not be worksheet-assignable — but its vials must be.
 - **Zero-vial container families keep the parent row** — otherwise the sample
   vanishes from the inbox until the Receive Wizard registers vials.
 - Native vial row shape:
-  - `uid = "mk1-sub-{pk}"` — same synthesized-uid convention as the samples-search
-    fix (`7db745d`).
+  - `uid = sub.external_lims_uid` — **plan-time correction**: native vials already
+    carry a NOT NULL UNIQUE `mk1://{uuid4-hex}` uid (`sub_samples/native.py`), so no
+    synthesis is needed (the spec's earlier `mk1-sub-{pk}` idea is obsolete).
   - `analyses` from the existing `_fetch_mk1_inbox_analyses_for_sub_sample`
     (Phase 3.5 source; its empty result hides the vial via the existing
     "no analyses → skip" rule, so fully-completed vials drop out naturally).
@@ -58,12 +59,11 @@ not be worksheet-assignable — but its vials must be.
 
 - `POST /worksheets/{id}/add-group` and `POST /worksheets/create-from-drop` accept
   arbitrary uid strings already — **no change**.
-- Bulk `POST /worksheets` stale-guard: uids matching `mk1-sub-*` skip SENAITE
-  verification; verify instead that the `lims_sub_samples` row exists and is not
-  already claimed (open worksheet item with that uid).
-- `stamp_for_item` (`lims_analyses/worksheet_analyst.py`): teach the resolver to
-  parse `mk1-sub-{pk}` uids (today it matches `lims_sub_samples.external_lims_uid`
-  only, which is NULL for native vials).
+- Bulk `POST /worksheets` stale-guard: **dropped at plan time** — the endpoint has
+  no FE callers (`CreateWorksheetDialog`/`useCreateWorksheetMutation` are dead
+  code) and it fails closed for `mk1://` uids.
+- `stamp_for_item` (`lims_analyses/worksheet_analyst.py`): **no change needed** —
+  it already resolves by exact `external_lims_uid` match, which native vials have.
 - `_notify_worksheet_assigned`: for vial-shaped items (native or AR-backed sub),
   notify the IS with the **parent** sample_id so the WP order-status flip
   (`analyzing`) keeps working. Today it fires the vial ID, which the IS cannot map
