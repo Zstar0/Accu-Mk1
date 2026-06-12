@@ -12001,6 +12001,7 @@ async def list_senaite_samples(
     search_field: Optional[str] = None,
     include_sub_samples: bool = False,
     _current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
     """
     List AnalysisRequests from SENAITE with optional review_state filter.
@@ -12152,6 +12153,37 @@ async def list_senaite_samples(
                 # or a sub-sample ID directly, they should find that record
                 # — the parents-only filter is for browsing, not lookups.
                 items = [_item_to_model(it) for it in deduped]
+
+                # Mk1-native vials (Model D) have no SENAITE AR, so getId
+                # can't find them. When an ID search comes back without the
+                # exact term, resolve it against lims_sub_samples and
+                # synthesize the row — direct vial-id lookup keeps working
+                # post-cutover. (Legacy dual-written vials still resolve via
+                # SENAITE above; the found-ids guard prevents duplicates.)
+                if search_field is None:
+                    found_ids = {it.id.upper() for it in items}
+                    if search_term.upper() not in found_ids:
+                        _sub = db.execute(
+                            select(LimsSubSample).where(
+                                func.upper(LimsSubSample.sample_id) == search_term.upper()
+                            )
+                        ).scalar_one_or_none()
+                        if _sub is not None:
+                            _parent = db.get(LimsSample, _sub.parent_sample_pk)
+                            items.append(SenaiteSampleItem(
+                                uid=_sub.external_lims_uid or f"mk1-sub-{_sub.id}",
+                                id=_sub.sample_id,
+                                title=_sub.sample_id,
+                                date_created=_sub.created_at.isoformat() if _sub.created_at else None,
+                                date_received=_sub.received_at.isoformat() if _sub.received_at else None,
+                                # A vial with received_at was physically checked
+                                # in (mirrors buildNativeSubSampleLookup).
+                                review_state="sample_received" if _sub.received_at
+                                             else (_parent.status if _parent and _parent.status else "registered"),
+                                sample_type="Sub-sample",
+                                analytes=[_parent.peptide_name] if _parent and _parent.peptide_name else [],
+                            ))
+
                 return SenaiteSamplesResponse(
                     items=items,
                     total=len(items),
