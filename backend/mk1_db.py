@@ -445,6 +445,23 @@ def list_sample_preps(
             return [dict(r) for r in cur.fetchall()]
 
 
+def list_sample_preps_for_sub_samples(sub_sample_pks: list[int]) -> list[dict]:
+    """Preps tagged to any of the given vials (lims_sub_sample_pk IN ...).
+
+    Slim projection — used by the chromatogram-candidates route to map
+    hplc_analyses.sample_prep_id back to a vial."""
+    if not sub_sample_pks:
+        return []
+    with get_mk1_db() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                "SELECT id, sample_id, senaite_sample_id, lims_sub_sample_pk "
+                "FROM sample_preps WHERE lims_sub_sample_pk = ANY(%s)",
+                [sub_sample_pks],
+            )
+            return [dict(r) for r in cur.fetchall()]
+
+
 def get_sample_prep(sample_prep_id: int) -> Optional[dict]:
     """Fetch a single sample prep by integer id (all columns)."""
     with get_mk1_db() as conn:

@@ -12,8 +12,10 @@
  * hosts the same AnalysisTable used on the vial details page for manual entry
  * and submit/verify transitions.
  *
- * The chromatogram CSV still uploads to the PARENT AR in SENAITE (COA
- * generation reads it from there) — fired alongside Auto-fill, best-effort.
+ * The chromatogram stays attached to the VIAL (it lives on this prep's
+ * hplc_analyses row; the vial's Attachments section renders it). Pushing it
+ * to the parent AR is an explicit choice on the parent page — the "Select
+ * Vial Chromatogram" picker — mirroring the vial-photo model.
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react'
@@ -24,8 +26,6 @@ import { toast } from 'sonner'
 import {
   listLimsAnalysesForSubSample,
   rebridgeSamplePrep,
-  lookupSenaiteSample,
-  uploadChromatogramToSenaite,
   renderChromatogramImage,
   type SamplePrep,
   type HPLCAnalysisResult,
@@ -113,22 +113,11 @@ export function VialResultsView({ prep, results: hplcResults, onBack, onComplete
     } finally {
       setBridging(false)
     }
-
-    // Chromatogram CSV → PARENT AR in SENAITE (best-effort; COA reads it there).
-    const firstResult = hplcResults[0]
-    const parentId = vialId.replace(/-S\d+$/i, '')
-    if (firstResult?.id && parentId && parentId !== vialId) {
-      try {
-        const parent = await lookupSenaiteSample(parentId)
-        if (parent.sample_uid) {
-          const r = await uploadChromatogramToSenaite(firstResult.id, parent.sample_uid)
-          if (r.success) toast.success(`Chromatogram CSV uploaded to ${parentId} in SENAITE`)
-        }
-      } catch {
-        // best-effort — don't block the user
-      }
-    }
-  }, [prep.id, hplcResults, vialId, loadAnalyses])
+    // The chromatogram stays attached to the VIAL (it lives on this prep's
+    // hplc_analyses row and shows on the vial's Attachments section). Pushing
+    // it to the parent AR is an explicit choice on the parent page — the
+    // "Select Vial Chromatogram" picker — mirroring the vial-photo model.
+  }, [prep.id, loadAnalyses])
 
   return (
     <div className="flex flex-col">
@@ -228,7 +217,9 @@ export function VialResultsView({ prep, results: hplcResults, onBack, onComplete
               <>
                 <img src={chromUrl} alt="HPLC Chromatogram" className="w-full rounded border border-border/50" />
                 <p className="text-xs text-muted-foreground">
-                  The chromatogram CSV uploads to the parent sample in SENAITE when you auto-fill.
+                  Attached to this vial — it shows in the vial&apos;s Attachments section.
+                  Push it to the parent from the parent page&apos;s &quot;Select Vial
+                  Chromatogram&quot; picker.
                 </p>
               </>
             ) : null}

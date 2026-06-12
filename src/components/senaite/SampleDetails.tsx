@@ -102,6 +102,10 @@ import {
   deleteSubSampleAttachment,
   setSubSamplePrimaryAttachment,
   type SubSampleAttachment,
+  listSubSampleChromatograms,
+  renderChromatogramImage,
+  uploadChromatogramToSenaite,
+  type SubSampleChromatogram,
 } from '@/lib/api'
 import { ReceiveWizard } from '@/components/intake/ReceiveWizard/ReceiveWizard'
 import type { ParentInfo } from '@/components/intake/ReceiveWizard/useReceiveWizard'
@@ -1143,6 +1147,55 @@ function VialAttachmentImage({
   )
 }
 
+/** Rendered chromatogram preview for an HPLC analysis. Object URLs are
+ *  cached per analysis id — renderChromatogramImage POSTs a fresh render
+ *  on every call, and chromatogram data is immutable once stored. */
+const _chromPreviewCache = new Map<number, string>()
+
+function ChromatogramPreviewImg({ analysisId, alt }: { analysisId: number; alt: string }) {
+  const [src, setSrc] = useState<string | null>(_chromPreviewCache.get(analysisId) ?? null)
+  const [error, setError] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    const cached = _chromPreviewCache.get(analysisId)
+    // Resolve through a promise either way — keeps setState async (React
+    // Compiler rule) while still serving cache hits without a re-render POST.
+    const urlPromise = cached
+      ? Promise.resolve(cached)
+      : renderChromatogramImage(analysisId).then(url => {
+          _chromPreviewCache.set(analysisId, url)
+          return url
+        })
+    urlPromise
+      .then(url => { if (!cancelled) setSrc(url) })
+      .catch(() => { if (!cancelled) setError(true) })
+    return () => { cancelled = true }
+  }, [analysisId])
+
+  if (error) {
+    return (
+      <div className="flex items-center justify-center w-full h-24 rounded-lg bg-muted/40 border border-border/30">
+        <span className="text-xs text-muted-foreground">Preview unavailable</span>
+      </div>
+    )
+  }
+  if (!src) {
+    return (
+      <div className="flex items-center justify-center w-full h-24 rounded-lg bg-muted/40 border border-border/30">
+        <Spinner className="size-4" />
+      </div>
+    )
+  }
+  return (
+    <img
+      src={src}
+      alt={alt}
+      className="rounded-lg border border-border/30 w-full max-h-40 object-contain bg-white"
+    />
+  )
+}
+
 function AddVialImageForm({
   sampleId,
   onUploaded,
@@ -1215,6 +1268,7 @@ function VialAttachmentsBlock({
   photoUrl,
   photoIsMk1,
   attachments,
+  chromatograms,
   onPhotoChanged,
   onAttachmentsChanged,
 }: {
@@ -1225,6 +1279,9 @@ function VialAttachmentsBlock({
    *  from here. */
   photoIsMk1: boolean
   attachments: SubSampleAttachment[]
+  /** Chromatograms from this vial's HPLC preps (derived, read-only —
+   *  the data lives on hplc_analyses, nothing to add/remove here). */
+  chromatograms: SubSampleChromatogram[]
   onPhotoChanged: () => void
   onAttachmentsChanged: () => void
 }) {
@@ -1343,6 +1400,32 @@ function VialAttachmentsBlock({
           </div>
         )}
       </div>
+
+      {/* Chromatograms — derived from this vial's HPLC preps (read-only) */}
+      {chromatograms.length > 0 && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {chromatograms.map(c => (
+            <div key={c.analysis_id} className="space-y-1.5">
+              <div className="flex items-center gap-2">
+                <Activity size={13} className="text-muted-foreground shrink-0" />
+                <span className="text-xs font-medium text-foreground truncate">
+                  Chromatogram{c.peptide_abbreviation ? ` — ${c.peptide_abbreviation}` : ''}
+                </span>
+                <Badge variant="secondary" className="text-[10px] shrink-0">HPLC Prep</Badge>
+                {c.created_at && (
+                  <span className="ml-auto text-[10px] text-muted-foreground shrink-0">
+                    {new Date(c.created_at).toLocaleDateString()}
+                  </span>
+                )}
+              </div>
+              <ChromatogramPreviewImg
+                analysisId={c.analysis_id}
+                alt={`${c.vial_sample_id} chromatogram`}
+              />
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Extra sample images */}
       {attachments.length > 0 && (
@@ -1488,6 +1571,110 @@ function SelectVialImageDialog({
                 {v.received_at && (
                   <div className="text-[10px] text-muted-foreground">
                     Received {new Date(v.received_at).toLocaleDateString()}
+                  </div>
+                )}
+              </button>
+            ))}
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+/**
+ * Parent-page overlay: pick which vial's chromatogram to attach to the
+ * parent. Snapshot semantics, mirroring SelectVialImageDialog — the chosen
+ * analysis's chromatogram CSV is uploaded to the parent AR in SENAITE as an
+ * "HPLC Graph" attachment (existing /chromatogram-to-senaite route), which
+ * the attachments section and COA generation consume natively.
+ */
+function SelectVialChromatogramDialog({
+  open,
+  onOpenChange,
+  parentSampleId,
+  parentSampleUid,
+  chromatograms,
+  containerMode,
+  onAttached,
+}: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  parentSampleId: string
+  parentSampleUid: string
+  chromatograms: SubSampleChromatogram[]
+  containerMode: boolean
+  onAttached: () => void
+}) {
+  const [attachingId, setAttachingId] = useState<number | null>(null)
+
+  const handleSelect = async (c: SubSampleChromatogram) => {
+    setAttachingId(c.analysis_id)
+    try {
+      const result = await uploadChromatogramToSenaite(c.analysis_id, parentSampleUid)
+      if (!result.success) throw new Error(result.message)
+      toast.success(`${c.vial_sample_id} chromatogram attached to ${parentSampleId}`)
+      onAttached()
+      onOpenChange(false)
+    } catch (err) {
+      toast.error('Attach failed', {
+        description: err instanceof Error ? err.message : 'Unknown error',
+      })
+    } finally {
+      setAttachingId(null)
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>Select Vial Chromatogram</DialogTitle>
+        </DialogHeader>
+        <p className="text-xs text-muted-foreground -mt-2">
+          Choose which vial&apos;s chromatogram to attach to {parentSampleId}. The CSV is
+          uploaded to SENAITE as an HPLC Graph attachment and becomes the parent&apos;s
+          newest chromatogram (used by the COA).
+        </p>
+        {chromatograms.length === 0 ? (
+          <p className="text-sm text-muted-foreground py-6 text-center">
+            No vial chromatograms available — process an HPLC prep for a vial first.
+          </p>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-h-[60vh] overflow-y-auto pr-1">
+            {chromatograms.map(c => (
+              <button
+                key={c.analysis_id}
+                type="button"
+                disabled={attachingId !== null}
+                onClick={() => void handleSelect(c)}
+                className="group text-left rounded-lg border border-border/50 bg-muted/20 hover:border-primary/60 hover:bg-muted/50 transition-colors p-2 space-y-1.5 cursor-pointer disabled:opacity-60"
+              >
+                <ChromatogramPreviewImg
+                  analysisId={c.analysis_id}
+                  alt={`${c.vial_sample_id} chromatogram`}
+                />
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <span className="text-xs font-medium text-foreground">
+                    {vialLabel(c.vial_sequence, containerMode)}
+                  </span>
+                  {c.assignment_role && <RoleHeaderBadge role={c.assignment_role} />}
+                  {c.assignment_kind === 'variance' && (
+                    <span className="inline-block text-[10px] leading-none px-1.5 py-0.5 rounded border uppercase tracking-wide font-medium bg-amber-500/15 text-amber-700 border-amber-500/40 dark:text-amber-300">
+                      Variance
+                    </span>
+                  )}
+                  {c.peptide_abbreviation && (
+                    <Badge variant="secondary" className="text-[10px] shrink-0">
+                      {c.peptide_abbreviation}
+                    </Badge>
+                  )}
+                  {attachingId === c.analysis_id && <Spinner className="size-3" />}
+                </div>
+                <div className="text-[10px] text-muted-foreground font-mono">{c.vial_sample_id}</div>
+                {c.created_at && (
+                  <div className="text-[10px] text-muted-foreground">
+                    {new Date(c.created_at).toLocaleDateString()}
                   </div>
                 )}
               </button>
@@ -2325,6 +2512,8 @@ export function SampleDetails() {
   const [vialsQuickLookOpen, setVialsQuickLookOpen] = useState(false)
   // Parent pages: pick a vial's primary photo to attach to the parent AR
   const [selectVialImageOpen, setSelectVialImageOpen] = useState(false)
+  // Parent pages: pick a vial's chromatogram to attach to the parent AR
+  const [selectVialChromOpen, setSelectVialChromOpen] = useState(false)
   const [availableServices, setAvailableServices] = useState<AnalysisService[]>([])
   const [servicesLoading, setServicesLoading] = useState(false)
   const [serviceSearch, setServiceSearch] = useState('')
@@ -2422,6 +2611,10 @@ export function SampleDetails() {
   const [vialPhotoVersion, setVialPhotoVersion] = useState(0)
   const [vialPhotoUrl, setVialPhotoUrl] = useState<string | null>(null)
   const [vialAttachments, setVialAttachments] = useState<SubSampleAttachment[]>([])
+  // Chromatograms from vial-scoped HPLC preps. Vial pages: this vial's own
+  // (rendered in the Attachments section). Parent pages: the whole family's
+  // (feeds the Select Vial Chromatogram picker).
+  const [vialChromatograms, setVialChromatograms] = useState<SubSampleChromatogram[]>([])
 
   useEffect(() => {
     if (!parentSampleId || !sampleId) {
@@ -2438,6 +2631,20 @@ export function SampleDetails() {
       .catch(() => { if (!cancelled) setVialAttachments([]) })
     return () => { cancelled = true }
   }, [parentSampleId, sampleId, vialPhotoVersion])
+
+  // Both page kinds load chromatogram candidates from the same route (it
+  // dispatches vial-vs-parent server-side). Best-effort — [] on failure.
+  useEffect(() => {
+    if (!sampleId) {
+      setVialChromatograms([])
+      return
+    }
+    let cancelled = false
+    listSubSampleChromatograms(sampleId)
+      .then(c => { if (!cancelled) setVialChromatograms(c) })
+      .catch(() => { if (!cancelled) setVialChromatograms([]) })
+    return () => { cancelled = true }
+  }, [sampleId, parentSampleId])
 
   const refreshVialPhoto = useCallback(() => {
     setVialPhotoVersion(v => v + 1)
@@ -3992,10 +4199,10 @@ export function SampleDetails() {
             icon={Paperclip}
             title={`Attachments (${
               (data.attachments?.length ?? 0) +
-              // Vial pages also count the Mk1-side items rendered below:
-              // the check-in photo (if any) + extra sample images.
+              // Vial pages also count the Mk1-side items rendered below: the
+              // check-in photo (if any) + extra images + prep chromatograms.
               (parentSampleId !== null
-                ? (vialPhotoUrl ? 1 : 0) + vialAttachments.length
+                ? (vialPhotoUrl ? 1 : 0) + vialAttachments.length + vialChromatograms.length
                 : 0)
             })`}
           >
@@ -4012,6 +4219,7 @@ export function SampleDetails() {
                       ?.photo_external_uid?.startsWith('mk1://')
                   }
                   attachments={vialAttachments}
+                  chromatograms={vialChromatograms}
                   onPhotoChanged={refreshVialPhoto}
                   onAttachmentsChanged={refreshVialAttachments}
                 />
@@ -4125,19 +4333,33 @@ export function SampleDetails() {
                   primary (legacy vial photos already live on this AR). */}
               {parentSampleId === null &&
                 data.sample_uid &&
-                (subData?.sub_samples.some(v => v.photo_external_uid?.startsWith('mk1://')) ?? false) && (
+                ((subData?.sub_samples.some(v => v.photo_external_uid?.startsWith('mk1://')) ?? false) ||
+                  vialChromatograms.length > 0) && (
                 <div className="pt-3 border-t border-border/40 flex items-center gap-2 flex-wrap" onClick={e => e.stopPropagation()}>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="gap-1.5 text-xs"
-                    onClick={() => setSelectVialImageOpen(true)}
-                  >
-                    <ImageIcon size={13} />
-                    Select Vial Image
-                  </Button>
+                  {(subData?.sub_samples.some(v => v.photo_external_uid?.startsWith('mk1://')) ?? false) && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="gap-1.5 text-xs"
+                      onClick={() => setSelectVialImageOpen(true)}
+                    >
+                      <ImageIcon size={13} />
+                      Select Vial Image
+                    </Button>
+                  )}
+                  {vialChromatograms.length > 0 && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="gap-1.5 text-xs"
+                      onClick={() => setSelectVialChromOpen(true)}
+                    >
+                      <Activity size={13} />
+                      Select Vial Chromatogram
+                    </Button>
+                  )}
                   <span className="text-[11px] text-muted-foreground">
-                    Attach a vial&apos;s photo to this sample
+                    Attach a vial&apos;s photo or chromatogram to this sample
                   </span>
                 </div>
               )}
@@ -4357,6 +4579,18 @@ export function SampleDetails() {
               // listing can lag a beat; the next refresh catches up if so.
               refreshSample(data.sample_id)
             }}
+          />
+        )}
+
+        {parentSampleId === null && data.sample_id && data.sample_uid && (
+          <SelectVialChromatogramDialog
+            open={selectVialChromOpen}
+            onOpenChange={setSelectVialChromOpen}
+            parentSampleId={data.sample_id}
+            parentSampleUid={data.sample_uid}
+            chromatograms={vialChromatograms}
+            containerMode={subData?.parent.container_mode ?? false}
+            onAttached={() => refreshSample(data.sample_id)}
           />
         )}
 

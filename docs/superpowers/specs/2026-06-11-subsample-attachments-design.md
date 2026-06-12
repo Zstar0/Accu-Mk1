@@ -129,6 +129,33 @@ semantics, FE-orchestrated, zero backend changes:
 - Only Mk1-stored primaries are offered — pre-cutover legacy vial photos
   already live on the parent AR.
 
+## Vial chromatograms (added same day)
+
+A vial's chromatogram is NOT separately stored — it's the `chromatogram_data`
+on the `hplc_analyses` rows of preps tagged with that vial
+(`sample_preps.lims_sub_sample_pk` → `hplc_analyses.sample_prep_id`). So a
+vial-scoped prep "attaches" its chromatogram to the sub-sample automatically
+at analysis-save time; nothing to push.
+
+- `GET /api/sub-samples/{sample_id}/chromatograms` — vial-or-parent dispatch
+  (like the photo route): vial id → its own candidates; parent id → the whole
+  family's. Entries: analysis_id, vial id/sequence/role/kind, peptide, prep,
+  created_at. Newest first.
+- **Vial pages**: the Attachments section renders a read-only Chromatogram
+  card per candidate (preview via the existing
+  `POST /hplc/analyses/{id}/chromatogram-image`, object-URLs cached per id).
+  Counted in the section header.
+- **Parent pages**: a **Select Vial Chromatogram** button (next to Select Vial
+  Image, shown when candidates exist) opens a picker grid — preview, vial
+  label, role badge, variance chip, peptide, date. Selecting calls the
+  existing `POST /hplc/analyses/{id}/chromatogram-to-senaite` with the parent
+  UID → CSV lands on the parent AR as an **HPLC Graph** attachment, consumed
+  natively by the attachments list and COA. Snapshot semantics (re-pick →
+  newest wins), mirroring the vial-photo model.
+- **VialResultsView change**: the auto-upload of the chromatogram CSV to the
+  parent AR at Auto-fill time is REMOVED — parent attachment is now always
+  the explicit picker choice.
+
 ## Error handling
 
 - Upload: non-image → 400; missing vial → 404; storage failure → 502.

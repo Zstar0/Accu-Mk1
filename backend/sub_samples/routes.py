@@ -449,6 +449,78 @@ def delete_sub_sample_photo(
     return None
 
 
+@router.get("/{sample_id}/chromatograms")
+def list_sub_sample_chromatograms(
+    sample_id: str,
+    db: Session = Depends(get_db),
+    _user=Depends(get_current_user),
+):
+    """Chromatogram candidates from vial-scoped sample preps.
+
+    A vial's chromatogram is the chromatogram_data on the hplc_analyses rows
+    of preps tagged with that vial (sample_preps.lims_sub_sample_pk) — no
+    separate storage. Vial id → its own candidates; parent id → candidates
+    across the whole family. Newest first. Render via
+    POST /hplc/analyses/{id}/chromatogram-image; push to the parent AR via
+    POST /hplc/analyses/{id}/chromatogram-to-senaite.
+    """
+    import mk1_db
+    from models import HPLCAnalysis, Peptide
+
+    sub = db.execute(
+        select(LimsSubSample).where(LimsSubSample.sample_id == sample_id)
+    ).scalar_one_or_none()
+    if sub is not None:
+        subs = [sub]
+    else:
+        parent = db.execute(
+            select(LimsSample).where(LimsSample.sample_id == sample_id)
+        ).scalar_one_or_none()
+        if parent is None:
+            raise HTTPException(404, f"Sample {sample_id} not found")
+        subs = list(parent.sub_samples)
+
+    pk_to_sub = {s.id: s for s in subs}
+    preps = mk1_db.list_sample_preps_for_sub_samples(list(pk_to_sub))
+    prep_by_id = {p["id"]: p for p in preps}
+    if not prep_by_id:
+        return {"chromatograms": []}
+
+    analyses = db.execute(
+        select(HPLCAnalysis).where(
+            HPLCAnalysis.sample_prep_id.in_(list(prep_by_id)),
+            HPLCAnalysis.chromatogram_data.is_not(None),
+        ).order_by(HPLCAnalysis.id.desc())
+    ).scalars().all()
+
+    out = []
+    pep_cache: dict = {}
+    for a in analyses:
+        chrom = a.chromatogram_data or {}
+        if not chrom.get("times") or not chrom.get("signals"):
+            continue
+        prep = prep_by_id.get(a.sample_prep_id)
+        s = pk_to_sub.get(prep["lims_sub_sample_pk"]) if prep else None
+        if s is None:
+            continue
+        pep = None
+        if a.peptide_id is not None:
+            if a.peptide_id not in pep_cache:
+                pep_cache[a.peptide_id] = db.get(Peptide, a.peptide_id)
+            pep = pep_cache[a.peptide_id]
+        out.append({
+            "analysis_id": a.id,
+            "vial_sample_id": s.sample_id,
+            "vial_sequence": s.vial_sequence,
+            "assignment_role": s.assignment_role,
+            "assignment_kind": s.assignment_kind,
+            "peptide_abbreviation": pep.abbreviation if pep else None,
+            "prep_id": prep["id"],
+            "created_at": a.created_at.isoformat() if a.created_at else None,
+        })
+    return {"chromatograms": out}
+
+
 # ── Sub-sample image attachments (2026-06-11 design) ─────────────────────────
 
 def _serialize_attachment(att) -> SubSampleAttachmentResponse:

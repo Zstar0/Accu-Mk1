@@ -5387,6 +5387,38 @@ export async function deleteSubSamplePhoto(sampleId: string): Promise<void> {
   invalidateSubSamplePhoto(sampleId)
 }
 
+// ── Sub-sample chromatograms (vial-scoped prep linkage) ───────────────────────
+
+export interface SubSampleChromatogram {
+  analysis_id: number
+  vial_sample_id: string
+  vial_sequence: number
+  assignment_role: string | null
+  assignment_kind: string | null
+  peptide_abbreviation: string | null
+  prep_id: number
+  created_at: string | null
+}
+
+/**
+ * Chromatogram candidates from vial-scoped sample preps. A vial id returns
+ * its own; a parent id returns candidates across the whole family (newest
+ * first). Render with renderChromatogramImage(analysis_id); push to the
+ * parent AR with uploadChromatogramToSenaite(analysis_id, parentUid).
+ */
+export async function listSubSampleChromatograms(
+  sampleId: string
+): Promise<SubSampleChromatogram[]> {
+  const response = await fetch(
+    `${API_BASE_URL()}/api/sub-samples/${encodeURIComponent(sampleId)}/chromatograms`,
+    { headers: getBearerHeaders() }
+  )
+  if (!response.ok)
+    throw new Error(`listSubSampleChromatograms failed: ${response.status}`)
+  const body = await response.json()
+  return body.chromatograms ?? []
+}
+
 // ── Sub-sample image attachments (2026-06-11 design) ──────────────────────────
 
 export interface SubSampleAttachment {
