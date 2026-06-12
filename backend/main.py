@@ -13807,6 +13807,23 @@ def _fetch_mk1_inbox_analyses_for_sub_sample(
     return out
 
 
+# Column set for the inbox's lims_sub_samples fetch. Single source of truth:
+# every attribute that _build_native_vial_inbox_items or the vial_meta loop
+# reads off a sub row MUST be here — these are column-limited Rows, not ORM
+# objects, so a missing column is a runtime AttributeError the full-ORM test
+# fixtures won't catch (tests select through this same tuple to stay honest).
+INBOX_SUB_SAMPLE_COLUMNS = (
+    LimsSubSample.parent_sample_pk,
+    LimsSubSample.external_lims_uid,
+    LimsSubSample.sample_id,
+    LimsSubSample.assignment_role,
+    LimsSubSample.assignment_kind,    # variance badge passthrough
+    LimsSubSample.vial_sequence,
+    LimsSubSample.id,                 # Phase 3.5: needed for Mk1 inbox source
+    LimsSubSample.received_at,        # native-vial rows: own check-in date
+)
+
+
 def _build_native_vial_inbox_items(
     db: Session,
     *,
@@ -14226,15 +14243,7 @@ async def get_worksheets_inbox(
     # inbox set) AND any sub of a parent we just loaded (to compute vial_total).
     parent_ids = list(parent_id_to_sample_id.keys())
     sub_rows = db.execute(
-        select(
-            LimsSubSample.parent_sample_pk,
-            LimsSubSample.external_lims_uid,
-            LimsSubSample.sample_id,
-            LimsSubSample.assignment_role,
-            LimsSubSample.vial_sequence,
-            LimsSubSample.id,             # Phase 3.5: needed for Mk1 inbox source
-            LimsSubSample.received_at,    # native-vial rows: own check-in date
-        ).where(
+        select(*INBOX_SUB_SAMPLE_COLUMNS).where(
             (LimsSubSample.external_lims_uid.in_(uids))
             | (LimsSubSample.parent_sample_pk.in_(parent_ids) if parent_ids else False)
         )

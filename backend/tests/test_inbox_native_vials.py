@@ -13,7 +13,7 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
 from database import Base
-from main import _build_native_vial_inbox_items
+from main import INBOX_SUB_SAMPLE_COLUMNS, _build_native_vial_inbox_items
 from models import (
     AnalysisService,
     LimsAnalysis,
@@ -87,11 +87,23 @@ def family(db):
     return parent, subs
 
 
+def _as_inbox_rows(db, subs):
+    """Re-select subs through the endpoint's column-limited tuple. Production
+    hands _build_native_vial_inbox_items SQLAlchemy Rows (not ORM objects) —
+    passing ORM objects here once masked a missing-column AttributeError."""
+    ids = [s.id for s in subs]
+    return db.execute(
+        select(*INBOX_SUB_SAMPLE_COLUMNS)
+        .where(LimsSubSample.id.in_(ids))
+        .order_by(LimsSubSample.vial_sequence)
+    ).all()
+
+
 def _call(db, subs, **overrides):
     kwargs = dict(
         parent_item=PARENT_ITEM,
         parent_sample_id="P-0300",
-        native_subs=subs,
+        native_subs=_as_inbox_rows(db, subs),
         family_size=3,
         allowed_vial_roles={"hplc"},
         assigned_pairs=set(),
