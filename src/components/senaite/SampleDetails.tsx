@@ -103,7 +103,6 @@ import {
   setSubSamplePrimaryAttachment,
   type SubSampleAttachment,
   listSubSampleChromatograms,
-  renderChromatogramImage,
   uploadChromatogramToSenaite,
   type SubSampleChromatogram,
 } from '@/lib/api'
@@ -1147,52 +1146,94 @@ function VialAttachmentImage({
   )
 }
 
-/** Rendered chromatogram preview for an HPLC analysis. Object URLs are
- *  cached per analysis id — renderChromatogramImage POSTs a fresh render
- *  on every call, and chromatogram data is immutable once stored. */
-const _chromPreviewCache = new Map<number, string>()
+/** In-app chromatogram chart for a vial chromatogram's raw series — the same
+ *  recharts treatment as HplcAttachmentChart (dark theme), NOT the branded
+ *  COA PNG. `compact` renders a small non-interactive trace for picker cards
+ *  (pointer-events pass through to the card's click handler). */
+function VialChromatogramChart({
+  data,
+  title,
+  compact = false,
+}: {
+  data: { times: number[]; signals: number[] }
+  title: string
+  compact?: boolean
+}) {
+  const [expanded, setExpanded] = useState(false)
+  const chartData = data.times.map((t, i) => ({ t, v: data.signals[i] ?? 0 }))
 
-function ChromatogramPreviewImg({ analysisId, alt }: { analysisId: number; alt: string }) {
-  const [src, setSrc] = useState<string | null>(_chromPreviewCache.get(analysisId) ?? null)
-  const [error, setError] = useState(false)
+  const chartInner = (tall: boolean) => (
+    <LineChart data={chartData} margin={{ top: 8, right: 16, bottom: compact ? 4 : 20, left: tall ? 8 : 4 }}>
+      <CartesianGrid strokeDasharray="3 3" stroke={CHART_GRID} vertical={false} />
+      <XAxis
+        dataKey="t"
+        type="number"
+        domain={['dataMin', 'dataMax']}
+        tick={{ fontSize: tall ? 11 : 9, fill: CHART_SLATE }}
+        axisLine={{ stroke: CHART_GRID }}
+        tickLine={false}
+        tickFormatter={(v: number) => v.toFixed(1)}
+        {...(compact ? {} : {
+          label: { value: 'min', position: 'insideBottom' as const, offset: -10, style: { fontSize: tall ? 11 : 9, fill: CHART_SLATE } },
+        })}
+      />
+      <YAxis
+        tick={{ fontSize: tall ? 11 : 9, fill: CHART_SLATE }}
+        axisLine={false}
+        tickLine={false}
+        tickFormatter={(v: number) => v >= 1000 ? `${(v / 1000).toFixed(0)}k` : String(Math.round(v))}
+        width={tall ? 48 : 40}
+      />
+      {!compact && (
+        <Tooltip
+          contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #475569', borderRadius: 6, fontSize: tall ? 12 : 10 }}
+          labelStyle={{ color: CHART_SLATE }}
+          itemStyle={{ color: '#e2e8f0' }}
+          labelFormatter={(v) => `${Number(v).toFixed(3)} min`}
+          formatter={(value) => [Number(value).toFixed(2), 'mAU']}
+        />
+      )}
+      <Line dataKey="v" dot={false} stroke={CHART_BLUE} strokeWidth={tall ? 2 : 1.5} isAnimationActive={false} />
+    </LineChart>
+  )
 
-  useEffect(() => {
-    let cancelled = false
-    const cached = _chromPreviewCache.get(analysisId)
-    // Resolve through a promise either way — keeps setState async (React
-    // Compiler rule) while still serving cache hits without a re-render POST.
-    const urlPromise = cached
-      ? Promise.resolve(cached)
-      : renderChromatogramImage(analysisId).then(url => {
-          _chromPreviewCache.set(analysisId, url)
-          return url
-        })
-    urlPromise
-      .then(url => { if (!cancelled) setSrc(url) })
-      .catch(() => { if (!cancelled) setError(true) })
-    return () => { cancelled = true }
-  }, [analysisId])
-
-  if (error) {
+  if (compact) {
     return (
-      <div className="flex items-center justify-center w-full h-24 rounded-lg bg-muted/40 border border-border/30">
-        <span className="text-xs text-muted-foreground">Preview unavailable</span>
+      <div className="h-28 w-full pointer-events-none rounded-lg border border-border/30 bg-muted/20">
+        <ResponsiveContainer width="100%" height="100%">
+          {chartInner(false)}
+        </ResponsiveContainer>
       </div>
     )
   }
-  if (!src) {
-    return (
-      <div className="flex items-center justify-center w-full h-24 rounded-lg bg-muted/40 border border-border/30">
-        <Spinner className="size-4" />
-      </div>
-    )
-  }
+
   return (
-    <img
-      src={src}
-      alt={alt}
-      className="rounded-lg border border-border/30 w-full max-h-40 object-contain bg-white"
-    />
+    <>
+      <div className="relative h-52 w-full group rounded-lg border border-border/30 bg-muted/20">
+        <ResponsiveContainer width="100%" height="100%">
+          {chartInner(false)}
+        </ResponsiveContainer>
+        <button
+          onClick={e => { e.stopPropagation(); setExpanded(true) }}
+          className="absolute top-1.5 right-1.5 p-1 rounded bg-background/60 border border-border/40 text-muted-foreground opacity-0 group-hover:opacity-100 hover:text-foreground hover:bg-background/90 transition-all cursor-pointer"
+          aria-label="Expand chromatogram"
+          title="View full size"
+        >
+          <Maximize2 size={12} />
+        </button>
+      </div>
+
+      <Dialog open={expanded} onOpenChange={setExpanded}>
+        <DialogContent className="max-w-[90vw] sm:max-w-[90vw] w-[90vw]">
+          <DialogTitle className="text-sm font-medium truncate pr-6">{title}</DialogTitle>
+          <div className="h-[60vh] w-full">
+            <ResponsiveContainer width="100%" height="100%">
+              {chartInner(true)}
+            </ResponsiveContainer>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </>
   )
 }
 
@@ -1418,9 +1459,9 @@ function VialAttachmentsBlock({
                   </span>
                 )}
               </div>
-              <ChromatogramPreviewImg
-                analysisId={c.analysis_id}
-                alt={`${c.vial_sample_id} chromatogram`}
+              <VialChromatogramChart
+                data={c.data}
+                title={`${c.vial_sample_id} — ${c.peptide_abbreviation ?? 'Chromatogram'}`}
               />
             </div>
           ))}
@@ -1650,9 +1691,10 @@ function SelectVialChromatogramDialog({
                 onClick={() => void handleSelect(c)}
                 className="group text-left rounded-lg border border-border/50 bg-muted/20 hover:border-primary/60 hover:bg-muted/50 transition-colors p-2 space-y-1.5 cursor-pointer disabled:opacity-60"
               >
-                <ChromatogramPreviewImg
-                  analysisId={c.analysis_id}
-                  alt={`${c.vial_sample_id} chromatogram`}
+                <VialChromatogramChart
+                  data={c.data}
+                  title={`${c.vial_sample_id} — ${c.peptide_abbreviation ?? 'Chromatogram'}`}
+                  compact
                 />
                 <div className="flex items-center gap-1.5 flex-wrap">
                   <span className="text-xs font-medium text-foreground">

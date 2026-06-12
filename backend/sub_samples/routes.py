@@ -517,6 +517,10 @@ def list_sub_sample_chromatograms(
             "peptide_abbreviation": pep.abbreviation if pep else None,
             "prep_id": prep["id"],
             "created_at": a.created_at.isoformat() if a.created_at else None,
+            # Raw series for in-app chart rendering (~800 LTTB points, a few
+            # KB) — the FE renders the same recharts chart used everywhere
+            # else instead of the branded PNG.
+            "data": {"times": chrom["times"], "signals": chrom["signals"]},
         })
     return {"chromatograms": out}
 

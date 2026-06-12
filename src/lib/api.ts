@@ -5398,6 +5398,8 @@ export interface SubSampleChromatogram {
   peptide_abbreviation: string | null
   prep_id: number
   created_at: string | null
+  /** Raw series (~800 LTTB points) for in-app recharts rendering. */
+  data: { times: number[]; signals: number[] }
 }
 
 /**
