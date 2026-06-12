@@ -89,3 +89,26 @@ New backend service (e.g. `backend/lims_analyses/prep_bridge.py` or a function i
 | Wizard Step1 (lookup + picker) | `src/components/hplc/wizard/steps/Step1SampleInfo.tsx` |
 | Worksheet Start Prep | `src/components/hplc/WorksheetDrawer.tsx`, `src/store/ui-store.ts` |
 | FE types | `src/lib/api.ts` (`SamplePrep`, `WizardSession`, `createWizardSession`) |
+
+---
+
+## Addendum 2026-06-11 — vial-only cutover
+
+The additive phase above kept parent preps as the default. Cutover decisions:
+
+1. **Step1 lookup is vial-only.** A parent-form id no longer creates a parent
+   prep: the lookup lists that parent's vials (role + variance badges) and the
+   tech picks one — each click re-runs the lookup as that vial. A parent with
+   no vials gets a clear "check the sample in first" error. The manual-entry
+   tab (standards / ad-hoc) is untouched. Worksheet "Start Prep" on parent
+   items prefills the parent id and now lands in the picker.
+2. **Vial preps get a Mk1 final step.** `SamplePrepHplcFlyout` renders the new
+   `VialResultsView` when `prep.lims_sub_sample_pk != null` (parent/legacy
+   preps keep `SenaiteResultsView` unchanged). It has no sample-ID input — the
+   write target is the prep's vial. Shows the bridge outcome, hosts the same
+   `AnalysisTable` the vial details page uses (manual entry + transitions),
+   and an **Auto-fill** button backed by `POST /hplc/sample-preps/{id}/bridge`
+   (`prep_bridge.rebridge_prep`) — re-runs the idempotent bridge over every
+   HPLC analysis on the prep (404 unknown prep, 409 parent-scoped/no analyses).
+3. **Chromatogram CSV still uploads to the PARENT AR** (COA reads it there),
+   fired best-effort alongside Auto-fill.

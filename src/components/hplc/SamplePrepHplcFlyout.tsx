@@ -72,6 +72,7 @@ import {
 import { AnalysisResults } from '@/components/hplc/AnalysisResults'
 import { CalculationVisuals } from '@/components/hplc/CalculationVisuals'
 import { SenaiteResultsView } from '@/components/hplc/SenaiteResultsView'
+import { VialResultsView } from '@/components/hplc/VialResultsView'
 import { StandardCurveReview } from '@/components/hplc/StandardCurveReview'
 import { useAuthStore } from '@/store/auth-store'
 import { User, Cpu, Calendar, Download } from 'lucide-react'
@@ -2171,12 +2172,23 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match, readOnly = fa
             )}
           </>
         ) : !readOnly && result ? (
-          <SenaiteResultsView
-            prep={prep}
-            results={isBlend || hasMultipleAnalytes ? [...analyteResults.values()] : [result]}
-            onBack={() => setView('analysis')}
-            onComplete={() => { prep.status = 'hplc_complete' }}
-          />
+          // Vial-scoped preps write to the vial's Mk1 lims_analyses rows;
+          // parent-scoped (legacy) preps keep the SENAITE results view.
+          prep.lims_sub_sample_pk != null ? (
+            <VialResultsView
+              prep={prep}
+              results={isBlend || hasMultipleAnalytes ? [...analyteResults.values()] : [result]}
+              onBack={() => setView('analysis')}
+              onComplete={() => { prep.status = 'hplc_complete' }}
+            />
+          ) : (
+            <SenaiteResultsView
+              prep={prep}
+              results={isBlend || hasMultipleAnalytes ? [...analyteResults.values()] : [result]}
+              onBack={() => setView('analysis')}
+              onComplete={() => { prep.status = 'hplc_complete' }}
+            />
+          )
         ) : null}
       </SheetContent>
 

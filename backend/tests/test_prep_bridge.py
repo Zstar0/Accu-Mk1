@@ -1,9 +1,11 @@
 """Unit tests for the vial-prep result bridge."""
+import pytest
+from unittest.mock import patch
 from sqlalchemy import select
 
 from models import AnalysisService, HPLCAnalysis, LimsAnalysis, LimsSample, LimsSubSample, Peptide
 from lims_analyses.service import create_analysis
-from lims_analyses.prep_bridge import bridge_prep_result_to_vial
+from lims_analyses.prep_bridge import bridge_prep_result_to_vial, rebridge_prep
 
 
 def _peptide(db, name="BPC-157", abbr="BPC-157"):
@@ -335,3 +337,68 @@ def test_analyte_purity_skipped_when_slot_unresolved(db_session, monkeypatch):
     monkeypatch.setattr("sub_samples.senaite.fetch_parent_analyte_slots", lambda pid: {})
     ids = bridge_prep_result_to_vial(db, lims_sub_sample_pk=vial.id, analysis=a, peptide=pep, user_id=1)
     assert ids == []
+
+
+# ── rebridge_prep (flyout Auto-fill re-run) ──────────────────────────────────
+
+
+def _hplc_for_prep(db, pep, prep_id, **kw):
+    a = _hplc(db, pep, **kw)
+    a.sample_prep_id = prep_id
+    db.flush()
+    return a
+
+
+def test_rebridge_runs_bridge_for_all_prep_analyses(db_session):
+    db = db_session
+    pep = _peptide(db)
+    vial = _vial(db)
+    pur = create_analysis(db, host_kind="sub_sample", host_pk=vial.id,
+                          analysis_service_id=73, keyword="HPLC-PUR", title="Peptide Purity (HPLC)")
+    _hplc_for_prep(db, pep, 42, purity=97.25)
+
+    with patch("mk1_db.get_sample_prep",
+               return_value={"id": 42, "lims_sub_sample_pk": vial.id}):
+        ids = rebridge_prep(db, prep_id=42, user_id=1)
+
+    assert ids == [pur.id]
+    db.refresh(pur)
+    assert pur.review_state == "to_be_verified"
+    assert pur.result_value == "97.25"
+
+
+def test_rebridge_is_idempotent(db_session):
+    db = db_session
+    pep = _peptide(db)
+    vial = _vial(db)
+    create_analysis(db, host_kind="sub_sample", host_pk=vial.id,
+                    analysis_service_id=73, keyword="HPLC-PUR", title="Peptide Purity (HPLC)")
+    _hplc_for_prep(db, pep, 42, purity=97.25)
+
+    with patch("mk1_db.get_sample_prep",
+               return_value={"id": 42, "lims_sub_sample_pk": vial.id}):
+        first = rebridge_prep(db, prep_id=42)
+        second = rebridge_prep(db, prep_id=42)
+
+    assert len(first) == 1 and second == []
+
+
+def test_rebridge_unknown_prep_raises_lookup(db_session):
+    with patch("mk1_db.get_sample_prep", return_value=None):
+        with pytest.raises(LookupError):
+            rebridge_prep(db_session, prep_id=999)
+
+
+def test_rebridge_parent_scoped_prep_raises_value(db_session):
+    with patch("mk1_db.get_sample_prep",
+               return_value={"id": 42, "lims_sub_sample_pk": None}):
+        with pytest.raises(ValueError, match="not vial-scoped"):
+            rebridge_prep(db_session, prep_id=42)
+
+
+def test_rebridge_no_analyses_raises_value(db_session):
+    vial = _vial(db_session)
+    with patch("mk1_db.get_sample_prep",
+               return_value={"id": 42, "lims_sub_sample_pk": vial.id}):
+        with pytest.raises(ValueError, match="no HPLC analyses"):
+            rebridge_prep(db_session, prep_id=42)

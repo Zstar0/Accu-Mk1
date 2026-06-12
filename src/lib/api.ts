@@ -3230,6 +3230,29 @@ export async function updateSamplePrep(
   return response.json()
 }
 
+/**
+ * Re-run the vial-prep result bridge for every HPLC analysis on a prep.
+ * Idempotent server-side (only 'unassigned' vial rows are written). 409 when
+ * the prep is parent-scoped or has no HPLC analyses yet.
+ */
+export async function rebridgeSamplePrep(
+  prepId: number
+): Promise<{ submitted: number[]; count: number }> {
+  const response = await fetch(`${API_BASE_URL()}/hplc/sample-preps/${prepId}/bridge`, {
+    method: 'POST',
+    headers: getBearerHeaders(),
+  })
+  if (!response.ok) {
+    const err = await response.json().catch(() => null)
+    throw new Error(
+      typeof err?.detail === 'string'
+        ? err.detail
+        : `rebridgeSamplePrep failed: ${response.status}`
+    )
+  }
+  return response.json()
+}
+
 export async function deleteSamplePrep(id: number): Promise<void> {
   const response = await fetch(`${API_BASE_URL()}/sample-preps/${id}`, {
     method: 'DELETE',

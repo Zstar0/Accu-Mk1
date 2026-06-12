@@ -27,6 +27,7 @@ import {
   getSenaiteStatus,
   lookupSenaiteSample,
   listSubSamples,
+  type SubSample,
   type PeptideRecord,
   type SenaiteLookupResult,
   type VialParams,
@@ -93,6 +94,11 @@ export function Step1SampleInfo() {
   const [lookupLoading, setLookupLoading] = useState(false)
   const [lookupError, setLookupError] = useState<string | null>(null)
   const [lookupResult, setLookupResult] = useState<SenaiteLookupResult | null>(null)
+  // Parent-form id entered → list its vials to pick from (preps are per-vial)
+  const [parentVialChoices, setParentVialChoices] = useState<{
+    parentId: string
+    vials: SubSample[]
+  } | null>(null)
 
   // Load peptides and check SENAITE status on mount
   useEffect(() => {
@@ -417,6 +423,7 @@ export function Step1SampleInfo() {
       setLookupResult(null)
       setLookupError(null)
       setLimsSubSamplePk(null)
+      setParentVialChoices(null)
     }
     if (tab === 'lookup') {
       // Clear manual-entered values when switching back to lookup
@@ -428,23 +435,40 @@ export function Step1SampleInfo() {
     setActiveTab(tab as 'lookup' | 'manual')
   }
 
-  async function handleLookup() {
-    if (!lookupId.trim()) return
-    const rawId = lookupId.trim()
+  async function handleLookup(overrideId?: string) {
+    const rawId = (overrideId ?? lookupId).trim()
+    if (!rawId) return
     setLookupLoading(true)
     setLookupError(null)
     setLookupResult(null)
+    setParentVialChoices(null)
     // Reset on every lookup — covers re-lookup within the same tab (the
     // tab-change clear does not fire here). Only the vial-found branch re-sets.
     setLimsSubSamplePk(null)
     try {
-      // Vial id (e.g. P-0142-S01): resolve to a sub-sample pk, then auto-populate
-      // from the PARENT (the vial inherits the parent compound). A non-vial id
-      // flows through the existing parent path unchanged (isVial=false).
+      // Preps are per-vial now: only vial ids (e.g. P-0142-S01) proceed. A
+      // parent-form id doesn't error out cold — we list its vials so the tech
+      // can pick one (each click re-runs the lookup as that vial).
       const isVial = /-S\d+$/i.test(rawId)
       let subSamplePk: number | null = null
       let parentId = rawId
-      if (isVial) {
+      if (!isVial) {
+        let listing
+        try {
+          listing = await listSubSamples(rawId)
+        } catch {
+          throw new Error(`Sample ${rawId} not found`)
+        }
+        if (listing.sub_samples.length === 0) {
+          throw new Error(
+            `Sample preps are per-vial, and ${rawId} has no vials yet — ` +
+            'check the sample in via the receive wizard first, then prep one of its vials.'
+          )
+        }
+        setParentVialChoices({ parentId: rawId, vials: listing.sub_samples })
+        return
+      }
+      {
         parentId = rawId.replace(/-S\d+$/i, '')
         // listSubSamples throwing (parent unknown) or no matching vial → caught
         // below as a failed lookup; pk stays null (set above).
@@ -812,12 +836,12 @@ export function Step1SampleInfo() {
 
                 {/* Search field */}
                 <div className="space-y-1.5">
-                  <Label htmlFor="senaite-id">SENAITE Sample ID</Label>
+                  <Label htmlFor="senaite-id">Vial Sample ID</Label>
                   <div className="flex gap-2">
                     <Input
                       id="senaite-id"
                       type="text"
-                      placeholder="e.g. S-0001"
+                      placeholder="e.g. P-0142-S01 — preps are per-vial"
                       value={lookupId}
                       onChange={e => setLookupId(e.target.value)}
                       onKeyDown={e => {
@@ -848,6 +872,44 @@ export function Step1SampleInfo() {
                   <Alert variant="destructive">
                     <AlertDescription>{lookupError}</AlertDescription>
                   </Alert>
+                )}
+
+                {/* Parent id entered → pick which vial to prep (preps are per-vial) */}
+                {parentVialChoices && (
+                  <div className="rounded-md border border-amber-500/40 bg-amber-50/50 dark:bg-amber-950/20 p-4 space-y-3">
+                    <p className="text-sm font-medium text-amber-700 dark:text-amber-300">
+                      Sample preps are per-vial — pick which {parentVialChoices.parentId} vial
+                      this prep is for:
+                    </p>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      {parentVialChoices.vials.map(v => (
+                        <button
+                          key={v.sample_id}
+                          type="button"
+                          disabled={lookupLoading}
+                          onClick={() => {
+                            setLookupId(v.sample_id)
+                            void handleLookup(v.sample_id)
+                          }}
+                          className="flex items-center justify-between gap-2 px-3 py-2 rounded-md border border-border bg-background hover:bg-muted hover:border-primary/50 transition-colors text-left cursor-pointer disabled:opacity-60"
+                        >
+                          <span className="font-mono text-sm font-medium">{v.sample_id}</span>
+                          <span className="flex items-center gap-1.5 shrink-0">
+                            {v.assignment_role && (
+                              <Badge variant="secondary" className="text-[10px] uppercase">
+                                {v.assignment_role}
+                              </Badge>
+                            )}
+                            {v.assignment_kind === 'variance' && (
+                              <Badge variant="outline" className="text-[10px] uppercase border-amber-500/40 text-amber-700 dark:text-amber-300">
+                                Variance
+                              </Badge>
+                            )}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                 )}
 
                 {/* SENAITE result summary card */}

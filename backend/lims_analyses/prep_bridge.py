@@ -172,6 +172,45 @@ def _pick_target(category: str, candidates: list[LimsAnalysis], *, slot: Optiona
     return generic[0] if len(generic) == 1 else None
 
 
+def rebridge_prep(db: Session, *, prep_id: int, user_id: Optional[int] = None) -> list[int]:
+    """Re-run the bridge for every HPLC analysis recorded against a vial-scoped
+    prep. Used by the flyout's vial-results view "Auto-fill" — covers rows the
+    create-time bridge skipped (or rows seeded after the analysis was saved).
+    Safe to repeat: the underlying bridge only touches 'unassigned' rows.
+
+    Raises LookupError (unknown prep) or ValueError (parent-scoped prep / no
+    HPLC analyses yet) for the route to map onto 404/409.
+    """
+    import mk1_db
+
+    prep = mk1_db.get_sample_prep(prep_id)
+    if not prep:
+        raise LookupError(f"sample prep {prep_id} not found")
+    sub_pk = prep.get("lims_sub_sample_pk")
+    if sub_pk is None:
+        raise ValueError(f"sample prep {prep_id} is not vial-scoped")
+
+    analyses = db.execute(
+        select(HPLCAnalysis)
+        .where(HPLCAnalysis.sample_prep_id == prep_id)
+        .order_by(HPLCAnalysis.id)
+    ).scalars().all()
+    if not analyses:
+        raise ValueError(f"sample prep {prep_id} has no HPLC analyses yet")
+
+    submitted: list[int] = []
+    for analysis in analyses:
+        peptide = db.get(Peptide, analysis.peptide_id) if analysis.peptide_id else None
+        submitted.extend(bridge_prep_result_to_vial(
+            db,
+            lims_sub_sample_pk=sub_pk,
+            analysis=analysis,
+            peptide=peptide,
+            user_id=user_id,
+        ))
+    return submitted
+
+
 def bridge_prep_result_to_vial(
     db: Session,
     *,

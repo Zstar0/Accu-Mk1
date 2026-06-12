@@ -764,7 +764,7 @@ export function SenaiteResultsView({ prep, results: hplcResults, onBack, onCompl
   )
 }
 
-function CompleteHplcButton({ prepId, onComplete }: { prepId: number; onComplete?: () => void }) {
+export function CompleteHplcButton({ prepId, onComplete }: { prepId: number; onComplete?: () => void }) {
   const [completing, setCompleting] = useState(false)
   const [done, setDone] = useState(false)
 

@@ -4079,6 +4079,27 @@ async def run_hplc_analysis(
     return _analysis_to_response(analysis, peptide.abbreviation)
 
 
+@app.post("/hplc/sample-preps/{prep_id}/bridge")
+def rebridge_sample_prep(
+    prep_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Re-run the vial-prep result bridge for every HPLC analysis on this prep.
+
+    Idempotent (only 'unassigned' lims_analyses rows are touched). Used by the
+    flyout's vial-results view Auto-fill. 404 unknown prep; 409 when the prep
+    is parent-scoped or has no HPLC analyses recorded yet."""
+    from lims_analyses.prep_bridge import rebridge_prep
+    try:
+        submitted = rebridge_prep(db, prep_id=prep_id, user_id=current_user.id)
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    return {"submitted": submitted, "count": len(submitted)}
+
+
 # --- HPLC Analysis History Endpoints ---
 
 class HPLCAnalysisListItem(BaseModel):
