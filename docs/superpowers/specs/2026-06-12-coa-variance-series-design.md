@@ -19,8 +19,17 @@ an analyte with two variance add-ons:
 
 ## Decisions (Handler-approved)
 
+> **Revised 2026-06-12 (post-build):** two changes from review —
+> (a) the identity row shows a **roll-up summary** (`Conforms 3/3` / `Mixed 2/3` /
+> `Does Not Conform 0/3`), green when all conform and slate (`#444F5B`) otherwise,
+> reusing the existing conformance colors — not a per-vial name list;
+> (b) the variance series is **PDF-only**. Each variance row carries a `digital`
+> single-value override (parent figure + parent status/conforms) that
+> `_build_coa_data_json` renders, so the digital/verify COA is unchanged. The
+> blend overall-identity composite reads the `digital` view to stay correct.
+
 1. **Rows:** purity, quantity, **and identity** get the series. (Identity was
-   re-added: the lab needs to see a per-vial identity mismatch.)
+   re-added: the lab needs to see a per-vial identity mismatch — now as a roll-up.)
 2. **Vial set:** the parent figure, then each `assignment_kind='variance'`
    sub-sample in `vial_sequence` order. A vial missing that analyte is skipped
    without shifting order.
