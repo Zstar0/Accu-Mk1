@@ -52,6 +52,7 @@ import { toast } from 'sonner'
 import {
   lookupSenaiteSample,
   updateSenaiteSampleFields,
+  updateCustomerRemarks,
   getSampleAdditionalCOAs,
   updateAdditionalCOAConfig,
   fetchSenaiteAttachmentUrl,
@@ -1927,6 +1928,59 @@ function formatDate(dateStr: string | null | undefined): string {
     hour: 'numeric',
     minute: '2-digit',
   })
+}
+
+// --- Customer Remarks (delivered with the published COA) ---
+
+function CustomerRemarksCard({
+  sampleId,
+  initial,
+  onSaved,
+}: {
+  sampleId: string
+  initial: string
+  onSaved: () => void
+}) {
+  const [text, setText] = useState(initial)
+  const [saving, setSaving] = useState(false)
+  const dirty = text !== initial
+
+  async function handleSave() {
+    setSaving(true)
+    try {
+      await updateCustomerRemarks(sampleId, text.trim())
+      toast.success('Customer remarks saved')
+      onSaved()
+    } catch (err) {
+      toast.error('Failed to save customer remarks', {
+        description: err instanceof Error ? err.message : 'Unknown error',
+      })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="space-y-2">
+      <Textarea
+        value={text}
+        onChange={e => setText(e.target.value)}
+        placeholder="Short customer-facing summary delivered with the published COA…"
+        className="min-h-24 text-sm"
+        aria-label={`Customer remarks for ${sampleId}`}
+        disabled={saving}
+      />
+      <div className="flex items-center justify-between gap-4">
+        <p className="text-[11px] text-muted-foreground">
+          Delivered to the customer with the published COA. Required when the
+          COA is non-conforming. Re-publish the COA to refresh the customer copy.
+        </p>
+        <Button size="sm" onClick={handleSave} disabled={!dirty || saving}>
+          {saving ? 'Saving…' : 'Save'}
+        </Button>
+      </div>
+    </div>
+  )
 }
 
 // --- Add Remark Form ---
@@ -4190,9 +4244,9 @@ export function SampleDetails() {
         </div>
         )}
 
-        {/* Remarks — full width */}
+        {/* Internal Remarks — full width (SENAITE-backed, lab-internal) */}
         <Card className="p-4 mb-6">
-          <SectionHeader icon={MessageSquare} title="Remarks">
+          <SectionHeader icon={MessageSquare} title="Internal Remarks">
             {data.remarks.length > 0 ? (
               <div className="space-y-2">
                 {data.remarks.map((r, i) => (
@@ -4234,6 +4288,20 @@ export function SampleDetails() {
             )}
           </SectionHeader>
         </Card>
+
+        {/* Customer Remarks — delivered with the published COA (parents only) */}
+        {isParent && (
+          <Card className="p-4 mb-6">
+            <SectionHeader icon={MessageSquare} title="Customer Remarks">
+              <CustomerRemarksCard
+                key={data.sample_id}
+                sampleId={data.sample_id}
+                initial={subData?.parent?.customer_remarks ?? ''}
+                onSaved={() => refetchSubs()}
+              />
+            </SectionHeader>
+          </Card>
+        )}
 
         {/* Attachments */}
         <Card className="p-4 mb-6">

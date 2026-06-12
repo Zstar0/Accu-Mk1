@@ -8924,6 +8924,10 @@ async def generate_sample_coa(
                 _reps = build_variance_replicates(db, _parent_row)
                 if _reps:
                     alias_body["variance_replicates"] = _reps
+                # Customer-facing remarks snapshot — COABuilder embeds them in
+                # coa_data and gates non-conforming COAs on their presence.
+                if (_parent_row.customer_remarks or "").strip():
+                    alias_body["lab_remarks"] = _parent_row.customer_remarks.strip()
         except Exception:
             _logger.warning("variance replicate build failed for %s", sample_id, exc_info=True)
 

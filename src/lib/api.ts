@@ -4918,6 +4918,8 @@ export interface ParentSampleSummary {
   /** TRUE = container family: parent is a pure report depository, S01 is
    *  Vial 1, no parent bench affordances (container-parent design). */
   container_mode: boolean
+  /** Customer-facing remarks delivered with the published COA. */
+  customer_remarks?: string | null
 }
 
 export interface SubSampleListResponse {
@@ -4992,6 +4994,23 @@ export async function listSubSamples(parentSampleId: string): Promise<SubSampleL
     { headers: getBearerHeaders() }
   )
   if (!response.ok) throw new Error(`listSubSamples failed: ${response.status}`)
+  return response.json()
+}
+
+/** Set the parent's customer-facing remarks (delivered with the published COA). */
+export async function updateCustomerRemarks(
+  parentSampleId: string,
+  remarks: string,
+): Promise<{ sample_id: string; customer_remarks: string }> {
+  const response = await fetch(
+    `${API_BASE_URL()}/api/sub-samples/parent/${encodeURIComponent(parentSampleId)}/customer-remarks`,
+    {
+      method: 'PUT',
+      headers: { ...getBearerHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ remarks }),
+    }
+  )
+  if (!response.ok) throw new Error(`updateCustomerRemarks failed: ${response.status}`)
   return response.json()
 }
 
