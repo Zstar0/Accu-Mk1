@@ -8910,6 +8910,23 @@ async def generate_sample_coa(
     if alias_map:
         alias_body["analyte_display_names"] = {str(k): v for k, v in alias_map.items()}
 
+    # Variance replicate series (parent's assignment_kind='variance' vials).
+    # Raw per-vial values; COABuilder prepends its own parent figure and renders
+    # the comma-delimited series. Best-effort — a builder error must not block
+    # generation. Parents only (sub-sample COAs have no variance children).
+    if not is_sub:
+        try:
+            from coa.variance_series import build_variance_replicates
+            _parent_row = db.execute(
+                select(LimsSample).where(LimsSample.sample_id == sample_id)
+            ).scalar_one_or_none()
+            if _parent_row is not None:
+                _reps = build_variance_replicates(db, _parent_row)
+                if _reps:
+                    alias_body["variance_replicates"] = _reps
+        except Exception:
+            _logger.warning("variance replicate build failed for %s", sample_id, exc_info=True)
+
     try:
         async with httpx.AsyncClient(timeout=120.0) as client:
             resp = await client.post(
