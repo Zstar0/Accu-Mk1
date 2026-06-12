@@ -8070,6 +8070,29 @@ INTEGRATION_SERVICE_API_KEY = os.environ.get("ACCU_MK1_API_KEY", "")
 COA_BUILDER_URL = os.environ.get("COA_BUILDER_URL", "")
 
 
+_VIAL_SHAPED_ID_RE = re.compile(r"^(?P<parent>.+)-S\d{2,}$")
+
+
+def _worksheet_notify_target(db: Session, sample_id: str) -> str:
+    """Resolve the sample id to notify the IS with when a worksheet item is
+    added. Order-status mapping on the IS side (/explorer/worksheet-assigned)
+    is keyed by PARENT AR ids — receive-webhook sample_status_events and
+    order payload sample_results — so vial ids (…-SNN) must be translated or
+    the notification no-ops (no_order_found). DB linkage wins; regex strip is
+    the fallback for vial-shaped ids with no lims_sub_samples row."""
+    if not sample_id:
+        return sample_id
+    m = _VIAL_SHAPED_ID_RE.match(sample_id)
+    if not m:
+        return sample_id
+    parent_sid = db.execute(
+        select(LimsSample.sample_id)
+        .join(LimsSubSample, LimsSubSample.parent_sample_pk == LimsSample.id)
+        .where(LimsSubSample.sample_id == sample_id)
+    ).scalar_one_or_none()
+    return parent_sid or m.group("parent")
+
+
 async def _notify_worksheet_assigned(sample_id: str) -> None:
     """Fire-and-forget: tell Integration Service a sample was added to a worksheet."""
     try:
@@ -14770,7 +14793,7 @@ async def create_worksheet(
     ).scalars().all()
     for sid in items:
         if sid:
-            await _notify_worksheet_assigned(sid)
+            await _notify_worksheet_assigned(_worksheet_notify_target(db, sid))
 
     return {
         "id": ws.id,
@@ -15104,8 +15127,9 @@ async def add_group_to_worksheet(
 
     db.commit()
 
-    # Notify integration service — order status → analyzing
-    await _notify_worksheet_assigned(data.sample_id)
+    # Notify integration service — order status → analyzing. Vial items
+    # notify with the PARENT id (the IS can only map parent ARs to orders).
+    await _notify_worksheet_assigned(_worksheet_notify_target(db, data.sample_id))
 
     return {"status": "added", "item_id": item.id}
 
@@ -15205,8 +15229,9 @@ async def create_worksheet_from_drop(
 
     db.commit()
 
-    # Notify integration service — order status → analyzing
-    await _notify_worksheet_assigned(data.sample_id)
+    # Notify integration service — order status → analyzing. Vial items
+    # notify with the PARENT id (the IS can only map parent ARs to orders).
+    await _notify_worksheet_assigned(_worksheet_notify_target(db, data.sample_id))
 
     return {"id": ws.id, "title": ws.title, "status": ws.status, "item_count": 1}
 
