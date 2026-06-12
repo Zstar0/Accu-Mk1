@@ -5,7 +5,7 @@ Parent NOT included (COABuilder prepends its own figure)."""
 from __future__ import annotations
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
 from database import Base
@@ -95,3 +95,61 @@ def test_empty_when_no_variance_vials(db):
     parent = LimsSample(sample_id="P-0600", external_lims_uid="uid-p0600")
     db.add(parent); db.commit()
     assert build_variance_replicates(db, parent) == {}
+
+
+@pytest.fixture
+def prod_world(db):
+    """Production single-peptide shape: generic purity/quantity services that
+    carry NO peptide_id (HPLC-PUR, PEPT-Total) and a peptide-specific identity
+    service (ID_BPC157). The vial's peptide is known only via its identity row;
+    purity/quantity must still attach to that peptide."""
+    pep = Peptide(name="BPC-157", abbreviation="BPC157", active=True)
+    db.add(pep)
+    db.flush()
+    pur = _svc(db, "HPLC-PUR")                 # generic, peptide_id=None
+    qty = _svc(db, "PEPT-Total")               # generic, peptide_id=None
+    idsvc = _svc(db, "ID_BPC157", pep.id)      # peptide-specific
+    parent = LimsSample(sample_id="P-0700", external_lims_uid="uid-p0700", container_mode=True)
+    db.add(parent)
+    db.flush()
+    subs = {}
+    for seq, kind in ((1, "core"), (2, "variance"), (3, "variance")):
+        sub = LimsSubSample(
+            parent_sample_pk=parent.id, external_lims_uid=f"mk1://w{seq}",
+            sample_id=f"P-0700-S{seq:02d}", vial_sequence=seq,
+            assignment_role="hplc", assignment_kind=kind,
+        )
+        db.add(sub); db.flush()
+        subs[seq] = sub
+    _row(db, subs[2], pur, "93.1"); _row(db, subs[2], qty, "15"); _row(db, subs[2], idsvc, "BPC-157")
+    _row(db, subs[3], pur, "99.98"); _row(db, subs[3], qty, "15"); _row(db, subs[3], idsvc, "BPC-157")
+    db.commit()
+    return parent
+
+
+def test_generic_services_attach_purity_quantity_to_vial_peptide(prod_world, db):
+    recs = build_variance_replicates(db, prod_world)["BPC-157"]
+    assert [r["vial_sequence"] for r in recs] == [2, 3]
+    v2, v3 = recs[0], recs[1]
+    assert v2["PURITY"] == "93.1%" and v2["IDENTITY"] == "BPC-157"
+    assert v2.get("QUANTITY", "").startswith("15")
+    assert v3["PURITY"] == "99.98%"
+    assert v3.get("QUANTITY", "").startswith("15")
+
+
+def test_vial_quantity_inherits_parent_unit_when_missing(prod_world, db):
+    """Vial PEPT-Total rows often carry no unit; the series must not fabricate
+    'mg' next to a parent measured in mg/mL. Inherit the parent's quantity unit
+    so the comma series stays consistent ('12 mg/mL, 15 mg/mL, ...')."""
+    qty = db.execute(
+        select(AnalysisService).where(AnalysisService.keyword == "PEPT-Total")
+    ).scalar_one()
+    # Parent-tier quantity row carries the canonical unit.
+    db.add(LimsAnalysis(
+        lims_sample_pk=prod_world.id, analysis_service_id=qty.id,
+        keyword="PEPT-Total", title="PEPT-Total", result_value="12",
+        result_unit="mg/mL", review_state="verified", reportable=True,
+    ))
+    db.commit()
+    recs = build_variance_replicates(db, prod_world)["BPC-157"]
+    assert recs[0]["QUANTITY"] == "15 mg/mL"
