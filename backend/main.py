@@ -14019,6 +14019,7 @@ async def get_worksheets_inbox(
 
     # Step 2b: Load SENAITE sample IDs that already have a sample prep
     prepped_senaite_ids: set[str] = set()
+    prepped_sub_pks: set[int] = set()
     if hide_prepped:
         try:
             from mk1_db import ensure_sample_preps_table, get_mk1_db
@@ -14027,6 +14028,10 @@ async def get_worksheets_inbox(
                 with conn.cursor() as cur:
                     cur.execute("SELECT DISTINCT senaite_sample_id FROM sample_preps WHERE senaite_sample_id IS NOT NULL")
                     prepped_senaite_ids = {row[0] for row in cur.fetchall()}
+                    # Vial-scoped preps (post prep-cutover) tag the vial pk —
+                    # the native-vial rows filter on this, not the senaite id.
+                    cur.execute("SELECT DISTINCT lims_sub_sample_pk FROM sample_preps WHERE lims_sub_sample_pk IS NOT NULL")
+                    prepped_sub_pks = {row[0] for row in cur.fetchall()}
         except Exception:
             pass  # If mk1 DB is unavailable, show all samples
 
@@ -14155,6 +14160,7 @@ async def get_worksheets_inbox(
             LimsSubSample.assignment_role,
             LimsSubSample.vial_sequence,
             LimsSubSample.id,             # Phase 3.5: needed for Mk1 inbox source
+            LimsSubSample.received_at,    # native-vial rows: own check-in date
         ).where(
             (LimsSubSample.external_lims_uid.in_(uids))
             | (LimsSubSample.parent_sample_pk.in_(parent_ids) if parent_ids else False)
@@ -14181,6 +14187,15 @@ async def get_worksheets_inbox(
             parent_container_mode[r.id] = r.container_mode
         all_parent_rows += list(extra_parents)
     family_sizes = _inbox_family_sizes(all_parent_rows, sub_rows)
+    # Native vials (mk1:// uid — no SENAITE AR) per parent pk, for the
+    # container-parent suppression branch in step 7. AR-backed subs are NOT
+    # collected here; they arrive through their own SENAITE loop items.
+    native_subs_by_parent: dict[int, list] = {}
+    for r in sub_rows:
+        if r.external_lims_uid and r.external_lims_uid.startswith("mk1://"):
+            native_subs_by_parent.setdefault(r.parent_sample_pk, []).append(r)
+    for subs in native_subs_by_parent.values():
+        subs.sort(key=lambda r: r.vial_sequence)
     for r in sub_rows:
         # Only inbox items keyed by external_lims_uid get vial_meta entries
         # (family-size counting lives in _inbox_family_sizes).
@@ -14285,6 +14300,37 @@ async def get_worksheets_inbox(
                 "assignment_role": "hplc",
                 "vial_sequence": 0,
             }
+
+        # Vial-only mode: a container parent is a depository, not a work
+        # unit. When its family has any vials, suppress the parent row and
+        # emit its native vials instead (AR-backed vials arrive via their
+        # own loop items). A zero-vial container family keeps the parent
+        # row — it is the family's only inbox handle until the Receive
+        # Wizard registers vials. Spec:
+        # docs/superpowers/specs/2026-06-11-vial-level-worksheets-inbox-design.md
+        if (
+            vial_meta.get("is_parent")
+            and vial_meta.get("container_mode")
+            and family_sizes.get(vial_meta.get("parent_lims_id"), 0) > 0
+        ):
+            result_items.extend(_build_native_vial_inbox_items(
+                db,
+                parent_item=it,
+                parent_sample_id=vial_meta["parent_sample_id"],
+                native_subs=native_subs_by_parent.get(vial_meta["parent_lims_id"], []),
+                family_size=family_sizes.get(vial_meta["parent_lims_id"], 1),
+                allowed_vial_roles=allowed_vial_roles,
+                assigned_pairs=assigned_pairs,
+                assigned_uids_for_null_group=assigned_uids_for_null_group,
+                hide_prepped=hide_prepped,
+                prepped_sub_pks=prepped_sub_pks,
+                prepped_senaite_ids=prepped_senaite_ids,
+                priority_map=priority_map,
+                order_priority=order_priority_map.get(sample_id),
+                assignment_map=assignment_map,
+                keyword_to_peptide=keyword_to_peptide,
+            ))
+            continue
 
         vial_role = vial_meta["assignment_role"]
         if vial_role not in allowed_vial_roles:
