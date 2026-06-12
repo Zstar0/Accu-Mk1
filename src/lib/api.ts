@@ -4446,6 +4446,9 @@ export interface InboxVialItem {
   is_parent: boolean
   parent_sample_id: string
   assignment_role: string | null
+  /** 'core' | 'variance' | null — explicit per-vial variance marker set at
+   *  check-in. Parents are always null. */
+  assignment_kind?: 'core' | 'variance' | null
   vial_sequence: number
   /** Family size: legacy = parent + subs; container = physical subs only. */
   vial_total: number

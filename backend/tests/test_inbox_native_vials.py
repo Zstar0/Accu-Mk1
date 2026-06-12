@@ -183,6 +183,23 @@ def test_order_priority_inherited_and_persisted(db, family):
     assert items[0].priority == "normal"
 
 
+def test_assignment_kind_passthrough(db, family):
+    """Variance vials surface assignment_kind so the inbox can badge them
+    (assignment_kind is the explicit per-vial variance marker, set at
+    check-in — see project variance-bucket-assignment)."""
+    _parent, subs = family
+    db.execute(
+        LimsSubSample.__table__.update()
+        .where(LimsSubSample.id == subs[1].id)
+        .values(assignment_kind="variance")
+    )
+    db.commit()
+    items = _call(db, subs)
+    by_id = {i.sample_id: i for i in items}
+    assert by_id["P-0300-S01"].assignment_kind is None
+    assert by_id["P-0300-S02"].assignment_kind == "variance"
+
+
 def test_date_received_prefers_vial_own_timestamp(db, family):
     _parent, subs = family
     items = _call(db, subs)

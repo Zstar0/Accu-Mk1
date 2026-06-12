@@ -13647,6 +13647,9 @@ class InboxVialItem(BaseModel):
     is_parent: bool
     parent_sample_id: str
     assignment_role: Optional[str] = None
+    # 'core' | 'variance' | None — explicit per-vial variance marker set at
+    # check-in (lims_sub_samples.assignment_kind). Parents are always None.
+    assignment_kind: Optional[str] = None
     vial_sequence: int          # 0 for parent, 1+ for subs (lims_sub_samples.vial_sequence)
     vial_total: int             # family size: legacy = parent + subs; container = subs only
     # Container family (parent is a pure depository): vial position label is
@@ -13895,6 +13898,7 @@ def _build_native_vial_inbox_items(
             is_parent=False,
             parent_sample_id=parent_sample_id,
             assignment_role=role,
+            assignment_kind=sub.assignment_kind,
             vial_sequence=sub.vial_sequence,
             vial_total=family_size,
             container_mode=True,
@@ -14277,6 +14281,7 @@ async def get_worksheets_inbox(
                 "parent_lims_id": r.parent_sample_pk,
                 "sub_sample_pk": r.id,    # Phase 3.5: needed for Mk1 inbox source
                 "assignment_role": r.assignment_role,
+                "assignment_kind": r.assignment_kind,
                 "vial_sequence": r.vial_sequence,
                 "container_mode": parent_container_mode.get(r.parent_sample_pk, False),
             }
@@ -14551,6 +14556,7 @@ async def get_worksheets_inbox(
                 is_parent=vial_meta["is_parent"],
                 parent_sample_id=vial_meta["parent_sample_id"],
                 assignment_role=vial_role,
+                assignment_kind=vial_meta.get("assignment_kind"),
                 vial_sequence=vial_meta["vial_sequence"],
                 vial_total=family_size,
                 container_mode=vial_meta.get("container_mode", False),

@@ -1,6 +1,6 @@
 import { useDraggable } from '@dnd-kit/core'
 import { useUIStore } from '@/store/ui-store'
-import { GripVertical } from 'lucide-react'
+import { GripVertical, Layers } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import {
   Select,
@@ -190,6 +190,18 @@ export function InboxVialCard({
           </button>
 
           <RoleBadge role={vial.assignment_role} />
+
+          {/* Variance replicate marker — sky + Layers mirrors SenaiteDashboard's
+              subIsVarianceMember treatment (variance = sky/Layers everywhere) */}
+          {vial.assignment_kind === 'variance' && (
+            <span
+              className="inline-flex items-center gap-1 rounded-md border border-sky-500/40 bg-sky-500/15 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-sky-700 dark:text-sky-300"
+              title="Variance replicate vial"
+            >
+              <Layers className="h-3 w-3" aria-hidden="true" />
+              Variance
+            </span>
+          )}
 
           {groupName && (
             <span className={cn('inline-flex items-center rounded-md border px-2 py-0.5 text-[10px] font-medium', colorClasses)}>
