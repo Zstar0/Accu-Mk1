@@ -56,6 +56,16 @@ describe('SampleIdBadge', () => {
     expect(screen.queryByText(/child of/i)).not.toBeInTheDocument()
   })
 
+  it('renders the variance icon when variance is set', () => {
+    render(<SampleIdBadge id="P-0148-S02" variance />)
+    expect(screen.getByLabelText(/variance replicate vial/i)).toBeInTheDocument()
+  })
+
+  it('omits the variance icon by default', () => {
+    render(<SampleIdBadge id="P-0148-S02" />)
+    expect(screen.queryByLabelText(/variance replicate vial/i)).not.toBeInTheDocument()
+  })
+
   it('auto-derives parent linkage from sub-sample id format when parentId is omitted', async () => {
     const user = userEvent.setup()
     render(<SampleIdBadge id="PB-0134-S02" />)

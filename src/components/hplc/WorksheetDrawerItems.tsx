@@ -280,7 +280,11 @@ function SortableItemRow({
           className="text-left hover:underline hover:text-primary transition-colors"
           onClick={() => useUIStore.getState().navigateToSample(item.sample_id)}
         >
-          <SampleIdBadge id={item.sample_id} stacked />
+          <SampleIdBadge
+            id={item.sample_id}
+            stacked
+            variance={item.assignment_kind === 'variance'}
+          />
         </button>
       </div>
 

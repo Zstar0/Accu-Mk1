@@ -1,3 +1,4 @@
+import { Layers } from 'lucide-react'
 import { useUIStore } from '@/store/ui-store'
 import { Button } from '@/components/ui/button'
 
@@ -17,11 +18,14 @@ interface Props {
    *  rendering inline. Use in tight tabular contexts (worksheet rows, etc.)
    *  where the inline layout otherwise wraps onto 3+ lines. */
   stacked?: boolean
+  /** Variance replicate vial — renders the small sky Layers icon next to the
+   *  id (variance = sky/Layers convention, see SenaiteDashboard). */
+  variance?: boolean
 }
 
 const SUB_SAMPLE_RE = /^(.+)-S(\d+)$/
 
-export function SampleIdBadge({ id, parentId, vialSequence, hasChildren, stacked }: Props) {
+export function SampleIdBadge({ id, parentId, vialSequence, hasChildren, stacked, variance }: Props) {
   const navigateToSample = useUIStore(state => state.navigateToSample)
 
   // Auto-derive parent linkage from the ID pattern when not provided.
@@ -57,10 +61,21 @@ export function SampleIdBadge({ id, parentId, vialSequence, hasChildren, stacked
     </span>
   )
 
+  const varianceIcon = variance && (
+    <Layers
+      className="inline h-3 w-3 shrink-0 text-sky-500"
+      aria-label="Variance replicate vial"
+      role="img"
+    />
+  )
+
   if (stacked) {
     return (
       <span className="font-mono text-sm leading-tight">
-        <span className="block whitespace-nowrap">{id}</span>
+        <span className="block whitespace-nowrap">
+          {id}
+          {varianceIcon && <span className="ml-1">{varianceIcon}</span>}
+        </span>
         {parentLink}
         {hasChildren != null && hasChildren > 0 && (
           <span className="block text-[10px] text-muted-foreground">({hasChildren} vials)</span>
@@ -72,6 +87,7 @@ export function SampleIdBadge({ id, parentId, vialSequence, hasChildren, stacked
   return (
     <span className="inline-flex items-center gap-1 font-mono text-sm">
       <span>{id}</span>
+      {varianceIcon}
       {parentLink}
       {hasChildren != null && hasChildren > 0 && (
         <span className="ml-1 text-xs text-muted-foreground">({hasChildren} vials)</span>

@@ -14956,13 +14956,19 @@ async def list_worksheets(
         # have no lims_sub_samples row. Additive; parents stay unaffected.
         item_sample_ids = {it.sample_id for it in items if it.sample_id}
         sub_sample_pk_map: dict[str, int] = {}
+        sub_kind_map: dict[str, Optional[str]] = {}
         if item_sample_ids:
             sub_rows = db.execute(
-                select(LimsSubSample.sample_id, LimsSubSample.id).where(
+                select(
+                    LimsSubSample.sample_id,
+                    LimsSubSample.id,
+                    LimsSubSample.assignment_kind,  # variance badge passthrough
+                ).where(
                     LimsSubSample.sample_id.in_(item_sample_ids)
                 )
             ).all()
             sub_sample_pk_map = {r.sample_id: r.id for r in sub_rows}
+            sub_kind_map = {r.sample_id: r.assignment_kind for r in sub_rows}
 
         def _resolve_method(it_instrument_uid: str | None, it_service_group_id: int | None) -> str | None:
             """Resolve HPLC method name from instrument + peptide (via service group)."""
@@ -15010,6 +15016,9 @@ async def list_worksheets(
                     "peptide_id": group_peptide_map.get(it.service_group_id) if it.service_group_id else None,
                     "method_name": _resolve_method(it.instrument_uid, it.service_group_id),
                     "lims_sub_sample_pk": sub_sample_pk_map.get(it.sample_id),
+                    # 'core' | 'variance' | None — None for parent-sample ids
+                    # (no lims_sub_samples row), same join as lims_sub_sample_pk
+                    "assignment_kind": sub_kind_map.get(it.sample_id),
                     "analyses": json.loads(it.analyses_json) if it.analyses_json else (group_analyses_map.get(it.service_group_id, []) if it.service_group_id else []),
                     "prep_status": it.prep_status,
                 }

@@ -1,7 +1,7 @@
 import { useState, useMemo } from 'react'
 import { useUIStore } from '@/store/ui-store'
 import { useDroppable } from '@dnd-kit/core'
-import { Plus, FileSpreadsheet, Pencil, Check, X, Trash2 } from 'lucide-react'
+import { Plus, FileSpreadsheet, Pencil, Check, X, Trash2, Layers } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import {
@@ -36,6 +36,8 @@ export interface WorksheetSummaryItem {
   priority: string
   added_at: string | null
   date_received: string | null
+  /** 'core' | 'variance' | null — null for parent-sample items. */
+  assignment_kind?: 'core' | 'variance' | null
   analyses?: { keyword?: string | null; title?: string | null; peptide_name?: string | null }[]
 }
 
@@ -231,6 +233,14 @@ function WorksheetDropZone({
               >
                 {item.sample_id}
               </button>
+              {/* variance = sky/Layers convention (SenaiteDashboard, SampleIdBadge) */}
+              {item.assignment_kind === 'variance' && (
+                <Layers
+                  className="h-3 w-3 shrink-0 text-sky-500"
+                  aria-label="Variance replicate vial"
+                  role="img"
+                />
+              )}
               <span className="text-muted-foreground/50">·</span>
               <span className="truncate min-w-0 text-muted-foreground">{item.group_name}</span>
               <ItemRolePills item={item} />
