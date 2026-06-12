@@ -13735,6 +13735,114 @@ def _fetch_mk1_inbox_analyses_for_sub_sample(
     return out
 
 
+def _build_native_vial_inbox_items(
+    db: Session,
+    *,
+    parent_item: dict,
+    parent_sample_id: str,
+    native_subs: list,
+    family_size: int,
+    allowed_vial_roles: set,
+    assigned_pairs: set,
+    assigned_uids_for_null_group: set,
+    hide_prepped: bool,
+    prepped_sub_pks: set,
+    prepped_senaite_ids: set,
+    priority_map: dict,
+    order_priority: Optional[str],
+    assignment_map: dict,
+    keyword_to_peptide: dict,
+) -> "list[InboxVialItem]":
+    """Inbox rows for the Mk1-native vials of one container-mode family.
+
+    Called when a container parent is suppressed in favor of its vials
+    (spec 2026-06-11-vial-level-worksheets-inbox-design.md). Mirrors the
+    per-vial filters of the SENAITE loop in get_worksheets_inbox: role,
+    open-worksheet claims, prepped, and no-analyses-left. Row identity is
+    the vial's own external_lims_uid (mk1://…) — already what
+    worksheet_analyst.stamp_for_item resolves and unique per vial.
+
+    Order-level priority persists to sample_priorities exactly like step 4b
+    does for parents, so the worksheet add endpoints (which read
+    SamplePriority by uid) see it too.
+    """
+    out: list[InboxVialItem] = []
+    priorities_dirty = False
+    for sub in native_subs:
+        uid = sub.external_lims_uid
+        role = sub.assignment_role
+        if role not in allowed_vial_roles:
+            continue
+        if uid in assigned_uids_for_null_group:
+            continue
+        if hide_prepped and (
+            sub.id in prepped_sub_pks or sub.sample_id in prepped_senaite_ids
+        ):
+            continue
+
+        analyses = _fetch_mk1_inbox_analyses_for_sub_sample(
+            db, sub.id, role, keyword_to_peptide,
+        )
+        analyses = [a for a in analyses if (uid, a.group_id) not in assigned_pairs]
+        if not analyses:
+            continue
+        analyses.sort(key=lambda a: (a.group_name.lower(), a.title.lower()))
+
+        prio = priority_map.get(uid)
+        if prio is None and order_priority in ("high", "expedited"):
+            existing = db.execute(
+                select(SamplePriority).where(SamplePriority.sample_uid == uid)
+            ).scalar_one_or_none()
+            if existing is None:
+                db.add(SamplePriority(sample_uid=uid, priority=order_priority))
+                priorities_dirty = True
+            elif existing.priority == "normal":
+                existing.priority = order_priority
+                priorities_dirty = True
+            prio = order_priority
+
+        unique_groups = {a.group_id for a in analyses}
+        assigned_count = 0
+        for gid in unique_groups:
+            assignment = assignment_map.get((uid, gid))
+            if assignment and assignment.assigned_analyst_id:
+                assigned_count += 1
+        summary = (
+            f"{assigned_count}/{len(unique_groups)} assigned"
+            if (unique_groups and assigned_count > 0)
+            else ""
+        )
+
+        received_at = getattr(sub, "received_at", None)
+        date_received = (
+            received_at.isoformat()
+            if received_at
+            else (parent_item.get("getDateReceived") or parent_item.get("DateReceived") or None)
+        )
+
+        out.append(InboxVialItem(
+            uid=uid,
+            sample_id=sub.sample_id,
+            is_parent=False,
+            parent_sample_id=parent_sample_id,
+            assignment_role=role,
+            vial_sequence=sub.vial_sequence,
+            vial_total=family_size,
+            container_mode=True,
+            title=str(parent_item.get("title", "")),
+            client_id=parent_item.get("getClientTitle") or parent_item.get("ClientID") or None,
+            client_order_number=parent_item.get("getClientOrderNumber") or parent_item.get("ClientOrderNumber") or None,
+            date_received=date_received,
+            review_state=str(parent_item.get("review_state", "sample_received")),
+            priority=prio or "normal",
+            assignment_summary=summary,
+            analyses=analyses,
+        ))
+    if priorities_dirty:
+        db.commit()
+    return out
+
+
 @app.get("/worksheets/inbox", response_model=InboxResponse)
 async def get_worksheets_inbox(
     hide_test_orders: bool = True,
