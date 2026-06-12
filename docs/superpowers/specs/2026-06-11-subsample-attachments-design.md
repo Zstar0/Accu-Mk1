@@ -156,6 +156,21 @@ at analysis-save time; nothing to push.
   parent AR at Auto-fill time is REMOVED — parent attachment is now always
   the explicit picker choice.
 
+## COA attachments gate (added same day)
+
+Parent COA generation pre-flights the AR's attachments and blocks (422,
+`code=missing_attachments`) until the parent carries:
+
+1. a **sample image** (any `image/*` attachment), and
+2. a **chromatogram** (`HPLC Graph` type or `.csv`) — required only when the
+   sample has analytical (non-micro) analytes; micro-only COAs are exempt
+   (derived from resolver decisions, fallback = the AR's active keywords).
+
+The 422 message names what's missing and points at the two pickers. Fail-OPEN
+when SENAITE can't be read (resolver-pre-flight posture — a flaky check must
+not permanently block generation). Sub-sample COAs and regen endpoints are
+not gated.
+
 ## Error handling
 
 - Upload: non-image → 400; missing vial → 404; storage failure → 502.
