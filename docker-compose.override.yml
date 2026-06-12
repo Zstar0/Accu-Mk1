@@ -34,4 +34,7 @@ services:
       - ./eslint.config.js:/app/eslint.config.js
       - ./prettier.config.js:/app/prettier.config.js
       - ./.env.development:/app/.env.development
+      # package.json drives __APP_VERSION__ (footer version) at vite startup;
+      # without this mount the footer reports the image's stale version.
+      - ./package.json:/app/package.json
       - /app/node_modules
