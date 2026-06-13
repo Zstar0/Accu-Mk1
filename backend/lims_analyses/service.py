@@ -1197,6 +1197,74 @@ def cascade_parent_add_to_vials(
     return out
 
 
+# ─── Removal-impact classification (retract-on-remove) ──────────────────────
+
+
+def classify_removal_impact(
+    db: Session, *, parent_sample_id: str, keyword: str,
+) -> Dict[str, List[dict]]:
+    """Classify the vial-tier rows a parent-service removal would touch into
+    pristine / worked_unverified / blocked. Drives the confirmation modal and
+    the delete-vs-reject decision. Pure read; never mutates.
+
+    Tiers (see the wrong-variant Replace design):
+      - pristine:          unassigned, no result, not retested, no promotion
+      - worked_unverified: active row with activity, not verified/published,
+                           not promoted -> audited reject on confirm
+      - blocked:           verified / published / promoted -> invalidate first
+
+    Keyword matching reuses the reject/remove cascade candidate set (analyte-
+    bridge translated for blend parents, generic kept as fallback).
+    """
+    from models import LimsSample, LimsSubSample, LimsAnalysisPromotion
+
+    out: Dict[str, List[dict]] = {"pristine": [], "worked_unverified": [], "blocked": []}
+    parent = db.execute(
+        select(LimsSample).where(LimsSample.sample_id == parent_sample_id)
+    ).scalar_one_or_none()
+    if parent is None:
+        return out
+
+    candidate_kws = _candidate_vial_keywords(
+        db, parent_sample_id=parent_sample_id, keyword=keyword
+    )
+
+    rows = db.execute(
+        select(LimsAnalysis, LimsSubSample.sample_id)
+        .join(LimsSubSample, LimsSubSample.id == LimsAnalysis.lims_sub_sample_pk)
+        .where(
+            LimsSubSample.parent_sample_pk == parent.id,
+            LimsAnalysis.keyword.in_(candidate_kws),
+            LimsAnalysis.retest_of_id.is_(None),
+            LimsAnalysis.review_state.notin_(["retracted", "rejected"]),
+        )
+    ).all()
+
+    for row, vial_sample_id in rows:
+        entry = {
+            "analysis_id": row.id,
+            "sample_id": vial_sample_id,
+            "keyword": row.keyword,
+            "review_state": row.review_state,
+        }
+        promoted = db.execute(
+            select(LimsAnalysisPromotion.id).where(
+                LimsAnalysisPromotion.source_analysis_id == row.id
+            )
+        ).scalar_one_or_none() is not None
+        if row.review_state in ("verified", "published") or promoted:
+            out["blocked"].append(entry)
+        elif (
+            row.review_state == "unassigned"
+            and row.result_value is None
+            and not row.retested
+        ):
+            out["pristine"].append(entry)
+        else:
+            out["worked_unverified"].append(entry)
+    return out
+
+
 # ─── Native vial add/remove (Phase 6 — native Manage Analyses) ──────────────
 
 
