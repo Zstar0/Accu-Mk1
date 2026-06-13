@@ -5,13 +5,6 @@ import { HelpCircle, Inbox, RefreshCw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
 import { InboxVialCard, type DragData } from '@/components/hplc/InboxVialCard'
@@ -19,7 +12,6 @@ import { InboxFamilyGroup } from '@/components/hplc/InboxFamilyGroup'
 import { groupInboxFamilies, type FamilyDragData } from '@/lib/inbox-families'
 import { WorksheetDropPanel } from '@/components/hplc/WorksheetDropPanel'
 import {
-  MICRO_CATEGORIES,
   vialHasMicroCategory,
   vialMatchesSampleId,
   vialMatchesAnalyte,
@@ -40,6 +32,16 @@ import {
   type InboxPriority,
   type InboxRole,
 } from '@/lib/api'
+
+// Microbiology sub-bench chips — the two customer addon products, plus All.
+// Values are the `microCategory` filter values consumed by vialHasMicroCategory
+// ('' = no filter). Sterility maps to the STER-* category; non-addon micro
+// vials (Moisture/KF, etc.) remain reachable only under "All".
+const MICRO_SUBCHIPS = [
+  { value: '', label: 'All' },
+  { value: 'endo', label: 'Endotoxin' },
+  { value: 'ster', label: 'Sterility' },
+] as const
 
 // localStorage keys for filter persistence (per the spec UI section)
 const STORAGE_ROLE_KEY = 'accu_mk1_worksheet_inbox_role'
@@ -118,6 +120,13 @@ export default function WorksheetsInboxPage() {
   useEffect(() => {
     window.localStorage.setItem(STORAGE_HIDE_TEST_KEY, String(hideTestOrders))
   }, [hideTestOrders])
+
+  // Clear the micro sub-bench selection when leaving Microbiology so switching
+  // benches never leaves a stale active sub-chip (the old dropdown silently
+  // held a latent value; chips show state, so the reset must be explicit).
+  useEffect(() => {
+    if (role !== 'microbiology') setMicroCategory('')
+  }, [role])
 
   const {
     data: inboxData,
@@ -389,7 +398,7 @@ export default function WorksheetsInboxPage() {
             </div>
 
             {/* Bench filter chips */}
-            <div className="mb-6 flex items-center gap-2">
+            <div className={cn('flex items-center gap-2', role === 'microbiology' ? 'mb-3' : 'mb-6')}>
               <button
                 type="button"
                 onClick={() => setRole('hplc')}
@@ -416,6 +425,30 @@ export default function WorksheetsInboxPage() {
               </button>
             </div>
 
+            {/* Microbiology sub-bench chips — Endotoxin / Sterility addons.
+                Nested under the Microbiology chip; reuse the microCategory
+                client-side filter (vialHasMicroCategory). */}
+            {role === 'microbiology' && (
+              <div className="mb-6 flex items-center gap-1.5 pl-4">
+                <span className="text-muted-foreground/40 select-none" aria-hidden="true">&#8627;</span>
+                {MICRO_SUBCHIPS.map(c => (
+                  <button
+                    key={c.value || 'all'}
+                    type="button"
+                    onClick={() => setMicroCategory(c.value)}
+                    className={cn(
+                      'inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-medium transition-colors',
+                      microCategory === c.value
+                        ? 'bg-violet-500/15 text-violet-700 border-violet-500/40 dark:text-violet-300'
+                        : 'bg-transparent text-muted-foreground border-border hover:bg-muted/40',
+                    )}
+                  >
+                    {c.label}
+                  </button>
+                ))}
+              </div>
+            )}
+
             {/* Client-side filters */}
             <div className="mb-6 flex flex-wrap items-center gap-2">
               <Input
@@ -431,22 +464,6 @@ export default function WorksheetsInboxPage() {
                   onChange={e => setAnalyteFilter(e.target.value)}
                   className="h-8 w-44 text-sm"
                 />
-              )}
-              {role === 'microbiology' && (
-                <Select
-                  value={microCategory || 'all'}
-                  onValueChange={v => setMicroCategory(v === 'all' ? '' : v)}
-                >
-                  <SelectTrigger size="sm" className="h-8 w-56 text-sm">
-                    <SelectValue placeholder="All categories" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All categories</SelectItem>
-                    {MICRO_CATEGORIES.map(c => (
-                      <SelectItem key={c.value} value={c.value}>{c.label}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
               )}
               {filtersActive && (
                 <button
