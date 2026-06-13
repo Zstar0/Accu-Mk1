@@ -8581,6 +8581,30 @@ async def replace_analyte(
     }
 
 
+@app.get("/peptides/with-service-set")
+async def get_peptides_with_service_set(
+    _current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Peptide ids that have a complete per-substance HPLC service set
+    (ID_/PUR_/QTY_). Drives the offer-only Replace picker — peptides not in
+    this set are shown disabled ("set up in Analysis Services first")."""
+    from models import AnalysisService
+
+    rows = db.execute(
+        select(AnalysisService.peptide_id, AnalysisService.keyword).where(
+            AnalysisService.peptide_id.is_not(None)
+        )
+    ).all()
+    by_pep: dict[int, set[str]] = {}
+    for peptide_id, keyword in rows:
+        if keyword and "_" in keyword:
+            by_pep.setdefault(peptide_id, set()).add(keyword.split("_", 1)[0])
+    eligible = [pid for pid, prefixes in by_pep.items()
+                if {"ID", "PUR", "QTY"}.issubset(prefixes)]
+    return {"peptide_ids": eligible}
+
+
 # ── WooCommerce REST API Proxy ──────────────────────────────────────
 # Fetches live order data directly from WooCommerce, including full
 # financial breakdown (totals, discounts, coupons, shipping, tax).

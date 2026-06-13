@@ -132,6 +132,7 @@ import { cn } from '@/lib/utils'
 import { EditableDataRow } from '@/components/dashboard/EditableField'
 import { AnalysisTable, StatusBadge, formatAnalysisTitle } from '@/components/senaite/AnalysisTable'
 import { RemovalConfirmModal } from '@/components/senaite/RemovalConfirmModal'
+import { ReplaceAnalyteDialog } from '@/components/senaite/ReplaceAnalyteDialog'
 import { needsMk1AnalysesSwap } from '@/lib/mk1-analyses-swap'
 import { buildNativeSubSampleLookup } from '@/lib/native-sub-sample'
 import { buildVialAssignmentMap, PARENT_OVERLAY_QUERY_KEY, invalidateParentVialOverlay } from '@/lib/vial-assignment'
@@ -2622,6 +2623,10 @@ export function SampleDetails() {
   const [removalModal, setRemovalModal] = useState<
     { keyword: string; title: string; impact: RemovalImpact } | null
   >(null)
+  // Replace-analyte dialog (wrong-variant correction), per slot.
+  const [replaceSlot, setReplaceSlot] = useState<
+    { slot: number; oldPeptideId: number | null; oldPeptideName: string } | null
+  >(null)
 
   const analysisSla = useAnalysisSlaMap(data)
 
@@ -4182,13 +4187,28 @@ export function SampleDetails() {
                           key={slot}
                           className="p-2.5 rounded-lg bg-muted/50 border border-border/30 space-y-1"
                         >
-                          <div className="flex items-center gap-2 mb-1">
-                            <span className="font-mono text-xs px-1.5 py-0.5 rounded bg-muted text-muted-foreground">
-                              A{slot}
-                            </span>
-                            <span className="text-[11px] text-muted-foreground">
-                              Analyte {slot}
-                            </span>
+                          <div className="flex items-center justify-between gap-2 mb-1">
+                            <div className="flex items-center gap-2">
+                              <span className="font-mono text-xs px-1.5 py-0.5 rounded bg-muted text-muted-foreground">
+                                A{slot}
+                              </span>
+                              <span className="text-[11px] text-muted-foreground">
+                                Analyte {slot}
+                              </span>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => setReplaceSlot({
+                                slot,
+                                oldPeptideId: analyte.matched_peptide_id ?? null,
+                                oldPeptideName: displayName,
+                              })}
+                              className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-primary transition-colors"
+                              title="Replace this analyte's peptide (wrong-variant correction)"
+                            >
+                              <RefreshCw size={11} aria-hidden="true" />
+                              Replace
+                            </button>
                           </div>
                           <div className="[&>div]:border-0 [&>div]:py-1">
                           <EditableDataRow
@@ -4656,6 +4676,20 @@ export function SampleDetails() {
           }}
           onCancel={() => setRemovalModal(null)}
         />
+
+        {/* Replace-analyte dialog (wrong-variant correction) */}
+        {replaceSlot && data && (
+          <ReplaceAnalyteDialog
+            open
+            sampleId={data.sample_id}
+            senaiteUid={data.sample_uid ?? ''}
+            slot={replaceSlot.slot}
+            oldPeptideId={replaceSlot.oldPeptideId}
+            oldPeptideName={replaceSlot.oldPeptideName}
+            onClose={() => setReplaceSlot(null)}
+            onReplaced={() => refreshSample(data.sample_id)}
+          />
+        )}
 
         {/* Analyses Table */}
         <AnalysisTable

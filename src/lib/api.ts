@@ -1710,6 +1710,60 @@ export async function getRemovalImpact(
   )
 }
 
+/** Peptide ids eligible for Replace (have a full ID_/PUR_/QTY_ service set). */
+export async function getPeptidesWithServiceSet(): Promise<number[]> {
+  const r = await apiFetch<{ peptide_ids: number[] }>('/peptides/with-service-set')
+  return r.peptide_ids
+}
+
+export interface ReplaceAnalyteResult {
+  success: boolean
+  field_updated: string
+  new_peptide: string
+  identity: { removed: string | null; added: string | null }
+  slot: number
+  old_peptide_id: number
+  new_peptide_id: number
+  vials: { deleted: unknown[]; retracted: unknown[]; blocked: unknown[]; reseeded: string[] }
+}
+
+/** Replace the peptide on one analyte slot. Throws on non-2xx; the thrown
+ *  error carries `.status` and `.impact` (for the 412 retract-confirm flow)
+ *  and `.detail` (409 blocked / 400 offer-only message). */
+export async function replaceAnalyte(
+  sampleId: string,
+  slot: number,
+  body: { newPeptideId: number; oldPeptideId: number; senaiteUid: string; confirmRetract?: boolean },
+): Promise<ReplaceAnalyteResult> {
+  const response = await fetch(
+    `${API_BASE_URL()}/explorer/samples/${encodeURIComponent(sampleId)}/analytes/${slot}/replace`,
+    {
+      method: 'POST',
+      headers: getBearerHeaders('application/json'),
+      body: JSON.stringify({
+        new_peptide_id: body.newPeptideId,
+        old_peptide_id: body.oldPeptideId,
+        senaite_uid: body.senaiteUid,
+        confirm_retract: body.confirmRetract ?? false,
+      }),
+    },
+  )
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null)
+    const err = new Error(
+      typeof payload?.detail === 'string' ? payload.detail : `Replace failed: ${response.status}`,
+    ) as Error & { status?: number; impact?: RemovalImpact; detail?: unknown }
+    err.status = response.status
+    err.detail = payload?.detail
+    // 412 carries the impact buckets so the FE can show the retract-confirm modal.
+    if (response.status === 412 && payload?.detail && typeof payload.detail === 'object') {
+      err.impact = payload.detail as RemovalImpact
+    }
+    throw err
+  }
+  return response.json()
+}
+
 export async function removeAnalysisFromSample(
   sampleId: string,
   keyword: string,
