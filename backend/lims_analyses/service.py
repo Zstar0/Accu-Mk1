@@ -1265,6 +1265,34 @@ def classify_removal_impact(
     return out
 
 
+def reject_vials_for_parent_keyword(
+    db: Session, *, parent_sample_id: str, keyword: str, user_id: Optional[int],
+) -> List[int]:
+    """Reject (audited clear, restorable on re-add) the worked_unverified vial
+    rows of a parent service. Pristine rows are left for the delete path;
+    verified/published/promoted rows are blocked and never touched. Returns the
+    rejected analysis ids. Never raises on a single bad row — one failure must
+    not kill the rest (mirrors cascade_parent_reject_to_vials)."""
+    impact = classify_removal_impact(
+        db, parent_sample_id=parent_sample_id, keyword=keyword
+    )
+    out: List[int] = []
+    for entry in impact["worked_unverified"]:
+        try:
+            apply_transition(
+                db,
+                analysis_id=entry["analysis_id"],
+                kind="reject",
+                reason="rejected via Manage Analyses remove (worked result)",
+                user_id=user_id,
+            )
+            out.append(entry["analysis_id"])
+        except Exception:
+            db.rollback()
+            continue
+    return out
+
+
 # ─── Native vial add/remove (Phase 6 — native Manage Analyses) ──────────────
 
 

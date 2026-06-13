@@ -16,6 +16,7 @@ from lims_analyses.service import (
     apply_transition,
     create_analysis,
     classify_removal_impact,
+    reject_vials_for_parent_keyword,
 )
 from models import AnalysisService, LimsAnalysis, LimsSample, LimsSubSample
 
@@ -109,3 +110,22 @@ def test_verified_row_is_blocked(seed, monkeypatch):
     assert [r["sample_id"] for r in impact["blocked"]] == ["P-IMP-001-S01"]
     assert impact["pristine"] == []
     assert impact["worked_unverified"] == []
+
+
+def test_reject_worked_vials_clears_with_audit(seed, monkeypatch):
+    db, parent, sub1, sub2, svc = seed
+    _no_slot(monkeypatch)
+    pristine = _row(db, sub1, svc)  # untouched by reject (it's pristine, not worked)
+    worked = _row(db, sub2, svc)
+    apply_transition(db, analysis_id=worked.id, kind="assign")
+    apply_transition(db, analysis_id=worked.id, kind="submit", result_value="99.1")
+
+    rejected = reject_vials_for_parent_keyword(
+        db, parent_sample_id=parent.sample_id, keyword=svc.keyword, user_id=None,
+    )
+
+    assert rejected == [worked.id]
+    db.refresh(worked)
+    assert worked.review_state == "rejected"
+    db.refresh(pristine)
+    assert pristine.review_state == "unassigned"  # pristine row left for the delete path
