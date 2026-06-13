@@ -1247,22 +1247,27 @@ def classify_removal_impact(
             "keyword": row.keyword,
             "review_state": row.review_state,
         }
-        promoted = db.execute(
-            select(LimsAnalysisPromotion.id).where(
-                LimsAnalysisPromotion.source_analysis_id == row.id
-            )
-        ).scalar_one_or_none() is not None
-        if row.review_state in ("verified", "published") or promoted:
-            out["blocked"].append(entry)
-        elif (
-            row.review_state == "unassigned"
-            and row.result_value is None
-            and not row.retested
-        ):
-            out["pristine"].append(entry)
-        else:
-            out["worked_unverified"].append(entry)
+        out[_analysis_removal_tier(db, row)].append(entry)
     return out
+
+
+def _analysis_removal_tier(db: Session, row: "LimsAnalysis") -> str:
+    """Classify a single analysis row for removal: 'pristine' (safe to delete),
+    'worked_unverified' (retract-on-confirm), or 'blocked' (verified/published/
+    promoted — invalidate/retest first). Shared by classify_removal_impact and
+    the slot-replace re-mirror so both honor the same tiers."""
+    from models import LimsAnalysisPromotion
+
+    promoted = db.execute(
+        select(LimsAnalysisPromotion.id).where(
+            LimsAnalysisPromotion.source_analysis_id == row.id
+        )
+    ).scalar_one_or_none() is not None
+    if row.review_state in ("verified", "published") or promoted:
+        return "blocked"
+    if row.review_state == "unassigned" and row.result_value is None and not row.retested:
+        return "pristine"
+    return "worked_unverified"
 
 
 def reject_vials_for_parent_keyword(
@@ -1309,6 +1314,125 @@ def peptide_has_full_service_set(db: Session, *, peptide_id: int) -> bool:
     ).scalars().all()
     prefixes = {k.split("_", 1)[0] for k in kws if k and "_" in k}
     return {"ID", "PUR", "QTY"}.issubset(prefixes)
+
+
+def replace_analyte_slot(
+    db: Session,
+    *,
+    parent_sample_id: str,
+    slot: int,
+    old_peptide_id: int,
+    new_peptide_id: int,
+    confirm_retract: bool,
+    user_id: Optional[int],
+) -> Dict[str, object]:
+    """Re-mirror one analyte slot from old_peptide -> new_peptide across the
+    family's non-xtra vials (the Mk1 side of a Replace).
+
+    Caller (the endpoint) is responsible for resolving old_peptide_id from the
+    slot BEFORE overwriting Analyte{slot}Peptide on the SENAITE AR, and for
+    reconciling the parent Identity service. This function only touches the
+    Mk1 vial rows:
+      - find each vial's per-substance rows for old_peptide_id
+      - pristine -> hard delete; worked_unverified -> reject (only when
+        confirm_retract); blocked (verified/published/promoted) -> left as-is
+        and reported
+      - re-seed every non-xtra vial so the seeder translates the (now updated)
+        slot title into the new peptide's PUR_/QTY_/ID_ rows.
+
+    Never raises per-row — one bad vial must not strand the rest. Raises
+    BadRequestError only on the offer-only gate (new peptide lacks services)
+    or NotFoundError when the parent is unknown.
+    """
+    from models import AnalysisService, LimsSample, LimsSubSample
+    from lims_analyses import seeder as _seeder
+
+    if not peptide_has_full_service_set(db, peptide_id=new_peptide_id):
+        raise BadRequestError(
+            f"peptide id={new_peptide_id} has no full ID_/PUR_/QTY_ service set"
+        )
+
+    parent = db.execute(
+        select(LimsSample).where(LimsSample.sample_id == parent_sample_id)
+    ).scalar_one_or_none()
+    if parent is None:
+        raise NotFoundError(f"parent sample {parent_sample_id!r} not found")
+
+    summary: Dict[str, object] = {
+        "slot": slot,
+        "old_peptide_id": old_peptide_id,
+        "new_peptide_id": new_peptide_id,
+        "vials": {"deleted": [], "retracted": [], "blocked": [], "reseeded": []},
+    }
+    vials = summary["vials"]  # type: ignore[assignment]
+
+    # Old per-substance rows on the family's vials (keyed by the old peptide).
+    old_rows = db.execute(
+        select(LimsAnalysis, LimsSubSample.sample_id)
+        .join(LimsSubSample, LimsSubSample.id == LimsAnalysis.lims_sub_sample_pk)
+        .join(AnalysisService, AnalysisService.id == LimsAnalysis.analysis_service_id)
+        .where(
+            LimsSubSample.parent_sample_pk == parent.id,
+            LimsSubSample.assignment_role.is_not(None),
+            LimsSubSample.assignment_role != "xtra",
+            AnalysisService.peptide_id == old_peptide_id,
+            LimsAnalysis.retest_of_id.is_(None),
+            LimsAnalysis.review_state.notin_(["retracted", "rejected"]),
+        )
+    ).all()
+
+    for row, vial_sample_id in old_rows:
+        tier = _analysis_removal_tier(db, row)
+        try:
+            if tier == "blocked":
+                vials["blocked"].append({"sample_id": vial_sample_id, "keyword": row.keyword})
+            elif tier == "pristine":
+                delete_pristine_analysis(
+                    db, sub_sample_pk=row.lims_sub_sample_pk,
+                    keyword=row.keyword, user_id=user_id,
+                )
+                vials["deleted"].append({"sample_id": vial_sample_id, "keyword": row.keyword})
+            elif confirm_retract:  # worked_unverified, confirmed
+                apply_transition(
+                    db, analysis_id=row.id, kind="reject",
+                    reason=f"replaced analyte slot {slot} ({old_peptide_id}->{new_peptide_id})",
+                    user_id=user_id,
+                )
+                vials["retracted"].append({"sample_id": vial_sample_id, "keyword": row.keyword})
+            else:  # worked but not confirmed — leave it, report as blocked-by-confirm
+                vials["blocked"].append({"sample_id": vial_sample_id, "keyword": row.keyword})
+        except Exception:
+            db.rollback()
+            continue
+
+    # Re-seed each non-xtra vial: the seeder reads the (caller-updated) slot
+    # title and translates it into the new peptide's per-substance rows. Skips
+    # keywords a vial already carries, so this only adds the new rows.
+    try:
+        from sub_samples import service as ss_service
+        wp_services = ss_service._fetch_wp_services_for_parent(parent_sample_id) or {}
+    except Exception:
+        wp_services = {}
+
+    subs = db.execute(
+        select(LimsSubSample).where(
+            LimsSubSample.parent_sample_pk == parent.id,
+            LimsSubSample.assignment_role.is_not(None),
+            LimsSubSample.assignment_role != "xtra",
+        ).order_by(LimsSubSample.vial_sequence)
+    ).scalars().all()
+    for sub in subs:
+        try:
+            _seeder.seed_analyses_for_vial(
+                db, sub_sample=sub, role=sub.assignment_role,
+                wp_services=wp_services, parent_sample_id=parent_sample_id,
+            )
+            vials["reseeded"].append(sub.sample_id)
+        except Exception:
+            db.rollback()
+            continue
+
+    return summary
 
 
 # ─── Native vial add/remove (Phase 6 — native Manage Analyses) ──────────────
