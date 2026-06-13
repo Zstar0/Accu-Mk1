@@ -1293,6 +1293,24 @@ def reject_vials_for_parent_keyword(
     return out
 
 
+# ─── Replace analyte (wrong-variant correction) ─────────────────────────────
+
+
+def peptide_has_full_service_set(db: Session, *, peptide_id: int) -> bool:
+    """True iff the peptide has the complete per-substance HPLC service set:
+    an ID_, a PUR_, and a QTY_ AnalysisService (all keyed by peptide_id).
+
+    Gates the offer-only Replace picker — a peptide without a full set can't be
+    swapped in (purity/quantity/identity would silently fall back to generics)."""
+    from models import AnalysisService
+
+    kws = db.execute(
+        select(AnalysisService.keyword).where(AnalysisService.peptide_id == peptide_id)
+    ).scalars().all()
+    prefixes = {k.split("_", 1)[0] for k in kws if k and "_" in k}
+    return {"ID", "PUR", "QTY"}.issubset(prefixes)
+
+
 # ─── Native vial add/remove (Phase 6 — native Manage Analyses) ──────────────
 
 
