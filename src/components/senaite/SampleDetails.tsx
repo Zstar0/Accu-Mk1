@@ -69,6 +69,8 @@ import {
   listAnalysisServices,
   addAnalysisToSample,
   removeAnalysisFromSample,
+  getRemovalImpact,
+  type RemovalImpact,
   getPeptides,
   getSampleAnalyteAliases,
   setSampleAnalyteAlias,
@@ -129,6 +131,7 @@ import { getSenaiteUrl, getWordpressUrl } from '@/lib/api-profiles'
 import { cn } from '@/lib/utils'
 import { EditableDataRow } from '@/components/dashboard/EditableField'
 import { AnalysisTable, StatusBadge, formatAnalysisTitle } from '@/components/senaite/AnalysisTable'
+import { RemovalConfirmModal } from '@/components/senaite/RemovalConfirmModal'
 import { needsMk1AnalysesSwap } from '@/lib/mk1-analyses-swap'
 import { buildNativeSubSampleLookup } from '@/lib/native-sub-sample'
 import { buildVialAssignmentMap, PARENT_OVERLAY_QUERY_KEY, invalidateParentVialOverlay } from '@/lib/vial-assignment'
@@ -2615,6 +2618,10 @@ export function SampleDetails() {
   const [serviceSearch, setServiceSearch] = useState('')
   const [addingService, setAddingService] = useState<string | null>(null)
   const [removingKeyword, setRemovingKeyword] = useState<string | null>(null)
+  // Retract-confirm modal for removing a service that has worked vial results.
+  const [removalModal, setRemovalModal] = useState<
+    { keyword: string; title: string; impact: RemovalImpact } | null
+  >(null)
 
   const analysisSla = useAnalysisSlaMap(data)
 
@@ -2928,12 +2935,33 @@ export function SampleDetails() {
     }
   }
 
+  // Trash-icon click: check what the removal would touch. Pristine-only →
+  // remove straight away (today's behavior). Worked/blocked vial rows →
+  // open the retract-confirm modal first.
   const handleRemoveAnalysis = async (keyword: string, title: string) => {
     if (!data?.sample_id) return
     setRemovingKeyword(keyword)
     try {
-      await removeAnalysisFromSample(data.sample_id, keyword)
+      const impact = await getRemovalImpact(data.sample_id, keyword)
+      if (impact.blocked.length > 0 || impact.worked_unverified.length > 0) {
+        setRemovalModal({ keyword, title, impact })
+        return
+      }
+      await performRemoveAnalysis(keyword, title, false)
+    } catch (e) {
+      toast.error('Failed to remove analysis', { description: e instanceof Error ? e.message : String(e) })
+    } finally {
+      setRemovingKeyword(null)
+    }
+  }
+
+  const performRemoveAnalysis = async (keyword: string, title: string, confirmRetract: boolean) => {
+    if (!data?.sample_id) return
+    setRemovingKeyword(keyword)
+    try {
+      await removeAnalysisFromSample(data.sample_id, keyword, { confirmRetract })
       toast.success(`Removed ${title}`)
+      setRemovalModal(null)
       refreshSample(data.sample_id)
     } catch (e) {
       toast.error('Failed to remove analysis', { description: e instanceof Error ? e.message : String(e) })
@@ -4616,6 +4644,18 @@ export function SampleDetails() {
             </div>
           </Card>
         )}
+
+        {/* Retract-confirm modal for removing a service with worked vial results */}
+        <RemovalConfirmModal
+          open={removalModal !== null}
+          serviceTitle={removalModal ? formatAnalysisTitle(removalModal.title, analyteNameMap).display : ''}
+          impact={removalModal?.impact ?? null}
+          pending={removingKeyword !== null && removingKeyword === removalModal?.keyword}
+          onConfirm={() => {
+            if (removalModal) performRemoveAnalysis(removalModal.keyword, removalModal.title, true)
+          }}
+          onCancel={() => setRemovalModal(null)}
+        />
 
         {/* Analyses Table */}
         <AnalysisTable

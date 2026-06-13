@@ -1684,12 +1684,40 @@ export async function addAnalysisToSample(
   return response.json()
 }
 
+/** One vial row in a removal-impact bucket. */
+export interface RemovalImpactRow {
+  analysis_id: number
+  sample_id: string
+  keyword: string
+  review_state: string
+}
+
+/** Vial-tier rows a parent-service removal would touch, by tier.
+ *  pristine -> deleted silently · worked_unverified -> retracted on confirm ·
+ *  blocked -> verified/published, removal refused until invalidated. */
+export interface RemovalImpact {
+  pristine: RemovalImpactRow[]
+  worked_unverified: RemovalImpactRow[]
+  blocked: RemovalImpactRow[]
+}
+
+export async function getRemovalImpact(
+  sampleId: string,
+  keyword: string,
+): Promise<RemovalImpact> {
+  return apiFetch<RemovalImpact>(
+    `/explorer/samples/${encodeURIComponent(sampleId)}/analyses/${encodeURIComponent(keyword)}/removal-impact`,
+  )
+}
+
 export async function removeAnalysisFromSample(
   sampleId: string,
   keyword: string,
+  opts?: { confirmRetract?: boolean },
 ): Promise<ManageAnalysisResult> {
+  const qs = opts?.confirmRetract ? '?confirm_retract=true' : ''
   const response = await fetch(
-    `${API_BASE_URL()}/explorer/samples/${encodeURIComponent(sampleId)}/analyses/${encodeURIComponent(keyword)}`,
+    `${API_BASE_URL()}/explorer/samples/${encodeURIComponent(sampleId)}/analyses/${encodeURIComponent(keyword)}${qs}`,
     {
       method: 'DELETE',
       headers: getAuthHeaders(),
