@@ -471,6 +471,72 @@ class TestNativeRemoveEndpoint:
         assert resp.status_code == 404
 
 
+class TestRemoveTieredGuard:
+    """DELETE on a PARENT with vials — verified blocks, worked needs confirm.
+
+    The tiered guard runs classify_removal_impact for the parent's vial rows
+    before the existing delete/proxy path. Keyword ID_BPC157 is a native (non-
+    ANALYTE) keyword so _candidate_vial_keywords never reads SENAITE.
+    """
+
+    def _parent_with_vial_row(self, db, *, parent_id, state):
+        from lims_analyses.service import apply_transition, create_analysis
+        svc = _make_service(db, keyword="ID_BPC157", senaite_uid="SN-IDBPC", title="BPC-157 - Identity (HPLC)")
+        parent = _make_sample(db, sample_id=parent_id)
+        sub = _make_sub(db, parent, uid=f"mk1://{parent_id}-v1", sample_id=f"{parent_id}-S01")
+        db.commit()
+        row = create_analysis(
+            db, host_kind="sub_sample", host_pk=sub.id,
+            analysis_service_id=svc.id, keyword="ID_BPC157",
+            title="BPC-157 - Identity (HPLC)", result_unit="%",
+        )
+        if state == "verified":
+            row.review_state = "verified"
+            db.commit()
+        elif state == "worked":
+            apply_transition(db, analysis_id=row.id, kind="assign")
+            apply_transition(db, analysis_id=row.id, kind="submit", result_value="99.1")
+        return parent, sub, row
+
+    def test_remove_blocks_when_verified_rows_exist(self, route_client):
+        db = route_client._test_session
+        self._parent_with_vial_row(db, parent_id="P-RM01", state="verified")
+
+        resp = route_client.delete("/explorer/samples/P-RM01/analyses/ID_BPC157")
+        assert resp.status_code == 409
+        assert "verified" in resp.json()["detail"].lower()
+
+    def test_remove_requires_confirm_for_worked_rows(self, route_client):
+        db = route_client._test_session
+        self._parent_with_vial_row(db, parent_id="P-RM02", state="worked")
+
+        resp = route_client.delete("/explorer/samples/P-RM02/analyses/ID_BPC157")
+        assert resp.status_code == 412
+        detail = resp.json()["detail"]
+        assert [r["sample_id"] for r in detail["worked_unverified"]] == ["P-RM02-S01"]
+
+    def test_remove_with_confirm_rejects_worked_rows(self, route_client):
+        db = route_client._test_session
+        _, _, row = self._parent_with_vial_row(db, parent_id="P-RM03", state="worked")
+
+        with patch("httpx.AsyncClient") as mock_cls:
+            mock_instance = AsyncMock()
+            mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_instance)
+            mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+            mock_resp = MagicMock()
+            mock_resp.raise_for_status = MagicMock()
+            mock_resp.json = MagicMock(return_value={"success": True, "message": "proxied"})
+            mock_instance.delete = AsyncMock(return_value=mock_resp)
+
+            resp = route_client.delete(
+                "/explorer/samples/P-RM03/analyses/ID_BPC157?confirm_retract=true"
+            )
+
+        assert resp.status_code == 200
+        db.refresh(row)
+        assert row.review_state == "rejected"
+
+
 class TestNonNativeFallthrough:
     """Non-native sample_id falls through to IS proxy (legacy path)."""
 

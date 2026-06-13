@@ -8289,14 +8289,36 @@ async def add_sample_analysis(
     return result
 
 
-@app.delete("/explorer/samples/{sample_id}/analyses/{keyword}")
-async def remove_sample_analysis(
+@app.get("/explorer/samples/{sample_id}/analyses/{keyword}/removal-impact")
+async def get_analysis_removal_impact(
     sample_id: str,
     keyword: str,
     _current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    """Classify the vial-tier rows a removal of {keyword} from parent
+    {sample_id} would touch (pristine / worked_unverified / blocked). Drives
+    the Manage Analyses retract-confirm modal. Thin wrapper over the tested
+    classify_removal_impact."""
+    from lims_analyses.service import classify_removal_impact
+    return classify_removal_impact(db, parent_sample_id=sample_id, keyword=keyword)
+
+
+@app.delete("/explorer/samples/{sample_id}/analyses/{keyword}")
+async def remove_sample_analysis(
+    sample_id: str,
+    keyword: str,
+    confirm_retract: bool = False,
+    _current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     """Remove an analysis from a sample.
+
+    Tiered worked-row handling (parent samples with vials): verified/published
+    vial rows BLOCK the remove (409 — invalidate/retest first); worked-but-
+    unverified rows require confirm_retract=true (412 with the impact payload
+    so the FE can show the modal) and are then audited-rejected; pristine rows
+    fall through to the existing delete/cascade path below.
 
     Native branch: if sample_id maps to a lims_sub_samples row whose
     external_lims_uid starts with 'mk1://', the analysis is hard-deleted
@@ -8307,9 +8329,34 @@ async def remove_sample_analysis(
     from sqlalchemy import select as _select
     from lims_analyses.service import (
         delete_pristine_analysis,
+        classify_removal_impact,
+        reject_vials_for_parent_keyword,
         BadRequestError as _BadRequestError,
         NotFoundError as _NotFoundError,
     )
+
+    # ── Tiered worked-row guard (parent samples with vials) ──────────────────
+    # Verified/published vial rows block; worked-unverified rows need an
+    # explicit confirm and are audited-rejected before the delete proceeds.
+    # Pristine rows are handled by the existing delete/cascade path below.
+    _impact = classify_removal_impact(db, parent_sample_id=sample_id, keyword=keyword)
+    if _impact["blocked"]:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Verified/published results exist on {len(_impact['blocked'])} "
+                "vial(s) — invalidate or retest those first."
+            ),
+        )
+    if _impact["worked_unverified"] and not confirm_retract:
+        # 412: FE shows the retract-confirm modal, then re-submits with
+        # confirm_retract=true. Payload is the full impact for the modal.
+        raise HTTPException(status_code=412, detail=_impact)
+    if _impact["worked_unverified"] and confirm_retract:
+        reject_vials_for_parent_keyword(
+            db, parent_sample_id=sample_id, keyword=keyword,
+            user_id=_current_user.id,
+        )
 
     sub = db.execute(
         _select(LimsSubSample).where(
