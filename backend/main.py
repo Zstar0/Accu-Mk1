@@ -8515,7 +8515,8 @@ async def replace_analyte(
     if forceable and not body.force:
         raise HTTPException(412, detail=impact)
 
-    _rep_logger = logging.getLogger(__name__)
+    import logging as _logging
+    _rep_logger = _logging.getLogger(__name__)
 
     # ── 3. write the slot's peptide (canonical source of truth) ───────────────
     field_result = await update_senaite_sample_fields(
