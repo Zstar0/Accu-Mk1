@@ -128,7 +128,7 @@ import { useUIStore } from '@/store/ui-store'
 import { getSenaiteUrl, getWordpressUrl } from '@/lib/api-profiles'
 import { cn } from '@/lib/utils'
 import { EditableDataRow } from '@/components/dashboard/EditableField'
-import { AnalysisTable, StatusBadge } from '@/components/senaite/AnalysisTable'
+import { AnalysisTable, StatusBadge, formatAnalysisTitle } from '@/components/senaite/AnalysisTable'
 import { needsMk1AnalysesSwap } from '@/lib/mk1-analyses-swap'
 import { buildNativeSubSampleLookup } from '@/lib/native-sub-sample'
 import { buildVialAssignmentMap, PARENT_OVERLAY_QUERY_KEY, invalidateParentVialOverlay } from '@/lib/vial-assignment'
@@ -4543,7 +4543,10 @@ export function SampleDetails() {
                       <div key={a.keyword ?? a.uid} className="flex items-center justify-between py-1 px-2 rounded bg-muted/40">
                         <div className="flex items-center gap-2 min-w-0">
                           <span className="text-xs font-mono text-muted-foreground shrink-0">{a.keyword}</span>
-                          <span className="text-xs truncate">{a.title}</span>
+                          {/* Show the resolved analyte name (e.g. "TB500 (Purity)")
+                              for generic ANALYTE-N services, matching the renamed
+                              titles in the AnalysisTable below. */}
+                          <span className="text-xs truncate">{formatAnalysisTitle(a.title, analyteNameMap).display}</span>
                         </div>
                         <Button
                           variant="ghost"

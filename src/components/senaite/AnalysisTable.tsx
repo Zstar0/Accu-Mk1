@@ -473,7 +473,7 @@ export function Mk1NativeBadge({ uid }: { uid?: string | null }) {
   )
 }
 
-function formatAnalysisTitle(title: string, nameMap: Map<number, string>): { display: string; original: string } {
+export function formatAnalysisTitle(title: string, nameMap: Map<number, string>): { display: string; original: string } {
   const match = title.match(/^Analyte\s+(\d)\s*(.*)/i)
   if (match?.[1]) {
     const slot = parseInt(match[1], 10)
