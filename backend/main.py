@@ -8430,7 +8430,9 @@ class ReplaceAnalyteBody(BaseModel):
     new_peptide_id: int
     old_peptide_id: int
     senaite_uid: str
-    confirm_retract: bool = False
+    # Strong confirm: authorizes retracting worked AND verified/promoted vial
+    # results (the whole analyte is wrong). Published results still hard-block.
+    force: bool = False
 
 
 @app.post("/explorer/samples/{sample_id}/analytes/{slot}/replace")
@@ -8498,13 +8500,19 @@ async def replace_analyte(
     impact = classify_slot_replacement_impact(
         db, parent_sample_id=sample_id, old_peptide_id=body.old_peptide_id
     )
-    if impact["blocked"]:
+    # Published results can never be force-retracted here — invalidate via SENAITE.
+    published = [b for b in impact["blocked"] if b.get("review_state") == "published"]
+    if published:
         raise HTTPException(
             409,
-            f"{len(impact['blocked'])} vial result(s) for this analyte are "
-            "verified/published — invalidate or retest those first.",
+            f"{len(published)} result(s) are on a published COA — invalidate or "
+            "retest in SENAITE first.",
         )
-    if impact["worked_unverified"] and not body.confirm_retract:
+    # Anything else that would be retracted (worked OR verified/promoted) needs
+    # the strong confirm. 412 carries the impact so the FE shows the (escalated
+    # when blocked rows are present) confirm modal, then re-posts with force=true.
+    forceable = impact["worked_unverified"] or impact["blocked"]
+    if forceable and not body.force:
         raise HTTPException(412, detail=impact)
 
     _rep_logger = logging.getLogger(__name__)
@@ -8567,7 +8575,7 @@ async def replace_analyte(
         summary = replace_analyte_slot(
             db, parent_sample_id=sample_id, slot=slot,
             old_peptide_id=body.old_peptide_id, new_peptide_id=body.new_peptide_id,
-            confirm_retract=body.confirm_retract, user_id=_current_user.id,
+            confirm_retract=body.force, force=body.force, user_id=_current_user.id,
         )
     except (_BadRequestError, _NotFoundError) as e:
         raise HTTPException(400, str(e))

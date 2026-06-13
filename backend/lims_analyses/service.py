@@ -1316,6 +1316,63 @@ def peptide_has_full_service_set(db: Session, *, peptide_id: int) -> bool:
     return {"ID", "PUR", "QTY"}.issubset(prefixes)
 
 
+def force_retract_analysis(
+    db: Session, *, analysis_id: int, user_id: Optional[int],
+) -> None:
+    """Strong-confirm retract of a worked/promoted/verified vial row, for the
+    wrong-variant Replace: the whole analyte is invalid, so its results are
+    discarded with an audit trail.
+
+      - published      -> refuse (BadRequestError): a published COA result must
+                          be invalidated via SENAITE, not auto-retracted here.
+      - promoted       -> un-promote: retract each parent canonical row it fed
+                          (verified -> retracted), drop the promotion link(s),
+                          then reject the source (promoted -> rejected).
+      - verified (vial)-> retract (verified -> retracted).
+      - else (worked)  -> reject.
+
+    Idempotent on the canonical row (skipped if already terminal). Raises only
+    on published; transition errors propagate to the caller's per-row guard.
+    """
+    from models import LimsAnalysisPromotion
+
+    row = get_analysis(db, analysis_id)
+    if row.review_state == "published":
+        raise BadRequestError(
+            "result is on a published COA — invalidate/retest in SENAITE first"
+        )
+
+    if row.review_state == "promoted":
+        links = list(db.execute(
+            select(LimsAnalysisPromotion).where(
+                LimsAnalysisPromotion.source_analysis_id == analysis_id
+            )
+        ).scalars().all())
+        for link in links:
+            canonical = db.get(LimsAnalysis, link.parent_analysis_id)
+            if canonical is not None and not is_terminal(canonical.review_state):
+                if canonical.review_state == "verified":
+                    apply_transition(
+                        db, analysis_id=canonical.id, kind="retract",
+                        reason="wrong-variant Replace: canonical result invalidated",
+                        user_id=user_id,
+                    )
+            db.delete(link)
+        db.flush()
+        apply_transition(
+            db, analysis_id=analysis_id, kind="reject",
+            reason="wrong-variant Replace: promoted source abandoned",
+            user_id=user_id,
+        )
+        return
+
+    kind = "retract" if row.review_state == "verified" else "reject"
+    apply_transition(
+        db, analysis_id=analysis_id, kind=kind,
+        reason="wrong-variant Replace: result discarded", user_id=user_id,
+    )
+
+
 def classify_slot_replacement_impact(
     db: Session, *, parent_sample_id: str, old_peptide_id: int,
 ) -> Dict[str, List[dict]]:
@@ -1367,6 +1424,7 @@ def replace_analyte_slot(
     new_peptide_id: int,
     confirm_retract: bool,
     user_id: Optional[int],
+    force: bool = False,
 ) -> Dict[str, object]:
     """Re-mirror one analyte slot from old_peptide -> new_peptide across the
     family's non-xtra vials (the Mk1 side of a Replace).
@@ -1416,7 +1474,17 @@ def replace_analyte_slot(
         return {"sample_id": e["sample_id"], "keyword": e["keyword"]}
 
     for e in impact["blocked"]:
-        vials["blocked"].append(_brief(e))
+        if force:
+            # Strong-confirm: un-promote/retract verified+promoted rows. Published
+            # rows raise inside force_retract_analysis -> stay blocked + reported.
+            try:
+                force_retract_analysis(db, analysis_id=e["analysis_id"], user_id=user_id)
+                vials["retracted"].append(_brief(e))
+            except Exception:
+                db.rollback()
+                vials["blocked"].append(_brief(e))
+        else:
+            vials["blocked"].append(_brief(e))
     for e in impact["pristine"]:
         try:
             delete_pristine_analysis(
@@ -1427,7 +1495,7 @@ def replace_analyte_slot(
             db.rollback()
             continue
     for e in impact["worked_unverified"]:
-        if not confirm_retract:
+        if not (confirm_retract or force):
             # Endpoint gates this (412) before any write; defensive here.
             vials["blocked"].append(_brief(e))
             continue

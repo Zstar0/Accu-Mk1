@@ -81,7 +81,7 @@ export function ReplaceAnalyteDialog({
     setPending(false)
   }
 
-  async function doReplace(confirmRetract: boolean) {
+  async function doReplace(force: boolean) {
     if (selectedId == null) return
     setPending(true)
     try {
@@ -89,7 +89,7 @@ export function ReplaceAnalyteDialog({
         newPeptideId: selectedId,
         oldPeptideId: oldPeptideId ?? 0,
         senaiteUid,
-        confirmRetract,
+        force,
       })
       const v = result.vials
       const bits = [
@@ -189,6 +189,7 @@ export function ReplaceAnalyteDialog({
         serviceTitle={`Replace analyte ${slot} → ${selectedName}`}
         impact={confirmImpact}
         pending={pending}
+        forceable
         onConfirm={() => doReplace(true)}
         onCancel={() => setConfirmImpact(null)}
       />

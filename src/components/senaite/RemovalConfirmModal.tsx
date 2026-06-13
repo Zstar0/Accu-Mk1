@@ -15,6 +15,10 @@ interface RemovalConfirmModalProps {
   impact: RemovalImpact | null
   /** True while the confirmed removal request is in flight. */
   pending?: boolean
+  /** When true, blocked (verified/promoted) rows can be force-retracted under a
+   *  strong confirm instead of hard-blocking (the wrong-variant Replace case).
+   *  Published rows never reach here — the endpoint refuses them up front. */
+  forceable?: boolean
   onConfirm: () => void
   onCancel: () => void
 }
@@ -33,35 +37,52 @@ export function RemovalConfirmModal({
   serviceTitle,
   impact,
   pending = false,
+  forceable = false,
   onConfirm,
   onCancel,
 }: RemovalConfirmModalProps) {
   const blocked = impact?.blocked ?? []
   const worked = impact?.worked_unverified ?? []
-  const isBlocked = blocked.length > 0
-  const workedVials = new Set(worked.map(r => r.sample_id)).size
+  const hasBlocked = blocked.length > 0
+  const workedCount = worked.length + (forceable ? blocked.length : 0)
+  const workedVials = new Set(
+    [...worked, ...(forceable ? blocked : [])].map(r => r.sample_id),
+  ).size
+
+  // Hard block only when blocked rows exist AND this caller can't force them.
+  const hardBlocked = hasBlocked && !forceable
+  const escalated = hasBlocked && forceable
 
   return (
     <Dialog open={open} onOpenChange={v => { if (!v) onCancel() }}>
       <DialogContent className="max-w-md">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            {isBlocked
+            {hardBlocked
               ? <ShieldX size={18} className="text-destructive" />
-              : <AlertTriangle size={18} className="text-amber-500" />}
-            {isBlocked ? 'Cannot remove yet' : 'Remove entered results?'}
+              : <AlertTriangle size={18} className={escalated ? 'text-destructive' : 'text-amber-500'} />}
+            {hardBlocked ? 'Cannot remove yet'
+              : escalated ? 'Retract finalized results?'
+              : 'Remove entered results?'}
           </DialogTitle>
         </DialogHeader>
 
         <div className="text-sm text-muted-foreground space-y-2">
-          <p>
-            <span className="font-medium text-foreground">{serviceTitle}</span>
-          </p>
-          {isBlocked ? (
+          <p><span className="font-medium text-foreground">{serviceTitle}</span></p>
+          {hardBlocked ? (
             <p>
               {blocked.length} vial result{blocked.length === 1 ? ' is' : 's are'}{' '}
               verified or on a published COA, so this service can't be removed here.
               Invalidate or retest {blocked.length === 1 ? 'it' : 'those'} first.
+            </p>
+          ) : escalated ? (
+            <p>
+              <span className="text-foreground font-medium">{blocked.length} verified/promoted</span>
+              {worked.length ? ` and ${worked.length} in-progress` : ''} result
+              {workedCount === 1 ? '' : 's'} across {workedVials} vial
+              {workedVials === 1 ? '' : 's'} will be retracted (canonical results
+              un-promoted) and kept as an audited record. This is for correcting a
+              wrong analyte — published COAs are not affected.
             </p>
           ) : (
             <p>
@@ -75,11 +96,11 @@ export function RemovalConfirmModal({
 
         <DialogFooter>
           <Button variant="ghost" onClick={onCancel} disabled={pending}>
-            {isBlocked ? 'Close' : 'Cancel'}
+            {hardBlocked ? 'Close' : 'Cancel'}
           </Button>
-          {!isBlocked && (
+          {!hardBlocked && (
             <Button variant="destructive" onClick={onConfirm} disabled={pending}>
-              {pending ? 'Removing…' : 'Retract & remove'}
+              {pending ? 'Working…' : escalated ? 'Force retract & replace' : 'Retract & remove'}
             </Button>
           )}
         </DialogFooter>

@@ -1733,7 +1733,7 @@ export interface ReplaceAnalyteResult {
 export async function replaceAnalyte(
   sampleId: string,
   slot: number,
-  body: { newPeptideId: number; oldPeptideId: number; senaiteUid: string; confirmRetract?: boolean },
+  body: { newPeptideId: number; oldPeptideId: number; senaiteUid: string; force?: boolean },
 ): Promise<ReplaceAnalyteResult> {
   const response = await fetch(
     `${API_BASE_URL()}/explorer/samples/${encodeURIComponent(sampleId)}/analytes/${slot}/replace`,
@@ -1744,7 +1744,7 @@ export async function replaceAnalyte(
         new_peptide_id: body.newPeptideId,
         old_peptide_id: body.oldPeptideId,
         senaite_uid: body.senaiteUid,
-        confirm_retract: body.confirmRetract ?? false,
+        force: body.force ?? false,
       }),
     },
   )

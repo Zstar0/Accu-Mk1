@@ -117,6 +117,11 @@ _ALLOWED: Dict[Tuple[str, str], str] = {
 
     ("verified",       "publish"):  "published",
     ("verified",       "retract"):  "retracted",
+
+    # Wrong-variant correction (force Replace): a promoted source row whose
+    # analyte was wrong is abandoned. Un-promotion retracts the parent
+    # canonical row + drops the promotion link first, then rejects the source.
+    ("promoted",       "reject"):   "rejected",
 }
 
 # Tier × kind matrix. Sub-sample (vial) rows do bench work (assign through

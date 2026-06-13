@@ -69,7 +69,7 @@ describe('ReplaceAnalyteDialog', () => {
     await userEvent.click(screen.getByRole('button', { name: /^Replace$/ }))
 
     await waitFor(() => expect(replaceAnalyte).toHaveBeenCalledWith('PB-0075', 2, {
-      newPeptideId: 2, oldPeptideId: 1, senaiteUid: 'uid-pb75', confirmRetract: false,
+      newPeptideId: 2, oldPeptideId: 1, senaiteUid: 'uid-pb75', force: false,
     }))
     await waitFor(() => expect(onReplaced).toHaveBeenCalled())
   })
@@ -96,7 +96,7 @@ describe('ReplaceAnalyteDialog', () => {
     await userEvent.click(screen.getByRole('button', { name: /retract & remove/i }))
 
     await waitFor(() => expect(replaceAnalyte).toHaveBeenLastCalledWith('PB-0075', 2, {
-      newPeptideId: 2, oldPeptideId: 1, senaiteUid: 'uid-pb75', confirmRetract: true,
+      newPeptideId: 2, oldPeptideId: 1, senaiteUid: 'uid-pb75', force: true,
     }))
   })
 })

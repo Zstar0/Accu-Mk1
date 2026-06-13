@@ -172,6 +172,69 @@ def test_classify_slot_replacement_impact_buckets(blend_two_vials):
                for e in impact["pristine"])
 
 
+def test_force_retract_unpromotes_then_rejects(db_mem):
+    """A promoted source row: force_retract retracts its parent canonical row,
+    drops the promotion link, and rejects the source."""
+    from datetime import datetime
+    from lims_analyses.service import create_analysis, force_retract_analysis
+    from models import AnalysisService, LimsAnalysisPromotion, LimsSample, LimsSubSample
+
+    svc = AnalysisService(title="ID_X", keyword="ID_X")
+    db_mem.add(svc); db_mem.flush()
+    parent = LimsSample(sample_id="P-FR-1", external_lims_uid="uid-fr-1")
+    db_mem.add(parent); db_mem.flush()
+    sub = LimsSubSample(parent_sample_pk=parent.id, external_lims_uid="mk1://fr-1-S01",
+                        sample_id="P-FR-1-S01", vial_sequence=1, assignment_role="hplc")
+    db_mem.add(sub); db_mem.flush()
+
+    # source vial row, promoted
+    source = create_analysis(db_mem, host_kind="sub_sample", host_pk=sub.id,
+                             analysis_service_id=svc.id, keyword="ID_X", title="ID_X",
+                             result_value="match")
+    source.review_state = "promoted"
+    # parent canonical row, verified (parent-tier)
+    canonical = create_analysis(db_mem, host_kind="sample", host_pk=parent.id,
+                                analysis_service_id=svc.id, keyword="ID_X", title="ID_X",
+                                result_value="match")
+    canonical.review_state = "verified"
+    db_mem.flush()
+    db_mem.add(LimsAnalysisPromotion(
+        parent_analysis_id=canonical.id, source_analysis_id=source.id,
+        contribution_kind="result", promoted_at=datetime(2026, 1, 1)))
+    db_mem.commit()
+
+    force_retract_analysis(db_mem, analysis_id=source.id, user_id=None)
+
+    db_mem.refresh(source); db_mem.refresh(canonical)
+    assert source.review_state == "rejected"
+    assert canonical.review_state == "retracted"
+    link = db_mem.execute(
+        select(LimsAnalysisPromotion).where(LimsAnalysisPromotion.source_analysis_id == source.id)
+    ).scalar_one_or_none()
+    assert link is None
+
+
+def test_force_retract_published_raises(db_mem):
+    from lims_analyses.service import create_analysis, force_retract_analysis, BadRequestError
+    from models import AnalysisService, LimsSample, LimsSubSample
+
+    svc = AnalysisService(title="ID_Y", keyword="ID_Y")
+    db_mem.add(svc); db_mem.flush()
+    parent = LimsSample(sample_id="P-FR-2", external_lims_uid="uid-fr-2")
+    db_mem.add(parent); db_mem.flush()
+    sub = LimsSubSample(parent_sample_pk=parent.id, external_lims_uid="mk1://fr-2-S01",
+                        sample_id="P-FR-2-S01", vial_sequence=1, assignment_role="hplc")
+    db_mem.add(sub); db_mem.flush()
+    row = create_analysis(db_mem, host_kind="sub_sample", host_pk=sub.id,
+                          analysis_service_id=svc.id, keyword="ID_Y", title="ID_Y",
+                          result_value="x")
+    row.review_state = "published"
+    db_mem.commit()
+
+    with pytest.raises(BadRequestError):
+        force_retract_analysis(db_mem, analysis_id=row.id, user_id=None)
+
+
 def test_replace_rejects_when_new_peptide_lacks_services(blend_two_vials):
     from lims_analyses.service import replace_analyte_slot, BadRequestError
 
