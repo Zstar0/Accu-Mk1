@@ -8419,6 +8419,168 @@ async def remove_sample_analysis(
     return result
 
 
+class ReplaceAnalyteBody(BaseModel):
+    """Replace the peptide on one analyte slot of a parent blend AR.
+
+    senaite_uid is the parent AR's SENAITE uid (the FE has it as data.uid);
+    old_peptide_id is the slot's current peptide (FE reads it from
+    data.analytes) — passing it avoids a SENAITE slot round-trip and lets the
+    orchestrator find the old per-substance vial rows.
+    """
+    new_peptide_id: int
+    old_peptide_id: int
+    senaite_uid: str
+    confirm_retract: bool = False
+
+
+@app.post("/explorer/samples/{sample_id}/analytes/{slot}/replace")
+async def replace_analyte(
+    sample_id: str,
+    slot: int,
+    body: ReplaceAnalyteBody,
+    _current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Replace a wrong peptide-variant on slot {slot} of a parent blend.
+
+    Order (gates first, then writes):
+      1. offer-only gate — new peptide needs a full ID_/PUR_/QTY_ set (400)
+      2. pre-write impact on the OLD peptide's vial rows — verified/published
+         block (409); worked-unverified need confirm_retract (412 + impact)
+      3. write Analyte{slot}Peptide = new identity title (SENAITE AR)
+      4. reset the slot's COA display alias
+      5. swap the parent AR identity service (remove ID_old, add ID_new) via
+         the Integration-Service proxy — best-effort, no Mk1 cascade (the
+         orchestrator is the sole authority on vial rows)
+      6. re-mirror the slot across vials (replace_analyte_slot)
+    """
+    from sqlalchemy import select as _select
+    from models import AnalysisService, Peptide, SampleAnalyteAlias
+    from lims_analyses.service import (
+        peptide_has_full_service_set,
+        classify_slot_replacement_impact,
+        replace_analyte_slot,
+        BadRequestError as _BadRequestError,
+        NotFoundError as _NotFoundError,
+    )
+
+    if slot < 1 or slot > 4:
+        raise HTTPException(400, "slot must be between 1 and 4")
+
+    new_pep = db.get(Peptide, body.new_peptide_id)
+    if new_pep is None:
+        raise HTTPException(404, f"peptide id={body.new_peptide_id} not found")
+
+    # ── 1. offer-only gate ───────────────────────────────────────────────────
+    if not peptide_has_full_service_set(db, peptide_id=body.new_peptide_id):
+        raise HTTPException(
+            400,
+            f"{new_pep.name} has no full ID_/PUR_/QTY_ service set — set it up "
+            "in Analysis Services first.",
+        )
+
+    new_id_svc = db.execute(
+        _select(AnalysisService).where(
+            AnalysisService.peptide_id == body.new_peptide_id,
+            AnalysisService.keyword.like("ID%"),
+        ).order_by(AnalysisService.keyword)
+    ).scalars().first()
+    old_id_kw = db.execute(
+        _select(AnalysisService.keyword).where(
+            AnalysisService.peptide_id == body.old_peptide_id,
+            AnalysisService.keyword.like("ID%"),
+        ).order_by(AnalysisService.keyword)
+    ).scalars().first()
+    if new_id_svc is None or not new_id_svc.title:
+        raise HTTPException(400, f"{new_pep.name} has no Identity service title")
+
+    # ── 2. pre-write impact gate ──────────────────────────────────────────────
+    impact = classify_slot_replacement_impact(
+        db, parent_sample_id=sample_id, old_peptide_id=body.old_peptide_id
+    )
+    if impact["blocked"]:
+        raise HTTPException(
+            409,
+            f"{len(impact['blocked'])} vial result(s) for this analyte are "
+            "verified/published — invalidate or retest those first.",
+        )
+    if impact["worked_unverified"] and not body.confirm_retract:
+        raise HTTPException(412, detail=impact)
+
+    _rep_logger = logging.getLogger(__name__)
+
+    # ── 3. write the slot's peptide (canonical source of truth) ───────────────
+    field_result = await update_senaite_sample_fields(
+        uid=body.senaite_uid,
+        req=SenaiteFieldUpdateRequest(fields={f"Analyte{slot}Peptide": new_id_svc.title}),
+        current_user=_current_user,
+    )
+    if not getattr(field_result, "success", False):
+        raise HTTPException(
+            502,
+            f"SENAITE field write failed: {getattr(field_result, 'message', 'unknown')}",
+        )
+
+    # ── 4. reset the slot's COA display alias (was pegged to the old peptide) ──
+    try:
+        _alias = db.execute(
+            _select(SampleAnalyteAlias).where(
+                SampleAnalyteAlias.senaite_sample_id == sample_id,
+                SampleAnalyteAlias.slot == slot,
+            )
+        ).scalar_one_or_none()
+        if _alias is not None:
+            db.delete(_alias)
+            db.commit()
+    except Exception as _alias_err:
+        db.rollback()
+        _rep_logger.warning("replace_analyte: alias reset failed for %s slot=%s: %s",
+                            sample_id, slot, _alias_err)
+
+    # ── 5. swap the parent AR identity service (direct IS proxy) ──────────────
+    identity = {"removed": None, "added": None}
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        if old_id_kw:
+            try:
+                r = await client.delete(
+                    f"{INTEGRATION_SERVICE_URL}/explorer/samples/{sample_id}/analyses/{old_id_kw}",
+                    headers={"X-API-Key": INTEGRATION_SERVICE_API_KEY},
+                )
+                r.raise_for_status()
+                identity["removed"] = old_id_kw
+            except Exception as _e:
+                _rep_logger.warning("replace_analyte: remove %s failed: %s", old_id_kw, _e)
+        if new_id_svc.senaite_uid:
+            try:
+                r = await client.post(
+                    f"{INTEGRATION_SERVICE_URL}/explorer/samples/{sample_id}/analyses",
+                    json={"service_uid": new_id_svc.senaite_uid},
+                    headers={"X-API-Key": INTEGRATION_SERVICE_API_KEY},
+                )
+                r.raise_for_status()
+                identity["added"] = new_id_svc.keyword
+            except Exception as _e:
+                _rep_logger.warning("replace_analyte: add %s failed: %s", new_id_svc.keyword, _e)
+
+    # ── 6. re-mirror the slot across vials ────────────────────────────────────
+    try:
+        summary = replace_analyte_slot(
+            db, parent_sample_id=sample_id, slot=slot,
+            old_peptide_id=body.old_peptide_id, new_peptide_id=body.new_peptide_id,
+            confirm_retract=body.confirm_retract, user_id=_current_user.id,
+        )
+    except (_BadRequestError, _NotFoundError) as e:
+        raise HTTPException(400, str(e))
+
+    return {
+        "success": True,
+        "field_updated": f"Analyte{slot}Peptide",
+        "new_peptide": new_pep.name,
+        "identity": identity,
+        **summary,
+    }
+
+
 # ── WooCommerce REST API Proxy ──────────────────────────────────────
 # Fetches live order data directly from WooCommerce, including full
 # financial breakdown (totals, discounts, coupons, shipping, tax).

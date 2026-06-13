@@ -16,7 +16,7 @@ from sqlalchemy.pool import StaticPool
 from unittest.mock import MagicMock, patch, AsyncMock
 
 from database import Base
-from models import AnalysisService, LimsAnalysis, LimsAnalysisTransition, LimsSubSample, LimsSample
+from models import AnalysisService, LimsAnalysis, LimsAnalysisTransition, LimsSubSample, LimsSample, Peptide
 
 
 # ─── Shared helpers ──────────────────────────────────────────────────────────
@@ -535,6 +535,71 @@ class TestRemoveTieredGuard:
         assert resp.status_code == 200
         db.refresh(row)
         assert row.review_state == "rejected"
+
+
+class TestReplaceAnalyteGates:
+    """POST …/analytes/{slot}/replace — pre-write gates (no SENAITE call).
+
+    Both branches return before any SENAITE/IS write, so no mocks needed.
+    """
+
+    def _peptide(self, db, name, abbr):
+        p = Peptide(name=name, abbreviation=abbr)
+        db.add(p)
+        db.flush()
+        return p
+
+    def _svc(self, db, *, keyword, peptide_id):
+        s = AnalysisService(title=keyword, keyword=keyword, peptide_id=peptide_id,
+                            senaite_uid=f"SN-{keyword}")
+        db.add(s)
+        db.flush()
+        return s
+
+    def test_replace_400_when_new_peptide_lacks_full_set(self, route_client):
+        db = route_client._test_session
+        new_pep = self._peptide(db, "Lonely Variant", "LONE")
+        self._svc(db, keyword="ID_LONE", peptide_id=new_pep.id)  # ID only
+        _make_sample(db, sample_id="P-REP01")
+        db.commit()
+
+        resp = route_client.post(
+            "/explorer/samples/P-REP01/analytes/2/replace",
+            json={"new_peptide_id": new_pep.id, "old_peptide_id": 999,
+                  "senaite_uid": "uid-x", "confirm_retract": False},
+        )
+        assert resp.status_code == 400
+        assert "service" in resp.json()["detail"].lower()
+
+    def test_replace_412_when_worked_rows_need_confirm(self, route_client):
+        from lims_analyses.service import apply_transition, create_analysis
+        db = route_client._test_session
+        old_pep = self._peptide(db, "TP500", "TP500")
+        new_pep = self._peptide(db, "TB500 (Thymosin Beta 4)", "TB500B4")
+        old_pur = self._svc(db, keyword="PUR_TP500", peptide_id=old_pep.id)
+        self._svc(db, keyword="ID_TP500", peptide_id=old_pep.id)
+        for cat in ("ID", "PUR", "QTY"):
+            self._svc(db, keyword=f"{cat}_TB500B4", peptide_id=new_pep.id)
+        parent = _make_sample(db, sample_id="P-REP02")
+        sub = _make_sub(db, parent, uid="mk1://rep02-v1", sample_id="P-REP02-S01")
+        sub.assignment_role = "hplc"  # classifier only sees assigned, non-xtra vials
+        db.commit()
+        row = create_analysis(
+            db, host_kind="sub_sample", host_pk=sub.id,
+            analysis_service_id=old_pur.id, keyword="PUR_TP500",
+            title="PUR_TP500",
+        )
+        apply_transition(db, analysis_id=row.id, kind="assign")
+        apply_transition(db, analysis_id=row.id, kind="submit", result_value="98.0")
+
+        resp = route_client.post(
+            "/explorer/samples/P-REP02/analytes/2/replace",
+            json={"new_peptide_id": new_pep.id, "old_peptide_id": old_pep.id,
+                  "senaite_uid": "uid-x", "confirm_retract": False},
+        )
+        assert resp.status_code == 412
+        detail = resp.json()["detail"]
+        assert [r["keyword"] for r in detail["worked_unverified"]] == ["PUR_TP500"]
 
 
 class TestNonNativeFallthrough:
