@@ -1316,6 +1316,48 @@ def peptide_has_full_service_set(db: Session, *, peptide_id: int) -> bool:
     return {"ID", "PUR", "QTY"}.issubset(prefixes)
 
 
+def classify_slot_replacement_impact(
+    db: Session, *, parent_sample_id: str, old_peptide_id: int,
+) -> Dict[str, List[dict]]:
+    """Classify the family's vial rows that a slot replacement would touch —
+    the OLD peptide's per-substance rows (PUR_/QTY_/ID_) across non-xtra vials
+    — into pristine / worked_unverified / blocked. Pure read; drives the
+    endpoint's pre-write 409/412 gate and the replace_analyte_slot action loop.
+    Entries carry analysis_id + sub_sample_pk + sample_id + keyword."""
+    from models import AnalysisService, LimsSample, LimsSubSample
+
+    out: Dict[str, List[dict]] = {"pristine": [], "worked_unverified": [], "blocked": []}
+    parent = db.execute(
+        select(LimsSample).where(LimsSample.sample_id == parent_sample_id)
+    ).scalar_one_or_none()
+    if parent is None:
+        return out
+
+    rows = db.execute(
+        select(LimsAnalysis, LimsSubSample.sample_id)
+        .join(LimsSubSample, LimsSubSample.id == LimsAnalysis.lims_sub_sample_pk)
+        .join(AnalysisService, AnalysisService.id == LimsAnalysis.analysis_service_id)
+        .where(
+            LimsSubSample.parent_sample_pk == parent.id,
+            LimsSubSample.assignment_role.is_not(None),
+            LimsSubSample.assignment_role != "xtra",
+            AnalysisService.peptide_id == old_peptide_id,
+            LimsAnalysis.retest_of_id.is_(None),
+            LimsAnalysis.review_state.notin_(["retracted", "rejected"]),
+        )
+    ).all()
+
+    for row, vial_sample_id in rows:
+        out[_analysis_removal_tier(db, row)].append({
+            "analysis_id": row.id,
+            "sub_sample_pk": row.lims_sub_sample_pk,
+            "sample_id": vial_sample_id,
+            "keyword": row.keyword,
+            "review_state": row.review_state,
+        })
+    return out
+
+
 def replace_analyte_slot(
     db: Session,
     *,
@@ -1344,7 +1386,7 @@ def replace_analyte_slot(
     BadRequestError only on the offer-only gate (new peptide lacks services)
     or NotFoundError when the parent is unknown.
     """
-    from models import AnalysisService, LimsSample, LimsSubSample
+    from models import LimsSample, LimsSubSample
     from lims_analyses import seeder as _seeder
 
     if not peptide_has_full_service_set(db, peptide_id=new_peptide_id):
@@ -1366,41 +1408,36 @@ def replace_analyte_slot(
     }
     vials = summary["vials"]  # type: ignore[assignment]
 
-    # Old per-substance rows on the family's vials (keyed by the old peptide).
-    old_rows = db.execute(
-        select(LimsAnalysis, LimsSubSample.sample_id)
-        .join(LimsSubSample, LimsSubSample.id == LimsAnalysis.lims_sub_sample_pk)
-        .join(AnalysisService, AnalysisService.id == LimsAnalysis.analysis_service_id)
-        .where(
-            LimsSubSample.parent_sample_pk == parent.id,
-            LimsSubSample.assignment_role.is_not(None),
-            LimsSubSample.assignment_role != "xtra",
-            AnalysisService.peptide_id == old_peptide_id,
-            LimsAnalysis.retest_of_id.is_(None),
-            LimsAnalysis.review_state.notin_(["retracted", "rejected"]),
-        )
-    ).all()
+    impact = classify_slot_replacement_impact(
+        db, parent_sample_id=parent_sample_id, old_peptide_id=old_peptide_id
+    )
 
-    for row, vial_sample_id in old_rows:
-        tier = _analysis_removal_tier(db, row)
+    def _brief(e):
+        return {"sample_id": e["sample_id"], "keyword": e["keyword"]}
+
+    for e in impact["blocked"]:
+        vials["blocked"].append(_brief(e))
+    for e in impact["pristine"]:
         try:
-            if tier == "blocked":
-                vials["blocked"].append({"sample_id": vial_sample_id, "keyword": row.keyword})
-            elif tier == "pristine":
-                delete_pristine_analysis(
-                    db, sub_sample_pk=row.lims_sub_sample_pk,
-                    keyword=row.keyword, user_id=user_id,
-                )
-                vials["deleted"].append({"sample_id": vial_sample_id, "keyword": row.keyword})
-            elif confirm_retract:  # worked_unverified, confirmed
-                apply_transition(
-                    db, analysis_id=row.id, kind="reject",
-                    reason=f"replaced analyte slot {slot} ({old_peptide_id}->{new_peptide_id})",
-                    user_id=user_id,
-                )
-                vials["retracted"].append({"sample_id": vial_sample_id, "keyword": row.keyword})
-            else:  # worked but not confirmed — leave it, report as blocked-by-confirm
-                vials["blocked"].append({"sample_id": vial_sample_id, "keyword": row.keyword})
+            delete_pristine_analysis(
+                db, sub_sample_pk=e["sub_sample_pk"], keyword=e["keyword"], user_id=user_id,
+            )
+            vials["deleted"].append(_brief(e))
+        except Exception:
+            db.rollback()
+            continue
+    for e in impact["worked_unverified"]:
+        if not confirm_retract:
+            # Endpoint gates this (412) before any write; defensive here.
+            vials["blocked"].append(_brief(e))
+            continue
+        try:
+            apply_transition(
+                db, analysis_id=e["analysis_id"], kind="reject",
+                reason=f"replaced analyte slot {slot} ({old_peptide_id}->{new_peptide_id})",
+                user_id=user_id,
+            )
+            vials["retracted"].append(_brief(e))
         except Exception:
             db.rollback()
             continue

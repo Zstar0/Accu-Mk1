@@ -156,6 +156,22 @@ def test_replace_clears_old_rows_and_reseeds(blend_two_vials, monkeypatch):
     assert sorted(seeded_for) == ["PB-REPL-1-S01", "PB-REPL-1-S02"]
 
 
+def test_classify_slot_replacement_impact_buckets(blend_two_vials):
+    from lims_analyses.service import classify_slot_replacement_impact
+
+    db, parent, sub_pristine, sub_worked, old_pep, new_pep = blend_two_vials
+    impact = classify_slot_replacement_impact(
+        db, parent_sample_id=parent.sample_id, old_peptide_id=old_pep.id,
+    )
+    # pristine vial: 3 old rows; worked vial: 2 pristine + 1 worked (PUR)
+    assert len(impact["pristine"]) == 5
+    assert [r["keyword"] for r in impact["worked_unverified"]] == ["PUR_TP500"]
+    assert impact["blocked"] == []
+    # entries carry what the action loop needs
+    assert all({"analysis_id", "sub_sample_pk", "sample_id", "keyword"} <= set(e)
+               for e in impact["pristine"])
+
+
 def test_replace_rejects_when_new_peptide_lacks_services(blend_two_vials):
     from lims_analyses.service import replace_analyte_slot, BadRequestError
 
