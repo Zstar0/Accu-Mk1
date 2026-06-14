@@ -133,6 +133,7 @@ import { EditableDataRow } from '@/components/dashboard/EditableField'
 import { AnalysisTable, StatusBadge, formatAnalysisTitle } from '@/components/senaite/AnalysisTable'
 import { RemovalConfirmModal } from '@/components/senaite/RemovalConfirmModal'
 import { ReplaceAnalyteDialog } from '@/components/senaite/ReplaceAnalyteDialog'
+import { isHplcAnalyteService } from '@/lib/hplc-analyte-services'
 import { needsMk1AnalysesSwap } from '@/lib/mk1-analyses-swap'
 import { buildNativeSubSampleLookup } from '@/lib/native-sub-sample'
 import { buildVialAssignmentMap, PARENT_OVERLAY_QUERY_KEY, invalidateParentVialOverlay } from '@/lib/vial-assignment'
@@ -2627,6 +2628,15 @@ export function SampleDetails() {
   const [replaceSlot, setReplaceSlot] = useState<
     { slot: number; oldPeptideId: number | null; oldPeptideName: string } | null
   >(null)
+  // Hide HPLC identity/purity/quantity from Manage Analyses (managed via Replace).
+  // Default on — manual add/remove of these leaves the slot + vials out of sync.
+  const [hideHplcServices, setHideHplcServices] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return true
+    return window.localStorage.getItem('accu_mk1_manage_hide_hplc') !== 'false'
+  })
+  useEffect(() => {
+    window.localStorage.setItem('accu_mk1_manage_hide_hplc', String(hideHplcServices))
+  }, [hideHplcServices])
 
   const analysisSla = useAnalysisSlaMap(data)
 
@@ -4581,12 +4591,27 @@ export function SampleDetails() {
                 </div>
               )}
 
+              {/* Hide the HPLC analyte family (identity/purity/quantity) — these
+                  are managed via Replace on the Analytes card; adding/removing
+                  them here leaves the slot + vials out of sync. */}
+              <label className="mb-3 flex items-center gap-2 cursor-pointer select-none text-xs text-muted-foreground">
+                <input
+                  type="checkbox"
+                  checked={hideHplcServices}
+                  onChange={e => setHideHplcServices(e.target.checked)}
+                  className="size-3.5 rounded border-border accent-primary cursor-pointer"
+                />
+                Hide HPLC identity / purity / quantity
+                <span className="text-muted-foreground/60">— managed via Replace on the Analytes card</span>
+              </label>
+
               {/* Current analyses with remove buttons */}
               <div className="mb-4">
                 <p className="text-xs text-muted-foreground mb-2">Current analyses</p>
                 <div className="space-y-1">
                   {analyses
                     .filter(a => a.review_state && !['retracted', 'cancelled'].includes(a.review_state))
+                    .filter(a => !hideHplcServices || !isHplcAnalyteService(a.keyword))
                     .map(a => (
                       <div key={a.keyword ?? a.uid} className="flex items-center justify-between py-1 px-2 rounded bg-muted/40">
                         <div className="flex items-center gap-2 min-w-0">
@@ -4633,6 +4658,7 @@ export function SampleDetails() {
                 ) : (
                   <div className="max-h-48 overflow-y-auto space-y-0.5">
                     {availableServices
+                      .filter(s => !hideHplcServices || !isHplcAnalyteService(s.keyword))
                       .filter(s => {
                         const q = serviceSearch.toLowerCase()
                         return !q || s.title.toLowerCase().includes(q) || s.keyword.toLowerCase().includes(q)
