@@ -125,6 +125,7 @@ import {
   downsampleLTTB,
 } from '@/components/hplc/ChromatogramChart'
 import { Textarea } from '@/components/ui/textarea'
+import { Checkbox } from '@/components/ui/checkbox'
 import { Spinner } from '@/components/ui/spinner'
 import { useUIStore } from '@/store/ui-store'
 import { getSenaiteUrl, getWordpressUrl } from '@/lib/api-profiles'
@@ -1940,20 +1941,25 @@ function formatDate(dateStr: string | null | undefined): string {
 function CustomerRemarksCard({
   sampleId,
   initial,
+  initialInclude,
+  deliveredAt,
   onSaved,
 }: {
   sampleId: string
   initial: string
+  initialInclude: boolean
+  deliveredAt: string | null
   onSaved: () => void
 }) {
   const [text, setText] = useState(initial)
+  const [include, setInclude] = useState(initialInclude)
   const [saving, setSaving] = useState(false)
-  const dirty = text !== initial
+  const dirty = text !== initial || include !== initialInclude
 
   async function handleSave() {
     setSaving(true)
     try {
-      await updateCustomerRemarks(sampleId, text.trim())
+      await updateCustomerRemarks(sampleId, text.trim(), include)
       toast.success('Customer remarks saved')
       onSaved()
     } catch (err) {
@@ -1975,10 +1981,25 @@ function CustomerRemarksCard({
         aria-label={`Customer remarks for ${sampleId}`}
         disabled={saving}
       />
+      <label className="flex items-center gap-2 text-sm">
+        <Checkbox
+          checked={include}
+          onCheckedChange={v => setInclude(v === true)}
+          disabled={saving}
+          aria-label="Include with publish"
+        />
+        Include with Publish?
+      </label>
+      {deliveredAt && (
+        <p className="text-[11px] text-muted-foreground">
+          Delivered on {formatDate(deliveredAt)}
+        </p>
+      )}
       <div className="flex items-center justify-between gap-4">
         <p className="text-[11px] text-muted-foreground">
-          Delivered to the customer with the published COA. Required when the
-          COA is non-conforming. Re-publish the COA to refresh the customer copy.
+          Delivered to the customer with the published COA when included. Required
+          when the COA is non-conforming (unless suppressed). Re-publish the COA to
+          refresh the customer copy.
         </p>
         <Button size="sm" onClick={handleSave} disabled={!dirty || saving}>
           {saving ? 'Saving…' : 'Save'}
@@ -4355,6 +4376,8 @@ export function SampleDetails() {
                 key={data.sample_id}
                 sampleId={data.sample_id}
                 initial={subData?.parent?.customer_remarks ?? ''}
+                initialInclude={subData?.parent?.customer_remarks_include ?? true}
+                deliveredAt={subData?.parent?.customer_remarks_delivered_at ?? null}
                 onSaved={() => refetchSubs()}
               />
             </SectionHeader>

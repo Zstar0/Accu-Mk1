@@ -5007,6 +5007,10 @@ export interface ParentSampleSummary {
   container_mode: boolean
   /** Customer-facing remarks delivered with the published COA. */
   customer_remarks?: string | null
+  /** "Include with Publish?" — whether the remark ships with the COA (default true). */
+  customer_remarks_include?: boolean
+  /** Set when a COA was generated with remarks included; surfaced as "Delivered on". */
+  customer_remarks_delivered_at?: string | null
 }
 
 export interface SubSampleListResponse {
@@ -5084,17 +5088,18 @@ export async function listSubSamples(parentSampleId: string): Promise<SubSampleL
   return response.json()
 }
 
-/** Set the parent's customer-facing remarks (delivered with the published COA). */
+/** Set the parent's customer-facing remarks + whether they're delivered with the COA. */
 export async function updateCustomerRemarks(
   parentSampleId: string,
   remarks: string,
-): Promise<{ sample_id: string; customer_remarks: string }> {
+  include: boolean,
+): Promise<{ sample_id: string; customer_remarks: string; customer_remarks_include: boolean }> {
   const response = await fetch(
     `${API_BASE_URL()}/api/sub-samples/parent/${encodeURIComponent(parentSampleId)}/customer-remarks`,
     {
       method: 'PUT',
       headers: { ...getBearerHeaders(), 'Content-Type': 'application/json' },
-      body: JSON.stringify({ remarks }),
+      body: JSON.stringify({ remarks, include }),
     }
   )
   if (!response.ok) throw new Error(`updateCustomerRemarks failed: ${response.status}`)
