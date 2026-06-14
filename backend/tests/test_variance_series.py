@@ -137,6 +137,47 @@ def test_generic_services_attach_purity_quantity_to_vial_peptide(prod_world, db)
     assert v3.get("QUANTITY", "").startswith("15")
 
 
+def test_retested_vial_uses_current_result_not_superseded_original(db):
+    """Regression (P-0149 S03): a variance vial whose identity was retested must
+    report the CURRENT (retested=False) value, not the superseded original.
+    `retest_of_id IS NULL` grabs the stale original (which becomes retested=True
+    once a retest exists); `retested IS False` is the correct current-row idiom
+    for vial-tier rows."""
+    pep = Peptide(name="BPC-157", abbreviation="BPC157", active=True)
+    db.add(pep)
+    db.flush()
+    idsvc = _svc(db, "ID_BPC157", pep.id)
+    parent = LimsSample(sample_id="P-0149", external_lims_uid="uid-p0149", container_mode=True)
+    db.add(parent)
+    db.flush()
+    sub = LimsSubSample(
+        parent_sample_pk=parent.id, external_lims_uid="mk1://s3",
+        sample_id="P-0149-S03", vial_sequence=3,
+        assignment_role="hplc", assignment_kind="variance",
+    )
+    db.add(sub)
+    db.flush()
+    # Superseded original identity: matched BPC-157, now retested away.
+    orig = LimsAnalysis(
+        lims_sub_sample_pk=sub.id, analysis_service_id=idsvc.id,
+        keyword="ID_BPC157", title="ID_BPC157", result_value="BPC-157",
+        review_state="variance_verified", reportable=True, retested=True,
+    )
+    db.add(orig)
+    db.flush()
+    # Current retest: does not conform.
+    db.add(LimsAnalysis(
+        lims_sub_sample_pk=sub.id, analysis_service_id=idsvc.id,
+        keyword="ID_BPC157", title="ID_BPC157", result_value="Does_Not_Conform",
+        review_state="variance_verified", reportable=True, retested=False,
+        retest_of_id=orig.id,
+    ))
+    db.commit()
+    recs = build_variance_replicates(db, parent)["BPC-157"]
+    assert len(recs) == 1
+    assert recs[0]["IDENTITY"] == "Does_Not_Conform"
+
+
 def test_vial_quantity_inherits_parent_unit_when_missing(prod_world, db):
     """Vial PEPT-Total rows often carry no unit; the series must not fabricate
     'mg' next to a parent measured in mg/mL. Inherit the parent's quantity unit

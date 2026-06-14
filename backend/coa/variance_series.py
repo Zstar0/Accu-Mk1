@@ -102,7 +102,12 @@ def build_variance_replicates(db: Session, parent) -> dict:
                 LimsAnalysis.lims_sub_sample_pk == sub.id,
                 LimsAnalysis.review_state.in_(_SERIES_STATES),
                 LimsAnalysis.reportable == True,  # noqa: E712
-                LimsAnalysis.retest_of_id.is_(None),
+                # Current vial result = retested IS False (the newest row in the
+                # retest chain). retest_of_id IS NULL grabs the *canonical
+                # original*, which becomes retested=True once a retest exists —
+                # so it would report the SUPERSEDED value (P-0149 S03 regression).
+                # Mirrors the vial-row idiom in sub_samples.lock_variance_set.
+                LimsAnalysis.retested.is_(False),
                 LimsAnalysis.result_value.isnot(None),
                 LimsAnalysis.result_value != "",
             )
