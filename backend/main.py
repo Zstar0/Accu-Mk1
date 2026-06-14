@@ -9156,22 +9156,34 @@ async def generate_sample_coa(
     # Raw per-vial values; COABuilder prepends its own parent figure and renders
     # the comma-delimited series. Best-effort — a builder error must not block
     # generation. Parents only (sub-sample COAs have no variance children).
+    # Tracks whether this generation delivered customer remarks — drives the
+    # "Delivered on" timestamp stamped after a successful generation.
+    _remarks_included = False
     if not is_sub:
-        try:
-            from coa.variance_series import build_variance_replicates
-            _parent_row = db.execute(
-                select(LimsSample).where(LimsSample.sample_id == sample_id)
-            ).scalar_one_or_none()
-            if _parent_row is not None:
+        _parent_row = db.execute(
+            select(LimsSample).where(LimsSample.sample_id == sample_id)
+        ).scalar_one_or_none()
+        if _parent_row is not None:
+            # Customer-remarks snapshot + "Include with Publish?" gating. When
+            # the flag is False we omit lab_remarks and tell COABuilder the
+            # suppression was intentional so its non-conforming gate is skipped.
+            # include_lab_remarks is ALWAYS sent. Set OUTSIDE the variance try
+            # below so a variance-build error can't drop it.
+            _include_remarks = bool(_parent_row.customer_remarks_include)
+            alias_body["include_lab_remarks"] = _include_remarks
+            _remarks_text = (_parent_row.customer_remarks or "").strip()
+            if _include_remarks and _remarks_text:
+                alias_body["lab_remarks"] = _remarks_text
+                _remarks_included = True
+            # Variance replicate series — best-effort; a builder error must not
+            # block generation.
+            try:
+                from coa.variance_series import build_variance_replicates
                 _reps = build_variance_replicates(db, _parent_row)
                 if _reps:
                     alias_body["variance_replicates"] = _reps
-                # Customer-facing remarks snapshot — COABuilder embeds them in
-                # coa_data and gates non-conforming COAs on their presence.
-                if (_parent_row.customer_remarks or "").strip():
-                    alias_body["lab_remarks"] = _parent_row.customer_remarks.strip()
-        except Exception:
-            _logger.warning("variance replicate build failed for %s", sample_id, exc_info=True)
+            except Exception:
+                _logger.warning("variance replicate build failed for %s", sample_id, exc_info=True)
 
     try:
         async with httpx.AsyncClient(timeout=120.0) as client:
@@ -9249,6 +9261,23 @@ async def generate_sample_coa(
 
     if warnings:
         message += f" (warnings: {'; '.join(warnings)})"
+
+    # "Delivered on" — stamp the parent when this generation actually carried
+    # customer remarks. Best-effort; a failure here must not fail the
+    # already-successful generation. Re-query (the earlier _parent_row is scoped
+    # to the not-is_sub block and may be stale).
+    if _remarks_included and verification_code:
+        try:
+            from datetime import datetime as _dt
+            _p = db.execute(
+                select(LimsSample).where(LimsSample.sample_id == sample_id)
+            ).scalar_one_or_none()
+            if _p is not None:
+                _p.customer_remarks_delivered_at = _dt.utcnow()
+                db.commit()
+        except Exception:
+            db.rollback()
+            _logger.warning("delivered_at stamp failed for %s", sample_id, exc_info=True)
 
     # --- COA roll-up Phase 1: write the per-generation manifest ---
     # Best-effort. COABuilder's response shape may or may not include the
