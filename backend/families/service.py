@@ -86,7 +86,11 @@ def _gather_analytes(
             select(LimsAnalysis).where(
                 LimsAnalysis.lims_sub_sample_pk.in_(sub_ids),
                 LimsAnalysis.reportable == True,  # noqa: E712
-                LimsAnalysis.retest_of_id.is_(None),
+                # Current vial row = retested IS False. retest_of_id IS NULL
+                # would surface the superseded original's state once a vial
+                # result is retested (P-0149 class). Parent-tier rows above keep
+                # retest_of_id IS NULL — their canonical row updates in place.
+                LimsAnalysis.retested.is_(False),
             )
         ).scalars().all()
         for r in vial_rows:

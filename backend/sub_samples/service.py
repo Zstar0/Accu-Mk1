@@ -1358,7 +1358,9 @@ def _fetch_mk1_results_for_host(
 
     Skips:
       - rows without a result_value (no result entered yet)
-      - retest siblings (we only show the canonical non-retest row)
+      - superseded rows: vial hosts select the current row (retested=False);
+        sample hosts keep the parent-tier canonical row (retest_of_id IS NULL,
+        updated in place via promotion — same convention as source_resolver).
     """
     from models import LimsAnalysis, LimsAnalysisPromotion
 
@@ -1371,7 +1373,9 @@ def _fetch_mk1_results_for_host(
     elif host_kind == "sub_sample":
         stmt = select(LimsAnalysis).where(
             LimsAnalysis.lims_sub_sample_pk == host_pk,
-            LimsAnalysis.retest_of_id.is_(None),
+            # Current vial result = retested IS False. retest_of_id IS NULL
+            # returns the superseded original once a retest exists (P-0149 S03).
+            LimsAnalysis.retested.is_(False),
             LimsAnalysis.result_value.is_not(None),
         )
     else:
