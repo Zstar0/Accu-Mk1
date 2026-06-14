@@ -48,6 +48,9 @@ class ParentSampleSummary(BaseModel):
     container_mode: bool = False
     # Customer-facing remarks delivered with the published COA.
     customer_remarks: Optional[str] = None
+    # "Include with Publish?" + the Mk1-side delivery timestamp.
+    customer_remarks_include: bool = True
+    customer_remarks_delivered_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True
@@ -55,6 +58,7 @@ class ParentSampleSummary(BaseModel):
 
 class CustomerRemarksUpdate(BaseModel):
     remarks: str
+    include: bool = True
 
 
 class SubSampleListResponse(BaseModel):

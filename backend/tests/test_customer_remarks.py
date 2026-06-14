@@ -64,3 +64,27 @@ def test_audit_log_written_without_full_text(db, parent):
     # Audit details carry lengths, not the text itself
     assert "Confidential" not in str(row.details)
     assert row.details.get("new_length") == len("Confidential paragraph.")
+
+
+def test_include_defaults_true(db, parent):
+    set_customer_remarks(db, "P-0700", "Visible to customer.", user_id=None)
+    db.refresh(parent)
+    assert parent.customer_remarks_include is True
+
+
+def test_include_false_persists(db, parent):
+    out = set_customer_remarks(db, "P-0700", "Internal only.", include=False, user_id=None)
+    assert out["customer_remarks_include"] is False
+    db.refresh(parent)
+    assert parent.customer_remarks_include is False
+
+
+def test_include_flag_in_audit_details(db, parent):
+    set_customer_remarks(db, "P-0700", "text", include=False, user_id=None)
+    row = db.execute(
+        select(AuditLog).where(
+            AuditLog.operation == "customer_remarks_updated",
+            AuditLog.entity_id == "P-0700",
+        )
+    ).scalars().first()
+    assert row.details.get("include") is False

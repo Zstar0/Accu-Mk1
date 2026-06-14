@@ -171,6 +171,8 @@ def ensure_parent_sample(
         assignment_role=parent.assignment_role,
         container_mode=parent.container_mode,
         customer_remarks=parent.customer_remarks,
+        customer_remarks_include=parent.customer_remarks_include,
+        customer_remarks_delivered_at=parent.customer_remarks_delivered_at,
     )
 
 
@@ -184,7 +186,8 @@ def update_customer_remarks(
     """Set the parent's customer-facing remarks (delivered with the COA)."""
     try:
         return service.set_customer_remarks(
-            db, parent_sample_id, body.remarks, user_id=user.id,
+            db, parent_sample_id, body.remarks, include=body.include,
+            user_id=user.id,
         )
     except LookupError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -225,6 +228,8 @@ def list_sub_samples(
             assignment_role=parent.assignment_role,
             container_mode=parent.container_mode,
             customer_remarks=parent.customer_remarks,
+            customer_remarks_include=parent.customer_remarks_include,
+            customer_remarks_delivered_at=parent.customer_remarks_delivered_at,
         ),
         sub_samples=[_serialize(s) for s in subs],
     )
