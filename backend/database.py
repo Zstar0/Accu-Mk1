@@ -349,6 +349,10 @@ def _run_migrations():
         # Customer-facing remarks delivered with the published COA
         # (2026-06-12-customer-remarks-design.md)
         "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS customer_remarks TEXT",
+        # "Include with Publish?" toggle + Mk1-side delivery timestamp
+        # (2026-06-13-customer-remarks-include-toggle-design.md)
+        "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS customer_remarks_include BOOLEAN NOT NULL DEFAULT TRUE",
+        "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS customer_remarks_delivered_at TIMESTAMP",
         # Backfill — non-HPLC sub-samples are not variance candidates by default.
         # Idempotent: re-running matches no rows once already flipped.
         """UPDATE lims_sub_samples

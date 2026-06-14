@@ -758,6 +758,18 @@ class LimsSample(Base):
     # COA generation; re-publish refreshes the customer copy). Distinct from
     # the SENAITE-backed internal Remarks field.
     customer_remarks: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # "Include with Publish?" — when False the remark is authored/saved but NOT
+    # delivered with the COA (Mk1 omits lab_remarks + sends include_lab_remarks
+    # false so COABuilder skips its non-conforming gate). Default TRUE preserves
+    # the prior always-deliver-when-non-empty behavior.
+    customer_remarks_include: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="true", default=True
+    )
+    # Set to utcnow() when a COA is successfully generated with remarks INCLUDED
+    # (the snapshot/delivery moment Mk1 can observe). Surfaced as "Delivered on".
+    customer_remarks_delivered_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime, nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     last_synced_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
