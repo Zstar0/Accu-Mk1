@@ -241,43 +241,64 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 **Files:**
 - Modify: `C:/tmp/accu-mk1-wave1/backend/main.py:9159-9174` (body assembly) and the success block `~9253-9288`
 
-- [ ] **Step 1: Gate the lab_remarks send and record the include flag**
+- [ ] **Step 1: Restructure the parent-row block — set the include flag OUTSIDE the variance try**
 
-In `backend/main.py`, replace the remarks snapshot lines (currently 9169-9172):
+In `backend/main.py`, replace the whole block (currently lines 9159-9174):
 
 ```python
+    if not is_sub:
+        try:
+            from coa.variance_series import build_variance_replicates
+            _parent_row = db.execute(
+                select(LimsSample).where(LimsSample.sample_id == sample_id)
+            ).scalar_one_or_none()
+            if _parent_row is not None:
+                _reps = build_variance_replicates(db, _parent_row)
+                if _reps:
+                    alias_body["variance_replicates"] = _reps
                 # Customer-facing remarks snapshot — COABuilder embeds them in
                 # coa_data and gates non-conforming COAs on their presence.
                 if (_parent_row.customer_remarks or "").strip():
                     alias_body["lab_remarks"] = _parent_row.customer_remarks.strip()
+        except Exception:
+            _logger.warning("variance replicate build failed for %s", sample_id, exc_info=True)
 ```
 
-with:
-
-```python
-                # Customer-facing remarks snapshot. The "Include with Publish?"
-                # flag gates delivery: when False we omit lab_remarks and tell
-                # COABuilder it was intentional so its non-conforming gate is
-                # skipped. include_lab_remarks is ALWAYS sent.
-                _include_remarks = bool(_parent_row.customer_remarks_include)
-                alias_body["include_lab_remarks"] = _include_remarks
-                _remarks_text = (_parent_row.customer_remarks or "").strip()
-                if _include_remarks and _remarks_text:
-                    alias_body["lab_remarks"] = _remarks_text
-                    _remarks_included = True
-```
-
-- [ ] **Step 2: Initialize the tracking flag before the block**
-
-Immediately before `if not is_sub:` (line 9159), add:
+with (note: remarks/include set OUTSIDE the variance try so a variance-build
+failure can't drop `include_lab_remarks` and silently re-enable the gate):
 
 ```python
     # Tracks whether this generation delivered customer remarks — drives the
     # "Delivered on" timestamp stamped after a successful generation.
     _remarks_included = False
+    if not is_sub:
+        _parent_row = db.execute(
+            select(LimsSample).where(LimsSample.sample_id == sample_id)
+        ).scalar_one_or_none()
+        if _parent_row is not None:
+            # Customer-remarks snapshot + "Include with Publish?" gating. When
+            # the flag is False we omit lab_remarks and tell COABuilder the
+            # suppression was intentional so its non-conforming gate is skipped.
+            # include_lab_remarks is ALWAYS sent. Set OUTSIDE the variance try
+            # below so a variance-build error can't drop it.
+            _include_remarks = bool(_parent_row.customer_remarks_include)
+            alias_body["include_lab_remarks"] = _include_remarks
+            _remarks_text = (_parent_row.customer_remarks or "").strip()
+            if _include_remarks and _remarks_text:
+                alias_body["lab_remarks"] = _remarks_text
+                _remarks_included = True
+            # Variance replicate series — best-effort; a builder error must not
+            # block generation.
+            try:
+                from coa.variance_series import build_variance_replicates
+                _reps = build_variance_replicates(db, _parent_row)
+                if _reps:
+                    alias_body["variance_replicates"] = _reps
+            except Exception:
+                _logger.warning("variance replicate build failed for %s", sample_id, exc_info=True)
 ```
 
-- [ ] **Step 3: Stamp delivered_at after a successful generation**
+- [ ] **Step 2: Stamp delivered_at after a successful generation**
 
 In the success path, the manifest-write block begins at line 9260 with `if (resolver_result is not None and verification_code and generation_number:`. Immediately BEFORE that `if` (after line 9251 `message += ...`), insert:
 
@@ -300,12 +321,12 @@ In the success path, the manifest-write block begins at line 9260 with `if (reso
             _logger.warning("delivered_at stamp failed for %s", sample_id, exc_info=True)
 ```
 
-- [ ] **Step 4: Restart backend and verify it boots**
+- [ ] **Step 3: Restart backend and verify it boots**
 
 Run: `docker restart accu-mk1-backend && sleep 5 && docker logs --tail 8 accu-mk1-backend`
 Expected: "Application startup complete." with no traceback. (Backend has no --reload — restart is required.)
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
 cd /c/tmp/accu-mk1-wave1
@@ -625,15 +646,36 @@ Expected: all pass.
 Run: `MSYS_NO_PATHCONV=1 docker exec accu-mk1-frontend sh -c "cd /app && npx tsc --noEmit"`
 Expected: no errors.
 
-- [ ] **Step 4: Live UAT (Handler-driven, on a PB-#### test sample)**
+- [ ] **Step 4: Deploy 2.19.0 COABuilder to what wave1 hits — HANDLER-GATED**
+
+> ⚠️ **Environmental gap (must resolve before Step 5.3).** wave1's backend calls
+> `COA_BUILDER_URL=http://host.docker.internal:5000` → container `coabuilder_service`,
+> which runs a **baked image (`coabuilder-coabuilder`) at 2.18.0** — NOT the
+> bind-mounted branch checkout. My edits to `/c/tmp/coabuilder-variance` go live on
+> `:5528` (`accumark-subvial-coabuilder`, bind-mounted) after a restart, but wave1
+> does not hit that container.
+>
+> **What still works WITHOUT this deploy:** Pydantic v2 ignores unknown body fields,
+> so the current 2.18.0 coabuilder silently ignores `include_lab_remarks`.
+> Suppression on **conforming** COAs already works (Mk1 omits `lab_remarks` →
+> coabuilder embeds nothing). Only the **non-conforming suppression bypass** (UAT
+> 5.3) needs 2.19.0 live.
+>
+> **Options (Handler picks):**
+> - **A — rebuild + recreate `coabuilder_service`:** `docker compose -p coabuilder build && docker compose -p coabuilder up -d` from the build context, after pointing it at `/c/tmp/coabuilder-variance` (the compose project's working_dir is the OneDrive `coabuilder` dir, currently stale at 2.14.8 — do NOT rebuild from there or it regresses). Keeps wave1's URL unchanged.
+> - **B — repoint wave1 backend to `:5528`:** recreate `accu-mk1-backend` with `COA_BUILDER_URL=http://host.docker.internal:5528` and `docker restart accumark-subvial-coabuilder`. No image rebuild; couples wave1 to the subvial container (revert after UAT).
+>
+> Confirm `curl -s http://localhost:5000/version` returns `2.19.0` (option A) or that the backend now targets `:5528` (option B) before running UAT 5.3.
+
+- [ ] **Step 5: Live UAT (Handler-driven, on a PB-#### test sample)**
 
 Confirm in the browser on a parent sample page:
 1. Customer Remarks card shows the "Include with Publish?" checkbox, checked by default.
-2. Save with a remark + checked → generate COA → "Delivered on <date/time>" appears.
-3. Uncheck → Save → regenerate a **non-conforming** COA → generation succeeds (no 422), no "Lab Remarks" button appears on the customer order page, and delivered_at is NOT advanced.
+2. Save with a remark + checked → generate COA → **refresh the sample page** (the card refetches on save, not on generate) → "Delivered on <date/time>" appears.
+3. Uncheck → Save → regenerate a **non-conforming** COA (requires 2.19.0 live, Step 4) → generation succeeds (no 422), no "Lab Remarks" button appears on the customer order page, and delivered_at is NOT advanced.
 4. DB spot-check: `docker exec accumark_postgres psql -U postgres -d accumark_mk1 -tA -c "SELECT customer_remarks_include, customer_remarks_delivered_at FROM lims_samples WHERE sample_id='<PB-####>'"`
 
-- [ ] **Step 5: Push both branches**
+- [ ] **Step 6: Push both branches**
 
 ```bash
 git -C /c/tmp/accu-mk1-wave1 push origin subsample-features
