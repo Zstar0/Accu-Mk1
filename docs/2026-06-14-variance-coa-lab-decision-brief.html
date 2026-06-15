@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Variance Testing — How Should We Certify It? · Lab Decision Brief</title>
+<style>
+  :root {
+    --ink: #1a2230;
+    --muted: #5b6677;
+    --line: #d8dee8;
+    --accent: #1f4ea1;
+    --accent-soft: #eef3fb;
+    --good: #1f7a4d;
+    --bad: #9a2f2f;
+    --paper: #ffffff;
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  body {
+    font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    color: var(--ink);
+    background: #f3f5f9;
+    margin: 0;
+    line-height: 1.5;
+    font-size: 14px;
+  }
+  .sheet {
+    max-width: 820px;
+    margin: 24px auto;
+    background: var(--paper);
+    padding: 40px 48px 44px;
+    box-shadow: 0 2px 18px rgba(20,34,58,.10);
+    border-radius: 6px;
+  }
+  header { border-bottom: 3px solid var(--accent); padding-bottom: 14px; margin-bottom: 22px; }
+  .brand { font-size: 12px; letter-spacing: .14em; text-transform: uppercase; color: var(--accent); font-weight: 700; }
+  h1 { font-size: 23px; margin: 6px 0 4px; line-height: 1.2; }
+  .sub { color: var(--muted); font-size: 12.5px; }
+  h2 {
+    font-size: 14px; text-transform: uppercase; letter-spacing: .06em;
+    color: var(--accent); margin: 26px 0 8px; padding-bottom: 4px; border-bottom: 1px solid var(--line);
+  }
+  p { margin: 8px 0; }
+  .muted { color: var(--muted); }
+  strong { color: var(--ink); }
+  ul { margin: 8px 0; padding-left: 20px; }
+  li { margin: 4px 0; }
+  table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 13.5px; }
+  th, td { border: 1px solid var(--line); padding: 8px 10px; text-align: left; }
+  th { background: var(--accent-soft); font-size: 11.5px; text-transform: uppercase; letter-spacing: .05em; color: var(--accent); }
+  .ok { color: var(--good); font-weight: 600; }
+  .no { color: var(--bad); font-weight: 600; }
+  .callout {
+    background: var(--accent-soft); border-left: 4px solid var(--accent);
+    padding: 10px 14px; margin: 12px 0; border-radius: 0 4px 4px 0; font-size: 13px;
+  }
+  .decision { border: 1px solid var(--line); border-radius: 5px; padding: 12px 16px; margin: 10px 0; }
+  .decision .q { font-weight: 700; margin-bottom: 4px; }
+  .box { display: inline-block; width: 13px; height: 13px; border: 1.5px solid var(--muted); border-radius: 2px; vertical-align: -2px; margin: 0 4px 0 2px; }
+  .opt { display: inline-block; margin-right: 14px; white-space: nowrap; }
+  .rule { border: 1px solid var(--line); border-radius: 5px; padding: 12px 16px; background: #fbfcfe; }
+  .signoff { margin-top: 14px; font-size: 13.5px; }
+  .fill { display: inline-block; border-bottom: 1px solid var(--muted); min-width: 70px; margin: 0 6px; }
+  .fill.lg { min-width: 200px; }
+  footer { margin-top: 26px; padding-top: 10px; border-top: 1px solid var(--line); color: var(--muted); font-size: 11px; }
+  .print-hint { text-align: center; color: var(--muted); font-size: 12px; margin: 10px 0 0; }
+  @media print {
+    body { background: #fff; font-size: 12px; }
+    .sheet { box-shadow: none; margin: 0; max-width: none; padding: 0 8mm; border-radius: 0; }
+    .print-hint { display: none; }
+    h2 { margin-top: 16px; }
+    .decision, .rule { break-inside: avoid; }
+  }
+</style>
+</head>
+<body>
+<div class="sheet">
+  <header>
+    <div class="brand">Accumark Labs · Internal Decision Brief</div>
+    <h1>Variance Testing — How Should We Certify It?</h1>
+    <div class="sub">Prepared for laboratory review · 2026-06-14</div>
+  </header>
+
+  <h2>What we're asking</h2>
+  <p>We offer <strong>variance testing</strong>: a customer sends us <strong>multiple vials from the
+  same lot</strong>, and we test each vial for <strong>Identity, Purity, and Quantity</strong>. We
+  need the lab's guidance on <strong>how multiple vials should roll up onto a single Certificate of
+  Analysis (COA)</strong> — and we propose the per-vial detail live on a <strong>separate Variance
+  Report</strong>.</p>
+  <p class="muted">This is a <em>uniformity / multi-unit</em> situation (distinct units from one lot),
+  not repeat measurements of one homogeneous sample. The closest formal reference is
+  <strong>USP &lt;905&gt; Uniformity of Dosage Units</strong> (acceptance considers both the mean
+  <em>and</em> individual unit deviations). We are not GMP-pharma; our <strong>ISO/IEC 17025</strong>
+  scope and the lab's SOPs govern what actually applies — that's your call.</p>
+
+  <h2>The structure we're leaning toward</h2>
+  <ul>
+    <li><strong>COA</strong> → one <strong>reportable result and one conformance verdict per
+      test</strong> (the lot's certified result).</li>
+    <li><strong>Variance Report</strong> → every vial's individual Identity / Purity / Quantity
+      result, each vial's pass/fail, and the aggregate.</li>
+  </ul>
+  <p>We need you to confirm that split and set the rules below.</p>
+
+  <h2>Worked example — real sample P-0149 (BPC-157, purity spec &ge; 98.0%)</h2>
+  <table>
+    <thead>
+      <tr><th>Vial</th><th>Identity</th><th>Purity</th><th>Quantity</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>1</td><td><span class="ok">BPC-157 &#10003;</span> confirmed</td><td>99.99%</td><td>13 mg/mL</td></tr>
+      <tr><td>2</td><td><span class="ok">BPC-157 &#10003;</span> confirmed</td><td>97.25%</td><td>15 mg/mL</td></tr>
+      <tr><td>3</td><td><span class="no">not confirmed &#10007;</span></td><td>96.24%</td><td>16 mg/mL</td></tr>
+    </tbody>
+  </table>
+  <div class="callout">This one sample lands on <strong>opposite COA verdicts</strong> depending on
+  the rules you choose below — which is exactly why we need them pinned down.</div>
+
+  <h2>Decisions we need from the lab</h2>
+
+  <div class="decision">
+    <div class="q">1. Purity / Quantity — how to aggregate and decide pass/fail on the COA</div>
+    <ul>
+      <li><strong>(A) Mean only:</strong> report the mean, verdict on the mean. → mean of the
+        identity-confirmed vials (99.99, 97.25) = <strong>98.62% → CONFORMS</strong>.</li>
+      <li><strong>(B) Mean + individual check (USP &lt;905&gt; style):</strong> report the mean, but
+        the lot <strong>fails/flags</strong> if <strong>any</strong> individual vial is out of spec.
+        → Vial 2 = 97.25% &lt; 98% → <strong>lot does not conform</strong>.</li>
+    </ul>
+    <div class="muted"><em>Central decision.</em>
+      <span class="opt"><span class="box"></span>A</span>
+      <span class="opt"><span class="box"></span>B</span>
+      <span class="opt"><span class="box"></span>Other: <span class="fill lg"></span></span>
+    </div>
+  </div>
+
+  <div class="decision">
+    <div class="q">2. Identity — it can't be averaged</div>
+    <p class="muted" style="margin-top:2px">A vial that isn't the declared peptide (Vial 3) is a
+    genuine finding (mislabeled / contaminated / non-uniform unit).</p>
+    <div>Report identity as <strong>"N of M vials confirmed"</strong> (here: 2 of 3)?
+      <span class="opt"><span class="box"></span>Yes</span>
+      <span class="opt"><span class="box"></span>No</span></div>
+    <div style="margin-top:6px">Does <strong>one</strong> identity miss make the lot
+      <strong>NOT CONFORM</strong> on identity?
+      <span class="opt"><span class="box"></span>Lot fails identity</span>
+      <span class="opt"><span class="box"></span>Report + note</span>
+      <span class="opt"><span class="box"></span>Other: <span class="fill"></span></span></div>
+    <div style="margin-top:6px"><strong>Exclude</strong> an identity-failed vial from the
+      Purity/Quantity mean (its values aren't meaningful for the declared peptide)?
+      <span class="opt"><span class="box"></span>Exclude</span>
+      <span class="opt"><span class="box"></span>Include</span></div>
+  </div>
+
+  <div class="decision">
+    <div class="q">3. What the COA displays</div>
+    <span class="opt"><span class="box"></span>Single aggregate value only</span>
+    <span class="opt"><span class="box"></span>Aggregate + spread (e.g. "98.6%, n = 3" or mean &plusmn; range)</span>
+  </div>
+
+  <div class="decision">
+    <div class="q">4. Quantity (informational — no spec today)</div>
+    <span class="opt"><span class="box"></span>Mean</span>
+    <span class="opt"><span class="box"></span>Range</span>
+    <span class="opt"><span class="box"></span>Mean &plusmn; range</span>
+    <span class="opt"><span class="box"></span>Other: <span class="fill"></span></span>
+  </div>
+
+  <h2>Our suggested default (please confirm or override)</h2>
+  <div class="rule">
+    <p style="margin-top:0" class="muted">Grounded in the uniformity rationale — a non-uniform lot
+    should be visible on the certificate:</p>
+    <ul>
+      <li><strong>COA:</strong> one verdict per test.
+        <ul>
+          <li><strong>Purity/Quantity:</strong> report the <strong>mean</strong>, but
+            <strong>fail/flag the lot if any identity-confirmed vial is out of spec</strong>
+            (Decision 1 = B).</li>
+          <li><strong>Identity:</strong> report <strong>"N of M confirmed"</strong>;
+            <strong>any</strong> non-match → lot <strong>does not conform</strong> on identity.
+            <strong>Exclude</strong> identity-failed vials from the Purity/Quantity mean.</li>
+          <li>Show <strong>mean + n</strong> on the certificate; full detail on the Variance Report.</li>
+        </ul>
+      </li>
+      <li><strong>Variance Report:</strong> every vial, every result, individual pass/fail, plus the
+        aggregate.</li>
+    </ul>
+    <p style="margin-bottom:0">Under this default, <strong>P-0149 → DOES NOT CONFORM</strong>
+    (Vial 2 purity below spec + Vial 3 identity miss), which we believe correctly reflects a
+    non-uniform lot.</p>
+  </div>
+
+  <h2>Sign-off</h2>
+  <div class="signoff">
+    <p>Decision 1: <span class="fill"></span>&nbsp;&nbsp; Decision 2: <span class="fill"></span>
+       &nbsp;&nbsp; Decision 3: <span class="fill"></span>&nbsp;&nbsp; Decision 4: <span class="fill"></span></p>
+    <p>Approved by: <span class="fill lg"></span>&nbsp;&nbsp; Date: <span class="fill"></span></p>
+    <p>Notes: <span class="fill" style="min-width:460px"></span></p>
+  </div>
+
+  <footer>Accumark Labs · Variance COA certification model · Draft for laboratory decision · 2026-06-14</footer>
+</div>
+<p class="print-hint">Tip: open in a browser and use Print → Save as PDF for a clean handout.</p>
+</body>
+</html>
