@@ -25,9 +25,12 @@ detail pages (separate effort). The conformance verdict is **mixed**:
   `mean X · SD Y · %RSD Z% · n=N` replacing the comma series (which didn't fit
   4+ vials). Reuses COABuilder's auto-wrap / font-fit.
 - **Statistics:** mean, **sample SD** (the uncertainty), **%RSD** (the precision /
-  true representation of variance — preferred over SD per Dennis). Computed once
-  and **rounded to 2 dp**; the same rounded mean drives both the verdict and the
-  printed figure, so display and pass/fail can never disagree.
+  true representation of variance — preferred over SD per Dennis). The verdict
+  compares the **EXACT (unrounded) mean** to spec — "don't round before or after
+  the mean" (lab 2026-06-15) — so rounding can never flip a fail to a pass. The
+  printed figures use **2-decimal precision** (cosmetic only); at a razor-edge
+  boundary the printed mean may round to the spec value while the exact mean
+  fails. %RSD is derived from the unrounded SD/mean.
 - **Per-vial spread** is preserved in `coa_data['variance_report']` and rendered
   on the dedicated Variance detail pages (Handler designing in Claude Design).
 - **Identity-failed vial:** its (wrong-molecule) purity/quantity is excluded from
