@@ -10,12 +10,12 @@ You're picking up a session that (1) **shipped** several P-0149 variance conform
 
 | Repo / dir | Path | Branch | Latest commit |
 |---|---|---|---|
-| **Accu-Mk1** (FE+BE checkout) | `C:/tmp/accu-mk1-wave1` | `subsample-features` | `a64f9a1` (pushed; tree has 2 untracked brief files) |
+| **Accu-Mk1** (FE+BE checkout) | `C:/tmp/accu-mk1-wave1` | `subsample-features` | `0da1c5f` (pushed; tree clean) |
 | **COABuilder** | `C:/tmp/coabuilder-variance` | `feat/coa-identity-na-variance` | `d36da74` = **v2.21.0** (pushed; `logs/` dirty, ignore) |
 | accumarklabs (WP) | DevKinsta / Kinsta | `subsample-features` | untouched this session |
 | integration-service | `…/Accumark-Workspace/integration-service` | — | untouched this session |
 
-Both feature branches are committed + pushed. The only uncommitted items are the two lab-brief files (see Outstanding #5).
+Both feature branches are committed + pushed and trees are clean (the handoff + both lab-brief files were committed in `0da1c5f`).
 
 ## What's on the branch
 
@@ -62,7 +62,7 @@ User clarified the domain: **variance vials = different vials the customer sent 
 
 | Layer | Run command |
 |---|---|
-| Branch/version | `git -C /c/tmp/accu-mk1-wave1 log --oneline -3` (expect `a64f9a1`) · `curl -s http://localhost:5000/version` (expect `2.21.0`) |
+| Branch/version | `git -C /c/tmp/accu-mk1-wave1 log --oneline -3` (expect `0da1c5f`) · `curl -s http://localhost:5000/version` (expect `2.21.0`) |
 | Mk1 variance + retest + remarks | `MSYS_NO_PATHCONV=1 docker exec accu-mk1-backend sh -c "cd /app && python -m pytest tests/test_variance_series.py tests/test_retest_current_row.py tests/test_customer_remarks.py -q"` |
 | COABuilder | `cd /c/tmp/coabuilder-variance && python -m pytest tests/ -q --deselect "tests/test_generic_page2_layout.py::TestRenderedPdfHasNoPhLeak::test_ph_not_duplicated_on_page2"` (expect 44 passed, 1 deselected) |
 | Latest P-0149 generation verdict | `docker exec accumark_postgres psql -U postgres -d accumark_integration -tA -c "SELECT generation_number, verification_code, coa_data->>'overall_status' FROM coa_generations WHERE sample_id='P-0149' ORDER BY created_at DESC LIMIT 3"` |
@@ -73,8 +73,7 @@ User clarified the domain: **variance vials = different vials the customer sent 
 2. **Reconcile the digital COA** as part of #1: the verify-page Core Panel must render the model's reportable result so the badge and the rows agree (no more FAILED-badge-over-CONFORMS-rows). Likely also: build/finish the separate **Variance Report** surface.
 3. **Revisit COABuilder 2.21.0** `overall_status` logic against the lab's aggregation rule — if they pick mean-aggregation, the worst-case "any below-spec vial → FAILED" likely changes to a mean-based verdict.
 4. **Deploy** once the model ships: hold the coabuilder branch from prod until #1; then use the `accumark-deploy` skill. Carries forward JWT_SECRET consistency + the WP Variance data setup from older handoffs.
-5. **Commit the two brief files** (`docs/2026-06-14-variance-coa-lab-decision-brief.md` + `.html`) if wanted — currently untracked.
-6. **Optional:** post the Slack canvas into a specific channel (not done — only the canvas was created).
+5. **Optional:** post the Slack canvas into a specific channel (not done — only the canvas was created). Canvas: https://valence-analytical.slack.com/docs/T0A9LFNLYKY/F0BA37KUN4F
 
 ## User collaboration preferences
 
@@ -88,4 +87,4 @@ User clarified the domain: **variance vials = different vials the customer sent 
 ## Recommended first action in the new session
 
 Confirm state, then ask about the decision:
-`git -C /c/tmp/accu-mk1-wave1 log --oneline -3` (expect `a64f9a1`) and `curl -s http://localhost:5000/version` (expect `2.21.0`). Then ask the user **whether the lab has decided the variance-COA model** (the 4 questions in `docs/2026-06-14-variance-coa-lab-decision-brief.md`). If yes → invoke brainstorming to design the chosen model (COA aggregate + Variance Report + digital reconciliation). If not → stand by or pick up an unrelated thread; do not implement variance-COA changes until the model is set.
+`git -C /c/tmp/accu-mk1-wave1 log --oneline -3` (expect `0da1c5f`) and `curl -s http://localhost:5000/version` (expect `2.21.0`). Then ask the user **whether the lab has decided the variance-COA model** (the 4 questions in `docs/2026-06-14-variance-coa-lab-decision-brief.md`). If yes → invoke brainstorming to design the chosen model (COA aggregate + Variance Report + digital reconciliation). If not → stand by or pick up an unrelated thread; do not implement variance-COA changes until the model is set.
