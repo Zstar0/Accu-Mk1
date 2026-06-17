@@ -2364,6 +2364,7 @@ export interface AnalysisServiceRecord {
   active: boolean
   result_type?: string | null
   result_options?: { value: string; label: string }[] | null
+  variance_capable?: boolean
   created_at: string
   updated_at: string
 }
@@ -2414,6 +2415,19 @@ export async function updateAnalysisServiceResultType(
     body: JSON.stringify(body),
   })
   if (!response.ok) throw new Error(`Update result type failed: ${response.status}`)
+  return response.json()
+}
+
+export async function updateAnalysisServiceVarianceCapable(
+  serviceId: number,
+  varianceCapable: boolean,
+): Promise<AnalysisServiceRecord> {
+  const response = await fetch(`${API_BASE_URL()}/analysis-services/${serviceId}/variance-capable`, {
+    method: 'PATCH',
+    headers: getBearerHeaders('application/json'),
+    body: JSON.stringify({ variance_capable: varianceCapable }),
+  })
+  if (!response.ok) throw new Error(`Update variance-capable failed: ${response.status}`)
   return response.json()
 }
 
