@@ -128,6 +128,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Spinner } from '@/components/ui/spinner'
 import { useUIStore } from '@/store/ui-store'
+import { useWizardStore } from '@/store/wizard-store'
 import { getSenaiteUrl, getWordpressUrl } from '@/lib/api-profiles'
 import { cn } from '@/lib/utils'
 import { EditableDataRow } from '@/components/dashboard/EditableField'
@@ -2631,6 +2632,11 @@ export function SampleDetails() {
 
   // Manage analyses panel
   const [manageAnalysesOpen, setManageAnalysesOpen] = useState(false)
+  // Parent pages: result edit fields are hidden by default to deter entering
+  // values on the parent (work belongs on the vials). Opt-in via a checkbox in
+  // the Manage Analyses overlay. Ephemeral on purpose — resets to hidden on
+  // every page load so the deterrent always applies to a fresh visit.
+  const [showParentResultEditing, setShowParentResultEditing] = useState(false)
   const [vialsQuickLookOpen, setVialsQuickLookOpen] = useState(false)
   // Parent pages: pick a vial's primary photo to attach to the parent AR
   const [selectVialImageOpen, setSelectVialImageOpen] = useState(false)
@@ -3654,6 +3660,30 @@ export function SampleDetails() {
               <Microscope size={12} />
               HPLC Results
             </Button>
+            {/* Sub-sample pages only: jump straight into a new HPLC analysis
+                (sample prep) for THIS vial — pre-fills the vial Sample ID and
+                auto-fires the SENAITE lookup. Reset the wizard first so a
+                half-finished session doesn't show its summary instead. */}
+            {parentSampleId !== null && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 px-2 gap-1 cursor-pointer"
+                onClick={() => {
+                  useWizardStore.getState().resetWizard()
+                  useUIStore.getState().startPrepFromWorksheet({
+                    sampleId: sampleId!,
+                    peptideId: null,
+                    method: null,
+                    instrumentId: null,
+                    autoLookup: true,
+                  })
+                }}
+              >
+                <FlaskConical size={12} />
+                New Analysis
+              </Button>
+            )}
             <Button
               variant="outline"
               size="sm"
@@ -3697,6 +3727,12 @@ export function SampleDetails() {
                 Variance Summary
               </Button>
             )}
+            {/* COA actions (Generate / Publish) are parent-level — the certified
+                deliverable lives on the parent AR, where the per-vial results are
+                aggregated. Hidden on sub-samples so a per-vial generate can't
+                fetch the empty vial and fail the conformance gate. */}
+            {isParent && (
+            <>
             <div className="relative">
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
@@ -3752,6 +3788,8 @@ export function SampleDetails() {
               >
                 <Terminal size={12} />
               </button>
+            )}
+            </>
             )}
           </div>
           </div>{/* end: SLA + actions row */}
@@ -4628,6 +4666,22 @@ export function SampleDetails() {
                 <span className="text-muted-foreground/60">— managed via Replace on the Analytes card</span>
               </label>
 
+              {/* Parent pages only: result entry on the parent is hidden by
+                  default to steer work onto the vials. Opt-in here when the lab
+                  really needs to enter a value at the parent tier. */}
+              {parentSampleId === null && (
+                <label className="mb-3 flex items-center gap-2 cursor-pointer select-none text-xs text-muted-foreground">
+                  <input
+                    type="checkbox"
+                    checked={showParentResultEditing}
+                    onChange={e => setShowParentResultEditing(e.target.checked)}
+                    className="size-3.5 rounded border-border accent-primary cursor-pointer"
+                  />
+                  Allow result entry on this parent
+                  <span className="text-muted-foreground/60">— results normally belong on the vials</span>
+                </label>
+              )}
+
               {/* Current analyses with remove buttons */}
               <div className="mb-4">
                 <p className="text-xs text-muted-foreground mb-2">Current analyses</p>
@@ -4752,6 +4806,7 @@ export function SampleDetails() {
             queryClient.invalidateQueries({ queryKey: [VIAL_OVERLAY_QUERY_KEY] })
           }}
           parentLineStates={parentSampleId !== null ? parentLineStates : undefined}
+          resultsReadOnly={parentSampleId === null && !showParentResultEditing}
           onResultSaved={(uid, newResult, newReviewState) => {
             setData(prev => {
               if (!prev) return prev

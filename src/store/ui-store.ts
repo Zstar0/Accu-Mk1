@@ -135,6 +135,9 @@ interface UIState {
     method: string | null
     instrumentId: number | null
     limsSubSamplePk?: number | null
+    // When true, Step1SampleInfo auto-fires the SENAITE lookup for sampleId
+    // once it mounts (used by the sub-sample page's "New Analysis" shortcut).
+    autoLookup?: boolean
   } | null
 
   openWorksheetDrawer: (worksheetId?: number) => void
@@ -146,6 +149,7 @@ interface UIState {
     method: string | null
     instrumentId: number | null
     limsSubSamplePk?: number | null
+    autoLookup?: boolean
   }) => void
   clearWorksheetPrepPrefill: () => void
 }

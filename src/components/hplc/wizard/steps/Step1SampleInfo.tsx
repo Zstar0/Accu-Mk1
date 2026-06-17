@@ -82,6 +82,10 @@ export function Step1SampleInfo() {
 
   // Tracks whether a prefill just applied — prevents tab switch from clearing peptide
   const prefillAppliedRef = useRef(false)
+  // Sample ID awaiting an auto-fired lookup (sub-sample page "New Analysis"
+  // shortcut). Held separately from the prefill — which is cleared on apply —
+  // so the lookup can wait until the async SENAITE status check resolves.
+  const [autoLookupPending, setAutoLookupPending] = useState<string | null>(null)
 
   // SENAITE state
   const [senaiteEnabled, setSenaiteEnabled] = useState(false)
@@ -182,12 +186,36 @@ export function Step1SampleInfo() {
     }
     // Carry the vial pk so this prep is tagged vial-scoped (null for parents)
     setLimsSubSamplePk(prefill.limsSubSamplePk ?? null)
+    // Stash the auto-lookup intent — the dedicated effect below fires it once
+    // the SENAITE status check has resolved (senaiteEnabled may still be false
+    // here because checkSenaiteStatus is async).
+    if (prefill.autoLookup && prefill.sampleId) {
+      setAutoLookupPending(prefill.sampleId)
+    }
     // Mark prefill as applied so tab switch doesn't clear peptide
     prefillAppliedRef.current = true
     // Clear prefill so it doesn't re-apply
     useUIStore.getState().clearWorksheetPrepPrefill()
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadingPeptides, peptides])
+
+  // Fire the auto-lookup once SENAITE status is known and peptides are loaded
+  // (peptides power the auto peptide-select in handleLookup). Gated here rather
+  // than in the prefill effect to dodge the senaiteEnabled async race; clears
+  // the pending id after firing so it never re-runs. If SENAITE is disabled
+  // there's no lookup tab, so we just drop the intent.
+  useEffect(() => {
+    if (checkingStatus || autoLookupPending === null) return
+    if (!senaiteEnabled) {
+      setAutoLookupPending(null)
+      return
+    }
+    if (loadingPeptides || peptides.length === 0) return
+    setActiveTab('lookup')
+    void handleLookup(autoLookupPending)
+    setAutoLookupPending(null)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [checkingStatus, senaiteEnabled, loadingPeptides, peptides, autoLookupPending])
 
   // Multi-vial / multi-analyte helpers (must be before early return)
   const isMultiVial = (peptides.find(p => p.id === peptideId)?.prep_vial_count ?? 1) > 1

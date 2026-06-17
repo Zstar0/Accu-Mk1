@@ -478,6 +478,51 @@ describe('AnalysisTable promoted-row correction hint', () => {
   })
 })
 
+describe('AnalysisTable resultsReadOnly', () => {
+  const renderTable = (analyses: SenaiteAnalysis[], resultsReadOnly?: boolean) => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    return render(
+      <I18nextProvider i18n={i18n}>
+        <QueryClientProvider client={qc}>
+          <AnalysisTable
+            analyses={analyses}
+            analyteNameMap={new Map()}
+            resultsReadOnly={resultsReadOnly}
+          />
+        </QueryClientProvider>
+      </I18nextProvider>
+    )
+  }
+
+  const editable = () =>
+    mkAnalysis({
+      uid: 'mk1:1',
+      keyword: 'PUR-HPLC',
+      title: 'Purity (HPLC)',
+      service_group_name: 'Analytics',
+      review_state: 'unassigned',
+      result: '',
+    })
+
+  it('renders the result editor by default (prop omitted)', () => {
+    renderTable([editable()])
+    expect(screen.getByLabelText('Edit result for Purity (HPLC)')).toBeInTheDocument()
+  })
+
+  it('suppresses the result editor when resultsReadOnly is true, keeping the static value', () => {
+    renderTable([editable()], true)
+    expect(screen.queryByLabelText('Edit result for Purity (HPLC)')).not.toBeInTheDocument()
+    // the row + its static value cell still render (Pending for an empty result)
+    expect(screen.getByText('Purity (HPLC)')).toBeInTheDocument()
+    expect(screen.getAllByText('Pending').length).toBeGreaterThan(0)
+  })
+
+  it('still shows the editor with resultsReadOnly explicitly false', () => {
+    renderTable([editable()], false)
+    expect(screen.getByLabelText('Edit result for Purity (HPLC)')).toBeInTheDocument()
+  })
+})
+
 describe('VialPhotoThumb', () => {
   beforeEach(() => {
     vi.clearAllMocks()

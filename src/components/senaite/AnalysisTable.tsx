@@ -1195,6 +1195,7 @@ function AnalysisRow({
   onVialMethodInstrumentSaved,
   parentLineStates,
   vialKind,
+  resultsReadOnly = false,
 }: {
   analysis: SenaiteAnalysis
   analyteNameMap: Map<number, string>
@@ -1222,6 +1223,8 @@ function AnalysisRow({
   /** The host vial's assignment_kind ('core' | 'variance' | null). Drives the
    *  promote-vs-variance-verify affordance split and the membership chip. */
   vialKind?: string | null
+  /** Suppress the result editor — render the static value only. */
+  resultsReadOnly?: boolean
 }) {
   const rowTint = ROW_STATUS_STYLE[analysis.review_state ?? ''] ?? ''
   const { display, original } = formatAnalysisTitle(analysis.title, analyteNameMap)
@@ -1318,7 +1321,7 @@ function AnalysisRow({
           )}
         </div>
       </td>
-      <EditableResultCell analysis={analysis} editing={editing} conformsValue={conformsValue} />
+      <EditableResultCell analysis={analysis} editing={editing} conformsValue={conformsValue} readOnly={resultsReadOnly} />
       <td className="py-2.5 px-3 text-center">
         {analysis.retested ? (
           <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-medium bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-400">
@@ -1631,6 +1634,14 @@ interface AnalysisTableProps {
    *  never appears there. Vial-list overlay entries carry their own kind on
    *  the match (VialMatch.assignmentKind), independent of this prop. */
   vialKind?: string | null
+  /**
+   * When true, result cells render their static value only — the inline
+   * editor / pencil / auto-input is suppressed. Used on parent pages to
+   * deter result entry on the parent (work belongs on the vials); the
+   * Manage Analyses overlay has an opt-in to flip it back on. Default
+   * false → unchanged for sub-sample pages and the Vials Quick Look.
+   */
+  resultsReadOnly?: boolean
 }
 
 export function AnalysisTable({
@@ -1653,6 +1664,7 @@ export function AnalysisTable({
   headerContent,
   hideProgress = false,
   vialKind,
+  resultsReadOnly = false,
 }: AnalysisTableProps) {
   const [analysisFilter, setAnalysisFilter] = useState<'all' | 'verified' | 'pending' | 'invalid'>('all')
   const [sortConfig, setSortConfig] = useState<SortConfig | null>(null)
@@ -1978,6 +1990,7 @@ export function AnalysisTable({
                       onVialMethodInstrumentSaved={onVialMethodInstrumentSaved}
                       parentLineStates={parentLineStates}
                       vialKind={vialKind}
+                      resultsReadOnly={resultsReadOnly}
                     />
                     {isExpanded && group.history.map(h => (
                       <HistoryRow
