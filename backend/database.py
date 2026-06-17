@@ -748,6 +748,19 @@ def _run_migrations():
         """,
         # Variance addon: lab-side override until WP variance addon ships.
         "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS variance_override TEXT",
+        # variance_capable on analysis_services. Run-once: the ADD + seed only
+        # fire when the column is missing (first boot after deploy). On every
+        # later boot the guard is false, so a lab's toggle choices stick.
+        """DO $$ BEGIN
+            IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                           WHERE table_name='analysis_services'
+                             AND column_name='variance_capable') THEN
+                ALTER TABLE analysis_services
+                    ADD COLUMN variance_capable BOOLEAN NOT NULL DEFAULT FALSE;
+                UPDATE analysis_services SET variance_capable = TRUE
+                    WHERE keyword IN ('PH-DETERM','Benzyl_Alcohol_Assay','FILL-NET-CONTENT');
+            END IF;
+        END $$""",
     ]
     # Per-statement isolation: a failure in one statement (e.g., a table that
     # create_all hasn't built yet on first run) must not skip subsequent
