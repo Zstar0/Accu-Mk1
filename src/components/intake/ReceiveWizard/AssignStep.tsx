@@ -207,7 +207,7 @@ export function AssignStep({ parentSampleId, parentSampleUid }: Props) {
               varianceVials={hplcVariance}
               demand={plan.demand.hplc}
               varianceN={plan.variance?.hplc ?? 0}
-              withVarianceZone
+              withVarianceZone={(plan.variance?.hplc ?? 0) > 0 || hplcVariance.length > 0}
               onReset={() => handleResetBucket('hplc')}
             />
           )}
@@ -612,9 +612,13 @@ function MicroBucket({
           {totalAssigned} / {totalDemand}
         </span>
       </header>
-      {/* Variance zones render alongside every core zone, even at paid 0 —
-          assignment is operational and free (internal QC replicates); the
-          paid count is a display-only marker. */}
+      {/* Variance zones are entitlement-gated (2026-06-16): shown only when there
+          is at least one PAID variance replicate — plan.variance is the replicate
+          count (total vials − 1), so >0 means "any variance purchased" (a 2-total
+          upsell = 1 replicate). An always-on zone nested inside the core bucket let
+          a vial dragged back in land on variance by accident (BW-0015 bug). To turn
+          variance ON for an order, set the total (≥2) in the Variance Testing box —
+          the lab override merges into plan.variance and reveals these zones. */}
       {endoDemand > 0 && (
         <>
           <SubDropZone
@@ -625,12 +629,14 @@ function MicroBucket({
             varianceN={endoVarianceN}
             onReset={onResetEndo}
           />
-          <VarianceDropZone
-            id="endo_variance"
-            paidCount={endoVarianceN}
-            vials={endoVariance ?? []}
-            roleLabel="Endo"
-          />
+          {(endoVarianceN > 0 || (endoVariance?.length ?? 0) > 0) && (
+            <VarianceDropZone
+              id="endo_variance"
+              paidCount={endoVarianceN}
+              vials={endoVariance ?? []}
+              roleLabel="Endo"
+            />
+          )}
         </>
       )}
       {sterDemand > 0 && (
@@ -643,12 +649,14 @@ function MicroBucket({
             varianceN={sterVarianceN}
             onReset={onResetSter}
           />
-          <VarianceDropZone
-            id="ster_variance"
-            paidCount={sterVarianceN}
-            vials={sterVariance ?? []}
-            roleLabel="Sterility"
-          />
+          {(sterVarianceN > 0 || (sterVariance?.length ?? 0) > 0) && (
+            <VarianceDropZone
+              id="ster_variance"
+              paidCount={sterVarianceN}
+              vials={sterVariance ?? []}
+              roleLabel="Sterility"
+            />
+          )}
         </>
       )}
       {endoDemand === 0 && sterDemand === 0 && (

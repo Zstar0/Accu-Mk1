@@ -120,13 +120,35 @@ describe('variance drop zones', () => {
     expect(screen.getByText(/paid 3/i)).toBeInTheDocument()
   })
 
-  it('renders the HPLC Variance zone with paid 0 even when no variance purchased', async () => {
-    // Spec decision: assignment is operational and free — the zone is always
-    // a valid drop target (internal QC replicates); paid count is a marker only.
+  it('renders an Endo Variance zone when endo variance is purchased', async () => {
+    vi.mocked(getVialPlan).mockResolvedValue(VARIANCE_PLAN)  // endo variance 2
+    renderStep()
+    expect(await screen.findByText(/Endo Variance/i)).toBeInTheDocument()
+  })
+
+  it('shows the HPLC Variance zone for a minimum upsell (1 paid replicate)', async () => {
+    // plan.variance is the PAID REPLICATE count (total − 1), so a 2-total upsell
+    // is variance.hplc=1. The zone must reveal at >0 — gating on >=2 would hide
+    // the single-replicate case, which is the common lab upsell.
+    vi.mocked(getVialPlan).mockResolvedValue({
+      ...PLAN,
+      variance: { hplc: 1, endo: 0, ster: 0 },
+    })
+    renderStep()
+    expect(await screen.findByText(/HPLC Variance/i)).toBeInTheDocument()
+    expect(screen.getByText(/paid 1/i)).toBeInTheDocument()
+  })
+
+  it('hides the HPLC Variance zone when the order has no variance', async () => {
+    // Spec change (2026-06-16): the variance drop zone is entitlement-gated —
+    // hidden unless there is at least one paid variance replicate (plan.variance
+    // > 0, i.e. the lab set a total ≥2 in the Variance Testing box). Rationale:
+    // an always-on zone nested inside the core bucket let a vial dragged back
+    // into HPLC land on variance by accident (BW-0015 bug). Setting the total in
+    // the Variance Testing box turns variance ON and reveals the zone.
     renderStep()  // default PLAN fixture (variance all zeros)
     await screen.findByText('P-0144-S01')
-    expect(screen.getByText(/HPLC Variance/i)).toBeInTheDocument()
-    expect(screen.getByText(/paid 0/i)).toBeInTheDocument()
+    expect(screen.queryByText(/HPLC Variance/i)).not.toBeInTheDocument()
   })
 })
 
@@ -268,8 +290,9 @@ describe('container mode', () => {
   it('renders no parent chip — only sub-sample vials', async () => {
     vi.mocked(getVialPlan).mockResolvedValue(CONTAINER_PLAN)
     renderStep()
-    // step rendered (HPLC bucket + its always-on variance zone)
-    expect(await screen.findByText(/HPLC Variance/i)).toBeInTheDocument()
+    // step rendered (HPLC bucket present). CONTAINER_PLAN has no variance, so
+    // the variance zone is gated off — assert on the core bucket label instead.
+    expect(await screen.findByText('Analyses Dept.')).toBeInTheDocument()
     // S01 chip present; the bare parent id is NOT rendered as a vial chip
     expect(screen.getByText('P-0144-S01')).toBeInTheDocument()
     expect(screen.queryByText(/^P-0144$/)).not.toBeInTheDocument()
