@@ -1,6 +1,84 @@
 # Changelog
 
-## Unreleased — Sub-Samples + Bac Water
+## v1.0.0 — 2026-06-16 — Accumark 1.0 Platform Release
+
+First production-stable release of **Accu-Mk1 as the primary LIMS**. This
+milestone folds together the multi-vial sub-sample pipeline, variance testing
+end-to-end, native Mk1 analyses with a full Manage-Analyses workflow, the
+vial-scoped HPLC prep bridge, COA generation, and the Bacteriostatic-Water /
+Benzyl-Alcohol order path — the systems that let Accu-Mk1 stand on its own and
+begin phasing out SENAITE. Detailed per-area breakdown below; the two
+sub-sample sections that follow document the intake foundation this builds on.
+
+### Added — Variance Testing (end-to-end)
+
+- **Per-vial `assignment_kind` (`core` | `variance`)** is the workflow gate, set
+  at check-in on the receive wizard's Assignment step. Variance buckets render
+  as drop zones beside each core bucket (HPLC / Endo / Sterility); dragging a
+  vial in marks it a paid replicate. `variance_verify` requires kind=`variance`;
+  promote rejects variance vials (re-assign to core to promote).
+- **Lab-side variance override** — the "Variance Testing" box on the Assignment
+  step sets the TOTAL vials tested per bucket (≥2; first is the core vial). The
+  override merges into the vial plan and is the interim upsell path until the WP
+  variance addon ships. Drop zones are entitlement-gated: shown only when there
+  is ≥1 paid replicate (or a bucket already holds variance vials).
+- **Variance set lifecycle** — membership, lock/unlock (self-service for now),
+  and a variance-series COA that reports each replicate plus aggregate stats.
+- **Variance indicators** across the dashboard, worksheet inbox vial cards, and
+  worksheet drop-panel / drawer rows (Layers icon + "paid N" markers).
+
+### Added — Native Mk1 Analyses & Manage Analyses
+
+- **`lims_analyses` rows seeded per vial** on role assignment, with a state
+  machine (`unassigned → assigned → to_be_verified → verified | promoted`) and a
+  vial→parent **promote** that rolls a signed-off vial result up to the parent AR.
+- **Manage Analyses overlay** — add or remove services on a sample. Removal is
+  tiered by impact: pristine rows delete outright, worked-but-unverified rows
+  require a retract-confirm (audited reject, restorable on re-add), and
+  verified/published/promoted rows are blocked (invalidate/retest first).
+- **Bulk overlay** with promote-aware, parent-lock-aware action gating.
+
+### Added — Replace Analyte (wrong-variant correction)
+
+- **Swap the peptide on one analyte slot** of a blend parent
+  (`POST …/analytes/{slot}/replace`). Offer-only gate requires the new peptide
+  to have a full ID_/PUR_/QTY_ service set; a strong-confirm force-retract clears
+  worked/verified/promoted vial rows for the old variant; published results stay
+  hard-blocked. Re-mirrors the slot to the new peptide across the vials.
+
+### Added — Customer Remarks (COA delivery)
+
+- **Customer-facing remarks** on a sample with an **"Include with Publish?"**
+  toggle and a delivered-on timestamp stamped at COA generation, so remarks
+  travel with the COA only when the lab opts in.
+
+### Added — HPLC Prep Bridge (vial-scoped)
+
+- **Sample preps tag to vials** (`sample_preps.lims_sub_sample_pk`); running a
+  prep bridges its result into the vial's `lims_analyses` rows. Identity routes
+  by **peptide_id catalog lookup** (token-match fallback), purity/quantity to the
+  generic services, and **blend aggregates** fill `BLEND-PUR` (mass-weighted) and
+  `PEPT-Total` once every per-component PUR/QTY is in. Per-vial chromatograms are
+  served from the prep's `hplc_analyses` rows.
+
+### Changed — COA generation
+
+- COA is **variance-aware** and attributes generic purity/quantity to a variance
+  vial's sole peptide. Customer-remarks delivery is gated on the include flag.
+
+### Fixed (this release)
+
+- **Variance drop zones no longer steal accidental drops** — gated to ≥1 paid
+  replicate; fixes BW-0015 where dragging a vial core→XTRA→back-to-HPLC landed on
+  the always-on nested variance zone and silently flipped `assignment_kind`.
+- **Samples-list vial count** no longer counts the parent AR as a vial.
+- **Prep-bridge identity** routes by peptide_id, fixing fragment-suffixed
+  peptides (e.g. `TB500 (17-23 FRAGMENT)`) and the `ID_TB500` vs `ID_TB500-17-23`
+  collision; never writes the legacy generic `HPLC-ID` for blends.
+- **Seeder** excludes the Endotoxin service group from the HPLC vial mirror, so
+  `ENDO-LAL` can't leak onto HPLC vials when Endotoxin is split out for SLA.
+- **Retest-aware reads** use the current vial row (`retested=False`) rather than
+  `retest_of_id IS NULL`, fixing variance-series and COA reads after a retest.
 
 ### Added — Analyte class & Benzyl Alcohol (Phase A)
 
@@ -46,7 +124,7 @@
 
 ---
 
-## Unreleased — Sub-Samples
+## v1.0.0 — Sub-Samples (intake foundation)
 
 ### Added
 
