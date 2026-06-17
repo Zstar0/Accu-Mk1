@@ -54,9 +54,9 @@ service metadata) is a larger refactor; the WP-key-based-vs-flag-driven choice i
 | **Flag granularity** | Per individual `AnalysisService` (not service groups). |
 | **Flag management** | Lab-managed toggle in Mk1 (Analysis Services admin), no deploy needed. |
 | **Replicate count source** | WP purchase (per-sample) + lab override. Flag supplies *which* analytes; count supplies *how many*. |
-| **BW conformance verdict** | **All replicates within `[spec_min, spec_max]`** — every measurement must pass; one out-of-range replicate fails the lot. (Diverges from the peptide mean rule by design — physical attributes are "every unit passes" QC.) |
+| **BW conformance verdict** | **pH and Benzyl Alcohol: all replicates within `[spec_min, spec_max]`** — every measurement must pass; one out-of-range replicate fails the lot. (Diverges from the peptide mean rule by design — physical attributes are "every unit passes" QC.) Fill Volume (`FILL-NET-CONTENT`) has **no baked spec** and renders informational (stat line, no pass/fail) unless/until a per-sample spec source is added. |
 | **BW identity gate** | None — BW has no identity analyte; all replicates count. |
-| **Scope** | BW pH / Benzyl Alcohol / Fill Volume. Architecture is analyte-agnostic; other matrices follow by flagging their services. |
+| **Scope** | BW pH / Benzyl Alcohol / Fill Volume. pH and Benzyl Alcohol carry baked specs and receive the all-in-range verdict; Fill Volume is informational (no baked spec). Architecture is analyte-agnostic; other matrices follow by flagging their services. |
 | **Sequencing** | Folded into the Accumark 1.0 launch (deploy gated on this). |
 
 ## Architecture

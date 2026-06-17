@@ -806,9 +806,14 @@ def _apply_variance_override(sample_id: str, result: Optional[dict]) -> Optional
 
 
 # Bucket (== vial assignment_role) -> WP service key carrying variance counts.
-# Must stay identical to lims_analyses.service._ROLE_VARIANCE_KEYS (the
-# variance_verify gate) — a test asserts equality. Coarse keys only, never
-# per-analyte (variance addon spec, "The scoping rule").
+# Retained for two reasons:
+#   1. A test asserts equality with lims_analyses.service._ROLE_VARIANCE_KEYS
+#      (the variance_verify gate) — this constant is that gate's reference.
+#   2. Canonical reference of the bucket→WP-key mapping for documentation.
+# NOTE: derive_variance_demand no longer iterates this constant. It now resolves
+# the hplc bucket inline in a BW-aware manner (reads hplcpurity_identity OR
+# bac_water_panel; see derive_variance_demand docstring). Coarse keys only,
+# never per-analyte (variance addon spec, "The scoping rule").
 VARIANCE_BUCKET_KEYS: dict[str, str] = {
     "hplc": "hplcpurity_identity",
     "endo": "endotoxin",
