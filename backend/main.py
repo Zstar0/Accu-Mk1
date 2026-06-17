@@ -1987,6 +1987,7 @@ class AnalysisServiceResponse(BaseModel):
     updated_at: datetime
     result_type: Optional[str] = None
     result_options: Optional[list] = None
+    variance_capable: bool
 
     class Config:
         from_attributes = True
@@ -2723,6 +2724,30 @@ async def update_analysis_service_result_type(
         service.result_type = data.result_type
     if "result_options" in data.model_fields_set:
         service.result_options = data.result_options
+    db.commit()
+    db.refresh(service)
+    return AnalysisServiceResponse.model_validate(service)
+
+
+class AnalysisServiceVarianceCapableUpdate(BaseModel):
+    variance_capable: bool
+
+
+@app.patch("/analysis-services/{service_id}/variance-capable", response_model=AnalysisServiceResponse)
+async def update_analysis_service_variance_capable(
+    service_id: int,
+    data: AnalysisServiceVarianceCapableUpdate,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Lab-managed toggle: mark an analyte as a variance figure. Mk1-owned —
+    never touched by the SENAITE sync."""
+    service = db.execute(
+        select(AnalysisService).where(AnalysisService.id == service_id)
+    ).scalar_one_or_none()
+    if not service:
+        raise HTTPException(404, f"Analysis service {service_id} not found")
+    service.variance_capable = data.variance_capable
     db.commit()
     db.refresh(service)
     return AnalysisServiceResponse.model_validate(service)
