@@ -9605,7 +9605,7 @@ async def regen_primary_coa(
     # integration service marks the new generation as published,
     # supersedes the old primary, and _publish_additional_coas sees no
     # draft children (existing additionals keep their codes).
-    return await publish_sample_coa(sample_id=sample_id, current_user=current_user)
+    return await publish_sample_coa(sample_id=sample_id, current_user=current_user, db=db)
 
 
 @app.post("/wizard/senaite/additional-coas/{config_id}/regen-coa")
