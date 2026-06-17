@@ -1268,9 +1268,10 @@ def aggregate_by_parent(db: Session, parent_sample_ids: list[str]) -> dict[str, 
     Two recognized inputs:
 
     1. Parent sample_ids (in lims_samples) with at least one sub-sample.
-       Returned as {vial_count: 1+N, parent_role: <parent's role>}.
-       Single-vial parents (no sub-samples) are omitted — the list-page
-       column is meant to highlight multi-vial splits.
+       Returned as {vial_count: N, parent_role: <parent's role>}, where N is
+       the number of sub-sample vials — the parent itself is NOT counted as a
+       vial (it's the report depository, not a physical testing vial). Parents
+       with no sub-samples are omitted — the list-page column highlights splits.
 
     2. Sub-sample sample_ids (in lims_sub_samples). Returned as
        {vial_count: 0, parent_role: <sub's own assignment_role>}.
@@ -1306,7 +1307,8 @@ def aggregate_by_parent(db: Session, parent_sample_ids: list[str]) -> dict[str, 
         if sub_count == 0:
             continue
         result[sample_id] = {
-            "vial_count": sub_count + 1,
+            # Sub-sample vials only — the parent is not a physical vial.
+            "vial_count": sub_count,
             "parent_role": parent_role or "hplc",
             "variance": _variance_buckets_from_override(variance_override),
         }
