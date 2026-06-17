@@ -1993,7 +1993,7 @@ function CustomerRemarksCard({
       </label>
       {deliveredAt && (
         <p className="text-[11px] text-muted-foreground">
-          Delivered on {formatDate(deliveredAt)}
+          Delivered to Customer {formatDate(deliveredAt)}
         </p>
       )}
       <div className="flex items-center justify-between gap-4">

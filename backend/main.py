@@ -9265,22 +9265,10 @@ async def generate_sample_coa(
     if warnings:
         message += f" (warnings: {'; '.join(warnings)})"
 
-    # "Delivered on" — stamp the parent when this generation actually carried
-    # customer remarks. Best-effort; a failure here must not fail the
-    # already-successful generation. Re-query (the earlier _parent_row is scoped
-    # to the not-is_sub block and may be stale).
-    if _remarks_included and verification_code:
-        try:
-            from datetime import datetime as _dt
-            _p = db.execute(
-                select(LimsSample).where(LimsSample.sample_id == sample_id)
-            ).scalar_one_or_none()
-            if _p is not None:
-                _p.customer_remarks_delivered_at = _dt.utcnow()
-                db.commit()
-        except Exception:
-            db.rollback()
-            _logger.warning("delivered_at stamp failed for %s", sample_id, exc_info=True)
+    # NOTE (1.0.1): "Delivered to Customer" is stamped at PUBLISH time
+    # (publish_sample_coa), NOT here. The lab writes the customer remark after
+    # reviewing the generated COA, so generation no longer represents delivery —
+    # the remark is captured and delivered when the COA is published.
 
     # --- COA roll-up Phase 1: write the per-generation manifest ---
     # Best-effort. COABuilder's response shape may or may not include the
@@ -9329,6 +9317,7 @@ async def generate_sample_coa(
 async def publish_sample_coa(
     sample_id: str,
     current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
     """Publish the latest draft Accumark COA for a SENAITE sample.
 
@@ -9373,11 +9362,32 @@ async def publish_sample_coa(
         if not senaite_uid:
             raise HTTPException(status_code=404, detail=f"Sample {sample_id} not found in SENAITE")
 
+    # Publish-time customer remark (1.0.1): the lab writes it AFTER reviewing the
+    # generated COA, so capture it HERE and send to IS, which forwards it to the
+    # WP COA email + order-page Lab Remarks button. publish-coa is parent-only
+    # (sub-samples are rejected above), so the parent row carries the remark.
+    _parent_row = db.execute(
+        select(LimsSample).where(LimsSample.sample_id == sample_id)
+    ).scalar_one_or_none()
+    _publish_body: dict = {}
+    _deliver_remark = False
+    if _parent_row is not None:
+        _inc = bool(_parent_row.customer_remarks_include)
+        _txt = (_parent_row.customer_remarks or "").strip()
+        _publish_body["include_lab_remarks"] = _inc
+        if _inc and _txt:
+            _publish_body["lab_remarks"] = _txt
+            _deliver_remark = True
+
     # 2. Publish in Integration Service (also publishes additional COAs)
     try:
         url = f"{INTEGRATION_SERVICE_URL}/explorer/samples/{sample_id}/publish-coa"
         async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(url, headers={"X-API-Key": INTEGRATION_SERVICE_API_KEY})
+            resp = await client.post(
+                url,
+                headers={"X-API-Key": INTEGRATION_SERVICE_API_KEY},
+                json=_publish_body or None,
+            )
             resp.raise_for_status()
             data = resp.json()
     except httpx.HTTPStatusError as e:
@@ -9392,6 +9402,18 @@ async def publish_sample_coa(
 
     verification_code: str | None = data.get("verification_code")
     warning: str | None = None
+
+    # Stamp "Delivered to Customer" now that the COA — carrying the current
+    # remark — is published to WordPress. Only when a remark was actually
+    # delivered (include on + non-empty). Best-effort; never fails the publish.
+    if _deliver_remark and _parent_row is not None:
+        try:
+            from datetime import datetime as _dt
+            _parent_row.customer_remarks_delivered_at = _dt.utcnow()
+            db.commit()
+        except Exception:
+            db.rollback()
+            _logger.warning("delivered_at stamp failed for %s", sample_id, exc_info=True)
 
     # 3 & 4. Write verification code and transition SENAITE workflow — guaranteed
     if senaite_uid:
