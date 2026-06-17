@@ -9212,6 +9212,16 @@ async def generate_sample_coa(
                     alias_body["variance_replicates"] = _reps
             except Exception:
                 _logger.warning("variance replicate build failed for %s", sample_id, exc_info=True)
+            # BW / non-peptide variance: analyte-keyed replicate series for the
+            # generic engine. Independent of variance_replicates (peptide engine
+            # ignores this key; generic engine ignores variance_replicates).
+            try:
+                from coa.variance_series import build_variance_analyte_series
+                _avar = build_variance_analyte_series(db, _parent_row)
+                if _avar:
+                    alias_body["variance_analytes"] = _avar
+            except Exception:
+                _logger.warning("variance analyte series build failed for %s", sample_id, exc_info=True)
 
     try:
         async with httpx.AsyncClient(timeout=120.0) as client:
