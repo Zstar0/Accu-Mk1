@@ -1,5 +1,18 @@
 # Changelog
 
+## v1.0.1 — 2026-06-17
+
+### Changed
+
+- **Customer Remarks are captured and delivered at *Publish*, not Generate.** The
+  lab writes the customer remark after reviewing the generated COA, so `publish-coa`
+  now reads the parent's current `customer_remarks` + "Include with Publish?" flag,
+  sends them to the Integration Service (which forwards `lab_remarks` to the COA
+  email + order-page Lab Remarks button), and stamps `customer_remarks_delivered_at`
+  on a successful publish. The generate path no longer stamps delivery. Sample
+  details now shows "Delivered to Customer <date time>". (Not rendered on the PDF
+  or digital COA — customer comms only.) Requires integration-service ≥ 1.0.1.
+
 ## v1.0.0 — 2026-06-16 — Accumark 1.0 Platform Release
 
 First production-stable release of **Accu-Mk1 as the primary LIMS**. This
