@@ -31,14 +31,23 @@ mirror seeder. The gap is purely *what can vary* (hardcoded) and *how it reports
 ## Decision summary
 
 **Approach A (flag-driven, physical buckets retained).** Add a single
-`variance_capable` boolean to the Mk1 `AnalysisService`. It becomes the one
-source of truth for "this analyte can be tested in replicate." The hardcoded
-`VARIANCE_BUCKET_KEYS` (entitlement) is replaced by reads of the flag; the
-peptide `_category()` series is left intact and a **parallel** analyte-keyed
-builder is added for the generic/BW path (additive — no peptide behavior change).
-The physical vial *roles* (hplc / endo / ster) are unchanged — they're real
-preparations. The peptide path's behavior is preserved by backfilling the flag
-`= true` on existing HPLC services.
+`variance_capable` boolean to the Mk1 `AnalysisService`. It becomes the source
+of truth for "this analyte is a variance figure" — read by the new COA analyte
+series and the assignment-page analyte participation. The peptide `_category()`
+series is left intact and a **parallel** analyte-keyed builder is added for the
+generic/BW path (additive — no peptide behavior change). The physical vial
+*roles* (hplc / endo / ster) are unchanged — they're real preparations.
+
+**Layer note — flag vs. entitlement (corrected 2026-06-17).** The flag lives on
+Mk1 *analyte* services (`PH-DETERM`); the variance *count* comes from WP keyed by
+*product* strings (`bac_water_panel`). These are different layers, so the flag
+cannot literally "replace" `VARIANCE_BUCKET_KEYS`. Entitlement instead becomes
+**BW-aware**: the `hplc` bucket reads `hplcpurity_identity` **or**
+`bac_water_panel` (mirroring `derive_base_demand:839`). The lab-override MVP needs
+no entitlement change at all — the existing HPLC override already sets the `hplc`
+bucket for any matrix. Fuller flag-driven entitlement (deriving buckets from
+service metadata) is a larger refactor; the WP-key-based-vs-flag-driven choice is
+**deferred to the Phase 4 user decision**, not settled here.
 
 | Dimension | Decision |
 |---|---|
@@ -61,11 +70,14 @@ Three layers change; one (vial assignment/seeding) does not.
 - **Mk1-owned override.** Like `peptide_id` and `result_type`, this is a Mk1
   field that the SENAITE sync must **preserve on re-sync** — never reset to
   default. The sync upsert's preserved-column set gains `variance_capable`.
-- **Backfill (migration, REQUIRED for safety).** Set `variance_capable = true`
-  on the existing HPLC purity/quantity/identity services so peptide variance
-  keeps working the instant Layer 2 switches from hardcoded keys to the flag.
-  Also seed `true` on pH / Benzyl Alcohol / Fill Volume so BW works out of the
-  box; the lab can adjust either set via the toggle afterward.
+- **Backfill (migration).** Seed `variance_capable = true` on the three BW
+  analytes only — `PH-DETERM`, `Benzyl_Alcohol_Assay`, `FILL-NET-CONTENT` (group
+  Analytics, ids 92–94 in the local catalog) — so BW works out of the box; the
+  lab adjusts via the toggle afterward. **No HPLC backfill needed:** the peptide
+  path runs through `build_variance_replicates` + `ConformanceEngine`, neither of
+  which reads `variance_capable`, so peptide variance is untouched regardless of
+  the flag. (The only consumer of the flag in this build is the new BW analyte
+  series, and BW samples never dispatch to the peptide engine.)
 - **Admin toggle.** A "Variance Capable" switch in the `ServicePanel` slide-out
   of `AnalysisServicesPage.tsx`, persisted through a small endpoint mirroring the
   existing `updateAnalysisServiceResultType` pattern. The services table gains a
@@ -73,11 +85,12 @@ Three layers change; one (vial assignment/seeding) does not.
 
 ### Layer 2 — Flow rewiring (Accu-Mk1, substitution not new machinery)
 
-- **Entitlement.** `derive_variance_demand` (and the bucket gating around it) no
-  longer matches three literal keys. A bucket's variance is in play iff that
-  bucket contains at least one `variance_capable` service for the sample. The
-  WP per-sample count + lab override still supply the number; the flag supplies
-  the membership. BW rides the existing `hplc` (chromatography) bucket.
+- **Entitlement (Phase 4 / WP-purchase slice only).** `derive_variance_demand`
+  becomes BW-aware: the `hplc` bucket reads `hplcpurity_identity` **or**
+  `bac_water_panel`, mirroring `derive_base_demand:839`. The lab-override MVP
+  (Phases 1–3) needs *no* entitlement change — the existing HPLC override already
+  drives the `hplc` bucket for any matrix, BW included. BW rides the existing
+  `hplc` (chromatography) bucket.
 - **Assignment page.** `AssignStep` / `VarianceOverrideEditor` surface the
   variance drop-zones and the override input for a bucket whenever the bucket has
   flagged services and entitlement/override > 0 — no longer keyed to the literal
@@ -104,10 +117,12 @@ Three layers change; one (vial assignment/seeding) does not.
   `conformance.py` into a shared module so both engines compute statistics
   identically and the lab's "don't round before/after the mean" rule lives in
   one place.
-- **WP verify page.** The per-row renderer already consumes `variance_report`
-  tests with `spec_min` / `spec_max` / `domain`. BW analytes emit the same shape.
-  The one new case to handle: a **two-sided** range (both `spec_min` *and*
-  `spec_max` set) — peptide purity only ever sets `spec_min`.
+- **WP verify page — no code change (verified 2026-06-17).** `vr_value_conforms()`
+  in `variance-charts.php` already checks `spec_min` and `spec_max` independently;
+  `vr_range_strip()` draws a two-sided band with both ticks; `vr_derive_claim()`
+  uses the midpoint when both bounds are set. BW analytes emit the same
+  `variance_report` shape, so two-sided ranges and per-replicate dot coloring are
+  already native. WP work is verification only (plus the optional Phase 4 product).
 
 ## Conformance — BW (all-replicates-in-range)
 
@@ -166,8 +181,8 @@ verifiable slice (zero WP dependency):
 - **New (COABuilder):** `GenericAssayEngine` renders the stat line; all-in-range
   verdict (pass, single-outlier fail, boundary); `variance_report_tests` emission
   for BW; shared stat core parity with the peptide path.
-- **New (WP):** verify-page renderer handles a two-sided `spec_min`+`spec_max`
-  range.
+- **WP:** no new render code — confirm (manually / existing fixtures) the
+  verify page draws the two-sided band + dots for a BW `variance_report`.
 - **End-to-end:** a BW sample, flag pH/BA/Fill Volume, lab-set a 2-vial variance,
   assign + seed, enter replicate results, generate + publish, confirm the COA and
   WP verify page show the series + correct all-in-range verdict.
@@ -185,4 +200,6 @@ verifiable slice (zero WP dependency):
 | Accu-Mk1 | `src/components/intake/ReceiveWizard/AssignStep.tsx` | label/visibility off the flag, not literals |
 | COABuilder | `src/coabuilder_core/generic_assay_engine.py` | variance render + all-in-range verdict |
 | COABuilder | `src/coabuilder_core/conformance.py` → shared stat module | lift `_variance_stats`/`_stat_line` |
-| accumarklabs | WP verify-page per-row renderer | two-sided range |
+| COABuilder | `scripts/server.py`, `src/coabuilder_core/senaite_client.py` | `variance_analytes` request field + dispatch |
+| accumarklabs | WP verify page | no change — verify only (two-sided already native) |
+| ~~integration-service~~ | — | **no change** (COA path is direct Mk1→COABuilder) |
