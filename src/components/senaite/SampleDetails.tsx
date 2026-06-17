@@ -1992,7 +1992,7 @@ function CustomerRemarksCard({
         Include with Publish?
       </label>
       {deliveredAt && (
-        <p className="text-[11px] text-muted-foreground">
+        <p className="text-[11px] font-medium text-orange-300">
           Delivered to Customer {formatDate(deliveredAt)}
         </p>
       )}
