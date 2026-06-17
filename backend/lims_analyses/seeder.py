@@ -16,13 +16,14 @@ HPLC vials MIRROR the parent SENAITE sample's full HPLC analyte set.
 Instead of seeding a generic HPLC-PUR/HPLC-ID whitelist, the seeder reads
 the parent AR's analysis keywords (sub_samples.senaite.fetch_parent_analysis_keywords)
 and creates one lims_analyses row per keyword that exists in the Mk1 catalog
-EXCEPT those in the "Microbiology" service group. This captures the real
-per-analyte purity/quantity/identity rows (ANALYTE-N-*, ID_*), blend purity
-(BLEND-PUR), peptide totals (PEPT-Total) and HPLC-ID exactly as the parent
-carries them. The predicate is exclude-Microbiology (not include-Analytics)
-because the per-analyte ANALYTE-N-* services are intentionally ungrouped — an
-Analytics-group include filter would silently drop them. Micro keywords
-(ENDO-LAL, STER-PCR, KF) are dropped; those vials get their own role seeding.
+EXCEPT those in the non-HPLC service groups ("Microbiology" + "Endotoxin").
+This captures the real per-analyte purity/quantity/identity rows (ANALYTE-N-*,
+ID_*), blend purity (BLEND-PUR), peptide totals (PEPT-Total) and HPLC-ID exactly
+as the parent carries them. The predicate is exclude-non-HPLC-groups (not
+include-Analytics) because the per-analyte ANALYTE-N-* services are intentionally
+ungrouped — an Analytics-group include filter would silently drop them. Micro
+keywords (STER-PCR, KF in Microbiology; ENDO-LAL in Endotoxin) are dropped;
+those vials get their own role seeding.
 
 The mirror is fail-hard: a SENAITE read error propagates so the caller can
 abort rather than seed a partial/empty analyte set. endo/ster/xtra vials are
@@ -100,12 +101,22 @@ def select_services_for_role(db: Session, role: str) -> List[AnalysisService]:
     return list(rows)
 
 
-def _micro_group_keywords(db: Session) -> Set[str]:
-    """Resolve the Microbiology service group's analysis keywords by group name.
+# Service groups whose analyses are NOT HPLC/Analyses-dept work, so they must be
+# dropped from the HPLC-vial mirror. Endotoxin is its OWN group (ENDO-LAL), a
+# sibling of Microbiology (STER-PCR/KF) — excluding only "Microbiology" let
+# ENDO-LAL leak onto HPLC vials (e.g. BW-0015-S01 showed an Endotoxin row on the
+# parent's vial overlay though the vial was HPLC-assigned).
+_NON_HPLC_GROUPS = ("Microbiology", "Endotoxin")
 
-    Returns an empty set if the group doesn't exist — so a missing group
-    excludes nothing (default-open). The HPLC mirror uses this as an EXCLUDE
-    list, not an include filter (see mirror_parent_hplc_analyses)."""
+
+def _micro_group_keywords(db: Session) -> Set[str]:
+    """Resolve the analysis keywords of the non-HPLC service groups (Microbiology
+    + Endotoxin) by group name.
+
+    Returns an empty set if none exist — so missing groups exclude nothing
+    (default-open). The HPLC mirror uses this as an EXCLUDE list, not an include
+    filter (see mirror_parent_hplc_analyses); Analytics-grouped and ungrouped
+    (ANALYTE-N-*) services are therefore kept."""
     rows = db.execute(
         select(AnalysisService.keyword)
         .join(
@@ -116,7 +127,7 @@ def _micro_group_keywords(db: Session) -> Set[str]:
             ServiceGroup,
             ServiceGroup.id == service_group_members.c.service_group_id,
         )
-        .where(ServiceGroup.name == "Microbiology")
+        .where(ServiceGroup.name.in_(_NON_HPLC_GROUPS))
     ).scalars().all()
     return {k for k in rows if k}
 
