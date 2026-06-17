@@ -141,3 +141,57 @@ def build_variance_replicates(db: Session, parent) -> dict:
                 out.setdefault(pname, []).append(rec)
     # Drop peptides whose vials contributed nothing.
     return {k: v for k, v in out.items() if v}
+
+
+def build_variance_analyte_series(db: Session, parent) -> dict:
+    """{keyword: {"unit": str, "values": [str, ...]}} for the parent's variance
+    vials, limited to variance_capable analysis services.
+
+    Keyed by SENAITE keyword (the same key COABuilder matches on in
+    _Analyses_Detailed) so the generic engine can pair each series to its
+    results_table row + baked spec. Values are per-vial current results
+    (retested=False) in vial-sequence order; COABuilder prepends its own parent
+    figure. Generic and analyte-agnostic — no peptide attribution, no
+    purity/quantity/identity categories."""
+    subs = db.execute(
+        select(LimsSubSample).where(
+            LimsSubSample.parent_sample_pk == parent.id,
+            LimsSubSample.assignment_kind == "variance",
+        ).order_by(LimsSubSample.vial_sequence)
+    ).scalars().all()
+    if not subs:
+        return {}
+    out: dict[str, dict] = {}
+    for sub in subs:
+        rows = db.execute(
+            select(LimsAnalysis, AnalysisService)
+            .join(AnalysisService, AnalysisService.id == LimsAnalysis.analysis_service_id)
+            .where(
+                LimsAnalysis.lims_sub_sample_pk == sub.id,
+                AnalysisService.variance_capable.is_(True),
+                LimsAnalysis.review_state.in_(_SERIES_STATES),
+                LimsAnalysis.reportable == True,  # noqa: E712
+                # Current vial result = retested IS False (the newest row in the
+                # retest chain). retest_of_id IS NULL grabs the *canonical
+                # original*, which becomes retested=True once a retest exists —
+                # so it would report the SUPERSEDED value (P-0149 S03 regression).
+                # Mirrors the vial-row idiom in build_variance_replicates above.
+                LimsAnalysis.retested.is_(False),
+                LimsAnalysis.result_value.isnot(None),
+                LimsAnalysis.result_value != "",
+            )
+            .order_by(LimsAnalysis.keyword)
+        ).all()
+        for la, svc in rows:
+            kw = (la.keyword or svc.keyword or "").strip()
+            if not kw:
+                continue
+            # Unit locked from the first vial seen for this keyword
+            # (la.result_unit, else the lab-configured svc.unit). A keyword maps
+            # to one physical measurement, so vials share a unit; divergence
+            # isn't detected.
+            entry = out.setdefault(
+                kw, {"unit": (la.result_unit or svc.unit or "").strip(), "values": []}
+            )
+            entry["values"].append(str(la.result_value).strip())
+    return {k: v for k, v in out.items() if v["values"]}
