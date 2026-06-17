@@ -339,6 +339,103 @@ def test_analyte_purity_skipped_when_slot_unresolved(db_session, monkeypatch):
     assert ids == []
 
 
+def test_identity_routes_by_peptide_id_not_token(db_session):
+    # Reproduces PB-0079-S01: a fragment-suffixed peptide whose normalized name
+    # ("TB5001723FRAGMENT") != its ID_ keyword suffix ("TB5001723"). Token
+    # matching skips the specific row and contaminates the generic HPLC-ID;
+    # peptide_id routing must land it on ID_TB500-17-23 and leave HPLC-ID alone.
+    db = db_session
+    pep = _peptide(db, name="TB500 (17-23 Fragment)", abbr="TB500 (17-23 FRAGMENT)")
+    vial = _vial(db)
+    _svc(db, keyword="ID_TB500-17-23", peptide=pep, title="TB500 (17-23 Fragment) - Identity (HPLC)")
+    gen = create_analysis(db, host_kind="sub_sample", host_pk=vial.id,
+                          analysis_service_id=29, keyword="HPLC-ID", title="Peptide ID (HPLC)")
+    spec = create_analysis(db, host_kind="sub_sample", host_pk=vial.id,
+                           analysis_service_id=31, keyword="ID_TB500-17-23",
+                           title="TB500 (17-23 Fragment) - Identity (HPLC)")
+    a = _hplc(db, pep, conforms=True)
+
+    ids = bridge_prep_result_to_vial(db, lims_sub_sample_pk=vial.id, analysis=a, peptide=pep, user_id=1)
+
+    assert ids == [spec.id]
+    db.refresh(spec); db.refresh(gen)
+    assert spec.review_state == "to_be_verified" and spec.result_value == "TB500 (17-23 Fragment)"
+    assert gen.review_state == "unassigned" and gen.result_value is None
+
+
+def _fill(db, row, value):
+    row.result_value = value
+    row.review_state = "to_be_verified"
+    db.flush()
+
+
+def test_blend_aggregates_written_when_components_complete(db_session):
+    from lims_analyses.prep_bridge import bridge_blend_aggregates
+    db = db_session
+    vial = _vial(db)
+    p1 = create_analysis(db, host_kind="sub_sample", host_pk=vial.id,
+                         analysis_service_id=200, keyword="PUR_BPC157", title="BPC-157 - Purity")
+    q1 = create_analysis(db, host_kind="sub_sample", host_pk=vial.id,
+                         analysis_service_id=201, keyword="QTY_BPC157", title="BPC-157 - Quantity")
+    p2 = create_analysis(db, host_kind="sub_sample", host_pk=vial.id,
+                         analysis_service_id=202, keyword="PUR_GHKCU", title="GHK-Cu - Purity")
+    q2 = create_analysis(db, host_kind="sub_sample", host_pk=vial.id,
+                         analysis_service_id=203, keyword="QTY_GHKCU", title="GHK-Cu - Quantity")
+    bp = create_analysis(db, host_kind="sub_sample", host_pk=vial.id,
+                         analysis_service_id=204, keyword="BLEND-PUR", title="Blend Purity")
+    pt = create_analysis(db, host_kind="sub_sample", host_pk=vial.id,
+                         analysis_service_id=205, keyword="PEPT-Total", title="Peptide Total Quantity")
+    # Mass-weighted: (98*1 + 100*1)/(1+1) = 99 ; total = 2
+    _fill(db, p1, "98"); _fill(db, q1, "1"); _fill(db, p2, "100"); _fill(db, q2, "1")
+
+    ids = bridge_blend_aggregates(db, lims_sub_sample_pk=vial.id, user_id=1)
+
+    assert set(ids) == {bp.id, pt.id}
+    db.refresh(bp); db.refresh(pt)
+    assert pt.review_state == "to_be_verified" and pt.result_value == "2"
+    assert bp.review_state == "to_be_verified" and bp.result_value == "99"
+
+
+def test_blend_aggregates_skipped_when_incomplete(db_session):
+    from lims_analyses.prep_bridge import bridge_blend_aggregates
+    db = db_session
+    vial = _vial(db)
+    p1 = create_analysis(db, host_kind="sub_sample", host_pk=vial.id,
+                         analysis_service_id=200, keyword="PUR_BPC157", title="BPC-157 - Purity")
+    q1 = create_analysis(db, host_kind="sub_sample", host_pk=vial.id,
+                         analysis_service_id=201, keyword="QTY_BPC157", title="BPC-157 - Quantity")
+    create_analysis(db, host_kind="sub_sample", host_pk=vial.id,
+                    analysis_service_id=202, keyword="PUR_GHKCU", title="GHK-Cu - Purity")  # left unassigned
+    bp = create_analysis(db, host_kind="sub_sample", host_pk=vial.id,
+                         analysis_service_id=204, keyword="BLEND-PUR", title="Blend Purity")
+    _fill(db, p1, "98"); _fill(db, q1, "1")
+
+    ids = bridge_blend_aggregates(db, lims_sub_sample_pk=vial.id, user_id=1)
+
+    assert ids == []
+    db.refresh(bp)
+    assert bp.review_state == "unassigned"
+
+
+def test_blend_aggregates_skip_single_peptide_vial(db_session):
+    # Single-peptide vials carry PEPT-Total (generic) but NO BLEND-PUR — they
+    # must be left untouched (the gate is BLEND-PUR presence).
+    from lims_analyses.prep_bridge import bridge_blend_aggregates
+    db = db_session
+    vial = _vial(db)
+    pt = create_analysis(db, host_kind="sub_sample", host_pk=vial.id,
+                         analysis_service_id=205, keyword="PEPT-Total", title="Peptide Total Quantity")
+    pur = create_analysis(db, host_kind="sub_sample", host_pk=vial.id,
+                          analysis_service_id=73, keyword="HPLC-PUR", title="Peptide Purity (HPLC)")
+    _fill(db, pur, "99")
+
+    ids = bridge_blend_aggregates(db, lims_sub_sample_pk=vial.id, user_id=1)
+
+    assert ids == []
+    db.refresh(pt)
+    assert pt.review_state == "unassigned"
+
+
 # ── rebridge_prep (flyout Auto-fill re-run) ──────────────────────────────────
 
 

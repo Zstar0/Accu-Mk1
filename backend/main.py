@@ -4064,7 +4064,7 @@ async def run_hplc_analysis(
             _prep = mk1_db.get_sample_prep(request.sample_prep_id)
             _sub_pk = _prep.get("lims_sub_sample_pk") if _prep else None
             if _sub_pk is not None:
-                from lims_analyses.prep_bridge import bridge_prep_result_to_vial
+                from lims_analyses.prep_bridge import bridge_prep_result_to_vial, bridge_blend_aggregates
                 bridge_prep_result_to_vial(
                     db,
                     lims_sub_sample_pk=_sub_pk,
@@ -4072,6 +4072,9 @@ async def run_hplc_analysis(
                     peptide=peptide,
                     user_id=current_user.id,
                 )
+                # Fill blend aggregates (BLEND-PUR / PEPT-Total) once this save
+                # completes the per-component set; no-op on partial blends/singles.
+                bridge_blend_aggregates(db, lims_sub_sample_pk=_sub_pk, user_id=current_user.id)
         except Exception:
             db.rollback()
             logger.exception("prep_bridge: failed for sample_prep_id=%s", request.sample_prep_id)

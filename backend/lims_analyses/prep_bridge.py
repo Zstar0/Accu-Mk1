@@ -116,12 +116,20 @@ def _result_for(category: str, analysis: HPLCAnalysis, peptide: Optional[Peptide
 
 
 def _pick_target(category: str, candidates: list[LimsAnalysis], *, slot: Optional[int],
-                 peptide_kw: Optional[str]) -> Optional[LimsAnalysis]:
+                 peptide_kw: Optional[str], id_kw: Optional[str] = None,
+                 pep_token: str = "") -> Optional[LimsAnalysis]:
     """Choose the single target row for a category, or None if ambiguous/empty.
 
-    Identity: a peptide-specific ID_<PEPTIDE> row wins over the generic HPLC-ID
-    row (the seeder puts both on every HPLC vial). Fall back to the generic row
-    only when no specific row matched.
+    Identity routing, in order:
+      1. per-substance: the prep peptide's OWN ID_<X> row, matched by the
+         catalog-resolved `id_kw` (peptide_id -> keyword). Primary — robust for
+         fragment-suffixed names (TB500-17-23) and disambiguates ID_TB500 vs
+         ID_TB500-17-23, which keyword-token matching cannot.
+      2. token fallback: when `id_kw` is None (no catalog ID_ service, e.g. unit
+         fixtures), match an ID_<X> row whose normalized suffix equals `pep_token`.
+      3. generic HPLC-ID — only when the vial carries NO peptide-specific ID_
+         rows at all (legacy single-peptide shape). A blend's generic HPLC-ID is
+         never contaminated by a component's identity.
 
     Purity/quantity routing, in order:
       1. per-substance: the prep peptide's OWN PUR_<X>/QTY_<X> row, matched by
@@ -132,11 +140,24 @@ def _pick_target(category: str, candidates: list[LimsAnalysis], *, slot: Optiona
     """
     if category == "identity":
         specific = [r for r in candidates if (r.keyword or "").upper().startswith("ID_")]
-        generic = [r for r in candidates if (r.keyword or "").upper() == "HPLC-ID"]
-        if len(specific) == 1:
-            return specific[0]
-        if not specific and len(generic) == 1:
-            return generic[0]
+        if id_kw:
+            m = [r for r in specific if (r.keyword or "").upper() == id_kw.upper()]
+            if len(m) == 1:
+                return m[0]
+            if m:
+                return None  # duplicate specific rows — ambiguous
+        elif pep_token:
+            m = [r for r in specific if _norm((r.keyword or "")[3:]) == pep_token]
+            if len(m) == 1:
+                return m[0]
+            if m:
+                return None
+        # Generic HPLC-ID only when there are NO peptide-specific ID_ rows on the
+        # vial (legacy single-peptide). Never write a blend's generic row.
+        if not specific:
+            generic = [r for r in candidates if (r.keyword or "").upper() == "HPLC-ID"]
+            if len(generic) == 1:
+                return generic[0]
         return None
     # purity / quantity
     # 1. per-substance: the prep peptide's own PUR_<X>/QTY_<X> row.
@@ -170,6 +191,99 @@ def _pick_target(category: str, candidates: list[LimsAnalysis], *, slot: Optiona
     else:
         generic = []
     return generic[0] if len(generic) == 1 else None
+
+
+def _component_key(keyword: Optional[str], suffix: str) -> Optional[str]:
+    """Component identity for a per-substance PUR_/QTY_ or legacy ANALYTE-N row.
+    Returns e.g. 'BPC157' for 'PUR_BPC157' / 'QTY_BPC157', or 'ANALYTE-2' for
+    'ANALYTE-2-PUR' — the shared key used to pair a component's purity & quantity.
+    None for non-component rows (BLEND-PUR, PEPT-Total, HPLC-PUR, ...)."""
+    kw = (keyword or "").upper()
+    if kw.startswith(suffix + "_"):
+        return kw[len(suffix) + 1:]
+    m = re.match(r"^(ANALYTE-[1-4])-" + suffix + r"$", kw)
+    return m.group(1) if m else None
+
+
+def _parse_float(s: Optional[str]) -> Optional[float]:
+    try:
+        return float(s) if s not in (None, "") else None
+    except (TypeError, ValueError):
+        return None
+
+
+def bridge_blend_aggregates(
+    db: Session,
+    *,
+    lims_sub_sample_pk: int,
+    user_id: Optional[int] = None,
+) -> list[int]:
+    """Compute & write a blend vial's aggregate rows from its filled per-component
+    rows: BLEND-PUR (mass-weighted mean purity, Σ(qty·purity)/Σqty) and PEPT-Total
+    (Σ quantity). Mirrors the flyout summary formula.
+
+    Gated on a BLEND-PUR row existing — that keyword is blend-only, so single-
+    peptide vials (which also carry PEPT-Total) are never touched. Writes only
+    once EVERY per-component purity AND quantity row is filled (so a partial blend
+    never writes a wrong aggregate), and only onto still-'unassigned' aggregate
+    rows. Computes from the same vial rows it gates on (no divergent source).
+    Returns the aggregate row ids that were written.
+    """
+    rows = db.execute(
+        select(LimsAnalysis).where(
+            LimsAnalysis.lims_sub_sample_pk == lims_sub_sample_pk,
+        )
+    ).scalars().all()
+
+    blend_pur = next((r for r in rows if (r.keyword or "").upper() == "BLEND-PUR"), None)
+    pept_total = next((r for r in rows if (r.keyword or "").upper() == "PEPT-TOTAL"), None)
+    if blend_pur is None:  # not a blend vial — leave singles alone
+        return []
+
+    # Pair each component's purity + quantity by shared key.
+    comps: dict[str, dict[str, Optional[float]]] = {}
+    pur_rows, qty_rows = [], []
+    for r in rows:
+        pk_ = _component_key(r.keyword, "PUR")
+        qk_ = _component_key(r.keyword, "QTY")
+        if pk_:
+            pur_rows.append(r)
+            comps.setdefault(pk_, {})["pur"] = _parse_float(r.result_value)
+        elif qk_:
+            qty_rows.append(r)
+            comps.setdefault(qk_, {})["qty"] = _parse_float(r.result_value)
+
+    # Completeness: at least one component pair, and every per-component purity &
+    # quantity row is filled (no longer 'unassigned').
+    comp_rows = pur_rows + qty_rows
+    if not comp_rows or any(r.review_state == "unassigned" for r in comp_rows):
+        return []
+
+    total_qty = sum(c["qty"] for c in comps.values() if c.get("qty") is not None)
+    weighted = sum(
+        c["qty"] * c["pur"]
+        for c in comps.values()
+        if c.get("qty") is not None and c.get("pur") is not None
+    )
+
+    written: list[int] = []
+    # Total quantity → PEPT-Total
+    if pept_total is not None and pept_total.review_state == "unassigned":
+        val = _fmt_num(total_qty)
+        if val is not None:
+            apply_transition(db, analysis_id=pept_total.id, kind="submit", result_value=val,
+                             reason="auto: blend total quantity (Σ component quantity)",
+                             user_id=user_id)
+            written.append(pept_total.id)
+    # Mass-weighted blend purity → BLEND-PUR (needs Σqty > 0 to weight)
+    if blend_pur.review_state == "unassigned" and total_qty > 0:
+        val = _fmt_num(weighted / total_qty)
+        if val is not None:
+            apply_transition(db, analysis_id=blend_pur.id, kind="submit", result_value=val,
+                             reason="auto: blend purity (mass-weighted component mean)",
+                             user_id=user_id)
+            written.append(blend_pur.id)
+    return written
 
 
 def stamp_prep_assignment(
@@ -258,6 +372,8 @@ def rebridge_prep(db: Session, *, prep_id: int, user_id: Optional[int] = None) -
             peptide=peptide,
             user_id=user_id,
         ))
+    # Blend aggregates (BLEND-PUR / PEPT-Total) once all component rows are filled.
+    submitted.extend(bridge_blend_aggregates(db, lims_sub_sample_pk=sub_pk, user_id=user_id))
     return submitted
 
 
@@ -286,21 +402,14 @@ def bridge_prep_result_to_vial(
 
     pep_token = _norm(peptide.abbreviation or peptide.name) if peptide else ""
 
-    # Bucket candidate rows by result category, applying the peptide guard for
-    # analyte-specific identity rows (ID_<PEPTIDE>).
+    # Bucket candidate rows by result category. Identity rows are NOT filtered
+    # here by token; _pick_target selects the right ID_<X> row per-peptide
+    # (catalog id_kw primary, token fallback), which is what disambiguates blends.
     by_category: dict[str, list[LimsAnalysis]] = {}
     for row in rows:
         category = _category(row.keyword)
         if category is None:
             continue
-        if category == "identity" and (row.keyword or "").upper().startswith("ID_"):
-            row_token = _norm(row.keyword[3:])
-            if pep_token and row_token and row_token != pep_token:
-                logger.info(
-                    "prep_bridge: skip vial=%s row=%s kw=%s — analyte %s != prep %s",
-                    lims_sub_sample_pk, row.id, row.keyword, row_token, pep_token,
-                )
-                continue
         by_category.setdefault(category, []).append(row)
 
     # Lazy slot resolution: only hit SENAITE when a per-analyte row is present.
@@ -325,11 +434,13 @@ def bridge_prep_result_to_vial(
     # Primary routing target — selects the peptide's own PUR_<X>/QTY_<X> row.
     pur_kw = _peptide_service_keyword(db, peptide=peptide, prefix="PUR_")
     qty_kw = _peptide_service_keyword(db, peptide=peptide, prefix="QTY_")
+    id_kw = _peptide_service_keyword(db, peptide=peptide, prefix="ID_")
 
     submitted: list[int] = []
     for category, candidates in by_category.items():
         peptide_kw = pur_kw if category == "purity" else (qty_kw if category == "quantity" else None)
-        row = _pick_target(category, candidates, slot=slot, peptide_kw=peptide_kw)
+        row = _pick_target(category, candidates, slot=slot, peptide_kw=peptide_kw,
+                           id_kw=id_kw, pep_token=pep_token)
         if row is None:
             logger.warning(
                 "prep_bridge: ambiguous/unresolved %s match for vial=%s (%d candidates) — skipping",
