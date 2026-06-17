@@ -826,11 +826,17 @@ def derive_variance_demand(services: dict) -> dict:
     paid marker counts — is n - 1. A "2-vial variance" purchase = the core
     vial + ONE paid variance replicate. 0 when not purchased. Uses the same
     normalization as the entitlement endpoint (counts int-filtered >= 2,
-    so the target is always >= 1 when purchased)."""
+    so the target is always >= 1 when purchased).
+
+    The hplc bucket is BW-aware — it reads hplcpurity_identity OR bac_water_panel
+    (mirroring derive_base_demand), since both produce chromatography vials and
+    are mutually exclusive per order. (Handler decision 2026-06-17.)"""
     entitlement = normalize_variance_entitlement({"variance": (services or {}).get("variance")})
+    hplc_total = max(entitlement.get("hplcpurity_identity", 0), entitlement.get("bac_water_panel", 0))
     return {
-        bucket: max(0, entitlement.get(key, 0) - 1)
-        for bucket, key in VARIANCE_BUCKET_KEYS.items()
+        "hplc": max(0, hplc_total - 1),
+        "endo": max(0, entitlement.get("endotoxin", 0) - 1),
+        "ster": max(0, entitlement.get("sterility_pcr", 0) - 1),
     }
 
 

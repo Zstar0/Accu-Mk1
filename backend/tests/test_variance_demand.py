@@ -51,8 +51,24 @@ class TestDeriveVarianceDemand:
         # The demand map and the variance_verify gate must agree on
         # role/bucket -> WP service key, or check-in demand and the sign-off
         # gate drift apart.
+        # NOTE (2026-06-17): both maps are now a stale description of hplc->key
+        # (neither captures "bac_water_panel"); the equality still holds only
+        # because both are unchanged. derive_variance_demand handles BW inline
+        # (max of both keys) rather than via these maps.
         from lims_analyses.service import _ROLE_VARIANCE_KEYS
         assert sub_service.VARIANCE_BUCKET_KEYS == _ROLE_VARIANCE_KEYS
+
+    def test_bw_variance_maps_to_hplc_bucket(self):
+        # BW orders carry variance count under bac_water_panel, not hplcpurity_identity.
+        # Both are chromatography (hplc bucket) and are mutually exclusive per order.
+        # Handler decision 2026-06-17.
+        services = {"variance": {"bac_water_panel": 3}}  # 3 total -> 2 paid replicates
+        assert sub_service.derive_variance_demand(services)["hplc"] == 2
+
+    def test_peptide_variance_still_maps_to_hplc_bucket(self):
+        # Guard: peptide path unchanged after BW-aware extension.
+        services = {"variance": {"hplcpurity_identity": 2}}
+        assert sub_service.derive_variance_demand(services)["hplc"] == 1
 
 
 class TestDeriveDemandCore:

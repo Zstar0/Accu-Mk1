@@ -417,6 +417,12 @@ def ensure_variance_entitlement(
     if parent is None:
         raise NotFoundError(f"parent sample pk={vial.parent_sample_pk} not found")
 
+    # CAVEAT (2026-06-17): NOT BW-aware. _ROLE_VARIANCE_KEYS maps hplc ->
+    # "hplcpurity_identity" only, but a Bacteriostatic Water order carries its
+    # variance count under "bac_water_panel". This fn has no production callers
+    # today; if it's ever re-activated as a gate, mirror the BW-aware OR logic in
+    # sub_samples.service.derive_variance_demand (max of both keys) or BW variance
+    # will be wrongly blocked.
     key = _ROLE_VARIANCE_KEYS.get(vial.assignment_role or "")
     if key is None:
         raise BadRequestError(
