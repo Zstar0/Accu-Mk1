@@ -60,6 +60,7 @@ export interface VialMatch {
   mk1Analysis: SenaiteAnalysis
   assignmentRole?: string | null  // the vial's own bench role (hplc/endo/ster)
   assignmentKind?: string | null  // 'core' | 'variance' | null — variance treatment keys off this
+  varianceLocked?: boolean        // vial is in the LOCKED variance set (in_variance_set && parent locked)
 }
 
 export interface VialAssignment {
@@ -73,6 +74,7 @@ export interface VialInput {
   analyses: SenaiteAnalysis[]
   assignmentRole?: string | null  // the sub-sample's bench role; carried onto each VialMatch
   assignmentKind?: string | null  // the sub-sample's assignment_kind; carried onto each VialMatch
+  varianceLocked?: boolean        // in_variance_set && parent's variance set locked; carried onto each VialMatch
 }
 
 const DEAD_STATES = new Set(['retracted', 'rejected'])
@@ -123,7 +125,7 @@ export function buildVialAssignmentMap(
     for (const { v, live } of vialLive) {
       for (const [kw, a] of live) {
         if (predicate(kw, a)) {
-          out.push({ vialSampleId: v.sampleId, vialLabel: v.label, mk1Analysis: a, assignmentRole: v.assignmentRole, assignmentKind: v.assignmentKind })
+          out.push({ vialSampleId: v.sampleId, vialLabel: v.label, mk1Analysis: a, assignmentRole: v.assignmentRole, assignmentKind: v.assignmentKind, varianceLocked: v.varianceLocked })
           break // one analysis per vial per parent row
         }
       }

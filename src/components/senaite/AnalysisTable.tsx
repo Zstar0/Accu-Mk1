@@ -1291,7 +1291,12 @@ function AnalysisRow({
             // Key each overlay vial by ITS OWN assignment_kind (carried on the
             // match) — a parent page mixes core and variance vials, so each
             // vial speaks for itself. No entitlement lookup: kind is explicit.
-            const vialIsVariance = showVarianceChip(m.mk1Analysis, m.assignmentKind)
+            // Colour EVERY variance-assigned vial (state-independent) — a vial
+            // assigned to the variance bucket reads as variance whether or not
+            // its replicate is signed off yet. A Lock icon marks vials locked
+            // into the variance set (in_variance_set && the set is locked).
+            const vialIsVariance = isVarianceMember(m.mk1Analysis, m.assignmentKind)
+            const vialLocked = !!m.varianceLocked
             return (
               <button
                 key={m.vialSampleId}
@@ -1302,10 +1307,17 @@ function AnalysisRow({
                     ? 'text-sky-600 dark:text-sky-400 hover:text-sky-700 dark:hover:text-sky-300'
                     : 'text-muted-foreground hover:text-foreground'
                 }`}
-                title={vialIsVariance ? `Variance replicate — ${m.vialSampleId}` : `Assigned to ${m.vialSampleId}`}
+                title={
+                  vialLocked
+                    ? `Variance replicate, locked into the set — ${m.vialSampleId}`
+                    : vialIsVariance
+                      ? `Variance replicate — ${m.vialSampleId}`
+                      : `Assigned to ${m.vialSampleId}`
+                }
               >
                 {vialIsVariance && <Layers className="h-3 w-3" aria-hidden="true" />}
                 {m.vialLabel} — {m.vialSampleId}
+                {vialLocked && <Lock className="h-3 w-3 shrink-0" aria-hidden="true" />}
               </button>
             )
           })}
