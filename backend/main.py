@@ -9105,102 +9105,119 @@ async def generate_sample_coa(
 
     is_sub = bool(re.search(r"-S\d{2,}$", sample_id))
     resolver_result = None
-    if not is_sub and SENAITE_URL:
-        try:
-            reader = SenaiteAnalysesHttpReader(
-                base_url=SENAITE_URL,
-                auth=_get_senaite_auth(current_user),
-            )
-            resolver_result = await resolve_sources(sample_id, db, reader)
-        except Exception as e:
-            # Resolver failure is non-fatal in Phase 1; log and fall through.
-            _logger.warning("COA resolver pre-flight failed for %s: %s", sample_id, e)
-            resolver_result = None
+    if not is_sub:
+        # ── COA pre-flight gates (parents only) ──────────────────────────────
+        # Evaluate EVERY gate and accumulate the blockers, then raise ONCE — the
+        # lab sees all blockers up front instead of one-at-a-time (clearing the
+        # attachment gate only to then hit "variance not locked" was whack-a-mole).
+        # Each gate keeps its own fail-open/fail-soft posture: a gate that can't
+        # be evaluated simply contributes no blocker.
+        _unresolved = None
+        _missing_attach = None
+        _variance_required = False
 
-        if resolver_result is not None:
-            # Micro analytes (ENDO/STER/KF) never block: the lab finishes them
-            # after the analytical COA and re-generates. Only NON-micro
-            # unresolved analytes hold up generation.
-            from coa.block_summary import (
-                build_name_resolver,
-                has_blocking_unresolved,
-                summarize_unresolved,
-            )
-            from lims_analyses.seeder import _micro_group_keywords
-
-            micro_kw = _micro_group_keywords(db)
-            if has_blocking_unresolved(resolver_result, micro_keywords=micro_kw):
-                name_for = _build_coa_analyte_name_resolver(db, sample_id, alias_map=_load_sample_aliases(db, sample_id))
-                unresolved = summarize_unresolved(
-                    resolver_result, micro_keywords=micro_kw, name_for=name_for,
+        if SENAITE_URL:
+            try:
+                reader = SenaiteAnalysesHttpReader(
+                    base_url=SENAITE_URL,
+                    auth=_get_senaite_auth(current_user),
                 )
-                lines = "\n".join(f"- {u['analyte_name']}: {u['reason']}" for u in unresolved)
-                raise HTTPException(
-                    status_code=422,
-                    detail={
-                        "code": "unresolved_sources",
-                        "message": (
-                            "COA can't be generated yet. These results still "
-                            "need a source:\n" + lines
-                        ),
-                        "unresolved": unresolved,
-                    },
-                )
+                resolver_result = await resolve_sources(sample_id, db, reader)
+            except Exception as e:
+                # Resolver failure is non-fatal in Phase 1; log and fall through.
+                _logger.warning("COA resolver pre-flight failed for %s: %s", sample_id, e)
+                resolver_result = None
 
-        # --- Attachments gate: a parent COA requires a sample image on the
-        # AR, and — when the sample carries analytical (non-micro) analytes —
-        # a chromatogram. Both are attached from the sample page pickers
-        # ("Select Vial Image" / "Select Vial Chromatogram") or the legacy
-        # check-in/auto-fill flows. Fail-OPEN when SENAITE can't be read
-        # (same posture as the resolver pre-flight: a flaky check must not
-        # permanently block generation; COABuilder fails loudly anyway if
-        # SENAITE is truly down).
-        kinds = await _parent_attachment_kinds(sample_id, _get_senaite_auth(current_user))
-        if kinds is not None:
-            from lims_analyses.seeder import _micro_group_keywords as _micro_kws
             if resolver_result is not None:
-                _micro = _micro_kws(db)
-                needs_chromatogram = any(
-                    d.analyte_keyword not in _micro for d in resolver_result.decisions
+                # Micro analytes (ENDO/STER/KF) never block: the lab finishes them
+                # after the analytical COA and re-generates. Only NON-micro
+                # unresolved analytes hold up generation.
+                from coa.block_summary import (
+                    build_name_resolver,
+                    has_blocking_unresolved,
+                    summarize_unresolved,
                 )
-            else:
-                # Resolver unavailable — derive from the AR's active keywords;
-                # fail open (no chromatogram requirement) if that read fails too.
-                try:
-                    from sub_samples.senaite import fetch_parent_analysis_keywords
+                from lims_analyses.seeder import _micro_group_keywords
+
+                micro_kw = _micro_group_keywords(db)
+                if has_blocking_unresolved(resolver_result, micro_keywords=micro_kw):
+                    name_for = _build_coa_analyte_name_resolver(db, sample_id, alias_map=_load_sample_aliases(db, sample_id))
+                    _unresolved = summarize_unresolved(
+                        resolver_result, micro_keywords=micro_kw, name_for=name_for,
+                    )
+
+            # --- Attachments gate: a parent COA requires a sample image on the
+            # AR, and — when the sample carries analytical (non-micro) analytes —
+            # a chromatogram. Both are attached from the sample page pickers
+            # ("Select Vial Image" / "Select Vial Chromatogram") or the legacy
+            # check-in/auto-fill flows. Fail-OPEN when SENAITE can't be read
+            # (same posture as the resolver pre-flight: a flaky check must not
+            # permanently block generation; COABuilder fails loudly anyway if
+            # SENAITE is truly down).
+            kinds = await _parent_attachment_kinds(sample_id, _get_senaite_auth(current_user))
+            if kinds is not None:
+                from lims_analyses.seeder import _micro_group_keywords as _micro_kws
+                if resolver_result is not None:
                     _micro = _micro_kws(db)
                     needs_chromatogram = any(
-                        k not in _micro
-                        for k in fetch_parent_analysis_keywords(sample_id)
+                        d.analyte_keyword not in _micro for d in resolver_result.decisions
                     )
-                except Exception:
-                    needs_chromatogram = False
-            gate_missing = []
-            if not kinds["has_image"]:
-                gate_missing.append({
-                    "kind": "sample_image",
-                    "message": "Sample image — attach one from the sample page "
-                               "(Select Vial Image, or upload a Sample Image attachment).",
-                })
-            if needs_chromatogram and not kinds["has_chromatogram"]:
-                gate_missing.append({
-                    "kind": "chromatogram",
-                    "message": "Chromatogram — attach one from the sample page "
-                               "(Select Vial Chromatogram, after processing the HPLC prep).",
-                })
-            if gate_missing:
-                gate_lines = "\n".join(f"- {m['message']}" for m in gate_missing)
-                raise HTTPException(
-                    status_code=422,
-                    detail={
-                        "code": "missing_attachments",
-                        "message": (
-                            "COA can't be generated yet. The sample is missing "
-                            "required attachments:\n" + gate_lines
-                        ),
-                        "missing": [m["kind"] for m in gate_missing],
-                    },
+                else:
+                    # Resolver unavailable — derive from the AR's active keywords;
+                    # fail open (no chromatogram requirement) if that read fails too.
+                    try:
+                        from sub_samples.senaite import fetch_parent_analysis_keywords
+                        _micro = _micro_kws(db)
+                        needs_chromatogram = any(
+                            k not in _micro
+                            for k in fetch_parent_analysis_keywords(sample_id)
+                        )
+                    except Exception:
+                        needs_chromatogram = False
+                gate_missing = []
+                if not kinds["has_image"]:
+                    gate_missing.append({
+                        "kind": "sample_image",
+                        "message": "Sample image — attach one from the sample page "
+                                   "(Select Vial Image, or upload a Sample Image attachment).",
+                    })
+                if needs_chromatogram and not kinds["has_chromatogram"]:
+                    gate_missing.append({
+                        "kind": "chromatogram",
+                        "message": "Chromatogram — attach one from the sample page "
+                                   "(Select Vial Chromatogram, after processing the HPLC prep).",
+                    })
+                if gate_missing:
+                    _missing_attach = gate_missing
+
+        # Variance-lock gate: a variance-purchased lot must have its variance set
+        # LOCKED before generation, so the COA never certifies an incomplete
+        # series (lock_variance_set enforces every in-set vial is signed off).
+        # Applies to peptide + BW. No SENAITE_URL dependency. Fail-soft: skip if
+        # services are unavailable.
+        _pre_parent = db.execute(
+            select(LimsSample).where(LimsSample.sample_id == sample_id)
+        ).scalar_one_or_none()
+        if _pre_parent is not None:
+            try:
+                from sub_samples.service import fetch_sample_services, variance_lock_required
+                _vsvc = fetch_sample_services(sample_id)
+                _variance_required = variance_lock_required(
+                    (_vsvc or {}).get("services") or {}, _pre_parent.variance_locked_at
                 )
+            except HTTPException:
+                raise
+            except Exception:
+                _variance_required = False
+
+        from coa.preflight import collect_preflight_blockers, build_preflight_error
+        _blockers = collect_preflight_blockers(
+            unresolved=_unresolved,
+            missing_attachments=_missing_attach,
+            variance_locked_required=_variance_required,
+        )
+        if _blockers:
+            raise HTTPException(status_code=422, detail=build_preflight_error(_blockers))
 
     # Enrich with per-sample analyte display alias picks so the COA renders
     # the customer-facing name (real name still drives conformance).
@@ -9215,36 +9232,13 @@ async def generate_sample_coa(
     # generation. Parents only (sub-sample COAs have no variance children).
     # Tracks whether this generation delivered customer remarks — drives the
     # "Delivered on" timestamp stamped after a successful generation.
+    # (The variance-lock gate above already blocked an unlocked variance lot.)
     _remarks_included = False
     if not is_sub:
         _parent_row = db.execute(
             select(LimsSample).where(LimsSample.sample_id == sample_id)
         ).scalar_one_or_none()
         if _parent_row is not None:
-            # Lock-gate: a variance-purchased lot must have its variance set LOCKED
-            # before generation, so the COA never certifies an incomplete series
-            # (lock_variance_set enforces every in-set vial is signed off). Applies
-            # to peptide + BW. Fail-soft: skip if services are unavailable.
-            try:
-                from sub_samples.service import fetch_sample_services, variance_lock_required
-                _vsvc = fetch_sample_services(sample_id)
-                _gate = variance_lock_required((_vsvc or {}).get("services") or {}, _parent_row.variance_locked_at)
-            except HTTPException:
-                raise
-            except Exception:
-                _gate = False
-            if _gate:
-                raise HTTPException(
-                    status_code=422,
-                    detail={
-                        "code": "variance_not_locked",
-                        "message": (
-                            "Lock the variance set before generating the COA. "
-                            "Variance was purchased for this sample — lock the set "
-                            "(all replicate vials signed off) first."
-                        ),
-                    },
-                )
             # Customer-remarks snapshot + "Include with Publish?" gating. When
             # the flag is False we omit lab_remarks and tell COABuilder the
             # suppression was intentional so its non-conforming gate is skipped.
