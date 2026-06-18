@@ -73,8 +73,10 @@ export const STATUS_COLORS: Record<string, string> = {
     'bg-indigo-100 text-indigo-700 border-indigo-200 dark:bg-indigo-500/15 dark:text-indigo-400 dark:border-indigo-500/20',
   ready_for_review:
     'bg-cyan-100 text-cyan-700 border-cyan-200 dark:bg-cyan-500/15 dark:text-cyan-400 dark:border-cyan-500/20',
+  // Matches `promoted` (teal) — both are terminal "done" states; sharing the
+  // colour keeps the table from reading as two different outcomes.
   variance_verified:
-    'bg-sky-100 text-sky-700 border-sky-200 dark:bg-sky-500/15 dark:text-sky-400 dark:border-sky-500/20',
+    'bg-teal-100 text-teal-700 border-teal-200 dark:bg-teal-500/15 dark:text-teal-400 dark:border-teal-500/20',
 }
 
 export const STATUS_LABELS: Record<string, string> = {
