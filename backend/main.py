@@ -9192,6 +9192,30 @@ async def generate_sample_coa(
             select(LimsSample).where(LimsSample.sample_id == sample_id)
         ).scalar_one_or_none()
         if _parent_row is not None:
+            # Lock-gate: a variance-purchased lot must have its variance set LOCKED
+            # before generation, so the COA never certifies an incomplete series
+            # (lock_variance_set enforces every in-set vial is signed off). Applies
+            # to peptide + BW. Fail-soft: skip if services are unavailable.
+            try:
+                from sub_samples.service import fetch_sample_services, variance_lock_required
+                _vsvc = fetch_sample_services(sample_id)
+                _gate = variance_lock_required((_vsvc or {}).get("services") or {}, _parent_row.variance_locked_at)
+            except HTTPException:
+                raise
+            except Exception:
+                _gate = False
+            if _gate:
+                raise HTTPException(
+                    status_code=422,
+                    detail={
+                        "code": "variance_not_locked",
+                        "message": (
+                            "Lock the variance set before generating the COA. "
+                            "Variance was purchased for this sample — lock the set "
+                            "(all replicate vials signed off) first."
+                        ),
+                    },
+                )
             # Customer-remarks snapshot + "Include with Publish?" gating. When
             # the flag is False we omit lab_remarks and tell COABuilder the
             # suppression was intentional so its non-conforming gate is skipped.

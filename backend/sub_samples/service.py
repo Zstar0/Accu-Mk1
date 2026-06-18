@@ -845,6 +845,15 @@ def derive_variance_demand(services: dict) -> dict:
     }
 
 
+def variance_lock_required(services: Optional[dict], variance_locked_at) -> bool:
+    """True when COA generation must be blocked pending a variance-set lock:
+    variance was purchased (any bucket target >= 1) AND the set isn't locked yet.
+    `services` is the inner WP services dict (with the 'variance' map)."""
+    demand = derive_variance_demand(services or {})
+    purchased = any(n >= 1 for n in demand.values())
+    return purchased and variance_locked_at is None
+
+
 def derive_base_demand(services: dict) -> dict:
     """Pre-variance vial demand per bucket (the lab-protocol baseline)."""
     hplc = bool(services.get("hplcpurity_identity") or services.get("bac_water_panel"))
