@@ -174,6 +174,47 @@ def test_core_vials_excluded(db):
     assert build_variance_analyte_series(db, parent) == {}
 
 
+def test_deselected_vial_excluded_from_series(db):
+    """A variance vial with in_variance_set=False (unchecked in the overlay,
+    e.g. 'Customer request') must NOT contribute to the COA series — the COA
+    must match the overlay's 'Computed across selected'. Regression: builder
+    filtered only on assignment_kind, so a deselected vial still reached the COA
+    (COA showed n=4 while the overlay showed n=3)."""
+    from coa.variance_series import build_variance_analyte_series
+
+    ph_svc = _svc(db, "PH-DETERM", variance_capable=True, unit="pH")
+    parent = LimsSample(sample_id="BW-0005", external_lims_uid="uid-bw0005")
+    db.add(parent)
+    db.flush()
+
+    included = LimsSubSample(
+        parent_sample_pk=parent.id,
+        external_lims_uid="mk1://bwin",
+        sample_id="BW-0005-S01",
+        vial_sequence=1,
+        assignment_role="hplc",
+        assignment_kind="variance",
+        in_variance_set=True,
+    )
+    excluded = LimsSubSample(
+        parent_sample_pk=parent.id,
+        external_lims_uid="mk1://bwout",
+        sample_id="BW-0005-S02",
+        vial_sequence=2,
+        assignment_role="hplc",
+        assignment_kind="variance",
+        in_variance_set=False,  # deselected
+    )
+    db.add_all([included, excluded])
+    db.flush()
+    _row(db, included, ph_svc, "5.4", unit="pH")
+    _row(db, excluded, ph_svc, "9.9", unit="pH")  # must NOT appear
+    db.commit()
+
+    series = build_variance_analyte_series(db, parent)
+    assert series["PH-DETERM"]["values"] == ["5.4"]
+
+
 def test_retested_vial_uses_current_result(db):
     """Current-row idiom: retested=False (not retest_of_id IS NULL)."""
     from coa.variance_series import build_variance_analyte_series

@@ -91,6 +91,36 @@ def test_per_vial_records_carry_their_analytes(world, db):
     assert "QUANTITY" not in v3  # vial 3 had no quantity row
 
 
+def test_deselected_vial_excluded(db):
+    """A variance vial with in_variance_set=False (unchecked in the overlay)
+    must NOT contribute a record — the COA series must match the overlay's
+    selected set. Regression: builder filtered only on assignment_kind, so a
+    deselected vial still reached the COA."""
+    pep = Peptide(name="BPC-157", abbreviation="BPC157", active=True)
+    db.add(pep); db.flush()
+    pur = _svc(db, "PUR_BPC157", pep.id)
+    parent = LimsSample(sample_id="P-0700", external_lims_uid="uid-p0700", container_mode=True)
+    db.add(parent); db.flush()
+    included = LimsSubSample(
+        parent_sample_pk=parent.id, external_lims_uid="mk1://in",
+        sample_id="P-0700-S01", vial_sequence=1,
+        assignment_role="hplc", assignment_kind="variance", in_variance_set=True,
+    )
+    excluded = LimsSubSample(
+        parent_sample_pk=parent.id, external_lims_uid="mk1://out",
+        sample_id="P-0700-S02", vial_sequence=2,
+        assignment_role="hplc", assignment_kind="variance", in_variance_set=False,
+    )
+    db.add_all([included, excluded]); db.flush()
+    _row(db, included, pur, "99.1")
+    _row(db, excluded, pur, "12.3")  # must NOT appear
+    db.commit()
+
+    recs = build_variance_replicates(db, parent)["BPC-157"]
+    assert [r["vial_sequence"] for r in recs] == [1]
+    assert recs[0]["PURITY"] == "99.1%"
+
+
 def test_empty_when_no_variance_vials(db):
     parent = LimsSample(sample_id="P-0600", external_lims_uid="uid-p0600")
     db.add(parent); db.commit()

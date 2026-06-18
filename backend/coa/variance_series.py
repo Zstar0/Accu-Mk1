@@ -87,6 +87,10 @@ def build_variance_replicates(db: Session, parent) -> dict:
         select(LimsSubSample).where(
             LimsSubSample.parent_sample_pk == parent.id,
             LimsSubSample.assignment_kind == "variance",
+            # Honor the overlay's "select which vials participate" — a deselected
+            # vial (in_variance_set=False, e.g. "Customer request") must not reach
+            # the COA, so the certified series matches the locked selection.
+            LimsSubSample.in_variance_set.is_(True),
         ).order_by(LimsSubSample.vial_sequence)
     ).scalars().all()
     if not subs:
@@ -157,6 +161,10 @@ def build_variance_analyte_series(db: Session, parent) -> dict:
         select(LimsSubSample).where(
             LimsSubSample.parent_sample_pk == parent.id,
             LimsSubSample.assignment_kind == "variance",
+            # Honor the overlay's "select which vials participate" — a deselected
+            # vial (in_variance_set=False, e.g. "Customer request") must not reach
+            # the COA, so the certified series matches the locked selection.
+            LimsSubSample.in_variance_set.is_(True),
         ).order_by(LimsSubSample.vial_sequence)
     ).scalars().all()
     if not subs:
