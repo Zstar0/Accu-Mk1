@@ -825,7 +825,7 @@ def unlock_variance_set_endpoint(
     # footing. Re-gate to admin once the Variance Addon COA phase ships
     # and lock semantics become contractual for the customer-facing COA.
     try:
-        parent = service.unlock_variance_set(db, parent_sample_id)
+        parent = service.unlock_variance_set(db, parent_sample_id, user.id)
         return {"parent_sample_id": parent.sample_id, "locked": False}
     except LookupError as e:
         raise HTTPException(status_code=404, detail=str(e))

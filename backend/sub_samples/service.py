@@ -1597,14 +1597,26 @@ def lock_variance_set(db: Session, parent_sample_id: str, user_id: int) -> LimsS
                 "variance series incomplete — unfinished rows: "
                 + ", ".join(sorted(unfinished))
             )
+    from models import AuditLog
     parent.variance_locked_at = datetime.utcnow()
     parent.variance_locked_by_user_id = user_id
+    # Activity-log the lock (append-only) — the variance_locked_at column only
+    # holds the CURRENT lock, so unlock/re-lock history would otherwise be lost.
+    db.add(AuditLog(
+        operation="variance_set_locked",
+        entity_type="variance_set",
+        entity_id=parent.sample_id,
+        details={"user_id": user_id, "selected_vials": selected},
+    ))
     db.commit()
     return parent
 
 
-def unlock_variance_set(db: Session, parent_sample_id: str) -> LimsSample:
-    """Admin-only: clear lock fields."""
+def unlock_variance_set(
+    db: Session, parent_sample_id: str, user_id: Optional[int] = None
+) -> LimsSample:
+    """Admin-only: clear lock fields. Activity-logged (append-only)."""
+    from models import AuditLog
     parent = db.execute(
         select(LimsSample).where(LimsSample.sample_id == parent_sample_id)
     ).scalar_one_or_none()
@@ -1612,5 +1624,11 @@ def unlock_variance_set(db: Session, parent_sample_id: str) -> LimsSample:
         raise LookupError(f"parent {parent_sample_id} not found")
     parent.variance_locked_at = None
     parent.variance_locked_by_user_id = None
+    db.add(AuditLog(
+        operation="variance_set_unlocked",
+        entity_type="variance_set",
+        entity_id=parent.sample_id,
+        details={"user_id": user_id},
+    ))
     db.commit()
     return parent

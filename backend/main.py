@@ -882,6 +882,35 @@ async def get_sample_activity(
             "source": "lims_analysis_promotions",
         })
 
+    # --- Mk1 DB: variance-set lock/unlock (audit_logs, append-only) ---
+    var_audits = db.execute(
+        select(AuditLog).where(
+            AuditLog.entity_type == "variance_set",
+            AuditLog.entity_id == sample_id,
+        ).order_by(AuditLog.timestamp)
+    ).scalars().all()
+    for a in var_audits:
+        a_details = a.details or {}
+        uid = a_details.get("user_id")
+        by_email = None
+        if uid:
+            u = db.execute(select(User).where(User.id == uid)).scalar_one_or_none()
+            by_email = u.email if u else None
+        locked = a.operation == "variance_set_locked"
+        n = a_details.get("selected_vials")
+        events.append({
+            "timestamp": a.timestamp.isoformat() if a.timestamp else None,
+            "event": a.operation,
+            "label": ("Variance set locked" if locked else "Variance set unlocked")
+                     + (f" — {n} vials" if locked and n else ""),
+            "details": {
+                "by": by_email,
+                "user_id": uid,
+                **({"selected_vials": n} if locked and n is not None else {}),
+            },
+            "source": "audit_logs",
+        })
+
     # --- Integration DB: sample_status_events ---
     try:
         with get_integration_db() as int_conn:

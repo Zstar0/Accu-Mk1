@@ -224,6 +224,7 @@ def lock_fixture(db):
     db.execute(text("DELETE FROM lims_analyses WHERE keyword LIKE 'ZZTEST-VARLOCK%'"))
     db.execute(text("DELETE FROM lims_sub_samples WHERE sample_id LIKE 'ZZTEST-VARLOCK%'"))
     db.execute(text("DELETE FROM lims_samples WHERE sample_id LIKE 'ZZTEST-VARLOCK%'"))
+    db.execute(text("DELETE FROM audit_logs WHERE entity_id LIKE 'ZZTEST-VARLOCK%'"))
     db.commit()
 
 
@@ -296,6 +297,49 @@ class TestLockSeriesGuard:
         parent = sub_service.lock_variance_set(db, "ZZTEST-VARLOCK", user_id=1)
         assert parent.variance_locked_at is not None
         sub_service.unlock_variance_set(db, "ZZTEST-VARLOCK")
+
+
+# ─── Lock/unlock activity logging ────────────────────────────────────────────
+
+from sqlalchemy import select as _select
+from models import AuditLog
+
+
+class TestVarianceLockAudit:
+    def test_lock_writes_audit_log(self, db, lock_fixture, monkeypatch):
+        # user_id=1 is the seeded admin (variance_locked_by_user_id FK -> users).
+        monkeypatch.setattr(sub_service, "fetch_sample_services",
+                            lambda sid: VARIANCE_SERVICES)
+        sub_service.lock_variance_set(db, "ZZTEST-VARLOCK", user_id=1)
+        log = db.execute(
+            _select(AuditLog).where(
+                AuditLog.entity_type == "variance_set",
+                AuditLog.entity_id == "ZZTEST-VARLOCK",
+                AuditLog.operation == "variance_set_locked",
+            )
+        ).scalars().first()
+        assert log is not None
+        assert log.details.get("user_id") == 1
+        # parent (in_variance_set) + 2 in-set sub-vials = 3
+        assert log.details.get("selected_vials") == 3
+        sub_service.unlock_variance_set(db, "ZZTEST-VARLOCK", user_id=1)
+
+    def test_unlock_writes_audit_log(self, db, lock_fixture, monkeypatch):
+        # unlock clears the FK column to NULL, so its user_id only lands in
+        # AuditLog.details — any value is fine there (no FK).
+        monkeypatch.setattr(sub_service, "fetch_sample_services",
+                            lambda sid: VARIANCE_SERVICES)
+        sub_service.lock_variance_set(db, "ZZTEST-VARLOCK", user_id=1)
+        sub_service.unlock_variance_set(db, "ZZTEST-VARLOCK", user_id=9)
+        log = db.execute(
+            _select(AuditLog).where(
+                AuditLog.entity_type == "variance_set",
+                AuditLog.entity_id == "ZZTEST-VARLOCK",
+                AuditLog.operation == "variance_set_unlocked",
+            )
+        ).scalars().first()
+        assert log is not None
+        assert log.details.get("user_id") == 9
 
 
 # ─── Variance override storage + merge ───────────────────────────────────────
