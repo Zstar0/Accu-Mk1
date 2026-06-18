@@ -15938,6 +15938,42 @@ async def reorder_worksheet_items(
     return {"status": "reordered", "count": len(data.item_ids)}
 
 
+# ── Variance payload (integration-service bridge) ────────────────────
+# Called server-to-server by integration-service when it regenerates an
+# additional (re-branded) COA on an already-published sample. /process-additional
+# re-fetches SENAITE bare, which drops the variance series and could certify a
+# re-branded COA with a verdict that disagrees with the primary. This returns the
+# same {variance_replicates, variance_analytes} the primary /process flow builds
+# (see main.py ~9233), so the additional COA renders an identical series.
+
+@app.get("/samples/{sample_id}/variance-payload")
+def get_sample_variance_payload(
+    sample_id: str,
+    db: Session = Depends(get_db),
+    _: None = Depends(require_internal_service_token),
+):
+    """Variance replicate payload for a sample, for S2S consumers.
+
+    Internal service token required (X-Service-Token). 404 if the parent
+    LimsSample does not exist; otherwise 200 with possibly-empty dicts (a sample
+    that never bought variance simply yields {}, {} — the caller proceeds bare).
+    """
+    parent = db.execute(
+        select(LimsSample).where(LimsSample.sample_id == sample_id)
+    ).scalar_one_or_none()
+    if parent is None:
+        raise HTTPException(status_code=404, detail=f"sample {sample_id} not found")
+
+    from coa.variance_series import (
+        build_variance_replicates,
+        build_variance_analyte_series,
+    )
+    return {
+        "variance_replicates": build_variance_replicates(db, parent) or {},
+        "variance_analytes": build_variance_analyte_series(db, parent) or {},
+    }
+
+
 # ── Peptide requests API (integration-service bridge) ────────────────
 # Called server-to-server by integration-service when a WP user submits the
 # peptide-request form. Internal service token + idempotency key are required.
