@@ -9250,25 +9250,11 @@ async def generate_sample_coa(
             if _include_remarks and _remarks_text:
                 alias_body["lab_remarks"] = _remarks_text
                 _remarks_included = True
-            # Variance replicate series — best-effort; a builder error must not
-            # block generation.
-            try:
-                from coa.variance_series import build_variance_replicates
-                _reps = build_variance_replicates(db, _parent_row)
-                if _reps:
-                    alias_body["variance_replicates"] = _reps
-            except Exception:
-                _logger.warning("variance replicate build failed for %s", sample_id, exc_info=True)
-            # BW / non-peptide variance: analyte-keyed replicate series for the
-            # generic engine. Independent of variance_replicates (peptide engine
-            # ignores this key; generic engine ignores variance_replicates).
-            try:
-                from coa.variance_series import build_variance_analyte_series
-                _avar = build_variance_analyte_series(db, _parent_row)
-                if _avar:
-                    alias_body["variance_analytes"] = _avar
-            except Exception:
-                _logger.warning("variance analyte series build failed for %s", sample_id, exc_info=True)
+            # Variance series (peptide replicates + BW/generic analyte series) —
+            # best-effort; a builder error must not block generation. Shared
+            # helper so regen-primary sends the identical series (parity).
+            from coa.variance_series import process_variance_fields
+            alias_body.update(process_variance_fields(db, _parent_row))
 
     try:
         async with httpx.AsyncClient(timeout=120.0) as client:
@@ -9625,6 +9611,16 @@ async def regen_primary_coa(
     alias_map = _load_sample_aliases(db, sample_id)
     if alias_map:
         alias_body["analyte_display_names"] = {str(k): v for k, v in alias_map.items()}
+
+    # Variance series — MUST mirror generate_sample_coa, else regenerating strips
+    # the variance series off the certified COA (the parent figure renders alone).
+    # Same shared helper both paths use so they can't drift.
+    _regen_parent = db.execute(
+        select(LimsSample).where(LimsSample.sample_id == sample_id)
+    ).scalar_one_or_none()
+    if _regen_parent is not None:
+        from coa.variance_series import process_variance_fields
+        alias_body.update(process_variance_fields(db, _regen_parent))
 
     # 1. Regenerate only the primary COA via COA Builder
     try:

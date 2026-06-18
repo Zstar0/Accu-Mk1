@@ -147,6 +147,32 @@ def build_variance_replicates(db: Session, parent) -> dict:
     return {k: v for k, v in out.items() if v}
 
 
+def process_variance_fields(db: Session, parent) -> dict:
+    """The variance portion of the COABuilder /process body for a parent.
+
+    Returns {"variance_replicates": ..., "variance_analytes": ...}, omitting any
+    key whose builder yields nothing. Shared by EVERY path that POSTs to
+    COABuilder /process (initial generate AND regen-primary) so a regenerated COA
+    keeps the same variance series — regen used to omit it, stripping the series
+    off the certified COA. Best-effort: a builder error contributes no key rather
+    than blocking generation.
+    """
+    fields: dict = {}
+    try:
+        reps = build_variance_replicates(db, parent)
+        if reps:
+            fields["variance_replicates"] = reps
+    except Exception:  # noqa: BLE001 — a builder error must not block generation
+        pass
+    try:
+        avar = build_variance_analyte_series(db, parent)
+        if avar:
+            fields["variance_analytes"] = avar
+    except Exception:  # noqa: BLE001
+        pass
+    return fields
+
+
 def build_variance_analyte_series(db: Session, parent) -> dict:
     """{keyword: {"unit": str, "values": [str, ...]}} for the parent's variance
     vials, limited to variance_capable analysis services.
