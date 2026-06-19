@@ -842,6 +842,82 @@ def list_promotions_for_parent(
     return result
 
 
+def list_variance_verifications_for_parent(
+    db: Session,
+    parent_sample_id: str,
+) -> list[dict]:
+    """Return one grouped variance-verification event per vial for the parent
+    LimsSample *parent_sample_id*, for the federated sample activity log.
+
+    Variance replicate vials never get promoted — they terminate in the
+    ``variance_verified`` state and feed the variance series. That act has no
+    promotion row and so was invisible in the activity timeline. We derive it
+    from the append-only ``lims_analysis_transitions`` log (to_state =
+    ``variance_verified``), which means already-verified vials surface
+    retroactively without any new write.
+
+    Each dict: ``{vial_sample_id, vial_sequence, count, occurred_at, by_email}``
+    where ``count`` is distinct analyses verified on that vial and
+    ``occurred_at`` / ``by_email`` come from the latest such transition.
+    Empty list when the sample is unknown or has no variance verifications.
+    """
+    from models import LimsSubSample, LimsAnalysisTransition, User
+    from models import LimsSample
+
+    parent = db.execute(
+        select(LimsSample).where(LimsSample.sample_id == parent_sample_id)
+    ).scalar_one_or_none()
+    if parent is None:
+        return []
+
+    vials = db.execute(
+        select(LimsSubSample).where(LimsSubSample.parent_sample_pk == parent.id)
+    ).scalars().all()
+    if not vials:
+        return []
+    vial_by_id = {v.id: v for v in vials}
+
+    rows = db.execute(
+        select(LimsAnalysisTransition, LimsAnalysis.lims_sub_sample_pk)
+        .join(LimsAnalysis, LimsAnalysisTransition.analysis_id == LimsAnalysis.id)
+        .where(
+            LimsAnalysisTransition.to_state == "variance_verified",
+            LimsAnalysis.lims_sub_sample_pk.in_(list(vial_by_id.keys())),
+        )
+    ).all()
+
+    # Group by vial. Count DISTINCT analyses (a vial re-verified after a
+    # retract would log multiple transitions for the same analysis); the
+    # latest transition supplies the timestamp + attribution.
+    analyses_by_vial: dict[int, set[int]] = {}
+    latest_txn_by_vial: dict[int, "LimsAnalysisTransition"] = {}
+    for txn, vial_pk in rows:
+        analyses_by_vial.setdefault(vial_pk, set()).add(txn.analysis_id)
+        cur = latest_txn_by_vial.get(vial_pk)
+        if cur is None or txn.occurred_at > cur.occurred_at:
+            latest_txn_by_vial[vial_pk] = txn
+
+    out: list[dict] = []
+    for vial_pk, analysis_ids in analyses_by_vial.items():
+        latest = latest_txn_by_vial[vial_pk]
+        by_email: Optional[str] = None
+        if latest.user_id is not None:
+            u = db.get(User, latest.user_id)
+            if u is not None:
+                by_email = u.email
+        vial = vial_by_id[vial_pk]
+        out.append({
+            "vial_sample_id": vial.sample_id,
+            "vial_sequence": vial.vial_sequence,
+            "count": len(analysis_ids),
+            "occurred_at": latest.occurred_at,
+            "by_email": by_email,
+        })
+
+    out.sort(key=lambda e: (e["vial_sequence"] or 0))
+    return out
+
+
 # ─── Phase 4c: parent-retest cascade ────────────────────────────────────────
 
 
@@ -927,6 +1003,27 @@ def cascade_parent_retest_to_sources(
         except Exception:
             # Log at call site; don't let one bad source kill the rest.
             pass
+
+    # 5. Un-promote the parent. Its promoted value came from a source we just
+    #    retested, so it now reflects superseded data — clear it immediately
+    #    rather than leaving the stale figure until a re-promote. Retracting
+    #    (not deleting) mirrors the re-promote supersession in promote_to_parent
+    #    and vacates the partial unique index (which excludes 'retracted'), so
+    #    the eventual re-promote inserts cleanly. NEVER retract a PUBLISHED
+    #    parent — it's a citable COA source; that path is invalidate→retest.
+    if new_row_ids and parent_analysis.review_state == "verified":
+        prior_state = parent_analysis.review_state
+        parent_analysis.review_state = "retracted"
+        parent_analysis.updated_at = datetime.utcnow()
+        db.add(LimsAnalysisTransition(
+            analysis_id=parent_analysis.id,
+            from_state=prior_state,
+            to_state="retracted",
+            transition_kind="auto",
+            user_id=user_id,
+            reason="un-promoted: source vial retested",
+        ))
+        db.commit()
 
     return new_row_ids
 

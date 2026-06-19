@@ -882,6 +882,27 @@ async def get_sample_activity(
             "source": "lims_analysis_promotions",
         })
 
+    # --- Mk1 DB: variance replicate verifications (one event per vial) ---
+    # Variance vials terminate in `variance_verified` (they feed the series, they
+    # are never promoted), so without this they were invisible in the timeline.
+    from lims_analyses.service import list_variance_verifications_for_parent
+    for v in list_variance_verifications_for_parent(db, sample_id):
+        n = v["count"]
+        events.append({
+            "timestamp": v["occurred_at"].isoformat() if v["occurred_at"] else None,
+            "event": "variance_verified",
+            "label": (
+                f"Variance replicates verified — {v['vial_sample_id']} "
+                f"({n} analys{'is' if n == 1 else 'es'})"
+            ),
+            "details": {
+                "by": v["by_email"],
+                "vial": v["vial_sample_id"],
+                "count": n,
+            },
+            "source": "lims_analysis_transitions",
+        })
+
     # --- Mk1 DB: variance-set lock/unlock (audit_logs, append-only) ---
     var_audits = db.execute(
         select(AuditLog).where(
