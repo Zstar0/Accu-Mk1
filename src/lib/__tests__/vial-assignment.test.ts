@@ -42,6 +42,18 @@ describe('buildVialAssignmentMap', () => {
     expect(a.editable).toBe(true)
   })
 
+  it('carries assignmentKind and varianceLocked from the vial onto each match', () => {
+    const parent = [an({ keyword: 'PH-DETERM', title: 'pH Determination' })]
+    const vials = [{
+      sampleId: 'BW-1-S02', label: 'Vial 2',
+      analyses: [an({ uid: 'mk1:50', keyword: 'PH-DETERM' })],
+      assignmentKind: 'variance' as const, varianceLocked: true,
+    }]
+    const m = buildVialAssignmentMap(parent, vials).get('PH-DETERM')!.matches[0]!
+    expect(m.assignmentKind).toBe('variance')
+    expect(m.varianceLocked).toBe(true)
+  })
+
   it('one keyword on two vials → both matches, not editable', () => {
     const parent = [an({ keyword: 'STER-PCR', title: 'Rapid Sterility Screening (PCR)' })]
     const vials = [

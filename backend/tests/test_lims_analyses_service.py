@@ -894,3 +894,132 @@ def test_senaite_shape_carries_parent_id_for_promoted_row(db, sub_sample, analys
     promoted = [r for r in rows if r.uid == f"mk1:{src.id}"]
     assert promoted, f"expected source row in senaite_shape output"
     assert promoted[0].promoted_to_parent_id == parent_row.id
+
+
+# ── variance verification activity (federated into the sample activity log) ──
+
+
+def test_list_variance_verifications_groups_by_vial(db, analysis_service):
+    """variance_verified transitions surface as one grouped event per vial,
+    counting distinct analyses, attributed to the verifying user.
+
+    Backfills retroactively: derives from the append-only transition log, so
+    already-verified vials (e.g. PB-0080) appear without any new write."""
+    from datetime import datetime, timedelta
+    from lims_analyses.service import list_variance_verifications_for_parent
+
+    parent = LimsSample(sample_id="TEST-VV-PARENT", sample_type="x", status="received")
+    db.add(parent)
+    db.flush()
+    vial = LimsSubSample(
+        parent_sample_pk=parent.id,
+        external_lims_uid="TEST-VV-UID-S02",
+        sample_id="TEST-VV-PARENT-S02",
+        vial_sequence=2,
+        assignment_kind="variance",
+    )
+    db.add(vial)
+    db.flush()
+    ids = []
+    base = datetime.utcnow()
+    for i in range(3):
+        a = LimsAnalysis(
+            lims_sub_sample_pk=vial.id,
+            analysis_service_id=analysis_service.id,
+            keyword=f"TEST-KW-{i}",  # distinct per (vial, keyword) unique constraint
+            title="TEST: vv",
+            review_state="variance_verified",
+        )
+        db.add(a)
+        db.flush()
+        db.add(LimsAnalysisTransition(
+            analysis_id=a.id,
+            from_state="to_be_verified",
+            to_state="variance_verified",
+            transition_kind="variance_verify",
+            reason="TEST: vv",
+            occurred_at=base + timedelta(seconds=i),
+        ))
+        ids.append(a.id)
+    db.commit()
+    try:
+        events = list_variance_verifications_for_parent(db, "TEST-VV-PARENT")
+        assert len(events) == 1
+        ev = events[0]
+        assert ev["vial_sample_id"] == "TEST-VV-PARENT-S02"
+        assert ev["count"] == 3
+        # latest transition timestamp wins
+        assert ev["occurred_at"] == base + timedelta(seconds=2)
+    finally:
+        db.execute(delete(LimsAnalysisTransition).where(LimsAnalysisTransition.analysis_id.in_(ids)))
+        db.execute(delete(LimsAnalysis).where(LimsAnalysis.id.in_(ids)))
+        db.execute(delete(LimsSubSample).where(LimsSubSample.id == vial.id))
+        db.execute(delete(LimsSample).where(LimsSample.id == parent.id))
+        db.commit()
+
+
+def test_list_variance_verifications_empty_for_unknown_sample(db):
+    from lims_analyses.service import list_variance_verifications_for_parent
+    assert list_variance_verifications_for_parent(db, "NO-SUCH-SAMPLE-XYZ") == []
+
+
+# ── parent un-promote on source retest ───────────────────────────────────────
+
+
+def test_parent_retest_cascade_unpromotes_verified_parent(db, analysis_service):
+    """Retesting a parent AR cascades to the source vial AND un-promotes (retracts)
+    the verified parent — its promoted value came from the now-superseded source,
+    so it must not linger. A PUBLISHED parent is never touched (citable COA)."""
+    from lims_analyses.service import cascade_parent_retest_to_sources
+    from models import LimsAnalysisPromotion
+
+    parent = LimsSample(sample_id="TEST-UNPROMOTE", sample_type="x", status="received")
+    db.add(parent)
+    db.flush()
+    vial = LimsSubSample(
+        parent_sample_pk=parent.id, external_lims_uid="TEST-UNP-UID-S01",
+        sample_id="TEST-UNPROMOTE-S01", vial_sequence=1, assignment_kind="core",
+    )
+    db.add(vial)
+    db.flush()
+
+    src = LimsAnalysis(
+        lims_sub_sample_pk=vial.id, analysis_service_id=analysis_service.id,
+        keyword="TEST-UNP-KW", title="TEST: src", result_value="4",
+        result_unit="mg", review_state="promoted",
+    )
+    parent_row = LimsAnalysis(
+        lims_sample_pk=parent.id, analysis_service_id=analysis_service.id,
+        keyword="TEST-UNP-KW", title="TEST: parent", result_value="4",
+        result_unit="mg", review_state="verified",
+    )
+    db.add_all([src, parent_row])
+    db.flush()
+    db.add(LimsAnalysisPromotion(
+        parent_analysis_id=parent_row.id, source_analysis_id=src.id,
+        contribution_kind="chosen",
+    ))
+    db.commit()
+
+    created_ids = []
+    try:
+        created_ids = cascade_parent_retest_to_sources(
+            db, parent_sample_id="TEST-UNPROMOTE", keyword="TEST-UNP-KW", user_id=None,
+        )
+        db.refresh(src)
+        db.refresh(parent_row)
+        assert created_ids, "expected a vial retest row to be created"
+        assert src.retested is True
+        # the new behaviour: parent is un-promoted (retracted) AND its stale
+        # promoted figure is cleared (the display filters by retest_of_id, not
+        # state, so a retracted-but-valued parent would still render 98).
+        assert parent_row.review_state == "retracted"
+        assert parent_row.result_value is None
+    finally:
+        all_ids = [src.id, parent_row.id, *created_ids]
+        db.execute(delete(LimsAnalysisTransition).where(LimsAnalysisTransition.analysis_id.in_(all_ids)))
+        db.execute(delete(LimsAnalysisPromotion).where(LimsAnalysisPromotion.source_analysis_id == src.id))
+        db.execute(delete(LimsAnalysis).where(LimsAnalysis.id.in_(all_ids)))
+        db.execute(delete(LimsSubSample).where(LimsSubSample.id == vial.id))
+        db.execute(delete(LimsSample).where(LimsSample.id == parent.id))
+        db.commit()

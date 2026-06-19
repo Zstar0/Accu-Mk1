@@ -806,9 +806,14 @@ def _apply_variance_override(sample_id: str, result: Optional[dict]) -> Optional
 
 
 # Bucket (== vial assignment_role) -> WP service key carrying variance counts.
-# Must stay identical to lims_analyses.service._ROLE_VARIANCE_KEYS (the
-# variance_verify gate) — a test asserts equality. Coarse keys only, never
-# per-analyte (variance addon spec, "The scoping rule").
+# Retained for two reasons:
+#   1. A test asserts equality with lims_analyses.service._ROLE_VARIANCE_KEYS
+#      (the variance_verify gate) — this constant is that gate's reference.
+#   2. Canonical reference of the bucket→WP-key mapping for documentation.
+# NOTE: derive_variance_demand no longer iterates this constant. It now resolves
+# the hplc bucket inline in a BW-aware manner (reads hplcpurity_identity OR
+# bac_water_panel; see derive_variance_demand docstring). Coarse keys only,
+# never per-analyte (variance addon spec, "The scoping rule").
 VARIANCE_BUCKET_KEYS: dict[str, str] = {
     "hplc": "hplcpurity_identity",
     "endo": "endotoxin",
@@ -826,12 +831,27 @@ def derive_variance_demand(services: dict) -> dict:
     paid marker counts — is n - 1. A "2-vial variance" purchase = the core
     vial + ONE paid variance replicate. 0 when not purchased. Uses the same
     normalization as the entitlement endpoint (counts int-filtered >= 2,
-    so the target is always >= 1 when purchased)."""
+    so the target is always >= 1 when purchased).
+
+    The hplc bucket is BW-aware — it reads hplcpurity_identity OR bac_water_panel
+    (mirroring derive_base_demand), since both produce chromatography vials and
+    are mutually exclusive per order. (Handler decision 2026-06-17.)"""
     entitlement = normalize_variance_entitlement({"variance": (services or {}).get("variance")})
+    hplc_total = max(entitlement.get("hplcpurity_identity", 0), entitlement.get("bac_water_panel", 0))
     return {
-        bucket: max(0, entitlement.get(key, 0) - 1)
-        for bucket, key in VARIANCE_BUCKET_KEYS.items()
+        "hplc": max(0, hplc_total - 1),
+        "endo": max(0, entitlement.get("endotoxin", 0) - 1),
+        "ster": max(0, entitlement.get("sterility_pcr", 0) - 1),
     }
+
+
+def variance_lock_required(services: Optional[dict], variance_locked_at) -> bool:
+    """True when COA generation must be blocked pending a variance-set lock:
+    variance was purchased (any bucket target >= 1) AND the set isn't locked yet.
+    `services` is the inner WP services dict (with the 'variance' map)."""
+    demand = derive_variance_demand(services or {})
+    purchased = any(n >= 1 for n in demand.values())
+    return purchased and variance_locked_at is None
 
 
 def derive_base_demand(services: dict) -> dict:
@@ -1364,16 +1384,23 @@ def _fetch_mk1_results_for_host(
         sample hosts keep the parent-tier canonical row (retest_of_id IS NULL,
         updated in place via promotion — same convention as source_resolver).
     """
-    from models import LimsAnalysis, LimsAnalysisPromotion
+    from models import LimsAnalysis, LimsAnalysisPromotion, AnalysisService, Peptide
+    from sub_samples.variance import identity_conforms
+    from coa.variance_series import _category
 
+    base = (
+        select(LimsAnalysis, AnalysisService, Peptide)
+        .outerjoin(AnalysisService, AnalysisService.id == LimsAnalysis.analysis_service_id)
+        .outerjoin(Peptide, Peptide.id == AnalysisService.peptide_id)
+    )
     if host_kind == "sample":
-        stmt = select(LimsAnalysis).where(
+        stmt = base.where(
             LimsAnalysis.lims_sample_pk == host_pk,
             LimsAnalysis.retest_of_id.is_(None),
             LimsAnalysis.result_value.is_not(None),
         )
     elif host_kind == "sub_sample":
-        stmt = select(LimsAnalysis).where(
+        stmt = base.where(
             LimsAnalysis.lims_sub_sample_pk == host_pk,
             # Current vial result = retested IS False. retest_of_id IS NULL
             # returns the superseded original once a retest exists (P-0149 S03).
@@ -1382,9 +1409,12 @@ def _fetch_mk1_results_for_host(
         )
     else:
         return {}
-    rows = db.execute(stmt).scalars().all()
-    if not rows:
+    triples = db.execute(stmt).all()
+    if not triples:
         return {}
+    rows = [t[0] for t in triples]
+    svc_by_analysis = {t[0].id: t[1] for t in triples}
+    peptide_by_analysis = {t[0].id: t[2] for t in triples}
 
     # Bulk-load promotion links for these rows
     row_ids = [r.id for r in rows]
@@ -1398,22 +1428,40 @@ def _fetch_mk1_results_for_host(
 
     out: dict = {}
     for r in rows:
-        # Heuristic: numeric vs categorical. Mk1 doesn't currently track this
-        # explicitly per analysis. Try float-parse the result; if it parses,
-        # call it numeric. Otherwise categorical. Matches what SENAITE-side
-        # fetch_results_by_keyword does indirectly via ResultOptions.
-        kind = "numeric"
-        try:
-            float(r.result_value)  # type: ignore[arg-type]
-        except (TypeError, ValueError):
+        svc = svc_by_analysis.get(r.id)
+        options = getattr(svc, "result_options", None) if svc else None
+        # numeric vs categorical: a service with defined result_options is a
+        # selection (categorical) even when its value float-parses — e.g.
+        # HPLC-ID / STER-PCR store "1". Without options, fall back to the
+        # float-parse heuristic so numeric-but-text-typed services (PUR_*,
+        # whose SENAITE result_type is 'text' yet hold "95.75") stay numeric.
+        if options:
             kind = "categorical"
-        out[r.keyword] = {
+        else:
+            kind = "numeric"
+            try:
+                float(r.result_value)  # type: ignore[arg-type]
+            except (TypeError, ValueError):
+                kind = "categorical"
+
+        entry: dict = {
             "value": str(r.result_value),
             "kind": kind,
             "spec": None,
             "uid": f"mk1:{r.id}",
             "promoted_to_parent_id": promo_by_source.get(r.id),
         }
+        # Identity conformance can't be inferred from the raw value (it's the
+        # peptide name, or a select code) — compute it here, where the keyword,
+        # options, and declared peptide are in hand, agreeing with the COA.
+        if _category(r.keyword) == "identity":
+            pep = peptide_by_analysis.get(r.id)
+            entry["conforms"] = identity_conforms(
+                r.result_value,
+                peptide_name=pep.name if pep is not None else None,
+                result_options=options,
+            )
+        out[r.keyword] = entry
     return out
 
 
@@ -1577,14 +1625,26 @@ def lock_variance_set(db: Session, parent_sample_id: str, user_id: int) -> LimsS
                 "variance series incomplete — unfinished rows: "
                 + ", ".join(sorted(unfinished))
             )
+    from models import AuditLog
     parent.variance_locked_at = datetime.utcnow()
     parent.variance_locked_by_user_id = user_id
+    # Activity-log the lock (append-only) — the variance_locked_at column only
+    # holds the CURRENT lock, so unlock/re-lock history would otherwise be lost.
+    db.add(AuditLog(
+        operation="variance_set_locked",
+        entity_type="variance_set",
+        entity_id=parent.sample_id,
+        details={"user_id": user_id, "selected_vials": selected},
+    ))
     db.commit()
     return parent
 
 
-def unlock_variance_set(db: Session, parent_sample_id: str) -> LimsSample:
-    """Admin-only: clear lock fields."""
+def unlock_variance_set(
+    db: Session, parent_sample_id: str, user_id: Optional[int] = None
+) -> LimsSample:
+    """Admin-only: clear lock fields. Activity-logged (append-only)."""
+    from models import AuditLog
     parent = db.execute(
         select(LimsSample).where(LimsSample.sample_id == parent_sample_id)
     ).scalar_one_or_none()
@@ -1592,5 +1652,11 @@ def unlock_variance_set(db: Session, parent_sample_id: str) -> LimsSample:
         raise LookupError(f"parent {parent_sample_id} not found")
     parent.variance_locked_at = None
     parent.variance_locked_by_user_id = None
+    db.add(AuditLog(
+        operation="variance_set_unlocked",
+        entity_type="variance_set",
+        entity_id=parent.sample_id,
+        details={"user_id": user_id},
+    ))
     db.commit()
     return parent

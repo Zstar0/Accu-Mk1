@@ -33,6 +33,7 @@ import { toast } from 'sonner'
 import type { SenaiteAnalysis, InboxPriority, ParentPromotionInfo } from '@/lib/api'
 import { setAnalysisMethodInstrument, promoteAnalyses } from '@/lib/api'
 import type { VialAssignment } from '@/lib/vial-assignment'
+import { ROLE_TEXT_CLASS, roleTextClass } from '@/lib/assignment-colors'
 import { PromotedFromBadge } from '@/components/senaite/PromotedFromBadge'
 import type { SampleSlaSnapshot } from '@/services/order-sla'
 import { AnalysisSlaCell } from '@/components/senaite/AnalysisSlaCell'
@@ -73,8 +74,10 @@ export const STATUS_COLORS: Record<string, string> = {
     'bg-indigo-100 text-indigo-700 border-indigo-200 dark:bg-indigo-500/15 dark:text-indigo-400 dark:border-indigo-500/20',
   ready_for_review:
     'bg-cyan-100 text-cyan-700 border-cyan-200 dark:bg-cyan-500/15 dark:text-cyan-400 dark:border-cyan-500/20',
+  // Matches `promoted` (teal) — both are terminal "done" states; sharing the
+  // colour keeps the table from reading as two different outcomes.
   variance_verified:
-    'bg-sky-100 text-sky-700 border-sky-200 dark:bg-sky-500/15 dark:text-sky-400 dark:border-sky-500/20',
+    'bg-teal-100 text-teal-700 border-teal-200 dark:bg-teal-500/15 dark:text-teal-400 dark:border-teal-500/20',
 }
 
 export const STATUS_LABELS: Record<string, string> = {
@@ -101,10 +104,10 @@ export const STATUS_LABELS: Record<string, string> = {
  * role badges elsewhere in the app — keeps the visual language consistent.
  */
 const PRIMARY_TITLE_COLOR: Record<string, string> = {
-  hplc: 'text-sky-700 dark:text-sky-300',
-  endo: 'text-emerald-700 dark:text-emerald-300',
-  ster: 'text-violet-700 dark:text-violet-300',
-  xtra: 'text-zinc-700 dark:text-zinc-300',
+  hplc: ROLE_TEXT_CLASS.hplc,
+  endo: ROLE_TEXT_CLASS.endo,
+  ster: ROLE_TEXT_CLASS.ster,
+  xtra: ROLE_TEXT_CLASS.xtra,
 }
 
 /** Row-level tint: colored left border + subtle background, inspired by SENAITE. */
@@ -1291,21 +1294,31 @@ function AnalysisRow({
             // Key each overlay vial by ITS OWN assignment_kind (carried on the
             // match) — a parent page mixes core and variance vials, so each
             // vial speaks for itself. No entitlement lookup: kind is explicit.
-            const vialIsVariance = showVarianceChip(m.mk1Analysis, m.assignmentKind)
+            // Colour EVERY variance-assigned vial (state-independent) — a vial
+            // assigned to the variance bucket reads as variance whether or not
+            // its replicate is signed off yet. A Lock icon marks vials locked
+            // into the variance set (in_variance_set && the set is locked).
+            const vialIsVariance = isVarianceMember(m.mk1Analysis, m.assignmentKind)
+            const vialLocked = !!m.varianceLocked
             return (
               <button
                 key={m.vialSampleId}
                 type="button"
                 onClick={e => { e.stopPropagation(); useUIStore.getState().navigateToSample(m.vialSampleId) }}
-                className={`inline-flex items-center gap-0.5 text-[10px] underline underline-offset-2 shrink-0 ${
-                  vialIsVariance
-                    ? 'text-sky-600 dark:text-sky-400 hover:text-sky-700 dark:hover:text-sky-300'
-                    : 'text-muted-foreground hover:text-foreground'
-                }`}
-                title={vialIsVariance ? `Variance replicate — ${m.vialSampleId}` : `Assigned to ${m.vialSampleId}`}
+                className={`inline-flex items-center gap-0.5 text-[10px] underline underline-offset-2 shrink-0 hover:opacity-80 ${roleTextClass(m.assignmentRole)}`}
+                title={
+                  vialLocked
+                    ? `Variance replicate, locked into the set — ${m.vialSampleId}`
+                    : vialIsVariance
+                      ? `Variance replicate — ${m.vialSampleId}`
+                      : `Assigned to ${m.vialSampleId}`
+                }
               >
-                {vialIsVariance && <Layers className="h-3 w-3" aria-hidden="true" />}
+                {/* Variance stays marked by the blue Layers icon; the vial label
+                    itself now carries its assignment-role colour. */}
+                {vialIsVariance && <Layers className="h-3 w-3 text-sky-600 dark:text-sky-400" aria-hidden="true" />}
                 {m.vialLabel} — {m.vialSampleId}
+                {vialLocked && <Lock className="h-3 w-3 shrink-0" aria-hidden="true" />}
               </button>
             )
           })}

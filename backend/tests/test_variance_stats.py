@@ -124,3 +124,55 @@ def test_spec_fail_status():
     ]
     stats = compute_variance_stats(vials)
     assert stats["Purity"]["pass"] is False
+
+
+# ── identity conformance (agrees with the COA's name-match rule) ─────────────
+
+from sub_samples.variance import identity_conforms
+
+
+def test_identity_conforms_name_match():
+    # Peptide-specific identity stores the peptide NAME on conformance.
+    assert identity_conforms("BPC-157", peptide_name="BPC-157") is True
+    assert identity_conforms("TB500 (17-23 Fragment)", peptide_name="TB500 (17-23 Fragment)") is True
+
+
+def test_identity_nonconform_explicit_token():
+    assert identity_conforms("Does_Not_Conform", peptide_name="TB500 (17-23 Fragment)") is False
+
+
+def test_identity_select_value_via_options():
+    # HPLC-ID stores "1"; its label "Conforms" is the signal.
+    opts = [{"value": "1", "label": "Conforms"}, {"value": "0", "label": "Does Not Conform"}]
+    assert identity_conforms("1", result_options=opts) is True
+    assert identity_conforms("0", result_options=opts) is False
+
+
+def test_identity_blank_is_none():
+    assert identity_conforms("", peptide_name="BPC-157") is None
+    assert identity_conforms(None) is None
+
+
+def test_categorical_uses_explicit_conforms_flag():
+    # 3 conform, 1 not — mirrors PB-0080 ID_TB500-17-23 (S02 set non-conform).
+    vials = [
+        _vial("S-1", results={"ID_X": {"value": "X", "kind": "categorical", "conforms": True}}),
+        _vial("S-2", results={"ID_X": {"value": "Does_Not_Conform", "kind": "categorical", "conforms": False}}),
+        _vial("S-3", results={"ID_X": {"value": "X", "kind": "categorical", "conforms": True}}),
+        _vial("S-4", results={"ID_X": {"value": "X", "kind": "categorical", "conforms": True}}),
+    ]
+    stats = compute_variance_stats(vials)
+    assert stats["ID_X"]["kind"] == "categorical"
+    assert stats["ID_X"]["conforms_count"] == 3
+    assert stats["ID_X"]["total"] == 4
+    assert stats["ID_X"]["pass"] is False
+
+
+def test_categorical_all_conform_flag_passes():
+    vials = [
+        _vial("S-1", results={"ID_X": {"value": "X", "kind": "categorical", "conforms": True}}),
+        _vial("S-2", results={"ID_X": {"value": "X", "kind": "categorical", "conforms": True}}),
+    ]
+    stats = compute_variance_stats(vials)
+    assert stats["ID_X"]["conforms_count"] == 2
+    assert stats["ID_X"]["pass"] is True

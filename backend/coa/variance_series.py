@@ -87,6 +87,10 @@ def build_variance_replicates(db: Session, parent) -> dict:
         select(LimsSubSample).where(
             LimsSubSample.parent_sample_pk == parent.id,
             LimsSubSample.assignment_kind == "variance",
+            # Honor the overlay's "select which vials participate" — a deselected
+            # vial (in_variance_set=False, e.g. "Customer request") must not reach
+            # the COA, so the certified series matches the locked selection.
+            LimsSubSample.in_variance_set.is_(True),
         ).order_by(LimsSubSample.vial_sequence)
     ).scalars().all()
     if not subs:
@@ -141,3 +145,87 @@ def build_variance_replicates(db: Session, parent) -> dict:
                 out.setdefault(pname, []).append(rec)
     # Drop peptides whose vials contributed nothing.
     return {k: v for k, v in out.items() if v}
+
+
+def process_variance_fields(db: Session, parent) -> dict:
+    """The variance portion of the COABuilder /process body for a parent.
+
+    Returns {"variance_replicates": ..., "variance_analytes": ...}, omitting any
+    key whose builder yields nothing. Shared by EVERY path that POSTs to
+    COABuilder /process (initial generate AND regen-primary) so a regenerated COA
+    keeps the same variance series — regen used to omit it, stripping the series
+    off the certified COA. Best-effort: a builder error contributes no key rather
+    than blocking generation.
+    """
+    fields: dict = {}
+    try:
+        reps = build_variance_replicates(db, parent)
+        if reps:
+            fields["variance_replicates"] = reps
+    except Exception:  # noqa: BLE001 — a builder error must not block generation
+        pass
+    try:
+        avar = build_variance_analyte_series(db, parent)
+        if avar:
+            fields["variance_analytes"] = avar
+    except Exception:  # noqa: BLE001
+        pass
+    return fields
+
+
+def build_variance_analyte_series(db: Session, parent) -> dict:
+    """{keyword: {"unit": str, "values": [str, ...]}} for the parent's variance
+    vials, limited to variance_capable analysis services.
+
+    Keyed by SENAITE keyword (the same key COABuilder matches on in
+    _Analyses_Detailed) so the generic engine can pair each series to its
+    results_table row + baked spec. Values are per-vial current results
+    (retested=False) in vial-sequence order; COABuilder prepends its own parent
+    figure. Generic and analyte-agnostic — no peptide attribution, no
+    purity/quantity/identity categories."""
+    subs = db.execute(
+        select(LimsSubSample).where(
+            LimsSubSample.parent_sample_pk == parent.id,
+            LimsSubSample.assignment_kind == "variance",
+            # Honor the overlay's "select which vials participate" — a deselected
+            # vial (in_variance_set=False, e.g. "Customer request") must not reach
+            # the COA, so the certified series matches the locked selection.
+            LimsSubSample.in_variance_set.is_(True),
+        ).order_by(LimsSubSample.vial_sequence)
+    ).scalars().all()
+    if not subs:
+        return {}
+    out: dict[str, dict] = {}
+    for sub in subs:
+        rows = db.execute(
+            select(LimsAnalysis, AnalysisService)
+            .join(AnalysisService, AnalysisService.id == LimsAnalysis.analysis_service_id)
+            .where(
+                LimsAnalysis.lims_sub_sample_pk == sub.id,
+                AnalysisService.variance_capable.is_(True),
+                LimsAnalysis.review_state.in_(_SERIES_STATES),
+                LimsAnalysis.reportable == True,  # noqa: E712
+                # Current vial result = retested IS False (the newest row in the
+                # retest chain). retest_of_id IS NULL grabs the *canonical
+                # original*, which becomes retested=True once a retest exists —
+                # so it would report the SUPERSEDED value (P-0149 S03 regression).
+                # Mirrors the vial-row idiom in build_variance_replicates above.
+                LimsAnalysis.retested.is_(False),
+                LimsAnalysis.result_value.isnot(None),
+                LimsAnalysis.result_value != "",
+            )
+            .order_by(LimsAnalysis.keyword)
+        ).all()
+        for la, svc in rows:
+            kw = (la.keyword or svc.keyword or "").strip()
+            if not kw:
+                continue
+            # Unit locked from the first vial seen for this keyword
+            # (la.result_unit, else the lab-configured svc.unit). A keyword maps
+            # to one physical measurement, so vials share a unit; divergence
+            # isn't detected.
+            entry = out.setdefault(
+                kw, {"unit": (la.result_unit or svc.unit or "").strip(), "values": []}
+            )
+            entry["values"].append(str(la.result_value).strip())
+    return {k: v for k, v in out.items() if v["values"]}

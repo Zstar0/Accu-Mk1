@@ -3,7 +3,7 @@ import { QRCodeSVG } from 'qrcode.react'
 const ROLE_SHORT: Record<string, string> = {
   hplc: 'HPLC',
   endo: 'ENDO',
-  ster: 'STERYL',
+  ster: 'PCR',
   xtra: 'XTRA',
 }
 

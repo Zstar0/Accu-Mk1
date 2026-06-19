@@ -882,6 +882,56 @@ async def get_sample_activity(
             "source": "lims_analysis_promotions",
         })
 
+    # --- Mk1 DB: variance replicate verifications (one event per vial) ---
+    # Variance vials terminate in `variance_verified` (they feed the series, they
+    # are never promoted), so without this they were invisible in the timeline.
+    from lims_analyses.service import list_variance_verifications_for_parent
+    for v in list_variance_verifications_for_parent(db, sample_id):
+        n = v["count"]
+        events.append({
+            "timestamp": v["occurred_at"].isoformat() if v["occurred_at"] else None,
+            "event": "variance_verified",
+            "label": (
+                f"Variance replicates verified — {v['vial_sample_id']} "
+                f"({n} analys{'is' if n == 1 else 'es'})"
+            ),
+            "details": {
+                "by": v["by_email"],
+                "vial": v["vial_sample_id"],
+                "count": n,
+            },
+            "source": "lims_analysis_transitions",
+        })
+
+    # --- Mk1 DB: variance-set lock/unlock (audit_logs, append-only) ---
+    var_audits = db.execute(
+        select(AuditLog).where(
+            AuditLog.entity_type == "variance_set",
+            AuditLog.entity_id == sample_id,
+        ).order_by(AuditLog.timestamp)
+    ).scalars().all()
+    for a in var_audits:
+        a_details = a.details or {}
+        uid = a_details.get("user_id")
+        by_email = None
+        if uid:
+            u = db.execute(select(User).where(User.id == uid)).scalar_one_or_none()
+            by_email = u.email if u else None
+        locked = a.operation == "variance_set_locked"
+        n = a_details.get("selected_vials")
+        events.append({
+            "timestamp": a.timestamp.isoformat() if a.timestamp else None,
+            "event": a.operation,
+            "label": ("Variance set locked" if locked else "Variance set unlocked")
+                     + (f" — {n} vials" if locked and n else ""),
+            "details": {
+                "by": by_email,
+                "user_id": uid,
+                **({"selected_vials": n} if locked and n is not None else {}),
+            },
+            "source": "audit_logs",
+        })
+
     # --- Integration DB: sample_status_events ---
     try:
         with get_integration_db() as int_conn:
@@ -1987,6 +2037,7 @@ class AnalysisServiceResponse(BaseModel):
     updated_at: datetime
     result_type: Optional[str] = None
     result_options: Optional[list] = None
+    variance_capable: bool
 
     class Config:
         from_attributes = True
@@ -2723,6 +2774,30 @@ async def update_analysis_service_result_type(
         service.result_type = data.result_type
     if "result_options" in data.model_fields_set:
         service.result_options = data.result_options
+    db.commit()
+    db.refresh(service)
+    return AnalysisServiceResponse.model_validate(service)
+
+
+class AnalysisServiceVarianceCapableUpdate(BaseModel):
+    variance_capable: bool
+
+
+@app.patch("/analysis-services/{service_id}/variance-capable", response_model=AnalysisServiceResponse)
+async def update_analysis_service_variance_capable(
+    service_id: int,
+    data: AnalysisServiceVarianceCapableUpdate,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Lab-managed toggle: mark an analyte as a variance figure. Mk1-owned —
+    never touched by the SENAITE sync."""
+    service = db.execute(
+        select(AnalysisService).where(AnalysisService.id == service_id)
+    ).scalar_one_or_none()
+    if not service:
+        raise HTTPException(404, f"Analysis service {service_id} not found")
+    service.variance_capable = data.variance_capable
     db.commit()
     db.refresh(service)
     return AnalysisServiceResponse.model_validate(service)
@@ -9051,102 +9126,119 @@ async def generate_sample_coa(
 
     is_sub = bool(re.search(r"-S\d{2,}$", sample_id))
     resolver_result = None
-    if not is_sub and SENAITE_URL:
-        try:
-            reader = SenaiteAnalysesHttpReader(
-                base_url=SENAITE_URL,
-                auth=_get_senaite_auth(current_user),
-            )
-            resolver_result = await resolve_sources(sample_id, db, reader)
-        except Exception as e:
-            # Resolver failure is non-fatal in Phase 1; log and fall through.
-            _logger.warning("COA resolver pre-flight failed for %s: %s", sample_id, e)
-            resolver_result = None
+    if not is_sub:
+        # ── COA pre-flight gates (parents only) ──────────────────────────────
+        # Evaluate EVERY gate and accumulate the blockers, then raise ONCE — the
+        # lab sees all blockers up front instead of one-at-a-time (clearing the
+        # attachment gate only to then hit "variance not locked" was whack-a-mole).
+        # Each gate keeps its own fail-open/fail-soft posture: a gate that can't
+        # be evaluated simply contributes no blocker.
+        _unresolved = None
+        _missing_attach = None
+        _variance_required = False
 
-        if resolver_result is not None:
-            # Micro analytes (ENDO/STER/KF) never block: the lab finishes them
-            # after the analytical COA and re-generates. Only NON-micro
-            # unresolved analytes hold up generation.
-            from coa.block_summary import (
-                build_name_resolver,
-                has_blocking_unresolved,
-                summarize_unresolved,
-            )
-            from lims_analyses.seeder import _micro_group_keywords
-
-            micro_kw = _micro_group_keywords(db)
-            if has_blocking_unresolved(resolver_result, micro_keywords=micro_kw):
-                name_for = _build_coa_analyte_name_resolver(db, sample_id, alias_map=_load_sample_aliases(db, sample_id))
-                unresolved = summarize_unresolved(
-                    resolver_result, micro_keywords=micro_kw, name_for=name_for,
+        if SENAITE_URL:
+            try:
+                reader = SenaiteAnalysesHttpReader(
+                    base_url=SENAITE_URL,
+                    auth=_get_senaite_auth(current_user),
                 )
-                lines = "\n".join(f"- {u['analyte_name']}: {u['reason']}" for u in unresolved)
-                raise HTTPException(
-                    status_code=422,
-                    detail={
-                        "code": "unresolved_sources",
-                        "message": (
-                            "COA can't be generated yet. These results still "
-                            "need a source:\n" + lines
-                        ),
-                        "unresolved": unresolved,
-                    },
-                )
+                resolver_result = await resolve_sources(sample_id, db, reader)
+            except Exception as e:
+                # Resolver failure is non-fatal in Phase 1; log and fall through.
+                _logger.warning("COA resolver pre-flight failed for %s: %s", sample_id, e)
+                resolver_result = None
 
-        # --- Attachments gate: a parent COA requires a sample image on the
-        # AR, and — when the sample carries analytical (non-micro) analytes —
-        # a chromatogram. Both are attached from the sample page pickers
-        # ("Select Vial Image" / "Select Vial Chromatogram") or the legacy
-        # check-in/auto-fill flows. Fail-OPEN when SENAITE can't be read
-        # (same posture as the resolver pre-flight: a flaky check must not
-        # permanently block generation; COABuilder fails loudly anyway if
-        # SENAITE is truly down).
-        kinds = await _parent_attachment_kinds(sample_id, _get_senaite_auth(current_user))
-        if kinds is not None:
-            from lims_analyses.seeder import _micro_group_keywords as _micro_kws
             if resolver_result is not None:
-                _micro = _micro_kws(db)
-                needs_chromatogram = any(
-                    d.analyte_keyword not in _micro for d in resolver_result.decisions
+                # Micro analytes (ENDO/STER/KF) never block: the lab finishes them
+                # after the analytical COA and re-generates. Only NON-micro
+                # unresolved analytes hold up generation.
+                from coa.block_summary import (
+                    build_name_resolver,
+                    has_blocking_unresolved,
+                    summarize_unresolved,
                 )
-            else:
-                # Resolver unavailable — derive from the AR's active keywords;
-                # fail open (no chromatogram requirement) if that read fails too.
-                try:
-                    from sub_samples.senaite import fetch_parent_analysis_keywords
+                from lims_analyses.seeder import _micro_group_keywords
+
+                micro_kw = _micro_group_keywords(db)
+                if has_blocking_unresolved(resolver_result, micro_keywords=micro_kw):
+                    name_for = _build_coa_analyte_name_resolver(db, sample_id, alias_map=_load_sample_aliases(db, sample_id))
+                    _unresolved = summarize_unresolved(
+                        resolver_result, micro_keywords=micro_kw, name_for=name_for,
+                    )
+
+            # --- Attachments gate: a parent COA requires a sample image on the
+            # AR, and — when the sample carries analytical (non-micro) analytes —
+            # a chromatogram. Both are attached from the sample page pickers
+            # ("Select Vial Image" / "Select Vial Chromatogram") or the legacy
+            # check-in/auto-fill flows. Fail-OPEN when SENAITE can't be read
+            # (same posture as the resolver pre-flight: a flaky check must not
+            # permanently block generation; COABuilder fails loudly anyway if
+            # SENAITE is truly down).
+            kinds = await _parent_attachment_kinds(sample_id, _get_senaite_auth(current_user))
+            if kinds is not None:
+                from lims_analyses.seeder import _micro_group_keywords as _micro_kws
+                if resolver_result is not None:
                     _micro = _micro_kws(db)
                     needs_chromatogram = any(
-                        k not in _micro
-                        for k in fetch_parent_analysis_keywords(sample_id)
+                        d.analyte_keyword not in _micro for d in resolver_result.decisions
                     )
-                except Exception:
-                    needs_chromatogram = False
-            gate_missing = []
-            if not kinds["has_image"]:
-                gate_missing.append({
-                    "kind": "sample_image",
-                    "message": "Sample image — attach one from the sample page "
-                               "(Select Vial Image, or upload a Sample Image attachment).",
-                })
-            if needs_chromatogram and not kinds["has_chromatogram"]:
-                gate_missing.append({
-                    "kind": "chromatogram",
-                    "message": "Chromatogram — attach one from the sample page "
-                               "(Select Vial Chromatogram, after processing the HPLC prep).",
-                })
-            if gate_missing:
-                gate_lines = "\n".join(f"- {m['message']}" for m in gate_missing)
-                raise HTTPException(
-                    status_code=422,
-                    detail={
-                        "code": "missing_attachments",
-                        "message": (
-                            "COA can't be generated yet. The sample is missing "
-                            "required attachments:\n" + gate_lines
-                        ),
-                        "missing": [m["kind"] for m in gate_missing],
-                    },
+                else:
+                    # Resolver unavailable — derive from the AR's active keywords;
+                    # fail open (no chromatogram requirement) if that read fails too.
+                    try:
+                        from sub_samples.senaite import fetch_parent_analysis_keywords
+                        _micro = _micro_kws(db)
+                        needs_chromatogram = any(
+                            k not in _micro
+                            for k in fetch_parent_analysis_keywords(sample_id)
+                        )
+                    except Exception:
+                        needs_chromatogram = False
+                gate_missing = []
+                if not kinds["has_image"]:
+                    gate_missing.append({
+                        "kind": "sample_image",
+                        "message": "Sample image — attach one from the sample page "
+                                   "(Select Vial Image, or upload a Sample Image attachment).",
+                    })
+                if needs_chromatogram and not kinds["has_chromatogram"]:
+                    gate_missing.append({
+                        "kind": "chromatogram",
+                        "message": "Chromatogram — attach one from the sample page "
+                                   "(Select Vial Chromatogram, after processing the HPLC prep).",
+                    })
+                if gate_missing:
+                    _missing_attach = gate_missing
+
+        # Variance-lock gate: a variance-purchased lot must have its variance set
+        # LOCKED before generation, so the COA never certifies an incomplete
+        # series (lock_variance_set enforces every in-set vial is signed off).
+        # Applies to peptide + BW. No SENAITE_URL dependency. Fail-soft: skip if
+        # services are unavailable.
+        _pre_parent = db.execute(
+            select(LimsSample).where(LimsSample.sample_id == sample_id)
+        ).scalar_one_or_none()
+        if _pre_parent is not None:
+            try:
+                from sub_samples.service import fetch_sample_services, variance_lock_required
+                _vsvc = fetch_sample_services(sample_id)
+                _variance_required = variance_lock_required(
+                    (_vsvc or {}).get("services") or {}, _pre_parent.variance_locked_at
                 )
+            except HTTPException:
+                raise
+            except Exception:
+                _variance_required = False
+
+        from coa.preflight import collect_preflight_blockers, build_preflight_error
+        _blockers = collect_preflight_blockers(
+            unresolved=_unresolved,
+            missing_attachments=_missing_attach,
+            variance_locked_required=_variance_required,
+        )
+        if _blockers:
+            raise HTTPException(status_code=422, detail=build_preflight_error(_blockers))
 
     # Enrich with per-sample analyte display alias picks so the COA renders
     # the customer-facing name (real name still drives conformance).
@@ -9161,6 +9253,7 @@ async def generate_sample_coa(
     # generation. Parents only (sub-sample COAs have no variance children).
     # Tracks whether this generation delivered customer remarks — drives the
     # "Delivered on" timestamp stamped after a successful generation.
+    # (The variance-lock gate above already blocked an unlocked variance lot.)
     _remarks_included = False
     if not is_sub:
         _parent_row = db.execute(
@@ -9178,15 +9271,11 @@ async def generate_sample_coa(
             if _include_remarks and _remarks_text:
                 alias_body["lab_remarks"] = _remarks_text
                 _remarks_included = True
-            # Variance replicate series — best-effort; a builder error must not
-            # block generation.
-            try:
-                from coa.variance_series import build_variance_replicates
-                _reps = build_variance_replicates(db, _parent_row)
-                if _reps:
-                    alias_body["variance_replicates"] = _reps
-            except Exception:
-                _logger.warning("variance replicate build failed for %s", sample_id, exc_info=True)
+            # Variance series (peptide replicates + BW/generic analyte series) —
+            # best-effort; a builder error must not block generation. Shared
+            # helper so regen-primary sends the identical series (parity).
+            from coa.variance_series import process_variance_fields
+            alias_body.update(process_variance_fields(db, _parent_row))
 
     try:
         async with httpx.AsyncClient(timeout=120.0) as client:
@@ -9543,6 +9632,16 @@ async def regen_primary_coa(
     alias_map = _load_sample_aliases(db, sample_id)
     if alias_map:
         alias_body["analyte_display_names"] = {str(k): v for k, v in alias_map.items()}
+
+    # Variance series — MUST mirror generate_sample_coa, else regenerating strips
+    # the variance series off the certified COA (the parent figure renders alone).
+    # Same shared helper both paths use so they can't drift.
+    _regen_parent = db.execute(
+        select(LimsSample).where(LimsSample.sample_id == sample_id)
+    ).scalar_one_or_none()
+    if _regen_parent is not None:
+        from coa.variance_series import process_variance_fields
+        alias_body.update(process_variance_fields(db, _regen_parent))
 
     # 1. Regenerate only the primary COA via COA Builder
     try:
@@ -15877,6 +15976,42 @@ async def reorder_worksheet_items(
             item.sort_order = idx
     db.commit()
     return {"status": "reordered", "count": len(data.item_ids)}
+
+
+# ── Variance payload (integration-service bridge) ────────────────────
+# Called server-to-server by integration-service when it regenerates an
+# additional (re-branded) COA on an already-published sample. /process-additional
+# re-fetches SENAITE bare, which drops the variance series and could certify a
+# re-branded COA with a verdict that disagrees with the primary. This returns the
+# same {variance_replicates, variance_analytes} the primary /process flow builds
+# (see main.py ~9233), so the additional COA renders an identical series.
+
+@app.get("/samples/{sample_id}/variance-payload")
+def get_sample_variance_payload(
+    sample_id: str,
+    db: Session = Depends(get_db),
+    _: None = Depends(require_internal_service_token),
+):
+    """Variance replicate payload for a sample, for S2S consumers.
+
+    Internal service token required (X-Service-Token). 404 if the parent
+    LimsSample does not exist; otherwise 200 with possibly-empty dicts (a sample
+    that never bought variance simply yields {}, {} — the caller proceeds bare).
+    """
+    parent = db.execute(
+        select(LimsSample).where(LimsSample.sample_id == sample_id)
+    ).scalar_one_or_none()
+    if parent is None:
+        raise HTTPException(status_code=404, detail=f"sample {sample_id} not found")
+
+    from coa.variance_series import (
+        build_variance_replicates,
+        build_variance_analyte_series,
+    )
+    return {
+        "variance_replicates": build_variance_replicates(db, parent) or {},
+        "variance_analytes": build_variance_analyte_series(db, parent) or {},
+    }
 
 
 # ── Peptide requests API (integration-service bridge) ────────────────

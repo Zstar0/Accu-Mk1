@@ -171,6 +171,12 @@ class AnalysisService(Base):
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    # Mk1-owned override (like peptide_id / result_type): marks an analyte as a
+    # variance figure. Read by the COA analyte series + assignment-page analyte
+    # participation. Preserved across SENAITE re-sync (sync never writes it).
+    variance_capable: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False, server_default="false"
+    )
 
     # Relationships
     peptide: Mapped[Optional["Peptide"]] = relationship("Peptide", foreign_keys=[peptide_id])

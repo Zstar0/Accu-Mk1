@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { fetchSubSamplePhotoUrl, type SubSample } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { vialLabel } from '@/lib/vial-label'
+import { ROLE_BADGE_CLASS } from '@/lib/assignment-colors'
 
 interface Props {
   vials: { sub: SubSample; isThisSession: boolean }[]
@@ -22,11 +23,11 @@ interface Props {
 // (sky/emerald/violet/zinc/amber) but with full labels instead of letters
 // since the wizard's right column has the space for it.
 const ROLE_BADGES: Record<string, { label: string; cls: string }> = {
-  hplc:       { label: 'HPLC',       cls: 'bg-sky-500/15 text-sky-700 border-sky-500/40 dark:text-sky-300' },
-  endo:       { label: 'ENDO',       cls: 'bg-emerald-500/15 text-emerald-700 border-emerald-500/40 dark:text-emerald-300' },
-  ster:       { label: 'STERYL',     cls: 'bg-violet-500/15 text-violet-700 border-violet-500/40 dark:text-violet-300' },
-  xtra:       { label: 'XTRA',       cls: 'bg-zinc-500/15 text-zinc-700 border-zinc-500/40 dark:text-zinc-300' },
-  unassigned: { label: 'Unassigned', cls: 'bg-amber-500/15 text-amber-700 border-amber-500/40 dark:text-amber-300' },
+  hplc:       { label: 'HPLC',       cls: ROLE_BADGE_CLASS.hplc },
+  endo:       { label: 'ENDO',       cls: ROLE_BADGE_CLASS.endo },
+  ster:       { label: 'PCR',        cls: ROLE_BADGE_CLASS.ster },
+  xtra:       { label: 'XTRA',       cls: ROLE_BADGE_CLASS.xtra },
+  unassigned: { label: 'Unassigned', cls: ROLE_BADGE_CLASS.unassigned },
 }
 
 function RoleBadge({ role }: { role: string | null | undefined }) {

@@ -28,6 +28,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { Spinner } from '@/components/ui/spinner'
 import { cn } from '@/lib/utils'
 import { invalidateVialAssignmentCaches } from '@/lib/vial-assignment'
+import { ROLE_CHIP_CLASS } from '@/lib/assignment-colors'
 
 interface Props {
   parentSampleId: string
@@ -39,7 +40,7 @@ interface Props {
 const ROLE_SHORT: Record<string, string> = {
   hplc: 'HPLC',
   endo: 'ENDO',
-  ster: 'STERYL',
+  ster: 'PCR',
   xtra: 'XTRA',
 }
 
@@ -762,11 +763,7 @@ function DraggableVial({ vial }: { vial: VialPlanItem }) {
     ? { transform: `translate3d(${transform.x}px, ${transform.y}px, 0)` }
     : undefined
   const role = vial.assignment_role ?? 'xtra'
-  const roleColor = (
-    role === 'hplc' ? 'bg-sky-400/25 text-sky-300' :
-    role === 'endo' || role === 'ster' ? 'bg-violet-400/25 text-violet-300' :
-    'bg-pink-400/25 text-pink-300'
-  )
+  const roleColor = ROLE_CHIP_CLASS[role] ?? ROLE_CHIP_CLASS.xtra
   return (
     <div
       ref={setNodeRef}

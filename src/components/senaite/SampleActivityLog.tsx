@@ -52,6 +52,7 @@ function eventToLevel(event: string): EventLevel {
     case 'analysis_transition': return 'info'
     case 'analysis_promoted': return 'success'
     case 'analysis_promoted_to_parent': return 'success'
+    case 'variance_verified': return 'accent'
     case 'role_assigned':     return 'accent'
     case 'remarks_updated':   return 'info'
     case 'analysis_removed':  return 'warn'
@@ -78,6 +79,7 @@ function eventIcon(event: string): string {
     case 'analysis_added':      return '+'
     case 'analysis_promoted':   return '↑'
     case 'analysis_promoted_to_parent': return '↑'
+    case 'variance_verified':   return '◈' // ◈ variance replicate verified
     case 'worksheet_assigned':        return '+'
     case 'worksheet_removed':         return '−' // −
     case 'worksheet_analyst_changed': return '◈' // ◈

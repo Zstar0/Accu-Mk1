@@ -36,6 +36,7 @@ import {
   syncAnalysisServices,
   updateAnalysisServicePeptide,
   updateAnalysisServiceResultType,
+  updateAnalysisServiceVarianceCapable,
   getPeptides,
   type AnalysisServiceRecord,
   type PeptideRecord,
@@ -206,6 +207,9 @@ export function AnalysisServicesPage() {
                     <Badge variant={svc.active ? 'default' : 'outline'} className="text-xs">
                       {svc.active ? 'Active' : 'Inactive'}
                     </Badge>
+                    {svc.variance_capable && (
+                      <Badge variant="secondary" className="ml-1 text-xs">Variance</Badge>
+                    )}
                   </TableCell>
                   <TableCell>
                     <ChevronRight className="h-4 w-4 text-muted-foreground" />
@@ -264,6 +268,15 @@ export function AnalysisServicesPage() {
                     toast.error(err instanceof Error ? err.message : 'Failed to update result type')
                   }
                 }}
+                onVarianceCapableChange={async (v) => {
+                  try {
+                    await updateAnalysisServiceVarianceCapable(selectedService.id, v)
+                    toast.success(v ? 'Variance-capable enabled' : 'Variance-capable disabled')
+                    await load()
+                  } catch (err) {
+                    toast.error(err instanceof Error ? err.message : 'Failed to update variance-capable')
+                  }
+                }}
               />
             </div>
           </div>
@@ -292,6 +305,7 @@ function ServicePanel({
   peptides,
   onPeptideChange,
   onResultTypeChange,
+  onVarianceCapableChange,
 }: {
   service: AnalysisServiceRecord
   peptides: PeptideRecord[]
@@ -300,6 +314,7 @@ function ServicePanel({
     result_type: string | null
     result_options: ResultOption[] | null
   }) => Promise<void>
+  onVarianceCapableChange: (v: boolean) => void
 }) {
   const isSlotService = /^ANALYTE-\d/i.test(service.keyword ?? '')
 
@@ -443,6 +458,19 @@ function ServicePanel({
             {rtSaving ? 'Saving…' : 'Save result type'}
           </Button>
         </div>
+      </div>
+
+      {/* Variance Capable */}
+      <div className="border-t pt-4">
+        <h4 className="mb-3 text-sm font-semibold text-muted-foreground">Variance</h4>
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={!!service.variance_capable}
+            onChange={e => onVarianceCapableChange(e.target.checked)}
+          />
+          Variance-capable (eligible for replicate testing &amp; COA variance series)
+        </label>
       </div>
 
       {/* Timestamps */}

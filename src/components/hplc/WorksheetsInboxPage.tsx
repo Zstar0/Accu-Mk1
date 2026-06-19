@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
+import { ROLE_BADGE_CLASS } from '@/lib/assignment-colors'
 import { toast } from 'sonner'
 import { InboxVialCard, type DragData } from '@/components/hplc/InboxVialCard'
 import { InboxFamilyGroup } from '@/components/hplc/InboxFamilyGroup'
@@ -405,7 +406,7 @@ export default function WorksheetsInboxPage() {
                 className={cn(
                   'inline-flex items-center rounded-full border px-3 py-1 text-sm font-medium transition-colors',
                   role === 'hplc'
-                    ? 'bg-sky-500/15 text-sky-700 border-sky-500/40 dark:text-sky-300'
+                    ? ROLE_BADGE_CLASS.hplc
                     : 'bg-transparent text-muted-foreground border-border hover:bg-muted/40',
                 )}
               >
@@ -439,7 +440,10 @@ export default function WorksheetsInboxPage() {
                     className={cn(
                       'inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-medium transition-colors',
                       microCategory === c.value
-                        ? 'bg-violet-500/15 text-violet-700 border-violet-500/40 dark:text-violet-300'
+                        // Active sub-chip carries its assignment-role colour:
+                        // Endotoxin → orange, Sterility(PCR) → purple; the "All"
+                        // chip has no role, so it falls back to neutral violet.
+                        ? (ROLE_BADGE_CLASS[c.value] ?? 'bg-violet-500/15 text-violet-700 border-violet-500/40 dark:text-violet-300')
                         : 'bg-transparent text-muted-foreground border-border hover:bg-muted/40',
                     )}
                   >

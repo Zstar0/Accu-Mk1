@@ -89,6 +89,7 @@ import {
   getWooOrder,
   fetchChromatogramLttb,
   listSubSamples,
+  getVarianceSet,
   listLimsAnalysesForSubSample,
   listParentPromotions,
   listParentLineStates,
@@ -2717,6 +2718,23 @@ export function SampleDetails() {
     })),
   })
 
+  // Variance-set lock state for the overlay's vial chips: a Lock icon marks
+  // vials locked into the set. Parent page only, and only when the family has a
+  // variance vial (else skip the fetch). Source of truth for in_variance_set +
+  // the set-level lock (listSubSamples carries neither).
+  const _hasVarianceVial = overlayVials.some(v => v.assignment_kind === 'variance')
+  const { data: varianceSetOverlay } = useQuery({
+    queryKey: ['variance-set-overlay', sampleId],
+    queryFn: () => getVarianceSet(sampleId ?? ''),
+    enabled: parentSampleId === null && _hasVarianceVial && !!sampleId,
+    staleTime: 30_000,
+  })
+  const lockedVialIds = new Set(
+    varianceSetOverlay?.locked
+      ? varianceSetOverlay.vials.filter(v => v.in_variance_set).map(v => v.sample_id)
+      : [],
+  )
+
   // Slot number → display peptide name (e.g. { 1: "BPC-157", 2: "TB-500" }).
   // Built here (pre-early-returns) because the overlay join's analyte bridge
   // needs it; also consumed by the analyte cards + AnalysisTable renames below.
@@ -2739,6 +2757,7 @@ export function SampleDetails() {
             analyses: overlayAnalysesQueries[i]?.data ?? [],
             assignmentRole: v.assignment_role, // vial bench role
             assignmentKind: v.assignment_kind, // explicit variance bucket — drives overlay treatment
+            varianceLocked: lockedVialIds.has(v.sample_id), // in the LOCKED variance set → Lock icon
           })),
           analyteNameMap, // analyte bridge: ANALYTE-{n}-PUR/QTY ↔ PUR_/QTY_<X>
         )

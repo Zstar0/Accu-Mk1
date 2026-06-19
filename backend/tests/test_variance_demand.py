@@ -51,8 +51,24 @@ class TestDeriveVarianceDemand:
         # The demand map and the variance_verify gate must agree on
         # role/bucket -> WP service key, or check-in demand and the sign-off
         # gate drift apart.
+        # NOTE (2026-06-17): both maps are now a stale description of hplc->key
+        # (neither captures "bac_water_panel"); the equality still holds only
+        # because both are unchanged. derive_variance_demand handles BW inline
+        # (max of both keys) rather than via these maps.
         from lims_analyses.service import _ROLE_VARIANCE_KEYS
         assert sub_service.VARIANCE_BUCKET_KEYS == _ROLE_VARIANCE_KEYS
+
+    def test_bw_variance_maps_to_hplc_bucket(self):
+        # BW orders carry variance count under bac_water_panel, not hplcpurity_identity.
+        # Both are chromatography (hplc bucket) and are mutually exclusive per order.
+        # Handler decision 2026-06-17.
+        services = {"variance": {"bac_water_panel": 3}}  # 3 total -> 2 paid replicates
+        assert sub_service.derive_variance_demand(services)["hplc"] == 2
+
+    def test_peptide_variance_still_maps_to_hplc_bucket(self):
+        # Guard: peptide path unchanged after BW-aware extension.
+        services = {"variance": {"hplcpurity_identity": 2}}
+        assert sub_service.derive_variance_demand(services)["hplc"] == 1
 
 
 class TestDeriveDemandCore:
@@ -208,6 +224,7 @@ def lock_fixture(db):
     db.execute(text("DELETE FROM lims_analyses WHERE keyword LIKE 'ZZTEST-VARLOCK%'"))
     db.execute(text("DELETE FROM lims_sub_samples WHERE sample_id LIKE 'ZZTEST-VARLOCK%'"))
     db.execute(text("DELETE FROM lims_samples WHERE sample_id LIKE 'ZZTEST-VARLOCK%'"))
+    db.execute(text("DELETE FROM audit_logs WHERE entity_id LIKE 'ZZTEST-VARLOCK%'"))
     db.commit()
 
 
@@ -280,6 +297,49 @@ class TestLockSeriesGuard:
         parent = sub_service.lock_variance_set(db, "ZZTEST-VARLOCK", user_id=1)
         assert parent.variance_locked_at is not None
         sub_service.unlock_variance_set(db, "ZZTEST-VARLOCK")
+
+
+# ─── Lock/unlock activity logging ────────────────────────────────────────────
+
+from sqlalchemy import select as _select
+from models import AuditLog
+
+
+class TestVarianceLockAudit:
+    def test_lock_writes_audit_log(self, db, lock_fixture, monkeypatch):
+        # user_id=1 is the seeded admin (variance_locked_by_user_id FK -> users).
+        monkeypatch.setattr(sub_service, "fetch_sample_services",
+                            lambda sid: VARIANCE_SERVICES)
+        sub_service.lock_variance_set(db, "ZZTEST-VARLOCK", user_id=1)
+        log = db.execute(
+            _select(AuditLog).where(
+                AuditLog.entity_type == "variance_set",
+                AuditLog.entity_id == "ZZTEST-VARLOCK",
+                AuditLog.operation == "variance_set_locked",
+            )
+        ).scalars().first()
+        assert log is not None
+        assert log.details.get("user_id") == 1
+        # parent (in_variance_set) + 2 in-set sub-vials = 3
+        assert log.details.get("selected_vials") == 3
+        sub_service.unlock_variance_set(db, "ZZTEST-VARLOCK", user_id=1)
+
+    def test_unlock_writes_audit_log(self, db, lock_fixture, monkeypatch):
+        # unlock clears the FK column to NULL, so its user_id only lands in
+        # AuditLog.details — any value is fine there (no FK).
+        monkeypatch.setattr(sub_service, "fetch_sample_services",
+                            lambda sid: VARIANCE_SERVICES)
+        sub_service.lock_variance_set(db, "ZZTEST-VARLOCK", user_id=1)
+        sub_service.unlock_variance_set(db, "ZZTEST-VARLOCK", user_id=9)
+        log = db.execute(
+            _select(AuditLog).where(
+                AuditLog.entity_type == "variance_set",
+                AuditLog.entity_id == "ZZTEST-VARLOCK",
+                AuditLog.operation == "variance_set_unlocked",
+            )
+        ).scalars().first()
+        assert log is not None
+        assert log.details.get("user_id") == 9
 
 
 # ─── Variance override storage + merge ───────────────────────────────────────
