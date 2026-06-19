@@ -1010,8 +1010,11 @@ def test_parent_retest_cascade_unpromotes_verified_parent(db, analysis_service):
         db.refresh(parent_row)
         assert created_ids, "expected a vial retest row to be created"
         assert src.retested is True
-        # the new behaviour: parent is un-promoted (retracted), not left verified
+        # the new behaviour: parent is un-promoted (retracted) AND its stale
+        # promoted figure is cleared (the display filters by retest_of_id, not
+        # state, so a retracted-but-valued parent would still render 98).
         assert parent_row.review_state == "retracted"
+        assert parent_row.result_value is None
     finally:
         all_ids = [src.id, parent_row.id, *created_ids]
         db.execute(delete(LimsAnalysisTransition).where(LimsAnalysisTransition.analysis_id.in_(all_ids)))

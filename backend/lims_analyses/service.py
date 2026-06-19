@@ -1014,6 +1014,12 @@ def cascade_parent_retest_to_sources(
     if new_row_ids and parent_analysis.review_state == "verified":
         prior_state = parent_analysis.review_state
         parent_analysis.review_state = "retracted"
+        # Clear the promoted figure too: the display serialization
+        # (list_analyses_for_host) filters by retest_of_id, NOT state, so a
+        # retracted parent still renders — leaving the stale value visible.
+        # The superseded SOURCE vial row keeps the old value for history.
+        parent_analysis.result_value = None
+        parent_analysis.result_unit = None
         parent_analysis.updated_at = datetime.utcnow()
         db.add(LimsAnalysisTransition(
             analysis_id=parent_analysis.id,
