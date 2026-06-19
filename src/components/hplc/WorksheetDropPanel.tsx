@@ -56,7 +56,7 @@ export interface WorksheetSummary {
 // tracked fast-follow). Endotoxin / Sterility / HPLC tints.
 const ROLE_PILL: Record<InboxRoleTag, { label: string; cls: string }> = {
   endo: { label: 'ENDO', cls: ROLE_BADGE_CLASS.endo },
-  ster: { label: 'STER', cls: ROLE_BADGE_CLASS.ster },
+  ster: { label: 'PCR', cls: ROLE_BADGE_CLASS.ster },
   hplc: { label: 'HPLC', cls: ROLE_BADGE_CLASS.hplc },
 }
 

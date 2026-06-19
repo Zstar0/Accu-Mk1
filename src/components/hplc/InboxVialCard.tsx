@@ -38,7 +38,7 @@ export interface DragData {
 const ROLE_BADGES: Record<string, { label: string; cls: string }> = {
   hplc:       { label: 'HPLC',       cls: ROLE_BADGE_CLASS.hplc },
   endo:       { label: 'ENDO',       cls: ROLE_BADGE_CLASS.endo },
-  ster:       { label: 'STER',       cls: ROLE_BADGE_CLASS.ster },
+  ster:       { label: 'PCR',        cls: ROLE_BADGE_CLASS.ster },
   xtra:       { label: 'XTRA',       cls: ROLE_BADGE_CLASS.xtra },
   unassigned: { label: '—',          cls: ROLE_BADGE_CLASS.unassigned },
 }

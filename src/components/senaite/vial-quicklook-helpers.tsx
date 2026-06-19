@@ -106,7 +106,7 @@ export function VialPhotoThumb({
 export const ROLE_HEADER_BADGES: Record<string, { label: string; cls: string }> = {
   hplc: { label: 'HPLC',   cls: ROLE_BADGE_CLASS.hplc },
   endo: { label: 'ENDO',   cls: ROLE_BADGE_CLASS.endo },
-  ster: { label: 'STERYL', cls: ROLE_BADGE_CLASS.ster },
+  ster: { label: 'PCR',    cls: ROLE_BADGE_CLASS.ster },
   xtra: { label: 'XTRA',   cls: ROLE_BADGE_CLASS.xtra },
 }
 

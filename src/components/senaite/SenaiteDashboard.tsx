@@ -160,7 +160,7 @@ type RoleKey = 'hplc' | 'endo' | 'ster' | 'xtra' | 'unassigned'
 const ROLE_BADGES: { key: RoleKey; label: string; cls: string }[] = [
   { key: 'hplc', label: 'H', cls: ROLE_BADGE_CLASS.hplc },
   { key: 'endo', label: 'E', cls: ROLE_BADGE_CLASS.endo },
-  { key: 'ster', label: 'S', cls: ROLE_BADGE_CLASS.ster },
+  { key: 'ster', label: 'P', cls: ROLE_BADGE_CLASS.ster },
   { key: 'xtra', label: 'X', cls: ROLE_BADGE_CLASS.xtra },
   { key: 'unassigned', label: '?', cls: ROLE_BADGE_CLASS.unassigned },
 ]

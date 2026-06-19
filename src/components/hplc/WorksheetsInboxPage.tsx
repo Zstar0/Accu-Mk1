@@ -440,7 +440,10 @@ export default function WorksheetsInboxPage() {
                     className={cn(
                       'inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-medium transition-colors',
                       microCategory === c.value
-                        ? 'bg-violet-500/15 text-violet-700 border-violet-500/40 dark:text-violet-300'
+                        // Active sub-chip carries its assignment-role colour:
+                        // Endotoxin → orange, Sterility(PCR) → purple; the "All"
+                        // chip has no role, so it falls back to neutral violet.
+                        ? (ROLE_BADGE_CLASS[c.value] ?? 'bg-violet-500/15 text-violet-700 border-violet-500/40 dark:text-violet-300')
                         : 'bg-transparent text-muted-foreground border-border hover:bg-muted/40',
                     )}
                   >
