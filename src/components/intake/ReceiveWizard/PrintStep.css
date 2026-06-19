@@ -115,16 +115,20 @@
     display: revert !important;
   }
 
-  /* Unchecked labels skip print. display:none beats visibility, so the page
-     break attached to .label doesn't trigger an empty page either. */
-  .label-row-unchecked,
-  .label-checkbox {
-    display: none !important;
-  }
   /* Let .label participate directly in the print-area flow (page-break
      lives on .label, and a wrapper box would break the per-page sizing). */
   .label-row {
     display: contents !important;
+  }
+  /* Unchecked labels skip print. display:none beats visibility, so the page
+     break attached to .label doesn't trigger an empty page either. An
+     unchecked row carries BOTH .label-row and .label-row-unchecked, so this
+     must out-specify the .label-row{display:contents} rule above — the extra
+     .print-area qualifier does that (and keeps it winning regardless of source
+     order). */
+  .print-area .label-row-unchecked,
+  .label-checkbox {
+    display: none !important;
   }
 
   html, body { margin: 0 !important; padding: 0 !important; }
