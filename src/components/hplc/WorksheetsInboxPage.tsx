@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
+import { ROLE_BADGE_CLASS } from '@/lib/assignment-colors'
 import { toast } from 'sonner'
 import { InboxVialCard, type DragData } from '@/components/hplc/InboxVialCard'
 import { InboxFamilyGroup } from '@/components/hplc/InboxFamilyGroup'
@@ -405,7 +406,7 @@ export default function WorksheetsInboxPage() {
                 className={cn(
                   'inline-flex items-center rounded-full border px-3 py-1 text-sm font-medium transition-colors',
                   role === 'hplc'
-                    ? 'bg-sky-500/15 text-sky-700 border-sky-500/40 dark:text-sky-300'
+                    ? ROLE_BADGE_CLASS.hplc
                     : 'bg-transparent text-muted-foreground border-border hover:bg-muted/40',
                 )}
               >

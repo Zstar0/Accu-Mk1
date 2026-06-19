@@ -33,6 +33,7 @@ import { toast } from 'sonner'
 import type { SenaiteAnalysis, InboxPriority, ParentPromotionInfo } from '@/lib/api'
 import { setAnalysisMethodInstrument, promoteAnalyses } from '@/lib/api'
 import type { VialAssignment } from '@/lib/vial-assignment'
+import { ROLE_TEXT_CLASS, roleTextClass } from '@/lib/assignment-colors'
 import { PromotedFromBadge } from '@/components/senaite/PromotedFromBadge'
 import type { SampleSlaSnapshot } from '@/services/order-sla'
 import { AnalysisSlaCell } from '@/components/senaite/AnalysisSlaCell'
@@ -103,10 +104,10 @@ export const STATUS_LABELS: Record<string, string> = {
  * role badges elsewhere in the app — keeps the visual language consistent.
  */
 const PRIMARY_TITLE_COLOR: Record<string, string> = {
-  hplc: 'text-sky-700 dark:text-sky-300',
-  endo: 'text-emerald-700 dark:text-emerald-300',
-  ster: 'text-violet-700 dark:text-violet-300',
-  xtra: 'text-zinc-700 dark:text-zinc-300',
+  hplc: ROLE_TEXT_CLASS.hplc,
+  endo: ROLE_TEXT_CLASS.endo,
+  ster: ROLE_TEXT_CLASS.ster,
+  xtra: ROLE_TEXT_CLASS.xtra,
 }
 
 /** Row-level tint: colored left border + subtle background, inspired by SENAITE. */
@@ -1304,11 +1305,7 @@ function AnalysisRow({
                 key={m.vialSampleId}
                 type="button"
                 onClick={e => { e.stopPropagation(); useUIStore.getState().navigateToSample(m.vialSampleId) }}
-                className={`inline-flex items-center gap-0.5 text-[10px] underline underline-offset-2 shrink-0 ${
-                  vialIsVariance
-                    ? 'text-sky-600 dark:text-sky-400 hover:text-sky-700 dark:hover:text-sky-300'
-                    : 'text-muted-foreground hover:text-foreground'
-                }`}
+                className={`inline-flex items-center gap-0.5 text-[10px] underline underline-offset-2 shrink-0 hover:opacity-80 ${roleTextClass(m.assignmentRole)}`}
                 title={
                   vialLocked
                     ? `Variance replicate, locked into the set — ${m.vialSampleId}`
@@ -1317,7 +1314,9 @@ function AnalysisRow({
                       : `Assigned to ${m.vialSampleId}`
                 }
               >
-                {vialIsVariance && <Layers className="h-3 w-3" aria-hidden="true" />}
+                {/* Variance stays marked by the blue Layers icon; the vial label
+                    itself now carries its assignment-role colour. */}
+                {vialIsVariance && <Layers className="h-3 w-3 text-sky-600 dark:text-sky-400" aria-hidden="true" />}
                 {m.vialLabel} — {m.vialSampleId}
                 {vialLocked && <Lock className="h-3 w-3 shrink-0" aria-hidden="true" />}
               </button>

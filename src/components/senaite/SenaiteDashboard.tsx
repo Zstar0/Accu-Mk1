@@ -21,6 +21,7 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card'
+import { ROLE_BADGE_CLASS } from '@/lib/assignment-colors'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -157,11 +158,11 @@ const TEST_CLIENT_ID = 'forrest@valenceanalytical.com'
 // expanded row.
 type RoleKey = 'hplc' | 'endo' | 'ster' | 'xtra' | 'unassigned'
 const ROLE_BADGES: { key: RoleKey; label: string; cls: string }[] = [
-  { key: 'hplc', label: 'H', cls: 'bg-sky-500/15 text-sky-300 border-sky-500/30' },
-  { key: 'endo', label: 'E', cls: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30' },
-  { key: 'ster', label: 'S', cls: 'bg-violet-500/15 text-violet-300 border-violet-500/30' },
-  { key: 'xtra', label: 'X', cls: 'bg-zinc-500/15 text-zinc-300 border-zinc-500/30' },
-  { key: 'unassigned', label: '?', cls: 'bg-amber-500/15 text-amber-300 border-amber-500/30' },
+  { key: 'hplc', label: 'H', cls: ROLE_BADGE_CLASS.hplc },
+  { key: 'endo', label: 'E', cls: ROLE_BADGE_CLASS.endo },
+  { key: 'ster', label: 'S', cls: ROLE_BADGE_CLASS.ster },
+  { key: 'xtra', label: 'X', cls: ROLE_BADGE_CLASS.xtra },
+  { key: 'unassigned', label: '?', cls: ROLE_BADGE_CLASS.unassigned },
 ]
 
 interface ColumnFilters {

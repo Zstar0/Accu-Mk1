@@ -27,6 +27,7 @@ import { SlaAgeIndicator } from '@/components/hplc/SlaAgeIndicator'
 import { useSlaForSubjects, type SlaSubject } from '@/services/sla-subjects'
 import type { WorksheetUser, InboxPriority } from '@/lib/api'
 import { itemRoleBadges, type InboxRoleTag } from '@/lib/inbox-filters'
+import { ROLE_BADGE_CLASS } from '@/lib/assignment-colors'
 
 export interface WorksheetSummaryItem {
   sample_id: string
@@ -54,9 +55,9 @@ export interface WorksheetSummary {
 // Role pill palette — mirrors InboxVialCard.ROLE_BADGES (copy #5; dedup is a
 // tracked fast-follow). Endotoxin / Sterility / HPLC tints.
 const ROLE_PILL: Record<InboxRoleTag, { label: string; cls: string }> = {
-  endo: { label: 'ENDO', cls: 'bg-emerald-500/15 text-emerald-700 border-emerald-500/40 dark:text-emerald-300' },
-  ster: { label: 'STER', cls: 'bg-violet-500/15 text-violet-700 border-violet-500/40 dark:text-violet-300' },
-  hplc: { label: 'HPLC', cls: 'bg-sky-500/15 text-sky-700 border-sky-500/40 dark:text-sky-300' },
+  endo: { label: 'ENDO', cls: ROLE_BADGE_CLASS.endo },
+  ster: { label: 'STER', cls: ROLE_BADGE_CLASS.ster },
+  hplc: { label: 'HPLC', cls: ROLE_BADGE_CLASS.hplc },
 }
 
 function ItemRolePills({ item }: { item: WorksheetSummaryItem }) {

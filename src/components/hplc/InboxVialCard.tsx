@@ -13,6 +13,7 @@ import { PriorityBadge } from '@/components/hplc/PriorityBadge'
 import { AgingTimer } from '@/components/hplc/AgingTimer'
 import { cn } from '@/lib/utils'
 import { vialLabel } from '@/lib/vial-label'
+import { ROLE_BADGE_CLASS } from '@/lib/assignment-colors'
 import {
   SERVICE_GROUP_COLORS,
   type ServiceGroupColor,
@@ -32,14 +33,14 @@ export interface DragData {
   analyses: { title: string; keyword: string | null; peptide_name: string | null; method: string | null }[]
 }
 
-// Role palette — mirrors VialsList / SenaiteDashboard / VialDetailsTab. Inline
-// copy #4 to stay additive; dedup is a tracked fast-follow.
+// Labels live here; colours come from the official scheme in
+// @/lib/assignment-colors (single source of truth).
 const ROLE_BADGES: Record<string, { label: string; cls: string }> = {
-  hplc:       { label: 'HPLC',       cls: 'bg-sky-500/15 text-sky-700 border-sky-500/40 dark:text-sky-300' },
-  endo:       { label: 'ENDO',       cls: 'bg-emerald-500/15 text-emerald-700 border-emerald-500/40 dark:text-emerald-300' },
-  ster:       { label: 'STER',       cls: 'bg-violet-500/15 text-violet-700 border-violet-500/40 dark:text-violet-300' },
-  xtra:       { label: 'XTRA',       cls: 'bg-zinc-500/15 text-zinc-700 border-zinc-500/40 dark:text-zinc-300' },
-  unassigned: { label: '—',          cls: 'bg-amber-500/15 text-amber-700 border-amber-500/40 dark:text-amber-300' },
+  hplc:       { label: 'HPLC',       cls: ROLE_BADGE_CLASS.hplc },
+  endo:       { label: 'ENDO',       cls: ROLE_BADGE_CLASS.endo },
+  ster:       { label: 'STER',       cls: ROLE_BADGE_CLASS.ster },
+  xtra:       { label: 'XTRA',       cls: ROLE_BADGE_CLASS.xtra },
+  unassigned: { label: '—',          cls: ROLE_BADGE_CLASS.unassigned },
 }
 
 function RoleBadge({ role }: { role: string | null | undefined }) {

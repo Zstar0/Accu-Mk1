@@ -6,6 +6,7 @@
 import { useEffect, useState } from 'react'
 import { cn } from '@/lib/utils'
 import { fetchSubSamplePhotoUrl } from '@/lib/api'
+import { ROLE_BADGE_CLASS } from '@/lib/assignment-colors'
 import type { SenaiteAnalysis } from '@/lib/api'
 
 /**
@@ -103,10 +104,10 @@ export function VialPhotoThumb({
 // InboxVialCard.tsx. Moved here from SampleDetails.tsx (was the fifth inline copy);
 // dedup of the remaining copies is a tracked fast-follow, not in scope here.
 export const ROLE_HEADER_BADGES: Record<string, { label: string; cls: string }> = {
-  hplc: { label: 'HPLC',   cls: 'bg-sky-500/15 text-sky-700 border-sky-500/40 dark:text-sky-300' },
-  endo: { label: 'ENDO',   cls: 'bg-emerald-500/15 text-emerald-700 border-emerald-500/40 dark:text-emerald-300' },
-  ster: { label: 'STERYL', cls: 'bg-violet-500/15 text-violet-700 border-violet-500/40 dark:text-violet-300' },
-  xtra: { label: 'XTRA',   cls: 'bg-zinc-500/15 text-zinc-700 border-zinc-500/40 dark:text-zinc-300' },
+  hplc: { label: 'HPLC',   cls: ROLE_BADGE_CLASS.hplc },
+  endo: { label: 'ENDO',   cls: ROLE_BADGE_CLASS.endo },
+  ster: { label: 'STERYL', cls: ROLE_BADGE_CLASS.ster },
+  xtra: { label: 'XTRA',   cls: ROLE_BADGE_CLASS.xtra },
 }
 
 export function RoleHeaderBadge({ role }: { role: string }) {
