@@ -27,6 +27,59 @@ from typing import Any, Optional
 
 CONFORMS_VALUES = {"conforms", "pass", "passes", "passing", "ok"}
 
+# Identity conformance tokens. Mirrors COABuilder conformance._identity_matches
+# (the rule the COA itself applies) plus the select-form "Conforms"/"1".
+_ID_PASS_TOKENS = {"conforms", "pass", "passes", "passing", "positive", "compliant", "ok", "1"}
+_ID_FAIL_TOKENS = {
+    "does_not_conform", "does not conform", "doesn't conform", "fail", "fails",
+    "nonconforming", "non-conforming", "non conforming", "negative", "0",
+}
+
+
+def identity_conforms(
+    value: Any,
+    peptide_name: Optional[str] = None,
+    result_options: Optional[list] = None,
+) -> Optional[bool]:
+    """Whether an identity result conforms, agreeing with the COA's own rule.
+
+    Identity is never a literal "conforms" string for peptide-specific services —
+    it's the peptide NAME (e.g. "BPC-157"), with an explicit "Does_Not_Conform"
+    on failure. Select-form identity (HPLC-ID) stores the option value ("1"),
+    whose label ("Conforms") is the signal. So:
+
+      1. map a select value through *result_options* to its label;
+      2. explicit fail token  -> False;
+      3. explicit pass token  -> True;
+      4. name-match (label starts with the declared peptide on a word boundary,
+         mirroring COABuilder conformance._identity_matches) -> True;
+      5. otherwise -> False.
+
+    Returns None for a blank/missing result (not yet entered).
+    """
+    raw = str(value if value is not None else "").strip()
+    if not raw:
+        return None
+
+    label = raw
+    for opt in (result_options or []):
+        if isinstance(opt, dict) and str(opt.get("value")) == raw:
+            label = str(opt.get("label") or raw)
+            break
+
+    norm = label.strip().lower()
+    if norm in _ID_FAIL_TOKENS:
+        return False
+    if norm in _ID_PASS_TOKENS:
+        return True
+
+    name = (peptide_name or "").strip()
+    if name and label.startswith(name):
+        suffix = label[len(name):]
+        if not suffix or not suffix[0].isalnum():
+            return True
+    return False
+
 
 def compute_variance_stats(vials: list[dict]) -> dict[str, dict[str, Any]]:
     """Compute per-keyword stats over vials with in_variance_set=True."""
@@ -100,12 +153,23 @@ def _categorical_stats(selected: list[dict], kw: str) -> dict[str, Any]:
         r = (v.get("results") or {}).get(kw)
         if not r:
             continue
-        val = str(r.get("value", "")).strip().lower()
-        if not val:
-            continue
-        total += 1
-        if val in CONFORMS_VALUES:
-            conforms += 1
+        # Prefer an explicit conformance verdict computed upstream where the
+        # keyword/options/peptide context exists (identity, etc.) — the string
+        # heuristic below can't tell "BPC-157" (a conforming identity) from a
+        # fail, nor that sterility "1" means fail. Fall back to the heuristic
+        # only when no verdict was supplied (e.g. SENAITE-sourced rows).
+        verdict = r.get("conforms")
+        if verdict is not None:
+            total += 1
+            if verdict:
+                conforms += 1
+        else:
+            val = str(r.get("value", "")).strip().lower()
+            if not val:
+                continue
+            total += 1
+            if val in CONFORMS_VALUES:
+                conforms += 1
         if spec is None and r.get("spec"):
             spec = r["spec"]
     return {

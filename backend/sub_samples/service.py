@@ -1384,16 +1384,23 @@ def _fetch_mk1_results_for_host(
         sample hosts keep the parent-tier canonical row (retest_of_id IS NULL,
         updated in place via promotion — same convention as source_resolver).
     """
-    from models import LimsAnalysis, LimsAnalysisPromotion
+    from models import LimsAnalysis, LimsAnalysisPromotion, AnalysisService, Peptide
+    from sub_samples.variance import identity_conforms
+    from coa.variance_series import _category
 
+    base = (
+        select(LimsAnalysis, AnalysisService, Peptide)
+        .outerjoin(AnalysisService, AnalysisService.id == LimsAnalysis.analysis_service_id)
+        .outerjoin(Peptide, Peptide.id == AnalysisService.peptide_id)
+    )
     if host_kind == "sample":
-        stmt = select(LimsAnalysis).where(
+        stmt = base.where(
             LimsAnalysis.lims_sample_pk == host_pk,
             LimsAnalysis.retest_of_id.is_(None),
             LimsAnalysis.result_value.is_not(None),
         )
     elif host_kind == "sub_sample":
-        stmt = select(LimsAnalysis).where(
+        stmt = base.where(
             LimsAnalysis.lims_sub_sample_pk == host_pk,
             # Current vial result = retested IS False. retest_of_id IS NULL
             # returns the superseded original once a retest exists (P-0149 S03).
@@ -1402,9 +1409,12 @@ def _fetch_mk1_results_for_host(
         )
     else:
         return {}
-    rows = db.execute(stmt).scalars().all()
-    if not rows:
+    triples = db.execute(stmt).all()
+    if not triples:
         return {}
+    rows = [t[0] for t in triples]
+    svc_by_analysis = {t[0].id: t[1] for t in triples}
+    peptide_by_analysis = {t[0].id: t[2] for t in triples}
 
     # Bulk-load promotion links for these rows
     row_ids = [r.id for r in rows]
@@ -1418,22 +1428,40 @@ def _fetch_mk1_results_for_host(
 
     out: dict = {}
     for r in rows:
-        # Heuristic: numeric vs categorical. Mk1 doesn't currently track this
-        # explicitly per analysis. Try float-parse the result; if it parses,
-        # call it numeric. Otherwise categorical. Matches what SENAITE-side
-        # fetch_results_by_keyword does indirectly via ResultOptions.
-        kind = "numeric"
-        try:
-            float(r.result_value)  # type: ignore[arg-type]
-        except (TypeError, ValueError):
+        svc = svc_by_analysis.get(r.id)
+        options = getattr(svc, "result_options", None) if svc else None
+        # numeric vs categorical: a service with defined result_options is a
+        # selection (categorical) even when its value float-parses — e.g.
+        # HPLC-ID / STER-PCR store "1". Without options, fall back to the
+        # float-parse heuristic so numeric-but-text-typed services (PUR_*,
+        # whose SENAITE result_type is 'text' yet hold "95.75") stay numeric.
+        if options:
             kind = "categorical"
-        out[r.keyword] = {
+        else:
+            kind = "numeric"
+            try:
+                float(r.result_value)  # type: ignore[arg-type]
+            except (TypeError, ValueError):
+                kind = "categorical"
+
+        entry: dict = {
             "value": str(r.result_value),
             "kind": kind,
             "spec": None,
             "uid": f"mk1:{r.id}",
             "promoted_to_parent_id": promo_by_source.get(r.id),
         }
+        # Identity conformance can't be inferred from the raw value (it's the
+        # peptide name, or a select code) — compute it here, where the keyword,
+        # options, and declared peptide are in hand, agreeing with the COA.
+        if _category(r.keyword) == "identity":
+            pep = peptide_by_analysis.get(r.id)
+            entry["conforms"] = identity_conforms(
+                r.result_value,
+                peptide_name=pep.name if pep is not None else None,
+                result_options=options,
+            )
+        out[r.keyword] = entry
     return out
 
 
