@@ -148,6 +148,23 @@ def test_native_create_after_legacy_subs_continues_sequence(
     assert s3.external_lims_uid.startswith("mk1://")
 
 
+# ── 1.0.2: native create is the default ──────────────────────────────────────
+
+
+def test_native_create_defaults_on(monkeypatch):
+    """With the env var unset, native create is the default (1.0.2)."""
+    from sub_samples import native
+    monkeypatch.delenv("SUBSAMPLE_NATIVE_CREATE", raising=False)
+    assert native.native_create_enabled() is True
+
+
+def test_native_create_explicit_off(monkeypatch):
+    """Only an explicit '0' opts back into the legacy SENAITE-secondary path."""
+    from sub_samples import native
+    monkeypatch.setenv("SUBSAMPLE_NATIVE_CREATE", "0")
+    assert native.native_create_enabled() is False
+
+
 # ── 1.0.2: in_variance_set default + assignment coupling ─────────────────────
 
 

@@ -23,9 +23,11 @@ _NATIVE_UID_PREFIX = "mk1://"
 
 
 def native_create_enabled() -> bool:
-    """Feature flag. Default OFF — prod stays on the legacy dual-write path
-    until SUBSAMPLE_NATIVE_CREATE is explicitly set to '1'."""
-    return os.environ.get("SUBSAMPLE_NATIVE_CREATE", "0") == "1"
+    """Feature flag. Default ON — native (Mk1-only) sub-samples are the intended
+    model post-1.0 cutover. Set SUBSAMPLE_NATIVE_CREATE=0 to opt back into the
+    legacy SENAITE-secondary dual-write path. (Prod already sets it explicitly
+    in backend/.env; this default is belt-and-suspenders for fresh envs.)"""
+    return os.environ.get("SUBSAMPLE_NATIVE_CREATE", "1") != "0"
 
 
 def is_native_vial(sub) -> bool:
