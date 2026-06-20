@@ -393,6 +393,50 @@ def test_items_sort_by_parent_then_parent_first_then_vial_sequence(client, auth_
         last_key = key
 
 
+# ── 1.0.2: native vials under non-container parents ──────────────────────────
+
+
+def test_non_container_parent_keeps_its_row_alongside_native_vials(client, auth_headers):
+    """1.0.2 inbox fix (endpoint contract): a native (mk1://) vial under a
+    NON-container parent must NOT swallow the parent's own row — the parent is
+    itself vial 1, so both must appear (the after-the-fact-add case). A
+    CONTAINER parent stays a depository: its native vials show, its own row
+    does not.
+
+    Read-only invariant check against the live stack: container_mode on a
+    native vial item reflects its parent's mode (the fix plumbs it through).
+    Skips when the stack has no native vials at all (e.g. pre-cutover stacks).
+    """
+    resp = client.get(
+        "/worksheets/inbox",
+        params={"hide_test_orders": "false", "show_xtra": "true"},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200, resp.text
+    items = resp.json()["items"]
+
+    native_items = [
+        i for i in items
+        if not i["is_parent"] and str(i.get("uid", "")).startswith("mk1://")
+    ]
+    if not native_items:
+        pytest.skip("stack has no native (mk1://) vials in the inbox feed")
+
+    parent_ids_present = {i["sample_id"] for i in items if i["is_parent"]}
+    for vial in native_items:
+        pid = vial["parent_sample_id"]
+        if vial["container_mode"] is False:
+            assert pid in parent_ids_present, (
+                f"non-container parent {pid} must keep its own row alongside "
+                f"native vial {vial['sample_id']} (1.0.2 fix)"
+            )
+        else:
+            assert pid not in parent_ids_present, (
+                f"container parent {pid} is a depository — its own row must be "
+                f"suppressed (vial {vial['sample_id']})"
+            )
+
+
 # ── Phase 3.5: Mk1-sourced inbox analyses for sub-samples ────────────────────
 
 

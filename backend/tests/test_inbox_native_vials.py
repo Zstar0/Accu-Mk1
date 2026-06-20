@@ -134,6 +134,18 @@ def test_emits_one_row_per_role_matching_native_vial(db, family):
     assert first.analyses and first.analyses[0].keyword == "HPLC-PUR"
 
 
+def test_non_container_parent_native_vials_carry_false_mode(db, family):
+    """1.0.2 inbox fix: native vials under a NON-container (already-received)
+    parent must emit with container_mode=False, not the old hardcoded True.
+    The endpoint passes the parent's real mode through this param; this asserts
+    the function honors it. The endpoint-level keep-the-parent-row behavior is
+    covered by the integration test in test_worksheets_inbox.py."""
+    _parent, subs = family
+    items = _call(db, subs, container_mode=False)
+    assert [i.sample_id for i in items] == ["P-0300-S01", "P-0300-S02"]
+    assert all(i.container_mode is False for i in items)
+
+
 def test_role_filter_micro(db, family):
     _parent, subs = family
     items = _call(db, subs, allowed_vial_roles={"ster", "endo"})

@@ -14236,15 +14236,21 @@ def _build_native_vial_inbox_items(
     order_priority: Optional[str],
     assignment_map: dict,
     keyword_to_peptide: dict,
+    container_mode: bool = True,
 ) -> "list[InboxVialItem]":
-    """Inbox rows for the Mk1-native vials of one container-mode family.
+    """Inbox rows for the Mk1-native vials of one family.
 
-    Called when a container parent is suppressed in favor of its vials
-    (spec 2026-06-11-vial-level-worksheets-inbox-design.md). Mirrors the
-    per-vial filters of the SENAITE loop in get_worksheets_inbox: role,
-    open-worksheet claims, prepped, and no-analyses-left. Row identity is
-    the vial's own external_lims_uid (mk1://…) — already what
-    worksheet_analyst.stamp_for_item resolves and unique per vial.
+    Called whenever a parent has Mk1-native vials. For a CONTAINER parent the
+    caller also suppresses the parent's own row (depository); for a
+    non-container (legacy / already-received) parent the parent row is kept
+    (it is vial 1) and these native vials are added alongside it — the
+    after-the-fact-add case. `container_mode` is stamped onto each emitted
+    item so the UI shapes it correctly. Spec
+    2026-06-11-vial-level-worksheets-inbox-design.md. Mirrors the per-vial
+    filters of the SENAITE loop in get_worksheets_inbox: role, open-worksheet
+    claims, prepped, and no-analyses-left. Row identity is the vial's own
+    external_lims_uid (mk1://…) — already what worksheet_analyst.stamp_for_item
+    resolves and unique per vial.
 
     Order-level priority persists to sample_priorities exactly like step 4b
     does for parents, so the worksheet add endpoints (which read
@@ -14313,7 +14319,7 @@ def _build_native_vial_inbox_items(
             assignment_kind=sub.assignment_kind,
             vial_sequence=sub.vial_sequence,
             vial_total=family_size,
-            container_mode=True,
+            container_mode=container_mode,
             title=str(parent_item.get("title", "")),
             client_id=parent_item.get("getClientTitle") or parent_item.get("ClientID") or None,
             client_order_number=parent_item.get("getClientOrderNumber") or parent_item.get("ClientOrderNumber") or None,
@@ -14779,17 +14785,16 @@ async def get_worksheets_inbox(
                 "vial_sequence": 0,
             }
 
-        # Vial-only mode: a container parent is a depository, not a work
-        # unit. When its family has any vials, suppress the parent row and
-        # emit its native vials instead (AR-backed vials arrive via their
-        # own loop items). A zero-vial container family keeps the parent
-        # row — it is the family's only inbox handle until the Receive
-        # Wizard registers vials. Spec:
+        # Native (mk1://) vials emit whenever a parent has them, regardless of
+        # container_mode. A CONTAINER parent is a pure depository, so its own
+        # row is additionally suppressed (depository branch below — unchanged).
+        # A non-container (legacy / already-received) parent is itself vial 1,
+        # so its native vials are added here AND its own row falls through to
+        # emit too (the after-the-fact-add case). AR-backed vials always arrive
+        # via their own SENAITE loop items, never here. Spec:
         # docs/superpowers/specs/2026-06-11-vial-level-worksheets-inbox-design.md
-        if (
-            vial_meta.get("is_parent")
-            and vial_meta.get("container_mode")
-            and family_sizes.get(vial_meta.get("parent_lims_id"), 0) > 0
+        if vial_meta.get("is_parent") and native_subs_by_parent.get(
+            vial_meta.get("parent_lims_id")
         ):
             result_items.extend(_build_native_vial_inbox_items(
                 db,
@@ -14807,7 +14812,19 @@ async def get_worksheets_inbox(
                 order_priority=order_priority_map.get(sample_id),
                 assignment_map=assignment_map,
                 keyword_to_peptide=keyword_to_peptide,
+                container_mode=bool(vial_meta.get("container_mode")),
             ))
+
+        # Depository suppression: a CONTAINER parent with any vials is a pure
+        # depository — suppress its own row. Gated on container_mode (NOT on
+        # whether the vials are native), so an AR-only container family stays
+        # suppressed exactly as before. A zero-vial container family keeps its
+        # row — its only inbox handle until the Receive Wizard registers vials.
+        if (
+            vial_meta.get("is_parent")
+            and vial_meta.get("container_mode")
+            and family_sizes.get(vial_meta.get("parent_lims_id"), 0) > 0
+        ):
             continue
 
         vial_role = vial_meta["assignment_role"]
