@@ -143,9 +143,10 @@ def test_reconcile_skipped_for_empty_family_when_flag_on(db_session, parent, mon
 
 
 def test_reconcile_runs_for_empty_family_when_flag_off(db_session, parent, monkeypatch):
-    """Empty family + flag OFF (pre-cutover) must STILL reconcile from SENAITE —
-    the guard must not over-reach and skip back-compat reconciliation."""
-    monkeypatch.delenv("SUBSAMPLE_NATIVE_CREATE", raising=False)
+    """Empty family + flag OFF (legacy opt-in) must STILL reconcile from SENAITE —
+    the guard must not over-reach and skip back-compat reconciliation. As of
+    1.0.2 native is the default, so the OFF case must be set explicitly."""
+    monkeypatch.setenv("SUBSAMPLE_NATIVE_CREATE", "0")
     parent.last_synced_at = datetime.datetime.utcnow() - datetime.timedelta(hours=1)
     db_session.commit()
 
