@@ -148,6 +148,69 @@ def test_native_create_after_legacy_subs_continues_sequence(
     assert s3.external_lims_uid.startswith("mk1://")
 
 
+# ── 1.0.2: in_variance_set default + assignment coupling ─────────────────────
+
+
+def _make_native(db_session, monkeypatch, n):
+    """Create n native vials under CUT-0001; return them in sequence order."""
+    monkeypatch.setenv("SUBSAMPLE_NATIVE_CREATE", "1")
+    monkeypatch.setattr("sub_samples.senaite.create_secondary", MagicMock())
+    monkeypatch.setattr("sub_samples.senaite.update_remarks", MagicMock())
+    out = []
+    for _ in range(n):
+        out.append(service.create_sub_sample(
+            db_session, parent_sample_id="CUT-0001", photo_bytes=_PNG,
+            photo_filename="v.jpg", remarks=None, user_id=1,
+        ))
+    return out
+
+
+def test_first_vial_defaults_in_variance_set(
+    db_session, parent, _stub_photo, _stub_wp_services, monkeypatch
+):
+    """The first vial (baseline) defaults into the variance set; others don't."""
+    s1, s2 = _make_native(db_session, monkeypatch, 2)
+    assert s1.vial_sequence == 1 and s1.in_variance_set is True
+    assert s2.vial_sequence == 2 and s2.in_variance_set is False
+
+
+def test_assigning_variance_adds_to_set(
+    db_session, parent, _stub_photo, _stub_wp_services, monkeypatch
+):
+    """A non-first vial assigned a variance kind joins the set."""
+    _s1, s2 = _make_native(db_session, monkeypatch, 2)
+    assert s2.in_variance_set is False
+    service.set_assignment_role(db_session, s2.sample_id, role="hplc",
+                               kind="variance", user_id=1)
+    db_session.refresh(s2)
+    assert s2.in_variance_set is True
+
+
+def test_assigning_core_nonfirst_drops_from_set(
+    db_session, parent, _stub_photo, _stub_wp_services, monkeypatch
+):
+    """A non-first vial assigned a non-variance kind drops out, even if it was
+    in the set (e.g. a stale default)."""
+    _s1, s2 = _make_native(db_session, monkeypatch, 2)
+    s2.in_variance_set = True
+    db_session.commit()
+    service.set_assignment_role(db_session, s2.sample_id, role="hplc",
+                               kind="core", user_id=1)
+    db_session.refresh(s2)
+    assert s2.in_variance_set is False
+
+
+def test_first_vial_stays_in_set_when_assigned_core(
+    db_session, parent, _stub_photo, _stub_wp_services, monkeypatch
+):
+    """The first vial (baseline) stays in the set regardless of its kind."""
+    s1, = _make_native(db_session, monkeypatch, 1)
+    service.set_assignment_role(db_session, s1.sample_id, role="hplc",
+                               kind="core", user_id=1)
+    db_session.refresh(s1)
+    assert s1.in_variance_set is True
+
+
 def test_legacy_create_still_calls_senaite(db_session, parent, _stub_photo, _stub_wp_services, monkeypatch):
     monkeypatch.setenv("SUBSAMPLE_NATIVE_CREATE", "0")
 
