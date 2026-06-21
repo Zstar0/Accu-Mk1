@@ -437,6 +437,124 @@ def test_non_container_parent_keeps_its_row_alongside_native_vials(client, auth_
             )
 
 
+def _find_borrowable_parent(client, headers):
+    """Find an HPLC inbox parent that has a lims_samples row and no existing
+    sub-samples — a clean host to seed native vials onto. Returns (sample_id,
+    lims_pk) or None. The parent is already order-linked and in the SENAITE
+    feed (it's in the inbox), so seeding native subs on it exercises the real
+    get_worksheets_inbox loop without the order_submissions-linkage seam."""
+    resp = client.get(
+        "/worksheets/inbox",
+        params={"role": "hplc", "hide_test_orders": "false"},
+        headers=headers,
+    )
+    parents = [i for i in resp.json().get("items", []) if i["is_parent"]]
+    with SessionLocal() as db:
+        for p in parents:
+            row = db.query(LimsSample).filter(
+                LimsSample.sample_id == p["sample_id"]
+            ).first()
+            if row is None:
+                continue
+            n_subs = db.query(LimsSubSample).filter(
+                LimsSubSample.parent_sample_pk == row.id
+            ).count()
+            if n_subs == 0:
+                return p["sample_id"], row.id
+    return None
+
+
+@pytest.mark.parametrize("container_mode,parent_row_expected", [
+    (False, True),    # non-container: parent is vial 1 — kept alongside native vials
+    (True, False),    # container: depository — parent row suppressed
+])
+def test_native_vials_emit_through_inbox_endpoint(
+    client, auth_headers, container_mode, parent_row_expected
+):
+    """1.0.2 inbox fix — end-to-end through get_worksheets_inbox (the loop where
+    the fix lives, which the unit test can't reach). Borrow a real inbox parent,
+    seed 2 native (mk1://) vials + one Mk1 analysis each onto it, flip its
+    container_mode, hit the endpoint, and assert the keep/suppress contract.
+    Mutates the live DB in try/finally like test_legacy_parent_without_lims_row."""
+    from models import (
+        LimsAnalysis, AnalysisService, ServiceGroup, service_group_members,
+    )
+    from sqlalchemy import select
+
+    found = _find_borrowable_parent(client, auth_headers)
+    if not found:
+        pytest.skip("no borrowable HPLC parent (lims_samples row, no subs) in stack")
+    parent_id, parent_pk = found
+
+    with SessionLocal() as db:
+        svc_id = db.execute(
+            select(AnalysisService.id)
+            .join(service_group_members,
+                  service_group_members.c.analysis_service_id == AnalysisService.id)
+            .join(ServiceGroup,
+                  ServiceGroup.id == service_group_members.c.service_group_id)
+            .where(ServiceGroup.name == "Analytics")
+        ).scalars().first()
+        if svc_id is None:
+            pytest.skip("no Analytics analysis service to seed")
+
+        parent = db.get(LimsSample, parent_pk)
+        orig_mode = parent.container_mode
+        created_sub_pks = []
+        try:
+            parent.container_mode = container_mode
+            db.flush()
+            for seq in (1, 2):
+                sub = LimsSubSample(
+                    parent_sample_pk=parent_pk,
+                    external_lims_uid=f"mk1://itest-{parent_pk}-{seq}",
+                    sample_id=f"{parent_id}-S{seq:02d}",
+                    vial_sequence=seq,
+                    assignment_role="hplc",
+                )
+                db.add(sub)
+                db.flush()
+                db.add(LimsAnalysis(
+                    lims_sub_sample_pk=sub.id,
+                    analysis_service_id=svc_id,
+                    keyword="ITEST",
+                    title="Inbox itest",
+                    review_state="unassigned",
+                ))
+                created_sub_pks.append(sub.id)
+            db.commit()
+
+            resp = client.get(
+                "/worksheets/inbox",
+                params={"role": "hplc", "hide_test_orders": "false"},
+                headers=auth_headers,
+            )
+            assert resp.status_code == 200, resp.text
+            ids = {i["sample_id"] for i in resp.json()["items"]}
+
+            assert (parent_id in ids) is parent_row_expected, (
+                f"parent {parent_id} (container_mode={container_mode}) "
+                f"row presence should be {parent_row_expected}; matching ids: "
+                f"{sorted(i for i in ids if i.startswith(parent_id))}"
+            )
+            assert f"{parent_id}-S01" in ids, "native vial 1 must show through the loop"
+            assert f"{parent_id}-S02" in ids, "native vial 2 must show through the loop"
+        finally:
+            for pk in created_sub_pks:
+                db.execute(
+                    LimsAnalysis.__table__.delete().where(
+                        LimsAnalysis.lims_sub_sample_pk == pk
+                    )
+                )
+                db.execute(
+                    LimsSubSample.__table__.delete().where(LimsSubSample.id == pk)
+                )
+            restored = db.get(LimsSample, parent_pk)
+            if restored is not None:
+                restored.container_mode = orig_mode
+            db.commit()
+
+
 # ── Phase 3.5: Mk1-sourced inbox analyses for sub-samples ────────────────────
 
 
