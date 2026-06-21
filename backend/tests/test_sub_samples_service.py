@@ -21,6 +21,17 @@ def db():
     s.close()
 
 
+@pytest.fixture(autouse=True)
+def _legacy_create_path(monkeypatch):
+    """Every create_sub_sample test in this file mocks the SENAITE secondary
+    path and asserts legacy-path behavior (contact inheritance, stale-UID
+    retry, photo-orphan compensation, custom-field copy). As of 1.0.2 native
+    create is the default, so pin the flag OFF here to keep exercising the
+    legacy path these tests are about. (Native-path behavior is covered by
+    test_sub_samples_cutover/native/provenance.)"""
+    monkeypatch.setenv("SUBSAMPLE_NATIVE_CREATE", "0")
+
+
 def _meta(uid="PARENT_UID", contact="CT_UID"):
     return {
         "uid": uid, "ClientUID": "C_UID", "ClientID": "client-8",

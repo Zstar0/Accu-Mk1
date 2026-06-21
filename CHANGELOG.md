@@ -1,5 +1,27 @@
 # Changelog
 
+## v1.0.2 — 2026-06-20
+
+### Fixed
+
+- **Worksheet inbox** now shows native vials added to already-received
+  (non-container) families; previously they were silently invisible to the
+  bench. The parent's own row (vial 1) is kept alongside its native vials;
+  container families remain depositories (parent row suppressed).
+- **Identity conformance** (variance overlay + COA variance block) resolves
+  now that identity Analysis Services auto-link to their peptide on startup
+  (migration `9e7a53a`); prior to the link, identity read non-conforming and
+  the COA variance series came back empty.
+
+### Changed
+
+- **Variance set** defaults to the first vial (baseline) plus any
+  variance-marked vials, instead of every vial; assignment couples membership
+  (variance replicates join, non-variance non-first vials drop, first vial
+  always stays), and manual overlay selection still applies.
+- **Native sub-sample creation** is now the default (`SUBSAMPLE_NATIVE_CREATE`
+  defaults on; set `=0` for the legacy SENAITE-secondary path).
+
 ## v1.0.1 — 2026-06-17
 
 ### Changed

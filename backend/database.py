@@ -688,6 +688,20 @@ def _run_migrations():
         WHERE g.name = 'Microbiology'
         ON CONFLICT (service_group_id, analysis_service_id) DO NOTHING
         """,
+        # Auto-link identity services (ID_<X>) to their peptide by exact name
+        # match so identity conformance resolves (variance overlay + COA). The
+        # link is otherwise a manual step (PUT /analysis-services/{id}/peptide);
+        # synced ID_ services arrive with peptide_name set but peptide_id NULL,
+        # which reads every identity result as non-conforming. Runs BEFORE the
+        # PUR_/QTY_ derivation below so those pick up the fresh links. Idempotent
+        # — only fills NULLs where an exact (case/whitespace-folded) name matches.
+        """
+        UPDATE analysis_services svc SET peptide_id = p.id
+        FROM peptides p
+        WHERE left(svc.keyword, 3) = 'ID_' AND svc.peptide_id IS NULL
+          AND svc.peptide_name IS NOT NULL AND svc.peptide_name <> ''
+          AND lower(trim(p.name)) = lower(trim(svc.peptide_name))
+        """,
         # Per-substance purity/quantity services. Derived from the per-peptide
         # identity services (ID_<X>) so the keyword suffix + peptide_id are
         # authoritative (the suffix is NOT derivable from the peptide name, e.g.

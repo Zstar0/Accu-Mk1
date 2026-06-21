@@ -187,6 +187,7 @@ def _create_sub_sample_native(
         received_by_user_id=user_id,
         photo_external_uid=f"mk1://{photo_key}",
         remarks=remarks,
+        in_variance_set=(vial_seq == 1),  # first vial is the baseline; others opt in via variance assignment
     )
     db.add(sub)
     parent.last_synced_at = datetime.utcnow()
@@ -326,6 +327,7 @@ def _create_sub_sample_legacy(
         # from legacy SENAITE secondary-AR paths during fetch-route dispatch.
         photo_external_uid=f"mk1://{photo_key}",
         remarks=remarks,
+        in_variance_set=(vial_seq == 1),  # first vial is the baseline; others opt in via variance assignment
     )
     db.add(sub)
 
@@ -448,6 +450,7 @@ def _reconcile_from_senaite(db: Session, parent: LimsSample) -> None:
             external_lims_uid=item["uid"],
             sample_id=item["id"],
             vial_sequence=next_seq,
+            in_variance_set=(next_seq == 1),  # first vial is the baseline; others opt in via variance assignment
         ))
 
     local_only = local_uids - remote_uids
@@ -1214,6 +1217,10 @@ def set_assignment_role(db: Session, sample_id: str, role: Optional[str],
         old_kind = sub.assignment_kind
         sub.assignment_role = role
         sub.assignment_kind = kind if (role and role != "xtra") else None
+        # Variance-set membership follows assignment: the first vial (baseline)
+        # is always in; any variance replicate is in; everything else is out.
+        # Manual overrides via set_variance_membership still apply afterward.
+        sub.in_variance_set = (sub.vial_sequence == 1) or (sub.assignment_kind == "variance")
         db.add(LimsSubSampleEvent(
             sub_sample_pk=sub.id,
             event="role_assigned",

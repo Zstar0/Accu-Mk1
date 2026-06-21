@@ -26,9 +26,11 @@ class _FakeSub:
 
 # ── flag ──────────────────────────────────────────────────────────
 
-def test_flag_defaults_off(monkeypatch):
+def test_flag_defaults_on(monkeypatch):
+    """As of 1.0.2 native create is the default (post-cutover); only an
+    explicit '0' opts back into the legacy SENAITE-secondary path."""
     monkeypatch.delenv("SUBSAMPLE_NATIVE_CREATE", raising=False)
-    assert native_create_enabled() is False
+    assert native_create_enabled() is True
 
 
 def test_flag_on_when_1(monkeypatch):
