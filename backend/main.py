@@ -8300,6 +8300,7 @@ def get_order_box_label_summary(order_number: str, _current_user=Depends(get_cur
     if row is None:
         raise HTTPException(status_code=404, detail=f"Order {order_number} not found")
     counts = {"hplc": 0, "endo": 0, "ster": 0}
+    fetch_error = False
     for entry in (row["sample_results"] or {}).values():
         sid = entry.get("senaite_id") if isinstance(entry, dict) else None
         if not sid:
@@ -8307,9 +8308,13 @@ def get_order_box_label_summary(order_number: str, _current_user=Depends(get_cur
         try:
             services_resp = sub_service.fetch_sample_services(sid)
         except Exception:
-            services_resp = None
-        if not services_resp:
+            # fetch_sample_services raises on network/non-2xx and returns None
+            # only on a legit 404. A raise means the count would be unreliable —
+            # fail loud (below) rather than silently undercount the box label.
+            fetch_error = True
             continue
+        if not services_resp:
+            continue  # legit 404 / unmapped sample → contributes 0
         # IS returns {"services": {...flags...}, ...}; derive_* wants the inner
         # flags dict (mirrors sub_samples.service.build_vial_plan).
         services = services_resp.get("services") or {}
@@ -8317,6 +8322,13 @@ def get_order_box_label_summary(order_number: str, _current_user=Depends(get_cur
         counts["hplc"] += d["hplc"]
         counts["endo"] += d["endo"]
         counts["ster"] += d["ster"]
+    if fetch_error:
+        # Don't return a silently-undercounted total (which the FE would print as
+        # a misleading/blank box label); let the wizard's soft-fail engage.
+        raise HTTPException(
+            status_code=503,
+            detail="Could not reach the analysis service for one or more samples; try again.",
+        )
     created = row.get("created_at")
     order_date = created.date().isoformat() if created else None
     return BoxLabelSummary(order_number=row["order_number"], order_date=order_date, counts=counts)

@@ -105,6 +105,13 @@ export function PrintStep({ parentSampleId, vials, orderNumber }: Props) {
     orderPrintInFlight.current = true
     try {
       const summary = await getOrderBoxLabelSummary(orderNumber)
+      const total = summary.counts.hplc + summary.counts.endo + summary.counts.ster
+      if (total === 0) {
+        // No expected vials in any department — nothing to print (avoids a
+        // blank box label). Reset the guard so a later retry works.
+        orderPrintInFlight.current = false
+        return
+      }
       setOrderSummary(summary)
       setPrintMode('order')
       // wait two frames so the order-label DOM mounts before printing

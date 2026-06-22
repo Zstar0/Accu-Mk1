@@ -58,6 +58,17 @@ def test_box_label_summary_404_when_order_missing():
         r = client.get("/orders/WP-0000/box-label-summary")
     assert r.status_code == 404
 
+def test_box_label_summary_503_when_services_fetch_raises():
+    # A network/non-2xx error (raise, not a 404 None) must fail loud rather than
+    # silently undercount — otherwise the wizard would print a misleading label.
+    def _raise(sid):
+        raise RuntimeError("IS unreachable")
+    with patch.object(main, "_fetch_order_submission_row", return_value=_fake_order_row()), \
+         patch("sub_samples.service.fetch_sample_services", side_effect=_raise):
+        r = client.get("/orders/WP-3263/box-label-summary")
+    assert r.status_code == 503
+
+
 def test_box_label_summary_skips_unmapped_sample_services():
     with patch.object(main, "_fetch_order_submission_row", return_value=_fake_order_row()), \
          patch("sub_samples.service.fetch_sample_services", side_effect=lambda sid: _SERVICES.get(sid) if sid == "P-0858" else None):
