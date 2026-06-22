@@ -3,7 +3,8 @@ import { Printer } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { LabelTemplate } from './LabelTemplate'
-import { getVialPlan, type VialPlanItem } from '@/lib/api'
+import { getVialPlan, getOrderBoxLabelSummary, type VialPlanItem, type OrderBoxLabelSummary } from '@/lib/api'
+import { OrderLabelTemplate } from './OrderLabelTemplate'
 import { vialPosition } from '@/lib/vial-label'
 import './PrintStep.css'
 
@@ -35,6 +36,8 @@ export function PrintStep({ parentSampleId, vials, orderNumber }: Props) {
   const [checkedIds, setCheckedIds] = useState<Set<string>>(
     () => new Set(vials.map(v => v.sample_id)),
   )
+  const [orderSummary, setOrderSummary] = useState<OrderBoxLabelSummary | null>(null)
+  const [printMode, setPrintMode] = useState<'vials' | 'order'>('vials')
 
   // Pull vial-plan to enrich each label with assignment_role + vial position.
   // Soft fail: if plan isn't available, labels print without role/position.
@@ -93,6 +96,24 @@ export function PrintStep({ parentSampleId, vials, orderNumber }: Props) {
   const selectAll = () => setCheckedIds(new Set(vials.map(v => v.sample_id)))
   const clearAll = () => setCheckedIds(new Set())
 
+  const printOrderLabels = async () => {
+    if (!orderNumber) return
+    try {
+      const summary = await getOrderBoxLabelSummary(orderNumber)
+      setOrderSummary(summary)
+      setPrintMode('order')
+      // wait two frames so the order-label DOM mounts before printing
+      requestAnimationFrame(() =>
+        requestAnimationFrame(() => {
+          window.print()
+          setPrintMode('vials')
+        }),
+      )
+    } catch {
+      // soft-fail: a failed summary fetch just doesn't print (matches getVialPlan's soft-fail)
+    }
+  }
+
   return (
     <div className="grid grid-rows-[auto_1fr] h-full min-h-0">
       <div className="screen-only px-6 py-3 border-b flex items-center gap-3 bg-muted/10 print-controls">
@@ -117,7 +138,17 @@ export function PrintStep({ parentSampleId, vials, orderNumber }: Props) {
         >
           Clear all
         </Button>
-        <div className="ml-auto">
+        <div className="ml-auto flex gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => void printOrderLabels()}
+            disabled={!orderNumber}
+            className="gap-2"
+          >
+            <Printer className="w-4 h-4" aria-hidden="true" />
+            Print Order #
+          </Button>
           <Button
             type="button"
             onClick={() => window.print()}
@@ -136,7 +167,7 @@ export function PrintStep({ parentSampleId, vials, orderNumber }: Props) {
             No vials in this session — nothing to print.
           </p>
         ) : (
-          <div className="print-area">
+          <div className={printMode === 'order' ? 'screen-only' : 'print-area'}>
             {vials.map(v => {
               const planItem = planByVial[v.sample_id]
               const role = planItem?.assignment_role ?? null
@@ -166,6 +197,22 @@ export function PrintStep({ parentSampleId, vials, orderNumber }: Props) {
                 </div>
               )
             })}
+          </div>
+        )}
+        {orderSummary && (
+          <div className={printMode === 'order' ? 'print-area order-print-area' : 'order-print-area screen-only'}>
+            {(['hplc', 'endo', 'ster'] as const)
+              .filter(d => orderSummary.counts[d] > 0)
+              .map(d => (
+                <div key={d} className="label-row">
+                  <OrderLabelTemplate
+                    orderNumber={orderSummary.order_number}
+                    department={d}
+                    vialCount={orderSummary.counts[d]}
+                    orderDate={orderSummary.order_date}
+                  />
+                </div>
+              ))}
           </div>
         )}
       </div>
