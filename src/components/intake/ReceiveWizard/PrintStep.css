@@ -31,6 +31,10 @@
     height: 6.35mm;
     box-sizing: border-box;
     background: var(--background, #fff);
+    /* extra right padding pulls the right-aligned role/date inboard of the
+       printer's unprintable right margin (physical label is wider than the
+       printable area) — tune this mm value if the clip persists/overshoots */
+    padding-right: 4mm;
   }
   .label svg {
     width: 5.5mm;
@@ -165,6 +169,9 @@
     width: 50.8mm;
     height: 6.35mm;
     padding: 0.3mm 0.8mm;
+    /* extra right padding pulls the right-aligned role/date inboard of the
+       printer's unprintable right margin — tune if the clip persists. */
+    padding-right: 4mm;
     margin: 0;
     box-sizing: border-box;
     display: flex !important;
