@@ -147,6 +147,66 @@ def build_variance_replicates(db: Session, parent) -> dict:
     return {k: v for k, v in out.items() if v}
 
 
+def build_vial_figures(db: Session, sub: LimsSubSample, qty_unit: str = "mg") -> dict:
+    """{peptide_name: {PURITY?, QUANTITY?, IDENTITY?}} for ONE HPLC vial.
+
+    The per-vial COA shape COABuilder's engine consumes as `vial_figures`: a
+    single record per peptide (no list, no vial_sequence inside) carrying whatever
+    this vial measured. Same result-selection rules as the variance series
+    (current row = retested False, reportable, live states). Empty when the vial
+    has no reportable HPLC results.
+    """
+    rows = db.execute(
+        select(LimsAnalysis, AnalysisService, Peptide)
+        .join(AnalysisService, AnalysisService.id == LimsAnalysis.analysis_service_id)
+        .outerjoin(Peptide, Peptide.id == AnalysisService.peptide_id)
+        .where(
+            LimsAnalysis.lims_sub_sample_pk == sub.id,
+            LimsAnalysis.review_state.in_(_SERIES_STATES),
+            LimsAnalysis.reportable == True,  # noqa: E712
+            LimsAnalysis.retested.is_(False),
+            LimsAnalysis.result_value.isnot(None),
+            LimsAnalysis.result_value != "",
+        )
+    ).all()
+    vial_peptides = {pep.name for la, svc, pep in rows if pep is not None}
+    sole_peptide = next(iter(vial_peptides)) if len(vial_peptides) == 1 else None
+    per_peptide: dict[str, dict] = {}
+    for la, svc, pep in rows:
+        category = _category(la.keyword)
+        key = _CATEGORY_TO_KEY.get(category or "")
+        if not key:
+            continue
+        pname = pep.name if pep is not None else sole_peptide
+        if pname is None:
+            continue
+        rec = per_peptide.setdefault(pname, {})
+        rec[key] = _fmt(category, la.result_value, la.result_unit, default_unit=qty_unit)
+    return {k: v for k, v in per_peptide.items() if v}
+
+
+def list_hplc_vials_with_figures(db: Session, parent) -> list[tuple[int, dict]]:
+    """[(vial_sequence, vial_figures), ...] for the parent's HPLC vials that carry
+    reportable results, in vial_sequence order — the source set for per-vial COAs.
+
+    Covers every assignment_role='hplc' vial (core AND variance), so each physical
+    HPLC vial can be spun off into its own honest-verdict COA.
+    """
+    qty_unit = _parent_quantity_unit(db, parent) or "mg"
+    subs = db.execute(
+        select(LimsSubSample).where(
+            LimsSubSample.parent_sample_pk == parent.id,
+            LimsSubSample.assignment_role == "hplc",
+        ).order_by(LimsSubSample.vial_sequence)
+    ).scalars().all()
+    out: list[tuple[int, dict]] = []
+    for sub in subs:
+        figs = build_vial_figures(db, sub, qty_unit)
+        if figs:
+            out.append((sub.vial_sequence, figs))
+    return out
+
+
 def process_variance_fields(db: Session, parent) -> dict:
     """The variance portion of the COABuilder /process body for a parent.
 

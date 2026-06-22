@@ -9402,6 +9402,102 @@ async def generate_sample_coa(
     )
 
 
+class GenerateVialCOAsRequest(BaseModel):
+    # The parent's primary COA generation_id (IS UUID) — vial COAs are children
+    # of it. The frontend has it from the sample's COA generations list.
+    parent_generation_id: str
+    lab_remarks: Optional[str] = None
+    include_lab_remarks: Optional[bool] = None
+
+
+@app.post("/wizard/senaite/samples/{sample_id}/generate-vial-coas")
+async def generate_vial_coas(
+    sample_id: str,
+    body: GenerateVialCOAsRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Generate one per-vial HPLC COA for every reportable HPLC vial of a parent.
+
+    Each vial COA is a child of the parent's primary COA (body.parent_generation_id)
+    that reports THAT vial's own purity/quantity/identity against the parent's
+    spec — an honest standalone verdict, not the variance mean. Reuses COABuilder
+    /process in vial mode (one call per vial). Publishing rides the normal
+    primary-publish path (vial children are picked up by _publish_additional_coas).
+    """
+    import logging as _logging
+    _logger = _logging.getLogger(__name__)
+
+    if not COA_BUILDER_URL:
+        return {"success": False, "message": "COA Builder not configured", "vials": [], "errors": []}
+    if re.search(r"-S\d{2,}$", sample_id):
+        return {
+            "success": False,
+            "message": "Per-vial COAs are generated from the parent sample, not a sub-sample.",
+            "vials": [], "errors": [],
+        }
+
+    parent = db.execute(
+        select(LimsSample).where(LimsSample.sample_id == sample_id)
+    ).scalar_one_or_none()
+    if parent is None:
+        return {"success": False, "message": f"Parent sample {sample_id} not found in LIMS", "vials": [], "errors": []}
+
+    from coa.variance_series import list_hplc_vials_with_figures
+    vials = list_hplc_vials_with_figures(db, parent)
+    if not vials:
+        return {
+            "success": False,
+            "message": "No HPLC vials with reportable results to generate COAs for.",
+            "vials": [], "errors": [],
+        }
+
+    # Customer-remarks snapshot — same source the parent COA uses, so a
+    # non-conforming vial COA carries remarks (COABuilder 422s otherwise).
+    include_remarks = body.include_lab_remarks
+    lab_remarks = (body.lab_remarks or "").strip()
+    if include_remarks is None:
+        include_remarks = bool(parent.customer_remarks_include)
+        if include_remarks and not lab_remarks:
+            lab_remarks = (parent.customer_remarks or "").strip()
+
+    results: list[dict] = []
+    errors: list[dict] = []
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        for vial_seq, figs in vials:
+            vbody: dict = {
+                "vial_figures": figs,
+                "parent_generation_id": body.parent_generation_id,
+                "vial_sequence": vial_seq,
+                "include_lab_remarks": bool(include_remarks),
+            }
+            if include_remarks and lab_remarks:
+                vbody["lab_remarks"] = lab_remarks
+            try:
+                resp = await client.post(f"{COA_BUILDER_URL}/process/{sample_id}", json=vbody)
+                resp.raise_for_status()
+                data = resp.json()
+                results.append({
+                    "vial_sequence": vial_seq,
+                    "verification_code": data.get("verification_code"),
+                    "generation_id": data.get("generation_id"),
+                })
+            except httpx.HTTPStatusError as e:
+                try:
+                    detail = e.response.json().get("detail", str(e.response.status_code))
+                except Exception:
+                    detail = str(e.response.status_code)
+                errors.append({"vial_sequence": vial_seq, "error": detail})
+                _logger.warning("vial COA gen failed for %s vial %s: %s", sample_id, vial_seq, detail)
+            except Exception as e:  # noqa: BLE001 — one vial failing must not abort the rest
+                errors.append({"vial_sequence": vial_seq, "error": str(e)})
+                _logger.warning("vial COA gen error for %s vial %s: %s", sample_id, vial_seq, e)
+
+    ok = len(results)
+    message = f"Generated {ok} per-vial COA(s)" + (f"; {len(errors)} failed" if errors else "")
+    return {"success": ok > 0, "message": message, "vials": results, "errors": errors}
+
+
 @app.post("/wizard/senaite/samples/{sample_id}/publish-coa")
 async def publish_sample_coa(
     sample_id: str,
