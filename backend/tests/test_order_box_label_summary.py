@@ -34,9 +34,12 @@ def _fake_order_row():
         },
     }
 
+# fetch_sample_services returns the IS payload with the flags nested under
+# "services" (alongside analytical_test, wp_order_number) — not a flat dict.
+# The endpoint must unwrap .get("services") before derive_base_demand.
 _SERVICES = {
-    "P-0858": {"hplcpurity_identity": True, "endotoxin": True, "sterility_pcr": True},
-    "P-0859": {"hplcpurity_identity": True},
+    "P-0858": {"services": {"hplcpurity_identity": True, "endotoxin": True, "sterility_pcr": True}},
+    "P-0859": {"services": {"hplcpurity_identity": True}},
 }
 
 def test_box_label_summary_sums_vials_per_department():

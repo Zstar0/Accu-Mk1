@@ -8305,11 +8305,14 @@ def get_order_box_label_summary(order_number: str, _current_user=Depends(get_cur
         if not sid:
             continue
         try:
-            services = sub_service.fetch_sample_services(sid)
+            services_resp = sub_service.fetch_sample_services(sid)
         except Exception:
-            services = None
-        if not services:
+            services_resp = None
+        if not services_resp:
             continue
+        # IS returns {"services": {...flags...}, ...}; derive_* wants the inner
+        # flags dict (mirrors sub_samples.service.build_vial_plan).
+        services = services_resp.get("services") or {}
         d = derive_base_demand(services)
         counts["hplc"] += d["hplc"]
         counts["endo"] += d["endo"]
