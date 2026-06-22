@@ -1022,6 +1022,8 @@ export interface ExplorerCOAGeneration {
   order_number: string | null
   /** Self-referential: null for primary COA, set for additional COAs */
   parent_generation_id: string | null
+  /** 1-based vial number for per-vial HPLC COA children; null for primaries and branding additional COAs */
+  vial_sequence: number | null
   /** Ingestion WP delivery status: pending | processing | uploaded | notified | partial | failed */
   ingestion_status: string | null
 }

@@ -377,6 +377,37 @@ export function selectRootGenerations(
     })
 }
 
+/**
+ * Select the current per-vial COA for each HPLC vial, sorted by vial number —
+ * one row per vial, mirroring how the primary card shows only the current cert.
+ * Each is a child of the parent primary generation. Superseded generations are
+ * excluded (so a regen+republish doesn't linger); for a vial with more than one
+ * live generation (e.g. an orphan draft beside the published one), the published
+ * generation wins, otherwise the latest by generation_number.
+ */
+export function selectVialGenerations(
+  gens: ExplorerCOAGeneration[]
+): ExplorerCOAGeneration[] {
+  const byVial = new Map<number, ExplorerCOAGeneration>()
+  for (const g of gens) {
+    if (g.vial_sequence == null || g.status === 'superseded') continue
+    const cur = byVial.get(g.vial_sequence)
+    if (!cur) {
+      byVial.set(g.vial_sequence, g)
+      continue
+    }
+    // Prefer published over draft; among the same status, prefer the newer generation.
+    const gWins =
+      g.status === 'published' && cur.status !== 'published'
+        ? true
+        : g.status !== 'published' && cur.status === 'published'
+          ? false
+          : g.generation_number > cur.generation_number
+    if (gWins) byVial.set(g.vial_sequence, g)
+  }
+  return [...byVial.values()].sort((a, b) => (a.vial_sequence ?? 0) - (b.vial_sequence ?? 0))
+}
+
 /** Derive a human-readable release status from the generation + ingestion records. */
 function coaReleaseStatus(gen: ExplorerCOAGeneration | null | undefined): {
   label: string
@@ -470,6 +501,78 @@ function GeneratedCOAFallbackList({
       {allDraft && (
         <p className="text-[11px] text-muted-foreground pl-1">Not yet attached to SENAITE</p>
       )}
+    </div>
+  )
+}
+
+/**
+ * List of per-vial COA children for the "Per-Vial COAs" card. Each row reports
+ * one HPLC vial's own figure ("Vial N"), with its own verification code and
+ * release status. Mirrors GeneratedCOAFallbackList's visual language.
+ */
+function VialCOAList({
+  generations,
+}: {
+  generations: ExplorerCOAGeneration[]
+}) {
+  return (
+    <div className="space-y-2">
+      {generations.map(gen => {
+        const release = coaReleaseStatus(gen)
+        return (
+          <div
+            key={gen.id}
+            className="flex items-start gap-3 p-3 rounded-lg bg-muted/40 border border-border/40"
+          >
+            <div className="flex items-center justify-center w-9 h-9 rounded-lg bg-muted text-muted-foreground border border-border/40 shrink-0 mt-0.5">
+              <FileText size={16} />
+            </div>
+            <div className="flex-1 min-w-0 space-y-2">
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="text-sm font-medium truncate">Vial {gen.vial_sequence}</span>
+                <span className="shrink-0 text-[10px] text-muted-foreground">Gen #{gen.generation_number}</span>
+                <span
+                  title={release.title}
+                  className={cn(
+                    'shrink-0 text-[10px] font-medium px-1.5 py-0.5 rounded-full border',
+                    {
+                      'bg-amber-500/10 text-amber-600 border-amber-500/30 dark:text-amber-400':
+                        release.color === 'amber',
+                      'bg-emerald-500/10 text-emerald-600 border-emerald-500/30 dark:text-emerald-400':
+                        release.color === 'emerald',
+                      'bg-red-500/10 text-red-500 border-red-500/30': release.color === 'red',
+                      'bg-muted text-muted-foreground border-border/40': release.color === 'zinc',
+                    }
+                  )}
+                >
+                  {release.label}
+                </span>
+              </div>
+              <div className="grid grid-cols-2 gap-x-3 gap-y-1">
+                <div className="flex flex-col">
+                  <span className="text-[11px] text-muted-foreground">Verification Code</span>
+                  {gen.verification_code ? (
+                    <a
+                      href={accuverifyUrl(gen.verification_code)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-[11px] font-mono text-foreground hover:underline truncate"
+                    >
+                      {gen.verification_code}
+                    </a>
+                  ) : (
+                    <span className="text-[11px] font-mono text-muted-foreground">—</span>
+                  )}
+                </div>
+                <div className="flex flex-col">
+                  <span className="text-[11px] text-muted-foreground">Created</span>
+                  <span className="text-[11px] text-foreground">{formatDate(gen.created_at)}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        )
+      })}
     </div>
   )
 }
@@ -4210,6 +4313,20 @@ export function SampleDetails() {
                 })()}
               </SectionHeader>
             </Card>
+
+            {/* Per-Vial COAs — children of the primary, one per HPLC vial.
+                selectRootGenerations collapses these out of the card above, so
+                they get their own section labeled "Vial N". */}
+            {(() => {
+              const vialGens = selectVialGenerations(coaGenerations)
+              return vialGens.length > 0 ? (
+                <Card className="p-4">
+                  <SectionHeader icon={FileText} title={`Per-Vial COAs (${vialGens.length})`}>
+                    <VialCOAList generations={vialGens} />
+                  </SectionHeader>
+                </Card>
+              ) : null
+            })()}
 
             {/* Digital COA Badge Embed */}
             {data.coa.verification_code && (
