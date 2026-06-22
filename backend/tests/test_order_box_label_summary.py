@@ -1,9 +1,28 @@
+import pytest
 from fastapi.testclient import TestClient
 from unittest.mock import patch
+import auth
 import main
 from main import app
 
 client = TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def _auth_override():
+    """Make these tests hermetic: the endpoint depends on get_current_user, so a
+    standalone run 401s without an override. Some sibling test modules install
+    this override at import time and never tear it down; capture and restore the
+    prior value (rather than clearing) so we don't strip their leaked override
+    in a full-suite run."""
+    key = auth.get_current_user
+    prev = app.dependency_overrides.get(key)
+    app.dependency_overrides[key] = lambda: {"id": 0, "username": "test"}
+    yield
+    if prev is None:
+        app.dependency_overrides.pop(key, None)
+    else:
+        app.dependency_overrides[key] = prev
 
 def _fake_order_row():
     return {
