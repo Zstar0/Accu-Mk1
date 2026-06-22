@@ -361,6 +361,16 @@ export function VialPanel({
       </header>
 
       <section className="flex flex-col gap-2">
+        {/* Always-available file picker — lets the operator upload a photo from
+            disk whether or not the live camera is available. */}
+        <input
+          ref={fileRef}
+          type="file"
+          accept="image/*"
+          onChange={onPickFile}
+          disabled={busy}
+          className="hidden"
+        />
         {cameraOk ? (
           <>
             {/* Keep the <video> element mounted with stream attached so we
@@ -457,6 +467,17 @@ export function VialPanel({
                   Guides {showGuides ? 'on' : 'off'}
                 </Button>
               )}
+              {cameraPhase === 'live' && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => fileRef.current?.click()}
+                  disabled={busy}
+                >
+                  <Upload className="w-4 h-4" aria-hidden="true" />
+                  Choose file...
+                </Button>
+              )}
             </div>
           </>
         ) : (
@@ -464,14 +485,6 @@ export function VialPanel({
             <p className="text-sm">
               Camera unavailable. Upload a photo from disk instead:
             </p>
-            <input
-              ref={fileRef}
-              type="file"
-              accept="image/*"
-              onChange={onPickFile}
-              disabled={busy}
-              className="hidden"
-            />
             <Button
               type="button"
               variant="outline"
