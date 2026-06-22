@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Printer } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -96,8 +96,13 @@ export function PrintStep({ parentSampleId, vials, orderNumber }: Props) {
   const selectAll = () => setCheckedIds(new Set(vials.map(v => v.sample_id)))
   const clearAll = () => setCheckedIds(new Set())
 
+  // Guard against a double-click during the fetch window firing two print
+  // chains (physical labels are expensive — a stray second print dialog can
+  // waste a label). Reset once the print fires or the fetch fails.
+  const orderPrintInFlight = useRef(false)
   const printOrderLabels = async () => {
-    if (!orderNumber) return
+    if (!orderNumber || orderPrintInFlight.current) return
+    orderPrintInFlight.current = true
     try {
       const summary = await getOrderBoxLabelSummary(orderNumber)
       setOrderSummary(summary)
@@ -107,10 +112,12 @@ export function PrintStep({ parentSampleId, vials, orderNumber }: Props) {
         requestAnimationFrame(() => {
           window.print()
           setPrintMode('vials')
+          orderPrintInFlight.current = false
         }),
       )
     } catch {
       // soft-fail: a failed summary fetch just doesn't print (matches getVialPlan's soft-fail)
+      orderPrintInFlight.current = false
     }
   }
 
