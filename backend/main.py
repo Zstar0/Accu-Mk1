@@ -9403,9 +9403,9 @@ async def generate_sample_coa(
 
 
 class GenerateVialCOAsRequest(BaseModel):
-    # The parent's primary COA generation_id (IS UUID) — vial COAs are children
-    # of it. The frontend has it from the sample's COA generations list.
-    parent_generation_id: str
+    # No parent_generation_id: the server DERIVES the sample's primary COA
+    # itself (never trusts a client-supplied generation id). Only optional
+    # remarks overrides are accepted.
     lab_remarks: Optional[str] = None
     include_lab_remarks: Optional[bool] = None
 
@@ -9413,61 +9413,85 @@ class GenerateVialCOAsRequest(BaseModel):
 @app.post("/wizard/senaite/samples/{sample_id}/generate-vial-coas")
 async def generate_vial_coas(
     sample_id: str,
-    body: GenerateVialCOAsRequest,
+    body: Optional[GenerateVialCOAsRequest] = None,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
     """Generate one per-vial HPLC COA for every reportable HPLC vial of a parent.
 
-    Each vial COA is a child of the parent's primary COA (body.parent_generation_id)
-    that reports THAT vial's own purity/quantity/identity against the parent's
-    spec — an honest standalone verdict, not the variance mean. Reuses COABuilder
-    /process in vial mode (one call per vial). Publishing rides the normal
-    primary-publish path (vial children are picked up by _publish_additional_coas).
+    The parent generation the vial COAs attach to is DERIVED server-side (the
+    sample's current primary, non-superseded generation) — never supplied by the
+    client, so a stale UI or a forged id can't graft vial COAs onto the wrong
+    lineage. Idempotent: a vial that already has a live child COA is skipped, so
+    re-running fills gaps instead of duplicating. Completeness-aware: success is
+    true only when no vial failed.
     """
     import logging as _logging
     _logger = _logging.getLogger(__name__)
 
-    if not COA_BUILDER_URL:
-        return {"success": False, "message": "COA Builder not configured", "vials": [], "errors": []}
-    if re.search(r"-S\d{2,}$", sample_id):
+    def _resp(success, message, *, expected=0, generated=None, skipped=None, errors=None):
         return {
-            "success": False,
-            "message": "Per-vial COAs are generated from the parent sample, not a sub-sample.",
-            "vials": [], "errors": [],
+            "success": success, "message": message, "expected": expected,
+            "generated": generated or [], "skipped": skipped or [], "errors": errors or [],
         }
+
+    if not COA_BUILDER_URL:
+        return _resp(False, "COA Builder not configured")
+    if re.search(r"-S\d{2,}$", sample_id):
+        return _resp(False, "Per-vial COAs are generated from the parent sample, not a sub-sample.")
 
     parent = db.execute(
         select(LimsSample).where(LimsSample.sample_id == sample_id)
     ).scalar_one_or_none()
     if parent is None:
-        return {"success": False, "message": f"Parent sample {sample_id} not found in LIMS", "vials": [], "errors": []}
+        return _resp(False, f"Parent sample {sample_id} not found in LIMS")
+
+    # Derive + validate the parent COA generation server-side (do not trust the
+    # client). fetch_primary_generation already scopes to this sample_id, a NULL
+    # parent_generation_id (primary), and excludes superseded.
+    from integration_db import fetch_primary_generation, fetch_existing_vial_sequences
+    try:
+        primary = fetch_primary_generation(sample_id)
+    except Exception as e:  # noqa: BLE001
+        _logger.warning("fetch_primary_generation failed for %s: %s", sample_id, e)
+        return _resp(False, "Could not look up the parent COA (Integration Service unavailable).")
+    if not primary:
+        return _resp(False, "Generate the parent COA first — per-vial COAs attach to it.")
+    parent_generation_id = str(primary["id"])
 
     from coa.variance_series import list_hplc_vials_with_figures
     vials = list_hplc_vials_with_figures(db, parent)
     if not vials:
-        return {
-            "success": False,
-            "message": "No HPLC vials with reportable results to generate COAs for.",
-            "vials": [], "errors": [],
-        }
+        return _resp(False, "No HPLC vials with reportable results to generate COAs for.")
+
+    # Idempotency: skip vials that already have a live child under this parent
+    # (one child per parent_generation_id + vial_sequence).
+    try:
+        existing = fetch_existing_vial_sequences(parent_generation_id)
+    except Exception as e:  # noqa: BLE001
+        _logger.warning("fetch_existing_vial_sequences failed for %s: %s", sample_id, e)
+        existing = set()
 
     # Customer-remarks snapshot — same source the parent COA uses, so a
     # non-conforming vial COA carries remarks (COABuilder 422s otherwise).
-    include_remarks = body.include_lab_remarks
-    lab_remarks = (body.lab_remarks or "").strip()
+    include_remarks = body.include_lab_remarks if body else None
+    lab_remarks = (body.lab_remarks or "").strip() if (body and body.lab_remarks) else ""
     if include_remarks is None:
         include_remarks = bool(parent.customer_remarks_include)
         if include_remarks and not lab_remarks:
             lab_remarks = (parent.customer_remarks or "").strip()
 
-    results: list[dict] = []
+    generated: list[dict] = []
+    skipped: list[int] = []
     errors: list[dict] = []
     async with httpx.AsyncClient(timeout=120.0) as client:
         for vial_seq, figs in vials:
+            if vial_seq in existing:
+                skipped.append(vial_seq)
+                continue
             vbody: dict = {
                 "vial_figures": figs,
-                "parent_generation_id": body.parent_generation_id,
+                "parent_generation_id": parent_generation_id,
                 "vial_sequence": vial_seq,
                 "include_lab_remarks": bool(include_remarks),
             }
@@ -9477,7 +9501,7 @@ async def generate_vial_coas(
                 resp = await client.post(f"{COA_BUILDER_URL}/process/{sample_id}", json=vbody)
                 resp.raise_for_status()
                 data = resp.json()
-                results.append({
+                generated.append({
                     "vial_sequence": vial_seq,
                     "verification_code": data.get("verification_code"),
                     "generation_id": data.get("generation_id"),
@@ -9493,9 +9517,17 @@ async def generate_vial_coas(
                 errors.append({"vial_sequence": vial_seq, "error": str(e)})
                 _logger.warning("vial COA gen error for %s vial %s: %s", sample_id, vial_seq, e)
 
-    ok = len(results)
-    message = f"Generated {ok} per-vial COA(s)" + (f"; {len(errors)} failed" if errors else "")
-    return {"success": ok > 0, "message": message, "vials": results, "errors": errors}
+    g, s, f = len(generated), len(skipped), len(errors)
+    parts = [f"Generated {g} per-vial COA(s)"]
+    if s:
+        parts.append(f"{s} already existed")
+    if f:
+        parts.append(f"{f} failed")
+    # Success only when nothing failed (a fully-skipped re-run is still success).
+    return {
+        "success": f == 0, "message": "; ".join(parts), "expected": len(vials),
+        "generated": generated, "skipped": skipped, "errors": errors,
+    }
 
 
 @app.post("/wizard/senaite/samples/{sample_id}/publish-coa")

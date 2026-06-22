@@ -3390,7 +3390,7 @@ export function SampleDetails() {
     const primaryGen = coaGenerations.find(
       g => g.parent_generation_id == null && g.status !== 'superseded'
     )
-    if (!primaryGen?.id) {
+    if (!primaryGen) {
       toast.error('Generate the parent COA first', {
         description: 'Per-vial COAs attach to the parent COA, which must exist before spinning off vials.',
       })
@@ -3399,10 +3399,10 @@ export function SampleDetails() {
     setIsGeneratingVialCOAs(true)
     const settle = startCOAConsole(`generate-vial-coas ${sampleId}`, GENERATE_STEPS)
     try {
-      const result = await generateVialCOAs(sampleId, primaryGen.id)
+      const result = await generateVialCOAs(sampleId)
       if (result.success) {
         settle(true)
-        toast.success('Per-vial COAs generated', { description: result.message })
+        toast.success('Per-vial COAs', { description: result.message })
         refreshSample(sampleId)
         getExplorerCOAGenerations(sampleId, 10).then(setCoaGenerations).catch(() => {})
         getSampleAdditionalCOAs(sampleId).then(setAdditionalCoas).catch(() => {})
