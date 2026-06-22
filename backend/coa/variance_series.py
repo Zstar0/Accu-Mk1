@@ -26,6 +26,14 @@ from models import AnalysisService, LimsAnalysis, LimsSubSample, Peptide
 # variance_verified terminal state replicates land in).
 _SERIES_STATES = ("submitted", "to_be_verified", "verified", "published", "variance_verified")
 
+# Per-vial COA enumeration also accepts 'promoted' — the core HPLC vial whose
+# result was promoted to the parent still has valid, reportable figures and
+# should be able to spin off its own per-vial COA ("a COA for each vial with
+# HPLC results"). The variance SERIES deliberately omits 'promoted' (the
+# promoted core is represented by the parent figure there), so this is a
+# vial-COA-only widening.
+_VIAL_COA_STATES = _SERIES_STATES + ("promoted",)
+
 _CATEGORY_TO_KEY = {"purity": "PURITY", "quantity": "QUANTITY", "identity": "IDENTITY"}
 
 _ANALYTE_PUR = re.compile(r"^ANALYTE-[1-4]-PUR$")
@@ -162,7 +170,7 @@ def build_vial_figures(db: Session, sub: LimsSubSample, qty_unit: str = "mg") ->
         .outerjoin(Peptide, Peptide.id == AnalysisService.peptide_id)
         .where(
             LimsAnalysis.lims_sub_sample_pk == sub.id,
-            LimsAnalysis.review_state.in_(_SERIES_STATES),
+            LimsAnalysis.review_state.in_(_VIAL_COA_STATES),
             LimsAnalysis.reportable == True,  # noqa: E712
             LimsAnalysis.retested.is_(False),
             LimsAnalysis.result_value.isnot(None),
