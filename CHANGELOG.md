@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.0.3 — 2026-06-22
+
+### Added
+
+- **Print Order # box labels.** The Print Labels tab can print one box label per
+  department (HPLC / ENDO / PCR) for the whole order, showing the order number,
+  the department's expected vial count, and the order date — for labeling the
+  color-coded department bins. Backed by a new order box-label summary endpoint.
+
 ## v1.0.2 — 2026-06-20
 
 ### Fixed
