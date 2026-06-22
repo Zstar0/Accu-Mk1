@@ -71,6 +71,8 @@ from calculations.hplc_processor import (
 )
 from file_watcher import FileWatcher
 from sub_samples.routes import router as sub_samples_router
+import sub_samples.service as sub_service
+from sub_samples.service import derive_base_demand
 from lims_analyses.routes import router as lims_analyses_router
 from families.routes import router as families_router  # Phase 5b
 
@@ -8249,6 +8251,72 @@ async def get_order_access_logs(order_id: str, _current_user=Depends(get_current
         raise HTTPException(status_code=e.response.status_code, detail=e.response.text)
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Integration Service unavailable: {e}")
+
+
+# --- Order Box-Label Summary ---
+
+class BoxLabelSummary(BaseModel):
+    order_number: str
+    order_date: Optional[str] = None
+    counts: dict  # {"hplc": int, "endo": int, "ster": int}
+
+
+def _fetch_order_submission_row(order_number: str) -> Optional[dict]:
+    """The order_submissions row for a WP order number, or None.
+    Frontend passes the SENAITE ClientOrderNumber (e.g. 'WP-3263'); the table
+    stores the bare number ('3263') in both order_number and order_id. Strip a
+    leading 'WP-' and match either column. Returns keys: order_number,
+    created_at (datetime|None), sample_results (dict)."""
+    from integration_db import get_integration_db
+    from psycopg2.extras import RealDictCursor
+    raw = (order_number or "").strip()
+    stripped = raw[3:] if raw.upper().startswith("WP-") else raw
+    with get_integration_db() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT order_number, order_id, created_at, sample_results
+                  FROM order_submissions
+                 WHERE order_number = %(raw)s OR order_number = %(stripped)s
+                    OR order_id = %(raw)s OR order_id = %(stripped)s
+                 ORDER BY created_at DESC
+                 LIMIT 1
+                """,
+                {"raw": raw, "stripped": stripped},
+            )
+            row = cur.fetchone()
+            if row is None:
+                return None
+            return {
+                "order_number": raw,
+                "created_at": row.get("created_at"),
+                "sample_results": row.get("sample_results") or {},
+            }
+
+
+@app.get("/orders/{order_number}/box-label-summary", response_model=BoxLabelSummary)
+def get_order_box_label_summary(order_number: str, _current_user=Depends(get_current_user)):
+    row = _fetch_order_submission_row(order_number)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"Order {order_number} not found")
+    counts = {"hplc": 0, "endo": 0, "ster": 0}
+    for entry in (row["sample_results"] or {}).values():
+        sid = entry.get("senaite_id") if isinstance(entry, dict) else None
+        if not sid:
+            continue
+        try:
+            services = sub_service.fetch_sample_services(sid)
+        except Exception:
+            services = None
+        if not services:
+            continue
+        d = derive_base_demand(services)
+        counts["hplc"] += d["hplc"]
+        counts["endo"] += d["endo"]
+        counts["ster"] += d["ster"]
+    created = row.get("created_at")
+    order_date = created.date().isoformat() if created else None
+    return BoxLabelSummary(order_number=row["order_number"], order_date=order_date, counts=counts)
 
 
 @app.get("/explorer/samples/{sample_id}/additional-coas")
