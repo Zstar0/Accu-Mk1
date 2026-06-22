@@ -1900,6 +1900,33 @@ export async function generateSenaiteCOA(
   return response.json()
 }
 
+export interface GenerateVialCOAsResult {
+  success: boolean
+  message: string
+  vials: { vial_sequence: number; verification_code: string | null; generation_id: string | null }[]
+  errors: { vial_sequence: number; error: string }[]
+}
+
+/**
+ * Generate one per-vial HPLC COA for each reportable HPLC vial of a parent.
+ * Each vial COA is a child of the parent's primary COA (parentGenerationId).
+ */
+export async function generateVialCOAs(
+  sampleId: string,
+  parentGenerationId: string
+): Promise<GenerateVialCOAsResult> {
+  const response = await fetch(
+    `${API_BASE_URL()}/wizard/senaite/samples/${encodeURIComponent(sampleId)}/generate-vial-coas`,
+    {
+      method: 'POST',
+      headers: { ...getBearerHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ parent_generation_id: parentGenerationId }),
+    }
+  )
+  if (!response.ok) throw new Error(await extractErrorMessage(response, `Vial COA generation failed: ${response.status}`))
+  return response.json()
+}
+
 export async function publishSenaiteCOA(
   sampleId: string
 ): Promise<SampleCOAActionResponse> {

@@ -62,6 +62,7 @@ import {
   getExplorerCOAGenerations,
   getExplorerCOASignedUrl,
   generateSenaiteCOA,
+  generateVialCOAs,
   publishSenaiteCOA,
   regenPrimaryCOA,
   regenAdditionalCOA,
@@ -2591,6 +2592,7 @@ export function SampleDetails() {
   const [additionalCoaPage, setAdditionalCoaPage] = useState(0)
   const [coaGenerations, setCoaGenerations] = useState<ExplorerCOAGeneration[]>([])
   const [isGeneratingCOA, setIsGeneratingCOA] = useState(false)
+  const [isGeneratingVialCOAs, setIsGeneratingVialCOAs] = useState(false)
   const [isPublishingCOA, setIsPublishingCOA] = useState(false)
   const [coaConsole, setCoaConsole] = useState<COAConsoleState>({
     visible: false,
@@ -3384,6 +3386,39 @@ export function SampleDetails() {
     }
   }
 
+  const handleGenerateVialCOAs = async () => {
+    const primaryGen = coaGenerations.find(
+      g => g.parent_generation_id == null && g.status !== 'superseded'
+    )
+    if (!primaryGen?.generation_id) {
+      toast.error('Generate the parent COA first', {
+        description: 'Per-vial COAs attach to the parent COA, which must exist before spinning off vials.',
+      })
+      return
+    }
+    setIsGeneratingVialCOAs(true)
+    const settle = startCOAConsole(`generate-vial-coas ${sampleId}`, GENERATE_STEPS)
+    try {
+      const result = await generateVialCOAs(sampleId, primaryGen.generation_id)
+      if (result.success) {
+        settle(true)
+        toast.success('Per-vial COAs generated', { description: result.message })
+        refreshSample(sampleId)
+        getExplorerCOAGenerations(sampleId, 10).then(setCoaGenerations).catch(() => {})
+        getSampleAdditionalCOAs(sampleId).then(setAdditionalCoas).catch(() => {})
+      } else {
+        settle(false, result.message ?? 'Vial COA generation failed')
+        toast.error('Per-vial COA generation failed', { description: result.message })
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Unknown error'
+      settle(false, msg)
+      toast.error('Per-vial COA generation failed', { description: msg })
+    } finally {
+      setIsGeneratingVialCOAs(false)
+    }
+  }
+
   const handlePublishCOA = async () => {
     setIsPublishingCOA(true)
     const settle = startCOAConsole(`publish-coa ${sampleId}`, PUBLISH_STEPS)
@@ -3759,9 +3794,9 @@ export function SampleDetails() {
                     variant="outline"
                     size="sm"
                     className="h-7 px-2 gap-1 cursor-pointer"
-                    disabled={isGeneratingCOA || isPublishingCOA}
+                    disabled={isGeneratingCOA || isPublishingCOA || isGeneratingVialCOAs}
                   >
-                    {(isGeneratingCOA || isPublishingCOA) ? (
+                    {(isGeneratingCOA || isPublishingCOA || isGeneratingVialCOAs) ? (
                       <Loader2 size={12} className="animate-spin" />
                     ) : (
                       <ChevronDown size={12} />
@@ -3776,6 +3811,16 @@ export function SampleDetails() {
                     className="cursor-pointer"
                   >
                     Generate Accumark COA
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onClick={handleGenerateVialCOAs}
+                    disabled={
+                      isGeneratingVialCOAs ||
+                      !coaGenerations.some(g => g.parent_generation_id == null && g.status !== 'superseded')
+                    }
+                    className="cursor-pointer"
+                  >
+                    Generate Per-Vial COAs
                   </DropdownMenuItem>
                   {isParent && (
                     <DropdownMenuItem
