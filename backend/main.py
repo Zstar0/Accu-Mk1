@@ -9869,6 +9869,12 @@ async def regen_primary_coa(
                 "SENAITE COA attach failed for %s: %s", sample_id, e
             )
 
+    # Mirror generate_sample_coa: refresh the Regular parent-services COA child
+    # off the NEW primary BEFORE publishing, so the cascade publishes it. The
+    # cascade's cross-primary supersede retires the old primary's regular child.
+    # Best-effort; no-op for non-variance.
+    await _maybe_emit_regular_coa_child(db, sample_id, _regen_parent, data)
+
     # 3. Publish the new primary — reuses publish_sample_coa's flow so
     # integration service marks the new generation as published,
     # supersedes the old primary, and _publish_additional_coas sees no
