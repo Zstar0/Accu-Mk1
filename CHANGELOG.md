@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.0.4 — 2026-06-23
+
+### Fixed
+
+- **COA source resolver now honors SENAITE retests.** A retested analysis left
+  in `verified` state alongside its superseded original (common on pre-subsample
+  samples) no longer forces a "more than one result — pick a source" block. The
+  resolver drops the superseded original (the one another analysis points at via
+  `getRetestOfUID`), so the COA generates against the current retest result.
+
 ## v1.0.3 — 2026-06-22
 
 ### Added
