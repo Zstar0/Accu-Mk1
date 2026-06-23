@@ -9091,6 +9091,40 @@ async def _parent_attachment_kinds(sample_id: str, auth) -> Optional[dict]:
         return None
 
 
+async def _maybe_emit_regular_coa_child(db, sample_id, parent_row, primary_data):
+    """For a variance sample, generate the Regular parent-services COA as a child
+    of the just-created variance primary: a SECOND COABuilder /process WITHOUT
+    variance fields (so it renders the parent's promoted figures as a plain COA),
+    tagged is_regular_coa. No-op for a non-variance sample (the primary already IS
+    the regular COA). Best-effort — a failure must NOT fail the primary.
+    """
+    import logging as _logging
+    _logger = _logging.getLogger(__name__)
+    if not COA_BUILDER_URL or parent_row is None:
+        return
+    from coa.variance_series import build_variance_replicates
+    if not build_variance_replicates(db, parent_row):
+        return  # non-variance: the primary already IS the regular COA
+    primary_gen_id = primary_data.get("generation_id")
+    if not primary_gen_id:
+        _logger.warning("regular COA child skipped for %s: no primary generation_id", sample_id)
+        return
+    body: dict = {"parent_generation_id": str(primary_gen_id), "is_regular_coa": True}
+    alias_map = _load_sample_aliases(db, sample_id)
+    if alias_map:
+        body["analyte_display_names"] = {str(k): v for k, v in alias_map.items()}
+    include_remarks = bool(parent_row.customer_remarks_include)
+    body["include_lab_remarks"] = include_remarks
+    if include_remarks and (parent_row.customer_remarks or "").strip():
+        body["lab_remarks"] = parent_row.customer_remarks.strip()
+    try:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            resp = await client.post(f"{COA_BUILDER_URL}/process/{sample_id}", json=body)
+            resp.raise_for_status()
+    except Exception as e:  # noqa: BLE001 — best-effort; must not fail the primary
+        _logger.warning("regular COA child generation failed for %s: %s", sample_id, e)
+
+
 @app.post("/wizard/senaite/samples/{sample_id}/generate-coa")
 async def generate_sample_coa(
     sample_id: str,
@@ -9335,6 +9369,11 @@ async def generate_sample_coa(
         except Exception as e:
             # Non-fatal — COA is generated; SENAITE attach is best-effort.
             _logger.warning("SENAITE COA attach failed for %s: %s", sample_id, e)
+
+    # Variance sample: also emit the Regular parent-services COA as a child of the
+    # just-created primary (best-effort; the helper no-ops for non-variance).
+    if not is_sub:
+        await _maybe_emit_regular_coa_child(db, sample_id, _parent_row, data)
 
     # Build a meaningful message from the COA Builder response
     warnings = data.get("warnings", [])
