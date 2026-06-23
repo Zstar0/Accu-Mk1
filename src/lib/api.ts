@@ -1024,6 +1024,8 @@ export interface ExplorerCOAGeneration {
   parent_generation_id: string | null
   /** 1-based vial number for per-vial HPLC COA children; null for primaries and branding additional COAs */
   vial_sequence: number | null
+  /** True for the regular parent-services COA child (plain COA generated alongside a variance primary) */
+  is_regular_coa: boolean
   /** Ingestion WP delivery status: pending | processing | uploaded | notified | partial | failed */
   ingestion_status: string | null
 }

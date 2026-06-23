@@ -408,6 +408,34 @@ export function selectVialGenerations(
   return [...byVial.values()].sort((a, b) => (a.vial_sequence ?? 0) - (b.vial_sequence ?? 0))
 }
 
+/**
+ * Select the current regular parent-services COA — the child generated alongside
+ * a variance primary (is_regular_coa). One row; superseded excluded; published
+ * preferred over draft, else the latest by generation_number. Empty for a
+ * non-variance sample (no regular child) — and the root/vial selectors already
+ * collapse it out of their cards (it has a parent and no vial_sequence).
+ */
+export function selectRegularGenerations(
+  gens: ExplorerCOAGeneration[]
+): ExplorerCOAGeneration[] {
+  let cur: ExplorerCOAGeneration | null = null
+  for (const g of gens) {
+    if (!g.is_regular_coa || g.status === 'superseded') continue
+    if (!cur) {
+      cur = g
+      continue
+    }
+    const gWins =
+      g.status === 'published' && cur.status !== 'published'
+        ? true
+        : g.status !== 'published' && cur.status === 'published'
+          ? false
+          : g.generation_number > cur.generation_number
+    if (gWins) cur = g
+  }
+  return cur ? [cur] : []
+}
+
 /** Derive a human-readable release status from the generation + ingestion records. */
 function coaReleaseStatus(gen: ExplorerCOAGeneration | null | undefined): {
   label: string
@@ -4323,6 +4351,21 @@ export function SampleDetails() {
                 <Card className="p-4">
                   <SectionHeader icon={FileText} title={`Per-Vial COAs (${vialGens.length})`}>
                     <VialCOAList generations={vialGens} />
+                  </SectionHeader>
+                </Card>
+              ) : null
+            })()}
+
+            {/* Regular COA — the plain parent-services COA generated alongside a
+                variance primary. A child (parent_generation_id set) with no
+                vial_sequence, so the root/vial cards above collapse it out; it
+                gets its own card here. */}
+            {(() => {
+              const regularGens = selectRegularGenerations(coaGenerations)
+              return regularGens.length > 0 ? (
+                <Card className="p-4">
+                  <SectionHeader icon={FileText} title="Regular COA">
+                    <GeneratedCOAFallbackList generations={regularGens} />
                   </SectionHeader>
                 </Card>
               ) : null

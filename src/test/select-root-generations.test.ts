@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { selectRootGenerations, selectVialGenerations } from '@/components/senaite/SampleDetails'
+import { selectRootGenerations, selectVialGenerations, selectRegularGenerations } from '@/components/senaite/SampleDetails'
 import type { ExplorerCOAGeneration } from '@/lib/api'
 
 function gen(overrides: Partial<ExplorerCOAGeneration>): ExplorerCOAGeneration {
@@ -22,6 +22,7 @@ function gen(overrides: Partial<ExplorerCOAGeneration>): ExplorerCOAGeneration {
     order_number: null,
     parent_generation_id: null,
     vial_sequence: null,
+    is_regular_coa: false,
     ingestion_status: null,
     ...overrides,
   }
@@ -102,5 +103,36 @@ describe('selectVialGenerations', () => {
     const d2 = gen({ id: 'd2', parent_generation_id: 'p', vial_sequence: 2, status: 'draft', generation_number: 3 })
     const result = selectVialGenerations([d1, d2])
     expect(result.map(g => g.id)).toEqual(['d2'])
+  })
+
+  it('excludes the regular COA child (it has no vial_sequence)', () => {
+    const regular = gen({ id: 'reg', parent_generation_id: 'p', vial_sequence: null, is_regular_coa: true })
+    expect(selectVialGenerations([regular])).toEqual([])
+  })
+})
+
+describe('selectRegularGenerations', () => {
+  it('returns empty when there is no regular child', () => {
+    const primary = gen({ id: 'p', vial_sequence: null })
+    const vial = gen({ id: 'v', parent_generation_id: 'p', vial_sequence: 1 })
+    expect(selectRegularGenerations([primary, vial])).toEqual([])
+  })
+
+  it('selects the regular parent-services child', () => {
+    const primary = gen({ id: 'p' })
+    const regular = gen({ id: 'reg', parent_generation_id: 'p', is_regular_coa: true })
+    expect(selectRegularGenerations([primary, regular]).map(g => g.id)).toEqual(['reg'])
+  })
+
+  it('excludes superseded regular children', () => {
+    const live = gen({ id: 'live', is_regular_coa: true, status: 'published' })
+    const old = gen({ id: 'old', is_regular_coa: true, status: 'superseded' })
+    expect(selectRegularGenerations([live, old]).map(g => g.id)).toEqual(['live'])
+  })
+
+  it('collapses to one row, preferring the published generation', () => {
+    const pub = gen({ id: 'pub', is_regular_coa: true, status: 'published', generation_number: 5 })
+    const draft = gen({ id: 'draft', is_regular_coa: true, status: 'draft', generation_number: 2 })
+    expect(selectRegularGenerations([pub, draft]).map(g => g.id)).toEqual(['pub'])
   })
 })

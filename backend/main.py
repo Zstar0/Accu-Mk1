@@ -7281,6 +7281,9 @@ class ExplorerCOAGenerationResponse(BaseModel):
     parent_generation_id: Optional[str] = None
     # 1-based vial number for per-vial HPLC COA children; None otherwise.
     vial_sequence: Optional[int] = None
+    # True for the regular parent-services COA child (plain COA generated
+    # alongside a variance primary); False otherwise.
+    is_regular_coa: bool = False
     ingestion_status: Optional[str] = None
 
 
