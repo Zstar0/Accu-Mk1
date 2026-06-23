@@ -107,6 +107,42 @@
     white-space: nowrap;
     flex-shrink: 0;
   }
+  .print-area .order-label,
+  .order-print-area .order-label {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 0.3mm;
+    width: 50.8mm;
+    height: 6.35mm;
+    padding: 0.3mm 0.8mm;
+    padding-right: 4mm;
+    box-sizing: border-box;
+    border: 1px dashed #ccc;
+    background: var(--background, #fff);
+  }
+  .order-label-id {
+    font-family: ui-monospace, monospace;
+    font-weight: 700;
+    font-size: 11pt;
+    line-height: 1;
+    letter-spacing: -0.02em;
+    white-space: nowrap;
+    color: var(--foreground);
+  }
+  .order-label-meta {
+    display: flex;
+    flex-direction: row;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 1mm;
+    font-family: ui-monospace, monospace;
+    font-size: 5.5pt;
+    color: var(--muted-foreground);
+    line-height: 1;
+    white-space: nowrap;
+  }
+  .order-label-dept { font-weight: 700; }
 }
 
 @media print {
@@ -266,4 +302,23 @@
     white-space: nowrap;
     flex-shrink: 0;
   }
+  .order-print-area .order-label {
+    width: 50.8mm;
+    height: 6.35mm;
+    padding: 0.3mm 0.8mm;
+    padding-right: 4mm;
+    margin: 0;
+    box-sizing: border-box;
+    display: flex !important;
+    flex-direction: column;
+    justify-content: center;
+    gap: 0.3mm;
+    border: none !important;
+    background: #fff !important;
+    page-break-inside: avoid;
+  }
+  .order-print-area .order-label:not(:last-child) { page-break-after: always; }
+  .order-print-area .order-label-id { font-family: ui-monospace, monospace; font-weight: 700; font-size: 11pt; line-height: 1; color: #000; white-space: nowrap; }
+  .order-print-area .order-label-meta { display: flex !important; flex-direction: row; justify-content: space-between; align-items: baseline; gap: 1mm; font-family: ui-monospace, monospace; font-size: 5.5pt; line-height: 1; color: #000; white-space: nowrap; }
+  .order-print-area .order-label-dept { font-weight: 700; }
 }
