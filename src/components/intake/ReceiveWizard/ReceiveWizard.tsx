@@ -176,6 +176,7 @@ export function ReceiveWizard({ parent, onClose, initialPhase = 'capture' }: Pro
         parentSampleId={parent.sample_id}
         vials={printList}
         orderNumber={parentDetails.details?.client_order_number ?? null}
+        orderDate={parentDetails.details?.date_received ?? null}
       />
     )
   } else if (phase === 'details') {
