@@ -191,6 +191,12 @@ def update_customer_remarks(
         )
     except LookupError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except RuntimeError as e:
+        # set_customer_remarks lazily creates the lims_samples row via
+        # ensure_sample_row, which hits SENAITE on a cache miss. A SENAITE
+        # outage (or a genuinely unknown AR) surfaces as RuntimeError -> 502
+        # (upstream failure), not a misleading 500.
+        raise HTTPException(status_code=502, detail=str(e))
 
 
 @router.get("", response_model=SubSampleListResponse)
