@@ -3332,7 +3332,11 @@ export function SampleDetails() {
     if (!sampleId) return
     let cancelled = false
 
-    getExplorerCOAGenerations(sampleId, 10).then(gens => {
+    // Fetch generously: the explorer orders primaries first (parent_generation_id
+    // IS NULL), so a sample with many primary regens would push its CHILD COAs
+    // (per-vial + the regular parent-services COA) past a small limit. 50 keeps
+    // the current children on the page for realistic regen counts.
+    getExplorerCOAGenerations(sampleId, 50).then(gens => {
       if (!cancelled) setCoaGenerations(gens)
     }).catch(() => {})
 
