@@ -64,8 +64,20 @@ def _gather_candidates_for(
     Build an `analyte_keyword -> [CandidateInfo]` map from one AR's analyses.
     `reader_payload[sample_id]` is the SENAITE analyses list for that AR.
     """
+    analyses = reader_payload.get(sample_id, [])
+    # A retest supersedes its original: any analysis whose UID is the target of
+    # another analysis's `retest_of_uid` has been retested and must NOT be a COA
+    # candidate. This uses SENAITE's authoritative retest link (getRetestOfUID) —
+    # the same relationship the analyses view honors — so a verified-but-
+    # superseded original (e.g. P-0895's pre-subsample retests, both left in
+    # SENAITE 'verified') drops out instead of forcing a spurious needs_decision.
+    superseded_uids = {
+        an.get("retest_of_uid") for an in analyses if an.get("retest_of_uid")
+    }
     out: Dict[str, List[CandidateInfo]] = {}
-    for an in reader_payload.get(sample_id, []):
+    for an in analyses:
+        if an.get("uid") in superseded_uids:
+            continue
         kw = an.get("keyword")
         if not kw:
             continue
@@ -498,5 +510,14 @@ class SenaiteAnalysesHttpReader:
                 "result": it.get("Result"),
                 "unit": it.get("Unit"),
                 "review_state": it.get("review_state"),
+                # SENAITE retest link: a non-empty getRetestOfUID / RetestOf.uid
+                # means THIS analysis is a retest of that UID (which is therefore
+                # superseded). Captured so _gather_candidates_for can drop the
+                # superseded original from COA candidates.
+                "retest_of_uid": (
+                    it.get("getRetestOfUID")
+                    or (it.get("RetestOf") or {}).get("uid")
+                    or None
+                ),
             })
         return out
