@@ -453,16 +453,50 @@ function coaReleaseStatus(gen: ExplorerCOAGeneration | null | undefined): {
   return { label: 'Published', color: 'emerald', title: 'Published in system' }
 }
 
+/** PDF button for a generation row — opens the IS signed URL for that COA's PDF. */
+function GeneratedCOAPdfButton({
+  sampleId,
+  generationNumber,
+}: {
+  sampleId: string
+  generationNumber: number
+}) {
+  const [downloading, setDownloading] = useState(false)
+  return (
+    <button
+      onClick={async () => {
+        setDownloading(true)
+        try {
+          const { url } = await getExplorerCOASignedUrl(sampleId, generationNumber)
+          window.open(url, '_blank')
+        } catch {
+          toast.error('Failed to open COA PDF')
+        } finally {
+          setDownloading(false)
+        }
+      }}
+      disabled={downloading}
+      className="shrink-0 inline-flex items-center gap-1 px-2 py-1 text-xs rounded-md border border-border bg-background hover:bg-muted transition-colors disabled:opacity-50 cursor-pointer"
+    >
+      {downloading ? <Loader2 size={11} className="animate-spin" /> : <ExternalLink size={11} />}
+      PDF
+    </button>
+  )
+}
+
 /**
  * Fallback list for the "Generated COAs" card when SENAITE has no attached
  * ARReport (data.published_coa is null) but Integration Service has root
- * generations. Mirrors the visual language of PublishedCOACard / the Additional
- * COAs section without the SENAITE-only PDF/regen actions.
+ * generations. Also powers the "Regular COA" card. Mirrors the visual language
+ * of PublishedCOACard / the Additional COAs section; each row links to its COA
+ * PDF via the IS signed URL.
  */
 function GeneratedCOAFallbackList({
   generations,
+  sampleId,
 }: {
   generations: ExplorerCOAGeneration[]
+  sampleId: string
 }) {
   const allDraft = generations.every(g => g.status === 'draft')
   return (
@@ -500,6 +534,7 @@ function GeneratedCOAFallbackList({
                     {release.label}
                   </span>
                 </div>
+                <GeneratedCOAPdfButton sampleId={sampleId} generationNumber={gen.generation_number} />
               </div>
               <div className="grid grid-cols-2 gap-x-3 gap-y-1">
                 <div className="flex flex-col">
@@ -4338,7 +4373,7 @@ export function SampleDetails() {
                   // root generations Integration Service already has.
                   const rootGens = selectRootGenerations(coaGenerations)
                   return rootGens.length > 0 ? (
-                    <GeneratedCOAFallbackList generations={rootGens} />
+                    <GeneratedCOAFallbackList generations={rootGens} sampleId={sampleId} />
                   ) : (
                     <p className="text-sm text-muted-foreground">No COA generated yet</p>
                   )
@@ -4369,7 +4404,7 @@ export function SampleDetails() {
               return regularGens.length > 0 ? (
                 <Card className="p-4">
                   <SectionHeader icon={FileText} title="Regular COA">
-                    <GeneratedCOAFallbackList generations={regularGens} />
+                    <GeneratedCOAFallbackList generations={regularGens} sampleId={sampleId} />
                   </SectionHeader>
                 </Card>
               ) : null
