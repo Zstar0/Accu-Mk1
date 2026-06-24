@@ -3541,7 +3541,7 @@ export function SampleDetails() {
           )
         }
         refreshSample(sampleId)
-        getExplorerCOAGenerations(sampleId, 10).then(setCoaGenerations).catch(() => {})
+        getExplorerCOAGenerations(sampleId, 50).then(setCoaGenerations).catch(() => {})
         getSampleAdditionalCOAs(sampleId).then(setAdditionalCoas).catch(() => {})
       } else {
         settle(false, result.message ?? 'Generation failed')
@@ -3574,7 +3574,7 @@ export function SampleDetails() {
         settle(true)
         toast.success('Per-vial COAs', { description: result.message })
         refreshSample(sampleId)
-        getExplorerCOAGenerations(sampleId, 10).then(setCoaGenerations).catch(() => {})
+        getExplorerCOAGenerations(sampleId, 50).then(setCoaGenerations).catch(() => {})
         getSampleAdditionalCOAs(sampleId).then(setAdditionalCoas).catch(() => {})
       } else {
         settle(false, result.message ?? 'Vial COA generation failed')
@@ -3600,7 +3600,7 @@ export function SampleDetails() {
           toast.warning('COA published with warning', { description: result.warning })
         }
         refreshSample(sampleId)
-        getExplorerCOAGenerations(sampleId, 10).then(setCoaGenerations).catch(() => {})
+        getExplorerCOAGenerations(sampleId, 50).then(setCoaGenerations).catch(() => {})
       } else {
         settle(false, result.message ?? 'Publish failed')
         toast.error('COA publish failed', { description: result.message })
@@ -4363,7 +4363,7 @@ export function SampleDetails() {
                     generation={coaGenerations.find(g => g.parent_generation_id == null && g.status !== 'superseded') ?? null}
                     onRefresh={() => {
                       refreshSample(sampleId)
-                      getExplorerCOAGenerations(sampleId, 10).then(setCoaGenerations).catch(() => {})
+                      getExplorerCOAGenerations(sampleId, 50).then(setCoaGenerations).catch(() => {})
                       getSampleAdditionalCOAs(sampleId).then(setAdditionalCoas).catch(() => {})
                     }}
                   />
@@ -4446,7 +4446,7 @@ export function SampleDetails() {
                           }
                           onRegenerated={() => {
                             getSampleAdditionalCOAs(data.sample_id).then(setAdditionalCoas).catch(() => {})
-                            getExplorerCOAGenerations(data.sample_id, 10).then(setCoaGenerations).catch(() => {})
+                            getExplorerCOAGenerations(data.sample_id, 50).then(setCoaGenerations).catch(() => {})
                           }}
                         />
                       ))}
