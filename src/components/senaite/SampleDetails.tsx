@@ -487,7 +487,7 @@ function GeneratedCOAPdfButton({
 /**
  * Fallback list for the "Generated COAs" card when SENAITE has no attached
  * ARReport (data.published_coa is null) but Integration Service has root
- * generations. Also powers the "Regular COA" card. Mirrors the visual language
+ * generations. Also powers the "Core COA" card. Mirrors the visual language
  * of PublishedCOACard / the Additional COAs section; each row links to its COA
  * PDF via the IS signed URL.
  */
@@ -4395,7 +4395,7 @@ export function SampleDetails() {
               ) : null
             })()}
 
-            {/* Regular COA — the plain parent-services COA generated alongside a
+            {/* Core COA — the plain parent-services COA generated alongside a
                 variance primary. A child (parent_generation_id set) with no
                 vial_sequence, so the root/vial cards above collapse it out; it
                 gets its own card here. */}
@@ -4403,7 +4403,7 @@ export function SampleDetails() {
               const regularGens = selectRegularGenerations(coaGenerations)
               return regularGens.length > 0 ? (
                 <Card className="p-4">
-                  <SectionHeader icon={FileText} title="Regular COA">
+                  <SectionHeader icon={FileText} title="Core COA">
                     <GeneratedCOAFallbackList generations={regularGens} sampleId={sampleId} />
                   </SectionHeader>
                 </Card>
