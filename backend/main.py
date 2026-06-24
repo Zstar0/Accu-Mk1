@@ -8618,10 +8618,11 @@ async def replace_analyte(
       6. re-mirror the slot across vials (replace_analyte_slot)
     """
     from sqlalchemy import select as _select
-    from models import AnalysisService, Peptide, SampleAnalyteAlias
+    from models import AnalysisService, LimsSample, Peptide, SampleAnalyteAlias
     from lims_analyses.service import (
         peptide_has_full_service_set,
         classify_slot_replacement_impact,
+        presubsample_slot_blocked_keywords,
         replace_analyte_slot,
         BadRequestError as _BadRequestError,
         NotFoundError as _NotFoundError,
@@ -8675,6 +8676,39 @@ async def replace_analyte(
     forceable = impact["worked_unverified"] or impact["blocked"]
     if forceable and not body.force:
         raise HTTPException(412, detail=impact)
+
+    # ── 2b. pre-subsample SENAITE-results gate ────────────────────────────────
+    # The vial-based impact gate above is blind to pre-subsample (pre-vial)
+    # samples — they have no Mk1 LimsSample/vial rows, so their results live only
+    # on the SENAITE AR. Guard the slot there before the destructive writes below
+    # (step 5 removes the old identity service), so a replace can never strip a
+    # worked identity or invalidate a verified/published result on an old sample.
+    _is_presubsample = db.execute(
+        _select(LimsSample.id).where(LimsSample.sample_id == sample_id)
+    ).scalar_one_or_none() is None
+    if _is_presubsample:
+        from lims_analyses.senaite_writeback import (
+            list_parent_line_states,
+            SenaiteWritebackError,
+        )
+        try:
+            _senaite_states = list_parent_line_states(sample_id)
+        except SenaiteWritebackError:
+            # Fail closed: can't prove the slot is safe to replace → don't write.
+            raise HTTPException(
+                502,
+                f"Could not read SENAITE results for {sample_id} to verify the "
+                "slot is safe to replace — try again.",
+            )
+        _blocked_kw = presubsample_slot_blocked_keywords(
+            _senaite_states, slot=slot, identity_keyword=old_id_kw
+        )
+        if _blocked_kw:
+            raise HTTPException(
+                409,
+                f"Slot {slot} has verified/published result(s) in SENAITE "
+                f"({', '.join(_blocked_kw)}) — invalidate or retest in SENAITE first.",
+            )
 
     import logging as _logging
     _rep_logger = _logging.getLogger(__name__)
