@@ -508,8 +508,8 @@ function GeneratedCOAFallbackList({
             key={gen.id}
             className="flex items-start gap-3 p-3 rounded-lg bg-muted/40 border border-border/40"
           >
-            <div className="flex items-center justify-center w-9 h-9 rounded-lg bg-muted text-muted-foreground border border-border/40 shrink-0 mt-0.5">
-              <FileText size={16} />
+            <div className="flex items-center justify-center w-9 h-9 rounded-lg bg-red-500/10 border border-red-500/20 shrink-0 mt-0.5">
+              <FileText size={16} className="text-red-500 dark:text-red-400" />
             </div>
             <div className="flex-1 min-w-0 space-y-2">
               <div className="flex items-center justify-between gap-2">
@@ -534,9 +534,25 @@ function GeneratedCOAFallbackList({
                     {release.label}
                   </span>
                 </div>
-                <GeneratedCOAPdfButton sampleId={sampleId} generationNumber={gen.generation_number} />
+                <div className="flex items-center gap-2 shrink-0">
+                  {release.color === 'emerald' && gen.verification_code && (
+                    <a
+                      href={accuverifyUrl(gen.verification_code)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2 transition-colors"
+                    >
+                      View Digital COA
+                    </a>
+                  )}
+                  <GeneratedCOAPdfButton sampleId={sampleId} generationNumber={gen.generation_number} />
+                </div>
               </div>
               <div className="grid grid-cols-2 gap-x-3 gap-y-1">
+                <div className="flex flex-col">
+                  <span className="text-[11px] text-muted-foreground">{gen.published_at ? 'Published' : 'Created'}</span>
+                  <span className="text-[11px] text-foreground">{formatDate(gen.published_at || gen.created_at)}</span>
+                </div>
                 <div className="flex flex-col">
                   <span className="text-[11px] text-muted-foreground">Verification Code</span>
                   {gen.verification_code ? (
@@ -551,10 +567,6 @@ function GeneratedCOAFallbackList({
                   ) : (
                     <span className="text-[11px] font-mono text-muted-foreground">—</span>
                   )}
-                </div>
-                <div className="flex flex-col">
-                  <span className="text-[11px] text-muted-foreground">Created</span>
-                  <span className="text-[11px] text-foreground">{formatDate(gen.created_at)}</span>
                 </div>
               </div>
             </div>
