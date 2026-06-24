@@ -1,6 +1,7 @@
-/* Physical label media: 105.7mm wide × 8.5mm tall strip labels.
-   Layout is QR on the left, single text line on the right packing
-   the sample ID, vial position, role, order #, and check-in date. */
+/* Physical label media: 2" × 1/4" strip labels (50.8mm × 6.35mm) on the
+   CAB Mach 4S/600B. Layout is QR on the left, two stacked text rows on the
+   right: row 1 = sample ID + role (top-right), row 2 = vial/order + date.
+   Nominal sizes below — tune the mm values if the printable area differs. */
 
 @media screen {
   .print-area {
@@ -23,43 +24,69 @@
     display: flex;
     flex-direction: row;
     align-items: center;
-    gap: 1.5mm;
+    gap: 1mm;
     border: 1px dashed #ccc;
-    padding: 0.5mm 1mm;
-    width: 105.7mm;
-    height: 8.5mm;
+    padding: 0.3mm 0.8mm;
+    width: 50.8mm;
+    height: 6.35mm;
     box-sizing: border-box;
     background: var(--background, #fff);
+    /* extra right padding pulls the right-aligned role/date inboard of the
+       printer's unprintable right margin (physical label is wider than the
+       printable area) — tune this mm value if the clip persists/overshoots */
+    padding-right: 4mm;
   }
   .label svg {
-    width: 7mm;
-    height: 7mm;
+    width: 5.5mm;
+    height: 5.5mm;
     flex-shrink: 0;
   }
   .label-text {
     flex: 1;
     min-width: 0;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 0.4mm;
+    overflow: hidden;
+  }
+  .label-line {
     display: flex;
     flex-direction: row;
-    align-items: center;
-    gap: 1.5mm;
-    overflow: hidden;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 1mm;
+    min-width: 0;
   }
   .label-id {
     font-family: ui-monospace, monospace;
     font-weight: 700;
-    font-size: 9pt;
-    line-height: 1;
+    font-size: 6pt;
+    line-height: 1.05;
     letter-spacing: -0.04em;
     white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
     color: var(--foreground);
+    flex: 1;
+    min-width: 0;
+  }
+  .label-role {
+    font-family: ui-monospace, monospace;
+    font-weight: 700;
+    font-size: 6pt;
+    color: var(--foreground);
+    line-height: 1.05;
+    letter-spacing: 0.02em;
+    white-space: nowrap;
     flex-shrink: 0;
   }
-  .label-meta {
+  .label-sub {
     font-family: ui-monospace, monospace;
-    font-size: 6.5pt;
+    font-size: 5.5pt;
     color: var(--muted-foreground);
-    line-height: 1;
+    line-height: 1.05;
     letter-spacing: -0.02em;
     white-space: nowrap;
     overflow: hidden;
@@ -67,24 +94,59 @@
     flex: 1;
     min-width: 0;
   }
-  .label-meta .label-meta-sep {
+  .label-sub .label-meta-sep {
     opacity: 0.5;
-    margin: 0 0.4em;
+    margin: 0 0.3em;
   }
-  .label-role {
+  .label-date {
     font-family: ui-monospace, monospace;
-    font-weight: 700;
-    font-size: 7pt;
-    color: var(--foreground);
-    line-height: 1;
-    letter-spacing: 0.04em;
+    font-size: 5.5pt;
+    color: var(--muted-foreground);
+    line-height: 1.05;
+    letter-spacing: -0.02em;
     white-space: nowrap;
     flex-shrink: 0;
   }
+  .print-area .order-label,
+  .order-print-area .order-label {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 0.3mm;
+    width: 50.8mm;
+    height: 6.35mm;
+    padding: 0.3mm 0.8mm;
+    padding-right: 4mm;
+    box-sizing: border-box;
+    border: 1px dashed #ccc;
+    background: var(--background, #fff);
+  }
+  .order-label-id {
+    font-family: ui-monospace, monospace;
+    font-weight: 700;
+    font-size: 11pt;
+    line-height: 1;
+    letter-spacing: -0.02em;
+    white-space: nowrap;
+    color: var(--foreground);
+  }
+  .order-label-meta {
+    display: flex;
+    flex-direction: row;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 1mm;
+    font-family: ui-monospace, monospace;
+    font-size: 5.5pt;
+    color: var(--muted-foreground);
+    line-height: 1;
+    white-space: nowrap;
+  }
+  .order-label-dept { font-weight: 700; }
 }
 
 @media print {
-  /* The print page is the label media (105.7mm × 8.5mm) — anything else
+  /* The print page is the label media (50.8mm × 6.35mm) — anything else
      on screen MUST leave layout entirely or the browser slices the rest
      of the document (SampleDetails page, Radix Dialog portal, wizard
      chrome) into more "pages" while position:fixed elements stamp on
@@ -106,7 +168,7 @@
     position: static !important;
     left: auto !important;
     top: auto !important;
-    width: 105.7mm !important;
+    width: 50.8mm !important;
     margin: 0 !important;
     padding: 0 !important;
     background: #fff !important;
@@ -134,21 +196,24 @@
   html, body { margin: 0 !important; padding: 0 !important; }
 
   @page {
-    size: 105.7mm 8.5mm;
+    size: 50.8mm 6.35mm;
     margin: 0;
   }
 
   .label {
     page-break-inside: avoid;
-    width: 105.7mm;
-    height: 8.5mm;
-    padding: 0.5mm 1mm;
+    width: 50.8mm;
+    height: 6.35mm;
+    padding: 0.3mm 0.8mm;
+    /* extra right padding pulls the right-aligned role/date inboard of the
+       printer's unprintable right margin — tune if the clip persists. */
+    padding-right: 4mm;
     margin: 0;
     box-sizing: border-box;
     display: flex !important;
     flex-direction: row;
     align-items: center;
-    gap: 1.5mm;
+    gap: 1mm;
     border: none !important;
     background: #fff !important;
   }
@@ -159,8 +224,8 @@
   }
 
   .label svg {
-    width: 7mm;
-    height: 7mm;
+    width: 5.5mm;
+    height: 5.5mm;
     flex-shrink: 0;
     display: block !important;
   }
@@ -168,29 +233,53 @@
   .label-text {
     flex: 1;
     min-width: 0;
+    height: 100%;
+    display: flex !important;
+    flex-direction: column;
+    justify-content: center;
+    gap: 0.4mm;
+    overflow: hidden;
+  }
+
+  .label-line {
     display: flex !important;
     flex-direction: row;
-    align-items: center;
-    gap: 1.5mm;
-    overflow: hidden;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 1mm;
+    min-width: 0;
   }
 
   .label-id {
     font-family: ui-monospace, monospace;
     font-weight: 700;
-    font-size: 9pt;
-    line-height: 1;
+    font-size: 6pt;
+    line-height: 1.05;
     letter-spacing: -0.04em;
     white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
     color: #000;
+    flex: 1;
+    min-width: 0;
+  }
+
+  .label-role {
+    font-family: ui-monospace, monospace;
+    font-weight: 700;
+    font-size: 6pt;
+    color: #000;
+    line-height: 1.05;
+    letter-spacing: 0.02em;
+    white-space: nowrap;
     flex-shrink: 0;
   }
 
-  .label-meta {
+  .label-sub {
     font-family: ui-monospace, monospace;
-    font-size: 6.5pt;
+    font-size: 5.5pt;
     color: #000;
-    line-height: 1;
+    line-height: 1.05;
     letter-spacing: -0.02em;
     white-space: nowrap;
     overflow: hidden;
@@ -199,14 +288,37 @@
     min-width: 0;
   }
 
-  .label-role {
+  .label-sub .label-meta-sep {
+    opacity: 0.5;
+    margin: 0 0.3em;
+  }
+
+  .label-date {
     font-family: ui-monospace, monospace;
-    font-weight: 700;
-    font-size: 7pt;
+    font-size: 5.5pt;
     color: #000;
-    line-height: 1;
-    letter-spacing: 0.04em;
+    line-height: 1.05;
+    letter-spacing: -0.02em;
     white-space: nowrap;
     flex-shrink: 0;
   }
+  .order-print-area .order-label {
+    width: 50.8mm;
+    height: 6.35mm;
+    padding: 0.3mm 0.8mm;
+    padding-right: 4mm;
+    margin: 0;
+    box-sizing: border-box;
+    display: flex !important;
+    flex-direction: column;
+    justify-content: center;
+    gap: 0.3mm;
+    border: none !important;
+    background: #fff !important;
+    page-break-inside: avoid;
+  }
+  .order-print-area .order-label:not(:last-child) { page-break-after: always; }
+  .order-print-area .order-label-id { font-family: ui-monospace, monospace; font-weight: 700; font-size: 11pt; line-height: 1; color: #000; white-space: nowrap; }
+  .order-print-area .order-label-meta { display: flex !important; flex-direction: row; justify-content: space-between; align-items: baseline; gap: 1mm; font-family: ui-monospace, monospace; font-size: 5.5pt; line-height: 1; color: #000; white-space: nowrap; }
+  .order-print-area .order-label-dept { font-weight: 700; }
 }

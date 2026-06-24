@@ -5325,6 +5325,20 @@ export async function getVialDemand(parentSampleId: string): Promise<VialDemandR
   return response.json()
 }
 
+export interface OrderBoxLabelSummary {
+  order_number: string
+  order_date: string | null
+  counts: { hplc: number; endo: number; ster: number }
+}
+
+export async function getOrderBoxLabelSummary(
+  orderNumber: string,
+): Promise<OrderBoxLabelSummary> {
+  return apiFetch<OrderBoxLabelSummary>(
+    `/orders/${encodeURIComponent(orderNumber)}/box-label-summary`,
+  )
+}
+
 /**
  * Get the vial plan for a parent sample (demand, assignment roles, etc.).
  */

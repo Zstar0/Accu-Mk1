@@ -41,30 +41,36 @@ export function LabelTemplate({
   const hasVial = vialPosition && vialTotal
   const dateStr = formatLabelDate(receivedAt)
 
-  // The strip label packs everything into one horizontal text row to fit the
-  // 105.7mm × 8.5mm media: [Sample ID]  [Vial X/Y · WP-#### · Date: M/D/YYYY]  [ROLE]
-  // Each segment is optional; separators only render when both neighbors exist.
-  const metaParts: string[] = []
-  if (hasVial) metaParts.push(`Vial ${vialPosition}/${vialTotal}`)
-  if (orderNumber) metaParts.push(orderNumber)
-  if (dateStr) metaParts.push(`Date: ${dateStr}`)
+  // 2" × 1/4" (50.8mm × 6.35mm) strip: QR on the left, two stacked text rows
+  // on the right.
+  //   Row 1: [Sample ID]                       [ROLE]
+  //   Row 2: [Vial X/Y · WP-####]              [M/D/YYYY]
+  // The role sits top-right and the date below it, per the lab tech's request.
+  const subParts: string[] = []
+  if (hasVial) subParts.push(`Vial ${vialPosition}/${vialTotal}`)
+  if (orderNumber) subParts.push(orderNumber)
 
   return (
     <div className="label">
-      <QRCodeSVG value={sampleId} size={96} level="M" marginSize={0} />
+      <QRCodeSVG value={sampleId} size={64} level="M" marginSize={2} />
       <div className="label-text">
-        <div className="label-id">{sampleId}</div>
-        {metaParts.length > 0 && (
-          <div className="label-meta">
-            {metaParts.map((part, i) => (
-              <span key={i}>
-                {i > 0 && <span className="label-meta-sep">·</span>}
-                {part}
-              </span>
-            ))}
-          </div>
-        )}
-        {roleText && <div className="label-role">{roleText}</div>}
+        <div className="label-line">
+          <span className="label-id">{sampleId}</span>
+          {roleText && <span className="label-role">{roleText}</span>}
+        </div>
+        <div className="label-line">
+          {subParts.length > 0 && (
+            <span className="label-sub">
+              {subParts.map((part, i) => (
+                <span key={i}>
+                  {i > 0 && <span className="label-meta-sep">·</span>}
+                  {part}
+                </span>
+              ))}
+            </span>
+          )}
+          {dateStr && <span className="label-date">{dateStr}</span>}
+        </div>
       </div>
     </div>
   )

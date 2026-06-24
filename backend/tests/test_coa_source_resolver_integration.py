@@ -234,6 +234,51 @@ def test_resolve_sources_senaite_only_parent_uses_legacy_path(db, analysis_servi
     assert d.chosen.value == "42.0"
 
 
+def test_resolve_sources_excludes_senaite_superseded_retest(db, analysis_service):
+    """Regression for P-0895 (pre-subsample retested sample): a SENAITE-only
+    parent with a retest pair — the superseded original AND the retest of it,
+    both still 'verified' in SENAITE — must resolve to the RETEST (mode='auto'),
+    not block on needs_decision. The superseded original (its UID is the target
+    of the retest's retest_of_uid) is excluded from candidates."""
+    parent = db.execute(select(LimsSample).limit(1)).scalars().first()
+    if parent is None:
+        pytest.skip("no parent samples in DB")
+    existing = db.execute(
+        select(func.count(LimsAnalysis.id)).where(
+            LimsAnalysis.lims_sample_pk == parent.id,
+            LimsAnalysis.keyword == analysis_service.keyword,
+            LimsAnalysis.retest_of_id.is_(None),
+        )
+    ).scalar()
+    if existing > 0:
+        pytest.skip("parent already has a Mk1 row for the keyword")
+
+    fake_payload = {
+        parent.sample_id: [
+            # Superseded original — still 'verified' in SENAITE; its UID is the
+            # target of the retest below. Must be excluded.
+            {"uid": "orig-uid", "keyword": analysis_service.keyword,
+             "result": "Conforms", "unit": "%", "review_state": "verified",
+             "retest_of_uid": None},
+            # The retest (points at the original via retest_of_uid) — report this.
+            {"uid": "retest-uid", "keyword": analysis_service.keyword,
+             "result": "99.93", "unit": "%", "review_state": "verified",
+             "retest_of_uid": "orig-uid"},
+        ],
+    }
+    reader = _FakeSenaiteReader(payload=fake_payload)
+    res = asyncio.run(resolve_sources(parent.sample_id, db, reader))
+
+    matching = [d for d in res.decisions if d.analyte_keyword == analysis_service.keyword]
+    assert matching, "expected a decision"
+    d = matching[0]
+    assert d.blocked is None, f"should not block; got blocked={d.blocked!r}: {d.blocked_detail}"
+    assert d.mode == "auto"
+    assert d.chosen is not None
+    assert d.chosen.source_analysis_uid == "retest-uid"
+    assert d.chosen.value == "99.93"
+
+
 def test_resolve_sources_mk1_to_be_verified_row_resolves(db, clean_sub, analysis_service):
     """A parent-tier row in to_be_verified state (not yet verified) now resolves
     as mode='auto' under the relaxed policy. Previously would have been blocked."""

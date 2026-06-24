@@ -1140,19 +1140,24 @@ def set_customer_remarks(db: Session, sample_id: str, remarks: str,
     """Set the customer-facing remarks on a parent sample and whether they are
     delivered with the COA ("Include with Publish?"). Audit-logs lengths + the
     include flag only (the text is customer-facing but the audit trail doesn't
-    need to duplicate it). Raises LookupError when the parent has no
-    lims_samples row. Does NOT touch customer_remarks_delivered_at (that is
+    need to duplicate it). Does NOT touch customer_remarks_delivered_at (that is
     stamped at COA generation).
+
+    Pre-1.0 samples predate the sub-samples feature and have no lims_samples row
+    to hang remarks on, so the first save used to 404. Lazily upsert the row via
+    the same first-touch path the vial wizard uses (ensure_sample_row) so the
+    save self-heals. ensure_sample_row hits SENAITE on a cache miss and raises
+    RuntimeError when SENAITE is unreachable or has no such AR; the route maps
+    that to 502.
 
     Spec: docs/superpowers/specs/2026-06-13-customer-remarks-include-toggle-design.md
     """
     from models import AuditLog
 
-    parent = db.execute(
-        select(LimsSample).where(LimsSample.sample_id == sample_id)
-    ).scalar_one_or_none()
-    if parent is None:
-        raise LookupError(f"sample {sample_id} not found")
+    # Lazy first-touch: return the existing row, or create it from SENAITE
+    # metadata. Replaces the old bare lookup that 404'd pre-1.0 parents whose
+    # lims_samples row was never created (they predate the sub-samples feature).
+    parent = ensure_sample_row(db, sample_id)
     old = parent.customer_remarks or ""
     parent.customer_remarks = remarks
     parent.customer_remarks_include = include

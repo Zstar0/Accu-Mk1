@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Printer } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { LabelTemplate } from './LabelTemplate'
 import { getVialPlan, type VialPlanItem } from '@/lib/api'
+import { OrderLabelTemplate } from './OrderLabelTemplate'
 import { vialPosition } from '@/lib/vial-label'
 import './PrintStep.css'
 
@@ -18,6 +19,7 @@ interface Props {
   parentSampleId: string
   vials: PrintLabel[]
   orderNumber?: string | null
+  orderDate?: string | null
 }
 
 /**
@@ -27,7 +29,7 @@ interface Props {
  * from a previous session, etc.). Default is all checked since the dominant
  * case is "print everything I just captured".
  */
-export function PrintStep({ parentSampleId, vials, orderNumber }: Props) {
+export function PrintStep({ parentSampleId, vials, orderNumber, orderDate }: Props) {
   const [planByVial, setPlanByVial] = useState<Record<string, VialPlanItem>>({})
   const [vialTotal, setVialTotal] = useState<number | null>(null)
   // Container family: position = vial_sequence (S01 IS Vial 1); legacy +1.
@@ -35,6 +37,8 @@ export function PrintStep({ parentSampleId, vials, orderNumber }: Props) {
   const [checkedIds, setCheckedIds] = useState<Set<string>>(
     () => new Set(vials.map(v => v.sample_id)),
   )
+  const [orderCounts, setOrderCounts] = useState<{ hplc: number; endo: number; ster: number } | null>(null)
+  const [printMode, setPrintMode] = useState<'vials' | 'order'>('vials')
 
   // Pull vial-plan to enrich each label with assignment_role + vial position.
   // Soft fail: if plan isn't available, labels print without role/position.
@@ -93,6 +97,34 @@ export function PrintStep({ parentSampleId, vials, orderNumber }: Props) {
   const selectAll = () => setCheckedIds(new Set(vials.map(v => v.sample_id)))
   const clearAll = () => setCheckedIds(new Set())
 
+  // Box-label counts come from what's actually ASSIGNED — the vial plan's
+  // per-vial assignment_role (hplc/endo/ster; xtra/unassigned don't count) —
+  // not what was ordered. A department with no vials assigned yet prints no
+  // label; reprinting after more vials arrive and are assigned reflects the
+  // new assignment. Guard against a double-click double-print (physical labels
+  // are expensive — a stray second print dialog can waste a label).
+  const orderPrintInFlight = useRef(false)
+  const printOrderLabels = () => {
+    if (!orderNumber || orderPrintInFlight.current) return
+    const counts = { hplc: 0, endo: 0, ster: 0 }
+    for (const v of Object.values(planByVial)) {
+      const role = v.assignment_role
+      if (role === 'hplc' || role === 'endo' || role === 'ster') counts[role] += 1
+    }
+    if (counts.hplc + counts.endo + counts.ster === 0) return // nothing assigned → no labels
+    orderPrintInFlight.current = true
+    setOrderCounts(counts)
+    setPrintMode('order')
+    // wait two frames so the order-label DOM mounts before printing
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => {
+        window.print()
+        setPrintMode('vials')
+        orderPrintInFlight.current = false
+      }),
+    )
+  }
+
   return (
     <div className="grid grid-rows-[auto_1fr] h-full min-h-0">
       <div className="screen-only px-6 py-3 border-b flex items-center gap-3 bg-muted/10 print-controls">
@@ -117,7 +149,17 @@ export function PrintStep({ parentSampleId, vials, orderNumber }: Props) {
         >
           Clear all
         </Button>
-        <div className="ml-auto">
+        <div className="ml-auto flex gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            onClick={printOrderLabels}
+            disabled={!orderNumber}
+            className="gap-2"
+          >
+            <Printer className="w-4 h-4" aria-hidden="true" />
+            Print Order #
+          </Button>
           <Button
             type="button"
             onClick={() => window.print()}
@@ -136,7 +178,7 @@ export function PrintStep({ parentSampleId, vials, orderNumber }: Props) {
             No vials in this session — nothing to print.
           </p>
         ) : (
-          <div className="print-area">
+          <div className={printMode === 'order' ? 'screen-only' : 'print-area'}>
             {vials.map(v => {
               const planItem = planByVial[v.sample_id]
               const role = planItem?.assignment_role ?? null
@@ -166,6 +208,22 @@ export function PrintStep({ parentSampleId, vials, orderNumber }: Props) {
                 </div>
               )
             })}
+          </div>
+        )}
+        {orderCounts && (
+          <div className={printMode === 'order' ? 'print-area order-print-area' : 'order-print-area screen-only'}>
+            {(['hplc', 'endo', 'ster'] as const)
+              .filter(d => orderCounts[d] > 0)
+              .map(d => (
+                <div key={d} className="label-row">
+                  <OrderLabelTemplate
+                    orderNumber={orderNumber ?? ''}
+                    department={d}
+                    vialCount={orderCounts[d]}
+                    orderDate={orderDate ? orderDate.slice(0, 10) : null}
+                  />
+                </div>
+              ))}
           </div>
         )}
       </div>
