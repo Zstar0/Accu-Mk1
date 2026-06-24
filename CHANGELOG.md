@@ -1,5 +1,17 @@
 # Changelog
 
+## v1.0.5 — 2026-06-23
+
+### Fixed
+
+- **Replace analyte now works on pre-subsample (pre-vial) samples.** The Replace
+  flow raised "parent sample not found" for older samples with no Mk1 vial rows —
+  after the SENAITE-side field + identity writes had already run, leaving a
+  partial change. It now no-ops the (nonexistent) vial re-mirror for these
+  samples, and a new pre-subsample guard blocks the replace (409) before any
+  write if the slot's identity or `ANALYTE-{slot}-PUR/QTY` are already
+  verified/published in SENAITE.
+
 ## v1.0.4 — 2026-06-23
 
 ### Fixed
