@@ -30,6 +30,29 @@ log = logging.getLogger(__name__)
 _DEFAULT_DIR = "/data/sub_sample_photos"
 _KNOWN_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".heic"}
 
+_CONTENT_TYPES = {
+    ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+    ".gif": "image/gif", ".webp": "image/webp", ".heic": "image/heic",
+}
+
+
+def _extension_for(filename: str) -> str:
+    """Return lowercased suffix if in _KNOWN_EXTS, else '.bin'."""
+    ext = Path(filename or "").suffix.lower()
+    return ext if ext in _KNOWN_EXTS else ".bin"
+
+
+def _build_rel_key(sample_id: str, filename: str) -> str:
+    """Build relative key 'sample_id/uuid.ext'; raise if sample_id is falsy."""
+    if not sample_id:
+        raise PhotoStorageError("save_photo: sample_id is required")
+    return f"{sample_id}/{uuid.uuid4().hex}{_extension_for(filename)}"
+
+
+def _content_type_for_key(key: str) -> str:
+    """Return MIME type by extension, else 'application/octet-stream'."""
+    return _CONTENT_TYPES.get(Path(key).suffix.lower(), "application/octet-stream")
+
 
 class PhotoStorageError(RuntimeError):
     """Raised on any storage-layer failure (write, read, delete)."""
@@ -61,21 +84,13 @@ class FilesystemPhotoStorage:
         self.root.mkdir(parents=True, exist_ok=True)
 
     def save_photo(self, sample_id: str, photo_bytes: bytes, filename: str) -> str:
-        if not sample_id:
-            raise PhotoStorageError("save_photo: sample_id is required")
         if not photo_bytes:
             raise PhotoStorageError("save_photo: photo_bytes is empty")
-
-        ext = self._extension_for(filename)
-        photo_uuid = uuid.uuid4().hex
-        rel_key = f"{sample_id}/{photo_uuid}{ext}"
+        rel_key = _build_rel_key(sample_id, filename)
         abs_path = self.root / rel_key
         abs_path.parent.mkdir(parents=True, exist_ok=True)
         abs_path.write_bytes(photo_bytes)
-        log.info(
-            "photo_storage.saved sample=%s key=%s size=%d",
-            sample_id, rel_key, len(photo_bytes),
-        )
+        log.info("photo_storage.saved sample=%s key=%s size=%d", sample_id, rel_key, len(photo_bytes))
         return rel_key
 
     def fetch_photo(self, key: str) -> bytes:
@@ -89,12 +104,6 @@ class FilesystemPhotoStorage:
         if abs_path.exists():
             abs_path.unlink()
             log.info("photo_storage.deleted key=%s", key)
-
-    def _extension_for(self, filename: str) -> str:
-        ext = Path(filename or "").suffix.lower()
-        if ext in _KNOWN_EXTS:
-            return ext
-        return ".bin"
 
     def _safe_resolve(self, key: str) -> Path:
         """Resolve a relative key under self.root; refuse path traversal."""
