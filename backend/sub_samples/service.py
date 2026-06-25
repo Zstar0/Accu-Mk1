@@ -157,6 +157,47 @@ def create_sub_sample(
     )
 
 
+def create_sub_samples_bulk(
+    db: Session,
+    parent_sample_id: str,
+    photo_bytes: bytes,
+    photo_filename: str,
+    remarks: Optional[str],
+    user_id: int,
+    count: int,
+) -> tuple[list[LimsSubSample], Optional[Exception]]:
+    """Create `count` identical vials (same photo bytes + remarks) for a parent.
+
+    Loops the single-create path: each vial gets its own vial_sequence (assigned
+    under the parent row lock per create) and a distinct storage key, and commits
+    independently. Stops at the first error and returns it alongside whatever was
+    created — partial success is kept (prior commits stand; the failed attempt is
+    rolled back). Auto-assignment is NOT run here; the caller refreshes the
+    vial-plan afterward, same as the single-create flow.
+
+    Returns (created, error). `error` is None on full success.
+    """
+    created: list[LimsSubSample] = []
+    for _ in range(count):
+        try:
+            sub = create_sub_sample(
+                db,
+                parent_sample_id=parent_sample_id,
+                photo_bytes=photo_bytes,
+                photo_filename=photo_filename,
+                remarks=remarks,
+                user_id=user_id,
+            )
+            created.append(sub)
+        except Exception as e:  # noqa: BLE001 — surface to caller, keep prior vials
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            return created, e
+    return created, None
+
+
 def _create_sub_sample_native(
     db: Session,
     parent: LimsSample,

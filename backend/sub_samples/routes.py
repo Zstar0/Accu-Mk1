@@ -25,6 +25,7 @@ from sub_samples.senaite import (
 )
 from sub_samples.schemas import (
     CreateSubSampleRequest, UpdateSubSampleRequest,
+    CreateBulkSubSamplesRequest, BulkSubSampleResponse,
     SubSampleResponse, SubSampleListResponse, ParentSampleSummary,
     VialPlanResponse, VialPlanItem, AssignmentPatchRequest,
     AggregatesRequest, AggregatesResponse, ParentAggregate,
@@ -141,6 +142,49 @@ def create_sub_sample(
     except RuntimeError as e:
         raise HTTPException(status_code=502, detail=str(e))
     return _serialize(sub)
+
+
+@router.post("/bulk", status_code=status.HTTP_201_CREATED, response_model=BulkSubSampleResponse)
+def create_sub_samples_bulk(
+    body: CreateBulkSubSamplesRequest,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """Create N identical vials (same photo + remarks) for a parent in one call.
+
+    Decodes the photo once and loops the tested single-create path; each vial
+    gets its own sequential vial_sequence and a distinct storage key. Created
+    vials carry assignment_role=NULL — the caller refreshes the vial-plan
+    afterward to run auto-assignment (same as the single-create flow).
+
+    Partial failure is tolerated: vials created before an error are kept and
+    returned with `failed` > 0. If ZERO vials are created, the originating error
+    is surfaced (502, mirroring the single-create path).
+    """
+    photo_bytes = _decode_photo(body.photo_base64)
+    created, err = service.create_sub_samples_bulk(
+        db,
+        parent_sample_id=body.parent_sample_id,
+        photo_bytes=photo_bytes,
+        photo_filename=_filename_from_request(),
+        remarks=body.remarks,
+        user_id=user.id,
+        count=body.count,
+    )
+    if not created and err is not None:
+        if isinstance(err, SecondaryFalloutError):
+            raise HTTPException(status_code=502, detail={
+                "code": "secondary_fallout",
+                "message": str(err),
+                "orphan_uid": err.orphan_uid,
+                "orphan_sample_id": err.orphan_sample_id,
+            })
+        raise HTTPException(status_code=502, detail=str(err))
+    return BulkSubSampleResponse(
+        created=[_serialize(s) for s in created],
+        requested=body.count,
+        failed=body.count - len(created),
+    )
 
 
 @router.post("/{parent_sample_id}/ensure", response_model=ParentSampleSummary)
