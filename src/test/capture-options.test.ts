@@ -41,6 +41,14 @@ describe('highestSupportedResValue', () => {
       highestSupportedResValue({ width: { max: 1920 }, height: { max: 1080 } }),
     ).toBe('1920x1080')
   })
+
+  it('returns null for an empty capabilities object', () => {
+    expect(highestSupportedResValue({})).toBeNull()
+  })
+
+  it('returns null when only one dimension is known', () => {
+    expect(highestSupportedResValue({ width: { max: 1280 } })).toBeNull()
+  })
 })
 
 describe('videoConstraints', () => {

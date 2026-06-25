@@ -61,7 +61,9 @@ export function supportedResOptions(
 export function highestSupportedResValue(
   caps: CaptureCapabilities | null,
 ): string | null {
-  if (!caps) return null
+  // Unknown OR incomplete capabilities (null, {}, or only one dimension) →
+  // null, so a caller never gets a resolution the camera hasn't confirmed.
+  if (caps?.width?.max == null || caps?.height?.max == null) return null
   const sized = supportedResOptions(caps).filter(o => o.w != null)
   if (sized.length === 0) return null
   return sized.reduce((best, o) =>
