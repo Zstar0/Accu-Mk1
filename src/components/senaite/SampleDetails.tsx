@@ -108,6 +108,7 @@ import {
   setSubSamplePrimaryAttachment,
   type SubSampleAttachment,
   listWorksheets,
+  getExplorerOrderById,
   listSubSampleChromatograms,
   uploadChromatogramToSenaite,
   type SubSampleChromatogram,
@@ -2860,6 +2861,18 @@ export function SampleDetails() {
   })
   const worksheetForSample = findWorksheetForSample(allWorksheets, data?.sample_id)
 
+  // Customer link for the header: resolve the WC customer_id from this sample's
+  // order (exact, keyed by the order id — the IS order endpoint already returns
+  // customer_id). null for guest orders / missing order → plain text, no link.
+  const orderNumber = data?.client_order_number ?? null
+  const { data: linkedOrder } = useQuery({
+    queryKey: ['explorer-order', orderNumber],
+    queryFn: () => getExplorerOrderById(orderNumber as string),
+    enabled: !!orderNumber,
+    staleTime: 5 * 60 * 1000,
+  })
+  const customerLinkId = linkedOrder?.customer_id ?? null
+
   // Sub-samples — only meaningful for parent samples (sample IDs that don't end
   // in -SNN). Sub-samples don't have sub-sub-samples, so we hide the section
   // entirely on sub-sample detail pages.
@@ -3800,7 +3813,18 @@ export function SampleDetails() {
                 <p>
                   Received {formatDate(data.date_received)}
                   {' · '}Client:{' '}
-                  <span className="text-foreground/80">{data.client ?? '—'}</span>
+                  {customerLinkId != null ? (
+                    <button
+                      type="button"
+                      onClick={() => useUIStore.getState().navigateToCustomer(customerLinkId)}
+                      className="text-blue-700 underline-offset-2 hover:underline dark:text-blue-400"
+                      title="View customer"
+                    >
+                      {data.client ?? '—'}
+                    </button>
+                  ) : (
+                    <span className="text-foreground/80">{data.client ?? '—'}</span>
+                  )}
                   {!retestInfo?.is_retest && retestInfo?.retested_as && retestInfo.retested_as.length > 0 && (
                     <>
                       {' · '}

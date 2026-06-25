@@ -813,6 +813,10 @@ export interface ExplorerOrder {
   id: string
   order_id: string
   order_number: string
+  /** WC customer id; null for guest-bucket orders. Optional on the FE type so
+   *  existing fixtures stay valid — the IS response always includes it. Mirrors
+   *  IS ExplorerOrderResponse.customer_id (desktop.py LINK-07). */
+  customer_id?: number | null
   status: string
   samples_expected: number
   samples_delivered: number
