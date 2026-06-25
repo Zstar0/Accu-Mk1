@@ -1,13 +1,16 @@
 import { describe, it, expect } from 'vitest'
-import { worksheetMatchesSampleQuery } from '../worksheet-sample-filter'
+import {
+  worksheetMatchesSampleQuery,
+  findWorksheetForSample,
+} from '../worksheet-sample-filter'
 import type { WorksheetListItem } from '@/lib/api'
 
 // Minimal WorksheetListItem builder — only the fields the predicate reads
 // (items[].sample_id) matter; the rest satisfy the type.
-function ws(sampleIds: string[]): WorksheetListItem {
+function ws(sampleIds: string[], id = 1, title = 'WS-1'): WorksheetListItem {
   return {
-    id: 1,
-    title: 'WS-1',
+    id,
+    title,
     status: 'open',
     notes: null,
     assigned_analyst: null,
@@ -58,5 +61,30 @@ describe('worksheetMatchesSampleQuery', () => {
   it('matches sub-sample ids', () => {
     expect(worksheetMatchesSampleQuery(ws(['P-0144-S03']), 'S03')).toBe(true)
     expect(worksheetMatchesSampleQuery(ws(['P-0144-S03']), 's03')).toBe(true)
+  })
+})
+
+describe('findWorksheetForSample', () => {
+  const sheets = [
+    ws(['P-0100', 'P-0101'], 10, 'WS-10'),
+    ws(['P-0144', 'P-0144-S03'], 20, 'WS-20'),
+  ]
+
+  it('finds the worksheet containing a parent sample id', () => {
+    expect(findWorksheetForSample(sheets, 'P-0144')?.id).toBe(20)
+  })
+
+  it('finds the worksheet containing a sub-sample id', () => {
+    expect(findWorksheetForSample(sheets, 'P-0144-S03')?.id).toBe(20)
+  })
+
+  it('returns undefined when no worksheet has the sample', () => {
+    expect(findWorksheetForSample(sheets, 'P-9999')).toBeUndefined()
+  })
+
+  it('returns undefined for a falsy id', () => {
+    expect(findWorksheetForSample(sheets, null)).toBeUndefined()
+    expect(findWorksheetForSample(sheets, undefined)).toBeUndefined()
+    expect(findWorksheetForSample(sheets, '')).toBeUndefined()
   })
 })

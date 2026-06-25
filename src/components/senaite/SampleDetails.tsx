@@ -107,6 +107,7 @@ import {
   deleteSubSampleAttachment,
   setSubSamplePrimaryAttachment,
   type SubSampleAttachment,
+  listWorksheets,
   listSubSampleChromatograms,
   uploadChromatogramToSenaite,
   type SubSampleChromatogram,
@@ -130,6 +131,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Spinner } from '@/components/ui/spinner'
 import { useUIStore } from '@/store/ui-store'
+import { findWorksheetForSample } from '@/components/hplc/worksheet-sample-filter'
 import { useWizardStore } from '@/store/wizard-store'
 import { getSenaiteUrl, getWordpressUrl } from '@/lib/api-profiles'
 import { cn } from '@/lib/utils'
@@ -2848,6 +2850,16 @@ export function SampleDetails() {
 
   const analysisSla = useAnalysisSlaMap(data)
 
+  // Worksheet membership for the header link. Reuses the worksheets list
+  // (react-query-cached); finds the worksheet whose items include this sample.
+  // Matches the sample's own id, so it works on parent + sub-sample pages.
+  const { data: allWorksheets = [] } = useQuery({
+    queryKey: ['worksheets-list', undefined],
+    queryFn: () => listWorksheets(),
+    staleTime: 30_000,
+  })
+  const worksheetForSample = findWorksheetForSample(allWorksheets, data?.sample_id)
+
   // Sub-samples — only meaningful for parent samples (sample IDs that don't end
   // in -SNN). Sub-samples don't have sub-sub-samples, so we hide the section
   // entirely on sub-sample detail pages.
@@ -3812,6 +3824,23 @@ export function SampleDetails() {
               </div>
             </div>
           </div>
+
+          {/* Worksheet membership — left of the counters; opens the worksheet flyout */}
+          {worksheetForSample && (
+            <button
+              type="button"
+              onClick={() => useUIStore.getState().openWorksheetDrawer(worksheetForSample.id)}
+              className="group flex flex-col items-center text-center"
+              title={`Open worksheet: ${worksheetForSample.title}`}
+            >
+              <div className="max-w-[180px] truncate text-sm font-semibold text-violet-700 underline-offset-2 group-hover:underline dark:text-violet-300">
+                {worksheetForSample.title}
+              </div>
+              <div className="text-[11px] uppercase tracking-wider text-muted-foreground">
+                Worksheet
+              </div>
+            </button>
+          )}
 
           {/* Counters */}
           {countableTotal > 0 && (
