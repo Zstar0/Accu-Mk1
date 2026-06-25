@@ -15,6 +15,11 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
+import {
+  captureMimeType,
+  CAPTURE_JPEG_QUALITY,
+  type CaptureFormat,
+} from './capture-options'
 
 interface Props {
   parentSampleId: string
@@ -133,6 +138,17 @@ export function VialPanel({
   }, [captureRes])
   const [actualRes, setActualRes] = useState<string | null>(null)
 
+  // Capture format (experiment toggle). JPEG default — ~10× smaller than PNG
+  // and web-native for the order-page gallery; PNG kept for lossless captures.
+  const [captureFormat, setCaptureFormat] = useState<CaptureFormat>(() => {
+    if (typeof window === 'undefined') return 'jpeg'
+    return localStorage.getItem('wizard-capture-format') === 'png' ? 'png' : 'jpeg'
+  })
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    localStorage.setItem('wizard-capture-format', captureFormat)
+  }, [captureFormat])
+
   const videoRef = useRef<HTMLVideoElement>(null)
   // Persist the camera stream across renders so we can re-attach it when the
   // <video> element remounts — e.g. after the save-confirmation card returns
@@ -230,11 +246,12 @@ export function VialPanel({
       return
     }
     ctx.drawImage(v, 0, 0)
-    // PNG = lossless: the capture matches the live preview's crispness
-    // (no JPEG re-encode softening). Larger files — see the storage note.
-    setPhotoDataUrl(c.toDataURL('image/png'))
+    // JPEG (q0.9) is ~10× smaller and feeds the customer order-page gallery
+    // directly; PNG stays available (lossless) via the Format toggle. PNG
+    // ignores the quality arg.
+    setPhotoDataUrl(c.toDataURL(captureMimeType(captureFormat), CAPTURE_JPEG_QUALITY))
     setLocalError(null)
-  }, [])
+  }, [captureFormat])
 
   const retake = useCallback(() => {
     setPhotoDataUrl(null)
@@ -576,6 +593,22 @@ export function VialPanel({
                       actual {actualRes}
                     </span>
                   )}
+                </label>
+              )}
+              {cameraPhase === 'live' && (
+                <label className="flex items-center gap-1 text-sm">
+                  <span className="text-muted-foreground">Format</span>
+                  <select
+                    value={captureFormat}
+                    onChange={e => setCaptureFormat(e.target.value as CaptureFormat)}
+                    disabled={busy}
+                    title="Capture image format — JPEG is smaller, PNG is lossless"
+                    aria-label="Capture image format"
+                    className="h-9 rounded-md border bg-background px-2 text-sm disabled:opacity-50"
+                  >
+                    <option value="jpeg">JPEG</option>
+                    <option value="png">PNG</option>
+                  </select>
                 </label>
               )}
               {cameraPhase === 'live' && (
