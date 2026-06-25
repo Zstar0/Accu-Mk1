@@ -2864,7 +2864,10 @@ export function SampleDetails() {
   // Customer link for the header: resolve the WC customer_id from this sample's
   // order (exact, keyed by the order id — the IS order endpoint already returns
   // customer_id). null for guest orders / missing order → plain text, no link.
-  const orderNumber = data?.client_order_number ?? null
+  // SENAITE stores the order number with a "WP-" prefix (e.g. "WP-3242"), but
+  // the IS order endpoint keys on the bare numeric id ("3242") — same
+  // extraction the WC-admin link uses below. Strip to digits before resolving.
+  const orderNumber = data?.client_order_number?.match(/\d+/)?.[0] ?? null
   const { data: linkedOrder } = useQuery({
     queryKey: ['explorer-order', orderNumber],
     queryFn: () => getExplorerOrderById(orderNumber as string),
