@@ -45,7 +45,17 @@ function RoleBadge({ role }: { role: string | null | undefined }) {
   )
 }
 
-function VialThumb({ sampleId, hasPhoto }: { sampleId: string; hasPhoto: boolean }) {
+function VialThumb({
+  sampleId,
+  hasPhoto,
+  photoKey,
+}: {
+  sampleId: string
+  hasPhoto: boolean
+  // photo_external_uid — changes when the photo is retaken, so the fetch effect
+  // re-runs and re-reads the (reseeded) cache instead of showing the stale shot.
+  photoKey?: string | null
+}) {
   const [url, setUrl] = useState<string | null>(null)
 
   useEffect(() => {
@@ -64,7 +74,7 @@ function VialThumb({ sampleId, hasPhoto }: { sampleId: string; hasPhoto: boolean
     return () => {
       cancelled = true
     }
-  }, [sampleId, hasPhoto])
+  }, [sampleId, hasPhoto, photoKey])
 
   return (
     <div className="w-9 h-9 rounded bg-muted/60 border shrink-0 overflow-hidden flex items-center justify-center">
@@ -154,7 +164,7 @@ export function VialsList({
                     : 'hover:bg-muted'
                 )}
               >
-                <VialThumb sampleId={v.sub.sample_id} hasPhoto={hasPhoto} />
+                <VialThumb sampleId={v.sub.sample_id} hasPhoto={hasPhoto} photoKey={v.sub.photo_external_uid} />
                 <div className="min-w-0 flex-1">
                   <div className="font-mono text-sm truncate">{v.sub.sample_id}</div>
                   <div className="text-xs text-muted-foreground">
