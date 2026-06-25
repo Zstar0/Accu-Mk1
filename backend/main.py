@@ -7213,6 +7213,7 @@ class ExplorerOrderResponse(BaseModel):
     id: str
     order_id: str
     order_number: str
+    customer_id: Optional[int] = None  # WC customer id; null for guest orders (passthrough from IS)
     status: str
     samples_expected: int
     samples_delivered: int
