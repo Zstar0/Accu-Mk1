@@ -117,6 +117,57 @@ class FilesystemPhotoStorage:
         return resolved
 
 
+class S3PhotoStorage:
+    """S3-backed PhotoStorage. Objects live at {prefix}{rel_key}; the DB keeps
+    the prefix-less rel_key as mk1://{rel_key}, so existing pointers resolve."""
+
+    def __init__(self, bucket=None, prefix=None, region=None, client=None):
+        self.bucket = bucket or os.environ["MK1_PHOTO_S3_BUCKET"]
+        p = prefix if prefix is not None else os.environ.get("MK1_PHOTO_S3_PREFIX", "sub-sample-photos/")
+        self.prefix = p if (p == "" or p.endswith("/")) else p + "/"
+        self.region = region or os.environ.get("S3_REGION") or os.environ.get("AWS_REGION", "us-west-1")
+        if client is not None:
+            self._client = client
+        else:
+            import boto3
+            from botocore.config import Config
+            self._client = boto3.client(
+                "s3", region_name=self.region,
+                config=Config(signature_version="s3v4", retries={"max_attempts": 3, "mode": "standard"}),
+            )
+
+    def _object_key(self, rel_key: str) -> str:
+        if not rel_key or rel_key.startswith("/") or ".." in rel_key.split("/"):
+            raise PhotoStorageError(f"unsafe key: {rel_key!r}")
+        return f"{self.prefix}{rel_key}"
+
+    def save_photo(self, sample_id: str, photo_bytes: bytes, filename: str) -> str:
+        if not photo_bytes:
+            raise PhotoStorageError("save_photo: photo_bytes is empty")
+        rel_key = _build_rel_key(sample_id, filename)
+        self._client.put_object(
+            Bucket=self.bucket, Key=self._object_key(rel_key),
+            Body=photo_bytes, ContentType=_content_type_for_key(rel_key),
+        )
+        log.info("photo_storage.s3_saved sample=%s key=%s size=%d", sample_id, rel_key, len(photo_bytes))
+        return rel_key
+
+    def fetch_photo(self, key: str) -> bytes:
+        obj_key = self._object_key(key)
+        from botocore.exceptions import ClientError
+        try:
+            resp = self._client.get_object(Bucket=self.bucket, Key=obj_key)
+        except ClientError as e:
+            code = e.response.get("Error", {}).get("Code", "")
+            if code in ("NoSuchKey", "NoSuchBucket", "404"):
+                raise PhotoNotFoundError(f"no photo at key={key!r}")
+            raise
+        return resp["Body"].read()
+
+    def delete_photo(self, key: str) -> None:
+        self._client.delete_object(Bucket=self.bucket, Key=self._object_key(key))
+
+
 # Module-level singleton. Wire via env at import.
 _storage: PhotoStorage = FilesystemPhotoStorage()
 
