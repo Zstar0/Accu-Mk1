@@ -5267,6 +5267,59 @@ export async function createSubSample(args: {
   return response.json()
 }
 
+export interface BulkSubSampleResult {
+  created: SubSample[]
+  requested: number
+  failed: number
+}
+
+/**
+ * Create N identical vials (same photo + remarks) for a parent in one call.
+ * The photo is uploaded once; the server loops the single-create path. Created
+ * vials carry assignment_role=NULL — refresh the vial-plan afterward to assign.
+ * May throw SecondaryFalloutError if SENAITE silently created an orphan AR.
+ */
+export async function createSubSamplesBulk(args: {
+  parentSampleId: string
+  photoBase64: string
+  count: number
+  remarks?: string
+}): Promise<BulkSubSampleResult> {
+  const response = await fetch(`${API_BASE_URL()}/api/sub-samples/bulk`, {
+    method: 'POST',
+    headers: getBearerHeaders('application/json'),
+    body: JSON.stringify({
+      parent_sample_id: args.parentSampleId,
+      photo_base64: args.photoBase64,
+      count: args.count,
+      remarks: args.remarks ?? null,
+    }),
+  })
+  if (!response.ok) {
+    if (response.status === 502) {
+      try {
+        const body = await response.json()
+        const d = body?.detail
+        if (d && typeof d === 'object' && d.code === 'secondary_fallout') {
+          throw new SecondaryFalloutError(
+            d.message ?? 'SENAITE silently created an orphan AR',
+            d.orphan_uid,
+            d.orphan_sample_id,
+          )
+        }
+        throw new Error(
+          `createSubSamplesBulk failed: ${typeof d === 'string' ? d : JSON.stringify(d)}`
+        )
+      } catch (e) {
+        if (e instanceof SecondaryFalloutError) throw e
+        throw new Error(`createSubSamplesBulk failed: ${response.status}`)
+      }
+    }
+    throw new Error(`createSubSamplesBulk failed: ${response.status}`)
+  }
+  return response.json()
+}
+
 /**
  * Update a sub-sample (photo and/or remarks).
  */

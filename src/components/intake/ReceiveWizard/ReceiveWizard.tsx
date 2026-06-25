@@ -53,6 +53,12 @@ export function ReceiveWizard({ parent, onClose, initialPhase = 'capture' }: Pro
   const editingSub = editingSampleId
     ? (wiz.vials.find(v => v.sub.sample_id === editingSampleId)?.sub ?? null)
     : null
+  // Delete is only offered for vials created in THIS session — editing a
+  // prior-session vial's photo/remarks is safe, but deleting an established
+  // vial from a completed check-in is not something we expose by accident.
+  const editingIsThisSession = editingSampleId
+    ? (wiz.vials.find(v => v.sub.sample_id === editingSampleId)?.isThisSession ?? false)
+    : false
 
   const hasSessionVials = wiz.sessionVials.length > 0 || wiz.parentReceivedThisSession
 
@@ -127,12 +133,18 @@ export function ReceiveWizard({ parent, onClose, initialPhase = 'capture' }: Pro
           parentSampleId={parent.sample_id}
           parentDetails={parentDetails.details}
           editingSub={editingSub}
+          canDelete={editingIsThisSession}
           loading={wiz.loading}
           error={wiz.error}
           onSaveNew={async (photoBytes, remarks) => {
             const sub = await wiz.saveNewVial(photoBytes, remarks)
             setEditingSampleId(null)
             return sub
+          }}
+          onSaveNewBulk={async (photoBytes, remarks, count) => {
+            const r = await wiz.saveNewVialsBulk(photoBytes, remarks, count)
+            setEditingSampleId(null)
+            return r
           }}
           onSaveEdit={async (sid, photoBytes, remarks) => {
             await wiz.editSessionVial(sid, photoBytes, remarks)

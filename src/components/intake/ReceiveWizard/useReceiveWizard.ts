@@ -5,6 +5,8 @@ import {
   createSubSample,
   updateSubSample,
   deleteSubSample,
+  createSubSamplesBulk,
+  getVialPlan,
   receiveSenaiteSample,
   seedSubSamplePhoto,
   type SubSample,
@@ -172,6 +174,58 @@ export function useReceiveWizard(parent: ParentInfo) {
     ],
   )
 
+  const saveNewVialsBulk = useCallback(
+    async (
+      photoBytes: Uint8Array,
+      remarks: string | undefined,
+      count: number,
+    ): Promise<{ created: number }> => {
+      const photoBase64 = bytesToBase64(photoBytes)
+      let remaining = count
+
+      // The first vial of a never-received parent goes through the parent-
+      // receive transition (legacy: becomes the parent; container: bare receive
+      // + S01). Reuse saveNewVial for that one so the one-time logic isn't
+      // duplicated, then bulk-create the remainder as sub-samples.
+      const isFirstVialEver =
+        isParentInPreReceivedState && !vials.some(v => v.isThisSession)
+      if (isFirstVialEver) {
+        await saveNewVial(photoBytes, remarks)
+        remaining -= 1
+      }
+
+      if (remaining > 0) {
+        const result = await createSubSamplesBulk({
+          parentSampleId: parent.sample_id,
+          photoBase64,
+          count: remaining,
+          remarks,
+        })
+        for (const sub of result.created) {
+          seedSubSamplePhoto(sub.sample_id, photoBytes)
+          sessionSampleIdsRef.current.add(sub.sample_id)
+        }
+        setVials(prev => [
+          ...prev,
+          ...result.created.map(sub => ({ sub, isThisSession: true })),
+        ])
+      }
+
+      // Run auto-assignment over the freshly created vials, then refresh so the
+      // assigned roles surface in the list. Best-effort: if IS is unreachable
+      // the Assignment tab assigns on demand — don't fail the save over it.
+      try {
+        await getVialPlan(parent.sample_id)
+        await refresh()
+      } catch {
+        /* auto-assign is best-effort here */
+      }
+
+      return { created: count }
+    },
+    [isParentInPreReceivedState, parent.sample_id, vials, saveNewVial, refresh],
+  )
+
   const editSessionVial = useCallback(
     async (sampleId: string, photoBytes?: Uint8Array, remarks?: string) => {
       const photoBase64 = photoBytes ? bytesToBase64(photoBytes) : undefined
@@ -207,6 +261,7 @@ export function useReceiveWizard(parent: ParentInfo) {
     containerMode,
     refresh,
     saveNewVial,
+    saveNewVialsBulk,
     editSessionVial,
     deleteSessionVial,
   }
