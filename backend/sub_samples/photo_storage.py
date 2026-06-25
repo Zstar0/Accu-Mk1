@@ -159,7 +159,7 @@ class S3PhotoStorage:
             resp = self._client.get_object(Bucket=self.bucket, Key=obj_key)
         except ClientError as e:
             code = e.response.get("Error", {}).get("Code", "")
-            if code in ("NoSuchKey", "NoSuchBucket", "404"):
+            if code == "NoSuchKey":
                 raise PhotoNotFoundError(f"no photo at key={key!r}")
             raise
         return resp["Body"].read()

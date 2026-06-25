@@ -58,3 +58,8 @@ def test_empty_bytes_rejected():
     s = _store()
     with pytest.raises(PhotoStorageError):
         s.save_photo("P-1-S1", b"", "x.jpg")
+
+def test_delete_unsafe_key_rejected():
+    s = _store()
+    with pytest.raises(PhotoStorageError):
+        s.delete_photo("../secret")
