@@ -10,6 +10,16 @@
   `MK1_PHOTO_S3_BUCKET` env var; falls back to filesystem storage when unset (dev).
   DB pointers (`mk1://{key}`) and the photo route are unchanged — no migration.
 
+## v1.0.6 — 2026-06-24
+
+### Added
+
+- **Core COA + per-vial COAs.** Staff "Regular COA" card renamed to **Core COA**
+  (customer-facing name; internal `regular` flag/meta unchanged). The Core COA child
+  is emitted on variance sample generation and surfaced on the sample-details page.
+  New **per-vial HPLC COA generation** endpoint + "Generate Per-Vial COAs" action and
+  a Per-Vial COAs card on sample details (vial figure builder included).
+
 ## v1.0.5 — 2026-06-23
 
 ### Fixed
