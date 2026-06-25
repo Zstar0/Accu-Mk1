@@ -168,8 +168,15 @@ class S3PhotoStorage:
         self._client.delete_object(Bucket=self.bucket, Key=self._object_key(key))
 
 
+def _make_default_storage() -> "PhotoStorage":
+    """Return S3PhotoStorage if MK1_PHOTO_S3_BUCKET is set, else FilesystemPhotoStorage."""
+    if os.environ.get("MK1_PHOTO_S3_BUCKET"):
+        return S3PhotoStorage()
+    return FilesystemPhotoStorage()
+
+
 # Module-level singleton. Wire via env at import.
-_storage: PhotoStorage = FilesystemPhotoStorage()
+_storage: "PhotoStorage" = _make_default_storage()
 
 
 def get_storage() -> PhotoStorage:
