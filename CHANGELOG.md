@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.0.7 — 2026-06-25
+
+### Added
+
+- **Durable S3-backed storage for sub-sample (vial) photos.** Photos now persist to
+  S3 (`accumark-coa-private-west1/sub-sample-photos/{vial}/{uuid}.{ext}`) instead of
+  ephemeral container `/data`, ending the loss-on-redeploy risk. Selected via the
+  `MK1_PHOTO_S3_BUCKET` env var; falls back to filesystem storage when unset (dev).
+  DB pointers (`mk1://{key}`) and the photo route are unchanged — no migration.
+
 ## v1.0.5 — 2026-06-23
 
 ### Fixed
