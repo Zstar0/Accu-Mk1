@@ -1524,6 +1524,24 @@ def classify_slot_replacement_impact(
     return out
 
 
+def presubsample_slot_blocked_keywords(
+    states: Dict[str, str], *, slot: int, identity_keyword: Optional[str],
+) -> List[str]:
+    """Pre-subsample (pre-vial) Replace guard.
+
+    The vial-based ``classify_slot_replacement_impact`` is blind to pre-subsample
+    samples — their results live only on the SENAITE AR, not in Mk1 vial rows. So
+    given SENAITE ``keyword -> review_state`` for the sample, return the slot's
+    analysis keywords (its identity service + ``ANALYTE-{slot}-PUR/QTY``) that
+    carry a worked result (``verified`` or ``published``) and would be invalidated
+    by replacing the analyte. Empty list => safe to replace; non-empty => the
+    caller should block (invalidate/retest in SENAITE first)."""
+    candidates = [f"ANALYTE-{slot}-PUR", f"ANALYTE-{slot}-QTY"]
+    if identity_keyword:
+        candidates.insert(0, identity_keyword)
+    return [kw for kw in candidates if states.get(kw) in ("verified", "published")]
+
+
 def replace_analyte_slot(
     db: Session,
     *,
@@ -1565,7 +1583,19 @@ def replace_analyte_slot(
         select(LimsSample).where(LimsSample.sample_id == parent_sample_id)
     ).scalar_one_or_none()
     if parent is None:
-        raise NotFoundError(f"parent sample {parent_sample_id!r} not found")
+        # Pre-subsample (pre-vial) sample: it has no Mk1 LimsSample/vial rows to
+        # mirror. The caller has already applied the SENAITE-side slot + identity
+        # changes, which are the ENTIRE operation for these older samples — so
+        # the vial re-mirror is a no-op, not an error. Returning here (instead of
+        # raising NotFoundError) is what lets Replace work on pre-subsample
+        # samples; the `pre_subsample` flag surfaces that to the caller/FE.
+        return {
+            "slot": slot,
+            "old_peptide_id": old_peptide_id,
+            "new_peptide_id": new_peptide_id,
+            "vials": {"deleted": [], "retracted": [], "blocked": [], "reseeded": []},
+            "pre_subsample": True,
+        }
 
     summary: Dict[str, object] = {
         "slot": slot,

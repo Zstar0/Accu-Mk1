@@ -312,6 +312,51 @@ def fetch_coa_generations_for_order(order_id: str) -> list[dict]:
             return [dict(row) for row in rows]
 
 
+def fetch_primary_generation(sample_id: str) -> Optional[dict]:
+    """The sample's current primary (non-child) COA generation, if any.
+
+    Primary = parent_generation_id IS NULL; superseded rows excluded; newest
+    first. Used to DERIVE the parent that per-vial COAs attach to server-side
+    rather than trusting a client-supplied generation id (which could point at
+    the wrong sample or a stale/superseded generation).
+    """
+    query = """
+        SELECT id, generation_number, verification_code, status
+        FROM coa_generations
+        WHERE sample_id = %s
+          AND parent_generation_id IS NULL
+          AND status <> 'superseded'
+        ORDER BY generation_number DESC
+        LIMIT 1
+    """
+    with get_integration_db() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(query, [sample_id])
+            row = cur.fetchone()
+            return dict(row) if row else None
+
+
+def fetch_existing_vial_sequences(parent_generation_id) -> set:
+    """vial_sequence values that already have a non-superseded per-vial child
+    under the given parent generation.
+
+    Drives per-vial COA idempotency: a vial already covered by a live child is
+    skipped on re-run instead of generating a duplicate child for the same
+    (parent_generation_id, vial_sequence).
+    """
+    query = """
+        SELECT DISTINCT vial_sequence
+        FROM coa_generations
+        WHERE parent_generation_id = %s
+          AND vial_sequence IS NOT NULL
+          AND status <> 'superseded'
+    """
+    with get_integration_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(query, [str(parent_generation_id)])
+            return {r[0] for r in cur.fetchall() if r[0] is not None}
+
+
 def fetch_sample_events_for_order(order_id: str) -> list[dict]:
     """
     Fetch all sample status events for an order.

@@ -62,6 +62,7 @@ import {
   getExplorerCOAGenerations,
   getExplorerCOASignedUrl,
   generateSenaiteCOA,
+  generateVialCOAs,
   publishSenaiteCOA,
   regenPrimaryCOA,
   regenAdditionalCOA,
@@ -376,6 +377,65 @@ export function selectRootGenerations(
     })
 }
 
+/**
+ * Select the current per-vial COA for each HPLC vial, sorted by vial number —
+ * one row per vial, mirroring how the primary card shows only the current cert.
+ * Each is a child of the parent primary generation. Superseded generations are
+ * excluded (so a regen+republish doesn't linger); for a vial with more than one
+ * live generation (e.g. an orphan draft beside the published one), the published
+ * generation wins, otherwise the latest by generation_number.
+ */
+export function selectVialGenerations(
+  gens: ExplorerCOAGeneration[]
+): ExplorerCOAGeneration[] {
+  const byVial = new Map<number, ExplorerCOAGeneration>()
+  for (const g of gens) {
+    if (g.vial_sequence == null || g.status === 'superseded') continue
+    const cur = byVial.get(g.vial_sequence)
+    if (!cur) {
+      byVial.set(g.vial_sequence, g)
+      continue
+    }
+    // Prefer published over draft; among the same status, prefer the newer generation.
+    const gWins =
+      g.status === 'published' && cur.status !== 'published'
+        ? true
+        : g.status !== 'published' && cur.status === 'published'
+          ? false
+          : g.generation_number > cur.generation_number
+    if (gWins) byVial.set(g.vial_sequence, g)
+  }
+  return [...byVial.values()].sort((a, b) => (a.vial_sequence ?? 0) - (b.vial_sequence ?? 0))
+}
+
+/**
+ * Select the current regular parent-services COA — the child generated alongside
+ * a variance primary (is_regular_coa). One row; superseded excluded; published
+ * preferred over draft, else the latest by generation_number. Empty for a
+ * non-variance sample (no regular child) — and the root/vial selectors already
+ * collapse it out of their cards (it has a parent and no vial_sequence).
+ */
+export function selectRegularGenerations(
+  gens: ExplorerCOAGeneration[]
+): ExplorerCOAGeneration[] {
+  let cur: ExplorerCOAGeneration | null = null
+  for (const g of gens) {
+    if (!g.is_regular_coa || g.status === 'superseded') continue
+    if (!cur) {
+      cur = g
+      continue
+    }
+    const gWins =
+      g.status === 'published' && cur.status !== 'published'
+        ? true
+        : g.status !== 'published' && cur.status === 'published'
+          ? false
+          : g.generation_number > cur.generation_number
+    if (gWins) cur = g
+  }
+  return cur ? [cur] : []
+}
+
 /** Derive a human-readable release status from the generation + ingestion records. */
 function coaReleaseStatus(gen: ExplorerCOAGeneration | null | undefined): {
   label: string
@@ -393,16 +453,50 @@ function coaReleaseStatus(gen: ExplorerCOAGeneration | null | undefined): {
   return { label: 'Published', color: 'emerald', title: 'Published in system' }
 }
 
+/** PDF button for a generation row — opens the IS signed URL for that COA's PDF. */
+function GeneratedCOAPdfButton({
+  sampleId,
+  generationNumber,
+}: {
+  sampleId: string
+  generationNumber: number
+}) {
+  const [downloading, setDownloading] = useState(false)
+  return (
+    <button
+      onClick={async () => {
+        setDownloading(true)
+        try {
+          const { url } = await getExplorerCOASignedUrl(sampleId, generationNumber)
+          window.open(url, '_blank')
+        } catch {
+          toast.error('Failed to open COA PDF')
+        } finally {
+          setDownloading(false)
+        }
+      }}
+      disabled={downloading}
+      className="shrink-0 inline-flex items-center gap-1 px-2 py-1 text-xs rounded-md border border-border bg-background hover:bg-muted transition-colors disabled:opacity-50 cursor-pointer"
+    >
+      {downloading ? <Loader2 size={11} className="animate-spin" /> : <ExternalLink size={11} />}
+      PDF
+    </button>
+  )
+}
+
 /**
  * Fallback list for the "Generated COAs" card when SENAITE has no attached
  * ARReport (data.published_coa is null) but Integration Service has root
- * generations. Mirrors the visual language of PublishedCOACard / the Additional
- * COAs section without the SENAITE-only PDF/regen actions.
+ * generations. Also powers the "Core COA" card. Mirrors the visual language
+ * of PublishedCOACard / the Additional COAs section; each row links to its COA
+ * PDF via the IS signed URL.
  */
 function GeneratedCOAFallbackList({
   generations,
+  sampleId,
 }: {
   generations: ExplorerCOAGeneration[]
+  sampleId: string
 }) {
   const allDraft = generations.every(g => g.status === 'draft')
   return (
@@ -414,8 +508,8 @@ function GeneratedCOAFallbackList({
             key={gen.id}
             className="flex items-start gap-3 p-3 rounded-lg bg-muted/40 border border-border/40"
           >
-            <div className="flex items-center justify-center w-9 h-9 rounded-lg bg-muted text-muted-foreground border border-border/40 shrink-0 mt-0.5">
-              <FileText size={16} />
+            <div className="flex items-center justify-center w-9 h-9 rounded-lg bg-red-500/10 border border-red-500/20 shrink-0 mt-0.5">
+              <FileText size={16} className="text-red-500 dark:text-red-400" />
             </div>
             <div className="flex-1 min-w-0 space-y-2">
               <div className="flex items-center justify-between gap-2">
@@ -440,6 +534,94 @@ function GeneratedCOAFallbackList({
                     {release.label}
                   </span>
                 </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  {release.color === 'emerald' && gen.verification_code && (
+                    <a
+                      href={accuverifyUrl(gen.verification_code)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2 transition-colors"
+                    >
+                      View Digital COA
+                    </a>
+                  )}
+                  <GeneratedCOAPdfButton sampleId={sampleId} generationNumber={gen.generation_number} />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-x-3 gap-y-1">
+                <div className="flex flex-col">
+                  <span className="text-[11px] text-muted-foreground">{gen.published_at ? 'Published' : 'Created'}</span>
+                  <span className="text-[11px] text-foreground">{formatDate(gen.published_at || gen.created_at)}</span>
+                </div>
+                <div className="flex flex-col">
+                  <span className="text-[11px] text-muted-foreground">Verification Code</span>
+                  {gen.verification_code ? (
+                    <a
+                      href={accuverifyUrl(gen.verification_code)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-[11px] font-mono text-foreground hover:underline truncate"
+                    >
+                      {gen.verification_code}
+                    </a>
+                  ) : (
+                    <span className="text-[11px] font-mono text-muted-foreground">—</span>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        )
+      })}
+      {allDraft && (
+        <p className="text-[11px] text-muted-foreground pl-1">Not yet attached to SENAITE</p>
+      )}
+    </div>
+  )
+}
+
+/**
+ * List of per-vial COA children for the "Per-Vial COAs" card. Each row reports
+ * one HPLC vial's own figure ("Vial N"), with its own verification code and
+ * release status. Mirrors GeneratedCOAFallbackList's visual language.
+ */
+function VialCOAList({
+  generations,
+}: {
+  generations: ExplorerCOAGeneration[]
+}) {
+  return (
+    <div className="space-y-2">
+      {generations.map(gen => {
+        const release = coaReleaseStatus(gen)
+        return (
+          <div
+            key={gen.id}
+            className="flex items-start gap-3 p-3 rounded-lg bg-muted/40 border border-border/40"
+          >
+            <div className="flex items-center justify-center w-9 h-9 rounded-lg bg-muted text-muted-foreground border border-border/40 shrink-0 mt-0.5">
+              <FileText size={16} />
+            </div>
+            <div className="flex-1 min-w-0 space-y-2">
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="text-sm font-medium truncate">Vial {gen.vial_sequence}</span>
+                <span className="shrink-0 text-[10px] text-muted-foreground">Gen #{gen.generation_number}</span>
+                <span
+                  title={release.title}
+                  className={cn(
+                    'shrink-0 text-[10px] font-medium px-1.5 py-0.5 rounded-full border',
+                    {
+                      'bg-amber-500/10 text-amber-600 border-amber-500/30 dark:text-amber-400':
+                        release.color === 'amber',
+                      'bg-emerald-500/10 text-emerald-600 border-emerald-500/30 dark:text-emerald-400':
+                        release.color === 'emerald',
+                      'bg-red-500/10 text-red-500 border-red-500/30': release.color === 'red',
+                      'bg-muted text-muted-foreground border-border/40': release.color === 'zinc',
+                    }
+                  )}
+                >
+                  {release.label}
+                </span>
               </div>
               <div className="grid grid-cols-2 gap-x-3 gap-y-1">
                 <div className="flex flex-col">
@@ -466,9 +648,6 @@ function GeneratedCOAFallbackList({
           </div>
         )
       })}
-      {allDraft && (
-        <p className="text-[11px] text-muted-foreground pl-1">Not yet attached to SENAITE</p>
-      )}
     </div>
   )
 }
@@ -2591,6 +2770,7 @@ export function SampleDetails() {
   const [additionalCoaPage, setAdditionalCoaPage] = useState(0)
   const [coaGenerations, setCoaGenerations] = useState<ExplorerCOAGeneration[]>([])
   const [isGeneratingCOA, setIsGeneratingCOA] = useState(false)
+  const [isGeneratingVialCOAs, setIsGeneratingVialCOAs] = useState(false)
   const [isPublishingCOA, setIsPublishingCOA] = useState(false)
   const [coaConsole, setCoaConsole] = useState<COAConsoleState>({
     visible: false,
@@ -3199,7 +3379,11 @@ export function SampleDetails() {
     if (!sampleId) return
     let cancelled = false
 
-    getExplorerCOAGenerations(sampleId, 10).then(gens => {
+    // Fetch generously: the explorer orders primaries first (parent_generation_id
+    // IS NULL), so a sample with many primary regens would push its CHILD COAs
+    // (per-vial + the regular parent-services COA) past a small limit. 50 keeps
+    // the current children on the page for realistic regen counts.
+    getExplorerCOAGenerations(sampleId, 50).then(gens => {
       if (!cancelled) setCoaGenerations(gens)
     }).catch(() => {})
 
@@ -3369,7 +3553,7 @@ export function SampleDetails() {
           )
         }
         refreshSample(sampleId)
-        getExplorerCOAGenerations(sampleId, 10).then(setCoaGenerations).catch(() => {})
+        getExplorerCOAGenerations(sampleId, 50).then(setCoaGenerations).catch(() => {})
         getSampleAdditionalCOAs(sampleId).then(setAdditionalCoas).catch(() => {})
       } else {
         settle(false, result.message ?? 'Generation failed')
@@ -3384,6 +3568,39 @@ export function SampleDetails() {
     }
   }
 
+  const handleGenerateVialCOAs = async () => {
+    const primaryGen = coaGenerations.find(
+      g => g.parent_generation_id == null && g.status !== 'superseded'
+    )
+    if (!primaryGen) {
+      toast.error('Generate the parent COA first', {
+        description: 'Per-vial COAs attach to the parent COA, which must exist before spinning off vials.',
+      })
+      return
+    }
+    setIsGeneratingVialCOAs(true)
+    const settle = startCOAConsole(`generate-vial-coas ${sampleId}`, GENERATE_STEPS)
+    try {
+      const result = await generateVialCOAs(sampleId)
+      if (result.success) {
+        settle(true)
+        toast.success('Per-vial COAs', { description: result.message })
+        refreshSample(sampleId)
+        getExplorerCOAGenerations(sampleId, 50).then(setCoaGenerations).catch(() => {})
+        getSampleAdditionalCOAs(sampleId).then(setAdditionalCoas).catch(() => {})
+      } else {
+        settle(false, result.message ?? 'Vial COA generation failed')
+        toast.error('Per-vial COA generation failed', { description: result.message })
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Unknown error'
+      settle(false, msg)
+      toast.error('Per-vial COA generation failed', { description: msg })
+    } finally {
+      setIsGeneratingVialCOAs(false)
+    }
+  }
+
   const handlePublishCOA = async () => {
     setIsPublishingCOA(true)
     const settle = startCOAConsole(`publish-coa ${sampleId}`, PUBLISH_STEPS)
@@ -3395,7 +3612,7 @@ export function SampleDetails() {
           toast.warning('COA published with warning', { description: result.warning })
         }
         refreshSample(sampleId)
-        getExplorerCOAGenerations(sampleId, 10).then(setCoaGenerations).catch(() => {})
+        getExplorerCOAGenerations(sampleId, 50).then(setCoaGenerations).catch(() => {})
       } else {
         settle(false, result.message ?? 'Publish failed')
         toast.error('COA publish failed', { description: result.message })
@@ -3759,9 +3976,9 @@ export function SampleDetails() {
                     variant="outline"
                     size="sm"
                     className="h-7 px-2 gap-1 cursor-pointer"
-                    disabled={isGeneratingCOA || isPublishingCOA}
+                    disabled={isGeneratingCOA || isPublishingCOA || isGeneratingVialCOAs}
                   >
-                    {(isGeneratingCOA || isPublishingCOA) ? (
+                    {(isGeneratingCOA || isPublishingCOA || isGeneratingVialCOAs) ? (
                       <Loader2 size={12} className="animate-spin" />
                     ) : (
                       <ChevronDown size={12} />
@@ -3776,6 +3993,16 @@ export function SampleDetails() {
                     className="cursor-pointer"
                   >
                     Generate Accumark COA
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onClick={handleGenerateVialCOAs}
+                    disabled={
+                      isGeneratingVialCOAs ||
+                      !coaGenerations.some(g => g.parent_generation_id == null && g.status !== 'superseded')
+                    }
+                    className="cursor-pointer"
+                  >
+                    Generate Per-Vial COAs
                   </DropdownMenuItem>
                   {isParent && (
                     <DropdownMenuItem
@@ -4148,7 +4375,7 @@ export function SampleDetails() {
                     generation={coaGenerations.find(g => g.parent_generation_id == null && g.status !== 'superseded') ?? null}
                     onRefresh={() => {
                       refreshSample(sampleId)
-                      getExplorerCOAGenerations(sampleId, 10).then(setCoaGenerations).catch(() => {})
+                      getExplorerCOAGenerations(sampleId, 50).then(setCoaGenerations).catch(() => {})
                       getSampleAdditionalCOAs(sampleId).then(setAdditionalCoas).catch(() => {})
                     }}
                   />
@@ -4158,13 +4385,42 @@ export function SampleDetails() {
                   // root generations Integration Service already has.
                   const rootGens = selectRootGenerations(coaGenerations)
                   return rootGens.length > 0 ? (
-                    <GeneratedCOAFallbackList generations={rootGens} />
+                    <GeneratedCOAFallbackList generations={rootGens} sampleId={sampleId} />
                   ) : (
                     <p className="text-sm text-muted-foreground">No COA generated yet</p>
                   )
                 })()}
               </SectionHeader>
             </Card>
+
+            {/* Per-Vial COAs — children of the primary, one per HPLC vial.
+                selectRootGenerations collapses these out of the card above, so
+                they get their own section labeled "Vial N". */}
+            {(() => {
+              const vialGens = selectVialGenerations(coaGenerations)
+              return vialGens.length > 0 ? (
+                <Card className="p-4">
+                  <SectionHeader icon={FileText} title={`Per-Vial COAs (${vialGens.length})`}>
+                    <VialCOAList generations={vialGens} />
+                  </SectionHeader>
+                </Card>
+              ) : null
+            })()}
+
+            {/* Core COA — the plain parent-services COA generated alongside a
+                variance primary. A child (parent_generation_id set) with no
+                vial_sequence, so the root/vial cards above collapse it out; it
+                gets its own card here. */}
+            {(() => {
+              const regularGens = selectRegularGenerations(coaGenerations)
+              return regularGens.length > 0 ? (
+                <Card className="p-4">
+                  <SectionHeader icon={FileText} title="Core COA">
+                    <GeneratedCOAFallbackList generations={regularGens} sampleId={sampleId} />
+                  </SectionHeader>
+                </Card>
+              ) : null
+            })()}
 
             {/* Digital COA Badge Embed */}
             {data.coa.verification_code && (
@@ -4202,7 +4458,7 @@ export function SampleDetails() {
                           }
                           onRegenerated={() => {
                             getSampleAdditionalCOAs(data.sample_id).then(setAdditionalCoas).catch(() => {})
-                            getExplorerCOAGenerations(data.sample_id, 10).then(setCoaGenerations).catch(() => {})
+                            getExplorerCOAGenerations(data.sample_id, 50).then(setCoaGenerations).catch(() => {})
                           }}
                         />
                       ))}

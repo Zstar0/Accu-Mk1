@@ -7281,6 +7281,11 @@ class ExplorerCOAGenerationResponse(BaseModel):
     order_id: Optional[str] = None
     order_number: Optional[str] = None
     parent_generation_id: Optional[str] = None
+    # 1-based vial number for per-vial HPLC COA children; None otherwise.
+    vial_sequence: Optional[int] = None
+    # True for the regular parent-services COA child (plain COA generated
+    # alongside a variance primary); False otherwise.
+    is_regular_coa: bool = False
     ingestion_status: Optional[str] = None
 
 
@@ -8618,10 +8623,11 @@ async def replace_analyte(
       6. re-mirror the slot across vials (replace_analyte_slot)
     """
     from sqlalchemy import select as _select
-    from models import AnalysisService, Peptide, SampleAnalyteAlias
+    from models import AnalysisService, LimsSample, Peptide, SampleAnalyteAlias
     from lims_analyses.service import (
         peptide_has_full_service_set,
         classify_slot_replacement_impact,
+        presubsample_slot_blocked_keywords,
         replace_analyte_slot,
         BadRequestError as _BadRequestError,
         NotFoundError as _NotFoundError,
@@ -8675,6 +8681,39 @@ async def replace_analyte(
     forceable = impact["worked_unverified"] or impact["blocked"]
     if forceable and not body.force:
         raise HTTPException(412, detail=impact)
+
+    # ── 2b. pre-subsample SENAITE-results gate ────────────────────────────────
+    # The vial-based impact gate above is blind to pre-subsample (pre-vial)
+    # samples — they have no Mk1 LimsSample/vial rows, so their results live only
+    # on the SENAITE AR. Guard the slot there before the destructive writes below
+    # (step 5 removes the old identity service), so a replace can never strip a
+    # worked identity or invalidate a verified/published result on an old sample.
+    _is_presubsample = db.execute(
+        _select(LimsSample.id).where(LimsSample.sample_id == sample_id)
+    ).scalar_one_or_none() is None
+    if _is_presubsample:
+        from lims_analyses.senaite_writeback import (
+            list_parent_line_states,
+            SenaiteWritebackError,
+        )
+        try:
+            _senaite_states = list_parent_line_states(sample_id)
+        except SenaiteWritebackError:
+            # Fail closed: can't prove the slot is safe to replace → don't write.
+            raise HTTPException(
+                502,
+                f"Could not read SENAITE results for {sample_id} to verify the "
+                "slot is safe to replace — try again.",
+            )
+        _blocked_kw = presubsample_slot_blocked_keywords(
+            _senaite_states, slot=slot, identity_keyword=old_id_kw
+        )
+        if _blocked_kw:
+            raise HTTPException(
+                409,
+                f"Slot {slot} has verified/published result(s) in SENAITE "
+                f"({', '.join(_blocked_kw)}) — invalidate or retest in SENAITE first.",
+            )
 
     import logging as _logging
     _rep_logger = _logging.getLogger(__name__)
@@ -9172,6 +9211,40 @@ async def _parent_attachment_kinds(sample_id: str, auth) -> Optional[dict]:
         return None
 
 
+async def _maybe_emit_regular_coa_child(db, sample_id, parent_row, primary_data):
+    """For a variance sample, generate the Regular parent-services COA as a child
+    of the just-created variance primary: a SECOND COABuilder /process WITHOUT
+    variance fields (so it renders the parent's promoted figures as a plain COA),
+    tagged is_regular_coa. No-op for a non-variance sample (the primary already IS
+    the regular COA). Best-effort — a failure must NOT fail the primary.
+    """
+    import logging as _logging
+    _logger = _logging.getLogger(__name__)
+    if not COA_BUILDER_URL or parent_row is None:
+        return
+    from coa.variance_series import build_variance_replicates
+    if not build_variance_replicates(db, parent_row):
+        return  # non-variance: the primary already IS the regular COA
+    primary_gen_id = primary_data.get("generation_id")
+    if not primary_gen_id:
+        _logger.warning("regular COA child skipped for %s: no primary generation_id", sample_id)
+        return
+    body: dict = {"parent_generation_id": str(primary_gen_id), "is_regular_coa": True}
+    alias_map = _load_sample_aliases(db, sample_id)
+    if alias_map:
+        body["analyte_display_names"] = {str(k): v for k, v in alias_map.items()}
+    include_remarks = bool(parent_row.customer_remarks_include)
+    body["include_lab_remarks"] = include_remarks
+    if include_remarks and (parent_row.customer_remarks or "").strip():
+        body["lab_remarks"] = parent_row.customer_remarks.strip()
+    try:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            resp = await client.post(f"{COA_BUILDER_URL}/process/{sample_id}", json=body)
+            resp.raise_for_status()
+    except Exception as e:  # noqa: BLE001 — best-effort; must not fail the primary
+        _logger.warning("regular COA child generation failed for %s: %s", sample_id, e)
+
+
 @app.post("/wizard/senaite/samples/{sample_id}/generate-coa")
 async def generate_sample_coa(
     sample_id: str,
@@ -9417,6 +9490,11 @@ async def generate_sample_coa(
             # Non-fatal — COA is generated; SENAITE attach is best-effort.
             _logger.warning("SENAITE COA attach failed for %s: %s", sample_id, e)
 
+    # Variance sample: also emit the Regular parent-services COA as a child of the
+    # just-created primary (best-effort; the helper no-ops for non-variance).
+    if not is_sub:
+        await _maybe_emit_regular_coa_child(db, sample_id, _parent_row, data)
+
     # Build a meaningful message from the COA Builder response
     warnings = data.get("warnings", [])
     if verification_code and generation_number:
@@ -9483,6 +9561,134 @@ async def generate_sample_coa(
         message=message,
         verification_code=verification_code,
     )
+
+
+class GenerateVialCOAsRequest(BaseModel):
+    # No parent_generation_id: the server DERIVES the sample's primary COA
+    # itself (never trusts a client-supplied generation id). Only optional
+    # remarks overrides are accepted.
+    lab_remarks: Optional[str] = None
+    include_lab_remarks: Optional[bool] = None
+
+
+@app.post("/wizard/senaite/samples/{sample_id}/generate-vial-coas")
+async def generate_vial_coas(
+    sample_id: str,
+    body: Optional[GenerateVialCOAsRequest] = None,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Generate one per-vial HPLC COA for every reportable HPLC vial of a parent.
+
+    The parent generation the vial COAs attach to is DERIVED server-side (the
+    sample's current primary, non-superseded generation) — never supplied by the
+    client, so a stale UI or a forged id can't graft vial COAs onto the wrong
+    lineage. Idempotent: a vial that already has a live child COA is skipped, so
+    re-running fills gaps instead of duplicating. Completeness-aware: success is
+    true only when no vial failed.
+    """
+    import logging as _logging
+    _logger = _logging.getLogger(__name__)
+
+    def _resp(success, message, *, expected=0, generated=None, skipped=None, errors=None):
+        return {
+            "success": success, "message": message, "expected": expected,
+            "generated": generated or [], "skipped": skipped or [], "errors": errors or [],
+        }
+
+    if not COA_BUILDER_URL:
+        return _resp(False, "COA Builder not configured")
+    if re.search(r"-S\d{2,}$", sample_id):
+        return _resp(False, "Per-vial COAs are generated from the parent sample, not a sub-sample.")
+
+    parent = db.execute(
+        select(LimsSample).where(LimsSample.sample_id == sample_id)
+    ).scalar_one_or_none()
+    if parent is None:
+        return _resp(False, f"Parent sample {sample_id} not found in LIMS")
+
+    # Derive + validate the parent COA generation server-side (do not trust the
+    # client). fetch_primary_generation already scopes to this sample_id, a NULL
+    # parent_generation_id (primary), and excludes superseded.
+    from integration_db import fetch_primary_generation, fetch_existing_vial_sequences
+    try:
+        primary = fetch_primary_generation(sample_id)
+    except Exception as e:  # noqa: BLE001
+        _logger.warning("fetch_primary_generation failed for %s: %s", sample_id, e)
+        return _resp(False, "Could not look up the parent COA (Integration Service unavailable).")
+    if not primary:
+        return _resp(False, "Generate the parent COA first — per-vial COAs attach to it.")
+    parent_generation_id = str(primary["id"])
+
+    from coa.variance_series import list_hplc_vials_with_figures
+    vials = list_hplc_vials_with_figures(db, parent)
+    if not vials:
+        return _resp(False, "No HPLC vials with reportable results to generate COAs for.")
+
+    # Idempotency: skip vials that already have a live child under this parent
+    # (one child per parent_generation_id + vial_sequence).
+    try:
+        existing = fetch_existing_vial_sequences(parent_generation_id)
+    except Exception as e:  # noqa: BLE001
+        _logger.warning("fetch_existing_vial_sequences failed for %s: %s", sample_id, e)
+        existing = set()
+
+    # Customer-remarks snapshot — same source the parent COA uses, so a
+    # non-conforming vial COA carries remarks (COABuilder 422s otherwise).
+    include_remarks = body.include_lab_remarks if body else None
+    lab_remarks = (body.lab_remarks or "").strip() if (body and body.lab_remarks) else ""
+    if include_remarks is None:
+        include_remarks = bool(parent.customer_remarks_include)
+        if include_remarks and not lab_remarks:
+            lab_remarks = (parent.customer_remarks or "").strip()
+
+    generated: list[dict] = []
+    skipped: list[int] = []
+    errors: list[dict] = []
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        for vial_seq, figs in vials:
+            if vial_seq in existing:
+                skipped.append(vial_seq)
+                continue
+            vbody: dict = {
+                "vial_figures": figs,
+                "parent_generation_id": parent_generation_id,
+                "vial_sequence": vial_seq,
+                "include_lab_remarks": bool(include_remarks),
+            }
+            if include_remarks and lab_remarks:
+                vbody["lab_remarks"] = lab_remarks
+            try:
+                resp = await client.post(f"{COA_BUILDER_URL}/process/{sample_id}", json=vbody)
+                resp.raise_for_status()
+                data = resp.json()
+                generated.append({
+                    "vial_sequence": vial_seq,
+                    "verification_code": data.get("verification_code"),
+                    "generation_id": data.get("generation_id"),
+                })
+            except httpx.HTTPStatusError as e:
+                try:
+                    detail = e.response.json().get("detail", str(e.response.status_code))
+                except Exception:
+                    detail = str(e.response.status_code)
+                errors.append({"vial_sequence": vial_seq, "error": detail})
+                _logger.warning("vial COA gen failed for %s vial %s: %s", sample_id, vial_seq, detail)
+            except Exception as e:  # noqa: BLE001 — one vial failing must not abort the rest
+                errors.append({"vial_sequence": vial_seq, "error": str(e)})
+                _logger.warning("vial COA gen error for %s vial %s: %s", sample_id, vial_seq, e)
+
+    g, s, f = len(generated), len(skipped), len(errors)
+    parts = [f"Generated {g} per-vial COA(s)"]
+    if s:
+        parts.append(f"{s} already existed")
+    if f:
+        parts.append(f"{f} failed")
+    # Success only when nothing failed (a fully-skipped re-run is still success).
+    return {
+        "success": f == 0, "message": "; ".join(parts), "expected": len(vials),
+        "generated": generated, "skipped": skipped, "errors": errors,
+    }
 
 
 @app.post("/wizard/senaite/samples/{sample_id}/publish-coa")
@@ -9782,6 +9988,12 @@ async def regen_primary_coa(
             _logging.getLogger(__name__).warning(
                 "SENAITE COA attach failed for %s: %s", sample_id, e
             )
+
+    # Mirror generate_sample_coa: refresh the Regular parent-services COA child
+    # off the NEW primary BEFORE publishing, so the cascade publishes it. The
+    # cascade's cross-primary supersede retires the old primary's regular child.
+    # Best-effort; no-op for non-variance.
+    await _maybe_emit_regular_coa_child(db, sample_id, _regen_parent, data)
 
     # 3. Publish the new primary — reuses publish_sample_coa's flow so
     # integration service marks the new generation as published,

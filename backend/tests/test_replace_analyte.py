@@ -248,3 +248,64 @@ def test_replace_rejects_when_new_peptide_lacks_services(blend_two_vials):
             old_peptide_id=old_pep.id, new_peptide_id=lonely.id,
             confirm_retract=True, user_id=None,
         )
+
+
+def test_presubsample_slot_blocked_keywords_flags_worked_results():
+    """The pre-subsample SENAITE guard flags the slot's identity + PUR/QTY when
+    verified/published, and ignores other slots and unworked states."""
+    from lims_analyses.service import presubsample_slot_blocked_keywords
+
+    states = {
+        "ID_TB500BETA4": "unassigned",     # identity, not worked -> safe
+        "ANALYTE-3-PUR": "verified",       # this slot, worked -> BLOCK
+        "ANALYTE-3-QTY": "assigned",       # this slot, not worked -> safe
+        "ANALYTE-2-PUR": "published",      # different slot -> ignore
+    }
+    blocked = presubsample_slot_blocked_keywords(
+        states, slot=3, identity_keyword="ID_TB500BETA4"
+    )
+    assert blocked == ["ANALYTE-3-PUR"]
+
+
+def test_presubsample_slot_blocked_keywords_clean_slot_is_empty():
+    """PB-0189's actual shape: slot identity unassigned, PUR/QTY assigned with no
+    results -> nothing blocked, replacement is safe."""
+    from lims_analyses.service import presubsample_slot_blocked_keywords
+
+    states = {
+        "ID_TB500BETA4": "unassigned",
+        "ANALYTE-3-PUR": "assigned",
+        "ANALYTE-3-QTY": "assigned",
+    }
+    assert presubsample_slot_blocked_keywords(
+        states, slot=3, identity_keyword="ID_TB500BETA4"
+    ) == []
+
+
+def test_replace_presubsample_no_parent_row_is_noop(db_mem):
+    """Pre-subsample sample: no LimsSample row exists, so there are no Mk1 vial
+    rows to mirror. The SENAITE-side slot + identity change (done by the caller)
+    is the entire operation — replace_analyte_slot must return a no-op summary
+    flagged pre_subsample, NOT raise NotFoundError (the old behavior that broke
+    Replace for older/pre-vial samples)."""
+    from lims_analyses.service import replace_analyte_slot
+
+    new_pep = _peptide(db_mem, "TB500 (17-23 Fragment)", "TB50017")
+    for cat in ("ID", "PUR", "QTY"):
+        _svc(db_mem, keyword=f"{cat}_TB50017", peptide_id=new_pep.id)
+    old_pep = _peptide(db_mem, "TB500 (Thymosin Beta 4)", "TB500B4")
+    db_mem.commit()
+
+    summary = replace_analyte_slot(
+        db_mem, parent_sample_id="PB-0189", slot=3,
+        old_peptide_id=old_pep.id, new_peptide_id=new_pep.id,
+        confirm_retract=False, user_id=None,
+    )
+
+    assert summary["pre_subsample"] is True
+    assert summary["slot"] == 3
+    assert summary["old_peptide_id"] == old_pep.id
+    assert summary["new_peptide_id"] == new_pep.id
+    assert summary["vials"] == {
+        "deleted": [], "retracted": [], "blocked": [], "reseeded": [],
+    }

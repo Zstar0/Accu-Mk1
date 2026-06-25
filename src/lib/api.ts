@@ -1022,6 +1022,10 @@ export interface ExplorerCOAGeneration {
   order_number: string | null
   /** Self-referential: null for primary COA, set for additional COAs */
   parent_generation_id: string | null
+  /** 1-based vial number for per-vial HPLC COA children; null for primaries and branding additional COAs */
+  vial_sequence: number | null
+  /** True for the regular parent-services COA child (plain COA generated alongside a variance primary) */
+  is_regular_coa: boolean
   /** Ingestion WP delivery status: pending | processing | uploaded | notified | partial | failed */
   ingestion_status: string | null
 }
@@ -1897,6 +1901,35 @@ export async function generateSenaiteCOA(
     { method: 'POST', headers: getBearerHeaders() }
   )
   if (!response.ok) throw new Error(await extractErrorMessage(response, `COA generation failed: ${response.status}`))
+  return response.json()
+}
+
+export interface GenerateVialCOAsResult {
+  success: boolean
+  message: string
+  expected: number
+  generated: { vial_sequence: number; verification_code: string | null; generation_id: string | null }[]
+  skipped: number[]
+  errors: { vial_sequence: number; error: string }[]
+}
+
+/**
+ * Generate one per-vial HPLC COA for each reportable HPLC vial of a parent.
+ * The parent COA generation is derived server-side (not passed by the client).
+ * Idempotent: vials that already have a COA are skipped.
+ */
+export async function generateVialCOAs(
+  sampleId: string
+): Promise<GenerateVialCOAsResult> {
+  const response = await fetch(
+    `${API_BASE_URL()}/wizard/senaite/samples/${encodeURIComponent(sampleId)}/generate-vial-coas`,
+    {
+      method: 'POST',
+      headers: { ...getBearerHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    }
+  )
+  if (!response.ok) throw new Error(await extractErrorMessage(response, `Vial COA generation failed: ${response.status}`))
   return response.json()
 }
 

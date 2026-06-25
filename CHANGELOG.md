@@ -1,5 +1,37 @@
 # Changelog
 
+## v1.0.7 — 2026-06-25
+
+### Added
+
+- **Durable S3-backed storage for sub-sample (vial) photos.** Photos now persist to
+  S3 (`accumark-coa-private-west1/sub-sample-photos/{vial}/{uuid}.{ext}`) instead of
+  ephemeral container `/data`, ending the loss-on-redeploy risk. Selected via the
+  `MK1_PHOTO_S3_BUCKET` env var; falls back to filesystem storage when unset (dev).
+  DB pointers (`mk1://{key}`) and the photo route are unchanged — no migration.
+
+## v1.0.6 — 2026-06-24
+
+### Added
+
+- **Core COA + per-vial COAs.** Staff "Regular COA" card renamed to **Core COA**
+  (customer-facing name; internal `regular` flag/meta unchanged). The Core COA child
+  is emitted on variance sample generation and surfaced on the sample-details page.
+  New **per-vial HPLC COA generation** endpoint + "Generate Per-Vial COAs" action and
+  a Per-Vial COAs card on sample details (vial figure builder included).
+
+## v1.0.5 — 2026-06-23
+
+### Fixed
+
+- **Replace analyte now works on pre-subsample (pre-vial) samples.** The Replace
+  flow raised "parent sample not found" for older samples with no Mk1 vial rows —
+  after the SENAITE-side field + identity writes had already run, leaving a
+  partial change. It now no-ops the (nonexistent) vial re-mirror for these
+  samples, and a new pre-subsample guard blocks the replace (409) before any
+  write if the slot's identity or `ANALYTE-{slot}-PUR/QTY` are already
+  verified/published in SENAITE.
+
 ## v1.0.4 — 2026-06-23
 
 ### Fixed
