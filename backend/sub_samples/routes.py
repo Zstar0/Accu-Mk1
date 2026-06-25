@@ -178,7 +178,7 @@ def create_sub_samples_bulk(
         db,
         parent_sample_id=body.parent_sample_id,
         photo_bytes=photo_bytes,
-        photo_filename=_filename_from_request(),
+        photo_filename=_filename_from_request(photo_bytes),
         remarks=body.remarks,
         user_id=user.id,
         count=body.count,
