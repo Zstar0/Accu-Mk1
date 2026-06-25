@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { VialPanel } from '@/components/intake/ReceiveWizard/VialPanel'
 
 vi.mock('@/lib/api', async importOriginal => {
@@ -45,16 +45,41 @@ afterEach(() => {
 })
 
 describe('VialPanel — capture format toggle', () => {
-  it('shows a Format selector defaulting to JPEG', () => {
+  it('shows a Format selector defaulting to JPEG', async () => {
     render(<VialPanel {...baseProps} />)
-    const sel = screen.getByLabelText(/capture image format/i) as HTMLSelectElement
+    const sel = (await screen.findByLabelText(/capture image format/i)) as HTMLSelectElement
     expect(sel.value).toBe('jpeg')
   })
 
-  it('persists the chosen format to localStorage', () => {
+  it('persists the chosen format to localStorage', async () => {
     render(<VialPanel {...baseProps} />)
-    const sel = screen.getByLabelText(/capture image format/i) as HTMLSelectElement
+    const sel = (await screen.findByLabelText(/capture image format/i)) as HTMLSelectElement
     fireEvent.change(sel, { target: { value: 'png' } })
     expect(localStorage.getItem('wizard-capture-format')).toBe('png')
+  })
+})
+
+describe('VialPanel — resolution mode-selection', () => {
+  it('filters the resolution list to camera-supported modes', async () => {
+    mockCamera(1280, 720)
+    render(<VialPanel {...baseProps} />)
+    const sel = (await screen.findByLabelText(
+      /capture resolution/i,
+    )) as HTMLSelectElement
+    await waitFor(() => {
+      const values = Array.from(sel.options).map(o => o.value)
+      expect(values).toContain('1280x720')
+      expect(values).not.toContain('3840x2160')
+    })
+  })
+
+  it('auto-corrects a saved resolution the camera cannot reach', async () => {
+    localStorage.setItem('wizard-capture-res', '3840x2160')
+    mockCamera(1280, 720)
+    render(<VialPanel {...baseProps} />)
+    const sel = (await screen.findByLabelText(
+      /capture resolution/i,
+    )) as HTMLSelectElement
+    await waitFor(() => expect(sel.value).toBe('1280x720'))
   })
 })

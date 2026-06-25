@@ -18,6 +18,10 @@ import {
 import {
   captureMimeType,
   CAPTURE_JPEG_QUALITY,
+  highestSupportedResValue,
+  supportedResOptions,
+  videoConstraints,
+  type CaptureCapabilities,
   type CaptureFormat,
 } from './capture-options'
 
@@ -57,28 +61,6 @@ async function dataUrlToBytes(dataUrl: string): Promise<Uint8Array> {
   const blob = await resp.blob()
   const buf = await blob.arrayBuffer()
   return new Uint8Array(buf)
-}
-
-// Capture-resolution options for the in-page experiment chooser. `ideal`
-// constraints request the size but fall back gracefully if the camera can't
-// hit it — the live readout shows what was actually negotiated.
-const RES_OPTIONS: { value: string; label: string; w?: number; h?: number }[] = [
-  { value: 'default', label: 'Default (camera native)' },
-  { value: '640x480', label: '640 × 480' },
-  { value: '1280x720', label: '1280 × 720 (HD)', w: 1280, h: 720 },
-  { value: '1920x1080', label: '1920 × 1080 (FHD)', w: 1920, h: 1080 },
-  { value: '2560x1440', label: '2560 × 1440 (QHD)', w: 2560, h: 1440 },
-  { value: '3840x2160', label: '3840 × 2160 (4K)', w: 3840, h: 2160 },
-]
-
-function videoConstraints(res: string): MediaTrackConstraints {
-  const c: MediaTrackConstraints = { facingMode: 'environment' }
-  const opt = RES_OPTIONS.find(o => o.value === res)
-  if (opt?.w && opt?.h) {
-    c.width = { ideal: opt.w }
-    c.height = { ideal: opt.h }
-  }
-  return c
 }
 
 export function VialPanel({
@@ -137,6 +119,9 @@ export function VialPanel({
     localStorage.setItem('wizard-capture-res', captureRes)
   }, [captureRes])
   const [actualRes, setActualRes] = useState<string | null>(null)
+  // Camera-reported capabilities (max width/height). Drives the supported-
+  // resolution list so the dropdown can't promise a mode the camera won't give.
+  const [captureCaps, setCaptureCaps] = useState<CaptureCapabilities | null>(null)
 
   // Capture format (experiment toggle). JPEG default — ~10× smaller than PNG
   // and web-native for the order-page gallery; PNG kept for lossless captures.
@@ -148,6 +133,20 @@ export function VialPanel({
     if (typeof window === 'undefined') return
     localStorage.setItem('wizard-capture-format', captureFormat)
   }, [captureFormat])
+
+  // When the camera's capabilities arrive, drop any saved resolution it can't
+  // reach back to the highest supported preset (so a stale "4K" pref doesn't
+  // silently fall back to 640×480).
+  useEffect(() => {
+    if (!captureCaps) return
+    const opts = supportedResOptions(captureCaps)
+    if (!opts.some(o => o.value === captureRes)) {
+      const best = highestSupportedResValue(captureCaps)
+      if (best) setCaptureRes(best)
+    }
+  }, [captureCaps, captureRes])
+
+  const resOptions = supportedResOptions(captureCaps)
 
   const videoRef = useRef<HTMLVideoElement>(null)
   // Persist the camera stream across renders so we can re-attach it when the
@@ -218,6 +217,15 @@ export function VialPanel({
           return
         }
         streamRef.current = s
+        const track = s.getVideoTracks?.()[0]
+        if (track?.getCapabilities) {
+          try {
+            const caps = track.getCapabilities()
+            setCaptureCaps({ width: caps.width, height: caps.height })
+          } catch {
+            // capabilities unsupported on this browser — keep the full list
+          }
+        }
         if (videoRef.current) {
           videoRef.current.srcObject = s
         }
@@ -582,7 +590,7 @@ export function VialPanel({
                     aria-label="Capture resolution"
                     className="h-9 rounded-md border bg-background px-2 text-sm disabled:opacity-50"
                   >
-                    {RES_OPTIONS.map(o => (
+                    {resOptions.map(o => (
                       <option key={o.value} value={o.value}>
                         {o.label}
                       </option>
