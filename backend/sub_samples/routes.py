@@ -69,11 +69,23 @@ def _decode_photo(photo_base64: str) -> bytes:
         raise HTTPException(status_code=400, detail=f"Invalid photo_base64: {e}")
 
 
-def _filename_from_request() -> str:
-    """Return photo filename. v1: hardcoded 'vial.jpg' since the wizard
-    always sends JPEG. If we ever accept PNG or other formats, the schema
-    should grow a filename field and we'd derive the extension from there."""
-    return "vial.jpg"
+def _filename_from_request(photo_bytes: bytes) -> str:
+    """Return a photo filename whose extension matches the ACTUAL image bytes.
+
+    The stored key's extension drives the served Content-Type, so it must stay
+    honest regardless of source — a camera capture (PNG or JPEG) or an uploaded
+    file of any format. Sniff the leading magic bytes; fall back to '.jpg'.
+    """
+    ext = ".jpg"
+    if photo_bytes[:8] == b"\x89PNG\r\n\x1a\n":
+        ext = ".png"
+    elif photo_bytes[:3] == b"\xff\xd8\xff":
+        ext = ".jpg"
+    elif photo_bytes[:6] in (b"GIF87a", b"GIF89a"):
+        ext = ".gif"
+    elif photo_bytes[:4] == b"RIFF" and photo_bytes[8:12] == b"WEBP":
+        ext = ".webp"
+    return f"vial{ext}"
 
 
 def _select_photo_attachment(
@@ -126,7 +138,7 @@ def create_sub_sample(
             db,
             parent_sample_id=body.parent_sample_id,
             photo_bytes=photo_bytes,
-            photo_filename=_filename_from_request(),
+            photo_filename=_filename_from_request(photo_bytes),
             remarks=body.remarks,
             user_id=user.id,
         )
@@ -322,7 +334,7 @@ def update_sub_sample(
             db,
             sample_id,
             photo_bytes,
-            _filename_from_request() if photo_bytes else None,
+            _filename_from_request(photo_bytes) if photo_bytes else None,
             body.remarks,
             user_id=user.id,
         )

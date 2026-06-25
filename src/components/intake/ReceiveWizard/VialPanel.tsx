@@ -54,6 +54,28 @@ async function dataUrlToBytes(dataUrl: string): Promise<Uint8Array> {
   return new Uint8Array(buf)
 }
 
+// Capture-resolution options for the in-page experiment chooser. `ideal`
+// constraints request the size but fall back gracefully if the camera can't
+// hit it — the live readout shows what was actually negotiated.
+const RES_OPTIONS: { value: string; label: string; w?: number; h?: number }[] = [
+  { value: 'default', label: 'Default (camera native)' },
+  { value: '640x480', label: '640 × 480' },
+  { value: '1280x720', label: '1280 × 720 (HD)', w: 1280, h: 720 },
+  { value: '1920x1080', label: '1920 × 1080 (FHD)', w: 1920, h: 1080 },
+  { value: '2560x1440', label: '2560 × 1440 (QHD)', w: 2560, h: 1440 },
+  { value: '3840x2160', label: '3840 × 2160 (4K)', w: 3840, h: 2160 },
+]
+
+function videoConstraints(res: string): MediaTrackConstraints {
+  const c: MediaTrackConstraints = { facingMode: 'environment' }
+  const opt = RES_OPTIONS.find(o => o.value === res)
+  if (opt?.w && opt?.h) {
+    c.width = { ideal: opt.w }
+    c.height = { ideal: opt.h }
+  }
+  return c
+}
+
 export function VialPanel({
   parentSampleId,
   parentDetails,
@@ -98,6 +120,18 @@ export function VialPanel({
     if (typeof window === 'undefined') return
     localStorage.setItem('wizard-camera-guides', showGuides ? '1' : '0')
   }, [showGuides])
+
+  // Capture resolution (experiment chooser). Persisted so a chosen setting
+  // sticks across check-ins. `actualRes` shows what the camera negotiated.
+  const [captureRes, setCaptureRes] = useState<string>(() => {
+    if (typeof window === 'undefined') return '1280x720'
+    return localStorage.getItem('wizard-capture-res') || '1280x720'
+  })
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    localStorage.setItem('wizard-capture-res', captureRes)
+  }, [captureRes])
+  const [actualRes, setActualRes] = useState<string | null>(null)
 
   const videoRef = useRef<HTMLVideoElement>(null)
   // Persist the camera stream across renders so we can re-attach it when the
@@ -161,7 +195,7 @@ export function VialPanel({
       return
     }
     navigator.mediaDevices
-      .getUserMedia({ video: { facingMode: 'environment' } })
+      .getUserMedia({ video: videoConstraints(captureRes) })
       .then(s => {
         if (cancelled) {
           s.getTracks().forEach(t => t.stop())
@@ -178,7 +212,7 @@ export function VialPanel({
       streamRef.current?.getTracks().forEach(t => t.stop())
       streamRef.current = null
     }
-  }, [])
+  }, [captureRes])
 
   const capture = useCallback(() => {
     if (!videoRef.current || !canvasRef.current) return
@@ -196,7 +230,9 @@ export function VialPanel({
       return
     }
     ctx.drawImage(v, 0, 0)
-    setPhotoDataUrl(c.toDataURL('image/jpeg', 0.85))
+    // PNG = lossless: the capture matches the live preview's crispness
+    // (no JPEG re-encode softening). Larger files — see the storage note.
+    setPhotoDataUrl(c.toDataURL('image/png'))
     setLocalError(null)
   }, [])
 
@@ -435,6 +471,11 @@ export function VialPanel({
                 autoPlay
                 playsInline
                 muted
+                onLoadedMetadata={e =>
+                  setActualRes(
+                    `${e.currentTarget.videoWidth}×${e.currentTarget.videoHeight}`,
+                  )
+                }
                 className="block w-full rounded bg-black aspect-[4/3] object-contain transition-opacity"
               />
               {showGuides && (
@@ -512,6 +553,30 @@ export function VialPanel({
                   <Crosshair className="w-4 h-4" aria-hidden="true" />
                   Guides {showGuides ? 'on' : 'off'}
                 </Button>
+              )}
+              {cameraPhase === 'live' && (
+                <label className="flex items-center gap-1 text-sm">
+                  <span className="text-muted-foreground">Res</span>
+                  <select
+                    value={captureRes}
+                    onChange={e => setCaptureRes(e.target.value)}
+                    disabled={busy}
+                    title="Capture resolution (experiment) — falls back if the camera can't reach it"
+                    aria-label="Capture resolution"
+                    className="h-9 rounded-md border bg-background px-2 text-sm disabled:opacity-50"
+                  >
+                    {RES_OPTIONS.map(o => (
+                      <option key={o.value} value={o.value}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                  {actualRes && (
+                    <span className="text-xs text-muted-foreground">
+                      actual {actualRes}
+                    </span>
+                  )}
+                </label>
               )}
               {cameraPhase === 'live' && (
                 <Button
