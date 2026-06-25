@@ -1,5 +1,33 @@
 # Changelog
 
+## v1.0.8 — 2026-06-25
+
+### Added
+
+- **Bulk vial check-in.** Create N identical vials in one step from the Receive
+  wizard (Quantity input, 1–50) — one capture applied to all, then run through
+  auto-assignment.
+- **Edit or retake any vial.** Every sub-sample vial in the wizard is now
+  editable (retake photo / edit remarks), not just this-session ones. Delete
+  stays limited to this-session vials.
+- **Capture controls.** Photo format toggle (JPEG default / PNG) and a
+  camera-resolution selector driven by the device's real capabilities, so the
+  stored photo is web-appropriate and as sharp as the camera allows; a stale
+  resolution the camera can't reach auto-corrects to the highest supported.
+- **Worksheet Sample ID search.** The HPLC worksheets list has a search box that
+  filters to worksheets containing a given sample.
+- **Worksheet link on sample details.** The sample-details header shows the
+  worksheet a sample is on (if any) and opens the worksheet flyout on click.
+- **Client → customer link.** The client on the sample-details header links to
+  that customer's detail page (registered customers only; guest orders unchanged).
+
+### Fixed
+
+- Bulk vial create returned 500 — the route dropped a required argument when
+  building the stored filename. Now creates correctly.
+- Vial thumbnails in the Receive wizard now refresh immediately after a photo
+  retake instead of requiring a page reload.
+
 ## v1.0.7 — 2026-06-25
 
 ### Added
