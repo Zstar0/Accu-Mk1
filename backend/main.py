@@ -14450,8 +14450,9 @@ def _fetch_mk1_inbox_analyses_for_sub_sample(
     builder. UIDs carry the 'mk1:' prefix so any downstream write-path
     dispatches to the Mk1 endpoints (Phase 3 adapter).
 
-    Filtering parity with the SENAITE path: excluded review_states dropped,
-    retests excluded (Mk1 retest is service-layer not state-edge).
+    Filtering: evaluate the live row per (vial, service) (retested=False) and
+    drop dead + terminal-done review_states, so a finished vial does not return
+    to the inbox once its open-worksheet claim is removed.
 
     Returns an empty list if the vial has no Mk1 rows — caller falls back
     to the SENAITE path.
@@ -14467,10 +14468,24 @@ def _fetch_mk1_inbox_analyses_for_sub_sample(
         )
         .outerjoin(ServiceGroup, ServiceGroup.id == service_group_members.c.service_group_id)
         .where(LimsAnalysis.lims_sub_sample_pk == sub_sample_pk)
-        .where(LimsAnalysis.retest_of_id.is_(None))
+        # Current/live row per (vial, service) is retested=False — NOT
+        # retest_of_id IS NULL, which selects the superseded original after a
+        # retest (see architecture_retest_current_row_idiom). Reading the
+        # original masked finished retests, bouncing done vials into the inbox.
+        .where(LimsAnalysis.retested.is_(False))
     ).all()
 
-    EXCLUDED_STATES = {"rejected", "retracted"}
+    # Drop dead rows (rejected/retracted) AND terminal done-states. A vial whose
+    # live result is promoted (rolled up to parent), verified/published, or
+    # variance_verified (vial-tier terminal; parent uses the mean model) is
+    # finished. Without these, completing a worksheet — which removes the only
+    # open-worksheet claim keeping the vial out — bounced finished Micro/variance
+    # vials back into the inbox (2026-06-25 incident). Core HPLC vials were masked
+    # by hide_prepped; Micro/variance vials have no prep, so nothing else hid them.
+    EXCLUDED_STATES = {
+        "rejected", "retracted",
+        "promoted", "verified", "published", "variance_verified",
+    }
     out: list[InboxAnalysisItem] = []
     for la, svc, sg in rows:
         if la.review_state in EXCLUDED_STATES:

@@ -230,3 +230,88 @@ def test_date_received_prefers_vial_own_timestamp(db, family):
     # received_at default=utcnow was set on insert — vial's own date wins
     assert items[0].date_received is not None
     assert items[0].date_received != PARENT_ITEM["getDateReceived"]
+
+
+def test_promoted_vial_hidden(db, family):
+    """A vial whose live analysis is `promoted` (rolled up to the parent = done)
+    must NOT reappear in the inbox once its worksheet claim is gone.
+
+    Regression for the 2026-06-25 incident: completing a Microbiology worksheet
+    bounced fully-worked, promoted sterility vials back into the inbox because
+    EXCLUDED_STATES dropped only rejected/retracted, not terminal done-states."""
+    _parent, subs = family
+    db.execute(
+        LimsAnalysis.__table__.update()
+        .where(LimsAnalysis.lims_sub_sample_pk == subs[0].id)
+        .values(review_state="promoted")
+    )
+    db.commit()
+    items = _call(db, subs)
+    assert [i.sample_id for i in items] == ["P-0300-S02"]  # S01 (promoted) is done
+
+
+def test_variance_verified_vial_hidden(db, family):
+    """Variance vials finish at the vial-tier terminal state `variance_verified`
+    (they are not `promoted`; the parent uses the mean model) and never get a
+    sample_prep, so hide_prepped does not mask them. They must be excluded like
+    `promoted` so they don't bounce back after worksheet completion."""
+    _parent, subs = family
+    db.execute(
+        LimsAnalysis.__table__.update()
+        .where(LimsAnalysis.lims_sub_sample_pk == subs[0].id)
+        .values(review_state="variance_verified")
+    )
+    db.commit()
+    items = _call(db, subs)
+    assert [i.sample_id for i in items] == ["P-0300-S02"]
+
+
+def test_retested_vial_reflects_live_row_not_superseded_original(db, family):
+    """Visibility must follow the LIVE row (retested=False), not the superseded
+    original (retest_of_id IS NULL). Here the original is non-terminal
+    (to_be_verified) but the live retest is `promoted` (done) -> the vial is
+    hidden. This is the P-0962-S03 shape from the incident, where reading the
+    original masked the fact that the retest had already finished."""
+    _parent, subs = family
+    orig = db.execute(
+        select(LimsAnalysis).where(LimsAnalysis.lims_sub_sample_pk == subs[0].id)
+    ).scalar_one()
+    orig.review_state = "to_be_verified"
+    orig.retested = True
+    db.flush()
+    db.add(LimsAnalysis(
+        lims_sub_sample_pk=subs[0].id,
+        analysis_service_id=orig.analysis_service_id,
+        keyword="HPLC-PUR",
+        title="Peptide Purity (HPLC)",
+        review_state="promoted",
+        retested=False,
+        retest_of_id=orig.id,
+    ))
+    db.commit()
+    items = _call(db, subs)
+    assert [i.sample_id for i in items] == ["P-0300-S02"]  # S01 done via retest
+
+
+def test_retested_vial_with_pending_live_row_still_shows(db, family):
+    """Inverse guard: if the live retest row is non-terminal (needs rework),
+    the vial MUST still appear — excluding done-states must not over-hide."""
+    _parent, subs = family
+    orig = db.execute(
+        select(LimsAnalysis).where(LimsAnalysis.lims_sub_sample_pk == subs[0].id)
+    ).scalar_one()
+    orig.review_state = "promoted"   # old, superseded
+    orig.retested = True
+    db.flush()
+    db.add(LimsAnalysis(
+        lims_sub_sample_pk=subs[0].id,
+        analysis_service_id=orig.analysis_service_id,
+        keyword="HPLC-PUR",
+        title="Peptide Purity (HPLC)",
+        review_state="unassigned",   # live, needs work
+        retested=False,
+        retest_of_id=orig.id,
+    ))
+    db.commit()
+    items = _call(db, subs)
+    assert [i.sample_id for i in items] == ["P-0300-S01", "P-0300-S02"]
