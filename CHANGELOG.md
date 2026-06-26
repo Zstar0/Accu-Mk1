@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.0.9 — 2026-06-26
+
+### Fixed
+
+- Worksheet inbox age showed a negative time (e.g. "-5h -59m") for a just-created
+  order. The age timer parsed a timezone-less `date_received` as browser-local
+  instead of UTC, putting "received" ~5h in the future. Now parses zone-less
+  timestamps as UTC and never renders a negative age.
+
 ## v1.0.8 — 2026-06-25
 
 ### Added
