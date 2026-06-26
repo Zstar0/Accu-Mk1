@@ -60,8 +60,8 @@ interface WorksheetDrawerItemsProps {
   isCompleted: boolean
   worksheetCompletedAtProp?: string | null
   prepStartedItems: Set<string>
-  onRemove: (sampleUid: string, serviceGroupId: number) => void
-  onReassign: (sampleUid: string, serviceGroupId: number, targetWorksheetId: number) => void
+  onRemove: (itemId: number) => void
+  onReassign: (itemId: number, targetWorksheetId: number) => void
   onStartPrep: (item: { sampleId: string; serviceGroupId: number | null; groupName: string; peptideId: number | null; instrumentUid: string | null; limsSubSamplePk: number | null }) => void
   instruments: Instrument[]
   onUpdateItem: (itemId: number, data: { instrument_uid?: string; prep_status?: string }) => void
@@ -199,8 +199,8 @@ interface SortableItemRowProps {
   slaSnapshot: SlaSubjectSnapshot | null
   slaLoading: boolean
   slaError: boolean
-  onRemove: (sampleUid: string, serviceGroupId: number) => void
-  onReassign: (sampleUid: string, serviceGroupId: number, targetWorksheetId: number) => void
+  onRemove: (itemId: number) => void
+  onReassign: (itemId: number, targetWorksheetId: number) => void
   onStartPrep: (item: { sampleId: string; serviceGroupId: number | null; groupName: string; peptideId: number | null; instrumentUid: string | null; limsSubSamplePk: number | null }) => void
   onUpdateItem: (itemId: number, data: { instrument_uid?: string; prep_status?: string }) => void
 }
@@ -267,7 +267,7 @@ function SortableItemRow({
         <button
           className="h-6 w-8 shrink-0 flex items-center justify-center opacity-0 group-hover/item:opacity-100 transition-opacity text-muted-foreground hover:text-destructive rounded mt-0.5"
           aria-label={`Remove ${item.sample_id} from worksheet`}
-          onClick={() => onRemove(item.sample_uid, item.service_group_id ?? 0)}
+          onClick={() => onRemove(item.id)}
         >
           <X className="h-3 w-3" />
         </button>
@@ -425,7 +425,7 @@ function SortableItemRow({
 interface ReassignButtonProps {
   item: ItemType
   otherWorksheets: WorksheetListItem[]
-  onReassign: (sampleUid: string, serviceGroupId: number, targetWorksheetId: number) => void
+  onReassign: (itemId: number, targetWorksheetId: number) => void
 }
 
 function ReassignButton({ item, otherWorksheets, onReassign }: ReassignButtonProps) {
@@ -450,7 +450,7 @@ function ReassignButton({ item, otherWorksheets, onReassign }: ReassignButtonPro
           <p className="text-xs font-semibold text-muted-foreground mb-2">Move to worksheet</p>
           <Select
             onValueChange={value => {
-              onReassign(item.sample_uid, item.service_group_id ?? 0, Number(value))
+              onReassign(item.id, Number(value))
               setOpen(false)
             }}
           >

@@ -4649,10 +4649,13 @@ export async function getInboxSamples(opts: GetInboxOptions = {}): Promise<Inbox
 }
 
 export async function updateInboxPriority(sampleUid: string, priority: InboxPriority): Promise<void> {
-  const response = await fetch(`${API_BASE_URL()}/worksheets/inbox/${sampleUid}/priority`, {
+  // sample_uid travels in the BODY, not the path: Mk1-native UIDs are
+  // `mk1://<hex>` and a slash-bearing UID in a path segment gets mangled by the
+  // nginx proxy (encoded `://` -> decoded + slash-merged -> wrong route -> 404).
+  const response = await fetch(`${API_BASE_URL()}/worksheets/inbox/priority`, {
     method: 'PUT',
     headers: getBearerHeaders('application/json'),
-    body: JSON.stringify({ priority }),
+    body: JSON.stringify({ sample_uid: sampleUid, priority }),
   })
   if (!response.ok) throw new Error(`Priority update failed: ${response.status}`)
 }
@@ -4750,11 +4753,13 @@ export async function listWorksheets(status?: string): Promise<WorksheetListItem
 
 export async function removeWorksheetItem(
   worksheetId: number,
-  sampleUid: string,
-  serviceGroupId: number
+  itemId: number
 ): Promise<void> {
+  // Keyed on the integer worksheet_items.id, NOT sample_uid/service_group_id:
+  // Mk1-native UIDs are `mk1://<hex>` and a slash-bearing UID in a path segment
+  // gets mangled by the nginx proxy into extra segments -> no route match -> 404.
   const response = await fetch(
-    `${API_BASE_URL()}/worksheets/${worksheetId}/items/${encodeURIComponent(sampleUid)}/${serviceGroupId}`,
+    `${API_BASE_URL()}/worksheets/${worksheetId}/items/${itemId}`,
     { method: 'DELETE', headers: getBearerHeaders() }
   )
   if (!response.ok) throw new Error(`Remove item failed: ${response.status}`)
@@ -4810,12 +4815,13 @@ export async function completeWorksheet(worksheetId: number): Promise<{ status: 
 
 export async function reassignWorksheetItem(
   worksheetId: number,
-  sampleUid: string,
-  serviceGroupId: number,
+  itemId: number,
   targetWorksheetId: number
 ): Promise<{ status: string; target_worksheet_id: number }> {
+  // By integer item id — see removeWorksheetItem for why native `mk1://` UIDs
+  // can't ride in a path segment.
   const response = await fetch(
-    `${API_BASE_URL()}/worksheets/${worksheetId}/items/${encodeURIComponent(sampleUid)}/${serviceGroupId}/reassign`,
+    `${API_BASE_URL()}/worksheets/${worksheetId}/items/${itemId}/reassign`,
     {
       method: 'POST',
       headers: getBearerHeaders('application/json'),

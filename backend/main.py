@@ -15325,6 +15325,43 @@ async def update_inbox_priority(
     return {"sample_uid": sample_uid, "priority": data.priority}
 
 
+class InboxPriorityUpdate(BaseModel):
+    sample_uid: str
+    priority: str
+
+
+@app.put("/worksheets/inbox/priority")
+async def update_inbox_priority_by_body(
+    data: InboxPriorityUpdate,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Upsert priority for a received sample; sample_uid travels in the body.
+
+    Body-based sibling of /worksheets/inbox/{sample_uid}/priority. Native
+    `mk1://<hex>` UIDs can't ride in a path segment — the nginx proxy mangles
+    the slashes into extra path segments -> 404 (see remove_worksheet_item_by_id).
+    """
+    valid_priorities = {"normal", "high", "expedited"}
+    if data.priority not in valid_priorities:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid priority '{data.priority}'. Must be one of: {', '.join(sorted(valid_priorities))}",
+        )
+
+    existing = db.execute(
+        select(SamplePriority).where(SamplePriority.sample_uid == data.sample_uid)
+    ).scalar_one_or_none()
+    if existing:
+        existing.priority = data.priority
+        existing.updated_at = datetime.utcnow()
+    else:
+        db.add(SamplePriority(sample_uid=data.sample_uid, priority=data.priority))
+
+    db.commit()
+    return {"sample_uid": data.sample_uid, "priority": data.priority}
+
+
 # ── D2: bulk per-sample priority lookup ────────────────────────────────────
 
 @app.post("/sample-priorities/lookup", response_model=SamplePriorityLookupResponse)
@@ -16106,6 +16143,56 @@ async def remove_worksheet_item(
     return {"status": "removed"}
 
 
+@app.delete("/worksheets/{worksheet_id}/items/{item_id}")
+async def remove_worksheet_item_by_id(
+    worksheet_id: int,
+    item_id: int,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Remove a worksheet item by its integer id. Analysis returns to inbox.
+
+    Preferred over the {sample_uid}/{service_group_id} sibling route above:
+    Mk1-native UIDs are `mk1://<hex>`, and a slash-bearing UID placed in a path
+    segment gets mangled by the nginx proxy (encoded `://` -> `%3A%2F%2F` ->
+    decoded + slash-merged -> extra path segments -> no route match -> 404). The
+    integer id carries no slashes. Mirrors PATCH .../items/{item_id}.
+    """
+    item = db.execute(
+        select(WorksheetItem).where(
+            WorksheetItem.id == item_id,
+            WorksheetItem.worksheet_id == worksheet_id,
+        )
+    ).scalar_one_or_none()
+    if not item:
+        raise HTTPException(404, "Item not found")
+
+    # Analyst-from-worksheet: clear vial-tier stamps; analysis returns to inbox.
+    # Best-effort: stamping failures must not break item removal.
+    from lims_analyses.worksheet_analyst import clear_for_item
+    import logging as _logging
+    ws_title = db.execute(
+        select(Worksheet.title).where(Worksheet.id == worksheet_id)
+    ).scalar_one_or_none()
+    try:
+        clear_for_item(
+            db,
+            sample_uid=item.sample_uid,
+            service_group_id=item.service_group_id,
+            acting_user_id=getattr(_current_user, "id", None),
+            worksheet_id=worksheet_id,
+            worksheet_title=ws_title,
+        )
+    except Exception:
+        _logging.getLogger(__name__).warning(
+            "analyst stamp clear failed during remove-worksheet-item-by-id", exc_info=True
+        )
+
+    db.delete(item)
+    db.commit()
+    return {"status": "removed"}
+
+
 class ReassignRequest(BaseModel):
     target_worksheet_id: int
 
@@ -16184,6 +16271,66 @@ async def reassign_worksheet_item(
     except Exception:
         _logging.getLogger(__name__).warning(
             "analyst stamp failed during reassign-worksheet-item", exc_info=True
+        )
+    db.commit()
+    return {"status": "reassigned", "target_worksheet_id": data.target_worksheet_id}
+
+
+@app.post("/worksheets/{worksheet_id}/items/{item_id}/reassign")
+async def reassign_worksheet_item_by_id(
+    worksheet_id: int,
+    item_id: int,
+    data: ReassignRequest,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Move a worksheet item to a different (open) worksheet, keyed by integer id.
+
+    By-id sibling of the {sample_uid}/{service_group_id} reassign route — see
+    remove_worksheet_item_by_id for why native `mk1://` UIDs can't ride in a
+    path segment.
+    """
+    item = db.execute(
+        select(WorksheetItem).where(
+            WorksheetItem.id == item_id,
+            WorksheetItem.worksheet_id == worksheet_id,
+        )
+    ).scalar_one_or_none()
+    if not item:
+        raise HTTPException(404, "Item not found")
+    target = db.execute(
+        select(Worksheet).where(Worksheet.id == data.target_worksheet_id, Worksheet.status == "open")
+    ).scalar_one_or_none()
+    if not target:
+        raise HTTPException(404, "Target worksheet not found or not open")
+    # Mirror the {sample_uid} reassign: item.worksheet_id move stays OUTSIDE the
+    # try so the reassign always happens; only the stamp side-effects are guarded.
+    from lims_analyses.worksheet_analyst import clear_for_item, stamp_for_item
+    import logging as _logging
+    acting_id = getattr(_current_user, "id", None)
+    src_ws_title = db.execute(
+        select(Worksheet.title).where(Worksheet.id == worksheet_id)
+    ).scalar_one_or_none()
+    sample_uid = item.sample_uid
+    gid = item.service_group_id
+    item.worksheet_id = data.target_worksheet_id
+    if target.assigned_analyst_id:
+        item.assigned_analyst_id = target.assigned_analyst_id
+    try:
+        clear_for_item(
+            db, sample_uid=sample_uid, service_group_id=gid,
+            acting_user_id=acting_id, worksheet_id=worksheet_id,
+            worksheet_title=src_ws_title,
+        )
+        stamp_for_item(
+            db, sample_uid=sample_uid, service_group_id=gid,
+            analyst_user_id=target.assigned_analyst_id or item.assigned_analyst_id,
+            acting_user_id=acting_id,
+            worksheet_id=target.id, worksheet_title=target.title,
+        )
+    except Exception:
+        _logging.getLogger(__name__).warning(
+            "analyst stamp failed during reassign-worksheet-item-by-id", exc_info=True
         )
     db.commit()
     return {"status": "reassigned", "target_worksheet_id": data.target_worksheet_id}
