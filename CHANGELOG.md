@@ -27,6 +27,14 @@
   building the stored filename. Now creates correctly.
 - Vial thumbnails in the Receive wizard now refresh immediately after a photo
   retake instead of requiring a page reload.
+- Removing, reassigning, or re-prioritizing native (in-house-tracked) worksheet
+  vials returned a 404 — the vial's `mk1://` id was mangled in the URL path by
+  the proxy. These now key on the worksheet item id and work for all vial types
+  (SENAITE-tracked vials were unaffected).
+- Finished vials (Micro sterility/endotoxin, variance HPLC) bounced back into
+  the worksheet inbox after their worksheet was marked Complete. The inbox now
+  excludes terminal done-states and reads the live post-retest row, so completed
+  work stays out of the queue.
 
 ## v1.0.7 — 2026-06-25
 
