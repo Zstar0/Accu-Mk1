@@ -265,18 +265,16 @@ export function WorksheetDrawer() {
                 isCompleted={!!isCompleted}
                 worksheetCompletedAtProp={activeWorksheet.completed_at}
                 prepStartedItems={prepStartedItems}
-                onRemove={(uid, gid) =>
+                onRemove={(itemId) =>
                   removeMutation.mutate({
                     worksheetId: activeWorksheet.id,
-                    sampleUid: uid,
-                    serviceGroupId: gid,
+                    itemId,
                   })
                 }
-                onReassign={(uid, gid, targetId) =>
+                onReassign={(itemId, targetId) =>
                   reassignMutation.mutate({
                     worksheetId: activeWorksheet.id,
-                    sampleUid: uid,
-                    serviceGroupId: gid,
+                    itemId,
                     targetWorksheetId: targetId,
                   })
                 }

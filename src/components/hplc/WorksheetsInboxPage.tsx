@@ -575,9 +575,9 @@ export default function WorksheetsInboxPage() {
                 toast.error(err instanceof Error ? err.message : 'Delete failed')
               }
             }}
-            onRemoveItem={async (worksheetId, sampleUid, serviceGroupId) => {
+            onRemoveItem={async (worksheetId, itemId) => {
               try {
-                await removeWorksheetItem(worksheetId, sampleUid, serviceGroupId)
+                await removeWorksheetItem(worksheetId, itemId)
                 toast.success('Item returned to inbox')
                 setPendingDropKeys(new Set())
                 queryClient.invalidateQueries({ queryKey: ['worksheets-list'] })

@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { useMemo, useState } from 'react'
-import { ClipboardList, ListChecks, AlertTriangle, Clock } from 'lucide-react'
+import { ClipboardList, ListChecks, AlertTriangle, Clock, Search } from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
 import {
   Table,
@@ -19,10 +19,12 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Input } from '@/components/ui/input'
 import { PriorityBadge } from '@/components/hplc/PriorityBadge'
 import { SlaAgeIndicator } from '@/components/hplc/SlaAgeIndicator'
 import { useSlaForSubjects, type SlaSubject, type SlaSubjectSnapshot } from '@/services/sla-subjects'
 import { listWorksheets, type InboxPriority } from '@/lib/api'
+import { worksheetMatchesSampleQuery } from '@/components/hplc/worksheet-sample-filter'
 import { getUserDirectory } from '@/lib/auth-api'
 import { displayName, resolveUserName } from '@/lib/user-display'
 import { useUIStore } from '@/store/ui-store'
@@ -53,6 +55,7 @@ function formatAvgAge(ms: number): string {
 export default function WorksheetsListPage() {
   const [statusFilter, setStatusFilter] = useState<string>('open')
   const [analystFilter, setAnalystFilter] = useState<string>('all')
+  const [sampleQuery, setSampleQuery] = useState('')
 
   const { data: worksheets = [], isLoading, isError } = useQuery({
     queryKey: ['worksheets-list', statusFilter === 'all' ? undefined : statusFilter],
@@ -83,10 +86,11 @@ export default function WorksheetsListPage() {
     return Array.from(emails).sort()
   })()
 
-  const filteredWorksheets =
-    analystFilter === 'all'
-      ? worksheets
-      : worksheets.filter(w => w.assigned_analyst_email === analystFilter)
+  const filteredWorksheets = worksheets.filter(
+    w =>
+      (analystFilter === 'all' || w.assigned_analyst_email === analystFilter) &&
+      worksheetMatchesSampleQuery(w, sampleQuery),
+  )
 
   // Flatten subjects over all worksheets for the batched SLA hook.
   // React Compiler memoizes this automatically (no manual useMemo per project convention).
@@ -242,6 +246,17 @@ export default function WorksheetsListPage() {
               ))}
             </SelectContent>
           </Select>
+
+          <div className="relative w-56">
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              value={sampleQuery}
+              onChange={e => setSampleQuery(e.target.value)}
+              placeholder="Search Sample ID…"
+              aria-label="Search by Sample ID"
+              className="pl-8"
+            />
+          </div>
         </div>
 
         {/* Error state */}

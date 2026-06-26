@@ -357,3 +357,33 @@ def test_aggregates_rejects_empty_id_list():
         json={"parent_sample_ids": []},
     )
     assert resp.status_code == 422
+
+
+def test_bulk_create_201_passes_decoded_photo_bytes_to_filename_helper():
+    """POST /api/sub-samples/bulk returns 201.
+
+    Regression guard: the route builds photo_filename via
+    _filename_from_request(photo_bytes), which requires the decoded bytes. A
+    call site that drops the argument raises TypeError before the service runs
+    (500 on every bulk create). The service is mocked so this test isolates the
+    route's photo-decode + filename wiring.
+    """
+    subs = [_mock_sub("P-0134-S01", vial_seq=1), _mock_sub("P-0134-S02", vial_seq=2)]
+    with patch(
+        "sub_samples.routes.service.create_sub_samples_bulk",
+        return_value=(subs, None),
+    ):
+        resp = client.post(
+            "/api/sub-samples/bulk",
+            json={
+                "parent_sample_id": "P-0134",
+                "photo_base64": "YWJj",
+                "count": 2,
+                "remarks": None,
+            },
+        )
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["requested"] == 2
+    assert body["failed"] == 0
+    assert len(body["created"]) == 2

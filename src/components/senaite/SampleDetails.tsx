@@ -107,6 +107,8 @@ import {
   deleteSubSampleAttachment,
   setSubSamplePrimaryAttachment,
   type SubSampleAttachment,
+  listWorksheets,
+  getExplorerOrderById,
   listSubSampleChromatograms,
   uploadChromatogramToSenaite,
   type SubSampleChromatogram,
@@ -130,6 +132,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Spinner } from '@/components/ui/spinner'
 import { useUIStore } from '@/store/ui-store'
+import { findWorksheetForSample } from '@/components/hplc/worksheet-sample-filter'
 import { useWizardStore } from '@/store/wizard-store'
 import { getSenaiteUrl, getWordpressUrl } from '@/lib/api-profiles'
 import { cn } from '@/lib/utils'
@@ -2848,6 +2851,31 @@ export function SampleDetails() {
 
   const analysisSla = useAnalysisSlaMap(data)
 
+  // Worksheet membership for the header link. Reuses the worksheets list
+  // (react-query-cached); finds the worksheet whose items include this sample.
+  // Matches the sample's own id, so it works on parent + sub-sample pages.
+  const { data: allWorksheets = [] } = useQuery({
+    queryKey: ['worksheets-list', undefined],
+    queryFn: () => listWorksheets(),
+    staleTime: 30_000,
+  })
+  const worksheetForSample = findWorksheetForSample(allWorksheets, data?.sample_id)
+
+  // Customer link for the header: resolve the WC customer_id from this sample's
+  // order (exact, keyed by the order id — the IS order endpoint already returns
+  // customer_id). null for guest orders / missing order → plain text, no link.
+  // SENAITE stores the order number with a "WP-" prefix (e.g. "WP-3242"), but
+  // the IS order endpoint keys on the bare numeric id ("3242") — same
+  // extraction the WC-admin link uses below. Strip to digits before resolving.
+  const orderNumber = data?.client_order_number?.match(/\d+/)?.[0] ?? null
+  const { data: linkedOrder } = useQuery({
+    queryKey: ['explorer-order', orderNumber],
+    queryFn: () => getExplorerOrderById(orderNumber as string),
+    enabled: !!orderNumber,
+    staleTime: 5 * 60 * 1000,
+  })
+  const customerLinkId = linkedOrder?.customer_id ?? null
+
   // Sub-samples — only meaningful for parent samples (sample IDs that don't end
   // in -SNN). Sub-samples don't have sub-sub-samples, so we hide the section
   // entirely on sub-sample detail pages.
@@ -3788,7 +3816,18 @@ export function SampleDetails() {
                 <p>
                   Received {formatDate(data.date_received)}
                   {' · '}Client:{' '}
-                  <span className="text-foreground/80">{data.client ?? '—'}</span>
+                  {customerLinkId != null ? (
+                    <button
+                      type="button"
+                      onClick={() => useUIStore.getState().navigateToCustomer(customerLinkId)}
+                      className="text-blue-700 underline-offset-2 hover:underline dark:text-blue-400"
+                      title="View customer"
+                    >
+                      {data.client ?? '—'}
+                    </button>
+                  ) : (
+                    <span className="text-foreground/80">{data.client ?? '—'}</span>
+                  )}
                   {!retestInfo?.is_retest && retestInfo?.retested_as && retestInfo.retested_as.length > 0 && (
                     <>
                       {' · '}
@@ -3812,6 +3851,23 @@ export function SampleDetails() {
               </div>
             </div>
           </div>
+
+          {/* Worksheet membership — left of the counters; opens the worksheet flyout */}
+          {worksheetForSample && (
+            <button
+              type="button"
+              onClick={() => useUIStore.getState().openWorksheetDrawer(worksheetForSample.id)}
+              className="group flex flex-col items-center text-center"
+              title={`Open worksheet: ${worksheetForSample.title}`}
+            >
+              <div className="max-w-[180px] truncate text-sm font-semibold text-violet-700 underline-offset-2 group-hover:underline dark:text-violet-300">
+                {worksheetForSample.title}
+              </div>
+              <div className="text-[11px] uppercase tracking-wider text-muted-foreground">
+                Worksheet
+              </div>
+            </button>
+          )}
 
           {/* Counters */}
           {countableTotal > 0 && (

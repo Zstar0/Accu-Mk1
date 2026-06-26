@@ -7213,6 +7213,7 @@ class ExplorerOrderResponse(BaseModel):
     id: str
     order_id: str
     order_number: str
+    customer_id: Optional[int] = None  # WC customer id; null for guest orders (passthrough from IS)
     status: str
     samples_expected: int
     samples_delivered: int
@@ -14449,8 +14450,9 @@ def _fetch_mk1_inbox_analyses_for_sub_sample(
     builder. UIDs carry the 'mk1:' prefix so any downstream write-path
     dispatches to the Mk1 endpoints (Phase 3 adapter).
 
-    Filtering parity with the SENAITE path: excluded review_states dropped,
-    retests excluded (Mk1 retest is service-layer not state-edge).
+    Filtering: evaluate the live row per (vial, service) (retested=False) and
+    drop dead + terminal-done review_states, so a finished vial does not return
+    to the inbox once its open-worksheet claim is removed.
 
     Returns an empty list if the vial has no Mk1 rows — caller falls back
     to the SENAITE path.
@@ -14466,10 +14468,24 @@ def _fetch_mk1_inbox_analyses_for_sub_sample(
         )
         .outerjoin(ServiceGroup, ServiceGroup.id == service_group_members.c.service_group_id)
         .where(LimsAnalysis.lims_sub_sample_pk == sub_sample_pk)
-        .where(LimsAnalysis.retest_of_id.is_(None))
+        # Current/live row per (vial, service) is retested=False — NOT
+        # retest_of_id IS NULL, which selects the superseded original after a
+        # retest (see architecture_retest_current_row_idiom). Reading the
+        # original masked finished retests, bouncing done vials into the inbox.
+        .where(LimsAnalysis.retested.is_(False))
     ).all()
 
-    EXCLUDED_STATES = {"rejected", "retracted"}
+    # Drop dead rows (rejected/retracted) AND terminal done-states. A vial whose
+    # live result is promoted (rolled up to parent), verified/published, or
+    # variance_verified (vial-tier terminal; parent uses the mean model) is
+    # finished. Without these, completing a worksheet — which removes the only
+    # open-worksheet claim keeping the vial out — bounced finished Micro/variance
+    # vials back into the inbox (2026-06-25 incident). Core HPLC vials were masked
+    # by hide_prepped; Micro/variance vials have no prep, so nothing else hid them.
+    EXCLUDED_STATES = {
+        "rejected", "retracted",
+        "promoted", "verified", "published", "variance_verified",
+    }
     out: list[InboxAnalysisItem] = []
     for la, svc, sg in rows:
         if la.review_state in EXCLUDED_STATES:
@@ -15324,6 +15340,43 @@ async def update_inbox_priority(
     return {"sample_uid": sample_uid, "priority": data.priority}
 
 
+class InboxPriorityUpdate(BaseModel):
+    sample_uid: str
+    priority: str
+
+
+@app.put("/worksheets/inbox/priority")
+async def update_inbox_priority_by_body(
+    data: InboxPriorityUpdate,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Upsert priority for a received sample; sample_uid travels in the body.
+
+    Body-based sibling of /worksheets/inbox/{sample_uid}/priority. Native
+    `mk1://<hex>` UIDs can't ride in a path segment — the nginx proxy mangles
+    the slashes into extra path segments -> 404 (see remove_worksheet_item_by_id).
+    """
+    valid_priorities = {"normal", "high", "expedited"}
+    if data.priority not in valid_priorities:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid priority '{data.priority}'. Must be one of: {', '.join(sorted(valid_priorities))}",
+        )
+
+    existing = db.execute(
+        select(SamplePriority).where(SamplePriority.sample_uid == data.sample_uid)
+    ).scalar_one_or_none()
+    if existing:
+        existing.priority = data.priority
+        existing.updated_at = datetime.utcnow()
+    else:
+        db.add(SamplePriority(sample_uid=data.sample_uid, priority=data.priority))
+
+    db.commit()
+    return {"sample_uid": data.sample_uid, "priority": data.priority}
+
+
 # ── D2: bulk per-sample priority lookup ────────────────────────────────────
 
 @app.post("/sample-priorities/lookup", response_model=SamplePriorityLookupResponse)
@@ -16105,6 +16158,56 @@ async def remove_worksheet_item(
     return {"status": "removed"}
 
 
+@app.delete("/worksheets/{worksheet_id}/items/{item_id}")
+async def remove_worksheet_item_by_id(
+    worksheet_id: int,
+    item_id: int,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Remove a worksheet item by its integer id. Analysis returns to inbox.
+
+    Preferred over the {sample_uid}/{service_group_id} sibling route above:
+    Mk1-native UIDs are `mk1://<hex>`, and a slash-bearing UID placed in a path
+    segment gets mangled by the nginx proxy (encoded `://` -> `%3A%2F%2F` ->
+    decoded + slash-merged -> extra path segments -> no route match -> 404). The
+    integer id carries no slashes. Mirrors PATCH .../items/{item_id}.
+    """
+    item = db.execute(
+        select(WorksheetItem).where(
+            WorksheetItem.id == item_id,
+            WorksheetItem.worksheet_id == worksheet_id,
+        )
+    ).scalar_one_or_none()
+    if not item:
+        raise HTTPException(404, "Item not found")
+
+    # Analyst-from-worksheet: clear vial-tier stamps; analysis returns to inbox.
+    # Best-effort: stamping failures must not break item removal.
+    from lims_analyses.worksheet_analyst import clear_for_item
+    import logging as _logging
+    ws_title = db.execute(
+        select(Worksheet.title).where(Worksheet.id == worksheet_id)
+    ).scalar_one_or_none()
+    try:
+        clear_for_item(
+            db,
+            sample_uid=item.sample_uid,
+            service_group_id=item.service_group_id,
+            acting_user_id=getattr(_current_user, "id", None),
+            worksheet_id=worksheet_id,
+            worksheet_title=ws_title,
+        )
+    except Exception:
+        _logging.getLogger(__name__).warning(
+            "analyst stamp clear failed during remove-worksheet-item-by-id", exc_info=True
+        )
+
+    db.delete(item)
+    db.commit()
+    return {"status": "removed"}
+
+
 class ReassignRequest(BaseModel):
     target_worksheet_id: int
 
@@ -16183,6 +16286,66 @@ async def reassign_worksheet_item(
     except Exception:
         _logging.getLogger(__name__).warning(
             "analyst stamp failed during reassign-worksheet-item", exc_info=True
+        )
+    db.commit()
+    return {"status": "reassigned", "target_worksheet_id": data.target_worksheet_id}
+
+
+@app.post("/worksheets/{worksheet_id}/items/{item_id}/reassign")
+async def reassign_worksheet_item_by_id(
+    worksheet_id: int,
+    item_id: int,
+    data: ReassignRequest,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Move a worksheet item to a different (open) worksheet, keyed by integer id.
+
+    By-id sibling of the {sample_uid}/{service_group_id} reassign route — see
+    remove_worksheet_item_by_id for why native `mk1://` UIDs can't ride in a
+    path segment.
+    """
+    item = db.execute(
+        select(WorksheetItem).where(
+            WorksheetItem.id == item_id,
+            WorksheetItem.worksheet_id == worksheet_id,
+        )
+    ).scalar_one_or_none()
+    if not item:
+        raise HTTPException(404, "Item not found")
+    target = db.execute(
+        select(Worksheet).where(Worksheet.id == data.target_worksheet_id, Worksheet.status == "open")
+    ).scalar_one_or_none()
+    if not target:
+        raise HTTPException(404, "Target worksheet not found or not open")
+    # Mirror the {sample_uid} reassign: item.worksheet_id move stays OUTSIDE the
+    # try so the reassign always happens; only the stamp side-effects are guarded.
+    from lims_analyses.worksheet_analyst import clear_for_item, stamp_for_item
+    import logging as _logging
+    acting_id = getattr(_current_user, "id", None)
+    src_ws_title = db.execute(
+        select(Worksheet.title).where(Worksheet.id == worksheet_id)
+    ).scalar_one_or_none()
+    sample_uid = item.sample_uid
+    gid = item.service_group_id
+    item.worksheet_id = data.target_worksheet_id
+    if target.assigned_analyst_id:
+        item.assigned_analyst_id = target.assigned_analyst_id
+    try:
+        clear_for_item(
+            db, sample_uid=sample_uid, service_group_id=gid,
+            acting_user_id=acting_id, worksheet_id=worksheet_id,
+            worksheet_title=src_ws_title,
+        )
+        stamp_for_item(
+            db, sample_uid=sample_uid, service_group_id=gid,
+            analyst_user_id=target.assigned_analyst_id or item.assigned_analyst_id,
+            acting_user_id=acting_id,
+            worksheet_id=target.id, worksheet_title=target.title,
+        )
+    except Exception:
+        _logging.getLogger(__name__).warning(
+            "analyst stamp failed during reassign-worksheet-item-by-id", exc_info=True
         )
     db.commit()
     return {"status": "reassigned", "target_worksheet_id": data.target_worksheet_id}

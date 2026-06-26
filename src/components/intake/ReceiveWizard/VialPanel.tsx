@@ -15,6 +15,15 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
+import {
+  captureMimeType,
+  CAPTURE_JPEG_QUALITY,
+  highestSupportedResValue,
+  supportedResOptions,
+  videoConstraints,
+  type CaptureCapabilities,
+  type CaptureFormat,
+} from './capture-options'
 
 interface Props {
   parentSampleId: string
@@ -29,6 +38,16 @@ interface Props {
     photoBytes: Uint8Array,
     remarks?: string,
   ) => Promise<{ sampleId: string }>
+  // Create N identical vials (same photo + remarks) in one shot. Called when
+  // the Quantity input is > 1. Returns how many were created.
+  onSaveNewBulk: (
+    photoBytes: Uint8Array,
+    remarks: string | undefined,
+    count: number,
+  ) => Promise<{ created: number }>
+  // True when the editing vial was created in THIS session — gates the Delete
+  // affordance (prior-session vials are edit-only here, not deletable).
+  canDelete?: boolean
   onSaveEdit: (
     sampleId: string,
     photoBytes?: Uint8Array,
@@ -48,9 +67,11 @@ export function VialPanel({
   parentSampleId,
   parentDetails,
   editingSub,
+  canDelete = false,
   loading: parentLoading,
   error: parentError,
   onSaveNew,
+  onSaveNewBulk,
   onSaveEdit,
   onDelete,
 }: Props) {
@@ -59,6 +80,11 @@ export function VialPanel({
   const [busy, setBusy] = useState(false)
   const [localError, setLocalError] = useState<string | null>(null)
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false)
+  // Bulk create: how many identical vials to make on Save. Default 1 (= the
+  // single-vial flow). Clamped 1..50; only meaningful in create mode.
+  const [vialCount, setVialCount] = useState(1)
+  // After a bulk save, show "N vials saved" instead of the single-vial card.
+  const [savedCount, setSavedCount] = useState<number | null>(null)
   // After a successful new-vial save, we show a confirmation card with the
   // returned sample ID until the user clicks "Receive another vial". Edit
   // mode does not use this — editingSub takes precedence below.
@@ -81,6 +107,46 @@ export function VialPanel({
     if (typeof window === 'undefined') return
     localStorage.setItem('wizard-camera-guides', showGuides ? '1' : '0')
   }, [showGuides])
+
+  // Capture resolution (experiment chooser). Persisted so a chosen setting
+  // sticks across check-ins. `actualRes` shows what the camera negotiated.
+  const [captureRes, setCaptureRes] = useState<string>(() => {
+    if (typeof window === 'undefined') return '1280x720'
+    return localStorage.getItem('wizard-capture-res') || '1280x720'
+  })
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    localStorage.setItem('wizard-capture-res', captureRes)
+  }, [captureRes])
+  const [actualRes, setActualRes] = useState<string | null>(null)
+  // Camera-reported capabilities (max width/height). Drives the supported-
+  // resolution list so the dropdown can't promise a mode the camera won't give.
+  const [captureCaps, setCaptureCaps] = useState<CaptureCapabilities | null>(null)
+
+  // Capture format (experiment toggle). JPEG default — ~10× smaller than PNG
+  // and web-native for the order-page gallery; PNG kept for lossless captures.
+  const [captureFormat, setCaptureFormat] = useState<CaptureFormat>(() => {
+    if (typeof window === 'undefined') return 'jpeg'
+    return localStorage.getItem('wizard-capture-format') === 'png' ? 'png' : 'jpeg'
+  })
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    localStorage.setItem('wizard-capture-format', captureFormat)
+  }, [captureFormat])
+
+  // When the camera's capabilities arrive, drop any saved resolution it can't
+  // reach back to the highest supported preset (so a stale "4K" pref doesn't
+  // silently fall back to 640×480).
+  useEffect(() => {
+    if (!captureCaps) return
+    const opts = supportedResOptions(captureCaps)
+    if (!opts.some(o => o.value === captureRes)) {
+      const best = highestSupportedResValue(captureCaps)
+      if (best) setCaptureRes(best)
+    }
+  }, [captureCaps, captureRes])
+
+  const resOptions = supportedResOptions(captureCaps)
 
   const videoRef = useRef<HTMLVideoElement>(null)
   // Persist the camera stream across renders so we can re-attach it when the
@@ -105,6 +171,8 @@ export function VialPanel({
     setLocalError(null)
     setEditPhotoOverride(false)
     setSavedSampleId(null)
+    setSavedCount(null)
+    setVialCount(1)
   }, [editingSub?.sample_id, editingSub?.remarks])
 
   // When editing a sub-sample with a saved photo, fetch the existing image
@@ -142,13 +210,22 @@ export function VialPanel({
       return
     }
     navigator.mediaDevices
-      .getUserMedia({ video: { facingMode: 'environment' } })
+      .getUserMedia({ video: videoConstraints(captureRes) })
       .then(s => {
         if (cancelled) {
           s.getTracks().forEach(t => t.stop())
           return
         }
         streamRef.current = s
+        const track = s.getVideoTracks?.()[0]
+        if (track?.getCapabilities) {
+          try {
+            const caps = track.getCapabilities()
+            setCaptureCaps({ width: caps.width, height: caps.height })
+          } catch {
+            // capabilities unsupported on this browser — keep the full list
+          }
+        }
         if (videoRef.current) {
           videoRef.current.srcObject = s
         }
@@ -159,7 +236,7 @@ export function VialPanel({
       streamRef.current?.getTracks().forEach(t => t.stop())
       streamRef.current = null
     }
-  }, [])
+  }, [captureRes])
 
   const capture = useCallback(() => {
     if (!videoRef.current || !canvasRef.current) return
@@ -177,9 +254,12 @@ export function VialPanel({
       return
     }
     ctx.drawImage(v, 0, 0)
-    setPhotoDataUrl(c.toDataURL('image/jpeg', 0.85))
+    // JPEG (q0.9) is ~10× smaller and feeds the customer order-page gallery
+    // directly; PNG stays available (lossless) via the Format toggle. PNG
+    // ignores the quality arg.
+    setPhotoDataUrl(c.toDataURL(captureMimeType(captureFormat), CAPTURE_JPEG_QUALITY))
     setLocalError(null)
-  }, [])
+  }, [captureFormat])
 
   const retake = useCallback(() => {
     setPhotoDataUrl(null)
@@ -227,19 +307,32 @@ export function VialPanel({
           setBusy(false)
           return
         }
-        const saved = await onSaveNew(photoBytes, trimmedRemarks)
-        // Defense in depth: reset transient state so falling back to the
-        // form (e.g. via "Receive another vial") starts clean.
-        setPhotoDataUrl(null)
-        setRemarks('')
-        setSavedSampleId(saved.sampleId)
+        const count = Math.min(50, Math.max(1, Math.trunc(vialCount) || 1))
+        if (count > 1) {
+          const { created } = await onSaveNewBulk(
+            photoBytes,
+            trimmedRemarks,
+            count,
+          )
+          setPhotoDataUrl(null)
+          setRemarks('')
+          setVialCount(1)
+          setSavedCount(created)
+        } else {
+          const saved = await onSaveNew(photoBytes, trimmedRemarks)
+          // Defense in depth: reset transient state so falling back to the
+          // form (e.g. via "Receive another vial") starts clean.
+          setPhotoDataUrl(null)
+          setRemarks('')
+          setSavedSampleId(saved.sampleId)
+        }
       }
     } catch (e) {
       setLocalError(e instanceof Error ? e.message : String(e))
     } finally {
       setBusy(false)
     }
-  }, [photoDataUrl, remarks, editingSub, onSaveNew, onSaveEdit])
+  }, [photoDataUrl, remarks, vialCount, editingSub, onSaveNew, onSaveNewBulk, onSaveEdit])
 
   const handleDelete = useCallback(async () => {
     if (!editingSub) return
@@ -257,6 +350,8 @@ export function VialPanel({
 
   const startAnotherVial = useCallback(() => {
     setSavedSampleId(null)
+    setSavedCount(null)
+    setVialCount(1)
     setPhotoDataUrl(null)
     setRemarks('')
     setLocalError(null)
@@ -281,7 +376,7 @@ export function VialPanel({
   // Confirmation card after a successful new-vial save. Edit mode never
   // reaches this branch because editingSub takes precedence in the parent's
   // reset logic — but we also gate on !editingSub here as a belt-and-braces.
-  if (savedSampleId && !editingSub) {
+  if ((savedSampleId || savedCount) && !editingSub) {
     return (
       <main className="p-6 flex flex-col gap-4 overflow-y-auto">
         <header className="flex items-baseline justify-between gap-4">
@@ -305,26 +400,38 @@ export function VialPanel({
               className="w-12 h-12 text-primary"
               aria-hidden="true"
             />
-            <div className="flex flex-col items-center gap-1">
-              <p className="text-base font-medium">Vial saved</p>
-              <p className="text-lg font-mono">{savedSampleId}</p>
-            </div>
+            {savedCount ? (
+              <div className="flex flex-col items-center gap-1">
+                <p className="text-base font-medium">{savedCount} vials saved</p>
+                <p className="text-sm text-muted-foreground text-center">
+                  Same photo applied to all and run through auto-assignment.
+                  Print them from the Print Labels tab.
+                </p>
+              </div>
+            ) : (
+              <div className="flex flex-col items-center gap-1">
+                <p className="text-base font-medium">Vial saved</p>
+                <p className="text-lg font-mono">{savedSampleId}</p>
+              </div>
+            )}
             <div className="flex flex-wrap items-center justify-center gap-2">
               <Button type="button" onClick={startAnotherVial} autoFocus>
                 <Camera className="w-4 h-4" aria-hidden="true" />
-                Receive another vial
+                {savedCount ? 'Receive more vials' : 'Receive another vial'}
               </Button>
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => printLabel({
-                  sampleId: savedSampleId,
-                  orderNumber: parentDetails?.client_order_number ?? null,
-                })}
-              >
-                <Printer className="w-4 h-4" aria-hidden="true" />
-                Print label
-              </Button>
+              {!savedCount && savedSampleId && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => printLabel({
+                    sampleId: savedSampleId,
+                    orderNumber: parentDetails?.client_order_number ?? null,
+                  })}
+                >
+                  <Printer className="w-4 h-4" aria-hidden="true" />
+                  Print label
+                </Button>
+              )}
             </div>
           </div>
         </div>
@@ -389,6 +496,11 @@ export function VialPanel({
                 autoPlay
                 playsInline
                 muted
+                onLoadedMetadata={e =>
+                  setActualRes(
+                    `${e.currentTarget.videoWidth}×${e.currentTarget.videoHeight}`,
+                  )
+                }
                 className="block w-full rounded bg-black aspect-[4/3] object-contain transition-opacity"
               />
               {showGuides && (
@@ -468,6 +580,46 @@ export function VialPanel({
                 </Button>
               )}
               {cameraPhase === 'live' && (
+                <label className="flex items-center gap-1 text-sm">
+                  <span className="text-muted-foreground">Res</span>
+                  <select
+                    value={captureRes}
+                    onChange={e => setCaptureRes(e.target.value)}
+                    disabled={busy}
+                    title="Capture resolution (experiment) — falls back if the camera can't reach it"
+                    aria-label="Capture resolution"
+                    className="h-9 rounded-md border bg-background px-2 text-sm disabled:opacity-50"
+                  >
+                    {resOptions.map(o => (
+                      <option key={o.value} value={o.value}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                  {actualRes && (
+                    <span className="text-xs text-muted-foreground">
+                      actual {actualRes}
+                    </span>
+                  )}
+                </label>
+              )}
+              {cameraPhase === 'live' && (
+                <label className="flex items-center gap-1 text-sm">
+                  <span className="text-muted-foreground">Format</span>
+                  <select
+                    value={captureFormat}
+                    onChange={e => setCaptureFormat(e.target.value as CaptureFormat)}
+                    disabled={busy}
+                    title="Capture image format — JPEG is smaller, PNG is lossless"
+                    aria-label="Capture image format"
+                    className="h-9 rounded-md border bg-background px-2 text-sm disabled:opacity-50"
+                  >
+                    <option value="jpeg">JPEG</option>
+                    <option value="png">PNG</option>
+                  </select>
+                </label>
+              )}
+              {cameraPhase === 'live' && (
                 <Button
                   type="button"
                   variant="outline"
@@ -531,16 +683,43 @@ export function VialPanel({
 
       {error && <p className="text-destructive text-sm">{error}</p>}
 
-      <div className="flex gap-2">
+      <div className="flex flex-wrap items-end gap-2">
+        {!editingSub && (
+          <label className="flex flex-col">
+            <span className="text-sm font-medium mb-1">Quantity</span>
+            <input
+              type="number"
+              inputMode="numeric"
+              min={1}
+              max={50}
+              step={1}
+              value={vialCount}
+              onChange={e => {
+                const n = parseInt(e.target.value, 10)
+                setVialCount(Number.isFinite(n) ? Math.min(50, Math.max(1, n)) : 1)
+              }}
+              disabled={busy}
+              title="Create this many identical vials with the same photo"
+              aria-label="Number of identical vials to create"
+              className="h-10 w-20 rounded-md border bg-background px-3 text-sm disabled:opacity-50"
+            />
+          </label>
+        )}
         <Button
           type="button"
           onClick={handleSave}
           disabled={busy || parentLoading}
           className="disabled:opacity-50"
         >
-          {busy ? 'Saving…' : editingSub ? 'Save changes' : 'Save vial'}
+          {busy
+            ? 'Saving…'
+            : editingSub
+              ? 'Save changes'
+              : vialCount > 1
+                ? `Save ${vialCount} vials`
+                : 'Save vial'}
         </Button>
-        {editingSub && (
+        {editingSub && canDelete && (
           <>
             <Button
               type="button"

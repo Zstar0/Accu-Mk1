@@ -45,7 +45,17 @@ function RoleBadge({ role }: { role: string | null | undefined }) {
   )
 }
 
-function VialThumb({ sampleId, hasPhoto }: { sampleId: string; hasPhoto: boolean }) {
+function VialThumb({
+  sampleId,
+  hasPhoto,
+  photoKey,
+}: {
+  sampleId: string
+  hasPhoto: boolean
+  // photo_external_uid — changes when the photo is retaken, so the fetch effect
+  // re-runs and re-reads the (reseeded) cache instead of showing the stale shot.
+  photoKey?: string | null
+}) {
   const [url, setUrl] = useState<string | null>(null)
 
   useEffect(() => {
@@ -64,7 +74,7 @@ function VialThumb({ sampleId, hasPhoto }: { sampleId: string; hasPhoto: boolean
     return () => {
       cancelled = true
     }
-  }, [sampleId, hasPhoto])
+  }, [sampleId, hasPhoto, photoKey])
 
   return (
     <div className="w-9 h-9 rounded bg-muted/60 border shrink-0 overflow-hidden flex items-center justify-center">
@@ -135,46 +145,34 @@ export function VialsList({
         )}
         {vials.map(v => {
           const isActive = activeSampleId === v.sub.sample_id
-          const editable = v.isThisSession
           const hasPhoto = !!v.sub.photo_external_uid
 
+          // Every sub-sample vial is editable — click to retake the photo or
+          // edit remarks (prior-session vials included; the edit flow PATCHes
+          // by sample_id and isn't session-bound). Only the parent AR card
+          // (rendered above, container families excepted) stays display-only.
           return (
             <li key={v.sub.sample_id} className="rounded overflow-hidden">
-              {editable ? (
-                <button
-                  type="button"
-                  onClick={() => onSelect(v.sub.sample_id)}
-                  title="Edit this vial"
-                  className={cn(
-                    'w-full text-left p-2 rounded transition-colors flex items-center gap-2',
-                    isActive
-                      ? 'bg-primary/10 ring-1 ring-primary/30'
-                      : 'hover:bg-muted'
-                  )}
-                >
-                  <VialThumb sampleId={v.sub.sample_id} hasPhoto={hasPhoto} />
-                  <div className="min-w-0 flex-1">
-                    <div className="font-mono text-sm truncate">{v.sub.sample_id}</div>
-                    <div className="text-xs text-muted-foreground">
-                      {vialLabel(v.sub.vial_sequence, containerMode)}
-                    </div>
-                    <RoleBadge role={v.sub.assignment_role} />
+              <button
+                type="button"
+                onClick={() => onSelect(v.sub.sample_id)}
+                title="Edit this vial — retake photo or edit remarks"
+                className={cn(
+                  'w-full text-left p-2 rounded transition-colors flex items-center gap-2',
+                  isActive
+                    ? 'bg-primary/10 ring-1 ring-primary/30'
+                    : 'hover:bg-muted'
+                )}
+              >
+                <VialThumb sampleId={v.sub.sample_id} hasPhoto={hasPhoto} photoKey={v.sub.photo_external_uid} />
+                <div className="min-w-0 flex-1">
+                  <div className="font-mono text-sm truncate">{v.sub.sample_id}</div>
+                  <div className="text-xs text-muted-foreground">
+                    {vialLabel(v.sub.vial_sequence, containerMode)}
                   </div>
-                </button>
-              ) : (
-                <div className="rounded bg-muted/30 opacity-70 p-2 flex items-center gap-2">
-                  <VialThumb sampleId={v.sub.sample_id} hasPhoto={hasPhoto} />
-                  <div className="min-w-0 flex-1">
-                    <div className="font-mono text-sm truncate">{v.sub.sample_id}</div>
-                    <div className="text-xs text-muted-foreground flex items-center gap-1">
-                      <span>{vialLabel(v.sub.vial_sequence, containerMode)}</span>
-                      <span aria-hidden>·</span>
-                      <span>read-only</span>
-                    </div>
-                    <RoleBadge role={v.sub.assignment_role} />
-                  </div>
+                  <RoleBadge role={v.sub.assignment_role} />
                 </div>
-              )}
+              </button>
             </li>
           )
         })}

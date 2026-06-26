@@ -813,6 +813,10 @@ export interface ExplorerOrder {
   id: string
   order_id: string
   order_number: string
+  /** WC customer id; null for guest-bucket orders. Optional on the FE type so
+   *  existing fixtures stay valid — the IS response always includes it. Mirrors
+   *  IS ExplorerOrderResponse.customer_id (desktop.py LINK-07). */
+  customer_id?: number | null
   status: string
   samples_expected: number
   samples_delivered: number
@@ -4645,10 +4649,13 @@ export async function getInboxSamples(opts: GetInboxOptions = {}): Promise<Inbox
 }
 
 export async function updateInboxPriority(sampleUid: string, priority: InboxPriority): Promise<void> {
-  const response = await fetch(`${API_BASE_URL()}/worksheets/inbox/${sampleUid}/priority`, {
+  // sample_uid travels in the BODY, not the path: Mk1-native UIDs are
+  // `mk1://<hex>` and a slash-bearing UID in a path segment gets mangled by the
+  // nginx proxy (encoded `://` -> decoded + slash-merged -> wrong route -> 404).
+  const response = await fetch(`${API_BASE_URL()}/worksheets/inbox/priority`, {
     method: 'PUT',
     headers: getBearerHeaders('application/json'),
-    body: JSON.stringify({ priority }),
+    body: JSON.stringify({ sample_uid: sampleUid, priority }),
   })
   if (!response.ok) throw new Error(`Priority update failed: ${response.status}`)
 }
@@ -4746,11 +4753,13 @@ export async function listWorksheets(status?: string): Promise<WorksheetListItem
 
 export async function removeWorksheetItem(
   worksheetId: number,
-  sampleUid: string,
-  serviceGroupId: number
+  itemId: number
 ): Promise<void> {
+  // Keyed on the integer worksheet_items.id, NOT sample_uid/service_group_id:
+  // Mk1-native UIDs are `mk1://<hex>` and a slash-bearing UID in a path segment
+  // gets mangled by the nginx proxy into extra segments -> no route match -> 404.
   const response = await fetch(
-    `${API_BASE_URL()}/worksheets/${worksheetId}/items/${encodeURIComponent(sampleUid)}/${serviceGroupId}`,
+    `${API_BASE_URL()}/worksheets/${worksheetId}/items/${itemId}`,
     { method: 'DELETE', headers: getBearerHeaders() }
   )
   if (!response.ok) throw new Error(`Remove item failed: ${response.status}`)
@@ -4806,12 +4815,13 @@ export async function completeWorksheet(worksheetId: number): Promise<{ status: 
 
 export async function reassignWorksheetItem(
   worksheetId: number,
-  sampleUid: string,
-  serviceGroupId: number,
+  itemId: number,
   targetWorksheetId: number
 ): Promise<{ status: string; target_worksheet_id: number }> {
+  // By integer item id — see removeWorksheetItem for why native `mk1://` UIDs
+  // can't ride in a path segment.
   const response = await fetch(
-    `${API_BASE_URL()}/worksheets/${worksheetId}/items/${encodeURIComponent(sampleUid)}/${serviceGroupId}/reassign`,
+    `${API_BASE_URL()}/worksheets/${worksheetId}/items/${itemId}/reassign`,
     {
       method: 'POST',
       headers: getBearerHeaders('application/json'),
@@ -5264,6 +5274,59 @@ export async function createSubSample(args: {
     throw new Error(`createSubSample failed: ${response.status}`)
   }
 
+  return response.json()
+}
+
+export interface BulkSubSampleResult {
+  created: SubSample[]
+  requested: number
+  failed: number
+}
+
+/**
+ * Create N identical vials (same photo + remarks) for a parent in one call.
+ * The photo is uploaded once; the server loops the single-create path. Created
+ * vials carry assignment_role=NULL — refresh the vial-plan afterward to assign.
+ * May throw SecondaryFalloutError if SENAITE silently created an orphan AR.
+ */
+export async function createSubSamplesBulk(args: {
+  parentSampleId: string
+  photoBase64: string
+  count: number
+  remarks?: string
+}): Promise<BulkSubSampleResult> {
+  const response = await fetch(`${API_BASE_URL()}/api/sub-samples/bulk`, {
+    method: 'POST',
+    headers: getBearerHeaders('application/json'),
+    body: JSON.stringify({
+      parent_sample_id: args.parentSampleId,
+      photo_base64: args.photoBase64,
+      count: args.count,
+      remarks: args.remarks ?? null,
+    }),
+  })
+  if (!response.ok) {
+    if (response.status === 502) {
+      try {
+        const body = await response.json()
+        const d = body?.detail
+        if (d && typeof d === 'object' && d.code === 'secondary_fallout') {
+          throw new SecondaryFalloutError(
+            d.message ?? 'SENAITE silently created an orphan AR',
+            d.orphan_uid,
+            d.orphan_sample_id,
+          )
+        }
+        throw new Error(
+          `createSubSamplesBulk failed: ${typeof d === 'string' ? d : JSON.stringify(d)}`
+        )
+      } catch (e) {
+        if (e instanceof SecondaryFalloutError) throw e
+        throw new Error(`createSubSamplesBulk failed: ${response.status}`)
+      }
+    }
+    throw new Error(`createSubSamplesBulk failed: ${response.status}`)
+  }
   return response.json()
 }
 

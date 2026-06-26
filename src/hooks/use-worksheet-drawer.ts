@@ -48,13 +48,11 @@ export function useWorksheetDrawer() {
   const removeMutation = useMutation({
     mutationFn: ({
       worksheetId,
-      sampleUid,
-      serviceGroupId,
+      itemId,
     }: {
       worksheetId: number
-      sampleUid: string
-      serviceGroupId: number
-    }) => removeWorksheetItem(worksheetId, sampleUid, serviceGroupId),
+      itemId: number
+    }) => removeWorksheetItem(worksheetId, itemId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['worksheets'] })
       queryClient.invalidateQueries({ queryKey: ['inbox-samples'] })
@@ -77,15 +75,13 @@ export function useWorksheetDrawer() {
   const reassignMutation = useMutation({
     mutationFn: ({
       worksheetId,
-      sampleUid,
-      serviceGroupId,
+      itemId,
       targetWorksheetId,
     }: {
       worksheetId: number
-      sampleUid: string
-      serviceGroupId: number
+      itemId: number
       targetWorksheetId: number
-    }) => reassignWorksheetItem(worksheetId, sampleUid, serviceGroupId, targetWorksheetId),
+    }) => reassignWorksheetItem(worksheetId, itemId, targetWorksheetId),
     onSuccess: (_data, variables) => {
       queryClient.invalidateQueries({ queryKey: ['worksheets'] })
       const target = worksheets.find(ws => ws.id === variables.targetWorksheetId)

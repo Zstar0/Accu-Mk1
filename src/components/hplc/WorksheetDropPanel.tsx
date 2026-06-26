@@ -30,6 +30,7 @@ import { itemRoleBadges, type InboxRoleTag } from '@/lib/inbox-filters'
 import { ROLE_BADGE_CLASS } from '@/lib/assignment-colors'
 
 export interface WorksheetSummaryItem {
+  id: number
   sample_id: string
   sample_uid: string
   service_group_id: number | null
@@ -113,7 +114,7 @@ function WorksheetDropZone({
   onRename: (id: number, title: string) => void
   onAssignTech: (id: number, analystId: number) => void
   onDelete: (id: number) => void
-  onRemoveItem: (worksheetId: number, sampleUid: string, serviceGroupId: number) => void
+  onRemoveItem: (worksheetId: number, itemId: number) => void
 }) {
   const { isOver, setNodeRef } = useDroppable({ id: `worksheet-${worksheet.id}` })
   const [editing, setEditing] = useState(false)
@@ -218,11 +219,7 @@ function WorksheetDropZone({
           {worksheet.items.map((item, i) => (
             <div key={i} className="group/item flex items-center gap-1.5 text-[10px]">
               <button
-                onClick={() => {
-                  if (item.service_group_id != null) {
-                    onRemoveItem(worksheet.id, item.sample_uid, item.service_group_id)
-                  }
-                }}
+                onClick={() => onRemoveItem(worksheet.id, item.id)}
                 className="opacity-0 group-hover/item:opacity-100 text-muted-foreground/40 hover:text-destructive transition-opacity shrink-0"
                 aria-label={`Remove ${item.sample_id} from worksheet`}
               >
@@ -293,7 +290,7 @@ interface WorksheetDropPanelProps {
   onRename: (id: number, title: string) => void
   onAssignTech: (id: number, analystId: number) => void
   onDelete: (id: number) => void
-  onRemoveItem: (worksheetId: number, sampleUid: string, serviceGroupId: number) => void
+  onRemoveItem: (worksheetId: number, itemId: number) => void
 }
 
 export function WorksheetDropPanel({ worksheets, users, loading, onRename, onAssignTech, onDelete, onRemoveItem }: WorksheetDropPanelProps) {

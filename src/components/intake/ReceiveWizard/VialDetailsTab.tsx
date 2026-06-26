@@ -53,9 +53,12 @@ interface Props {
 function SubSamplePhotoCell({
   sampleId,
   hasPhoto,
+  photoKey,
 }: {
   sampleId: string
   hasPhoto: boolean
+  // photo_external_uid — re-fetch when the photo is retaken (key changes).
+  photoKey?: string | null
 }) {
   const [url, setUrl] = useState<string | null>(null)
   const [errored, setErrored] = useState(false)
@@ -75,7 +78,7 @@ function SubSamplePhotoCell({
     return () => {
       cancelled = true
     }
-  }, [sampleId, hasPhoto])
+  }, [sampleId, hasPhoto, photoKey])
 
   if (!hasPhoto) return <span className="text-muted-foreground">—</span>
   if (errored || !url) {
@@ -144,6 +147,7 @@ export function VialDetailsTab({ vials, orderNumber, onCloseAndNavigate, contain
                       <SubSamplePhotoCell
                         sampleId={s.sample_id}
                         hasPhoto={!!s.photo_external_uid}
+                        photoKey={s.photo_external_uid}
                       />
                     </td>
                     <td className="px-3 py-2">

@@ -6,8 +6,25 @@ interface AgingTimerProps {
   className?: string
 }
 
-function formatAge(ageMs: number): string {
-  const totalMinutes = Math.floor(ageMs / 60_000)
+/**
+ * Parse a backend `date_received` to epoch ms, honoring the API contract that
+ * timestamps are UTC (ISO 8601). A date-TIME string with no zone is read by JS
+ * as browser-LOCAL, which made a just-received sample show a negative age (≈ −1
+ * timezone offset, e.g. −5h in CDT). Treat a zone-less datetime as UTC by
+ * appending "Z". Date-only strings are already UTC per the JS spec — leave them.
+ */
+export function parseReceivedAtMs(dateReceived: string): number {
+  const hasTime = dateReceived.includes('T')
+  const hasZone = /[zZ]$|[+-]\d{2}:?\d{2}$/.test(dateReceived)
+  const normalized = hasTime && !hasZone ? `${dateReceived}Z` : dateReceived
+  return new Date(normalized).getTime()
+}
+
+export function formatAge(ageMs: number): string {
+  // Clamp negatives to 0: a sample received "now" can read as a sub-minute
+  // negative from clock skew, and any residual must never render as "-5h -59m".
+  const ms = Math.max(0, ageMs)
+  const totalMinutes = Math.floor(ms / 60_000)
   const hours = Math.floor(totalMinutes / 60)
   const minutes = totalMinutes % 60
 
@@ -46,7 +63,7 @@ export function AgingTimer({ dateReceived, compact, className = '' }: AgingTimer
     )
   }
 
-  const received = new Date(dateReceived).getTime()
+  const received = parseReceivedAtMs(dateReceived)
   const ageMs = now - received
   const colorClass = getAgeColor(ageMs)
 

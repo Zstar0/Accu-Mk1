@@ -35,6 +35,24 @@ class SubSampleResponse(BaseModel):
         from_attributes = True
 
 
+class CreateBulkSubSamplesRequest(BaseModel):
+    parent_sample_id: str = Field(..., description="Parent SENAITE sample ID, e.g. 'P-0134'")
+    photo_base64: str = Field(
+        ..., description="Photo as base64-encoded JPEG/PNG — one image, reused for every vial"
+    )
+    count: int = Field(..., ge=1, le=50, description="Number of identical vials to create (1..50)")
+    remarks: Optional[str] = None
+
+
+class BulkSubSampleResponse(BaseModel):
+    """Result of a bulk create. `created` carries assignment_role=NULL until the
+    caller refreshes the vial-plan. `failed` = requested - len(created) (>0 only
+    on partial failure)."""
+    created: list[SubSampleResponse]
+    requested: int
+    failed: int
+
+
 class ParentSampleSummary(BaseModel):
     sample_id: str
     external_lims_uid: Optional[str]
