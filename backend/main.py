@@ -76,6 +76,10 @@ from sub_samples.service import derive_base_demand
 from lims_analyses.routes import router as lims_analyses_router
 from families.routes import router as families_router  # Phase 5b
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 
 # --- API Key Configuration ---
 
@@ -751,6 +755,15 @@ async def get_sample_retest_info(
     return result
 
 
+def _activity_bucket_label(kind, role):
+    """Helper to map analysis bucket kind/role to display label."""
+    if kind == "variance":
+        return "Variance"
+    if role in (None, "xtra"):
+        return "Extra"
+    return role
+
+
 @app.get("/samples/{sample_id}/activity")
 async def get_sample_activity(
     sample_id: str,
@@ -811,7 +824,7 @@ async def get_sample_activity(
                         "source": "sample_preps",
                     })
     except Exception:
-        pass  # mk1_db unavailable — return other events only
+        logger.warning("sample_preps unavailable for activity timeline", exc_info=True)
 
     # --- Mk1 DB: worksheet_items (added to worksheet) ---
     items = db.execute(
@@ -1179,16 +1192,8 @@ async def get_sample_activity(
 
             if se.event == "role_assigned":
                 d = se.details or {}
-
-                def _bucket(kind, role):
-                    if kind == "variance":
-                        return "Variance"
-                    if role in (None, "xtra"):
-                        return "Extra"
-                    return role
-
                 if d.get("kind_from") != d.get("kind_to"):
-                    label = f"Bucket: {_bucket(d.get('kind_from'), d.get('from'))} → {_bucket(d.get('kind_to'), d.get('to'))}"
+                    label = f"Bucket: {_activity_bucket_label(d.get('kind_from'), d.get('from'))} → {_activity_bucket_label(d.get('kind_to'), d.get('to'))}"
                 else:
                     label = f"Role: {d.get('from')} → {d.get('to')}"
             elif se.event == "remarks_updated":
