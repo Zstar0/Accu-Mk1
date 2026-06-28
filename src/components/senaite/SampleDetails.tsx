@@ -147,7 +147,9 @@ import { SampleHeaderSla } from '@/components/senaite/SampleHeaderSla'
 import { useAnalysisSlaMap } from '@/services/analysis-sla'
 import { SamplePrepHplcFlyout } from '@/components/hplc/SamplePrepHplcFlyout'
 import { SampleActivityLog } from '@/components/senaite/SampleActivityLog'
-import { OrderedProducts } from '@/components/senaite/OrderedProducts'
+import { OrderedProducts, useOrderedProducts } from '@/components/senaite/OrderedProducts'
+import { ProductChip } from '@/components/senaite/ProductChip'
+import { computeProductCompletion, type ProductCompletionContext } from '@/lib/product-completion'
 import { VialsQuickLookDialog } from '@/components/senaite/VialsQuickLookDialog'
 import { Eye, Microscope, Plus, Printer, Search, Star, Trash2, ScrollText, Sigma } from 'lucide-react'
 import { VarianceSummary } from '@/components/samples/VarianceSummary'
@@ -2869,6 +2871,9 @@ export function SampleDetails() {
       : [],
   )
 
+  // Ordered products for the sticky-header chip row (shares the card's query).
+  const orderedProductsQuery = useOrderedProducts(sampleId ?? '')
+
   // Slot number → display peptide name (e.g. { 1: "BPC-157", 2: "TB-500" }).
   // Built here (pre-early-returns) because the overlay join's analyte bridge
   // needs it; also consumed by the analyte cards + AnalysisTable renames below.
@@ -3593,6 +3598,14 @@ export function SampleDetails() {
   ).length
   const pendingCount = countableTotal - verifiedCount
 
+  // Per-product completion (green check + contributing vials), from data the
+  // page already loads. Shared by the card chips and the sticky-header chips.
+  const productCompletionCtx: ProductCompletionContext = {
+    analyses: data.analyses,
+    promotionsByKeyword,
+    varianceSet: varianceSetOverlay,
+  }
+
   const senaiteBaseUrl = getSenaiteUrl()
 
   return (
@@ -3770,6 +3783,21 @@ export function SampleDetails() {
               </div>
             </div>
           </div>
+
+          {/* Ordered-product chips — right of the Received/Client block, single line
+              (compact + overflow-x so they never wrap / grow the header height). */}
+          {(orderedProductsQuery.data?.products?.length ?? 0) > 0 && (
+            <div className="flex items-center gap-1.5 ml-auto self-center min-w-0 overflow-x-auto shrink">
+              {orderedProductsQuery.data!.products.map(p => (
+                <ProductChip
+                  key={p.key}
+                  compact
+                  product={p}
+                  completion={computeProductCompletion(p, productCompletionCtx)}
+                />
+              ))}
+            </div>
+          )}
 
           {/* Worksheet membership — left of the counters; opens the worksheet flyout */}
           {worksheetForSample && (
@@ -4176,7 +4204,7 @@ export function SampleDetails() {
                     }
                   />
                 </div>
-                <OrderedProducts sampleId={sampleId ?? ''} subData={subData} />
+                <OrderedProducts sampleId={sampleId ?? ''} subData={subData} completionCtx={productCompletionCtx} />
               </SectionHeader>
             </Card>
 

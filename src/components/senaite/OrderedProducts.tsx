@@ -1,16 +1,19 @@
 import { useQuery } from '@tanstack/react-query'
-import { RefreshCw, Copy, FlaskConical } from 'lucide-react'
+import { RefreshCw, Copy } from 'lucide-react'
 import {
   getOrderedProducts, OrderedProductsError,
-  type OrderedProduct, type SubSampleListResponse,
+  type SubSampleListResponse,
 } from '@/lib/api'
+import { ProductChip } from '@/components/senaite/ProductChip'
+import { computeProductCompletion, type ProductCompletionContext } from '@/lib/product-completion'
 
-function Chip({ p }: { p: OrderedProduct }) {
-  return (
-    <span className="inline-flex items-center gap-1 rounded-md border border-violet-500/30 bg-violet-500/10 px-2 py-1 text-xs text-violet-300">
-      <FlaskConical size={12} /> {p.label}
-    </span>
-  )
+/** Shared query so the card and the sticky header fetch once (same key). */
+export function useOrderedProducts(sampleId: string) {
+  return useQuery({
+    queryKey: ['ordered-products', sampleId],
+    queryFn: () => getOrderedProducts(sampleId),
+    retry: (count, err) => !(err instanceof OrderedProductsError && err.status === 404) && count < 2,
+  })
 }
 
 const Header = (
@@ -18,13 +21,13 @@ const Header = (
 )
 
 export function OrderedProducts({
-  sampleId, subData,
-}: { sampleId: string; subData: SubSampleListResponse | undefined }) {
-  const q = useQuery({
-    queryKey: ['ordered-products', sampleId],
-    queryFn: () => getOrderedProducts(sampleId),
-    retry: (count, err) => !(err instanceof OrderedProductsError && err.status === 404) && count < 2,
-  })
+  sampleId, subData, completionCtx,
+}: {
+  sampleId: string
+  subData: SubSampleListResponse | undefined
+  completionCtx?: ProductCompletionContext
+}) {
+  const q = useOrderedProducts(sampleId)
 
   if (q.isLoading) {
     return <Section header={Header}><span className="text-xs text-muted-foreground">loading…</span></Section>
@@ -68,7 +71,13 @@ export function OrderedProducts({
   return (
     <Section header={Header}>
       <div className="flex flex-wrap gap-2">
-        {products.map(p => <Chip key={p.key} p={p} />)}
+        {products.map(p => (
+          <ProductChip
+            key={p.key}
+            product={p}
+            completion={completionCtx ? computeProductCompletion(p, completionCtx) : null}
+          />
+        ))}
       </div>
       {unmet.length > 0 && (
         <div className="mt-2 space-y-1">
