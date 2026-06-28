@@ -63,3 +63,28 @@ it('non-404 error shows copy + retry', async () => {
   expect(screen.getByRole('button', { name: /retry/i })).toBeInTheDocument()
   expect(screen.getByRole('button', { name: /copy/i })).toBeInTheDocument()
 })
+
+// ─── purchased-vs-assigned alert tests ────────────────────────────────────────
+
+const vialIn = (k: 'role' | 'kind', v: string) =>
+  ({ parent: null, sub_samples: [{ assignment_role: k === 'role' ? v : 'hplc',
+       assignment_kind: k === 'kind' ? v : null }] }) as unknown as api.SubSampleListResponse
+
+it('alerts when variance purchased but no variance vial', async () => {
+  vi.spyOn(api, 'getOrderedProducts').mockResolvedValue({
+    sample_id: 'P-1', wp_order_number: 'WP-1',
+    products: [{ key: 'variance', label: 'Variance HPLC', is_addon: true, fulfillment_role: 'variance', fulfillment_dim: 'kind' }],
+  })
+  wrap(<OrderedProducts sampleId="P-1" subData={{ parent: null, sub_samples: [] } as unknown as api.SubSampleListResponse} />)
+  expect(await screen.findByText(/Variance HPLC purchased .* no vial assigned/i)).toBeInTheDocument()
+})
+
+it('no alert when a variance vial exists', async () => {
+  vi.spyOn(api, 'getOrderedProducts').mockResolvedValue({
+    sample_id: 'P-1', wp_order_number: 'WP-1',
+    products: [{ key: 'variance', label: 'Variance HPLC', is_addon: true, fulfillment_role: 'variance', fulfillment_dim: 'kind' }],
+  })
+  wrap(<OrderedProducts sampleId="P-1" subData={vialIn('kind', 'variance')} />)
+  await screen.findByText('Variance HPLC')
+  expect(screen.queryByText(/no vial assigned/i)).toBeNull()
+})
