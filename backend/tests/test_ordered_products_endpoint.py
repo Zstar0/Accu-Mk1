@@ -1,3 +1,4 @@
+import pytest
 import requests
 from fastapi.testclient import TestClient
 from main import app
@@ -5,7 +6,13 @@ from auth import get_current_user
 from sub_samples import routes as ss_routes
 
 client = TestClient(app)
-app.dependency_overrides[get_current_user] = lambda: type("U", (), {"id": 1, "email": "t@t"})()
+
+
+@pytest.fixture(autouse=True)
+def _override_auth():
+    app.dependency_overrides[get_current_user] = lambda: type("U", (), {"id": 1, "email": "t@t"})()
+    yield
+    app.dependency_overrides.pop(get_current_user, None)
 
 
 def test_ordered_products_ok(monkeypatch):
