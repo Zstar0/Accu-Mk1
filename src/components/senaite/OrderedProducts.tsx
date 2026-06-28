@@ -23,7 +23,6 @@ export function OrderedProducts({
     queryKey: ['ordered-products', sampleId],
     queryFn: () => getOrderedProducts(sampleId),
     retry: (count, err) => !(err instanceof OrderedProductsError && err.status === 404) && count < 2,
-    retryDelay: 0,
   })
 
   const Header = (

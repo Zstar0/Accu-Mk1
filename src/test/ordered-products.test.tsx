@@ -34,7 +34,7 @@ describe('getOrderedProducts', () => {
 // ─── OrderedProducts component tests ──────────────────────────────────────────
 
 function wrap(ui: React.ReactNode) {
-  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false, retryDelay: 0 } } })
   return render(<QueryClientProvider client={qc}>{ui}</QueryClientProvider>)
 }
 const noVials = { parent: null, sub_samples: [] } as unknown as api.SubSampleListResponse
