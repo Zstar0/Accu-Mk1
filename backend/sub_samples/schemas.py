@@ -233,3 +233,17 @@ class VarianceOverrideRequest(BaseModel):
     vials in addition to core — additive-bucket contract). None or {} clears
     the override."""
     variance: Optional[dict] = None
+
+
+class OrderedProduct(BaseModel):
+    key: str
+    label: str
+    is_addon: bool
+    fulfillment_role: Optional[str] = None
+    fulfillment_dim: str = "role"
+
+
+class OrderedProductsResponse(BaseModel):
+    sample_id: str
+    wp_order_number: Optional[str] = None
+    products: list[OrderedProduct]
