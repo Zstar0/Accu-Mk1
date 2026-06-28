@@ -452,8 +452,13 @@ def test_activity_endpoint_user_attributed(activity_client):
     assert role_events[0]["details"]["by"] == "lab@test.com"
 
 
-def test_activity_endpoint_no_sub_sample_events_for_parent(activity_client):
-    """Sub-sample blocks do not run for a parent sample_id."""
+def test_activity_parent_with_no_vials_has_no_vial_events(activity_client):
+    """A parent with no sub-samples yields no vial events.
+
+    The activity endpoint fans out over a parent's family vials. An empty family
+    (parent with no vials) produces no vial events. (Parents WITH vials DO fan out;
+    see test_activity_family_fanout.py.)
+    """
     db = activity_client._test_session
     # Seed only parent (no sub-sample with this sample_id)
     parent = LimsSample(sample_id="P-PARENT-ONLY", external_lims_uid="SENAITE-PARENT2")
@@ -466,7 +471,7 @@ def test_activity_endpoint_no_sub_sample_events_for_parent(activity_client):
     sub_sources = [e for e in events if e["source"] in (
         "lims_analysis_transitions", "lims_analysis_promotions", "lims_sub_sample_events"
     )]
-    assert len(sub_sources) == 0, "sub-sample blocks must not run for a parent id"
+    assert len(sub_sources) == 0, "parent with no vials should have no vial events"
 
 
 def test_activity_endpoint_analysis_added_label(activity_client):
