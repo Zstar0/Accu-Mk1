@@ -63,6 +63,14 @@ function eventToLevel(event: string): EventLevel {
   }
 }
 
+export function eventLevelFor(ev: SampleActivityEvent): EventLevel {
+  if (ev.event === 'role_assigned' &&
+      ev.details?.kind_from === 'variance' && ev.details?.kind_to !== 'variance') {
+    return 'warn'
+  }
+  return eventToLevel(ev.event)
+}
+
 function eventIcon(event: string): string {
   switch (event) {
     case 'status_change':       return '\u25cf' // ●
@@ -142,6 +150,7 @@ function DetailLine({
     default: {
       // Vial events (analysis_added/transition/promoted, role_assigned,
       // remarks_updated, analysis_removed) carry user attribution in `by`.
+      if (d.vial) parts.push(<span key="v" className="text-zinc-400">{String(d.vial)}</span>)
       if (d.by) parts.push(<span key="u">by <UserTag email={d.by as string} directory={directory} /></span>)
       if (d.reason) parts.push(`reason=${d.reason}`)
       break
@@ -297,7 +306,7 @@ export function SampleActivityLog({ open, onClose, sampleId }: Props) {
             )}
 
             {events.map((ev, i) => {
-              const level = eventToLevel(ev.event)
+              const level = eventLevelFor(ev)
               const icon = eventIcon(ev.event)
               const ts = formatTimestamp(ev.timestamp)
               const isFirst = i === 0
