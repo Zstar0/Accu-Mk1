@@ -23,7 +23,7 @@ def seeded_client():
                        assignment_role="hplc", assignment_kind="variance")
     s.add(v1); s.flush()
     s.add(LimsSubSampleEvent(sub_sample_pk=v1.id, event="role_assigned",
-          details={"from": "hplc", "to": "hplc", "kind_from": "variance", "kind_to": None}))
+          details={"from": "hplc", "to": "xtra", "kind_from": "variance", "kind_to": None}))
     s.commit(); s.close()
 
     def _override_get_db():

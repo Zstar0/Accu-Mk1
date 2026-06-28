@@ -1183,7 +1183,7 @@ async def get_sample_activity(
                 def _bucket(kind, role):
                     if kind == "variance":
                         return "Variance"
-                    if kind is None or role in (None, "xtra"):
+                    if role in (None, "xtra"):
                         return "Extra"
                     return role
 
