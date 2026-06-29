@@ -775,6 +775,22 @@ def _run_migrations():
                     WHERE keyword IN ('PH-DETERM','Benzyl_Alcohol_Assay','FILL-NET-CONTENT');
             END IF;
         END $$""",
+        # Order-first check-in boxing: lims_boxes + sub_sample.box_id link.
+        """
+        CREATE TABLE IF NOT EXISTS lims_boxes (
+            id SERIAL PRIMARY KEY,
+            order_key VARCHAR(100) NOT NULL,
+            box_number INTEGER NOT NULL,
+            role VARCHAR(8) NOT NULL,
+            created_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            printed_at TIMESTAMP,
+            printed_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            CONSTRAINT uq_lims_box_order_number UNIQUE (order_key, box_number)
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS ix_lims_boxes_order_key ON lims_boxes (order_key)",
+        "ALTER TABLE lims_sub_samples ADD COLUMN IF NOT EXISTS box_id INTEGER REFERENCES lims_boxes(id) ON DELETE SET NULL",
     ]
     # Per-statement isolation: a failure in one statement (e.g., a table that
     # create_all hasn't built yet on first run) must not skip subsequent
