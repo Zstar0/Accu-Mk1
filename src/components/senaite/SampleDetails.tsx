@@ -3784,21 +3784,6 @@ export function SampleDetails() {
             </div>
           </div>
 
-          {/* Ordered-product chips — right of the Received/Client block, single line
-              (compact + overflow-x so they never wrap / grow the header height). */}
-          {(orderedProductsQuery.data?.products?.length ?? 0) > 0 && (
-            <div className="flex items-center gap-1.5 ml-auto self-center min-w-0 overflow-x-auto shrink">
-              {orderedProductsQuery.data!.products.map(p => (
-                <ProductChip
-                  key={p.key}
-                  compact
-                  product={p}
-                  completion={computeProductCompletion(p, productCompletionCtx)}
-                />
-              ))}
-            </div>
-          )}
-
           {/* Worksheet membership — left of the counters; opens the worksheet flyout */}
           {worksheetForSample && (
             <button
@@ -3877,6 +3862,23 @@ export function SampleDetails() {
               />
             )
           })()}
+
+          {/* Ordered-product chips — own line, right-aligned, directly above the
+              action bar. overflow-x so a long set scrolls instead of wrapping. */}
+          {(orderedProductsQuery.data?.products?.length ?? 0) > 0 && (
+            <div className="w-full flex justify-end">
+              <div className="flex items-center gap-1.5 min-w-0 overflow-x-auto">
+                {orderedProductsQuery.data!.products.map(p => (
+                  <ProductChip
+                    key={p.key}
+                    compact
+                    product={p}
+                    completion={computeProductCompletion(p, productCompletionCtx)}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* SLA + actions row — w-full wraps below the top row. The SLA
               lines (moved out of the left block) sit on the left, indented
