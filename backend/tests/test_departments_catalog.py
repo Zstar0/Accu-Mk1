@@ -114,3 +114,53 @@ def test_backfill_is_idempotent(db_session):
     assert db_session.get(ServiceGroup, micro.id).department_id == micro_dept_id
     assert db_session.get(AnalysisService, pur.id).department_id == pur_dept_id
     assert db_session.get(AnalysisService, ster.id).department_id == ster_dept_id
+
+
+import auth
+from fastapi.testclient import TestClient
+from sqlalchemy import text as _text
+
+
+def _client():
+    from main import app
+    app.dependency_overrides[auth.get_current_user] = lambda: {"id": 0, "username": "test"}
+    return TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def _cleanup_departments():
+    from database import engine
+    with engine.connect() as c:
+        before = {r[0] for r in c.execute(_text("SELECT id FROM departments")).fetchall()}
+    yield
+    with engine.begin() as c:
+        after = {r[0] for r in c.execute(_text("SELECT id FROM departments")).fetchall()}
+        new = list(after - before)
+        if new:
+            c.execute(_text("DELETE FROM departments WHERE id = ANY(:i)"), {"i": new})
+
+
+def test_create_and_list_department():
+    client = _client()
+    resp = client.post("/departments", json={"name": "ZZ Test Dept", "sort_order": 9})
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["name"] == "ZZ Test Dept"
+    listed = client.get("/departments").json()
+    assert any(d["name"] == "ZZ Test Dept" for d in listed)
+
+
+def test_duplicate_department_name_rejected():
+    client = _client()
+    client.post("/departments", json={"name": "ZZ Dup Dept"})
+    resp = client.post("/departments", json={"name": "ZZ Dup Dept"})
+    assert resp.status_code == 400
+
+
+def test_service_groups_response_includes_department_fields():
+    client = _client()
+    groups = client.get("/service-groups").json()
+    assert isinstance(groups, list)
+    if groups:
+        assert "department_id" in groups[0]
+        assert "is_assignable" in groups[0]
+        assert "vials_required" in groups[0]
