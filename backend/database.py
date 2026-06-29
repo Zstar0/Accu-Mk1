@@ -122,6 +122,10 @@ def init_db():
     _run_migrations()
     Base.metadata.create_all(bind=engine)
     _seed_federal_holidays_window()
+    # Plan 1A: seed departments and backfill department_id from live groups.
+    from catalog.departments import backfill_departments
+    with SessionLocal() as _s:
+        backfill_departments(_s)
 
 
 def _run_migrations():
@@ -837,6 +841,25 @@ def _run_migrations():
         )
         """,
         "CREATE INDEX IF NOT EXISTS ix_flag_events_flag ON flag_events (flag_id)",
+        # --- Catalog v1 (Plan 1A): departments + group/service catalog columns ---
+        """
+        CREATE TABLE IF NOT EXISTS departments (
+            id SERIAL PRIMARY KEY,
+            name VARCHAR(200) NOT NULL UNIQUE,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            color VARCHAR(50) NOT NULL DEFAULT 'blue',
+            is_system BOOLEAN NOT NULL DEFAULT FALSE,
+            created_at TIMESTAMP DEFAULT now(),
+            updated_at TIMESTAMP DEFAULT now()
+        )
+        """,
+        "ALTER TABLE service_groups ADD COLUMN IF NOT EXISTS department_id INTEGER REFERENCES departments(id) ON DELETE SET NULL",
+        "ALTER TABLE service_groups ADD COLUMN IF NOT EXISTS vials_required INTEGER",
+        "ALTER TABLE service_groups ADD COLUMN IF NOT EXISTS is_assignable BOOLEAN NOT NULL DEFAULT FALSE",
+        "ALTER TABLE analysis_services ADD COLUMN IF NOT EXISTS department_id INTEGER REFERENCES departments(id) ON DELETE SET NULL",
+        "ALTER TABLE analysis_services ADD COLUMN IF NOT EXISTS vials_required INTEGER",
+        "ALTER TABLE analysis_services ADD COLUMN IF NOT EXISTS is_assignable BOOLEAN NOT NULL DEFAULT FALSE",
+        "ALTER TABLE analysis_services ADD COLUMN IF NOT EXISTS sla_tier_id INTEGER REFERENCES sla_tiers(id) ON DELETE SET NULL",
     ]
     # Per-statement isolation: a failure in one statement (e.g., a table that
     # create_all hasn't built yet on first run) must not skip subsequent
