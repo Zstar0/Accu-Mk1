@@ -1,5 +1,32 @@
 # Changelog
 
+## v1.0.10 — 2026-06-28
+
+### Added
+
+- **Order-sourced PRODUCTS section.** The sample parent page's products now come
+  from the customer's order (via Integration Service `package` + services),
+  with a purchased-vs-assigned amber alert and family vial-assignment history in
+  the activity flyout. Header chips sit above the action bar with a green
+  completion check per product.
+- **Rich hover tooltips for product chips.** Chips use the shadcn `Tooltip` +
+  sectioned `font-mono` card (the SLA-breakdown style) instead of native
+  `title=`; documented as the default for non-trivial hovers in
+  `docs/developer/ui-patterns.md`.
+- **Variance indicator on parent + inbox rows.** A sky Layers icon precedes the
+  Sample ID wherever a parent has variance-assigned sub-samples — the SENAITE
+  sample list parent row (entitlement OR assigned variance subs) and the
+  worksheet inbox (parent cards, family-group headers, and the variance
+  sub-vials themselves). Backed by an additive `has_variance_subs` aggregate
+  flag (no migration).
+
+### Fixed
+
+- **Duplicate Samplevariance product chip.** WordPress sends both the
+  `samplevariance` buy-flag and the `variance` data-points dict for one
+  purchase; the products builder now renders a single "Variance HPLC" chip
+  instead of also rendering a stray "Samplevariance" chip.
+
 ## v1.0.9 — 2026-06-26
 
 ### Fixed
