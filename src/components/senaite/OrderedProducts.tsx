@@ -1,0 +1,111 @@
+import { useQuery } from '@tanstack/react-query'
+import { RefreshCw, Copy } from 'lucide-react'
+import {
+  getOrderedProducts, OrderedProductsError,
+  type SubSampleListResponse,
+} from '@/lib/api'
+import { ProductChip } from '@/components/senaite/ProductChip'
+import { computeProductCompletion, type ProductCompletionContext } from '@/lib/product-completion'
+
+/** Shared query so the card and the sticky header fetch once (same key). */
+export function useOrderedProducts(sampleId: string) {
+  return useQuery({
+    queryKey: ['ordered-products', sampleId],
+    queryFn: () => getOrderedProducts(sampleId),
+    retry: (count, err) => !(err instanceof OrderedProductsError && err.status === 404) && count < 2,
+  })
+}
+
+const Header = (
+  <span className="text-[11px] text-muted-foreground uppercase tracking-wider">Products</span>
+)
+
+export function OrderedProducts({
+  sampleId, subData, completionCtx,
+}: {
+  sampleId: string
+  subData: SubSampleListResponse | undefined
+  completionCtx?: ProductCompletionContext
+}) {
+  const q = useOrderedProducts(sampleId)
+
+  if (q.isLoading) {
+    return <Section header={Header}><span className="text-xs text-muted-foreground">loading…</span></Section>
+  }
+
+  if (q.isError) {
+    const err = q.error
+    if (err instanceof OrderedProductsError && err.status === 404) {
+      return <Section header={Header}><span className="text-xs text-muted-foreground">no linked order</span></Section>
+    }
+    const errorText = formatError(sampleId, err)
+    return (
+      <Section header={Header}>
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-red-400" title={errorText}>⚠ Couldn&apos;t load ordered products</span>
+          <button
+            className="text-xs text-zinc-400 hover:text-zinc-200 inline-flex items-center gap-1"
+            onClick={() => navigator.clipboard?.writeText(errorText)}
+          >
+            <Copy size={12} /> Copy
+          </button>
+          <button
+            className="text-xs text-zinc-400 hover:text-zinc-200 inline-flex items-center gap-1"
+            onClick={() => q.refetch()}
+          >
+            <RefreshCw size={12} /> Retry
+          </button>
+        </div>
+      </Section>
+    )
+  }
+
+  const products = q.data?.products ?? []
+  const vials = subData?.sub_samples ?? []
+  const unmet = products.filter(p =>
+    p.is_addon && p.fulfillment_role && !vials.some(s =>
+      (p.fulfillment_dim === 'kind' ? s.assignment_kind : s.assignment_role) === p.fulfillment_role,
+    ),
+  )
+
+  return (
+    <Section header={Header}>
+      <div className="flex flex-wrap gap-2">
+        {products.map(p => (
+          <ProductChip
+            key={p.key}
+            product={p}
+            completion={completionCtx ? computeProductCompletion(p, completionCtx) : null}
+          />
+        ))}
+      </div>
+      {unmet.length > 0 && (
+        <div className="mt-2 space-y-1">
+          {unmet.map(p => (
+            <div key={p.key}
+                 className="flex items-center gap-1.5 rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-xs text-amber-300">
+              ⚠ {p.label} purchased — no vial assigned to run it.
+            </div>
+          ))}
+        </div>
+      )}
+    </Section>
+  )
+}
+
+function Section({ header, children }: { header: React.ReactNode; children: React.ReactNode }) {
+  return (
+    <div className="mt-3 pt-3 border-t border-border">
+      {header}
+      <div className="mt-2">{children}</div>
+    </div>
+  )
+}
+
+function formatError(sampleId: string, err: unknown): string {
+  const status = err instanceof OrderedProductsError ? err.status : '?'
+  const detail = err instanceof OrderedProductsError
+    ? (typeof err.detail === 'string' ? err.detail : JSON.stringify(err.detail ?? {}))
+    : String(err)
+  return `ordered-products error\nsample_id: ${sampleId}\nstatus: ${status}\ndetail: ${detail}\nat: ${new Date().toISOString()}`
+}

@@ -76,6 +76,10 @@ from sub_samples.service import derive_base_demand
 from lims_analyses.routes import router as lims_analyses_router
 from families.routes import router as families_router  # Phase 5b
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 
 # --- API Key Configuration ---
 
@@ -751,6 +755,15 @@ async def get_sample_retest_info(
     return result
 
 
+def _activity_bucket_label(kind, role):
+    """Helper to map analysis bucket kind/role to display label."""
+    if kind == "variance":
+        return "Variance"
+    if role in (None, "xtra"):
+        return "Extra"
+    return role
+
+
 @app.get("/samples/{sample_id}/activity")
 async def get_sample_activity(
     sample_id: str,
@@ -787,28 +800,31 @@ async def get_sample_activity(
             })
 
     # --- Mk1 DB: sample_preps (prep records with user attribution) ---
-    from mk1_db import ensure_sample_preps_table, get_mk1_db
-    from psycopg2.extras import RealDictCursor
-    ensure_sample_preps_table()
-    with get_mk1_db() as mk1_conn:
-        with mk1_conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute(
-                "SELECT id, sample_id, senaite_sample_id, status, created_at, created_by_email "
-                "FROM sample_preps WHERE senaite_sample_id = %s ORDER BY created_at",
-                [sample_id],
-            )
-            for row in cur.fetchall():
-                events.append({
-                    "timestamp": row["created_at"].isoformat() if row["created_at"] else None,
-                    "event": "prep_record_created",
-                    "label": "Prep record created",
-                    "details": {
-                        "prep_id": row["sample_id"],
-                        "status": row["status"],
-                        "by": row["created_by_email"],
-                    },
-                    "source": "sample_preps",
-                })
+    try:
+        from mk1_db import ensure_sample_preps_table, get_mk1_db
+        from psycopg2.extras import RealDictCursor
+        ensure_sample_preps_table()
+        with get_mk1_db() as mk1_conn:
+            with mk1_conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    "SELECT id, sample_id, senaite_sample_id, status, created_at, created_by_email "
+                    "FROM sample_preps WHERE senaite_sample_id = %s ORDER BY created_at",
+                    [sample_id],
+                )
+                for row in cur.fetchall():
+                    events.append({
+                        "timestamp": row["created_at"].isoformat() if row["created_at"] else None,
+                        "event": "prep_record_created",
+                        "label": "Prep record created",
+                        "details": {
+                            "prep_id": row["sample_id"],
+                            "status": row["status"],
+                            "by": row["created_by_email"],
+                        },
+                        "source": "sample_preps",
+                    })
+    except Exception:
+        logger.warning("sample_preps unavailable for activity timeline", exc_info=True)
 
     # --- Mk1 DB: worksheet_items (added to worksheet) ---
     items = db.execute(
@@ -1063,18 +1079,25 @@ async def get_sample_activity(
         pass  # Integration DB unavailable — return Mk1 events only
 
     # --- Mk1 DB: sub-sample activity (Section A + B from spec) ---
-    # Self-gates: only runs when sample_id belongs to a lims_sub_samples row.
-    sub_row = db.execute(
+    # Fan-out: when sample_id is a vial id, runs for that vial only (unchanged).
+    # When sample_id is a parent id, runs Sections A+B for every family vial.
+    from models import (
+        LimsAnalysis,
+        LimsAnalysisTransition,
+        LimsAnalysisPromotion,
+        LimsSubSampleEvent,
+    )
+    direct_sub = db.execute(
         select(LimsSubSample).where(LimsSubSample.sample_id == sample_id)
     ).scalar_one_or_none()
-    if sub_row is not None:
-        from models import (
-            LimsAnalysis,
-            LimsAnalysisTransition,
-            LimsAnalysisPromotion,
-            LimsSubSampleEvent,
-        )
-
+    if direct_sub is not None:
+        family_subs = [direct_sub]
+    else:
+        parent = db.execute(
+            select(LimsSample).where(LimsSample.sample_id == sample_id)
+        ).scalar_one_or_none()
+        family_subs = list(parent.sub_samples)[:64] if parent is not None else []
+    for sub_row in family_subs:
         # Section A1: lims_analysis_transitions for analyses on this sub-sample
         # Join: lims_analyses → lims_analysis_transitions; email join for user.
         analyses_on_sub = db.execute(
@@ -1104,7 +1127,7 @@ async def get_sample_activity(
                     # Seeded / manually added
                     label = f"Analysis added: {kw}"
                     event_name = "analysis_added"
-                    details: dict = {"keyword": kw, "by": actor_email}
+                    details: dict = {"keyword": kw, "by": actor_email, "vial": sub_row.sample_id}
                 else:
                     label = f"{kw}: {t.from_state}→{t.to_state}"
                     event_name = "analysis_transition"
@@ -1115,6 +1138,7 @@ async def get_sample_activity(
                         "kind": t.transition_kind,
                         "reason": t.reason,
                         "by": actor_email,
+                        "vial": sub_row.sample_id,
                     }
                 events.append({
                     "timestamp": t.occurred_at.isoformat() if t.occurred_at else None,
@@ -1147,6 +1171,7 @@ async def get_sample_activity(
                         "parent_analysis_id": p.parent_analysis_id,
                         "contribution_kind": p.contribution_kind,
                         "by": promoter_email,
+                        "vial": sub_row.sample_id,
                     },
                     "source": "lims_analysis_promotions",
                 })
@@ -1167,7 +1192,10 @@ async def get_sample_activity(
 
             if se.event == "role_assigned":
                 d = se.details or {}
-                label = f"Role: {d.get('from')} → {d.get('to')}"
+                if d.get("kind_from") != d.get("kind_to"):
+                    label = f"Bucket: {_activity_bucket_label(d.get('kind_from'), d.get('from'))} → {_activity_bucket_label(d.get('kind_to'), d.get('to'))}"
+                else:
+                    label = f"Role: {d.get('from')} → {d.get('to')}"
             elif se.event == "remarks_updated":
                 label = "Remarks updated"
             elif se.event == "analysis_removed":
@@ -1193,6 +1221,7 @@ async def get_sample_activity(
 
             event_details = dict(se.details or {})
             event_details["by"] = actor_email
+            event_details["vial"] = sub_row.sample_id
             events.append({
                 "timestamp": se.created_at.isoformat() if se.created_at else None,
                 "event": se.event,

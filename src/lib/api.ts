@@ -5429,6 +5429,11 @@ export interface ParentAggregate {
    *  none). AR-list display hint; authoritative gate is server-side. Optional
    *  for back-compat with older responses. */
   variance?: { hplc: number; endo: number; ster: number }
+  /** True when ≥1 sub-sample vial is assigned to the variance bucket
+   *  (assignment_kind='variance'). Drives the parent list-row variance
+   *  indicator independently of entitlement (`variance`). Optional for
+   *  back-compat with older responses. */
+  has_variance_subs?: boolean
 }
 
 export interface SampleAggregatesResponse {
@@ -5870,4 +5875,44 @@ export async function unlockVarianceSet(parentSampleId: string): Promise<{ paren
   if (r.status === 403) throw new Error('admin role required to unlock variance sets')
   if (!r.ok) throw new Error(`unlockVarianceSet failed: ${r.status}`)
   return r.json()
+}
+
+// ─── Ordered Products ──────────────────────────────────────────────────────
+
+export interface OrderedProduct {
+  key: string
+  label: string
+  is_addon: boolean
+  fulfillment_role: string | null
+  fulfillment_dim: 'role' | 'kind'
+}
+
+export interface OrderedProductsResponse {
+  sample_id: string
+  wp_order_number: string | null
+  products: OrderedProduct[]
+}
+
+export class OrderedProductsError extends Error {
+  status: number
+  detail: unknown
+  constructor(status: number, detail: unknown) {
+    super(`ordered-products failed: ${status}`)
+    this.name = 'OrderedProductsError'
+    this.status = status
+    this.detail = detail
+  }
+}
+
+export async function getOrderedProducts(sampleId: string): Promise<OrderedProductsResponse> {
+  const response = await fetch(
+    `${API_BASE_URL()}/api/sub-samples/${encodeURIComponent(sampleId)}/ordered-products`,
+    { headers: getBearerHeaders() },
+  )
+  if (!response.ok) {
+    let detail: unknown = null
+    try { detail = (await response.json()).detail ?? null } catch { /* no body */ }
+    throw new OrderedProductsError(response.status, detail)
+  }
+  return response.json()
 }

@@ -344,6 +344,43 @@ For panels that toggle visibility, prefer CSS over conditional rendering:
 
 This preserves scroll position, form state, and resize dimensions.
 
+### Rich hover tooltips (default)
+
+For any **non-trivial** hover — anything beyond a one-word hint — prefer the
+shadcn `Tooltip` primitive with a sectioned, `font-mono` content card over the
+native `title=` attribute. Native `title` is reserved for single-word utility
+hints (it can't be styled, it's slow to appear, and it can't show structure).
+
+The reference implementations are `SlaBreakdownTooltip` and `ProductChipTooltip`.
+The pattern:
+
+```tsx
+<Tooltip>
+  <TooltipTrigger asChild>
+    <span>{trigger}</span>
+  </TooltipTrigger>
+  {/* p-0: the content card owns its own padding. The card Portals out, so an
+      overflow-x/hidden ancestor (e.g. a sticky header row) never clips it. */}
+  <TooltipContent className="p-0 max-w-xs">
+    <SomethingTooltip … />
+  </TooltipContent>
+</Tooltip>
+```
+
+The content card is a pure, prop-driven component (no queries of its own) styled:
+
+```tsx
+<div className="flex flex-col gap-1.5 p-3 text-xs font-mono">
+  <div className="font-semibold border-b border-primary-foreground/20 pb-1.5">
+    {header}
+  </div>
+  {/* additional sections divided by `border-t border-primary-foreground/20 pt-1.5` */}
+</div>
+```
+
+Keeping the content pure makes it trivially unit-testable (render it directly,
+assert on `textContent`) without driving Radix's hover/open state.
+
 ## Best Practices
 
 ### Do

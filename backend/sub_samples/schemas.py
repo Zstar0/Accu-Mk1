@@ -146,6 +146,14 @@ class ParentAggregate(BaseModel):
                     "AR-list display hint — the authoritative gate is server-side "
                     "at sign-off (fail-closed).",
     )
+    has_variance_subs: bool = Field(
+        default=False,
+        description="True when at least one sub-sample vial is assigned to the "
+                    "variance bucket (assignment_kind='variance'). Drives the "
+                    "list-page parent variance indicator independently of "
+                    "entitlement (`variance`) — a parent can have variance vials "
+                    "with no purchased override.",
+    )
 
 
 class AggregatesResponse(BaseModel):
@@ -233,3 +241,17 @@ class VarianceOverrideRequest(BaseModel):
     vials in addition to core — additive-bucket contract). None or {} clears
     the override."""
     variance: Optional[dict] = None
+
+
+class OrderedProduct(BaseModel):
+    key: str
+    label: str
+    is_addon: bool
+    fulfillment_role: Optional[str] = None
+    fulfillment_dim: str = "role"
+
+
+class OrderedProductsResponse(BaseModel):
+    sample_id: str
+    wp_order_number: Optional[str] = None
+    products: list[OrderedProduct]

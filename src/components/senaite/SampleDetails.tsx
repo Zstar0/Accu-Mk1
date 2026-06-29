@@ -22,7 +22,6 @@ import {
   XCircle,
   ArrowLeft,
   RefreshCw,
-  Dna,
   Copy,
   Paperclip,
   ImageIcon,
@@ -31,7 +30,6 @@ import {
   FileText,
   Terminal,
   CornerDownRight,
-  type LucideIcon,
 } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -149,6 +147,9 @@ import { SampleHeaderSla } from '@/components/senaite/SampleHeaderSla'
 import { useAnalysisSlaMap } from '@/services/analysis-sla'
 import { SamplePrepHplcFlyout } from '@/components/hplc/SamplePrepHplcFlyout'
 import { SampleActivityLog } from '@/components/senaite/SampleActivityLog'
+import { OrderedProducts, useOrderedProducts } from '@/components/senaite/OrderedProducts'
+import { ProductChip } from '@/components/senaite/ProductChip'
+import { computeProductCompletion, type ProductCompletionContext } from '@/lib/product-completion'
 import { VialsQuickLookDialog } from '@/components/senaite/VialsQuickLookDialog'
 import { Eye, Microscope, Plus, Printer, Search, Star, Trash2, ScrollText, Sigma } from 'lucide-react'
 import { VarianceSummary } from '@/components/samples/VarianceSummary'
@@ -1990,79 +1991,6 @@ function SectionHeader({
 
 // --- Analysis Profile theming ---
 
-interface ProfileTheme {
-  icon: LucideIcon
-  bg: string
-  text: string
-  border: string
-}
-
-const PROFILE_THEMES: { pattern: RegExp; theme: ProfileTheme }[] = [
-  {
-    pattern: /peptide.*(?:single|blend|core)/i,
-    theme: {
-      icon: FlaskConical,
-      bg: 'bg-violet-100 dark:bg-violet-500/15',
-      text: 'text-violet-700 dark:text-violet-400',
-      border: 'border-violet-200 dark:border-violet-500/20',
-    },
-  },
-  {
-    pattern: /endotoxin/i,
-    theme: {
-      icon: ShieldCheck,
-      bg: 'bg-teal-100 dark:bg-teal-500/15',
-      text: 'text-teal-700 dark:text-teal-400',
-      border: 'border-teal-200 dark:border-teal-500/20',
-    },
-  },
-  {
-    pattern: /sterility|pcr/i,
-    theme: {
-      icon: Dna,
-      bg: 'bg-rose-100 dark:bg-rose-500/15',
-      text: 'text-rose-700 dark:text-rose-400',
-      border: 'border-rose-200 dark:border-rose-500/20',
-    },
-  },
-  {
-    pattern: /variance/i,
-    theme: {
-      icon: Sigma,
-      bg: 'bg-sky-100 dark:bg-sky-500/15',
-      text: 'text-sky-700 dark:text-sky-400',
-      border: 'border-sky-200 dark:border-sky-500/20',
-    },
-  },
-]
-
-const DEFAULT_PROFILE_THEME: ProfileTheme = {
-  icon: Activity,
-  bg: 'bg-muted',
-  text: 'text-muted-foreground',
-  border: 'border-border/50',
-}
-
-function getProfileTheme(profileName: string): ProfileTheme {
-  for (const { pattern, theme } of PROFILE_THEMES) {
-    if (pattern.test(profileName)) return theme
-  }
-  return DEFAULT_PROFILE_THEME
-}
-
-function ProfileChip({ name }: { name: string }) {
-  const theme = getProfileTheme(name)
-  const Icon = theme.icon
-  return (
-    <span
-      className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-md text-[11px] font-medium border ${theme.bg} ${theme.text} ${theme.border}`}
-    >
-      <Icon size={12} />
-      {name}
-    </span>
-  )
-}
-
 // StatusBadge and TabButton moved to AnalysisTable.tsx
 
 function AccuVerifyBadge({ code }: { code: string }) {
@@ -2943,6 +2871,9 @@ export function SampleDetails() {
       : [],
   )
 
+  // Ordered products for the sticky-header chip row (shares the card's query).
+  const orderedProductsQuery = useOrderedProducts(sampleId ?? '')
+
   // Slot number → display peptide name (e.g. { 1: "BPC-157", 2: "TB-500" }).
   // Built here (pre-early-returns) because the overlay join's analyte bridge
   // needs it; also consumed by the analyte cards + AnalysisTable renames below.
@@ -3667,12 +3598,13 @@ export function SampleDetails() {
   ).length
   const pendingCount = countableTotal - verifiedCount
 
-  // Variance is "enabled" for this sample when any vial is explicitly bucketed
-  // as a variance replicate (assignment_kind='variance'). Parent-page only —
-  // subData carries the family's vials. Drives the Products "Variance" chip.
-  const hasVariance = (subData?.sub_samples ?? []).some(
-    s => s.assignment_kind === 'variance'
-  )
+  // Per-product completion (green check + contributing vials), from data the
+  // page already loads. Shared by the card chips and the sticky-header chips.
+  const productCompletionCtx: ProductCompletionContext = {
+    analyses: data.analyses,
+    promotionsByKeyword,
+    varianceSet: varianceSetOverlay,
+  }
 
   const senaiteBaseUrl = getSenaiteUrl()
 
@@ -3930,6 +3862,23 @@ export function SampleDetails() {
               />
             )
           })()}
+
+          {/* Ordered-product chips — own line, right-aligned, directly above the
+              action bar. overflow-x so a long set scrolls instead of wrapping. */}
+          {(orderedProductsQuery.data?.products?.length ?? 0) > 0 && (
+            <div className="w-full flex justify-end">
+              <div className="flex items-center gap-1.5 min-w-0 overflow-x-auto">
+                {orderedProductsQuery.data!.products.map(p => (
+                  <ProductChip
+                    key={p.key}
+                    compact
+                    product={p}
+                    completion={computeProductCompletion(p, productCompletionCtx)}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* SLA + actions row — w-full wraps below the top row. The SLA
               lines (moved out of the left block) sit on the left, indented
@@ -4257,19 +4206,7 @@ export function SampleDetails() {
                     }
                   />
                 </div>
-                {(data.profiles.length > 0 || hasVariance) && (
-                  <div className="mt-3 pt-3 border-t border-border">
-                    <span className="text-[11px] text-muted-foreground uppercase tracking-wider">
-                      Products
-                    </span>
-                    <div className="flex flex-wrap gap-2 mt-2">
-                      {data.profiles.map((p, i) => (
-                        <ProfileChip key={p + i} name={p} />
-                      ))}
-                      {hasVariance && <ProfileChip name="Variance" />}
-                    </div>
-                  </div>
-                )}
+                <OrderedProducts sampleId={sampleId ?? ''} subData={subData} completionCtx={productCompletionCtx} />
               </SectionHeader>
             </Card>
 
