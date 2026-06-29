@@ -1,4 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
+import { createRoot } from 'react-dom/client'
+import '@/components/intake/ReceiveWizard/PrintStep.css'
 
 interface PrintTarget {
   sampleId: string
@@ -40,5 +42,32 @@ export function usePrintLabel() {
 
   const printLabel = (t: PrintTarget) => setTarget(t)
 
-  return { printLabel, target }
+  return { printLabel, printNode, target }
+}
+
+/**
+ * Print an arbitrary React node (e.g. a box label) without a co-located
+ * `<PrintLabelPortal>`. Mirrors {@link usePrintLabel}'s strip-label path:
+ * render the node off-screen inside a `.print-area` host (the same class the
+ * PrintStep.css print isolation targets), give the SVG a tick to lay out,
+ * then `window.print()`; the host is torn down on `afterprint`.
+ */
+export function printNode(node: ReactNode): void {
+  const host = document.createElement('div')
+  host.className = 'print-area'
+  host.style.position = 'fixed'
+  host.style.left = '-9999px'
+  host.style.top = '0'
+  document.body.appendChild(host)
+
+  const root = createRoot(host)
+  root.render(node)
+
+  const cleanup = () => {
+    root.unmount()
+    host.remove()
+  }
+  window.addEventListener('afterprint', cleanup, { once: true })
+  // Give the SVG a tick to lay out before invoking print (matches printLabel).
+  setTimeout(() => window.print(), 80)
 }
