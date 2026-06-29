@@ -73,6 +73,12 @@ def build_ordered_products(services: dict, package: str | None) -> list[dict]:
                 out.append(_as_dict(PRODUCT_REGISTRY["variance"]))
                 seen.add("variance")
             continue
+        if key == "samplevariance":
+            # WP buy-flag (bool) alias of the `variance` data-points dict handled
+            # above. The variance product is rendered from `variance`; this raw
+            # key must never render too, or it double-renders as a stray
+            # fail-open "Samplevariance" chip (it isn't a distinct product).
+            continue
         if not val:
             continue
         if key == "hplcpurity_identity" and has_package:

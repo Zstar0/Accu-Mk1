@@ -38,6 +38,27 @@ def test_variance_uses_normalized_entitlement():
     assert v["fulfillment_dim"] == "kind" and v["fulfillment_role"] == "variance"
 
 
+def test_samplevariance_flag_does_not_double_render_variance():
+    # WordPress sends BOTH the `samplevariance` buy-flag (bool) and the
+    # `variance` data-points dict for one purchase. Only the modelled
+    # "Variance HPLC" chip should render — never a duplicate fail-open
+    # "Samplevariance" chip from the raw buy-flag key.
+    out = build_ordered_products(
+        {"variance": {"hplcpurity_identity": 2}, "samplevariance": True}, "core"
+    )
+    assert "Samplevariance" not in labels(out)
+    assert "Variance HPLC" in labels(out)
+    # Exactly one variance-flavoured chip.
+    assert sum("ariance" in lbl for lbl in labels(out)) == 1
+
+
+def test_samplevariance_flag_alone_renders_no_stray_chip():
+    # The buy-flag without a purchased `variance` dict still must not produce a
+    # stray "Samplevariance" chip — it is an alias of `variance`, not a product.
+    out = build_ordered_products({"samplevariance": True}, "core")
+    assert "Samplevariance" not in labels(out)
+
+
 def test_bac_water_panel_is_base():
     out = build_ordered_products({"bac_water_panel": True}, None)
     v = [p for p in out if p["key"] == "bac_water_panel"][0]
