@@ -28,3 +28,28 @@ def test_department_persists_with_defaults(db_session):
     assert d.sort_order == 0
     assert d.color == "blue"
     assert d.is_system is False
+
+
+def test_service_group_and_service_have_catalog_columns(db_session):
+    from models import Department, ServiceGroup, AnalysisService
+    dept = Department(name="Analytical")
+    db_session.add(dept)
+    db_session.commit()
+
+    g = ServiceGroup(name="Analytics", department_id=dept.id, vials_required=1, is_assignable=True)
+    s = AnalysisService(
+        title="HPLC Purity", keyword="PUR_X",
+        department_id=dept.id, vials_required=1, is_assignable=False, sla_tier_id=None,
+    )
+    db_session.add_all([g, s])
+    db_session.commit()
+    db_session.refresh(g)
+    db_session.refresh(s)
+
+    assert g.department_id == dept.id
+    assert g.vials_required == 1
+    assert g.is_assignable is True
+    assert s.department_id == dept.id
+    assert s.vials_required == 1
+    assert s.is_assignable is False
+    assert s.sla_tier_id is None
