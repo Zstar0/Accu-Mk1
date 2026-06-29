@@ -5514,6 +5514,44 @@ export async function patchVialAssignment(
   return response.json()
 }
 
+export interface LimsBox {
+  id: number
+  order_key: string
+  box_number: number
+  role: 'hplc' | 'endo' | 'ster'
+  label_code: string
+  vial_count: number
+  printed_at: string | null
+}
+
+export async function listOrderBoxes(orderKey: string): Promise<LimsBox[]> {
+  return apiFetch<LimsBox[]>(`/api/boxes?order_key=${encodeURIComponent(orderKey)}`)
+}
+
+export async function createBox(
+  orderKey: string,
+  role: 'hplc' | 'endo' | 'ster',
+): Promise<LimsBox> {
+  return apiFetch<LimsBox>('/api/boxes', {
+    method: 'POST',
+    body: JSON.stringify({ order_key: orderKey, role }),
+  })
+}
+
+export async function assignVialsToBox(
+  boxId: number,
+  subSampleIds: string[],
+): Promise<LimsBox> {
+  return apiFetch<LimsBox>(`/api/boxes/${boxId}/assign`, {
+    method: 'POST',
+    body: JSON.stringify({ sub_sample_ids: subSampleIds }),
+  })
+}
+
+export async function printBox(boxId: number): Promise<LimsBox> {
+  return apiFetch<LimsBox>(`/api/boxes/${boxId}/print`, { method: 'POST' })
+}
+
 /** Per-service variance counts the parent's order purchased. Empty when none
  *  or unreachable — callers fail closed (action hidden). */
 export async function fetchVarianceEntitlement(
