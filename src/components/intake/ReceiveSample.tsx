@@ -48,6 +48,8 @@ import {
   type SenaiteSample,
   type SenaiteReceiveSampleResponse,
 } from '@/lib/api'
+import { groupSamplesByOrder, type OrderGroup } from '@/lib/inbox-orders'
+import { OrderReceiveSession } from '@/components/intake/OrderReceiveSession'
 
 type IntakeStep = 1 | 2
 
@@ -232,6 +234,8 @@ export function ReceiveSample() {
   const [sortColumn, setSortColumn] = useState<SortColumn | null>(null)
   const [sortDir, setSortDir] = useState<SortDir>('asc')
   const [showTestSamples, setShowTestSamples] = useState(false)
+  const [receiveMode, setReceiveMode] = useState<'order' | 'sample'>('order')
+  const [selectedOrder, setSelectedOrder] = useState<OrderGroup | null>(null)
 
   // Sub-samples receive wizard (modal). Row click in the intake list opens
   // the wizard for that parent sample; the legacy single-step receive flow
@@ -274,6 +278,8 @@ export function ReceiveSample() {
         return sortDir === 'asc' ? cmp : -cmp
       })
     : filteredSamples
+
+  const orderGroups = groupSamplesByOrder(filteredSamples)
 
   const loadDueSamples = useCallback(async () => {
     setDueSamplesLoading(true)
@@ -508,17 +514,42 @@ export function ReceiveSample() {
                   </Button>
                 </div>
 
-                <label
-                  htmlFor="show-test-samples"
-                  className="flex items-center gap-2 text-sm text-muted-foreground cursor-pointer select-none"
-                >
-                  <Checkbox
-                    id="show-test-samples"
-                    checked={showTestSamples}
-                    onCheckedChange={v => setShowTestSamples(v === true)}
-                  />
-                  Show Test Samples
-                </label>
+                <div className="flex items-center justify-between gap-4">
+                  <label
+                    htmlFor="show-test-samples"
+                    className="flex items-center gap-2 text-sm text-muted-foreground cursor-pointer select-none"
+                  >
+                    <Checkbox
+                      id="show-test-samples"
+                      checked={showTestSamples}
+                      onCheckedChange={v => setShowTestSamples(v === true)}
+                    />
+                    Show Test Samples
+                  </label>
+
+                  <div className="inline-flex rounded-md border p-0.5 text-sm">
+                    <button
+                      type="button"
+                      onClick={() => setReceiveMode('order')}
+                      className={cn(
+                        'px-3 py-1 rounded',
+                        receiveMode === 'order' && 'bg-accent font-semibold'
+                      )}
+                    >
+                      By order
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setReceiveMode('sample')}
+                      className={cn(
+                        'px-3 py-1 rounded',
+                        receiveMode === 'sample' && 'bg-accent font-semibold'
+                      )}
+                    >
+                      By sample
+                    </button>
+                  </div>
+                </div>
 
                 {dueSamplesLoading ? (
                   <div className="flex items-center justify-center py-12">
@@ -540,6 +571,25 @@ export function ReceiveSample() {
                   <div className="flex flex-col items-center justify-center gap-2 py-12 text-muted-foreground">
                     <FlaskConical className="h-6 w-6" />
                     <p className="text-sm">No due samples found</p>
+                  </div>
+                ) : receiveMode === 'order' ? (
+                  <div className="flex flex-col gap-2">
+                    {orderGroups.map(group => (
+                      <button
+                        key={group.orderKey ?? '__none__'}
+                        type="button"
+                        onClick={() => setSelectedOrder(group)}
+                        className="flex items-center justify-between rounded-lg border p-3 text-left hover:bg-muted/40"
+                      >
+                        <span className="font-mono font-semibold">
+                          {group.orderLabel}
+                        </span>
+                        <span className="text-sm text-muted-foreground">
+                          {group.clientId ?? '—'} · {group.samples.length} sample
+                          {group.samples.length !== 1 ? 's' : ''}
+                        </span>
+                      </button>
+                    ))}
                   </div>
                 ) : (
                   <div className="overflow-auto">
@@ -1061,6 +1111,17 @@ export function ReceiveSample() {
             </div>
           </DialogContent>
         </Dialog>
+      )}
+
+      {/* Order-scoped receive session (sample stepper + boxing stage) */}
+      {selectedOrder && (
+        <OrderReceiveSession
+          order={selectedOrder}
+          onClose={() => {
+            setSelectedOrder(null)
+            void loadDueSamples()
+          }}
+        />
       )}
     </div>
   )
