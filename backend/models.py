@@ -177,6 +177,14 @@ class AnalysisService(Base):
     variance_capable: Mapped[bool] = mapped_column(
         Boolean, default=False, nullable=False, server_default="false"
     )
+    department_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("departments.id", ondelete="SET NULL"), nullable=True
+    )
+    vials_required: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    is_assignable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    sla_tier_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("sla_tiers.id", ondelete="SET NULL"), nullable=True
+    )
 
     # Relationships
     peptide: Mapped[Optional["Peptide"]] = relationship("Peptide", foreign_keys=[peptide_id])
@@ -201,6 +209,11 @@ class ServiceGroup(Base):
     sla_tier_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("sla_tiers.id", ondelete="SET NULL"), nullable=True
     )
+    department_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("departments.id", ondelete="SET NULL"), nullable=True
+    )
+    vials_required: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    is_assignable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
