@@ -84,6 +84,36 @@ describe('computeProductCompletion', () => {
     expect([...r.vials].sort()).toEqual(['P-1-S01', 'P-1-S05'])
   })
 
+  it('accushield (bundle): met only when EVERY component — HPLC + Endo + Sterility — is promoted', () => {
+    const analyses = [
+      ana('HPLC-PUR', 'Analytics'), ana('ID_BPC', null),
+      ana('ENDO-LAL', 'Endotoxin'), ana('STER-PCR', 'Microbiology'),
+    ]
+    // all HPLC-family promoted but endo/ster NOT -> NOT met (unlike core, which
+    // would be met here — AccuShield is Core + Endotoxin + Sterility)
+    expect(
+      computeProductCompletion(prod('accushield'), ctx({
+        analyses, promos: [promo('HPLC-PUR', ['P-1-S01']), promo('ID_BPC', ['P-1-S01'])],
+      }))!.met,
+    ).toBe(false)
+    // every component promoted -> met; vials unioned across all groups
+    const r = computeProductCompletion(prod('accushield'), ctx({
+      analyses, promos: [
+        promo('HPLC-PUR', ['P-1-S01']), promo('ID_BPC', ['P-1-S01']),
+        promo('ENDO-LAL', ['P-1-S02']), promo('STER-PCR', ['P-1-S03']),
+      ],
+    }))!
+    expect(r.met).toBe(true)
+    expect([...r.vials].sort()).toEqual(['P-1-S01', 'P-1-S02', 'P-1-S03'])
+  })
+
+  it('core stays HPLC-only: met on HPLC even with endo/ster unpromoted (NOT a bundle)', () => {
+    const analyses = [ana('HPLC-PUR', 'Analytics'), ana('ENDO-LAL', 'Endotoxin')]
+    expect(
+      computeProductCompletion(prod('core'), ctx({ analyses, promos: [promo('HPLC-PUR', ['P-1-S01'])] }))!.met,
+    ).toBe(true)
+  })
+
   it('hplc: not met when no hplc-family analyses exist', () => {
     expect(
       computeProductCompletion(prod('hplcpurity_identity'), ctx({ analyses: [ana('ENDO-LAL', 'Endotoxin')] }))!.met,
