@@ -96,12 +96,17 @@ interface InboxVialCardProps {
   /** True when the previous card in the rendered list shares this vial's parent_sample_id.
    *  Used for the indent + connector visual grouping (parents render flush, subs indent under their parent). */
   groupedWithPrevious: boolean
+  /** True when this vial's family has ≥1 variance-assigned sub-sample. Only the
+   *  parent card surfaces it (a Layers icon before the ID) — an at-a-glance cue
+   *  that the sample needs multiple vials tested. */
+  parentHasVarianceSubs?: boolean
   onPriorityChange: (sampleUid: string, priority: InboxPriority) => void
 }
 
 export function InboxVialCard({
   vial,
   groupedWithPrevious,
+  parentHasVarianceSubs,
   onPriorityChange,
 }: InboxVialCardProps) {
   // Drag uses the first analysis's group_id. Today every vial's analyses[]
@@ -178,17 +183,34 @@ export function InboxVialCard({
             <GripVertical className="h-4 w-4" />
           </button>
 
-          {/* Sample ID — clickable to sample details */}
-          <button
-            type="button"
-            className="font-mono text-sm font-medium hover:underline hover:text-primary transition-colors"
-            onClick={e => {
-              e.stopPropagation()
-              useUIStore.getState().navigateToSample(vial.sample_id)
-            }}
-          >
-            {vial.sample_id}
-          </button>
+          {/* Sample ID — clickable to sample details. A Layers icon prefixes
+              the ID on the parent card (family has variance vials) AND on each
+              variance vial itself, so the variance rows line up down the ID
+              column. Variance vials also keep the explicit VARIANCE badge below. */}
+          <span className="inline-flex items-center gap-1">
+            {((vial.is_parent && parentHasVarianceSubs) ||
+              vial.assignment_kind === 'variance') && (
+              <Layers
+                className="h-3 w-3 text-sky-500 shrink-0"
+                aria-label={
+                  vial.assignment_kind === 'variance'
+                    ? 'Variance replicate vial'
+                    : 'Has variance vials'
+                }
+                role="img"
+              />
+            )}
+            <button
+              type="button"
+              className="font-mono text-sm font-medium hover:underline hover:text-primary transition-colors"
+              onClick={e => {
+                e.stopPropagation()
+                useUIStore.getState().navigateToSample(vial.sample_id)
+              }}
+            >
+              {vial.sample_id}
+            </button>
+          </span>
 
           <RoleBadge role={vial.assignment_role} />
 

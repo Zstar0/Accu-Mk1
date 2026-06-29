@@ -14,7 +14,7 @@ import os
 import requests
 from datetime import datetime, timedelta
 from typing import Optional, Tuple, List
-from sqlalchemy import select, func, delete
+from sqlalchemy import select, func, delete, case
 from sqlalchemy.orm import Session
 from models import LimsSample, LimsSubSample, LimsSubSampleEvent
 from sub_samples import native
@@ -1367,6 +1367,12 @@ def aggregate_by_parent(db: Session, parent_sample_ids: list[str]) -> dict[str, 
             LimsSample.assignment_role,
             LimsSample.variance_override,
             func.count(LimsSubSample.id).label("sub_count"),
+            # Count of vials explicitly assigned to the variance bucket. Drives
+            # the parent's "has variance vials" list indicator — assignment, not
+            # entitlement (a parent can have variance vials with no override).
+            func.sum(
+                case((LimsSubSample.assignment_kind == "variance", 1), else_=0)
+            ).label("variance_sub_count"),
         )
         .outerjoin(LimsSubSample, LimsSubSample.parent_sample_pk == LimsSample.id)
         .where(LimsSample.sample_id.in_(parent_sample_ids))
@@ -1376,7 +1382,7 @@ def aggregate_by_parent(db: Session, parent_sample_ids: list[str]) -> dict[str, 
             LimsSample.variance_override,
         )
     ).all()
-    for sample_id, parent_role, variance_override, sub_count in parent_rows:
+    for sample_id, parent_role, variance_override, sub_count, variance_sub_count in parent_rows:
         if sub_count == 0:
             continue
         result[sample_id] = {
@@ -1384,6 +1390,7 @@ def aggregate_by_parent(db: Session, parent_sample_ids: list[str]) -> dict[str, 
             "vial_count": sub_count,
             "parent_role": parent_role or "hplc",
             "variance": _variance_buckets_from_override(variance_override),
+            "has_variance_subs": (variance_sub_count or 0) > 0,
         }
 
     # Path 2: sub-sample rows. Skip any IDs already resolved as parents
@@ -1399,6 +1406,7 @@ def aggregate_by_parent(db: Session, parent_sample_ids: list[str]) -> dict[str, 
                 "vial_count": 0,
                 "parent_role": role or "unassigned",
                 "variance": {"hplc": 0, "endo": 0, "ster": 0},
+                "has_variance_subs": False,
             }
 
     return result

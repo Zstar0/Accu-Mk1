@@ -5429,6 +5429,11 @@ export interface ParentAggregate {
    *  none). AR-list display hint; authoritative gate is server-side. Optional
    *  for back-compat with older responses. */
   variance?: { hplc: number; endo: number; ster: number }
+  /** True when ≥1 sub-sample vial is assigned to the variance bucket
+   *  (assignment_kind='variance'). Drives the parent list-row variance
+   *  indicator independently of entitlement (`variance`). Optional for
+   *  back-compat with older responses. */
+  has_variance_subs?: boolean
 }
 
 export interface SampleAggregatesResponse {

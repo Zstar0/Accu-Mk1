@@ -3,6 +3,7 @@ import {
   groupInboxFamilies,
   familyDragItems,
   familyDateReceived,
+  varianceParentIds,
 } from '@/lib/inbox-families'
 import type { InboxVialItem } from '@/lib/api'
 
@@ -95,5 +96,29 @@ describe('familyDateReceived', () => {
 
   it('returns null when no vial has a date', () => {
     expect(familyDateReceived([vial({ date_received: null })])).toBeNull()
+  })
+})
+
+describe('varianceParentIds', () => {
+  it('collects parents whose aggregate flags variance subs', () => {
+    const set = varianceParentIds({
+      'P-01': { has_variance_subs: true },
+      'P-02': { has_variance_subs: false },
+      'P-03': { has_variance_subs: true },
+    })
+    expect(set.has('P-01')).toBe(true)
+    expect(set.has('P-03')).toBe(true)
+    expect(set.has('P-02')).toBe(false)
+    expect(set.size).toBe(2)
+  })
+
+  it('treats a missing flag as no variance', () => {
+    const set = varianceParentIds({ 'P-09': {} })
+    expect(set.has('P-09')).toBe(false)
+    expect(set.size).toBe(0)
+  })
+
+  it('returns an empty set for an empty map', () => {
+    expect(varianceParentIds({}).size).toBe(0)
   })
 })

@@ -146,6 +146,14 @@ class ParentAggregate(BaseModel):
                     "AR-list display hint — the authoritative gate is server-side "
                     "at sign-off (fail-closed).",
     )
+    has_variance_subs: bool = Field(
+        default=False,
+        description="True when at least one sub-sample vial is assigned to the "
+                    "variance bucket (assignment_kind='variance'). Drives the "
+                    "list-page parent variance indicator independently of "
+                    "entitlement (`variance`) — a parent can have variance vials "
+                    "with no purchased override.",
+    )
 
 
 class AggregatesResponse(BaseModel):

@@ -180,6 +180,16 @@ export function parentHasVariance(agg: ParentAggregate | undefined): boolean {
   return !!v && (v.hplc >= 1 || v.endo >= 1 || v.ster >= 1)
 }
 
+/** True when the parent row should show the variance indicator: either it has
+ *  variance entitlement (purchased replicates) OR at least one sub-sample vial
+ *  is actually assigned to the variance bucket. The latter is the operational
+ *  signal lab techs care about — a variance vial exists to test even when no
+ *  entitlement override was set. Union is deliberately additive: it never hides
+ *  the icon on a parent that shows it today. */
+export function parentShowsVariance(agg: ParentAggregate | undefined): boolean {
+  return parentHasVariance(agg) || agg?.has_variance_subs === true
+}
+
 /** True when a sub-sample vial is explicitly assigned to a variance bucket
  *  (assignment_kind, set at check-in). Replaces the implicit role-bucket ×
  *  entitlement inference — each vial speaks for itself now. */
@@ -465,7 +475,7 @@ function SampleTable({
             >
               <TableCell className="font-mono text-sm">
                 <span className="inline-flex items-center gap-1">
-                  {parentHasVariance(agg) && (
+                  {parentShowsVariance(agg) && (
                     <Layers className="h-3 w-3 text-sky-500 shrink-0" aria-label="Has variance testing" />
                   )}
                   {s.id}

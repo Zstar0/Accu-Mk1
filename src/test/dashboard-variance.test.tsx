@@ -1,9 +1,16 @@
 import { describe, it, expect } from 'vitest'
-import { parentHasVariance, subIsVarianceMember } from '@/components/senaite/SenaiteDashboard'
+import {
+  parentHasVariance,
+  parentShowsVariance,
+  subIsVarianceMember,
+} from '@/components/senaite/SenaiteDashboard'
 import type { ParentAggregate, SubSample } from '@/lib/api'
 
-const agg = (variance?: ParentAggregate['variance']): ParentAggregate =>
-  ({ vial_count: 2, parent_role: 'hplc', variance }) as ParentAggregate
+const agg = (
+  variance?: ParentAggregate['variance'],
+  has_variance_subs?: boolean,
+): ParentAggregate =>
+  ({ vial_count: 2, parent_role: 'hplc', variance, has_variance_subs }) as ParentAggregate
 
 const sub = (
   role: SubSample['assignment_role'] | 'unassigned',
@@ -22,6 +29,21 @@ describe('parentHasVariance (paid-replicates map: purchased n - 1)', () => {
     expect(parentHasVariance(agg({ hplc: 0, endo: 0, ster: 0 }))).toBe(false)
     expect(parentHasVariance(agg(undefined))).toBe(false)
     expect(parentHasVariance(undefined)).toBe(false)
+  })
+})
+
+describe('parentShowsVariance (entitlement OR assigned variance subs)', () => {
+  it('true when the parent has variance entitlement (no assigned subs)', () => {
+    expect(parentShowsVariance(agg({ hplc: 1, endo: 0, ster: 0 }, false))).toBe(true)
+  })
+  it('true when a variance sub is assigned (no entitlement override)', () => {
+    expect(parentShowsVariance(agg({ hplc: 0, endo: 0, ster: 0 }, true))).toBe(true)
+    expect(parentShowsVariance(agg(undefined, true))).toBe(true)
+  })
+  it('false when neither entitlement nor assigned variance subs', () => {
+    expect(parentShowsVariance(agg({ hplc: 0, endo: 0, ster: 0 }, false))).toBe(false)
+    expect(parentShowsVariance(agg(undefined, undefined))).toBe(false)
+    expect(parentShowsVariance(undefined)).toBe(false)
   })
 })
 

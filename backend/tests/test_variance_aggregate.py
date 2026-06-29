@@ -63,3 +63,47 @@ def test_zztest_cleaned(db):
         "SELECT count(*) FROM lims_samples WHERE sample_id LIKE 'ZZTEST-AGGV%'"
     )).scalar_one()
     assert n == 0
+
+
+def _make_parent_with_subs(db, sample_id, sub_kinds):
+    """Parent with one sub per entry in sub_kinds (an assignment_kind value).
+    No variance_override — so any variance signal must come from the subs."""
+    parent = LimsSample(
+        sample_id=sample_id, peptide_name="ZZ AggK", status="received",
+        assignment_role="hplc", variance_override=None,
+    )
+    db.add(parent)
+    db.flush()
+    for i, kind in enumerate(sub_kinds, start=1):
+        db.add(LimsSubSample(
+            sample_id=f"{sample_id}-S{i:02d}", parent_sample_pk=parent.id,
+            vial_sequence=i, received_at=datetime.utcnow(), assignment_role="hplc",
+            assignment_kind=kind,
+            external_lims_uid=f"zz-uid-aggvk-{sample_id}-s{i:02d}",
+        ))
+    db.commit()
+
+
+@pytest.fixture()
+def aggvk_fixture(db):
+    # A parent whose vials include a variance assignment (entitlement unset).
+    _make_parent_with_subs(db, "ZZTEST-AGGVK-VAR", ["core", "variance"])
+    # A parent with only core vials.
+    _make_parent_with_subs(db, "ZZTEST-AGGVK-CORE", ["core"])
+    yield
+    db.rollback()
+    db.execute(text("DELETE FROM lims_sub_samples WHERE sample_id LIKE 'ZZTEST-AGGVK%'"))
+    db.execute(text("DELETE FROM lims_samples WHERE sample_id LIKE 'ZZTEST-AGGVK%'"))
+    db.commit()
+
+
+def test_has_variance_subs_reflects_assignment_kind(db, aggvk_fixture):
+    out = sub_service.aggregate_by_parent(
+        db, ["ZZTEST-AGGVK-VAR", "ZZTEST-AGGVK-CORE"]
+    )
+    # Parent with a variance-assigned vial → flagged, even though its
+    # entitlement override is unset (variance map stays zero).
+    assert out["ZZTEST-AGGVK-VAR"]["has_variance_subs"] is True
+    assert out["ZZTEST-AGGVK-VAR"]["variance"] == {"hplc": 0, "endo": 0, "ster": 0}
+    # Parent with only core vials → not flagged.
+    assert out["ZZTEST-AGGVK-CORE"]["has_variance_subs"] is False

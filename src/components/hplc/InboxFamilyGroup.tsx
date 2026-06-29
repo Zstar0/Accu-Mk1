@@ -1,5 +1,5 @@
 import { useDraggable } from '@dnd-kit/core'
-import { GripVertical } from 'lucide-react'
+import { GripVertical, Layers } from 'lucide-react'
 import { useUIStore } from '@/store/ui-store'
 import { AgingTimer } from '@/components/hplc/AgingTimer'
 import { InboxVialCard } from '@/components/hplc/InboxVialCard'
@@ -14,6 +14,9 @@ import type { InboxPriority } from '@/lib/api'
 
 interface InboxFamilyGroupProps {
   family: VialFamily
+  /** True when this family has ≥1 variance-assigned sub-sample — prefixes the
+   *  header sample id with a Layers icon so the whole job reads as variance. */
+  hasVarianceSubs?: boolean
   onPriorityChange: (sampleUid: string, priority: InboxPriority) => void
 }
 
@@ -21,7 +24,7 @@ interface InboxFamilyGroupProps {
  *  drag handle that assigns the WHOLE family at once (one worksheet item
  *  per vial). Rendered only for vial-only families (no parent row) with
  *  2+ visible vials — legacy parent-led families keep the flat card list. */
-export function InboxFamilyGroup({ family, onPriorityChange }: InboxFamilyGroupProps) {
+export function InboxFamilyGroup({ family, hasVarianceSubs, onPriorityChange }: InboxFamilyGroupProps) {
   const dragData: FamilyDragData = {
     family: true,
     parentSampleId: family.parentSampleId,
@@ -53,13 +56,22 @@ export function InboxFamilyGroup({ family, onPriorityChange }: InboxFamilyGroupP
         >
           <GripVertical className="h-4 w-4" />
         </button>
-        <button
-          type="button"
-          className="font-mono text-sm font-semibold hover:underline hover:text-primary transition-colors"
-          onClick={() => useUIStore.getState().navigateToSample(family.parentSampleId)}
-        >
-          {family.parentSampleId}
-        </button>
+        <span className="inline-flex items-center gap-1">
+          {hasVarianceSubs && (
+            <Layers
+              className="h-3 w-3 text-sky-500 shrink-0"
+              aria-label="Has variance vials"
+              role="img"
+            />
+          )}
+          <button
+            type="button"
+            className="font-mono text-sm font-semibold hover:underline hover:text-primary transition-colors"
+            onClick={() => useUIStore.getState().navigateToSample(family.parentSampleId)}
+          >
+            {family.parentSampleId}
+          </button>
+        </span>
         <span className="inline-flex items-center rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
           {family.vials.length} vials
         </span>

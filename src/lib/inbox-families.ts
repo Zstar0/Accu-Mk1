@@ -73,6 +73,20 @@ export function familyDragItems(vials: InboxVialItem[]): DragData[] {
   }))
 }
 
+/** Parent sample_ids whose aggregate reports at least one variance-assigned
+ *  sub-sample. Drives the inbox parent/family variance indicator. Keyed off the
+ *  authoritative aggregates map (not the visible vials) so a variance vial
+ *  filtered out of the current bench view never hides the family-level cue. */
+export function varianceParentIds(
+  aggregates: Record<string, { has_variance_subs?: boolean }>,
+): Set<string> {
+  const ids = new Set<string>()
+  for (const [parentSampleId, agg] of Object.entries(aggregates)) {
+    if (agg?.has_variance_subs) ids.add(parentSampleId)
+  }
+  return ids
+}
+
 /** Earliest date_received in the family — drives the header aging timer. */
 export function familyDateReceived(vials: InboxVialItem[]): string | null {
   const dates = vials

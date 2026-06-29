@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { DndContext, DragOverlay, type DragEndEvent, type DragStartEvent } from '@dnd-kit/core'
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { HelpCircle, Inbox, RefreshCw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -10,7 +10,7 @@ import { ROLE_BADGE_CLASS } from '@/lib/assignment-colors'
 import { toast } from 'sonner'
 import { InboxVialCard, type DragData } from '@/components/hplc/InboxVialCard'
 import { InboxFamilyGroup } from '@/components/hplc/InboxFamilyGroup'
-import { groupInboxFamilies, type FamilyDragData } from '@/lib/inbox-families'
+import { groupInboxFamilies, varianceParentIds, type FamilyDragData } from '@/lib/inbox-families'
 import { WorksheetDropPanel } from '@/components/hplc/WorksheetDropPanel'
 import {
   vialHasMicroCategory,
@@ -24,6 +24,7 @@ import {
 import {
   getWorksheetUsers,
   getInboxSamples,
+  fetchSampleAggregates,
   listWorksheets,
   addGroupToWorksheet,
   createWorksheetFromDrop,
@@ -183,6 +184,23 @@ export default function WorksheetsInboxPage() {
   // rank = most urgent vial; vials by sequence). A family never splits
   // across the list — techs grab all of a sample's vials at once.
   const families = groupInboxFamilies(visibleVials)
+
+  // Variance indicator: pull authoritative per-parent variance-sub flags so a
+  // family reads as a variance job even when its variance vial is filtered out
+  // of the current bench view. One batched call, mirroring the samples list.
+  const parentIdsKey = Array.from(new Set(families.map(f => f.parentSampleId)))
+    .sort()
+    .join(',')
+  const { data: aggregatesData } = useQuery({
+    queryKey: ['inbox-aggregates', parentIdsKey],
+    queryFn: () => fetchSampleAggregates(parentIdsKey ? parentIdsKey.split(',') : []),
+    enabled: parentIdsKey.length > 0,
+    staleTime: 30_000,
+  })
+  const varianceParents = useMemo(
+    () => varianceParentIds(aggregatesData?.aggregates ?? {}),
+    [aggregatesData],
+  )
 
   const filtersActive =
     sampleIdFilter.trim().length > 0 ||
@@ -523,15 +541,18 @@ export default function WorksheetsInboxPage() {
                       <InboxFamilyGroup
                         key={fam.parentSampleId}
                         family={fam}
+                        hasVarianceSubs={varianceParents.has(fam.parentSampleId)}
                         onPriorityChange={handlePriorityChange}
                       />
                     )
                   }
+                  const familyHasVariance = varianceParents.has(fam.parentSampleId)
                   return fam.vials.map((vial, idx) => (
                     <InboxVialCard
                       key={vial.uid}
                       vial={vial}
                       groupedWithPrevious={idx > 0}
+                      parentHasVarianceSubs={familyHasVariance}
                       onPriorityChange={handlePriorityChange}
                     />
                   ))
