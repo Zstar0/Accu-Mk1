@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.0.11 — 2026-06-28
+
+### Fixed
+
+- **AccuShield completion check now requires the full bundle.** The AccuShield
+  product chip's green check fired on the HPLC portion alone; AccuShield is
+  "Core + Full Biosafety Suite" (HPLC + Endotoxin + Sterility), so its check now
+  turns green only when **every** live parent analysis — HPLC, Endotoxin, and
+  Sterility — is promoted. Core (HPLC-only) is unchanged.
+
 ## v1.0.10 — 2026-06-28
 
 ### Added

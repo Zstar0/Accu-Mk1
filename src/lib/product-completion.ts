@@ -6,7 +6,11 @@
  * Rules (per the 2026-06-28 design):
  *   - Endotoxin  → the Endotoxin-group analysis (ENDO-LAL) is promoted
  *   - Sterility  → the Microbiology-group analysis (STER-PCR) is promoted
- *   - HPLC       → EVERY hplc-family parent analysis is promoted (strict)
+ *   - HPLC (Core)→ EVERY hplc-family parent analysis is promoted (strict)
+ *   - AccuShield → the bundle ("Core + Full Biosafety Suite") is done only when
+ *                  EVERY live parent analysis is promoted — HPLC AND Endotoxin
+ *                  AND Sterility. (Core is HPLC-only; AccuShield = Core + Endo +
+ *                  Ster, so its check must clear all three, not just HPLC.)
  *   - Variance   → the variance set is locked (the lock guard already enforces
  *                  the required count + promoted/verified, see lock_variance_set)
  *
@@ -33,19 +37,22 @@ export interface ProductCompletionContext {
   varianceSet: VarianceSetResponse | undefined
 }
 
-type CompletionKind = 'endo' | 'ster' | 'hplc' | 'variance'
+type CompletionKind = 'endo' | 'ster' | 'hplc' | 'bundle' | 'variance'
 
 const NON_HPLC_GROUPS = new Set(['Microbiology', 'Endotoxin'])
 
-/** Map an ordered-product key to its completion rule (null = no check shown). */
+/** Map an ordered-product key to its completion rule (null = no check shown).
+ *  `core`/`hplcpurity_identity`/`bac_water_panel` are single-component HPLC
+ *  packages; `accushield` is the multi-component bundle (Core + Endo + Ster). */
 function completionKind(productKey: string): CompletionKind | null {
   switch (productKey) {
     case 'endotoxin':
       return 'endo'
     case 'sterility_pcr':
       return 'ster'
-    case 'core':
     case 'accushield':
+      return 'bundle'
+    case 'core':
     case 'hplcpurity_identity':
     case 'bac_water_panel':
       return 'hplc'
@@ -80,10 +87,11 @@ export function computeProductCompletion(
     return { met: locked, vials }
   }
 
-  // endo / ster / hplc: every live (non-retested) analysis in the category must
-  // have a promotion. An empty category is "not done" (nothing to promote yet).
+  // endo / ster / hplc / bundle: every live (non-retested) analysis in the
+  // category must have a promotion. An empty category is "not done" (nothing to
+  // promote yet). `bundle` (AccuShield) spans ALL groups — HPLC + Endo + Ster.
   const category = ctx.analyses.filter(
-    a => !a.retested && a.keyword && inCategory(a, kind),
+    a => !a.retested && a.keyword && (kind === 'bundle' || inCategory(a, kind)),
   )
   if (category.length === 0) return { met: false, vials: [] }
 
