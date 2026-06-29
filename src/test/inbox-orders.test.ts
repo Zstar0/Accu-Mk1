@@ -21,7 +21,8 @@ describe('groupSamplesByOrder', () => {
 
   it('collapses order-less samples into a single "No order" group sorted last', () => {
     const groups = groupSamplesByOrder([s('P-0600', null), s('P-0700', 'WP-20066')])
-    expect(groups[groups.length - 1].orderKey).toBeNull()
-    expect(groups[groups.length - 1].orderLabel).toBe('No order')
+    const last = groups[groups.length - 1]!
+    expect(last.orderKey).toBeNull()
+    expect(last.orderLabel).toBe('No order')
   })
 })
