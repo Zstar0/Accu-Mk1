@@ -224,6 +224,26 @@ service_group_members = Table(
 )
 
 
+class Department(Base):
+    """Top-level lab department (e.g. Analytical, Microbiology).
+
+    A service's single structural home; drives the assignment-page block, the
+    HPLC-mirror allow-list, and the worksheet/inbox lane. Catalog config table.
+    """
+    __tablename__ = "departments"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(200), nullable=False, unique=True)
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    color: Mapped[str] = mapped_column(String(50), nullable=False, default="blue")
+    is_system: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def __repr__(self) -> str:
+        return f"<Department(id={self.id}, name='{self.name}')>"
+
+
 # M2M junction: instrument <-> method (methods can be shared across instruments of the same model)
 instrument_methods = Table(
     "instrument_methods",
