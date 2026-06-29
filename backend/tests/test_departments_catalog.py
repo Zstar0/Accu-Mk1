@@ -151,7 +151,8 @@ def test_create_and_list_department():
 
 def test_duplicate_department_name_rejected():
     client = _client()
-    client.post("/departments", json={"name": "ZZ Dup Dept"})
+    first = client.post("/departments", json={"name": "ZZ Dup Dept"})
+    assert first.status_code == 201, first.text
     resp = client.post("/departments", json={"name": "ZZ Dup Dept"})
     assert resp.status_code == 400
 
