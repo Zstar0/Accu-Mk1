@@ -94,8 +94,23 @@ def test_backfill_seeds_departments_and_assigns_ids(db_session):
 
 def test_backfill_is_idempotent(db_session):
     from catalog.departments import backfill_departments
-    from models import Department
-    _seed_groups_and_services(db_session)
+    from models import Department, ServiceGroup, AnalysisService
+    analytics, micro, pur, ster = _seed_groups_and_services(db_session)
     backfill_departments(db_session)
+
+    # Capture department_id assignments after the first run.
+    analytics_dept_id = db_session.get(ServiceGroup, analytics.id).department_id
+    micro_dept_id = db_session.get(ServiceGroup, micro.id).department_id
+    pur_dept_id = db_session.get(AnalysisService, pur.id).department_id
+    ster_dept_id = db_session.get(AnalysisService, ster.id).department_id
+
     backfill_departments(db_session)
+
+    # No duplicate department rows.
     assert db_session.query(Department).filter_by(name="Microbiology").count() == 1
+    assert db_session.query(Department).filter_by(name="Analytical").count() == 1
+    # department_id assignments are stable across runs.
+    assert db_session.get(ServiceGroup, analytics.id).department_id == analytics_dept_id
+    assert db_session.get(ServiceGroup, micro.id).department_id == micro_dept_id
+    assert db_session.get(AnalysisService, pur.id).department_id == pur_dept_id
+    assert db_session.get(AnalysisService, ster.id).department_id == ster_dept_id
