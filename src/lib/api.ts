@@ -4170,6 +4170,16 @@ export async function downloadSharePointFiles(
 
 // ─── Service Groups ───────────────────────────────────────────────────────────
 
+export interface Department {
+  id: number
+  name: string
+  sort_order: number
+  color: string
+  is_system: boolean
+  created_at: string
+  updated_at: string
+}
+
 export interface ServiceGroup {
   id: number
   name: string
@@ -4178,6 +4188,9 @@ export interface ServiceGroup {
   sort_order: number
   is_default: boolean
   sla_tier_id: number | null
+  department_id: number | null
+  vials_required: number | null
+  is_assignable: boolean
   member_count: number
   member_ids: number[]
   created_at: string

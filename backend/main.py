@@ -2055,6 +2055,9 @@ class ServiceGroupCreate(BaseModel):
     sort_order: int = 0
     is_default: bool = False
     sla_tier_id: Optional[int] = None
+    department_id: Optional[int] = None
+    vials_required: Optional[int] = None
+    is_assignable: bool = False
 
 
 class ServiceGroupUpdate(BaseModel):
@@ -2065,6 +2068,9 @@ class ServiceGroupUpdate(BaseModel):
     sort_order: Optional[int] = None
     is_default: Optional[bool] = None
     sla_tier_id: Optional[int] = None
+    department_id: Optional[int] = None
+    vials_required: Optional[int] = None
+    is_assignable: Optional[bool] = None
 
 
 class ServiceGroupResponse(BaseModel):
@@ -2076,8 +2082,33 @@ class ServiceGroupResponse(BaseModel):
     sort_order: int
     is_default: bool = False
     sla_tier_id: Optional[int] = None
+    department_id: Optional[int] = None
+    vials_required: Optional[int] = None
+    is_assignable: bool = False
     member_count: int = 0
     member_ids: list[int] = []
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+# ─── Department schemas (Catalog v1) ───
+
+class DepartmentCreate(BaseModel):
+    name: str
+    sort_order: int = 0
+    color: str = "blue"
+    is_system: bool = False
+
+
+class DepartmentResponse(BaseModel):
+    id: int
+    name: str
+    sort_order: int
+    color: str
+    is_system: bool
     created_at: datetime
     updated_at: datetime
 
@@ -13612,6 +13643,9 @@ async def get_service_groups(
             sort_order=group.sort_order,
             is_default=group.is_default,
             sla_tier_id=group.sla_tier_id,
+            department_id=group.department_id,
+            vials_required=group.vials_required,
+            is_assignable=group.is_assignable,
             member_count=len(group.analysis_services),
             member_ids=[s.id for s in group.analysis_services],
             created_at=group.created_at,
@@ -13651,6 +13685,9 @@ async def create_service_group(
         sort_order=group.sort_order,
         is_default=group.is_default,
         sla_tier_id=group.sla_tier_id,
+        department_id=group.department_id,
+        vials_required=group.vials_required,
+        is_assignable=group.is_assignable,
         member_count=0,
         created_at=group.created_at,
         updated_at=group.updated_at,
@@ -13760,6 +13797,42 @@ async def set_service_group_members(
     group.analysis_services = list(services)
     db.commit()
     return {"count": len(services)}
+
+
+# ─── Departments (Catalog v1) ─────────────────────────────────────────────────
+
+
+@app.get("/departments", response_model=list[DepartmentResponse])
+async def get_departments(
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Return all departments ordered by sort_order, name."""
+    from models import Department
+    rows = db.execute(
+        select(Department).order_by(Department.sort_order, Department.name)
+    ).scalars().all()
+    return rows
+
+
+@app.post("/departments", response_model=DepartmentResponse, status_code=201)
+async def create_department(
+    data: DepartmentCreate,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Create a new department."""
+    from models import Department
+    existing = db.execute(
+        select(Department).where(Department.name == data.name)
+    ).scalar_one_or_none()
+    if existing:
+        raise HTTPException(400, f"Department '{data.name}' already exists")
+    dept = Department(**data.model_dump())
+    db.add(dept)
+    db.commit()
+    db.refresh(dept)
+    return dept
 
 
 # ─── SLA tiers (sub-project A, revised to tiers) ──────────────────────────────
