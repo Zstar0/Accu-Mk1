@@ -7,6 +7,8 @@ Analytical bench; Microbiology and Endotoxin are both the Microbiology bench.
 """
 from typing import Optional
 
+from sqlalchemy.orm import Session
+
 DEPARTMENT_NAMES = ["Analytical", "Microbiology"]
 
 # Group name -> department name. Endotoxin nests under Microbiology (the
@@ -21,9 +23,6 @@ _GROUP_NAME_TO_DEPARTMENT = {
 def department_for_group_name(group_name: str) -> Optional[str]:
     """Return the department name for a service group, or None if unknown."""
     return _GROUP_NAME_TO_DEPARTMENT.get(group_name)
-
-
-from sqlalchemy.orm import Session
 
 
 def backfill_departments(db: Session) -> None:
