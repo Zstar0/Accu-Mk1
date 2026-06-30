@@ -20,8 +20,12 @@ export type FlagTypeSlug =
   | 'waiting_on_customer'
   | 'ready_for_verification'
 
-// NOTE: `blocked` is added to this union in Task 7 (where the UI surfaces it).
-export type FlagStatus = 'open' | 'in_progress' | 'resolved' | 'closed'
+export type FlagStatus =
+  | 'open'
+  | 'in_progress'
+  | 'blocked'
+  | 'resolved'
+  | 'closed'
 
 export type FlagTab = 'assigned' | 'raised' | 'watching' | 'all_open'
 

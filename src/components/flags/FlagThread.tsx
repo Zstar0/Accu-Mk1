@@ -45,12 +45,15 @@ import { FlagAvatar } from '@/components/flags/FlagAvatar'
 const STATUS_LABELS: Record<FlagStatus, string> = {
   open: 'Open',
   in_progress: 'In progress',
+  blocked: 'Blocked',
   resolved: 'Resolved',
   closed: 'Closed',
 }
 const STATUS_DOT: Record<FlagStatus, string> = {
   open: '#e8730a',
   in_progress: '#3b82f6',
+  // Amber — an active state that's stuck. Distinct from in-progress (blue).
+  blocked: '#f59e0b',
   resolved: '#22c55e',
   closed: '#94a3b8',
 }

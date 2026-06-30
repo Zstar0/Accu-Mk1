@@ -20,11 +20,12 @@ import type { FlagResponse } from '@/lib/flags-api'
  *   Click: exactly one open flag → open its thread; more than one → open the
  *   flyout filtered to this entity.
  *
- * Open = `open` | `in_progress` (the states that still want attention). The
- * `sample` button passes `includeDescendants` so it aggregates its vials.
+ * Open = `open` | `in_progress` | `blocked` (the states that still want
+ * attention). The `sample` button passes `includeDescendants` so it aggregates
+ * its vials.
  */
 
-const OPEN_STATES = new Set(['open', 'in_progress'])
+const OPEN_STATES = new Set(['open', 'in_progress', 'blocked'])
 
 // Dominant-severity order for the pill color when several types are open
 // (blocker is the loudest). Distinct from the catalog's display order.
@@ -44,6 +45,7 @@ function severityRank(type: string): number {
 const STATUS_LABELS: Record<string, string> = {
   open: 'Open',
   in_progress: 'In progress',
+  blocked: 'Blocked',
   resolved: 'Resolved',
   closed: 'Closed',
 }
