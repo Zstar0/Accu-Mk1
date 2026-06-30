@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 import { Plus } from 'lucide-react'
 import {
   Popover,
@@ -39,11 +39,15 @@ export function RaiseFlagButton({
   entityId,
   defaultAssigneeId = null,
   variant = 'default',
+  trigger,
 }: {
   entityType?: string
   entityId?: string
   defaultAssigneeId?: number | null
   variant?: 'default' | 'compact'
+  /** Custom popover trigger (e.g. EntityFlagButton's outline affordance). When
+   *  provided it replaces the built-in variant buttons. */
+  trigger?: ReactNode
 }) {
   const create = useCreateFlag()
   const users = useFlagUsers()
@@ -106,20 +110,21 @@ export function RaiseFlagButton({
       }}
     >
       <PopoverTrigger asChild>
-        {variant === 'compact' ? (
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-7 w-7"
-            aria-label="Raise a flag"
-          >
-            <Plus className="h-4 w-4" />
-          </Button>
-        ) : (
-          <Button size="sm" className="gap-1.5">
-            <Plus className="h-4 w-4" /> Raise a flag
-          </Button>
-        )}
+        {trigger ??
+          (variant === 'compact' ? (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7"
+              aria-label="Raise a flag"
+            >
+              <Plus className="h-4 w-4" />
+            </Button>
+          ) : (
+            <Button size="sm" className="gap-1.5">
+              <Plus className="h-4 w-4" /> Raise a flag
+            </Button>
+          ))}
       </PopoverTrigger>
       <PopoverContent align="end" className="w-80 space-y-3">
         <p className="text-sm font-semibold">Raise a flag</p>

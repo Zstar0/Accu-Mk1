@@ -152,8 +152,21 @@ interface UIState {
   // null means the flyout shows one flag's thread instead of the triage list.
   flagsFlyoutOpen: boolean
   flagsThreadId: number | null
+  // When set, the flyout shows the open flags on ONE entity (driven by an
+  // EntityFlagButton) instead of the triage tabs. Cleared on flyout close.
+  flagsEntityFilter: {
+    type: string
+    id: string
+    includeDescendants: boolean
+  } | null
   openFlagsFlyout: (threadId?: number) => void
   openFlagThread: (id: number) => void
+  openFlagsForEntity: (
+    type: string,
+    id: string,
+    opts?: { includeDescendants?: boolean }
+  ) => void
+  clearFlagsEntityFilter: () => void
   closeFlagThread: () => void
   closeFlagsFlyout: () => void
   startPrepFromWorksheet: (prefill: {
@@ -197,6 +210,7 @@ export const useUIStore = create<UIState>()(
       worksheetPrepPrefill: null,
       flagsFlyoutOpen: false,
       flagsThreadId: null,
+      flagsEntityFilter: null,
 
       toggleLeftSidebar: () =>
         set(
@@ -492,13 +506,39 @@ export const useUIStore = create<UIState>()(
           'openFlagThread'
         ),
 
-      // Back to the triage list — drops the thread but keeps the flyout open.
+      // Open the flyout filtered to one entity's open flags (e.g. clicking an
+      // EntityFlagButton with >1 flag). Drops any active thread.
+      openFlagsForEntity: (type, id, opts) =>
+        set(
+          {
+            flagsFlyoutOpen: true,
+            flagsThreadId: null,
+            flagsEntityFilter: {
+              type,
+              id,
+              includeDescendants: opts?.includeDescendants ?? false,
+            },
+          },
+          undefined,
+          'openFlagsForEntity'
+        ),
+
+      // Return from the entity-filtered view to the triage tabs.
+      clearFlagsEntityFilter: () =>
+        set({ flagsEntityFilter: null }, undefined, 'clearFlagsEntityFilter'),
+
+      // Back to the triage list — drops the thread but keeps the flyout open
+      // (and any entity filter, so "back" returns to the filtered list).
       closeFlagThread: () =>
         set({ flagsThreadId: null }, undefined, 'closeFlagThread'),
 
       closeFlagsFlyout: () =>
         set(
-          { flagsFlyoutOpen: false, flagsThreadId: null },
+          {
+            flagsFlyoutOpen: false,
+            flagsThreadId: null,
+            flagsEntityFilter: null,
+          },
           undefined,
           'closeFlagsFlyout'
         ),

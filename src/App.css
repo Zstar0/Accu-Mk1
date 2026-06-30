@@ -118,6 +118,22 @@ input:-webkit-autofill:active {
   }
 }
 
+/* Type-colored attention glow for a flagged EntityFlagButton pill. Soft,
+   slow pulse so a flagged item reads as "live" without nagging. The color is
+   the dominant open-flag type, supplied inline via --flag-glow-color. */
+.flags-entity-glow {
+  animation: flags-entity-pulse 2.1s ease-in-out infinite;
+}
+@keyframes flags-entity-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+  50% {
+    box-shadow: 0 0 12px 1px var(--flag-glow-color, #e5484d);
+  }
+}
+
 /* Comment slide-in for the thread composer (flag-thread-dark.html). Each
    comment animates once when its node first mounts — keyed by id, so only a
    newly-sent comment animates, not the whole list on refetch. */
@@ -138,6 +154,7 @@ input:-webkit-autofill:active {
 @media (prefers-reduced-motion: reduce) {
   .flags-glow,
   .flags-bump,
+  .flags-entity-glow,
   .flag-cmt-in {
     animation: none;
   }
