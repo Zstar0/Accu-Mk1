@@ -14,14 +14,46 @@ from flags.errors import BadRequestError, NotFoundError, PermissionDeniedError
 from flags.models import FlagComment, FlagEvent, FlagFlag, FlagParticipant
 
 
-def _audit(db, flag_id, actor_id, event_type, *, from_value=None, to_value=None, details=None):
-    """Write the audit row AND publish to the event sink. Caller commits."""
-    db.add(FlagEvent(flag_id=flag_id, actor_id=actor_id, event_type=event_type,
-                     from_value=from_value, to_value=to_value, details=details))
-    seams.EVENT_SINK.emit({
-        "event_type": event_type, "flag_id": flag_id, "actor_id": actor_id,
+def _flag_summary(flag) -> dict:
+    return {
+        "id": flag.id, "title": flag.title, "type": flag.type, "kind": flag.kind,
+        "status": flag.status, "entity_type": flag.entity_type, "entity_id": flag.entity_id,
+        "assignee_id": flag.assignee_id, "created_by": flag.created_by,
+    }
+
+
+def _audit(db, flag, actor_id, event_type, *, from_value=None, to_value=None, details=None):
+    """Write the audit row now; STAGE the sink event to fire after commit.
+
+    Accepts a FlagFlag object (preferred — enables the summary) so the emitted
+    event can carry a post-mutation snapshot. Pass the object, not the id.
+    """
+    row = FlagEvent(flag_id=flag.id, actor_id=actor_id, event_type=event_type,
+                    from_value=from_value, to_value=to_value, details=details)
+    db.add(row)
+    pending = db.info.setdefault("flag_pending_events", [])
+    pending.append((row, {
+        "event_type": event_type, "flag_id": flag.id, "actor_id": actor_id,
         "from_value": from_value, "to_value": to_value, "details": details or {},
-    })
+        "event_id": None,                 # filled in post-commit from row.id
+        "flag": _flag_summary(flag),
+    }))
+
+
+def _commit_and_emit(db):
+    """Flush to populate row ids, commit, then emit staged events in order.
+
+    event_id is read after flush (ids populated) but before commit (rows not yet
+    expired) so the post-commit emit needs no per-event reload. Emit is strictly
+    post-commit: a rollback never reaches the sink.
+    """
+    pending = db.info.pop("flag_pending_events", [])
+    db.flush()                       # populate FlagEvent.id on every staged row
+    for row, event in pending:
+        event["event_id"] = row.id
+    db.commit()
+    for _row, event in pending:
+        seams.EVENT_SINK.emit(event)
 
 
 def create_flag(db: Session, *, user, entity_type, entity_id, type, title,
@@ -43,14 +75,14 @@ def create_flag(db: Session, *, user, entity_type, entity_id, type, title,
     db.add(flag)
     db.flush()  # populate flag.id
 
-    _audit(db, flag.id, actor_id, "raised", to_value="open", details={"type": type})
+    _audit(db, flag, actor_id, "raised", to_value="open", details={"type": type})
     if assignee_id is not None:
         db.add(FlagParticipant(flag_id=flag.id, user_id=assignee_id, role="watcher", added_by=actor_id))
-        _audit(db, flag.id, actor_id, "assigned", to_value=str(assignee_id))
+        _audit(db, flag, actor_id, "assigned", to_value=str(assignee_id))
     if first_comment:
         db.add(FlagComment(flag_id=flag.id, author_id=actor_id, body=first_comment))
-        _audit(db, flag.id, actor_id, "commented")
-    db.commit()
+        _audit(db, flag, actor_id, "commented")
+    _commit_and_emit(db)
     db.refresh(flag)
     return flag
 
@@ -106,8 +138,8 @@ def add_comment(db: Session, *, user, flag_id, body) -> FlagComment:
     c = FlagComment(flag_id=flag.id, author_id=actor_id, body=body.strip())
     db.add(c)
     flag.updated_at = datetime.utcnow()
-    _audit(db, flag.id, actor_id, "commented")
-    db.commit()
+    _audit(db, flag, actor_id, "commented")
+    _commit_and_emit(db)
     db.refresh(c)
     return c
 
@@ -127,10 +159,10 @@ def assign(db: Session, *, user, flag_id, assignee_id) -> FlagFlag:
         ).scalar_one_or_none()
         if exists is None:
             db.add(FlagParticipant(flag_id=flag.id, user_id=assignee_id, role="watcher", added_by=actor_id))
-    _audit(db, flag.id, actor_id, "assigned" if assignee_id is not None else "unassigned",
+    _audit(db, flag, actor_id, "assigned" if assignee_id is not None else "unassigned",
            from_value=str(prev) if prev is not None else None,
            to_value=str(assignee_id) if assignee_id is not None else None)
-    db.commit()
+    _commit_and_emit(db)
     db.refresh(flag)
     return flag
 
@@ -148,8 +180,8 @@ def add_watcher(db: Session, *, user, flag_id, user_id) -> FlagParticipant:
     p = FlagParticipant(flag_id=flag.id, user_id=user_id, role="watcher",
                         added_by=getattr(user, "id", None))
     db.add(p)
-    _audit(db, flag.id, getattr(user, "id", None), "watcher_added", to_value=str(user_id))
-    db.commit()
+    _audit(db, flag, getattr(user, "id", None), "watcher_added", to_value=str(user_id))
+    _commit_and_emit(db)
     db.refresh(p)
     return p
 
@@ -164,8 +196,8 @@ def remove_watcher(db: Session, *, user, flag_id, user_id) -> None:
     ).scalar_one_or_none()
     if row is not None:
         db.delete(row)
-        _audit(db, flag.id, getattr(user, "id", None), "watcher_removed", from_value=str(user_id))
-        db.commit()
+        _audit(db, flag, getattr(user, "id", None), "watcher_removed", from_value=str(user_id))
+        _commit_and_emit(db)
 
 
 def change_status(db: Session, *, user, flag_id, to_status) -> FlagFlag:
@@ -185,7 +217,7 @@ def change_status(db: Session, *, user, flag_id, to_status) -> FlagFlag:
     elif to_status in ("open", "in_progress"):
         flag.resolved_at = None
         flag.resolved_by = None
-    _audit(db, flag.id, actor_id, "status_changed", from_value=from_status, to_value=to_status)
-    db.commit()
+    _audit(db, flag, actor_id, "status_changed", from_value=from_status, to_value=to_status)
+    _commit_and_emit(db)
     db.refresh(flag)
     return flag
