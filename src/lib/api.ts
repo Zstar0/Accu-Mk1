@@ -5552,6 +5552,11 @@ export async function printBox(boxId: number): Promise<LimsBox> {
   return apiFetch<LimsBox>(`/api/boxes/${boxId}/print`, { method: 'POST' })
 }
 
+/** Delete an empty box. Backend rejects with 409 if the box still holds vials. */
+export async function deleteBox(boxId: number): Promise<void> {
+  await apiFetch<void>(`/api/boxes/${boxId}`, { method: 'DELETE' })
+}
+
 /** Per-service variance counts the parent's order purchased. Empty when none
  *  or unreachable — callers fail closed (action hidden). */
 export async function fetchVarianceEntitlement(
