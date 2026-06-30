@@ -186,6 +186,62 @@ describe('UIStore flags flyout + thread', () => {
   })
 })
 
+describe('UIStore flags entity filter', () => {
+  beforeEach(() => {
+    useUIStore.setState({
+      flagsFlyoutOpen: false,
+      flagsThreadId: null,
+      flagsEntityFilter: null,
+    })
+  })
+
+  it('defaults to no entity filter', () => {
+    expect(useUIStore.getState().flagsEntityFilter).toBeNull()
+  })
+
+  it('openFlagsForEntity opens the flyout filtered to that entity (descendants default false)', () => {
+    useUIStore.getState().openFlagsForEntity('sub_sample', '42')
+    const state = useUIStore.getState()
+    expect(state.flagsFlyoutOpen).toBe(true)
+    expect(state.flagsThreadId).toBeNull()
+    expect(state.flagsEntityFilter).toEqual({
+      type: 'sub_sample',
+      id: '42',
+      includeDescendants: false,
+    })
+  })
+
+  it('openFlagsForEntity honors includeDescendants and drops any open thread', () => {
+    useUIStore.getState().openFlagThread(5)
+    useUIStore
+      .getState()
+      .openFlagsForEntity('sample', 'P-0071', { includeDescendants: true })
+    const state = useUIStore.getState()
+    expect(state.flagsThreadId).toBeNull()
+    expect(state.flagsEntityFilter).toEqual({
+      type: 'sample',
+      id: 'P-0071',
+      includeDescendants: true,
+    })
+  })
+
+  it('clearFlagsEntityFilter returns to the tabs (keeps flyout open)', () => {
+    useUIStore.getState().openFlagsForEntity('sample', 'P-0071')
+    useUIStore.getState().clearFlagsEntityFilter()
+    const state = useUIStore.getState()
+    expect(state.flagsEntityFilter).toBeNull()
+    expect(state.flagsFlyoutOpen).toBe(true)
+  })
+
+  it('closeFlagsFlyout clears the entity filter', () => {
+    useUIStore.getState().openFlagsForEntity('sample', 'P-0071')
+    useUIStore.getState().closeFlagsFlyout()
+    const state = useUIStore.getState()
+    expect(state.flagsEntityFilter).toBeNull()
+    expect(state.flagsFlyoutOpen).toBe(false)
+  })
+})
+
 describe('UIStore customer detail tabs + order search', () => {
   beforeEach(() => {
     useUIStore.setState(useUIStore.getInitialState())

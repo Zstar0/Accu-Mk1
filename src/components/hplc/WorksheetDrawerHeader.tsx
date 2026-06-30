@@ -11,6 +11,7 @@ import {
 } from '@/components/ui/select'
 import type { WorksheetListItem } from '@/lib/api'
 import { displayName } from '@/lib/user-display'
+import { EntityFlagButton } from '@/components/flags/EntityFlagButton'
 
 interface WorksheetDrawerHeaderProps {
   worksheet: WorksheetListItem
@@ -132,6 +133,15 @@ export function WorksheetDrawerHeader({
           >
             {worksheet.title}
           </span>
+        )}
+        {/* Flag System (Plan 4): stateful flag button for this worksheet. */}
+        {!editingTitle && (
+          <div className="ml-auto shrink-0">
+            <EntityFlagButton
+              entityType="worksheet"
+              entityId={String(worksheet.id)}
+            />
+          </div>
         )}
       </div>
 

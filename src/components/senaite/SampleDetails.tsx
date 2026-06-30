@@ -151,6 +151,7 @@ import { OrderedProducts, useOrderedProducts } from '@/components/senaite/Ordere
 import { ProductChip } from '@/components/senaite/ProductChip'
 import { computeProductCompletion, type ProductCompletionContext } from '@/lib/product-completion'
 import { VialsQuickLookDialog } from '@/components/senaite/VialsQuickLookDialog'
+import { EntityFlagButton } from '@/components/flags/EntityFlagButton'
 import { Eye, Microscope, Plus, Printer, Search, Star, Trash2, ScrollText, Sigma } from 'lucide-react'
 import { VarianceSummary } from '@/components/samples/VarianceSummary'
 import { usePrintLabel } from '@/components/samples/usePrintLabel'
@@ -2907,6 +2908,17 @@ export function SampleDetails() {
     enabled: !!parentSampleId,
   })
 
+  // Flag System (Plan 4): the entity this page's stateful flag button targets.
+  // Parent pages flag the sample and aggregate their vials' flags
+  // (includeDescendants); vial pages flag just this vial (its LimsSubSample pk).
+  // The sample id is the human Sample ID — the backend registry resolves it.
+  const flagEntityType = isParent ? 'sample' : 'sub_sample'
+  const flagEntityId = isParent
+    ? (data?.sample_id ?? '')
+    : String(
+        parentSummary?.sub_samples.find(s => s.sample_id === sampleId)?.id ?? ''
+      )
+
   // Vial-page Mk1 attachments: the check-in photo URL (also drives the header
   // thumb after edits) and the extra sample images. vialPhotoVersion bumps
   // force a refetch after replace/remove (the api.ts object-URL cache is
@@ -3862,6 +3874,20 @@ export function SampleDetails() {
               />
             )
           })()}
+
+          {/* Flag System (Plan 4): prominent stateful flag button, top-right by
+              the thumbnail. Parent pages aggregate their vials' flags; vial
+              pages flag just this vial. */}
+          {flagEntityId && (
+            <div className="flex items-start">
+              <EntityFlagButton
+                entityType={flagEntityType}
+                entityId={flagEntityId}
+                includeDescendants={isParent}
+                size="lg"
+              />
+            </div>
+          )}
 
           {/* Ordered-product chips — own line, right-aligned, directly above the
               action bar. overflow-x so a long set scrolls instead of wrapping. */}

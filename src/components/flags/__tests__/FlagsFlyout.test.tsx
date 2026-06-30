@@ -15,11 +15,18 @@ vi.mock('@/components/flags/flag-users', () => ({
 
 // Mock the data hooks — these tests guard wiring, not the network.
 const useFlagsList = vi.fn()
+const useEntityFlags = vi.fn((..._args: unknown[]) => ({
+  data: [] as FlagResponse[],
+  isLoading: false,
+  isError: false,
+  refetch: vi.fn(),
+}))
 vi.mock('@/hooks/use-flags', async orig => {
   const actual = (await orig()) as Record<string, unknown>
   return {
     ...actual,
     useFlagsList: (...args: unknown[]) => useFlagsList(...args),
+    useEntityFlags: (...args: unknown[]) => useEntityFlags(...args),
     useFlag: () => ({ data: undefined, isLoading: true, isError: false }),
     useCreateFlag: () => ({ mutate: vi.fn(), isPending: false }),
   }
@@ -52,7 +59,11 @@ describe('FlagsFlyout', () => {
       isError: false,
       refetch: vi.fn(),
     })
-    useUIStore.setState({ flagsFlyoutOpen: true, flagsThreadId: null })
+    useUIStore.setState({
+      flagsFlyoutOpen: true,
+      flagsThreadId: null,
+      flagsEntityFilter: null,
+    })
   })
 
   it('renders the cards for the default (assigned) tab', async () => {
@@ -118,5 +129,49 @@ describe('FlagsFlyout', () => {
     fireEvent.click(chipLabel)
     expect(useUIStore.getState().sampleDetailsTargetId).toBe('P-0071')
     expect(useUIStore.getState().flagsThreadId).toBeNull()
+  })
+
+  it('entity-filter mode shows a labeled chip + entity list and can clear back to tabs', async () => {
+    const f = flag(1, 'Crashed out — needs re-prep')
+    f.entity = {
+      entity_type: 'sample',
+      entity_id: 'P-0071',
+      label: 'P-0071',
+      sample_id: 'P-0071',
+      analyses: [],
+      lot: null,
+      deep_link: { kind: 'sample', id: 'P-0071' },
+    }
+    useEntityFlags.mockReturnValue({
+      data: [f],
+      isLoading: false,
+      isError: false,
+      refetch: vi.fn(),
+    })
+    useUIStore.setState({
+      flagsFlyoutOpen: true,
+      flagsThreadId: null,
+      flagsEntityFilter: {
+        type: 'sample',
+        id: 'P-0071',
+        includeDescendants: true,
+      },
+    })
+
+    const { FlagsFlyout } = await import('@/components/flags/FlagsFlyout')
+    render(<FlagsFlyout />)
+
+    // Header chip uses the resolved label; the tabs are not shown.
+    expect(await screen.findByText('Flags on P-0071')).toBeInTheDocument()
+    expect(screen.queryByRole('tab', { name: 'All open' })).toBeNull()
+    // Entity-filtered list drives the visible cards.
+    expect(useEntityFlags).toHaveBeenCalled()
+    expect(screen.getByText('Crashed out — needs re-prep')).toBeInTheDocument()
+
+    // Clearing the filter returns to the tabs.
+    fireEvent.click(
+      screen.getByRole('button', { name: /clear entity filter/i })
+    )
+    expect(useUIStore.getState().flagsEntityFilter).toBeNull()
   })
 })

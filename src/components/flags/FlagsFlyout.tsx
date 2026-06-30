@@ -1,14 +1,15 @@
 import { useState } from 'react'
-import { Flag } from 'lucide-react'
+import { Flag, X } from 'lucide-react'
 import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useUIStore } from '@/store/ui-store'
-import { useFlagsList } from '@/hooks/use-flags'
+import { useFlagsList, useEntityFlags } from '@/hooks/use-flags'
 import type { FlagTab } from '@/lib/flags-api'
 import { FlagCard } from '@/components/flags/FlagCard'
 import { FlagThread } from '@/components/flags/FlagThread'
 import { RaiseFlagButton } from '@/components/flags/RaiseFlagButton'
+import { entityLabel } from '@/components/flags/flag-entity'
 
 const TABS: { value: FlagTab; label: string }[] = [
   { value: 'assigned', label: 'Assigned to me' },
@@ -19,16 +20,36 @@ const TABS: { value: FlagTab; label: string }[] = [
 
 /**
  * Full-height right slide-over for the Flag System — mirrors WorksheetDrawer
- * (uses ui/sheet). Four triage tabs of flag cards; when a thread is selected it
- * swaps the list for the full FlagThread view. Visual target: flyout-form.html.
+ * (uses ui/sheet). Three modes: a selected thread (FlagThread), an
+ * entity-filtered list (driven by an EntityFlagButton with >1 flag), or the
+ * four triage tabs. Visual target: flyout-form.html.
  */
 export function FlagsFlyout() {
   const open = useUIStore(state => state.flagsFlyoutOpen)
   const threadId = useUIStore(state => state.flagsThreadId)
+  const entityFilter = useUIStore(state => state.flagsEntityFilter)
   const [tab, setTab] = useState<FlagTab>('assigned')
 
-  const { data: flags, isLoading, isError, refetch } = useFlagsList(tab)
+  const tabQuery = useFlagsList(tab)
+  const entityQuery = useEntityFlags(entityFilter?.type, entityFilter?.id, {
+    includeDescendants: entityFilter?.includeDescendants ?? false,
+  })
+
+  const filtering = entityFilter != null
+  const {
+    data: flags,
+    isLoading,
+    isError,
+    refetch,
+  } = filtering ? entityQuery : tabQuery
+
   const activeTabLabel = TABS.find(t => t.value === tab)?.label ?? 'Flags'
+  // Prefer the server-resolved label from a returned flag; fall back to the
+  // opaque "Vial 42" form when the list is empty / unresolved.
+  const entityLabelText = entityFilter
+    ? (flags?.find(f => f.entity?.label)?.entity?.label ??
+      entityLabel(entityFilter.type, entityFilter.id))
+    : ''
 
   return (
     <Sheet
@@ -47,29 +68,48 @@ export function FlagsFlyout() {
         ) : (
           <>
             {/* Header */}
-            <div className="flex items-center justify-between border-b px-4 py-3">
-              <h2 className="flex items-center gap-2 text-base font-semibold">
-                <Flag className="h-4 w-4" /> Flags
-              </h2>
-              <RaiseFlagButton variant="compact" />
-            </div>
+            {filtering ? (
+              <div className="flex items-center justify-between gap-2 border-b px-4 py-3">
+                <h2 className="flex min-w-0 items-center gap-2 text-base font-semibold">
+                  <Flag className="h-4 w-4 shrink-0" />
+                  <span className="truncate">Flags on {entityLabelText}</span>
+                </h2>
+                <button
+                  type="button"
+                  onClick={() => useUIStore.getState().clearFlagsEntityFilter()}
+                  aria-label="Clear entity filter"
+                  className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+            ) : (
+              <>
+                <div className="flex items-center justify-between border-b px-4 py-3">
+                  <h2 className="flex items-center gap-2 text-base font-semibold">
+                    <Flag className="h-4 w-4" /> Flags
+                  </h2>
+                  <RaiseFlagButton variant="compact" />
+                </div>
 
-            {/* Tabs */}
-            <div className="border-b px-3 pt-2">
-              <Tabs value={tab} onValueChange={v => setTab(v as FlagTab)}>
-                <TabsList className="h-auto flex-wrap bg-transparent p-0">
-                  {TABS.map(t => (
-                    <TabsTrigger
-                      key={t.value}
-                      value={t.value}
-                      className="rounded-b-none border-b-2 border-transparent px-3 py-1.5 text-xs data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none"
-                    >
-                      {t.label}
-                    </TabsTrigger>
-                  ))}
-                </TabsList>
-              </Tabs>
-            </div>
+                {/* Tabs */}
+                <div className="border-b px-3 pt-2">
+                  <Tabs value={tab} onValueChange={v => setTab(v as FlagTab)}>
+                    <TabsList className="h-auto flex-wrap bg-transparent p-0">
+                      {TABS.map(t => (
+                        <TabsTrigger
+                          key={t.value}
+                          value={t.value}
+                          className="rounded-b-none border-b-2 border-transparent px-3 py-1.5 text-xs data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none"
+                        >
+                          {t.label}
+                        </TabsTrigger>
+                      ))}
+                    </TabsList>
+                  </Tabs>
+                </div>
+              </>
+            )}
 
             {/* List */}
             <div className="min-h-0 flex-1 overflow-auto p-2">
@@ -101,9 +141,11 @@ export function FlagsFlyout() {
                   <Flag className="mb-3 h-8 w-8 text-muted-foreground/30" />
                   <p className="text-sm font-semibold">No flags here</p>
                   <p className="mt-1 text-xs text-muted-foreground">
-                    {tab === 'assigned'
-                      ? 'Nothing is assigned to you right now.'
-                      : 'This tab is empty.'}
+                    {filtering
+                      ? 'No open flags on this item.'
+                      : tab === 'assigned'
+                        ? 'Nothing is assigned to you right now.'
+                        : 'This tab is empty.'}
                   </p>
                 </div>
               )}
