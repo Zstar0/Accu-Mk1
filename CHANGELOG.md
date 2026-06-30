@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.0.12 — 2026-06-29
+
+### Fixed
+
+- **Endotoxin product-chip completion classifies by keyword, not service group.** Prod has no 'Endotoxin' service group (ENDO-LAL lives under Microbiology), so the chip never went green despite a promoted result (P-0965). Endotoxin/sterility are now keyword-classified, working in prod and dev seeds.
+- **Promote no longer 502s on duplicate analysis-service keywords.** `resolve_parent_analyte_target` tolerates duplicate keywords (picks the peptide-bearing row deterministically; fails loudly only if duplicates span different peptides). Fixes "parent slot resolution failed: Multiple rows were found" on PB-0186 TB-500 purity.
+- **Analysis-service sync reconciles recreated SENAITE services.** When SENAITE deletes+recreates a service under a new UID, the sync adopts the existing row (same keyword, stale senaite_id) instead of cloning it — preserving result/slot references and preventing duplicate-keyword rows.
+
 ## v1.0.11 — 2026-06-28
 
 ### Fixed
