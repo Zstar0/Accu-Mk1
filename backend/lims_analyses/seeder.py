@@ -48,6 +48,8 @@ from models import (
     AnalysisService,
     LimsAnalysis,
     LimsSubSample,
+    ServiceGroup,
+    service_group_members,
 )
 
 log = logging.getLogger(__name__)
@@ -99,6 +101,36 @@ def select_services_for_role(db: Session, role: str) -> List[AnalysisService]:
     ).scalars().all()
     return list(rows)
 
+
+# Non-HPLC service group names whose keywords must NOT appear on HPLC vials.
+# Endotoxin is its own group (ENDO-LAL), a sibling of Microbiology (STER-PCR/KF)
+# — excluding only "Microbiology" let ENDO-LAL leak onto HPLC vials (BW-0015-S01).
+_NON_HPLC_GROUPS = ("Microbiology", "Endotoxin")
+
+
+def _micro_group_keywords(db: Session) -> Set[str]:
+    """Resolve the analysis keywords of the non-HPLC service groups (Microbiology
+    + Endotoxin) by group name.
+
+    Returns an empty set if none exist — so missing groups exclude nothing
+    (default-open). Consumed by the COA-generation gate in main.py and by
+    test_assign_role_fail_hard.py to determine which keywords should not appear on
+    HPLC vials. The HPLC mirror (mirror_parent_hplc_analyses) no longer calls this
+    function — it uses a fail-closed Department allow-list instead (see
+    mirror_parent_hplc_analyses)."""
+    rows = db.execute(
+        select(AnalysisService.keyword)
+        .join(
+            service_group_members,
+            service_group_members.c.analysis_service_id == AnalysisService.id,
+        )
+        .join(
+            ServiceGroup,
+            ServiceGroup.id == service_group_members.c.service_group_id,
+        )
+        .where(ServiceGroup.name.in_(_NON_HPLC_GROUPS))
+    ).scalars().all()
+    return {k for k in rows if k}
 
 
 def mirror_parent_hplc_analyses(
@@ -153,6 +185,9 @@ def mirror_parent_hplc_analyses(
     # it can never leak onto a chromatography vial (was: exclude-known-Micro
     # deny-list, which defaulted to "contaminate the HPLC vial").
     analytical_dept_id = department_id_by_name(db, "Analytical")
+    if analytical_dept_id is None:
+        log.error("seeder.mirror.no_analytical_dept — aborting mirror (fail-closed)")
+        return []
 
     # raises -> fail-hard
     parent_keywords = senaite_mod.fetch_parent_analysis_keywords(parent_sample_id)
