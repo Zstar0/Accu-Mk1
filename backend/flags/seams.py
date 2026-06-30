@@ -77,15 +77,22 @@ def register_mk1_entities() -> None:
         row = db.get(LimsSubSample, int(eid)) if str(eid).isdigit() else None
         return getattr(row, "sample_id", None) or f"Vial {eid}"
 
+    # Deep links reconciled against the real frontend useHashNavigation routes
+    # (Plan 3 Task 7). Hash format is `#<section>/<subsection>?id=<id>`.
     register_entity("sample",
                     label=_sample_label,
                     deep_link=lambda eid: f"/#senaite/sample-details?id={eid}",
                     can_flag=lambda user, eid: True)
+    # NOTE: there is no dedicated vial/sub-sample route — vials are viewed inside
+    # the parent sample page, and the sub-sample pk alone can't resolve the
+    # parent here. The frontend suppresses the deep-link arrow for sub_sample
+    # (documented gap); we point at the sample-details route as the closest
+    # landing rather than the former non-existent `/#vials/{eid}`.
     register_entity("sub_sample",
                     label=_sub_sample_label,
-                    deep_link=lambda eid: f"/#vials/{eid}",
+                    deep_link=lambda eid: f"/#senaite/sample-details?id={eid}",
                     can_flag=lambda user, eid: True)
     register_entity("worksheet",
                     label=lambda db, eid: f"Worksheet {eid}",
-                    deep_link=lambda eid: f"/#worksheets/{eid}",
+                    deep_link=lambda eid: f"/#hplc-analysis/worksheet-detail?id={eid}",
                     can_flag=lambda user, eid: True)

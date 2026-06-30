@@ -27,6 +27,9 @@ import { Button } from '@/components/ui/button'
 import { ClipboardList } from 'lucide-react'
 import { useWorksheetDrawer } from '@/hooks/use-worksheet-drawer'
 import { useUIStore } from '@/store/ui-store'
+import { FlagsHeaderButton } from '@/components/flags/FlagsHeaderButton'
+import { FlagsFlyout } from '@/components/flags/FlagsFlyout'
+import { useFlagStreamGlue } from '@/components/flags/use-flag-stream-glue'
 
 // Backend connection status type
 type BackendStatus =
@@ -66,6 +69,11 @@ export function MainWindow() {
   // Set up global event listeners (keyboard shortcuts, etc.)
   useMainWindowEventListeners()
   useHashNavigation()
+
+  // Flag System live updates: one SSE subscription at app scope. Returns the
+  // glow signal for the header button (bumped on relevant events, cleared when
+  // the flyout opens).
+  const flagsHasNew = useFlagStreamGlue()
 
   useEffect(() => {
     getVersion()
@@ -162,8 +170,9 @@ export function MainWindow() {
               <SidebarTrigger className="-ml-1" />
               <Separator orientation="vertical" className="mr-2 h-4" />
               <span className="text-sm text-muted-foreground">Accu-Mk1</span>
-              <div className="ml-auto">
+              <div className="ml-auto flex items-center gap-2">
                 <WorksheetHeaderButton />
+                <FlagsHeaderButton hasNew={flagsHasNew} />
               </div>
             </header>
 
@@ -178,6 +187,7 @@ export function MainWindow() {
         <CommandPalette />
         <PreferencesDialog />
         <WorksheetDrawer />
+        <FlagsFlyout />
         <Toaster
           position="bottom-right"
           theme={

@@ -53,6 +53,7 @@ import {
   computePrimaryAnalysisUids,
   patchAnalysisInList,
 } from '@/components/senaite/vial-quicklook-helpers'
+import { RaiseFlagButton } from '@/components/flags/RaiseFlagButton'
 
 /** Role options for the quick re-assign dropdown — labels match SampleDetails'
  *  assignmentLabel switch (em-dashes, verbatim). `null` = Unassigned. */
@@ -332,6 +333,13 @@ function VialSection({
           ))}
         </DropdownMenuContent>
       </DropdownMenu>
+      {/* Raise a flag on this vial (Flag System) — prop-driven, entity is the
+          LimsSubSample pk. */}
+      <RaiseFlagButton
+        variant="compact"
+        entityType="sub_sample"
+        entityId={String(vial.id)}
+      />
       {/* ml-auto right-pins this in the slim (collapsed/loading/error/empty)
           wrapper, where the header row spans full width. Inside AnalysisTable's
           justify-between header the left block is content-sized, so it's a
