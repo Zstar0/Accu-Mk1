@@ -1,4 +1,4 @@
-import { useCallback } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   DndContext, PointerSensor, useSensor, useSensors, useDroppable, useDraggable,
@@ -8,12 +8,13 @@ import { Button } from '@/components/ui/button'
 import { usePrintLabel } from '@/components/samples/usePrintLabel'
 import { BoxLabelTemplate } from './BoxLabelTemplate'
 import {
-  listOrderBoxes, createBox, assignVialsToBox, printBox,
+  listOrderBoxes, createBox, assignVialsToBox, deleteBox, printBox,
   listSubSamples, type LimsBox, type SubSample,
 } from '@/lib/api'
 
 type BoxRole = 'hplc' | 'endo' | 'ster'
 const ROLE_LABEL: Record<BoxRole, string> = { hplc: 'HPLC', endo: 'Endotoxin', ster: 'Sterility' }
+const ROLES: BoxRole[] = ['hplc', 'endo', 'ster']
 
 // The sub-sample shape returned by `listSubSamples` carries a `box_id` link
 // once the boxing backend has stamped it. The base `SubSample` type predates
@@ -35,9 +36,17 @@ interface Props {
   sampleIds: string[]
 }
 
-export function BoxStep({ orderKey, clientId, sampleIds }: Props) {
+export function BoxStep({ orderKey, orderLabel, clientId, sampleIds }: Props) {
   const qc = useQueryClient()
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }))
+
+  // Capacity is frontend-only (ephemeral) — local per-box state driving the
+  // Auto-assign batch size. Defaults to the role's remaining-unboxed count at
+  // render (computed below), so the common "one box holds them all" is a click.
+  const [capacities, setCapacities] = useState<Record<number, number>>({})
+  // Guards the in-flight window of the first-box auto-create effect so a
+  // refetch/HMR never double-creates. Keyed `${orderKey}:${role}`.
+  const autoCreatedRef = useRef<Set<string>>(new Set())
 
   const boxesQ = useQuery({ queryKey: ['order-boxes', orderKey], queryFn: () => listOrderBoxes(orderKey) })
 
@@ -49,6 +58,36 @@ export function BoxStep({ orderKey, clientId, sampleIds }: Props) {
       return lists.flatMap(l => l.sub_samples)
     },
   })
+
+  const boxes = boxesQ.data ?? []
+  const vials = (vialsQ.data ?? []).filter(v => v.assignment_role && v.assignment_role !== 'xtra')
+
+  // Auto-create — FIRST box only. A render effect (ref-guarded): for each role
+  // with assigned-but-unboxed vials and zero boxes, mint exactly one box. The
+  // ref closes the in-flight window before the box list refetches; once a box
+  // of that role exists, `roleBoxes.length === 0` is false so it never refires.
+  // Trailing boxes are NOT created here — that is the event-driven path in
+  // `handleAutoAssign` below (no double-fire window, no ref needed).
+  useEffect(() => {
+    if (boxesQ.isLoading || vialsQ.isLoading) return
+    let cancelled = false
+    const run = async () => {
+      for (const role of ROLES) {
+        const unboxed = vials.filter(v => v.assignment_role === role && !v.box_id)
+        const roleBoxes = boxes.filter(b => b.role === role)
+        const key = `${orderKey}:${role}`
+        if (unboxed.length > 0 && roleBoxes.length === 0 && !autoCreatedRef.current.has(key)) {
+          autoCreatedRef.current.add(key)
+          await createBox(orderKey, role)
+          if (cancelled) return
+          await qc.invalidateQueries({ queryKey: ['order-boxes', orderKey] })
+        }
+      }
+    }
+    void run()
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [boxesQ.data, vialsQ.data, boxesQ.isLoading, vialsQ.isLoading, orderKey, qc])
 
   const handleDragEnd = useCallback(async (event: DragEndEvent) => {
     const subSampleId = String(event.active.id)
@@ -64,40 +103,92 @@ export function BoxStep({ orderKey, clientId, sampleIds }: Props) {
     await qc.invalidateQueries({ queryKey: ['order-boxes', orderKey] })
   }
 
+  // Auto-assign(box): fill up to `capacity - vial_count` of this box's role's
+  // unboxed vials, then — in the SAME handler (an event, not a render effect) —
+  // create the trailing box if the role still has unboxed vials and no empty
+  // box exists. Doing it here means no double-fire window, so no ref guard.
+  const handleAutoAssign = async (box: LimsBox) => {
+    const role = box.role as BoxRole
+    const roleUnboxed = vials.filter(v => v.assignment_role === role && !v.box_id)
+    const capacity = capacities[box.id] ?? roleUnboxed.length
+    const take = Math.max(0, capacity - box.vial_count)
+    const takenIds = roleUnboxed.slice(0, take).map(v => v.sample_id)
+    if (takenIds.length > 0) {
+      await assignVialsToBox(box.id, takenIds)
+      await qc.invalidateQueries({ queryKey: ['order-boxes', orderKey] })
+      await qc.invalidateQueries({ queryKey: ['order-vials', orderKey] })
+    }
+    const remaining = roleUnboxed.slice(take)
+    const otherEmptyBox = boxes.some(b => b.id !== box.id && b.role === role && b.vial_count === 0)
+    const thisBoxStillEmpty = box.vial_count + takenIds.length === 0
+    if (remaining.length > 0 && !otherEmptyBox && !thisBoxStillEmpty) {
+      await createBox(orderKey, role)
+      await qc.invalidateQueries({ queryKey: ['order-boxes', orderKey] })
+    }
+  }
+
+  const handleRemoveBox = async (box: LimsBox) => {
+    await deleteBox(box.id)
+    await qc.invalidateQueries({ queryKey: ['order-boxes', orderKey] })
+  }
+
   if (boxesQ.isLoading || vialsQ.isLoading) return <div className="p-6">Loading…</div>
-  const boxes = boxesQ.data ?? []
-  const vials = (vialsQ.data ?? []).filter(v => v.assignment_role && v.assignment_role !== 'xtra')
+
+  const unboxedVials = vials.filter(v => !v.box_id)
 
   return (
     <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
-      <div className="p-6 grid grid-cols-3 gap-4 overflow-y-auto h-full">
-        {(['hplc', 'endo', 'ster'] as BoxRole[]).map(role => (
-          <div key={role} className="flex flex-col gap-3">
-            <div className="flex items-center justify-between">
-              <h3 className="font-semibold">{ROLE_LABEL[role]}</h3>
-              <Button size="sm" variant="outline" onClick={() => void addBox(role)}>+ Add box</Button>
-            </div>
-            <UnboxedTray
-              role={role}
-              vials={vials.filter(v => v.assignment_role === role && !v.box_id)}
-            />
-            {boxes.filter(b => b.role === role).map(b => (
-              <BoxCard key={b.id} box={b} clientName={clientId} />
-            ))}
-          </div>
-        ))}
+      <div className="p-6 flex gap-4 h-full overflow-hidden">
+        {/* LEFT: per-role box columns + in-column drop targets (manual override). */}
+        <div className="flex-1 grid grid-cols-3 gap-4 overflow-y-auto">
+          {ROLES.map(role => {
+            const roleUnboxedCount = unboxedVials.filter(v => v.assignment_role === role).length
+            return (
+              <div key={role} className="flex flex-col gap-3">
+                <div className="flex items-center justify-between">
+                  <h3 className="font-semibold">{ROLE_LABEL[role]}</h3>
+                  <Button size="sm" variant="outline" onClick={() => void addBox(role)}>+ Add box</Button>
+                </div>
+                {boxes.filter(b => b.role === role).map(b => (
+                  <BoxCard
+                    key={b.id}
+                    box={b}
+                    clientName={clientId}
+                    capacity={capacities[b.id] ?? roleUnboxedCount}
+                    onCapacityChange={n => setCapacities(c => ({ ...c, [b.id]: n }))}
+                    onAutoAssign={() => void handleAutoAssign(b)}
+                    onRemove={() => void handleRemoveBox(b)}
+                  />
+                ))}
+              </div>
+            )
+          })}
+        </div>
+
+        {/* RIGHT: unboxed vials, grouped by role — drag source for overrides. */}
+        <UnboxedPanel orderLabel={orderLabel} vials={unboxedVials} />
       </div>
     </DndContext>
   )
 }
 
-function UnboxedTray({ role, vials }: { role: BoxRole; vials: { sample_id: string }[] }) {
+function UnboxedPanel({ orderLabel, vials }: { orderLabel: string; vials: OrderVial[] }) {
   return (
-    <div className="rounded border border-dashed p-2 min-h-12">
-      <div className="text-xs text-muted-foreground mb-1">Unboxed {ROLE_LABEL[role]}</div>
-      <div className="flex flex-wrap gap-1">
-        {vials.map(v => <VialChip key={v.sample_id} id={v.sample_id} />)}
-      </div>
+    <div className="w-56 shrink-0 overflow-y-auto rounded border p-3">
+      <div className="mb-2 text-sm font-semibold">Unboxed ({orderLabel})</div>
+      {ROLES.map(role => {
+        const rv = vials.filter(v => v.assignment_role === role)
+        if (rv.length === 0) return null
+        return (
+          <div key={role} className="mb-2">
+            <div className="mb-1 text-xs text-muted-foreground">{ROLE_LABEL[role]}</div>
+            <div className="flex flex-wrap gap-1">
+              {rv.map(v => <VialChip key={v.sample_id} id={v.sample_id} />)}
+            </div>
+          </div>
+        )
+      })}
+      {vials.length === 0 && <div className="text-xs text-muted-foreground">All vials boxed.</div>}
     </div>
   )
 }
@@ -112,7 +203,16 @@ function VialChip({ id }: { id: string }) {
   )
 }
 
-function BoxCard({ box, clientName }: { box: LimsBox; clientName: string | null }) {
+interface BoxCardProps {
+  box: LimsBox
+  clientName: string | null
+  capacity: number
+  onCapacityChange: (n: number) => void
+  onAutoAssign: () => void
+  onRemove: () => void
+}
+
+function BoxCard({ box, clientName, capacity, onCapacityChange, onAutoAssign, onRemove }: BoxCardProps) {
   const { setNodeRef, isOver } = useDroppable({ id: String(box.id) })
   const { printNode } = usePrintLabel()
   return (
@@ -120,15 +220,34 @@ function BoxCard({ box, clientName }: { box: LimsBox; clientName: string | null 
       className={`rounded border p-2 ${isOver ? 'ring-2 ring-primary' : ''}`}>
       <div className="flex items-center justify-between">
         <span className="font-mono font-semibold">{box.label_code}</span>
-        <Button size="sm" variant="ghost"
-          onClick={() => { void printBox(box.id); printNode(
-            <BoxLabelTemplate labelCode={box.label_code} clientName={clientName}
-              role={box.role} vialCount={box.vial_count} />,
-          ) }}>
-          {box.printed_at ? 'Reprint' : 'Print label'}
-        </Button>
+        <div className="flex items-center gap-1">
+          <Button size="sm" variant="ghost"
+            onClick={() => { void printBox(box.id); printNode(
+              <BoxLabelTemplate labelCode={box.label_code} clientName={clientName}
+                role={box.role} vialCount={box.vial_count} />,
+            ) }}>
+            {box.printed_at ? 'Reprint' : 'Print label'}
+          </Button>
+          {box.vial_count === 0 && (
+            <Button size="sm" variant="ghost" aria-label="Remove box"
+              onClick={onRemove}>×</Button>
+          )}
+        </div>
       </div>
       <div className="text-xs text-muted-foreground">{box.vial_count} vials</div>
+      <div className="mt-2 flex items-center gap-1">
+        <label className="text-xs text-muted-foreground" htmlFor={`cap-${box.id}`}>Cap</label>
+        <input
+          id={`cap-${box.id}`}
+          type="number"
+          min={0}
+          aria-label="Capacity"
+          value={capacity}
+          onChange={e => onCapacityChange(Number(e.target.value))}
+          className="w-16 rounded border px-1 py-0.5 text-xs"
+        />
+        <Button size="sm" variant="outline" onClick={onAutoAssign}>Auto-assign</Button>
+      </div>
     </div>
   )
 }
