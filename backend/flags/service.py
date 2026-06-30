@@ -100,7 +100,7 @@ def list_flags(db: Session, *, user_id: int, tab: str, status: Optional[str] = N
                entity_type: Optional[str] = None, entity_id: Optional[str] = None,
                include_descendants: bool = False) -> list[FlagFlag]:
     stmt = select(FlagFlag).order_by(FlagFlag.updated_at.desc())
-    open_states = ("open", "in_progress")
+    open_states = catalog.OPEN_STATES
     if tab == "assigned":
         stmt = stmt.where(FlagFlag.assignee_id == user_id, FlagFlag.status.in_(open_states))
     elif tab == "raised":
@@ -129,7 +129,7 @@ def list_flags(db: Session, *, user_id: int, tab: str, status: Optional[str] = N
 
 
 def summary(db: Session, *, user_id: int) -> dict:
-    open_states = ("open", "in_progress")
+    open_states = catalog.OPEN_STATES
     assigned = db.execute(
         select(FlagFlag).where(FlagFlag.assignee_id == user_id, FlagFlag.status.in_(open_states))
     ).scalars().all()
@@ -225,7 +225,7 @@ def change_status(db: Session, *, user, flag_id, to_status) -> FlagFlag:
     if to_status == "resolved":
         flag.resolved_at = datetime.utcnow()
         flag.resolved_by = actor_id
-    elif to_status in ("open", "in_progress"):
+    elif to_status in catalog.OPEN_STATES:
         flag.resolved_at = None
         flag.resolved_by = None
     _audit(db, flag, actor_id, "status_changed", from_value=from_status, to_value=to_status)
