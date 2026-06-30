@@ -114,6 +114,33 @@ describe('computeProductCompletion', () => {
     ).toBe(true)
   })
 
+  it('endotoxin: met when ENDO-LAL is promoted even though prod groups it under Microbiology', () => {
+    // Repro of the P-0965 prod bug: prod has only 'Core HPLC' + 'Microbiology'
+    // service groups (no 'Endotoxin' group); ENDO-LAL lives in 'Microbiology'.
+    // Endotoxin must be identified by keyword, not group name.
+    const r = computeProductCompletion(prod('endotoxin'), ctx({
+      analyses: [ana('ENDO-LAL', 'Microbiology'), ana('STER-PCR', 'Microbiology')],
+      promos: [promo('ENDO-LAL', ['P-0965-S02'])], // sterility NOT promoted
+    }))
+    expect(r).toEqual({ met: true, vials: ['P-0965-S02'] })
+  })
+
+  it('sterility: endotoxin sharing the Microbiology group does NOT satisfy it', () => {
+    const r = computeProductCompletion(prod('sterility_pcr'), ctx({
+      analyses: [ana('ENDO-LAL', 'Microbiology'), ana('STER-PCR', 'Microbiology')],
+      promos: [promo('ENDO-LAL', ['P-0965-S02'])], // only endo promoted
+    }))
+    expect(r!.met).toBe(false)
+  })
+
+  it('sterility: met when STER-PCR is promoted, regardless of endotoxin state', () => {
+    const r = computeProductCompletion(prod('sterility_pcr'), ctx({
+      analyses: [ana('ENDO-LAL', 'Microbiology'), ana('STER-PCR', 'Microbiology')],
+      promos: [promo('STER-PCR', ['P-0965-S03'])], // endo NOT promoted
+    }))
+    expect(r).toEqual({ met: true, vials: ['P-0965-S03'] })
+  })
+
   it('hplc: not met when no hplc-family analyses exist', () => {
     expect(
       computeProductCompletion(prod('hplcpurity_identity'), ctx({ analyses: [ana('ENDO-LAL', 'Endotoxin')] }))!.met,

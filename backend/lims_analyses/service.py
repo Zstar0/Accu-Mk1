@@ -70,9 +70,26 @@ def resolve_parent_analyte_target(
         return vial_keyword, None, None
     cat = m.group(1)  # 'PUR' or 'QTY'
 
-    vsvc = db.execute(
-        select(AnalysisService).where(AnalysisService.keyword == vial_keyword)
-    ).scalar_one_or_none()
+    # `keyword` is non-unique: a re-run of the analysis-services sync can clone
+    # per-substance services (prod had two PUR_TB500BETA4 rows). Tolerate the
+    # duplicates, but never guess across DIFFERENT peptides — that would target
+    # the wrong parent analyte slot and corrupt the COA. Fail loudly instead.
+    vsvc_rows = db.execute(
+        select(AnalysisService)
+        .where(AnalysisService.keyword == vial_keyword)
+        .order_by(AnalysisService.id)
+    ).scalars().all()
+    distinct_peptides = {r.peptide_id for r in vsvc_rows if r.peptide_id is not None}
+    if len(distinct_peptides) > 1:
+        raise BadRequestError(
+            f"Analysis-service keyword {vial_keyword!r} is duplicated across "
+            f"multiple peptides {sorted(distinct_peptides)}; dedupe Analysis "
+            f"Services before promoting."
+        )
+    vsvc = next(
+        (r for r in vsvc_rows if r.peptide_id is not None),
+        vsvc_rows[0] if vsvc_rows else None,
+    )
     if vsvc is None or vsvc.peptide_id is None:
         return vial_keyword, None, None
 
@@ -92,9 +109,13 @@ def resolve_parent_analyte_target(
         return vial_keyword, None, None
 
     parent_keyword = f"ANALYTE-{slot_n}-{cat}"
+    # Parent ANALYTE-* keywords can likewise be duplicated; the keyword string
+    # is what the SENAITE write-back uses, so pick deterministically.
     psvc = db.execute(
-        select(AnalysisService).where(AnalysisService.keyword == parent_keyword)
-    ).scalar_one_or_none()
+        select(AnalysisService)
+        .where(AnalysisService.keyword == parent_keyword)
+        .order_by(AnalysisService.id)
+    ).scalars().first()
     if psvc is None:
         return parent_keyword, None, None
     return parent_keyword, psvc.id, (psvc.title or parent_keyword)
