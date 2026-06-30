@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.0.13 — 2026-06-30
+
+### Fixed
+
+- **Numeric analysis results display at 2 dp on sample-details.** A promoted sub-sample value written to the parent AR at full precision (e.g. Fill Volume `9.710267415 mL` on BW-0037-S01) rendered in full on the SENAITE analyses table. `formatNumericResult()` trims only over-precise (>2 dp) numeric results to 2 dp at display; integers, ≤2 dp values, unit-suffixed values, and non-numeric text pass through unchanged. The stored value and the edit draft stay full precision — display-layer only. (Pairs with COA Builder 2.28.1.)
+
 ## v1.0.12 — 2026-06-29
 
 ### Fixed

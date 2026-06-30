@@ -37,6 +37,7 @@ import { ROLE_TEXT_CLASS, roleTextClass } from '@/lib/assignment-colors'
 import { PromotedFromBadge } from '@/components/senaite/PromotedFromBadge'
 import type { SampleSlaSnapshot } from '@/services/order-sla'
 import { AnalysisSlaCell } from '@/components/senaite/AnalysisSlaCell'
+import { formatNumericResult } from '@/components/senaite/senaite-utils'
 import { useAnalysisEditing, type UseAnalysisEditingReturn } from '@/hooks/use-analysis-editing'
 import { useAnalysisTransition, type UseAnalysisTransitionReturn } from '@/hooks/use-analysis-transition'
 import { useBulkAnalysisTransition } from '@/hooks/use-bulk-analysis-transition'
@@ -517,7 +518,9 @@ function resolveResultLabel(result: string | null, options: SenaiteAnalysis['res
   if (options.length > 0) {
     return options.find(o => o.value === result)?.label ?? result
   }
-  return result
+  // Numeric free-text path: trim over-precise promoted values to 2 dp for
+  // display only (the stored value and the edit draft stay full precision).
+  return formatNumericResult(result)
 }
 
 /** Maps stored identity result values to human-readable labels. */
