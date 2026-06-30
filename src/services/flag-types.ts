@@ -16,6 +16,7 @@ import {
   updateFlagType,
   deleteFlagType,
   getFlagEntityTypes,
+  FlagTypeApiError,
   type FlagType,
   type FlagTypeCreate,
   type FlagTypeUpdate,
@@ -88,9 +89,12 @@ export function useDeleteFlagType() {
       invalidateTypesAndFlags(qc)
       toast.success('Flag type deleted')
     },
-    // 409 (built-in/in-use) is handled by the caller (offer deactivate); other
-    // errors surface as a toast.
-    onError: (e: Error) => toast.error(e.message),
+    // 409 (built-in/in-use) is handled inline by the caller (offer deactivate);
+    // only surface a toast for other errors.
+    onError: (e: Error) => {
+      if (e instanceof FlagTypeApiError && e.status === 409) return
+      toast.error(e.message)
+    },
   })
 }
 
