@@ -5,9 +5,12 @@ Analytics is the Analytical bench; Microbiology and Endotoxin are both the
 Microbiology bench. (Plan 1B repointed the former hardcoded routing literals at
 this mapping.)
 """
+import logging
 from typing import Optional
 
 from sqlalchemy.orm import Session
+
+log = logging.getLogger(__name__)
 
 DEPARTMENT_NAMES = ["Analytical", "Microbiology"]
 
@@ -80,3 +83,23 @@ def backfill_departments(db: Session) -> None:
         svc.department_id = analytical_id
 
     db.commit()
+
+    # Defense-in-depth (Plan 1B): the HPLC-mirror fail-closed allow-list excludes
+    # any service whose department_id is NULL. After this backfill there should be
+    # none; if a future ungrouped analytical service slips through, make it LOUD —
+    # it would otherwise be silently dropped from HPLC-vial mirroring.
+    from sqlalchemy import func
+    null_count = db.query(func.count(AnalysisService.id)).filter(
+        AnalysisService.department_id.is_(None)
+    ).scalar()
+    if null_count:
+        samples = [
+            kw for (kw,) in db.query(AnalysisService.keyword)
+            .filter(AnalysisService.department_id.is_(None))
+            .limit(10).all()
+        ]
+        log.warning(
+            "catalog.backfill.null_department count=%s — these services have no "
+            "department and will be EXCLUDED from HPLC-vial mirroring (fail-closed). "
+            "Sample keywords: %s", null_count, samples,
+        )
