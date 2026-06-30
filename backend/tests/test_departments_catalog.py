@@ -165,3 +165,33 @@ def test_service_groups_response_includes_department_fields():
         assert "department_id" in groups[0]
         assert "is_assignable" in groups[0]
         assert "vials_required" in groups[0]
+
+
+def test_backfill_does_not_overwrite_existing_group_department(db_session):
+    """Review follow-up #4a: a manually-reassigned group.department_id survives a
+    re-run (backfill owns NULLs only, not a foot-gun once a UI can reassign)."""
+    from models import Department, ServiceGroup
+    from catalog.departments import backfill_departments
+    # Seed a group whose name maps to Analytical, but pin it to Microbiology by hand.
+    backfill_departments(db_session)  # creates Analytical + Microbiology
+    analytical = db_session.query(Department).filter_by(name="Analytical").one()
+    micro = db_session.query(Department).filter_by(name="Microbiology").one()
+    g = ServiceGroup(name="Analytics", department_id=micro.id)  # deliberately "wrong"
+    db_session.add(g)
+    db_session.commit()
+    backfill_departments(db_session)  # re-run must NOT clobber the manual choice
+    assert db_session.get(ServiceGroup, g.id).department_id == micro.id
+
+
+def test_backfill_tags_ungrouped_analyte_services_analytical(db_session):
+    """The ungrouped ANALYTE-N-* generics (the HPLC-mirror fallback rows) get the
+    Analytical department so the fail-closed allow-list (Task 2) keeps them."""
+    from models import Department, AnalysisService
+    from catalog.departments import backfill_departments
+    svc = AnalysisService(keyword="ANALYTE-1-PUR", title="Analyte 1 (Purity)", category="Peptide Analysis")
+    db_session.add(svc)
+    db_session.commit()
+    assert svc.department_id is None  # ungrouped → starts NULL
+    backfill_departments(db_session)
+    analytical = db_session.query(Department).filter_by(name="Analytical").one()
+    assert db_session.get(AnalysisService, svc.id).department_id == analytical.id
