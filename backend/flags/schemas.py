@@ -58,6 +58,26 @@ class EventResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class DeepLink(BaseModel):
+    """How the frontend navigates to a flagged entity. `kind` ∈
+    sample | worksheet | none; `id` is the navigator argument."""
+    kind: str
+    id: str
+
+
+class EntityContext(BaseModel):
+    """Server-resolved context for a flagged entity (Plan 4). Attached
+    optionally onto flag responses; null when the registry can't resolve it.
+    Produced by the Mk1 closures in `seams.register_mk1_entities`."""
+    entity_type: str
+    entity_id: str
+    label: str
+    sample_id: Optional[str] = None
+    analyses: List[str] = Field(default_factory=list)
+    lot: Optional[str] = None  # deferred — additive hook only (lives in SENAITE)
+    deep_link: DeepLink
+
+
 class FlagResponse(BaseModel):
     id: int
     entity_type: str
@@ -72,6 +92,8 @@ class FlagResponse(BaseModel):
     updated_at: datetime
     resolved_at: Optional[datetime]
     resolved_by: Optional[int]
+    # Optional server-resolved entity context (label/sample_id/analyses/deep_link).
+    entity: Optional[EntityContext] = None
     model_config = ConfigDict(from_attributes=True)
 
 

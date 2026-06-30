@@ -12,16 +12,30 @@ from sqlalchemy.orm import Session
 
 from auth import get_current_user
 from database import get_db
-from flags import service
+from flags import seams, service
 from flags.bus import BUS
 from flags.errors import BadRequestError, ConflictError, NotFoundError, PermissionDeniedError
 from flags.schemas import (
     AssignRequest, CommentRequest, CommentResponse, CreateFlagRequest,
-    FlagDetailResponse, FlagResponse, StatusRequest, SummaryResponse, WatcherRequest,
+    EntityContext, FlagDetailResponse, FlagResponse, StatusRequest, SummaryResponse,
+    WatcherRequest,
 )
 
 router = APIRouter(prefix="/api/flags", tags=["flags"])
 logger = logging.getLogger(__name__)
+
+
+def _with_entity(db: Session, flag, resp_cls=FlagResponse):
+    """Serialize a flag ORM row and decorate it with resolved entity context.
+
+    Context is best-effort (a card without it still renders) — `resolve_context`
+    swallows resolver errors and returns None, which leaves `entity` unset.
+    """
+    resp = resp_cls.model_validate(flag)
+    ctx = seams.resolve_context(db, flag.entity_type, flag.entity_id)
+    if ctx is not None:
+        resp.entity = EntityContext.model_validate(ctx)
+    return resp
 
 
 def _http(e: Exception) -> HTTPException:
@@ -42,10 +56,11 @@ def _http(e: Exception) -> HTTPException:
 @router.post("", response_model=FlagResponse, status_code=status.HTTP_201_CREATED)
 def create_flag(req: CreateFlagRequest, db: Session = Depends(get_db), user=Depends(get_current_user)):
     try:
-        return FlagResponse.model_validate(service.create_flag(
+        flag = service.create_flag(
             db, user=user, entity_type=req.entity_type, entity_id=req.entity_id,
             type=req.type, title=req.title, assignee_id=req.assignee_id,
-            first_comment=req.first_comment))
+            first_comment=req.first_comment)
+        return _with_entity(db, flag)
     except Exception as e:
         raise _http(e)
 
@@ -53,11 +68,13 @@ def create_flag(req: CreateFlagRequest, db: Session = Depends(get_db), user=Depe
 @router.get("", response_model=List[FlagResponse])
 def list_flags(tab: str = Query("all_open"), status: Optional[str] = None,
                entity_type: Optional[str] = None, entity_id: Optional[str] = None,
+               include_descendants: bool = False,
                db: Session = Depends(get_db), user=Depends(get_current_user)):
     try:
         rows = service.list_flags(db, user_id=getattr(user, "id", None), tab=tab,
-                                  status=status, entity_type=entity_type, entity_id=entity_id)
-        return [FlagResponse.model_validate(r) for r in rows]
+                                  status=status, entity_type=entity_type, entity_id=entity_id,
+                                  include_descendants=include_descendants)
+        return [_with_entity(db, r) for r in rows]
     except Exception as e:
         raise _http(e)
 
@@ -100,7 +117,7 @@ async def stream(request: Request, user=Depends(get_current_user)):
 @router.get("/{flag_id}", response_model=FlagDetailResponse)
 def get_flag(flag_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
     try:
-        return FlagDetailResponse.model_validate(service.get_flag(db, flag_id))
+        return _with_entity(db, service.get_flag(db, flag_id), FlagDetailResponse)
     except Exception as e:
         raise _http(e)
 

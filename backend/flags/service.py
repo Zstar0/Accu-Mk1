@@ -6,7 +6,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
 from flags import catalog, permissions, seams
@@ -95,7 +95,8 @@ def get_flag(db: Session, flag_id: int) -> FlagFlag:
 
 
 def list_flags(db: Session, *, user_id: int, tab: str, status: Optional[str] = None,
-               entity_type: Optional[str] = None, entity_id: Optional[str] = None) -> list[FlagFlag]:
+               entity_type: Optional[str] = None, entity_id: Optional[str] = None,
+               include_descendants: bool = False) -> list[FlagFlag]:
     stmt = select(FlagFlag).order_by(FlagFlag.updated_at.desc())
     open_states = ("open", "in_progress")
     if tab == "assigned":
@@ -112,8 +113,16 @@ def list_flags(db: Session, *, user_id: int, tab: str, status: Optional[str] = N
     if status:
         stmt = stmt.where(FlagFlag.status == status)
     if entity_type and entity_id:
-        stmt = stmt.where(FlagFlag.entity_type == entity_type,
-                          FlagFlag.entity_id == str(entity_id))
+        # The matched set is the entity itself plus — when rolling up — its
+        # registry-resolved descendants (a sample's vials). The hierarchy lives
+        # entirely behind `resolve_descendants`; this stays entity-agnostic.
+        pairs = [(entity_type, str(entity_id))]
+        if include_descendants:
+            pairs.extend(seams.resolve_descendants(db, entity_type, str(entity_id)))
+        stmt = stmt.where(or_(*[
+            and_(FlagFlag.entity_type == et, FlagFlag.entity_id == eid)
+            for et, eid in pairs
+        ]))
     return list(db.execute(stmt).scalars().all())
 
 
