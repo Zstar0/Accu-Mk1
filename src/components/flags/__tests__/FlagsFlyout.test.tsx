@@ -86,4 +86,37 @@ describe('FlagsFlyout', () => {
 
     expect(useUIStore.getState().flagsThreadId).toBe(1)
   })
+
+  it('renders resolved entity context (Sample ID + analytes) and navigates on chip click', async () => {
+    const f = flag(1, 'Crashed out — needs re-prep')
+    f.entity = {
+      entity_type: 'sub_sample',
+      entity_id: '1',
+      label: 'P-0071-S01',
+      sample_id: 'P-0071',
+      analyses: ['PEPT-Total', 'HPLC-PUR'],
+      lot: null,
+      deep_link: { kind: 'sample', id: 'P-0071' },
+    }
+    useFlagsList.mockReturnValue({
+      data: [f],
+      isLoading: false,
+      isError: false,
+      refetch: vi.fn(),
+    })
+
+    const { FlagsFlyout } = await import('@/components/flags/FlagsFlyout')
+    render(<FlagsFlyout />)
+
+    // Resolved label on the chip + secondary context line.
+    const chipLabel = await screen.findByText('P-0071-S01')
+    expect(screen.getByText('P-0071')).toBeInTheDocument()
+    expect(screen.getByText('PEPT-Total, HPLC-PUR')).toBeInTheDocument()
+
+    // Clicking the chip deep-links via the resolved deep_link (vial → parent
+    // sample), and does NOT open the thread.
+    fireEvent.click(chipLabel)
+    expect(useUIStore.getState().sampleDetailsTargetId).toBe('P-0071')
+    expect(useUIStore.getState().flagsThreadId).toBeNull()
+  })
 })
