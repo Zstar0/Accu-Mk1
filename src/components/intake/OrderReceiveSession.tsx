@@ -47,10 +47,15 @@ export function OrderReceiveSession({ order, onClose }: Props) {
 
   if (!current) return null
 
-  const clientName = details.details?.client ?? order.clientId ?? current.client_id
-  const sampleType = details.details?.sample_type ?? current.sample_type
-  const analytes = analyteLabel(details.details, current)
-  const lot = details.details?.client_lot ?? null
+  const d = details.details
+  const clientName = d?.client ?? order.clientId ?? current.client_id
+  const contact = d?.contact ?? null
+  const sampleType = d?.sample_type ?? current.sample_type
+  const orderNumber = d?.client_order_number ?? current.client_order_number ?? null
+  const clientSampleId = d?.client_sample_id ?? null
+  const lot = d?.client_lot ?? null
+  const declaredQty = d?.declared_weight_mg != null ? `${d.declared_weight_mg} mg` : null
+  const analytes = analyteLabel(d, current)
 
   return (
     <Dialog open onOpenChange={open => { if (!open) onClose() }}>
@@ -62,38 +67,52 @@ export function OrderReceiveSession({ order, onClose }: Props) {
         <DialogTitle className="sr-only">Receive {order.orderLabel}</DialogTitle>
 
         {/* ── Header bar ───────────────────────────────────────────────── */}
-        <header className="flex items-center justify-between gap-4 px-6 py-3 border-b bg-muted/10">
-          <div className="flex flex-col gap-1 min-w-0">
-            <h2 className="text-base font-semibold leading-tight truncate">
-              Receive {order.orderLabel}
-              {clientName && (
-                <span className="text-muted-foreground font-normal">
-                  {' · '}{clientName}
+        <header className="flex flex-col gap-2.5 px-6 py-3 border-b bg-muted/10">
+          {/* Top row: order label + active sample id, progress indicator */}
+          <div className="flex items-start justify-between gap-4">
+            <div className="flex flex-col gap-0.5 min-w-0">
+              <h2 className="text-base font-semibold leading-tight truncate">
+                Receive {order.orderLabel}
+                {clientName && (
+                  <span className="text-muted-foreground font-normal">
+                    {' · '}{clientName}
+                  </span>
+                )}
+              </h2>
+              {onBoxing ? (
+                <div className="flex items-center gap-1.5 text-sm text-muted-foreground">
+                  <Package className="h-3.5 w-3.5" aria-hidden="true" />
+                  <span>Assign this order’s vials into boxes</span>
+                </div>
+              ) : (
+                <span className="font-mono text-sm text-foreground truncate">
+                  {current.id}
                 </span>
               )}
-            </h2>
-            {onBoxing ? (
-              <div className="flex items-center gap-1.5 text-sm text-muted-foreground">
-                <Package className="h-3.5 w-3.5" aria-hidden="true" />
-                <span>Assign this order’s vials into boxes</span>
-              </div>
-            ) : (
-              <div className="flex items-center gap-2 text-sm text-muted-foreground min-w-0">
-                <span className="font-mono text-foreground">{current.id}</span>
-                {sampleType && <span className="truncate">· {sampleType}</span>}
-                {analytes && <span className="truncate">· {analytes}</span>}
-                {lot && <span className="truncate">· Lot {lot}</span>}
-              </div>
-            )}
+            </div>
+            <div className="flex flex-col items-end gap-0.5 shrink-0">
+              <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                {onBoxing ? 'Stage' : 'Progress'}
+              </span>
+              <span className="text-sm font-mono font-semibold tabular-nums">
+                {onBoxing ? 'Boxing' : `Sample ${index + 1} of ${total}`}
+              </span>
+            </div>
           </div>
-          <div className="flex flex-col items-end gap-0.5 shrink-0">
-            <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
-              {onBoxing ? 'Stage' : 'Progress'}
-            </span>
-            <span className="text-sm font-mono font-semibold tabular-nums">
-              {onBoxing ? 'Boxing' : `Sample ${index + 1} of ${total}`}
-            </span>
-          </div>
+
+          {/* Per-sample info strip — wraps gracefully, '—' fallbacks. Omitted
+              on the boxing stage, where the info is order-level (shown above). */}
+          {!onBoxing && (
+            <div className="flex flex-wrap items-start gap-x-6 gap-y-2 border-t pt-2.5">
+              <HeaderField label="Contact" value={contact} />
+              <HeaderField label="Sample Type" value={sampleType} />
+              <HeaderField label="Order #" value={orderNumber} />
+              <HeaderField label="Client Sample ID" value={clientSampleId} />
+              <HeaderField label="Client Lot" value={lot} />
+              <HeaderField label="Declared Qty" value={declaredQty} />
+              <HeaderField label="Analytes" value={analytes} className="max-w-[28rem]" />
+            </div>
+          )}
         </header>
 
         {/* ── Rail + main ──────────────────────────────────────────────── */}
@@ -146,12 +165,37 @@ export function OrderReceiveSession({ order, onClose }: Props) {
                 key={current.uid}
                 parent={{ uid: current.uid, sample_id: current.id, status: current.review_state ?? null }}
                 onClose={onClose}
+                hideSampleInfo
               />
             )}
           </div>
         </div>
       </DialogContent>
     </Dialog>
+  )
+}
+
+/** One compact key/value cell in the header info strip. Stacked label/value
+ *  with a truncating value (full text on hover) so the strip stays a tidy
+ *  single-line-per-field row that wraps as the dialog narrows. */
+function HeaderField({
+  label,
+  value,
+  className,
+}: {
+  label: string
+  value: string | null | undefined
+  className?: string
+}) {
+  return (
+    <div className={cn('flex flex-col gap-0.5 min-w-0', className)}>
+      <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
+        {label}
+      </span>
+      <span className="text-xs font-medium truncate" title={value || undefined}>
+        {value || '—'}
+      </span>
+    </div>
   )
 }
 

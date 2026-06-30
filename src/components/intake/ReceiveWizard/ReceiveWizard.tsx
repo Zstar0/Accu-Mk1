@@ -21,9 +21,19 @@ interface Props {
   // SampleDetails entry passes 'details' so techs land on the sub-sample
   // table they came in to see, not the empty new-vial form.
   initialPhase?: Phase
+  // Drops the persistent SampleInfoPanel sidebar so the body reflows to full
+  // width. Used by the order-session flow, which surfaces the same sample
+  // context in its own header — keeping the panel here would duplicate it.
+  // Default false: the standalone single-sample path is untouched.
+  hideSampleInfo?: boolean
 }
 
-export function ReceiveWizard({ parent, onClose, initialPhase = 'capture' }: Props) {
+export function ReceiveWizard({
+  parent,
+  onClose,
+  initialPhase = 'capture',
+  hideSampleInfo = false,
+}: Props) {
   const wiz = useReceiveWizard(parent)
   const parentDetails = useParentSampleDetails(parent.sample_id)
   const [phase, setPhase] = useState<Phase>(initialPhase)
@@ -265,8 +275,14 @@ export function ReceiveWizard({ parent, onClose, initialPhase = 'capture' }: Pro
         receivedCount={receivedCount}
       />
       {phaseTabs}
-      <div className="grid grid-cols-[260px_1fr] min-h-0 overflow-hidden">
-        {sidebar}
+      <div
+        className={
+          hideSampleInfo
+            ? 'grid grid-cols-1 min-h-0 overflow-hidden'
+            : 'grid grid-cols-[260px_1fr] min-h-0 overflow-hidden'
+        }
+      >
+        {!hideSampleInfo && sidebar}
         {body}
       </div>
       {footer}
