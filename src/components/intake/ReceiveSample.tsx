@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import {
   Loader2,
@@ -34,6 +34,7 @@ import {
   getSenaiteSamples,
   getSenaiteStatus,
   listSubSamples,
+  type ExplorerOrder,
   type SenaiteSample,
 } from '@/lib/api'
 import {
@@ -42,6 +43,9 @@ import {
   type EnrichedOrderGroup,
   type OrderGroup,
 } from '@/lib/inbox-orders'
+import type { OrderSlaVerdict } from '@/lib/sla-resolution'
+import { useOrderSlaStatuses } from '@/services/order-sla'
+import { useSenaiteLookupMap } from '@/services/senaite-lookup-map'
 import { OrderListRow } from '@/components/intake/OrderListRow'
 import { OrderReceiveSession } from '@/components/intake/OrderReceiveSession'
 
@@ -254,6 +258,30 @@ export function ReceiveSample() {
 
   const enriched = enrichOrderGroups(orderGroups, explorerOrders ?? [])
 
+  // Page-level SLA verdicts for the By-Order table — mirror OrderStatusPage:
+  // feed the matched ExplorerOrders to useSenaiteLookupMap (per-sample SENAITE
+  // lookups) and useOrderSlaStatuses (one /sla/status batch), then select a
+  // per-order verdict by order_id. Due-receive samples have no date_received
+  // yet, so the SLA clock hasn't started and most resolve to "awaiting" — the
+  // same not-started verdict Order Status shows for them.
+  const slaOrders = useMemo(
+    () =>
+      enriched
+        .map(g => g.order)
+        .filter((o): o is ExplorerOrder => o != null),
+    [enriched]
+  )
+  const { sampleLookupMap } = useSenaiteLookupMap(slaOrders)
+  const orderSla = useOrderSlaStatuses(slaOrders, sampleLookupMap)
+
+  const verdictFor = useCallback(
+    (group: EnrichedOrderGroup): OrderSlaVerdict | undefined =>
+      group.order
+        ? orderSla.verdictByOrderId.get(group.order.order_id)
+        : undefined,
+    [orderSla.verdictByOrderId]
+  )
+
   const handleProcessOrder = useCallback((group: EnrichedOrderGroup) => {
     setSelectedOrder(group)
   }, [])
@@ -386,6 +414,7 @@ export function ReceiveSample() {
                       <OrderListRow
                         key={group.orderKey ?? '__none__'}
                         group={group}
+                        slaVerdict={verdictFor(group)}
                         onProcess={handleProcessOrder}
                       />
                     ))}
