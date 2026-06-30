@@ -42,6 +42,21 @@ export default defineConfig(async () => ({
     port: 1420,
     strictPort: true,
     host: host || false,
+    // Same-origin API proxy — mirrors the baked nginx image (nginx.conf:
+    // `location /api/` strips the prefix and proxies to the backend). When a
+    // mounted dev stack sets VITE_API_URL=/api, the SPA calls a relative base
+    // and this dev server forwards /api/* to the backend container, stripping
+    // /api exactly like nginx. That makes a stack reached over Tailscale work
+    // with no absolute "localhost" base, no backend CORS, and no exposed
+    // backend port. Dormant for local desktop dev (absolute VITE_API_URL never
+    // hits /api). changeOrigin stays off to preserve the Host header like nginx.
+    proxy: {
+      '/api': {
+        target: process.env.VITE_PROXY_TARGET || 'http://127.0.0.1:8012',
+        changeOrigin: false,
+        rewrite: p => p.replace(/^\/api/, ''),
+      },
+    },
     hmr: host
       ? {
           protocol: 'ws',
