@@ -837,6 +837,63 @@ def _run_migrations():
         )
         """,
         "CREATE INDEX IF NOT EXISTS ix_flag_events_flag ON flag_events (flag_id)",
+        # --- flag_types catalog (Plan 5) ---
+        """
+        CREATE TABLE IF NOT EXISTS flag_types (
+            id           SERIAL PRIMARY KEY,
+            slug         TEXT NOT NULL UNIQUE,
+            label        TEXT NOT NULL,
+            color        TEXT NOT NULL,
+            kind         TEXT NOT NULL,
+            is_blocking  BOOLEAN NOT NULL DEFAULT FALSE,
+            is_active    BOOLEAN NOT NULL DEFAULT TRUE,
+            sort_order   INTEGER NOT NULL DEFAULT 0,
+            entity_types JSONB NOT NULL DEFAULT '[]'::jsonb,
+            is_builtin   BOOLEAN NOT NULL DEFAULT FALSE,
+            created_at   TIMESTAMP NOT NULL DEFAULT NOW(),
+            updated_at   TIMESTAMP NOT NULL DEFAULT NOW()
+        )
+        """,
+        # Seed the 5 built-ins idempotently (mirrors flags/catalog.py FLAG_TYPES
+        # + FLAG_TYPE_ORDER). entity_types='[]' = global. is_builtin=true blocks
+        # hard-delete (deactivate only). Existing flags reference these slugs.
+        """
+        INSERT INTO flag_types (slug, label, color, kind, is_blocking, is_active, sort_order, entity_types, is_builtin)
+        SELECT 'blocker', 'Blocker', '#e5484d', 'issue', TRUE, TRUE, 0, '[]'::jsonb, TRUE
+        WHERE NOT EXISTS (SELECT 1 FROM flag_types WHERE slug='blocker')
+        """,
+        """
+        INSERT INTO flag_types (slug, label, color, kind, is_blocking, is_active, sort_order, entity_types, is_builtin)
+        SELECT 'critical', 'Critical', '#e8730a', 'issue', TRUE, TRUE, 1, '[]'::jsonb, TRUE
+        WHERE NOT EXISTS (SELECT 1 FROM flag_types WHERE slug='critical')
+        """,
+        """
+        INSERT INTO flag_types (slug, label, color, kind, is_blocking, is_active, sort_order, entity_types, is_builtin)
+        SELECT 'question', 'Question', '#3b82f6', 'issue', FALSE, TRUE, 2, '[]'::jsonb, TRUE
+        WHERE NOT EXISTS (SELECT 1 FROM flag_types WHERE slug='question')
+        """,
+        """
+        INSERT INTO flag_types (slug, label, color, kind, is_blocking, is_active, sort_order, entity_types, is_builtin)
+        SELECT 'waiting_on_customer', 'Waiting on Customer', '#8b5cf6', 'issue', FALSE, TRUE, 3, '[]'::jsonb, TRUE
+        WHERE NOT EXISTS (SELECT 1 FROM flag_types WHERE slug='waiting_on_customer')
+        """,
+        """
+        INSERT INTO flag_types (slug, label, color, kind, is_blocking, is_active, sort_order, entity_types, is_builtin)
+        SELECT 'ready_for_verification', 'Ready for Verification', '#22c55e', 'signal', FALSE, TRUE, 4, '[]'::jsonb, TRUE
+        WHERE NOT EXISTS (SELECT 1 FROM flag_types WHERE slug='ready_for_verification')
+        """,
+        # Extend the NAMED status CHECK to admit 'blocked' (Plan 5). A dedicated
+        # DROP+ADD statement — NOT an edit to the IF-NOT-EXISTS flag_flags create
+        # (which never re-runs once the table exists). Postgres-only; on the
+        # SQLite test path this statement fails and is swallowed per-statement
+        # (the CHECK doesn't exist there anyway). Without this, writing 'blocked'
+        # would 500 against the live Postgres constraint.
+        """
+        ALTER TABLE flag_flags
+            DROP CONSTRAINT IF EXISTS flag_flags_status_check,
+            ADD CONSTRAINT flag_flags_status_check
+                CHECK (status IN ('open','in_progress','blocked','resolved','closed'))
+        """,
     ]
     # Per-statement isolation: a failure in one statement (e.g., a table that
     # create_all hasn't built yet on first run) must not skip subsequent
