@@ -15811,12 +15811,17 @@ async def list_worksheets(
         group_ids = {it.service_group_id for it in items if it.service_group_id}
         group_name_map: dict[int, str] = {}
         group_peptide_map: dict[int, int | None] = {}
+        group_department_name_map: dict[int, str | None] = {}
         if group_ids:
+            from models import Department
             groups = db.execute(
-                select(ServiceGroup.id, ServiceGroup.name, ServiceGroup.color).where(ServiceGroup.id.in_(group_ids))
+                select(ServiceGroup.id, ServiceGroup.name, ServiceGroup.color, Department.name)
+                .outerjoin(Department, Department.id == ServiceGroup.department_id)
+                .where(ServiceGroup.id.in_(group_ids))
             ).all()
-            group_name_map = {g.id: g.name for g in groups}
-            group_color_map: dict[int, str] = {g.id: g.color for g in groups}
+            group_name_map = {g[0]: g[1] for g in groups}
+            group_color_map: dict[int, str] = {g[0]: g[2] for g in groups}
+            group_department_name_map = {g[0]: g[3] for g in groups}
             # Resolve peptide_id and analyses per group
             group_analyses_map: dict[int, list[dict]] = {}
             for gid in group_ids:
@@ -15923,6 +15928,7 @@ async def list_worksheets(
                     "sample_id": it.sample_id,
                     "sample_uid": it.sample_uid,
                     "service_group_id": it.service_group_id,
+                    "department_name": group_department_name_map.get(it.service_group_id) if it.service_group_id else None,
                     "group_name": group_name_map.get(it.service_group_id, "—") if it.service_group_id else "—",
                     "group_color": group_color_map.get(it.service_group_id, "zinc") if it.service_group_id else "zinc",
                     "priority": it.priority,
