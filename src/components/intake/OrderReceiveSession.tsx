@@ -116,7 +116,7 @@ export function OrderReceiveSession({ order, onClose }: Props) {
         </header>
 
         {/* ── Rail + main ──────────────────────────────────────────────── */}
-        <div className="grid grid-cols-[220px_1fr] min-h-0 overflow-hidden">
+        <div className="grid grid-cols-[300px_1fr] min-h-0 overflow-hidden">
           {/* Left rail: sample list + boxing entry */}
           <nav className="flex flex-col min-h-0 border-r bg-muted/5">
             <div className="px-3 py-2 text-[10px] uppercase tracking-wider text-muted-foreground border-b">
@@ -200,8 +200,11 @@ function HeaderField({
 }
 
 /** A single sample row in the left rail. Lazily fetches the sub-sample count
- *  so a ✓ marks samples that already have received vials. staleTime keeps the
- *  per-sample lookups from refiring as the tech walks the order. */
+ *  so a ✓ marks samples that already have received vials, plus the parent
+ *  details (lot + analytes) for an at-a-glance per-sample summary. staleTime
+ *  and the react-query cache keep the per-sample lookups from refiring (and
+ *  dedupe with the header's call for the active sample) as the tech walks the
+ *  order. */
 function SampleRailRow({
   sample,
   active,
@@ -218,12 +221,21 @@ function SampleRailRow({
   })
   const received = (subQ.data?.parent.sub_sample_count ?? 0) > 0
 
+  // Per-row lot + analytes. Cached/deduped with the header's call for the
+  // active sample. `loading` is only used to soften the empty state — errors
+  // are intentionally swallowed (this is a glanceable summary, not a save path).
+  const details = useParentSampleDetails(sample.id)
+  const d = details.details
+  const lot = d?.client_lot ?? null
+  const analytes = analyteLabel(d, sample)
+  const placeholder = details.loading ? '…' : '—'
+
   return (
     <button
       type="button"
       onClick={onSelect}
       className={cn(
-        'flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition-colors border-l-2',
+        'flex w-full items-start gap-2 px-3 py-2 text-left text-sm transition-colors border-l-2',
         active
           ? 'border-primary bg-primary/10 text-foreground font-medium'
           : 'border-transparent text-muted-foreground hover:bg-muted/50 hover:text-foreground'
@@ -231,14 +243,26 @@ function SampleRailRow({
     >
       <span
         className={cn(
-          'flex h-4 w-4 shrink-0 items-center justify-center',
+          'mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center',
           received ? 'text-emerald-500' : 'text-transparent'
         )}
         aria-hidden="true"
       >
         <Check className="h-3.5 w-3.5" />
       </span>
-      <span className="font-mono truncate">{sample.id}</span>
+      <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <span className="font-mono truncate">{sample.id}</span>
+        <span className="flex flex-col gap-0.5 text-[11px] font-normal leading-tight text-muted-foreground">
+          <span className="truncate" title={lot || undefined}>
+            <span className="text-muted-foreground/70">Lot </span>
+            {lot || placeholder}
+          </span>
+          <span className="line-clamp-2" title={analytes || undefined}>
+            <span className="text-muted-foreground/70">Analytes </span>
+            {analytes || placeholder}
+          </span>
+        </span>
+      </span>
     </button>
   )
 }
