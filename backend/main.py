@@ -14510,13 +14510,31 @@ class InboxResponse(BaseModel):
     filter_role: Optional[str] = None  # echo of the query param so the frontend can confirm
 
 
-# Role → service_group_name set. Hardcoded — the lab has had Analytics +
-# Microbiology for years and a 2-entry mapping doesn't deserve a table.
-ROLE_TO_GROUP_NAMES: dict[str, set[str]] = {
-    "hplc": {"Analytics"},
-    "microbiology": {"Microbiology"},
+# Role → DEPARTMENT name. Department drives the lane: a new Microbiology-department
+# group (e.g. Sterility PCR) lands in the micro lane automatically, no name-pinning.
+ROLE_TO_DEPARTMENT_NAME: dict[str, str] = {
+    "hplc": "Analytical",
+    "microbiology": "Microbiology",
 }
-VALID_INBOX_ROLES = set(ROLE_TO_GROUP_NAMES.keys())
+VALID_INBOX_ROLES = set(ROLE_TO_DEPARTMENT_NAME.keys())
+
+
+def _inbox_allowed_group_ids(db, role: Optional[str]) -> Optional[set[int]]:
+    """Resolve a worksheet-inbox role to the set of service-group ids in that
+    role's DEPARTMENT. None role → None (no filter; pass all groups). Keying on
+    Department (not group name) means every group in the department — including a
+    newly-created Sterility-PCR group — is in the lane."""
+    if role is None:
+        return None
+    from models import Department
+    dept_name = ROLE_TO_DEPARTMENT_NAME[role]
+    return {
+        r[0] for r in db.execute(
+            select(ServiceGroup.id)
+            .join(Department, Department.id == ServiceGroup.department_id)
+            .where(Department.name == dept_name)
+        ).all()
+    }
 
 # Role-set membership for the assignment_role column. Microbiology covers
 # both 'ster' and 'endo' (collapsed into one filter chip per spec Q1).
@@ -14828,14 +14846,7 @@ async def get_worksheets_inbox(
         raise HTTPException(status_code=503, detail="SENAITE not configured")
 
     # Resolve role → allowed service_group IDs. None means "no filter; pass all groups".
-    allowed_group_ids: Optional[set[int]] = None
-    if role is not None:
-        group_names = ROLE_TO_GROUP_NAMES[role]
-        allowed_group_ids = {
-            r[0] for r in db.execute(
-                select(ServiceGroup.id).where(ServiceGroup.name.in_(group_names))
-            ).all()
-        }
+    allowed_group_ids: Optional[set[int]] = _inbox_allowed_group_ids(db, role)
 
     # Resolve allowed vial assignment_role values. NULL roles always excluded (auto-
     # assign on /vial-plan is the cure for those). XTRA gated by show_xtra.
