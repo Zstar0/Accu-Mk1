@@ -30,12 +30,19 @@ import { cn } from '@/lib/utils'
 import { ReceiveWizard } from '@/components/intake/ReceiveWizard/ReceiveWizard'
 import type { ParentInfo } from '@/components/intake/ReceiveWizard/useReceiveWizard'
 import {
+  getExplorerOrders,
   getSenaiteSamples,
   getSenaiteStatus,
   listSubSamples,
   type SenaiteSample,
 } from '@/lib/api'
-import { groupSamplesByOrder, type OrderGroup } from '@/lib/inbox-orders'
+import {
+  enrichOrderGroups,
+  groupSamplesByOrder,
+  type EnrichedOrderGroup,
+  type OrderGroup,
+} from '@/lib/inbox-orders'
+import { OrderListRow } from '@/components/intake/OrderListRow'
 import { OrderReceiveSession } from '@/components/intake/OrderReceiveSession'
 
 type SortColumn =
@@ -235,6 +242,22 @@ export function ReceiveSample() {
 
   const orderGroups = groupSamplesByOrder(filteredSamples)
 
+  // Join the due-sample order groups to their ExplorerOrder for the By-Order
+  // table (email, Created, customer deep-link). SLA verdicts are wired in a
+  // follow-on task; OrderListRow renders the SLA cell in its awaiting state.
+  const { data: explorerOrders } = useQuery({
+    queryKey: ['explorer', 'orders', 'receive'],
+    queryFn: () => getExplorerOrders(undefined, 200, 0),
+    enabled: dueSamplesConnected,
+    staleTime: 30_000,
+  })
+
+  const enriched = enrichOrderGroups(orderGroups, explorerOrders ?? [])
+
+  const handleProcessOrder = useCallback((group: EnrichedOrderGroup) => {
+    setSelectedOrder(group)
+  }, [])
+
   const loadDueSamples = useCallback(async () => {
     setDueSamplesLoading(true)
     setDueSamplesError(null)
@@ -347,23 +370,27 @@ export function ReceiveSample() {
                 <p className="text-sm">No due samples found</p>
               </div>
             ) : receiveMode === 'order' ? (
-              <div className="flex flex-col gap-2">
-                {orderGroups.map(group => (
-                  <button
-                    key={group.orderKey ?? '__none__'}
-                    type="button"
-                    onClick={() => setSelectedOrder(group)}
-                    className="flex items-center justify-between rounded-lg border p-3 text-left hover:bg-muted/40"
-                  >
-                    <span className="font-mono font-semibold">
-                      {group.orderLabel}
-                    </span>
-                    <span className="text-sm text-muted-foreground">
-                      {group.clientId ?? '—'} · {group.samples.length} sample
-                      {group.samples.length !== 1 ? 's' : ''}
-                    </span>
-                  </button>
-                ))}
+              <div className="overflow-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="w-36">Order #</TableHead>
+                      <TableHead>Client / Email</TableHead>
+                      <TableHead className="w-36">Created</TableHead>
+                      <TableHead className="w-32">SLA</TableHead>
+                      <TableHead className="w-24" />
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {enriched.map(group => (
+                      <OrderListRow
+                        key={group.orderKey ?? '__none__'}
+                        group={group}
+                        onProcess={handleProcessOrder}
+                      />
+                    ))}
+                  </TableBody>
+                </Table>
               </div>
             ) : (
               <div className="overflow-auto">
