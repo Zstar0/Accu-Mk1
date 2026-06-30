@@ -89,19 +89,24 @@ def _parent_quantity_unit(db: Session, parent) -> Optional[str]:
 
 
 def build_variance_replicates(db: Session, parent) -> dict:
-    """{peptide_name: [per-vial record, ...]} for the parent's variance vials."""
+    """{peptide_name: [per-vial record, ...]} for the parent's variance vials.
+
+    Includes ALL in-set sub-vials (core + variance) so each physical vial is its
+    own row. The core vial's results land in 'promoted' state; the variance vials'
+    results land in 'variance_verified'. Non-variance samples (no in-set variance
+    vial) return {} — the variance path must never fire for standard certs.
+    """
     qty_unit = _parent_quantity_unit(db, parent) or "mg"
+    # Variance sample = has >=1 in-set variance vial. Then list ALL in-set subs
+    # (core + variance) so each physical vial is its own row; the parent record
+    # is never a row (its figure is a promoted copy of one of these vials).
     subs = db.execute(
         select(LimsSubSample).where(
             LimsSubSample.parent_sample_pk == parent.id,
-            LimsSubSample.assignment_kind == "variance",
-            # Honor the overlay's "select which vials participate" — a deselected
-            # vial (in_variance_set=False, e.g. "Customer request") must not reach
-            # the COA, so the certified series matches the locked selection.
             LimsSubSample.in_variance_set.is_(True),
         ).order_by(LimsSubSample.vial_sequence)
     ).scalars().all()
-    if not subs:
+    if not any(s.assignment_kind == "variance" for s in subs):
         return {}
 
     out: dict[str, list] = {}
@@ -112,7 +117,7 @@ def build_variance_replicates(db: Session, parent) -> dict:
             .outerjoin(Peptide, Peptide.id == AnalysisService.peptide_id)
             .where(
                 LimsAnalysis.lims_sub_sample_pk == sub.id,
-                LimsAnalysis.review_state.in_(_SERIES_STATES),
+                LimsAnalysis.review_state.in_(_VIAL_COA_STATES),  # _SERIES_STATES + 'promoted'
                 LimsAnalysis.reportable == True,  # noqa: E712
                 # Current vial result = retested IS False (the newest row in the
                 # retest chain). retest_of_id IS NULL grabs the *canonical
