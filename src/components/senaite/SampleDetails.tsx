@@ -3843,11 +3843,11 @@ export function SampleDetails() {
             </div>
           )}
 
-          {/* Flag System (Plan 4): prominent stateful flag button, to the LEFT
-              of the thumbnail. Parent pages aggregate their vials' flags; vial
-              pages flag just this vial. */}
+          {/* Flag System (Plan 4): stateful flag button, right-aligned (ml-auto)
+              so it sits next to the thumbnail in the justify-between row. Parent
+              pages aggregate their vials' flags; vial pages flag just this vial. */}
           {flagEntityId && (
-            <div className="flex items-start">
+            <div className="flex items-start ml-auto">
               <EntityFlagButton
                 entityType={flagEntityType}
                 entityId={flagEntityId}
