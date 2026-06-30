@@ -3843,6 +3843,20 @@ export function SampleDetails() {
             </div>
           )}
 
+          {/* Flag System (Plan 4): prominent stateful flag button, to the LEFT
+              of the thumbnail. Parent pages aggregate their vials' flags; vial
+              pages flag just this vial. */}
+          {flagEntityId && (
+            <div className="flex items-start">
+              <EntityFlagButton
+                entityType={flagEntityType}
+                entityId={flagEntityId}
+                includeDescendants={isParent}
+                size="lg"
+              />
+            </div>
+          )}
+
           {/* Vial photo — far right of the top row, hover to enlarge.
               Vial pages: photo presence comes from the parent summary's vial
               record. Parent pages: the parent IS vial 1, and the photo endpoint
@@ -3874,20 +3888,6 @@ export function SampleDetails() {
               />
             )
           })()}
-
-          {/* Flag System (Plan 4): prominent stateful flag button, top-right by
-              the thumbnail. Parent pages aggregate their vials' flags; vial
-              pages flag just this vial. */}
-          {flagEntityId && (
-            <div className="flex items-start">
-              <EntityFlagButton
-                entityType={flagEntityType}
-                entityId={flagEntityId}
-                includeDescendants={isParent}
-                size="lg"
-              />
-            </div>
-          )}
 
           {/* Ordered-product chips — own line, right-aligned, directly above the
               action bar. overflow-x so a long set scrolls instead of wrapping. */}
