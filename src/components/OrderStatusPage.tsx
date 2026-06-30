@@ -55,6 +55,7 @@ import {
 } from '@/components/explorer/helpers'
 import { toggleFilterKey, isOrderAtRisk } from '@/components/explorer/order-filters'
 import { OrderRow } from '@/components/explorer/OrderRow'
+import { FlagIndicator } from '@/components/flags/FlagIndicator'
 import { SampleSlaIndicator } from '@/components/explorer/SampleSlaIndicator'
 import { useOrderSlaStatuses, type SampleSlaSnapshot } from '@/services/order-sla'
 import { useSenaiteLookupMap } from '@/services/senaite-lookup-map'
@@ -239,6 +240,7 @@ function KanbanSampleCard({
           >
             {item.sampleId}
           </button>
+          <FlagIndicator scope={{ kind: 'sample', sampleId: item.sampleId }} />
           {item.email && (
             <span className="text-[10px] text-muted-foreground/60 leading-none truncate">{item.email}</span>
           )}
@@ -462,6 +464,17 @@ function KanbanView({
               >
                 #{order.order_id}
               </a>
+              <FlagIndicator
+                scope={{
+                  kind: 'order',
+                  orderId: order.order_id,
+                  sampleIds: Object.values(order.sample_results ?? {})
+                    .filter(s => s.status !== 'failed' && s.senaite_id)
+                    .map(s => s.senaite_id),
+                  label: `#${order.order_number}`,
+                }}
+                variant="pill"
+              />
               {email && <span className="text-xs text-muted-foreground">{email}</span>}
               <span className="text-xs text-muted-foreground ml-auto">
                 {order.samples_delivered}/{order.samples_expected} samples · {formatProcessingTime(order.created_at, order.completed_at)}
