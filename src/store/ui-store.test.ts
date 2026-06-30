@@ -136,6 +136,56 @@ describe('UIStore customer actions', () => {
   })
 })
 
+describe('UIStore flags flyout + thread', () => {
+  beforeEach(() => {
+    useUIStore.setState({ flagsFlyoutOpen: false, flagsThreadId: null })
+  })
+
+  it('defaults to closed with no active thread', () => {
+    const state = useUIStore.getState()
+    expect(state.flagsFlyoutOpen).toBe(false)
+    expect(state.flagsThreadId).toBeNull()
+  })
+
+  it('openFlagsFlyout() opens the flyout (triage list, no thread)', () => {
+    useUIStore.getState().openFlagsFlyout()
+    const state = useUIStore.getState()
+    expect(state.flagsFlyoutOpen).toBe(true)
+    expect(state.flagsThreadId).toBeNull()
+  })
+
+  it('openFlagThread(7) opens the flyout onto thread 7', () => {
+    useUIStore.getState().openFlagThread(7)
+    const state = useUIStore.getState()
+    expect(state.flagsFlyoutOpen).toBe(true)
+    expect(state.flagsThreadId).toBe(7)
+  })
+
+  it('openFlagsFlyout() preserves an already-open thread id', () => {
+    useUIStore.getState().openFlagThread(3)
+    useUIStore.getState().closeFlagsFlyout()
+    // Re-open the list without arg — thread id was reset by close, stays null.
+    useUIStore.getState().openFlagsFlyout()
+    expect(useUIStore.getState().flagsThreadId).toBeNull()
+  })
+
+  it('closeFlagThread() drops the thread but keeps the flyout open', () => {
+    useUIStore.getState().openFlagThread(5)
+    useUIStore.getState().closeFlagThread()
+    const state = useUIStore.getState()
+    expect(state.flagsFlyoutOpen).toBe(true)
+    expect(state.flagsThreadId).toBeNull()
+  })
+
+  it('closeFlagsFlyout() resets both flyout and thread', () => {
+    useUIStore.getState().openFlagThread(9)
+    useUIStore.getState().closeFlagsFlyout()
+    const state = useUIStore.getState()
+    expect(state.flagsFlyoutOpen).toBe(false)
+    expect(state.flagsThreadId).toBeNull()
+  })
+})
+
 describe('UIStore customer detail tabs + order search', () => {
   beforeEach(() => {
     useUIStore.setState(useUIStore.getInitialState())
