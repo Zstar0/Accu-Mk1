@@ -1,10 +1,20 @@
 import { describe, it, expect } from 'vitest'
-import { groupSamplesByOrder } from '@/lib/inbox-orders'
-import type { SenaiteSample } from '@/lib/api'
+import { enrichOrderGroups, groupSamplesByOrder } from '@/lib/inbox-orders'
+import type { ExplorerOrder, SenaiteSample } from '@/lib/api'
 
 function s(id: string, order: string | null, client = 'RTD'): SenaiteSample {
   return { uid: id, id, client_order_number: order, client_id: client } as SenaiteSample
 }
+
+const grp = (orderKey: string | null) => ({
+  orderKey,
+  orderLabel: orderKey ?? 'No order',
+  clientId: 'acme',
+  samples: [],
+})
+
+const ord = (order_number: string, customer_id: number | null = 7) =>
+  ({ order_number, customer_id, created_at: '2026-06-24T00:00:00Z' } as unknown as ExplorerOrder)
 
 describe('groupSamplesByOrder', () => {
   it('groups samples sharing an order number', () => {
@@ -24,5 +34,20 @@ describe('groupSamplesByOrder', () => {
     const last = groups[groups.length - 1]!
     expect(last.orderKey).toBeNull()
     expect(last.orderLabel).toBe('No order')
+  })
+})
+
+describe('enrichOrderGroups', () => {
+  it('matches a group to its ExplorerOrder by order_number', () => {
+    const r = enrichOrderGroups([grp('WP-1042')], [ord('WP-1042')])[0]!
+    expect(r.order?.order_number).toBe('WP-1042')
+  })
+  it('leaves order null when no ExplorerOrder matches', () => {
+    const r = enrichOrderGroups([grp('WP-9999')], [ord('WP-1042')])[0]!
+    expect(r.order).toBeNull()
+  })
+  it('leaves order null for the No-order group', () => {
+    const r = enrichOrderGroups([grp(null)], [ord('WP-1042')])[0]!
+    expect(r.order).toBeNull()
   })
 })

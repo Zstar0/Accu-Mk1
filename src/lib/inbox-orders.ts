@@ -1,10 +1,29 @@
-import type { SenaiteSample } from '@/lib/api'
+import type { ExplorerOrder, SenaiteSample } from '@/lib/api'
 
 export interface OrderGroup {
   orderKey: string | null
   orderLabel: string
   clientId: string | null
   samples: SenaiteSample[]
+}
+
+export interface EnrichedOrderGroup extends OrderGroup {
+  order: ExplorerOrder | null
+}
+
+/**
+ * Join order groups to their `ExplorerOrder` by `order_number`. Groups with no
+ * order key (the "No order" bucket) or no matching order get `order: null`.
+ */
+export function enrichOrderGroups(
+  groups: OrderGroup[],
+  orders: ExplorerOrder[],
+): EnrichedOrderGroup[] {
+  const byNumber = new Map(orders.map(o => [o.order_number, o]))
+  return groups.map(g => ({
+    ...g,
+    order: g.orderKey ? (byNumber.get(g.orderKey) ?? null) : null,
+  }))
 }
 
 export function groupSamplesByOrder(samples: SenaiteSample[]): OrderGroup[] {
