@@ -57,3 +57,26 @@ def test_assign_then_print_records_membership_and_stamp(db):
     assert printed.printed_at is not None
     assert printed.printed_by_user_id == 7
     assert len(service.list_for_order(db, "WP-20066")) == 1
+
+
+def test_delete_empty_box_removes_it(db):
+    box = service.next_box(db, "WP-20066", "hplc", user_id=1)
+    assert len(service.list_for_order(db, "WP-20066")) == 1
+    service.delete_box(db, box.id)
+    assert service.list_for_order(db, "WP-20066") == []
+
+
+def test_delete_box_with_vials_is_rejected(db):
+    p = LimsSample(sample_id="P-0602", external_lims_uid="u-602")
+    db.add(p); db.flush()
+    v = _vial(db, p, 1, "hplc")
+    box = service.next_box(db, "WP-20066", "hplc", user_id=1)
+    service.assign_vials(db, box.id, [v.sample_id])
+    with pytest.raises(service.BoxNotEmptyError):
+        service.delete_box(db, box.id)
+    assert len(service.list_for_order(db, "WP-20066")) == 1
+
+
+def test_delete_missing_box_raises_lookup(db):
+    with pytest.raises(LookupError):
+        service.delete_box(db, 9999)

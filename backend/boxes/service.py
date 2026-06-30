@@ -9,6 +9,10 @@ from models import LimsBox, LimsSubSample
 BOXABLE_ROLES = {"hplc", "endo", "ster"}
 
 
+class BoxNotEmptyError(Exception):
+    """Raised when deleting a box that still has assigned vials; unassign first."""
+
+
 def box_label_code(box: LimsBox) -> str:
     """Verbatim order key + running number; never adds a 'WP-' prefix."""
     return f"{box.order_key}-{box.box_number}"
@@ -70,6 +74,21 @@ def mark_printed(db: Session, box_id: int, user_id: int) -> LimsBox:
     db.commit()
     db.refresh(box)
     return box
+
+
+def delete_box(db: Session, box_id: int) -> None:
+    """Delete an empty box. Raises LookupError if missing, BoxNotEmptyError if it
+    still holds >= 1 assigned vial (unassign those first)."""
+    box = db.get(LimsBox, box_id)
+    if box is None:
+        raise LookupError(f"box {box_id} not found")
+    count = vial_count(db, box_id)
+    if count > 0:
+        raise BoxNotEmptyError(
+            f"box {box_id} still has {count} assigned vial(s); unassign first"
+        )
+    db.delete(box)
+    db.commit()
 
 
 def list_for_order(db: Session, order_key: str) -> List[LimsBox]:

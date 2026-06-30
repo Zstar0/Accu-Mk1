@@ -57,3 +57,13 @@ def print_box(box_id: int, db: Session = Depends(get_db), user=Depends(get_curre
     except LookupError as e:
         raise HTTPException(status_code=404, detail=str(e))
     return _serialize(db, box)
+
+
+@router.delete("/{box_id}", status_code=204)
+def delete_box(box_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    try:
+        service.delete_box(db, box_id)
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except service.BoxNotEmptyError as e:
+        raise HTTPException(status_code=409, detail=str(e))
