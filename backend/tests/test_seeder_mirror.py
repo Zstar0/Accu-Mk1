@@ -183,3 +183,56 @@ def test_hplc_without_parent_sample_id_raises(db):
             wp_services={"hplcpurity_identity": True},
             commit=False,
         )
+
+
+def test_mirror_fail_closed_excludes_ungrouped_null_department_service(db, monkeypatch):
+    """THE fail-closed discriminator. An unknown service with NO group membership
+    and department_id=None must NOT be mirrored onto an HPLC vial.
+
+    Goes genuinely RED on BOTH wrong implementations:
+      - old exclude-Micro DENY-list: ungrouped → not in micro_kw → leaks (RED)
+      - deny-by-department mis-impl (`== micro_id: continue`): NULL ≠ micro → leaks (RED)
+    GREEN only on the correct `== Analytical` allow-list: NULL → excluded.
+
+    After Task 1 the live catalog has no NULL-department services left, so the test
+    MINTS one — which is exactly the 'unknown service' case the fail-closed default
+    exists to catch. The whole-catalog `svc_by_kw` select inside the mirror sees this
+    flushed throwaway row in-session; commit=False + the fixture rollback discards it."""
+    from models import AnalysisService
+    vial = _throwaway_vial(db)
+    rogue = AnalysisService(keyword="ZZTEST-ROGUE", title="Rogue (untagged)", department_id=None)
+    db.add(rogue)
+    db.flush()  # has an id + is visible to the mirror's catalog select within this session
+    monkeypatch.setattr(
+        "sub_samples.senaite.fetch_parent_analysis_keywords",
+        lambda pid: ["HPLC-ID", "ZZTEST-ROGUE"])
+    inserted = seed_analyses_for_vial(
+        db, sub_sample=vial, role="hplc",
+        wp_services={"hplcpurity_identity": True}, parent_sample_id="X", commit=False)
+    seeded = {r.keyword for r in inserted}
+    assert "ZZTEST-ROGUE" not in seeded   # fail-closed: unknown/NULL-department excluded
+    assert "HPLC-ID" in seeded            # legitimate Analytical service still mirrored
+
+
+def test_mirror_excludes_every_microbiology_department_service(db, monkeypatch):
+    """Broad safety lock: NO Microbiology-department service is ever mirrored onto an
+    HPLC vial, regardless of which group it sits in (spec: 'no Microbiology service
+    ever appears on an HPLC vial's seeded set'). Passes on the old deny-list too (all
+    5 Micro services are grouped) — it is a lock, not the discriminator above."""
+    from models import AnalysisService, Department
+    vial = _throwaway_vial(db)
+    micro_kws = db.execute(
+        select(AnalysisService.keyword)
+        .join(Department, Department.id == AnalysisService.department_id)
+        .where(Department.name == "Microbiology", AnalysisService.keyword.isnot(None))
+    ).scalars().all()
+    assert micro_kws, "live catalog should carry Microbiology-department services"
+    parent_keywords = ["HPLC-ID", "BLEND-PUR", "PEPT-Total", *micro_kws]
+    monkeypatch.setattr(
+        "sub_samples.senaite.fetch_parent_analysis_keywords", lambda pid: parent_keywords)
+    inserted = seed_analyses_for_vial(
+        db, sub_sample=vial, role="hplc",
+        wp_services={"hplcpurity_identity": True}, parent_sample_id="X", commit=False)
+    seeded = {r.keyword for r in inserted}
+    assert seeded.isdisjoint(set(micro_kws))               # no Micro service leaked
+    assert {"HPLC-ID", "BLEND-PUR", "PEPT-Total"} <= seeded  # analytical still mirrored
