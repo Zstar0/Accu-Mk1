@@ -1,0 +1,96 @@
+<h2>The toast that flies home</h2>
+<p class="subtitle">Click <strong>Raise a flag</strong> and watch it: the toast confirms, dwells a beat, then flies into the Flags button, which bumps and increments. This is the actual motion. Tell me if the feel/speed is right or wants tuning.</p>
+
+<style>
+  .demo{position:relative;background:#0b1220;border-radius:14px;overflow:hidden;min-height:300px;border:1px solid #1d2942}
+  .appbar{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;background:#0f1729;border-bottom:1px solid #1d2942}
+  .brand{color:#e6ecf6;font-weight:800;font-size:14px;letter-spacing:.3px}
+  .brand small{color:#5f6e8c;font-weight:600;margin-left:8px}
+  .nav-r{display:flex;align-items:center;gap:10px}
+  .fbtn{display:inline-flex;align-items:center;gap:7px;background:#1c2740;color:#cdd6e4;border:1px solid #2a3550;border-radius:9px;padding:8px 12px;font-size:13px;font-weight:600;position:relative;transition:transform .18s cubic-bezier(.34,1.56,.64,1)}
+  .fbtn.ghost{background:transparent;border-color:#243049;color:#9fb0c9}
+  .fbtn svg{width:15px;height:15px}
+  .fbtn.bump{transform:scale(1.18)}
+  .fbtn.glow{animation:glow 1.4s ease-out}
+  @keyframes glow{0%{box-shadow:0 0 0 0 rgba(229,72,77,.55)}100%{box-shadow:0 0 22px 6px rgba(229,72,77,0)}}
+  .chip{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;padding:0 5px;border-radius:9px;font-size:11px;font-weight:700;color:#fff;line-height:1;transition:transform .25s cubic-bezier(.34,1.56,.64,1)}
+  .chip.pop{transform:scale(1.55)}
+  .c-block{background:#e5484d}.c-crit{background:#e8730a}.c-ready{background:#22c55e}
+  .stage{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:46px 16px}
+  .raise{background:#3b82f6;color:#fff;border:none;border-radius:10px;padding:12px 20px;font-size:14px;font-weight:700;cursor:pointer;box-shadow:0 6px 18px rgba(59,130,246,.35);transition:transform .12s}
+  .raise:active{transform:scale(.96)}
+  .reset{background:transparent;color:#6b7891;border:1px solid #28344e;border-radius:8px;padding:7px 13px;font-size:12px;font-weight:600;cursor:pointer}
+  .toast{position:fixed;left:50%;bottom:34px;transform:translateX(-50%) translateY(20px) scale(.96);opacity:0;display:none;align-items:center;gap:11px;background:#fff;border-radius:13px;padding:13px 15px;width:330px;box-shadow:0 18px 50px rgba(8,15,35,.4);z-index:50;border-left:4px solid #e5484d}
+  .toast .ic{width:30px;height:30px;border-radius:8px;background:#fde8e8;color:#e5484d;display:flex;align-items:center;justify-content:center;flex:none}
+  .toast .ic svg{width:16px;height:16px}
+  .toast .tt{font-size:13px;font-weight:700;color:#16203a}
+  .toast .ts{font-size:11.5px;color:#6b7891;margin-top:1px}
+  .toast .undo{margin-left:auto;color:#3b82f6;font-weight:700;font-size:12px;cursor:pointer;flex:none}
+</style>
+
+<div class="demo">
+  <div class="appbar">
+    <div class="brand">Accu&#8209;Mk1 <small>LIMS</small></div>
+    <div class="nav-r">
+      <span class="fbtn ghost"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>Worksheets</span>
+      <span class="fbtn" id="flagBtn"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 2a1 1 0 0 1 1 1v1h9.2a.8.8 0 0 1 .66 1.25L15 8l1.86 2.75A.8.8 0 0 1 16.2 12H7v9a1 1 0 1 1-2 0V3a1 1 0 0 1 1-1z"/></svg>Flags<span class="chip c-block" id="chipBlock">2</span><span class="chip c-crit">1</span><span class="chip c-ready">4</span></span>
+    </div>
+  </div>
+  <div class="stage">
+    <button class="raise" onclick="raiseFlag()">&#43; Raise a flag</button>
+    <button class="reset" onclick="resetDemo()">Reset</button>
+    <p style="color:#5f6e8c;font-size:12px;margin:0">Raises a Blocker on Vial P-1023-3</p>
+  </div>
+</div>
+
+<div class="toast" id="toast">
+  <div class="ic"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 2a1 1 0 0 1 1 1v1h9.2a.8.8 0 0 1 .66 1.25L15 8l1.86 2.75A.8.8 0 0 1 16.2 12H7v9a1 1 0 1 1-2 0V3a1 1 0 0 1 1-1z"/></svg></div>
+  <div><div class="tt">Flag raised &middot; Blocker</div><div class="ts">Vial P-1023-3 &mdash; assigned to Dennis</div></div>
+  <span class="undo">Undo</span>
+</div>
+
+<script>
+  var busy=false;
+  function raiseFlag(){
+    if(busy) return; busy=true;
+    var toast=document.getElementById('toast');
+    toast.style.transition='none';
+    toast.style.display='flex';
+    toast.style.transform='translateX(-50%) translateY(20px) scale(.96)';
+    toast.style.opacity='0';
+    // entrance (spring up)
+    requestAnimationFrame(function(){
+      toast.style.transition='transform .5s cubic-bezier(.22,1,.36,1), opacity .35s ease-out';
+      toast.style.transform='translateX(-50%) translateY(0) scale(1)';
+      toast.style.opacity='1';
+    });
+    // dwell, then fly home
+    setTimeout(flyHome, 1250);
+  }
+  function flyHome(){
+    var toast=document.getElementById('toast');
+    var btn=document.getElementById('flagBtn');
+    var tr=toast.getBoundingClientRect();
+    var br=btn.getBoundingClientRect();
+    var dx=(br.left+br.width/2)-(tr.left+tr.width/2);
+    var dy=(br.top+br.height/2)-(tr.top+tr.height/2);
+    toast.style.transition='transform .6s cubic-bezier(.5,0,.18,1), opacity .42s ease-in .16s';
+    toast.style.transform='translateX(-50%) translate('+dx+'px,'+dy+'px) scale(.1)';
+    toast.style.opacity='0';
+    setTimeout(landAtButton, 470);
+    setTimeout(function(){ toast.style.display='none'; busy=false; }, 660);
+  }
+  function landAtButton(){
+    var btn=document.getElementById('flagBtn');
+    var chip=document.getElementById('chipBlock');
+    btn.classList.add('bump','glow');
+    chip.textContent=(parseInt(chip.textContent,10)+1);
+    chip.classList.add('pop');
+    setTimeout(function(){ btn.classList.remove('bump'); chip.classList.remove('pop'); },260);
+    setTimeout(function(){ btn.classList.remove('glow'); },1400);
+  }
+  function resetDemo(){
+    document.getElementById('chipBlock').textContent='2';
+    var t=document.getElementById('toast'); t.style.display='none'; busy=false;
+  }
+</script>

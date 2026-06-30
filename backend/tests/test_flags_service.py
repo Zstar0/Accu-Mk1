@@ -1,0 +1,74 @@
+import os, sys
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+from types import SimpleNamespace
+
+import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+
+@pytest.fixture
+def db():
+    from database import Base
+    import flags.models  # noqa: F401
+    from flags import seams
+    seams.set_event_sink(seams.InMemoryEventSink())
+    seams.register_entity("sub_sample",
+                           label=lambda d, e: f"Vial {e}",
+                           deep_link=lambda e: f"/v/{e}",
+                           can_flag=lambda u, e: True)
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    s = sessionmaker(bind=engine)()
+    try:
+        yield s
+    finally:
+        s.close()
+
+
+def _user(id=1, role="standard"):
+    return SimpleNamespace(id=id, role=role, email=f"u{id}@x.t")
+
+
+def test_create_flag_writes_event_and_emits(db):
+    from flags import service, seams
+    from flags.models import FlagEvent
+    f = service.create_flag(db, user=_user(7), entity_type="sub_sample", entity_id="123",
+                            type="blocker", title="Crashed out", first_comment="cloudy")
+    assert f.id and f.status == "open" and f.kind == "issue" and f.created_by == 7
+    evs = db.query(FlagEvent).filter_by(flag_id=f.id).all()
+    assert any(e.event_type == "raised" for e in evs)
+    assert seams.EVENT_SINK.events[0]["event_type"] == "raised"
+    assert len(f.comments) == 1 and f.comments[0].body == "cloudy"
+
+
+def test_create_flag_unknown_entity_type_rejected(db):
+    from flags import service
+    from flags.errors import BadRequestError
+    with pytest.raises(BadRequestError):
+        service.create_flag(db, user=_user(), entity_type="nope", entity_id="1",
+                            type="blocker", title="x")
+
+
+def test_create_flag_invalid_type_rejected(db):
+    from flags import service
+    from flags.errors import BadRequestError
+    with pytest.raises(BadRequestError):
+        service.create_flag(db, user=_user(), entity_type="sub_sample", entity_id="1",
+                            type="not_a_type", title="x")
+
+
+def test_list_tabs_and_summary(db):
+    from flags import service
+    u = _user(7)
+    a = service.create_flag(db, user=u, entity_type="sub_sample", entity_id="1",
+                            type="blocker", title="A", assignee_id=7)
+    service.create_flag(db, user=u, entity_type="sub_sample", entity_id="2",
+                        type="ready_for_verification", title="B")
+    assigned = service.list_flags(db, user_id=7, tab="assigned")
+    assert [f.id for f in assigned] == [a.id]
+    all_open = service.list_flags(db, user_id=7, tab="all_open")
+    assert len(all_open) == 2
+    s = service.summary(db, user_id=7)
+    assert s["assigned_to_me"] == 1
+    assert s["by_type"]["blocker"] == 1 and s["by_type"]["ready_for_verification"] == 1

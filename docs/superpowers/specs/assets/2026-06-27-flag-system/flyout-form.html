@@ -1,0 +1,74 @@
+<h2>The flyout it opens</h2>
+<p class="subtitle">Same content in both &mdash; this choice is purely <strong>shape</strong>. A is a full-height slide-over (an inbox you live in, like the worksheet flyout). B is a dropdown popover (a quick peek, with "view all" for the full screen). Click the shape you want.</p>
+
+<style>
+  .wrap{display:flex;gap:22px;flex-wrap:wrap;align-items:flex-start;margin-top:6px}
+  .col{flex:1;min-width:330px}
+  .col .letter{margin-bottom:10px}
+  .trigger{background:#0f1729;border-radius:10px;padding:9px 12px;display:flex;justify-content:flex-end}
+  .fbtn{display:inline-flex;align-items:center;gap:7px;background:#1c2740;color:#cdd6e4;border:1px solid #2a3550;border-radius:9px;padding:7px 11px;font-size:12px;font-weight:600;position:relative;box-shadow:0 0 0 0 rgba(229,72,77,.5);animation:glow 2s ease-out infinite}
+  .fbtn svg{width:14px;height:14px}
+  @keyframes glow{0%{box-shadow:0 0 0 0 rgba(229,72,77,.45)}70%{box-shadow:0 0 14px 2px rgba(229,72,77,0)}100%{box-shadow:0 0 0 0 rgba(229,72,77,0)}}
+  .chip{display:inline-flex;align-items:center;justify-content:center;min-width:17px;height:17px;padding:0 5px;border-radius:9px;font-size:10px;font-weight:700;color:#fff;line-height:1}
+  .c-block{background:#e5484d}.c-crit{background:#e8730a}.c-q{background:#3b82f6}.c-wait{background:#8b5cf6}.c-ready{background:#22c55e}
+  .panel{background:#fff;border:1px solid #e6e8ee;border-radius:12px;overflow:hidden;box-shadow:0 12px 40px rgba(10,20,40,.16);margin-top:10px}
+  .slide{height:520px;display:flex;flex-direction:column}
+  .pop{margin-top:10px}
+  .ph{padding:13px 15px;border-bottom:1px solid #eef0f4;display:flex;align-items:center;justify-content:space-between}
+  .ph h4{margin:0;font-size:15px;color:#16203a}
+  .tabs{display:flex;gap:4px;padding:9px 12px 0;border-bottom:1px solid #eef0f4;flex-wrap:wrap}
+  .tab{font-size:12px;color:#6b7891;padding:6px 9px;border-radius:7px 7px 0 0;font-weight:600}
+  .tab.on{color:#16203a;background:#f3f5f9;box-shadow:inset 0 -2px 0 #3b82f6}
+  .list{padding:8px;overflow:auto;flex:1}
+  .fc{display:flex;gap:10px;padding:10px;border-radius:9px;position:relative}
+  .fc:hover{background:#f6f8fb}
+  .bar{width:3px;border-radius:3px;flex:none}
+  .fc .body{flex:1;min-width:0}
+  .fc .row1{display:flex;align-items:center;gap:7px;font-size:11px;color:#6b7891;margin-bottom:2px}
+  .ent{display:inline-flex;align-items:center;gap:4px;background:#eef1f7;color:#3a4straight;color:#3d4a66;border-radius:6px;padding:1px 6px;font-weight:700}
+  .ttl{font-size:13px;color:#1a2440;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .row3{display:flex;align-items:center;gap:8px;margin-top:5px;font-size:11px;color:#7c8aa3}
+  .pill{font-size:10px;font-weight:700;padding:2px 7px;border-radius:20px;color:#fff}
+  .av{width:18px;height:18px;border-radius:50%;font-size:9px;font-weight:700;color:#fff;display:flex;align-items:center;justify-content:center}
+  .you{box-shadow:0 0 0 2px #c7f0d8}
+  .unread{position:absolute;top:12px;right:10px;width:8px;height:8px;border-radius:50%;background:#3b82f6}
+  .pf{padding:10px 14px;border-top:1px solid #eef0f4;font-size:12px;color:#3b82f6;font-weight:700;text-align:center}
+</style>
+
+<div class="wrap">
+  <!-- A: slide-over -->
+  <div class="col option" data-choice="a" onclick="toggleSelect(this)" style="display:block;padding:14px">
+    <div class="letter">A</div>
+    <h3 style="margin:2px 0 2px">Full-height slide-over</h3>
+    <p style="margin:0 0 4px">An inbox you triage in. Tabs, scroll, room to breathe. Matches the worksheet flyout.</p>
+    <div class="trigger"><span class="fbtn"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 2a1 1 0 0 1 1 1v1h9.2a.8.8 0 0 1 .66 1.25L15 8l1.86 2.75A.8.8 0 0 1 16.2 12H7v9a1 1 0 1 1-2 0V3a1 1 0 0 1 1-1z"/></svg>Flags<span class="chip c-block">2</span><span class="chip c-crit">1</span><span class="chip c-ready">4</span></span></div>
+    <div class="panel slide">
+      <div class="ph"><h4>Flags</h4><span style="font-size:18px;color:#aab3c5">&#43;</span></div>
+      <div class="tabs"><span class="tab on">Assigned to me</span><span class="tab">Raised by me</span><span class="tab">Watching</span><span class="tab">All open</span></div>
+      <div class="list">
+        <div class="fc"><div class="bar c-block"></div><div class="body"><div class="row1"><span class="ent">&#129514; Vial P-1023-3</span><span class="pill c-block">Blocker</span></div><div class="ttl">Crashed out &mdash; needs re-prep</div><div class="row3"><span class="av you" style="background:#16a34a">YOU</span><span>2 comments</span><span>&middot; 10m</span></div></div><span class="unread"></span></div>
+        <div class="fc"><div class="bar c-crit"></div><div class="body"><div class="row1"><span class="ent">&#129514; Vial P-1009-1</span><span class="pill c-crit">Critical</span></div><div class="ttl">Check-in photo missing after recheck</div><div class="row3"><span class="av you" style="background:#16a34a">YOU</span><span>1 comment</span><span>&middot; 25m</span></div></div><span class="unread"></span></div>
+        <div class="fc"><div class="bar c-wait"></div><div class="body"><div class="row1"><span class="ent">&#128202; Sample BW-0041</span><span class="pill c-wait">Waiting on customer</span></div><div class="ttl">Lot # mismatch &mdash; emailed client</div><div class="row3"><span class="av" style="background:#8b5cf6">DM</span><span>3 comments</span><span>&middot; 1h</span></div></div></div>
+        <div class="fc"><div class="bar c-ready"></div><div class="body"><div class="row1"><span class="ent">&#128203; Worksheet WS-218</span><span class="pill c-ready">Ready to verify</span></div><div class="ttl">All results in &mdash; ready for review</div><div class="row3"><span class="av" style="background:#94a3b8">&#8211;</span><span>unassigned</span><span>&middot; 3h</span></div></div></div>
+        <div class="fc"><div class="bar c-q"></div><div class="body"><div class="row1"><span class="ent">&#128196; COA PB-0080</span><span class="pill c-q">Question</span></div><div class="ttl">Which spec applies to this lot?</div><div class="row3"><span class="av" style="background:#3b82f6">SK</span><span>5 comments</span><span>&middot; 1d</span></div></div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- B: dropdown popover -->
+  <div class="col option" data-choice="b" onclick="toggleSelect(this)" style="display:block;padding:14px">
+    <div class="letter">B</div>
+    <h3 style="margin:2px 0 2px">Dropdown popover</h3>
+    <p style="margin:0 0 4px">A quick peek under the button. Compact, capped height, "view all" jumps to the full screen.</p>
+    <div class="trigger"><span class="fbtn"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 2a1 1 0 0 1 1 1v1h9.2a.8.8 0 0 1 .66 1.25L15 8l1.86 2.75A.8.8 0 0 1 16.2 12H7v9a1 1 0 1 1-2 0V3a1 1 0 0 1 1-1z"/></svg>Flags<span class="chip c-block">2</span><span class="chip c-crit">1</span><span class="chip c-ready">4</span></span></div>
+    <div class="panel pop">
+      <div class="ph"><h4>Assigned to me &middot; 3</h4><span style="font-size:11px;color:#6b7891;font-weight:600">All open</span></div>
+      <div class="list" style="max-height:300px">
+        <div class="fc" style="padding:9px"><div class="bar c-block"></div><div class="body"><div class="row1"><span class="ent">&#129514; P-1023-3</span><span class="pill c-block">Blocker</span></div><div class="ttl">Crashed out &mdash; needs re-prep</div><div class="row3"><span>2 comments</span><span>&middot; 10m</span></div></div><span class="unread"></span></div>
+        <div class="fc" style="padding:9px"><div class="bar c-crit"></div><div class="body"><div class="row1"><span class="ent">&#129514; P-1009-1</span><span class="pill c-crit">Critical</span></div><div class="ttl">Photo missing after recheck</div><div class="row3"><span>1 comment</span><span>&middot; 25m</span></div></div><span class="unread"></span></div>
+        <div class="fc" style="padding:9px"><div class="bar c-q"></div><div class="body"><div class="row1"><span class="ent">&#128196; PB-0080</span><span class="pill c-q">Question</span></div><div class="ttl">Which spec applies?</div><div class="row3"><span>5 comments</span><span>&middot; 1d</span></div></div></div>
+      </div>
+      <div class="pf">View all flags &rarr;</div>
+    </div>
+  </div>
+</div>

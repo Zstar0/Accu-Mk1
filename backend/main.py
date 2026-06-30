@@ -75,6 +75,7 @@ import sub_samples.service as sub_service
 from sub_samples.service import derive_base_demand
 from lims_analyses.routes import router as lims_analyses_router
 from families.routes import router as families_router  # Phase 5b
+from flags.routes import router as flags_router
 
 import logging
 
@@ -320,6 +321,8 @@ def seed_default_settings(db: Session):
 async def lifespan(app: FastAPI):
     """Initialize database on startup and seed defaults."""
     init_db()
+    from flags import seams as _flag_seams
+    _flag_seams.register_mk1_entities()
     # Seed default settings and admin user
     from database import SessionLocal
     db = SessionLocal()
@@ -392,6 +395,7 @@ file_watcher = FileWatcher()
 app.include_router(sub_samples_router)
 app.include_router(lims_analyses_router)
 app.include_router(families_router)
+app.include_router(flags_router)
 
 # --- Endpoints ---
 
