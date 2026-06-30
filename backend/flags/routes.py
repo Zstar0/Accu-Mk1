@@ -10,14 +10,15 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
-from auth import get_current_user
+from auth import get_current_user, require_admin
 from database import get_db
-from flags import seams, service
+from flags import seams, service, types_service
 from flags.bus import BUS
 from flags.errors import BadRequestError, ConflictError, NotFoundError, PermissionDeniedError
 from flags.schemas import (
     AssignRequest, CommentRequest, CommentResponse, CreateFlagRequest,
-    EntityContext, FlagDetailResponse, FlagResponse, StatusRequest, SummaryResponse,
+    EntityContext, FlagDetailResponse, FlagResponse, FlagTypeCreate,
+    FlagTypeResponse, FlagTypeUpdate, StatusRequest, SummaryResponse,
     WatcherRequest,
 )
 
@@ -112,6 +113,58 @@ async def stream(request: Request, user=Depends(get_current_user)):
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
     )
+
+
+# --- flag types (Plan 5) -------------------------------------------------
+# Literal `/types*` + `/entity-types` routes are defined ABOVE `/{flag_id}` so
+# they win the match (literal-before-param). Mutations are admin-gated.
+@router.get("/types", response_model=List[FlagTypeResponse])
+def list_flag_types(entity_type: Optional[str] = None, active_only: bool = False,
+                    db: Session = Depends(get_db), user=Depends(get_current_user)):
+    try:
+        return types_service.list_types(db, entity_type=entity_type, active_only=active_only)
+    except Exception as e:
+        raise _http(e)
+
+
+@router.post("/types", response_model=FlagTypeResponse, status_code=201)
+def create_flag_type(req: FlagTypeCreate, db: Session = Depends(get_db),
+                     admin=Depends(require_admin)):
+    try:
+        return types_service.create_type(
+            db, label=req.label, color=req.color, kind=req.kind, slug=req.slug,
+            is_blocking=req.is_blocking, is_active=req.is_active,
+            sort_order=req.sort_order, entity_types=req.entity_types)
+    except Exception as e:
+        raise _http(e)
+
+
+@router.put("/types/{type_id}", response_model=FlagTypeResponse)
+def update_flag_type(type_id: int, req: FlagTypeUpdate, db: Session = Depends(get_db),
+                     admin=Depends(require_admin)):
+    try:
+        return types_service.update_type(db, type_id, **req.model_dump(exclude_unset=True))
+    except Exception as e:
+        raise _http(e)
+
+
+@router.delete("/types/{type_id}", status_code=204)
+def delete_flag_type(type_id: int, db: Session = Depends(get_db),
+                     admin=Depends(require_admin)):
+    # Hard-delete only unused custom types; built-in/in-use raise ConflictError
+    # → 409, signalling the client to offer the deactivate path instead.
+    try:
+        types_service.delete_type(db, type_id)
+    except Exception as e:
+        raise _http(e)
+
+
+@router.get("/entity-types", response_model=List[str])
+def list_entity_types(db: Session = Depends(get_db), user=Depends(get_current_user)):
+    # Registered entity-type SLUGS only — the registry's `label` is a per-instance
+    # callable ("Vial 42"), not a type-level name. The frontend resolves display
+    # names from flag-entity.ts ENTITY_META.
+    return sorted(seams._REGISTRY.keys())
 
 
 @router.get("/{flag_id}", response_model=FlagDetailResponse)

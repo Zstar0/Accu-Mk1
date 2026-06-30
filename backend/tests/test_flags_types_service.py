@@ -13,19 +13,8 @@ def db():
     Base.metadata.create_all(engine)
     s = sessionmaker(bind=engine)()
     # Seed the 5 built-ins the way _run_migrations does on Postgres.
-    from models import FlagType
-    builtins = [
-        ("blocker", "Blocker", "#e5484d", "issue", True, 0),
-        ("critical", "Critical", "#e8730a", "issue", True, 1),
-        ("question", "Question", "#3b82f6", "issue", False, 2),
-        ("waiting_on_customer", "Waiting on Customer", "#8b5cf6", "issue", False, 3),
-        ("ready_for_verification", "Ready for Verification", "#22c55e", "signal", False, 4),
-    ]
-    for slug, label, color, kind, blocking, order in builtins:
-        s.add(FlagType(slug=slug, label=label, color=color, kind=kind,
-                       is_blocking=blocking, sort_order=order, entity_types=[],
-                       is_builtin=True))
-    s.commit()
+    from flags import types_service
+    types_service.seed_builtins(s)
     try:
         yield s
     finally:

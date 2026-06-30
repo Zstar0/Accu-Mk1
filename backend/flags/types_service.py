@@ -18,6 +18,29 @@ from flags.models import FlagFlag
 from models import FlagType
 
 
+# The 5 built-ins, mirroring database._run_migrations seed + catalog.FLAG_TYPES.
+# (slug, label, color, kind, is_blocking, sort_order)
+_BUILTINS = [
+    ("blocker", "Blocker", "#e5484d", "issue", True, 0),
+    ("critical", "Critical", "#e8730a", "issue", True, 1),
+    ("question", "Question", "#3b82f6", "issue", False, 2),
+    ("waiting_on_customer", "Waiting on Customer", "#8b5cf6", "issue", False, 3),
+    ("ready_for_verification", "Ready for Verification", "#22c55e", "signal", False, 4),
+]
+
+
+def seed_builtins(db: Session) -> None:
+    """Idempotently seed the 5 built-in types. Production seeds via
+    database._run_migrations (Postgres); this is the parity path for SQLite test
+    sessions (create_all builds the table but runs no migrations)."""
+    for slug, label, color, kind, blocking, order in _BUILTINS:
+        if get_type_by_slug(db, slug) is None:
+            db.add(FlagType(slug=slug, label=label, color=color, kind=kind,
+                            is_blocking=blocking, sort_order=order,
+                            entity_types=[], is_builtin=True))
+    db.commit()
+
+
 def _slugify(label: str) -> str:
     s = re.sub(r"[^a-z0-9]+", "_", (label or "").strip().lower()).strip("_")
     return s or "type"

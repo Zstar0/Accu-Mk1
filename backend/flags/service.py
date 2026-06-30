@@ -9,7 +9,7 @@ from typing import Optional
 from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
-from flags import catalog, permissions, seams
+from flags import catalog, permissions, seams, types_service
 from flags.errors import BadRequestError, NotFoundError, PermissionDeniedError
 from flags.models import FlagComment, FlagEvent, FlagFlag, FlagParticipant
 
@@ -60,17 +60,19 @@ def create_flag(db: Session, *, user, entity_type, entity_id, type, title,
                 assignee_id=None, first_comment=None) -> FlagFlag:
     if not seams.is_registered(entity_type):
         raise BadRequestError(f"unknown entity_type {entity_type!r}")
-    if not catalog.is_valid_type(type):
+    if not types_service.is_valid_type(db, type):
         raise BadRequestError(f"unknown flag type {type!r}")
     if not permissions.can(user, "create", None):
         raise PermissionDeniedError("not allowed to create flags")
     spec = seams.get_entity_spec(entity_type)
     if not spec.can_flag(user, str(entity_id)):
         raise PermissionDeniedError(f"not allowed to flag {entity_type} {entity_id}")
+    if not types_service.is_allowed_for_entity(db, type, entity_type):
+        raise BadRequestError(f"flag type {type!r} is not allowed for {entity_type}")
 
     actor_id = getattr(user, "id", None)
     flag = FlagFlag(entity_type=entity_type, entity_id=str(entity_id),
-                    kind=catalog.kind_for_type(type), type=type, status="open",
+                    kind=types_service.kind_for_type(db, type), type=type, status="open",
                     title=title, created_by=actor_id, assignee_id=assignee_id)
     db.add(flag)
     db.flush()  # populate flag.id

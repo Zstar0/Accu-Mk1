@@ -6,15 +6,16 @@ from typing import List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
-FlagType = Literal["blocker", "critical", "question", "waiting_on_customer", "ready_for_verification"]
-FlagStatus = Literal["open", "in_progress", "resolved", "closed"]
+# `type` is now a DB-managed flag-type slug (Plan 5), validated server-side
+# against flag_types — so it is a free string on the wire, not a closed Literal.
+FlagStatus = Literal["open", "in_progress", "blocked", "resolved", "closed"]
 FlagTab = Literal["assigned", "raised", "watching", "all_open"]
 
 
 class CreateFlagRequest(BaseModel):
     entity_type: str
     entity_id: str
-    type: FlagType
+    type: str
     title: str
     assignee_id: Optional[int] = None
     first_comment: Optional[str] = None
@@ -105,3 +106,43 @@ class FlagDetailResponse(FlagResponse):
 class SummaryResponse(BaseModel):
     assigned_to_me: int
     by_type: dict
+
+
+# --- flag types (Plan 5) -------------------------------------------------
+class FlagTypeResponse(BaseModel):
+    id: int
+    slug: str
+    label: str
+    color: str
+    kind: str
+    is_blocking: bool
+    is_active: bool
+    sort_order: int
+    entity_types: List[str] = Field(default_factory=list)
+    is_builtin: bool
+    created_at: datetime
+    updated_at: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+
+class FlagTypeCreate(BaseModel):
+    label: str
+    color: str
+    kind: str  # 'issue' | 'signal'
+    # Optional — generated from `label` when absent. Immutable once created.
+    slug: Optional[str] = None
+    is_blocking: bool = False
+    is_active: bool = True
+    sort_order: Optional[int] = None
+    entity_types: List[str] = Field(default_factory=list)
+
+
+class FlagTypeUpdate(BaseModel):
+    """All-optional partial edit. No `slug` — the slug is immutable."""
+    label: Optional[str] = None
+    color: Optional[str] = None
+    kind: Optional[str] = None
+    is_blocking: Optional[bool] = None
+    is_active: Optional[bool] = None
+    sort_order: Optional[int] = None
+    entity_types: Optional[List[str]] = None

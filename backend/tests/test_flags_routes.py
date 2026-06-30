@@ -14,8 +14,9 @@ def client():
     from main import app
     from auth import get_current_user
     from database import get_db, Base
+    import models  # noqa: F401  (register FlagType on Base)
     import flags.models  # noqa: F401
-    from flags import seams
+    from flags import seams, types_service
     seams.set_event_sink(seams.InMemoryEventSink())
     seams.register_mk1_entities()
 
@@ -24,6 +25,7 @@ def client():
     Base.metadata.create_all(engine)
     Session = sessionmaker(bind=engine)
     shared = Session()
+    types_service.seed_builtins(shared)
 
     def _db():
         yield shared
@@ -127,3 +129,103 @@ def test_include_descendants_rolls_up_vial_flags(client):
         f"/api/flags?tab=all_open&entity_type=sample&entity_id={sample.id}"
         "&include_descendants=true").json()
     assert [f["title"] for f in rolled] == ["vial issue"]
+
+
+# --- flag types (Plan 5) -------------------------------------------------
+def _as_admin(client):
+    """Flip the get_current_user override to an admin for this client."""
+    from main import app
+    from auth import get_current_user
+    app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(
+        id=1, role="admin", email="admin@x.t")
+
+
+def _as_standard(client):
+    from main import app
+    from auth import get_current_user
+    app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(
+        id=42, role="standard", email="t@x.t")
+
+
+def test_list_types_lists_builtins(client):
+    rows = client.get("/api/flags/types").json()
+    slugs = [r["slug"] for r in rows]
+    assert slugs == ["blocker", "critical", "question",
+                     "waiting_on_customer", "ready_for_verification"]
+    assert all(r["is_builtin"] for r in rows)
+
+
+def test_entity_types_endpoint(client):
+    types = client.get("/api/flags/entity-types").json()
+    assert set(types) >= {"sample", "sub_sample", "worksheet"}
+
+
+def test_type_mutations_require_admin(client):
+    # Standard user (fixture default) is forbidden from all mutations.
+    assert client.post("/api/flags/types", json={
+        "label": "X", "color": "#000000", "kind": "issue"}).status_code == 403
+    assert client.put("/api/flags/types/1", json={"label": "Y"}).status_code == 403
+    assert client.delete("/api/flags/types/1").status_code == 403
+
+
+def test_admin_can_create_update_delete_type(client):
+    _as_admin(client)
+    try:
+        created = client.post("/api/flags/types", json={
+            "label": "Vial Only", "color": "#abcdef", "kind": "issue",
+            "entity_types": ["sub_sample"]})
+        assert created.status_code == 201, created.text
+        tid = created.json()["id"]
+        assert created.json()["slug"] == "vial_only"
+
+        upd = client.put(f"/api/flags/types/{tid}", json={"label": "Vial Only!"})
+        assert upd.status_code == 200 and upd.json()["label"] == "Vial Only!"
+
+        assert client.delete(f"/api/flags/types/{tid}").status_code == 204
+    finally:
+        _as_standard(client)
+
+
+def test_delete_builtin_returns_409(client):
+    _as_admin(client)
+    try:
+        blocker = next(r for r in client.get("/api/flags/types").json()
+                       if r["slug"] == "blocker")
+        assert client.delete(f"/api/flags/types/{blocker['id']}").status_code == 409
+    finally:
+        _as_standard(client)
+
+
+def test_delete_in_use_type_returns_409(client):
+    _as_admin(client)
+    try:
+        created = client.post("/api/flags/types", json={
+            "label": "In Use", "color": "#abcabc", "kind": "issue"})
+        tid, slug = created.json()["id"], created.json()["slug"]
+        _as_standard(client)
+        r = client.post("/api/flags", json={"entity_type": "sub_sample",
+                        "entity_id": "9", "type": slug, "title": "uses it"})
+        assert r.status_code == 201, r.text
+        _as_admin(client)
+        assert client.delete(f"/api/flags/types/{tid}").status_code == 409
+    finally:
+        _as_standard(client)
+
+
+def test_create_flag_with_type_not_allowed_for_entity_400(client):
+    _as_admin(client)
+    try:
+        created = client.post("/api/flags/types", json={
+            "label": "Vial Only", "color": "#abcdef", "kind": "issue",
+            "entity_types": ["sub_sample"]})
+        slug = created.json()["slug"]
+    finally:
+        _as_standard(client)
+    # Allowed on a vial…
+    ok = client.post("/api/flags", json={"entity_type": "sub_sample",
+                     "entity_id": "1", "type": slug, "title": "ok"})
+    assert ok.status_code == 201, ok.text
+    # …but not on a worksheet (out of scope).
+    bad = client.post("/api/flags", json={"entity_type": "worksheet",
+                      "entity_id": "1", "type": slug, "title": "nope"})
+    assert bad.status_code == 400, bad.text
