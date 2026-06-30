@@ -41,3 +41,15 @@ export function formatClock(iso: string): string {
     minute: '2-digit',
   })
 }
+
+/** Compact absolute date+time, e.g. "Jun 30, 4:41 PM". */
+export function formatDateTime(iso: string): string {
+  const ms = toMs(iso)
+  if (Number.isNaN(ms)) return ''
+  return new Date(ms).toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  })
+}

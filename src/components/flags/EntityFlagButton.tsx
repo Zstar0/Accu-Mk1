@@ -5,6 +5,7 @@ import { cn } from '@/lib/utils'
 import { useUIStore } from '@/store/ui-store'
 import { useEntityFlags } from '@/hooks/use-flags'
 import { flagTypeDef } from '@/components/flags/flag-catalog'
+import { formatDateTime } from '@/components/flags/flag-format'
 import { RaiseFlagButton } from '@/components/flags/RaiseFlagButton'
 import type { FlagResponse } from '@/lib/flags-api'
 
@@ -37,6 +38,26 @@ const SEVERITY_ORDER: string[] = [
 function severityRank(type: string): number {
   const i = SEVERITY_ORDER.indexOf(type)
   return i === -1 ? SEVERITY_ORDER.length : i
+}
+
+const STATUS_LABELS: Record<string, string> = {
+  open: 'Open',
+  in_progress: 'In progress',
+  resolved: 'Resolved',
+  closed: 'Closed',
+}
+
+function statusLabel(status: string): string {
+  return STATUS_LABELS[status] ?? status
+}
+
+/** The most recently updated flag — drives the "status · last update" subline.
+ *  Backend timestamps share one ISO format, so a string compare orders them. */
+function latestFlag(open: FlagResponse[]): FlagResponse | undefined {
+  return open.reduce<FlagResponse | undefined>(
+    (best, f) => (!best || f.updated_at > best.updated_at ? f : best),
+    undefined
+  )
 }
 
 /** The most severe open flag — drives the pill's color. Undefined only for an
@@ -100,10 +121,12 @@ export function EntityFlagButton({
   if (!dominant) return null // unreachable (open is non-empty) — narrows the type
   const def = flagTypeDef(dominant.type)
   const count = open.length
+  const latest = latestFlag(open) ?? dominant
+  const subline = `${statusLabel(latest.status)} · ${formatDateTime(latest.updated_at)}`
   const label =
     count === 1
-      ? `1 open flag (${def.label}) — open it`
-      : `${count} open flags — view all`
+      ? `Flag (${def.label}) — ${subline}. Open it.`
+      : `${count} open flags — latest ${subline}. View all.`
 
   const handleClick = () => {
     const [first] = open
@@ -129,26 +152,40 @@ export function EntityFlagButton({
         } as CSSProperties
       }
       className={cn(
-        'flags-entity-glow gap-1.5 border-0 font-bold text-white shadow-sm transition-transform hover:brightness-110 active:scale-95',
-        lg ? 'h-9 px-3.5 text-sm' : 'h-7 px-2.5 text-xs',
+        'flags-entity-glow h-auto items-center gap-2 border-0 py-1.5 font-bold text-white shadow-sm transition-transform hover:brightness-110 active:scale-95',
+        lg ? 'px-3.5' : 'px-2.5',
         className
       )}
     >
       <Flag
-        className={cn(lg ? 'h-4 w-4' : 'h-3.5 w-3.5')}
+        className={cn('shrink-0', lg ? 'h-4 w-4' : 'h-3.5 w-3.5')}
         fill="currentColor"
       />
-      Flagged
-      {count > 1 && (
+      <span className="flex flex-col items-start leading-tight">
+        <span
+          className={cn('flex items-center gap-1.5', lg ? 'text-sm' : 'text-xs')}
+        >
+          Flagged
+          {count > 1 && (
+            <span
+              className={cn(
+                'flex h-4 min-w-4 items-center justify-center rounded-full bg-white/25 px-1 font-semibold leading-none',
+                lg ? 'text-[11px]' : 'text-[10px]'
+              )}
+            >
+              {count > 99 ? '99+' : count}
+            </span>
+          )}
+        </span>
         <span
           className={cn(
-            'flex items-center justify-center rounded-full bg-white/25 font-semibold leading-none',
-            lg ? 'h-5 min-w-5 px-1 text-xs' : 'h-4 min-w-4 px-1 text-[10px]'
+            'font-normal text-white/85',
+            lg ? 'text-[11px]' : 'text-[10px]'
           )}
         >
-          {count > 99 ? '99+' : count}
+          {subline}
         </span>
-      )}
+      </span>
     </Button>
   )
 }
