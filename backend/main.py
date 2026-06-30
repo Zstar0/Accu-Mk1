@@ -2863,7 +2863,9 @@ def _apply_service_result_type(svc, item: dict) -> None:
 
 @app.post("/analysis-services/sync")
 async def sync_analysis_services(db: Session = Depends(get_db), _current_user=Depends(get_current_user)):
-    """Sync analysis services from Senaite. Adds new services, does not overwrite existing."""
+    """Sync analysis services from Senaite. Adds new services and reconciles a
+    service SENAITE recreated under a new id/UID by adopting the existing row;
+    never overwrites local result-type edits."""
     import httpx as _httpx
 
     if not SENAITE_URL:
@@ -2900,6 +2902,9 @@ async def sync_analysis_services(db: Session = Depends(get_db), _current_user=De
 
     created = 0
     updated = 0
+    # senaite_ids present in THIS pull — used to spot orphaned Mk1 rows whose
+    # SENAITE object was deleted/recreated, so we adopt instead of cloning.
+    current_ids = {it.get("id") for it in items if it.get("id")}
     for item in items:
         senaite_id = item.get("id")
         if not senaite_id:
@@ -2937,6 +2942,36 @@ async def sync_analysis_services(db: Session = Depends(get_db), _current_user=De
                 existing.category = category
                 updated += 1
             _apply_service_result_type(existing, item)  # local-wins seed
+            continue
+
+        # SENAITE can delete+recreate a service under a new id/UID (same keyword).
+        # Matching only by senaite_id would clone the keyword and orphan the old
+        # row (the TB500 promote-502 incident). Adopt an orphaned row — same
+        # keyword, stale senaite_id absent from this pull — preserving its id and
+        # all lims_analyses / peptide_analytes references. .first() tolerates any
+        # pre-existing duplicates.
+        kw = item.get("getKeyword") or item.get("Keyword")
+        orphan = None
+        if kw and current_ids:
+            orphan = db.execute(
+                select(AnalysisService)
+                .where(
+                    AnalysisService.keyword == kw,
+                    AnalysisService.senaite_id.isnot(None),
+                    AnalysisService.senaite_id.not_in(current_ids),
+                )
+                .order_by(AnalysisService.id)
+            ).scalars().first()
+        if orphan is not None:
+            orphan.senaite_id = senaite_id
+            orphan.senaite_uid = item.get("uid")
+            orphan.title = title
+            if category:
+                orphan.category = category
+            if methods_list:
+                orphan.methods = methods_list
+            _apply_service_result_type(orphan, item)
+            updated += 1
             continue
 
         svc = AnalysisService(
