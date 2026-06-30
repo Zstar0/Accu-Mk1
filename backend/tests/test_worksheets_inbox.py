@@ -15,7 +15,7 @@ Verifies:
 import pytest
 from fastapi.testclient import TestClient
 
-from main import app, ROLE_TO_VIAL_ROLES, VALID_INBOX_ROLES, ROLE_TO_GROUP_NAMES
+from main import app, ROLE_TO_VIAL_ROLES, VALID_INBOX_ROLES, ROLE_TO_DEPARTMENT_NAME, _inbox_allowed_group_ids
 from database import SessionLocal
 from models import LimsSample, LimsSubSample
 
@@ -53,9 +53,9 @@ def test_valid_inbox_roles_exactly_hplc_and_micro():
     assert VALID_INBOX_ROLES == {"hplc", "microbiology"}
 
 
-def test_role_to_group_names_present():
-    assert "Analytics" in ROLE_TO_GROUP_NAMES["hplc"]
-    assert "Microbiology" in ROLE_TO_GROUP_NAMES["microbiology"]
+def test_role_to_department_name_present():
+    assert ROLE_TO_DEPARTMENT_NAME["hplc"] == "Analytical"
+    assert ROLE_TO_DEPARTMENT_NAME["microbiology"] == "Microbiology"
 
 
 # ── Route validation ─────────────────────────────────────────────────────────
@@ -607,3 +607,28 @@ def test_parent_sample_inbox_analyses_never_carry_mk1_uids(client, auth_headers)
                 assert not uid.startswith("mk1:"), (
                     f"parent {parent['sample_id']} unexpectedly has mk1: UID {uid}"
                 )
+
+
+# ── Task 4: Department-keyed inbox lane helper ────────────────────────────────
+
+
+def test_inbox_helper_includes_new_microbiology_department_group(monkeypatch):
+    """A new Microbiology-DEPARTMENT group with a different NAME lands in the micro
+    lane — the behavioral win. RED if the resolver ever name-pins again. Throwaway
+    group is created + rolled back; never committed to the live catalog."""
+    from sqlalchemy import select
+    from database import SessionLocal
+    from models import ServiceGroup, Department
+    from main import _inbox_allowed_group_ids
+    db = SessionLocal()
+    try:
+        micro = db.execute(select(Department).where(Department.name == "Microbiology")).scalars().one()
+        g = ServiceGroup(name="ZZTEST Sterility PCR", department_id=micro.id)
+        db.add(g)
+        db.flush()  # visible in-session to the helper's query
+        allowed = _inbox_allowed_group_ids(db, "microbiology")
+        assert g.id in allowed                       # new same-department group is in the lane
+        assert _inbox_allowed_group_ids(db, None) is None  # no role → no filter
+    finally:
+        db.rollback()
+        db.close()
