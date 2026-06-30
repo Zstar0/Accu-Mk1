@@ -1,0 +1,407 @@
+import { useState } from 'react'
+import { ArrowLeft, ArrowUpRight, Check, Eye, Send } from 'lucide-react'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Skeleton } from '@/components/ui/skeleton'
+import { cn } from '@/lib/utils'
+import { useAuthStore } from '@/store/auth-store'
+import { useUIStore } from '@/store/ui-store'
+import {
+  useFlag,
+  useChangeStatus,
+  useAssignFlag,
+  useAddComment,
+  useAddWatcher,
+  useRemoveWatcher,
+} from '@/hooks/use-flags'
+import type {
+  FlagStatus,
+  CommentResponse,
+  EventResponse,
+} from '@/lib/flags-api'
+import { flagTypeDef } from '@/components/flags/flag-catalog'
+import {
+  entityMeta,
+  entityLabel,
+  navigateToEntity,
+} from '@/components/flags/flag-entity'
+import {
+  useFlagUsers,
+  nameForUser,
+  initialsForUser,
+  avatarColor,
+} from '@/components/flags/flag-users'
+import { formatClock } from '@/components/flags/flag-format'
+import { FlagAvatar } from '@/components/flags/FlagAvatar'
+
+const STATUS_LABELS: Record<FlagStatus, string> = {
+  open: 'Open',
+  in_progress: 'In progress',
+  resolved: 'Resolved',
+  closed: 'Closed',
+}
+const STATUS_DOT: Record<FlagStatus, string> = {
+  open: '#e8730a',
+  in_progress: '#3b82f6',
+  resolved: '#22c55e',
+  closed: '#94a3b8',
+}
+
+type TimelineEntry =
+  | { kind: 'comment'; at: string; comment: CommentResponse }
+  | { kind: 'event'; at: string; event: EventResponse }
+
+/**
+ * One flag's thread: breadcrumb + entity/resolve header, status/assignee/watch
+ * controls, an interleaved audit+comment timeline, and a composer. Visual
+ * target: flag-thread-dark.html.
+ *
+ * Gaps vs the mockup (API limits, noted): the detail API exposes no watchers
+ * list, so the watcher count is derived best-effort from the event trail and
+ * the Watch toggle's initial state is inferred the same way.
+ */
+export function FlagThread({
+  flagId,
+  tabLabel,
+}: {
+  flagId: number
+  tabLabel: string
+}) {
+  const { data: flag, isLoading, isError } = useFlag(flagId)
+  const users = useFlagUsers()
+  const currentUserId = useAuthStore(state => state.user?.id ?? null)
+
+  const changeStatus = useChangeStatus(flagId)
+  const assign = useAssignFlag(flagId)
+  const addComment = useAddComment(flagId)
+  const addWatcher = useAddWatcher(flagId)
+  const removeWatcher = useRemoveWatcher(flagId)
+
+  const [draft, setDraft] = useState('')
+
+  if (isLoading) {
+    return (
+      <div className="space-y-3 p-4">
+        <Skeleton className="h-5 w-1/3" />
+        <Skeleton className="h-6 w-2/3" />
+        <Skeleton className="h-24 w-full" />
+      </div>
+    )
+  }
+  if (isError || !flag) {
+    return (
+      <div className="flex flex-1 flex-col items-center justify-center p-8 text-center">
+        <p className="text-sm font-semibold">Could not load this flag.</p>
+        <Button
+          variant="outline"
+          size="sm"
+          className="mt-3"
+          onClick={() => useUIStore.getState().closeFlagThread()}
+        >
+          Back to flags
+        </Button>
+      </div>
+    )
+  }
+
+  const def = flagTypeDef(flag.type)
+  const { Icon, canDeepLink } = entityMeta(flag.entity_type)
+  const status = (flag.status as FlagStatus) ?? 'open'
+
+  // Best-effort watcher state from the audit trail (no watchers list on the API).
+  const watchers = new Set<number>()
+  for (const e of flag.events) {
+    if (e.actor_id == null) continue
+    if (e.event_type === 'watcher_added') watchers.add(e.actor_id)
+    if (e.event_type === 'watcher_removed') watchers.delete(e.actor_id)
+  }
+  const iWatch = currentUserId != null && watchers.has(currentUserId)
+
+  // Merge comments + non-comment events into one time-ordered timeline.
+  const timeline: TimelineEntry[] = [
+    ...flag.comments.map(
+      (comment): TimelineEntry => ({
+        kind: 'comment',
+        at: comment.created_at,
+        comment,
+      })
+    ),
+    ...flag.events
+      .filter(e => e.event_type !== 'commented')
+      .map(
+        (event): TimelineEntry => ({
+          kind: 'event',
+          at: event.created_at,
+          event,
+        })
+      ),
+  ].sort((a, b) => Date.parse(a.at) - Date.parse(b.at))
+
+  const submit = () => {
+    const body = draft.trim()
+    if (!body || addComment.isPending) return
+    addComment.mutate(body)
+    setDraft('')
+  }
+
+  const eventText = (e: EventResponse): string => {
+    const actor = nameForUser(users, e.actor_id)
+    switch (e.event_type) {
+      case 'raised':
+        return `🚩 ${actor} raised this · ${def.label}`
+      case 'assigned':
+        return `Assigned to ${nameForUser(users, e.to_value ? Number(e.to_value) : null)}`
+      case 'unassigned':
+        return `${actor} unassigned this`
+      case 'status_changed':
+        return `Status → ${STATUS_LABELS[e.to_value as FlagStatus] ?? e.to_value} · ${actor}`
+      case 'watcher_added':
+        return `${actor} started watching`
+      case 'watcher_removed':
+        return `${actor} stopped watching`
+      default:
+        return `${actor} · ${e.event_type}`
+    }
+  }
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      {/* Breadcrumb */}
+      <button
+        type="button"
+        onClick={() => useUIStore.getState().closeFlagThread()}
+        className="flex items-center gap-2 border-b px-4 py-2.5 text-xs font-semibold text-muted-foreground hover:text-foreground"
+      >
+        <ArrowLeft className="h-3.5 w-3.5" />
+        Flags <span className="text-muted-foreground/50">/</span>
+        <span className="text-foreground/70">{tabLabel}</span>
+      </button>
+
+      {/* Header */}
+      <div className="border-b px-4 py-3">
+        <div className="flex items-center justify-between gap-2">
+          <span className="inline-flex items-center gap-1.5 rounded-md bg-muted px-2 py-1 text-[11px] font-bold text-foreground/80">
+            <Icon className="h-3.5 w-3.5" />
+            {entityLabel(flag.entity_type, flag.entity_id)}
+            {canDeepLink && (
+              <button
+                type="button"
+                aria-label="Open entity"
+                onClick={() =>
+                  navigateToEntity(flag.entity_type, flag.entity_id)
+                }
+                className="opacity-70 hover:opacity-100"
+              >
+                <ArrowUpRight className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </span>
+          {status !== 'resolved' && status !== 'closed' && (
+            <Button
+              size="sm"
+              className="h-7 gap-1.5 bg-emerald-700 text-emerald-50 hover:bg-emerald-700/90"
+              disabled={changeStatus.isPending}
+              onClick={() => changeStatus.mutate('resolved')}
+            >
+              <Check className="h-3.5 w-3.5" /> Resolve
+            </Button>
+          )}
+        </div>
+
+        <div className="mt-2.5 flex items-center gap-2">
+          <h2 className="text-base font-bold text-foreground">{flag.title}</h2>
+          <span
+            className="rounded-full px-2 py-0.5 text-[10px] font-bold text-white"
+            style={{ backgroundColor: def.color }}
+          >
+            {def.label}
+          </span>
+        </div>
+
+        {/* Controls */}
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <Select
+            value={status}
+            onValueChange={v => changeStatus.mutate(v as FlagStatus)}
+          >
+            <SelectTrigger className="h-8 w-auto gap-1.5 text-xs">
+              <span
+                className="h-2 w-2 rounded-full"
+                style={{ backgroundColor: STATUS_DOT[status] }}
+              />
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {(Object.keys(STATUS_LABELS) as FlagStatus[]).map(s => (
+                <SelectItem key={s} value={s}>
+                  {STATUS_LABELS[s]}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+
+          <Select
+            value={
+              flag.assignee_id == null ? 'unassigned' : String(flag.assignee_id)
+            }
+            onValueChange={v =>
+              assign.mutate(v === 'unassigned' ? null : Number(v))
+            }
+          >
+            <SelectTrigger className="h-8 w-auto gap-1.5 text-xs">
+              <SelectValue placeholder="Unassigned" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="unassigned">Unassigned</SelectItem>
+              {[...users.values()].map(u => (
+                <SelectItem key={u.id} value={String(u.id)}>
+                  {nameForUser(users, u.id)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-8 gap-1.5 text-xs"
+            disabled={
+              addWatcher.isPending ||
+              removeWatcher.isPending ||
+              currentUserId == null
+            }
+            onClick={() => {
+              if (currentUserId == null) return
+              if (iWatch) removeWatcher.mutate(currentUserId)
+              else addWatcher.mutate(currentUserId)
+            }}
+          >
+            <Eye className="h-3.5 w-3.5" />
+            {iWatch ? 'Watching' : 'Watch'}
+            {watchers.size > 0 && (
+              <span className="text-muted-foreground">· {watchers.size}</span>
+            )}
+          </Button>
+        </div>
+      </div>
+
+      {/* Timeline */}
+      <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-auto bg-muted/30 px-4 py-3.5">
+        {timeline.map((entry, i) =>
+          entry.kind === 'event' ? (
+            <div
+              key={`e-${entry.event.id}`}
+              className="flex items-center justify-center gap-2 text-[11px] text-muted-foreground"
+            >
+              <span className="h-px flex-1 bg-border" />
+              <span className="text-center">
+                {eventText(entry.event)} · {formatClock(entry.at)}
+              </span>
+              <span className="h-px flex-1 bg-border" />
+            </div>
+          ) : (
+            <CommentRow
+              key={`c-${entry.comment.id}`}
+              comment={entry.comment}
+              isMe={entry.comment.author_id === currentUserId}
+              name={nameForUser(users, entry.comment.author_id)}
+              initials={initialsForUser(
+                users,
+                entry.comment.author_id,
+                currentUserId
+              )}
+              color={avatarColor(entry.comment.author_id)}
+              index={i}
+            />
+          )
+        )}
+        {timeline.length === 0 && (
+          <p className="py-6 text-center text-xs text-muted-foreground">
+            No activity yet.
+          </p>
+        )}
+      </div>
+
+      {/* Composer */}
+      <div className="flex items-center gap-2.5 border-t bg-background px-3 py-2.5">
+        <FlagAvatar
+          initials={initialsForUser(users, currentUserId, currentUserId)}
+          color={avatarColor(currentUserId)}
+          isYou
+          size={22}
+        />
+        <Input
+          value={draft}
+          onChange={e => setDraft(e.target.value)}
+          onKeyDown={e => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+              e.preventDefault()
+              submit()
+            }
+          }}
+          placeholder="Write a comment…"
+          className="h-10 flex-1"
+        />
+        <Button
+          size="icon"
+          className="h-10 w-10 shrink-0"
+          disabled={!draft.trim() || addComment.isPending}
+          onClick={submit}
+          aria-label="Send comment"
+        >
+          <Send className="h-4 w-4" />
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+function CommentRow({
+  comment,
+  isMe,
+  name,
+  initials,
+  color,
+  index,
+}: {
+  comment: CommentResponse
+  isMe: boolean
+  name: string
+  initials: string
+  color: string
+  index: number
+}) {
+  return (
+    <div
+      className="flag-cmt-in flex gap-2.5"
+      style={{ animationDelay: `${Math.min(index, 8) * 30}ms` }}
+    >
+      <FlagAvatar initials={initials} color={color} isYou={isMe} size={22} />
+      <div
+        className={cn(
+          'max-w-[300px] rounded-xl border px-3 py-2',
+          isMe ? 'border-primary/40 bg-primary/10' : 'border-border bg-muted/60'
+        )}
+      >
+        <div className="mb-0.5 flex items-center gap-2">
+          <b className="text-xs text-foreground">{isMe ? 'You' : name}</b>
+          <span className="text-[10.5px] text-muted-foreground">
+            {formatClock(comment.created_at)}
+          </span>
+        </div>
+        <div className="text-[13px] leading-relaxed text-foreground/90">
+          {comment.body}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+export default FlagThread
