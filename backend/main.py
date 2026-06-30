@@ -323,6 +323,10 @@ async def lifespan(app: FastAPI):
     init_db()
     from flags import seams as _flag_seams
     _flag_seams.register_mk1_entities()
+    import asyncio as _asyncio
+    from flags import bus as _flag_bus
+    _flag_bus.BUS.set_loop(_asyncio.get_running_loop())
+    _flag_seams.set_event_sink(_flag_bus.SSEEventSink(_flag_bus.BUS))
     # Seed default settings and admin user
     from database import SessionLocal
     db = SessionLocal()
