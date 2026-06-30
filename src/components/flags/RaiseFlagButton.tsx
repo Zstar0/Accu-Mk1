@@ -34,15 +34,27 @@ import { useFlagUsers, nameForUser } from '@/components/flags/flag-users'
  * Deferred: the "Undo" grace window (toast-animation.html) needs a delete-flag
  * endpoint, which Plan 1 does not provide — noted, not implemented.
  */
+/** One pickable target for the order-scope create flow. */
+export interface FlagCandidate {
+  entityType: string
+  entityId: string
+  label: string
+}
+
 export function RaiseFlagButton({
   entityType,
   entityId,
+  candidates,
   defaultAssigneeId = null,
   variant = 'default',
   trigger,
 }: {
   entityType?: string
   entityId?: string
+  /** Order scope (Plan 6): the samples this order spans. With >1 the compose
+   *  opens on a "Which sample?" select; with exactly one it's prefilled. Ignored
+   *  when an explicit `entityType`/`entityId` is given. */
+  candidates?: FlagCandidate[]
   defaultAssigneeId?: number | null
   variant?: 'default' | 'compact'
   /** Custom popover trigger (e.g. EntityFlagButton's outline affordance). When
@@ -52,6 +64,8 @@ export function RaiseFlagButton({
   const create = useCreateFlag()
   const users = useFlagUsers()
   const presetEntity = entityType != null && entityId != null
+  const hasCandidates =
+    !presetEntity && candidates != null && candidates.length > 0
 
   const [open, setOpen] = useState(false)
   const [type, setType] = useState<string>('blocker')
@@ -60,6 +74,14 @@ export function RaiseFlagButton({
   const [firstComment, setFirstComment] = useState('')
   const [entityTypeInput, setEntityTypeInput] = useState('sub_sample')
   const [entityIdInput, setEntityIdInput] = useState('')
+  const [candidateId, setCandidateId] = useState<string>(
+    candidates?.[0]?.entityId ?? ''
+  )
+
+  // The chosen candidate (order scope), defaulting to the first.
+  const selectedCandidate = hasCandidates
+    ? (candidates.find(c => c.entityId === candidateId) ?? candidates[0])
+    : undefined
 
   const reset = () => {
     setType('blocker')
@@ -67,12 +89,19 @@ export function RaiseFlagButton({
     setAssigneeId(defaultAssigneeId)
     setFirstComment('')
     setEntityIdInput('')
+    setCandidateId(candidates?.[0]?.entityId ?? '')
   }
 
-  const resolvedEntityType = presetEntity ? (entityType ?? '') : entityTypeInput
+  const resolvedEntityType = presetEntity
+    ? (entityType ?? '')
+    : selectedCandidate
+      ? selectedCandidate.entityType
+      : entityTypeInput
   const resolvedEntityId = presetEntity
     ? (entityId ?? '')
-    : entityIdInput.trim()
+    : selectedCandidate
+      ? selectedCandidate.entityId
+      : entityIdInput.trim()
 
   // Only types active AND allowed for this entity, ordered by sort_order
   // (the backend returns them ordered). Colors come from the row.
@@ -145,7 +174,28 @@ export function RaiseFlagButton({
       <PopoverContent align="end" className="w-80 space-y-3">
         <p className="text-sm font-semibold">Raise a flag</p>
 
-        {!presetEntity && (
+        {hasCandidates && candidates.length > 1 && (
+          <div className="space-y-1">
+            <Label className="text-xs">Which sample?</Label>
+            <Select
+              value={selectedCandidate?.entityId}
+              onValueChange={setCandidateId}
+            >
+              <SelectTrigger className="h-8 text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {candidates.map(c => (
+                  <SelectItem key={c.entityId} value={c.entityId}>
+                    {c.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        )}
+
+        {!presetEntity && !hasCandidates && (
           <div className="grid grid-cols-2 gap-2">
             <div className="space-y-1">
               <Label className="text-xs">Entity type</Label>

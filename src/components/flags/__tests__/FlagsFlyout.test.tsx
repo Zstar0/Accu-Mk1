@@ -131,6 +131,82 @@ describe('FlagsFlyout', () => {
     expect(useUIStore.getState().flagsThreadId).toBeNull()
   })
 
+  it('samples (order) scope filters the all_open list, labels the header, and clears back to tabs', async () => {
+    const inOrder = flag(1, 'On P-0001')
+    inOrder.entity = {
+      entity_type: 'sample',
+      entity_id: 'P-0001',
+      label: 'P-0001',
+      sample_id: 'P-0001',
+      analyses: [],
+      lot: null,
+      deep_link: { kind: 'sample', id: 'P-0001' },
+    }
+    const elsewhere = flag(2, 'On some other sample')
+    elsewhere.entity = {
+      entity_type: 'sample',
+      entity_id: 'P-9999',
+      label: 'P-9999',
+      sample_id: 'P-9999',
+      analyses: [],
+      lot: null,
+      deep_link: { kind: 'sample', id: 'P-9999' },
+    }
+    // The flyout reads useFlagsList('all_open') for the samples scope.
+    useFlagsList.mockReturnValue({
+      data: [inOrder, elsewhere],
+      isLoading: false,
+      isError: false,
+      refetch: vi.fn(),
+    })
+    useUIStore.setState({
+      flagsFlyoutOpen: true,
+      flagsThreadId: null,
+      flagsEntityFilter: null,
+      flagsSamplesFilter: { label: '#1042', sampleIds: ['P-0001'] },
+    })
+
+    const { FlagsFlyout } = await import('@/components/flags/FlagsFlyout')
+    render(<FlagsFlyout />)
+
+    // Order-scoped header label; tabs hidden.
+    expect(await screen.findByText('Flags · #1042')).toBeInTheDocument()
+    expect(screen.queryByRole('tab', { name: 'All open' })).toBeNull()
+    // Only the in-order sample's flag is listed.
+    expect(screen.getByText('On P-0001')).toBeInTheDocument()
+    expect(screen.queryByText('On some other sample')).toBeNull()
+
+    // Clearing the order filter returns to the tabs.
+    fireEvent.click(screen.getByRole('button', { name: /clear order filter/i }))
+    expect(useUIStore.getState().flagsSamplesFilter).toBeNull()
+  })
+
+  it('samples scope with no matching flags shows a prominent +New flag empty state', async () => {
+    useFlagsList.mockReturnValue({
+      data: [],
+      isLoading: false,
+      isError: false,
+      refetch: vi.fn(),
+    })
+    useUIStore.setState({
+      flagsFlyoutOpen: true,
+      flagsThreadId: null,
+      flagsEntityFilter: null,
+      flagsSamplesFilter: { label: '#1042', sampleIds: ['P-0001', 'P-0002'] },
+    })
+
+    const { FlagsFlyout } = await import('@/components/flags/FlagsFlyout')
+    render(<FlagsFlyout />)
+
+    expect(
+      await screen.findByText(/no flags on #1042 yet — raise one/i)
+    ).toBeInTheDocument()
+    // The empty state offers a working raise affordance (order → sample picker).
+    expect(
+      screen.getAllByRole('button', { name: /raise a flag/i }).length
+    ).toBeGreaterThan(0)
+  })
+
   it('entity-filter mode shows a labeled chip + entity list and can clear back to tabs', async () => {
     const f = flag(1, 'Crashed out — needs re-prep')
     f.entity = {
