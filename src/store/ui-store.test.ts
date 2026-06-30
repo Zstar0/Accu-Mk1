@@ -242,6 +242,62 @@ describe('UIStore flags entity filter', () => {
   })
 })
 
+describe('UIStore flags samples (order) filter', () => {
+  beforeEach(() => {
+    useUIStore.setState({
+      flagsFlyoutOpen: false,
+      flagsThreadId: null,
+      flagsEntityFilter: null,
+      flagsSamplesFilter: null,
+    })
+  })
+
+  it('defaults to no samples filter', () => {
+    expect(useUIStore.getState().flagsSamplesFilter).toBeNull()
+  })
+
+  it('openFlagsForSamples opens the flyout scoped to the sample ids', () => {
+    useUIStore.getState().openFlagsForSamples('#1042', ['P-0001', 'P-0002'])
+    const state = useUIStore.getState()
+    expect(state.flagsFlyoutOpen).toBe(true)
+    expect(state.flagsThreadId).toBeNull()
+    expect(state.flagsSamplesFilter).toEqual({
+      label: '#1042',
+      sampleIds: ['P-0001', 'P-0002'],
+    })
+  })
+
+  it('is mutually exclusive with the single-entity filter (each clears the other)', () => {
+    useUIStore.getState().openFlagsForEntity('sample', 'P-0071')
+    useUIStore.getState().openFlagsForSamples('#1042', ['P-0001'])
+    expect(useUIStore.getState().flagsEntityFilter).toBeNull()
+    expect(useUIStore.getState().flagsSamplesFilter).toEqual({
+      label: '#1042',
+      sampleIds: ['P-0001'],
+    })
+
+    // …and opening a single entity clears the samples scope.
+    useUIStore.getState().openFlagsForEntity('sample', 'P-0071')
+    expect(useUIStore.getState().flagsSamplesFilter).toBeNull()
+    expect(useUIStore.getState().flagsEntityFilter).not.toBeNull()
+  })
+
+  it('clearFlagsSamplesFilter returns to the tabs (keeps flyout open)', () => {
+    useUIStore.getState().openFlagsForSamples('#1042', ['P-0001'])
+    useUIStore.getState().clearFlagsSamplesFilter()
+    expect(useUIStore.getState().flagsSamplesFilter).toBeNull()
+    expect(useUIStore.getState().flagsFlyoutOpen).toBe(true)
+  })
+
+  it('closeFlagsFlyout clears the samples filter', () => {
+    useUIStore.getState().openFlagsForSamples('#1042', ['P-0001'])
+    useUIStore.getState().closeFlagsFlyout()
+    const state = useUIStore.getState()
+    expect(state.flagsSamplesFilter).toBeNull()
+    expect(state.flagsFlyoutOpen).toBe(false)
+  })
+})
+
 describe('UIStore customer detail tabs + order search', () => {
   beforeEach(() => {
     useUIStore.setState(useUIStore.getInitialState())

@@ -159,6 +159,13 @@ interface UIState {
     id: string
     includeDescendants: boolean
   } | null
+  // Plan 6: order/multi-sample scope (an order spans samples). Mutually
+  // exclusive with the single-entity flagsEntityFilter — opening one clears the
+  // other. Drives the flyout's "Flags · {label}" rolled-up view.
+  flagsSamplesFilter: {
+    label: string
+    sampleIds: string[]
+  } | null
   openFlagsFlyout: (threadId?: number) => void
   openFlagThread: (id: number) => void
   openFlagsForEntity: (
@@ -166,7 +173,9 @@ interface UIState {
     id: string,
     opts?: { includeDescendants?: boolean }
   ) => void
+  openFlagsForSamples: (label: string, sampleIds: string[]) => void
   clearFlagsEntityFilter: () => void
+  clearFlagsSamplesFilter: () => void
   closeFlagThread: () => void
   closeFlagsFlyout: () => void
   startPrepFromWorksheet: (prefill: {
@@ -211,6 +220,7 @@ export const useUIStore = create<UIState>()(
       flagsFlyoutOpen: false,
       flagsThreadId: null,
       flagsEntityFilter: null,
+      flagsSamplesFilter: null,
 
       toggleLeftSidebar: () =>
         set(
@@ -518,14 +528,34 @@ export const useUIStore = create<UIState>()(
               id,
               includeDescendants: opts?.includeDescendants ?? false,
             },
+            // Mutually exclusive with the order/samples scope.
+            flagsSamplesFilter: null,
           },
           undefined,
           'openFlagsForEntity'
         ),
 
+      // Plan 6: open the flyout rolled up to an order's samples. Clears the
+      // single-entity filter so the two scopes never coexist.
+      openFlagsForSamples: (label, sampleIds) =>
+        set(
+          {
+            flagsFlyoutOpen: true,
+            flagsThreadId: null,
+            flagsSamplesFilter: { label, sampleIds },
+            flagsEntityFilter: null,
+          },
+          undefined,
+          'openFlagsForSamples'
+        ),
+
       // Return from the entity-filtered view to the triage tabs.
       clearFlagsEntityFilter: () =>
         set({ flagsEntityFilter: null }, undefined, 'clearFlagsEntityFilter'),
+
+      // Return from the order/samples view to the triage tabs.
+      clearFlagsSamplesFilter: () =>
+        set({ flagsSamplesFilter: null }, undefined, 'clearFlagsSamplesFilter'),
 
       // Back to the triage list — drops the thread but keeps the flyout open
       // (and any entity filter, so "back" returns to the filtered list).
@@ -538,6 +568,7 @@ export const useUIStore = create<UIState>()(
             flagsFlyoutOpen: false,
             flagsThreadId: null,
             flagsEntityFilter: null,
+            flagsSamplesFilter: null,
           },
           undefined,
           'closeFlagsFlyout'
