@@ -15,12 +15,13 @@ interface VialLike {
   analyses: AnalysisLike[]
 }
 
-/** Bench lane of a worksheet item, from its top-level service_group_id.
- *  1 = Analytics -> HPLC, 2 = Microbiology. `analyses_json` drops group_id,
- *  so this is the only reliable bench signal for a stored item. */
-export function itemBench(serviceGroupId: number | null): 'hplc' | 'micro' | null {
-  if (serviceGroupId === 1) return 'hplc'
-  if (serviceGroupId === 2) return 'micro'
+/** Bench lane of a worksheet item, from its service DEPARTMENT (the single
+ *  structural routing key from the catalog). Robust to new groups within a
+ *  department — a new Microbiology group still lands in 'micro'. Replaces the
+ *  old hardcoded service_group_id === 1/2. */
+export function itemBench(departmentName: string | null | undefined): 'hplc' | 'micro' | null {
+  if (departmentName === 'Analytical') return 'hplc'
+  if (departmentName === 'Microbiology') return 'micro'
   return null
 }
 
@@ -39,12 +40,12 @@ export function analysisRole(a: AnalysisLike): InboxRoleTag | null {
 }
 
 /** Distinct, stably-ordered role badges for a worksheet item. Bench from
- *  service_group_id picks the lane; within micro, split ENDO/STER per analysis. */
+ *  department_name picks the lane; within micro, split ENDO/STER per analysis. */
 export function itemRoleBadges(item: {
-  service_group_id: number | null
+  department_name: string | null | undefined
   analyses?: AnalysisLike[]
 }): InboxRoleTag[] {
-  const bench = itemBench(item.service_group_id)
+  const bench = itemBench(item.department_name)
   const analyses = item.analyses ?? []
   if (bench === 'hplc') return ['hplc']
   const roles = new Set<InboxRoleTag>()
@@ -59,7 +60,7 @@ export function itemRoleBadges(item: {
   return (['hplc', 'endo', 'ster'] as const).filter(r => roles.has(r))
 }
 
-/** Micro service-group categories for the inbox dropdown (Microbiology = group 2).
+/** Micro service-group categories for the inbox dropdown (Microbiology department).
  *  Verified members: Endotoxin (ENDO-LAL), Rapid Sterility Screening (PCR)
  *  (STER-PCR), Moisture Content (KF). */
 export const MICRO_CATEGORIES = [
