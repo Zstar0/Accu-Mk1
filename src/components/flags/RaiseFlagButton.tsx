@@ -18,7 +18,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { Label } from '@/components/ui/label'
 import { notifications } from '@/lib/notifications'
 import { useCreateFlag } from '@/hooks/use-flags'
-import type { FlagType } from '@/lib/flags-api'
+import type { FlagTypeSlug } from '@/lib/flags-api'
 import { FLAG_TYPE_ORDER, FLAG_TYPES } from '@/components/flags/flag-catalog'
 import { useFlagUsers, nameForUser } from '@/components/flags/flag-users'
 
@@ -54,7 +54,7 @@ export function RaiseFlagButton({
   const presetEntity = entityType != null && entityId != null
 
   const [open, setOpen] = useState(false)
-  const [type, setType] = useState<FlagType>('blocker')
+  const [type, setType] = useState<FlagTypeSlug>('blocker')
   const [title, setTitle] = useState('')
   const [assigneeId, setAssigneeId] = useState<number | null>(defaultAssigneeId)
   const [firstComment, setFirstComment] = useState('')
@@ -161,7 +161,7 @@ export function RaiseFlagButton({
 
         <div className="space-y-1">
           <Label className="text-xs">Type</Label>
-          <Select value={type} onValueChange={v => setType(v as FlagType)}>
+          <Select value={type} onValueChange={v => setType(v as FlagTypeSlug)}>
             <SelectTrigger className="h-8 gap-1.5 text-xs">
               <span
                 className="h-2 w-2 rounded-full"

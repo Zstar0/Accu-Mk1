@@ -7,7 +7,7 @@
  * tokens only" rule — these are semantic type accents, not chrome).
  */
 
-import type { FlagType } from '@/lib/flags-api'
+import type { FlagTypeSlug } from '@/lib/flags-api'
 
 export type FlagKind = 'issue' | 'signal'
 
@@ -17,7 +17,7 @@ export interface FlagTypeDef {
   kind: FlagKind
 }
 
-export const FLAG_TYPES: Record<FlagType, FlagTypeDef> = {
+export const FLAG_TYPES: Record<FlagTypeSlug, FlagTypeDef> = {
   blocker: { label: 'Blocker', color: '#e5484d', kind: 'issue' },
   critical: { label: 'Critical', color: '#e8730a', kind: 'issue' },
   question: { label: 'Question', color: '#3b82f6', kind: 'issue' },
@@ -35,7 +35,7 @@ export const FLAG_TYPES: Record<FlagType, FlagTypeDef> = {
 
 /** Ordered for display (issues first, by urgency; signal last) — drives the
  *  left-to-right order of the segmented count chips on the header button. */
-export const FLAG_TYPE_ORDER: FlagType[] = [
+export const FLAG_TYPE_ORDER: FlagTypeSlug[] = [
   'blocker',
   'critical',
   'question',
@@ -46,7 +46,7 @@ export const FLAG_TYPE_ORDER: FlagType[] = [
 /** Look up a type def, tolerating unknown strings from the wire. */
 export function flagTypeDef(type: string): FlagTypeDef {
   return (
-    FLAG_TYPES[type as FlagType] ?? {
+    FLAG_TYPES[type as FlagTypeSlug] ?? {
       label: type,
       color: '#94a3b8',
       kind: 'issue',

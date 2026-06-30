@@ -8,15 +8,19 @@
 
 import { apiFetch } from './api'
 
-// --- string unions (mirror schemas.py FlagType/FlagStatus/FlagTab) ---
+// --- string unions (mirror schemas.py FlagStatus/FlagTab) ---
 
-export type FlagType =
+/** The 5 built-in type slugs. Types are now DB-managed (Plan 5), so a flag's
+ *  `type` is any slug string on the wire — this union only documents the
+ *  built-ins and keys the static fallback catalog. */
+export type FlagTypeSlug =
   | 'blocker'
   | 'critical'
   | 'question'
   | 'waiting_on_customer'
   | 'ready_for_verification'
 
+// NOTE: `blocked` is added to this union in Task 7 (where the UI surfaces it).
 export type FlagStatus = 'open' | 'in_progress' | 'resolved' | 'closed'
 
 export type FlagTab = 'assigned' | 'raised' | 'watching' | 'all_open'
@@ -100,14 +104,53 @@ export interface SummaryResponse {
 
 // --- request bodies (mirror schemas.py request models) ---
 
-/** Mirrors `CreateFlagRequest`. */
+/** Mirrors `CreateFlagRequest`. `type` is a DB-managed type slug (Plan 5). */
 export interface CreateFlagBody {
   entity_type: string
   entity_id: string
-  type: FlagType
+  type: string
   title: string
   assignee_id?: number | null
   first_comment?: string | null
+}
+
+/** Mirrors `FlagTypeResponse` — a row of the user-managed flag-type catalog
+ *  (Plan 5). `entity_types` empty = global; otherwise the entity-type slugs this
+ *  type may be raised on. */
+export interface FlagType {
+  id: number
+  slug: string
+  label: string
+  color: string
+  kind: 'issue' | 'signal'
+  is_blocking: boolean
+  is_active: boolean
+  sort_order: number
+  entity_types: string[]
+  is_builtin: boolean
+}
+
+/** Mirrors `FlagTypeCreate`. */
+export interface FlagTypeCreate {
+  label: string
+  color: string
+  kind: 'issue' | 'signal'
+  slug?: string
+  is_blocking?: boolean
+  is_active?: boolean
+  sort_order?: number
+  entity_types?: string[]
+}
+
+/** Mirrors `FlagTypeUpdate` (all-optional; no slug — it's immutable). */
+export interface FlagTypeUpdate {
+  label?: string
+  color?: string
+  kind?: 'issue' | 'signal'
+  is_blocking?: boolean
+  is_active?: boolean
+  sort_order?: number
+  entity_types?: string[]
 }
 
 /** Optional server-side narrowing filters for the list endpoint. The primary
@@ -193,3 +236,65 @@ export const removeWatcher = (id: number, user_id: number) =>
   apiFetch<undefined>(`/api/flags/${id}/watchers/${user_id}`, {
     method: 'DELETE',
   })
+
+// --- flag types (Plan 5) -------------------------------------------------
+
+/** Error carrying the HTTP status so callers can branch on 409 (in-use/built-in
+ *  → offer deactivate instead of hard-delete). */
+export class FlagTypeApiError extends Error {
+  status: number
+  constructor(status: number, message: string) {
+    super(message)
+    this.name = 'FlagTypeApiError'
+    this.status = status
+  }
+}
+
+/** `GET /api/flags/types` — the managed type catalog. `active_only` is for the
+ *  raise picker; omit it (the default) for color/label resolution so deactivated
+ *  but still-referenced types resolve. `entity_type` scopes to types raisable on
+ *  that entity (global + scoped). */
+export const getFlagTypes = (params?: {
+  entity_type?: string
+  active_only?: boolean
+}) => {
+  const qs = new URLSearchParams()
+  if (params?.entity_type) qs.set('entity_type', params.entity_type)
+  if (params?.active_only) qs.set('active_only', 'true')
+  const suffix = qs.toString() ? `?${qs.toString()}` : ''
+  return apiFetch<FlagType[]>(`/api/flags/types${suffix}`)
+}
+
+/** `POST /api/flags/types` — create a type (admin). */
+export const createFlagType = (body: FlagTypeCreate) =>
+  apiFetch<FlagType>('/api/flags/types', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+
+/** `PUT /api/flags/types/{id}` — edit a type (admin). */
+export const updateFlagType = (id: number, body: FlagTypeUpdate) =>
+  apiFetch<FlagType>(`/api/flags/types/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  })
+
+/** `DELETE /api/flags/types/{id}` — hard-delete an unused custom type (admin).
+ *  Throws {@link FlagTypeApiError} with `status === 409` when the type is
+ *  built-in or in use (the caller should deactivate instead). */
+export const deleteFlagType = async (id: number): Promise<void> => {
+  try {
+    await apiFetch<undefined>(`/api/flags/types/${id}`, { method: 'DELETE' })
+  } catch (e) {
+    const match = e instanceof Error ? e.message.match(/(\d{3})$/) : null
+    throw new FlagTypeApiError(
+      match ? Number(match[1]) : 0,
+      e instanceof Error ? e.message : 'delete failed'
+    )
+  }
+}
+
+/** `GET /api/flags/entity-types` — the registered entity-type slugs (display
+ *  names resolved client-side via flag-entity.ts ENTITY_META). */
+export const getFlagEntityTypes = () =>
+  apiFetch<string[]>('/api/flags/entity-types')
