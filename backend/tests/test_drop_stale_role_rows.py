@@ -47,6 +47,29 @@ def test_hplc_to_ster_drops_unassigned_analytical_rows(db):
     assert remaining == []
 
 
+def test_hplc_to_ster_sheds_ungrouped_analyte_row(db):
+    """Locks the Handler-approved latent-bug fix: a hplc->ster flip sheds an
+    unassigned UNGROUPED ANALYTE-N-* row (department Analytical via Task 1 backfill,
+    no service_group_members entry) that the old group-membership query structurally
+    missed. Safety triple still applies — only unassigned/no-result/no-retest."""
+    analyte = db.execute(
+        select(AnalysisService).where(AnalysisService.keyword.like("ANALYTE-%")).limit(1)
+    ).scalars().one()
+    analytical = db.execute(
+        select(Department).where(Department.name == "Analytical")).scalars().one()
+    assert analyte.department_id == analytical.id   # Task 1 tagged it Analytical
+    v = _vial(db)
+    row = LimsAnalysis(
+        lims_sub_sample_pk=v.id, analysis_service_id=analyte.id,
+        keyword=analyte.keyword, title=analyte.title or analyte.keyword,
+        review_state="unassigned")
+    db.add(row); db.flush()
+    n = _drop_stale_role_rows(db, sub=v, old_role="hplc", new_role="ster")
+    assert n == 1
+    assert db.execute(select(LimsAnalysis).where(
+        LimsAnalysis.lims_sub_sample_pk == v.id)).scalars().all() == []
+
+
 def test_cleanup_never_touches_rows_with_a_result(db):
     v = _vial(db)
     analytical_svc = db.execute(
