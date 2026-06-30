@@ -1,0 +1,70 @@
+<h2>The Flags entry point, top-right</h2>
+<p class="subtitle">A persistent button next to <strong>Worksheets</strong>. The real question here: <em>how much should the badge tell you at a glance</em> before you open the flyout? Click the one that feels right — we'll refine the winner, then design the flyout and the toast animation next.</p>
+
+<style>
+  .fbar{background:#0f1729;border-radius:12px;padding:12px 16px;display:flex;align-items:center;justify-content:flex-end;gap:10px;margin-top:6px}
+  .fbtn{display:inline-flex;align-items:center;gap:8px;background:#1c2740;color:#cdd6e4;border:1px solid #2a3550;border-radius:9px;padding:8px 12px;font-size:13px;font-weight:600;position:relative}
+  .fbtn svg{width:15px;height:15px;display:block}
+  .fbtn.ghost{background:transparent;border-color:#243049;color:#9fb0c9}
+  .chip{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;padding:0 5px;border-radius:9px;font-size:11px;font-weight:700;color:#fff;line-height:1}
+  .c-block{background:#e5484d}.c-crit{background:#e8730a}.c-ready{background:#22c55e}
+  .corner{position:absolute;top:-7px;right:-7px;min-width:20px;height:20px;padding:0 6px;border-radius:10px;font-size:11px;font-weight:700;color:#fff;display:flex;align-items:center;justify-content:center;background:#e5484d;box-shadow:0 0 0 2px #0f1729;line-height:1}
+  .dot{position:absolute;top:-3px;right:-3px;width:10px;height:10px;border-radius:50%;background:#e5484d;box-shadow:0 0 0 2px #0f1729}
+  .pulse{animation:pls 1.8s ease-out infinite}
+  @keyframes pls{0%{box-shadow:0 0 0 2px #0f1729,0 0 0 0 rgba(229,72,77,.55)}70%{box-shadow:0 0 0 2px #0f1729,0 0 0 11px rgba(229,72,77,0)}100%{box-shadow:0 0 0 2px #0f1729,0 0 0 0 rgba(229,72,77,0)}}
+  .legend{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:#7c8aa3;margin-top:14px}
+  .legend span{display:inline-flex;align-items:center;gap:6px}
+  .legend i{width:10px;height:10px;border-radius:3px;display:inline-block}
+</style>
+
+<div class="options">
+  <div class="option" data-choice="a" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content" style="flex:1">
+      <h3>Segmented counts &mdash; breakdown lives on the button</h3>
+      <p>Colored count chips show the mix right there. Zero clicks to know "2 blockers, 1 critical, 4 ready." Most informative, busiest.</p>
+      <div class="fbar">
+        <span class="fbtn ghost"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>Worksheets</span>
+        <span class="fbtn"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 2a1 1 0 0 1 1 1v1h9.2a.8.8 0 0 1 .66 1.25L15 8l1.86 2.75A.8.8 0 0 1 16.2 12H7v9a1 1 0 1 1-2 0V3a1 1 0 0 1 1-1z"/></svg>Flags
+          <span class="chip c-block">2</span><span class="chip c-crit">1</span><span class="chip c-ready">4</span>
+        </span>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content" style="flex:1">
+      <h3>One smart badge &mdash; iOS-style, pulses on new</h3>
+      <p>A single total, tinted by the most urgent type (red when a blocker exists). It softly pulses when something new lands. Clean; the breakdown opens in the flyout.</p>
+      <div class="fbar">
+        <span class="fbtn ghost"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>Worksheets</span>
+        <span class="fbtn"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 2a1 1 0 0 1 1 1v1h9.2a.8.8 0 0 1 .66 1.25L15 8l1.86 2.75A.8.8 0 0 1 16.2 12H7v9a1 1 0 1 1-2 0V3a1 1 0 0 1 1-1z"/></svg>Flags
+          <span class="corner pulse">7</span>
+        </span>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="c" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content" style="flex:1">
+      <h3>Minimal &mdash; icon + total, attention dot</h3>
+      <p>Just the flag icon with a neutral total and a red dot when anything needs attention. Most compact for a crowded toolbar; everything lives inside the flyout.</p>
+      <div class="fbar">
+        <span class="fbtn ghost"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>Worksheets</span>
+        <span class="fbtn" style="padding:9px 11px"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 2a1 1 0 0 1 1 1v1h9.2a.8.8 0 0 1 .66 1.25L15 8l1.86 2.75A.8.8 0 0 1 16.2 12H7v9a1 1 0 1 1-2 0V3a1 1 0 0 1 1-1z"/></svg>
+          <span class="corner" style="background:#3a455e">7</span><span class="dot"></span>
+        </span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="legend">
+  <span><i style="background:#e5484d"></i>Blocker</span>
+  <span><i style="background:#e8730a"></i>Critical</span>
+  <span><i style="background:#3b82f6"></i>Question</span>
+  <span><i style="background:#8b5cf6"></i>Waiting on customer</span>
+  <span><i style="background:#22c55e"></i>Ready for verification</span>
+</div>
