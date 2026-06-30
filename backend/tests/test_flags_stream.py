@@ -57,3 +57,46 @@ def test_emit_happens_after_commit_and_is_enriched(db):
     assert raised["flag"]["title"] == "Crashed out"
     assert raised["flag"]["status"] == "open"
     assert raised["flag"]["entity_type"] == "sub_sample"
+
+
+def test_stream_generator_frames_event():
+    """Direct-generator unit test (the plan's documented fallback for the SSE
+    endpoint, since TestClient.stream + cross-thread publish hangs under the sync
+    test transport). Drive the endpoint's inner async generator on the loop,
+    publish an event through the bus, and assert the first non-heartbeat frame is
+    correctly framed (id: / event: / data: <json>)."""
+    import asyncio, json
+    from types import SimpleNamespace
+    import main  # noqa: F401  (ensure app + routes import cleanly)
+    from flags.routes import stream
+    from flags import bus
+
+    async def scenario():
+        bus.BUS.set_loop(asyncio.get_running_loop())
+
+        class FakeRequest:
+            async def is_disconnected(self):
+                return False
+
+        user = SimpleNamespace(id=42, role="standard", email="t@x.t")
+        resp = await stream(FakeRequest(), user=user)
+        assert resp.media_type == "text/event-stream"
+        assert resp.headers["cache-control"] == "no-cache"
+        agen = resp.body_iterator
+        try:
+            first = await agen.__anext__()
+            assert first == ": connected\n\n"
+            # subscription is registered (stream() ran); publish reaches it on-loop
+            bus.BUS.publish({"event_type": "raised", "flag_id": 1, "event_id": 7,
+                             "flag": {"id": 1, "title": "Crashed out"}})
+            frame = await asyncio.wait_for(agen.__anext__(), timeout=2.0)
+            assert frame.startswith("id: 7\n")
+            assert "event: raised\n" in frame
+            data_line = next(l for l in frame.split("\n") if l.startswith("data: "))
+            payload = json.loads(data_line[len("data: "):])
+            assert payload["flag_id"] == 1
+            assert payload["flag"]["title"] == "Crashed out"
+        finally:
+            await agen.aclose()
+
+    asyncio.run(scenario())
