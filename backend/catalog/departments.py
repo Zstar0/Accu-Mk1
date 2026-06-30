@@ -1,9 +1,9 @@
 """Catalog department assignment.
 
 Single source of truth for which top-level Department a service group belongs to.
-Derived to match the existing hardcoded routing literals (sub_samples.service
-._ROLE_GROUP_NAMES, lims_analyses.seeder._NON_HPLC_GROUPS): Analytics is the
-Analytical bench; Microbiology and Endotoxin are both the Microbiology bench.
+Analytics is the Analytical bench; Microbiology and Endotoxin are both the
+Microbiology bench. (Plan 1B repointed the former hardcoded routing literals at
+this mapping.)
 """
 from typing import Optional
 
