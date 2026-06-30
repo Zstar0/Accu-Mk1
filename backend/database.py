@@ -117,6 +117,7 @@ def init_db():
     """Initialize database tables."""
     # Import models to register them with Base
     import models  # noqa: F401
+    import flags.models  # noqa: F401  (register flag_* tables on Base)
     # Run column migrations before create_all so ORM mappings match the DB schema
     _run_migrations()
     Base.metadata.create_all(bind=engine)
@@ -775,6 +776,67 @@ def _run_migrations():
                     WHERE keyword IN ('PH-DETERM','Benzyl_Alcohol_Assay','FILL-NET-CONTENT');
             END IF;
         END $$""",
+        # --- flags module ---
+        """
+        CREATE TABLE IF NOT EXISTS flag_flags (
+            id           SERIAL PRIMARY KEY,
+            entity_type  TEXT NOT NULL,
+            entity_id    TEXT NOT NULL,
+            kind         TEXT NOT NULL,
+            type         TEXT NOT NULL,
+            status       TEXT NOT NULL DEFAULT 'open'
+                         CONSTRAINT flag_flags_status_check
+                         CHECK (status IN ('open','in_progress','resolved','closed')),
+            title        TEXT NOT NULL,
+            created_by   INTEGER NOT NULL,
+            assignee_id  INTEGER,
+            created_at   TIMESTAMP NOT NULL DEFAULT NOW(),
+            updated_at   TIMESTAMP NOT NULL DEFAULT NOW(),
+            resolved_at  TIMESTAMP,
+            resolved_by  INTEGER
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS ix_flag_flags_entity   ON flag_flags (entity_type, entity_id)",
+        "CREATE INDEX IF NOT EXISTS ix_flag_flags_assignee ON flag_flags (assignee_id)",
+        "CREATE INDEX IF NOT EXISTS ix_flag_flags_status   ON flag_flags (status, updated_at)",
+        """
+        CREATE TABLE IF NOT EXISTS flag_comments (
+            id         SERIAL PRIMARY KEY,
+            flag_id    INTEGER NOT NULL REFERENCES flag_flags(id) ON DELETE CASCADE,
+            author_id  INTEGER NOT NULL,
+            body       TEXT NOT NULL,
+            audience   TEXT NOT NULL DEFAULT 'internal',
+            created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+            edited_at  TIMESTAMP
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS ix_flag_comments_flag ON flag_comments (flag_id)",
+        """
+        CREATE TABLE IF NOT EXISTS flag_participants (
+            id        SERIAL PRIMARY KEY,
+            flag_id   INTEGER NOT NULL REFERENCES flag_flags(id) ON DELETE CASCADE,
+            user_id   INTEGER NOT NULL,
+            role      TEXT NOT NULL DEFAULT 'watcher',
+            added_at  TIMESTAMP NOT NULL DEFAULT NOW(),
+            added_by  INTEGER,
+            CONSTRAINT uq_flag_participant UNIQUE (flag_id, user_id)
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS ix_flag_participants_flag ON flag_participants (flag_id)",
+        "CREATE INDEX IF NOT EXISTS ix_flag_participants_user ON flag_participants (user_id)",
+        """
+        CREATE TABLE IF NOT EXISTS flag_events (
+            id          SERIAL PRIMARY KEY,
+            flag_id     INTEGER NOT NULL REFERENCES flag_flags(id) ON DELETE CASCADE,
+            actor_id    INTEGER,
+            event_type  TEXT NOT NULL,
+            from_value  TEXT,
+            to_value    TEXT,
+            details     JSONB,
+            created_at  TIMESTAMP NOT NULL DEFAULT NOW()
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS ix_flag_events_flag ON flag_events (flag_id)",
     ]
     # Per-statement isolation: a failure in one statement (e.g., a table that
     # create_all hasn't built yet on first run) must not skip subsequent
