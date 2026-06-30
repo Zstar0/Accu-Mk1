@@ -609,6 +609,29 @@ def test_parent_sample_inbox_analyses_never_carry_mk1_uids(client, auth_headers)
                 )
 
 
+# ── Task 5: department_name field on worksheet items ─────────────────────────
+
+
+def test_worksheet_items_include_department_name():
+    """Every serialized worksheet item exposes department_name (None when the
+    group has no department). Uses dependency_overrides to bypass auth so it
+    is exercisable without live credentials. Skips when no non-staging
+    worksheets with items exist on this stack."""
+    import auth as _auth
+    from main import app
+    app.dependency_overrides[_auth.get_current_user] = lambda: {"id": 0, "email": "test@test.local"}
+    try:
+        _client = TestClient(app)
+        resp = _client.get("/worksheets")
+        assert resp.status_code == 200
+        items = [it for ws in resp.json() for it in ws.get("items", [])]
+        if not items:
+            pytest.skip("no worksheets with items in this stack")
+        assert all("department_name" in it for it in items)
+    finally:
+        app.dependency_overrides.pop(_auth.get_current_user, None)
+
+
 # ── Task 4: Department-keyed inbox lane helper ────────────────────────────────
 
 
