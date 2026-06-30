@@ -570,7 +570,7 @@ export function ReceiveSample() {
       {/* Order-scoped receive session (sample stepper + boxing stage) */}
       {selectedOrder && (
         <OrderReceiveSession
-          order={selectedOrder}
+          orders={[selectedOrder]}
           onClose={() => {
             setSelectedOrder(null)
             void loadDueSamples()

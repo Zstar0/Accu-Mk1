@@ -15,7 +15,7 @@ import type { OrderGroup } from '@/lib/inbox-orders'
 import { cn } from '@/lib/utils'
 
 interface Props {
-  order: OrderGroup
+  orders: OrderGroup[]
   onClose: () => void
 }
 
@@ -34,12 +34,22 @@ function analyteLabel(
   return null
 }
 
-export function OrderReceiveSession({ order, onClose }: Props) {
+export function OrderReceiveSession({ orders, onClose }: Props) {
+  // Walk the flattened union of every order's samples; a combined session is
+  // just one stepper over `order 1`'s samples, then `order 2`'s, … . Boxing is
+  // entered once the index passes the union length.
+  const samples = orders.flatMap(o => o.samples)
   // index 0..n-1 = walking samples; index === n = order-level boxing stage
   const [index, setIndex] = useState(0)
-  const total = order.samples.length
+  const total = samples.length
   const onBoxing = index >= total
-  const current = order.samples[Math.min(index, total - 1)]
+  const current = samples[Math.min(index, total - 1)]
+
+  // Single order → "Receive WP-####"; combined → "Receive N orders".
+  const headerLabel =
+    orders.length === 1
+      ? `Receive ${orders[0]?.orderLabel ?? ''}`
+      : `Receive ${orders.length} orders`
 
   // Enrich the active sample's header context (client, type, analytes, lot).
   // Hook runs unconditionally (stable order) even on the empty-order guard path.
@@ -48,7 +58,7 @@ export function OrderReceiveSession({ order, onClose }: Props) {
   if (!current) return null
 
   const d = details.details
-  const clientName = d?.client ?? order.clientId ?? current.client_id
+  const clientName = d?.client ?? orders[0]?.clientId ?? current.client_id
   const contact = d?.contact ?? null
   const sampleType = d?.sample_type ?? current.sample_type
   const orderNumber = d?.client_order_number ?? current.client_order_number ?? null
@@ -57,6 +67,16 @@ export function OrderReceiveSession({ order, onClose }: Props) {
   const declaredQty = d?.declared_weight_mg != null ? `${d.declared_weight_mg} mg` : null
   const analytes = analyteLabel(d, current)
 
+  // Per-order blocks carrying the base index of their first sample in the
+  // flattened walk, so rail rows and the boxing sections line up with the
+  // single `index`/`setIndex` stepper.
+  let runningOffset = 0
+  const orderBlocks = orders.map(o => {
+    const base = runningOffset
+    runningOffset += o.samples.length
+    return { order: o, base }
+  })
+
   return (
     <Dialog open onOpenChange={open => { if (!open) onClose() }}>
       <DialogContent
@@ -64,15 +84,15 @@ export function OrderReceiveSession({ order, onClose }: Props) {
       >
         {/* Radix requires a labelled title; the styled header below is the
             visible heading, so the DialogTitle is visually hidden. */}
-        <DialogTitle className="sr-only">Receive {order.orderLabel}</DialogTitle>
+        <DialogTitle className="sr-only">{headerLabel}</DialogTitle>
 
         {/* ── Header bar ───────────────────────────────────────────────── */}
         <header className="flex flex-col gap-2.5 px-6 py-3 border-b bg-muted/10">
           {/* Top row: order label + active sample id, progress indicator */}
-          <div className="flex items-start justify-between gap-4">
+          <div className="flex items-start justify-between gap-4 pr-10">
             <div className="flex flex-col gap-0.5 min-w-0">
               <h2 className="text-base font-semibold leading-tight truncate">
-                Receive {order.orderLabel}
+                {headerLabel}
                 {clientName && (
                   <span className="text-muted-foreground font-normal">
                     {' · '}{clientName}
@@ -123,13 +143,23 @@ export function OrderReceiveSession({ order, onClose }: Props) {
               Samples
             </div>
             <ul className="flex-1 min-h-0 overflow-y-auto py-1">
-              {order.samples.map((s, i) => (
-                <li key={s.uid}>
-                  <SampleRailRow
-                    sample={s}
-                    active={!onBoxing && i === index}
-                    onSelect={() => setIndex(i)}
-                  />
+              {orderBlocks.map(({ order: o, base }) => (
+                <li key={o.orderKey ?? o.samples[0]?.id ?? base}>
+                  <OrderSeparator label={o.orderLabel} />
+                  <ul>
+                    {o.samples.map((s, j) => {
+                      const gi = base + j
+                      return (
+                        <li key={s.uid}>
+                          <SampleRailRow
+                            sample={s}
+                            active={!onBoxing && gi === index}
+                            onSelect={() => setIndex(gi)}
+                          />
+                        </li>
+                      )
+                    })}
+                  </ul>
                 </li>
               ))}
             </ul>
@@ -154,12 +184,22 @@ export function OrderReceiveSession({ order, onClose }: Props) {
           {/* Main area */}
           <div className="min-h-0 overflow-hidden">
             {onBoxing ? (
-              <BoxStep
-                orderKey={order.orderKey ?? current.id}
-                orderLabel={order.orderLabel}
-                clientId={order.clientId}
-                sampleIds={order.samples.map(s => s.id)}
-              />
+              <div className="h-full min-h-0 overflow-y-auto">
+                {orders.map(o => {
+                  const orderKey = o.orderKey ?? o.samples[0]?.id ?? ''
+                  return (
+                    <section key={orderKey} className="px-4 py-3">
+                      <OrderSeparator label={o.orderLabel} />
+                      <BoxStep
+                        orderKey={orderKey}
+                        orderLabel={o.orderLabel}
+                        clientId={o.clientId}
+                        sampleIds={o.samples.map(s => s.id)}
+                      />
+                    </section>
+                  )
+                })}
+              </div>
             ) : (
               <ReceiveWizard
                 key={current.uid}
@@ -172,6 +212,21 @@ export function OrderReceiveSession({ order, onClose }: Props) {
         </div>
       </DialogContent>
     </Dialog>
+  )
+}
+
+/** A `─ {orderLabel} ─` divider that heads each order's block in the rail and
+ *  the boxing stage. For a single-order session it reads as a minimal caption;
+ *  for a combined session it visually segments the orders. */
+function OrderSeparator({ label }: { label: string }) {
+  return (
+    <div className="flex items-center gap-2 px-3 pt-3 pb-1">
+      <span className="h-px w-3 shrink-0 bg-border" aria-hidden="true" />
+      <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+        {label}
+      </span>
+      <span className="h-px flex-1 bg-border" aria-hidden="true" />
+    </div>
   )
 }
 
