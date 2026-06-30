@@ -74,7 +74,71 @@ input:-webkit-autofill:active {
   }
 
   @keyframes theme-circle-expand {
-    from { clip-path: circle(0% at var(--theme-x, 50%) var(--theme-y, 50%)); }
-    to   { clip-path: circle(150% at var(--theme-x, 50%) var(--theme-y, 50%)); }
+    from {
+      clip-path: circle(0% at var(--theme-x, 50%) var(--theme-y, 50%));
+    }
+    to {
+      clip-path: circle(150% at var(--theme-x, 50%) var(--theme-y, 50%));
+    }
+  }
+}
+
+/* --- Flag System ------------------------------------------------------- */
+
+/* Glow-on-new for the Flags header button. Pulsing red ring while a relevant
+   event has landed and the flyout is still closed (see toolbar-badge.html). */
+.flags-glow {
+  animation: flags-pulse 1.8s ease-out infinite;
+}
+@keyframes flags-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(229, 72, 77, 0.5);
+  }
+  70% {
+    box-shadow: 0 0 0 8px rgba(229, 72, 77, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(229, 72, 77, 0);
+  }
+}
+
+/* One-shot bump when an event flies home into the button. */
+.flags-bump {
+  animation: flags-bump 0.42s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+@keyframes flags-bump {
+  0% {
+    transform: scale(1);
+  }
+  45% {
+    transform: scale(1.18);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+/* Comment slide-in for the thread composer (flag-thread-dark.html). Each
+   comment animates once when its node first mounts — keyed by id, so only a
+   newly-sent comment animates, not the whole list on refetch. */
+.flag-cmt-in {
+  animation: flag-cmt-in 0.4s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+@keyframes flag-cmt-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .flags-glow,
+  .flags-bump,
+  .flag-cmt-in {
+    animation: none;
   }
 }
