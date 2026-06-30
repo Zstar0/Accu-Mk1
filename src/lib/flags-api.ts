@@ -45,6 +45,27 @@ export interface EventResponse {
   created_at: string
 }
 
+/** Mirrors `DeepLink` — how the frontend navigates to a flagged entity.
+ *  `kind` ∈ `sample` | `worksheet` | `none`; `id` is the navigator argument. */
+export interface DeepLink {
+  kind: string
+  id: string
+}
+
+/** Mirrors `EntityContext` (Plan 4) — server-resolved presentation context for
+ *  a flagged entity. Produced by the Mk1 registry closures; null when the
+ *  registry can't resolve it. `lot` is an additive hook (deferred — always
+ *  null this round). */
+export interface EntityContext {
+  entity_type: string
+  entity_id: string
+  label: string
+  sample_id: string | null
+  analyses: string[]
+  lot: string | null
+  deep_link: DeepLink
+}
+
 /** Mirrors `FlagResponse`. `type`/`status` are loose strings on the wire (the
  *  backend stores them as text); narrow to the unions at the UI boundary. */
 export interface FlagResponse {
@@ -61,6 +82,8 @@ export interface FlagResponse {
   updated_at: string
   resolved_at: string | null
   resolved_by: number | null
+  /** Server-resolved entity context; absent when unresolvable (Plan 4). */
+  entity?: EntityContext | null
 }
 
 /** Mirrors `FlagDetailResponse` (adds comments + events). */
@@ -103,6 +126,23 @@ export const listFlags = (tab: FlagTab, params?: ListFlagsParams) => {
   if (params?.status) qs.set('status', params.status)
   if (params?.entity_type) qs.set('entity_type', params.entity_type)
   if (params?.entity_id) qs.set('entity_id', params.entity_id)
+  return apiFetch<FlagResponse[]>(`/api/flags?${qs.toString()}`)
+}
+
+/** `GET /api/flags?entity_type&entity_id[&include_descendants=true]` — the open
+ *  flags on one entity (optionally rolling up its descendants, e.g. a sample's
+ *  vials). Drives the stateful `EntityFlagButton`. */
+export const listEntityFlags = (
+  entityType: string,
+  entityId: string,
+  includeDescendants = false
+) => {
+  const qs = new URLSearchParams({
+    tab: 'all_open',
+    entity_type: entityType,
+    entity_id: entityId,
+  })
+  if (includeDescendants) qs.set('include_descendants', 'true')
   return apiFetch<FlagResponse[]>(`/api/flags?${qs.toString()}`)
 }
 

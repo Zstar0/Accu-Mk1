@@ -14,6 +14,7 @@ import {
 } from '@tanstack/react-query'
 import {
   listFlags,
+  listEntityFlags,
   getFlag,
   getSummary,
   createFlag,
@@ -36,6 +37,10 @@ export const flagKeys = {
   lists: () => ['flags', 'list'] as const,
   list: (tab: FlagTab, params?: ListFlagsParams) =>
     ['flags', 'list', tab, params ?? {}] as const,
+  // Entity-scoped open flags. Under ['flags', …] so the SSE glue's blanket
+  // invalidate(['flags']) refreshes every EntityFlagButton on any flag event.
+  entity: (entityType: string, entityId: string, includeDescendants: boolean) =>
+    ['flags', 'entity', entityType, entityId, includeDescendants] as const,
   detail: (id: number) => ['flags', id] as const,
 }
 
@@ -55,6 +60,31 @@ export function useFlagsList(tab: FlagTab, params?: ListFlagsParams) {
   return useQuery({
     queryKey: flagKeys.list(tab, params),
     queryFn: () => listFlags(tab, params),
+    staleTime: 5_000,
+  })
+}
+
+/** Open flags on one entity (optionally rolling up its descendants). Drives the
+ *  stateful EntityFlagButton; disabled until both ids are present. */
+export function useEntityFlags(
+  entityType: string | null | undefined,
+  entityId: string | null | undefined,
+  opts?: { includeDescendants?: boolean }
+) {
+  const includeDescendants = opts?.includeDescendants ?? false
+  return useQuery({
+    queryKey: flagKeys.entity(
+      entityType ?? '',
+      entityId ?? '',
+      includeDescendants
+    ),
+    queryFn: () =>
+      listEntityFlags(
+        entityType as string,
+        entityId as string,
+        includeDescendants
+      ),
+    enabled: !!entityType && !!entityId,
     staleTime: 5_000,
   })
 }
