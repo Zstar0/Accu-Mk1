@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest'
-import { enrichOrderGroups, groupSamplesByOrder } from '@/lib/inbox-orders'
+import {
+  customerDetailHash,
+  enrichOrderGroups,
+  groupSamplesByOrder,
+} from '@/lib/inbox-orders'
 import type { ExplorerOrder, SenaiteSample } from '@/lib/api'
 
 function s(id: string, order: string | null, client = 'RTD'): SenaiteSample {
@@ -49,5 +53,14 @@ describe('enrichOrderGroups', () => {
   it('leaves order null for the No-order group', () => {
     const r = enrichOrderGroups([grp(null)], [ord('WP-1042')])[0]!
     expect(r.order).toBeNull()
+  })
+})
+
+describe('customerDetailHash', () => {
+  it('builds a customer deep-link hash when customer_id is set', () => {
+    expect(customerDetailHash(7)).toBe('#accumark-tools/customer-detail?id=7')
+  })
+  it('falls back to the customers list when customer_id is null', () => {
+    expect(customerDetailHash(null)).toBe('#accumark-tools/customers')
   })
 })

@@ -26,6 +26,17 @@ export function enrichOrderGroups(
   }))
 }
 
+/**
+ * Build a navigation hash to a customer: the customer-detail deep link when an
+ * id is set, else the customers list. Mirrors the `accumark-tools/customer-detail`
+ * route in `src/lib/hash-navigation.ts`.
+ */
+export function customerDetailHash(customerId: number | null): string {
+  return customerId != null
+    ? `#accumark-tools/customer-detail?id=${encodeURIComponent(String(customerId))}`
+    : '#accumark-tools/customers'
+}
+
 export function groupSamplesByOrder(samples: SenaiteSample[]): OrderGroup[] {
   const byOrder = new Map<string | null, SenaiteSample[]>()
   for (const sample of samples) {
