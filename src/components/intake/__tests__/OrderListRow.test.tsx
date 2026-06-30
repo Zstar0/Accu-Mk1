@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, fireEvent } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 import { OrderListRow } from '@/components/intake/OrderListRow'
@@ -53,7 +53,15 @@ function renderRow(group: EnrichedOrderGroup) {
       </table>
     </QueryClientProvider>
   )
-  return render(<OrderListRow group={group} onProcess={vi.fn()} />, { wrapper })
+  return render(
+    <OrderListRow
+      group={group}
+      selected={false}
+      onToggle={vi.fn()}
+      onProcess={vi.fn()}
+    />,
+    { wrapper }
+  )
 }
 
 describe('OrderListRow', () => {
@@ -76,5 +84,44 @@ describe('OrderListRow', () => {
     renderRow(makeGroup(7, 'a@b.com'))
     // formatDate renders a localized "Jun …" string for the 2026-06-24 created_at.
     expect(screen.getByText(/Jun/)).toBeInTheDocument()
+  })
+
+  it('toggles selection via the leading checkbox', () => {
+    const onToggle = vi.fn()
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={qc}>
+        <table>
+          <tbody>{children}</tbody>
+        </table>
+      </QueryClientProvider>
+    )
+    render(
+      <OrderListRow
+        group={makeGroup(7, 'a@b.com')}
+        selected={false}
+        onToggle={onToggle}
+        onProcess={vi.fn()}
+      />,
+      { wrapper }
+    )
+    fireEvent.click(screen.getByRole('checkbox', { name: /Select WP-1042/ }))
+    expect(onToggle).toHaveBeenCalledWith('WP-1042')
+  })
+
+  it('renders no checkbox for the No-order group', () => {
+    const group: EnrichedOrderGroup = {
+      orderKey: null,
+      orderLabel: 'No order',
+      clientId: 'acme',
+      samples: [
+        { id: 'S-1', sample_type: 'Peptide', review_state: 'sample_due' },
+      ] as unknown as SenaiteSample[],
+      order: null,
+    }
+    renderRow(group)
+    expect(screen.queryByRole('checkbox')).toBeNull()
   })
 })

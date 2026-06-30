@@ -201,7 +201,12 @@ export function ReceiveSample() {
   const [sortDir, setSortDir] = useState<SortDir>('asc')
   const [showTestSamples, setShowTestSamples] = useState(false)
   const [receiveMode, setReceiveMode] = useState<'order' | 'sample'>('order')
-  const [selectedOrder, setSelectedOrder] = useState<OrderGroup | null>(null)
+  const [selectedOrders, setSelectedOrders] = useState<OrderGroup[] | null>(
+    null
+  )
+  // Checked order keys for multi-order combine. Only non-null orderKeys are
+  // selectable (the No-order group is excluded).
+  const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set())
 
   // Sub-samples receive wizard (modal). Row click in the By-sample list opens
   // the wizard for that parent sample; the By-order list opens the order-scoped
@@ -282,9 +287,50 @@ export function ReceiveSample() {
     [orderSla.verdictByOrderId]
   )
 
-  const handleProcessOrder = useCallback((group: EnrichedOrderGroup) => {
-    setSelectedOrder(group)
+  const toggleKey = useCallback((orderKey: string) => {
+    setSelectedKeys(prev => {
+      const next = new Set(prev)
+      if (next.has(orderKey)) {
+        next.delete(orderKey)
+      } else {
+        next.add(orderKey)
+      }
+      return next
+    })
   }, [])
+
+  // Open the combined set of currently-checked orders as one session.
+  const handleProcessTogether = useCallback(() => {
+    const combined = enriched.filter(
+      g => g.orderKey != null && selectedKeys.has(g.orderKey)
+    )
+    if (combined.length > 0) setSelectedOrders(combined)
+  }, [enriched, selectedKeys])
+
+  const handleClearSelection = useCallback(() => {
+    setSelectedKeys(new Set())
+  }, [])
+
+  // Process semantics: if the clicked order is part of a multi-order selection,
+  // open the whole combined set; otherwise open just that order.
+  const handleProcessOrder = useCallback(
+    (group: EnrichedOrderGroup) => {
+      if (
+        group.orderKey != null &&
+        selectedKeys.has(group.orderKey) &&
+        selectedKeys.size >= 2
+      ) {
+        setSelectedOrders(
+          enriched.filter(
+            g => g.orderKey != null && selectedKeys.has(g.orderKey)
+          )
+        )
+      } else {
+        setSelectedOrders([group])
+      }
+    },
+    [enriched, selectedKeys]
+  )
 
   const loadDueSamples = useCallback(async () => {
     setDueSamplesLoading(true)
@@ -398,28 +444,57 @@ export function ReceiveSample() {
                 <p className="text-sm">No due samples found</p>
               </div>
             ) : receiveMode === 'order' ? (
-              <div className="overflow-auto">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead className="w-36">Order #</TableHead>
-                      <TableHead>Client / Email</TableHead>
-                      <TableHead className="w-36">Created</TableHead>
-                      <TableHead className="w-32">SLA</TableHead>
-                      <TableHead className="w-24" />
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {enriched.map(group => (
-                      <OrderListRow
-                        key={group.orderKey ?? '__none__'}
-                        group={group}
-                        slaVerdict={verdictFor(group)}
-                        onProcess={handleProcessOrder}
-                      />
-                    ))}
-                  </TableBody>
-                </Table>
+              <div className="flex flex-col gap-3">
+                {selectedKeys.size >= 1 && (
+                  <div className="sticky top-0 z-10 flex items-center gap-3 rounded-md border bg-background/95 px-3 py-2 text-sm shadow-sm backdrop-blur">
+                    <span className="font-medium">
+                      {selectedKeys.size} order
+                      {selectedKeys.size !== 1 ? 's' : ''} selected
+                    </span>
+                    <span aria-hidden="true" className="text-muted-foreground">
+                      ·
+                    </span>
+                    <Button size="sm" onClick={handleProcessTogether}>
+                      Process together
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={handleClearSelection}
+                    >
+                      Clear
+                    </Button>
+                  </div>
+                )}
+                <div className="overflow-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead className="w-10" />
+                        <TableHead className="w-36">Order #</TableHead>
+                        <TableHead>Client / Email</TableHead>
+                        <TableHead className="w-36">Created</TableHead>
+                        <TableHead className="w-32">SLA</TableHead>
+                        <TableHead className="w-24" />
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {enriched.map(group => (
+                        <OrderListRow
+                          key={group.orderKey ?? '__none__'}
+                          group={group}
+                          slaVerdict={verdictFor(group)}
+                          selected={
+                            group.orderKey != null &&
+                            selectedKeys.has(group.orderKey)
+                          }
+                          onToggle={toggleKey}
+                          onProcess={handleProcessOrder}
+                        />
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
               </div>
             ) : (
               <div className="overflow-auto">
@@ -567,12 +642,13 @@ export function ReceiveSample() {
         </Dialog>
       )}
 
-      {/* Order-scoped receive session (sample stepper + boxing stage) */}
-      {selectedOrder && (
+      {/* Order-scoped receive session (sample stepper + boxing stage). Accepts
+          one or more orders combined into a single session. */}
+      {selectedOrders && selectedOrders.length > 0 && (
         <OrderReceiveSession
-          orders={[selectedOrder]}
+          orders={selectedOrders}
           onClose={() => {
-            setSelectedOrder(null)
+            setSelectedOrders(null)
             void loadDueSamples()
           }}
         />

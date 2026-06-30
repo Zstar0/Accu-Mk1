@@ -1,5 +1,6 @@
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 import type { OrderSlaVerdict } from '@/lib/sla-resolution'
 import { OrderSlaCell } from '@/components/explorer/OrderSlaCell'
 import {
@@ -17,6 +18,10 @@ interface OrderListRowProps {
   // From useOrderSlaStatuses (wired in Task 1.5). Undefined → the SLA cell
   // renders its inert "awaiting"/loading state.
   slaVerdict?: OrderSlaVerdict
+  // Selection state for multi-order combine. The No-order group (orderKey ===
+  // null) is not selectable, so its checkbox cell is rendered disabled/empty.
+  selected: boolean
+  onToggle: (orderKey: string) => void
   onProcess: (group: EnrichedOrderGroup) => void
 }
 
@@ -52,8 +57,15 @@ function worstSampleState(group: EnrichedOrderGroup): string | null {
  * Process) over a muted secondary row (sample count, expected vials, sample-type
  * chips). The left border is tinted by the order's worst sample state.
  */
-export function OrderListRow({ group, slaVerdict, onProcess }: OrderListRowProps) {
+export function OrderListRow({
+  group,
+  slaVerdict,
+  selected,
+  onToggle,
+  onProcess,
+}: OrderListRowProps) {
   const order = group.order
+  const selectable = group.orderKey != null
   const email = order ? getOrderEmail(order) : null
   const customerId = order?.customer_id ?? null
   const linkEmail = email != null && customerId != null
@@ -79,6 +91,15 @@ export function OrderListRow({ group, slaVerdict, onProcess }: OrderListRowProps
             : 'border-l-transparent'
         )}
       >
+        <td className="py-3 px-3 align-middle">
+          {selectable ? (
+            <Checkbox
+              aria-label={`Select ${group.orderLabel}`}
+              checked={selected}
+              onCheckedChange={() => onToggle(group.orderKey as string)}
+            />
+          ) : null}
+        </td>
         <td className="py-3 px-3 whitespace-nowrap font-mono text-sm font-semibold">
           {group.orderLabel}
         </td>
@@ -121,7 +142,7 @@ export function OrderListRow({ group, slaVerdict, onProcess }: OrderListRowProps
       </tr>
       <tr>
         <td
-          colSpan={5}
+          colSpan={6}
           className="pb-3 px-3 text-xs text-muted-foreground border-l-3 border-l-transparent"
         >
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
