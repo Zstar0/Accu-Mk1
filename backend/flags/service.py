@@ -94,3 +94,98 @@ def summary(db: Session, *, user_id: int) -> dict:
     for f in db.execute(select(FlagFlag).where(FlagFlag.status.in_(open_states))).scalars().all():
         by_type[f.type] = by_type.get(f.type, 0) + 1
     return {"assigned_to_me": len(assigned), "by_type": by_type}
+
+
+def add_comment(db: Session, *, user, flag_id, body) -> FlagComment:
+    flag = get_flag(db, flag_id)
+    if not permissions.can(user, "comment", flag):
+        raise PermissionDeniedError("not allowed to comment")
+    if not body or not body.strip():
+        raise BadRequestError("comment body required")
+    actor_id = getattr(user, "id", None)
+    c = FlagComment(flag_id=flag.id, author_id=actor_id, body=body.strip())
+    db.add(c)
+    flag.updated_at = datetime.utcnow()
+    _audit(db, flag.id, actor_id, "commented")
+    db.commit()
+    db.refresh(c)
+    return c
+
+
+def assign(db: Session, *, user, flag_id, assignee_id) -> FlagFlag:
+    flag = get_flag(db, flag_id)
+    if not permissions.can(user, "assign", flag):
+        raise PermissionDeniedError("not allowed to assign")
+    actor_id = getattr(user, "id", None)
+    prev = flag.assignee_id
+    flag.assignee_id = assignee_id
+    flag.updated_at = datetime.utcnow()
+    if assignee_id is not None:
+        exists = db.execute(
+            select(FlagParticipant).where(FlagParticipant.flag_id == flag.id,
+                                          FlagParticipant.user_id == assignee_id)
+        ).scalar_one_or_none()
+        if exists is None:
+            db.add(FlagParticipant(flag_id=flag.id, user_id=assignee_id, role="watcher", added_by=actor_id))
+    _audit(db, flag.id, actor_id, "assigned" if assignee_id is not None else "unassigned",
+           from_value=str(prev) if prev is not None else None,
+           to_value=str(assignee_id) if assignee_id is not None else None)
+    db.commit()
+    db.refresh(flag)
+    return flag
+
+
+def add_watcher(db: Session, *, user, flag_id, user_id) -> FlagParticipant:
+    flag = get_flag(db, flag_id)
+    if not permissions.can(user, "watch", flag):
+        raise PermissionDeniedError("not allowed to watch")
+    existing = db.execute(
+        select(FlagParticipant).where(FlagParticipant.flag_id == flag.id,
+                                      FlagParticipant.user_id == user_id)
+    ).scalar_one_or_none()
+    if existing is not None:
+        return existing
+    p = FlagParticipant(flag_id=flag.id, user_id=user_id, role="watcher",
+                        added_by=getattr(user, "id", None))
+    db.add(p)
+    _audit(db, flag.id, getattr(user, "id", None), "watcher_added", to_value=str(user_id))
+    db.commit()
+    db.refresh(p)
+    return p
+
+
+def remove_watcher(db: Session, *, user, flag_id, user_id) -> None:
+    flag = get_flag(db, flag_id)
+    if not permissions.can(user, "watch", flag):
+        raise PermissionDeniedError("not allowed")
+    row = db.execute(
+        select(FlagParticipant).where(FlagParticipant.flag_id == flag.id,
+                                      FlagParticipant.user_id == user_id)
+    ).scalar_one_or_none()
+    if row is not None:
+        db.delete(row)
+        _audit(db, flag.id, getattr(user, "id", None), "watcher_removed", from_value=str(user_id))
+        db.commit()
+
+
+def change_status(db: Session, *, user, flag_id, to_status) -> FlagFlag:
+    from flags.errors import ConflictError
+    flag = get_flag(db, flag_id)
+    if not permissions.can(user, "change_status", flag):
+        raise PermissionDeniedError("not allowed to change status")
+    if not catalog.is_legal_transition(flag.status, to_status):
+        raise ConflictError(f"illegal transition {flag.status} -> {to_status}")
+    actor_id = getattr(user, "id", None)
+    from_status = flag.status
+    flag.status = to_status
+    flag.updated_at = datetime.utcnow()
+    if to_status == "resolved":
+        flag.resolved_at = datetime.utcnow()
+        flag.resolved_by = actor_id
+    elif to_status in ("open", "in_progress"):
+        flag.resolved_at = None
+        flag.resolved_by = None
+    _audit(db, flag.id, actor_id, "status_changed", from_value=from_status, to_value=to_status)
+    db.commit()
+    db.refresh(flag)
+    return flag
