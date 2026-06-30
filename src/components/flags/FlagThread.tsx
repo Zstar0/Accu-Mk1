@@ -27,6 +27,7 @@ import type {
   EventResponse,
 } from '@/lib/flags-api'
 import { flagTypeDef } from '@/components/flags/flag-catalog'
+import { useFlagTypesMap } from '@/services/flag-types'
 import {
   entityMeta,
   entityLabel,
@@ -76,6 +77,7 @@ export function FlagThread({
 }) {
   const { data: flag, isLoading, isError } = useFlag(flagId)
   const users = useFlagUsers()
+  const typesMap = useFlagTypesMap()
   const currentUserId = useAuthStore(state => state.user?.id ?? null)
 
   const changeStatus = useChangeStatus(flagId)
@@ -111,7 +113,7 @@ export function FlagThread({
     )
   }
 
-  const def = flagTypeDef(flag.type)
+  const def = typesMap[flag.type] ?? flagTypeDef(flag.type)
   const { Icon, canDeepLink } = entityMeta(flag.entity_type)
   const status = (flag.status as FlagStatus) ?? 'open'
 

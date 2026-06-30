@@ -1,12 +1,24 @@
 import { useEffect, useState } from 'react'
-import { useQueryClient } from '@tanstack/react-query'
+import { useQueryClient, type QueryClient } from '@tanstack/react-query'
 import { useFlagStream, type FlagStreamEvent } from '@/lib/flag-stream'
 import { flagKeys } from '@/hooks/use-flags'
+import { flagTypeKeys } from '@/services/flag-types'
 import { useUIStore } from '@/store/ui-store'
 import { useAuthStore } from '@/store/auth-store'
 import { notifications } from '@/lib/notifications'
-import { flagTypeDef } from '@/components/flags/flag-catalog'
+import { flagTypeDef, type FlagTypeDef } from '@/components/flags/flag-catalog'
+import type { FlagType } from '@/lib/flags-api'
 import { FLAGS_BUTTON_ID } from '@/components/flags/FlagsHeaderButton'
+
+/** Resolve a type slug → {label,color,kind} at event time, reading the managed
+ *  catalog from the query cache (incl. inactive types) and falling back to the
+ *  static catalog for slugs not yet cached / unknown. */
+function resolveTypeDef(qc: QueryClient, type: string): FlagTypeDef {
+  const rows = qc.getQueryData<FlagType[]>(flagTypeKeys.list({}))
+  const row = rows?.find(t => t.slug === type)
+  if (row) return { label: row.label, color: row.color, kind: row.kind }
+  return flagTypeDef(type)
+}
 
 /** Friendly toast title per event type. */
 function toastTitle(e: FlagStreamEvent, me: number | null): string {
@@ -30,13 +42,16 @@ function toastTitle(e: FlagStreamEvent, me: number | null): string {
   }
 }
 
-function notifyForEvent(e: FlagStreamEvent, me: number | null) {
+function notifyForEvent(
+  e: FlagStreamEvent,
+  me: number | null,
+  def: FlagTypeDef
+) {
   const title = toastTitle(e, me)
-  const kind = flagTypeDef(e.flag.type)
   if (e.flag.type === 'blocker') notifications.error(title, e.flag.title)
   else if (e.flag.type === 'critical')
     notifications.warning(title, e.flag.title)
-  else if (kind.kind === 'signal') notifications.success(title, e.flag.title)
+  else if (def.kind === 'signal') notifications.success(title, e.flag.title)
   else notifications.info(title, e.flag.title)
 }
 
@@ -137,10 +152,11 @@ export function useFlagStreamGlue(): boolean {
       me != null && (e.flag.assignee_id === me || e.flag.created_by === me)
 
     if (relevant && !showingThisThread) {
+      const def = resolveTypeDef(queryClient, e.flag.type)
       setHasNew(true)
-      notifyForEvent(e, me)
+      notifyForEvent(e, me, def)
       if (e.event_type === 'raised' && !ui.flagsFlyoutOpen) {
-        flyToFlagsButton(flagTypeDef(e.flag.type).color)
+        flyToFlagsButton(def.color)
       }
     }
   })

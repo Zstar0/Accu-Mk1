@@ -5,6 +5,7 @@ import { cn } from '@/lib/utils'
 import { useUIStore } from '@/store/ui-store'
 import { useEntityFlags } from '@/hooks/use-flags'
 import { flagTypeDef } from '@/components/flags/flag-catalog'
+import { useFlagTypesMap } from '@/services/flag-types'
 import { formatDateTime } from '@/components/flags/flag-format'
 import { RaiseFlagButton } from '@/components/flags/RaiseFlagButton'
 import type { FlagResponse } from '@/lib/flags-api'
@@ -88,6 +89,7 @@ export function EntityFlagButton({
   className,
 }: EntityFlagButtonProps) {
   const { data } = useEntityFlags(entityType, entityId, { includeDescendants })
+  const typesMap = useFlagTypesMap()
   const open = (data ?? []).filter(f => OPEN_STATES.has(f.status))
   const lg = size === 'lg'
 
@@ -119,7 +121,7 @@ export function EntityFlagButton({
   // --- Flagged: bold, type-colored pill ----------------------------------
   const dominant = dominantFlag(open)
   if (!dominant) return null // unreachable (open is non-empty) — narrows the type
-  const def = flagTypeDef(dominant.type)
+  const def = typesMap[dominant.type] ?? flagTypeDef(dominant.type)
   const count = open.length
   const latest = latestFlag(open) ?? dominant
   const subline = `${statusLabel(latest.status)} · ${formatDateTime(latest.updated_at)}`
@@ -163,7 +165,10 @@ export function EntityFlagButton({
       />
       <span className="flex flex-col items-start leading-tight">
         <span
-          className={cn('flex items-center gap-1.5', lg ? 'text-sm' : 'text-xs')}
+          className={cn(
+            'flex items-center gap-1.5',
+            lg ? 'text-sm' : 'text-xs'
+          )}
         >
           Flagged
           {count > 1 && (

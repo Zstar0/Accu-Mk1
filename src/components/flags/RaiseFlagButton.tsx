@@ -18,8 +18,8 @@ import { Textarea } from '@/components/ui/textarea'
 import { Label } from '@/components/ui/label'
 import { notifications } from '@/lib/notifications'
 import { useCreateFlag } from '@/hooks/use-flags'
-import type { FlagTypeSlug } from '@/lib/flags-api'
-import { FLAG_TYPE_ORDER, FLAG_TYPES } from '@/components/flags/flag-catalog'
+import { useFlagTypes } from '@/services/flag-types'
+import { flagTypeDef } from '@/components/flags/flag-catalog'
 import { useFlagUsers, nameForUser } from '@/components/flags/flag-users'
 
 /**
@@ -54,7 +54,7 @@ export function RaiseFlagButton({
   const presetEntity = entityType != null && entityId != null
 
   const [open, setOpen] = useState(false)
-  const [type, setType] = useState<FlagTypeSlug>('blocker')
+  const [type, setType] = useState<string>('blocker')
   const [title, setTitle] = useState('')
   const [assigneeId, setAssigneeId] = useState<number | null>(defaultAssigneeId)
   const [firstComment, setFirstComment] = useState('')
@@ -73,6 +73,22 @@ export function RaiseFlagButton({
   const resolvedEntityId = presetEntity
     ? (entityId ?? '')
     : entityIdInput.trim()
+
+  // Only types active AND allowed for this entity, ordered by sort_order
+  // (the backend returns them ordered). Colors come from the row.
+  const typesQuery = useFlagTypes({
+    entity_type: resolvedEntityType || undefined,
+    active_only: true,
+  })
+  const flagTypes = typesQuery.data ?? []
+  // Keep the selection valid as the entity (and thus the allowed set) changes.
+  const selectedType = flagTypes.some(t => t.slug === type)
+    ? type
+    : (flagTypes[0]?.slug ?? type)
+  const selectedColor =
+    flagTypes.find(t => t.slug === selectedType)?.color ??
+    flagTypeDef(selectedType).color
+
   const canSubmit =
     title.trim().length > 0 && resolvedEntityId.length > 0 && !create.isPending
 
@@ -82,7 +98,7 @@ export function RaiseFlagButton({
       {
         entity_type: resolvedEntityType,
         entity_id: resolvedEntityId,
-        type,
+        type: selectedType,
         title: title.trim(),
         assignee_id: assigneeId,
         first_comment: firstComment.trim() || null,
@@ -161,18 +177,18 @@ export function RaiseFlagButton({
 
         <div className="space-y-1">
           <Label className="text-xs">Type</Label>
-          <Select value={type} onValueChange={v => setType(v as FlagTypeSlug)}>
+          <Select value={selectedType} onValueChange={setType}>
             <SelectTrigger className="h-8 gap-1.5 text-xs">
               <span
                 className="h-2 w-2 rounded-full"
-                style={{ backgroundColor: FLAG_TYPES[type].color }}
+                style={{ backgroundColor: selectedColor }}
               />
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {FLAG_TYPE_ORDER.map(t => (
-                <SelectItem key={t} value={t}>
-                  {FLAG_TYPES[t].label}
+              {flagTypes.map(t => (
+                <SelectItem key={t.slug} value={t.slug}>
+                  {t.label}
                 </SelectItem>
               ))}
             </SelectContent>

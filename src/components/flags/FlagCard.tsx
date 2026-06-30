@@ -4,6 +4,7 @@ import { useAuthStore } from '@/store/auth-store'
 import { useUIStore } from '@/store/ui-store'
 import type { FlagResponse } from '@/lib/flags-api'
 import { flagTypeDef } from '@/components/flags/flag-catalog'
+import { useFlagTypesMap } from '@/services/flag-types'
 import {
   entityMeta,
   entityDisplayLabel,
@@ -36,9 +37,10 @@ export function FlagCard({
   unread?: boolean
 }) {
   const users = useFlagUsers()
+  const typesMap = useFlagTypesMap()
   const currentUserId = useAuthStore(state => state.user?.id ?? null)
 
-  const def = flagTypeDef(flag.type)
+  const def = typesMap[flag.type] ?? flagTypeDef(flag.type)
   const { Icon } = entityMeta(flag.entity_type)
   const label = entityDisplayLabel(flag)
   const canNavigate = flagCanNavigate(flag)
