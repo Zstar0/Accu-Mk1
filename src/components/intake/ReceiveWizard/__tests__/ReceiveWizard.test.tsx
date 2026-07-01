@@ -116,12 +116,12 @@ describe('ReceiveWizard boxing tab (order context)', () => {
     expect(screen.queryByRole('tab', { name: 'Boxing' })).not.toBeInTheDocument()
   })
 
-  it('shows the Boxing tab after Assignment when boxing context is provided', () => {
+  it('shows the Boxing tab right of Print Labels when boxing context is provided', () => {
     render(<ReceiveWizard parent={parent} onClose={() => {}} boxing={boxing} />)
     const tabs = screen.getAllByRole('tab').map(t => t.textContent)
-    const assignIdx = tabs.indexOf('Assignment')
+    const printIdx = tabs.indexOf('Print Labels')
     const boxingIdx = tabs.indexOf('Boxing')
-    expect(boxingIdx).toBe(assignIdx + 1)
+    expect(boxingIdx).toBe(printIdx + 1)
   })
 
   it('renders BoxStep with the order scope when the Boxing tab is selected', async () => {
