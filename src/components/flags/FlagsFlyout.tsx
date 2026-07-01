@@ -95,16 +95,20 @@ export function FlagsFlyout() {
   // opened) — their rows pulse so what's new stands out. Set is memoized by the
   // React Compiler off `justOpened`.
   const justOpened = useFlagUnseen(state => state.justOpened)
-  const justOpenedTab = useFlagUnseen(state => state.justOpenedTab)
   const highlightIds = new Set(justOpened)
 
   // On the open that acknowledged pings, jump to the tab holding the newest one
-  // so its row pulse is actually on screen. Fires once per open (justOpenedTab
-  // is set only on the open transition, cleared on close) — never fights a
-  // manual tab click afterward.
+  // so its row pulse is actually on screen. Driven by a store subscription (not
+  // a setState in an effect body — matches the glue's glow-clear pattern) so it
+  // stays off the render path; `justOpenedTab` only transitions to a value on
+  // the acknowledging open, so this never fights a manual tab click afterward.
   useEffect(() => {
-    if (open && justOpenedTab) setTab(justOpenedTab)
-  }, [open, justOpenedTab])
+    return useFlagUnseen.subscribe((s, prev) => {
+      if (s.justOpenedTab && s.justOpenedTab !== prev.justOpenedTab) {
+        setTab(s.justOpenedTab)
+      }
+    })
+  }, [])
 
   const tabQuery = useFlagsList(tab)
   const entityQuery = useEntityFlags(entityFilter?.type, entityFilter?.id, {
