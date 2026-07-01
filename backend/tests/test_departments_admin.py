@@ -106,3 +106,38 @@ def test_service_count_counts_ungrouped_service(client, dept):
             db.delete(db.get(AnalysisService, sid)); db.commit()
         finally:
             db.close()
+
+
+def test_delete_ok_no_dependents(client):
+    db = SessionLocal(); d = Department(name="ZZDEPT-DEL"); db.add(d); db.commit(); did = d.id; db.close()
+    r = client.delete(f"/departments/{did}", headers=_auth())
+    assert r.status_code == 204
+    db = SessionLocal(); assert db.get(Department, did) is None; db.close()
+
+
+def test_delete_blocked_by_service(client, dept):
+    db = SessionLocal()
+    svc = AnalysisService(keyword="ZZDEPT-SVC", title="zz", department_id=dept)
+    db.add(svc); db.commit(); sid = svc.id; db.close()
+    try:
+        r = client.delete(f"/departments/{dept}", headers=_auth())
+        assert r.status_code == 409
+        assert "service" in r.json()["detail"].lower()
+    finally:
+        db = SessionLocal(); db.delete(db.get(AnalysisService, sid)); db.commit(); db.close()
+
+
+def test_delete_blocked_when_system(client):
+    db = SessionLocal(); d = Department(name="ZZDEPT-SYS", is_system=True); db.add(d); db.commit(); did = d.id; db.close()
+    try:
+        assert client.delete(f"/departments/{did}", headers=_auth()).status_code == 409
+    finally:
+        db = SessionLocal(); db.delete(db.get(Department, did)); db.commit(); db.close()
+
+
+def test_delete_requires_admin(client, dept):
+    assert client.delete(f"/departments/{dept}", headers=_auth("standard")).status_code == 403
+
+
+def test_delete_404_missing(client):
+    assert client.delete("/departments/99999999", headers=_auth()).status_code == 404

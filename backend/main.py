@@ -14140,6 +14140,25 @@ async def update_department(
     return _department_out(db, dept)
 
 
+@app.delete("/departments/{department_id}", status_code=204)
+async def delete_department(department_id: int, db: Session = Depends(get_db), _current_user=Depends(require_admin)):
+    """Delete a department (admin). Refused for system departments or any with
+    dependent groups/services — the department_id FK is ON DELETE SET NULL, so
+    deleting one in use would silently orphan its services' department (and drop
+    analytical services from HPLC mirroring)."""
+    from models import Department
+    dept = db.get(Department, department_id)
+    if dept is None:
+        raise HTTPException(404, "Department not found")
+    if dept.is_system:
+        raise HTTPException(409, f"Department '{dept.name}' is a system department and cannot be deleted.")
+    groups, services = _department_counts(db, department_id)
+    if groups or services:
+        raise HTTPException(409, f"Department '{dept.name}' still has {groups} service group(s) and {services} service(s). Reassign them before deleting.")
+    db.delete(dept); db.commit()
+    return None
+
+
 # ─── SLA tiers (sub-project A, revised to tiers) ──────────────────────────────
 
 
