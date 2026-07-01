@@ -18,7 +18,7 @@ describe('useFlagUnseen', () => {
     const { useFlagUnseen } = await import('../use-flag-unseen')
     useFlagUnseen.getState().markUnseen(42)
     expect(useFlagUnseen.getState().unseenIds).toEqual([42])
-    expect(JSON.parse(window.localStorage.getItem(KEY)!)).toEqual([42])
+    expect(window.localStorage.getItem(KEY)).toBe(JSON.stringify([42]))
   })
 
   it('dedupes repeated marks of the same flag', async () => {
