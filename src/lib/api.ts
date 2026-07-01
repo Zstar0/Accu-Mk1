@@ -5551,6 +5551,15 @@ export async function assignVialsToBox(
   })
 }
 
+/** Clear box membership for the given vials (drag back out to the Unboxed
+ *  tray). Mirrors {@link assignVialsToBox}; backend responds `{ unassigned: N }`. */
+export async function unassignVialsFromBox(subSampleIds: string[]): Promise<void> {
+  await apiFetch<{ unassigned: number }>('/api/boxes/unassign', {
+    method: 'POST',
+    body: JSON.stringify({ sub_sample_ids: subSampleIds }),
+  })
+}
+
 export async function printBox(boxId: number): Promise<LimsBox> {
   return apiFetch<LimsBox>(`/api/boxes/${boxId}/print`, { method: 'POST' })
 }
