@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.0.14 — 2026-06-30
+
+### Fixed
+
+- **Variance COA per-vial series includes the core sub-vial.** `build_variance_replicates` now returns every in-set sub-vial (core + variance) instead of variance-only, gated on ≥1 in-set variance vial (non-variance certs still send nothing), and accepts the core's `promoted`-state rows via `_VIAL_COA_STATES`. This makes the physical sub-vials the single source of truth for the COA's page-3 per-vial table, fixing the P-1094 case where a variance vial at seq 1 dropped a page-3 row. Pairs with COA Builder 2.28.2.
+
 ## v1.0.13 — 2026-06-30
 
 ### Fixed
