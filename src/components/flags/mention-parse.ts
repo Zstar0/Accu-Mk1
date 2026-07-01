@@ -34,11 +34,11 @@ export function renderCommentSegments(
   body: string,
   mentions: number[],
   nameOf: (id: number) => string
-): Array<{ text: string; mentionId: number | null }> {
+): { text: string; mentionId: number | null }[] {
   const tokens = mentions
     .map(id => ({ id, tok: `@${nameOf(id)}` }))
     .sort((a, b) => b.tok.length - a.tok.length)
-  const segs: Array<{ text: string; mentionId: number | null }> = []
+  const segs: { text: string; mentionId: number | null }[] = []
   let i = 0
   while (i < body.length) {
     const hit = tokens.find(t => body.startsWith(t.tok, i))
