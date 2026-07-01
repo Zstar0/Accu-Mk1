@@ -1,13 +1,21 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
+
+// Captures the DndContext handlers so a test can drive onDragEnd directly —
+// jsdom can't produce real pointer-drag geometry, so we invoke the branch.
+const dnd = vi.hoisted(() => ({ onDragEnd: null as null | ((e: unknown) => void) }))
 
 // dnd-kit's draggable/droppable need a DOM measuring layer that jsdom lacks;
 // stub the primitives to inert pass-throughs so the boxing logic is what's
 // under test, not the drag library.
 vi.mock('@dnd-kit/core', () => ({
-  DndContext: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  DndContext: ({ children, onDragEnd }: { children: ReactNode; onDragEnd: (e: unknown) => void }) => {
+    dnd.onDragEnd = onDragEnd
+    return <div>{children}</div>
+  },
+  DragOverlay: ({ children }: { children: ReactNode }) => <div>{children}</div>,
   PointerSensor: class {},
   useSensor: () => ({}),
   useSensors: () => [],
@@ -22,7 +30,7 @@ vi.mock('@/components/samples/usePrintLabel', () => ({
 }))
 
 import {
-  listOrderBoxes, createBox, assignVialsToBox, deleteBox, listSubSamples,
+  listOrderBoxes, createBox, assignVialsToBox, unassignVialsFromBox, deleteBox, listSubSamples,
   printBox, type LimsBox, type SubSample,
 } from '@/lib/api'
 
@@ -30,6 +38,7 @@ vi.mock('@/lib/api', () => ({
   listOrderBoxes: vi.fn(),
   createBox: vi.fn(),
   assignVialsToBox: vi.fn(),
+  unassignVialsFromBox: vi.fn(),
   deleteBox: vi.fn(),
   printBox: vi.fn(),
   listSubSamples: vi.fn(),
@@ -40,6 +49,7 @@ import { BoxStep } from '@/components/intake/ReceiveWizard/BoxStep'
 const mockListOrderBoxes = vi.mocked(listOrderBoxes)
 const mockCreateBox = vi.mocked(createBox)
 const mockAssignVialsToBox = vi.mocked(assignVialsToBox)
+const mockUnassignVialsFromBox = vi.mocked(unassignVialsFromBox)
 const mockDeleteBox = vi.mocked(deleteBox)
 const mockListSubSamples = vi.mocked(listSubSamples)
 const mockPrintBox = vi.mocked(printBox)
@@ -104,6 +114,7 @@ function setupBackend(vials: Vial[]) {
   })
 
   mockPrintBox.mockResolvedValue({} as never)
+  mockUnassignVialsFromBox.mockResolvedValue(undefined)
 
   return { boxesState }
 }
@@ -210,5 +221,42 @@ describe('BoxStep — capacity-driven boxing', () => {
 
     await waitFor(() => expect(mockDeleteBox).toHaveBeenCalledTimes(1))
     expect(mockDeleteBox).toHaveBeenCalledWith(1)
+  })
+
+  it('dropping a boxed vial on the "unboxed" droppable unassigns it', async () => {
+    // A pre-existing box (id 7) holding one vial; dragging that chip onto the
+    // Unboxed tray (over.id === "unboxed") must clear its box membership.
+    const { boxesState } = setupBackend([vial('P-101', 'hplc', 7)])
+    boxesState.push({
+      id: 7, order_key: ORDER, box_number: 1, role: 'hplc',
+      label_code: `${ORDER}-1`, vial_count: 1, printed_at: null,
+    })
+    renderBoxStep()
+    await screen.findByText('P-101')
+
+    // Drive the drag-end branch directly (jsdom lacks pointer geometry).
+    await act(async () => {
+      await dnd.onDragEnd!({ active: { id: 'P-101' }, over: { id: 'unboxed' } })
+    })
+
+    expect(mockUnassignVialsFromBox).toHaveBeenCalledWith(['P-101'])
+    expect(mockAssignVialsToBox).not.toHaveBeenCalled()
+  })
+
+  it('dropping a vial on a box id assigns (not unassigns)', async () => {
+    const { boxesState } = setupBackend([vial('P-101', 'hplc', 7)])
+    boxesState.push({
+      id: 7, order_key: ORDER, box_number: 1, role: 'hplc',
+      label_code: `${ORDER}-1`, vial_count: 1, printed_at: null,
+    })
+    renderBoxStep()
+    await screen.findByText('P-101')
+
+    await act(async () => {
+      await dnd.onDragEnd!({ active: { id: 'P-101' }, over: { id: '7' } })
+    })
+
+    expect(mockAssignVialsToBox).toHaveBeenCalledWith(7, ['P-101'])
+    expect(mockUnassignVialsFromBox).not.toHaveBeenCalled()
   })
 })
