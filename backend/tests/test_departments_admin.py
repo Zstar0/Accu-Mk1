@@ -57,7 +57,7 @@ def test_put_updates_fields(client, dept):
     assert r.status_code == 200
     body = r.json()
     assert body["name"] == "ZZDEPT-A2" and body["color"] == "green" and body["sort_order"] == 9
-    assert "group_count" in body and "service_count" in body
+    assert body["group_count"] == 0 and body["service_count"] == 0
 
 
 def test_put_rejects_duplicate_name(client, dept):
@@ -66,7 +66,11 @@ def test_put_rejects_duplicate_name(client, dept):
         r = client.put(f"/departments/{dept}", json={"name": "ZZDEPT-OTHER"}, headers=_auth())
         assert r.status_code == 400
     finally:
-        db = SessionLocal(); db.delete(db.get(Department, oid)); db.commit(); db.close()
+        db = SessionLocal()
+        try:
+            db.delete(db.get(Department, oid)); db.commit()
+        finally:
+            db.close()
 
 
 def test_put_404_missing(client):
@@ -79,3 +83,26 @@ def test_put_requires_admin(client, dept):
 
 def test_post_requires_admin(client):
     assert client.post("/departments", json={"name": "ZZDEPT-NEW"}, headers=_auth("standard")).status_code == 403
+
+
+def test_put_rename_to_own_name_ok(client, dept):
+    r = client.put(f"/departments/{dept}", json={"name": "ZZDEPT-A", "color": "red"}, headers=_auth())
+    assert r.status_code == 200
+    assert r.json()["color"] == "red"
+
+
+def test_service_count_counts_ungrouped_service(client, dept):
+    db = SessionLocal()
+    svc = AnalysisService(keyword="ZZDEPT-UNGROUPED", title="zz", department_id=dept)  # no service_group_members row
+    db.add(svc); db.commit(); sid = svc.id; db.close()
+    try:
+        r = client.get("/departments", headers=_auth())
+        row = next(d for d in r.json() if d["id"] == dept)
+        assert row["service_count"] == 1   # counted directly by department_id, not through any group
+        assert row["group_count"] == 0
+    finally:
+        db = SessionLocal()
+        try:
+            db.delete(db.get(AnalysisService, sid)); db.commit()
+        finally:
+            db.close()
