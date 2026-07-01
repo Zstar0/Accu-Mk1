@@ -1,15 +1,17 @@
 import { useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
-import { Check } from 'lucide-react'
+import { useQuery, useQueries } from '@tanstack/react-query'
+import { Check, Loader2 } from 'lucide-react'
 import {
   Dialog,
   DialogContent,
   DialogTitle,
 } from '@/components/ui/dialog'
+import { Button } from '@/components/ui/button'
 import { ReceiveWizard } from '@/components/intake/ReceiveWizard/ReceiveWizard'
 import { useParentSampleDetails } from '@/components/intake/ReceiveWizard/useParentSampleDetails'
 import { listSubSamples, type SenaiteSample } from '@/lib/api'
 import type { SenaiteLookupResult } from '@/lib/api'
+import { completeCheckIn, type CompleteCheckInSample } from '@/lib/complete-checkin'
 import type { OrderGroup } from '@/lib/inbox-orders'
 import { cn } from '@/lib/utils'
 
@@ -42,6 +44,39 @@ export function OrderReceiveSession({ orders, onClose }: Props) {
   const [index, setIndex] = useState(0)
   const total = samples.length
   const current = samples[Math.min(index, total - 1)]
+
+  // Per-sample vial counts. Same query key as the rail's SampleRailRow
+  // (`['order-rail-sub-count', id]`), so these share the react-query cache with
+  // the rail — no duplicate fetching. Drives the header "Complete Check-In"
+  // count and the set of samples handed to `completeCheckIn`.
+  const subCountQueries = useQueries({
+    queries: samples.map(s => ({
+      queryKey: ['order-rail-sub-count', s.id],
+      queryFn: () => listSubSamples(s.id),
+      staleTime: 5 * 60_000,
+    })),
+  })
+  const checkInSamples: CompleteCheckInSample[] = samples.map((s, i) => ({
+    uid: s.uid,
+    sampleId: s.id,
+    vialCount: subCountQueries[i]?.data?.parent.sub_sample_count ?? 0,
+  }))
+  const vialedCount = checkInSamples.filter(s => s.vialCount > 0).length
+
+  // Order-level receive: transitions every vialed sample at once, then closes
+  // (parent refreshes the due list via onClose). Disabled while running and
+  // when nothing is vialed. The embedded wizard is `orderManaged`, so its own
+  // finish never receives — this button owns the whole order's receive.
+  const [completing, setCompleting] = useState(false)
+  const handleCompleteCheckIn = async () => {
+    setCompleting(true)
+    try {
+      await completeCheckIn(checkInSamples)
+      onClose()
+    } finally {
+      setCompleting(false)
+    }
+  }
 
   // Single order → "Receive WP-####"; combined → "Receive N orders".
   const headerLabel =
@@ -112,13 +147,28 @@ export function OrderReceiveSession({ orders, onClose }: Props) {
                 {current.id}
               </span>
             </div>
-            <div className="flex flex-col items-end gap-0.5 shrink-0">
-              <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                Progress
-              </span>
-              <span className="text-sm font-mono font-semibold tabular-nums">
-                {`Sample ${index + 1} of ${total}`}
-              </span>
+            <div className="flex items-center gap-4 shrink-0">
+              <Button
+                type="button"
+                size="sm"
+                onClick={handleCompleteCheckIn}
+                disabled={completing || vialedCount === 0}
+              >
+                {completing ? (
+                  <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                ) : (
+                  <Check className="h-4 w-4" aria-hidden="true" />
+                )}
+                {`Complete Check-In · ${vialedCount} of ${total} samples`}
+              </Button>
+              <div className="flex flex-col items-end gap-0.5">
+                <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                  Progress
+                </span>
+                <span className="text-sm font-mono font-semibold tabular-nums">
+                  {`Sample ${index + 1} of ${total}`}
+                </span>
+              </div>
             </div>
           </div>
 
@@ -173,6 +223,7 @@ export function OrderReceiveSession({ orders, onClose }: Props) {
               parent={{ uid: current.uid, sample_id: current.id, status: current.review_state ?? null }}
               onClose={onClose}
               hideSampleInfo
+              orderManaged
               boxing={{
                 orderKey: activeOrder.orderKey ?? activeOrder.samples[0]?.id ?? '',
                 orderLabel: activeOrder.orderLabel,
