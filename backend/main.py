@@ -16735,23 +16735,41 @@ def get_sample_sterility_results(
     db: Session = Depends(get_db),
     _: None = Depends(require_internal_service_token),
 ):
-    """Server-to-server: verified parent-tier sterility results for a sample,
-    for coabuilder's native (SENAITE-free) sterility source + shadow-diff.
-    Keyed by sample_id (P-XXXX). Empty list for an unknown or never-promoted
-    sample (200, not 404) — the caller proceeds bare."""
-    from lims_analyses import service as la_service
+    """Server-to-server: the LIVE parent-tier sterility results for a sample,
+    for coabuilder's native sterility read + shadow-diff. Keyed by sample_id
+    (P-XXXX).
 
-    promos = la_service.list_promotions_for_parent(db, sample_id)
-    rows = [
-        {
-            "keyword": p.keyword,
-            "result_value": p.result_value,
-            "promoted_at": p.promoted_at,
-        }
-        for p in promos
-        if p.keyword in _STERILITY_KEYWORDS
-    ]
-    return {"sample_id": sample_id, "sterility_results": rows}
+    Returns only the current, non-retracted/rejected parent-tier row per
+    sterility keyword — `retest_of_id IS NULL` + `review_state NOT IN
+    (retracted, rejected)`, the codebase's canonical "live result" filter
+    (see lims_analyses/service.py). A retracted or superseded sterility result
+    must NEVER leak onto a certificate. Empty list for an unknown or
+    resultless sample (200, not 404) — the caller proceeds bare."""
+    from models import LimsSample, LimsAnalysis
+
+    parent = db.execute(
+        select(LimsSample).where(LimsSample.sample_id == sample_id)
+    ).scalar_one_or_none()
+    if parent is None:
+        return {"sample_id": sample_id, "sterility_results": []}
+
+    rows = db.execute(
+        select(LimsAnalysis).where(
+            LimsAnalysis.lims_sample_pk == parent.id,
+            LimsAnalysis.lims_sub_sample_pk.is_(None),
+            LimsAnalysis.keyword.in_(_STERILITY_KEYWORDS),
+            LimsAnalysis.retest_of_id.is_(None),
+            LimsAnalysis.review_state.not_in(("retracted", "rejected")),
+        )
+    ).scalars().all()
+    return {
+        "sample_id": sample_id,
+        "sterility_results": [
+            {"keyword": r.keyword, "result_value": r.result_value,
+             "review_state": r.review_state}
+            for r in rows
+        ],
+    }
 
 
 # ── Peptide requests API (integration-service bridge) ────────────────

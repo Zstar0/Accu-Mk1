@@ -53,5 +53,22 @@ def test_shape_and_sterility_only_filter():
     assert isinstance(body["sterility_results"], list)
     allowed = {"STER-PCR", "STER-USP71", "PCR-FUNGI", "PCR-BACTERIA"}
     for row in body["sterility_results"]:
-        assert set(row.keys()) == {"keyword", "result_value", "promoted_at"}
+        assert set(row.keys()) == {"keyword", "result_value", "review_state"}
         assert row["keyword"] in allowed
+
+
+def test_excludes_retracted_and_no_duplicate_keywords():
+    """The live-result filter (retest_of_id IS NULL + not retracted/rejected):
+    a retracted/superseded result must never leak, and there is at most one
+    row per keyword. P-0152 has a retracted 'Detected' STER-PCR alongside a
+    verified '0' — only the '0' may appear (regression for the Step-8 finding
+    that list_promotions_for_parent returned both). Tolerant of P-0152 absence."""
+    resp = client.get("/samples/P-0152/sterility-results", headers=_auth())
+    assert resp.status_code == 200
+    rows = resp.json()["sterility_results"]
+    assert all(r["review_state"] not in ("retracted", "rejected") for r in rows)
+    kws = [r["keyword"] for r in rows]
+    assert len(kws) == len(set(kws)), f"duplicate keywords leaked: {kws}"
+    ster = [r for r in rows if r["keyword"] == "STER-PCR"]
+    if ster:
+        assert ster[0]["result_value"] == "0", "retracted 'Detected' leaked instead of live '0'"
