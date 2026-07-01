@@ -11,6 +11,7 @@ import {
   listOrderBoxes, createBox, assignVialsToBox, deleteBox, printBox,
   listSubSamples, type LimsBox, type SubSample,
 } from '@/lib/api'
+import { ROLE_CHIP_CLASS, roleBadgeClass, roleTextClass } from '@/lib/assignment-colors'
 
 type BoxRole = 'hplc' | 'endo' | 'ster'
 const ROLE_LABEL: Record<BoxRole, string> = { hplc: 'HPLC', endo: 'Endotoxin', ster: 'Sterility' }
@@ -146,7 +147,7 @@ export function BoxStep({ orderKey, orderLabel, clientId, sampleIds }: Props) {
             return (
               <div key={role} className="flex flex-col gap-3">
                 <div className="flex items-center justify-between">
-                  <h3 className="font-semibold">{ROLE_LABEL[role]}</h3>
+                  <h3 className={`font-semibold ${roleTextClass(role)}`}>{ROLE_LABEL[role]}</h3>
                   <Button size="sm" variant="outline" onClick={() => void addBox(role)}>+ Add box</Button>
                 </div>
                 {boxes.filter(b => b.role === role).map(b => (
@@ -181,9 +182,9 @@ function UnboxedPanel({ orderLabel, vials }: { orderLabel: string; vials: OrderV
         if (rv.length === 0) return null
         return (
           <div key={role} className="mb-2">
-            <div className="mb-1 text-xs text-muted-foreground">{ROLE_LABEL[role]}</div>
+            <div className={`mb-1 text-xs ${roleTextClass(role)}`}>{ROLE_LABEL[role]}</div>
             <div className="flex flex-wrap gap-1">
-              {rv.map(v => <VialChip key={v.sample_id} id={v.sample_id} />)}
+              {rv.map(v => <VialChip key={v.sample_id} id={v.sample_id} role={role} />)}
             </div>
           </div>
         )
@@ -193,11 +194,11 @@ function UnboxedPanel({ orderLabel, vials }: { orderLabel: string; vials: OrderV
   )
 }
 
-function VialChip({ id }: { id: string }) {
+function VialChip({ id, role }: { id: string; role: string }) {
   const { attributes, listeners, setNodeRef } = useDraggable({ id })
   return (
     <span ref={setNodeRef} {...listeners} {...attributes}
-      className="cursor-grab rounded bg-muted px-2 py-0.5 font-mono text-xs">
+      className={`cursor-grab rounded ${ROLE_CHIP_CLASS[role] ?? 'bg-muted'} px-2 py-0.5 font-mono text-xs`}>
       {id}
     </span>
   )
@@ -217,9 +218,9 @@ function BoxCard({ box, clientName, capacity, onCapacityChange, onAutoAssign, on
   const { printNode } = usePrintLabel()
   return (
     <div ref={setNodeRef}
-      className={`rounded border p-2 ${isOver ? 'ring-2 ring-primary' : ''}`}>
+      className={`rounded border p-2 ${roleBadgeClass(box.role)} ${isOver ? 'ring-2 ring-primary' : ''}`}>
       <div className="flex items-center justify-between">
-        <span className="font-mono font-semibold">{box.label_code}</span>
+        <span className={`font-mono font-semibold ${roleTextClass(box.role)}`}>{box.label_code}</span>
         <div className="flex items-center gap-1">
           <Button size="sm" variant="ghost"
             onClick={() => { void printBox(box.id); printNode(
