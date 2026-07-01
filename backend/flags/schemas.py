@@ -103,6 +103,23 @@ class FlagDetailResponse(FlagResponse):
     events: List[EventResponse] = Field(default_factory=list)
 
 
+class ActivityItem(BaseModel):
+    """One audit event + its (entity-resolved) flag — a row of the feed."""
+    id: int
+    event_type: str
+    actor_id: Optional[int] = None
+    from_value: Optional[str] = None
+    to_value: Optional[str] = None
+    created_at: datetime
+    flag: FlagResponse
+
+
+class ActivityPage(BaseModel):
+    """One keyset page of the activity feed. `next_cursor` is null on the last."""
+    items: List[ActivityItem]
+    next_cursor: Optional[str] = None
+
+
 class SummaryResponse(BaseModel):
     assigned_to_me: int
     by_type: dict

@@ -16,10 +16,10 @@ from flags import seams, service, types_service
 from flags.bus import BUS
 from flags.errors import BadRequestError, ConflictError, NotFoundError, PermissionDeniedError
 from flags.schemas import (
-    AssignRequest, CommentRequest, CommentResponse, CreateFlagRequest,
-    EntityContext, FlagDetailResponse, FlagResponse, FlagTypeCreate,
-    FlagTypeResponse, FlagTypeUpdate, StatusRequest, SummaryResponse,
-    WatcherRequest,
+    ActivityItem, ActivityPage, AssignRequest, CommentRequest, CommentResponse,
+    CreateFlagRequest, EntityContext, FlagDetailResponse, FlagResponse,
+    FlagTypeCreate, FlagTypeResponse, FlagTypeUpdate, StatusRequest,
+    SummaryResponse, WatcherRequest,
 )
 
 router = APIRouter(prefix="/api/flags", tags=["flags"])
@@ -83,6 +83,26 @@ def list_flags(tab: str = Query("all_open"), status: Optional[str] = None,
 @router.get("/summary", response_model=SummaryResponse)
 def summary(db: Session = Depends(get_db), user=Depends(get_current_user)):
     return SummaryResponse(**service.summary(db, user_id=getattr(user, "id", None)))
+
+
+@router.get("/activity", response_model=ActivityPage)
+def activity(cursor: Optional[str] = None, limit: int = Query(25, ge=1, le=50),
+             db: Session = Depends(get_db), user=Depends(get_current_user)):
+    # Literal /activity is registered ABOVE /{flag_id} so it wins the match.
+    try:
+        rows, next_cursor = service.list_activity(
+            db, user_id=getattr(user, "id", None), cursor=cursor, limit=limit)
+        items = [
+            ActivityItem(
+                id=ev.id, event_type=ev.event_type, actor_id=ev.actor_id,
+                from_value=ev.from_value, to_value=ev.to_value,
+                created_at=ev.created_at, flag=_with_entity(db, ev.flag),
+            )
+            for ev in rows
+        ]
+        return ActivityPage(items=items, next_cursor=next_cursor)
+    except Exception as e:
+        raise _http(e)
 
 
 @router.get("/stream")

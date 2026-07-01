@@ -3,6 +3,7 @@ call writes a flag_events audit row AND emits to the event sink in the same
 transaction boundary."""
 from __future__ import annotations
 
+import base64
 from datetime import datetime
 from typing import Optional
 
@@ -126,6 +127,51 @@ def list_flags(db: Session, *, user_id: int, tab: str, status: Optional[str] = N
             for et, eid in pairs
         ]))
     return list(db.execute(stmt).scalars().all())
+
+
+def _encode_cursor(ev: FlagEvent) -> str:
+    raw = f"{ev.created_at.isoformat()}|{ev.id}"
+    return base64.urlsafe_b64encode(raw.encode()).decode()
+
+
+def _decode_cursor(cursor: str) -> tuple[datetime, int]:
+    try:
+        raw = base64.urlsafe_b64decode(cursor.encode()).decode()
+        ts_str, id_str = raw.rsplit("|", 1)
+        return datetime.fromisoformat(ts_str), int(id_str)
+    except Exception:
+        raise BadRequestError("bad activity cursor")
+
+
+def list_activity(db: Session, *, user_id: int, cursor: Optional[str] = None,
+                  limit: int = 25) -> tuple[list[FlagEvent], Optional[str]]:
+    """Newest-first feed of flag events relevant to `user_id`: events on flags
+    they're the assignee/creator/watcher of, unioned with their own actions.
+    Keyset paginated on (created_at, id); returns (rows, next_cursor)."""
+    limit = max(1, min(limit, 50))
+    relevant = select(FlagFlag.id).where(or_(
+        FlagFlag.assignee_id == user_id,
+        FlagFlag.created_by == user_id,
+        FlagFlag.id.in_(select(FlagParticipant.flag_id)
+                        .where(FlagParticipant.user_id == user_id)),
+    ))
+    stmt = select(FlagEvent).where(or_(
+        FlagEvent.actor_id == user_id,
+        FlagEvent.flag_id.in_(relevant),
+    ))
+    if cursor:
+        c_ts, c_id = _decode_cursor(cursor)
+        stmt = stmt.where(or_(
+            FlagEvent.created_at < c_ts,
+            and_(FlagEvent.created_at == c_ts, FlagEvent.id < c_id),
+        ))
+    stmt = stmt.order_by(FlagEvent.created_at.desc(), FlagEvent.id.desc()).limit(limit + 1)
+    rows = list(db.execute(stmt).scalars().all())
+    next_cursor = None
+    if len(rows) > limit:
+        rows = rows[:limit]
+        next_cursor = _encode_cursor(rows[-1])
+    return rows, next_cursor
 
 
 def summary(db: Session, *, user_id: int) -> dict:

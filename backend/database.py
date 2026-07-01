@@ -894,6 +894,8 @@ def _run_migrations():
             ADD CONSTRAINT flag_flags_status_check
                 CHECK (status IN ('open','in_progress','blocked','resolved','closed'))
         """,
+        # Flag activity feed: keyset scan on (created_at, id) newest-first
+        "CREATE INDEX IF NOT EXISTS ix_flag_events_created_at_id ON flag_events (created_at DESC, id DESC)",
     ]
     # Per-statement isolation: a failure in one statement (e.g., a table that
     # create_all hasn't built yet on first run) must not skip subsequent
