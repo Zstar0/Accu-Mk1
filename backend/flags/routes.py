@@ -105,6 +105,16 @@ def activity(cursor: Optional[str] = None, limit: int = Query(25, ge=1, le=50),
         raise _http(e)
 
 
+@router.get("/unread", response_model=List[FlagResponse])
+def unread(db: Session = Depends(get_db), user=Depends(get_current_user)):
+    # Literal /unread above /{flag_id}.
+    try:
+        rows = service.list_unread(db, user_id=getattr(user, "id", None))
+        return [_with_entity(db, r) for r in rows]
+    except Exception as e:
+        raise _http(e)
+
+
 @router.get("/stream")
 async def stream(request: Request, user=Depends(get_current_user)):
     sub = BUS.subscribe(getattr(user, "id", None))
@@ -191,6 +201,14 @@ def list_entity_types(db: Session = Depends(get_db), user=Depends(get_current_us
 def get_flag(flag_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
     try:
         return _with_entity(db, service.get_flag(db, flag_id), FlagDetailResponse)
+    except Exception as e:
+        raise _http(e)
+
+
+@router.post("/{flag_id}/read", status_code=204)
+def mark_read(flag_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    try:
+        service.mark_read(db, user_id=getattr(user, "id", None), flag_id=flag_id)
     except Exception as e:
         raise _http(e)
 

@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from flags import catalog, permissions, seams, types_service
 from flags.errors import BadRequestError, NotFoundError, PermissionDeniedError
-from flags.models import FlagComment, FlagEvent, FlagFlag, FlagParticipant
+from flags.models import FlagComment, FlagEvent, FlagFlag, FlagParticipant, FlagRead
 
 
 def _flag_summary(flag) -> dict:
@@ -107,6 +107,16 @@ def _valid_user_ids(db: Session, ids) -> list[int]:
     return [i for i in uniq if i in present]
 
 
+def _relevant_flag_ids(user_id: int):
+    """Flags the user is the assignee/creator/participant of (a Select of ids)."""
+    return select(FlagFlag.id).where(or_(
+        FlagFlag.assignee_id == user_id,
+        FlagFlag.created_by == user_id,
+        FlagFlag.id.in_(select(FlagParticipant.flag_id)
+                        .where(FlagParticipant.user_id == user_id)),
+    ))
+
+
 def list_flags(db: Session, *, user_id: int, tab: str, status: Optional[str] = None,
                entity_type: Optional[str] = None, entity_id: Optional[str] = None,
                include_descendants: bool = False) -> list[FlagFlag]:
@@ -159,15 +169,9 @@ def list_activity(db: Session, *, user_id: int, cursor: Optional[str] = None,
     they're the assignee/creator/watcher of, unioned with their own actions.
     Keyset paginated on (created_at, id); returns (rows, next_cursor)."""
     limit = max(1, min(limit, 50))
-    relevant = select(FlagFlag.id).where(or_(
-        FlagFlag.assignee_id == user_id,
-        FlagFlag.created_by == user_id,
-        FlagFlag.id.in_(select(FlagParticipant.flag_id)
-                        .where(FlagParticipant.user_id == user_id)),
-    ))
     stmt = select(FlagEvent).where(or_(
         FlagEvent.actor_id == user_id,
-        FlagEvent.flag_id.in_(relevant),
+        FlagEvent.flag_id.in_(_relevant_flag_ids(user_id)),
     ))
     if cursor:
         c_ts, c_id = _decode_cursor(cursor)
@@ -182,6 +186,30 @@ def list_activity(db: Session, *, user_id: int, cursor: Optional[str] = None,
         rows = rows[:limit]
         next_cursor = _encode_cursor(rows[-1])
     return rows, next_cursor
+
+
+def list_unread(db: Session, *, user_id: int) -> list[FlagFlag]:
+    """Flags relevant to the user that changed since they last read them
+    (never-read counts as unread), newest-updated first."""
+    stmt = (select(FlagFlag)
+            .outerjoin(FlagRead, and_(FlagRead.flag_id == FlagFlag.id,
+                                      FlagRead.user_id == user_id))
+            .where(FlagFlag.id.in_(_relevant_flag_ids(user_id)))
+            .where(or_(FlagRead.last_read_at.is_(None),
+                       FlagFlag.updated_at > FlagRead.last_read_at))
+            .order_by(FlagFlag.updated_at.desc()))
+    return list(db.execute(stmt).scalars().all())
+
+
+def mark_read(db: Session, *, user_id: int, flag_id: int) -> None:
+    get_flag(db, flag_id)  # 404 if the flag doesn't exist
+    row = db.execute(select(FlagRead).where(
+        FlagRead.user_id == user_id, FlagRead.flag_id == flag_id)).scalar_one_or_none()
+    if row is None:
+        db.add(FlagRead(user_id=user_id, flag_id=flag_id, last_read_at=datetime.utcnow()))
+    else:
+        row.last_read_at = datetime.utcnow()
+    db.commit()
 
 
 def summary(db: Session, *, user_id: int) -> dict:
