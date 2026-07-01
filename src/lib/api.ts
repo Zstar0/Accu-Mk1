@@ -4468,7 +4468,7 @@ export async function deleteSlaPriorityTier(
 ): Promise<void> {
   // Without serviceGroupId, deletes the global (NULL group) override; with it,
   // deletes only the per-group row.
-  const url = new URL(`${API_BASE_URL()}/sla-priority-tiers/${priority}`)
+  const url = new URL(`${API_BASE_URL()}/sla-priority-tiers/${priority}`, window.location.origin)
   if (serviceGroupId != null) url.searchParams.set('service_group_id', String(serviceGroupId))
   const response = await fetch(url.toString(), {
     method: 'DELETE', headers: getBearerHeaders(),
@@ -5241,7 +5241,7 @@ export async function updateCustomerRemarks(
 export async function listLimsAnalysesForSubSample(
   subSamplePk: number
 ): Promise<SenaiteAnalysis[]> {
-  const url = new URL(`${API_BASE_URL()}/api/lims-analyses`)
+  const url = new URL(`${API_BASE_URL()}/api/lims-analyses`, window.location.origin)
   url.searchParams.set('host_kind', 'sub_sample')
   url.searchParams.set('host_pk', String(subSamplePk))
   url.searchParams.set('as', 'senaite_shape')
@@ -5273,7 +5273,7 @@ export interface ParentPromotionInfo {
 export async function listParentPromotions(
   parentSampleId: string
 ): Promise<ParentPromotionInfo[]> {
-  const url = new URL(`${API_BASE_URL()}/api/lims-analyses/promotions`)
+  const url = new URL(`${API_BASE_URL()}/api/lims-analyses/promotions`, window.location.origin)
   url.searchParams.set('parent_sample_id', parentSampleId)
   const response = await fetch(url.toString(), { headers: getBearerHeaders() })
   if (!response.ok) {
@@ -5291,7 +5291,7 @@ export async function listParentPromotions(
 export async function listParentLineStates(
   parentSampleId: string
 ): Promise<{ states: Record<string, string> }> {
-  const url = new URL(`${API_BASE_URL()}/api/lims-analyses/parent-line-states`)
+  const url = new URL(`${API_BASE_URL()}/api/lims-analyses/parent-line-states`, window.location.origin)
   url.searchParams.set('parent_sample_id', parentSampleId)
   const response = await fetch(url.toString(), { headers: getBearerHeaders() })
   if (!response.ok) {
