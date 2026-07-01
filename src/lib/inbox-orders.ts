@@ -11,6 +11,13 @@ export interface EnrichedOrderGroup extends OrderGroup {
   order: ExplorerOrder | null
 }
 
+// Integration `order_submissions` store `order_number` as the bare number
+// (e.g. "3267"), but the SENAITE `client_order_number` used as a group's
+// `orderKey` carries a "WP-" prefix (e.g. "WP-3267"). Normalize both sides by
+// stripping a leading case-insensitive "WP-" before matching (a no-op if the
+// value is already bare).
+const stripWp = (s: string): string => s.replace(/^WP-/i, '')
+
 /**
  * Join order groups to their `ExplorerOrder` by `order_number`. Groups with no
  * order key (the "No order" bucket) or no matching order get `order: null`.
@@ -19,10 +26,10 @@ export function enrichOrderGroups(
   groups: OrderGroup[],
   orders: ExplorerOrder[],
 ): EnrichedOrderGroup[] {
-  const byNumber = new Map(orders.map(o => [o.order_number, o]))
+  const byNumber = new Map(orders.map(o => [stripWp(o.order_number), o]))
   return groups.map(g => ({
     ...g,
-    order: g.orderKey ? (byNumber.get(g.orderKey) ?? null) : null,
+    order: g.orderKey ? (byNumber.get(stripWp(g.orderKey)) ?? null) : null,
   }))
 }
 

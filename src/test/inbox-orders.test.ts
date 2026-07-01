@@ -46,6 +46,10 @@ describe('enrichOrderGroups', () => {
     const r = enrichOrderGroups([grp('WP-1042')], [ord('WP-1042')])[0]!
     expect(r.order?.order_number).toBe('WP-1042')
   })
+  it('matches a WP-prefixed group orderKey to a bare-number ExplorerOrder', () => {
+    const r = enrichOrderGroups([grp('WP-3267')], [ord('3267')])[0]!
+    expect(r.order?.order_number).toBe('3267')
+  })
   it('leaves order null when no ExplorerOrder matches', () => {
     const r = enrichOrderGroups([grp('WP-9999')], [ord('WP-1042')])[0]!
     expect(r.order).toBeNull()
