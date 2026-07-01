@@ -4,7 +4,7 @@ import {
   DndContext, DragOverlay, PointerSensor, useSensor, useSensors, useDroppable, useDraggable,
   type DragEndEvent, type DragStartEvent, type Modifier,
 } from '@dnd-kit/core'
-import { Trash2 } from 'lucide-react'
+import { Printer, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { usePrintLabel } from '@/components/samples/usePrintLabel'
 import { BoxLabelTemplate } from './BoxLabelTemplate'
@@ -289,11 +289,12 @@ function BoxCard({ box, boxVials, clientName, capacity, activeId, onCapacityChan
       <div className="flex items-center justify-between">
         <span className={`font-mono font-semibold ${roleTextClass(box.role)}`}>{box.label_code}</span>
         <div className="flex items-center gap-1">
-          <Button size="sm" variant="ghost"
+          <Button size="sm" variant="outline" className="gap-2"
             onClick={() => { void printBox(box.id); printNode(
               <BoxLabelTemplate labelCode={box.label_code} clientName={clientName}
                 role={box.role} vialCount={box.vial_count} />,
             ) }}>
+            <Printer className="w-4 h-4" aria-hidden="true" />
             {box.printed_at ? 'Reprint' : 'Print label'}
           </Button>
           <Button size="sm" variant="ghost" aria-label="Delete box"
