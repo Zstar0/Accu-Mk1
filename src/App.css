@@ -91,20 +91,20 @@ input:-webkit-autofill:active {
   --flag-unread: #ec4899;
 }
 
-/* Glow-on-new for the Flags header button. Pulsing red ring while a relevant
+/* Glow-on-new for the Flags header button. Pulsing gold ring while a relevant
    event has landed and the flyout is still closed (see toolbar-badge.html). */
 .flags-glow {
   animation: flags-pulse 1.8s ease-out infinite;
 }
 @keyframes flags-pulse {
   0% {
-    box-shadow: 0 0 0 0 rgba(229, 72, 77, 0.5);
+    box-shadow: 0 0 0 0 rgba(234, 179, 8, 0.55);
   }
   70% {
-    box-shadow: 0 0 0 8px rgba(229, 72, 77, 0);
+    box-shadow: 0 0 0 8px rgba(234, 179, 8, 0);
   }
   100% {
-    box-shadow: 0 0 0 0 rgba(229, 72, 77, 0);
+    box-shadow: 0 0 0 0 rgba(234, 179, 8, 0);
   }
 }
 
