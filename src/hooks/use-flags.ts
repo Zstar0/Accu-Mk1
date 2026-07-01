@@ -8,6 +8,7 @@
 
 import {
   useQuery,
+  useInfiniteQuery,
   useMutation,
   useQueryClient,
   type QueryClient,
@@ -17,6 +18,7 @@ import {
   listEntityFlags,
   getFlag,
   getSummary,
+  getActivity,
   createFlag,
   addComment,
   assignFlag,
@@ -27,6 +29,7 @@ import {
   type ListFlagsParams,
   type FlagStatus,
   type CreateFlagBody,
+  type ActivityPage,
 } from '@/lib/flags-api'
 
 // --- query keys (exported so tests + the SSE glue share the literals) ---
@@ -41,6 +44,7 @@ export const flagKeys = {
   // invalidate(['flags']) refreshes every EntityFlagButton on any flag event.
   entity: (entityType: string, entityId: string, includeDescendants: boolean) =>
     ['flags', 'entity', entityType, entityId, includeDescendants] as const,
+  activity: () => ['flags', 'activity'] as const,
   detail: (id: number) => ['flags', id] as const,
 }
 
@@ -95,6 +99,19 @@ export function useFlag(id: number | null) {
     queryKey: flagKeys.detail(id ?? -1),
     queryFn: () => getFlag(id as number),
     enabled: id != null,
+  })
+}
+
+/** The relevance activity feed — newest-first, keyset-paginated. Under
+ *  ['flags', …] so the SSE glue's blanket invalidate refreshes it too. */
+export function useFlagActivity() {
+  return useInfiniteQuery({
+    queryKey: flagKeys.activity(),
+    queryFn: ({ pageParam }: { pageParam: string | undefined }) =>
+      getActivity(pageParam),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (last: ActivityPage) => last.next_cursor ?? undefined,
+    staleTime: 5_000,
   })
 }
 

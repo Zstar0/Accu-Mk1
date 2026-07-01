@@ -100,6 +100,23 @@ export interface FlagDetailResponse extends FlagResponse {
   events: EventResponse[]
 }
 
+/** Mirrors `ActivityItem` — one audit event + its (entity-resolved) flag. */
+export interface ActivityItem {
+  id: number
+  event_type: string
+  actor_id: number | null
+  from_value: string | null
+  to_value: string | null
+  created_at: string
+  flag: FlagResponse
+}
+
+/** Mirrors `ActivityPage` — one keyset page of the activity feed. */
+export interface ActivityPage {
+  items: ActivityItem[]
+  next_cursor: string | null
+}
+
 /** Mirrors `SummaryResponse`. `by_type` maps a flag type → open count. */
 export interface SummaryResponse {
   assigned_to_me: number
@@ -202,6 +219,14 @@ export const createFlag = (body: CreateFlagBody) =>
 
 /** `GET /api/flags/summary` — counts for the header button badge. */
 export const getSummary = () => apiFetch<SummaryResponse>('/api/flags/summary')
+
+/** `GET /api/flags/activity` — one keyset page of the user's relevance feed
+ *  (newest first). Omit `cursor` for the first page. */
+export const getActivity = (cursor?: string, limit = 25) => {
+  const qs = new URLSearchParams({ limit: String(limit) })
+  if (cursor) qs.set('cursor', cursor)
+  return apiFetch<ActivityPage>(`/api/flags/activity?${qs.toString()}`)
+}
 
 /** `GET /api/flags/{id}` — one flag with its comments + events. */
 export const getFlag = (id: number) =>

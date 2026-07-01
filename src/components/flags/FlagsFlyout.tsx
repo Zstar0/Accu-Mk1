@@ -12,6 +12,7 @@ import type { FlagTab, FlagResponse } from '@/lib/flags-api'
 import { FlagCard } from '@/components/flags/FlagCard'
 import { FlagTable } from '@/components/flags/FlagTable'
 import { FlagThread } from '@/components/flags/FlagThread'
+import { FlagActivityFeed } from '@/components/flags/FlagActivityFeed'
 import { FlagsFilterBar } from '@/components/flags/FlagsFilterBar'
 import {
   useFlagViewMode,
@@ -28,11 +29,16 @@ import {
   type FlagFilterState,
 } from '@/components/flags/flag-filter'
 
-const TABS: { value: FlagTab; label: string }[] = [
+/** The flyout's tab axis. Four map 1:1 to the API's `FlagTab`; `activity` is a
+ *  FE-only tab that renders the event feed instead of a flag list. */
+type FlyoutTab = FlagTab | 'activity'
+
+const TABS: { value: FlyoutTab; label: string }[] = [
   { value: 'assigned', label: 'Assigned to me' },
   { value: 'raised', label: 'Raised by me' },
   { value: 'watching', label: 'Watching' },
   { value: 'all_open', label: 'All open' },
+  { value: 'activity', label: 'Activity' },
 ]
 
 const VIEW_OPTIONS = [
@@ -86,7 +92,9 @@ export function FlagsFlyout() {
   const threadId = useUIStore(state => state.flagsThreadId)
   const entityFilter = useUIStore(state => state.flagsEntityFilter)
   const samplesFilter = useUIStore(state => state.flagsSamplesFilter)
-  const [tab, setTab] = useState<FlagTab>('assigned')
+  const [tab, setTab] = useState<FlyoutTab>('assigned')
+  // The Activity tab renders the event feed instead of a flag list.
+  const isActivity = tab === 'activity'
   // Ephemeral triage filters, local to the flyout — reset when it closes.
   const [filter, setFilter] = useState<FlagFilterState>(EMPTY_FLAG_FILTER)
   // Persisted display style (stacked list vs. aligned table).
@@ -110,7 +118,9 @@ export function FlagsFlyout() {
     })
   }, [])
 
-  const tabQuery = useFlagsList(tab)
+  // The Activity tab isn't a real API tab — hold a valid FlagTab so the query
+  // stays well-formed; its result is ignored (the feed renders instead).
+  const tabQuery = useFlagsList(isActivity ? 'assigned' : (tab as FlagTab))
   const entityQuery = useEntityFlags(entityFilter?.type, entityFilter?.id, {
     includeDescendants: entityFilter?.includeDescendants ?? false,
   })
@@ -233,7 +243,9 @@ export function FlagsFlyout() {
                     <Flag className="h-4 w-4" /> Flags
                   </h2>
                   <div className="flex items-center gap-1.5">
-                    <ViewToggle mode={viewMode} onChange={setViewMode} />
+                    {!isActivity && (
+                      <ViewToggle mode={viewMode} onChange={setViewMode} />
+                    )}
                     <RaiseFlagButton
                       trigger={
                         <Button
@@ -250,7 +262,7 @@ export function FlagsFlyout() {
 
                 {/* Tabs */}
                 <div className="border-b px-3 pt-2">
-                  <Tabs value={tab} onValueChange={v => setTab(v as FlagTab)}>
+                  <Tabs value={tab} onValueChange={v => setTab(v as FlyoutTab)}>
                     <TabsList className="h-auto flex-wrap bg-transparent p-0">
                       {TABS.map(t => (
                         <TabsTrigger
@@ -267,13 +279,18 @@ export function FlagsFlyout() {
               </>
             )}
 
-            {/* Filter bar — shown whenever there are flags to triage. */}
-            {!isLoading && !isError && hasFlags && (
+            {/* Filter bar — shown whenever there are flags to triage (not on Activity). */}
+            {!isActivity && !isLoading && !isError && hasFlags && (
               <FlagsFilterBar value={filter} onChange={setFilter} />
             )}
 
-            {/* List */}
-            <div className="min-h-0 flex-1 overflow-auto p-2">
+            {/* List — or the Activity feed on that tab. */}
+            {isActivity ? (
+              <div className="min-h-0 flex-1 overflow-auto">
+                <FlagActivityFeed />
+              </div>
+            ) : (
+              <div className="min-h-0 flex-1 overflow-auto p-2">
               {!isLoading && !isError && hasFlags && (
                 <div className="px-1 pb-1.5 text-[11px] text-muted-foreground">
                   {visibleFlags.length} of {total}
@@ -359,7 +376,8 @@ export function FlagsFlyout() {
                     />
                   ))
                 ))}
-            </div>
+              </div>
+            )}
           </>
         )}
       </SheetContent>
