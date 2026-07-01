@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   DndContext, DragOverlay, PointerSensor, useSensor, useSensors, useDroppable, useDraggable,
-  type DragEndEvent, type DragStartEvent,
+  type DragEndEvent, type DragStartEvent, type Modifier,
 } from '@dnd-kit/core'
 import { Button } from '@/components/ui/button'
 import { usePrintLabel } from '@/components/samples/usePrintLabel'
@@ -12,6 +12,24 @@ import {
   listSubSamples, type LimsBox, type SubSample,
 } from '@/lib/api'
 import { ROLE_CHIP_CLASS, roleBadgeClass, roleTextClass } from '@/lib/assignment-colors'
+
+// Snap the drag preview's CENTER to the cursor. Without it, the overlay is
+// offset by wherever inside the chip the grab started, so the "held" copy
+// floats far from the pointer. Inline (not @dnd-kit/modifiers) to avoid a new
+// dependency: shift the transform so the cursor lands at the chip's midpoint.
+const snapCenterToCursor: Modifier = ({ activatorEvent, draggingNodeRect, transform }) => {
+  if (draggingNodeRect && activatorEvent && 'clientX' in activatorEvent) {
+    const e = activatorEvent as PointerEvent
+    const offsetX = e.clientX - draggingNodeRect.left
+    const offsetY = e.clientY - draggingNodeRect.top
+    return {
+      ...transform,
+      x: transform.x + offsetX - draggingNodeRect.width / 2,
+      y: transform.y + offsetY - draggingNodeRect.height / 2,
+    }
+  }
+  return transform
+}
 
 type BoxRole = 'hplc' | 'endo' | 'ster'
 const ROLE_LABEL: Record<BoxRole, string> = { hplc: 'HPLC', endo: 'Endotoxin', ster: 'Sterility' }
@@ -194,8 +212,11 @@ export function BoxStep({ orderKey, orderLabel, clientId, sampleIds }: Props) {
         <UnboxedPanel orderLabel={orderLabel} vials={unboxedVials} activeId={activeId} />
       </div>
 
-      {/* The "held" preview — a role-colored copy tracking the cursor. */}
-      <DragOverlay>
+      {/* The "held" preview — a role-colored copy tracking the cursor. The
+          center snaps to the pointer; dropAnimation is disabled so the chip
+          doesn't fly back to its old box before the reassign state lands
+          (which reads backwards). */}
+      <DragOverlay dropAnimation={null} modifiers={[snapCenterToCursor]}>
         {activeVial ? (
           <span className={`cursor-grabbing rounded ${ROLE_CHIP_CLASS[activeVial.assignment_role ?? ''] ?? 'bg-muted'} px-2 py-0.5 font-mono text-xs`}>
             {activeVial.sample_id}
