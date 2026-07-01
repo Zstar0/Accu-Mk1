@@ -184,6 +184,22 @@ describe('BoxStep — capacity-driven boxing', () => {
     expect(ids).toEqual(['P-101', 'P-102'])
   })
 
+  it('renders a box\'s assigned vials as chips inside the box card', async () => {
+    // A pre-existing box (id 7) with one vial already assigned to it. Because
+    // the vial is boxed, no first-box auto-create fires — the chip must show
+    // inside the box card, and the Unboxed panel reports everything boxed.
+    const { boxesState } = setupBackend([vial('P-101', 'hplc', 7)])
+    boxesState.push({
+      id: 7, order_key: ORDER, box_number: 1, role: 'hplc',
+      label_code: `${ORDER}-1`, vial_count: 1, printed_at: null,
+    })
+    renderBoxStep()
+
+    expect(await screen.findByText('P-101')).toBeInTheDocument()
+    expect(screen.getByText('All vials boxed.')).toBeInTheDocument()
+    expect(mockCreateBox).not.toHaveBeenCalled()
+  })
+
   it('remove on an empty box calls deleteBox with the box id', async () => {
     setupBackend([vial('P-101', 'hplc')])
     renderBoxStep()

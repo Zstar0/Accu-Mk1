@@ -157,6 +157,7 @@ export function BoxStep({ orderKey, orderLabel, clientId, sampleIds }: Props) {
                   <BoxCard
                     key={b.id}
                     box={b}
+                    boxVials={vials.filter(v => v.box_id === b.id)}
                     clientName={clientId}
                     capacity={capacities[b.id] ?? DEFAULT_BOX_CAPACITY}
                     onCapacityChange={n => setCapacities(c => ({ ...c, [b.id]: n }))}
@@ -209,6 +210,10 @@ function VialChip({ id, role }: { id: string; role: string }) {
 
 interface BoxCardProps {
   box: LimsBox
+  // The order's vials already assigned to THIS box (box_id === box.id).
+  // Rendered inside the card as draggable chips so the tech sees what landed
+  // where and can drag a chip onto another box to reassign it.
+  boxVials: OrderVial[]
   clientName: string | null
   capacity: number
   onCapacityChange: (n: number) => void
@@ -216,7 +221,7 @@ interface BoxCardProps {
   onRemove: () => void
 }
 
-function BoxCard({ box, clientName, capacity, onCapacityChange, onAutoAssign, onRemove }: BoxCardProps) {
+function BoxCard({ box, boxVials, clientName, capacity, onCapacityChange, onAutoAssign, onRemove }: BoxCardProps) {
   const { setNodeRef, isOver } = useDroppable({ id: String(box.id) })
   const { printNode } = usePrintLabel()
   return (
@@ -239,6 +244,13 @@ function BoxCard({ box, clientName, capacity, onCapacityChange, onAutoAssign, on
         </div>
       </div>
       <div className="text-xs text-muted-foreground">{box.vial_count} vials</div>
+      {boxVials.length > 0 && (
+        <div className="mt-1 flex flex-wrap gap-1">
+          {boxVials.map(v => (
+            <VialChip key={v.sample_id} id={v.sample_id} role={v.assignment_role ?? ''} />
+          ))}
+        </div>
+      )}
       <div className="mt-2 flex items-center gap-1">
         <label className="text-xs text-muted-foreground" htmlFor={`cap-${box.id}`}>Cap</label>
         <input
