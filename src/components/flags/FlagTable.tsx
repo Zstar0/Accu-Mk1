@@ -35,8 +35,18 @@ import type { FlagTypeDef } from '@/components/flags/flag-catalog'
 const GRID_TEMPLATE =
   'grid grid-cols-[3px_130px_104px_minmax(0,1fr)_150px_120px_108px_44px] items-center gap-x-2'
 
-/** The aligned-columns table view for the flyout list (Plan 8). */
-export function FlagTable({ flags }: { flags: FlagResponse[] }) {
+/**
+ * The aligned-columns table view for the flyout list (Plan 8). `highlightIds`
+ * are the flags the user was just pinged about — their rows pulse (see FlagCard
+ * for the same treatment in list view).
+ */
+export function FlagTable({
+  flags,
+  highlightIds,
+}: {
+  flags: FlagResponse[]
+  highlightIds?: Set<number>
+}) {
   const users = useFlagUsers()
   const typesMap = useFlagTypesMap()
   const currentUserId = useAuthStore(state => state.user?.id ?? null)
@@ -52,6 +62,7 @@ export function FlagTable({ flags }: { flags: FlagResponse[] }) {
             users={users}
             typesMap={typesMap}
             currentUserId={currentUserId}
+            highlight={highlightIds?.has(flag.id) ?? false}
           />
         ))}
       </div>
@@ -86,11 +97,13 @@ function FlagTableRow({
   users,
   typesMap,
   currentUserId,
+  highlight = false,
 }: {
   flag: FlagResponse
   users: UserMap
   typesMap: Record<string, FlagTypeDef>
   currentUserId: number | null
+  highlight?: boolean
 }) {
   const def = typesMap[flag.type] ?? flagTypeDef(flag.type)
   const { Icon } = entityMeta(flag.entity_type)
@@ -127,7 +140,8 @@ function FlagTableRow({
       }}
       className={cn(
         GRID_TEMPLATE,
-        'group cursor-pointer rounded-md px-1.5 py-1.5 transition-colors hover:bg-muted/60'
+        'group cursor-pointer rounded-md px-1.5 py-1.5 transition-colors hover:bg-muted/60',
+        highlight && 'flag-row-pulse'
       )}
     >
       {/* Type-color accent */}

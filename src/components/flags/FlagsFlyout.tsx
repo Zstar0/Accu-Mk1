@@ -7,6 +7,7 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useUIStore } from '@/store/ui-store'
 import { useFlagsList, useEntityFlags } from '@/hooks/use-flags'
+import { useFlagUnseen } from '@/components/flags/use-flag-unseen'
 import type { FlagTab, FlagResponse } from '@/lib/flags-api'
 import { FlagCard } from '@/components/flags/FlagCard'
 import { FlagTable } from '@/components/flags/FlagTable'
@@ -90,6 +91,11 @@ export function FlagsFlyout() {
   const [filter, setFilter] = useState<FlagFilterState>(EMPTY_FLAG_FILTER)
   // Persisted display style (stacked list vs. aligned table).
   const [viewMode, setViewMode] = useFlagViewMode()
+  // Flags the user was just pinged about (snapshot captured when this flyout
+  // opened) — their rows pulse so what's new stands out. Set is memoized by the
+  // React Compiler off `justOpened`.
+  const justOpened = useFlagUnseen(state => state.justOpened)
+  const highlightIds = new Set(justOpened)
 
   const tabQuery = useFlagsList(tab)
   const entityQuery = useEntityFlags(entityFilter?.type, entityFilter?.id, {
@@ -330,10 +336,14 @@ export function FlagsFlyout() {
                 !isError &&
                 visibleFlags.length > 0 &&
                 (viewMode === 'table' ? (
-                  <FlagTable flags={visibleFlags} />
+                  <FlagTable flags={visibleFlags} highlightIds={highlightIds} />
                 ) : (
                   visibleFlags.map(flag => (
-                    <FlagCard key={flag.id} flag={flag} />
+                    <FlagCard
+                      key={flag.id}
+                      flag={flag}
+                      highlight={highlightIds.has(flag.id)}
+                    />
                   ))
                 ))}
             </div>

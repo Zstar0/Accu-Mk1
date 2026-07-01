@@ -70,10 +70,10 @@ export function MainWindow() {
   useMainWindowEventListeners()
   useHashNavigation()
 
-  // Flag System live updates: one SSE subscription at app scope. Returns the
-  // glow signal for the header button (bumped on relevant events, cleared when
-  // the flyout opens).
-  const flagsHasNew = useFlagStreamGlue()
+  // Flag System live updates: one SSE subscription at app scope. Pure
+  // side-effect — the header pulse now reads the persisted `useFlagUnseen`
+  // store directly, so nothing to thread through here.
+  useFlagStreamGlue()
 
   useEffect(() => {
     getVersion()
@@ -172,7 +172,7 @@ export function MainWindow() {
               <span className="text-sm text-muted-foreground">Accu-Mk1</span>
               <div className="ml-auto flex items-center gap-2">
                 <WorksheetHeaderButton />
-                <FlagsHeaderButton hasNew={flagsHasNew} />
+                <FlagsHeaderButton />
               </div>
             </header>
 

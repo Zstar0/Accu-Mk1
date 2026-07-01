@@ -1,10 +1,11 @@
-import { useEffect, useState } from 'react'
+import { useEffect } from 'react'
 import { useQueryClient, type QueryClient } from '@tanstack/react-query'
 import { useFlagStream, type FlagStreamEvent } from '@/lib/flag-stream'
 import { flagKeys } from '@/hooks/use-flags'
 import { flagTypeKeys } from '@/services/flag-types'
 import { useUIStore } from '@/store/ui-store'
 import { useAuthStore } from '@/store/auth-store'
+import { useFlagUnseen } from '@/components/flags/use-flag-unseen'
 import { toast } from 'sonner'
 import { flagTypeDef, type FlagTypeDef } from '@/components/flags/flag-catalog'
 import type { FlagType } from '@/lib/flags-api'
@@ -127,25 +128,32 @@ function flyToFlagsButton(color: string) {
 /**
  * App-scope SSE glue. Mounts the flag stream once, refreshes all flag queries on
  * every event (so open lists/threads update in place), and — for events
- * relevant to the current user that they aren't already looking at — raises the
- * glow signal, a toast, and (when the flyout is closed) the fly-home flourish.
+ * relevant to the current user that they aren't already looking at — marks the
+ * flag unseen (persisted → drives the header pulse across reloads), raises a
+ * toast, and (when the flyout is closed) the fly-home flourish.
  *
  * Relevance = assignee or creator is me. "Watching"-based relevance is deferred:
  * the event payload doesn't carry the viewer's watch set, so we can't decide it
  * client-side without extra state (documented gap — lists still update in place).
  *
- * Returns `hasNew` for the header button glow.
+ * The header pulse now reads from the persisted `useFlagUnseen` store, so this
+ * hook is a pure side-effect (no return): mount it once at app scope.
  */
-export function useFlagStreamGlue(): boolean {
+export function useFlagStreamGlue(): void {
   const queryClient = useQueryClient()
-  const [hasNew, setHasNew] = useState(false)
 
-  // Opening the flyout is where you see what's new — clear the glow on the
-  // closed→open transition. Driven by a store subscription (not a setState in an
-  // effect body) so it stays off React's render path.
+  // Opening the flyout is where you see what's new: snapshot the unseen set into
+  // `justOpened` (so the pinged rows can pulse) and clear the persisted set (so
+  // the bar pulse stops). Closing drops that snapshot so a re-open doesn't
+  // re-pulse. Driven by a store subscription (not setState in an effect body) so
+  // it stays off React's render path.
   useEffect(() => {
     return useUIStore.subscribe((state, prev) => {
-      if (state.flagsFlyoutOpen && !prev.flagsFlyoutOpen) setHasNew(false)
+      if (state.flagsFlyoutOpen && !prev.flagsFlyoutOpen) {
+        useFlagUnseen.getState().acknowledge()
+      } else if (!state.flagsFlyoutOpen && prev.flagsFlyoutOpen) {
+        useFlagUnseen.getState().clearJustOpened()
+      }
     })
   }, [])
 
@@ -173,12 +181,12 @@ export function useFlagStreamGlue(): boolean {
 
     if (relevant && !showingThisThread && !supersededByAssign) {
       const def = resolveTypeDef(queryClient, e.flag.type)
-      setHasNew(true)
+      // Persist the ping: survives reload, and drives the header pulse
+      // synchronously (independent of whether the fly animation runs).
+      useFlagUnseen.getState().markUnseen(e.flag_id)
       // The toast owns the fly-home now: it fires on the toast's auto-close
       // (as it slides away), and clicking the toast opens this flag instead.
       notifyForEvent(e, me, def)
     }
   })
-
-  return hasNew
 }

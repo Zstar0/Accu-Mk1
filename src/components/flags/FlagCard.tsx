@@ -31,13 +31,19 @@ import { FlagAvatar } from '@/components/flags/FlagAvatar'
  *
  * Note: the list API (`FlagResponse`) exposes neither a comment count nor a
  * read/unread flag, so `unread` is a forward-looking prop, off by default.
+ *
+ * `highlight` briefly pulses the card when the flyout opens onto a flag the user
+ * was just pinged about (driven by the `justOpened` snapshot). Keyed by flag id
+ * at the call site, so a data refetch won't replay the animation.
  */
 export function FlagCard({
   flag,
   unread = false,
+  highlight = false,
 }: {
   flag: FlagResponse
   unread?: boolean
+  highlight?: boolean
 }) {
   const users = useFlagUsers()
   const typesMap = useFlagTypesMap()
@@ -75,7 +81,10 @@ export function FlagCard({
           useUIStore.getState().openFlagThread(flag.id)
         }
       }}
-      className="group relative flex gap-3 rounded-lg p-2.5 hover:bg-muted/60 cursor-pointer transition-colors"
+      className={cn(
+        'group relative flex gap-3 rounded-lg p-2.5 hover:bg-muted/60 cursor-pointer transition-colors',
+        highlight && 'flag-row-pulse'
+      )}
     >
       <div
         className="w-[3px] shrink-0 rounded-full"

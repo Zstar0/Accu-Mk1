@@ -5,6 +5,7 @@ import { useFlagSummary } from '@/hooks/use-flags'
 import { useUIStore } from '@/store/ui-store'
 import { flagTypeDef } from '@/components/flags/flag-catalog'
 import { useFlagTypes, useFlagTypesMap } from '@/services/flag-types'
+import { useFlagUnseen } from '@/components/flags/use-flag-unseen'
 
 /** Stable DOM id so the toast fly-home animation (Task 7) can locate the
  *  button to fly into. */
@@ -13,12 +14,15 @@ export const FLAGS_BUTTON_ID = 'flags-header-button'
 /**
  * Flags entry button — sits beside Worksheets in the top bar. Renders one small
  * colored count chip per non-zero flag type (the segmented-counts design, A in
- * toolbar-badge.html), pulses when a relevant event has arrived while the flyout
- * is closed, and opens the flyout on click.
+ * toolbar-badge.html), pulses when the user has been pinged about a flag they
+ * haven't looked at (persisted → survives reload), and opens the flyout on click.
  */
-export function FlagsHeaderButton({ hasNew = false }: { hasNew?: boolean }) {
+export function FlagsHeaderButton() {
   const { data: summary } = useFlagSummary()
   const flyoutOpen = useUIStore(state => state.flagsFlyoutOpen)
+  // Standing "you have unseen pings" signal, persisted across reloads. Cleared
+  // when the flyout opens (acknowledge()), so it only nags until you look.
+  const hasUnseen = useFlagUnseen(state => state.unseenIds.length > 0)
   // Color/label resolution (incl. inactive types + static fallback) and the
   // type rows (for sort_order). Both hooks share one query cache entry.
   const typesMap = useFlagTypesMap()
@@ -34,9 +38,9 @@ export function FlagsHeaderButton({ hasNew = false }: { hasNew?: boolean }) {
   const chips = Object.keys(byType)
     .filter(slug => (byType[slug] ?? 0) > 0)
     .sort((a, b) => orderOf(a) - orderOf(b) || a.localeCompare(b))
-  // Glow is tied to NEW arrivals, not a standing count — and never while the
+  // Glow is tied to UNSEEN pings, not a standing count — and never while the
   // flyout (where you'd see them) is already open.
-  const glow = hasNew && !flyoutOpen
+  const glow = hasUnseen && !flyoutOpen
 
   return (
     <Button

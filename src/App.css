@@ -134,6 +134,24 @@ input:-webkit-autofill:active {
   }
 }
 
+/* A row the user was just pinged about pulses when the flyout opens, so what's
+   new stands out. Finite (rests after a few beats, no fill so it reverts to the
+   row's own hover/rest bg); blue = the established "new/unread" cue here. Keyed
+   by flag id at the call site, so a data refetch won't replay it. */
+.flag-row-pulse {
+  animation: flag-row-pulse 1.1s ease-out 3;
+}
+@keyframes flag-row-pulse {
+  0% {
+    background-color: rgba(59, 130, 246, 0.22);
+    box-shadow: inset 0 0 0 1px rgba(59, 130, 246, 0.55);
+  }
+  100% {
+    background-color: transparent;
+    box-shadow: inset 0 0 0 1px transparent;
+  }
+}
+
 /* Comment slide-in for the thread composer (flag-thread-dark.html). Each
    comment animates once when its node first mounts — keyed by id, so only a
    newly-sent comment animates, not the whole list on refetch. */
@@ -155,6 +173,7 @@ input:-webkit-autofill:active {
   .flags-glow,
   .flags-bump,
   .flags-entity-glow,
+  .flag-row-pulse,
   .flag-cmt-in {
     animation: none;
   }
