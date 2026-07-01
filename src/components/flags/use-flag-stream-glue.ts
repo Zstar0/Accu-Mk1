@@ -8,7 +8,8 @@ import { useAuthStore } from '@/store/auth-store'
 import { useFlagUnseen } from '@/components/flags/use-flag-unseen'
 import { toast } from 'sonner'
 import { flagTypeDef, type FlagTypeDef } from '@/components/flags/flag-catalog'
-import type { FlagType } from '@/lib/flags-api'
+import { flagToastBody } from '@/components/flags/flag-toast'
+import type { FlagTab, FlagType } from '@/lib/flags-api'
 import { FLAGS_BUTTON_ID } from '@/components/flags/FlagsHeaderButton'
 
 /** Resolve a type slug → {label,color,kind} at event time, reading the managed
@@ -50,7 +51,7 @@ function notifyForEvent(
 ) {
   const title = toastTitle(e, me)
   const opts = {
-    description: e.flag.title,
+    description: flagToastBody(e.flag, def),
     // Click the toast → open the flyout to this flag's thread.
     onClick: () => useUIStore.getState().openFlagThread(e.flag_id),
     // The fly-home flourish waits until the toast auto-dismisses (starts to
@@ -181,9 +182,13 @@ export function useFlagStreamGlue(): void {
 
     if (relevant && !showingThisThread && !supersededByAssign) {
       const def = resolveTypeDef(queryClient, e.flag.type)
+      // Which triage tab holds this flag for me — the flyout's auto-jump target.
+      // Relevance is assignee-or-creator, so if it isn't mine-as-assignee it's
+      // mine-as-creator → the "Raised by me" tab.
+      const tab: FlagTab = e.flag.assignee_id === me ? 'assigned' : 'raised'
       // Persist the ping: survives reload, and drives the header pulse
       // synchronously (independent of whether the fly animation runs).
-      useFlagUnseen.getState().markUnseen(e.flag_id)
+      useFlagUnseen.getState().markUnseen(e.flag_id, tab)
       // The toast owns the fly-home now: it fires on the toast's auto-close
       // (as it slides away), and clicking the toast opens this flag instead.
       notifyForEvent(e, me, def)
