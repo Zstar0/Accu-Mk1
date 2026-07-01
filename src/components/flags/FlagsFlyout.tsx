@@ -291,91 +291,94 @@ export function FlagsFlyout() {
               </div>
             ) : (
               <div className="min-h-0 flex-1 overflow-auto p-2">
-              {!isLoading && !isError && hasFlags && (
-                <div className="px-1 pb-1.5 text-[11px] text-muted-foreground">
-                  {visibleFlags.length} of {total}
-                </div>
-              )}
-
-              {isLoading && (
-                <div className="space-y-2 p-2">
-                  <Skeleton className="h-16 w-full" />
-                  <Skeleton className="h-16 w-full" />
-                  <Skeleton className="h-16 w-full" />
-                </div>
-              )}
-
-              {isError && (
-                <div className="p-6 text-center">
-                  <p className="text-sm text-muted-foreground">
-                    Couldn’t load flags.
-                  </p>
-                  <button
-                    type="button"
-                    onClick={() => refetch()}
-                    className="mt-2 text-xs font-semibold text-primary hover:underline"
-                  >
-                    Retry
-                  </button>
-                </div>
-              )}
-
-              {!isLoading &&
-                !isError &&
-                flags &&
-                flags.length === 0 &&
-                (scoped ? (
-                  <div className="flex flex-col items-center justify-center px-6 py-12 text-center">
-                    <Flag className="mb-3 h-8 w-8 text-muted-foreground/30" />
-                    <p className="text-sm font-semibold">No flags yet</p>
-                    <p className="mt-1 mb-3 text-xs text-muted-foreground">
-                      No flags on {scopedLabel} yet — raise one.
-                    </p>
-                    {filtering ? (
-                      <RaiseFlagButton
-                        entityType={entityFilter.type}
-                        entityId={entityFilter.id}
-                      />
-                    ) : (
-                      <RaiseFlagButton candidates={sampleCandidates} />
-                    )}
+                {!isLoading && !isError && hasFlags && (
+                  <div className="px-1 pb-1.5 text-[11px] text-muted-foreground">
+                    {visibleFlags.length} of {total}
                   </div>
-                ) : (
+                )}
+
+                {isLoading && (
+                  <div className="space-y-2 p-2">
+                    <Skeleton className="h-16 w-full" />
+                    <Skeleton className="h-16 w-full" />
+                    <Skeleton className="h-16 w-full" />
+                  </div>
+                )}
+
+                {isError && (
+                  <div className="p-6 text-center">
+                    <p className="text-sm text-muted-foreground">
+                      Couldn’t load flags.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => refetch()}
+                      className="mt-2 text-xs font-semibold text-primary hover:underline"
+                    >
+                      Retry
+                    </button>
+                  </div>
+                )}
+
+                {!isLoading &&
+                  !isError &&
+                  flags &&
+                  flags.length === 0 &&
+                  (scoped ? (
+                    <div className="flex flex-col items-center justify-center px-6 py-12 text-center">
+                      <Flag className="mb-3 h-8 w-8 text-muted-foreground/30" />
+                      <p className="text-sm font-semibold">No flags yet</p>
+                      <p className="mt-1 mb-3 text-xs text-muted-foreground">
+                        No flags on {scopedLabel} yet — raise one.
+                      </p>
+                      {filtering ? (
+                        <RaiseFlagButton
+                          entityType={entityFilter.type}
+                          entityId={entityFilter.id}
+                        />
+                      ) : (
+                        <RaiseFlagButton candidates={sampleCandidates} />
+                      )}
+                    </div>
+                  ) : (
+                    <div className="flex flex-col items-center justify-center px-6 py-12 text-center">
+                      <Flag className="mb-3 h-8 w-8 text-muted-foreground/30" />
+                      <p className="text-sm font-semibold">No flags here</p>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        {tab === 'assigned'
+                          ? 'Nothing is assigned to you right now.'
+                          : 'This tab is empty.'}
+                      </p>
+                    </div>
+                  ))}
+
+                {filteredOut && (
                   <div className="flex flex-col items-center justify-center px-6 py-12 text-center">
                     <Flag className="mb-3 h-8 w-8 text-muted-foreground/30" />
-                    <p className="text-sm font-semibold">No flags here</p>
+                    <p className="text-sm font-semibold">No matching flags</p>
                     <p className="mt-1 text-xs text-muted-foreground">
-                      {tab === 'assigned'
-                        ? 'Nothing is assigned to you right now.'
-                        : 'This tab is empty.'}
+                      No flags match these filters — adjust them.
                     </p>
                   </div>
-                ))}
+                )}
 
-              {filteredOut && (
-                <div className="flex flex-col items-center justify-center px-6 py-12 text-center">
-                  <Flag className="mb-3 h-8 w-8 text-muted-foreground/30" />
-                  <p className="text-sm font-semibold">No matching flags</p>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    No flags match these filters — adjust them.
-                  </p>
-                </div>
-              )}
-
-              {!isLoading &&
-                !isError &&
-                visibleFlags.length > 0 &&
-                (viewMode === 'table' ? (
-                  <FlagTable flags={visibleFlags} highlightIds={highlightIds} />
-                ) : (
-                  visibleFlags.map(flag => (
-                    <FlagCard
-                      key={flag.id}
-                      flag={flag}
-                      highlight={highlightIds.has(flag.id)}
+                {!isLoading &&
+                  !isError &&
+                  visibleFlags.length > 0 &&
+                  (viewMode === 'table' ? (
+                    <FlagTable
+                      flags={visibleFlags}
+                      highlightIds={highlightIds}
                     />
-                  ))
-                ))}
+                  ) : (
+                    visibleFlags.map(flag => (
+                      <FlagCard
+                        key={flag.id}
+                        flag={flag}
+                        highlight={highlightIds.has(flag.id)}
+                      />
+                    ))
+                  ))}
               </div>
             )}
           </>

@@ -7,9 +7,11 @@ vi.mock('@/hooks/use-flags', () => ({
 }))
 // Row pulls users/types/auth — stub to keep the feed test focused.
 vi.mock('@/components/flags/FlagActivityRow', () => ({
-  FlagActivityRow: ({ item }: { item: { id: number; flag: { title: string } } }) => (
-    <div>{item.flag.title}</div>
-  ),
+  FlagActivityRow: ({
+    item,
+  }: {
+    item: { id: number; flag: { title: string } }
+  }) => <div>{item.flag.title}</div>,
 }))
 
 const page = (titles: string[], next: string | null) => ({
@@ -31,9 +33,8 @@ describe('FlagActivityFeed', () => {
       hasNextPage: true,
       isFetchingNextPage: false,
     })
-    const { FlagActivityFeed } = await import(
-      '@/components/flags/FlagActivityFeed'
-    )
+    const { FlagActivityFeed } =
+      await import('@/components/flags/FlagActivityFeed')
     render(<FlagActivityFeed />)
     expect(screen.getByText('a')).toBeInTheDocument()
     fireEvent.click(screen.getByText('Load more'))
@@ -50,9 +51,8 @@ describe('FlagActivityFeed', () => {
       hasNextPage: false,
       isFetchingNextPage: false,
     })
-    const { FlagActivityFeed } = await import(
-      '@/components/flags/FlagActivityFeed'
-    )
+    const { FlagActivityFeed } =
+      await import('@/components/flags/FlagActivityFeed')
     render(<FlagActivityFeed />)
     expect(screen.getByText('No activity yet')).toBeInTheDocument()
   })

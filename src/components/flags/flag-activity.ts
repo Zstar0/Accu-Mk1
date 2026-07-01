@@ -18,7 +18,8 @@ export function activityVerb(
       return 'raised this flag'
     case 'assigned': {
       const toId = to != null ? Number(to) : null
-      if (toId != null && me != null && toId === me) return 'assigned this to you'
+      if (toId != null && me != null && toId === me)
+        return 'assigned this to you'
       return `assigned this to ${opts.nameOf(toId)}`
     }
     case 'unassigned':
