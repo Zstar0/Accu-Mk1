@@ -11,8 +11,7 @@ import pytest
 from sqlalchemy import select
 
 from database import SessionLocal
-from models import AnalysisService, Department, LimsSample, LimsSubSample
-from catalog.departments import department_id_by_name
+from models import LimsSample, LimsSubSample
 from sub_samples.service import derive_base_demand
 from lims_analyses.seeder import select_services_for_role, _micro_group_keywords
 
@@ -71,7 +70,7 @@ def test_new_micro_services_excluded_from_hplc_mirror(db, monkeypatch):
         wp_services={"hplcpurity_identity": True}, parent_sample_id="X", commit=False,
     )
     seeded = {r.keyword for r in inserted}
-    assert seeded.isdisjoint({"STER-USP71", "PCR-FUNGI", "PCR-BACTERIA"})
+    assert seeded == {"HPLC-ID"}
 
 
 # ── New micro groups land in the micro inbox lane (Department-keyed) ──────────

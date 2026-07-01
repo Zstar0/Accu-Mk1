@@ -33,12 +33,11 @@ def _members(db, group):
     ).scalars().all())
 
 
-def test_usp71_sla_tier_seeded():
-    with SessionLocal() as db:
-        tier = db.execute(select(SlaTier).where(SlaTier.name == "Sterility USP<71>")).scalar_one_or_none()
-        assert tier is not None
-        assert tier.target_minutes == 20160
-        assert tier.is_default is False
+def test_usp71_sla_tier_seeded(db):
+    tier = db.execute(select(SlaTier).where(SlaTier.name == "Sterility USP<71>")).scalar_one_or_none()
+    assert tier is not None
+    assert tier.target_minutes == 20160
+    assert tier.is_default is False
 
 
 def test_native_usp71_service(db):

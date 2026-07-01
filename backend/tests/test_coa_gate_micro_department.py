@@ -90,6 +90,7 @@ def test_returns_exactly_microbiology_department_keywords(db):
         select(AnalysisService.keyword).where(
             AnalysisService.department_id == micro_id,
             AnalysisService.keyword.isnot(None),
+            AnalysisService.keyword != "",
         )
     ).scalars().all())
     assert _micro_group_keywords(db) == expected
