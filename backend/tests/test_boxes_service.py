@@ -94,15 +94,17 @@ def test_delete_empty_box_removes_it(db):
     assert service.list_for_order(db, "WP-20066") == []
 
 
-def test_delete_box_with_vials_is_rejected(db):
+def test_delete_box_with_vials_unassigns_and_removes(db):
     p = LimsSample(sample_id="P-0602", external_lims_uid="u-602")
     db.add(p); db.flush()
     v = _vial(db, p, 1, "hplc")
     box = service.next_box(db, "WP-20066", "hplc", user_id=1)
     service.assign_vials(db, box.id, [v.sample_id])
-    with pytest.raises(service.BoxNotEmptyError):
-        service.delete_box(db, box.id)
-    assert len(service.list_for_order(db, "WP-20066")) == 1
+    # Deleting a non-empty box returns its vials to Unboxed, then removes the box.
+    service.delete_box(db, box.id)
+    assert service.list_for_order(db, "WP-20066") == []
+    db.refresh(v)
+    assert v.box_id is None
 
 
 def test_delete_missing_box_raises_lookup(db):

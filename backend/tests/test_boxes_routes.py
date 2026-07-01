@@ -5,7 +5,6 @@ from fastapi.testclient import TestClient
 
 from main import app
 from auth import get_current_user
-from boxes import service
 
 
 @pytest.fixture(autouse=True)
@@ -58,11 +57,12 @@ def test_delete_empty_box_returns_204():
     assert resp.content == b""
 
 
-def test_delete_box_with_vials_is_rejected():
-    with patch("boxes.routes.service.delete_box",
-               side_effect=service.BoxNotEmptyError("box 3 still has 2 vial(s)")):
+def test_delete_box_with_vials_returns_204():
+    # Deleting a box with vials is now allowed (service returns them to Unboxed),
+    # so the route responds 204 — there is no 409 rejection path anymore.
+    with patch("boxes.routes.service.delete_box", return_value=None):
         resp = client.delete("/api/boxes/3")
-    assert resp.status_code == 409
+    assert resp.status_code == 204
 
 
 def test_delete_missing_box_404():

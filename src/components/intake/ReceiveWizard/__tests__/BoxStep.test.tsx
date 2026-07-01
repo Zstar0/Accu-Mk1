@@ -215,8 +215,8 @@ describe('BoxStep — capacity-driven boxing', () => {
     setupBackend([vial('P-101', 'hplc')])
     renderBoxStep()
 
-    // Auto-created box has vial_count 0 → the remove control shows.
-    const removeBtn = await screen.findByLabelText('Remove box')
+    // Every box now shows a Delete control (trashcan).
+    const removeBtn = await screen.findByLabelText('Delete box')
     fireEvent.click(removeBtn)
 
     await waitFor(() => expect(mockDeleteBox).toHaveBeenCalledTimes(1))

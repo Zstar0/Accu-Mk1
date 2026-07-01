@@ -170,13 +170,6 @@ export function BoxStep({ orderKey, orderLabel, clientId, sampleIds }: Props) {
   const handleRemoveBox = async (box: LimsBox) => {
     await deleteBox(box.id)
     await qc.invalidateQueries({ queryKey: ['order-boxes', orderKey] })
-  }
-
-  const handleClearBox = async (box: LimsBox) => {
-    const ids = vials.filter(v => v.box_id === box.id).map(v => v.sample_id)
-    if (ids.length === 0) return
-    await unassignVialsFromBox(ids)
-    await qc.invalidateQueries({ queryKey: ['order-boxes', orderKey] })
     await qc.invalidateQueries({ queryKey: ['order-vials', orderKey] })
   }
 
@@ -209,7 +202,6 @@ export function BoxStep({ orderKey, orderLabel, clientId, sampleIds }: Props) {
                     onCapacityChange={n => setCapacities(c => ({ ...c, [b.id]: n }))}
                     onAutoAssign={() => void handleAutoAssign(b)}
                     onRemove={() => void handleRemoveBox(b)}
-                    onClear={() => void handleClearBox(b)}
                   />
                 ))}
               </div>
@@ -286,10 +278,9 @@ interface BoxCardProps {
   onCapacityChange: (n: number) => void
   onAutoAssign: () => void
   onRemove: () => void
-  onClear: () => void
 }
 
-function BoxCard({ box, boxVials, clientName, capacity, activeId, onCapacityChange, onAutoAssign, onRemove, onClear }: BoxCardProps) {
+function BoxCard({ box, boxVials, clientName, capacity, activeId, onCapacityChange, onAutoAssign, onRemove }: BoxCardProps) {
   const { setNodeRef, isOver } = useDroppable({ id: String(box.id) })
   const { printNode } = usePrintLabel()
   return (
@@ -305,17 +296,11 @@ function BoxCard({ box, boxVials, clientName, capacity, activeId, onCapacityChan
             ) }}>
             {box.printed_at ? 'Reprint' : 'Print label'}
           </Button>
-          {boxVials.length > 0 && (
-            <Button size="sm" variant="ghost" aria-label="Clear box"
-              className="text-destructive hover:text-destructive"
-              onClick={onClear}>
-              <Trash2 className="h-4 w-4" />
-            </Button>
-          )}
-          {box.vial_count === 0 && (
-            <Button size="sm" variant="ghost" aria-label="Remove box"
-              onClick={onRemove}>×</Button>
-          )}
+          <Button size="sm" variant="ghost" aria-label="Delete box"
+            className="text-destructive hover:text-destructive"
+            onClick={onRemove}>
+            <Trash2 className="h-4 w-4" />
+          </Button>
         </div>
       </div>
       <div className="text-xs text-muted-foreground">{box.vial_count} vials</div>

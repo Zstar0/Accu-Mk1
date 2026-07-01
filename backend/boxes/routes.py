@@ -74,5 +74,3 @@ def delete_box(box_id: int, db: Session = Depends(get_db), user=Depends(get_curr
         service.delete_box(db, box_id)
     except LookupError as e:
         raise HTTPException(status_code=404, detail=str(e))
-    except service.BoxNotEmptyError as e:
-        raise HTTPException(status_code=409, detail=str(e))
