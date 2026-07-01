@@ -11,8 +11,11 @@ import { VialPanel } from './VialPanel'
 import { PrintStep } from './PrintStep'
 import { AssignStep } from './AssignStep'
 import { VialDetailsTab, useCloseAndNavigate } from './VialDetailsTab'
+import { PackagingPanel } from './PackagingPanel'
+import { PackagingImagesList } from './PackagingImagesList'
+import type { PackagingPhoto } from '@/lib/api'
 
-type Phase = 'capture' | 'assign' | 'print' | 'details'
+type Phase = 'packaging' | 'capture' | 'assign' | 'print' | 'details'
 
 interface Props {
   parent: ParentInfo
@@ -38,6 +41,7 @@ export function ReceiveWizard({
   const parentDetails = useParentSampleDetails(parent.sample_id)
   const [phase, setPhase] = useState<Phase>(initialPhase)
   const [editingSampleId, setEditingSampleId] = useState<string | null>(null)
+  const [editingPackaging, setEditingPackaging] = useState<PackagingPhoto | null>(null)
 
   // Sub Sample Details table reads assignment_role off the wizard's local
   // vials state. AssignStep mutates roles via its own PATCH calls and never
@@ -110,6 +114,7 @@ export function ReceiveWizard({
         activationMode="manual"
       >
         <TabsList>
+          <TabsTrigger value="packaging">Packaging</TabsTrigger>
           <TabsTrigger value="capture">Vial Management</TabsTrigger>
           <TabsTrigger value="assign" disabled={!assignmentEnabled}>Assignment</TabsTrigger>
           <TabsTrigger value="print" disabled={printList.length === 0}>Print Labels</TabsTrigger>
@@ -136,7 +141,15 @@ export function ReceiveWizard({
 
   // Per-phase body content (right of the persistent sidebar).
   let body: React.ReactNode = null
-  if (phase === 'capture') {
+  if (phase === 'packaging') {
+    body = (
+      <div className="grid grid-cols-[1fr_240px] min-h-0 overflow-hidden">
+        <PackagingPanel parentSampleId={parent.sample_id} editing={editingPackaging}
+          onSaved={() => setEditingPackaging(null)} onCancelEdit={() => setEditingPackaging(null)} />
+        <PackagingImagesList parentSampleId={parent.sample_id} onEdit={setEditingPackaging} />
+      </div>
+    )
+  } else if (phase === 'capture') {
     body = (
       <div className="grid grid-cols-[1fr_240px] min-h-0 overflow-hidden">
         <VialPanel
