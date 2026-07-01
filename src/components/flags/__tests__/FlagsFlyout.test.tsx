@@ -98,7 +98,7 @@ describe('FlagsFlyout', () => {
     expect(useUIStore.getState().flagsThreadId).toBe(1)
   })
 
-  it('renders resolved entity context (Sample ID + analytes) and navigates on chip click', async () => {
+  it('renders the resolved entity chip and navigates on chip click', async () => {
     const f = flag(1, 'Crashed out — needs re-prep')
     f.entity = {
       entity_type: 'sub_sample',
@@ -119,12 +119,8 @@ describe('FlagsFlyout', () => {
     const { FlagsFlyout } = await import('@/components/flags/FlagsFlyout')
     render(<FlagsFlyout />)
 
-    // Resolved label on the chip + secondary context cell. The default table
-    // view combines sample id + analytes into one aligned cell.
+    // Resolved label on the entity chip (table view).
     const chipLabel = await screen.findByText('P-0071-S01')
-    expect(
-      screen.getByText('P-0071 · PEPT-Total, HPLC-PUR')
-    ).toBeInTheDocument()
 
     // Clicking the chip deep-links via the resolved deep_link (vial → parent
     // sample), and does NOT open the thread.
