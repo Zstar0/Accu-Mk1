@@ -420,7 +420,8 @@ export function FlagThread({
               }
               if (e.key === 'Enter') {
                 e.preventDefault()
-                pickMention(mentionCandidates[activeIdx]!)
+                const chosen = mentionCandidates[activeIdx]
+                if (chosen) pickMention(chosen)
                 return
               }
               if (e.key === 'Escape') {
