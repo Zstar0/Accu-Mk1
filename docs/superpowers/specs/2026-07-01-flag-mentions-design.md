@@ -1,34 +1,33 @@
-# Flag System — @mentions in comments (+ watcher live-toasts)
+# Flag System — @mentions in comments
 
 *Design spec. Created 2026-07-01. Part of the Flag System frontend work on PR #28
 (`feat/flag-system-frontend`).*
 
 ## Summary
 
-Let a commenter `@`-mention a specific lab user, who then gets notified **even if
-they aren't assigned to the flag**. Mentioning adds the person as a watcher, so
-they stay looped in. In the same stroke, close the pre-existing "watchers get no
-live toasts" gap: the event payload starts carrying the flag's watcher ids, so
-the notification glue can treat watching (and mentions) as relevance — all
-decided client-side from the payload. Additive only.
+Let a commenter `@`-mention a specific lab user, who then gets a **live
+notification even if they aren't assigned to the flag**. The mention also adds
+them as a watcher, so the flag surfaces in their Watching tab + Activity feed —
+but *only* the explicit mention pings live; watching does not raise toasts.
+Additive only.
 
 ## Motivation
 
-Comments today notify only the assignee/creator (the glue can't see watchers, and
-mentions don't exist). You can't pull a specific person into a flag they're not
-on. This adds a first-class "call someone out" path and — because mentions make
-the target a watcher — it forces us to make *watching* actually deliver live
-notifications (currently a documented gap).
+Comments today notify only the assignee/creator; you can't pull a specific person
+into a flag they're not on. This adds a first-class "call someone out" path — the
+mentioned user is notified live and looped in as a watcher.
 
 ## Decisions (locked with the user)
 
 - **Compose = `@`-autocomplete picker** (not freehand text parsing): unambiguous
   resolution to a user id.
 - **Mention adds the user as a watcher** (participant), not a one-time ping — they
-  keep getting updates (Watching tab, Activity feed, and — via the change below —
-  live toasts).
-- **Close the watch-set gap now:** emit watcher ids in the payload so *any*
-  watcher gets live toasts, not just mentioned users.
+  keep seeing updates via the Watching tab + Activity feed.
+- **Watchers do NOT get live toasts.** Only an explicit mention notifies live
+  (a toast per watched-flag event was judged too noisy). The mention is the single
+  live ping; follow-ups reach the watcher quietly via Watching/Activity. Relevance
+  stays **assignee OR creator OR mentioned** — no watcher clause, no payload change
+  to carry watcher ids.
 
 ## Data model
 
@@ -39,13 +38,6 @@ notifications (currently a documented gap).
 - No new tables.
 
 ## Backend
-
-### `_flag_summary` — carry watchers (closes the gap for ALL events)
-
-`service._flag_summary(flag)` gains `"watchers": [p.user_id for p in flag.participants]`.
-Every emitted event's `flag` snapshot now lists the current participant ids. (Small
-list; lazy-loaded from the already-attached flag. Applies to every event type, so
-watchers become notifiable everywhere.)
 
 ### `add_comment` — accept + store mentions, add watchers, tag the event
 
@@ -86,29 +78,26 @@ def add_comment(db, *, user, flag_id, body, mention_ids=None):
 ### API + types (`lib/flags-api.ts`)
 
 - `CommentResponse` gains `mentions: number[]`.
-- `FlagSnapshot` (in `lib/flag-stream.ts`) gains `watchers: number[]` (default `[]`).
 - `addComment(id, body, mentionIds?)` sends `{ body, mention_ids }`.
 
 ### Notification glue (`use-flag-stream-glue.ts`)
 
-Relevance widens to include watcher + mention, all from the payload:
+Relevance widens to include **mention** only (no watcher clause):
 
 ```
 const mentions = Array.isArray(e.details?.mentions) ? e.details.mentions as number[] : []
-const watchers = e.flag.watchers ?? []
 const iAmMentioned = me != null && mentions.includes(me)
 const relevant = me != null && !isMyAction && (
-  e.flag.assignee_id === me || e.flag.created_by === me ||
-  watchers.includes(me) || iAmMentioned
+  e.flag.assignee_id === me || e.flag.created_by === me || iAmMentioned
 )
 ```
 
-- Toast title: when `iAmMentioned` on a `commented` event → **"{Actor} mentioned
-  you"** (else the existing titles). The persisted unseen-pulse + fly all work
-  unchanged (they key off relevance).
-- The `markUnseen` tab pick stays `assigned`/`raised`; a watcher/mention lands under
+- Toast title: when `iAmMentioned` → **"You were mentioned"** (else the existing
+  titles). The persisted unseen-pulse + fly all work unchanged (they key off
+  relevance).
+- The `markUnseen` tab pick stays `assigned`/`raised`; a mention lands under the
   `assigned` fallback (fine — the toast + bar are the signal; the row also appears
-  in Watching/Activity).
+  in Watching/Activity for the now-watching user).
 
 ### Compose — `@`-autocomplete (`FlagThread.tsx` + a small `mention` helper)
 
@@ -135,15 +124,13 @@ const relevant = me != null && !isMyAction && (
   participant (deduped, idempotent on re-mention), and the `commented` event's
   `details.mentions` lists them.
 - Invalid / unknown ids are dropped.
-- `_flag_summary` includes `watchers` = current participant ids (asserted via any
-  event payload).
 
 **Frontend (vitest):**
 - `mention-parse.test.ts` — `activeMentionQuery` (open token at caret, closes on
   space; none when no `@`); `mentionIdsInBody` (keeps referenced, drops removed).
-- `renderCommentBody` — splits a body into text + mention chips.
-- Glue relevance test (extend existing coverage): an event where `me ∈
-  flag.watchers` or `me ∈ details.mentions` is relevant; self-actor still suppressed.
+- `renderCommentSegments` — splits a body into text + mention chips.
+- `flag-relevance.test.ts`: an event where `me ∈ details.mentions` is relevant;
+  assignee/creator relevant; self-actor suppressed; unrelated user not relevant.
 
 ## ISO 17025 alignment
 
@@ -161,17 +148,18 @@ const relevant = me != null && !isMyAction && (
 - No `@here` / `@channel` / role mentions.
 - No re-mention reconciliation when a comment is edited (comment edit isn't a
   current feature; mentions are captured at post time).
-- No per-flag mute (a follow-up if watcher toasts prove noisy).
+- **Watchers get no live toasts** (only explicit mentions do). Per-flag mute /
+  opt-in watcher toasts are a possible later follow-up.
 - Mentions notify via the comment event only; no separate "mention inbox".
 
 ## Files
 
-**Backend:** `flags/service.py` (`_flag_summary` watchers, `add_comment` mentions +
-watchers, `_valid_user_ids`), `flags/models.py` (`FlagComment.mentions`),
-`flags/schemas.py` (`CommentRequest.mention_ids`, `CommentResponse.mentions`),
-`flags/routes.py` (pass-through), `database.py` (idempotent `mentions` column),
+**Backend:** `flags/service.py` (`add_comment` mentions + watchers,
+`_valid_user_ids`), `flags/models.py` (`FlagComment.mentions`), `flags/schemas.py`
+(`CommentRequest.mention_ids`, `CommentResponse.mentions`), `flags/routes.py`
+(pass-through), `database.py` (idempotent `mentions` column),
 `tests/test_flags_mentions.py`.
-**Frontend:** `lib/flags-api.ts`, `lib/flag-stream.ts` (`FlagSnapshot.watchers`),
-`components/flags/use-flag-stream-glue.ts` (relevance + title),
+**Frontend:** `lib/flags-api.ts`, `components/flags/use-flag-stream-glue.ts`
+(relevance + title), `components/flags/flag-relevance.ts` (+ test),
 `components/flags/mention-parse.ts` (+ test), `components/flags/FlagThread.tsx`
 (picker + render), `components/flags/__tests__/*`.
