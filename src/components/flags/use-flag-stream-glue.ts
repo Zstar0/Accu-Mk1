@@ -5,7 +5,7 @@ import { flagKeys } from '@/hooks/use-flags'
 import { flagTypeKeys } from '@/services/flag-types'
 import { useUIStore } from '@/store/ui-store'
 import { useAuthStore } from '@/store/auth-store'
-import { notifications } from '@/lib/notifications'
+import { toast } from 'sonner'
 import { flagTypeDef, type FlagTypeDef } from '@/components/flags/flag-catalog'
 import type { FlagType } from '@/lib/flags-api'
 import { FLAGS_BUTTON_ID } from '@/components/flags/FlagsHeaderButton'
@@ -48,11 +48,20 @@ function notifyForEvent(
   def: FlagTypeDef
 ) {
   const title = toastTitle(e, me)
-  if (e.flag.type === 'blocker') notifications.error(title, e.flag.title)
-  else if (e.flag.type === 'critical')
-    notifications.warning(title, e.flag.title)
-  else if (def.kind === 'signal') notifications.success(title, e.flag.title)
-  else notifications.info(title, e.flag.title)
+  const opts = {
+    description: e.flag.title,
+    // Click the toast → open the flyout to this flag's thread.
+    onClick: () => useUIStore.getState().openFlagThread(e.flag_id),
+    // The fly-home flourish waits until the toast auto-dismisses (starts to
+    // slide away) — and only if the user hasn't opened the flyout meanwhile.
+    onAutoClose: () => {
+      if (!useUIStore.getState().flagsFlyoutOpen) flyToFlagsButton(def.color)
+    },
+  }
+  if (e.flag.type === 'blocker') toast.error(title, opts)
+  else if (e.flag.type === 'critical') toast.warning(title, opts)
+  else if (def.kind === 'signal') toast.success(title, opts)
+  else toast.info(title, opts)
 }
 
 /**
@@ -165,13 +174,9 @@ export function useFlagStreamGlue(): boolean {
     if (relevant && !showingThisThread && !supersededByAssign) {
       const def = resolveTypeDef(queryClient, e.flag.type)
       setHasNew(true)
+      // The toast owns the fly-home now: it fires on the toast's auto-close
+      // (as it slides away), and clicking the toast opens this flag instead.
       notifyForEvent(e, me, def)
-      // Fly for ANY relevant event (assignment, comment, status…) when the
-      // flyout is closed — not just 'raised'. The cross-user "assigned to you"
-      // is the common case and it must fly to the Flags bar too.
-      if (!ui.flagsFlyoutOpen) {
-        flyToFlagsButton(def.color)
-      }
     }
   })
 
