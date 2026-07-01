@@ -86,6 +86,22 @@ describe('OrderListRow', () => {
     expect(screen.getByText(/Jun/)).toBeInTheDocument()
   })
 
+  it('renders a single row with the samples/vials sub-line under the order #', () => {
+    const { container } = renderRow(makeGroup(7, 'a@b.com'))
+    // Collapsed to one row — no spanning secondary row remains.
+    expect(container.querySelectorAll('tr')).toHaveLength(1)
+    expect(screen.getByText(/1 sample/)).toBeInTheDocument()
+  })
+
+  it('omits standalone "—" placeholders when client and email are present', async () => {
+    renderRow(makeGroup(7, 'a@b.com'))
+    expect(screen.getByText('acme')).toBeInTheDocument()
+    // Wait for the expected-vials query to settle (it renders "—" only while
+    // loading) so the remaining dash-check reflects steady state.
+    await screen.findByText(/expected vial/)
+    expect(screen.queryByText('—')).toBeNull()
+  })
+
   it('toggles selection via the leading checkbox', () => {
     const onToggle = vi.fn()
     const qc = new QueryClient({

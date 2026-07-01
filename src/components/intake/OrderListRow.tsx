@@ -52,10 +52,10 @@ function worstSampleState(group: EnrichedOrderGroup): string | null {
 }
 
 /**
- * One order's 2-row table item, mirroring `OrderRow` from the Order Status
- * explorer: a primary row (Order #, client + linked email, Created, SLA,
- * Process) over a muted secondary row (sample count, expected vials, sample-type
- * chips). The left border is tinted by the order's worst sample state.
+ * One order's single-row table item, mirroring `OrderRow` from the Order Status
+ * explorer: Order # (with a muted sample-count / expected-vials sub-line), client
+ * + linked email + sample-type chips, Created, SLA, and Process. The left border
+ * is tinted by the order's worst sample state.
  */
 export function OrderListRow({
   group,
@@ -81,95 +81,85 @@ export function OrderListRow({
   )
 
   return (
-    <>
-      <tr
-        data-testid="order-list-row"
-        className={cn(
-          'align-top border-l-3',
-          worst
-            ? (STATE_BORDER_CLASS[worst] ?? 'border-l-transparent')
-            : 'border-l-transparent'
-        )}
-      >
-        <td className="py-3 px-3 align-middle">
-          {selectable ? (
-            <Checkbox
-              aria-label={`Select ${group.orderLabel}`}
-              checked={selected}
-              onCheckedChange={() => onToggle(group.orderKey as string)}
-            />
-          ) : null}
-        </td>
-        <td className="py-3 px-3 whitespace-nowrap font-mono text-sm font-semibold">
-          {group.orderLabel}
-        </td>
-        <td className="py-3 px-3">
-          <div className="flex flex-col gap-0.5">
-            <span className="text-sm">{group.clientId ?? '—'}</span>
-            {email ? (
-              linkEmail ? (
-                <a
-                  href={customerDetailHash(customerId)}
-                  className="text-xs text-primary hover:underline"
-                  title={email}
-                >
-                  {email}
-                </a>
-              ) : (
-                <span className="text-xs text-muted-foreground" title={email}>
-                  {email}
-                </span>
-              )
-            ) : (
-              <span className="text-xs text-muted-foreground">{'—'}</span>
-            )}
-          </div>
-        </td>
-        <td className="py-3 px-3 whitespace-nowrap text-sm text-muted-foreground">
-          {formatDate(order?.created_at ?? null)}
-        </td>
-        <td className="py-3 px-3 whitespace-nowrap align-top">
-          <OrderSlaCell
-            verdict={slaVerdict ?? { color: 'awaiting' }}
-            isLoading={!slaVerdict}
+    <tr
+      data-testid="order-list-row"
+      className={cn(
+        'align-top border-l-3',
+        worst
+          ? (STATE_BORDER_CLASS[worst] ?? 'border-l-transparent')
+          : 'border-l-transparent'
+      )}
+    >
+      <td className="py-3 px-3 align-middle">
+        {selectable ? (
+          <Checkbox
+            aria-label={`Select ${group.orderLabel}`}
+            checked={selected}
+            onCheckedChange={() => onToggle(group.orderKey as string)}
           />
-        </td>
-        <td className="py-3 px-3 whitespace-nowrap text-right">
-          <Button size="sm" onClick={() => onProcess(group)}>
-            Process
-          </Button>
-        </td>
-      </tr>
-      <tr>
-        <td
-          colSpan={6}
-          className="pb-3 px-3 text-xs text-muted-foreground border-l-3 border-l-transparent"
-        >
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-            <span>
-              {group.samples.length} sample
-              {group.samples.length !== 1 ? 's' : ''}
-            </span>
-            <span aria-hidden="true">·</span>
+        ) : null}
+      </td>
+      <td className="py-3 px-3 whitespace-nowrap align-top">
+        <div className="flex flex-col gap-0.5">
+          <span className="font-mono text-sm font-semibold">
+            {group.orderLabel}
+          </span>
+          <span className="text-xs text-muted-foreground">
+            {group.samples.length} sample
+            {group.samples.length !== 1 ? 's' : ''}{' '}
+            <span aria-hidden="true">·</span>{' '}
             <OrderExpectedVials orderNumber={group.orderKey} />
-            {sampleTypes.length > 0 && (
-              <>
-                <span aria-hidden="true">·</span>
-                <span className="flex flex-wrap gap-1">
-                  {sampleTypes.map(t => (
-                    <span
-                      key={t}
-                      className="inline-flex items-center rounded-full border px-2 py-0.5"
-                    >
-                      {t}
-                    </span>
-                  ))}
+          </span>
+        </div>
+      </td>
+      <td className="py-3 px-3">
+        <div className="flex flex-col gap-0.5">
+          {group.clientId ? (
+            <span className="text-sm">{group.clientId}</span>
+          ) : null}
+          {email ? (
+            linkEmail ? (
+              <a
+                href={customerDetailHash(customerId)}
+                className="text-xs text-primary hover:underline"
+                title={email}
+              >
+                {email}
+              </a>
+            ) : (
+              <span className="text-xs text-muted-foreground" title={email}>
+                {email}
+              </span>
+            )
+          ) : null}
+          {sampleTypes.length > 0 && (
+            <span className="flex flex-wrap gap-1 text-xs">
+              {sampleTypes.map(t => (
+                <span
+                  key={t}
+                  className="inline-flex items-center rounded-full border px-2 py-0.5"
+                >
+                  {t}
                 </span>
-              </>
-            )}
-          </div>
-        </td>
-      </tr>
-    </>
+              ))}
+            </span>
+          )}
+        </div>
+      </td>
+      <td className="py-3 px-3 whitespace-nowrap text-sm text-muted-foreground">
+        {formatDate(order?.created_at ?? null)}
+      </td>
+      <td className="py-3 px-3 whitespace-nowrap align-top">
+        <OrderSlaCell
+          verdict={slaVerdict ?? { color: 'awaiting' }}
+          isLoading={!slaVerdict}
+        />
+      </td>
+      <td className="py-3 px-3 whitespace-nowrap text-right">
+        <Button size="sm" onClick={() => onProcess(group)}>
+          Process
+        </Button>
+      </td>
+    </tr>
   )
 }
