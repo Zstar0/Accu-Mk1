@@ -9,11 +9,17 @@ import { useFlagsList, useEntityFlags } from '@/hooks/use-flags'
 import type { FlagTab, FlagResponse } from '@/lib/flags-api'
 import { FlagCard } from '@/components/flags/FlagCard'
 import { FlagThread } from '@/components/flags/FlagThread'
+import { FlagsFilterBar } from '@/components/flags/FlagsFilterBar'
 import {
   RaiseFlagButton,
   type FlagCandidate,
 } from '@/components/flags/RaiseFlagButton'
 import { entityLabel } from '@/components/flags/flag-entity'
+import {
+  filterFlags,
+  EMPTY_FLAG_FILTER,
+  type FlagFilterState,
+} from '@/components/flags/flag-filter'
 
 const TABS: { value: FlagTab; label: string }[] = [
   { value: 'assigned', label: 'Assigned to me' },
@@ -34,6 +40,8 @@ export function FlagsFlyout() {
   const entityFilter = useUIStore(state => state.flagsEntityFilter)
   const samplesFilter = useUIStore(state => state.flagsSamplesFilter)
   const [tab, setTab] = useState<FlagTab>('assigned')
+  // Ephemeral triage filters, local to the flyout — reset when it closes.
+  const [filter, setFilter] = useState<FlagFilterState>(EMPTY_FLAG_FILTER)
 
   const tabQuery = useFlagsList(tab)
   const entityQuery = useEntityFlags(entityFilter?.type, entityFilter?.id, {
@@ -85,11 +93,20 @@ export function FlagsFlyout() {
       }))
     : []
 
+  // Client-side triage filters layered on the fetched list (no API change).
+  const total = flags?.length ?? 0
+  const visibleFlags = flags ? filterFlags(flags, filter) : []
+  const hasFlags = total > 0
+  const filteredOut = hasFlags && visibleFlags.length === 0
+
   return (
     <Sheet
       open={open}
       onOpenChange={isOpen => {
-        if (!isOpen) useUIStore.getState().closeFlagsFlyout()
+        if (!isOpen) {
+          setFilter(EMPTY_FLAG_FILTER)
+          useUIStore.getState().closeFlagsFlyout()
+        }
       }}
     >
       <SheetContent
@@ -149,7 +166,11 @@ export function FlagsFlyout() {
                   </h2>
                   <RaiseFlagButton
                     trigger={
-                      <Button variant="outline" size="sm" className="h-7 gap-1.5">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-7 gap-1.5"
+                      >
                         <Plus className="h-3.5 w-3.5" /> Add Flag
                       </Button>
                     }
@@ -175,8 +196,19 @@ export function FlagsFlyout() {
               </>
             )}
 
+            {/* Filter bar — shown whenever there are flags to triage. */}
+            {!isLoading && !isError && hasFlags && (
+              <FlagsFilterBar value={filter} onChange={setFilter} />
+            )}
+
             {/* List */}
             <div className="min-h-0 flex-1 overflow-auto p-2">
+              {!isLoading && !isError && hasFlags && (
+                <div className="px-1 pb-1.5 text-[11px] text-muted-foreground">
+                  {visibleFlags.length} of {total}
+                </div>
+              )}
+
               {isLoading && (
                 <div className="space-y-2 p-2">
                   <Skeleton className="h-16 w-full" />
@@ -232,9 +264,21 @@ export function FlagsFlyout() {
                   </div>
                 ))}
 
+              {filteredOut && (
+                <div className="flex flex-col items-center justify-center px-6 py-12 text-center">
+                  <Flag className="mb-3 h-8 w-8 text-muted-foreground/30" />
+                  <p className="text-sm font-semibold">No matching flags</p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    No flags match these filters — adjust them.
+                  </p>
+                </div>
+              )}
+
               {!isLoading &&
                 !isError &&
-                flags?.map(flag => <FlagCard key={flag.id} flag={flag} />)}
+                visibleFlags.map(flag => (
+                  <FlagCard key={flag.id} flag={flag} />
+                ))}
             </div>
           </>
         )}
