@@ -128,14 +128,16 @@ export function useReceiveWizard(parent: ParentInfo) {
       // "Single-vial check-in policy" section under Save semantics.
       //
       // CONTAINER families (container-parent design): the parent is a pure
-      // report depository and never a physical vial — the first photo still
-      // transitions the parent AR to received (bare: no photo/remarks on it),
-      // but the vial itself becomes S01 via the normal sub-sample path below.
+      // report depository and never a physical vial. Under deferred check-in
+      // the first vial does NOT transition the parent AR — the parent stays
+      // sample_due and is received later via the explicit "Complete Check-In"
+      // step. The vial itself becomes S01 via the normal sub-sample path below.
       if (isFirstVialEver) {
         if (isContainer) {
-          await receiveSenaiteSample(parent.uid, parent.sample_id, null, null)
-          setParentReceivedThisSession(true)
-          // fall through: this physical vial is S01, a real sub-sample
+          // Deferred check-in: the container parent stays sample_due here.
+          // The parent AR is received later via the explicit "Complete
+          // Check-In" step; this first physical vial still becomes S01 via
+          // the normal sub-sample path below.
         } else {
           await receiveSenaiteSample(
             parent.uid,
