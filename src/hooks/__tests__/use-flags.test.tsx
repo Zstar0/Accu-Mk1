@@ -166,12 +166,12 @@ describe('flag mutations invalidate the right keys', () => {
     await waitFor(() => expect(api.listFlags).toHaveBeenCalledTimes(1))
 
     await act(async () => {
-      await result.current.comment.mutateAsync('hello')
+      await result.current.comment.mutateAsync({ body: 'hello', mentionIds: [] })
     })
 
     // Comment touches the thread detail only — the list stays put.
     expect(api.listFlags).toHaveBeenCalledTimes(1)
-    expect(api.addComment).toHaveBeenCalledWith(7, 'hello')
+    expect(api.addComment).toHaveBeenCalledWith(7, 'hello', [])
     qc.clear()
   })
 
