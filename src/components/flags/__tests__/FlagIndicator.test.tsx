@@ -18,6 +18,8 @@ vi.mock('@/services/flag-types', () => ({
     blocker: { label: 'Blocker', color: '#e5484d', kind: 'issue' },
     question: { label: 'Question', color: '#3b82f6', kind: 'issue' },
   }),
+  // RaiseFlagButton (rendered for the unflagged indicator) reads the catalog.
+  useFlagTypes: () => ({ data: [] }),
 }))
 
 const EMPTY: FlagRollup = {
@@ -57,7 +59,7 @@ describe('FlagIndicator', () => {
     })
   })
 
-  it('unflagged sample → dim, still-clickable flag that opens the scoped flyout', async () => {
+  it('unflagged sample → clicking opens the Raise-a-flag compose, not the flyout', async () => {
     const { FlagIndicator } = await import('@/components/flags/FlagIndicator')
     render(<FlagIndicator scope={{ kind: 'sample', sampleId: 'P-0001' }} />)
 
@@ -66,12 +68,10 @@ describe('FlagIndicator', () => {
     expect(btn).toHaveAccessibleName(/raise one/i)
 
     fireEvent.click(btn)
-    expect(useUIStore.getState().flagsEntityFilter).toEqual({
-      type: 'sample',
-      id: 'P-0001',
-      includeDescendants: true,
-    })
-    expect(useUIStore.getState().flagsFlyoutOpen).toBe(true)
+    // The raise compose opens; the scoped flyout does NOT.
+    expect(await screen.findByText('Raise a flag')).toBeInTheDocument()
+    expect(useUIStore.getState().flagsFlyoutOpen).toBe(false)
+    expect(useUIStore.getState().flagsEntityFilter).toBeNull()
   })
 
   it('flagged sample → colored flag with count = dominant color, opens scoped flyout', async () => {

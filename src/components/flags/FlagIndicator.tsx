@@ -8,6 +8,7 @@ import {
 } from '@/hooks/use-open-flags-by-sample'
 import { useFlagTypesMap } from '@/services/flag-types'
 import { flagTypeDef } from '@/components/flags/flag-catalog'
+import { RaiseFlagButton } from '@/components/flags/RaiseFlagButton'
 import {
   Tooltip,
   TooltipContent,
@@ -21,12 +22,12 @@ import {
  * fetch.
  *
  * - **Flagged** → a small flag in the dominant type's color, plus a tiny count
- *   when >1. Tooltip carries the breakdown.
- * - **Unflagged** → a dim flag (brightens on hover) at the same hit target, so
- *   the user can still click through to **raise** one from here.
- *
- * Click opens the flyout scoped to this sample (`openFlagsForEntity`) or, for an
- * order, rolled up across its samples (`openFlagsForSamples`).
+ *   when >1. Tooltip carries the breakdown. Click opens the flyout scoped to
+ *   this sample (`openFlagsForEntity`) or, for an order, rolled up across its
+ *   samples (`openFlagsForSamples`).
+ * - **Unflagged** → a dim flag (brightens on hover). Click opens the Raise-a-flag
+ *   compose directly (sample scope presets the target; order scope picks a
+ *   sample) — no empty flyout to click through.
  */
 
 const EMPTY_ROLLUP: FlagRollup = {
@@ -84,44 +85,68 @@ export function FlagIndicator({
   const color = rollup.dominantColor ?? undefined
   const pill = variant === 'pill'
 
+  const indicatorButton = (
+    <button
+      type="button"
+      data-testid="flag-indicator"
+      data-flagged={flagged ? 'true' : 'false'}
+      // Flagged → open the scoped flyout. Unflagged → the button is a
+      // RaiseFlagButton trigger (below), so just stop the row's own nav.
+      onClick={flagged ? handleClick : e => e.stopPropagation()}
+      aria-label={tip}
+      className={cn(
+        'inline-flex shrink-0 items-center gap-0.5 rounded leading-none transition-colors',
+        pill && 'px-1 py-0.5',
+        !flagged && 'text-muted-foreground/40 hover:text-muted-foreground/80',
+        className
+      )}
+      style={
+        flagged
+          ? ({
+              color,
+              ...(pill
+                ? { backgroundColor: tintFor(rollup.dominantColor) }
+                : {}),
+            } as CSSProperties)
+          : undefined
+      }
+    >
+      <Flag
+        className="h-3.5 w-3.5 shrink-0"
+        fill={flagged ? 'currentColor' : 'none'}
+      />
+      {flagged && rollup.count > 1 && (
+        <span className="text-[10px] font-semibold leading-none tabular-nums">
+          {rollup.count > 99 ? '99+' : rollup.count}
+        </span>
+      )}
+    </button>
+  )
+
+  // Unflagged → clicking raises a flag directly (no empty flyout). Sample scope
+  // presets the target; order scope offers a "Which sample?" picker.
+  if (!flagged) {
+    return (
+      <RaiseFlagButton
+        entityType={scope.kind === 'sample' ? 'sample' : undefined}
+        entityId={scope.kind === 'sample' ? scope.sampleId : undefined}
+        candidates={
+          scope.kind === 'order'
+            ? scope.sampleIds.map(id => ({
+                entityType: 'sample',
+                entityId: id,
+                label: id,
+              }))
+            : undefined
+        }
+        trigger={indicatorButton}
+      />
+    )
+  }
+
   return (
     <Tooltip>
-      <TooltipTrigger asChild>
-        <button
-          type="button"
-          data-testid="flag-indicator"
-          data-flagged={flagged ? 'true' : 'false'}
-          onClick={handleClick}
-          aria-label={tip}
-          className={cn(
-            'inline-flex shrink-0 items-center gap-0.5 rounded leading-none transition-colors',
-            pill && 'px-1 py-0.5',
-            !flagged &&
-              'text-muted-foreground/40 hover:text-muted-foreground/80',
-            className
-          )}
-          style={
-            flagged
-              ? ({
-                  color,
-                  ...(pill
-                    ? { backgroundColor: tintFor(rollup.dominantColor) }
-                    : {}),
-                } as CSSProperties)
-              : undefined
-          }
-        >
-          <Flag
-            className="h-3.5 w-3.5 shrink-0"
-            fill={flagged ? 'currentColor' : 'none'}
-          />
-          {flagged && rollup.count > 1 && (
-            <span className="text-[10px] font-semibold leading-none tabular-nums">
-              {rollup.count > 99 ? '99+' : rollup.count}
-            </span>
-          )}
-        </button>
-      </TooltipTrigger>
+      <TooltipTrigger asChild>{indicatorButton}</TooltipTrigger>
       <TooltipContent>{tip}</TooltipContent>
     </Tooltip>
   )

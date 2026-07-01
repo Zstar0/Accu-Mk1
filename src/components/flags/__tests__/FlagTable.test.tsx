@@ -48,7 +48,6 @@ describe('FlagTable', () => {
       'Entity',
       'Type',
       'Title',
-      'Sample',
       'Assignee',
       'Status',
       'Age',

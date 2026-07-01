@@ -30,10 +30,10 @@ import type { FlagTypeDef } from '@/components/flags/flag-catalog'
  * shifts. Title is the ONLY flexible column (`minmax(0,1fr)`); everything else
  * is fixed-width and every cell truncates — content never wraps or misaligns.
  *
- * Columns: accent · Entity · Type · Title · Sample/context · Assignee · Status · Age
+ * Columns: accent · Entity · Type · Title · Assignee · Status · Age
  */
 const GRID_TEMPLATE =
-  'grid grid-cols-[3px_130px_104px_minmax(0,1fr)_150px_120px_108px_44px] items-center gap-x-2'
+  'grid grid-cols-[3px_130px_104px_minmax(0,1fr)_120px_108px_44px] items-center gap-x-2'
 
 /**
  * The aligned-columns table view for the flyout list (Plan 8). `highlightIds`
@@ -87,7 +87,6 @@ function FlagTableHeader() {
       <span className="truncate">Entity</span>
       <span className="truncate">Type</span>
       <span className="truncate">Title</span>
-      <span className="truncate">Sample</span>
       <span className="truncate">Assignee</span>
       <span className="truncate">Status</span>
       <span className="truncate text-end">Age</span>
@@ -122,15 +121,6 @@ function FlagTableRow({
   const status = flag.status as FlagStatus
   const statusLabel = STATUS_LABELS[status] ?? flag.status
   const statusColor = STATUS_DOT[status] ?? '#94a3b8'
-
-  // Secondary context (vials/samples): "P-0071 · PEPT-Total, …". Omit the
-  // sample id when it would just repeat the entity chip label (sample rows).
-  const sampleId = flag.entity?.sample_id ?? null
-  const analyses = flag.entity?.analyses ?? []
-  const showSample = sampleId != null && sampleId !== label
-  const contextText = [showSample ? sampleId : null, analyses.join(', ')]
-    .filter(Boolean)
-    .join(' · ')
 
   return (
     <div
@@ -198,14 +188,6 @@ function FlagTableRow({
         title={flag.title}
       >
         {flag.title}
-      </span>
-
-      {/* Sample / context */}
-      <span
-        className="min-w-0 truncate text-[11px] text-muted-foreground"
-        title={contextText || undefined}
-      >
-        {contextText || '—'}
       </span>
 
       {/* Assignee */}
