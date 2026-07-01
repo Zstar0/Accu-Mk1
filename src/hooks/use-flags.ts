@@ -135,11 +135,12 @@ export function useCreateFlag() {
   })
 }
 
-/** Append a comment → only the open thread changes. */
+/** Append a comment (with optional @mentions) → only the open thread changes. */
 export function useAddComment(flagId: number) {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (body: string) => addComment(flagId, body),
+    mutationFn: ({ body, mentionIds }: { body: string; mentionIds?: number[] }) =>
+      addComment(flagId, body, mentionIds),
     onSuccess: () =>
       qc.invalidateQueries({ queryKey: flagKeys.detail(flagId) }),
   })

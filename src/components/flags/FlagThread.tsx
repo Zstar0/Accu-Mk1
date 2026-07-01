@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { ArrowLeft, ArrowUpRight, Check, Eye, Send } from 'lucide-react'
 import {
   Select,
@@ -38,7 +38,14 @@ import {
   nameForUser,
   initialsForUser,
   avatarColor,
+  type UserMap,
 } from '@/components/flags/flag-users'
+import { displayName } from '@/lib/user-display'
+import {
+  activeMentionQuery,
+  mentionIdsInBody,
+  renderCommentSegments,
+} from '@/components/flags/mention-parse'
 import { formatClock } from '@/components/flags/flag-format'
 import { STATUS_LABELS, STATUS_DOT } from '@/components/flags/flag-status'
 import { FlagAvatar } from '@/components/flags/FlagAvatar'
@@ -75,6 +82,41 @@ export function FlagThread({
   const removeWatcher = useRemoveWatcher(flagId)
 
   const [draft, setDraft] = useState('')
+  // @mention picker state: the users chosen (id → display name), the open
+  // `@token` menu, and the keyboard-highlighted candidate.
+  const [selected, setSelected] = useState<Map<number, string>>(new Map())
+  const [menu, setMenu] = useState<{ query: string; start: number } | null>(null)
+  const [activeIdx, setActiveIdx] = useState(0)
+  const inputRef = useRef<HTMLInputElement | null>(null)
+
+  const mentionCandidates = menu
+    ? [...users.values()]
+        .filter(u => {
+          const q = menu.query.toLowerCase()
+          return (
+            displayName(u).toLowerCase().includes(q) ||
+            u.email.toLowerCase().includes(q)
+          )
+        })
+        .slice(0, 6)
+    : []
+
+  const onDraftChange = (value: string, caret: number) => {
+    setDraft(value)
+    setMenu(activeMentionQuery(value, caret))
+    setActiveIdx(0)
+  }
+
+  const pickMention = (u: { id: number; email: string }) => {
+    if (!menu) return
+    const name = displayName(u)
+    const before = draft.slice(0, menu.start)
+    const after = draft.slice(menu.start + 1 + menu.query.length)
+    setDraft(`${before}@${name} ${after}`)
+    setSelected(prev => new Map(prev).set(u.id, name))
+    setMenu(null)
+    queueMicrotask(() => inputRef.current?.focus())
+  }
 
   if (isLoading) {
     return (
@@ -137,8 +179,10 @@ export function FlagThread({
   const submit = () => {
     const body = draft.trim()
     if (!body || addComment.isPending) return
-    addComment.mutate(body)
+    addComment.mutate({ body, mentionIds: mentionIdsInBody(body, selected) })
     setDraft('')
+    setSelected(new Map())
+    setMenu(null)
   }
 
   const eventText = (e: EventResponse): string => {
@@ -308,6 +352,7 @@ export function FlagThread({
                 currentUserId
               )}
               color={avatarColor(entry.comment.author_id)}
+              users={users}
               index={i}
             />
           )
@@ -320,23 +365,76 @@ export function FlagThread({
       </div>
 
       {/* Composer */}
-      <div className="flex items-center gap-2.5 border-t bg-background px-3 py-2.5">
+      <div className="relative flex items-center gap-2.5 border-t bg-background px-3 py-2.5">
         <FlagAvatar
           initials={initialsForUser(users, currentUserId, currentUserId)}
           color={avatarColor(currentUserId)}
           isYou
           size={22}
         />
+        {menu && mentionCandidates.length > 0 && (
+          <div className="absolute bottom-full left-12 z-20 mb-1 w-64 overflow-hidden rounded-md border bg-popover shadow-md">
+            {mentionCandidates.map((u, i) => (
+              <button
+                key={u.id}
+                type="button"
+                onMouseDown={e => {
+                  e.preventDefault()
+                  pickMention(u)
+                }}
+                className={cn(
+                  'flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[13px]',
+                  i === activeIdx ? 'bg-accent' : 'hover:bg-accent/60'
+                )}
+              >
+                <FlagAvatar
+                  initials={initialsForUser(users, u.id, currentUserId)}
+                  color={avatarColor(u.id)}
+                  size={18}
+                />
+                <span className="truncate">{displayName(u)}</span>
+              </button>
+            ))}
+          </div>
+        )}
         <Input
+          ref={inputRef}
           value={draft}
-          onChange={e => setDraft(e.target.value)}
+          onChange={e =>
+            onDraftChange(
+              e.target.value,
+              e.target.selectionStart ?? e.target.value.length
+            )
+          }
           onKeyDown={e => {
+            if (menu && mentionCandidates.length > 0) {
+              if (e.key === 'ArrowDown') {
+                e.preventDefault()
+                setActiveIdx(i => Math.min(i + 1, mentionCandidates.length - 1))
+                return
+              }
+              if (e.key === 'ArrowUp') {
+                e.preventDefault()
+                setActiveIdx(i => Math.max(i - 1, 0))
+                return
+              }
+              if (e.key === 'Enter') {
+                e.preventDefault()
+                pickMention(mentionCandidates[activeIdx]!)
+                return
+              }
+              if (e.key === 'Escape') {
+                e.preventDefault()
+                setMenu(null)
+                return
+              }
+            }
             if (e.key === 'Enter' && !e.shiftKey) {
               e.preventDefault()
               submit()
             }
           }}
-          placeholder="Write a comment…"
+          placeholder="Write a comment… use @ to mention"
           className="h-10 flex-1"
         />
         <Button
@@ -359,6 +457,7 @@ function CommentRow({
   name,
   initials,
   color,
+  users,
   index,
 }: {
   comment: CommentResponse
@@ -366,6 +465,7 @@ function CommentRow({
   name: string
   initials: string
   color: string
+  users: UserMap
   index: number
 }) {
   return (
@@ -387,7 +487,22 @@ function CommentRow({
           </span>
         </div>
         <div className="text-[13px] leading-relaxed text-foreground/90">
-          {comment.body}
+          {renderCommentSegments(
+            comment.body,
+            comment.mentions ?? [],
+            id => nameForUser(users, id)
+          ).map((seg, i) =>
+            seg.mentionId != null ? (
+              <span
+                key={i}
+                className="rounded bg-primary/15 px-1 font-medium text-primary"
+              >
+                {seg.text}
+              </span>
+            ) : (
+              <span key={i}>{seg.text}</span>
+            )
+          )}
         </div>
       </div>
     </div>

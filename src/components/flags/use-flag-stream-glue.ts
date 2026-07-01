@@ -6,6 +6,7 @@ import { flagTypeKeys } from '@/services/flag-types'
 import { useUIStore } from '@/store/ui-store'
 import { useAuthStore } from '@/store/auth-store'
 import { useFlagUnseen } from '@/components/flags/use-flag-unseen'
+import { evaluateRelevance } from '@/components/flags/flag-relevance'
 import { toast } from 'sonner'
 import { flagTypeDef, type FlagTypeDef } from '@/components/flags/flag-catalog'
 import { flagToastBody, flagToastHeading } from '@/components/flags/flag-toast'
@@ -47,9 +48,10 @@ function toastTitle(e: FlagStreamEvent, me: number | null): string {
 function notifyForEvent(
   e: FlagStreamEvent,
   me: number | null,
-  def: FlagTypeDef
+  def: FlagTypeDef,
+  mentioned: boolean
 ) {
-  const title = toastTitle(e, me)
+  const title = mentioned ? 'You were mentioned' : toastTitle(e, me)
   // Clicking the toast opens this flag's thread and dismisses the toast. sonner
   // v2 has no whole-toast onClick, so the handler is wired onto the heading +
   // body nodes we render; `toastId` is captured after creation (the handler
@@ -174,12 +176,20 @@ export function useFlagStreamGlue(): void {
     const ui = useUIStore.getState()
     const showingThisThread =
       ui.flagsFlyoutOpen && ui.flagsThreadId === e.flag_id
-    // Never notify yourself for your OWN action (you're the actor).
-    const isMyAction = me != null && e.actor_id === me
-    const relevant =
-      me != null &&
-      !isMyAction &&
-      (e.flag.assignee_id === me || e.flag.created_by === me)
+    // Relevance (assignee / creator / @mention, minus self-actions) is decided
+    // purely from the payload. Watching does NOT notify live.
+    const mentions = Array.isArray(e.details?.mentions)
+      ? (e.details.mentions as number[])
+      : []
+    const { relevant, mentioned } = evaluateRelevance(
+      {
+        actorId: e.actor_id,
+        assigneeId: e.flag.assignee_id,
+        createdBy: e.flag.created_by,
+        mentions,
+      },
+      me
+    )
     // Creating a flag assigned to someone emits 'raised' THEN 'assigned'. Let
     // the 'assigned' event be the single notification (with the "Assigned to
     // you" title + the fly) so the assignee isn't double-toasted.
@@ -191,15 +201,15 @@ export function useFlagStreamGlue(): void {
     if (relevant && !showingThisThread && !supersededByAssign) {
       const def = resolveTypeDef(queryClient, e.flag.type)
       // Which triage tab holds this flag for me — the flyout's auto-jump target.
-      // Relevance is assignee-or-creator, so if it isn't mine-as-assignee it's
-      // mine-as-creator → the "Raised by me" tab.
+      // Assignee → "Assigned to me"; otherwise (creator or mention) → "Raised by
+      // me" as a reasonable default landing tab.
       const tab: FlagTab = e.flag.assignee_id === me ? 'assigned' : 'raised'
       // Persist the ping: survives reload, and drives the header pulse
       // synchronously (independent of whether the fly animation runs).
       useFlagUnseen.getState().markUnseen(e.flag_id, tab)
       // The toast owns the fly-home now: it fires on the toast's auto-close
       // (as it slides away), and clicking the toast opens this flag instead.
-      notifyForEvent(e, me, def)
+      notifyForEvent(e, me, def, mentioned)
     }
   })
 }

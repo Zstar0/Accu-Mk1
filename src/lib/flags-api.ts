@@ -31,13 +31,14 @@ export type FlagTab = 'assigned' | 'raised' | 'watching' | 'all_open'
 
 // --- response shapes (mirror schemas.py) ---
 
-/** Mirrors `CommentResponse`. */
+/** Mirrors `CommentResponse`. `mentions` = user ids called out in the body. */
 export interface CommentResponse {
   id: number
   flag_id: number
   author_id: number
   body: string
   audience: string
+  mentions: number[]
   created_at: string
   edited_at: string | null
 }
@@ -232,11 +233,12 @@ export const getActivity = (cursor?: string, limit = 25) => {
 export const getFlag = (id: number) =>
   apiFetch<FlagDetailResponse>(`/api/flags/${id}`)
 
-/** `POST /api/flags/{id}/comments` — append a comment. */
-export const addComment = (id: number, body: string) =>
+/** `POST /api/flags/{id}/comments` — append a comment, optionally @mentioning
+ *  users (who get notified + added as watchers). */
+export const addComment = (id: number, body: string, mentionIds: number[] = []) =>
   apiFetch<CommentResponse>(`/api/flags/${id}/comments`, {
     method: 'POST',
-    body: JSON.stringify({ body }),
+    body: JSON.stringify({ body, mention_ids: mentionIds }),
   })
 
 /** `POST /api/flags/{id}/assign` — assign (or unassign with `null`). */
