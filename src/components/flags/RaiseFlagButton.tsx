@@ -238,7 +238,13 @@ export function RaiseFlagButton({
             <SelectContent>
               {flagTypes.map(t => (
                 <SelectItem key={t.slug} value={t.slug}>
-                  {t.label}
+                  <span className="flex items-center gap-2">
+                    <span
+                      className="h-2 w-2 shrink-0 rounded-full"
+                      style={{ backgroundColor: t.color }}
+                    />
+                    {t.label}
+                  </span>
                 </SelectItem>
               ))}
             </SelectContent>
