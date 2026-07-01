@@ -16724,6 +16724,36 @@ def get_sample_variance_payload(
     }
 
 
+# Sterility analytes reported natively from Accu-Mk1 (Catalog 1E-a). Endotoxin
+# (ENDO-LAL) is intentionally excluded — it stays SENAITE-sourced.
+_STERILITY_KEYWORDS = frozenset({"STER-PCR", "STER-USP71", "PCR-FUNGI", "PCR-BACTERIA"})
+
+
+@app.get("/samples/{sample_id}/sterility-results")
+def get_sample_sterility_results(
+    sample_id: str,
+    db: Session = Depends(get_db),
+    _: None = Depends(require_internal_service_token),
+):
+    """Server-to-server: verified parent-tier sterility results for a sample,
+    for coabuilder's native (SENAITE-free) sterility source + shadow-diff.
+    Keyed by sample_id (P-XXXX). Empty list for an unknown or never-promoted
+    sample (200, not 404) — the caller proceeds bare."""
+    from lims_analyses import service as la_service
+
+    promos = la_service.list_promotions_for_parent(db, sample_id)
+    rows = [
+        {
+            "keyword": p.keyword,
+            "result_value": p.result_value,
+            "promoted_at": p.promoted_at,
+        }
+        for p in promos
+        if p.keyword in _STERILITY_KEYWORDS
+    ]
+    return {"sample_id": sample_id, "sterility_results": rows}
+
+
 # ── Peptide requests API (integration-service bridge) ────────────────
 # Called server-to-server by integration-service when a WP user submits the
 # peptide-request form. Internal service token + idempotency key are required.
