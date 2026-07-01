@@ -420,7 +420,8 @@ export function FlagThread({
                 setActiveIdx(i => Math.max(i - 1, 0))
                 return
               }
-              if (e.key === 'Enter') {
+              // Enter or Tab completes the highlighted candidate.
+              if (e.key === 'Enter' || e.key === 'Tab') {
                 e.preventDefault()
                 const chosen = mentionCandidates[activeIdx]
                 if (chosen) pickMention(chosen)
