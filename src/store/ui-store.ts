@@ -26,6 +26,7 @@ export type LIMSSubSection =
   | 'peptide-config'
   | 'analysis-services'
   | 'service-groups'
+  | 'departments'
 export type HPLCAnalysisSubSection =
   | 'overview'
   | 'new-analysis'

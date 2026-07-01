@@ -7,6 +7,7 @@ import { MethodsPage } from '@/components/hplc/MethodsPage'
 import { PeptideConfig } from '@/components/hplc/PeptideConfig'
 import { AnalysisServicesPage } from '@/components/hplc/AnalysisServicesPage'
 import ServiceGroupsPage from '@/components/hplc/ServiceGroupsPage'
+import { DepartmentsPage } from '@/components/hplc/DepartmentsPage'
 import WorksheetsInboxPage from '@/components/hplc/WorksheetsInboxPage'
 import WorksheetsListPage from '@/components/hplc/WorksheetsListPage'
 import { OrderDashboard } from '@/components/dashboard/OrderDashboard'
@@ -59,6 +60,7 @@ export function MainWindowContent({
         if (activeSubSection === 'analysis-services')
           return <AnalysisServicesPage />
         if (activeSubSection === 'service-groups') return <ServiceGroupsPage />
+        if (activeSubSection === 'departments') return <DepartmentsPage />
         return <InstrumentsPage />
       case 'hplc-analysis':
         if (activeSubSection === 'inbox') return <WorksheetsInboxPage />

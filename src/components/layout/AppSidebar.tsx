@@ -88,6 +88,7 @@ const navItems: NavItem[] = [
       { id: 'peptide-config', label: 'Peptides' },
       { id: 'analysis-services', label: 'Analysis Services' },
       { id: 'service-groups', label: 'Service Groups', adminOnly: true },
+      { id: 'departments', label: 'Departments', adminOnly: true },
     ],
   },
   {
