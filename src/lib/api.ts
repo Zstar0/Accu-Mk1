@@ -4213,8 +4213,52 @@ export interface Department {
   sort_order: number
   color: string
   is_system: boolean
+  group_count: number
+  service_count: number
   created_at: string
   updated_at: string
+}
+
+export interface DepartmentInput {
+  name: string
+  color?: string
+  sort_order?: number
+}
+
+export async function getDepartments(): Promise<Department[]> {
+  const response = await fetch(`${API_BASE_URL()}/departments`, {
+    headers: getBearerHeaders(),
+  })
+  if (!response.ok) throw new Error(`Failed to load departments: ${response.status}`)
+  return response.json()
+}
+
+export async function createDepartment(data: DepartmentInput): Promise<Department> {
+  const response = await fetch(`${API_BASE_URL()}/departments`, {
+    method: 'POST',
+    headers: getBearerHeaders('application/json'),
+    body: JSON.stringify(data),
+  })
+  if (!response.ok) throw new Error(`Failed to create department: ${response.status}`)
+  return response.json()
+}
+
+export async function updateDepartment(id: number, data: Partial<DepartmentInput>): Promise<Department> {
+  const response = await fetch(`${API_BASE_URL()}/departments/${id}`, {
+    method: 'PUT',
+    headers: getBearerHeaders('application/json'),
+    body: JSON.stringify(data),
+  })
+  if (!response.ok) throw new Error(`Failed to update department: ${response.status}`)
+  return response.json()
+}
+
+export async function deleteDepartment(id: number): Promise<void> {
+  const response = await fetch(`${API_BASE_URL()}/departments/${id}`, {
+    method: 'DELETE',
+    headers: getBearerHeaders(),
+  })
+  if (!response.ok) throw new Error(`Failed to delete department: ${response.status}`)
 }
 
 export interface ServiceGroup {
