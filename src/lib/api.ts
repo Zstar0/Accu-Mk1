@@ -5049,6 +5049,9 @@ export interface SubSample {
   // hex UID for legacy dual-written vials. Used to load native vials from Mk1
   // without calling SENAITE. Optional for back-compat with older responses.
   external_lims_uid?: string | null
+  // FK to lims_boxes.id — which physical box this vial is assigned to, or null
+  // when unboxed. Drives the boxing UI's per-box vial chips.
+  box_id?: number | null
 }
 
 export interface ParentSampleSummary {

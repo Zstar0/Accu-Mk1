@@ -30,6 +30,9 @@ class SubSampleResponse(BaseModel):
     # a SENAITE hex UID for legacy dual-written vials. Lets the frontend
     # load native vials from Mk1 without calling SENAITE.
     external_lims_uid: Optional[str] = None
+    # FK to lims_boxes.id — which physical box this vial is assigned to, or
+    # None when unboxed. Lets the boxing UI reflect server-side assignments.
+    box_id: Optional[int] = None
 
     class Config:
         from_attributes = True

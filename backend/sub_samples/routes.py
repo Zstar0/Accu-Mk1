@@ -57,6 +57,7 @@ def _serialize(sub) -> SubSampleResponse:
         assignment_role=sub.assignment_role,
         assignment_kind=sub.assignment_kind,
         external_lims_uid=sub.external_lims_uid,
+        box_id=sub.box_id,
     )
 
 

@@ -22,9 +22,9 @@ const ROLES: BoxRole[] = ['hplc', 'endo', 'ster']
 const DEFAULT_BOX_CAPACITY = 6
 
 // The sub-sample shape returned by `listSubSamples` carries a `box_id` link
-// once the boxing backend has stamped it. The base `SubSample` type predates
-// that column, so widen locally (box_id optional) rather than touch api.ts.
-type OrderVial = SubSample & { box_id?: number | null }
+// (FK to lims_boxes.id) once the boxing backend has stamped it — null while
+// unboxed. `SubSample.box_id` now exposes it; the alias is kept for readability.
+type OrderVial = SubSample
 
 /** Pure: the lines printed on a box label. Tested directly. */
 export function boxLabelLines(box: LimsBox, clientName: string | null): string[] {
