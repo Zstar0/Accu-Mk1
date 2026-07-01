@@ -111,7 +111,7 @@ export function FlagsFlyout() {
     >
       <SheetContent
         side="right"
-        className="flex w-[440px] flex-col gap-0 p-0 sm:max-w-[440px]"
+        className="flex w-[880px] max-w-[92vw] flex-col gap-0 p-0 sm:max-w-[880px]"
       >
         <SheetTitle className="sr-only">Flags</SheetTitle>
         {threadId != null ? (
