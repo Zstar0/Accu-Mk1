@@ -110,6 +110,9 @@ import {
   listSubSampleChromatograms,
   uploadChromatogramToSenaite,
   type SubSampleChromatogram,
+  listPackagingPhotos,
+  fetchPackagingPhotoUrl,
+  type PackagingPhoto,
 } from '@/lib/api'
 import { ReceiveWizard } from '@/components/intake/ReceiveWizard/ReceiveWizard'
 import type { ParentInfo } from '@/components/intake/ReceiveWizard/useReceiveWizard'
@@ -871,6 +874,77 @@ function AttachmentImage({ attachment }: { attachment: SenaiteAttachment }) {
       alt={attachment.filename}
       className="rounded-lg border border-border/30 max-h-40 w-auto object-contain"
     />
+  )
+}
+
+// ── Packaging photos (Mk1) — read-only thumbnails in Attachments ─────────────
+// Parent-sample packaging photos captured during check-in / the Manage
+// Sub-Samples overlay. This surface is READ-ONLY: all mutation (add/retake/
+// remove) happens in the wizard. The ['packaging-photos', parentSampleId]
+// query key is shared with the wizard so caches stay in sync.
+
+/** Single packaging photo thumbnail. Mirrors AttachmentImage's blob-backed
+ *  load/loading/error states. No controls — read-only. */
+function PackagingThumb({ photo }: { photo: PackagingPhoto }) {
+  const [src, setSrc] = useState<string | null>(null)
+  const [error, setError] = useState(false)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    let cancelled = false
+    fetchPackagingPhotoUrl(photo.id)
+      .then(url => { if (!cancelled) setSrc(url) })
+      .catch(() => { if (!cancelled) setError(true) })
+      .finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [photo.id])
+
+  return (
+    <div className="space-y-1.5">
+      {loading ? (
+        <div className="flex items-center justify-center w-full h-48 rounded-lg bg-muted/40 border border-border/30">
+          <Spinner className="size-5" />
+        </div>
+      ) : error || !src ? (
+        <div className="flex flex-col items-center justify-center gap-2 w-full h-48 rounded-lg bg-muted/40 border border-border/30">
+          <ImageIcon size={24} className="text-muted-foreground" />
+          <span className="text-xs text-muted-foreground">Failed to load image</span>
+        </div>
+      ) : (
+        <img
+          src={src}
+          alt={photo.remarks ?? 'Packaging photo'}
+          className="rounded-lg border border-border/30 max-h-40 w-auto object-contain"
+        />
+      )}
+      {photo.remarks && (
+        <p className="text-xs text-muted-foreground">{photo.remarks}</p>
+      )}
+    </div>
+  )
+}
+
+/** Read-only "Packaging" group for the Attachments section. Renders nothing
+ *  when the parent sample has no packaging photos. Exported for isolated
+ *  testing (SampleDetails is too heavy to render whole in a unit test). */
+export function PackagingAttachmentsGroup({ parentSampleId }: { parentSampleId: string }) {
+  const { data: photos } = useQuery({
+    queryKey: ['packaging-photos', parentSampleId],
+    queryFn: () => listPackagingPhotos(parentSampleId),
+    enabled: !!parentSampleId,
+  })
+
+  if (!photos || photos.length === 0) return null
+
+  return (
+    <div className="space-y-2">
+      <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Packaging</p>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {photos.map(photo => (
+          <PackagingThumb key={photo.id} photo={photo} />
+        ))}
+      </div>
+    </div>
   )
 }
 
@@ -4720,6 +4794,12 @@ export function SampleDetails() {
                   onPhotoChanged={refreshVialPhoto}
                   onAttachmentsChanged={refreshVialAttachments}
                 />
+              )}
+              {/* Packaging photos (Mk1) — read-only; parent id is `parentSampleId`
+                  on vial pages, else this page's own `data.sample_id`. Renders
+                  nothing when the parent has no packaging photos. */}
+              {data.sample_id && (
+                <PackagingAttachmentsGroup parentSampleId={parentSampleId ?? data.sample_id} />
               )}
               {/* Renderable attachments — newest image + newest HPLC graph side by side */}
               {(() => {
