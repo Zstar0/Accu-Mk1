@@ -12,15 +12,23 @@ interface Props {
 export function BoxLabelTemplate({ labelCode, clientName, role, vialCount }: Props) {
   return (
     <div className="label">
-      <QRCodeSVG value={labelCode} size={96} level="M" marginSize={0} />
+      <QRCodeSVG value={labelCode} size={64} level="M" marginSize={2} />
       <div className="label-text">
-        <div className="label-id">{labelCode}</div>
-        <div className="label-meta">
-          {clientName && <span>{clientName}</span>}
-          <span className="label-meta-sep">·</span>
-          <span>{vialCount} vials</span>
+        <div className="label-line">
+          <span className="label-id">{labelCode}</span>
+          <span className="label-role">{ROLE_SHORT[role]}</span>
         </div>
-        <div className="label-role">{ROLE_SHORT[role]}</div>
+        <div className="label-line">
+          <span className="label-sub">
+            {clientName && (
+              <>
+                <span>{clientName}</span>
+                <span className="label-meta-sep">·</span>
+              </>
+            )}
+            <span>{vialCount} vials</span>
+          </span>
+        </div>
       </div>
     </div>
   )
