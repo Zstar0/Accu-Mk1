@@ -20,6 +20,9 @@ _GROUP_NAME_TO_DEPARTMENT = {
     "Analytics": "Analytical",
     "Microbiology": "Microbiology",
     "Endotoxin": "Microbiology",
+    # Plan 1C sterility tenant — both nest under the Microbiology bench.
+    "Sterility PCR": "Microbiology",
+    "Sterility USP<71>": "Microbiology",
 }
 
 

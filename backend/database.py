@@ -860,6 +860,62 @@ def _run_migrations():
         "ALTER TABLE analysis_services ADD COLUMN IF NOT EXISTS vials_required INTEGER",
         "ALTER TABLE analysis_services ADD COLUMN IF NOT EXISTS is_assignable BOOLEAN NOT NULL DEFAULT FALSE",
         "ALTER TABLE analysis_services ADD COLUMN IF NOT EXISTS sla_tier_id INTEGER REFERENCES sla_tiers(id) ON DELETE SET NULL",
+        # ── Plan 1C: Sterility tenant ────────────────────────────────────────
+        # USP<71> gets its own ~14-day SLA via a single-member group (the FE
+        # resolver honors group tiers, not per-service ones). 14d = 20160 min.
+        """
+        INSERT INTO sla_tiers (name, target_minutes, business_hours_only, is_default, amber_threshold_percent, created_at, updated_at)
+        SELECT 'Sterility USP<71>', 20160, FALSE, FALSE, 20, NOW(), NOW()
+        WHERE NOT EXISTS (SELECT 1 FROM sla_tiers WHERE name = 'Sterility USP<71>')
+        """,
+        # Native USP<71> sterility service — SENAITE-free (senaite_id/uid NULL).
+        # result_options mirror the PCR 0/1 shape; CONFIRM lab terminology before
+        # the per-product split ships (dormant until then). department_id is left
+        # to backfill_departments (cascades Microbiology from its group).
+        # Idempotent (analysis_services.keyword is not unique -> guard on NOT EXISTS).
+        """
+        INSERT INTO analysis_services (title, keyword, category, result_options, active, is_assignable, created_at, updated_at)
+        SELECT 'USP<71> Sterility', 'STER-USP71', 'Additional Testing',
+               '[{"value":"0","label":"No Growth"},{"value":"1","label":"Growth"}]'::jsonb,
+               TRUE, FALSE, NOW(), NOW()
+        WHERE NOT EXISTS (SELECT 1 FROM analysis_services WHERE keyword = 'STER-USP71')
+        """,
+        # "Sterility PCR" assignable group (Microbiology). department_id set from
+        # the dept row when present; NULL on a fresh DB -> backfill fills it from
+        # _GROUP_NAME_TO_DEPARTMENT. sla_tier_id left NULL (dormant until the
+        # per-product split seeds vials via this group in a later phase).
+        """
+        INSERT INTO service_groups (name, description, color, sort_order, is_default, department_id, vials_required, is_assignable, created_at, updated_at)
+        SELECT 'Sterility PCR', 'Rapid Sterility Screening (PCR) - Fungi + Bacteria qPCR', 'purple', 0, FALSE,
+               (SELECT id FROM departments WHERE name = 'Microbiology'), 1, TRUE, NOW(), NOW()
+        WHERE NOT EXISTS (SELECT 1 FROM service_groups WHERE name = 'Sterility PCR')
+        """,
+        # Members of Sterility PCR: the existing PCR-FUNGI + PCR-BACTERIA services.
+        """
+        INSERT INTO service_group_members (service_group_id, analysis_service_id)
+        SELECT g.id, s.id
+        FROM service_groups g
+        JOIN analysis_services s ON s.keyword IN ('PCR-FUNGI', 'PCR-BACTERIA')
+        WHERE g.name = 'Sterility PCR'
+        ON CONFLICT (service_group_id, analysis_service_id) DO NOTHING
+        """,
+        # "Sterility USP<71>" single-member group carrying the ~14-day tier.
+        """
+        INSERT INTO service_groups (name, description, color, sort_order, is_default, department_id, vials_required, is_assignable, sla_tier_id, created_at, updated_at)
+        SELECT 'Sterility USP<71>', 'Compendial USP<71> sterility (~14-day)', 'purple', 0, FALSE,
+               (SELECT id FROM departments WHERE name = 'Microbiology'), 1, TRUE,
+               (SELECT id FROM sla_tiers WHERE name = 'Sterility USP<71>'), NOW(), NOW()
+        WHERE NOT EXISTS (SELECT 1 FROM service_groups WHERE name = 'Sterility USP<71>')
+        """,
+        # Member of Sterility USP<71>: the native STER-USP71 service.
+        """
+        INSERT INTO service_group_members (service_group_id, analysis_service_id)
+        SELECT g.id, s.id
+        FROM service_groups g
+        JOIN analysis_services s ON s.keyword = 'STER-USP71'
+        WHERE g.name = 'Sterility USP<71>'
+        ON CONFLICT (service_group_id, analysis_service_id) DO NOTHING
+        """,
     ]
     # Per-statement isolation: a failure in one statement (e.g., a table that
     # create_all hasn't built yet on first run) must not skip subsequent
