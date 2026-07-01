@@ -139,8 +139,13 @@ export function useCreateFlag() {
 export function useAddComment(flagId: number) {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: ({ body, mentionIds }: { body: string; mentionIds?: number[] }) =>
-      addComment(flagId, body, mentionIds),
+    mutationFn: ({
+      body,
+      mentionIds,
+    }: {
+      body: string
+      mentionIds?: number[]
+    }) => addComment(flagId, body, mentionIds),
     onSuccess: () =>
       qc.invalidateQueries({ queryKey: flagKeys.detail(flagId) }),
   })

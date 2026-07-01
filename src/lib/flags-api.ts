@@ -235,7 +235,11 @@ export const getFlag = (id: number) =>
 
 /** `POST /api/flags/{id}/comments` — append a comment, optionally @mentioning
  *  users (who get notified + added as watchers). */
-export const addComment = (id: number, body: string, mentionIds: number[] = []) =>
+export const addComment = (
+  id: number,
+  body: string,
+  mentionIds: number[] = []
+) =>
   apiFetch<CommentResponse>(`/api/flags/${id}/comments`, {
     method: 'POST',
     body: JSON.stringify({ body, mention_ids: mentionIds }),

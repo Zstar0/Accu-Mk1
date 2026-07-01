@@ -85,7 +85,9 @@ export function FlagThread({
   // @mention picker state: the users chosen (id → display name), the open
   // `@token` menu, and the keyboard-highlighted candidate.
   const [selected, setSelected] = useState<Map<number, string>>(new Map())
-  const [menu, setMenu] = useState<{ query: string; start: number } | null>(null)
+  const [menu, setMenu] = useState<{ query: string; start: number } | null>(
+    null
+  )
   const [activeIdx, setActiveIdx] = useState(0)
   const inputRef = useRef<HTMLInputElement | null>(null)
 
@@ -488,10 +490,8 @@ function CommentRow({
           </span>
         </div>
         <div className="text-[13px] leading-relaxed text-foreground/90">
-          {renderCommentSegments(
-            comment.body,
-            comment.mentions ?? [],
-            id => nameForUser(users, id)
+          {renderCommentSegments(comment.body, comment.mentions ?? [], id =>
+            nameForUser(users, id)
           ).map((seg, i) =>
             seg.mentionId != null ? (
               <span
