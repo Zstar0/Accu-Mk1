@@ -37,6 +37,11 @@ vi.mock('@/components/intake/ReceiveWizard/PrintStep', () => ({
 vi.mock('@/components/intake/ReceiveWizard/AssignStep', () => ({
   AssignStep: () => <div />,
 }))
+vi.mock('@/components/intake/ReceiveWizard/BoxStep', () => ({
+  BoxStep: ({ orderKey }: { orderKey: string }) => (
+    <div data-testid="box-step">box:{orderKey}</div>
+  ),
+}))
 vi.mock('@/components/intake/ReceiveWizard/VialDetailsTab', () => ({
   VialDetailsTab: () => <div />,
   useCloseAndNavigate: () => () => {},
@@ -93,5 +98,35 @@ describe('ReceiveWizard packaging tab', () => {
     expect(list).toBeInTheDocument()
     expect(within(panel).getByText('panel:P-1')).toBeInTheDocument()
     expect(within(list).getByText('list:P-1')).toBeInTheDocument()
+  })
+})
+
+describe('ReceiveWizard boxing tab (order context)', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  const boxing = {
+    orderKey: 'WP-1042',
+    orderLabel: 'WP-1042',
+    clientId: 'acme',
+    sampleIds: ['P-1', 'P-2'],
+  }
+
+  it('omits the Boxing tab when no boxing prop is given', () => {
+    render(<ReceiveWizard parent={parent} onClose={() => {}} />)
+    expect(screen.queryByRole('tab', { name: 'Boxing' })).not.toBeInTheDocument()
+  })
+
+  it('shows the Boxing tab after Assignment when boxing context is provided', () => {
+    render(<ReceiveWizard parent={parent} onClose={() => {}} boxing={boxing} />)
+    const tabs = screen.getAllByRole('tab').map(t => t.textContent)
+    const assignIdx = tabs.indexOf('Assignment')
+    const boxingIdx = tabs.indexOf('Boxing')
+    expect(boxingIdx).toBe(assignIdx + 1)
+  })
+
+  it('renders BoxStep with the order scope when the Boxing tab is selected', async () => {
+    render(<ReceiveWizard parent={parent} onClose={() => {}} boxing={boxing} />)
+    await userEvent.click(screen.getByRole('tab', { name: 'Boxing' }))
+    expect(screen.getByTestId('box-step')).toHaveTextContent('box:WP-1042')
   })
 })

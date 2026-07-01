@@ -1,13 +1,12 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Check, Package } from 'lucide-react'
+import { Check } from 'lucide-react'
 import {
   Dialog,
   DialogContent,
   DialogTitle,
 } from '@/components/ui/dialog'
 import { ReceiveWizard } from '@/components/intake/ReceiveWizard/ReceiveWizard'
-import { BoxStep } from '@/components/intake/ReceiveWizard/BoxStep'
 import { useParentSampleDetails } from '@/components/intake/ReceiveWizard/useParentSampleDetails'
 import { listSubSamples, type SenaiteSample } from '@/lib/api'
 import type { SenaiteLookupResult } from '@/lib/api'
@@ -37,12 +36,11 @@ function analyteLabel(
 export function OrderReceiveSession({ orders, onClose }: Props) {
   // Walk the flattened union of every order's samples; a combined session is
   // just one stepper over `order 1`'s samples, then `order 2`'s, … . Boxing is
-  // entered once the index passes the union length.
+  // no longer a stage here — it lives as an order-scoped tab inside the wizard.
   const samples = orders.flatMap(o => o.samples)
-  // index 0..n-1 = walking samples; index === n = order-level boxing stage
+  // index 0..n-1 = walking samples.
   const [index, setIndex] = useState(0)
   const total = samples.length
-  const onBoxing = index >= total
   const current = samples[Math.min(index, total - 1)]
 
   // Single order → "Receive WP-####"; combined → "Receive N orders".
@@ -68,14 +66,25 @@ export function OrderReceiveSession({ orders, onClose }: Props) {
   const analytes = analyteLabel(d, current)
 
   // Per-order blocks carrying the base index of their first sample in the
-  // flattened walk, so rail rows and the boxing sections line up with the
-  // single `index`/`setIndex` stepper.
+  // flattened walk, so rail rows line up with the single `index`/`setIndex`
+  // stepper.
   let runningOffset = 0
   const orderBlocks = orders.map(o => {
     const base = runningOffset
     runningOffset += o.samples.length
     return { order: o, base }
   })
+
+  // The order that owns the active sample — its scope feeds the wizard's
+  // order-scoped Boxing tab (boxes shared across the order's samples).
+  const activeOrder =
+    orderBlocks.find(
+      ({ order: o, base }) => index >= base && index < base + o.samples.length
+    )?.order ?? orders[0]
+
+  // `current` guaranteed the union is non-empty, so an owning order always
+  // exists; this narrows the type for the boxing scope below.
+  if (!activeOrder) return null
 
   return (
     <Dialog open onOpenChange={open => { if (!open) onClose() }}>
@@ -99,45 +108,35 @@ export function OrderReceiveSession({ orders, onClose }: Props) {
                   </span>
                 )}
               </h2>
-              {onBoxing ? (
-                <div className="flex items-center gap-1.5 text-sm text-muted-foreground">
-                  <Package className="h-3.5 w-3.5" aria-hidden="true" />
-                  <span>Assign this order’s vials into boxes</span>
-                </div>
-              ) : (
-                <span className="font-mono text-sm text-foreground truncate">
-                  {current.id}
-                </span>
-              )}
+              <span className="font-mono text-sm text-foreground truncate">
+                {current.id}
+              </span>
             </div>
             <div className="flex flex-col items-end gap-0.5 shrink-0">
               <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                {onBoxing ? 'Stage' : 'Progress'}
+                Progress
               </span>
               <span className="text-sm font-mono font-semibold tabular-nums">
-                {onBoxing ? 'Boxing' : `Sample ${index + 1} of ${total}`}
+                {`Sample ${index + 1} of ${total}`}
               </span>
             </div>
           </div>
 
-          {/* Per-sample info strip — wraps gracefully, '—' fallbacks. Omitted
-              on the boxing stage, where the info is order-level (shown above). */}
-          {!onBoxing && (
-            <div className="flex flex-wrap items-start gap-x-6 gap-y-2 border-t pt-2.5">
-              <HeaderField label="Contact" value={contact} />
-              <HeaderField label="Sample Type" value={sampleType} />
-              <HeaderField label="Order #" value={orderNumber} />
-              <HeaderField label="Client Sample ID" value={clientSampleId} />
-              <HeaderField label="Client Lot" value={lot} />
-              <HeaderField label="Declared Qty" value={declaredQty} />
-              <HeaderField label="Analytes" value={analytes} className="max-w-[28rem]" />
-            </div>
-          )}
+          {/* Per-sample info strip — wraps gracefully, '—' fallbacks. */}
+          <div className="flex flex-wrap items-start gap-x-6 gap-y-2 border-t pt-2.5">
+            <HeaderField label="Contact" value={contact} />
+            <HeaderField label="Sample Type" value={sampleType} />
+            <HeaderField label="Order #" value={orderNumber} />
+            <HeaderField label="Client Sample ID" value={clientSampleId} />
+            <HeaderField label="Client Lot" value={lot} />
+            <HeaderField label="Declared Qty" value={declaredQty} />
+            <HeaderField label="Analytes" value={analytes} className="max-w-[28rem]" />
+          </div>
         </header>
 
         {/* ── Rail + main ──────────────────────────────────────────────── */}
         <div className="grid grid-cols-[300px_1fr] min-h-0 overflow-hidden">
-          {/* Left rail: sample list + boxing entry */}
+          {/* Left rail: per-order sample list */}
           <nav className="flex flex-col min-h-0 border-r bg-muted/5">
             <div className="px-3 py-2 text-[10px] uppercase tracking-wider text-muted-foreground border-b">
               Samples
@@ -153,7 +152,7 @@ export function OrderReceiveSession({ orders, onClose }: Props) {
                         <li key={s.uid}>
                           <SampleRailRow
                             sample={s}
-                            active={!onBoxing && gi === index}
+                            active={gi === index}
                             onSelect={() => setIndex(gi)}
                           />
                         </li>
@@ -163,51 +162,24 @@ export function OrderReceiveSession({ orders, onClose }: Props) {
                 </li>
               ))}
             </ul>
-            <div className="border-t p-1">
-              <button
-                type="button"
-                onClick={() => setIndex(total)}
-                className={cn(
-                  'flex w-full items-center gap-2 rounded-md px-3 py-2 text-sm transition-colors',
-                  'border-l-2',
-                  onBoxing
-                    ? 'border-primary bg-primary/10 text-foreground font-medium'
-                    : 'border-transparent text-muted-foreground hover:bg-muted/50 hover:text-foreground'
-                )}
-              >
-                <Package className="h-4 w-4 shrink-0" aria-hidden="true" />
-                Boxing
-              </button>
-            </div>
           </nav>
 
-          {/* Main area */}
+          {/* Main area — the wizard for the active sample, carrying its order's
+              scope so the wizard's order-scoped Boxing tab can box the whole
+              order (boxes shared across the order's samples). */}
           <div className="min-h-0 overflow-hidden">
-            {onBoxing ? (
-              <div className="h-full min-h-0 overflow-y-auto">
-                {orders.map(o => {
-                  const orderKey = o.orderKey ?? o.samples[0]?.id ?? ''
-                  return (
-                    <section key={orderKey} className="px-4 py-3">
-                      <OrderSeparator label={o.orderLabel} />
-                      <BoxStep
-                        orderKey={orderKey}
-                        orderLabel={o.orderLabel}
-                        clientId={o.clientId}
-                        sampleIds={o.samples.map(s => s.id)}
-                      />
-                    </section>
-                  )
-                })}
-              </div>
-            ) : (
-              <ReceiveWizard
-                key={current.uid}
-                parent={{ uid: current.uid, sample_id: current.id, status: current.review_state ?? null }}
-                onClose={onClose}
-                hideSampleInfo
-              />
-            )}
+            <ReceiveWizard
+              key={current.uid}
+              parent={{ uid: current.uid, sample_id: current.id, status: current.review_state ?? null }}
+              onClose={onClose}
+              hideSampleInfo
+              boxing={{
+                orderKey: activeOrder.orderKey ?? activeOrder.samples[0]?.id ?? '',
+                orderLabel: activeOrder.orderLabel,
+                clientId: activeOrder.clientId,
+                sampleIds: activeOrder.samples.map(s => s.id),
+              }}
+            />
           </div>
         </div>
       </DialogContent>

@@ -1,24 +1,24 @@
-import { describe, it, expect, vi } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { render, screen } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 import { OrderReceiveSession } from '@/components/intake/OrderReceiveSession'
 import type { OrderGroup } from '@/lib/inbox-orders'
 import type { SenaiteSample } from '@/lib/api'
 
-// BoxStep pulls in dnd-kit + the boxing queries — replace it with a sentinel
-// that echoes the order key it was handed so we can assert one section per
-// order with the right scope.
-vi.mock('@/components/intake/ReceiveWizard/BoxStep', () => ({
-  BoxStep: ({ orderKey }: { orderKey: string }) => (
-    <div data-testid="box-step">{orderKey}</div>
-  ),
-}))
-
-// The receive wizard mounts for the active (non-boxing) sample; stub it so the
-// rail/boxing structure is what's under test, not the wizard internals.
+// Boxing is now an order-scoped tab inside the wizard, not a session stage.
+// Capture the props the session hands the wizard so we can assert it passes the
+// active order's boxing scope; render the sample id so the rail is testable.
+const receiveWizardProps: Array<{
+  boxing?: { orderKey: string; sampleIds: string[] }
+}> = []
 vi.mock('@/components/intake/ReceiveWizard/ReceiveWizard', () => ({
-  ReceiveWizard: () => <div data-testid="receive-wizard" />,
+  ReceiveWizard: (props: {
+    boxing?: { orderKey: string; sampleIds: string[] }
+  }) => {
+    receiveWizardProps.push(props)
+    return <div data-testid="receive-wizard" />
+  },
 }))
 
 // Per-sample header/rail enrichment hits the backend; stub to a stable empty
@@ -62,6 +62,10 @@ function renderSession(orders: OrderGroup[]) {
 }
 
 describe('OrderReceiveSession (orders[])', () => {
+  beforeEach(() => {
+    receiveWizardProps.length = 0
+  })
+
   const twoOrders = [
     order('WP-1042', ['P-1101', 'P-1102']),
     order('WP-1043', ['P-1108']),
@@ -85,12 +89,15 @@ describe('OrderReceiveSession (orders[])', () => {
     expect(screen.getAllByText('Receive 2 orders').length).toBeGreaterThan(0)
   })
 
-  it('renders one BoxStep section per order on the boxing stage', () => {
+  it('hands the wizard the active order’s boxing scope (order-scoped tab)', () => {
     renderSession(twoOrders)
-    fireEvent.click(screen.getByRole('button', { name: /Boxing/i }))
-    const sections = screen.getAllByTestId('box-step')
-    expect(sections).toHaveLength(2)
-    expect(sections.map(s => s.textContent)).toEqual(['WP-1042', 'WP-1043'])
+    // No standalone boxing stage anymore — no rail Boxing button.
+    expect(screen.queryByRole('button', { name: /Boxing/i })).not.toBeInTheDocument()
+    // The wizard mounts for the active sample (P-1101, first order) and gets
+    // that order's whole scope for its Boxing tab.
+    const last = receiveWizardProps[receiveWizardProps.length - 1]
+    expect(last?.boxing?.orderKey).toBe('WP-1042')
+    expect(last?.boxing?.sampleIds).toEqual(['P-1101', 'P-1102'])
   })
 
   it('uses a single-order header for length 1', () => {

@@ -10,12 +10,13 @@ import { VialsList } from './VialsList'
 import { VialPanel } from './VialPanel'
 import { PrintStep } from './PrintStep'
 import { AssignStep } from './AssignStep'
+import { BoxStep } from './BoxStep'
 import { VialDetailsTab, useCloseAndNavigate } from './VialDetailsTab'
 import { PackagingPanel } from './PackagingPanel'
 import { PackagingImagesList } from './PackagingImagesList'
 import type { PackagingPhoto } from '@/lib/api'
 
-type Phase = 'packaging' | 'capture' | 'assign' | 'print' | 'details'
+type Phase = 'packaging' | 'capture' | 'assign' | 'boxing' | 'print' | 'details'
 
 interface Props {
   parent: ParentInfo
@@ -29,6 +30,16 @@ interface Props {
   // context in its own header — keeping the panel here would duplicate it.
   // Default false: the standalone single-sample path is untouched.
   hideSampleInfo?: boolean
+  // Order context that unlocks the order-scoped Boxing tab. When provided, a
+  // "Boxing" trigger appears after Assignment and boxes the whole order (boxes
+  // shared across the order's samples, labels {order}-{n}). Omitted on the
+  // standalone single-sample path, so no Boxing tab there.
+  boxing?: {
+    orderKey: string
+    orderLabel: string
+    clientId: string | null
+    sampleIds: string[]
+  }
 }
 
 export function ReceiveWizard({
@@ -36,6 +47,7 @@ export function ReceiveWizard({
   onClose,
   initialPhase = 'capture',
   hideSampleInfo = false,
+  boxing,
 }: Props) {
   const wiz = useReceiveWizard(parent)
   const parentDetails = useParentSampleDetails(parent.sample_id)
@@ -117,6 +129,7 @@ export function ReceiveWizard({
           <TabsTrigger value="packaging">Packaging</TabsTrigger>
           <TabsTrigger value="capture">Vial Management</TabsTrigger>
           <TabsTrigger value="assign" disabled={!assignmentEnabled}>Assignment</TabsTrigger>
+          {boxing && <TabsTrigger value="boxing">Boxing</TabsTrigger>}
           <TabsTrigger value="print" disabled={printList.length === 0}>Print Labels</TabsTrigger>
           <TabsTrigger value="details" disabled={wiz.vials.length === 0}>Sub Sample Details</TabsTrigger>
         </TabsList>
@@ -202,6 +215,17 @@ export function ReceiveWizard({
         <AssignStep
           parentSampleId={parent.sample_id}
           parentSampleUid={parent.uid}
+        />
+      </div>
+    )
+  } else if (phase === 'boxing' && boxing) {
+    body = (
+      <div className="overflow-y-auto">
+        <BoxStep
+          orderKey={boxing.orderKey}
+          orderLabel={boxing.orderLabel}
+          clientId={boxing.clientId}
+          sampleIds={boxing.sampleIds}
         />
       </div>
     )
