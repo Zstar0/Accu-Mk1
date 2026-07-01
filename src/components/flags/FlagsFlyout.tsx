@@ -1,5 +1,6 @@
 import { useState } from 'react'
-import { Flag, Plus, X } from 'lucide-react'
+import { Flag, List, Plus, Table2, X } from 'lucide-react'
+import { cn } from '@/lib/utils'
 import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet'
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -10,6 +11,10 @@ import type { FlagTab, FlagResponse } from '@/lib/flags-api'
 import { FlagCard } from '@/components/flags/FlagCard'
 import { FlagThread } from '@/components/flags/FlagThread'
 import { FlagsFilterBar } from '@/components/flags/FlagsFilterBar'
+import {
+  useFlagViewMode,
+  type FlagViewMode,
+} from '@/components/flags/use-flag-view-mode'
 import {
   RaiseFlagButton,
   type FlagCandidate,
@@ -28,6 +33,46 @@ const TABS: { value: FlagTab; label: string }[] = [
   { value: 'all_open', label: 'All open' },
 ]
 
+const VIEW_OPTIONS = [
+  { mode: 'list' as const, Icon: List, label: 'List view' },
+  { mode: 'table' as const, Icon: Table2, label: 'Table view' },
+]
+
+/** Compact segmented control (stacked list ⇄ aligned table) — flyout header. */
+function ViewToggle({
+  mode,
+  onChange,
+}: {
+  mode: FlagViewMode
+  onChange: (mode: FlagViewMode) => void
+}) {
+  return (
+    <div
+      role="group"
+      aria-label="Flag view"
+      className="inline-flex items-center gap-0.5 rounded-md border p-0.5"
+    >
+      {VIEW_OPTIONS.map(({ mode: m, Icon, label }) => (
+        <button
+          key={m}
+          type="button"
+          aria-label={label}
+          aria-pressed={mode === m}
+          onClick={() => onChange(m)}
+          className={cn(
+            'inline-flex h-6 w-6 items-center justify-center rounded transition-colors',
+            mode === m
+              ? 'bg-muted text-foreground'
+              : 'text-muted-foreground hover:text-foreground'
+          )}
+        >
+          <Icon className="h-3.5 w-3.5" />
+        </button>
+      ))}
+    </div>
+  )
+}
+
 /**
  * Full-height right slide-over for the Flag System — mirrors WorksheetDrawer
  * (uses ui/sheet). Three modes: a selected thread (FlagThread), an
@@ -42,6 +87,8 @@ export function FlagsFlyout() {
   const [tab, setTab] = useState<FlagTab>('assigned')
   // Ephemeral triage filters, local to the flyout — reset when it closes.
   const [filter, setFilter] = useState<FlagFilterState>(EMPTY_FLAG_FILTER)
+  // Persisted display style (stacked list vs. aligned table).
+  const [viewMode, setViewMode] = useFlagViewMode()
 
   const tabQuery = useFlagsList(tab)
   const entityQuery = useEntityFlags(entityFilter?.type, entityFilter?.id, {
@@ -129,7 +176,8 @@ export function FlagsFlyout() {
                       : `Flags · ${scopedLabel}`}
                   </span>
                 </h2>
-                <div className="flex shrink-0 items-center gap-1">
+                <div className="flex shrink-0 items-center gap-1.5">
+                  <ViewToggle mode={viewMode} onChange={setViewMode} />
                   {filtering ? (
                     <RaiseFlagButton
                       entityType={entityFilter.type}
@@ -164,17 +212,20 @@ export function FlagsFlyout() {
                   <h2 className="flex items-center gap-2 text-base font-semibold">
                     <Flag className="h-4 w-4" /> Flags
                   </h2>
-                  <RaiseFlagButton
-                    trigger={
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="h-7 gap-1.5"
-                      >
-                        <Plus className="h-3.5 w-3.5" /> Add Flag
-                      </Button>
-                    }
-                  />
+                  <div className="flex items-center gap-1.5">
+                    <ViewToggle mode={viewMode} onChange={setViewMode} />
+                    <RaiseFlagButton
+                      trigger={
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-7 gap-1.5"
+                        >
+                          <Plus className="h-3.5 w-3.5" /> Add Flag
+                        </Button>
+                      }
+                    />
+                  </div>
                 </div>
 
                 {/* Tabs */}
@@ -276,9 +327,15 @@ export function FlagsFlyout() {
 
               {!isLoading &&
                 !isError &&
-                visibleFlags.map(flag => (
-                  <FlagCard key={flag.id} flag={flag} />
-                ))}
+                visibleFlags.length > 0 &&
+                // Table view lands in Task 2; stub to the stacked cards for now.
+                (viewMode === 'table'
+                  ? visibleFlags.map(flag => (
+                      <FlagCard key={flag.id} flag={flag} />
+                    ))
+                  : visibleFlags.map(flag => (
+                      <FlagCard key={flag.id} flag={flag} />
+                    )))}
             </div>
           </>
         )}
