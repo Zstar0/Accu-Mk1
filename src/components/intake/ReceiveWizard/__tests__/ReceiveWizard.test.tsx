@@ -169,15 +169,39 @@ describe('ReceiveWizard finish → Complete Check-In', () => {
     expect(onClose).toHaveBeenCalledTimes(1)
   })
 
-  it('orderManaged with vials: labels "Finish" and closes without receiving', async () => {
+  it('orderManaged with vials: renders NO footer Finish button (order session owns completion)', () => {
     wizState.vials = [{ sub: { sample_id: 'P-1-S01' } }]
-    const onClose = vi.fn()
-    render(<ReceiveWizard parent={parent} onClose={onClose} orderManaged />)
+    render(<ReceiveWizard parent={parent} onClose={() => {}} orderManaged />)
 
-    const btn = screen.getByRole('button', { name: /Finish/ })
-    await userEvent.click(btn)
+    expect(screen.queryByRole('button', { name: /Finish|Complete Check-In/ })).not.toBeInTheDocument()
+  })
 
-    expect(receiveSenaiteSample).not.toHaveBeenCalled()
-    expect(onClose).toHaveBeenCalledTimes(1)
+  it('standalone with vials: DOES render the footer completion button', () => {
+    wizState.vials = [{ sub: { sample_id: 'P-1-S01' } }]
+    render(<ReceiveWizard parent={parent} onClose={() => {}} />)
+
+    expect(screen.getByRole('button', { name: /Complete Check-In/ })).toBeInTheDocument()
+  })
+})
+
+describe('ReceiveWizard print labels tab', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    wizState.vials = []
+  })
+
+  it('enables Print Labels when the sample has ≥1 vial even with parentReceived=false', () => {
+    // Deferred check-in: a sample can be vialed while its parent is still Due
+    // (the mock's parentReceived is false). Print Labels must not hinge on it.
+    wizState.vials = [{ sub: { sample_id: 'P-1-S01' } }]
+    render(<ReceiveWizard parent={parent} onClose={() => {}} />)
+
+    expect(screen.getByRole('tab', { name: 'Print Labels' })).not.toBeDisabled()
+  })
+
+  it('disables Print Labels when the sample has no vials', () => {
+    render(<ReceiveWizard parent={parent} onClose={() => {}} />)
+
+    expect(screen.getByRole('tab', { name: 'Print Labels' })).toBeDisabled()
   })
 })

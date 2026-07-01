@@ -96,30 +96,34 @@ export function ReceiveWizard({
 
   const hasSessionVials = wiz.sessionVials.length > 0 || wiz.parentReceivedThisSession
 
-  // Print Labels tab shows ALL labels for the family whenever the parent has
-  // been received — so a tech entering from sample details can reprint any
-  // existing label, not just session ones. The checkbox row on the print
-  // tab lets them skip labels they don't actually want. Each entry carries
+  // Print Labels tab lists every vial the sample has whenever there is at least
+  // one — deferred check-in means a sample can be vialed while its parent is
+  // still Due, so label printing must NOT hinge on parentReceived. The legacy
+  // parent label (parent IS vial 1) is prepended only for received legacy
+  // families; container families never print a parent label. The checkbox row
+  // on the print tab lets techs skip labels they don't want; each entry carries
   // received_at so the label can render the check-in date.
-  const printList: { sample_id: string; received_at?: string | null }[] = wiz.parentReceived
-    ? [
-        {
-          sample_id: parent.sample_id,
-          received_at: parentDetails.details?.date_received ?? null,
-        },
-        ...wiz.vials.map(v => ({
-          sample_id: v.sub.sample_id,
-          received_at: v.sub.received_at,
-        })),
-      ]
-    : wiz.sessionVials.map(s => ({ sample_id: s.sample_id, received_at: s.received_at }))
+  const vialLabels = wiz.vials.map(v => ({
+    sample_id: v.sub.sample_id,
+    received_at: v.sub.received_at,
+  }))
+  const legacyParentLabel: { sample_id: string; received_at?: string | null }[] =
+    wiz.parentReceived && !wiz.containerMode
+      ? [{ sample_id: parent.sample_id, received_at: parentDetails.details?.date_received ?? null }]
+      : []
+  const printList = [...legacyParentLabel, ...vialLabels]
 
   // Finish is the intake-flow's "I'm done capturing" verb. When the wizard is
   // opened from sample details (initialPhase='details') against an already-
   // received sample, Finish doesn't read right — there's nothing to finish.
   // Show it again the moment session activity starts (new vial saved this
   // session) since the tech is now actively doing intake work.
-  const showFinish = hasSessionVials || initialPhase !== 'details'
+  // The order session owns completion via its own top-level "Complete Check-In"
+  // button (OrderReceiveSession), so the embedded wizard must NOT show a footer
+  // Finish in the order flow — it would be a duplicate, competing affordance.
+  // Standalone keeps its footer Finish/"Complete Check-In" as the sole way to
+  // finish.
+  const showFinish = !orderManaged && (hasSessionVials || initialPhase !== 'details')
 
   const phaseTabs = (
     <div className="px-6 py-2 border-b bg-muted/10">
