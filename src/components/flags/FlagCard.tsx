@@ -172,7 +172,6 @@ export function FlagCard({
           <span>{relativeTime(flag.updated_at)}</span>
         </div>
       </div>
-
     </div>
   )
 }

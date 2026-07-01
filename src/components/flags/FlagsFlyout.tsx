@@ -303,7 +303,9 @@ export function FlagsFlyout() {
                             {t.value === 'unread' && unreadFlags.length > 0 && (
                               <span
                                 className="ml-1 rounded-full px-1.5 text-[10px] font-semibold text-white"
-                                style={{ backgroundColor: 'var(--flag-unread)' }}
+                                style={{
+                                  backgroundColor: 'var(--flag-unread)',
+                                }}
                               >
                                 {unreadFlags.length}
                               </span>
@@ -311,7 +313,9 @@ export function FlagsFlyout() {
                             {t.value !== 'unread' && dot && (
                               <span
                                 className="ml-1 inline-block h-1.5 w-1.5 rounded-full align-middle"
-                                style={{ backgroundColor: 'var(--flag-unread)' }}
+                                style={{
+                                  backgroundColor: 'var(--flag-unread)',
+                                }}
                                 aria-hidden
                               />
                             )}
