@@ -46,9 +46,12 @@ vi.mock('@/components/intake/ReceiveWizard/VialDetailsTab', () => ({
   VialDetailsTab: () => <div />,
   useCloseAndNavigate: () => () => {},
 }))
+// Controllable vial set: default [] keeps the tab tests untouched; the
+// Complete Check-In tests set it before rendering to exercise the vialed path.
+const wizState = vi.hoisted(() => ({ vials: [] as { sub: { sample_id: string } }[] }))
 vi.mock('@/components/intake/ReceiveWizard/useReceiveWizard', () => ({
   useReceiveWizard: () => ({
-    vials: [],
+    vials: wizState.vials,
     sessionVials: [],
     loading: false,
     error: null,
@@ -65,6 +68,11 @@ vi.mock('@/components/intake/ReceiveWizard/useReceiveWizard', () => ({
 }))
 vi.mock('@/components/intake/ReceiveWizard/useParentSampleDetails', () => ({
   useParentSampleDetails: () => ({ details: null, loading: false, error: null }),
+}))
+
+const receiveSenaiteSample = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/api', () => ({
+  receiveSenaiteSample: (...args: unknown[]) => receiveSenaiteSample(...args),
 }))
 
 import { ReceiveWizard } from '@/components/intake/ReceiveWizard/ReceiveWizard'
@@ -128,5 +136,48 @@ describe('ReceiveWizard boxing tab (order context)', () => {
     render(<ReceiveWizard parent={parent} onClose={() => {}} boxing={boxing} />)
     await userEvent.click(screen.getByRole('tab', { name: 'Boxing' }))
     expect(screen.getByTestId('box-step')).toHaveTextContent('box:WP-1042')
+  })
+})
+
+describe('ReceiveWizard finish → Complete Check-In', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    wizState.vials = []
+  })
+
+  it('standalone with vials: labels "Complete Check-In" and receives then closes', async () => {
+    wizState.vials = [{ sub: { sample_id: 'P-1-S01' } }]
+    const onClose = vi.fn()
+    render(<ReceiveWizard parent={parent} onClose={onClose} />)
+
+    const btn = screen.getByRole('button', { name: /Complete Check-In/ })
+    await userEvent.click(btn)
+
+    expect(receiveSenaiteSample).toHaveBeenCalledWith('U-1', 'P-1', null, null)
+    expect(receiveSenaiteSample).toHaveBeenCalledTimes(1)
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
+  it('standalone with 0 vials: labels "Finish" and closes without receiving', async () => {
+    const onClose = vi.fn()
+    render(<ReceiveWizard parent={parent} onClose={onClose} />)
+
+    const btn = screen.getByRole('button', { name: /Finish/ })
+    await userEvent.click(btn)
+
+    expect(receiveSenaiteSample).not.toHaveBeenCalled()
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
+  it('orderManaged with vials: labels "Finish" and closes without receiving', async () => {
+    wizState.vials = [{ sub: { sample_id: 'P-1-S01' } }]
+    const onClose = vi.fn()
+    render(<ReceiveWizard parent={parent} onClose={onClose} orderManaged />)
+
+    const btn = screen.getByRole('button', { name: /Finish/ })
+    await userEvent.click(btn)
+
+    expect(receiveSenaiteSample).not.toHaveBeenCalled()
+    expect(onClose).toHaveBeenCalledTimes(1)
   })
 })

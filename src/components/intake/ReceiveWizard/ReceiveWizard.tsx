@@ -14,6 +14,7 @@ import { BoxStep } from './BoxStep'
 import { VialDetailsTab, useCloseAndNavigate } from './VialDetailsTab'
 import { PackagingPanel } from './PackagingPanel'
 import { PackagingImagesList } from './PackagingImagesList'
+import { receiveSenaiteSample } from '@/lib/api'
 import type { PackagingPhoto } from '@/lib/api'
 
 type Phase = 'packaging' | 'capture' | 'assign' | 'boxing' | 'print' | 'details'
@@ -40,6 +41,11 @@ interface Props {
     clientId: string | null
     sampleIds: string[]
   }
+  // The order session owns the receive (its own "Complete Check-In" button
+  // transitions every vialed sample at once), so the embedded wizard's finish
+  // must NOT receive — it just closes. Default false: the standalone
+  // single-sample path owns its own receive on "Complete Check-In".
+  orderManaged?: boolean
 }
 
 export function ReceiveWizard({
@@ -48,12 +54,14 @@ export function ReceiveWizard({
   initialPhase = 'capture',
   hideSampleInfo = false,
   boxing,
+  orderManaged = false,
 }: Props) {
   const wiz = useReceiveWizard(parent)
   const parentDetails = useParentSampleDetails(parent.sample_id)
   const [phase, setPhase] = useState<Phase>(initialPhase)
   const [editingSampleId, setEditingSampleId] = useState<string | null>(null)
   const [editingPackaging, setEditingPackaging] = useState<PackagingPhoto | null>(null)
+  const [completing, setCompleting] = useState(false)
 
   // Sub Sample Details table reads assignment_role off the wizard's local
   // vials state. AssignStep mutates roles via its own PATCH calls and never
@@ -137,10 +145,31 @@ export function ReceiveWizard({
     </div>
   )
 
+  // Standalone single-sample check-in: the parent stays Due until the tech
+  // finishes, so "Finish" becomes the explicit "Complete Check-In" that
+  // transitions this vialed sample sample_due → sample_received (bare receive —
+  // photos live on the vials). When order-managed, or when no vial was
+  // captured, there's nothing to receive here — keep the plain "Finish" close.
+  const completesCheckIn = !orderManaged && wiz.vials.length > 0
+  const handleFinish = async () => {
+    setCompleting(true)
+    try {
+      await receiveSenaiteSample(parent.uid, parent.sample_id, null, null)
+      onClose()
+    } finally {
+      setCompleting(false)
+    }
+  }
   const finishButton = (
-    <Button type="button" variant="outline" onClick={onClose} className="gap-2">
+    <Button
+      type="button"
+      variant="outline"
+      onClick={completesCheckIn ? handleFinish : onClose}
+      disabled={completing}
+      className="gap-2"
+    >
       <Check className="w-4 h-4" aria-hidden="true" />
-      Finish
+      {completesCheckIn ? 'Complete Check-In' : 'Finish'}
     </Button>
   )
 
