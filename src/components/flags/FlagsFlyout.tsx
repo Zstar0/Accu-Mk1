@@ -9,6 +9,7 @@ import { useUIStore } from '@/store/ui-store'
 import { useFlagsList, useEntityFlags } from '@/hooks/use-flags'
 import type { FlagTab, FlagResponse } from '@/lib/flags-api'
 import { FlagCard } from '@/components/flags/FlagCard'
+import { FlagTable } from '@/components/flags/FlagTable'
 import { FlagThread } from '@/components/flags/FlagThread'
 import { FlagsFilterBar } from '@/components/flags/FlagsFilterBar'
 import {
@@ -328,14 +329,13 @@ export function FlagsFlyout() {
               {!isLoading &&
                 !isError &&
                 visibleFlags.length > 0 &&
-                // Table view lands in Task 2; stub to the stacked cards for now.
-                (viewMode === 'table'
-                  ? visibleFlags.map(flag => (
-                      <FlagCard key={flag.id} flag={flag} />
-                    ))
-                  : visibleFlags.map(flag => (
-                      <FlagCard key={flag.id} flag={flag} />
-                    )))}
+                (viewMode === 'table' ? (
+                  <FlagTable flags={visibleFlags} />
+                ) : (
+                  visibleFlags.map(flag => (
+                    <FlagCard key={flag.id} flag={flag} />
+                  ))
+                ))}
             </div>
           </>
         )}

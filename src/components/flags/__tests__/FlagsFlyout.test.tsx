@@ -119,10 +119,12 @@ describe('FlagsFlyout', () => {
     const { FlagsFlyout } = await import('@/components/flags/FlagsFlyout')
     render(<FlagsFlyout />)
 
-    // Resolved label on the chip + secondary context line.
+    // Resolved label on the chip + secondary context cell. The default table
+    // view combines sample id + analytes into one aligned cell.
     const chipLabel = await screen.findByText('P-0071-S01')
-    expect(screen.getByText('P-0071')).toBeInTheDocument()
-    expect(screen.getByText('PEPT-Total, HPLC-PUR')).toBeInTheDocument()
+    expect(
+      screen.getByText('P-0071 · PEPT-Total, HPLC-PUR')
+    ).toBeInTheDocument()
 
     // Clicking the chip deep-links via the resolved deep_link (vial → parent
     // sample), and does NOT open the thread.
