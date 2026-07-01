@@ -15,12 +15,15 @@ export interface FlagFilterState {
   status: string
   /** An entity-type slug (e.g. `sample`), or `'all'`. */
   entityType: string
+  /** A flag-type slug (e.g. `blocker`), or `'all'`. */
+  type: string
 }
 
 export const EMPTY_FLAG_FILTER: FlagFilterState = {
   text: '',
   status: 'all',
   entityType: 'all',
+  type: 'all',
 }
 
 /** The best "Sample ID"-ish token to match free text against. */
@@ -28,20 +31,23 @@ function sampleToken(flag: FlagResponse): string {
   return flag.entity?.sample_id ?? flag.entity?.label ?? flag.entity_id
 }
 
-/** Filter a flag list by free text (title OR sample id), status, and entity
- *  type. Empty/`'all'` filters are no-ops; the returned array preserves order. */
+/** Filter a flag list by free text (title OR sample id), status, entity type,
+ *  and flag type. Empty/`'all'` filters are no-ops; the returned array preserves
+ *  order. */
 export function filterFlags(
   flags: FlagResponse[],
   filter: FlagFilterState
 ): FlagResponse[] {
   const text = filter.text.trim().toLowerCase()
-  const { status, entityType } = filter
+  const { status, entityType, type } = filter
 
-  if (!text && status === 'all' && entityType === 'all') return flags
+  if (!text && status === 'all' && entityType === 'all' && type === 'all')
+    return flags
 
   return flags.filter(flag => {
     if (status !== 'all' && flag.status !== status) return false
     if (entityType !== 'all' && flag.entity_type !== entityType) return false
+    if (type !== 'all' && flag.type !== type) return false
     if (text) {
       const haystack = `${flag.title} ${sampleToken(flag)}`.toLowerCase()
       if (!haystack.includes(text)) return false

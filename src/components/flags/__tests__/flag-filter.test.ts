@@ -117,6 +117,17 @@ describe('filterFlags', () => {
     ).toEqual([3])
   })
 
+  it('filters by flag type', () => {
+    const flags = [
+      flag({ id: 1, type: 'blocker' }),
+      flag({ id: 2, type: 'question' }),
+      flag({ id: 3, type: 'critical' }),
+    ]
+    expect(
+      filterFlags(flags, filter({ type: 'question' })).map(f => f.id)
+    ).toEqual([2])
+  })
+
   it('combines text + status + entity type (all must match)', () => {
     const flags = [
       flag({

@@ -14,6 +14,7 @@ import {
   STATUS_ORDER,
 } from '@/components/flags/flag-status'
 import { entityMeta } from '@/components/flags/flag-entity'
+import { useFlagTypes } from '@/services/flag-types'
 import type { FlagFilterState } from '@/components/flags/flag-filter'
 
 /** Entity types offered in the filter, in display order. Labels resolve via
@@ -33,7 +34,7 @@ function Dot({ color }: { color: string }) {
 
 /**
  * Compact, sticky triage filter row for the flyout: free-text search (title or
- * Sample ID) + a Status select + an Entity select. Controlled — the flyout owns
+ * Sample ID) + Status, Type, and Entity selects. Controlled — the flyout owns
  * the ephemeral state and applies {@link filterFlags} to the fetched list.
  */
 export function FlagsFilterBar({
@@ -43,6 +44,11 @@ export function FlagsFilterBar({
   value: FlagFilterState
   onChange: (next: FlagFilterState) => void
 }) {
+  // Managed type catalog (incl. inactive, so a deactivated type with open flags
+  // is still filterable), ordered by sort_order.
+  const { data: typeRows } = useFlagTypes({})
+  const types = [...(typeRows ?? [])].sort((a, b) => a.sort_order - b.sort_order)
+
   return (
     <div className="sticky top-0 z-10 flex items-center gap-2 border-b bg-background/95 px-3 py-2 backdrop-blur supports-[backdrop-filter]:bg-background/80">
       <div className="relative min-w-0 flex-1">
@@ -73,6 +79,28 @@ export function FlagsFilterBar({
             <SelectItem key={s} value={s}>
               <Dot color={STATUS_DOT[s]} />
               {STATUS_LABELS[s as FlagStatus]}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+
+      <Select
+        value={value.type}
+        onValueChange={type => onChange({ ...value, type })}
+      >
+        <SelectTrigger
+          size="sm"
+          aria-label="Filter by type"
+          className="h-8 w-auto text-xs"
+        >
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="all">All types</SelectItem>
+          {types.map(t => (
+            <SelectItem key={t.slug} value={t.slug}>
+              <Dot color={t.color} />
+              {t.label}
             </SelectItem>
           ))}
         </SelectContent>
