@@ -4229,7 +4229,10 @@ export async function getDepartments(): Promise<Department[]> {
   const response = await fetch(`${API_BASE_URL()}/departments`, {
     headers: getBearerHeaders(),
   })
-  if (!response.ok) throw new Error(`Failed to load departments: ${response.status}`)
+  if (!response.ok) {
+    const err = await response.json().catch(() => null)
+    throw new Error(err?.detail || `Failed to load departments: ${response.status}`)
+  }
   return response.json()
 }
 
@@ -4239,7 +4242,10 @@ export async function createDepartment(data: DepartmentInput): Promise<Departmen
     headers: getBearerHeaders('application/json'),
     body: JSON.stringify(data),
   })
-  if (!response.ok) throw new Error(`Failed to create department: ${response.status}`)
+  if (!response.ok) {
+    const err = await response.json().catch(() => null)
+    throw new Error(err?.detail || `Failed to create department: ${response.status}`)
+  }
   return response.json()
 }
 
@@ -4249,7 +4255,10 @@ export async function updateDepartment(id: number, data: Partial<DepartmentInput
     headers: getBearerHeaders('application/json'),
     body: JSON.stringify(data),
   })
-  if (!response.ok) throw new Error(`Failed to update department: ${response.status}`)
+  if (!response.ok) {
+    const err = await response.json().catch(() => null)
+    throw new Error(err?.detail || `Failed to update department: ${response.status}`)
+  }
   return response.json()
 }
 
@@ -4258,7 +4267,10 @@ export async function deleteDepartment(id: number): Promise<void> {
     method: 'DELETE',
     headers: getBearerHeaders(),
   })
-  if (!response.ok) throw new Error(`Failed to delete department: ${response.status}`)
+  if (!response.ok) {
+    const err = await response.json().catch(() => null)
+    throw new Error(err?.detail || `Failed to delete department: ${response.status}`)
+  }
 }
 
 export interface ServiceGroup {

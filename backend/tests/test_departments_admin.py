@@ -141,3 +141,15 @@ def test_delete_requires_admin(client, dept):
 
 def test_delete_404_missing(client):
     assert client.delete("/departments/99999999", headers=_auth()).status_code == 404
+
+
+def test_delete_blocked_by_group(client, dept):
+    db = SessionLocal()
+    g = ServiceGroup(name="ZZDEPT-GRP", department_id=dept)
+    db.add(g); db.commit(); gid = g.id; db.close()
+    try:
+        r = client.delete(f"/departments/{dept}", headers=_auth())
+        assert r.status_code == 409
+        assert "group" in r.json()["detail"].lower()
+    finally:
+        db = SessionLocal(); db.delete(db.get(ServiceGroup, gid)); db.commit(); db.close()
