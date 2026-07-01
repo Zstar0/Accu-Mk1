@@ -2146,11 +2146,20 @@ class DepartmentResponse(BaseModel):
     sort_order: int
     color: str
     is_system: bool
+    group_count: int = 0
+    service_count: int = 0
     created_at: datetime
     updated_at: datetime
 
     class Config:
         from_attributes = True
+
+
+class DepartmentUpdate(BaseModel):
+    name: Optional[str] = None
+    color: Optional[str] = None
+    sort_order: Optional[int] = None
+    # is_system intentionally omitted — not user-editable.
 
 
 class ServiceGroupMembersRequest(BaseModel):
@@ -14056,37 +14065,79 @@ async def set_service_group_members(
 # ─── Departments (Catalog v1) ─────────────────────────────────────────────────
 
 
+def _department_counts(db: Session, dept_id: int) -> tuple[int, int]:
+    from models import ServiceGroup, AnalysisService
+    from sqlalchemy import func
+    groups = db.query(func.count(ServiceGroup.id)).filter(ServiceGroup.department_id == dept_id).scalar() or 0
+    services = db.query(func.count(AnalysisService.id)).filter(AnalysisService.department_id == dept_id).scalar() or 0
+    return groups, services
+
+
+def _department_out(db: Session, dept) -> "DepartmentResponse":
+    g, s = _department_counts(db, dept.id)
+    return DepartmentResponse(
+        id=dept.id, name=dept.name, sort_order=dept.sort_order, color=dept.color,
+        is_system=dept.is_system, group_count=g, service_count=s,
+        created_at=dept.created_at, updated_at=dept.updated_at,
+    )
+
+
 @app.get("/departments", response_model=list[DepartmentResponse])
 async def get_departments(
     db: Session = Depends(get_db),
     _current_user=Depends(get_current_user),
 ):
-    """Return all departments ordered by sort_order, name."""
+    """Return all departments ordered by sort_order, name (with group/service counts)."""
     from models import Department
     rows = db.execute(
         select(Department).order_by(Department.sort_order, Department.name)
     ).scalars().all()
-    return rows
+    return [_department_out(db, d) for d in rows]
 
 
 @app.post("/departments", response_model=DepartmentResponse, status_code=201)
 async def create_department(
     data: DepartmentCreate,
     db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
+    _current_user=Depends(require_admin),
 ):
-    """Create a new department."""
+    """Create a new department (admin)."""
     from models import Department
-    existing = db.execute(
-        select(Department).where(Department.name == data.name)
-    ).scalar_one_or_none()
-    if existing:
+    if db.execute(select(Department).where(Department.name == data.name)).scalar_one_or_none():
         raise HTTPException(400, f"Department '{data.name}' already exists")
     dept = Department(**data.model_dump())
     db.add(dept)
     db.commit()
     db.refresh(dept)
-    return dept
+    return _department_out(db, dept)
+
+
+@app.put("/departments/{department_id}", response_model=DepartmentResponse)
+async def update_department(
+    department_id: int,
+    data: DepartmentUpdate,
+    db: Session = Depends(get_db),
+    _current_user=Depends(require_admin),
+):
+    """Update a department's name/color/sort_order (admin). is_system is immutable."""
+    from models import Department
+    dept = db.get(Department, department_id)
+    if dept is None:
+        raise HTTPException(404, "Department not found")
+    if data.name is not None and data.name != dept.name:
+        clash = db.execute(
+            select(Department).where(Department.name == data.name, Department.id != department_id)
+        ).scalar_one_or_none()
+        if clash:
+            raise HTTPException(400, f"Department '{data.name}' already exists")
+        dept.name = data.name
+    if data.color is not None:
+        dept.color = data.color
+    if data.sort_order is not None:
+        dept.sort_order = data.sort_order
+    db.commit()
+    db.refresh(dept)
+    return _department_out(db, dept)
 
 
 # ─── SLA tiers (sub-project A, revised to tiers) ──────────────────────────────
