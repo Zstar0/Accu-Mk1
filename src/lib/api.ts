@@ -5959,3 +5959,132 @@ export async function getOrderedProducts(sampleId: string): Promise<OrderedProdu
   }
   return response.json()
 }
+
+// ── Packaging photos (Mk1-native, stored in S3-gated PhotoStorage) ──────────
+
+export interface PackagingPhoto {
+  id: number
+  ordering: number
+  remarks: string | null
+  content_type: string | null
+  created_at: string
+  created_by_user_id: number | null
+}
+
+/**
+ * Create a packaging photo against a parent sample. Mirrors createSubSample's
+ * headers/base-URL/error handling.
+ */
+export async function createPackagingPhoto(args: {
+  parentSampleId: string
+  photoBase64: string
+  remarks?: string | null
+  filename?: string
+  contentType?: string
+}): Promise<PackagingPhoto> {
+  const response = await fetch(
+    `${API_BASE_URL()}/api/samples/${encodeURIComponent(args.parentSampleId)}/packaging-photos`,
+    {
+      method: 'POST',
+      headers: getBearerHeaders('application/json'),
+      body: JSON.stringify({
+        photo_base64: args.photoBase64,
+        remarks: args.remarks ?? null,
+        filename: args.filename ?? null,
+        content_type: args.contentType ?? null,
+      }),
+    }
+  )
+  if (!response.ok)
+    throw new Error(`createPackagingPhoto failed: ${response.status}`)
+  return response.json()
+}
+
+/**
+ * List a parent sample's packaging photos (ordered by `ordering`).
+ */
+export async function listPackagingPhotos(
+  parentSampleId: string
+): Promise<PackagingPhoto[]> {
+  const response = await fetch(
+    `${API_BASE_URL()}/api/samples/${encodeURIComponent(parentSampleId)}/packaging-photos`,
+    { headers: getBearerHeaders() }
+  )
+  if (!response.ok)
+    throw new Error(`listPackagingPhotos failed: ${response.status}`)
+  return response.json()
+}
+
+/**
+ * Resolve a renderable object URL for a packaging photo's raw bytes. The
+ * backend requires Bearer auth, so a plain `<img src=...>` would 401; we fetch
+ * as blob and wrap it in an object URL. Mirrors fetchSubSamplePhotoUrl.
+ * Returns null if the photo is missing (404). Cached per photoId.
+ */
+const _packagingPhotoCache = new Map<number, string>()
+
+export async function fetchPackagingPhotoUrl(
+  photoId: number
+): Promise<string | null> {
+  const cached = _packagingPhotoCache.get(photoId)
+  if (cached) return cached
+
+  const response = await fetch(
+    `${API_BASE_URL()}/api/packaging-photos/${photoId}`,
+    { headers: getBearerHeaders() }
+  )
+  if (response.status === 404) return null
+  if (!response.ok)
+    throw new Error(`fetchPackagingPhotoUrl failed: ${response.status}`)
+  const blob = await response.blob()
+  const url = URL.createObjectURL(blob)
+  _packagingPhotoCache.set(photoId, url)
+  return url
+}
+
+/**
+ * Drop a packaging photo's cached object URL so the next fetch hits the server.
+ * Call after the photo is replaced or removed.
+ */
+export function invalidatePackagingPhoto(photoId: number): void {
+  const prev = _packagingPhotoCache.get(photoId)
+  if (prev?.startsWith('blob:')) URL.revokeObjectURL(prev)
+  _packagingPhotoCache.delete(photoId)
+}
+
+/**
+ * Update a packaging photo (bytes and/or remarks). Mirrors updateSubSample.
+ */
+export async function updatePackagingPhoto(
+  photoId: number,
+  args: { photoBase64?: string; remarks?: string | null }
+): Promise<PackagingPhoto> {
+  const response = await fetch(
+    `${API_BASE_URL()}/api/packaging-photos/${photoId}`,
+    {
+      method: 'PATCH',
+      headers: getBearerHeaders('application/json'),
+      body: JSON.stringify({
+        photo_base64: args.photoBase64 ?? null,
+        remarks: args.remarks ?? null,
+      }),
+    }
+  )
+  if (!response.ok)
+    throw new Error(`updatePackagingPhoto failed: ${response.status}`)
+  if (args.photoBase64) invalidatePackagingPhoto(photoId)
+  return response.json()
+}
+
+/**
+ * Delete a packaging photo. Invalidates the local blob cache on success.
+ */
+export async function deletePackagingPhoto(photoId: number): Promise<void> {
+  const response = await fetch(
+    `${API_BASE_URL()}/api/packaging-photos/${photoId}`,
+    { method: 'DELETE', headers: getBearerHeaders() }
+  )
+  if (!response.ok && response.status !== 204)
+    throw new Error(`deletePackagingPhoto failed: ${response.status}`)
+  invalidatePackagingPhoto(photoId)
+}
