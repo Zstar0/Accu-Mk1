@@ -148,14 +148,28 @@ export function useFlagStreamGlue(): boolean {
     const ui = useUIStore.getState()
     const showingThisThread =
       ui.flagsFlyoutOpen && ui.flagsThreadId === e.flag_id
+    // Never notify yourself for your OWN action (you're the actor).
+    const isMyAction = me != null && e.actor_id === me
     const relevant =
-      me != null && (e.flag.assignee_id === me || e.flag.created_by === me)
+      me != null &&
+      !isMyAction &&
+      (e.flag.assignee_id === me || e.flag.created_by === me)
+    // Creating a flag assigned to someone emits 'raised' THEN 'assigned'. Let
+    // the 'assigned' event be the single notification (with the "Assigned to
+    // you" title + the fly) so the assignee isn't double-toasted.
+    const supersededByAssign =
+      e.event_type === 'raised' &&
+      e.flag.assignee_id != null &&
+      e.flag.assignee_id !== e.actor_id
 
-    if (relevant && !showingThisThread) {
+    if (relevant && !showingThisThread && !supersededByAssign) {
       const def = resolveTypeDef(queryClient, e.flag.type)
       setHasNew(true)
       notifyForEvent(e, me, def)
-      if (e.event_type === 'raised' && !ui.flagsFlyoutOpen) {
+      // Fly for ANY relevant event (assignment, comment, status…) when the
+      // flyout is closed — not just 'raised'. The cross-user "assigned to you"
+      // is the common case and it must fly to the Flags bar too.
+      if (!ui.flagsFlyoutOpen) {
         flyToFlagsButton(def.color)
       }
     }
