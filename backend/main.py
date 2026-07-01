@@ -76,6 +76,7 @@ from sub_samples.service import derive_base_demand
 from lims_analyses.routes import router as lims_analyses_router
 from families.routes import router as families_router  # Phase 5b
 from boxes.routes import router as boxes_router
+from packaging_photos.routes import router as packaging_photos_router
 
 import logging
 
@@ -394,6 +395,7 @@ app.include_router(sub_samples_router)
 app.include_router(lims_analyses_router)
 app.include_router(families_router)
 app.include_router(boxes_router)
+app.include_router(packaging_photos_router)
 
 # --- Endpoints ---
 
