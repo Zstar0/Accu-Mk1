@@ -19,7 +19,6 @@ import { Label } from '@/components/ui/label'
 import { notifications } from '@/lib/notifications'
 import { useCreateFlag } from '@/hooks/use-flags'
 import { useFlagTypes } from '@/services/flag-types'
-import { flagTypeDef } from '@/components/flags/flag-catalog'
 import { useFlagUsers, nameForUser } from '@/components/flags/flag-users'
 
 /**
@@ -114,9 +113,6 @@ export function RaiseFlagButton({
   const selectedType = flagTypes.some(t => t.slug === type)
     ? type
     : (flagTypes[0]?.slug ?? type)
-  const selectedColor =
-    flagTypes.find(t => t.slug === selectedType)?.color ??
-    flagTypeDef(selectedType).color
 
   const canSubmit =
     title.trim().length > 0 && resolvedEntityId.length > 0 && !create.isPending
@@ -229,10 +225,6 @@ export function RaiseFlagButton({
           <Label className="text-xs">Type</Label>
           <Select value={selectedType} onValueChange={setType}>
             <SelectTrigger className="h-8 gap-1.5 text-xs">
-              <span
-                className="h-2 w-2 rounded-full"
-                style={{ backgroundColor: selectedColor }}
-              />
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
