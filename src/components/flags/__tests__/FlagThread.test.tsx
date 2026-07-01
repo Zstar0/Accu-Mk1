@@ -120,10 +120,13 @@ describe('FlagThread', () => {
     const { FlagThread } = await import('@/components/flags/FlagThread')
     render(<FlagThread flagId={7} tabLabel="Assigned to me" />)
 
-    const input = screen.getByPlaceholderText('Write a comment…')
+    const input = screen.getByPlaceholderText(/Write a comment/)
     fireEvent.change(input, { target: { value: 'on it' } })
     fireEvent.keyDown(input, { key: 'Enter' })
 
-    expect(addCommentMutate).toHaveBeenCalledWith('on it')
+    expect(addCommentMutate).toHaveBeenCalledWith({
+      body: 'on it',
+      mentionIds: [],
+    })
   })
 })
