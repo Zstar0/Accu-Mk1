@@ -135,7 +135,7 @@ export function FlagThread({
       .then(() =>
         queryClient.invalidateQueries({ queryKey: flagKeys.unread() })
       )
-      .catch(() => {})
+      .catch(() => undefined)
   }, [flagId, flagUpdatedAt, queryClient])
 
   if (isLoading) {
