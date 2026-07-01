@@ -59,6 +59,8 @@ class FlagComment(Base):
     body: Mapped[str] = mapped_column(Text, nullable=False)
     audience: Mapped[str] = mapped_column(Text, nullable=False, default="internal",
                                           server_default="internal")
+    mentions: Mapped[Optional[list]] = mapped_column(
+        JSONB().with_variant(JSON(), "sqlite"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     edited_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 

@@ -198,7 +198,9 @@ def get_flag(flag_id: int, db: Session = Depends(get_db), user=Depends(get_curre
 @router.post("/{flag_id}/comments", response_model=CommentResponse, status_code=201)
 def add_comment(flag_id: int, req: CommentRequest, db: Session = Depends(get_db), user=Depends(get_current_user)):
     try:
-        return CommentResponse.model_validate(service.add_comment(db, user=user, flag_id=flag_id, body=req.body))
+        return CommentResponse.model_validate(
+            service.add_comment(db, user=user, flag_id=flag_id, body=req.body,
+                                mention_ids=req.mention_ids))
     except Exception as e:
         raise _http(e)
 

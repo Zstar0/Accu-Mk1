@@ -97,6 +97,16 @@ def get_flag(db: Session, flag_id: int) -> FlagFlag:
     return flag
 
 
+def _valid_user_ids(db: Session, ids) -> list[int]:
+    """Existing user ids only, order-preserving + deduped."""
+    from models import User
+    if not ids:
+        return []
+    uniq = list(dict.fromkeys(int(i) for i in ids))
+    present = set(db.execute(select(User.id).where(User.id.in_(uniq))).scalars().all())
+    return [i for i in uniq if i in present]
+
+
 def list_flags(db: Session, *, user_id: int, tab: str, status: Optional[str] = None,
                entity_type: Optional[str] = None, entity_id: Optional[str] = None,
                include_descendants: bool = False) -> list[FlagFlag]:
@@ -185,17 +195,29 @@ def summary(db: Session, *, user_id: int) -> dict:
     return {"assigned_to_me": len(assigned), "by_type": by_type}
 
 
-def add_comment(db: Session, *, user, flag_id, body) -> FlagComment:
+def add_comment(db: Session, *, user, flag_id, body, mention_ids=None) -> FlagComment:
     flag = get_flag(db, flag_id)
     if not permissions.can(user, "comment", flag):
         raise PermissionDeniedError("not allowed to comment")
     if not body or not body.strip():
         raise BadRequestError("comment body required")
     actor_id = getattr(user, "id", None)
-    c = FlagComment(flag_id=flag.id, author_id=actor_id, body=body.strip())
+    valid = _valid_user_ids(db, mention_ids or [])
+    c = FlagComment(flag_id=flag.id, author_id=actor_id, body=body.strip(),
+                    mentions=valid or None)
     db.add(c)
+    # A mention loops the user in: add as a watcher (silent — no watcher_added
+    # event; dedup against existing participants).
+    for uid in valid:
+        exists = db.execute(select(FlagParticipant).where(
+            FlagParticipant.flag_id == flag.id,
+            FlagParticipant.user_id == uid)).scalar_one_or_none()
+        if exists is None:
+            db.add(FlagParticipant(flag_id=flag.id, user_id=uid,
+                                   role="watcher", added_by=actor_id))
     flag.updated_at = datetime.utcnow()
-    _audit(db, flag, actor_id, "commented")
+    _audit(db, flag, actor_id, "commented",
+           details={"mentions": valid} if valid else None)
     _commit_and_emit(db)
     db.refresh(c)
     return c

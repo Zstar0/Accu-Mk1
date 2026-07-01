@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import List, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 # `type` is now a DB-managed flag-type slug (Plan 5), validated server-side
 # against flag_types — so it is a free string on the wire, not a closed Literal.
@@ -23,6 +23,7 @@ class CreateFlagRequest(BaseModel):
 
 class CommentRequest(BaseModel):
     body: str
+    mention_ids: List[int] = Field(default_factory=list)
 
 
 class AssignRequest(BaseModel):
@@ -43,9 +44,15 @@ class CommentResponse(BaseModel):
     author_id: int
     body: str
     audience: str
+    mentions: List[int] = Field(default_factory=list)
     created_at: datetime
     edited_at: Optional[datetime]
     model_config = ConfigDict(from_attributes=True)
+
+    @field_validator("mentions", mode="before")
+    @classmethod
+    def _none_to_list(cls, v):
+        return v or []
 
 
 class EventResponse(BaseModel):

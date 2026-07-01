@@ -896,6 +896,8 @@ def _run_migrations():
         """,
         # Flag activity feed: keyset scan on (created_at, id) newest-first
         "CREATE INDEX IF NOT EXISTS ix_flag_events_created_at_id ON flag_events (created_at DESC, id DESC)",
+        # Flag @mentions: user ids called out in a comment
+        "ALTER TABLE flag_comments ADD COLUMN IF NOT EXISTS mentions JSON",
     ]
     # Per-statement isolation: a failure in one statement (e.g., a table that
     # create_all hasn't built yet on first run) must not skip subsequent
