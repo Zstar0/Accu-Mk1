@@ -17,6 +17,10 @@ type BoxRole = 'hplc' | 'endo' | 'ster'
 const ROLE_LABEL: Record<BoxRole, string> = { hplc: 'HPLC', endo: 'Endotoxin', ster: 'Sterility' }
 const ROLES: BoxRole[] = ['hplc', 'endo', 'ster']
 
+// Default per-box capacity: the lab's smallest box holds 6 vials. Auto-assign
+// fills up to the (possibly-edited) capacity; only this default is fixed at 6.
+const DEFAULT_BOX_CAPACITY = 6
+
 // The sub-sample shape returned by `listSubSamples` carries a `box_id` link
 // once the boxing backend has stamped it. The base `SubSample` type predates
 // that column, so widen locally (box_id optional) rather than touch api.ts.
@@ -42,8 +46,8 @@ export function BoxStep({ orderKey, orderLabel, clientId, sampleIds }: Props) {
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }))
 
   // Capacity is frontend-only (ephemeral) — local per-box state driving the
-  // Auto-assign batch size. Defaults to the role's remaining-unboxed count at
-  // render (computed below), so the common "one box holds them all" is a click.
+  // Auto-assign batch size. Defaults to DEFAULT_BOX_CAPACITY (the lab's
+  // smallest box); edit per-box when a larger box is used.
   const [capacities, setCapacities] = useState<Record<number, number>>({})
   // Guards the in-flight window of the first-box auto-create effect so a
   // refetch/HMR never double-creates. Keyed `${orderKey}:${role}`.
@@ -111,7 +115,7 @@ export function BoxStep({ orderKey, orderLabel, clientId, sampleIds }: Props) {
   const handleAutoAssign = async (box: LimsBox) => {
     const role = box.role as BoxRole
     const roleUnboxed = vials.filter(v => v.assignment_role === role && !v.box_id)
-    const capacity = capacities[box.id] ?? roleUnboxed.length
+    const capacity = capacities[box.id] ?? DEFAULT_BOX_CAPACITY
     const take = Math.max(0, capacity - box.vial_count)
     const takenIds = roleUnboxed.slice(0, take).map(v => v.sample_id)
     if (takenIds.length > 0) {
@@ -143,7 +147,6 @@ export function BoxStep({ orderKey, orderLabel, clientId, sampleIds }: Props) {
         {/* LEFT: per-role box columns + in-column drop targets (manual override). */}
         <div className="flex-1 grid grid-cols-3 gap-4 overflow-y-auto">
           {ROLES.map(role => {
-            const roleUnboxedCount = unboxedVials.filter(v => v.assignment_role === role).length
             return (
               <div key={role} className="flex flex-col gap-3">
                 <div className="flex items-center justify-between">
@@ -155,7 +158,7 @@ export function BoxStep({ orderKey, orderLabel, clientId, sampleIds }: Props) {
                     key={b.id}
                     box={b}
                     clientName={clientId}
-                    capacity={capacities[b.id] ?? roleUnboxedCount}
+                    capacity={capacities[b.id] ?? DEFAULT_BOX_CAPACITY}
                     onCapacityChange={n => setCapacities(c => ({ ...c, [b.id]: n }))}
                     onAutoAssign={() => void handleAutoAssign(b)}
                     onRemove={() => void handleRemoveBox(b)}
