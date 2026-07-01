@@ -36,6 +36,21 @@ def test_assign_role_mismatch_is_400():
     assert resp.status_code == 400
 
 
+def test_unassign_returns_count():
+    with patch("boxes.routes.service.unassign_vials", return_value=2) as m:
+        resp = client.post("/api/boxes/unassign", json={"sub_sample_ids": ["P-0600-S01", "P-0600-S02"]})
+    assert resp.status_code == 200
+    assert resp.json() == {"unassigned": 2}
+    m.assert_called_once()
+
+
+def test_unassign_already_unassigned_is_noop_success():
+    with patch("boxes.routes.service.unassign_vials", return_value=0):
+        resp = client.post("/api/boxes/unassign", json={"sub_sample_ids": ["P-0600-S01"]})
+    assert resp.status_code == 200
+    assert resp.json() == {"unassigned": 0}
+
+
 def test_delete_empty_box_returns_204():
     with patch("boxes.routes.service.delete_box", return_value=None):
         resp = client.delete("/api/boxes/3")

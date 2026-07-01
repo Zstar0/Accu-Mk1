@@ -65,6 +65,19 @@ def assign_vials(db: Session, box_id: int, sub_sample_ids: List[str]) -> LimsBox
     return box
 
 
+def unassign_vials(db: Session, sub_sample_ids: List[str]) -> int:
+    """Clear box membership (box_id = None) for the given sub-samples. Mirrors
+    how `assign_vials` selects rows. Idempotent: unassigning an already-unboxed
+    vial is a no-op. Returns the number of rows that were updated."""
+    subs = db.scalars(
+        select(LimsSubSample).where(LimsSubSample.sample_id.in_(sub_sample_ids))
+    ).all()
+    for s in subs:
+        s.box_id = None
+    db.commit()
+    return len(subs)
+
+
 def mark_printed(db: Session, box_id: int, user_id: int) -> LimsBox:
     box = db.get(LimsBox, box_id)
     if box is None:

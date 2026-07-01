@@ -59,6 +59,34 @@ def test_assign_then_print_records_membership_and_stamp(db):
     assert len(service.list_for_order(db, "WP-20066")) == 1
 
 
+def test_unassign_clears_box_membership(db):
+    p = LimsSample(sample_id="P-0610", external_lims_uid="u-610")
+    db.add(p); db.flush()
+    v = _vial(db, p, 1, "hplc")
+    box = service.next_box(db, "WP-20066", "hplc", user_id=1)
+    service.assign_vials(db, box.id, [v.sample_id])
+    assert v.box_id == box.id
+    assert service.vial_count(db, box.id) == 1
+
+    n = service.unassign_vials(db, [v.sample_id])
+    assert n == 1
+    assert v.box_id is None
+    assert service.vial_count(db, box.id) == 0
+
+
+def test_unassign_already_unassigned_is_noop_success(db):
+    p = LimsSample(sample_id="P-0611", external_lims_uid="u-611")
+    db.add(p); db.flush()
+    v = _vial(db, p, 1, "hplc")
+    assert v.box_id is None
+    # Unassigning a vial that was never boxed succeeds and leaves it unboxed.
+    n = service.unassign_vials(db, [v.sample_id])
+    assert n == 1
+    assert v.box_id is None
+    # Unknown ids are simply not found — no error.
+    assert service.unassign_vials(db, ["P-9999-S01"]) == 0
+
+
 def test_delete_empty_box_removes_it(db):
     box = service.next_box(db, "WP-20066", "hplc", user_id=1)
     assert len(service.list_for_order(db, "WP-20066")) == 1

@@ -50,6 +50,15 @@ def assign(box_id: int, body: AssignVialsRequest, db: Session = Depends(get_db),
     return _serialize(db, box)
 
 
+@router.post("/unassign")
+def unassign(body: AssignVialsRequest, db: Session = Depends(get_db),
+             user=Depends(get_current_user)):
+    """Clear box membership for the given vials (drag back out to Unboxed).
+    No role check — removing from a box is always allowed."""
+    count = service.unassign_vials(db, body.sub_sample_ids)
+    return {"unassigned": count}
+
+
 @router.post("/{box_id}/print", response_model=BoxResponse)
 def print_box(box_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
     try:
