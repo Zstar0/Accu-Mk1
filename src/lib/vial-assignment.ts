@@ -42,8 +42,12 @@ export function invalidateParentVialOverlay(
  * parent sample page and would otherwise serve stale rows until their staleTime
  * elapsed (and `refetchOnWindowFocus` is off globally, so tabbing away won't
  * save us): the parent-scoped sub-samples list, the per-vial parent-AR overlay,
- * and the quicklook per-vial analyses. The latter two are vial-pk-keyed, so they
- * invalidate by key prefix; sub-samples is scoped to this parent only.
+ * the quicklook per-vial analyses, and the order-scoped vials list that feeds
+ * the Boxing tab (['order-vials', orderKey, sampleIds]). The overlay/quicklook
+ * pair are vial-pk-keyed and the order-vials list carries the reassigned role,
+ * so all three invalidate by key prefix; sub-samples is scoped to this parent
+ * only. Without the order-vials refresh, Boxing keeps the pre-reassign role and
+ * filters the vial out until a full page reload.
  */
 export function invalidateVialAssignmentCaches(
   queryClient: QueryClient,
@@ -52,6 +56,7 @@ export function invalidateVialAssignmentCaches(
   void queryClient.invalidateQueries({ queryKey: ['sub-samples', parentSampleId] })
   void queryClient.invalidateQueries({ queryKey: [PARENT_OVERLAY_QUERY_KEY] })
   void queryClient.invalidateQueries({ queryKey: [QUICKLOOK_VIAL_ANALYSES_QUERY_KEY] })
+  void queryClient.invalidateQueries({ queryKey: ['order-vials'] })
 }
 
 export interface VialMatch {

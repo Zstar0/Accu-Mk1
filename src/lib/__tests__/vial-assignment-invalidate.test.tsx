@@ -7,13 +7,15 @@ import { invalidateVialAssignmentCaches, invalidateParentVialOverlay } from '@/l
 
 // Behavioral contract: after a vial role re-assignment, every active query that
 // renders assignment state must refetch — the parent page's sub-samples list,
-// the parent AR-table overlay (parent-overlay-vial-analyses), and the quicklook
-// dialog's per-vial analyses. Keys are asserted as literals on purpose: they
-// must match what SampleDetails/VialsQuickLookDialog register. The foreign
-// sub-samples key proves the list invalidation is scoped to the parent.
+// the parent AR-table overlay (parent-overlay-vial-analyses), the quicklook
+// dialog's per-vial analyses, and the order-scoped vials list that feeds the
+// Boxing tab (['order-vials', orderKey, sampleIds]). Keys are asserted as
+// literals on purpose: they must match what SampleDetails/VialsQuickLookDialog/
+// BoxStep register. The foreign sub-samples key proves the list invalidation is
+// scoped to the parent.
 
 describe('invalidateVialAssignmentCaches', () => {
-  it('refetches sub-samples, parent overlay, and quicklook queries for the parent only', async () => {
+  it('refetches sub-samples, parent overlay, quicklook, and order-vials queries for the parent only', async () => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
     const wrapper = ({ children }: { children: ReactNode }) =>
       createElement(QueryClientProvider, { client: qc }, children)
@@ -21,15 +23,19 @@ describe('invalidateVialAssignmentCaches', () => {
     const subsFn = vi.fn(async () => 'subs')
     const overlayFn = vi.fn(async () => [])
     const quicklookFn = vi.fn(async () => [])
+    const orderVialsFn = vi.fn(async () => [])
     const foreignFn = vi.fn(async () => 'foreign')
 
     // Mount real useQuery hooks (staleTime Infinity → only an explicit
-    // invalidation can refetch them), mirroring the app's surfaces.
+    // invalidation can refetch them), mirroring the app's surfaces. The
+    // order-vials probe mirrors BoxStep's ['order-vials', orderKey, sampleIds]
+    // shape so the partial-prefix invalidation is what catches it.
     renderHook(
       () => {
         useQuery({ queryKey: ['sub-samples', 'P-0144'], queryFn: subsFn, staleTime: Infinity })
         useQuery({ queryKey: ['parent-overlay-vial-analyses', 21], queryFn: overlayFn, staleTime: Infinity })
         useQuery({ queryKey: ['quicklook-vial-analyses', 21], queryFn: quicklookFn, staleTime: Infinity })
+        useQuery({ queryKey: ['order-vials', 'ORD-42', ['P-0144-S02']], queryFn: orderVialsFn, staleTime: Infinity })
         useQuery({ queryKey: ['sub-samples', 'P-9999'], queryFn: foreignFn, staleTime: Infinity })
       },
       { wrapper }
@@ -39,6 +45,7 @@ describe('invalidateVialAssignmentCaches', () => {
       expect(subsFn).toHaveBeenCalledTimes(1)
       expect(overlayFn).toHaveBeenCalledTimes(1)
       expect(quicklookFn).toHaveBeenCalledTimes(1)
+      expect(orderVialsFn).toHaveBeenCalledTimes(1)
       expect(foreignFn).toHaveBeenCalledTimes(1)
     })
 
@@ -48,6 +55,9 @@ describe('invalidateVialAssignmentCaches', () => {
       expect(subsFn).toHaveBeenCalledTimes(2)
       expect(overlayFn).toHaveBeenCalledTimes(2)
       expect(quicklookFn).toHaveBeenCalledTimes(2)
+      // Boxing refreshes: the order-scoped vials list picks up the new role
+      // without a page reload.
+      expect(orderVialsFn).toHaveBeenCalledTimes(2)
     })
     // scoped: a different parent's sub-samples list is untouched
     expect(foreignFn).toHaveBeenCalledTimes(1)
