@@ -1,6 +1,7 @@
 import { useState } from 'react'
-import { Flag, X } from 'lucide-react'
+import { Flag, Plus, X } from 'lucide-react'
 import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet'
+import { Button } from '@/components/ui/button'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useUIStore } from '@/store/ui-store'
@@ -102,7 +103,7 @@ export function FlagsFlyout() {
           <>
             {/* Header */}
             {scoped ? (
-              <div className="flex items-center justify-between gap-2 border-b px-4 py-3">
+              <div className="flex items-center justify-between gap-2 border-b py-3 pl-4 pr-12">
                 <h2 className="flex min-w-0 items-center gap-2 text-base font-semibold">
                   <Flag className="h-4 w-4 shrink-0" />
                   <span className="truncate">
@@ -142,11 +143,17 @@ export function FlagsFlyout() {
               </div>
             ) : (
               <>
-                <div className="flex items-center justify-between border-b px-4 py-3">
+                <div className="flex items-center justify-between border-b py-3 pl-4 pr-12">
                   <h2 className="flex items-center gap-2 text-base font-semibold">
                     <Flag className="h-4 w-4" /> Flags
                   </h2>
-                  <RaiseFlagButton variant="compact" />
+                  <RaiseFlagButton
+                    trigger={
+                      <Button variant="outline" size="sm" className="h-7 gap-1.5">
+                        <Plus className="h-3.5 w-3.5" /> Add Flag
+                      </Button>
+                    }
+                  />
                 </div>
 
                 {/* Tabs */}
