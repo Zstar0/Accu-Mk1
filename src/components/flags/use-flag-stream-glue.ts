@@ -8,7 +8,7 @@ import { useAuthStore } from '@/store/auth-store'
 import { useFlagUnseen } from '@/components/flags/use-flag-unseen'
 import { toast } from 'sonner'
 import { flagTypeDef, type FlagTypeDef } from '@/components/flags/flag-catalog'
-import { flagToastBody } from '@/components/flags/flag-toast'
+import { flagToastBody, flagToastHeading } from '@/components/flags/flag-toast'
 import type { FlagTab, FlagType } from '@/lib/flags-api'
 import { FLAGS_BUTTON_ID } from '@/components/flags/FlagsHeaderButton'
 
@@ -50,20 +50,28 @@ function notifyForEvent(
   def: FlagTypeDef
 ) {
   const title = toastTitle(e, me)
+  // Clicking the toast opens this flag's thread and dismisses the toast. sonner
+  // v2 has no whole-toast onClick, so the handler is wired onto the heading +
+  // body nodes we render; `toastId` is captured after creation (the handler
+  // only ever fires later, so the forward reference is safe).
+  let toastId: string | number | undefined
+  const open = () => {
+    useUIStore.getState().openFlagThread(e.flag_id)
+    if (toastId !== undefined) toast.dismiss(toastId)
+  }
   const opts = {
-    description: flagToastBody(e.flag, def),
-    // Click the toast → open the flyout to this flag's thread.
-    onClick: () => useUIStore.getState().openFlagThread(e.flag_id),
+    description: flagToastBody(e.flag, def, open),
     // The fly-home flourish waits until the toast auto-dismisses (starts to
     // slide away) — and only if the user hasn't opened the flyout meanwhile.
     onAutoClose: () => {
       if (!useUIStore.getState().flagsFlyoutOpen) flyToFlagsButton(def.color)
     },
   }
-  if (e.flag.type === 'blocker') toast.error(title, opts)
-  else if (e.flag.type === 'critical') toast.warning(title, opts)
-  else if (def.kind === 'signal') toast.success(title, opts)
-  else toast.info(title, opts)
+  const heading = flagToastHeading(title, open)
+  if (e.flag.type === 'blocker') toastId = toast.error(heading, opts)
+  else if (e.flag.type === 'critical') toastId = toast.warning(heading, opts)
+  else if (def.kind === 'signal') toastId = toast.success(heading, opts)
+  else toastId = toast.info(heading, opts)
 }
 
 /**
