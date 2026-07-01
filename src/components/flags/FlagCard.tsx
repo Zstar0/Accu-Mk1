@@ -23,14 +23,15 @@ import { FlagAvatar } from '@/components/flags/FlagAvatar'
 
 /**
  * One flag in the flyout's stacked LIST view (Plan 8 restored the pre-Plan-7
- * card): a left type-color bar, then a meta row (entity chip → deep-link, type
+ * card): a left accent bar, then a meta row (entity chip → deep-link, type
  * pill, status badge), the title, an optional Sample-context line, and an
  * assignee + relative-time footer. Clicking the card opens the thread; clicking
  * the entity chip deep-links (and stops propagation). The aligned-columns
  * TABLE view is a separate renderer (`FlagTable`).
  *
- * Note: the list API (`FlagResponse`) exposes neither a comment count nor a
- * read/unread flag, so `unread` is a forward-looking prop, off by default.
+ * `unread` drives the left bar: the dedicated `--flag-unread` color when this
+ * flag has unread changes for the user (from `useFlagUnread`), transparent when
+ * read. Type is conveyed by the type pill, not the bar.
  *
  * `highlight` briefly pulses the card when the flyout opens onto a flag the user
  * was just pinged about (driven by the `justOpened` snapshot). Keyed by flag id
@@ -88,7 +89,9 @@ export function FlagCard({
     >
       <div
         className="w-[3px] shrink-0 rounded-full"
-        style={{ backgroundColor: def.color }}
+        style={{
+          backgroundColor: unread ? 'var(--flag-unread)' : 'transparent',
+        }}
         aria-hidden
       />
 
@@ -170,12 +173,6 @@ export function FlagCard({
         </div>
       </div>
 
-      {unread && (
-        <span
-          className="absolute right-2.5 top-3 h-2 w-2 rounded-full bg-blue-500"
-          aria-label="unread"
-        />
-      )}
     </div>
   )
 }

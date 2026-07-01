@@ -85,6 +85,12 @@ input:-webkit-autofill:active {
 
 /* --- Flag System ------------------------------------------------------- */
 
+/* Dedicated "unread" accent — a reserved color that is NOT in the type palette,
+   the status dots, or the flash blue. Tune the shade to taste. */
+:root {
+  --flag-unread: #ec4899;
+}
+
 /* Glow-on-new for the Flags header button. Pulsing red ring while a relevant
    event has landed and the flyout is still closed (see toolbar-badge.html). */
 .flags-glow {

@@ -1,4 +1,5 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, ArrowUpRight, Check, Eye, Send } from 'lucide-react'
 import {
   Select,
@@ -20,7 +21,9 @@ import {
   useAddComment,
   useAddWatcher,
   useRemoveWatcher,
+  flagKeys,
 } from '@/hooks/use-flags'
+import { markRead } from '@/lib/flags-api'
 import type {
   FlagStatus,
   CommentResponse,
@@ -119,6 +122,21 @@ export function FlagThread({
     setMenu(null)
     queueMicrotask(() => inputRef.current?.focus())
   }
+
+  // Opening a flag marks it read (clears its unread bar). Keyed on the flag's
+  // `updated_at` too, so a flag you're actively viewing stays read as it changes
+  // under you (your own comment won't re-flag it unread). Off the render path —
+  // POST + query invalidate, no setState.
+  const queryClient = useQueryClient()
+  const flagUpdatedAt = flag?.updated_at
+  useEffect(() => {
+    if (flagUpdatedAt == null) return // not loaded yet
+    void markRead(flagId)
+      .then(() =>
+        queryClient.invalidateQueries({ queryKey: flagKeys.unread() })
+      )
+      .catch(() => {})
+  }, [flagId, flagUpdatedAt, queryClient])
 
   if (isLoading) {
     return (

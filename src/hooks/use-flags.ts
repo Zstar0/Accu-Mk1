@@ -19,6 +19,7 @@ import {
   getFlag,
   getSummary,
   getActivity,
+  getUnread,
   createFlag,
   addComment,
   assignFlag,
@@ -45,6 +46,7 @@ export const flagKeys = {
   entity: (entityType: string, entityId: string, includeDescendants: boolean) =>
     ['flags', 'entity', entityType, entityId, includeDescendants] as const,
   activity: () => ['flags', 'activity'] as const,
+  unread: () => ['flags', 'unread'] as const,
   detail: (id: number) => ['flags', id] as const,
 }
 
@@ -99,6 +101,16 @@ export function useFlag(id: number | null) {
     queryKey: flagKeys.detail(id ?? -1),
     queryFn: () => getFlag(id as number),
     enabled: id != null,
+  })
+}
+
+/** Flags with unread notifications for me. Under ['flags', …] so the glue's
+ *  blanket invalidate refreshes it live. */
+export function useFlagUnread() {
+  return useQuery({
+    queryKey: flagKeys.unread(),
+    queryFn: getUnread,
+    staleTime: 5_000,
   })
 }
 

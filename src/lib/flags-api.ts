@@ -229,6 +229,13 @@ export const getActivity = (cursor?: string, limit = 25) => {
   return apiFetch<ActivityPage>(`/api/flags/activity?${qs.toString()}`)
 }
 
+/** `GET /api/flags/unread` — flags relevant to me with unread changes. */
+export const getUnread = () => apiFetch<FlagResponse[]>('/api/flags/unread')
+
+/** `POST /api/flags/{id}/read` — stamp this flag read for me (204). */
+export const markRead = (id: number) =>
+  apiFetch<undefined>(`/api/flags/${id}/read`, { method: 'POST' })
+
 /** `GET /api/flags/{id}` — one flag with its comments + events. */
 export const getFlag = (id: number) =>
   apiFetch<FlagDetailResponse>(`/api/flags/${id}`)

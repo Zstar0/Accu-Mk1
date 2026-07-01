@@ -6,8 +6,10 @@ import { Button } from '@/components/ui/button'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useUIStore } from '@/store/ui-store'
-import { useFlagsList, useEntityFlags } from '@/hooks/use-flags'
+import { useAuthStore } from '@/store/auth-store'
+import { useFlagsList, useEntityFlags, useFlagUnread } from '@/hooks/use-flags'
 import { useFlagUnseen } from '@/components/flags/use-flag-unseen'
+import { unreadBuckets } from '@/components/flags/unread-buckets'
 import type { FlagTab, FlagResponse } from '@/lib/flags-api'
 import { FlagCard } from '@/components/flags/FlagCard'
 import { FlagTable } from '@/components/flags/FlagTable'
@@ -29,15 +31,16 @@ import {
   type FlagFilterState,
 } from '@/components/flags/flag-filter'
 
-/** The flyout's tab axis. Four map 1:1 to the API's `FlagTab`; `activity` is a
- *  FE-only tab that renders the event feed instead of a flag list. */
-type FlyoutTab = FlagTab | 'activity'
+/** The flyout's tab axis. Four map 1:1 to the API's `FlagTab`; `activity` (event
+ *  feed) and `unread` (unread flags) are FE-only tabs. */
+type FlyoutTab = FlagTab | 'activity' | 'unread'
 
 const TABS: { value: FlyoutTab; label: string }[] = [
   { value: 'assigned', label: 'Assigned to me' },
   { value: 'raised', label: 'Raised by me' },
   { value: 'watching', label: 'Watching' },
   { value: 'all_open', label: 'All open' },
+  { value: 'unread', label: 'Unread' },
   { value: 'activity', label: 'Activity' },
 ]
 
@@ -92,9 +95,11 @@ export function FlagsFlyout() {
   const threadId = useUIStore(state => state.flagsThreadId)
   const entityFilter = useUIStore(state => state.flagsEntityFilter)
   const samplesFilter = useUIStore(state => state.flagsSamplesFilter)
+  const me = useAuthStore(state => state.user?.id ?? null)
   const [tab, setTab] = useState<FlyoutTab>('assigned')
-  // The Activity tab renders the event feed instead of a flag list.
+  // FE-only tabs: Activity renders the event feed; Unread lists unread flags.
   const isActivity = tab === 'activity'
+  const isUnread = tab === 'unread'
   // Ephemeral triage filters, local to the flyout — reset when it closes.
   const [filter, setFilter] = useState<FlagFilterState>(EMPTY_FLAG_FILTER)
   // Persisted display style (stacked list vs. aligned table).
@@ -118,15 +123,23 @@ export function FlagsFlyout() {
     })
   }, [])
 
-  // The Activity tab isn't a real API tab — hold a valid FlagTab so the query
-  // stays well-formed; its result is ignored (the feed renders instead).
-  const tabQuery = useFlagsList(isActivity ? 'assigned' : (tab as FlagTab))
+  // Activity/Unread aren't real API tabs — hold a valid FlagTab so the query
+  // stays well-formed; the result is ignored (the feed/unread list renders).
+  const tabQuery = useFlagsList(
+    isActivity || isUnread ? 'assigned' : (tab as FlagTab)
+  )
   const entityQuery = useEntityFlags(entityFilter?.type, entityFilter?.id, {
     includeDescendants: entityFilter?.includeDescendants ?? false,
   })
   // Order/samples scope filters the page-wide all_open list client-side. Same
   // query key the indicators already loaded, so TanStack Query dedupes it.
   const allOpenQuery = useFlagsList('all_open')
+  // Unread flags drive the left-bar markers (all tabs), the tab dots, and the
+  // Unread tab's list. One query, three views.
+  const unreadQuery = useFlagUnread()
+  const unreadFlags = unreadQuery.data ?? []
+  const unreadIds = new Set(unreadFlags.map(f => f.id))
+  const buckets = unreadBuckets(unreadFlags, me)
 
   const filtering = entityFilter != null
   const samplesScope = !entityFilter && samplesFilter != null
@@ -148,6 +161,11 @@ export function FlagsFlyout() {
     isLoading = allOpenQuery.isLoading
     isError = allOpenQuery.isError
     refetch = allOpenQuery.refetch
+  } else if (isUnread) {
+    flags = unreadFlags
+    isLoading = unreadQuery.isLoading
+    isError = unreadQuery.isError
+    refetch = unreadQuery.refetch
   } else {
     ;({ data: flags, isLoading, isError, refetch } = tabQuery)
   }
@@ -264,23 +282,51 @@ export function FlagsFlyout() {
                 <div className="border-b px-3 pt-2">
                   <Tabs value={tab} onValueChange={v => setTab(v as FlyoutTab)}>
                     <TabsList className="h-auto flex-wrap bg-transparent p-0">
-                      {TABS.map(t => (
-                        <TabsTrigger
-                          key={t.value}
-                          value={t.value}
-                          className="rounded-b-none border-b-2 border-transparent px-3 py-1.5 text-xs data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none"
-                        >
-                          {t.label}
-                        </TabsTrigger>
-                      ))}
+                      {TABS.map(t => {
+                        const dot =
+                          t.value === 'assigned'
+                            ? buckets.assigned
+                            : t.value === 'raised'
+                              ? buckets.raised
+                              : t.value === 'watching'
+                                ? buckets.watching
+                                : t.value === 'all_open'
+                                  ? buckets.allOpen
+                                  : false
+                        return (
+                          <TabsTrigger
+                            key={t.value}
+                            value={t.value}
+                            className="rounded-b-none border-b-2 border-transparent px-3 py-1.5 text-xs data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none"
+                          >
+                            {t.label}
+                            {t.value === 'unread' && unreadFlags.length > 0 && (
+                              <span
+                                className="ml-1 rounded-full px-1.5 text-[10px] font-semibold text-white"
+                                style={{ backgroundColor: 'var(--flag-unread)' }}
+                              >
+                                {unreadFlags.length}
+                              </span>
+                            )}
+                            {t.value !== 'unread' && dot && (
+                              <span
+                                className="ml-1 inline-block h-1.5 w-1.5 rounded-full align-middle"
+                                style={{ backgroundColor: 'var(--flag-unread)' }}
+                                aria-hidden
+                              />
+                            )}
+                          </TabsTrigger>
+                        )
+                      })}
                     </TabsList>
                   </Tabs>
                 </div>
               </>
             )}
 
-            {/* Filter bar — shown whenever there are flags to triage (not on Activity). */}
-            {!isActivity && !isLoading && !isError && hasFlags && (
+            {/* Filter bar — shown whenever there are flags to triage (not on
+                Activity or Unread). */}
+            {!isActivity && !isUnread && !isLoading && !isError && hasFlags && (
               <FlagsFilterBar value={filter} onChange={setFilter} />
             )}
 
@@ -369,6 +415,7 @@ export function FlagsFlyout() {
                     <FlagTable
                       flags={visibleFlags}
                       highlightIds={highlightIds}
+                      unreadIds={unreadIds}
                     />
                   ) : (
                     visibleFlags.map(flag => (
@@ -376,6 +423,7 @@ export function FlagsFlyout() {
                         key={flag.id}
                         flag={flag}
                         highlight={highlightIds.has(flag.id)}
+                        unread={unreadIds.has(flag.id)}
                       />
                     ))
                   ))}

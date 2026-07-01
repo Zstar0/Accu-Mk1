@@ -91,6 +91,20 @@ describe('FlagTable', () => {
     expect(useUIStore.getState().flagsThreadId).toBe(7)
   })
 
+  it('paints the unread accent only for rows in unreadIds', () => {
+    const { container } = render(
+      <FlagTable
+        flags={[flag({ id: 1 }), flag({ id: 2 })]}
+        unreadIds={new Set([1])}
+      />
+    )
+    const unreadBars = container.querySelectorAll(
+      '[style*="--flag-unread"]'
+    )
+    // Exactly the one unread row's accent uses the dedicated color.
+    expect(unreadBars.length).toBe(1)
+  })
+
   it('deep-links (not open-thread) when the entity chip is clicked', () => {
     const navigateToSample = vi.fn()
     useUIStore.setState({ navigateToSample, flagsThreadId: null })

@@ -43,9 +43,11 @@ const GRID_TEMPLATE =
 export function FlagTable({
   flags,
   highlightIds,
+  unreadIds,
 }: {
   flags: FlagResponse[]
   highlightIds?: Set<number>
+  unreadIds?: Set<number>
 }) {
   const users = useFlagUsers()
   const typesMap = useFlagTypesMap()
@@ -63,6 +65,7 @@ export function FlagTable({
             typesMap={typesMap}
             currentUserId={currentUserId}
             highlight={highlightIds?.has(flag.id) ?? false}
+            unread={unreadIds?.has(flag.id) ?? false}
           />
         ))}
       </div>
@@ -98,12 +101,14 @@ function FlagTableRow({
   typesMap,
   currentUserId,
   highlight = false,
+  unread = false,
 }: {
   flag: FlagResponse
   users: UserMap
   typesMap: Record<string, FlagTypeDef>
   currentUserId: number | null
   highlight?: boolean
+  unread?: boolean
 }) {
   const def = typesMap[flag.type] ?? flagTypeDef(flag.type)
   const { Icon } = entityMeta(flag.entity_type)
@@ -144,10 +149,12 @@ function FlagTableRow({
         highlight && 'flag-row-pulse'
       )}
     >
-      {/* Type-color accent */}
+      {/* Unread accent (dedicated color when unread, else transparent) */}
       <span
         className="h-6 w-full rounded-full"
-        style={{ backgroundColor: def.color }}
+        style={{
+          backgroundColor: unread ? 'var(--flag-unread)' : 'transparent',
+        }}
         aria-hidden
       />
 
