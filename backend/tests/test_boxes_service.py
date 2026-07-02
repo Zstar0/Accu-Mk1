@@ -110,3 +110,43 @@ def test_delete_box_with_vials_unassigns_and_removes(db):
 def test_delete_missing_box_raises_lookup(db):
     with pytest.raises(LookupError):
         service.delete_box(db, 9999)
+
+
+def test_close_box_unassigns_vials_and_stamps_stored(db):
+    p = LimsSample(sample_id="P-0603", external_lims_uid="u-603")
+    db.add(p); db.flush()
+    v = _vial(db, p, 1, "hplc")
+    box = service.next_box(db, "WP-20067", "hplc", user_id=1)
+    service.assign_vials(db, box.id, [v.sample_id])
+    closed = service.close_box(db, box.id, user_id=7)
+    assert closed.stored_at is not None
+    assert closed.stored_by_user_id == 7
+    db.refresh(v)
+    assert v.box_id is None
+    # Closed boxes drop off both active surfaces.
+    assert service.list_for_order(db, "WP-20067") == []
+    assert box.id not in [b.id for b in service.list_active(db)]
+
+
+def test_close_box_is_idempotent(db):
+    box = service.next_box(db, "WP-20068", "hplc", user_id=1)
+    first = service.close_box(db, box.id, user_id=1)
+    stamp = first.stored_at
+    again = service.close_box(db, box.id, user_id=2)
+    # Re-close is a no-op: first closer's stamp wins, nothing re-stamps.
+    assert again.stored_at == stamp
+    assert again.stored_by_user_id == 1
+
+
+def test_close_missing_box_raises_lookup(db):
+    with pytest.raises(LookupError):
+        service.close_box(db, 9999, user_id=1)
+
+
+def test_list_active_excludes_stored(db):
+    a = service.next_box(db, "WP-20069", "hplc", user_id=1)
+    b = service.next_box(db, "WP-20069", "endo", user_id=1)
+    service.close_box(db, a.id, user_id=1)
+    ids = [x.id for x in service.list_active(db)]
+    assert a.id not in ids
+    assert b.id in ids

@@ -99,9 +99,41 @@ def delete_box(db: Session, box_id: int) -> None:
     db.commit()
 
 
+def close_box(db: Session, box_id: int, user_id: int) -> LimsBox:
+    """Close out a box: return all its vials to Unboxed and stamp stored_at.
+
+    The normal end-of-life path — unlike delete_box (the mistake path) it keeps
+    the box row as a record. Idempotent: closing an already-stored box is a
+    no-op (first closer's stamp wins). Raises LookupError if the box is missing.
+    """
+    box = db.get(LimsBox, box_id)
+    if box is None:
+        raise LookupError(f"box {box_id} not found")
+    if box.stored_at is None:
+        db.execute(
+            update(LimsSubSample).where(LimsSubSample.box_id == box_id).values(box_id=None)
+        )
+        box.stored_at = datetime.utcnow()
+        box.stored_by_user_id = user_id
+        db.commit()
+    db.refresh(box)
+    return box
+
+
+def list_active(db: Session) -> List[LimsBox]:
+    """All boxes not yet closed out to storage, oldest first (Active Boxes page)."""
+    return list(
+        db.scalars(
+            select(LimsBox).where(LimsBox.stored_at.is_(None)).order_by(LimsBox.created_at, LimsBox.id)
+        )
+    )
+
+
 def list_for_order(db: Session, order_key: str) -> List[LimsBox]:
     return list(
         db.scalars(
-            select(LimsBox).where(LimsBox.order_key == order_key).order_by(LimsBox.box_number)
+            select(LimsBox)
+            .where(LimsBox.order_key == order_key, LimsBox.stored_at.is_(None))
+            .order_by(LimsBox.box_number)
         ).all()
     )

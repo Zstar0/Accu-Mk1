@@ -791,6 +791,8 @@ def _run_migrations():
         """,
         "CREATE INDEX IF NOT EXISTS ix_lims_boxes_order_key ON lims_boxes (order_key)",
         "ALTER TABLE lims_sub_samples ADD COLUMN IF NOT EXISTS box_id INTEGER REFERENCES lims_boxes(id) ON DELETE SET NULL",
+        "ALTER TABLE lims_boxes ADD COLUMN IF NOT EXISTS stored_at TIMESTAMP",
+        "ALTER TABLE lims_boxes ADD COLUMN IF NOT EXISTS stored_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL",
     ]
     # Per-statement isolation: a failure in one statement (e.g., a table that
     # create_all hasn't built yet on first run) must not skip subsequent

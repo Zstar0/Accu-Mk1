@@ -833,6 +833,10 @@ class LimsBox(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     printed_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     printed_by_user_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("users.id", ondelete="SET NULL"))
+    # Close-out ("stored"): set when the box's testing life ends and it goes to
+    # storage; its vials were returned to Unboxed. Active box = stored_at IS NULL.
+    stored_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    stored_by_user_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("users.id", ondelete="SET NULL"))
 
     vials: Mapped[List["LimsSubSample"]] = relationship("LimsSubSample", back_populates="box")
 
