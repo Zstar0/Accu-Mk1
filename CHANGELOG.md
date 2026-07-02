@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.0.20 — 2026-07-02
+
+### Fixed
+
+- **"Add Type" in Preferences → Flags no longer fails with a 409 after the first type.** The Add button always creates a placeholder labeled "New type" (renamed afterward), so the backend kept deriving the same immutable slug `new_type` and rejecting every subsequent add as a conflict. A label-derived slug now auto-uniquifies (`new_type`, `new_type_2`, …) instead of colliding; an explicitly-provided slug that collides still returns 409 (real user intent). Backend-only — no schema, migration, or data change.
+
 ## v1.0.19 — 2026-07-02
 
 ### Changed
