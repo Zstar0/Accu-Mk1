@@ -244,8 +244,12 @@ def add_comment(db: Session, *, user, flag_id, body, mention_ids=None) -> FlagCo
             db.add(FlagParticipant(flag_id=flag.id, user_id=uid,
                                    role="watcher", added_by=actor_id))
     flag.updated_at = datetime.utcnow()
-    _audit(db, flag, actor_id, "commented",
-           details={"mentions": valid} if valid else None)
+    # body_excerpt rides the event for notification transports (Slack DMs);
+    # additive detail key — consumers ignore unknown keys.
+    details = {"body_excerpt": body.strip()[:140]}
+    if valid:
+        details["mentions"] = valid
+    _audit(db, flag, actor_id, "commented", details=details)
     _commit_and_emit(db)
     db.refresh(c)
     return c

@@ -38,6 +38,9 @@ interface ParsedNav {
   section: ActiveSection
   subSection: ActiveSubSection
   targetId: string | null
+  /** Slack DM deep link (spec 2026-07-02): `?flag=<id>` opens that flag's
+   *  thread. One-shot — buildHash never re-emits it. */
+  flagId: number | null
 }
 
 function parseNavHash(hash: string): ParsedNav | null {
@@ -55,17 +58,21 @@ function parseNavHash(hash: string): ParsedNav | null {
   const subSection = path.slice(slash + 1)
   if (!VALID_SECTIONS.has(section) || !subSection) return null
 
-  // Extract ?id= parameter
+  // Extract ?id= and ?flag= parameters
   let targetId: string | null = null
+  let flagId: number | null = null
   if (query) {
     const params = new URLSearchParams(query)
     targetId = params.get('id')
+    const rawFlag = params.get('flag')
+    if (rawFlag && !Number.isNaN(Number(rawFlag))) flagId = Number(rawFlag)
   }
 
   return {
     section: section as ActiveSection,
     subSection: subSection as ActiveSubSection,
     targetId,
+    flagId,
   }
 }
 
@@ -95,6 +102,12 @@ function applyNavToStore(nav: ParsedNav) {
     store.openWorksheetDrawer(Number(targetId))
   } else {
     store.navigateTo(section, subSection)
+  }
+
+  // Slack DM deep link (spec 2026-07-02): one-shot open of a flag thread.
+  // buildHash never re-emits ?flag=, so the param clears on the next nav.
+  if (nav.flagId != null) {
+    store.openFlagThread(nav.flagId)
   }
 }
 

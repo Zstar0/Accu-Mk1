@@ -76,6 +76,7 @@ from sub_samples.service import derive_base_demand
 from lims_analyses.routes import router as lims_analyses_router
 from families.routes import router as families_router  # Phase 5b
 from flags.routes import router as flags_router
+from slack_notify.routes import router as slack_prefs_router
 
 import logging
 
@@ -327,6 +328,9 @@ async def lifespan(app: FastAPI):
     from flags import bus as _flag_bus
     _flag_bus.BUS.set_loop(_asyncio.get_running_loop())
     _flag_seams.set_event_sink(_flag_bus.SSEEventSink(_flag_bus.BUS))
+    # Slack DM notifications (spec 2026-07-02) — dormant without the token.
+    from slack_notify.notifier import maybe_start as _slack_maybe_start
+    _slack_notifier_task = _slack_maybe_start(_flag_bus.BUS)
     # Seed default settings and admin user
     from database import SessionLocal
     db = SessionLocal()
@@ -400,6 +404,7 @@ app.include_router(sub_samples_router)
 app.include_router(lims_analyses_router)
 app.include_router(families_router)
 app.include_router(flags_router)
+app.include_router(slack_prefs_router)
 
 # --- Endpoints ---
 

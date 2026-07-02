@@ -898,6 +898,8 @@ def _run_migrations():
         "CREATE INDEX IF NOT EXISTS ix_flag_events_created_at_id ON flag_events (created_at DESC, id DESC)",
         # Flag @mentions: user ids called out in a comment
         "ALTER TABLE flag_comments ADD COLUMN IF NOT EXISTS mentions JSON",
+        # Slack DM prefs: cached Slack display name for mapping confidence
+        "ALTER TABLE slack_dm_prefs ADD COLUMN IF NOT EXISTS slack_display_name TEXT",
     ]
     # Per-statement isolation: a failure in one statement (e.g., a table that
     # create_all hasn't built yet on first run) must not skip subsequent

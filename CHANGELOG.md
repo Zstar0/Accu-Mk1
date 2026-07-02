@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.0.16 — 2026-07-02
+
+### Added
+
+- **Flag System.** A task/thread system on samples, vials, and worksheets: raise Issue or Signal flags, assign them, comment with @mentions, watch threads, and track status (Open → In progress → Blocked → Resolved → Closed). Real-time updates over SSE with a flyout showing Activity, mentions, and unread counts; admin-managed flag types; multi-flag affordances per entity. Internal, all-staff-visible in v1. Additive — new `flags`, `flag_comments`, `flag_events`, and `flag_participants` tables auto-create at startup.
+- **Slack DM notifications for flags.** Flag activity can mirror to Slack DMs, with a per-user config card on the Account → Profile page (master toggle, link status, member-ID field, test-DM button, and five per-category toggles: assigned / mentioned / activity-on-flags-you-raised / activity-on-flags-you-watch / status changes). Recipients are computed server-side (assignee / creator / mentioned / watchers, minus the actor). Deep links land on the flagged entity's page and open the thread. **Env-gated — dormant unless `MK1_SLACK_BOT_TOKEN` is set** (zero overhead when unconfigured); optional mixed-domain email resolution via `MK1_SLACK_EMAIL_ALIAS_DOMAINS`. User-supplied text is escaped before Slack mrkdwn interpolation.
+
 ## v1.0.15 — 2026-07-01
 
 ### Added

@@ -1,0 +1,42 @@
+# Slack app manifest for Accu-Mk1 flag DM notifications.
+# Create at https://api.slack.com/apps -> "Create New App" -> "From a manifest"
+# -> pick the lab workspace -> paste this YAML.
+#
+# After install: copy the Bot User OAuth Token (xoxb-...) from
+# "OAuth & Permissions" into the Mk1 backend env as MK1_SLACK_BOT_TOKEN.
+# Push-only DMs: no event subscriptions, no interactivity, no public URL.
+# See docs/superpowers/specs/2026-07-02-flag-slack-dm-notifications-design.md.
+display_information:
+  name: Accu-Mk1
+  description: Flag notifications from the Accu-Mk1 LIMS (assignments, mentions, watched activity)
+  background_color: "#1a1d21"
+features:
+  # Read-only Messages tab: users can scroll the bot's DM history, but the
+  # composer is disabled — nothing listens, so don't invite replies.
+  app_home:
+    home_tab_enabled: false
+    messages_tab_enabled: true
+    messages_tab_read_only_enabled: true
+  bot_user:
+    display_name: Accu-Mk1
+    always_online: true
+oauth_config:
+  scopes:
+    bot:
+      - chat:write        # send the DMs
+      - im:write          # open the DM conversation with a user
+      - users:read        # prerequisite for users:read.email
+      - users:read.email  # users.lookupByEmail (map Mk1 login email -> Slack id)
+settings:
+  # Phase-2 prep (interactive actions — Resolve / Assign-to-me buttons in DMs).
+  # Enabled now so the app never needs a manifest change: with no interactive
+  # components in our messages Slack sends nothing here. When Phase 2 ships,
+  # Mk1 adds POST /api/slack/interactions with MANDATORY request-signature
+  # verification (SLACK_SIGNING_SECRET env, X-Slack-Signature v0 HMAC,
+  # timestamp replay window). Until then the URL simply 404s.
+  interactivity:
+    is_enabled: true
+    request_url: https://accumk1.valenceanalytical.com/api/slack/interactions
+  org_deploy_enabled: false
+  socket_mode_enabled: false
+  token_rotation_enabled: false
