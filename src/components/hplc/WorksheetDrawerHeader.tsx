@@ -12,6 +12,7 @@ import {
 import type { WorksheetListItem } from '@/lib/api'
 import { displayName } from '@/lib/user-display'
 import { EntityFlagButton } from '@/components/flags/EntityFlagButton'
+import { useRegisterActiveFlagEntity } from '@/components/flags/use-active-flag-entity'
 
 interface WorksheetDrawerHeaderProps {
   worksheet: WorksheetListItem
@@ -45,6 +46,13 @@ export function WorksheetDrawerHeader({
   const [titleDraft, setTitleDraft] = useState(worksheet.title)
   const [notesValue, setNotesValue] = useState(userNotes)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // Multi-flag affordances: the open worksheet drawer is "the page you're on".
+  useRegisterActiveFlagEntity(
+    'worksheet',
+    String(worksheet.id),
+    worksheet.title || `Worksheet ${worksheet.id}`
+  )
 
   // Sync when switching worksheets or when external updates arrive
   useEffect(() => {

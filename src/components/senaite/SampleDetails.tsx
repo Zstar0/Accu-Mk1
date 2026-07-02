@@ -152,6 +152,7 @@ import { ProductChip } from '@/components/senaite/ProductChip'
 import { computeProductCompletion, type ProductCompletionContext } from '@/lib/product-completion'
 import { VialsQuickLookDialog } from '@/components/senaite/VialsQuickLookDialog'
 import { EntityFlagButton } from '@/components/flags/EntityFlagButton'
+import { useRegisterActiveFlagEntity } from '@/components/flags/use-active-flag-entity'
 import { Eye, Microscope, Plus, Printer, Search, Star, Trash2, ScrollText, Sigma } from 'lucide-react'
 import { VarianceSummary } from '@/components/samples/VarianceSummary'
 import { usePrintLabel } from '@/components/samples/usePrintLabel'
@@ -2918,6 +2919,15 @@ export function SampleDetails() {
     : String(
         parentSummary?.sub_samples.find(s => s.sample_id === sampleId)?.id ?? ''
       )
+
+  // Multi-flag affordances: while this page is mounted it is "the page you're
+  // on" — the un-scoped flyout's Add Flag targets it. Human sample/vial id is
+  // the label ("P-0144" / "P-0144-S01").
+  useRegisterActiveFlagEntity(
+    flagEntityId ? flagEntityType : null,
+    flagEntityId || null,
+    sampleId ?? null
+  )
 
   // Vial-page Mk1 attachments: the check-in photo URL (also drives the header
   // thumb after edits) and the extra sample images. vialPhotoVersion bumps
