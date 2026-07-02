@@ -57,7 +57,7 @@ const mockPrintBox = vi.mocked(printBox)
 
 type Vial = SubSample & { box_id?: number | null }
 
-const vial = (sampleId: string, role: 'hplc' | 'endo' | 'ster', boxId: number | null = null): Vial =>
+const vial = (sampleId: string, role: 'hplc' | 'endo' | 'ster' | 'xtra', boxId: number | null = null): Vial =>
   ({
     id: Number(sampleId.replace(/\D/g, '')) || 0,
     sample_id: sampleId,
@@ -196,6 +196,19 @@ describe('BoxStep — capacity-driven boxing', () => {
     const ids = mockAssignVialsToBox.mock.calls[0]![1]
     expect(ids.length).toBeLessThanOrEqual(2)
     expect(ids).toEqual(['P-101', 'P-102'])
+  })
+
+  it('shows an unboxed xtra vial in the Unboxed panel under Extras (no longer filtered out)', async () => {
+    setupBackend([vial('P-201', 'xtra')])
+    renderBoxStep()
+
+    // The chip is in the Unboxed panel (never assigned), grouped under an
+    // "Extras" heading that renders twice: the xtra role column + the panel group.
+    expect(await screen.findByText('P-201')).toBeInTheDocument()
+    expect(screen.getAllByText('Extras').length).toBeGreaterThanOrEqual(2)
+    expect(screen.queryByText('All vials boxed.')).not.toBeInTheDocument()
+    // xtra is boxable now: the first-box auto-create fires for it too.
+    await waitFor(() => expect(mockCreateBox).toHaveBeenCalledWith(ORDER, 'xtra'))
   })
 
   it('renders a box\'s assigned vials as chips inside the box card', async () => {

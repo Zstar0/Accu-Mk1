@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from models import LimsBox, LimsSubSample
 
-BOXABLE_ROLES = {"hplc", "endo", "ster"}
+BOXABLE_ROLES = {"hplc", "endo", "ster", "xtra"}
 
 
 def box_label_code(box: LimsBox) -> str:

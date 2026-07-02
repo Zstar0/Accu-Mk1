@@ -5521,7 +5521,7 @@ export interface LimsBox {
   id: number
   order_key: string
   box_number: number
-  role: 'hplc' | 'endo' | 'ster'
+  role: 'hplc' | 'endo' | 'ster' | 'xtra'
   label_code: string
   vial_count: number
   printed_at: string | null
@@ -5535,7 +5535,7 @@ export async function listOrderBoxes(orderKey: string): Promise<LimsBox[]> {
 
 export async function createBox(
   orderKey: string,
-  role: 'hplc' | 'endo' | 'ster',
+  role: 'hplc' | 'endo' | 'ster' | 'xtra',
 ): Promise<LimsBox> {
   return apiFetch<LimsBox>('/api/boxes', {
     method: 'POST',

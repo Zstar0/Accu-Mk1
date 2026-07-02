@@ -46,6 +46,15 @@ def test_assign_rejects_role_mismatch(db):
         service.assign_vials(db, box.id, [endo_vial.sample_id])
 
 
+def test_xtra_is_boxable(db):
+    p = LimsSample(sample_id="P-0620", external_lims_uid="u-620")
+    db.add(p); db.flush()
+    v = _vial(db, p, 1, "xtra")
+    box = service.next_box(db, "WP-20070", "xtra", user_id=1)
+    service.assign_vials(db, box.id, [v.sample_id])
+    assert v.box_id == box.id
+
+
 def test_assign_then_print_records_membership_and_stamp(db):
     p = LimsSample(sample_id="P-0601", external_lims_uid="u-601")
     db.add(p); db.flush()

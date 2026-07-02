@@ -828,7 +828,7 @@ class LimsBox(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     order_key: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     box_number: Mapped[int] = mapped_column(Integer, nullable=False)
-    role: Mapped[str] = mapped_column(String(8), nullable=False)  # hplc | endo | ster
+    role: Mapped[str] = mapped_column(String(8), nullable=False)  # hplc | endo | ster | xtra
     created_by_user_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("users.id", ondelete="SET NULL"))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     printed_at: Mapped[Optional[datetime]] = mapped_column(DateTime)

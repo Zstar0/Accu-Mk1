@@ -5,7 +5,7 @@ from pydantic import BaseModel
 
 class CreateBoxRequest(BaseModel):
     order_key: str
-    role: str  # hplc | endo | ster
+    role: str  # hplc | endo | ster | xtra
 
 
 class AssignVialsRequest(BaseModel):

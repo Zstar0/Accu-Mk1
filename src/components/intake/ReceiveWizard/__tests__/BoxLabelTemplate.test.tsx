@@ -37,6 +37,13 @@ describe('BoxLabelTemplate', () => {
     expect(screen.getByText('2026-07-01')).toBeInTheDocument()
   })
 
+  it('xtra prints as XTRA on the meta row', () => {
+    render(
+      <BoxLabelTemplate boxId={137} orderKey="WP-3267" role="xtra" vialCount={1} createdAt={null} />,
+    )
+    expect(screen.getByText('XTRA · 1 vial')).toBeInTheDocument()
+  })
+
   it('singularizes a one-vial count', () => {
     render(
       <BoxLabelTemplate boxId={137} orderKey="WP-3267" role="endo" vialCount={1} createdAt={null} />,

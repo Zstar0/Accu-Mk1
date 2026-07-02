@@ -13,7 +13,7 @@ import { getWordpressUrl } from '@/lib/api-profiles'
 import { roleBadgeClass, roleTextClass } from '@/lib/assignment-colors'
 import { groupSamplesByOrder } from '@/lib/inbox-orders'
 
-const ROLE_LABEL: Record<string, string> = { hplc: 'HPLC', endo: 'Endotoxin', ster: 'Sterility' }
+const ROLE_LABEL: Record<string, string> = { hplc: 'HPLC', endo: 'Endotoxin', ster: 'Sterility', xtra: 'Extras' }
 
 /** Group boxes by order_key preserving first-appearance order, so the API's
  *  oldest-box-first ordering holds within and across groups. */

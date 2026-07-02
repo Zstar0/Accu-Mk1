@@ -32,9 +32,9 @@ const snapCenterToCursor: Modifier = ({ activatorEvent, draggingNodeRect, transf
   return transform
 }
 
-type BoxRole = 'hplc' | 'endo' | 'ster'
-const ROLE_LABEL: Record<BoxRole, string> = { hplc: 'HPLC', endo: 'Endotoxin', ster: 'Sterility' }
-const ROLES: BoxRole[] = ['hplc', 'endo', 'ster']
+type BoxRole = 'hplc' | 'endo' | 'ster' | 'xtra'
+const ROLE_LABEL: Record<BoxRole, string> = { hplc: 'HPLC', endo: 'Endotoxin', ster: 'Sterility', xtra: 'Extras' }
+const ROLES: BoxRole[] = ['hplc', 'endo', 'ster', 'xtra']
 
 // Default per-box capacity: the lab's smallest box holds 6 vials. Auto-assign
 // fills up to the (possibly-edited) capacity; only this default is fixed at 6.
@@ -91,7 +91,7 @@ export function BoxStep({ orderKey, orderLabel, sampleIds }: Props) {
   })
 
   const boxes = boxesQ.data ?? []
-  const vials = (vialsQ.data ?? []).filter(v => v.assignment_role && v.assignment_role !== 'xtra')
+  const vials = (vialsQ.data ?? []).filter(v => v.assignment_role)
 
   // Auto-create — FIRST box only. A render effect (ref-guarded): for each role
   // with assigned-but-unboxed vials and zero boxes, mint exactly one box. The
@@ -216,7 +216,7 @@ export function BoxStep({ orderKey, orderLabel, sampleIds }: Props) {
         </div>
         <div className="flex gap-4 flex-1 min-h-0">
           {/* LEFT: per-role box columns + in-column drop targets (manual override). */}
-          <div className="flex-1 grid grid-cols-3 gap-4 overflow-y-auto">
+          <div className="flex-1 grid grid-cols-4 gap-4 overflow-y-auto">
             {ROLES.map(role => {
               return (
                 <div key={role} className="flex flex-col gap-3">

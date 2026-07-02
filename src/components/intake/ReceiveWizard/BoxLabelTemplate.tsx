@@ -1,12 +1,12 @@
 import { QRCodeSVG } from 'qrcode.react'
 
 // "PCR" per the lab's Sterility-Screening-PCR naming (matches the order label).
-export const ROLE_SHORT: Record<string, string> = { hplc: 'HPLC', endo: 'ENDO', ster: 'PCR' }
+export const ROLE_SHORT: Record<string, string> = { hplc: 'HPLC', endo: 'ENDO', ster: 'PCR', xtra: 'XTRA' }
 
 interface Props {
   boxId: number                // lims_boxes.id — the QR payload (scanner-station contract)
   orderKey: string             // e.g. "WP-3267" — the big printed line
-  role: 'hplc' | 'endo' | 'ster'
+  role: 'hplc' | 'endo' | 'ster' | 'xtra'
   vialCount: number
   createdAt: string | null     // ISO; printed as YYYY-MM-DD, omitted when null
 }
