@@ -76,12 +76,18 @@ Emails are mixed (`@accumarklabs.com` / `@valenceanalytical.com` aliases), so:
 
 1. **Happy path:** on first DM attempt with `slack_member_id` null, call
    `users.lookupByEmail` with the Mk1 login email; on hit, cache the member id
-   into the prefs row.
-2. **Fallback:** lookup miss → mark the row unresolved; the preferences UI
-   shows "Not linked" with a field to paste your Slack member ID
-   (Slack profile → Copy member ID) and a **"Send test DM"** button.
-
-No domain-swap heuristics — explicit link only.
+   (and `slack_display_name` via `users.info`) into the prefs row.
+2. **Alias-domain retry:** lab logins and Slack profiles use different aliased
+   domains on ONE O365 inbox (`forrest@valenceanalytical.com` login vs
+   `forrest@accumarklabs.com` Slack). On a login-email miss, retry the same
+   local-part on each domain in `MK1_SLACK_EMAIL_ALIAS_DOMAINS` (comma-list env;
+   empty/unset = off, `emails.candidate_emails`). Safe because the domains
+   alias one inbox → same person; off-list addresses (personal gmail) are never
+   rewritten. **Prod must set `MK1_SLACK_EMAIL_ALIAS_DOMAINS=accumarklabs.com,valenceanalytical.com`.**
+3. **Manual fallback:** still no hit → row stays unresolved; the prefs UI shows
+   "Not linked" with a field to paste your Slack member ID (Slack profile →
+   Copy member ID) and a **"Send test DM"** button. The "Linked → {name}"
+   confidence line lets a user catch any wrong auto-resolution.
 
 ## API
 
