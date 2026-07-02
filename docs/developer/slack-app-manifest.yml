@@ -11,6 +11,12 @@ display_information:
   description: Flag notifications from the Accu-Mk1 LIMS (assignments, mentions, watched activity)
   background_color: "#1a1d21"
 features:
+  # Read-only Messages tab: users can scroll the bot's DM history, but the
+  # composer is disabled — nothing listens, so don't invite replies.
+  app_home:
+    home_tab_enabled: false
+    messages_tab_enabled: true
+    messages_tab_read_only_enabled: true
   bot_user:
     display_name: Accu-Mk1
     always_online: true
