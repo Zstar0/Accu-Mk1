@@ -355,6 +355,7 @@ export function SamplePreps() {
       }
       setScanMatches(prev => new Map(prev).set(prep.id, match))
       setOverrideTarget(null)
+      setOverrideTab('sharepoint')
       toast.success(`"${res.folder_name}" pinned to ${prep.senaite_sample_id ?? prep.sample_id}`, {
         description: `${res.peak_files.length} PeakData, ${res.chrom_files.length} chromatogram file(s) — use Process HPLC.`,
       })
@@ -388,6 +389,7 @@ export function SamplePreps() {
     }
     setScanMatches(prev => new Map(prev).set(prep.id, match))
     setOverrideTarget(null)
+    setOverrideTab('sharepoint')
     const chromCount = localFiles.filter(f => f.kind === 'chrom').length
     toast.success(`"${folderName}" pinned to ${prep.senaite_sample_id ?? prep.sample_id}`, {
       description: `${peakCount} PeakData, ${chromCount} chromatogram file(s) — use Process HPLC.`,
