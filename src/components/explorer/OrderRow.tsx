@@ -5,6 +5,7 @@ import { cn } from '@/lib/utils'
 import type { ExplorerOrder, SenaiteLookupResult } from '@/lib/api'
 import type { OrderSlaVerdict } from '@/lib/sla-resolution'
 import type { SampleSlaSnapshot } from '@/services/order-sla'
+import { FlagIndicator } from '@/components/flags/FlagIndicator'
 import { OrderFinancePanel } from './OrderFinancePanel'
 import { OrderSlaCell } from './OrderSlaCell'
 import { SampleCard } from './SampleCard'
@@ -124,6 +125,13 @@ export function OrderRow({
     )
   })
 
+  // Plan 6: the order's samples for the at-a-glance flag rollup. All
+  // successfully-created samples (ignores the analysis filter so the indicator
+  // reflects the whole order), keyed by the SENAITE id that IS the flag entity.
+  const flagSampleIds = Object.values(order.sample_results ?? {})
+    .filter(s => s.status !== 'failed' && s.senaite_id)
+    .map(s => s.senaite_id)
+
   const worstState = getOrderWorstState(order, sampleLookupMap)
   const done = isOrderDone(order, sampleLookupMap)
   const progress = getOrderProgress(order, sampleLookupMap)
@@ -191,6 +199,15 @@ export function OrderRow({
             {order.order_id}
             <ExternalLink className="h-3 w-3" />
           </a>
+          <FlagIndicator
+            scope={{
+              kind: 'order',
+              orderId: order.order_id,
+              sampleIds: flagSampleIds,
+              label: `#${order.order_number}`,
+            }}
+            variant="pill"
+          />
         </div>
       </td>
       <td className="py-3 px-3">

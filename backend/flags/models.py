@@ -59,6 +59,8 @@ class FlagComment(Base):
     body: Mapped[str] = mapped_column(Text, nullable=False)
     audience: Mapped[str] = mapped_column(Text, nullable=False, default="internal",
                                           server_default="internal")
+    mentions: Mapped[Optional[list]] = mapped_column(
+        JSONB().with_variant(JSON(), "sqlite"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     edited_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
@@ -97,3 +99,15 @@ class FlagEvent(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
     flag: Mapped["FlagFlag"] = relationship("FlagFlag", back_populates="events")
+
+
+class FlagRead(Base):
+    """Per-user last-read marker for a flag (drives unread state)."""
+    __tablename__ = "flag_reads"
+    __table_args__ = (UniqueConstraint("user_id", "flag_id", name="uq_flag_read"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    flag_id: Mapped[int] = mapped_column(Integer, ForeignKey("flag_flags.id", ondelete="CASCADE"),
+                                         nullable=False, index=True)
+    last_read_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)

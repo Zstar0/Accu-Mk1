@@ -11,26 +11,43 @@ import {
 } from '@/components/ui/select'
 import type { WorksheetListItem } from '@/lib/api'
 import { displayName } from '@/lib/user-display'
+import { EntityFlagButton } from '@/components/flags/EntityFlagButton'
+import { useRegisterActiveFlagEntity } from '@/components/flags/use-active-flag-entity'
 
 interface WorksheetDrawerHeaderProps {
   worksheet: WorksheetListItem
   userNotes: string
-  users: { id: number; email: string; first_name?: string | null; last_name?: string | null }[]
-  onUpdate: (data: { title?: string; assigned_analyst?: number; notes?: string }) => void
+  users: {
+    id: number
+    email: string
+    first_name?: string | null
+    last_name?: string | null
+  }[]
+  onUpdate: (data: {
+    title?: string
+    assigned_analyst?: number
+    notes?: string
+  }) => void
   isCompleted: boolean
 }
 
 const STATUS_CLASSES: Record<string, string> = {
   open: 'bg-emerald-100 text-emerald-800 border border-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-300',
-  completed: 'bg-zinc-100 text-zinc-600 border border-zinc-200 dark:bg-zinc-900/30 dark:text-zinc-400',
-  cancelled: 'bg-red-100 text-red-700 border border-red-200 dark:bg-red-900/30 dark:text-red-300',
+  completed:
+    'bg-zinc-100 text-zinc-600 border border-zinc-200 dark:bg-zinc-900/30 dark:text-zinc-400',
+  cancelled:
+    'bg-red-100 text-red-700 border border-red-200 dark:bg-red-900/30 dark:text-red-300',
 }
 
 function formatDate(dateStr: string | null): string {
   if (!dateStr) return '—'
   const d = new Date(dateStr)
   if (isNaN(d.getTime())) return '—'
-  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
+  return d.toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  })
 }
 
 export function WorksheetDrawerHeader({
@@ -44,6 +61,13 @@ export function WorksheetDrawerHeader({
   const [titleDraft, setTitleDraft] = useState(worksheet.title)
   const [notesValue, setNotesValue] = useState(userNotes)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // Multi-flag affordances: the open worksheet drawer is "the page you're on".
+  useRegisterActiveFlagEntity(
+    'worksheet',
+    String(worksheet.id),
+    worksheet.title || `Worksheet ${worksheet.id}`
+  )
 
   // Sync when switching worksheets or when external updates arrive
   useEffect(() => {
@@ -133,15 +157,30 @@ export function WorksheetDrawerHeader({
             {worksheet.title}
           </span>
         )}
+        {/* Flag System (Plan 4): stateful flag button for this worksheet. */}
+        {!editingTitle && (
+          <div className="ml-auto shrink-0">
+            <EntityFlagButton
+              entityType="worksheet"
+              entityId={String(worksheet.id)}
+            />
+          </div>
+        )}
       </div>
 
       {/* Status row */}
       <div className="flex items-center gap-2 flex-wrap">
-        <span className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium capitalize ${statusClass}`}>
+        <span
+          className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium capitalize ${statusClass}`}
+        >
           {worksheet.status}
         </span>
-        <span className="text-xs text-muted-foreground">{worksheet.item_count} items</span>
-        <span className="text-xs text-muted-foreground">{formatDate(worksheet.created_at)}</span>
+        <span className="text-xs text-muted-foreground">
+          {worksheet.item_count} items
+        </span>
+        <span className="text-xs text-muted-foreground">
+          {formatDate(worksheet.created_at)}
+        </span>
       </div>
 
       {/* Tech dropdown */}
@@ -149,12 +188,18 @@ export function WorksheetDrawerHeader({
         <p className="text-sm text-muted-foreground">
           {(() => {
             const a = users.find(u => u.id === worksheet.assigned_analyst)
-            return a ? displayName(a) : (worksheet.assigned_analyst_email ?? 'No tech assigned')
+            return a
+              ? displayName(a)
+              : (worksheet.assigned_analyst_email ?? 'No tech assigned')
           })()}
         </p>
       ) : (
         <Select
-          value={worksheet.assigned_analyst ? String(worksheet.assigned_analyst) : undefined}
+          value={
+            worksheet.assigned_analyst
+              ? String(worksheet.assigned_analyst)
+              : undefined
+          }
           onValueChange={value => onUpdate({ assigned_analyst: Number(value) })}
         >
           <SelectTrigger className="h-8 w-full">
@@ -172,7 +217,9 @@ export function WorksheetDrawerHeader({
 
       {/* Notes textarea */}
       {isCompleted ? (
-        <p className="text-sm text-muted-foreground whitespace-pre-wrap">{notesValue || '—'}</p>
+        <p className="text-sm text-muted-foreground whitespace-pre-wrap">
+          {notesValue || '—'}
+        </p>
       ) : (
         <Textarea
           className="min-h-[72px] resize-none text-sm"

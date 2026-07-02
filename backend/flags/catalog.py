@@ -15,15 +15,23 @@ FLAG_TYPES: dict[str, dict] = {
     "ready_for_verification":{"kind": "signal", "label": "Ready for Verification","color": "#22c55e", "blocking": False},
 }
 
-STATUSES = ["open", "in_progress", "resolved", "closed"]
+STATUSES = ["open", "in_progress", "blocked", "resolved", "closed"]
+
+# The active/open states — a flag in any of these still wants attention and is
+# counted toward open totals. Centralized so list/summary/reopen agree (Plan 5
+# added `blocked`).
+OPEN_STATES = ("open", "in_progress", "blocked")
 
 # Lifecycle. Forward flow plus reopen from resolved/closed. open->closed and
-# open->resolved are allowed (a flag can be resolved/closed directly).
+# open->resolved are allowed (a flag can be resolved/closed directly). `blocked`
+# is an active state reachable from any open state and itself reopenable
+# (Plan 5): Open → In Progress ⇄ Blocked → Resolved → Closed.
 LEGAL_TRANSITIONS: dict[str, set[str]] = {
-    "open":        {"in_progress", "resolved", "closed"},
-    "in_progress": {"resolved", "closed", "open"},
-    "resolved":    {"closed", "open", "in_progress"},
-    "closed":      {"open", "in_progress"},
+    "open":        {"in_progress", "blocked", "resolved", "closed"},
+    "in_progress": {"blocked", "resolved", "closed", "open"},
+    "blocked":     {"open", "in_progress", "resolved", "closed"},
+    "resolved":    {"closed", "open", "in_progress", "blocked"},
+    "closed":      {"open", "in_progress", "blocked"},
 }
 
 

@@ -45,7 +45,11 @@ export type AccuMarkToolsSubSection =
   | 'coa-explorer'
   | 'chromatographs'
   | 'digital-coa'
-export type ReportsSubSection = 'dashboard' | 'checkin-times' | 'bottlenecks' | 'sync-debug'
+export type ReportsSubSection =
+  | 'dashboard'
+  | 'checkin-times'
+  | 'bottlenecks'
+  | 'sync-debug'
 export type AccountSubSection = 'profile' | 'user-management'
 export type PeptideRequestsSubSection = 'list' | 'detail'
 export type ActiveSubSection =
@@ -119,7 +123,7 @@ interface UIState {
   // how the three-input UI commits debounced values independently per axis.
   setCustomerOrderSearchField: (
     field: 'order_number' | 'sample_id' | 'analyte',
-    value: string,
+    value: string
   ) => void
   // Clears all three slots. Used by navigateToCustomers and any explicit
   // "clear filters" affordance the UI exposes.
@@ -143,6 +147,48 @@ interface UIState {
   openWorksheetDrawer: (worksheetId?: number) => void
   closeWorksheetDrawer: () => void
   setActiveWorksheetId: (id: number | null) => void
+
+  // Flag System flyout (mirrors the worksheet drawer shape). flagsThreadId !==
+  // null means the flyout shows one flag's thread instead of the triage list.
+  flagsFlyoutOpen: boolean
+  flagsThreadId: number | null
+  // When set, the flyout shows the open flags on ONE entity (driven by an
+  // EntityFlagButton) instead of the triage tabs. Cleared on flyout close.
+  flagsEntityFilter: {
+    type: string
+    id: string
+    includeDescendants: boolean
+  } | null
+  // Plan 6: order/multi-sample scope (an order spans samples). Mutually
+  // exclusive with the single-entity flagsEntityFilter — opening one clears the
+  // other. Drives the flyout's "Flags · {label}" rolled-up view.
+  flagsSamplesFilter: {
+    label: string
+    sampleIds: string[]
+  } | null
+  openFlagsFlyout: (threadId?: number) => void
+  openFlagThread: (id: number) => void
+  openFlagsForEntity: (
+    type: string,
+    id: string,
+    opts?: { includeDescendants?: boolean }
+  ) => void
+  openFlagsForSamples: (label: string, sampleIds: string[]) => void
+  clearFlagsEntityFilter: () => void
+  clearFlagsSamplesFilter: () => void
+  closeFlagThread: () => void
+  closeFlagsFlyout: () => void
+  // Multi-flag affordances (spec 2026-07-01): the entity detail surfaces the
+  // user currently has open, top = "the page you're on". A stack so overlays
+  // compose (worksheet drawer over a sample page); closing one restores the
+  // one beneath. Drives the un-scoped flyout's context-aware Add Flag.
+  activeFlagEntityStack: { type: string; id: string; label: string }[]
+  pushActiveFlagEntity: (entry: {
+    type: string
+    id: string
+    label: string
+  }) => void
+  popActiveFlagEntity: (entry: { type: string; id: string }) => void
   startPrepFromWorksheet: (prefill: {
     sampleId: string
     peptideId: number | null
@@ -182,6 +228,11 @@ export const useUIStore = create<UIState>()(
       worksheetDrawerOpen: false,
       activeWorksheetId: null,
       worksheetPrepPrefill: null,
+      flagsFlyoutOpen: false,
+      flagsThreadId: null,
+      flagsEntityFilter: null,
+      flagsSamplesFilter: null,
+      activeFlagEntityStack: [],
 
       toggleLeftSidebar: () =>
         set(
@@ -355,7 +406,11 @@ export const useUIStore = create<UIState>()(
             // UX revision: clear all three search slots when navigating back
             // to the customer list — same intent as the old single-field
             // reset, just applied per-axis.
-            customerOrderSearch: { order_number: '', sample_id: '', analyte: '' },
+            customerOrderSearch: {
+              order_number: '',
+              sample_id: '',
+              analyte: '',
+            },
             navigationKey: state.navigationKey + 1,
           }),
           undefined,
@@ -388,19 +443,28 @@ export const useUIStore = create<UIState>()(
       setCustomerOrderSearchField: (field, value) =>
         set(
           state => ({
-            customerOrderSearch: { ...state.customerOrderSearch, [field]: value },
+            customerOrderSearch: {
+              ...state.customerOrderSearch,
+              [field]: value,
+            },
           }),
           undefined,
-          'setCustomerOrderSearchField',
+          'setCustomerOrderSearchField'
         ),
 
       // Clears all three slots in one render cycle. Used by clear-filters
       // affordances; navigateToCustomers does the equivalent inline.
       setCustomerOrderSearchReset: () =>
         set(
-          { customerOrderSearch: { order_number: '', sample_id: '', analyte: '' } },
+          {
+            customerOrderSearch: {
+              order_number: '',
+              sample_id: '',
+              analyte: '',
+            },
+          },
           undefined,
-          'setCustomerOrderSearchReset',
+          'setCustomerOrderSearchReset'
         ),
 
       setUpdateVersion: version =>
@@ -443,6 +507,118 @@ export const useUIStore = create<UIState>()(
           { worksheetPrepPrefill: null },
           undefined,
           'clearWorksheetPrepPrefill'
+        ),
+
+      // Open the flyout. With no arg it opens the triage list (preserving any
+      // current thread id); with a thread id it opens straight onto that thread.
+      openFlagsFlyout: threadId =>
+        set(
+          state => ({
+            flagsFlyoutOpen: true,
+            flagsThreadId: threadId ?? state.flagsThreadId,
+          }),
+          undefined,
+          'openFlagsFlyout'
+        ),
+
+      openFlagThread: id =>
+        set(
+          { flagsFlyoutOpen: true, flagsThreadId: id },
+          undefined,
+          'openFlagThread'
+        ),
+
+      // Open the flyout filtered to one entity's open flags (e.g. clicking an
+      // EntityFlagButton with >1 flag). Drops any active thread.
+      openFlagsForEntity: (type, id, opts) =>
+        set(
+          {
+            flagsFlyoutOpen: true,
+            flagsThreadId: null,
+            flagsEntityFilter: {
+              type,
+              id,
+              includeDescendants: opts?.includeDescendants ?? false,
+            },
+            // Mutually exclusive with the order/samples scope.
+            flagsSamplesFilter: null,
+          },
+          undefined,
+          'openFlagsForEntity'
+        ),
+
+      // Plan 6: open the flyout rolled up to an order's samples. Clears the
+      // single-entity filter so the two scopes never coexist.
+      openFlagsForSamples: (label, sampleIds) =>
+        set(
+          {
+            flagsFlyoutOpen: true,
+            flagsThreadId: null,
+            flagsSamplesFilter: { label, sampleIds },
+            flagsEntityFilter: null,
+          },
+          undefined,
+          'openFlagsForSamples'
+        ),
+
+      // Return from the entity-filtered view to the triage tabs.
+      clearFlagsEntityFilter: () =>
+        set({ flagsEntityFilter: null }, undefined, 'clearFlagsEntityFilter'),
+
+      // Return from the order/samples view to the triage tabs.
+      clearFlagsSamplesFilter: () =>
+        set({ flagsSamplesFilter: null }, undefined, 'clearFlagsSamplesFilter'),
+
+      pushActiveFlagEntity: entry =>
+        set(
+          state => ({
+            activeFlagEntityStack: [...state.activeFlagEntityStack, entry],
+          }),
+          undefined,
+          'pushActiveFlagEntity'
+        ),
+
+      popActiveFlagEntity: entry =>
+        set(
+          state => {
+            const stack = state.activeFlagEntityStack
+            // Remove the LAST matching entry (not necessarily the top —
+            // React unmount order isn't guaranteed to mirror mount order).
+            let i = -1
+            for (let j = stack.length - 1; j >= 0; j--) {
+              const e = stack[j]
+              if (e && e.type === entry.type && e.id === entry.id) {
+                i = j
+                break
+              }
+            }
+            if (i === -1) return {}
+            return {
+              activeFlagEntityStack: [
+                ...stack.slice(0, i),
+                ...stack.slice(i + 1),
+              ],
+            }
+          },
+          undefined,
+          'popActiveFlagEntity'
+        ),
+
+      // Back to the triage list — drops the thread but keeps the flyout open
+      // (and any entity filter, so "back" returns to the filtered list).
+      closeFlagThread: () =>
+        set({ flagsThreadId: null }, undefined, 'closeFlagThread'),
+
+      closeFlagsFlyout: () =>
+        set(
+          {
+            flagsFlyoutOpen: false,
+            flagsThreadId: null,
+            flagsEntityFilter: null,
+            flagsSamplesFilter: null,
+          },
+          undefined,
+          'closeFlagsFlyout'
         ),
     }),
     {

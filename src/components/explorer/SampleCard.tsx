@@ -2,6 +2,7 @@ import { AlertTriangle, RefreshCw } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
 import { useUIStore } from '@/store/ui-store'
+import { FlagIndicator } from '@/components/flags/FlagIndicator'
 import type { SenaiteLookupResult } from '@/lib/api'
 import type { SampleSlaSnapshot } from '@/services/order-sla'
 import {
@@ -119,6 +120,9 @@ export function SampleCard({
         {needsAttention && (
           <AlertTriangle className="h-3.5 w-3.5 text-amber-500 shrink-0" />
         )}
+        <span className="ml-auto shrink-0">
+          <FlagIndicator scope={{ kind: 'sample', sampleId }} />
+        </span>
       </div>
       {analyteEl}
       <div className="flex items-center gap-2">

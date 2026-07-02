@@ -869,6 +869,45 @@ class SlaTier(Base):
         return f"<SlaTier(id={self.id}, name='{self.name}', target_minutes={self.target_minutes})>"
 
 
+class FlagType(Base):
+    """A user-managed flag type (Plan 5). Promotes the hardcoded catalog
+    (backend/flags/catalog.py FLAG_TYPES) to a DB table the lab can self-manage.
+
+    `slug` is the stable wire key referenced by flag_flags.type — it is IMMUTABLE
+    (existing flags reference it; renaming would orphan history). The displayed
+    `label`/`color`/`kind`/`is_blocking` and the per-entity `entity_types` scope
+    are editable. Deletion is soft (is_active=false) for built-ins and in-use
+    types; only unused custom types hard-delete. `kind` is snapshotted onto
+    flag_flags.kind at creation, so editing a type's kind never rewrites history.
+    """
+
+    __tablename__ = "flag_types"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    slug: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
+    label: Mapped[str] = mapped_column(Text, nullable=False)
+    color: Mapped[str] = mapped_column(Text, nullable=False)
+    kind: Mapped[str] = mapped_column(Text, nullable=False)  # 'issue' | 'signal'
+    is_blocking: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true"
+    )
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # Empty list = global (applies to all entity types); otherwise the slugs of
+    # the entity types this flag type may be raised on.
+    entity_types: Mapped[list] = mapped_column(
+        JSONB().with_variant(JSON(), "sqlite"), nullable=False, default=list
+    )
+    is_builtin: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+    def __repr__(self) -> str:
+        return f"<FlagType(id={self.id}, slug='{self.slug}', is_active={self.is_active})>"
+
+
 class SlaPriorityTier(Base):
     """Priority -> SLA tier override, optionally scoped to a single service group.
 

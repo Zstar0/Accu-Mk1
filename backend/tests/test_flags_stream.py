@@ -11,8 +11,9 @@ from sqlalchemy.pool import StaticPool
 @pytest.fixture
 def db():
     from database import Base
+    import models  # noqa: F401  (register FlagType on Base)
     import flags.models  # noqa: F401
-    from flags import seams
+    from flags import seams, types_service
     seams.register_mk1_entities()
     engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False},
                            poolclass=StaticPool)
@@ -20,6 +21,7 @@ def db():
     Session = sessionmaker(bind=engine)
     s = Session()
     s._engine_for_test = engine  # keep a handle for fresh sessions
+    types_service.seed_builtins(s)
     try:
         yield s
     finally:

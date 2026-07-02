@@ -10,14 +10,16 @@ from sqlalchemy.orm import sessionmaker
 @pytest.fixture
 def db():
     from database import Base
+    import models  # noqa: F401  (register FlagType on Base)
     import flags.models  # noqa: F401
-    from flags import seams
+    from flags import seams, types_service
     seams.set_event_sink(seams.InMemoryEventSink())
     seams.register_entity("sub_sample", label=lambda d, e: f"V{e}",
                            deep_link=lambda e: f"/v/{e}", can_flag=lambda u, e: True)
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)
     s = sessionmaker(bind=engine)()
+    types_service.seed_builtins(s)
     try:
         yield s
     finally:

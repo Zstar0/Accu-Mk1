@@ -3,15 +3,16 @@ call writes a flag_events audit row AND emits to the event sink in the same
 transaction boundary."""
 from __future__ import annotations
 
+import base64
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
-from flags import catalog, permissions, seams
+from flags import catalog, permissions, seams, types_service
 from flags.errors import BadRequestError, NotFoundError, PermissionDeniedError
-from flags.models import FlagComment, FlagEvent, FlagFlag, FlagParticipant
+from flags.models import FlagComment, FlagEvent, FlagFlag, FlagParticipant, FlagRead
 
 
 def _flag_summary(flag) -> dict:
@@ -60,17 +61,19 @@ def create_flag(db: Session, *, user, entity_type, entity_id, type, title,
                 assignee_id=None, first_comment=None) -> FlagFlag:
     if not seams.is_registered(entity_type):
         raise BadRequestError(f"unknown entity_type {entity_type!r}")
-    if not catalog.is_valid_type(type):
+    if not types_service.is_valid_type(db, type):
         raise BadRequestError(f"unknown flag type {type!r}")
     if not permissions.can(user, "create", None):
         raise PermissionDeniedError("not allowed to create flags")
     spec = seams.get_entity_spec(entity_type)
     if not spec.can_flag(user, str(entity_id)):
         raise PermissionDeniedError(f"not allowed to flag {entity_type} {entity_id}")
+    if not types_service.is_allowed_for_entity(db, type, entity_type):
+        raise BadRequestError(f"flag type {type!r} is not allowed for {entity_type}")
 
     actor_id = getattr(user, "id", None)
     flag = FlagFlag(entity_type=entity_type, entity_id=str(entity_id),
-                    kind=catalog.kind_for_type(type), type=type, status="open",
+                    kind=types_service.kind_for_type(db, type), type=type, status="open",
                     title=title, created_by=actor_id, assignee_id=assignee_id)
     db.add(flag)
     db.flush()  # populate flag.id
@@ -94,10 +97,31 @@ def get_flag(db: Session, flag_id: int) -> FlagFlag:
     return flag
 
 
+def _valid_user_ids(db: Session, ids) -> list[int]:
+    """Existing user ids only, order-preserving + deduped."""
+    from models import User
+    if not ids:
+        return []
+    uniq = list(dict.fromkeys(int(i) for i in ids))
+    present = set(db.execute(select(User.id).where(User.id.in_(uniq))).scalars().all())
+    return [i for i in uniq if i in present]
+
+
+def _relevant_flag_ids(user_id: int):
+    """Flags the user is the assignee/creator/participant of (a Select of ids)."""
+    return select(FlagFlag.id).where(or_(
+        FlagFlag.assignee_id == user_id,
+        FlagFlag.created_by == user_id,
+        FlagFlag.id.in_(select(FlagParticipant.flag_id)
+                        .where(FlagParticipant.user_id == user_id)),
+    ))
+
+
 def list_flags(db: Session, *, user_id: int, tab: str, status: Optional[str] = None,
-               entity_type: Optional[str] = None, entity_id: Optional[str] = None) -> list[FlagFlag]:
+               entity_type: Optional[str] = None, entity_id: Optional[str] = None,
+               include_descendants: bool = False) -> list[FlagFlag]:
     stmt = select(FlagFlag).order_by(FlagFlag.updated_at.desc())
-    open_states = ("open", "in_progress")
+    open_states = catalog.OPEN_STATES
     if tab == "assigned":
         stmt = stmt.where(FlagFlag.assignee_id == user_id, FlagFlag.status.in_(open_states))
     elif tab == "raised":
@@ -112,13 +136,84 @@ def list_flags(db: Session, *, user_id: int, tab: str, status: Optional[str] = N
     if status:
         stmt = stmt.where(FlagFlag.status == status)
     if entity_type and entity_id:
-        stmt = stmt.where(FlagFlag.entity_type == entity_type,
-                          FlagFlag.entity_id == str(entity_id))
+        # The matched set is the entity itself plus — when rolling up — its
+        # registry-resolved descendants (a sample's vials). The hierarchy lives
+        # entirely behind `resolve_descendants`; this stays entity-agnostic.
+        pairs = [(entity_type, str(entity_id))]
+        if include_descendants:
+            pairs.extend(seams.resolve_descendants(db, entity_type, str(entity_id)))
+        stmt = stmt.where(or_(*[
+            and_(FlagFlag.entity_type == et, FlagFlag.entity_id == eid)
+            for et, eid in pairs
+        ]))
     return list(db.execute(stmt).scalars().all())
 
 
+def _encode_cursor(ev: FlagEvent) -> str:
+    raw = f"{ev.created_at.isoformat()}|{ev.id}"
+    return base64.urlsafe_b64encode(raw.encode()).decode()
+
+
+def _decode_cursor(cursor: str) -> tuple[datetime, int]:
+    try:
+        raw = base64.urlsafe_b64decode(cursor.encode()).decode()
+        ts_str, id_str = raw.rsplit("|", 1)
+        return datetime.fromisoformat(ts_str), int(id_str)
+    except Exception:
+        raise BadRequestError("bad activity cursor")
+
+
+def list_activity(db: Session, *, user_id: int, cursor: Optional[str] = None,
+                  limit: int = 25) -> tuple[list[FlagEvent], Optional[str]]:
+    """Newest-first feed of flag events relevant to `user_id`: events on flags
+    they're the assignee/creator/watcher of, unioned with their own actions.
+    Keyset paginated on (created_at, id); returns (rows, next_cursor)."""
+    limit = max(1, min(limit, 50))
+    stmt = select(FlagEvent).where(or_(
+        FlagEvent.actor_id == user_id,
+        FlagEvent.flag_id.in_(_relevant_flag_ids(user_id)),
+    ))
+    if cursor:
+        c_ts, c_id = _decode_cursor(cursor)
+        stmt = stmt.where(or_(
+            FlagEvent.created_at < c_ts,
+            and_(FlagEvent.created_at == c_ts, FlagEvent.id < c_id),
+        ))
+    stmt = stmt.order_by(FlagEvent.created_at.desc(), FlagEvent.id.desc()).limit(limit + 1)
+    rows = list(db.execute(stmt).scalars().all())
+    next_cursor = None
+    if len(rows) > limit:
+        rows = rows[:limit]
+        next_cursor = _encode_cursor(rows[-1])
+    return rows, next_cursor
+
+
+def list_unread(db: Session, *, user_id: int) -> list[FlagFlag]:
+    """Flags relevant to the user that changed since they last read them
+    (never-read counts as unread), newest-updated first."""
+    stmt = (select(FlagFlag)
+            .outerjoin(FlagRead, and_(FlagRead.flag_id == FlagFlag.id,
+                                      FlagRead.user_id == user_id))
+            .where(FlagFlag.id.in_(_relevant_flag_ids(user_id)))
+            .where(or_(FlagRead.last_read_at.is_(None),
+                       FlagFlag.updated_at > FlagRead.last_read_at))
+            .order_by(FlagFlag.updated_at.desc()))
+    return list(db.execute(stmt).scalars().all())
+
+
+def mark_read(db: Session, *, user_id: int, flag_id: int) -> None:
+    get_flag(db, flag_id)  # 404 if the flag doesn't exist
+    row = db.execute(select(FlagRead).where(
+        FlagRead.user_id == user_id, FlagRead.flag_id == flag_id)).scalar_one_or_none()
+    if row is None:
+        db.add(FlagRead(user_id=user_id, flag_id=flag_id, last_read_at=datetime.utcnow()))
+    else:
+        row.last_read_at = datetime.utcnow()
+    db.commit()
+
+
 def summary(db: Session, *, user_id: int) -> dict:
-    open_states = ("open", "in_progress")
+    open_states = catalog.OPEN_STATES
     assigned = db.execute(
         select(FlagFlag).where(FlagFlag.assignee_id == user_id, FlagFlag.status.in_(open_states))
     ).scalars().all()
@@ -128,17 +223,29 @@ def summary(db: Session, *, user_id: int) -> dict:
     return {"assigned_to_me": len(assigned), "by_type": by_type}
 
 
-def add_comment(db: Session, *, user, flag_id, body) -> FlagComment:
+def add_comment(db: Session, *, user, flag_id, body, mention_ids=None) -> FlagComment:
     flag = get_flag(db, flag_id)
     if not permissions.can(user, "comment", flag):
         raise PermissionDeniedError("not allowed to comment")
     if not body or not body.strip():
         raise BadRequestError("comment body required")
     actor_id = getattr(user, "id", None)
-    c = FlagComment(flag_id=flag.id, author_id=actor_id, body=body.strip())
+    valid = _valid_user_ids(db, mention_ids or [])
+    c = FlagComment(flag_id=flag.id, author_id=actor_id, body=body.strip(),
+                    mentions=valid or None)
     db.add(c)
+    # A mention loops the user in: add as a watcher (silent — no watcher_added
+    # event; dedup against existing participants).
+    for uid in valid:
+        exists = db.execute(select(FlagParticipant).where(
+            FlagParticipant.flag_id == flag.id,
+            FlagParticipant.user_id == uid)).scalar_one_or_none()
+        if exists is None:
+            db.add(FlagParticipant(flag_id=flag.id, user_id=uid,
+                                   role="watcher", added_by=actor_id))
     flag.updated_at = datetime.utcnow()
-    _audit(db, flag, actor_id, "commented")
+    _audit(db, flag, actor_id, "commented",
+           details={"mentions": valid} if valid else None)
     _commit_and_emit(db)
     db.refresh(c)
     return c
@@ -214,7 +321,7 @@ def change_status(db: Session, *, user, flag_id, to_status) -> FlagFlag:
     if to_status == "resolved":
         flag.resolved_at = datetime.utcnow()
         flag.resolved_by = actor_id
-    elif to_status in ("open", "in_progress"):
+    elif to_status in catalog.OPEN_STATES:
         flag.resolved_at = None
         flag.resolved_by = None
     _audit(db, flag, actor_id, "status_changed", from_value=from_status, to_value=to_status)
