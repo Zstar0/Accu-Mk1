@@ -27,9 +27,8 @@ describe('SlackPrefsSection', () => {
   })
 
   it('renders master toggle, five category toggles, link state', async () => {
-    const { SlackPrefsSection } = await import(
-      '@/components/preferences/panes/SlackPrefsSection'
-    )
+    const { SlackPrefsSection } =
+      await import('@/components/preferences/panes/SlackPrefsSection')
     render(<SlackPrefsSection />)
     expect(screen.getByText(/not linked/i)).toBeInTheDocument()
     // master + 5 categories
@@ -37,9 +36,8 @@ describe('SlackPrefsSection', () => {
   })
 
   it('toggling a category saves that field', async () => {
-    const { SlackPrefsSection } = await import(
-      '@/components/preferences/panes/SlackPrefsSection'
-    )
+    const { SlackPrefsSection } =
+      await import('@/components/preferences/panes/SlackPrefsSection')
     render(<SlackPrefsSection />)
     const switches = screen.getAllByRole('switch')
     await userEvent.click(switches[4]!)
@@ -49,9 +47,8 @@ describe('SlackPrefsSection', () => {
   })
 
   it('test button fires the test mutation', async () => {
-    const { SlackPrefsSection } = await import(
-      '@/components/preferences/panes/SlackPrefsSection'
-    )
+    const { SlackPrefsSection } =
+      await import('@/components/preferences/panes/SlackPrefsSection')
     render(<SlackPrefsSection />)
     await userEvent.click(screen.getByRole('button', { name: /send test dm/i }))
     expect(test).toHaveBeenCalled()
