@@ -91,7 +91,11 @@ async def test_dm(db: Session = Depends(get_db),
     row = _row(db, user.id)
     member_id = row.slack_member_id if row else None
     if member_id is None:
-        member_id = await client.lookup_by_email(user.email)
+        from slack_notify.emails import alias_domains_from_env, candidate_emails
+        for cand in candidate_emails(user.email, alias_domains_from_env()):
+            member_id = await client.lookup_by_email(cand)
+            if member_id:
+                break
         if member_id is None:
             return {"ok": False, "detail": "No Slack account matched your "
                                            "email — paste your Slack member ID."}

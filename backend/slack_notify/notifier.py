@@ -12,6 +12,7 @@ import os
 from typing import Optional
 
 from slack_notify.client import SlackClient
+from slack_notify.emails import alias_domains_from_env, candidate_emails
 from slack_notify.messages import build_message, link_hash_for
 from slack_notify.planner import plan_dms
 
@@ -19,10 +20,13 @@ logger = logging.getLogger(__name__)
 
 
 class SlackNotifier:
-    def __init__(self, client, session_factory, base_url: str) -> None:
+    def __init__(self, client, session_factory, base_url: str,
+                 alias_domains: Optional[list] = None) -> None:
         self._client = client
         self._session_factory = session_factory
         self._base_url = base_url
+        # Aliased login/Slack domains — retry lookup across them (emails.py).
+        self._alias_domains = alias_domains or []
 
     # -- sync helpers (run via to_thread) ---------------------------------
     def _plan_and_enrich(self, event: dict):
@@ -85,7 +89,12 @@ class SlackNotifier:
             sent = 0
             for user_id, category, email, member_id in targets:
                 if member_id is None:
-                    member_id = await self._client.lookup_by_email(email)
+                    # Try the login email, then the same local-part on each
+                    # alias domain (mixed accumarklabs / valenceanalytical).
+                    for cand in candidate_emails(email, self._alias_domains):
+                        member_id = await self._client.lookup_by_email(cand)
+                        if member_id:
+                            break
                     if member_id is None:
                         continue          # unresolved — UI shows "Not linked"
                     display_name = await self._client.user_info(member_id)
@@ -126,5 +135,6 @@ def maybe_start(bus) -> Optional["asyncio.Task"]:
         return None
     from database import SessionLocal
     base_url = os.getenv("MK1_PUBLIC_URL", "https://accumk1.valenceanalytical.com")
-    notifier = SlackNotifier(SlackClient(token), SessionLocal, base_url)
+    notifier = SlackNotifier(SlackClient(token), SessionLocal, base_url,
+                             alias_domains=alias_domains_from_env())
     return notifier.start(bus)
