@@ -33,6 +33,7 @@ import {
   getExplorerOrders,
   getSenaiteSamples,
   getSenaiteStatus,
+  getSetting,
   listSubSamples,
   type ExplorerOrder,
   type SenaiteSample,
@@ -208,6 +209,19 @@ export function ReceiveSample() {
   // selectable (the No-order group is excluded).
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set())
 
+  // Admin-gated feature flag: multi-order check-in. Default OFF — the lab SOP is
+  // one order at a time. Shares the exact query key with the Check-In prefs pane
+  // so toggling the setting there propagates here live. getSetting throws on a
+  // missing key, so treat a 404 as false.
+  const multiOrderQ = useQuery({
+    queryKey: ['setting', 'checkin_multi_order_enabled'],
+    queryFn: () =>
+      getSetting('checkin_multi_order_enabled')
+        .then(s => s.value === 'true')
+        .catch(() => false),
+  })
+  const multiOrderEnabled = multiOrderQ.data ?? false
+
   // Sub-samples receive wizard (modal). Row click in the By-sample list opens
   // the wizard for that parent sample; the By-order list opens the order-scoped
   // OrderReceiveSession instead.
@@ -356,6 +370,14 @@ export function ReceiveSample() {
     loadDueSamples()
   }, [loadDueSamples])
 
+  // When multi-order check-in is off, drop any lingering selection so a later
+  // per-row Process opens a single order (never a stale combined set).
+  useEffect(() => {
+    if (!multiOrderEnabled && selectedKeys.size > 0) {
+      setSelectedKeys(new Set())
+    }
+  }, [multiOrderEnabled, selectedKeys])
+
   return (
     <div className="flex h-full flex-col">
       <ScrollArea className="flex-1">
@@ -445,7 +467,7 @@ export function ReceiveSample() {
               </div>
             ) : receiveMode === 'order' ? (
               <div className="flex flex-col gap-3">
-                {selectedKeys.size >= 1 && (
+                {multiOrderEnabled && selectedKeys.size >= 1 && (
                   <div className="sticky top-0 z-10 flex items-center gap-3 rounded-md border bg-background/95 px-3 py-2 text-sm shadow-sm backdrop-blur">
                     <span className="font-medium">
                       {selectedKeys.size} order
@@ -484,6 +506,7 @@ export function ReceiveSample() {
                           key={group.orderKey ?? '__none__'}
                           group={group}
                           slaVerdict={verdictFor(group)}
+                          selectable={multiOrderEnabled}
                           selected={
                             group.orderKey != null &&
                             selectedKeys.has(group.orderKey)

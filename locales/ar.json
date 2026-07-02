@@ -103,6 +103,11 @@
   "preferences.businessHours.sat": "Sat",
   "preferences.businessHours.sun": "Sun",
 
+  "preferences.checkIn": "الاستلام",
+  "preferences.checkIn.section": "Order Check-In",
+  "preferences.checkIn.multiOrderLabel": "Allow multi-order check-in",
+  "preferences.checkIn.multiOrderDescription": "Off = techs process one order completely before the next (SOP default); On = the By-Order receive list allows selecting and combining multiple orders.",
+
   "orderStatus.sla": "SLA",
   "orderStatus.sla.left": "{{time}} left",
   "orderStatus.sla.over": "over by {{time}}",

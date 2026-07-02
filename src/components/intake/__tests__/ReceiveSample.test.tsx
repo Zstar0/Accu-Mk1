@@ -1,8 +1,9 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 import { ReceiveSample } from '@/components/intake/ReceiveSample'
+import { getSetting } from '@/lib/api'
 
 // Stub the heavy session shell with a sentinel that echoes the flattened sample
 // ids it was handed, so we can assert which orders a Process click opened.
@@ -102,7 +103,21 @@ vi.mock('@/lib/api', async importOriginal => {
     listSubSamples: vi
       .fn()
       .mockResolvedValue({ parent: { sub_sample_count: 0 } }),
+    // Multi-order check-in flag. Default resolves 'true' (set per-test in
+    // beforeEach) so the selection/combine suite keeps its checkboxes; the
+    // gating suite overrides it to reject (missing key) or resolve 'false'.
+    getSetting: vi.fn(),
   }
+})
+
+// The multi-order UI is now opt-in. Default every test to the flag ON so the
+// existing selection/combine suite behaves as before; gating tests override.
+beforeEach(() => {
+  vi.mocked(getSetting).mockReset()
+  vi.mocked(getSetting).mockResolvedValue({
+    key: 'checkin_multi_order_enabled',
+    value: 'true',
+  } as Awaited<ReturnType<typeof getSetting>>)
 })
 
 function renderPage() {
@@ -166,5 +181,43 @@ describe('ReceiveSample — order selection + combine', () => {
     await waitFor(() =>
       expect(screen.queryByText(/orders selected/)).toBeNull()
     )
+  })
+})
+
+describe('ReceiveSample — multi-order check-in flag gating', () => {
+  it('hides checkboxes and the combine bar by default (missing setting key)', async () => {
+    vi.mocked(getSetting).mockRejectedValue(new Error('404'))
+    renderPage()
+
+    // Wait for the By-Order rows to render so absence assertions are meaningful.
+    await waitFor(() =>
+      expect(screen.getAllByTestId('order-list-row').length).toBeGreaterThan(0)
+    )
+    expect(
+      screen.queryByRole('checkbox', { name: /^Select / })
+    ).toBeNull()
+    expect(screen.queryByText('Process together')).toBeNull()
+  })
+
+  it('hides checkboxes when the setting resolves to "false"', async () => {
+    vi.mocked(getSetting).mockResolvedValue({
+      key: 'checkin_multi_order_enabled',
+      value: 'false',
+    } as Awaited<ReturnType<typeof getSetting>>)
+    renderPage()
+
+    await waitFor(() =>
+      expect(screen.getAllByTestId('order-list-row').length).toBeGreaterThan(0)
+    )
+    expect(
+      screen.queryByRole('checkbox', { name: /^Select / })
+    ).toBeNull()
+    expect(screen.queryByText('Process together')).toBeNull()
+  })
+
+  it('renders row checkboxes when the setting resolves to "true"', async () => {
+    // beforeEach already resolves 'true'; assert the checkboxes appear.
+    renderPage()
+    expect(await rowCheckbox('WP-1042')).toBeInTheDocument()
   })
 })

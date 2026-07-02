@@ -21,6 +21,9 @@ interface OrderListRowProps {
   // Selection state for multi-order combine. The No-order group (orderKey ===
   // null) is not selectable, so its checkbox cell is rendered disabled/empty.
   selected: boolean
+  // Gates the per-row checkbox. Defaults true so standalone usage is unchanged;
+  // ReceiveSample passes the multi-order check-in flag to hide it when off.
+  selectable?: boolean
   onToggle: (orderKey: string) => void
   onProcess: (group: EnrichedOrderGroup) => void
 }
@@ -61,11 +64,12 @@ export function OrderListRow({
   group,
   slaVerdict,
   selected,
+  selectable = true,
   onToggle,
   onProcess,
 }: OrderListRowProps) {
   const order = group.order
-  const selectable = group.orderKey != null
+  const canSelect = selectable && group.orderKey != null
   const email = order ? getOrderEmail(order) : null
   const customerId = order?.customer_id ?? null
   const linkEmail = email != null && customerId != null
@@ -91,7 +95,7 @@ export function OrderListRow({
       )}
     >
       <td className="py-3 px-3 align-middle">
-        {selectable ? (
+        {canSelect ? (
           <Checkbox
             aria-label={`Select ${group.orderLabel}`}
             checked={selected}

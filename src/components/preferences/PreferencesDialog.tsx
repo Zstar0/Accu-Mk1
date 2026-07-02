@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Settings, Palette, Zap, Database, Timer, CalendarClock } from 'lucide-react'
+import { Settings, Palette, Zap, Database, Timer, CalendarClock, ClipboardCheck } from 'lucide-react'
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -32,8 +32,9 @@ import { DataPipelinePane } from './panes/DataPipelinePane'
 import { AdvancedPane } from './panes/AdvancedPane'
 import { SlaPane } from './panes/SlaPane'
 import { BusinessHoursPane } from './panes/BusinessHoursPane'
+import { CheckInPane } from './panes/CheckInPane'
 
-type PreferencePane = 'general' | 'appearance' | 'dataPipeline' | 'sla' | 'businessHours' | 'advanced'
+type PreferencePane = 'general' | 'appearance' | 'dataPipeline' | 'sla' | 'businessHours' | 'checkIn' | 'advanced'
 
 const navigationItems = [
   {
@@ -60,6 +61,11 @@ const navigationItems = [
     id: 'businessHours' as const,
     labelKey: 'preferences.businessHours',
     icon: CalendarClock,
+  },
+  {
+    id: 'checkIn' as const,
+    labelKey: 'preferences.checkIn',
+    icon: ClipboardCheck,
   },
   {
     id: 'advanced' as const,
@@ -141,6 +147,7 @@ export function PreferencesDialog() {
               {activePane === 'dataPipeline' && <DataPipelinePane />}
               {activePane === 'sla' && <SlaPane />}
               {activePane === 'businessHours' && <BusinessHoursPane />}
+              {activePane === 'checkIn' && <CheckInPane />}
               {activePane === 'advanced' && <AdvancedPane />}
             </div>
           </main>
