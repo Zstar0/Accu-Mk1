@@ -3,6 +3,7 @@ import asyncio
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
 from database import Base
 from models import SlackDmPrefs, User
@@ -26,8 +27,12 @@ class FakeClient:
 
 @pytest.fixture()
 def session_factory():
+    # StaticPool: one shared connection across threads — handle_event touches
+    # the DB from asyncio.to_thread, and per-thread connections would each see
+    # their own empty in-memory database.
     engine = create_engine("sqlite://",
-                           connect_args={"check_same_thread": False})
+                           connect_args={"check_same_thread": False},
+                           poolclass=StaticPool)
     Base.metadata.create_all(engine)
     return sessionmaker(bind=engine)
 
