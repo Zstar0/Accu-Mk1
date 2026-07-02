@@ -1,5 +1,11 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -28,16 +34,16 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { toast } from 'sonner'
-import { Plus, RotateCcw, Shield, User, UserX, UserCheck } from 'lucide-react'
+import { Plus, RotateCcw, Shield } from 'lucide-react'
 import {
   listUsers,
   createUser,
-  updateUser,
   resetUserPassword,
   type AuthUser,
 } from '@/lib/auth-api'
 import { useAuthStore } from '@/store/auth-store'
 import { displayName } from '@/lib/user-display'
+import { UserEditFlyout } from '@/components/auth/UserEditFlyout'
 
 export function UserManagement() {
   const [users, setUsers] = useState<AuthUser[]>([])
@@ -47,7 +53,9 @@ export function UserManagement() {
   const [newPassword, setNewPassword] = useState('')
   const [newRole, setNewRole] = useState('standard')
   const [creating, setCreating] = useState(false)
+  const [selectedUserId, setSelectedUserId] = useState<number | null>(null)
   const currentUser = useAuthStore(state => state.user)
+  const selectedUser = users.find(u => u.id === selectedUserId) ?? null
 
   const loadUsers = useCallback(async () => {
     try {
@@ -72,7 +80,11 @@ export function UserManagement() {
     }
     setCreating(true)
     try {
-      await createUser({ email: newEmail, password: newPassword, role: newRole })
+      await createUser({
+        email: newEmail,
+        password: newPassword,
+        role: newRole,
+      })
       toast.success(`User ${newEmail} created`)
       setCreateOpen(false)
       setNewEmail('')
@@ -83,29 +95,6 @@ export function UserManagement() {
       toast.error(err instanceof Error ? err.message : 'Failed to create user')
     } finally {
       setCreating(false)
-    }
-  }
-
-  const handleToggleActive = async (user: AuthUser) => {
-    try {
-      await updateUser(user.id, { is_active: !user.is_active })
-      toast.success(
-        `${user.email} ${user.is_active ? 'deactivated' : 'activated'}`
-      )
-      await loadUsers()
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to update user')
-    }
-  }
-
-  const handleToggleRole = async (user: AuthUser) => {
-    const newRole = user.role === 'admin' ? 'standard' : 'admin'
-    try {
-      await updateUser(user.id, { role: newRole })
-      toast.success(`${user.email} role changed to ${newRole}`)
-      await loadUsers()
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to update role')
     }
   }
 
@@ -213,10 +202,16 @@ export function UserManagement() {
             </TableHeader>
             <TableBody>
               {users.map(user => (
-                <TableRow key={user.id}>
+                <TableRow
+                  key={user.id}
+                  onClick={() => setSelectedUserId(user.id)}
+                  className="cursor-pointer"
+                >
                   <TableCell className="font-medium">
                     {displayName(user)}
-                    <span className="block text-xs text-muted-foreground">{user.email}</span>
+                    <span className="block text-xs text-muted-foreground">
+                      {user.email}
+                    </span>
                     {user.id === currentUser?.id && (
                       <span className="ml-2 text-xs text-muted-foreground">
                         (you)
@@ -250,44 +245,13 @@ export function UserManagement() {
                   </TableCell>
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-1">
-                      {user.id !== currentUser?.id && (
-                        <>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => handleToggleRole(user)}
-                            title={
-                              user.role === 'admin'
-                                ? 'Demote to standard'
-                                : 'Promote to admin'
-                            }
-                          >
-                            {user.role === 'admin' ? (
-                              <User className="h-4 w-4" />
-                            ) : (
-                              <Shield className="h-4 w-4" />
-                            )}
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => handleToggleActive(user)}
-                            title={
-                              user.is_active ? 'Deactivate' : 'Activate'
-                            }
-                          >
-                            {user.is_active ? (
-                              <UserX className="h-4 w-4" />
-                            ) : (
-                              <UserCheck className="h-4 w-4" />
-                            )}
-                          </Button>
-                        </>
-                      )}
                       <Button
                         variant="ghost"
                         size="sm"
-                        onClick={() => handleResetPassword(user)}
+                        onClick={e => {
+                          e.stopPropagation()
+                          handleResetPassword(user)
+                        }}
                         title="Reset password"
                       >
                         <RotateCcw className="h-4 w-4" />
@@ -300,6 +264,16 @@ export function UserManagement() {
           </Table>
         </CardContent>
       </Card>
+
+      {selectedUser && (
+        <UserEditFlyout
+          key={selectedUser.id}
+          user={selectedUser}
+          isSelf={selectedUser.id === currentUser?.id}
+          onClose={() => setSelectedUserId(null)}
+          onSaved={loadUsers}
+        />
+      )}
     </div>
   )
 }

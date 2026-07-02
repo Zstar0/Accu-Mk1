@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.0.17 — 2026-07-02
+
+### Added
+
+- **Admin edit-user flyout on User Management.** Click a user row to open a right-side slide-out (mirroring the Instruments page) and edit a user's **first name, last name, email, role, and active status**. Save sends only the changed fields via the existing admin update endpoint; editing your own account disables the role/active controls (no self-lockout). The redundant role/active quick-toggle icons fold into the flyout; reset-password stays a row action. Frontend-only — no backend, API, or migration change.
+
 ## v1.0.16 — 2026-07-02
 
 ### Added
