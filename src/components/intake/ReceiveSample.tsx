@@ -47,7 +47,6 @@ import {
 import type { OrderSlaVerdict } from '@/lib/sla-resolution'
 import { useOrderSlaStatuses } from '@/services/order-sla'
 import { useSenaiteLookupMap } from '@/services/senaite-lookup-map'
-import { useUIStore } from '@/store/ui-store'
 import { OrderListRow } from '@/components/intake/OrderListRow'
 import { OrderReceiveSession } from '@/components/intake/OrderReceiveSession'
 
@@ -206,12 +205,6 @@ export function ReceiveSample() {
   const [selectedOrders, setSelectedOrders] = useState<OrderGroup[] | null>(
     null
   )
-  // Which wizard tab the next session opens on. Only the Active Boxes label
-  // deep-link sets 'boxing'; reset on session close so a normal Process keeps
-  // the capture-first default.
-  const [sessionInitialPhase, setSessionInitialPhase] = useState<
-    'boxing' | undefined
-  >(undefined)
   // Checked order keys for multi-order combine. Only non-null orderKeys are
   // selectable (the No-order group is excluded).
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set())
@@ -376,27 +369,6 @@ export function ReceiveSample() {
   useEffect(() => {
     loadDueSamples()
   }, [loadDueSamples])
-
-  // Deep link from the Active Boxes page: a box-label click lands the tech in
-  // that order's receive session on the Boxing tab. Waits for the By-Order
-  // groups to load; if the order is no longer in the due queue (fully
-  // received), the slot just clears and the By-Order list stays put.
-  const receiveBoxingTarget = useUIStore(
-    state => state.receiveBoxingTargetOrderKey
-  )
-  useEffect(() => {
-    const { receiveBoxingTargetOrderKey } = useUIStore.getState()
-    if (!receiveBoxingTargetOrderKey || dueSamplesLoading) return
-    const match = enriched.find(
-      g => g.orderKey === receiveBoxingTargetOrderKey
-    )
-    if (match) {
-      setReceiveMode('order')
-      setSessionInitialPhase('boxing')
-      setSelectedOrders([match])
-    }
-    useUIStore.setState({ receiveBoxingTargetOrderKey: null })
-  }, [receiveBoxingTarget, dueSamplesLoading, enriched])
 
   // When multi-order check-in is off, drop any lingering selection so a later
   // per-row Process opens a single order (never a stale combined set).
@@ -698,10 +670,8 @@ export function ReceiveSample() {
       {selectedOrders && selectedOrders.length > 0 && (
         <OrderReceiveSession
           orders={selectedOrders}
-          initialPhase={sessionInitialPhase}
           onClose={() => {
             setSelectedOrders(null)
-            setSessionInitialPhase(undefined)
             void loadDueSamples()
           }}
         />

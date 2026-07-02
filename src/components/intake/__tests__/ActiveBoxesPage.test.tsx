@@ -2,28 +2,35 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ActiveBoxesPage } from '../ActiveBoxesPage'
-import { listActiveBoxes, closeBox } from '@/lib/api'
+import { closeBox, getSenaiteSamples, listActiveBoxes } from '@/lib/api'
+import { toast } from 'sonner'
 
 vi.mock('@/lib/api', () => ({
   listActiveBoxes: vi.fn(),
   closeBox: vi.fn(),
+  getSenaiteSamples: vi.fn(),
 }))
 const mockList = vi.mocked(listActiveBoxes)
 const mockClose = vi.mocked(closeBox)
+const mockSamples = vi.mocked(getSenaiteSamples)
 
-// The page only selects navigateToReceiveBoxing off the ui-store; mirror the
-// canonical selector-driven mock (AppSidebar.test.tsx) with just that slot.
-const navigateToReceiveBoxing = vi.fn()
-interface MockUIState {
-  navigateToReceiveBoxing: (orderKey: string) => void
-}
-vi.mock('@/store/ui-store', () => {
-  const state = (): MockUIState => ({ navigateToReceiveBoxing })
-  const useUIStore = <T,>(selector: (s: MockUIState) => T): T =>
-    selector(state())
-  ;(useUIStore as unknown as { getState: () => MockUIState }).getState = state
-  return { useUIStore }
-})
+vi.mock('sonner', () => ({ toast: { error: vi.fn() } }))
+
+// Stub the heavy session shell with a sentinel echoing the order it was handed
+// and the landing tab, so we can assert what a box-label click opened.
+vi.mock('@/components/intake/OrderReceiveSession', () => ({
+  OrderReceiveSession: ({
+    orders,
+    initialPhase,
+  }: {
+    orders: { orderKey: string | null }[]
+    initialPhase?: string
+  }) => (
+    <div data-testid="session" data-initial-phase={initialPhase}>
+      {orders[0]?.orderKey}
+    </div>
+  ),
+}))
 
 const box = {
   id: 13,
@@ -35,6 +42,22 @@ const box = {
   printed_at: null,
   created_at: '2026-07-01T12:00:00',
   stored_at: null,
+}
+
+const orderSample = {
+  uid: 'u1',
+  id: 'P-1',
+  title: 'P-1',
+  client_id: 'acme',
+  client_order_number: 'WP-3267',
+  date_created: null,
+  date_received: null,
+  date_sampled: null,
+  review_state: 'sample_received',
+  sample_type: 'Peptide',
+  contact: null,
+  verification_code: null,
+  analytes: [],
 }
 
 function renderPage() {
@@ -50,7 +73,8 @@ describe('ActiveBoxesPage', () => {
   beforeEach(() => {
     mockList.mockReset()
     mockClose.mockReset()
-    navigateToReceiveBoxing.mockClear()
+    mockSamples.mockReset()
+    vi.mocked(toast.error).mockClear()
   })
 
   it('renders active boxes with label, order, and vial count', async () => {
@@ -89,11 +113,33 @@ describe('ActiveBoxesPage', () => {
     expect(screen.getByText('1 box')).toBeInTheDocument()
   })
 
-  it('clicking a box label deep-links into the order receive session', async () => {
+  it('clicking a box label fetches the order and opens the session on Boxing', async () => {
     mockList.mockResolvedValue([box])
+    mockSamples.mockResolvedValue({ items: [orderSample], total: 1, b_start: 0 })
     renderPage()
     fireEvent.click(await screen.findByRole('button', { name: 'WP-3267-1' }))
-    expect(navigateToReceiveBoxing).toHaveBeenCalledWith('WP-3267')
+    await waitFor(() =>
+      expect(mockSamples).toHaveBeenCalledWith(undefined, 200, 0, 'WP-3267', 'order_number'),
+    )
+    const session = await screen.findByTestId('session')
+    expect(session).toHaveTextContent('WP-3267')
+    expect(session.dataset.initialPhase).toBe('boxing')
+  })
+
+  it('no matching samples: session does not open and a notice is raised', async () => {
+    mockList.mockResolvedValue([box])
+    // Fuzzy search returns something, but nothing exactly on this order.
+    mockSamples.mockResolvedValue({
+      items: [{ ...orderSample, client_order_number: 'WP-32670' }],
+      total: 1,
+      b_start: 0,
+    })
+    renderPage()
+    fireEvent.click(await screen.findByRole('button', { name: 'WP-3267-1' }))
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith('No order session available for WP-3267'),
+    )
+    expect(screen.queryByTestId('session')).toBeNull()
   })
 
   it('renders the coming-soon Location placeholder', async () => {

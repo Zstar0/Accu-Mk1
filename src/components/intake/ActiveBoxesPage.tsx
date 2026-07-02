@@ -1,15 +1,17 @@
-import { Fragment, useState } from 'react'
+import { Fragment, useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Archive } from 'lucide-react'
+import { Archive, Loader2 } from 'lucide-react'
+import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
-import { closeBox, listActiveBoxes, type LimsBox } from '@/lib/api'
+import { OrderReceiveSession } from '@/components/intake/OrderReceiveSession'
+import { closeBox, getSenaiteSamples, listActiveBoxes, type LimsBox } from '@/lib/api'
 import { getWordpressUrl } from '@/lib/api-profiles'
 import { roleBadgeClass, roleTextClass } from '@/lib/assignment-colors'
-import { useUIStore } from '@/store/ui-store'
+import { groupSamplesByOrder } from '@/lib/inbox-orders'
 
 const ROLE_LABEL: Record<string, string> = { hplc: 'HPLC', endo: 'Endotoxin', ster: 'Sterility' }
 
@@ -53,9 +55,38 @@ function OrderLink({ orderKey }: { orderKey: string }) {
 export function ActiveBoxesPage() {
   const qc = useQueryClient()
   const [closing, setClosing] = useState<LimsBox | null>(null)
-  const navigateToReceiveBoxing = useUIStore(state => state.navigateToReceiveBoxing)
+  // A label click opens that order's check-in overlay (OrderReceiveSession)
+  // in place, landed on the Boxing tab — all boxes of one order share it.
+  const [sessionOrderKey, setSessionOrderKey] = useState<string | null>(null)
 
   const boxesQ = useQuery({ queryKey: ['active-boxes'], queryFn: listActiveBoxes })
+
+  // Samples for the clicked order. reviewState is deliberately undefined —
+  // checked-in orders have left the due queue, so the overlay must see ALL
+  // states. The search can be fuzzy, so exact-match filter below.
+  const sessionQ = useQuery({
+    queryKey: ['boxes-session-samples', sessionOrderKey],
+    queryFn: () => getSenaiteSamples(undefined, 200, 0, sessionOrderKey!, 'order_number'),
+    enabled: sessionOrderKey !== null,
+  })
+  const sessionItems = (sessionQ.data?.items ?? []).filter(
+    s => s.client_order_number === sessionOrderKey
+  )
+  const sessionGroup =
+    groupSamplesByOrder(sessionItems).find(g => g.orderKey === sessionOrderKey) ?? null
+
+  // Order-less box keys (e.g. a bare sample id) resolve to zero samples —
+  // drop the session and tell the tech instead of opening an empty dialog.
+  useEffect(() => {
+    if (!sessionOrderKey || !sessionQ.data || sessionGroup) return
+    toast.error(`No order session available for ${sessionOrderKey}`)
+    setSessionOrderKey(null)
+  }, [sessionOrderKey, sessionQ.data, sessionGroup])
+  useEffect(() => {
+    if (!sessionOrderKey || !sessionQ.isError) return
+    toast.error(`Failed to load samples for ${sessionOrderKey}`)
+    setSessionOrderKey(null)
+  }, [sessionOrderKey, sessionQ.isError])
   const closeM = useMutation({
     mutationFn: (boxId: number) => closeBox(boxId),
     onSuccess: async () => {
@@ -107,10 +138,14 @@ export function ActiveBoxesPage() {
                     <td className="py-2 pr-4">
                       <button
                         type="button"
-                        onClick={() => navigateToReceiveBoxing(b.order_key)}
-                        className={`font-mono font-semibold hover:underline ${roleTextClass(b.role)}`}
+                        onClick={() => setSessionOrderKey(b.order_key)}
+                        disabled={sessionOrderKey === b.order_key && sessionQ.isPending}
+                        className={`inline-flex items-center gap-1.5 font-mono font-semibold hover:underline ${roleTextClass(b.role)}`}
                       >
                         {b.label_code}
+                        {sessionOrderKey === b.order_key && sessionQ.isPending && (
+                          <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />
+                        )}
                       </button>
                     </td>
                     <td className="py-2 pr-4">
@@ -136,6 +171,25 @@ export function ActiveBoxesPage() {
             ))}
           </tbody>
         </table>
+      )}
+
+      {/* The order's check-in overlay, landed on Boxing. On close, refresh the
+          box list (and the overlay's order-scoped box/vial queries) so counts
+          reflect whatever the tech did inside. */}
+      {sessionGroup && (
+        <OrderReceiveSession
+          orders={[sessionGroup]}
+          initialPhase="boxing"
+          onClose={() => {
+            const key = sessionOrderKey
+            setSessionOrderKey(null)
+            void qc.invalidateQueries({ queryKey: ['active-boxes'] })
+            if (key) {
+              void qc.invalidateQueries({ queryKey: ['order-boxes', key] })
+              void qc.invalidateQueries({ queryKey: ['order-vials', key] })
+            }
+          }}
+        />
       )}
 
       <AlertDialog open={closing !== null} onOpenChange={open => { if (!open) setClosing(null) }}>

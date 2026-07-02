@@ -72,9 +72,6 @@ interface UIState {
   peptideConfigTargetId: number | null
   orderExplorerTargetOrderId: string | null
   sampleDetailsTargetId: string | null
-  // Deep link from the Active Boxes page: which order's receive session to
-  // open (landed on the Boxing tab). ReceiveSample consumes + clears it.
-  receiveBoxingTargetOrderKey: string | null
   samplePrepTargetId: number | null
   methodsTargetId: number | null
   peptideRequestTargetId: string | null
@@ -110,7 +107,6 @@ interface UIState {
   navigateToPeptide: (peptideId: number) => void
   navigateToOrderExplorer: (orderId?: string) => void
   navigateToSample: (sampleId: string) => void
-  navigateToReceiveBoxing: (orderKey: string) => void
   navigateToSamplePrep: (prepId: number) => void
   navigateToMethod: (methodId: number) => void
   navigateToPeptideRequest: (requestId: string) => void
@@ -173,7 +169,6 @@ export const useUIStore = create<UIState>()(
       peptideConfigTargetId: null,
       orderExplorerTargetOrderId: null,
       sampleDetailsTargetId: null,
-      receiveBoxingTargetOrderKey: null,
       samplePrepTargetId: null,
       methodsTargetId: null,
       peptideRequestTargetId: null,
@@ -295,18 +290,6 @@ export const useUIStore = create<UIState>()(
           }),
           undefined,
           'navigateToSample'
-        ),
-
-      navigateToReceiveBoxing: orderKey =>
-        set(
-          state => ({
-            activeSection: 'senaite',
-            activeSubSection: 'receive-sample',
-            receiveBoxingTargetOrderKey: orderKey,
-            navigationKey: state.navigationKey + 1,
-          }),
-          undefined,
-          'navigateToReceiveBoxing'
         ),
 
       navigateToSamplePrep: prepId =>
