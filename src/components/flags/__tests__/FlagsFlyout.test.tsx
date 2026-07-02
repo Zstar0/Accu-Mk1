@@ -248,6 +248,19 @@ describe('FlagsFlyout', () => {
     )
     expect(useUIStore.getState().flagsEntityFilter).toBeNull()
   })
+
+  it('shows a link to the Flags guide in the header', async () => {
+    useUIStore.setState({
+      flagsFlyoutOpen: true,
+      flagsEntityFilter: null,
+      flagsSamplesFilter: null,
+    })
+    const { FlagsFlyout } = await import('@/components/flags/FlagsFlyout')
+    render(<FlagsFlyout />)
+    const link = await screen.findByRole('link', { name: /guide/i })
+    expect(link).toHaveAttribute('href', '/guides/flags-system-guide.html')
+    expect(link).toHaveAttribute('target', '_blank')
+  })
 })
 
 describe('FlagsFlyout context-aware Add Flag', () => {

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Flag, List, Plus, Table2, X } from 'lucide-react'
+import { Flag, HelpCircle, List, Plus, Table2, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet'
 import { Button } from '@/components/ui/button'
@@ -81,6 +81,24 @@ function ViewToggle({
         </button>
       ))}
     </div>
+  )
+}
+
+/** Small header link to the static Flags guide (mirrors the SOP-guide links
+ *  in the Receive Wizard / Worksheets Inbox headers). New-tab anchor — no
+ *  modal, so no z-index conflict with the flyout Sheet. */
+function GuideLink() {
+  return (
+    <a
+      href="/guides/flags-system-guide.html"
+      target="_blank"
+      rel="noopener noreferrer"
+      className="inline-flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
+      title="Open the Flags guide in a new tab"
+    >
+      <HelpCircle className="size-3.5" aria-hidden="true" />
+      Guide
+    </a>
   )
 }
 
@@ -230,6 +248,7 @@ export function FlagsFlyout() {
                   </span>
                 </h2>
                 <div className="flex shrink-0 items-center gap-1.5">
+                  <GuideLink />
                   <ViewToggle mode={viewMode} onChange={setViewMode} />
                   {filtering ? (
                     <RaiseFlagButton
@@ -266,6 +285,7 @@ export function FlagsFlyout() {
                     <Flag className="h-4 w-4" /> Flags
                   </h2>
                   <div className="flex items-center gap-1.5">
+                    <GuideLink />
                     {!isActivity && (
                       <ViewToggle mode={viewMode} onChange={setViewMode} />
                     )}
