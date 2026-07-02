@@ -162,43 +162,43 @@ export function EntityFlagButton({
           lg ? 'px-3.5' : 'px-2.5'
         )}
       >
-      <span className="relative shrink-0">
-        <Flag
-          className={cn(lg ? 'h-4 w-4' : 'h-3.5 w-3.5')}
-          fill="currentColor"
-        />
-        {/* Floating count circle (staff review 2026-07-01) — overlaps the
+        <span className="relative shrink-0">
+          <Flag
+            className={cn(lg ? 'h-4 w-4' : 'h-3.5 w-3.5')}
+            fill="currentColor"
+          />
+          {/* Floating count circle (staff review 2026-07-01) — overlaps the
             icon's top-right corner instead of an inline chip. */}
-        {count > 1 && (
+          {count > 1 && (
+            <span
+              className={cn(
+                'absolute -right-2 -top-2 flex h-4 min-w-4 items-center justify-center rounded-full bg-white px-0.5 font-bold leading-none tabular-nums shadow-sm',
+                lg ? 'text-[10px]' : 'text-[9px]'
+              )}
+              style={{ color: def.color }}
+            >
+              {count > 99 ? '99+' : count}
+            </span>
+          )}
+        </span>
+        <span className="flex flex-col items-start leading-tight">
           <span
             className={cn(
-              'absolute -right-2 -top-2 flex h-4 min-w-4 items-center justify-center rounded-full bg-white px-0.5 font-bold leading-none tabular-nums shadow-sm',
-              lg ? 'text-[10px]' : 'text-[9px]'
+              'flex items-center gap-1.5',
+              lg ? 'text-sm' : 'text-xs'
             )}
-            style={{ color: def.color }}
           >
-            {count > 99 ? '99+' : count}
+            Flagged
           </span>
-        )}
-      </span>
-      <span className="flex flex-col items-start leading-tight">
-        <span
-          className={cn(
-            'flex items-center gap-1.5',
-            lg ? 'text-sm' : 'text-xs'
-          )}
-        >
-          Flagged
+          <span
+            className={cn(
+              'font-normal text-white/85',
+              lg ? 'text-[11px]' : 'text-[10px]'
+            )}
+          >
+            {subline}
+          </span>
         </span>
-        <span
-          className={cn(
-            'font-normal text-white/85',
-            lg ? 'text-[11px]' : 'text-[10px]'
-          )}
-        >
-          {subline}
-        </span>
-      </span>
       </Button>
       {/* Multi-flag affordances: the discoverable "add another" — the pill
           views existing flags; this raises a new one on the same entity. */}

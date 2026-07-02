@@ -41,7 +41,12 @@ function readStoredIds(): number[] {
   }
 }
 
-const FLAG_TABS: readonly FlagTab[] = ['assigned', 'raised', 'watching', 'all_open']
+const FLAG_TABS: readonly FlagTab[] = [
+  'assigned',
+  'raised',
+  'watching',
+  'all_open',
+]
 
 function readStoredTab(): FlagTab | null {
   if (typeof window === 'undefined') return null

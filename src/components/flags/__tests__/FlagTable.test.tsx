@@ -97,9 +97,7 @@ describe('FlagTable', () => {
         unreadIds={new Set([1])}
       />
     )
-    const unreadBars = container.querySelectorAll(
-      '[style*="--flag-unread"]'
-    )
+    const unreadBars = container.querySelectorAll('[style*="--flag-unread"]')
     // Exactly the one unread row's accent uses the dedicated color.
     expect(unreadBars.length).toBe(1)
   })

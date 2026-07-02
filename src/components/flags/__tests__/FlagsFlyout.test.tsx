@@ -279,7 +279,9 @@ describe('FlagsFlyout context-aware Add Flag', () => {
 
   it('shows Add Flag preset to the active entity (no manual id form)', async () => {
     useUIStore.setState({
-      activeFlagEntityStack: [{ type: 'sample', id: 'P-0071', label: 'P-0071' }],
+      activeFlagEntityStack: [
+        { type: 'sample', id: 'P-0071', label: 'P-0071' },
+      ],
     })
     const { FlagsFlyout } = await import('@/components/flags/FlagsFlyout')
     render(<FlagsFlyout />)
