@@ -60,9 +60,7 @@ export function SlackPrefsSection() {
         <span className="text-xs text-muted-foreground">
           {prefs.linked
             ? `${t('preferences.slack.linked')}${
-                prefs.slack_display_name
-                  ? ` → ${prefs.slack_display_name}`
-                  : ''
+                prefs.slack_display_name ? ` → ${prefs.slack_display_name}` : ''
               }`
             : t('preferences.slack.notLinked')}
         </span>
