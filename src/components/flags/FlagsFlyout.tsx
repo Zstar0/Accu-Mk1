@@ -95,6 +95,11 @@ export function FlagsFlyout() {
   const threadId = useUIStore(state => state.flagsThreadId)
   const entityFilter = useUIStore(state => state.flagsEntityFilter)
   const samplesFilter = useUIStore(state => state.flagsSamplesFilter)
+  // Multi-flag affordances: "the page you're on" — the top of the registered
+  // entity stack. Drives the context-aware Add Flag (hidden when empty).
+  const activeEntity = useUIStore(
+    state => state.activeFlagEntityStack.at(-1) ?? null
+  )
   const me = useAuthStore(state => state.user?.id ?? null)
   const [tab, setTab] = useState<FlyoutTab>('assigned')
   // FE-only tabs: Activity renders the event feed; Unread lists unread flags.
@@ -264,17 +269,26 @@ export function FlagsFlyout() {
                     {!isActivity && (
                       <ViewToggle mode={viewMode} onChange={setViewMode} />
                     )}
-                    <RaiseFlagButton
-                      trigger={
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="h-7 gap-1.5"
-                        >
-                          <Plus className="h-3.5 w-3.5" /> Add Flag
-                        </Button>
-                      }
-                    />
+                    {/* Context-aware Add Flag: targets the entity page the
+                        user is on; hidden when there isn't one (nobody knows
+                        raw entity ids — staff review 2026-07-01). */}
+                    {activeEntity && (
+                      <RaiseFlagButton
+                        entityType={activeEntity.type}
+                        entityId={activeEntity.id}
+                        targetLabel={activeEntity.label}
+                        trigger={
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-7 gap-1.5"
+                            title={`Add flag on ${activeEntity.label}`}
+                          >
+                            <Plus className="h-3.5 w-3.5" /> Add Flag
+                          </Button>
+                        }
+                      />
+                    )}
                   </div>
                 </div>
 

@@ -47,6 +47,7 @@ export function RaiseFlagButton({
   defaultAssigneeId = null,
   variant = 'default',
   trigger,
+  targetLabel,
 }: {
   entityType?: string
   entityId?: string
@@ -59,6 +60,9 @@ export function RaiseFlagButton({
   /** Custom popover trigger (e.g. EntityFlagButton's outline affordance). When
    *  provided it replaces the built-in variant buttons. */
   trigger?: ReactNode
+  /** Human label of the preset target — renders "on {label}" under the
+   *  compose heading so it's obvious what the flag will attach to. */
+  targetLabel?: string
 }) {
   const create = useCreateFlag()
   const users = useFlagUsers()
@@ -168,7 +172,12 @@ export function RaiseFlagButton({
           ))}
       </PopoverTrigger>
       <PopoverContent align="end" className="w-80 space-y-3">
-        <p className="text-sm font-semibold">Raise a flag</p>
+        <div>
+          <p className="text-sm font-semibold">Raise a flag</p>
+          {targetLabel && (
+            <p className="text-xs text-muted-foreground">on {targetLabel}</p>
+          )}
+        </div>
 
         {hasCandidates && candidates.length > 1 && (
           <div className="space-y-1">
