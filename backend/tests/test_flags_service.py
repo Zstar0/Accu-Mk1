@@ -73,4 +73,26 @@ def test_list_tabs_and_summary(db):
     assert len(all_open) == 2
     s = service.summary(db, user_id=7)
     assert s["assigned_to_me"] == 1
-    assert s["by_type"]["blocker"] == 1 and s["by_type"]["ready_for_verification"] == 1
+    # by_type is scoped to flags assigned to me: the unassigned
+    # ready_for_verification flag (B) is excluded.
+    assert s["by_type"] == {"blocker": 1}
+
+
+def test_summary_by_type_scoped_to_assignee(db):
+    from flags import service
+    u7, u8 = _user(7), _user(8)
+    service.create_flag(db, user=u7, entity_type="sub_sample", entity_id="1",
+                        type="blocker", title="mine", assignee_id=7)
+    service.create_flag(db, user=u7, entity_type="sub_sample", entity_id="2",
+                        type="question", title="mine too", assignee_id=7)
+    # Someone else's open flag — must NOT count toward my badge.
+    service.create_flag(db, user=u8, entity_type="sub_sample", entity_id="3",
+                        type="blocker", title="theirs", assignee_id=8)
+    # An unassigned open flag — also excluded.
+    service.create_flag(db, user=u7, entity_type="sub_sample", entity_id="4",
+                        type="critical", title="nobody's")
+    s = service.summary(db, user_id=7)
+    assert s["assigned_to_me"] == 2
+    assert s["by_type"] == {"blocker": 1, "question": 1}
+    # by_type totals reconcile with assigned_to_me.
+    assert sum(s["by_type"].values()) == s["assigned_to_me"]

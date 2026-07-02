@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.0.22 — 2026-07-02
+
+### Changed
+
+- **The Flags button count now reflects only flags assigned to you.** The colored per-type chips on the Flags button previously counted *all* open flags of each type across the whole lab; they now count only the open flags **assigned to you**, so the badge is a personal "my work" signal. (The pulse/glow remains the separate "you've been pinged" cue.) Backend-only — the summary endpoint's per-type breakdown is now scoped to the requesting user.
+
 ## v1.0.21 — 2026-07-02
 
 ### Fixed

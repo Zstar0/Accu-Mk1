@@ -213,12 +213,16 @@ def mark_read(db: Session, *, user_id: int, flag_id: int) -> None:
 
 
 def summary(db: Session, *, user_id: int) -> dict:
+    # Header-button counts are personal: both the total and the per-type
+    # breakdown are scoped to flags assigned to ME (open only). by_type drives
+    # the colored chips on FlagsHeaderButton, so it must not leak other users'
+    # or unassigned flags into my badge.
     open_states = catalog.OPEN_STATES
     assigned = db.execute(
         select(FlagFlag).where(FlagFlag.assignee_id == user_id, FlagFlag.status.in_(open_states))
     ).scalars().all()
     by_type: dict[str, int] = {}
-    for f in db.execute(select(FlagFlag).where(FlagFlag.status.in_(open_states))).scalars().all():
+    for f in assigned:
         by_type[f.type] = by_type.get(f.type, 0) + 1
     return {"assigned_to_me": len(assigned), "by_type": by_type}
 

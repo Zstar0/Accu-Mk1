@@ -44,7 +44,7 @@ def client():
 def test_raise_list_get_comment_status(client):
     r = client.post("/api/flags", json={"entity_type": "sub_sample", "entity_id": "123",
                                          "type": "blocker", "title": "Crashed out",
-                                         "first_comment": "cloudy"})
+                                         "first_comment": "cloudy", "assignee_id": 42})
     assert r.status_code == 201, r.text
     fid = r.json()["id"]
     assert r.json()["kind"] == "issue" and r.json()["status"] == "open"

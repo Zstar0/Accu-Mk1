@@ -37,8 +37,9 @@ def test_blocked_in_catalog():
 
 def test_can_transition_to_blocked_and_counts_as_open(db):
     from flags import service
+    # Assigned to me so the summary badge (scoped to my assigned flags) counts it.
     f = service.create_flag(db, user=_user(7), entity_type="sub_sample",
-                            entity_id="1", type="blocker", title="t")
+                            entity_id="1", type="blocker", title="t", assignee_id=7)
     service.change_status(db, user=_user(7), flag_id=f.id, to_status="in_progress")
     f2 = service.change_status(db, user=_user(7), flag_id=f.id, to_status="blocked")
     assert f2.status == "blocked"
