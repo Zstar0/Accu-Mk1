@@ -40,6 +40,7 @@ import {
   ExternalLink,
   Plus,
   X,
+  HardDrive,
 } from 'lucide-react'
 import {
   downloadSharePointFiles,
@@ -62,6 +63,7 @@ import {
   getPeptides,
   updatePeptide,
 } from '@/lib/api'
+import { localDownloadedFiles, localPeakNames } from './hplc-local-files'
 import { PeakTable } from '@/components/hplc/PeakTable'
 import {
   parseChromatogramCsv,
@@ -876,7 +878,10 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match, readOnly = fa
     if (dbCheckActiveRef.current) return  // skip during DB check (ref — synchronous guard)
 
     // History mode: no SharePoint files — reconstruct from stored data
-    const isHistoryMode = match.peak_files.length === 0 && !match.folder_id
+    const isLocal = match.source === 'local'
+    // A local match has peak_files:[] and folder_id:'' — do NOT treat it as
+    // history mode; its content lives in match.local_files.
+    const isHistoryMode = !isLocal && match.peak_files.length === 0 && !match.folder_id
 
     // Standard history mode: no HPLC analysis records — load from calibration curve
     if (isHistoryMode && prep.is_standard && (!savedResults || savedResults.length === 0)) {
@@ -977,23 +982,30 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match, readOnly = fa
     setLoading(true)
     setParseError(null)
     try {
-      let chromItems = match.chrom_files
-      if (chromItems.length === 0 && match.folder_id) {
-        try {
-          chromItems = await getFolderChromFiles(match.folder_id)
-        } catch {
-          // non-fatal — chromatogram just won't show
+      let downloaded: { filename: string; content: string }[]
+      let peakFileNames: Set<string>
+      if (isLocal) {
+        // Local source: content already in hand — no SharePoint round-trip.
+        downloaded = localDownloadedFiles(match)
+        peakFileNames = localPeakNames(match)
+      } else {
+        let chromItems = match.chrom_files
+        if (chromItems.length === 0 && match.folder_id) {
+          try {
+            chromItems = await getFolderChromFiles(match.folder_id)
+          } catch {
+            // non-fatal — chromatogram just won't show
+          }
         }
+        const allFiles = [...match.peak_files, ...chromItems]
+        const ids = allFiles.map(f => f.id)
+        downloaded = await downloadSharePointFiles(ids)
+        peakFileNames = new Set(match.peak_files.map(f => f.name))
       }
-
-      const allFiles = [...match.peak_files, ...chromItems]
-      const ids = allFiles.map(f => f.id)
-      const downloaded = await downloadSharePointFiles(ids)
 
       // Phase 13.5: Archive all downloaded files for source-file audit trail
       downloadedFilesRef.current = downloaded.map(d => ({ filename: d.filename, content: d.content }))
 
-      const peakFileNames = new Set(match.peak_files.map(f => f.name))
       const peakFiles   = downloaded.filter(d => peakFileNames.has(d.filename))
       const chromFiles  = downloaded.filter(d => !peakFileNames.has(d.filename))
 
@@ -1590,6 +1602,11 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match, readOnly = fa
               </SheetTitle>
               <p className="text-xs text-muted-foreground mt-0.5 truncate">
                 {match.folder_name}
+                {match.source === 'local' && (
+                  <span className="ml-2 inline-flex items-center gap-1 rounded bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
+                    <HardDrive className="h-3 w-3" /> Local files: {match.folder_name}
+                  </span>
+                )}
               </p>
             </div>
             {isStandard && (
