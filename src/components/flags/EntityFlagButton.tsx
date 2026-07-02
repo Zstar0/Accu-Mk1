@@ -1,9 +1,10 @@
-import { Flag } from 'lucide-react'
+import { Flag, Plus } from 'lucide-react'
 import type { CSSProperties } from 'react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { useUIStore } from '@/store/ui-store'
 import { useEntityFlags } from '@/hooks/use-flags'
+import { entityLabel } from '@/components/flags/flag-entity'
 import { flagTypeDef } from '@/components/flags/flag-catalog'
 import { useFlagTypesMap } from '@/services/flag-types'
 import { formatDateTime } from '@/components/flags/flag-format'
@@ -144,23 +145,23 @@ export function EntityFlagButton({
   }
 
   return (
-    <Button
-      type="button"
-      onClick={handleClick}
-      aria-label={label}
-      title={label}
-      style={
-        {
-          backgroundColor: def.color,
-          '--flag-glow-color': def.color,
-        } as CSSProperties
-      }
-      className={cn(
-        'flags-entity-glow h-auto items-center gap-2 border-0 py-1.5 font-bold text-white shadow-sm transition-transform hover:brightness-110 active:scale-95',
-        lg ? 'px-3.5' : 'px-2.5',
-        className
-      )}
-    >
+    <span className={cn('inline-flex items-center gap-1', className)}>
+      <Button
+        type="button"
+        onClick={handleClick}
+        aria-label={label}
+        title={label}
+        style={
+          {
+            backgroundColor: def.color,
+            '--flag-glow-color': def.color,
+          } as CSSProperties
+        }
+        className={cn(
+          'flags-entity-glow h-auto items-center gap-2 border-0 py-1.5 font-bold text-white shadow-sm transition-transform hover:brightness-110 active:scale-95',
+          lg ? 'px-3.5' : 'px-2.5'
+        )}
+      >
       <Flag
         className={cn('shrink-0', lg ? 'h-4 w-4' : 'h-3.5 w-3.5')}
         fill="currentColor"
@@ -193,7 +194,29 @@ export function EntityFlagButton({
           {subline}
         </span>
       </span>
-    </Button>
+      </Button>
+      {/* Multi-flag affordances: the discoverable "add another" — the pill
+          views existing flags; this raises a new one on the same entity. */}
+      <RaiseFlagButton
+        entityType={entityType}
+        entityId={entityId}
+        targetLabel={entityLabel(entityType, entityId)}
+        trigger={
+          <Button
+            variant="outline"
+            size="icon"
+            aria-label="Raise another flag"
+            title="Raise another flag"
+            className={cn(
+              'shrink-0 text-muted-foreground hover:text-foreground',
+              lg ? 'h-9 w-9' : 'h-8 w-8'
+            )}
+          >
+            <Plus className={lg ? 'h-4 w-4' : 'h-3.5 w-3.5'} />
+          </Button>
+        }
+      />
+    </span>
   )
 }
 
