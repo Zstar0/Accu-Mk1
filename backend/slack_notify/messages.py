@@ -19,6 +19,14 @@ _ACTION = {
 _EXCERPT_MAX = 140
 
 
+def _esc(s: object) -> str:
+    """Escape Slack mrkdwn control chars in user-supplied text so a crafted
+    flag title / comment / name can't inject a spoofed link or formatting.
+    Order matters: & first. URLs (the link target) are NOT escaped."""
+    return (str(s).replace("&", "&amp;")
+            .replace("<", "&lt;").replace(">", "&gt;"))
+
+
 def _entity_label(flag: dict) -> str:
     kind = _ENTITY_LABEL.get(flag.get("entity_type"), flag.get("entity_type", ""))
     return f"{kind} {flag.get('entity_id', '')}".strip()
@@ -42,13 +50,16 @@ def build_message(event: dict, category: str, actor_label: str,
                   link_hash: Optional[str] = None) -> tuple[str, list[dict]]:
     flag = event.get("flag") or {}
     verb = "commented on" if event.get("event_type") == "commented" else "updated"
+    # Escape user-supplied text (actor name, title, entity id/type, excerpt)
+    # before mrkdwn interpolation — the link target stays raw so its query `&`
+    # survives.
     action = _ACTION.get(category, "{actor} updated a flag").format(
-        actor=actor_label, verb=verb)
+        actor=_esc(actor_label), verb=verb)
     if event.get("event_type") == "status_changed" and event.get("to_value"):
-        action += f" → {_STATUS_LABEL.get(event['to_value'], event['to_value'])}"
-    title = flag.get("title", "")
+        action += f" → {_esc(_STATUS_LABEL.get(event['to_value'], event['to_value']))}"
+    title = _esc(flag.get("title", ""))
     status = _STATUS_LABEL.get(flag.get("status"), flag.get("status", ""))
-    context = f"{_entity_label(flag)} · {str(flag.get('type', '')).replace('_', ' ').title()} · {status}"
+    context = _esc(f"{_entity_label(flag)} · {str(flag.get('type', '')).replace('_', ' ').title()} · {status}")
     link = f"{base_url.rstrip('/')}/{link_hash or link_hash_for(None, flag.get('id'))}"
 
     text = f"{action}: {title}"
@@ -62,5 +73,5 @@ def build_message(event: dict, category: str, actor_label: str,
     if excerpt:
         blocks.insert(1, {"type": "section",
                           "text": {"type": "mrkdwn",
-                                   "text": f"> {excerpt[:_EXCERPT_MAX]}"}})
+                                   "text": f"> {_esc(excerpt[:_EXCERPT_MAX])}"}})
     return text, blocks

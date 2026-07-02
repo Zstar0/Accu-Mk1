@@ -44,6 +44,32 @@ def test_link_hash_for_routes_to_the_entity_page():
     assert link_hash_for(None, 7) == "#dashboard/orders?flag=7"
 
 
+def test_crafted_title_cannot_spoof_a_slack_link():
+    # A flag title with mrkdwn link markup must be escaped, not rendered as a
+    # second clickable link in the DM (phishing). Escape < > & in user text.
+    e = _event()
+    e["flag"]["title"] = "Pay <https://evil.example|here> & win"
+    _text, blocks = build_message(e, "assigned", "Nick", "https://mk1.example")
+    flat = str(blocks)
+    assert "&lt;https://evil.example|here&gt;" in flat
+    assert "&amp; win" in flat
+    # the raw injected link markup must be gone
+    assert "<https://evil.example|here>" not in flat
+    # the legitimate deep link (its & is part of the URL) stays intact
+    assert "https://mk1.example/#dashboard/orders?flag=7" in flat
+
+
+def test_comment_excerpt_and_actor_label_are_escaped():
+    e = _event(event_type="commented",
+               details={"mentions": [], "body_excerpt": "look <here|x> & <there>"})
+    _text, blocks = build_message(e, "watching_activity",
+                                  "Nick <fake|admin>", "https://mk1.example")
+    flat = str(blocks)
+    assert "&lt;here|x&gt;" in flat and "&amp;" in flat
+    assert "Nick &lt;fake|admin&gt;" in flat
+    assert "<here|x>" not in flat
+
+
 def test_build_message_uses_entity_link_hash_when_given():
     text, blocks = build_message(
         _event(), "assigned", "Nick", "https://mk1.example",
