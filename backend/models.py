@@ -1314,3 +1314,25 @@ class LimsAnalysisPromotion(Base):
             f"<LimsAnalysisPromotion(parent_id={self.parent_analysis_id}, "
             f"source_id={self.source_analysis_id}, kind={self.contribution_kind})>"
         )
+
+
+class SlackDmPrefs(Base):
+    """Per-user Slack DM notification preferences for the flag system.
+
+    Absent row = all defaults (enabled, every category on). slack_member_id is
+    cached from users.lookupByEmail or pasted manually in Preferences.
+    """
+    __tablename__ = "slack_dm_prefs"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, unique=True, nullable=False, index=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    slack_member_id: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    notify_assigned: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    notify_mentioned: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    notify_raised_activity: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    notify_watching_activity: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    notify_status_changes: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow,
+                                                 onupdate=datetime.utcnow, nullable=False)
