@@ -18,12 +18,14 @@ class SlackClient:
         self._headers = {"Authorization": f"Bearer {token}"}
         self._transport = transport
 
-    async def _call(self, method: str, payload: dict) -> Optional[dict]:
+    async def _call(self, method: str, payload: dict,
+                    *, form: bool = False) -> Optional[dict]:
         try:
             async with httpx.AsyncClient(transport=self._transport,
                                          timeout=10.0) as http:
+                kwargs = {"data": payload} if form else {"json": payload}
                 resp = await http.post(f"{_BASE}/{method}",
-                                       headers=self._headers, json=payload)
+                                       headers=self._headers, **kwargs)
             data = resp.json()
             if resp.status_code != 200 or not data.get("ok"):
                 logger.warning("slack %s failed: %s", method,
@@ -35,7 +37,9 @@ class SlackClient:
             return None
 
     async def lookup_by_email(self, email: str) -> Optional[str]:
-        data = await self._call("users.lookupByEmail", {"email": email})
+        # users.lookupByEmail rejects JSON bodies (invalid_arguments) — form only.
+        data = await self._call("users.lookupByEmail", {"email": email},
+                                form=True)
         return (data or {}).get("user", {}).get("id") or None
 
     async def open_dm(self, member_id: str) -> Optional[str]:

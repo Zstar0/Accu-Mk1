@@ -8,10 +8,14 @@ def _client(handler):
     return SlackClient("xoxb-test", transport=httpx.MockTransport(handler))
 
 
-def test_lookup_by_email_hit_and_miss():
+def test_lookup_by_email_is_form_encoded_hit_and_miss():
     def handler(request):
         assert request.headers["Authorization"] == "Bearer xoxb-test"
-        if b"hit@x.com" in request.content or "hit%40x.com" in str(request.url):
+        # Slack rejects JSON for users.lookupByEmail (invalid_arguments) —
+        # the call MUST be application/x-www-form-urlencoded.
+        assert request.headers["content-type"].startswith(
+            "application/x-www-form-urlencoded")
+        if b"hit%40x.com" in request.content or b"hit@x.com" in request.content:
             return httpx.Response(200, json={"ok": True, "user": {"id": "U123"}})
         return httpx.Response(200, json={"ok": False, "error": "users_not_found"})
     c = _client(handler)
