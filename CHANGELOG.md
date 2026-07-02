@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.0.15 — 2026-07-01
+
+### Added
+
+- **Local files as a second HPLC data source.** The per-prep HPLC folder picker now has a **SharePoint** tab and a **Local files** tab. The Local tab lets a tech pick a folder on their machine; its `*_PeakData.csv` / `*_DAD1A.csv` files are read in the browser (nothing is uploaded) and processed through the exact same parse / peak / chromatogram / save flow as SharePoint. When a SharePoint browse call is throttled (429), the error offers a one-click switch to the Local tab. A "Local files: &lt;folder&gt;" badge marks local-sourced results for review. Frontend-only; no change to result / purity math.
+
 ## v1.0.14 — 2026-06-30
 
 ### Fixed

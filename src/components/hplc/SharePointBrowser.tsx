@@ -30,6 +30,10 @@ import {
   type SharePointItem,
 } from '@/lib/api'
 
+export function isThrottleError(message: string): boolean {
+  return /\b429\b/.test(message) || /throttl|rate.?limit|retry-after/i.test(message)
+}
+
 interface SharePointBrowserProps {
   /** Called when user selects a folder for analysis */
   onFolderSelected: (path: string, folderName: string, files: SharePointItem[]) => void
@@ -41,6 +45,9 @@ interface SharePointBrowserProps {
    * HPLC folder override) — PeakData CSVs often sit in nested run subfolders.
    */
   allowSelectAnyFolder?: boolean
+  /** Called when a browse call fails with a throttle-shaped error (HTTP 429).
+   *  Lets the host offer the local-files source instead. */
+  onThrottled?: () => void
 }
 
 interface BreadcrumbSegment {
@@ -51,7 +58,7 @@ interface BreadcrumbSegment {
 type SortField = 'name' | 'size' | 'created' | 'last_modified'
 type SortDir = 'asc' | 'desc'
 
-export function SharePointBrowser({ onFolderSelected, disabled, allowSelectAnyFolder }: SharePointBrowserProps) {
+export function SharePointBrowser({ onFolderSelected, disabled, allowSelectAnyFolder, onThrottled }: SharePointBrowserProps) {
   const [currentPath, setCurrentPath] = useState('')
   const [items, setItems] = useState<SharePointItem[]>([])
   const [loading, setLoading] = useState(false)
@@ -232,6 +239,15 @@ export function SharePointBrowser({ onFolderSelected, disabled, allowSelectAnyFo
             >
               Retry
             </Button>
+            {onThrottled && isThrottleError(error) && (
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={onThrottled}
+              >
+                SharePoint&apos;s throttled — use Local files instead →
+              </Button>
+            )}
           </div>
         )}
 
