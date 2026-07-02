@@ -1,0 +1,27 @@
+# Slack app manifest for Accu-Mk1 flag DM notifications.
+# Create at https://api.slack.com/apps -> "Create New App" -> "From a manifest"
+# -> pick the lab workspace -> paste this YAML.
+#
+# After install: copy the Bot User OAuth Token (xoxb-...) from
+# "OAuth & Permissions" into the Mk1 backend env as MK1_SLACK_BOT_TOKEN.
+# Push-only DMs: no event subscriptions, no interactivity, no public URL.
+# See docs/superpowers/specs/2026-07-02-flag-slack-dm-notifications-design.md.
+display_information:
+  name: Accu-Mk1
+  description: Flag notifications from the Accu-Mk1 LIMS (assignments, mentions, watched activity)
+  background_color: "#1a1d21"
+features:
+  bot_user:
+    display_name: Accu-Mk1
+    always_online: true
+oauth_config:
+  scopes:
+    bot:
+      - chat:write        # send the DMs
+      - im:write          # open the DM conversation with a user
+      - users:read        # prerequisite for users:read.email
+      - users:read.email  # users.lookupByEmail (map Mk1 login email -> Slack id)
+settings:
+  org_deploy_enabled: false
+  socket_mode_enabled: false
+  token_rotation_enabled: false
