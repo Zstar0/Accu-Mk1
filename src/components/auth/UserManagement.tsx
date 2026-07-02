@@ -1,5 +1,11 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -74,7 +80,11 @@ export function UserManagement() {
     }
     setCreating(true)
     try {
-      await createUser({ email: newEmail, password: newPassword, role: newRole })
+      await createUser({
+        email: newEmail,
+        password: newPassword,
+        role: newRole,
+      })
       toast.success(`User ${newEmail} created`)
       setCreateOpen(false)
       setNewEmail('')
@@ -199,7 +209,9 @@ export function UserManagement() {
                 >
                   <TableCell className="font-medium">
                     {displayName(user)}
-                    <span className="block text-xs text-muted-foreground">{user.email}</span>
+                    <span className="block text-xs text-muted-foreground">
+                      {user.email}
+                    </span>
                     {user.id === currentUser?.id && (
                       <span className="ml-2 text-xs text-muted-foreground">
                         (you)

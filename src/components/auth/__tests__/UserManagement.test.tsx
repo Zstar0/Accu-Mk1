@@ -4,8 +4,7 @@ import { render, screen, waitFor } from '@/test/test-utils'
 import { useAuthStore } from '@/store/auth-store'
 
 const listUsers = vi.fn()
-vi.mock('@/lib/auth-api', async importOriginal => ({
-  ...(await importOriginal<typeof import('@/lib/auth-api')>()),
+vi.mock('@/lib/auth-api', () => ({
   listUsers: () => listUsers(),
   updateUser: vi.fn().mockResolvedValue({}),
   resetUserPassword: vi.fn(),
@@ -45,16 +44,22 @@ describe('UserManagement', () => {
   it('opens the edit flyout when a user row is clicked', async () => {
     const { UserManagement } = await import('@/components/auth/UserManagement')
     render(<UserManagement />)
-    await waitFor(() => expect(screen.getByText('jane@lab.com')).toBeInTheDocument())
+    await waitFor(() =>
+      expect(screen.getByText('jane@lab.com')).toBeInTheDocument()
+    )
     await userEvent.click(screen.getByText('jane@lab.com'))
     expect(screen.getByText('Edit user')).toBeInTheDocument()
-    expect((screen.getByLabelText('Email') as HTMLInputElement).value).toBe('jane@lab.com')
+    expect((screen.getByLabelText('Email') as HTMLInputElement).value).toBe(
+      'jane@lab.com'
+    )
   })
 
   it('no longer shows the promote/demote toggle icons', async () => {
     const { UserManagement } = await import('@/components/auth/UserManagement')
     render(<UserManagement />)
-    await waitFor(() => expect(screen.getByText('jane@lab.com')).toBeInTheDocument())
+    await waitFor(() =>
+      expect(screen.getByText('jane@lab.com')).toBeInTheDocument()
+    )
     expect(screen.queryByTitle('Promote to admin')).not.toBeInTheDocument()
     expect(screen.queryByTitle('Deactivate')).not.toBeInTheDocument()
     // one reset-password action per row survives

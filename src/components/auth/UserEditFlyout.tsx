@@ -23,7 +23,12 @@ interface UserEditFlyoutProps {
   onSaved: () => void | Promise<void>
 }
 
-export function UserEditFlyout({ user, isSelf, onClose, onSaved }: UserEditFlyoutProps) {
+export function UserEditFlyout({
+  user,
+  isSelf,
+  onClose,
+  onSaved,
+}: UserEditFlyoutProps) {
   const [firstName, setFirstName] = useState(user.first_name ?? '')
   const [lastName, setLastName] = useState(user.last_name ?? '')
   const [email, setEmail] = useState(user.email)
@@ -35,8 +40,10 @@ export function UserEditFlyout({ user, isSelf, onClose, onSaved }: UserEditFlyou
   const emailValid = EMAIL_RE.test(emailTrim)
 
   const patch: UserUpdateInput = {}
-  if (firstName.trim() !== (user.first_name ?? '')) patch.first_name = firstName.trim() || null
-  if (lastName.trim() !== (user.last_name ?? '')) patch.last_name = lastName.trim() || null
+  if (firstName.trim() !== (user.first_name ?? ''))
+    patch.first_name = firstName.trim() || null
+  if (lastName.trim() !== (user.last_name ?? ''))
+    patch.last_name = lastName.trim() || null
   if (emailTrim !== user.email) patch.email = emailTrim
   if (!isSelf && role !== user.role) patch.role = role
   if (!isSelf && isActive !== user.is_active) patch.is_active = isActive
@@ -73,7 +80,12 @@ export function UserEditFlyout({ user, isSelf, onClose, onSaved }: UserEditFlyou
             <Pencil className="h-5 w-5 text-primary" />
             <span className="text-lg font-semibold">Edit user</span>
           </div>
-          <Button variant="ghost" size="icon" onClick={onClose} aria-label="Close">
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={onClose}
+            aria-label="Close"
+          >
             <X className="h-4 w-4" />
           </Button>
         </div>
@@ -133,14 +145,17 @@ export function UserEditFlyout({ user, isSelf, onClose, onSaved }: UserEditFlyou
             </div>
             {isSelf && (
               <p className="text-xs text-muted-foreground">
-                You can't change your own role or active status.
+                You cannot change your own role or active status.
               </p>
             )}
             <div className="flex justify-end gap-2 pt-2">
               <Button variant="outline" onClick={onClose}>
                 Cancel
               </Button>
-              <Button onClick={handleSave} disabled={!hasChanges || !emailValid || saving}>
+              <Button
+                onClick={handleSave}
+                disabled={!hasChanges || !emailValid || saving}
+              >
                 {saving ? 'Saving...' : 'Save changes'}
               </Button>
             </div>

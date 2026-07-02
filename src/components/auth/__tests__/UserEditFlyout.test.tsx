@@ -4,8 +4,7 @@ import { render, screen } from '@/test/test-utils'
 import type { AuthUser } from '@/lib/auth-api'
 
 const updateUser = vi.fn()
-vi.mock('@/lib/auth-api', async importOriginal => ({
-  ...(await importOriginal<typeof import('@/lib/auth-api')>()),
+vi.mock('@/lib/auth-api', () => ({
   updateUser: (...args: unknown[]) => updateUser(...args),
 }))
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }))
@@ -21,7 +20,9 @@ const baseUser: AuthUser = {
   last_name: 'Doe',
 }
 
-async function renderFlyout(opts: { user?: Partial<AuthUser>; isSelf?: boolean } = {}) {
+async function renderFlyout(
+  opts: { user?: Partial<AuthUser>; isSelf?: boolean } = {}
+) {
   const onClose = vi.fn()
   const onSaved = vi.fn()
   const { UserEditFlyout } = await import('@/components/auth/UserEditFlyout')
@@ -43,9 +44,15 @@ describe('UserEditFlyout', () => {
 
   it('pre-fills the form from the user', async () => {
     await renderFlyout()
-    expect((screen.getByLabelText('First name') as HTMLInputElement).value).toBe('Jane')
-    expect((screen.getByLabelText('Last name') as HTMLInputElement).value).toBe('Doe')
-    expect((screen.getByLabelText('Email') as HTMLInputElement).value).toBe('jane@lab.com')
+    expect(
+      (screen.getByLabelText('First name') as HTMLInputElement).value
+    ).toBe('Jane')
+    expect((screen.getByLabelText('Last name') as HTMLInputElement).value).toBe(
+      'Doe'
+    )
+    expect((screen.getByLabelText('Email') as HTMLInputElement).value).toBe(
+      'jane@lab.com'
+    )
   })
 
   it('saves only changed fields and calls onSaved', async () => {
