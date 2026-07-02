@@ -80,6 +80,33 @@ export function FlagsPane() {
       )}
 
       <SettingsSection title={t('preferences.flags.types')}>
+        {/* Concept help — what the knobs on a type actually mean. */}
+        <div className="space-y-1 rounded-md border bg-muted/40 p-3 text-xs text-muted-foreground">
+          <p>
+            <span className="font-semibold text-foreground">
+              {t('preferences.flags.kindIssue')}
+            </span>{' '}
+            — {t('preferences.flags.help.issue')}
+          </p>
+          <p>
+            <span className="font-semibold text-foreground">
+              {t('preferences.flags.kindSignal')}
+            </span>{' '}
+            — {t('preferences.flags.help.signal')}
+          </p>
+          <p>
+            <span className="font-semibold text-foreground">
+              {t('preferences.flags.appliesTo')}
+            </span>{' '}
+            {t('preferences.flags.help.scope')}
+          </p>
+          <p>
+            <span className="font-semibold text-foreground">
+              {t('preferences.flags.active')}
+            </span>{' '}
+            — {t('preferences.flags.help.deactivate')}
+          </p>
+        </div>
         <div className="flex items-center justify-between">
           <p className="text-sm text-muted-foreground">
             {t('preferences.flags.typesDescription')}

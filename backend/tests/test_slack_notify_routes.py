@@ -43,6 +43,7 @@ def test_get_defaults_when_no_row(client):
     assert r.status_code == 200
     body = r.json()
     assert body["enabled"] is True and body["linked"] is False
+    assert body["slack_display_name"] is None
     assert all(body[f"notify_{c}"] is True for c in
                ("assigned", "mentioned", "raised_activity",
                 "watching_activity", "status_changes"))

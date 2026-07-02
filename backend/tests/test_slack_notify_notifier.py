@@ -18,6 +18,8 @@ class FakeClient:
     async def lookup_by_email(self, email):
         self.lookups.append(email)
         return "U-FROM-EMAIL" if email == "two@lab.com" else None
+    async def user_info(self, member_id):
+        return "Forrest (fake)"
     async def open_dm(self, member_id):
         return f"D-{member_id}"
     async def post_dm(self, channel, text, blocks):
@@ -71,6 +73,9 @@ def test_email_lookup_caches_member_id_and_posts(session_factory):
     db = session_factory()
     row = db.query(SlackDmPrefs).filter_by(user_id=2).one()
     assert row.slack_member_id == "U-FROM-EMAIL"
+    # The auto-link also caches WHO it resolved to — surfaced in the prefs UI
+    # so users can confirm the mapping hit the right Slack account.
+    assert row.slack_display_name == "Forrest (fake)"
     db.close()
 
 

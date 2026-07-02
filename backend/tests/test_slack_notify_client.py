@@ -33,6 +33,23 @@ def test_open_dm_and_post_dm():
     assert asyncio.run(c.post_dm("D9", "hi", [])) is True
 
 
+def test_user_info_returns_display_name_with_realname_fallback():
+    def handler(request):
+        assert request.url.path.endswith("users.info")
+        if b"U-DISPLAY" in request.content:
+            return httpx.Response(200, json={
+                "ok": True,
+                "user": {"real_name": "Forrest Parker",
+                         "profile": {"display_name": "forrest"}}})
+        return httpx.Response(200, json={
+            "ok": True,
+            "user": {"real_name": "No Display",
+                     "profile": {"display_name": ""}}})
+    c = _client(handler)
+    assert asyncio.run(c.user_info("U-DISPLAY")) == "forrest"
+    assert asyncio.run(c.user_info("U-BARE")) == "No Display"
+
+
 def test_http_error_returns_falsey_never_raises():
     def handler(request):
         return httpx.Response(500)
