@@ -10,15 +10,37 @@ vi.mock('qrcode.react', () => ({
 describe('BoxLabelTemplate', () => {
   it('encodes the bare box id in the QR — the scanner-station contract', () => {
     render(
-      <BoxLabelTemplate boxId={137} labelCode="WP-3267-1" clientName="Acme" role="hplc" vialCount={4} />,
+      <BoxLabelTemplate boxId={137} orderKey="WP-3267" role="hplc" vialCount={4} createdAt={null} />,
     )
     expect(screen.getByTestId('qr').getAttribute('data-value')).toBe('137')
   })
 
-  it('still prints the human label code as text', () => {
+  it('prints the order key as the big line (no box_number suffix)', () => {
     render(
-      <BoxLabelTemplate boxId={137} labelCode="WP-3267-1" clientName={null} role="ster" vialCount={2} />,
+      <BoxLabelTemplate boxId={137} orderKey="WP-3267" role="hplc" vialCount={4} createdAt={null} />,
     )
-    expect(screen.getByText('WP-3267-1')).toBeInTheDocument()
+    expect(screen.getByText('WP-3267')).toBeInTheDocument()
+  })
+
+  it('meta row shows the short role and vial count — ster prints as PCR', () => {
+    render(
+      <BoxLabelTemplate boxId={137} orderKey="WP-3267" role="ster" vialCount={2} createdAt={null} />,
+    )
+    expect(screen.getByText('PCR · 2 vials')).toBeInTheDocument()
+  })
+
+  it('renders the box created date as YYYY-MM-DD', () => {
+    render(
+      <BoxLabelTemplate boxId={137} orderKey="WP-3267" role="hplc" vialCount={4}
+        createdAt="2026-07-01T12:00:00" />,
+    )
+    expect(screen.getByText('2026-07-01')).toBeInTheDocument()
+  })
+
+  it('singularizes a one-vial count', () => {
+    render(
+      <BoxLabelTemplate boxId={137} orderKey="WP-3267" role="endo" vialCount={1} createdAt={null} />,
+    )
+    expect(screen.getByText('ENDO · 1 vial')).toBeInTheDocument()
   })
 })

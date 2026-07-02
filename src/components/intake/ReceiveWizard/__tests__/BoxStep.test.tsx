@@ -24,9 +24,10 @@ vi.mock('@dnd-kit/core', () => ({
 }))
 
 // usePrintLabel pulls in createRoot/print plumbing; we only care about the
-// boxing flow, so stub it to a no-op that still returns the expected shape.
+// boxing flow, so stub it to a spy that still returns the expected shape.
+const printing = vi.hoisted(() => ({ printNode: vi.fn() }))
 vi.mock('@/components/samples/usePrintLabel', () => ({
-  usePrintLabel: () => ({ printNode: () => {} }),
+  usePrintLabel: () => ({ printNode: printing.printNode }),
 }))
 
 import {
@@ -263,5 +264,32 @@ describe('BoxStep — capacity-driven boxing', () => {
 
     expect(mockAssignVialsToBox).toHaveBeenCalledWith(7, ['P-101'])
     expect(mockUnassignVialsFromBox).not.toHaveBeenCalled()
+  })
+
+  it('"Print box labels" prints one job covering only the vialed boxes', async () => {
+    // Two pre-existing boxes: id 7 holds the order's only vial, id 8 is empty.
+    // The toolbar button must stamp printed_at for the vialed box only and
+    // issue a single print job (one printNode call carrying every label).
+    const { boxesState } = setupBackend([vial('P-101', 'hplc', 7)])
+    boxesState.push(
+      {
+        id: 7, order_key: ORDER, box_number: 1, role: 'hplc',
+        label_code: `${ORDER}-1`, vial_count: 1, printed_at: null,
+        created_at: '2026-07-01T12:00:00', stored_at: null,
+      },
+      {
+        id: 8, order_key: ORDER, box_number: 2, role: 'hplc',
+        label_code: `${ORDER}-2`, vial_count: 0, printed_at: null,
+        created_at: null, stored_at: null,
+      },
+    )
+    renderBoxStep()
+    await screen.findByText('P-101')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Print box labels' }))
+
+    await waitFor(() => expect(mockPrintBox).toHaveBeenCalledTimes(1))
+    expect(mockPrintBox).toHaveBeenCalledWith(7)
+    expect(printing.printNode).toHaveBeenCalledTimes(1)
   })
 })

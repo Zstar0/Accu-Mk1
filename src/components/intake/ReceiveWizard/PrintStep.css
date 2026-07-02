@@ -107,6 +107,42 @@
     white-space: nowrap;
     flex-shrink: 0;
   }
+  /* Box label text column — order-label typography (big id + meta row)
+     sitting to the right of the QR inside the shared .label flex row. */
+  .box-label-text {
+    flex: 1;
+    min-width: 0;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 0.3mm;
+    overflow: hidden;
+  }
+  .box-label-id {
+    font-family: ui-monospace, monospace;
+    font-weight: 700;
+    font-size: 11pt;
+    line-height: 1;
+    letter-spacing: -0.02em;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: var(--foreground);
+  }
+  .box-label-meta {
+    display: flex;
+    flex-direction: row;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 1mm;
+    font-family: ui-monospace, monospace;
+    font-size: 5.5pt;
+    color: var(--muted-foreground);
+    line-height: 1;
+    white-space: nowrap;
+  }
+  .box-label-dept { font-weight: 700; }
   .print-area .order-label,
   .order-print-area .order-label {
     display: flex;
@@ -302,6 +338,42 @@
     white-space: nowrap;
     flex-shrink: 0;
   }
+  /* Box label text column — mirrors the order-label print sizes (11pt id,
+     5.5pt meta, both #000) next to the QR in the shared .label row. */
+  .box-label-text {
+    flex: 1;
+    min-width: 0;
+    height: 100%;
+    display: flex !important;
+    flex-direction: column;
+    justify-content: center;
+    gap: 0.3mm;
+    overflow: hidden;
+  }
+  .box-label-id {
+    font-family: ui-monospace, monospace;
+    font-weight: 700;
+    font-size: 11pt;
+    line-height: 1;
+    letter-spacing: -0.02em;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: #000;
+  }
+  .box-label-meta {
+    display: flex !important;
+    flex-direction: row;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 1mm;
+    font-family: ui-monospace, monospace;
+    font-size: 5.5pt;
+    color: #000;
+    line-height: 1;
+    white-space: nowrap;
+  }
+  .box-label-dept { font-weight: 700; }
   .order-print-area .order-label {
     width: 50.8mm;
     height: 6.35mm;

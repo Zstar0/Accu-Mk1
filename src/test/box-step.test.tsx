@@ -5,15 +5,22 @@ import type { LimsBox } from '@/lib/api'
 const box: LimsBox = {
   id: 1, order_key: 'WP-20066', box_number: 3, role: 'ster',
   label_code: 'WP-20066-3', vial_count: 4, printed_at: null,
-  created_at: null, stored_at: null,
+  created_at: '2026-07-01T12:00:00', stored_at: null,
 }
 
 describe('boxLabelLines', () => {
-  it('uses the label_code verbatim (no double WP- prefix) and names the bin', () => {
-    const lines = boxLabelLines(box, 'RTD Biosciences')
-    expect(lines[0]).toBe('WP-20066-3')
-    expect(lines).toContain('RTD Biosciences')
-    expect(lines.join(' ')).toMatch(/STER/i)
-    expect(lines.join(' ')).toMatch(/4 vials/)
+  it('leads with the bare order key (the QR keeps physical labels unique)', () => {
+    const lines = boxLabelLines(box)
+    expect(lines[0]).toBe('WP-20066')
+  })
+
+  it('meta line: short role (ster → PCR) · vial count · created date', () => {
+    const lines = boxLabelLines(box)
+    expect(lines[1]).toBe('PCR · 4 vials · 2026-07-01')
+  })
+
+  it('omits the date when created_at is null and singularizes one vial', () => {
+    const lines = boxLabelLines({ ...box, role: 'hplc', vial_count: 1, created_at: null })
+    expect(lines[1]).toBe('HPLC · 1 vial')
   })
 })

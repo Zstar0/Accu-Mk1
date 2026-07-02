@@ -7,7 +7,7 @@ import {
 import { Printer, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { usePrintLabel } from '@/components/samples/usePrintLabel'
-import { BoxLabelTemplate } from './BoxLabelTemplate'
+import { BoxLabelTemplate, ROLE_SHORT } from './BoxLabelTemplate'
 import {
   listOrderBoxes, createBox, assignVialsToBox, unassignVialsFromBox, deleteBox, printBox,
   listSubSamples, type LimsBox, type SubSample,
@@ -46,23 +46,27 @@ const DEFAULT_BOX_CAPACITY = 6
 type OrderVial = SubSample
 
 /** Pure: the lines printed on a box label. Tested directly. */
-export function boxLabelLines(box: LimsBox, clientName: string | null): string[] {
-  const lines = [box.label_code]
-  if (clientName) lines.push(clientName)
-  lines.push(`${ROLE_LABEL[box.role as BoxRole]} · ${box.vial_count} vials`)
-  return lines
+export function boxLabelLines(box: LimsBox): string[] {
+  const meta = `${ROLE_SHORT[box.role]} · ${box.vial_count} vial${box.vial_count === 1 ? '' : 's'}`
+  return [
+    box.order_key,
+    box.created_at ? `${meta} · ${box.created_at.slice(0, 10)}` : meta,
+  ]
 }
 
 interface Props {
   orderKey: string
   orderLabel: string
+  /** Accepted (ReceiveWizard still passes it) but no longer printed — the
+   *  box label now leads with the order key instead of a client line. */
   clientId: string | null
   sampleIds: string[]
 }
 
-export function BoxStep({ orderKey, orderLabel, clientId, sampleIds }: Props) {
+export function BoxStep({ orderKey, orderLabel, sampleIds }: Props) {
   const qc = useQueryClient()
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }))
+  const { printNode } = usePrintLabel()
 
   // Capacity is frontend-only (ephemeral) — local per-box state driving the
   // Auto-assign batch size. Defaults to DEFAULT_BOX_CAPACITY (the lab's
@@ -178,40 +182,69 @@ export function BoxStep({ orderKey, orderLabel, clientId, sampleIds }: Props) {
   const unboxedVials = vials.filter(v => !v.box_id)
   const activeVial = activeId ? vials.find(v => v.sample_id === activeId) ?? null : null
 
+  // Every vialed box of the order, in the same role/box order as the columns
+  // below — one physical label each in a single print job.
+  const printableBoxes = ROLES.flatMap(role =>
+    boxes.filter(b => b.role === role && b.vial_count > 0))
+
+  const handlePrintAllLabels = () => {
+    // One print job: a fragment of .label nodes — the print CSS page-breaks
+    // on .label, so each box lands on its own strip (same idiom as PrintStep
+    // printing many labels in one window.print()).
+    printNode(
+      <>
+        {printableBoxes.map(b => (
+          <BoxLabelTemplate key={b.id} boxId={b.id} orderKey={b.order_key}
+            role={b.role} vialCount={b.vial_count} createdAt={b.created_at} />
+        ))}
+      </>,
+    )
+    // Stamp printed_at on each box, same as the per-box button does.
+    for (const b of printableBoxes) void printBox(b.id)
+  }
+
   return (
     <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}
       onDragCancel={() => setActiveId(null)}>
-      <div className="p-6 flex gap-4 h-full overflow-hidden">
-        {/* LEFT: per-role box columns + in-column drop targets (manual override). */}
-        <div className="flex-1 grid grid-cols-3 gap-4 overflow-y-auto">
-          {ROLES.map(role => {
-            return (
-              <div key={role} className="flex flex-col gap-3">
-                <div className="flex items-center justify-between">
-                  <h3 className={`font-semibold ${roleTextClass(role)}`}>{ROLE_LABEL[role]}</h3>
-                  <Button size="sm" variant="outline" onClick={() => void addBox(role)}>+ Add box</Button>
-                </div>
-                {boxes.filter(b => b.role === role).map(b => (
-                  <BoxCard
-                    key={b.id}
-                    box={b}
-                    boxVials={vials.filter(v => v.box_id === b.id)}
-                    clientName={clientId}
-                    capacity={capacities[b.id] ?? DEFAULT_BOX_CAPACITY}
-                    activeId={activeId}
-                    onCapacityChange={n => setCapacities(c => ({ ...c, [b.id]: n }))}
-                    onAutoAssign={() => void handleAutoAssign(b)}
-                    onRemove={() => void handleRemoveBox(b)}
-                  />
-                ))}
-              </div>
-            )
-          })}
+      <div className="p-6 flex flex-col gap-4 h-full overflow-hidden">
+        <div className="flex items-center">
+          <Button type="button" variant="outline" size="sm" className="gap-2"
+            onClick={handlePrintAllLabels} disabled={printableBoxes.length === 0}>
+            <Printer className="w-4 h-4" aria-hidden="true" />
+            Print box labels
+          </Button>
         </div>
+        <div className="flex gap-4 flex-1 min-h-0">
+          {/* LEFT: per-role box columns + in-column drop targets (manual override). */}
+          <div className="flex-1 grid grid-cols-3 gap-4 overflow-y-auto">
+            {ROLES.map(role => {
+              return (
+                <div key={role} className="flex flex-col gap-3">
+                  <div className="flex items-center justify-between">
+                    <h3 className={`font-semibold ${roleTextClass(role)}`}>{ROLE_LABEL[role]}</h3>
+                    <Button size="sm" variant="outline" onClick={() => void addBox(role)}>+ Add box</Button>
+                  </div>
+                  {boxes.filter(b => b.role === role).map(b => (
+                    <BoxCard
+                      key={b.id}
+                      box={b}
+                      boxVials={vials.filter(v => v.box_id === b.id)}
+                      capacity={capacities[b.id] ?? DEFAULT_BOX_CAPACITY}
+                      activeId={activeId}
+                      onCapacityChange={n => setCapacities(c => ({ ...c, [b.id]: n }))}
+                      onAutoAssign={() => void handleAutoAssign(b)}
+                      onRemove={() => void handleRemoveBox(b)}
+                    />
+                  ))}
+                </div>
+              )
+            })}
+          </div>
 
-        {/* RIGHT: unboxed vials, grouped by role — drag source for overrides and
-            a drop target: drag a boxed chip here to clear its box membership. */}
-        <UnboxedPanel orderLabel={orderLabel} vials={unboxedVials} activeId={activeId} />
+          {/* RIGHT: unboxed vials, grouped by role — drag source for overrides and
+              a drop target: drag a boxed chip here to clear its box membership. */}
+          <UnboxedPanel orderLabel={orderLabel} vials={unboxedVials} activeId={activeId} />
+        </div>
       </div>
 
       {/* The "held" preview — a role-colored copy tracking the cursor. The
@@ -272,7 +305,6 @@ interface BoxCardProps {
   // Rendered inside the card as draggable chips so the tech sees what landed
   // where and can drag a chip onto another box to reassign it.
   boxVials: OrderVial[]
-  clientName: string | null
   capacity: number
   activeId: string | null
   onCapacityChange: (n: number) => void
@@ -280,7 +312,7 @@ interface BoxCardProps {
   onRemove: () => void
 }
 
-function BoxCard({ box, boxVials, clientName, capacity, activeId, onCapacityChange, onAutoAssign, onRemove }: BoxCardProps) {
+function BoxCard({ box, boxVials, capacity, activeId, onCapacityChange, onAutoAssign, onRemove }: BoxCardProps) {
   const { setNodeRef, isOver } = useDroppable({ id: String(box.id) })
   const { printNode } = usePrintLabel()
   return (
@@ -291,8 +323,8 @@ function BoxCard({ box, boxVials, clientName, capacity, activeId, onCapacityChan
         <div className="flex items-center gap-1">
           <Button size="sm" variant="outline" className="gap-2"
             onClick={() => { void printBox(box.id); printNode(
-              <BoxLabelTemplate boxId={box.id} labelCode={box.label_code} clientName={clientName}
-                role={box.role} vialCount={box.vial_count} />,
+              <BoxLabelTemplate boxId={box.id} orderKey={box.order_key}
+                role={box.role} vialCount={box.vial_count} createdAt={box.created_at} />,
             ) }}>
             <Printer className="w-4 h-4" aria-hidden="true" />
             {box.printed_at ? 'Reprint' : 'Print label'}
