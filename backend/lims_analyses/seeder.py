@@ -89,10 +89,49 @@ def role_implies_seeding(role: Optional[str], wp_services: Dict[str, bool]) -> b
     return any(wp_services.get(k) for k in role_keys)
 
 
-def select_services_for_role(db: Session, role: str) -> List[AnalysisService]:
-    """Return the analysis_services rows whose keyword exactly matches the
-    role's whitelist. Empty list if the role has no whitelist (xtra) or
-    the catalog doesn't carry any matching keyword."""
+# Catalog 1D: sterility PRODUCT identifier -> catalog ServiceGroup name. The
+# group's member services (via service_group_members) are the analyses seeded
+# for that product. Catalog-sourced so a PCR-only order seeds Fungi+Bacteria and
+# a USP<71>-only order seeds USP71 — addon-aware within the legacy ster bucket.
+STERILITY_PRODUCT_TO_GROUP: Dict[str, str] = {
+    "sterility_pcr": "Sterility PCR",
+    "sterility_usp71": "Sterility USP<71>",
+}
+
+
+def _services_for_sterility_products(
+    db: Session, ordered_products: Set[str]
+) -> List[AnalysisService]:
+    """Member analysis_services of the ordered sterility groups (catalog-sourced)."""
+    out: dict[int, AnalysisService] = {}
+    for product in ordered_products:
+        group_name = STERILITY_PRODUCT_TO_GROUP.get(product)
+        if not group_name:
+            continue
+        group = db.execute(
+            select(ServiceGroup).where(ServiceGroup.name == group_name)
+        ).scalar_one_or_none()
+        if group is None:
+            log.warning("sterility_seed.group_missing product=%s group=%s",
+                        product, group_name)
+            continue
+        for svc in group.analysis_services:
+            out[svc.id] = svc
+    return list(out.values())
+
+
+def select_services_for_role(
+    db: Session, role: str, *, ordered_products: Optional[Set[str]] = None
+) -> List[AnalysisService]:
+    """Return the analysis_services rows to seed for a vial role.
+
+    Catalog 1D — addon-aware sterility (additive, opt-in): when `role == "ster"`
+    and `ordered_products` is provided, resolve members from the ordered catalog
+    groups (PCR-only -> Fungi+Bacteria; USP<71>-only -> USP71). Legacy callers
+    that omit `ordered_products` get the unchanged ROLE_TO_KEYWORDS whitelist.
+    """
+    if role == "ster" and ordered_products is not None:
+        return _services_for_sterility_products(db, ordered_products)
     keywords = ROLE_TO_KEYWORDS.get(role, [])
     if not keywords:
         return []
