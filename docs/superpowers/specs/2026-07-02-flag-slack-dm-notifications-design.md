@@ -95,9 +95,14 @@ All behind `get_current_user`; `user_id` always derived from the JWT.
 
 ## Frontend
 
-**Preferences → Flags pane** gains a "Slack notifications" section: master
-toggle, link status + member-id field + test button, five category toggles.
-Server-stored (the backend is the consumer) — not localStorage.
+The **Account → Profile page** gains a "Slack notifications" card
+(`src/components/auth/SlackPrefsSection.tsx`): master toggle, link status
+showing WHO the mapping resolved to ("Linked → {Slack display name}", cached
+`slack_display_name` via `users.info` at every link path), member-id field +
+test button, five category toggles. Server-stored (the backend is the
+consumer) — not localStorage. **Placement rationale (2026-07-02):** these are
+per-user prefs, not admin settings — the settings dialog will eventually be
+admin-only, and every user must keep reaching their own Slack config.
 
 **Deep link (new):** DM tap-through needs a URL that opens a flag's thread.
 Add a `flag` query param to the existing `#section/subsection?…` hash scheme:

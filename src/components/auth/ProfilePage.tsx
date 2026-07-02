@@ -7,6 +7,7 @@ import { toast } from 'sonner'
 import { CheckCircle2, Loader2, User } from 'lucide-react'
 import { changePassword, setSenaitePassword, clearSenaitePassword, updateMe } from '@/lib/auth-api'
 import { useAuthStore } from '@/store/auth-store'
+import { SlackPrefsSection } from '@/components/auth/SlackPrefsSection'
 
 export function ProfilePage() {
   const user = useAuthStore(state => state.user)
@@ -26,6 +27,9 @@ export function ProfilePage() {
       <NameSection />
       <ChangePasswordSection />
       <SenaiteCredentialsSection />
+      {/* Per-user Slack DM prefs — personal config, lives here rather than
+          the settings dialog (which will become admin-only). */}
+      <SlackPrefsSection />
     </div>
   )
 }
