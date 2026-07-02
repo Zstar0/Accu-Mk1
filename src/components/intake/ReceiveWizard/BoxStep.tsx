@@ -291,7 +291,7 @@ function BoxCard({ box, boxVials, clientName, capacity, activeId, onCapacityChan
         <div className="flex items-center gap-1">
           <Button size="sm" variant="outline" className="gap-2"
             onClick={() => { void printBox(box.id); printNode(
-              <BoxLabelTemplate labelCode={box.label_code} clientName={clientName}
+              <BoxLabelTemplate boxId={box.id} labelCode={box.label_code} clientName={clientName}
                 role={box.role} vialCount={box.vial_count} />,
             ) }}>
             <Printer className="w-4 h-4" aria-hidden="true" />
