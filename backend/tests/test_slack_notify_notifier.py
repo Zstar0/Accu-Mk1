@@ -88,6 +88,38 @@ def test_manual_member_id_skips_lookup(session_factory):
     assert fake.posted[0][0] == "D-U-MANUAL"
 
 
+def test_alias_domain_fallback_resolves_and_caches(session_factory):
+    # Login email misses; the same local-part on an alias domain hits.
+    db = session_factory()
+    db.add(User(id=1, email="one@lab.com", hashed_password="x"))
+    db.add(User(id=7, email="nova@valence.test", hashed_password="x"))
+    f = FlagFlag(entity_type="sample", entity_id="P-1", kind="issue",
+                 type="blocker", status="open", title="t", created_by=1,
+                 assignee_id=7)
+    db.add(f)
+    db.commit()
+    fid = f.id
+    db.close()
+
+    class AliasFake(FakeClient):
+        async def lookup_by_email(self, email):
+            self.lookups.append(email)
+            return "U-ALT" if email == "nova@accumark.test" else None
+
+    fake = AliasFake()
+    n = SlackNotifier(fake, session_factory, "https://mk1.example",
+                      alias_domains=["valence.test", "accumark.test"])
+    ev = _event(fid)
+    ev["to_value"] = "7"
+    sent = asyncio.run(n.handle_event(ev))
+    assert sent == 1
+    assert fake.posted[0][0] == "D-U-ALT"
+    assert fake.lookups == ["nova@valence.test", "nova@accumark.test"]
+    db = session_factory()
+    assert db.query(SlackDmPrefs).filter_by(user_id=7).one().slack_member_id == "U-ALT"
+    db.close()
+
+
 def test_unresolvable_user_is_skipped_silently(session_factory):
     fid = _seed(session_factory)
     db = session_factory()
