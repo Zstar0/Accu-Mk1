@@ -400,3 +400,63 @@ describe('UIStore customer detail tabs + order search', () => {
     })
   })
 })
+
+describe('UIStore active flag entity stack', () => {
+  beforeEach(() => {
+    useUIStore.setState({ activeFlagEntityStack: [] })
+  })
+
+  it('defaults to an empty stack', () => {
+    expect(useUIStore.getState().activeFlagEntityStack).toEqual([])
+  })
+
+  it('push adds to the top; overlays stack in order', () => {
+    useUIStore
+      .getState()
+      .pushActiveFlagEntity({ type: 'sample', id: 'P-0071', label: 'P-0071' })
+    useUIStore
+      .getState()
+      .pushActiveFlagEntity({ type: 'worksheet', id: '9', label: 'WS Alpha' })
+    const stack = useUIStore.getState().activeFlagEntityStack
+    expect(stack).toHaveLength(2)
+    expect(stack.at(-1)).toEqual({
+      type: 'worksheet',
+      id: '9',
+      label: 'WS Alpha',
+    })
+  })
+
+  it('pop removes the LAST matching entry and restores the one beneath', () => {
+    useUIStore
+      .getState()
+      .pushActiveFlagEntity({ type: 'sample', id: 'P-0071', label: 'P-0071' })
+    useUIStore
+      .getState()
+      .pushActiveFlagEntity({ type: 'worksheet', id: '9', label: 'WS Alpha' })
+    useUIStore.getState().popActiveFlagEntity({ type: 'worksheet', id: '9' })
+    const stack = useUIStore.getState().activeFlagEntityStack
+    expect(stack).toHaveLength(1)
+    expect(stack.at(-1)?.id).toBe('P-0071')
+  })
+
+  it('pop of a non-top entry removes just that entry (unmount order safety)', () => {
+    useUIStore
+      .getState()
+      .pushActiveFlagEntity({ type: 'sample', id: 'P-0071', label: 'P-0071' })
+    useUIStore
+      .getState()
+      .pushActiveFlagEntity({ type: 'worksheet', id: '9', label: 'WS Alpha' })
+    useUIStore.getState().popActiveFlagEntity({ type: 'sample', id: 'P-0071' })
+    const stack = useUIStore.getState().activeFlagEntityStack
+    expect(stack).toHaveLength(1)
+    expect(stack.at(-1)?.type).toBe('worksheet')
+  })
+
+  it('pop of an unknown entry is a no-op', () => {
+    useUIStore
+      .getState()
+      .pushActiveFlagEntity({ type: 'sample', id: 'P-0071', label: 'P-0071' })
+    useUIStore.getState().popActiveFlagEntity({ type: 'sample', id: 'NOPE' })
+    expect(useUIStore.getState().activeFlagEntityStack).toHaveLength(1)
+  })
+})

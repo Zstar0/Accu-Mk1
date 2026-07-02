@@ -32,13 +32,17 @@ maintained as a small **stack** (`pushActiveFlagEntity` / `popActiveFlagEntity`)
 overlays compose: SampleDetails registers the sample; opening VialsQuickLookDialog
 pushes the vial; closing it restores the sample. `activeFlagEntity` reads the top.
 
-Registering surfaces (the three that mount `EntityFlagButton` today):
+Registering surfaces:
 
 | Surface | Entity |
 |---|---|
-| `SampleDetails` | `sample` |
-| `VialsQuickLookDialog` | `sub_sample` (vial) |
+| `SampleDetails` (parent page) | `sample` |
+| `SampleDetails` (vial page, `isParent=false`) | `sub_sample` (vial) |
 | `WorksheetDrawerHeader` | `worksheet` |
+
+`VialsQuickLookDialog` registers **nothing**: it lists all of a parent's vials
+(one flag button per row), so there is no single "vial you're on"; the parent
+sample's context (registered by SampleDetails underneath) stays active.
 
 Push on mount, pop on unmount. Client-side only.
 
