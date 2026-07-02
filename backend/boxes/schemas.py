@@ -20,6 +20,8 @@ class BoxResponse(BaseModel):
     label_code: str
     vial_count: int
     printed_at: Optional[datetime] = None
+    created_at: Optional[datetime] = None
+    stored_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True

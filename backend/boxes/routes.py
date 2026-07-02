@@ -19,6 +19,8 @@ def _serialize(db: Session, box) -> BoxResponse:
         label_code=service.box_label_code(box),
         vial_count=service.vial_count(db, box.id),
         printed_at=box.printed_at,
+        created_at=box.created_at,
+        stored_at=box.stored_at,
     )
 
 
@@ -26,6 +28,12 @@ def _serialize(db: Session, box) -> BoxResponse:
 def list_boxes(order_key: str = Query(...), db: Session = Depends(get_db),
                user=Depends(get_current_user)):
     return [_serialize(db, b) for b in service.list_for_order(db, order_key)]
+
+
+@router.get("/active", response_model=list[BoxResponse])
+def list_active_boxes(db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """Every box not yet closed out to storage, across all orders."""
+    return [_serialize(db, b) for b in service.list_active(db)]
 
 
 @router.post("", response_model=BoxResponse, status_code=201)
@@ -74,3 +82,14 @@ def delete_box(box_id: int, db: Session = Depends(get_db), user=Depends(get_curr
         service.delete_box(db, box_id)
     except LookupError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.post("/{box_id}/close", response_model=BoxResponse)
+def close_box(box_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """Close out a box: vials return to Unboxed, the box is stamped stored.
+    Idempotent — re-closing a stored box is a no-op."""
+    try:
+        box = service.close_box(db, box_id, user_id=user.id)
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return _serialize(db, box)

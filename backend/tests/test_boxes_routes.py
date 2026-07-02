@@ -18,7 +18,8 @@ client = TestClient(app)
 
 
 def test_create_box_returns_label_code():
-    fake = MagicMock(id=3, order_key="WP-20066", box_number=2, role="hplc", printed_at=None)
+    fake = MagicMock(id=3, order_key="WP-20066", box_number=2, role="hplc", printed_at=None,
+                     created_at=None, stored_at=None)
     with patch("boxes.routes.service.next_box", return_value=fake), \
          patch("boxes.routes.service.box_label_code", return_value="WP-20066-2"), \
          patch("boxes.routes.service.vial_count", return_value=0):
@@ -68,4 +69,30 @@ def test_delete_box_with_vials_returns_204():
 def test_delete_missing_box_404():
     with patch("boxes.routes.service.delete_box", side_effect=LookupError("box 99 not found")):
         resp = client.delete("/api/boxes/99")
+    assert resp.status_code == 404
+
+
+def test_list_active_boxes_returns_200():
+    with patch("boxes.routes.service.list_active", return_value=[]):
+        resp = client.get("/api/boxes/active")
+    assert resp.status_code == 200
+    assert resp.json() == []
+
+
+def test_close_box_returns_stored_box():
+    fake = MagicMock(id=13, order_key="WP-3267", box_number=1, role="hplc",
+                     printed_at=None, created_at=None, stored_at="2026-07-01T13:00:00")
+    with patch("boxes.routes.service.close_box", return_value=fake) as m, \
+         patch("boxes.routes.service.box_label_code", return_value="WP-3267-1"), \
+         patch("boxes.routes.service.vial_count", return_value=0):
+        resp = client.post("/api/boxes/13/close")
+    assert resp.status_code == 200
+    assert resp.json()["stored_at"] is not None
+    m.assert_called_once()
+    assert m.call_args.args[1] == 13 or m.call_args.kwargs.get("box_id") == 13
+
+
+def test_close_missing_box_returns_404():
+    with patch("boxes.routes.service.close_box", side_effect=LookupError("box 99 not found")):
+        resp = client.post("/api/boxes/99/close")
     assert resp.status_code == 404
