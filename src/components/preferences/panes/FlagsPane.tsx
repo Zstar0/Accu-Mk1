@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Plus, Trash2, Loader2, AlertTriangle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -45,6 +45,12 @@ export function FlagsPane() {
   const createType = useCreateFlagType()
   const updateType = useUpdateFlagType()
   const deleteType = useDeleteFlagType()
+  // Synchronous in-flight guard: `disabled={createType.isPending}` only takes
+  // effect on the next render, so a same-tick double-fire of the Add button
+  // slips two POSTs through before the button disables. A ref flips
+  // immediately, collapsing the burst to one create (and clears on settle so
+  // the admin can add the next type).
+  const createInFlight = useRef(false)
 
   const types = [...(typesQuery.data ?? [])].sort(
     (a, b) => a.sort_order - b.sort_order || a.label.localeCompare(b.label)
@@ -111,13 +117,22 @@ export function FlagsPane() {
             <Button
               size="sm"
               disabled={createType.isPending}
-              onClick={() =>
-                createType.mutate({
-                  label: t('preferences.flags.newTypeDefaultName'),
-                  color: '#3b82f6',
-                  kind: 'issue',
-                })
-              }
+              onClick={() => {
+                if (createInFlight.current) return
+                createInFlight.current = true
+                createType.mutate(
+                  {
+                    label: t('preferences.flags.newTypeDefaultName'),
+                    color: '#3b82f6',
+                    kind: 'issue',
+                  },
+                  {
+                    onSettled: () => {
+                      createInFlight.current = false
+                    },
+                  }
+                )
+              }}
             >
               <Plus className="mr-1 h-4 w-4" /> {t('preferences.flags.addType')}
             </Button>
