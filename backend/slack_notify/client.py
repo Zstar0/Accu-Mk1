@@ -42,6 +42,15 @@ class SlackClient:
                                 form=True)
         return (data or {}).get("user", {}).get("id") or None
 
+    async def user_info(self, member_id: str) -> Optional[str]:
+        """Display name (fallback real name) for a member id — mapping
+        confidence in the prefs UI. Form-encoded like lookupByEmail."""
+        data = await self._call("users.info", {"user": member_id}, form=True)
+        user = (data or {}).get("user") or {}
+        profile = user.get("profile") or {}
+        return (profile.get("display_name") or user.get("real_name")
+                or profile.get("real_name") or None)
+
     async def open_dm(self, member_id: str) -> Optional[str]:
         data = await self._call("conversations.open", {"users": member_id})
         return (data or {}).get("channel", {}).get("id") or None

@@ -7,6 +7,8 @@ import { apiFetch } from './api'
 export interface SlackDmPrefs {
   enabled: boolean
   slack_member_id: string | null
+  /** WHO the link resolved to (Slack display name) — mapping confidence. */
+  slack_display_name: string | null
   linked: boolean
   notify_assigned: boolean
   notify_mentioned: boolean

@@ -7,6 +7,7 @@ const test = vi.fn()
 const prefs = {
   enabled: true,
   slack_member_id: null as string | null,
+  slack_display_name: null as string | null,
   linked: false,
   notify_assigned: true,
   notify_mentioned: true,
@@ -24,6 +25,19 @@ describe('SlackPrefsSection', () => {
   beforeEach(() => {
     update.mockReset()
     test.mockReset()
+    prefs.linked = false
+    prefs.slack_member_id = null
+    prefs.slack_display_name = null
+  })
+
+  it('linked state shows WHO the mapping resolved to', async () => {
+    prefs.linked = true
+    prefs.slack_member_id = 'U123'
+    prefs.slack_display_name = 'forrest'
+    const { SlackPrefsSection } =
+      await import('@/components/preferences/panes/SlackPrefsSection')
+    render(<SlackPrefsSection />)
+    expect(screen.getByText(/slack linked → forrest/i)).toBeInTheDocument()
   })
 
   it('renders master toggle, five category toggles, link state', async () => {

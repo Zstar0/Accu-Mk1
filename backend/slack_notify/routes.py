@@ -37,10 +37,12 @@ def _row(db: Session, user_id: int) -> Optional[SlackDmPrefs]:
 def _serialize(row: Optional[SlackDmPrefs]) -> dict:
     if row is None:
         out = {f: True for f in _FIELDS}
-        out.update({"slack_member_id": None, "linked": False})
+        out.update({"slack_member_id": None, "slack_display_name": None,
+                    "linked": False})
         return out
     out = {f: bool(getattr(row, f)) for f in _FIELDS}
     out["slack_member_id"] = row.slack_member_id
+    out["slack_display_name"] = row.slack_display_name
     out["linked"] = bool(row.slack_member_id)
     return out
 
@@ -51,16 +53,27 @@ def get_prefs(db: Session = Depends(get_db), user=Depends(get_current_user)):
 
 
 @router.put("")
-def put_prefs(body: SlackPrefsUpdate, db: Session = Depends(get_db),
-              user=Depends(get_current_user)):
+async def put_prefs(body: SlackPrefsUpdate, db: Session = Depends(get_db),
+                    user=Depends(get_current_user)):
     row = _row(db, user.id)
     if row is None:
         row = SlackDmPrefs(user_id=user.id)
         db.add(row)
+    member_changed = False
     for field, value in body.model_dump(exclude_unset=True).items():
         if field == "slack_member_id":
             value = (value or "").strip() or None
+            member_changed = value != row.slack_member_id
         setattr(row, field, value)
+    if member_changed:
+        # Refresh WHO the id resolves to (mapping confidence in the UI).
+        # Best-effort: no token / bad id → name just stays empty.
+        row.slack_display_name = None
+        token = os.getenv("MK1_SLACK_BOT_TOKEN")
+        if token and row.slack_member_id:
+            from slack_notify.client import SlackClient
+            row.slack_display_name = await SlackClient(token).user_info(
+                row.slack_member_id)
     db.commit()
     db.refresh(row)
     return _serialize(row)
@@ -86,6 +99,7 @@ async def test_dm(db: Session = Depends(get_db),
             row = SlackDmPrefs(user_id=user.id)
             db.add(row)
         row.slack_member_id = member_id
+        row.slack_display_name = await client.user_info(member_id)
         db.commit()
     channel = await client.open_dm(member_id)
     if channel and await client.post_dm(
