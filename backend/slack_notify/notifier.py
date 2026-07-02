@@ -12,7 +12,7 @@ import os
 from typing import Optional
 
 from slack_notify.client import SlackClient
-from slack_notify.messages import build_message
+from slack_notify.messages import build_message, link_hash_for
 from slack_notify.planner import plan_dms
 
 logger = logging.getLogger(__name__)
@@ -26,15 +26,24 @@ class SlackNotifier:
 
     # -- sync helpers (run via to_thread) ---------------------------------
     def _plan_and_enrich(self, event: dict):
-        """Plan DMs and load emails/cached member ids + actor label in one
-        short-lived session. Returns (actor_label, [(user_id, category,
-        email, member_id_or_None)])."""
+        """Plan DMs and load emails/cached member ids + actor label + the
+        entity-aware link hash in one short-lived session. Returns
+        (actor_label, link_hash, [(user_id, category, email,
+        member_id_or_None)])."""
         from models import SlackDmPrefs, User
+        from flags import seams
         db = self._session_factory()
         try:
             planned = plan_dms(db, event)
+            flag = event.get("flag") or {}
             if not planned:
-                return "", []
+                return "", "", []
+            # Tap-through lands on the flagged entity's page with the flag
+            # thread open. resolve_context never raises; None → dashboard
+            # fallback via link_hash_for.
+            ctx = seams.resolve_context(db, flag.get("entity_type", ""),
+                                        str(flag.get("entity_id", ""))) or {}
+            link_hash = link_hash_for(ctx.get("deep_link"), flag.get("id"))
             actor = (db.query(User).get(event.get("actor_id"))
                      if event.get("actor_id") else None)
             actor_label = (f"{actor.first_name or ''} {actor.last_name or ''}".strip()
@@ -48,7 +57,7 @@ class SlackNotifier:
                 row = db.query(SlackDmPrefs).filter_by(user_id=p.user_id).first()
                 out.append((p.user_id, p.category, user.email,
                             row.slack_member_id if row else None))
-            return actor_label, out
+            return actor_label, link_hash, out
         finally:
             db.close()
 
@@ -68,7 +77,7 @@ class SlackNotifier:
     # -- async pipeline ----------------------------------------------------
     async def handle_event(self, event: dict) -> int:
         try:
-            actor_label, targets = await asyncio.to_thread(
+            actor_label, link_hash, targets = await asyncio.to_thread(
                 self._plan_and_enrich, event)
             sent = 0
             for user_id, category, email, member_id in targets:
@@ -82,7 +91,8 @@ class SlackNotifier:
                 if channel is None:
                     continue
                 text, blocks = build_message(event, category, actor_label,
-                                             self._base_url)
+                                             self._base_url,
+                                             link_hash=link_hash)
                 if await self._client.post_dm(channel, text, blocks):
                     sent += 1
             return sent
