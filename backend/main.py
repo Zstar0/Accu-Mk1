@@ -327,6 +327,9 @@ async def lifespan(app: FastAPI):
     from flags import bus as _flag_bus
     _flag_bus.BUS.set_loop(_asyncio.get_running_loop())
     _flag_seams.set_event_sink(_flag_bus.SSEEventSink(_flag_bus.BUS))
+    # Slack DM notifications (spec 2026-07-02) — dormant without the token.
+    from slack_notify.notifier import maybe_start as _slack_maybe_start
+    _slack_notifier_task = _slack_maybe_start(_flag_bus.BUS)
     # Seed default settings and admin user
     from database import SessionLocal
     db = SessionLocal()
