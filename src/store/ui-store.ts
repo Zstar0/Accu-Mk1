@@ -178,6 +178,17 @@ interface UIState {
   clearFlagsSamplesFilter: () => void
   closeFlagThread: () => void
   closeFlagsFlyout: () => void
+  // Multi-flag affordances (spec 2026-07-01): the entity detail surfaces the
+  // user currently has open, top = "the page you're on". A stack so overlays
+  // compose (worksheet drawer over a sample page); closing one restores the
+  // one beneath. Drives the un-scoped flyout's context-aware Add Flag.
+  activeFlagEntityStack: { type: string; id: string; label: string }[]
+  pushActiveFlagEntity: (entry: {
+    type: string
+    id: string
+    label: string
+  }) => void
+  popActiveFlagEntity: (entry: { type: string; id: string }) => void
   startPrepFromWorksheet: (prefill: {
     sampleId: string
     peptideId: number | null
@@ -221,6 +232,7 @@ export const useUIStore = create<UIState>()(
       flagsThreadId: null,
       flagsEntityFilter: null,
       flagsSamplesFilter: null,
+      activeFlagEntityStack: [],
 
       toggleLeftSidebar: () =>
         set(
@@ -556,6 +568,41 @@ export const useUIStore = create<UIState>()(
       // Return from the order/samples view to the triage tabs.
       clearFlagsSamplesFilter: () =>
         set({ flagsSamplesFilter: null }, undefined, 'clearFlagsSamplesFilter'),
+
+      pushActiveFlagEntity: entry =>
+        set(
+          state => ({
+            activeFlagEntityStack: [...state.activeFlagEntityStack, entry],
+          }),
+          undefined,
+          'pushActiveFlagEntity'
+        ),
+
+      popActiveFlagEntity: entry =>
+        set(
+          state => {
+            const stack = state.activeFlagEntityStack
+            // Remove the LAST matching entry (not necessarily the top —
+            // React unmount order isn't guaranteed to mirror mount order).
+            let i = -1
+            for (let j = stack.length - 1; j >= 0; j--) {
+              const e = stack[j]
+              if (e && e.type === entry.type && e.id === entry.id) {
+                i = j
+                break
+              }
+            }
+            if (i === -1) return {}
+            return {
+              activeFlagEntityStack: [
+                ...stack.slice(0, i),
+                ...stack.slice(i + 1),
+              ],
+            }
+          },
+          undefined,
+          'popActiveFlagEntity'
+        ),
 
       // Back to the triage list — drops the thread but keeps the flyout open
       // (and any entity filter, so "back" returns to the filtered list).
