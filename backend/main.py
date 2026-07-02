@@ -76,6 +76,7 @@ from sub_samples.service import derive_base_demand
 from lims_analyses.routes import router as lims_analyses_router
 from families.routes import router as families_router  # Phase 5b
 from flags.routes import router as flags_router
+from slack_notify.routes import router as slack_prefs_router
 
 import logging
 
@@ -403,6 +404,7 @@ app.include_router(sub_samples_router)
 app.include_router(lims_analyses_router)
 app.include_router(families_router)
 app.include_router(flags_router)
+app.include_router(slack_prefs_router)
 
 # --- Endpoints ---
 
