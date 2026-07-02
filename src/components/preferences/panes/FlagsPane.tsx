@@ -14,6 +14,7 @@ import {
 } from '@/components/ui/select'
 import { cn } from '@/lib/utils'
 import { SettingsSection } from '../shared/SettingsComponents'
+import { SlackPrefsSection } from './SlackPrefsSection'
 import { useAuthStore } from '@/store/auth-store'
 import {
   useFlagTypes,
@@ -69,6 +70,9 @@ export function FlagsPane() {
 
   return (
     <div className="space-y-8">
+      {/* Per-user Slack DM prefs (spec 2026-07-02) — everyone, not just admins. */}
+      <SlackPrefsSection />
+
       {!isAdmin && (
         <p className="text-sm text-muted-foreground">
           {t('preferences.flags.readOnly')}
