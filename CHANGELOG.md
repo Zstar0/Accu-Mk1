@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.0.19 — 2026-07-02
+
+### Changed
+
+- **Internal Remarks now render as amber "internal notes."** On the Sample Details page, each lab-internal remark is styled with the warm amber scheme from the Flags user guide (amber tint + left border, light/dark) and an "Internal — not shared with the customer" caption, making it obvious at a glance that these notes never reach the customer (distinct from the separate Customer Remarks card). Frontend-only; the inline card was extracted into a testable `InternalRemarkCard` component.
+
 ## v1.0.18 — 2026-07-02
 
 ### Added
