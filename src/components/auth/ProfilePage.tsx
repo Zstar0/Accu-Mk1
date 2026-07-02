@@ -1,11 +1,22 @@
 import { useState, type FormEvent } from 'react'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { toast } from 'sonner'
 import { CheckCircle2, Loader2, User } from 'lucide-react'
-import { changePassword, setSenaitePassword, clearSenaitePassword, updateMe } from '@/lib/auth-api'
+import {
+  changePassword,
+  setSenaitePassword,
+  clearSenaitePassword,
+  updateMe,
+} from '@/lib/auth-api'
 import { useAuthStore } from '@/store/auth-store'
 import { SlackPrefsSection } from '@/components/auth/SlackPrefsSection'
 
@@ -57,20 +68,36 @@ function NameSection() {
     <Card>
       <CardHeader>
         <CardTitle>Name</CardTitle>
-        <CardDescription>Shown as the analyst on samples and worksheets.</CardDescription>
+        <CardDescription>
+          Shown as the analyst on samples and worksheets.
+        </CardDescription>
       </CardHeader>
       <CardContent>
         <form onSubmit={handleSaveName} className="flex flex-col gap-4">
           <div className="flex flex-col gap-2">
             <Label htmlFor="first-name">First name</Label>
-            <Input id="first-name" value={firstName} onChange={e => setFirstName(e.target.value)} placeholder="Ada" />
+            <Input
+              id="first-name"
+              value={firstName}
+              onChange={e => setFirstName(e.target.value)}
+              placeholder="Ada"
+            />
           </div>
           <div className="flex flex-col gap-2">
             <Label htmlFor="last-name">Last name</Label>
-            <Input id="last-name" value={lastName} onChange={e => setLastName(e.target.value)} placeholder="Lovelace" />
+            <Input
+              id="last-name"
+              value={lastName}
+              onChange={e => setLastName(e.target.value)}
+              placeholder="Lovelace"
+            />
           </div>
           <Button type="submit" disabled={savingName} className="w-fit gap-2">
-            {savingName ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
+            {savingName ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <CheckCircle2 className="h-4 w-4" />
+            )}
             Save name
           </Button>
         </form>
@@ -108,7 +135,9 @@ function ChangePasswordSection() {
       setNewPassword('')
       setConfirmPassword('')
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to change password')
+      toast.error(
+        err instanceof Error ? err.message : 'Failed to change password'
+      )
     } finally {
       setIsSubmitting(false)
     }
@@ -177,7 +206,9 @@ function SenaiteCredentialsSection() {
       setPassword('')
       setShowInput(false)
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to save credentials')
+      toast.error(
+        err instanceof Error ? err.message : 'Failed to save credentials'
+      )
     } finally {
       setSaving(false)
     }
@@ -188,7 +219,9 @@ function SenaiteCredentialsSection() {
       await clearSenaitePassword()
       toast.success('Senaite credentials removed')
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to clear credentials')
+      toast.error(
+        err instanceof Error ? err.message : 'Failed to clear credentials'
+      )
     }
   }
 
@@ -211,7 +244,11 @@ function SenaiteCredentialsSection() {
             <Button variant="outline" size="sm" onClick={handleClear}>
               Remove
             </Button>
-            <Button variant="outline" size="sm" onClick={() => setShowInput(true)}>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setShowInput(true)}
+            >
               Update
             </Button>
           </div>
@@ -223,7 +260,9 @@ function SenaiteCredentialsSection() {
                 placeholder="Enter your Senaite password"
                 value={password}
                 onChange={e => setPassword(e.target.value)}
-                onKeyDown={e => { if (e.key === 'Enter') handleSave() }}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') handleSave()
+                }}
                 className="flex-1"
                 disabled={saving}
               />
@@ -232,21 +271,27 @@ function SenaiteCredentialsSection() {
                 onClick={handleSave}
                 disabled={!password.trim() || saving}
               >
-                {saving && <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />}
+                {saving && (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />
+                )}
                 {saving ? 'Verifying...' : 'Save'}
               </Button>
               {showInput && (
                 <Button
                   variant="ghost"
                   size="sm"
-                  onClick={() => { setShowInput(false); setPassword('') }}
+                  onClick={() => {
+                    setShowInput(false)
+                    setPassword('')
+                  }}
                 >
                   Cancel
                 </Button>
               )}
             </div>
             <p className="text-xs text-muted-foreground">
-              Your password is verified against Senaite before saving and stored encrypted.
+              Your password is verified against Senaite before saving and stored
+              encrypted.
             </p>
           </div>
         )}
