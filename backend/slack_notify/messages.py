@@ -11,8 +11,8 @@ _STATUS_LABEL = {"open": "Open", "in_progress": "In progress", "blocked": "Block
 _ACTION = {
     "assigned": "{actor} assigned you a flag",
     "mentioned": "{actor} mentioned you in a flag comment",
-    "raised_activity": "{actor} updated a flag you raised",
-    "watching_activity": "{actor} commented on a flag you're watching",
+    "raised_activity": "{actor} {verb} a flag you raised",
+    "watching_activity": "{actor} {verb} a flag you're watching",
     "status_changes": "{actor} changed the status of your flag",
 }
 
@@ -41,7 +41,9 @@ def build_message(event: dict, category: str, actor_label: str,
                   base_url: str,
                   link_hash: Optional[str] = None) -> tuple[str, list[dict]]:
     flag = event.get("flag") or {}
-    action = _ACTION.get(category, "{actor} updated a flag").format(actor=actor_label)
+    verb = "commented on" if event.get("event_type") == "commented" else "updated"
+    action = _ACTION.get(category, "{actor} updated a flag").format(
+        actor=actor_label, verb=verb)
     if event.get("event_type") == "status_changed" and event.get("to_value"):
         action += f" → {_STATUS_LABEL.get(event['to_value'], event['to_value'])}"
     title = flag.get("title", "")
