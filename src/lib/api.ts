@@ -5525,6 +5525,8 @@ export interface LimsBox {
   label_code: string
   vial_count: number
   printed_at: string | null
+  created_at: string | null
+  stored_at: string | null
 }
 
 export async function listOrderBoxes(orderKey: string): Promise<LimsBox[]> {
@@ -5564,9 +5566,20 @@ export async function printBox(boxId: number): Promise<LimsBox> {
   return apiFetch<LimsBox>(`/api/boxes/${boxId}/print`, { method: 'POST' })
 }
 
-/** Delete an empty box. Backend rejects with 409 if the box still holds vials. */
+/** Delete a box outright (mistake path): its vials return to Unboxed. */
 export async function deleteBox(boxId: number): Promise<void> {
   await apiFetch<void>(`/api/boxes/${boxId}`, { method: 'DELETE' })
+}
+
+/** All boxes not yet closed out to storage, across all orders. */
+export async function listActiveBoxes(): Promise<LimsBox[]> {
+  return apiFetch<LimsBox[]>('/api/boxes/active')
+}
+
+/** Close out a box (end-of-life): vials return to Unboxed, box is stamped
+ *  stored and drops off active surfaces. Idempotent on the backend. */
+export async function closeBox(boxId: number): Promise<LimsBox> {
+  return apiFetch<LimsBox>(`/api/boxes/${boxId}/close`, { method: 'POST' })
 }
 
 /** Per-service variance counts the parent's order purchased. Empty when none

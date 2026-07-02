@@ -97,6 +97,8 @@ function setupBackend(vials: Vial[]) {
       label_code: `${orderKey}-${nextNumber - 1}`,
       vial_count: 0,
       printed_at: null,
+      created_at: null,
+      stored_at: null,
     }
     boxesState.push(box)
     return { ...box }
@@ -203,6 +205,7 @@ describe('BoxStep — capacity-driven boxing', () => {
     boxesState.push({
       id: 7, order_key: ORDER, box_number: 1, role: 'hplc',
       label_code: `${ORDER}-1`, vial_count: 1, printed_at: null,
+      created_at: null, stored_at: null,
     })
     renderBoxStep()
 
@@ -230,6 +233,7 @@ describe('BoxStep — capacity-driven boxing', () => {
     boxesState.push({
       id: 7, order_key: ORDER, box_number: 1, role: 'hplc',
       label_code: `${ORDER}-1`, vial_count: 1, printed_at: null,
+      created_at: null, stored_at: null,
     })
     renderBoxStep()
     await screen.findByText('P-101')
@@ -248,6 +252,7 @@ describe('BoxStep — capacity-driven boxing', () => {
     boxesState.push({
       id: 7, order_key: ORDER, box_number: 1, role: 'hplc',
       label_code: `${ORDER}-1`, vial_count: 1, printed_at: null,
+      created_at: null, stored_at: null,
     })
     renderBoxStep()
     await screen.findByText('P-101')

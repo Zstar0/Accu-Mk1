@@ -20,6 +20,7 @@ export type SenaiteSubSection =
   | 'event-log'
   | 'sample-details'
   | 'receive-sample'
+  | 'boxes'
 export type LIMSSubSection =
   | 'instruments'
   | 'methods'

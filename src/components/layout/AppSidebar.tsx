@@ -75,6 +75,7 @@ const navItems: NavItem[] = [
     subItems: [
       { id: 'samples', label: 'Samples' },
       { id: 'receive-sample', label: 'Receive Sample' },
+      { id: 'boxes', label: 'Boxes' },
       { id: 'event-log', label: 'Event Log' },
     ],
   },

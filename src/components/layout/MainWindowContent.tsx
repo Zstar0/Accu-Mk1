@@ -15,6 +15,7 @@ import { SenaiteDashboard } from '@/components/senaite/SenaiteDashboard'
 import { SampleDetails } from '@/components/senaite/SampleDetails'
 import { SampleEventLog } from '@/components/senaite/SampleEventLog'
 import { ReceiveSample } from '@/components/intake/ReceiveSample'
+import { ActiveBoxesPage } from '@/components/intake/ActiveBoxesPage'
 import { UserManagement } from '@/components/auth/UserManagement'
 import { ProfilePage } from '@/components/auth/ProfilePage'
 import { ReportsDashboard } from '@/components/reports/ReportsDashboard'
@@ -51,6 +52,7 @@ export function MainWindowContent({
         if (activeSubSection === 'event-log') return <SampleEventLog />
         if (activeSubSection === 'sample-details') return <SampleDetails />
         if (activeSubSection === 'receive-sample') return <ReceiveSample />
+        if (activeSubSection === 'boxes') return <ActiveBoxesPage />
         return <SenaiteDashboard />
       case 'lims':
         if (activeSubSection === 'instruments') return <InstrumentsPage />

@@ -5,6 +5,7 @@ import type { LimsBox } from '@/lib/api'
 const box: LimsBox = {
   id: 1, order_key: 'WP-20066', box_number: 3, role: 'ster',
   label_code: 'WP-20066-3', vial_count: 4, printed_at: null,
+  created_at: null, stored_at: null,
 }
 
 describe('boxLabelLines', () => {
