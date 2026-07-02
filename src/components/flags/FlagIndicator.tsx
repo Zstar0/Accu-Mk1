@@ -111,15 +111,22 @@ export function FlagIndicator({
           : undefined
       }
     >
-      <Flag
-        className="h-3.5 w-3.5 shrink-0"
-        fill={flagged ? 'currentColor' : 'none'}
-      />
-      {flagged && rollup.count > 1 && (
-        <span className="text-[10px] font-semibold leading-none tabular-nums">
-          {rollup.count > 99 ? '99+' : rollup.count}
-        </span>
-      )}
+      <span className="relative inline-flex shrink-0">
+        <Flag
+          className="h-3.5 w-3.5 shrink-0"
+          fill={flagged ? 'currentColor' : 'none'}
+        />
+        {/* Floating count circle (staff review 2026-07-01) — overlaps the
+            icon's top-right corner instead of an inline number. */}
+        {flagged && rollup.count > 1 && (
+          <span
+            className="absolute -right-1.5 -top-1.5 flex h-3.5 min-w-3.5 items-center justify-center rounded-full px-0.5 text-[9px] font-bold leading-none text-white tabular-nums"
+            style={{ backgroundColor: color }}
+          >
+            {rollup.count > 99 ? '99+' : rollup.count}
+          </span>
+        )}
+      </span>
     </button>
   )
 

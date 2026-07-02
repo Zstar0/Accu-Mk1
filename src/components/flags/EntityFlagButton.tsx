@@ -162,10 +162,25 @@ export function EntityFlagButton({
           lg ? 'px-3.5' : 'px-2.5'
         )}
       >
-      <Flag
-        className={cn('shrink-0', lg ? 'h-4 w-4' : 'h-3.5 w-3.5')}
-        fill="currentColor"
-      />
+      <span className="relative shrink-0">
+        <Flag
+          className={cn(lg ? 'h-4 w-4' : 'h-3.5 w-3.5')}
+          fill="currentColor"
+        />
+        {/* Floating count circle (staff review 2026-07-01) — overlaps the
+            icon's top-right corner instead of an inline chip. */}
+        {count > 1 && (
+          <span
+            className={cn(
+              'absolute -right-2 -top-2 flex h-4 min-w-4 items-center justify-center rounded-full bg-white px-0.5 font-bold leading-none tabular-nums shadow-sm',
+              lg ? 'text-[10px]' : 'text-[9px]'
+            )}
+            style={{ color: def.color }}
+          >
+            {count > 99 ? '99+' : count}
+          </span>
+        )}
+      </span>
       <span className="flex flex-col items-start leading-tight">
         <span
           className={cn(
@@ -174,16 +189,6 @@ export function EntityFlagButton({
           )}
         >
           Flagged
-          {count > 1 && (
-            <span
-              className={cn(
-                'flex h-4 min-w-4 items-center justify-center rounded-full bg-white/25 px-1 font-semibold leading-none',
-                lg ? 'text-[11px]' : 'text-[10px]'
-              )}
-            >
-              {count > 99 ? '99+' : count}
-            </span>
-          )}
         </span>
         <span
           className={cn(
