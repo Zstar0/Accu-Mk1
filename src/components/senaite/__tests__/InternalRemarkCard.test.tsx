@@ -20,6 +20,8 @@ describe('InternalRemarkCard', () => {
       'href',
       'https://x.test'
     )
-    expect(screen.getByText(/not shared with the customer/i)).toBeInTheDocument()
+    expect(
+      screen.getByText(/not shared with the customer/i)
+    ).toBeInTheDocument()
   })
 })

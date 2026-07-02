@@ -1,6 +1,6 @@
 import { useState, useEffect, useId, useRef, useMemo, useCallback } from 'react'
 import { useQuery, useQueries, useQueryClient } from '@tanstack/react-query'
-import DOMPurify from 'dompurify'
+import { InternalRemarkCard } from '@/components/senaite/InternalRemarkCard'
 import { useTheme } from '@/hooks/use-theme'
 import {
   ChevronDown,
@@ -15,7 +15,6 @@ import {
   ShieldCheck,
   MessageSquare,
   Activity,
-  User,
   ExternalLink,
   Loader2,
   X,
@@ -5518,42 +5517,12 @@ export function SampleDetails() {
           {data.remarks.length > 0 ? (
             <div className="space-y-2">
               {data.remarks.map((r, i) => (
-                <div
+                <InternalRemarkCard
                   key={`${r.user_id}-${r.created}-${i}`}
-                  className="p-3 rounded-lg bg-muted/40 border border-border/30"
-                >
-                  <div className="flex items-center justify-between mb-1.5">
-                    <div className="flex items-center gap-2">
-                      <div className="w-5 h-5 rounded-full bg-muted flex items-center justify-center">
-                        <User size={11} className="text-muted-foreground" />
-                      </div>
-                      <span className="text-xs font-medium text-foreground">
-                        {r.user_id ?? 'System'}
-                      </span>
-                    </div>
-                    <span className="text-[11px] text-muted-foreground">
-                      {formatDate(r.created)}
-                    </span>
-                  </div>
-                  <p
-                    className="text-sm text-muted-foreground pl-7 [&_a]:text-blue-700 dark:[&_a]:text-blue-400 [&_a]:underline"
-                    dangerouslySetInnerHTML={{
-                      __html: DOMPurify.sanitize(r.content, {
-                        ALLOWED_TAGS: [
-                          'a',
-                          'b',
-                          'i',
-                          'em',
-                          'strong',
-                          'br',
-                          'p',
-                          'span',
-                        ],
-                        ALLOWED_ATTR: ['href', 'target', 'rel', 'class'],
-                      }),
-                    }}
-                  />
-                </div>
+                  author={String(r.user_id ?? 'System')}
+                  createdLabel={formatDate(r.created)}
+                  content={r.content}
+                />
               ))}
             </div>
           ) : (
