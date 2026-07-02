@@ -10,6 +10,7 @@ Environment can be switched at runtime via set_environment().
 """
 
 import os
+import re
 from contextlib import contextmanager
 from typing import Generator, Optional
 
@@ -485,10 +486,13 @@ def search_sample_ids_by_verification_code(search: str, limit: int = 50) -> list
 def search_sample_ids_by_order_number(search: str, limit: int = 50) -> list[str]:
     """
     Search for SENAITE sample IDs by WordPress order number (ILIKE).
+    Accepts both bare ("3066") and WP-prefixed ("WP-3066") forms.
 
-    Searches both:
+    Searches:
     - order_submissions.order_number / order_id (stores bare number like "3066")
     - ingestions.order_ref (stores WP-prefixed like "WP-3066")
+    - order_submissions.sample_results (senaite ids recorded at AR-creation
+      time, so pre-COA orders resolve before any ingestions rows exist)
 
     Args:
         search: Partial or full order number to search for (e.g. "WP-3066" or "3066")
@@ -510,14 +514,27 @@ def search_sample_ids_by_order_number(search: str, limit: int = 50) -> list[str]
             SELECT sample_id
             FROM ingestions
             WHERE order_ref ILIKE %s AND sample_id IS NOT NULL
+            UNION
+            -- Pre-COA: sample ids recorded at AR-creation time on the order submission
+            SELECT (value ->> 'senaite_id') AS sample_id
+            FROM order_submissions o
+            CROSS JOIN LATERAL jsonb_each(o.sample_results)
+            WHERE (o.order_number ILIKE %s OR o.order_id ILIKE %s)
+              AND o.sample_results IS NOT NULL
+              AND (value ->> 'senaite_id') IS NOT NULL
         ) combined
         ORDER BY sample_id DESC
         LIMIT %s
     """
+    bare = re.sub(r"^wp-", "", search.strip(), flags=re.IGNORECASE)
+    bare_term = f"%{bare}%"
     search_term = f"%{search}%"
     with get_integration_db() as conn:
         with conn.cursor() as cur:
-            cur.execute(query, [search_term, search_term, search_term, limit])
+            cur.execute(
+                query,
+                [bare_term, bare_term, search_term, bare_term, bare_term, limit],
+            )
             return [row[0] for row in cur.fetchall()]
 
 
