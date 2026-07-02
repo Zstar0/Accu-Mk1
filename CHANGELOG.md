@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.0.18 — 2026-07-02
+
+### Added
+
+- **Flags user guide.** A polished, self-contained HTML guide to the Flag System (what flags are, raising/assigning/watching, the status lifecycle, comments & @mentions, the flyout tabs, flags on samples/vials/worksheets, and Slack DM notifications — which are on by default for everyone), linked as a **Guide** button in the Flags flyout header. Built from `docs/guides/flags-system-guide.md` via the existing guide pipeline; served at `/guides/flags-system-guide.html`. Frontend + docs only.
+
 ## v1.0.17 — 2026-07-02
 
 ### Added
