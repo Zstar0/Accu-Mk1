@@ -46,6 +46,16 @@ def _slugify(label: str) -> str:
     return s or "type"
 
 
+def _unique_slug(db: Session, base: str) -> str:
+    """First free slug in the base, base_2, base_3, ... sequence."""
+    if get_type_by_slug(db, base) is None:
+        return base
+    n = 2
+    while get_type_by_slug(db, f"{base}_{n}") is not None:
+        n += 1
+    return f"{base}_{n}"
+
+
 # --- reads ---------------------------------------------------------------
 def list_types(db: Session, entity_type: Optional[str] = None,
                active_only: bool = False) -> list[FlagType]:
@@ -101,9 +111,17 @@ def create_type(db: Session, *, label: str, color: str, kind: str,
                 entity_types: Optional[list] = None,
                 sort_order: Optional[int] = None,
                 is_active: bool = True) -> FlagType:
+    explicit = bool(slug and slug.strip())
     slug = (slug or _slugify(label)).strip()
-    if get_type_by_slug(db, slug) is not None:
-        raise ConflictError(f"flag type slug {slug!r} already exists")
+    if explicit:
+        # An explicitly-provided slug that collides is real user intent → 409.
+        if get_type_by_slug(db, slug) is not None:
+            raise ConflictError(f"flag type slug {slug!r} already exists")
+    else:
+        # Slug derived from the label (the "Add Type" create-then-rename UX
+        # always POSTs the same default label with no slug): auto-uniquify
+        # instead of colliding.
+        slug = _unique_slug(db, slug)
     if sort_order is None:
         max_order = db.execute(select(FlagType.sort_order)).scalars().all()
         sort_order = (max(max_order) + 1) if max_order else 0
