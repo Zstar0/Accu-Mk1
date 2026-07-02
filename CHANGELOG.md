@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.0.21 — 2026-07-02
+
+### Fixed
+
+- **"Add Type" in Preferences → Flags no longer double-creates on a fast double-click.** The button relied on `disabled` while a create was in flight, but that only takes effect on the next render, so a same-tick double-fire slipped two creates through (after the v1.0.20 slug fix, that produced a phantom extra type — e.g. `new_type_2` *and* `new_type_3` — and could race the slug uniquifier). A synchronous in-flight guard now collapses the burst to a single create and resets once it settles. Frontend-only.
+
 ## v1.0.20 — 2026-07-02
 
 ### Fixed
