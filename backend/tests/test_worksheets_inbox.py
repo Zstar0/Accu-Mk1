@@ -15,7 +15,7 @@ Verifies:
 import pytest
 from fastapi.testclient import TestClient
 
-from main import app, ROLE_TO_VIAL_ROLES, VALID_INBOX_ROLES, ROLE_TO_GROUP_NAMES
+from main import app, ROLE_TO_VIAL_ROLES, VALID_INBOX_ROLES, ROLE_TO_DEPARTMENT_NAME, _inbox_allowed_group_ids
 from database import SessionLocal
 from models import LimsSample, LimsSubSample
 
@@ -53,9 +53,9 @@ def test_valid_inbox_roles_exactly_hplc_and_micro():
     assert VALID_INBOX_ROLES == {"hplc", "microbiology"}
 
 
-def test_role_to_group_names_present():
-    assert "Analytics" in ROLE_TO_GROUP_NAMES["hplc"]
-    assert "Microbiology" in ROLE_TO_GROUP_NAMES["microbiology"]
+def test_role_to_department_name_present():
+    assert ROLE_TO_DEPARTMENT_NAME["hplc"] == "Analytical"
+    assert ROLE_TO_DEPARTMENT_NAME["microbiology"] == "Microbiology"
 
 
 # ── Route validation ─────────────────────────────────────────────────────────
@@ -607,3 +607,51 @@ def test_parent_sample_inbox_analyses_never_carry_mk1_uids(client, auth_headers)
                 assert not uid.startswith("mk1:"), (
                     f"parent {parent['sample_id']} unexpectedly has mk1: UID {uid}"
                 )
+
+
+# ── Task 5: department_name field on worksheet items ─────────────────────────
+
+
+def test_worksheet_items_include_department_name():
+    """Every serialized worksheet item exposes department_name (None when the
+    group has no department). Uses dependency_overrides to bypass auth so it
+    is exercisable without live credentials. Skips when no non-staging
+    worksheets with items exist on this stack."""
+    import auth as _auth
+    from main import app
+    app.dependency_overrides[_auth.get_current_user] = lambda: {"id": 0, "email": "test@test.local"}
+    try:
+        _client = TestClient(app)
+        resp = _client.get("/worksheets")
+        assert resp.status_code == 200
+        items = [it for ws in resp.json() for it in ws.get("items", [])]
+        if not items:
+            pytest.skip("no worksheets with items in this stack")
+        assert all("department_name" in it for it in items)
+    finally:
+        app.dependency_overrides.pop(_auth.get_current_user, None)
+
+
+# ── Task 4: Department-keyed inbox lane helper ────────────────────────────────
+
+
+def test_inbox_helper_includes_new_microbiology_department_group(monkeypatch):
+    """A new Microbiology-DEPARTMENT group with a different NAME lands in the micro
+    lane — the behavioral win. RED if the resolver ever name-pins again. Throwaway
+    group is created + rolled back; never committed to the live catalog."""
+    from sqlalchemy import select
+    from database import SessionLocal
+    from models import ServiceGroup, Department
+    from main import _inbox_allowed_group_ids
+    db = SessionLocal()
+    try:
+        micro = db.execute(select(Department).where(Department.name == "Microbiology")).scalars().one()
+        g = ServiceGroup(name="ZZTEST Sterility PCR", department_id=micro.id)
+        db.add(g)
+        db.flush()  # visible in-session to the helper's query
+        allowed = _inbox_allowed_group_ids(db, "microbiology")
+        assert g.id in allowed                       # new same-department group is in the lane
+        assert _inbox_allowed_group_ids(db, None) is None  # no role → no filter
+    finally:
+        db.rollback()
+        db.close()

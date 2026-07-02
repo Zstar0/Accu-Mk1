@@ -10,11 +10,11 @@ import {
 } from '@/lib/inbox-filters'
 
 describe('itemBench', () => {
-  it('maps service group ids to benches', () => {
-    expect(itemBench(1)).toBe('hplc')
-    expect(itemBench(2)).toBe('micro')
+  it('maps department names to benches', () => {
+    expect(itemBench('Analytical')).toBe('hplc')
+    expect(itemBench('Microbiology')).toBe('micro')
     expect(itemBench(null)).toBeNull()
-    expect(itemBench(99)).toBeNull()
+    expect(itemBench('Nope')).toBeNull()
   })
 })
 
@@ -37,30 +37,30 @@ describe('analysisRole', () => {
 })
 
 describe('itemRoleBadges', () => {
-  it('hplc item -> [hplc] regardless of analyses', () => {
-    expect(itemRoleBadges({ service_group_id: 1, analyses: [{ keyword: 'X', title: 'Purity' }] })).toEqual(['hplc'])
+  it('hplc (Analytical) item -> [hplc] regardless of analyses', () => {
+    expect(itemRoleBadges({ department_name: 'Analytical', analyses: [{ keyword: 'X', title: 'Purity' }] })).toEqual(['hplc'])
   })
   it('endo-only micro item -> [endo]', () => {
-    expect(itemRoleBadges({ service_group_id: 2, analyses: [{ keyword: 'ENDO-LAL', title: 'Endotoxin' }] })).toEqual(['endo'])
+    expect(itemRoleBadges({ department_name: 'Microbiology', analyses: [{ keyword: 'ENDO-LAL', title: 'Endotoxin' }] })).toEqual(['endo'])
   })
   it('ster-only micro item -> [ster]', () => {
-    expect(itemRoleBadges({ service_group_id: 2, analyses: [{ keyword: 'STER-PCR', title: 'Rapid Sterility Screening (PCR)' }] })).toEqual(['ster'])
+    expect(itemRoleBadges({ department_name: 'Microbiology', analyses: [{ keyword: 'STER-PCR', title: 'Rapid Sterility Screening (PCR)' }] })).toEqual(['ster'])
   })
   it('mixed micro item -> [endo, ster] in stable order', () => {
-    expect(itemRoleBadges({ service_group_id: 2, analyses: [
+    expect(itemRoleBadges({ department_name: 'Microbiology', analyses: [
       { keyword: 'STER-PCR', title: 'Rapid Sterility Screening (PCR)' },
       { keyword: 'ENDO-LAL', title: 'Endotoxin' },
     ] })).toEqual(['endo', 'ster'])
   })
   it('micro item with only moisture -> [] (no pill)', () => {
-    expect(itemRoleBadges({ service_group_id: 2, analyses: [{ keyword: 'KF', title: 'Moisture Content' }] })).toEqual([])
+    expect(itemRoleBadges({ department_name: 'Microbiology', analyses: [{ keyword: 'KF', title: 'Moisture Content' }] })).toEqual([])
   })
-  it('null group + no derivable role -> []', () => {
-    expect(itemRoleBadges({ service_group_id: null, analyses: [] })).toEqual([])
+  it('null department + no derivable role -> []', () => {
+    expect(itemRoleBadges({ department_name: null, analyses: [] })).toEqual([])
   })
-  it('unknown bench with derivable hplc analysis -> [hplc]', () => {
+  it('unknown department with derivable hplc analysis -> [hplc]', () => {
     expect(itemRoleBadges({
-      service_group_id: null,
+      department_name: null,
       analyses: [{ keyword: 'BPC-157-PUR', title: 'Purity', peptide_name: 'BPC-157' }],
     })).toEqual(['hplc'])
   })

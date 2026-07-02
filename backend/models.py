@@ -177,6 +177,14 @@ class AnalysisService(Base):
     variance_capable: Mapped[bool] = mapped_column(
         Boolean, default=False, nullable=False, server_default="false"
     )
+    department_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("departments.id", ondelete="SET NULL"), nullable=True
+    )
+    vials_required: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    is_assignable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    sla_tier_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("sla_tiers.id", ondelete="SET NULL"), nullable=True
+    )
 
     # Relationships
     peptide: Mapped[Optional["Peptide"]] = relationship("Peptide", foreign_keys=[peptide_id])
@@ -201,6 +209,11 @@ class ServiceGroup(Base):
     sla_tier_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("sla_tiers.id", ondelete="SET NULL"), nullable=True
     )
+    department_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("departments.id", ondelete="SET NULL"), nullable=True
+    )
+    vials_required: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    is_assignable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -222,6 +235,26 @@ service_group_members = Table(
     Column("analysis_service_id", Integer, ForeignKey("analysis_services.id", ondelete="CASCADE"), nullable=False),
     UniqueConstraint("service_group_id", "analysis_service_id", name="uq_service_group_member"),
 )
+
+
+class Department(Base):
+    """Top-level lab department (e.g. Analytical, Microbiology).
+
+    A service's single structural home; drives the assignment-page block, the
+    HPLC-mirror allow-list, and the worksheet/inbox lane. Catalog config table.
+    """
+    __tablename__ = "departments"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(200), nullable=False, unique=True)
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    color: Mapped[str] = mapped_column(String(50), nullable=False, default="blue")
+    is_system: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def __repr__(self) -> str:
+        return f"<Department(id={self.id}, name='{self.name}')>"
 
 
 # M2M junction: instrument <-> method (methods can be shared across instruments of the same model)

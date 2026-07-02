@@ -16,14 +16,14 @@ HPLC vials MIRROR the parent SENAITE sample's full HPLC analyte set.
 Instead of seeding a generic HPLC-PUR/HPLC-ID whitelist, the seeder reads
 the parent AR's analysis keywords (sub_samples.senaite.fetch_parent_analysis_keywords)
 and creates one lims_analyses row per keyword that exists in the Mk1 catalog
-EXCEPT those in the non-HPLC service groups ("Microbiology" + "Endotoxin").
-This captures the real per-analyte purity/quantity/identity rows (ANALYTE-N-*,
-ID_*), blend purity (BLEND-PUR), peptide totals (PEPT-Total) and HPLC-ID exactly
-as the parent carries them. The predicate is exclude-non-HPLC-groups (not
-include-Analytics) because the per-analyte ANALYTE-N-* services are intentionally
-ungrouped — an Analytics-group include filter would silently drop them. Micro
-keywords (STER-PCR, KF in Microbiology; ENDO-LAL in Endotoxin) are dropped;
-those vials get their own role seeding.
+ONLY IF that service's department_id equals the Analytical department id (fail-closed
+allow-list). This captures the real per-analyte purity/quantity/identity rows
+(ANALYTE-N-*, ID_*), blend purity (BLEND-PUR), peptide totals (PEPT-Total) and
+HPLC-ID exactly as the parent carries them — the per-analyte ANALYTE-N-* services
+are tagged Analytical by Task 1's backfill_departments step so they are kept.
+Microbiology-department keywords (STER-PCR, KF, ENDO-LAL, PCR-BACTERIA, PCR-FUNGI)
+and any NULL/unknown-department service are excluded; those vials get their own
+role seeding.
 
 The mirror is fail-hard: a SENAITE read error propagates so the caller can
 abort rather than seed a partial/empty analyte set. endo/ster/xtra vials are
@@ -42,6 +42,7 @@ from typing import Dict, List, Optional, Set
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from catalog.departments import department_id_by_name
 from lims_analyses import service as la_service
 from models import (
     AnalysisService,
@@ -101,11 +102,9 @@ def select_services_for_role(db: Session, role: str) -> List[AnalysisService]:
     return list(rows)
 
 
-# Service groups whose analyses are NOT HPLC/Analyses-dept work, so they must be
-# dropped from the HPLC-vial mirror. Endotoxin is its OWN group (ENDO-LAL), a
-# sibling of Microbiology (STER-PCR/KF) — excluding only "Microbiology" let
-# ENDO-LAL leak onto HPLC vials (e.g. BW-0015-S01 showed an Endotoxin row on the
-# parent's vial overlay though the vial was HPLC-assigned).
+# Non-HPLC service group names whose keywords must NOT appear on HPLC vials.
+# Endotoxin is its own group (ENDO-LAL), a sibling of Microbiology (STER-PCR/KF)
+# — excluding only "Microbiology" let ENDO-LAL leak onto HPLC vials (BW-0015-S01).
 _NON_HPLC_GROUPS = ("Microbiology", "Endotoxin")
 
 
@@ -114,9 +113,11 @@ def _micro_group_keywords(db: Session) -> Set[str]:
     + Endotoxin) by group name.
 
     Returns an empty set if none exist — so missing groups exclude nothing
-    (default-open). The HPLC mirror uses this as an EXCLUDE list, not an include
-    filter (see mirror_parent_hplc_analyses); Analytics-grouped and ungrouped
-    (ANALYTE-N-*) services are therefore kept."""
+    (default-open). Consumed by the COA-generation gate in main.py and by
+    test_assign_role_fail_hard.py to determine which keywords should not appear on
+    HPLC vials. The HPLC mirror (mirror_parent_hplc_analyses) no longer calls this
+    function — it uses a fail-closed Department allow-list instead (see
+    mirror_parent_hplc_analyses)."""
     rows = db.execute(
         select(AnalysisService.keyword)
         .join(
@@ -144,9 +145,10 @@ def mirror_parent_hplc_analyses(
     """Mirror the parent's HPLC analyses onto the HPLC vial.
 
     Reads the parent's SENAITE analysis keywords and seeds a lims_analyses row
-    for every keyword that exists in the Mk1 catalog EXCEPT those belonging to
-    the Microbiology service group (ENDO-LAL/STER-PCR/KF — those vials get
-    their own role-based seeding).
+    for every keyword that exists in the Mk1 catalog AND whose service has
+    department_id == Analytical (fail-closed allow-list). Microbiology-department
+    and NULL/unknown-department services are excluded by default — those vials get
+    their own role-based seeding.
 
     Generic per-analyte keywords (ANALYTE-{n}-PUR / ANALYTE-{n}-QTY) are
     TRANSLATED to the slot peptide's per-substance service (PUR_<X> / QTY_<X>)
@@ -157,12 +159,11 @@ def mirror_parent_hplc_analyses(
     so the analyte is never silently dropped. Identity (ID_<X>), BLEND-PUR,
     PEPT-Total and HPLC-ID are mirrored unchanged.
 
-    The predicate is EXCLUDE-Microbiology, not include-Analytics, on purpose:
-    the per-analyte services (ANALYTE-N-PUR / ANALYTE-N-QTY) are intentionally
-    ungrouped in the catalog, so an Analytics-group include filter would drop
-    exactly the per-analyte rows this feature exists to mirror. Default-open
-    (seed unless it's a known Micro keyword) is the correct error direction —
-    under-inclusion silently loses analyte data.
+    The predicate is fail-closed (include-Analytical), not exclude-Microbiology:
+    any service whose department_id != Analytical is excluded by default, including
+    NULL/unknown-department services. The per-analyte services (ANALYTE-N-PUR /
+    ANALYTE-N-QTY) are tagged Analytical by backfill_departments (Task 1) so they
+    are never dropped by this allow-list.
 
     Fail-hard: a SENAITE read error propagates (the caller aborts rather than
     seed a partial analyte set).
@@ -179,8 +180,14 @@ def mirror_parent_hplc_analyses(
     svc_rows = db.execute(select(AnalysisService)).scalars().all()
     svc_by_kw = {s.keyword: s for s in svc_rows if s.keyword}
 
-    # Keywords to drop: the Microbiology group (ENDO-LAL/STER-PCR/KF).
-    micro_kw = _micro_group_keywords(db)
+    # Fail-closed allow-list: only Analytical-department services mirror onto HPLC
+    # vials. A Microbiology / NULL / mis-tagged service is excluded by default, so
+    # it can never leak onto a chromatography vial (was: exclude-known-Micro
+    # deny-list, which defaulted to "contaminate the HPLC vial").
+    analytical_dept_id = department_id_by_name(db, "Analytical")
+    if analytical_dept_id is None:
+        log.error("seeder.mirror.no_analytical_dept — aborting mirror (fail-closed)")
+        return []
 
     # raises -> fail-hard
     parent_keywords = senaite_mod.fetch_parent_analysis_keywords(parent_sample_id)
@@ -246,7 +253,7 @@ def mirror_parent_hplc_analyses(
             svc = svc_by_kw.get(kw)
             if svc is None:          # keyword not in the Mk1 catalog at all
                 continue
-        if svc.keyword in micro_kw:   # Microbiology analysis (ENDO-LAL/STER-PCR/KF)
+        if svc.department_id != analytical_dept_id:   # fail-closed: Analytical only
             continue
         if svc.keyword in existing_kw:
             continue
