@@ -102,8 +102,17 @@ Server-stored (the backend is the consumer) — not localStorage.
 **Deep link (new):** DM tap-through needs a URL that opens a flag's thread.
 Add a `flag` query param to the existing `#section/subsection?…` hash scheme:
 `applyNavToStore` in `src/lib/hash-navigation.ts` reads `?flag=<id>` on
-load/back-forward and calls `openFlagThread(id)`. Slack messages link to
-`{MK1_PUBLIC_URL}/#dashboard/orders?flag=<id>`.
+load/back-forward and calls `openFlagThread(id)`.
+
+Links are **entity-aware** — one URL lands on the flagged entity's page AND
+opens the thread. The notifier resolves the entity via `seams.resolve_context`
+and `link_hash_for(deep_link, flag_id)` maps it:
+
+| deep_link kind | URL |
+|---|---|
+| `sample` | `{MK1_PUBLIC_URL}/#senaite/sample-details?id=<sid>&flag=<id>` (vials resolve to their parent sample) |
+| `worksheet` | `{MK1_PUBLIC_URL}/#hplc-analysis/worksheet-detail?id=<wid>&flag=<id>` |
+| `none` / unresolvable | `{MK1_PUBLIC_URL}/#dashboard/orders?flag=<id>` (thread still opens) |
 
 ## Message format
 
@@ -147,8 +156,28 @@ impact. DM delivery is not audited in v1.
 - Live acceptance: real token in a dev stack, link one user, raise/assign/
   mention → 3 DMs with working deep links.
 
+## Phase 2 — interactive actions (PREPPED, not built)
+
+Decision 2026-07-02: prepare for in-DM actions ("Resolve", "Assign to me",
+"Open"). Prep shipped in v1 so the Slack app never needs recreating:
+
+- The manifest pre-enables `interactivity` with
+  `request_url: https://accumk1.valenceanalytical.com/api/slack/interactions`.
+  With no interactive components in v1 messages, Slack sends nothing; the URL
+  404s harmlessly until Phase 2.
+- Phase 2 adds: `POST /api/slack/interactions` on Mk1 with **mandatory
+  request-signature verification** (new `SLACK_SIGNING_SECRET` env,
+  `X-Slack-Signature` v0 HMAC over `v0:{timestamp}:{body}`, reject stale
+  timestamps ±5 min — this becomes Mk1's first inbound Slack surface, so it
+  must fail closed); `block_actions` payload handling mapped onto the existing
+  `flags.service` actions (actor = the Slack user reverse-mapped via
+  `slack_dm_prefs.slack_member_id`, unmapped → ephemeral error); action
+  buttons appended to the DM blocks.
+- Phase-2 security review trigger: the signing secret joins the token in the
+  env; the endpoint must never mutate state on unverified requests.
+
 ## Out of scope (v1)
 
-Presence-aware suppression, digests/batching, channel posts, interactive Slack
-buttons/actions, per-flag mute, admin management of other users' prefs,
-durable outbox delivery.
+Presence-aware suppression, digests/batching, channel posts, per-flag mute,
+admin management of other users' prefs, durable outbox delivery. (Interactive
+actions moved to Phase 2 above — prepped, not built.)

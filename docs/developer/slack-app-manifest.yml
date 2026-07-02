@@ -28,6 +28,15 @@ oauth_config:
       - users:read        # prerequisite for users:read.email
       - users:read.email  # users.lookupByEmail (map Mk1 login email -> Slack id)
 settings:
+  # Phase-2 prep (interactive actions — Resolve / Assign-to-me buttons in DMs).
+  # Enabled now so the app never needs a manifest change: with no interactive
+  # components in our messages Slack sends nothing here. When Phase 2 ships,
+  # Mk1 adds POST /api/slack/interactions with MANDATORY request-signature
+  # verification (SLACK_SIGNING_SECRET env, X-Slack-Signature v0 HMAC,
+  # timestamp replay window). Until then the URL simply 404s.
+  interactivity:
+    is_enabled: true
+    request_url: https://accumk1.valenceanalytical.com/api/slack/interactions
   org_deploy_enabled: false
   socket_mode_enabled: false
   token_rotation_enabled: false
