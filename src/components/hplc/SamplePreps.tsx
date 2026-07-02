@@ -11,6 +11,8 @@ import {
   Microscope,
   FolderSearch,
   X,
+  HardDrive,
+  Cloud,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -33,11 +35,14 @@ import {
   type SamplePrep,
   type HplcScanMatch,
   type HplcScanLogLine,
+  type LocalHplcFile,
 } from '@/lib/api'
 import { useUIStore } from '@/store/ui-store'
 import { useWizardStore } from '@/store/wizard-store'
 import { SamplePrepHplcFlyout } from './SamplePrepHplcFlyout'
 import { SharePointBrowser } from './SharePointBrowser'
+import { LocalHplcFolderPicker } from './LocalHplcFolderPicker'
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 
 // ─── Status definitions ───────────────────────────────────────────────────────
 
@@ -213,6 +218,7 @@ export function SamplePreps() {
   // scanMatches, so Process HPLC works identically downstream.
   const [overrideTarget, setOverrideTarget] = useState<SamplePrep | null>(null)
   const [overrideLoading, setOverrideLoading] = useState(false)
+  const [overrideTab, setOverrideTab] = useState<'sharepoint' | 'local'>('sharepoint')
 
   const load = useCallback(async (q?: string) => {
     setLoading(true)
@@ -359,6 +365,33 @@ export function SamplePreps() {
     } finally {
       setOverrideLoading(false)
     }
+  }
+
+  function applyLocalOverride(prep: SamplePrep, folderName: string, localFiles: LocalHplcFile[]) {
+    const peakCount = localFiles.filter(f => f.kind === 'peak').length
+    if (peakCount === 0) {
+      toast.error(`No *_PeakData.csv files in "${folderName}"`, {
+        description: 'Pick a folder containing HPLC PeakData exports.',
+      })
+      return
+    }
+    const match: HplcScanMatch = {
+      prep_id: prep.id,
+      senaite_sample_id: prep.senaite_sample_id ?? prep.sample_id,
+      folder_name: folderName,
+      folder_id: '',
+      peak_files: [],
+      chrom_files: [],
+      is_override: true,
+      source: 'local',
+      local_files: localFiles,
+    }
+    setScanMatches(prev => new Map(prev).set(prep.id, match))
+    setOverrideTarget(null)
+    const chromCount = localFiles.filter(f => f.kind === 'chrom').length
+    toast.success(`"${folderName}" pinned to ${prep.senaite_sample_id ?? prep.sample_id}`, {
+      description: `${peakCount} PeakData, ${chromCount} chromatogram file(s) — use Process HPLC.`,
+    })
   }
 
   // ── Render ────────────────────────────────────────────────────────────────────
@@ -545,7 +578,7 @@ export function SamplePreps() {
                           {match && (
                             <button
                               title={match.is_override
-                                ? `Process HPLC data from override folder: ${match.folder_name}`
+                                ? `Process HPLC data from ${match.source === 'local' ? 'local folder' : 'override folder'}: ${match.folder_name}`
                                 : 'Process HPLC data'}
                               className={cn(
                                 'flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium border transition-colors',
@@ -605,8 +638,8 @@ export function SamplePreps() {
         />
       )}
 
-      {/* HPLC data folder override picker */}
-      <Dialog open={overrideTarget !== null} onOpenChange={v => { if (!v && !overrideLoading) setOverrideTarget(null) }}>
+      {/* HPLC data folder override picker — SharePoint or Local files */}
+      <Dialog open={overrideTarget !== null} onOpenChange={v => { if (!v && !overrideLoading) { setOverrideTarget(null); setOverrideTab('sharepoint') } }}>
         <DialogContent className="sm:max-w-3xl">
           <DialogHeader>
             <DialogTitle>
@@ -614,8 +647,7 @@ export function SamplePreps() {
             </DialogTitle>
           </DialogHeader>
           <p className="text-xs text-muted-foreground -mt-2">
-            Navigate to any LIMS folder with HPLC data and click &quot;Use this folder&quot; —
-            its PeakData/chromatogram CSVs are pinned to this prep for processing
+            Pin a folder&apos;s PeakData/chromatogram CSVs to this prep for processing
             (this session only; nothing is saved to the prep).
           </p>
           {overrideLoading && (
@@ -625,13 +657,30 @@ export function SamplePreps() {
             </div>
           )}
           {overrideTarget && (
-            <SharePointBrowser
-              allowSelectAnyFolder
-              disabled={overrideLoading}
-              onFolderSelected={(path, folderName) =>
-                void applyFolderOverride(overrideTarget, path, folderName)
-              }
-            />
+            <Tabs value={overrideTab} onValueChange={v => setOverrideTab(v as 'sharepoint' | 'local')}>
+              <TabsList>
+                <TabsTrigger value="sharepoint"><Cloud className="h-4 w-4 mr-1" />SharePoint</TabsTrigger>
+                <TabsTrigger value="local"><HardDrive className="h-4 w-4 mr-1" />Local files</TabsTrigger>
+              </TabsList>
+              <TabsContent value="sharepoint">
+                <SharePointBrowser
+                  allowSelectAnyFolder
+                  disabled={overrideLoading}
+                  onThrottled={() => setOverrideTab('local')}
+                  onFolderSelected={(path, folderName) =>
+                    void applyFolderOverride(overrideTarget, path, folderName)
+                  }
+                />
+              </TabsContent>
+              <TabsContent value="local">
+                <LocalHplcFolderPicker
+                  disabled={overrideLoading}
+                  onSelected={(folderName, localFiles) =>
+                    applyLocalOverride(overrideTarget, folderName, localFiles)
+                  }
+                />
+              </TabsContent>
+            </Tabs>
           )}
         </DialogContent>
       </Dialog>
