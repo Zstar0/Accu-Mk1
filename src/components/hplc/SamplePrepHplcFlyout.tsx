@@ -307,12 +307,23 @@ function buildDebugLines({
   }
 
   push('dim', '')
-  push('dim', '─── SharePoint Match ───')
-  push('info', `Folder: ${match.folder_name}`)
-  push('info', `Peak files: ${match.peak_files.length}`)
-  match.peak_files.forEach(f => push('dim', `  ${f.name}`))
-  push('info', `Chrom files: ${match.chrom_files.length}`)
-  match.chrom_files.forEach(f => push('dim', `  ${f.name}`))
+  if (match.source === 'local') {
+    const localPeaks = (match.local_files ?? []).filter(f => f.kind === 'peak')
+    const localChrom = (match.local_files ?? []).filter(f => f.kind === 'chrom')
+    push('dim', '─── Local Files ───')
+    push('info', `Folder: ${match.folder_name}`)
+    push('info', `Peak files: ${localPeaks.length}`)
+    localPeaks.forEach(f => push('dim', `  ${f.filename}`))
+    push('info', `Chrom files: ${localChrom.length}`)
+    localChrom.forEach(f => push('dim', `  ${f.filename}`))
+  } else {
+    push('dim', '─── SharePoint Match ───')
+    push('info', `Folder: ${match.folder_name}`)
+    push('info', `Peak files: ${match.peak_files.length}`)
+    match.peak_files.forEach(f => push('dim', `  ${f.name}`))
+    push('info', `Chrom files: ${match.chrom_files.length}`)
+    match.chrom_files.forEach(f => push('dim', `  ${f.name}`))
+  }
 
   if (!parseResult) {
     push('warn', 'No parse result — data not yet loaded')
@@ -1601,11 +1612,12 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match, readOnly = fa
                 {readOnly ? 'Review' : 'Process HPLC'} — {prep.senaite_sample_id ?? prep.sample_id}
               </SheetTitle>
               <p className="text-xs text-muted-foreground mt-0.5 truncate">
-                {match.folder_name}
-                {match.source === 'local' && (
-                  <span className="ml-2 inline-flex items-center gap-1 rounded bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
+                {match.source === 'local' ? (
+                  <span className="inline-flex items-center gap-1 rounded bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
                     <HardDrive className="h-3 w-3" /> Local files: {match.folder_name}
                   </span>
+                ) : (
+                  match.folder_name
                 )}
               </p>
             </div>
