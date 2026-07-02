@@ -4,6 +4,8 @@
  */
 import type { HplcScanMatch, LocalHplcFile } from '@/lib/api'
 
+export type { LocalHplcFile }
+
 const PEAK_RE = /_PeakData\.csv$/i
 const CHROM_RE = /_DAD1A\.csv$/i
 
