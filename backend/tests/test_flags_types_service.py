@@ -83,14 +83,29 @@ def test_create_then_delete_unused_custom(db):
     assert types_service.get_type(db, t.id) is None
 
 
-def test_create_generates_unique_slug(db):
+def test_create_derived_slug_auto_uniquifies(db):
+    # Create-then-rename UX: the "Add Type" button always POSTs the same default
+    # label ("New type") with NO slug, so a derived-slug collision must
+    # auto-uniquify (new_type, new_type_2, new_type_3, ...) instead of 409-ing.
+    from flags import types_service
+    a = types_service.create_type(db, label="New type", color="#111111", kind="issue")
+    b = types_service.create_type(db, label="New type", color="#222222", kind="issue")
+    c = types_service.create_type(db, label="New type", color="#333333", kind="issue")
+    assert a.slug == "new_type"
+    assert b.slug == "new_type_2"
+    assert c.slug == "new_type_3"
+    # Three distinct persisted rows — none clobbered the others.
+    assert len({a.id, b.id, c.id}) == 3
+
+
+def test_create_explicit_slug_collision_still_raises(db):
+    # An EXPLICITLY-provided slug that collides is real user intent → still 409.
     from flags import types_service
     from flags.errors import ConflictError
-    types_service.create_type(db, label="My Type", color="#111111", kind="issue")
-    # Same label → same generated slug → conflict.
+    types_service.create_type(db, label="First", slug="retest", color="#111111", kind="issue")
     with pytest.raises(ConflictError):
-        types_service.create_type(db, label="My Type", color="#222222", kind="issue")
-    # Cannot shadow a built-in slug.
+        types_service.create_type(db, label="Second", slug="retest", color="#222222", kind="issue")
+    # Cannot shadow a built-in slug either.
     with pytest.raises(ConflictError):
         types_service.create_type(db, label="X", slug="blocker", color="#333333", kind="issue")
 
