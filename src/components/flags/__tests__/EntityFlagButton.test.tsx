@@ -104,4 +104,27 @@ describe('EntityFlagButton', () => {
     expect(useUIStore.getState().flagsFlyoutOpen).toBe(true)
     expect(useUIStore.getState().flagsThreadId).toBeNull()
   })
+
+  it('flagged: renders a Raise-another-flag + next to the pill', async () => {
+    useEntityFlags.mockReturnValue({ data: [f(7, 'blocker', 'open')] })
+    const { EntityFlagButton } =
+      await import('@/components/flags/EntityFlagButton')
+    render(<EntityFlagButton entityType="sample" entityId="P-0071" />)
+
+    expect(
+      screen.getByRole('button', { name: 'Raise another flag' })
+    ).toBeInTheDocument()
+  })
+
+  it('the + opens the compose preset to this entity (pill untouched)', async () => {
+    useEntityFlags.mockReturnValue({ data: [f(7, 'blocker', 'open')] })
+    const { EntityFlagButton } =
+      await import('@/components/flags/EntityFlagButton')
+    render(<EntityFlagButton entityType="sample" entityId="P-0071" />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Raise another flag' }))
+    expect(await screen.findByText('on Sample P-0071')).toBeInTheDocument()
+    // Pill still present and unchanged.
+    expect(screen.getByText('Flagged')).toBeInTheDocument()
+  })
 })
