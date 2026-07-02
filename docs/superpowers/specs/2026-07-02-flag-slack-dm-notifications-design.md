@@ -100,9 +100,10 @@ toggle, link status + member-id field + test button, five category toggles.
 Server-stored (the backend is the consumer) — not localStorage.
 
 **Deep link (new):** DM tap-through needs a URL that opens a flag's thread.
-Add hash-route handling for `#flags?open=<id>` → `openFlagThread(id)` in
-`useHashNavigation`. Slack messages link to
-`https://accumk1.valenceanalytical.com/#flags?open=<id>`.
+Add a `flag` query param to the existing `#section/subsection?…` hash scheme:
+`applyNavToStore` in `src/lib/hash-navigation.ts` reads `?flag=<id>` on
+load/back-forward and calls `openFlagThread(id)`. Slack messages link to
+`{MK1_PUBLIC_URL}/#dashboard/orders?flag=<id>`.
 
 ## Message format
 
