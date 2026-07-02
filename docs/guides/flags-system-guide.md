@@ -11,6 +11,7 @@ Flags are how Accu-Mk1 keeps work moving without losing the thread in Slack. A *
 > - The **Flags button** (top-right, next to Worksheets) opens a slide-out with everything relevant to you — what's assigned to you, what you raised, what you're watching, and what's new.
 > - **@mention** someone in a comment to pull them in as a watcher.
 > - Move a flag through its **status** (Open → In Progress → Blocked → Resolved → Closed) so its state is never a mystery.
+> - **Flag activity reaches you as a Slack DM automatically** — on by default for everyone; tune it or turn it off under Account → Profile.
 
 Read this once end-to-end; after that the flyout and the flag buttons are self-explanatory.
 
@@ -129,13 +130,17 @@ Everywhere, the **count badge** tells you how many flags are on the item, and th
 
 ## Slack DM notifications
 
-You can have flag activity mirrored to you as **Slack direct messages** — the same things that would toast you in the app.
+Flag activity comes to you as **Slack direct messages** automatically — **this is on by default for everyone.** When a flag is assigned to you, someone @mentions you, there's activity on a flag you raised or watch, or a status changes, you get a DM. No setup required for most people.
 
-- It's **opt-in per person**. Set it up under **Account → Profile**: link your Slack account (or paste your Slack member ID), send a **test DM** to confirm it works, and toggle the categories you want (assigned to you, mentioned, activity on flags you raised, activity on flags you watch, status changes).
-- **Watchers don't get live DMs for every ripple** by design — watching keeps you in the loop without drowning you.
-- Each DM deep-links back to the flagged item and opens the thread.
+> **On by default.** You don't opt in — you're already in. If DMs are noisier than you'd like, you *opt out* (all or part) under **Account → Profile**.
 
-> If you never set this up, nothing changes — flags still work entirely in the app. Slack DMs are a convenience layer on top.
+**How you get linked (automatic).** Accu-Mk1 matches your login email to your Slack account — including known alias domains, so a mixed-domain address (your Mk1 login on one domain, your Slack on another) still resolves — and links you the first time you'd receive a DM. Nothing for you to do.
+
+**If you're _not_ getting DMs.** Your Slack account couldn't be matched to your email. Go to **Account → Profile**, paste your **Slack member ID**, and hit **Send test DM** to confirm. The page shows who your account resolved to ("Slack linked → …") so you can be sure it mapped to you.
+
+**Turning it down.** On **Account → Profile**, the master toggle switches DMs off entirely, and the per-category toggles mute just some kinds — for example, turn off *activity on flags you watch* if watched-flag chatter is too much.
+
+The five categories — **assigned to you**, **mentioned**, **activity on flags you raised**, **activity on flags you watch**, and **status changes** — are **all on by default**. Each DM deep-links back to the flagged item and opens the thread.
 
 ## For admins — managing flag types
 

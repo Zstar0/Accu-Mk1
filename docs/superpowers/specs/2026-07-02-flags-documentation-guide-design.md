@@ -50,7 +50,7 @@ Practical, second-person, lab-staff tone (matching the Check-In guide). Sections
 6. **Comments & @mentions** — threaded discussion; `@name` pulls someone in as a watcher; the system/audit lines woven into the thread.
 7. **The Flags flyout** — opening it (the header button + unread pulse); the tabs (Assigned to me / Raised by me / Watching / All open / Activity / Unread); list vs table view; the filter bar; unread markers.
 8. **Flags on your work** — the flag button/indicator on Sample Details (aggregates its vials), vial rows, worksheet drawer, and the Order/Customer views; the count badge; multiple flags per item.
-9. **Slack DM notifications** — brief: opt-in per-user at **Account → Profile**, the category toggles, the test-DM button; watchers get no live toasts by design.
+9. **Slack DM notifications** — **on by default for every user (opt-out)**, including watcher-activity; auto-linked by email match (alias domains cover mixed-domain staff), manual member-ID fallback + test-DM at **Account → Profile**; the five category toggles. (The "no notification for watchers" rule is in-app toasts only, NOT DMs.)
 10. **For admins — managing flag types** — **Preferences → Flags** pane: create/edit/deactivate types, per-entity scope, the blocking flag; deactivate-not-delete for audit integrity.
 11. **Tips & etiquette** — short: resolve when done, use Signal for "ready for verification", don't over-flag.
 
