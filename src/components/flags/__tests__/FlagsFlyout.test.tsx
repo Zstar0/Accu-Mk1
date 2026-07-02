@@ -249,3 +249,46 @@ describe('FlagsFlyout', () => {
     expect(useUIStore.getState().flagsEntityFilter).toBeNull()
   })
 })
+
+describe('FlagsFlyout context-aware Add Flag', () => {
+  beforeEach(() => {
+    useFlagsList.mockReset()
+    useFlagsList.mockReturnValue({
+      data: [],
+      isLoading: false,
+      isError: false,
+      refetch: vi.fn(),
+    })
+    useUIStore.setState({
+      flagsFlyoutOpen: true,
+      flagsThreadId: null,
+      flagsEntityFilter: null,
+      flagsSamplesFilter: null,
+      activeFlagEntityStack: [],
+    })
+  })
+
+  it('hides Add Flag when no entity page is active', async () => {
+    const { FlagsFlyout } = await import('@/components/flags/FlagsFlyout')
+    render(<FlagsFlyout />)
+    await screen.findByRole('tab', { name: 'Assigned to me' })
+    expect(
+      screen.queryByRole('button', { name: /add flag/i })
+    ).not.toBeInTheDocument()
+  })
+
+  it('shows Add Flag preset to the active entity (no manual id form)', async () => {
+    useUIStore.setState({
+      activeFlagEntityStack: [{ type: 'sample', id: 'P-0071', label: 'P-0071' }],
+    })
+    const { FlagsFlyout } = await import('@/components/flags/FlagsFlyout')
+    render(<FlagsFlyout />)
+
+    await userEvent.click(
+      await screen.findByRole('button', { name: /add flag/i })
+    )
+    // Compose targets the page entity: label line present, no raw-id input.
+    expect(await screen.findByText('on P-0071')).toBeInTheDocument()
+    expect(screen.queryByText('Entity id')).not.toBeInTheDocument()
+  })
+})
