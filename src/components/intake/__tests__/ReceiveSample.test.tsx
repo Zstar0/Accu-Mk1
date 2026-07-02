@@ -4,16 +4,20 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 import { ReceiveSample } from '@/components/intake/ReceiveSample'
 import { getSetting } from '@/lib/api'
+import { useUIStore } from '@/store/ui-store'
 
 // Stub the heavy session shell with a sentinel that echoes the flattened sample
-// ids it was handed, so we can assert which orders a Process click opened.
+// ids it was handed (and the landing tab), so we can assert which orders a
+// Process click or a boxes-page deep link opened.
 vi.mock('@/components/intake/OrderReceiveSession', () => ({
   OrderReceiveSession: ({
     orders,
+    initialPhase,
   }: {
     orders: { samples: { id: string }[] }[]
+    initialPhase?: string
   }) => (
-    <div data-testid="session">
+    <div data-testid="session" data-initial-phase={initialPhase}>
       {orders
         .flatMap(o => o.samples)
         .map(s => (
@@ -181,6 +185,24 @@ describe('ReceiveSample — order selection + combine', () => {
     await waitFor(() =>
       expect(screen.queryByText(/orders selected/)).toBeNull()
     )
+  })
+})
+
+describe('ReceiveSample — Active Boxes deep link', () => {
+  it('opens the target order’s session on the Boxing tab and clears the slot', async () => {
+    // Real ui-store: the Active Boxes label click parks the order key here.
+    useUIStore.setState({ receiveBoxingTargetOrderKey: 'WP-1042' })
+    renderPage()
+
+    await waitFor(() =>
+      expect(screen.getByTestId('session')).toBeInTheDocument()
+    )
+    expect(screen.getByTestId('session').dataset.initialPhase).toBe('boxing')
+    const ids = screen
+      .getAllByTestId('session-sample')
+      .map(n => n.textContent)
+    expect(ids).toEqual(['P-1'])
+    expect(useUIStore.getState().receiveBoxingTargetOrderKey).toBeNull()
   })
 })
 

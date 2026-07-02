@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, type ComponentProps } from 'react'
 import { useQuery, useQueries } from '@tanstack/react-query'
 import { Check, Loader2 } from 'lucide-react'
 import {
@@ -18,6 +18,9 @@ import { cn } from '@/lib/utils'
 interface Props {
   orders: OrderGroup[]
   onClose: () => void
+  // Which wizard tab the session lands on. The Active Boxes label deep-link
+  // passes 'boxing'; omitted, the wizard keeps its capture-first default.
+  initialPhase?: ComponentProps<typeof ReceiveWizard>['initialPhase']
 }
 
 /** Comma-joined analyte labels for the header, preferring the enriched SENAITE
@@ -35,7 +38,7 @@ function analyteLabel(
   return null
 }
 
-export function OrderReceiveSession({ orders, onClose }: Props) {
+export function OrderReceiveSession({ orders, onClose, initialPhase }: Props) {
   // Walk the flattened union of every order's samples; a combined session is
   // just one stepper over `order 1`'s samples, then `order 2`'s, … . Boxing is
   // no longer a stage here — it lives as an order-scoped tab inside the wizard.
@@ -222,6 +225,7 @@ export function OrderReceiveSession({ orders, onClose }: Props) {
               key={current.uid}
               parent={{ uid: current.uid, sample_id: current.id, status: current.review_state ?? null }}
               onClose={onClose}
+              initialPhase={initialPhase}
               hideSampleInfo
               orderManaged
               boxing={{
