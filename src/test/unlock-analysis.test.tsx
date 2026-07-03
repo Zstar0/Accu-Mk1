@@ -94,7 +94,7 @@ describe('UnlockDialog', () => {
           } as SenaiteAnalysis
         }
         open
-        onOpenChange={() => {}}
+        onOpenChange={vi.fn()}
         onUnlocked={onUnlocked}
       />
     )
@@ -123,8 +123,8 @@ describe('UnlockDialog', () => {
           } as SenaiteAnalysis
         }
         open
-        onOpenChange={() => {}}
-        onUnlocked={() => {}}
+        onOpenChange={vi.fn()}
+        onUnlocked={vi.fn()}
       />
     )
     await userEvent.type(screen.getByLabelText(/reason/i), 'wrong replicate')
