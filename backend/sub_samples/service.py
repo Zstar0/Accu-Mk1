@@ -12,7 +12,7 @@ import json
 import logging
 import os
 import requests
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Tuple, List
 from sqlalchemy import select, func, delete, case
 from sqlalchemy.orm import Session
@@ -110,6 +110,24 @@ def _extract_label(value):
     if isinstance(value, dict):
         return value.get("title") or value.get("Title") or value.get("uid")
     return value
+
+
+def _parse_senaite_date(value) -> Optional[datetime]:
+    """SENAITE serializes dates as ISO-8601 strings, usually with a TZ offset
+    (e.g. '2026-05-01T10:23:00+00:00'), occasionally with a trailing 'Z'.
+    lims_samples date columns are naive UTC (datetime.utcnow() convention),
+    so normalize aware → UTC and strip tzinfo. Returns None for empty or
+    unparseable values — basic-info population is best-effort, never fatal."""
+    if not value or not isinstance(value, str):
+        return None
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        log.debug("sub_samples.basic_info: unparseable SENAITE date %r", value)
+        return None
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return dt
 
 
 def _refresh_parent_from_senaite(db: Session, parent: LimsSample) -> None:
