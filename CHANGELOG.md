@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.0.24 — 2026-07-03
+
+### Fixed
+
+- **Flags live-stream no longer buffered at the frontend proxy.** `api/flags/stream` joins the HPLC streams in the frontend nginx's unbuffered-SSE location (which also re-signals `X-Accel-Buffering: no` to the host proxy). Previously the stream fell through to the generic API location and the host nginx buffered it dead — each open tab parked a zombie connection until the browser's per-host pool starved and every page spun (the 2026-07-03 "app not loading" incident; the host side was hot-fixed the same night, this bakes the fix into the image and syncs the `scripts/accumk1-nginx.conf` reference copy).
+- **Browsers no longer cache a stale app shell across deploys.** `index.html` is now served with `Cache-Control: no-cache`, so every load revalidates it. Hashed bundle names change with each release, and a heuristically-cached shell pointed at deleted assets (blank page until a hard refresh). Hashed `/assets/` keep their 1-year immutable cache.
+
 ## v1.0.23 — 2026-07-03
 
 ### Fixed
