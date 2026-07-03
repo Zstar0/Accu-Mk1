@@ -59,28 +59,47 @@ def ensure_sample_row(db: Session, parent_sample_id: str) -> LimsSample:
         return existing
 
     meta = senaite.fetch_parent_metadata(parent_sample_id)
+    return _create_sample_row(db, parent_sample_id, meta)
+
+
+def _populate_basic_info(row: LimsSample, meta: dict) -> None:
+    """Write the FULL canonical basic-info field set from a
+    fetch_parent_metadata payload (the raw complete=true item). The single
+    definition of "basic info" — create (ensure_sample_row), refresh
+    (_refresh_parent_from_senaite), and the backfill script all route through
+    here so rows come out identical and complete
+    (2026-07-02-lims-sample-canonical-basic-info-design.md).
+
+    Deliberately NOT basic info (owned elsewhere — never write here):
+    container_mode, assignment_role, variance fields, customer_remarks*,
+    is_retest."""
+    row.external_lims_uid = meta.get("uid")
+    row.external_lims_system = "senaite"
+    row.client_id = meta.get("ClientID")
+    row.client_uid = _extract_uid(meta.get("ClientUID") or meta.get("Client"))
+    row.contact_uid = _extract_uid(meta.get("ContactUID") or meta.get("Contact"))
+    row.sample_type = _extract_uid(meta.get("SampleType"))
+    row.client_sample_id = meta.get("ClientSampleID")
+    row.peptide_name = _extract_label(meta.get("Analyte1Peptide"))
+    row.date_received = _parse_senaite_date(meta.get("DateReceived"))
+    row.date_sampled = _parse_senaite_date(meta.get("DateSampled"))
+    row.status = meta.get("review_state")
+    row.last_synced_at = datetime.utcnow()
+
+
+def _create_sample_row(db: Session, parent_sample_id: str, meta: dict) -> LimsSample:
+    """Construct + populate + flush a new lims_samples row from an
+    already-fetched meta payload. Owns the container_mode first-touch gate —
+    the backfill script reuses this so the gate is defined exactly once."""
     row = LimsSample(
         sample_id=parent_sample_id,
-        external_lims_uid=meta.get("uid"),
-        external_lims_system="senaite",
-        client_uid=_extract_uid(meta.get("ClientUID") or meta.get("Client")),
-        client_id=meta.get("ClientID"),
-        contact_uid=_extract_uid(meta.get("ContactUID") or meta.get("Contact")),
-        sample_type=_extract_uid(meta.get("SampleType")),
-        status=meta.get("review_state"),
-        # Analyte1Peptide may come back as a {uid, url} dict from
-        # /complete=true; the lims_samples.peptide_name column is a string
-        # (display label), so reduce to title/string. Falls back to None when
-        # the parent has no analytes (non-peptide samples).
-        peptide_name=_extract_label(meta.get("Analyte1Peptide")),
-        client_sample_id=meta.get("ClientSampleID"),
-        last_synced_at=datetime.utcnow(),
         # Container family iff this row is born BEFORE check-in: pre-received
         # families have no parent-as-vial-1 history, so they start as pure
         # report depositories (2026-06-10-container-parent-design.md).
         # Already-received families predate the cutover -> legacy.
         container_mode=meta.get("review_state") in _PRE_RECEIVED_STATES,
     )
+    _populate_basic_info(row, meta)
     db.add(row)
     db.flush()
     return row

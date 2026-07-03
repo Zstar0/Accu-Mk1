@@ -69,3 +69,53 @@ def test_parse_date_none_empty_garbage():
     assert _parse_senaite_date("") is None
     assert _parse_senaite_date("not-a-date") is None
     assert _parse_senaite_date({"uid": "X"}) is None  # non-string never raises
+
+
+# --- _populate_basic_info + create path -------------------------------------
+
+def test_populate_basic_info_writes_full_field_set(db):
+    row = LimsSample(sample_id="P-0134")
+    service._populate_basic_info(row, _full_meta())
+    assert row.external_lims_uid == "PARENT_UID"
+    assert row.external_lims_system == "senaite"
+    assert row.client_id == "client-8"
+    assert row.client_uid == "C_UID"
+    assert row.contact_uid == "CT_UID"
+    assert row.sample_type == "ST_UID"            # uid-extracted from dict
+    assert row.client_sample_id == "CS-001"
+    assert row.peptide_name == "BPC-157"          # label-extracted from dict
+    assert row.date_received == datetime(2026, 5, 1, 10, 23, 0)
+    assert row.date_sampled == datetime(2026, 4, 30, 6, 0, 0)  # +02:00 → UTC
+    assert row.status == "received"
+    assert row.last_synced_at is not None
+
+
+def test_populate_basic_info_never_touches_non_basic_fields(db):
+    row = LimsSample(sample_id="P-0134", container_mode=True,
+                     assignment_role="ster", in_variance_set=False)
+    service._populate_basic_info(row, _full_meta())
+    assert row.container_mode is True
+    assert row.assignment_role == "ster"
+    assert row.in_variance_set is False
+
+
+def test_ensure_sample_row_now_sets_dates_on_create(db):
+    with patch("sub_samples.service.senaite.fetch_parent_metadata",
+               return_value=_full_meta()):
+        row = ensure_sample_row(db, "P-0134")
+    assert row.date_received == datetime(2026, 5, 1, 10, 23, 0)
+    assert row.date_sampled == datetime(2026, 4, 30, 6, 0, 0)
+    assert row.client_sample_id == "CS-001"
+
+
+def test_create_gate_container_mode_still_state_gated(db):
+    # received at first touch → legacy (parent-is-vial-1), NOT container
+    with patch("sub_samples.service.senaite.fetch_parent_metadata",
+               return_value=_full_meta(review_state="received")):
+        received = ensure_sample_row(db, "P-0200")
+    assert received.container_mode is False
+    # pre-received at first touch → container family
+    with patch("sub_samples.service.senaite.fetch_parent_metadata",
+               return_value=_full_meta(uid="U2", review_state="sample_due")):
+        due = ensure_sample_row(db, "P-0201")
+    assert due.container_mode is True
