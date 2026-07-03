@@ -2,7 +2,7 @@
 title: "LimsSample as the canonical basic-info registry (SENAITE-independent sample metadata)"
 date: 2026-07-02
 revised: 2026-07-03 (rev 2 — post-review: read-surface corrected, refresh wiring added)
-status: draft
+status: approved (Handler, 2026-07-03)
 authors: [ZeroSignal, forrestp]
 ---
 
