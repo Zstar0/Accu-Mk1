@@ -50,7 +50,9 @@ Effects, one transaction:
   original promotion it sits at `to_be_verified` in SENAITE carrying the
   written result — unverified, therefore not citable. The next re-promotion
   overwrites it (`writeback_promotion` updates Result/Remarks and submits only
-  if needed). Native (`mk1://`) parents have no SENAITE line; nothing to do.
+  if needed). The SENAITE guard runs whenever the parent has a `sample_id`
+  (all parents today are SENAITE ARs — same assumption the promote writeback
+  makes) and is fail-closed, symmetric with promote itself.
 
 Guards (all → 409 with a clear message):
 
@@ -113,7 +115,6 @@ Service level (SQLite, SENAITE reader mocked):
    parent row verified; old links dead).
 5. Variance `unverify`: happy path + reason required + wrong-tier/state
    rejections.
-6. Native parent (no SENAITE): un-promote succeeds with no SENAITE call.
 
 Frontend (vitest): dialog renders per state, confirm disabled until reason,
 correct endpoint per row state, invalidation on success.
