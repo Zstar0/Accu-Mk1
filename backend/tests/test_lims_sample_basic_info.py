@@ -1,7 +1,7 @@
 """Unit tests for the canonical basic-info registry
 (2026-07-02-lims-sample-canonical-basic-info-design.md)."""
 import pytest
-from datetime import datetime
+from datetime import datetime, timedelta
 from unittest.mock import patch
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -140,3 +140,60 @@ def test_refresh_writes_full_set_not_subset(db):
     assert parent.client_id == "client-8"
     assert parent.date_received == datetime(2026, 5, 1, 10, 23, 0)
     assert parent.status == "received"
+
+
+# --- reconcile piggyback -----------------------------------------------------
+
+
+def _stale_parent(db, **kw):
+    row = LimsSample(sample_id="P-0134", external_lims_uid="PARENT_UID",
+                     client_sample_id="STALE-CSID",
+                     last_synced_at=datetime.utcnow() - timedelta(minutes=10),
+                     **kw)
+    db.add(row)
+    db.commit()
+    return row
+
+
+def test_stale_list_view_refreshes_basic_info(db):
+    _stale_parent(db)
+    with patch("sub_samples.service.senaite.fetch_parent_metadata",
+               return_value=_full_meta()) as fpm, \
+         patch("sub_samples.service.senaite.fetch_secondaries", return_value=[]):
+        parent, _subs = list_sub_samples(db, "P-0134")
+    fpm.assert_called_once()
+    assert parent.client_sample_id == "CS-001"
+    assert parent.date_received == datetime(2026, 5, 1, 10, 23, 0)
+
+
+def test_fresh_parent_skips_refresh(db):
+    row = LimsSample(sample_id="P-0134", external_lims_uid="PARENT_UID",
+                     last_synced_at=datetime.utcnow())
+    db.add(row)
+    db.commit()
+    with patch("sub_samples.service.senaite.fetch_parent_metadata") as fpm:
+        list_sub_samples(db, "P-0134")
+    fpm.assert_not_called()
+
+
+def test_refresh_failure_does_not_break_list(db):
+    _stale_parent(db)
+    with patch("sub_samples.service.senaite.fetch_parent_metadata",
+               side_effect=RuntimeError("senaite down")), \
+         patch("sub_samples.service.senaite.fetch_secondaries", return_value=[]):
+        parent, subs = list_sub_samples(db, "P-0134")   # must not raise
+    assert parent.client_sample_id == "STALE-CSID"      # stale but served
+
+
+def test_native_family_still_gets_basic_info_refresh(db, monkeypatch):
+    """Model-D guard skips the SUB-SAMPLE pull, not the parent refresh —
+    a native family's parent AR still lives in SENAITE."""
+    monkeypatch.setenv("SUBSAMPLE_NATIVE_CREATE", "1")
+    _stale_parent(db)
+    with patch("sub_samples.service.senaite.fetch_parent_metadata",
+               return_value=_full_meta()) as fpm, \
+         patch("sub_samples.service.senaite.fetch_secondaries") as fsec:
+        parent, _subs = list_sub_samples(db, "P-0134")
+    fpm.assert_called_once()          # basic info refreshed
+    fsec.assert_not_called()          # Model-D: sub-sample pull skipped
+    assert parent.client_sample_id == "CS-001"

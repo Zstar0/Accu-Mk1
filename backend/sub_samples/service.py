@@ -482,6 +482,9 @@ def list_sub_samples(db: Session, parent_sample_id: str) -> Tuple[Optional[LimsS
 def _reconcile_from_senaite(db: Session, parent: LimsSample) -> None:
     """SENAITE is canonical; insert SENAITE-only sub-samples missing locally.
 
+    Also refreshes the parent's basic info (best-effort) — the 5-minute
+    staleness trigger doubles as the registry's eventual-consistency mechanism.
+
     Never deletes local rows based on absence in SENAITE — surface to a human
     via WARN log instead.
 
@@ -492,6 +495,20 @@ def _reconcile_from_senaite(db: Session, parent: LimsSample) -> None:
     """
     if not parent.external_lims_uid:
         return
+
+    # Basic-info freshness piggyback (2026-07-02 canonical basic-info spec):
+    # this staleness path is the one existing re-sync trigger, so refresh the
+    # parent's basic info here too. Runs BEFORE the Model-D guard on purpose —
+    # native families' parent AR still lives in SENAITE (only the sub-sample
+    # set is Mk1-owned). Best-effort: a SENAITE hiccup must not take down
+    # list_sub_samples; stale-but-served beats 500.
+    try:
+        _refresh_parent_from_senaite(db, parent)
+    except Exception as e:
+        log.warning(
+            "sub_samples.basic_info_refresh_failed parent=%s err=%s",
+            parent.sample_id, e,
+        )
 
     # Model-D guard: if any vial in this family is native, OR the family is
     # empty while the native flag is on, Mk1 owns the sub-sample set. Pulling
