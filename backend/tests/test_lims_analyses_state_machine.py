@@ -36,7 +36,7 @@ def test_terminal_states():
 def test_transition_kinds_set():
     assert TRANSITION_KINDS == {
         "assign", "submit", "verify", "retract", "reject",
-        "retest", "publish", "reset", "auto", "variance_verify",
+        "retest", "publish", "reset", "auto", "variance_verify", "unverify",
     }
 
 
@@ -252,3 +252,21 @@ def test_promoted_is_a_known_nonterminal_state():
 def test_verify_not_allowed_on_vial_tier():
     with pytest.raises(TierMismatchError):
         next_state("to_be_verified", "verify", tier=TIER_VIAL)
+
+
+# ── unverify transition (vial unlock feature) ─────────────────────────────────
+
+
+def test_unverify_reverts_variance_verified_to_tbv():
+    assert next_state("variance_verified", "unverify", tier="vial") == "to_be_verified"
+
+
+def test_unverify_rejected_from_other_states():
+    for state in ("to_be_verified", "verified", "promoted", "unassigned"):
+        with pytest.raises(InvalidTransitionError):
+            next_state(state, "unverify", tier="vial")
+
+
+def test_unverify_rejected_on_parent_tier():
+    with pytest.raises(TierMismatchError):
+        next_state("variance_verified", "unverify", tier="parent")
