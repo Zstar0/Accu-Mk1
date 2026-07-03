@@ -107,6 +107,7 @@ import {
   type SubSampleAttachment,
   listWorksheets,
   getExplorerOrderById,
+  getSenaiteSamples,
   listSubSampleChromatograms,
   uploadChromatogramToSenaite,
   type SubSampleChromatogram,
@@ -2891,6 +2892,33 @@ export function SampleDetails() {
   const subSamples = subData?.sub_samples ?? []
   const subCount = subData?.parent.sub_sample_count ?? 0
 
+  // Order scope for the Manage Sub-Samples overlay's Boxing tab. Mirrors
+  // ActiveBoxesPage: fetch the order's samples in ANY review state (the
+  // search can be fuzzy, so exact-match filter below) and share its
+  // ['boxes-session-samples', key] cache. Runs only while the overlay is
+  // open; order-less samples (or zero matches / errors) derive no boxing
+  // prop, so the overlay keeps its current tab set.
+  const boxingOrderKey = data?.client_order_number ?? null
+  const { data: boxingSamplesData } = useQuery({
+    queryKey: ['boxes-session-samples', boxingOrderKey],
+    queryFn: () => getSenaiteSamples(undefined, 200, 0, boxingOrderKey!, 'order_number'),
+    enabled: wizardParent !== null && boxingOrderKey !== null,
+  })
+  const boxingSamples = (boxingSamplesData?.items ?? []).filter(
+    s => s.client_order_number === boxingOrderKey
+  )
+  // SenaiteLookupResult carries no client_id, so take it off the matched
+  // order samples — same source groupSamplesByOrder uses for its groups.
+  const wizardBoxing =
+    boxingOrderKey !== null && boxingSamples.length > 0
+      ? {
+          orderKey: boxingOrderKey,
+          orderLabel: boxingOrderKey,
+          clientId: boxingSamples[0]?.client_id ?? null,
+          sampleIds: boxingSamples.map(s => s.id),
+        }
+      : undefined
+
   // Parent linkage breadcrumb — only for sub-samples
   const parentSampleId = useMemo(() => {
     if (!sampleId) return null
@@ -5257,6 +5285,7 @@ export function SampleDetails() {
                 <ReceiveWizard
                   parent={wizardParent}
                   initialPhase="details"
+                  boxing={wizardBoxing}
                   onClose={() => {
                     setWizardParent(null)
                     void refetchSubs()
