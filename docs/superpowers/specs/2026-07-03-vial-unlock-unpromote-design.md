@@ -125,9 +125,37 @@ correct endpoint per row state, invalidation on success.
   the transitions audit table, and the dead-link idiom.
 - No un-publish of parent rows or COAs (published stays immutable; the
   existing invalidate/retest paths own that).
-- No SENAITE-side retraction — the guard ensures the SENAITE line is at most
-  `to_be_verified`, which is not citable.
+- ~~No SENAITE-side retraction — the guard ensures the SENAITE line is at most
+  `to_be_verified`, which is not citable.~~ **Superseded by UAT amendment 1:**
+  not citable, but also not field-writable — a submitted line 401s the
+  re-promote write-back, so unlock now retracts it.
 - Ships as a normal Mk1 release (backend + FE, no coordination with IS/COA).
+
+## UAT amendments (2026-07-03, devbox `unlock` stack)
+
+1. **Unlock retracts the SENAITE parent line.** The original promote SUBMITS
+   the parent AR line (`→ to_be_verified`), and SENAITE's jsonapi refuses
+   field writes (`Result`/`Remarks`) on submitted lines — so re-promote after
+   unlock failed with `HTTP 401 "Not allowed to set the field 'Remarks'"`.
+   The unpromote route now retracts the line when it sits at
+   `to_be_verified` (the editable retest sibling SENAITE spawns is what the
+   next write-back targets). Ordering, all fail-closed: local Mk1
+   preconditions (`validate_unpromote`) → SENAITE line read (guard) →
+   SENAITE retract → Mk1 mutation. Lines already at `unassigned`/`assigned`
+   need no retract; `verified`/`published` still 409.
+2. **Parent-page retract cascades to un-promote.** Retracting a parent AR
+   line via `/wizard/senaite/analyses/{uid}/transition` left the Mk1 side
+   stale (vials stuck at `promoted`, no activity-log entry). A best-effort
+   `cascade_parent_retract_to_unpromote` (same pattern as the retest/reject
+   cascades) now runs the shared `unpromote_parent_analysis` path when the
+   retracted line's canonical row is a verified promotion — vials revert,
+   audit rows land in the activity log. Non-promotion rows are untouched.
+3. **Retract no longer reports "silently rejected" on success.** The proxy
+   expected `unassigned` after retract, but SENAITE returns the ORIGINAL
+   line at `retracted` (the `unassigned` retest sibling is a separate
+   object) — every successful retract toasted "0 succeeded, 1 failed".
+   Pre-existing bug, exposed by this UAT; `EXPECTED_POST_STATES["retract"]`
+   is now `"retracted"` in both the proxy and the write-back module.
 
 ## ISO 17025 alignment
 

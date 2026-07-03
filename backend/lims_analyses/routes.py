@@ -396,6 +396,16 @@ def unpromote(
     except service.NotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
+    # All local preconditions BEFORE any SENAITE call: a doomed request
+    # (blank reason, wrong tier/state, no links) must never retract the
+    # parent AR line first.
+    try:
+        service.validate_unpromote(
+            db, parent_analysis_id=req.parent_analysis_id, reason=req.reason
+        )
+    except Exception as e:
+        raise _handle_service_error(e)
+
     parent_sample = (
         db.get(LimsSample, parent_row.lims_sample_pk)
         if parent_row.lims_sample_pk is not None else None
@@ -427,6 +437,23 @@ def unpromote(
                    f"{parent_sample_id} is {line['review_state']} in "
                    f"SENAITE — retract it in SENAITE first, then unlock",
         )
+
+    # The original promote SUBMITTED this line (→ to_be_verified) and SENAITE
+    # refuses field writes on submitted lines, so a re-promote after unlock
+    # would 401 on the Result/Remarks update. Retract it now — the editable
+    # retest sibling SENAITE spawns is what the next promote targets. Still
+    # BEFORE any Mk1 mutation and fail-closed, same as the guard above.
+    # Lines already at unassigned/assigned (e.g. manually retracted earlier)
+    # are field-writable and need nothing.
+    if line["review_state"] == "to_be_verified":
+        try:
+            senaite_writeback.retract_analysis_line(line["uid"])
+        except SenaiteWritebackError as e:
+            raise HTTPException(
+                status_code=409,
+                detail=f"SENAITE parent line could not be retracted — unlock "
+                       f"blocked (fail-closed): {e}",
+            )
 
     try:
         parent, reverted = service.unpromote_parent_analysis(

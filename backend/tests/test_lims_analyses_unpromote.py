@@ -118,6 +118,59 @@ def test_unpromote_then_repromote_round_trip(db):
     assert new_parent.id != parent_row.id
 
 
+# ─── SENAITE-initiated retract cascade (parent page / SENAITE UI proxy) ──────
+
+
+def test_retract_cascade_unpromotes_group(db):
+    """Retracting the parent AR line in SENAITE un-promotes the Mk1 side:
+    canonical row retracted+cleared, sources workable, activity log written."""
+    parent, parent_row, sources = _seed_promoted_group(db, n_sources=2)
+    reverted = service.cascade_parent_retract_to_unpromote(
+        db, parent_sample_id=parent.sample_id, keyword="PURITY-HPLC", user_id=7)
+    assert sorted(reverted) == sorted(a.id for a in sources)
+    db.refresh(parent_row)
+    assert parent_row.review_state == "retracted"
+    assert parent_row.result_value is None
+    for a in sources:
+        db.refresh(a)
+        assert a.review_state == "to_be_verified"
+    audit = db.execute(select(LimsAnalysisTransition).where(
+        LimsAnalysisTransition.analysis_id == parent_row.id,
+        LimsAnalysisTransition.transition_kind == "unpromote")).scalars().all()
+    assert len(audit) == 1 and "retracted in SENAITE" in audit[0].reason
+
+
+def test_retract_cascade_noop_on_unknown_sample(db):
+    assert service.cascade_parent_retract_to_unpromote(
+        db, parent_sample_id="P-9999", keyword="PURITY-HPLC", user_id=1) == []
+
+
+def test_retract_cascade_noop_on_unknown_keyword(db):
+    parent, parent_row, _ = _seed_promoted_group(db, 1)
+    assert service.cascade_parent_retract_to_unpromote(
+        db, parent_sample_id=parent.sample_id, keyword="NOPE", user_id=1) == []
+    db.refresh(parent_row)
+    assert parent_row.review_state == "verified"
+
+
+def test_retract_cascade_noop_when_not_a_promotion(db):
+    """A verified parent-tier row WITHOUT promotion links (legacy/manual value)
+    must be left alone — the cascade only unlocks promotions."""
+    svc = AnalysisService(title="pH", keyword="PH")
+    db.add(svc); db.flush()
+    parent = LimsSample(sample_id="P-0002", external_lims_uid="uid-P-0002")
+    db.add(parent); db.flush()
+    row = LimsAnalysis(lims_sample_pk=parent.id, analysis_service_id=svc.id,
+                       keyword="PH", title="pH",
+                       review_state="verified", result_value="7.1")
+    db.add(row); db.commit()
+    assert service.cascade_parent_retract_to_unpromote(
+        db, parent_sample_id="P-0002", keyword="PH", user_id=1) == []
+    db.refresh(row)
+    assert row.review_state == "verified"
+    assert row.result_value == "7.1"
+
+
 # ─── Route-level tests ────────────────────────────────────────────────────────
 from unittest.mock import MagicMock, patch
 from fastapi.testclient import TestClient
@@ -156,18 +209,60 @@ def _line(state):
     return {"uid": "senaite-uid-1", "review_state": state}
 
 
-def test_unpromote_route_happy_path(route_client):
+def test_unpromote_route_happy_path_retracts_senaite_line(route_client):
+    """The original promote SUBMITTED the SENAITE line (to_be_verified) —
+    unlock must retract it so a later re-promote can write Result/Remarks
+    (SENAITE refuses field writes on submitted lines: UAT 2026-07-03)."""
     db = route_client._test_session
     _, parent_row, sources = _seed_promoted_group(db, 1)
     with patch("lims_analyses.routes.senaite_writeback.find_parent_analysis_line",
-               return_value=_line("to_be_verified")):
+               return_value=_line("to_be_verified")), \
+         patch("lims_analyses.routes.senaite_writeback.retract_analysis_line",
+               return_value="retracted") as mock_retract:
         resp = route_client.post("/api/lims-analyses/unpromote",
                                  json={"parent_analysis_id": parent_row.id,
                                        "reason": "swap fix"})
     assert resp.status_code == 200, resp.text
+    mock_retract.assert_called_once_with("senaite-uid-1")
     body = resp.json()
     assert body["parent"]["review_state"] == "retracted"
     assert body["reverted_source_ids"] == [sources[0].id]
+
+
+def test_unpromote_route_skips_retract_when_line_editable(route_client):
+    """A line someone already retracted manually sits at unassigned/assigned —
+    field writes work there, so no retract is issued."""
+    db = route_client._test_session
+    _, parent_row, _ = _seed_promoted_group(db, 1)
+    with patch("lims_analyses.routes.senaite_writeback.find_parent_analysis_line",
+               return_value=_line("unassigned")), \
+         patch("lims_analyses.routes.senaite_writeback.retract_analysis_line") as mock_retract:
+        resp = route_client.post("/api/lims-analyses/unpromote",
+                                 json={"parent_analysis_id": parent_row.id,
+                                       "reason": "swap fix"})
+    assert resp.status_code == 200, resp.text
+    mock_retract.assert_not_called()
+
+
+def test_unpromote_route_retract_failure_fail_closed(route_client):
+    """SENAITE retract fails → 409, and NO Mk1 mutation happened."""
+    from lims_analyses.senaite_writeback import SenaiteWritebackError
+    db = route_client._test_session
+    _, parent_row, sources = _seed_promoted_group(db, 1)
+    with patch("lims_analyses.routes.senaite_writeback.find_parent_analysis_line",
+               return_value=_line("to_be_verified")), \
+         patch("lims_analyses.routes.senaite_writeback.retract_analysis_line",
+               side_effect=SenaiteWritebackError("retract refused")):
+        resp = route_client.post("/api/lims-analyses/unpromote",
+                                 json={"parent_analysis_id": parent_row.id,
+                                       "reason": "swap fix"})
+    assert resp.status_code == 409
+    assert "retract" in resp.json()["detail"].lower()
+    db.refresh(parent_row)
+    assert parent_row.review_state == "verified"      # nothing mutated
+    for a in sources:
+        db.refresh(a)
+        assert a.review_state == "promoted"
 
 
 def test_unpromote_route_senaite_verified_blocks(route_client):

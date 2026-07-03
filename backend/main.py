@@ -13577,7 +13577,12 @@ class AnalysisTransitionRequest(BaseModel):
 EXPECTED_POST_STATES: dict[str, str] = {
     "submit": "to_be_verified",
     "verify": "verified",
-    "retract": "unassigned",
+    # retract: the update response carries the ORIGINAL line, which lands in
+    # 'retracted' — the editable retest sibling SENAITE spawns is a separate
+    # object (it starts 'unassigned', but never comes back on this response).
+    # Expecting 'unassigned' here made every successful retract report
+    # "silently rejected" (UAT 2026-07-03).
+    "retract": "retracted",
     "reject": "rejected",
     "retest": "verified",
 }
@@ -13653,12 +13658,15 @@ async def transition_analysis(
                     keyword=keyword,
                 )
 
-            # ── Parent retest/reject cascade (best-effort) ───────────────────
+            # ── Parent retest/reject/retract cascade (best-effort) ──────────
             # retest: find the Mk1 parent-tier row and cascade the retest to
             # all source vial-tier analyses so the bench sees the work requests.
             # reject: the service was removed from the offering — reject the
             # UNPOPULATED vial-tier mirror rows of that keyword across the
             # family (rows with results are never touched).
+            # retract: if the retracted line's Mk1 canonical row is a verified
+            # promotion, un-promote it (sources back to to_be_verified, audit
+            # trail written) so the vials don't sit stale at 'promoted'.
             #
             # sample_id resolution:
             #   1. Try item["getRequestID"] — available when the update endpoint
@@ -13667,7 +13675,7 @@ async def transition_analysis(
             #      getRequestID from there (one extra GET, always reliable).
             #   3. If still absent, log a warning and skip — the cascade is
             #      best-effort and must not fail the SENAITE transition.
-            if req.transition in ("retest", "reject"):
+            if req.transition in ("retest", "reject", "retract"):
                 import logging as _logging
                 _cascade_logger = _logging.getLogger(__name__)
                 _cascade_tag = f"cascade_parent_{req.transition}"
@@ -13675,6 +13683,7 @@ async def transition_analysis(
                     from lims_analyses.service import (
                         cascade_parent_reject_to_vials,
                         cascade_parent_retest_to_sources,
+                        cascade_parent_retract_to_unpromote,
                     )
 
                     _parent_sample_id: Optional[str] = (
@@ -13712,6 +13721,14 @@ async def transition_analysis(
                                 user_id=_user_id,
                             )
                             _verb = "created vial retest rows"
+                        elif req.transition == "retract":
+                            _row_ids = cascade_parent_retract_to_unpromote(
+                                db,
+                                parent_sample_id=_parent_sample_id,
+                                keyword=keyword,
+                                user_id=_user_id,
+                            )
+                            _verb = "un-promoted source vial rows"
                         else:
                             _row_ids = cascade_parent_reject_to_vials(
                                 db,

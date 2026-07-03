@@ -1511,21 +1511,18 @@ def force_retract_analysis(
     )
 
 
-def unpromote_parent_analysis(
+def validate_unpromote(
     db: Session, *, parent_analysis_id: int, reason: str,
-    user_id: Optional[int],
-) -> Tuple[LimsAnalysis, List[int]]:
-    """Unlock a promotion: retract the parent-tier canonical row and revert
-    EVERY source vial in its promotion group to to_be_verified, so the normal
-    retest / re-verify / re-promote tools apply (vial unlock spec 2026-07-03).
+) -> Tuple[LimsAnalysis, List[LimsAnalysis]]:
+    """Run every unpromote precondition WITHOUT mutating anything.
 
-    Non-destructive counterpart to force_retract_analysis: promotion links are
-    KEPT (consumers already ignore links whose parent row is retracted), and
-    sources come back workable instead of rejected. The SENAITE-side guard
-    (parent AR line not verified/published) lives in the route — this function
-    only owns Mk1 state.
+    The route calls this BEFORE the SENAITE-side retract so a doomed request
+    (blank reason, wrong tier/state, no links, mixed group) never mutates the
+    parent AR line first; unpromote_parent_analysis calls it again as its own
+    guard, so there is exactly one source of truth for the rules.
 
-    Returns (parent_row, reverted_source_ids).
+    Returns (parent_row, source_rows). Raises BadRequestError /
+    InvalidTransitionError / NotFoundError exactly as the mutation would.
     """
     from models import LimsAnalysisPromotion
 
@@ -1571,6 +1568,28 @@ def unpromote_parent_analysis(
                 f"promotion group cannot be unlocked partially"
             ),
         )
+    return parent_row, source_rows
+
+
+def unpromote_parent_analysis(
+    db: Session, *, parent_analysis_id: int, reason: str,
+    user_id: Optional[int],
+) -> Tuple[LimsAnalysis, List[int]]:
+    """Unlock a promotion: retract the parent-tier canonical row and revert
+    EVERY source vial in its promotion group to to_be_verified, so the normal
+    retest / re-verify / re-promote tools apply (vial unlock spec 2026-07-03).
+
+    Non-destructive counterpart to force_retract_analysis: promotion links are
+    KEPT (consumers already ignore links whose parent row is retracted), and
+    sources come back workable instead of rejected. The SENAITE-side guard
+    (parent AR line not verified/published, retract-if-submitted) lives in the
+    route — this function only owns Mk1 state.
+
+    Returns (parent_row, reverted_source_ids).
+    """
+    parent_row, source_rows = validate_unpromote(
+        db, parent_analysis_id=parent_analysis_id, reason=reason
+    )
 
     now = datetime.utcnow()
     parent_row.review_state = "retracted"
@@ -1603,6 +1622,57 @@ def unpromote_parent_analysis(
     db.commit()
     db.refresh(parent_row)
     return parent_row, reverted
+
+
+def cascade_parent_retract_to_unpromote(
+    db: Session, *, parent_sample_id: str, keyword: str, user_id: Optional[int],
+) -> List[int]:
+    """When a PARENT AR analysis line is retracted in SENAITE (parent page /
+    SENAITE UI proxy), cascade into Mk1: if the keyword's active parent-tier
+    canonical row is a verified promotion, un-promote it so the source vials
+    come back workable and the activity log records the unlock — instead of
+    the vials sitting stale at 'promoted' (UAT 2026-07-03).
+
+    Resolution mirrors cascade_parent_retest_to_sources; the state work is
+    delegated to unpromote_parent_analysis so route-initiated unlocks and
+    SENAITE-initiated retracts share one audited code path.
+
+    Returns the reverted source ids ([] when any link in the chain is missing
+    or the row isn't an unpromotable promotion). Never raises — caller wraps
+    the whole cascade best-effort.
+    """
+    from models import LimsSample
+
+    parent_sample = db.execute(
+        select(LimsSample).where(LimsSample.sample_id == parent_sample_id)
+    ).scalar_one_or_none()
+    if parent_sample is None:
+        return []
+
+    parent_analysis = db.execute(
+        select(LimsAnalysis).where(
+            LimsAnalysis.lims_sample_pk == parent_sample.id,
+            LimsAnalysis.lims_sub_sample_pk.is_(None),
+            LimsAnalysis.keyword == keyword,
+            LimsAnalysis.retest_of_id.is_(None),
+            LimsAnalysis.review_state.not_in(("retracted", "rejected")),
+        )
+    ).scalars().first()
+    if parent_analysis is None:
+        return []
+
+    try:
+        _, reverted = unpromote_parent_analysis(
+            db, parent_analysis_id=parent_analysis.id,
+            reason=f"parent AR line {keyword} retracted in SENAITE",
+            user_id=user_id,
+        )
+        return reverted
+    except Exception:
+        # Not a promotion (no links), not verified, mixed group, … — the
+        # cascade is best-effort and must never fail the SENAITE transition.
+        db.rollback()
+        return []
 
 
 def classify_slot_replacement_impact(

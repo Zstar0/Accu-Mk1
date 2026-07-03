@@ -71,7 +71,7 @@ export function UnlockDialog({
           <DialogTitle>Unlock {analysis.title}</DialogTitle>
           <DialogDescription>
             {isPromoted
-              ? 'Retracts the promoted parent value and returns every vial in this promotion group to To Be Verified. Retest / re-verify / re-promote as needed afterwards.'
+              ? 'Retracts the promoted parent value — including its SENAITE AR line — and returns every vial in this promotion group to To Be Verified. Retest / re-verify / re-promote as needed afterwards.'
               : 'Returns this variance replicate to To Be Verified so it can be corrected and re-verified.'}
           </DialogDescription>
         </DialogHeader>
