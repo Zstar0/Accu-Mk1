@@ -86,7 +86,7 @@ async def _get_site_id() -> str:
     if _site_id_cache:
         return _site_id_cache
 
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, ) as client:
         if SHAREPOINT_SITE_PATH:
             # Named site: /sites/{hostname}:/{relative-path}
             url = f"{GRAPH_BASE_URL}/sites/{SHAREPOINT_HOSTNAME}:/{SHAREPOINT_SITE_PATH}"
@@ -112,7 +112,7 @@ async def _get_drive_id() -> str:
         return _drive_id_cache
 
     site_id = await _get_site_id()
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, ) as client:
         url = f"{GRAPH_BASE_URL}/sites/{site_id}/drives"
         resp = await client.get(url, headers=_headers())
         if resp.status_code == 401:
@@ -170,7 +170,7 @@ async def _list_folder_at_root(root_path: str, path: str = "") -> list[dict]:
 
     items = []
     retried_auth = False
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, timeout=30.0) as client:
         while url:
             resp = await client.get(url, headers=_headers(), params=params)
             if resp.status_code == 401 and not retried_auth:
@@ -227,7 +227,7 @@ async def list_folder_by_id(folder_id: str) -> list[dict]:
     items = []
     retried_auth = False
     auth_headers = _headers()
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, timeout=30.0) as client:
         while url:
             resp = await client.get(url, headers=auth_headers, params=params)
             if resp.status_code == 401 and not retried_auth:
@@ -332,7 +332,7 @@ async def download_file(item_id: str) -> tuple[bytes, str]:
     drive_id = await _get_drive_id()
     max_retries = 3
 
-    async with httpx.AsyncClient(follow_redirects=True) as client:
+    async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, follow_redirects=True) as client:
         # Get file metadata first for the filename
         meta_url = f"{GRAPH_BASE_URL}/drives/{drive_id}/items/{item_id}"
         meta_resp = await client.get(meta_url, headers=_headers())
@@ -367,7 +367,7 @@ async def download_file_by_path(path: str) -> tuple[bytes, str]:
     drive_id = await _get_drive_id()
     full_path = f"{SHAREPOINT_PEPTIDES_PATH}/{path}"
 
-    async with httpx.AsyncClient(follow_redirects=True) as client:
+    async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, follow_redirects=True) as client:
         from urllib.parse import quote
         encoded_path = quote(full_path, safe="/")
         url = f"{GRAPH_BASE_URL}/drives/{drive_id}/root:/{encoded_path}:/content"
