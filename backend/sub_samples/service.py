@@ -150,14 +150,12 @@ def _parse_senaite_date(value) -> Optional[datetime]:
 
 
 def _refresh_parent_from_senaite(db: Session, parent: LimsSample) -> None:
-    """Refresh the cached lims_samples row from SENAITE in place."""
+    """Refresh the cached lims_samples row from SENAITE in place. Writes the
+    FULL basic-info set via _populate_basic_info (it used to write a 5-field
+    subset, which let client_sample_id / peptide_name / client_id / dates go
+    permanently stale)."""
     meta = senaite.fetch_parent_metadata(parent.sample_id)
-    parent.external_lims_uid = meta.get("uid")
-    parent.client_uid = _extract_uid(meta.get("ClientUID") or meta.get("Client"))
-    parent.contact_uid = _extract_uid(meta.get("ContactUID") or meta.get("Contact"))
-    parent.sample_type = _extract_uid(meta.get("SampleType"))
-    parent.status = meta.get("review_state")
-    parent.last_synced_at = datetime.utcnow()
+    _populate_basic_info(parent, meta)
     db.flush()
 
 

@@ -119,3 +119,24 @@ def test_create_gate_container_mode_still_state_gated(db):
                return_value=_full_meta(uid="U2", review_state="sample_due")):
         due = ensure_sample_row(db, "P-0201")
     assert due.container_mode is True
+
+
+# --- full-field refresh ------------------------------------------------------
+
+def test_refresh_writes_full_set_not_subset(db):
+    """Rev-1 gap: refresh only wrote 5 fields, letting client_sample_id,
+    peptide_name, client_id and the dates go stale forever."""
+    db.add(LimsSample(sample_id="P-0134", external_lims_uid="OLD_UID",
+                      client_sample_id="STALE-CSID", peptide_name="Old Peptide",
+                      client_id="old-client"))
+    db.commit()
+    parent = db.query(LimsSample).filter_by(sample_id="P-0134").one()
+    with patch("sub_samples.service.senaite.fetch_parent_metadata",
+               return_value=_full_meta()):
+        service._refresh_parent_from_senaite(db, parent)
+    assert parent.external_lims_uid == "PARENT_UID"
+    assert parent.client_sample_id == "CS-001"      # the real drift source
+    assert parent.peptide_name == "BPC-157"
+    assert parent.client_id == "client-8"
+    assert parent.date_received == datetime(2026, 5, 1, 10, 23, 0)
+    assert parent.status == "received"
