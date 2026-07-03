@@ -61,6 +61,10 @@ def test_unpromote_reverts_group_and_retracts_parent(db):
         db, parent_analysis_id=parent_row.id, reason="purity/quantity swap", user_id=7)
     assert got_parent.review_state == "retracted"
     assert got_parent.verified_at is None
+    # Stale promoted figure cleared — the display path renders retracted
+    # parents (filters by retest_of_id, not state), so the value must go.
+    assert got_parent.result_value is None
+    assert got_parent.result_unit is None
     assert sorted(reverted) == sorted(a.id for a in sources)
     for a in sources:
         db.refresh(a)

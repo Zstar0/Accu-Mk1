@@ -1574,6 +1574,13 @@ def unpromote_parent_analysis(
 
     now = datetime.utcnow()
     parent_row.review_state = "retracted"
+    # Clear the promoted figure too: the display serialization
+    # (list_analyses_for_host) filters by retest_of_id, NOT state, so a
+    # retracted parent still renders — leaving the stale value visible.
+    # The reverted SOURCE vial rows keep their values (they're workable again).
+    # Same hazard/fix as unpromote_on_retest above.
+    parent_row.result_value = None
+    parent_row.result_unit = None
     parent_row.verified_at = None
     parent_row.updated_at = now
     db.add(LimsAnalysisTransition(
