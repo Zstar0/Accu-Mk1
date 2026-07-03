@@ -39,7 +39,7 @@ from sqlalchemy.exc import IntegrityError
 
 from database import get_db, init_db
 from sla_engine import BusinessSchedule, compute_business_minutes, sla_status_dict
-from models import AuditLog, Settings, Job, Sample, Result, Instrument, AnalysisService, HplcMethod, Peptide, PeptideAnalyte, CalibrationCurve, HPLCAnalysis, User, SharePointFileCache, WizardSession, WizardMeasurement, peptide_methods, blend_components, ServiceGroup, service_group_members, SamplePriority, Worksheet, WorksheetItem, instrument_methods, SampleAnalyteAlias, SlaTier, SlaPriorityTier, BusinessHoursConfig, LabHoliday, LimsSample, LimsSubSample
+from models import AuditLog, Settings, Job, Sample, Result, Instrument, AnalysisService, HplcMethod, Peptide, PeptideAnalyte, CalibrationCurve, HPLCAnalysis, User, SharePointFileCache, WizardSession, WizardMeasurement, peptide_methods, blend_components, ServiceGroup, service_group_members, SamplePriority, Worksheet, WorksheetItem, instrument_methods, SampleAnalyteAlias, SlaTier, SlaPriorityTier, BusinessHoursConfig, LabHoliday, LimsSample, LimsSubSample, FlagType
 from auth import (
     get_current_user, require_admin, create_access_token,
     verify_password, get_password_hash, seed_admin_user,
@@ -77,6 +77,8 @@ from lims_analyses.routes import router as lims_analyses_router
 from families.routes import router as families_router  # Phase 5b
 from boxes.routes import router as boxes_router
 from packaging_photos.routes import router as packaging_photos_router
+from flags.routes import router as flags_router
+from slack_notify.routes import router as slack_prefs_router
 
 import logging
 
@@ -322,6 +324,15 @@ def seed_default_settings(db: Session):
 async def lifespan(app: FastAPI):
     """Initialize database on startup and seed defaults."""
     init_db()
+    from flags import seams as _flag_seams
+    _flag_seams.register_mk1_entities()
+    import asyncio as _asyncio
+    from flags import bus as _flag_bus
+    _flag_bus.BUS.set_loop(_asyncio.get_running_loop())
+    _flag_seams.set_event_sink(_flag_bus.SSEEventSink(_flag_bus.BUS))
+    # Slack DM notifications (spec 2026-07-02) — dormant without the token.
+    from slack_notify.notifier import maybe_start as _slack_maybe_start
+    _slack_notifier_task = _slack_maybe_start(_flag_bus.BUS)
     # Seed default settings and admin user
     from database import SessionLocal
     db = SessionLocal()
@@ -396,6 +407,8 @@ app.include_router(lims_analyses_router)
 app.include_router(families_router)
 app.include_router(boxes_router)
 app.include_router(packaging_photos_router)
+app.include_router(flags_router)
+app.include_router(slack_prefs_router)
 
 # --- Endpoints ---
 
@@ -489,7 +502,7 @@ async def set_senaite_credentials(
     if not SENAITE_URL:
         raise HTTPException(400, "Senaite integration is not configured")
     try:
-        async with httpx.AsyncClient(timeout=SENAITE_TIMEOUT) as client:
+        async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, timeout=SENAITE_TIMEOUT) as client:
             auth_url = f"{SENAITE_URL}/senaite/@@API/senaite/v1/auth"
             print(f"[INFO] Validating Senaite credentials for {current_user.email}")
             resp = await client.get(
@@ -2867,7 +2880,9 @@ def _apply_service_result_type(svc, item: dict) -> None:
 
 @app.post("/analysis-services/sync")
 async def sync_analysis_services(db: Session = Depends(get_db), _current_user=Depends(get_current_user)):
-    """Sync analysis services from Senaite. Adds new services, does not overwrite existing."""
+    """Sync analysis services from Senaite. Adds new services and reconciles a
+    service SENAITE recreated under a new id/UID by adopting the existing row;
+    never overwrites local result-type edits."""
     import httpx as _httpx
 
     if not SENAITE_URL:
@@ -2904,6 +2919,9 @@ async def sync_analysis_services(db: Session = Depends(get_db), _current_user=De
 
     created = 0
     updated = 0
+    # senaite_ids present in THIS pull — used to spot orphaned Mk1 rows whose
+    # SENAITE object was deleted/recreated, so we adopt instead of cloning.
+    current_ids = {it.get("id") for it in items if it.get("id")}
     for item in items:
         senaite_id = item.get("id")
         if not senaite_id:
@@ -2941,6 +2959,36 @@ async def sync_analysis_services(db: Session = Depends(get_db), _current_user=De
                 existing.category = category
                 updated += 1
             _apply_service_result_type(existing, item)  # local-wins seed
+            continue
+
+        # SENAITE can delete+recreate a service under a new id/UID (same keyword).
+        # Matching only by senaite_id would clone the keyword and orphan the old
+        # row (the TB500 promote-502 incident). Adopt an orphaned row — same
+        # keyword, stale senaite_id absent from this pull — preserving its id and
+        # all lims_analyses / peptide_analytes references. .first() tolerates any
+        # pre-existing duplicates.
+        kw = item.get("getKeyword") or item.get("Keyword")
+        orphan = None
+        if kw and current_ids:
+            orphan = db.execute(
+                select(AnalysisService)
+                .where(
+                    AnalysisService.keyword == kw,
+                    AnalysisService.senaite_id.isnot(None),
+                    AnalysisService.senaite_id.not_in(current_ids),
+                )
+                .order_by(AnalysisService.id)
+            ).scalars().first()
+        if orphan is not None:
+            orphan.senaite_id = senaite_id
+            orphan.senaite_uid = item.get("uid")
+            orphan.title = title
+            if category:
+                orphan.category = category
+            if methods_list:
+                orphan.methods = methods_list
+            _apply_service_result_type(orphan, item)
+            updated += 1
             continue
 
         svc = AnalysisService(
@@ -4334,7 +4382,7 @@ async def render_chromatogram_image(
 
     render_url = f"{INTEGRATION_SERVICE_URL}/v1/chromatogram/render"
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, timeout=30.0) as client:
             render_resp = await client.post(
                 render_url,
                 json={
@@ -4562,7 +4610,7 @@ async def upload_chromatogram_to_senaite(
 
     filename = f"chromatogram_{analysis.sample_id_label}.csv"
     try:
-        async with httpx.AsyncClient(
+        async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, 
             timeout=httpx.Timeout(60.0, connect=10.0),
             auth=_get_senaite_auth(current_user),
             follow_redirects=True,
@@ -7454,7 +7502,7 @@ async def get_explorer_orders(
         url = f"{os.environ.get('INTEGRATION_SERVICE_URL', 'http://host.docker.internal:8000')}/explorer/orders"
         api_key = os.environ.get("ACCU_MK1_API_KEY", "")
         try:
-            async with _httpx.AsyncClient(timeout=15.0) as client:
+            async with _httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, timeout=15.0) as client:
                 resp = await client.get(url, params=params, headers={"X-API-Key": api_key})
                 resp.raise_for_status()
                 return resp.json()
@@ -7504,7 +7552,7 @@ async def get_explorer_customers(
     url = f"{os.environ.get('INTEGRATION_SERVICE_URL', 'http://host.docker.internal:8000')}/explorer/customers"
     api_key = os.environ.get("ACCU_MK1_API_KEY", "")
     try:
-        async with _httpx.AsyncClient(timeout=15.0) as client:
+        async with _httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, timeout=15.0) as client:
             resp = await client.get(url, params=params, headers={"X-API-Key": api_key})
             resp.raise_for_status()
             return resp.json()
@@ -7525,7 +7573,7 @@ async def get_explorer_customer(customer_id: int, _current_user=Depends(get_curr
     url = f"{os.environ.get('INTEGRATION_SERVICE_URL', 'http://host.docker.internal:8000')}/explorer/customers/{customer_id}"
     api_key = os.environ.get("ACCU_MK1_API_KEY", "")
     try:
-        async with _httpx.AsyncClient(timeout=15.0) as client:
+        async with _httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, timeout=15.0) as client:
             resp = await client.get(url, headers={"X-API-Key": api_key})
             if resp.status_code == 404:
                 raise HTTPException(status_code=404, detail=f"Customer {customer_id} not found")
@@ -7544,7 +7592,7 @@ async def get_explorer_order(order_id: str, _current_user=Depends(get_current_us
     url = f"{os.environ.get('INTEGRATION_SERVICE_URL', 'http://host.docker.internal:8000')}/explorer/orders/{order_id}"
     api_key = os.environ.get("ACCU_MK1_API_KEY", "")
     try:
-        async with _httpx.AsyncClient(timeout=15.0) as client:
+        async with _httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, timeout=15.0) as client:
             resp = await client.get(url, headers={"X-API-Key": api_key})
             if resp.status_code == 404:
                 raise HTTPException(status_code=404, detail=f"Order {order_id} not found")
@@ -8183,6 +8231,7 @@ async def reports_resync(
 # integration-service as the single source of truth for query logic.
 
 import httpx
+from httpx_shared import HTTPX_SSL_CONTEXT
 
 INTEGRATION_SERVICE_URL = os.environ.get("INTEGRATION_SERVICE_URL", "http://host.docker.internal:8000")
 INTEGRATION_SERVICE_API_KEY = os.environ.get("ACCU_MK1_API_KEY", "")
@@ -8216,7 +8265,7 @@ async def _notify_worksheet_assigned(sample_id: str) -> None:
     """Fire-and-forget: tell Integration Service a sample was added to a worksheet."""
     try:
         url = f"{INTEGRATION_SERVICE_URL}/explorer/worksheet-assigned"
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, timeout=10.0) as client:
             resp = await client.post(
                 url,
                 json={"sample_id": sample_id},
@@ -8231,7 +8280,7 @@ async def _notify_worksheet_assigned(sample_id: str) -> None:
 async def _proxy_explorer_get(path: str) -> list[dict]:
     """Proxy a GET request to the Integration Service explorer API."""
     url = f"{INTEGRATION_SERVICE_URL}/explorer{path}"
-    async with httpx.AsyncClient(timeout=15.0) as client:
+    async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, timeout=15.0) as client:
         resp = await client.get(url, headers={"X-API-Key": INTEGRATION_SERVICE_API_KEY})
         resp.raise_for_status()
         return resp.json()
@@ -8455,7 +8504,7 @@ async def add_sample_analysis(
     # Non-native: proxy to Integration Service
     try:
         url = f"{INTEGRATION_SERVICE_URL}/explorer/samples/{sample_id}/analyses"
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, timeout=30.0) as client:
             resp = await client.post(url, json=body, headers={"X-API-Key": INTEGRATION_SERVICE_API_KEY})
             resp.raise_for_status()
             result = resp.json()
@@ -8583,7 +8632,7 @@ async def remove_sample_analysis(
     # Non-native: proxy to Integration Service
     try:
         url = f"{INTEGRATION_SERVICE_URL}/explorer/samples/{sample_id}/analyses/{keyword}"
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, timeout=30.0) as client:
             resp = await client.delete(url, headers={"X-API-Key": INTEGRATION_SERVICE_API_KEY})
             resp.raise_for_status()
             result = resp.json()
@@ -8782,7 +8831,7 @@ async def replace_analyte(
 
     # ── 5. swap the parent AR identity service (direct IS proxy) ──────────────
     identity = {"removed": None, "added": None}
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, timeout=30.0) as client:
         if old_id_kw:
             try:
                 r = await client.delete(
@@ -8901,7 +8950,7 @@ async def update_additional_coa_config(
     """Update additional COA config branding (proxied to Integration Service)."""
     try:
         url = f"{INTEGRATION_SERVICE_URL}/explorer/additional-coas/{config_id}"
-        async with httpx.AsyncClient(timeout=15.0) as client:
+        async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, timeout=15.0) as client:
             resp = await client.patch(
                 url,
                 json=body.model_dump(exclude_unset=True),
@@ -8936,7 +8985,7 @@ async def get_all_coa_generations(
         params["limit"] = str(limit)
         params["offset"] = str(offset)
         url = f"{INTEGRATION_SERVICE_URL}/explorer/coa-generations"
-        async with httpx.AsyncClient(timeout=15.0) as client:
+        async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, timeout=15.0) as client:
             resp = await client.get(
                 url,
                 params=params,
@@ -8967,7 +9016,7 @@ async def get_coa_signed_url(
     """Get a presigned download URL for a COA PDF (proxied to Integration Service)."""
     try:
         url = f"{INTEGRATION_SERVICE_URL}/explorer/signed-url/coa"
-        async with httpx.AsyncClient(timeout=15.0) as client:
+        async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, timeout=15.0) as client:
             resp = await client.post(
                 url,
                 json=body.model_dump(),
@@ -8989,7 +9038,7 @@ async def get_chromatogram_signed_url(
     """Get a presigned download URL for a chromatogram image (proxied to Integration Service)."""
     try:
         url = f"{INTEGRATION_SERVICE_URL}/explorer/signed-url/chromatogram"
-        async with httpx.AsyncClient(timeout=15.0) as client:
+        async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, timeout=15.0) as client:
             resp = await client.post(
                 url,
                 json=body.model_dump(),
@@ -9014,7 +9063,7 @@ async def get_chromatogram_lttb(
         raise HTTPException(status_code=400, detail="Resolution must be '5k' or '10k'")
     try:
         url = f"{INTEGRATION_SERVICE_URL}/explorer/chromatogram-lttb/{verification_code}/{resolution}"
-        async with httpx.AsyncClient(timeout=15.0) as client:
+        async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, timeout=15.0) as client:
             resp = await client.get(url, headers={"X-API-Key": INTEGRATION_SERVICE_API_KEY})
             resp.raise_for_status()
             return Response(
@@ -9202,7 +9251,7 @@ async def _parent_attachment_kinds(sample_id: str, auth) -> Optional[dict]:
     """
     import logging as _logging
     try:
-        async with httpx.AsyncClient(
+        async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, 
             timeout=httpx.Timeout(30.0, connect=5.0), auth=auth, follow_redirects=True,
         ) as client:
             resp = await client.get(
@@ -9272,7 +9321,7 @@ async def _maybe_emit_regular_coa_child(db, sample_id, parent_row, primary_data)
     if include_remarks and (parent_row.customer_remarks or "").strip():
         body["lab_remarks"] = parent_row.customer_remarks.strip()
     try:
-        async with httpx.AsyncClient(timeout=120.0) as client:
+        async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, timeout=120.0) as client:
             resp = await client.post(f"{COA_BUILDER_URL}/process/{sample_id}", json=body)
             resp.raise_for_status()
     except Exception as e:  # noqa: BLE001 — best-effort; must not fail the primary
@@ -9468,7 +9517,7 @@ async def generate_sample_coa(
             alias_body.update(process_variance_fields(db, _parent_row))
 
     try:
-        async with httpx.AsyncClient(timeout=120.0) as client:
+        async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, timeout=120.0) as client:
             resp = await client.post(
                 f"{COA_BUILDER_URL}/process/{sample_id}",
                 json=alias_body if alias_body else None,
@@ -9507,7 +9556,7 @@ async def generate_sample_coa(
             # (404/401 without raising), so check status and retry once with
             # the service account.
             for attach_auth in (_get_senaite_auth(current_user), httpx.BasicAuth(SENAITE_USER, SENAITE_PASSWORD)):
-                async with httpx.AsyncClient(
+                async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, 
                     timeout=httpx.Timeout(30.0, connect=5.0),
                     auth=attach_auth,
                     follow_redirects=True,
@@ -9679,7 +9728,7 @@ async def generate_vial_coas(
     generated: list[dict] = []
     skipped: list[int] = []
     errors: list[dict] = []
-    async with httpx.AsyncClient(timeout=120.0) as client:
+    async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, timeout=120.0) as client:
         for vial_seq, figs in vials:
             if vial_seq in existing:
                 skipped.append(vial_seq)
@@ -9754,7 +9803,7 @@ async def publish_sample_coa(
     senaite_uid: str | None = None
     if SENAITE_URL:
         try:
-            async with httpx.AsyncClient(
+            async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, 
                 timeout=httpx.Timeout(15.0, connect=5.0),
                 auth=_get_senaite_auth(current_user),
                 follow_redirects=True,
@@ -9794,7 +9843,7 @@ async def publish_sample_coa(
     # 2. Publish in Integration Service (also publishes additional COAs)
     try:
         url = f"{INTEGRATION_SERVICE_URL}/explorer/samples/{sample_id}/publish-coa"
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, timeout=30.0) as client:
             resp = await client.post(
                 url,
                 headers={"X-API-Key": INTEGRATION_SERVICE_API_KEY},
@@ -9830,7 +9879,7 @@ async def publish_sample_coa(
     # 3 & 4. Write verification code and transition SENAITE workflow — guaranteed
     if senaite_uid:
         try:
-            async with httpx.AsyncClient(
+            async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, 
                 timeout=httpx.Timeout(30.0, connect=5.0),
                 auth=_get_senaite_auth(current_user),
                 follow_redirects=True,
@@ -9968,7 +10017,7 @@ async def regen_primary_coa(
 
     # 1. Regenerate only the primary COA via COA Builder
     try:
-        async with httpx.AsyncClient(timeout=120.0) as client:
+        async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, timeout=120.0) as client:
             resp = await client.post(
                 f"{COA_BUILDER_URL}/process/{sample_id}",
                 params={"skip_additional_coas": "true"},
@@ -10002,7 +10051,7 @@ async def regen_primary_coa(
     # 2. Attach new PDF to SENAITE (best-effort — the generation already has a PDF in S3)
     if SENAITE_URL and pdf_base64:
         try:
-            async with httpx.AsyncClient(
+            async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, 
                 timeout=httpx.Timeout(30.0, connect=5.0),
                 auth=_get_senaite_auth(current_user),
                 follow_redirects=True,
@@ -10050,7 +10099,7 @@ async def regen_additional_coa(
     """
     url = f"{INTEGRATION_SERVICE_URL}/explorer/additional-coas/{config_id}/regenerate"
     try:
-        async with httpx.AsyncClient(timeout=120.0) as client:
+        async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, timeout=120.0) as client:
             resp = await client.post(
                 url,
                 headers={"X-API-Key": INTEGRATION_SERVICE_API_KEY},
@@ -11848,7 +11897,7 @@ async def _resolve_instrument_from_senaite(sample_id: str) -> Optional[str]:
     try:
         # Use the search endpoint (proven to work for catalog queries)
         search_url = f"{SENAITE_URL}/senaite/@@API/senaite/v1/search"
-        async with httpx.AsyncClient(
+        async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, 
             timeout=SENAITE_TIMEOUT,
             auth=httpx.BasicAuth(SENAITE_USER, SENAITE_PASSWORD),
         ) as client:
@@ -11899,7 +11948,7 @@ async def _fetch_senaite_sample(sample_id: str) -> dict:
     """
     url = f"{SENAITE_URL}/senaite/@@API/senaite/v1/AnalysisRequest"
     print(f"[INFO] _fetch_senaite_sample: GET {url}?id={sample_id}&complete=yes")
-    async with httpx.AsyncClient(
+    async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, 
         timeout=SENAITE_TIMEOUT,
         auth=httpx.BasicAuth(SENAITE_USER, SENAITE_PASSWORD),
     ) as client:
@@ -12000,7 +12049,7 @@ async def lookup_senaite_sample(
             # Distinguish "sample not found" from "credentials/permissions failure".
             # If a sanity query (no ID filter) also returns 0, SENAITE auth is broken.
             url = f"{SENAITE_URL}/senaite/@@API/senaite/v1/AnalysisRequest"
-            async with httpx.AsyncClient(
+            async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, 
                 timeout=SENAITE_TIMEOUT,
                 auth=httpx.BasicAuth(SENAITE_USER, SENAITE_PASSWORD),
             ) as client:
@@ -12097,7 +12146,7 @@ async def lookup_senaite_sample(
         senaite_analyses: list[SenaiteAnalysis] = []
         try:
             analysis_url = f"{SENAITE_URL}/senaite/@@API/senaite/v1/Analysis"
-            async with httpx.AsyncClient(
+            async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, 
                 timeout=SENAITE_TIMEOUT,
                 auth=httpx.BasicAuth(SENAITE_USER, SENAITE_PASSWORD),
             ) as client:
@@ -12217,7 +12266,7 @@ async def lookup_senaite_sample(
                 try:
                     inst_url = f"{SENAITE_URL}/senaite/@@API/senaite/v1/Instrument"
                     uid_filter = "|".join(_inst_uid_to_indices.keys())
-                    async with httpx.AsyncClient(
+                    async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, 
                         timeout=SENAITE_TIMEOUT,
                         auth=httpx.BasicAuth(SENAITE_USER, SENAITE_PASSWORD),
                     ) as inst_client:
@@ -12261,7 +12310,7 @@ async def lookup_senaite_sample(
                     return svc_uid, svc_item
 
                 try:
-                    async with httpx.AsyncClient(
+                    async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, 
                         timeout=SENAITE_TIMEOUT,
                         auth=httpx.BasicAuth(SENAITE_USER, SENAITE_PASSWORD),
                     ) as svc_client:
@@ -12304,7 +12353,7 @@ async def lookup_senaite_sample(
                         title = obj.get("title") or obj.get("Title") or ""
                         return kind, uid, title
 
-                    async with httpx.AsyncClient(
+                    async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, 
                         timeout=SENAITE_TIMEOUT,
                         auth=httpx.BasicAuth(SENAITE_USER, SENAITE_PASSWORD),
                     ) as title_client:
@@ -12354,7 +12403,7 @@ async def lookup_senaite_sample(
         try:
             raw_attachments = item.get("Attachment") or []
             if isinstance(raw_attachments, list) and raw_attachments:
-                async with httpx.AsyncClient(
+                async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, 
                     timeout=SENAITE_TIMEOUT,
                     auth=httpx.BasicAuth(SENAITE_USER, SENAITE_PASSWORD),
                 ) as att_client:
@@ -12401,7 +12450,7 @@ async def lookup_senaite_sample(
         published_coa_report: Optional[SenaitePublishedCOA] = None
         sample_path = item.get("path") or ""  # e.g. /senaite/clients/client-8/PB-0061
         try:
-            async with httpx.AsyncClient(
+            async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, 
                 timeout=SENAITE_TIMEOUT,
                 auth=httpx.BasicAuth(SENAITE_USER, SENAITE_PASSWORD),
             ) as report_client:
@@ -12570,7 +12619,7 @@ async def get_senaite_attachment(
         else:
             # Fallback: fetch attachment metadata directly via api_url pattern
             att_url = f"{SENAITE_URL}/senaite/@@API/senaite/v1/Attachment/{uid}"
-            async with httpx.AsyncClient(
+            async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, 
                 timeout=SENAITE_TIMEOUT,
                 auth=httpx.BasicAuth(SENAITE_USER, SENAITE_PASSWORD),
             ) as client:
@@ -12589,7 +12638,7 @@ async def get_senaite_attachment(
         if not download_url:
             raise HTTPException(status_code=404, detail="Attachment has no download URL")
 
-        async with httpx.AsyncClient(
+        async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, 
             timeout=SENAITE_TIMEOUT,
             auth=httpx.BasicAuth(SENAITE_USER, SENAITE_PASSWORD),
         ) as client:
@@ -12624,7 +12673,7 @@ async def get_senaite_report(
         if not download_url:
             # Fallback: fetch ARReport metadata directly
             report_api_url = f"{SENAITE_URL}/senaite/@@API/senaite/v1/ARReport/{uid}"
-            async with httpx.AsyncClient(
+            async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, 
                 timeout=SENAITE_TIMEOUT,
                 auth=httpx.BasicAuth(SENAITE_USER, SENAITE_PASSWORD),
             ) as client:
@@ -12640,7 +12689,7 @@ async def get_senaite_report(
         if not download_url:
             raise HTTPException(status_code=404, detail="Report PDF not found")
 
-        async with httpx.AsyncClient(
+        async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, 
             timeout=SENAITE_TIMEOUT,
             auth=httpx.BasicAuth(SENAITE_USER, SENAITE_PASSWORD),
         ) as client:
@@ -12687,7 +12736,7 @@ async def upload_senaite_attachment(
         filename = file.filename or "attachment"
         content_type = file.content_type or "application/octet-stream"
 
-        async with httpx.AsyncClient(
+        async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, 
             timeout=httpx.Timeout(60.0, connect=10.0),
             auth=_get_senaite_auth(current_user),
             follow_redirects=True,
@@ -12877,7 +12926,7 @@ async def list_senaite_samples(
         )
 
     try:
-        async with httpx.AsyncClient(
+        async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, 
             timeout=SENAITE_TIMEOUT,
             auth=httpx.BasicAuth(SENAITE_USER, SENAITE_PASSWORD),
         ) as client:
@@ -13093,7 +13142,7 @@ async def receive_senaite_sample(
     steps_done = []
 
     try:
-        async with httpx.AsyncClient(
+        async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, 
             timeout=httpx.Timeout(30.0, connect=5.0),
             auth=_get_senaite_auth(current_user),
             follow_redirects=True,
@@ -13315,7 +13364,7 @@ async def update_senaite_sample_fields(
         )
 
     try:
-        async with httpx.AsyncClient(
+        async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, 
             timeout=httpx.Timeout(30.0, connect=5.0),
             auth=_get_senaite_auth(current_user),
             follow_redirects=True,
@@ -13408,7 +13457,7 @@ async def set_analysis_result(
         )
 
     try:
-        async with httpx.AsyncClient(
+        async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, 
             timeout=httpx.Timeout(30.0, connect=5.0),
             auth=_get_senaite_auth(current_user),
             follow_redirects=True,
@@ -13484,7 +13533,7 @@ async def set_analysis_method_instrument(
         return AnalysisResultResponse(success=False, message="No fields to update")
 
     try:
-        async with httpx.AsyncClient(
+        async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, 
             timeout=httpx.Timeout(30.0, connect=5.0),
             auth=_get_senaite_auth(current_user),
             follow_redirects=True,
@@ -13571,7 +13620,7 @@ async def transition_analysis(
         )
 
     try:
-        async with httpx.AsyncClient(
+        async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, 
             timeout=httpx.Timeout(30.0, connect=5.0),
             auth=_get_senaite_auth(current_user),
             follow_redirects=True,
@@ -14310,7 +14359,7 @@ async def get_senaite_analysts(
         raise HTTPException(503, "SENAITE URL not configured")
 
     try:
-        async with httpx.AsyncClient(
+        async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, 
             timeout=httpx.Timeout(30.0, connect=5.0),
             auth=_get_senaite_auth(current_user),
             follow_redirects=True,
@@ -14753,7 +14802,7 @@ async def get_worksheets_inbox(
         }
 
         try:
-            async with httpx.AsyncClient(
+            async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, 
                 timeout=SENAITE_TIMEOUT,
                 auth=_get_senaite_auth(current_user),
                 follow_redirects=True,
@@ -15071,7 +15120,7 @@ async def get_worksheets_inbox(
     analyses_by_sample: dict[str, list[dict]] = {sid: [] for sid in sample_id_list}
 
     if sample_id_list:
-        async with httpx.AsyncClient(
+        async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, 
             timeout=SENAITE_TIMEOUT,
             auth=_get_senaite_auth(current_user),
             follow_redirects=True,
@@ -15564,7 +15613,7 @@ async def create_worksheet(
     # Stale data guard: verify all samples still in sample_received state (INBX-10)
     stale_uids: list[str] = []
     try:
-        async with httpx.AsyncClient(
+        async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, 
             timeout=SENAITE_TIMEOUT,
             auth=_get_senaite_auth(current_user),
             follow_redirects=True,

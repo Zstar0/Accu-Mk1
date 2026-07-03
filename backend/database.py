@@ -117,6 +117,7 @@ def init_db():
     """Initialize database tables."""
     # Import models to register them with Base
     import models  # noqa: F401
+    import flags.models  # noqa: F401  (register flag_* tables on Base)
     # Run column migrations before create_all so ORM mappings match the DB schema
     _run_migrations()
     Base.metadata.create_all(bind=engine)
@@ -775,6 +776,130 @@ def _run_migrations():
                     WHERE keyword IN ('PH-DETERM','Benzyl_Alcohol_Assay','FILL-NET-CONTENT');
             END IF;
         END $$""",
+        # --- flags module ---
+        """
+        CREATE TABLE IF NOT EXISTS flag_flags (
+            id           SERIAL PRIMARY KEY,
+            entity_type  TEXT NOT NULL,
+            entity_id    TEXT NOT NULL,
+            kind         TEXT NOT NULL,
+            type         TEXT NOT NULL,
+            status       TEXT NOT NULL DEFAULT 'open'
+                         CONSTRAINT flag_flags_status_check
+                         CHECK (status IN ('open','in_progress','resolved','closed')),
+            title        TEXT NOT NULL,
+            created_by   INTEGER NOT NULL,
+            assignee_id  INTEGER,
+            created_at   TIMESTAMP NOT NULL DEFAULT NOW(),
+            updated_at   TIMESTAMP NOT NULL DEFAULT NOW(),
+            resolved_at  TIMESTAMP,
+            resolved_by  INTEGER
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS ix_flag_flags_entity   ON flag_flags (entity_type, entity_id)",
+        "CREATE INDEX IF NOT EXISTS ix_flag_flags_assignee ON flag_flags (assignee_id)",
+        "CREATE INDEX IF NOT EXISTS ix_flag_flags_status   ON flag_flags (status, updated_at)",
+        """
+        CREATE TABLE IF NOT EXISTS flag_comments (
+            id         SERIAL PRIMARY KEY,
+            flag_id    INTEGER NOT NULL REFERENCES flag_flags(id) ON DELETE CASCADE,
+            author_id  INTEGER NOT NULL,
+            body       TEXT NOT NULL,
+            audience   TEXT NOT NULL DEFAULT 'internal',
+            created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+            edited_at  TIMESTAMP
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS ix_flag_comments_flag ON flag_comments (flag_id)",
+        """
+        CREATE TABLE IF NOT EXISTS flag_participants (
+            id        SERIAL PRIMARY KEY,
+            flag_id   INTEGER NOT NULL REFERENCES flag_flags(id) ON DELETE CASCADE,
+            user_id   INTEGER NOT NULL,
+            role      TEXT NOT NULL DEFAULT 'watcher',
+            added_at  TIMESTAMP NOT NULL DEFAULT NOW(),
+            added_by  INTEGER,
+            CONSTRAINT uq_flag_participant UNIQUE (flag_id, user_id)
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS ix_flag_participants_flag ON flag_participants (flag_id)",
+        "CREATE INDEX IF NOT EXISTS ix_flag_participants_user ON flag_participants (user_id)",
+        """
+        CREATE TABLE IF NOT EXISTS flag_events (
+            id          SERIAL PRIMARY KEY,
+            flag_id     INTEGER NOT NULL REFERENCES flag_flags(id) ON DELETE CASCADE,
+            actor_id    INTEGER,
+            event_type  TEXT NOT NULL,
+            from_value  TEXT,
+            to_value    TEXT,
+            details     JSONB,
+            created_at  TIMESTAMP NOT NULL DEFAULT NOW()
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS ix_flag_events_flag ON flag_events (flag_id)",
+        # --- flag_types catalog (Plan 5) ---
+        """
+        CREATE TABLE IF NOT EXISTS flag_types (
+            id           SERIAL PRIMARY KEY,
+            slug         TEXT NOT NULL UNIQUE,
+            label        TEXT NOT NULL,
+            color        TEXT NOT NULL,
+            kind         TEXT NOT NULL,
+            is_blocking  BOOLEAN NOT NULL DEFAULT FALSE,
+            is_active    BOOLEAN NOT NULL DEFAULT TRUE,
+            sort_order   INTEGER NOT NULL DEFAULT 0,
+            entity_types JSONB NOT NULL DEFAULT '[]'::jsonb,
+            is_builtin   BOOLEAN NOT NULL DEFAULT FALSE,
+            created_at   TIMESTAMP NOT NULL DEFAULT NOW(),
+            updated_at   TIMESTAMP NOT NULL DEFAULT NOW()
+        )
+        """,
+        # Seed the 5 built-ins idempotently (mirrors flags/catalog.py FLAG_TYPES
+        # + FLAG_TYPE_ORDER). entity_types='[]' = global. is_builtin=true blocks
+        # hard-delete (deactivate only). Existing flags reference these slugs.
+        """
+        INSERT INTO flag_types (slug, label, color, kind, is_blocking, is_active, sort_order, entity_types, is_builtin)
+        SELECT 'blocker', 'Blocker', '#e5484d', 'issue', TRUE, TRUE, 0, '[]'::jsonb, TRUE
+        WHERE NOT EXISTS (SELECT 1 FROM flag_types WHERE slug='blocker')
+        """,
+        """
+        INSERT INTO flag_types (slug, label, color, kind, is_blocking, is_active, sort_order, entity_types, is_builtin)
+        SELECT 'critical', 'Critical', '#e8730a', 'issue', TRUE, TRUE, 1, '[]'::jsonb, TRUE
+        WHERE NOT EXISTS (SELECT 1 FROM flag_types WHERE slug='critical')
+        """,
+        """
+        INSERT INTO flag_types (slug, label, color, kind, is_blocking, is_active, sort_order, entity_types, is_builtin)
+        SELECT 'question', 'Question', '#3b82f6', 'issue', FALSE, TRUE, 2, '[]'::jsonb, TRUE
+        WHERE NOT EXISTS (SELECT 1 FROM flag_types WHERE slug='question')
+        """,
+        """
+        INSERT INTO flag_types (slug, label, color, kind, is_blocking, is_active, sort_order, entity_types, is_builtin)
+        SELECT 'waiting_on_customer', 'Waiting on Customer', '#8b5cf6', 'issue', FALSE, TRUE, 3, '[]'::jsonb, TRUE
+        WHERE NOT EXISTS (SELECT 1 FROM flag_types WHERE slug='waiting_on_customer')
+        """,
+        """
+        INSERT INTO flag_types (slug, label, color, kind, is_blocking, is_active, sort_order, entity_types, is_builtin)
+        SELECT 'ready_for_verification', 'Ready for Verification', '#22c55e', 'signal', FALSE, TRUE, 4, '[]'::jsonb, TRUE
+        WHERE NOT EXISTS (SELECT 1 FROM flag_types WHERE slug='ready_for_verification')
+        """,
+        # Extend the NAMED status CHECK to admit 'blocked' (Plan 5). A dedicated
+        # DROP+ADD statement — NOT an edit to the IF-NOT-EXISTS flag_flags create
+        # (which never re-runs once the table exists). Postgres-only; on the
+        # SQLite test path this statement fails and is swallowed per-statement
+        # (the CHECK doesn't exist there anyway). Without this, writing 'blocked'
+        # would 500 against the live Postgres constraint.
+        """
+        ALTER TABLE flag_flags
+            DROP CONSTRAINT IF EXISTS flag_flags_status_check,
+            ADD CONSTRAINT flag_flags_status_check
+                CHECK (status IN ('open','in_progress','blocked','resolved','closed'))
+        """,
+        # Flag activity feed: keyset scan on (created_at, id) newest-first
+        "CREATE INDEX IF NOT EXISTS ix_flag_events_created_at_id ON flag_events (created_at DESC, id DESC)",
+        # Flag @mentions: user ids called out in a comment
+        "ALTER TABLE flag_comments ADD COLUMN IF NOT EXISTS mentions JSON",
+        # Slack DM prefs: cached Slack display name for mapping confidence
+        "ALTER TABLE slack_dm_prefs ADD COLUMN IF NOT EXISTS slack_display_name TEXT",
         # Order-first check-in boxing: lims_boxes + sub_sample.box_id link.
         """
         CREATE TABLE IF NOT EXISTS lims_boxes (

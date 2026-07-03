@@ -1,5 +1,87 @@
 # Changelog
 
+## v1.0.24 — 2026-07-03
+
+### Fixed
+
+- **Flags live-stream no longer buffered at the frontend proxy.** `api/flags/stream` joins the HPLC streams in the frontend nginx's unbuffered-SSE location (which also re-signals `X-Accel-Buffering: no` to the host proxy). Previously the stream fell through to the generic API location and the host nginx buffered it dead — each open tab parked a zombie connection until the browser's per-host pool starved and every page spun (the 2026-07-03 "app not loading" incident; the host side was hot-fixed the same night, this bakes the fix into the image and syncs the `scripts/accumk1-nginx.conf` reference copy).
+- **Browsers no longer cache a stale app shell across deploys.** `index.html` is now served with `Cache-Control: no-cache`, so every load revalidates it. Hashed bundle names change with each release, and a heuristically-cached shell pointed at deleted assets (blank page until a hard refresh). Hashed `/assets/` keep their 1-year immutable cache.
+
+## v1.0.23 — 2026-07-03
+
+### Fixed
+
+- **Backend memory no longer climbs ~2 GB/hour during active lab sessions** (the 2026-07-02 "Memory High - Droplet" New Relic alert — host hit 93% before a restart). Every SENAITE-proxying, SharePoint, and COA-resolver request constructed a throwaway `httpx` client, and each construction builds a fresh SSL context with a full CA-bundle parse (~340 kB of allocations — even for plain-http URLs) that the allocator never returns to the OS. All 60 ad-hoc client sites now share one module-level SSL context (`httpx_shared.HTTPX_SSL_CONTEXT`). Measured on an isolated stack: 343.7 → 0.1 kB/call steady-state on the SENAITE lookup endpoint. A new AST-based regression test fails on any future bare `httpx` client construction. Not related to the Flag System (explicitly ruled out — SSE bus is bounded and connection counts stayed flat).
+
+## v1.0.22 — 2026-07-02
+
+### Changed
+
+- **The Flags button count now reflects only flags assigned to you.** The colored per-type chips on the Flags button previously counted *all* open flags of each type across the whole lab; they now count only the open flags **assigned to you**, so the badge is a personal "my work" signal. (The pulse/glow remains the separate "you've been pinged" cue.) Backend-only — the summary endpoint's per-type breakdown is now scoped to the requesting user.
+
+## v1.0.21 — 2026-07-02
+
+### Fixed
+
+- **"Add Type" in Preferences → Flags no longer double-creates on a fast double-click.** The button relied on `disabled` while a create was in flight, but that only takes effect on the next render, so a same-tick double-fire slipped two creates through (after the v1.0.20 slug fix, that produced a phantom extra type — e.g. `new_type_2` *and* `new_type_3` — and could race the slug uniquifier). A synchronous in-flight guard now collapses the burst to a single create and resets once it settles. Frontend-only.
+
+## v1.0.20 — 2026-07-02
+
+### Fixed
+
+- **"Add Type" in Preferences → Flags no longer fails with a 409 after the first type.** The Add button always creates a placeholder labeled "New type" (renamed afterward), so the backend kept deriving the same immutable slug `new_type` and rejecting every subsequent add as a conflict. A label-derived slug now auto-uniquifies (`new_type`, `new_type_2`, …) instead of colliding; an explicitly-provided slug that collides still returns 409 (real user intent). Backend-only — no schema, migration, or data change.
+
+## v1.0.19 — 2026-07-02
+
+### Changed
+
+- **Internal Remarks now render as amber "internal notes."** On the Sample Details page, each lab-internal remark is styled with the warm amber scheme from the Flags user guide (amber tint + left border, light/dark) and an "Internal — not shared with the customer" caption, making it obvious at a glance that these notes never reach the customer (distinct from the separate Customer Remarks card). Frontend-only; the inline card was extracted into a testable `InternalRemarkCard` component.
+
+## v1.0.18 — 2026-07-02
+
+### Added
+
+- **Flags user guide.** A polished, self-contained HTML guide to the Flag System (what flags are, raising/assigning/watching, the status lifecycle, comments & @mentions, the flyout tabs, flags on samples/vials/worksheets, and Slack DM notifications — which are on by default for everyone), linked as a **Guide** button in the Flags flyout header. Built from `docs/guides/flags-system-guide.md` via the existing guide pipeline; served at `/guides/flags-system-guide.html`. Frontend + docs only.
+
+## v1.0.17 — 2026-07-02
+
+### Added
+
+- **Admin edit-user flyout on User Management.** Click a user row to open a right-side slide-out (mirroring the Instruments page) and edit a user's **first name, last name, email, role, and active status**. Save sends only the changed fields via the existing admin update endpoint; editing your own account disables the role/active controls (no self-lockout). The redundant role/active quick-toggle icons fold into the flyout; reset-password stays a row action. Frontend-only — no backend, API, or migration change.
+
+## v1.0.16 — 2026-07-02
+
+### Added
+
+- **Flag System.** A task/thread system on samples, vials, and worksheets: raise Issue or Signal flags, assign them, comment with @mentions, watch threads, and track status (Open → In progress → Blocked → Resolved → Closed). Real-time updates over SSE with a flyout showing Activity, mentions, and unread counts; admin-managed flag types; multi-flag affordances per entity. Internal, all-staff-visible in v1. Additive — new `flags`, `flag_comments`, `flag_events`, and `flag_participants` tables auto-create at startup.
+- **Slack DM notifications for flags.** Flag activity can mirror to Slack DMs, with a per-user config card on the Account → Profile page (master toggle, link status, member-ID field, test-DM button, and five per-category toggles: assigned / mentioned / activity-on-flags-you-raised / activity-on-flags-you-watch / status changes). Recipients are computed server-side (assignee / creator / mentioned / watchers, minus the actor). Deep links land on the flagged entity's page and open the thread. **Env-gated — dormant unless `MK1_SLACK_BOT_TOKEN` is set** (zero overhead when unconfigured); optional mixed-domain email resolution via `MK1_SLACK_EMAIL_ALIAS_DOMAINS`. User-supplied text is escaped before Slack mrkdwn interpolation.
+
+## v1.0.15 — 2026-07-01
+
+### Added
+
+- **Local files as a second HPLC data source.** The per-prep HPLC folder picker now has a **SharePoint** tab and a **Local files** tab. The Local tab lets a tech pick a folder on their machine; its `*_PeakData.csv` / `*_DAD1A.csv` files are read in the browser (nothing is uploaded) and processed through the exact same parse / peak / chromatogram / save flow as SharePoint. When a SharePoint browse call is throttled (429), the error offers a one-click switch to the Local tab. A "Local files: &lt;folder&gt;" badge marks local-sourced results for review. Frontend-only; no change to result / purity math.
+
+## v1.0.14 — 2026-06-30
+
+### Fixed
+
+- **Variance COA per-vial series includes the core sub-vial.** `build_variance_replicates` now returns every in-set sub-vial (core + variance) instead of variance-only, gated on ≥1 in-set variance vial (non-variance certs still send nothing), and accepts the core's `promoted`-state rows via `_VIAL_COA_STATES`. This makes the physical sub-vials the single source of truth for the COA's page-3 per-vial table, fixing the P-1094 case where a variance vial at seq 1 dropped a page-3 row. Pairs with COA Builder 2.28.2.
+
+## v1.0.13 — 2026-06-30
+
+### Fixed
+
+- **Numeric analysis results display at 2 dp on sample-details.** A promoted sub-sample value written to the parent AR at full precision (e.g. Fill Volume `9.710267415 mL` on BW-0037-S01) rendered in full on the SENAITE analyses table. `formatNumericResult()` trims only over-precise (>2 dp) numeric results to 2 dp at display; integers, ≤2 dp values, unit-suffixed values, and non-numeric text pass through unchanged. The stored value and the edit draft stay full precision — display-layer only. (Pairs with COA Builder 2.28.1.)
+
+## v1.0.12 — 2026-06-29
+
+### Fixed
+
+- **Endotoxin product-chip completion classifies by keyword, not service group.** Prod has no 'Endotoxin' service group (ENDO-LAL lives under Microbiology), so the chip never went green despite a promoted result (P-0965). Endotoxin/sterility are now keyword-classified, working in prod and dev seeds.
+- **Promote no longer 502s on duplicate analysis-service keywords.** `resolve_parent_analyte_target` tolerates duplicate keywords (picks the peptide-bearing row deterministically; fails loudly only if duplicates span different peptides). Fixes "parent slot resolution failed: Multiple rows were found" on PB-0186 TB-500 purity.
+- **Analysis-service sync reconciles recreated SENAITE services.** When SENAITE deletes+recreates a service under a new UID, the sync adopts the existing row (same keyword, stale senaite_id) instead of cloning it — preserving result/slot references and preventing duplicate-keyword rows.
+
 ## v1.0.11 — 2026-06-28
 
 ### Fixed

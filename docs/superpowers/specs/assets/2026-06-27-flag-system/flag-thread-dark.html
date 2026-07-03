@@ -1,0 +1,78 @@
+<h2>Inside a flag &mdash; the thread (dark mode)</h2>
+<p class="subtitle">Same view, dark theme. <strong>Type a comment and hit send</strong> for the slide-in. Grey system lines = the audit trail in context.</p>
+
+<style>
+  .stage-dark{background:#0a1120;border-radius:16px;padding:26px 18px;display:flex;justify-content:center}
+  .panel{width:100%;max-width:440px;background:#111a2e;border:1px solid #233049;border-radius:14px;overflow:hidden;box-shadow:0 18px 50px rgba(0,0,0,.5);display:flex;flex-direction:column;height:560px}
+  .top{padding:11px 15px;border-bottom:1px solid #1e2940;display:flex;align-items:center;gap:8px;font-size:12px;color:#8a95a8;font-weight:600}
+  .top .bk{color:#5f6e8c}
+  .top .sep{color:#3a4considera;color:#36425e}
+  .hd{padding:13px 15px 12px;border-bottom:1px solid #1e2940}
+  .ent{display:inline-flex;align-items:center;gap:5px;background:#1b2740;color:#aebbd2;border-radius:6px;padding:2px 8px;font-weight:700;font-size:11px}
+  .pill{font-size:10px;font-weight:700;padding:2px 8px;border-radius:20px;color:#fff}
+  .c-block{background:#e5484d}
+  .ttl{font-size:16px;font-weight:700;color:#eef2f8;margin:9px 0 11px}
+  .ctl{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .sel{display:inline-flex;align-items:center;gap:6px;border:1px solid #2a3654;border-radius:8px;padding:5px 9px;font-size:12px;color:#c3cde0;font-weight:600;background:#172238}
+  .sdot{width:8px;height:8px;border-radius:50%;background:#e8730a}
+  .av{width:22px;height:22px;border-radius:50%;font-size:9px;font-weight:700;color:#fff;display:flex;align-items:center;justify-content:center;flex:none}
+  .tl{flex:1;overflow:auto;padding:14px 15px;display:flex;flex-direction:column;gap:13px;background:#0c1322}
+  .sys{display:flex;align-items:center;gap:7px;justify-content:center;font-size:11px;color:#73809a}
+  .sys .ln{flex:1;height:1px;background:#1c2740}
+  .cmt{display:flex;gap:9px;transition:opacity .4s ease, transform .4s cubic-bezier(.22,1,.36,1)}
+  .cmt.enter{opacity:0;transform:translateY(12px)}
+  .cb{background:#172238;border:1px solid #25324d;border-radius:10px;padding:8px 11px;max-width:300px}
+  .cmt.me .cb{background:#14294b;border-color:#2c4d7e}
+  .ch{display:flex;align-items:center;gap:7px;margin-bottom:3px}
+  .ch b{font-size:12px;color:#e6ecf6}.ch span{font-size:10.5px;color:#7c8aa3}
+  .ctext{font-size:13px;color:#cdd7e6;line-height:1.45}
+  .comp{border-top:1px solid #1e2940;padding:10px 12px;display:flex;align-items:center;gap:9px;background:#101829}
+  .comp input{flex:1;border:1px solid #2a3654;border-radius:10px;padding:10px 12px;font-size:13px;outline:none;background:#0d1525;color:#e6ecf6}
+  .comp input::placeholder{color:#5f6e8c}
+  .comp input:focus{border-color:#3b82f6;box-shadow:0 0 0 3px rgba(59,130,246,.18)}
+  .send{background:#3b82f6;color:#fff;border:none;border-radius:9px;width:38px;height:38px;cursor:pointer;font-size:16px;flex:none}
+  .resolve{background:#1c7a43;color:#d9f7e6;border:1px solid #2a8f54;border-radius:8px;padding:6px 12px;font-size:12px;font-weight:700;cursor:pointer}
+</style>
+
+<div class="stage-dark">
+  <div class="panel">
+    <div class="top"><span class="bk">&larr;</span> Flags <span class="sep">/</span> Assigned to me</div>
+    <div class="hd">
+      <div class="ctl" style="justify-content:space-between">
+        <span class="ent">&#129514; Vial P-1023-3 &nearr;</span>
+        <button class="resolve">&#10003; Resolve</button>
+      </div>
+      <div class="ttl">Crashed out &mdash; needs re-prep <span class="pill c-block" style="vertical-align:middle">Blocker</span></div>
+      <div class="ctl">
+        <span class="sel"><span class="sdot"></span>In progress &#9662;</span>
+        <span class="sel"><span class="av" style="background:#0ea5a5">DM</span>Dennis &#9662;</span>
+        <span class="sel">&#128065; Watching &middot; 3</span>
+      </div>
+    </div>
+    <div class="tl" id="timeline">
+      <div class="sys"><span class="ln"></span><span>&#128681; Sarah raised this &middot; Blocker &middot; 3:42 PM</span><span class="ln"></span></div>
+      <div class="cmt"><span class="av" style="background:#8b5cf6">SK</span><div class="cb"><div class="ch"><b>Sarah</b><span>3:43 PM</span></div><div class="ctext">Vial looks cloudy after reconstitution &mdash; can't run it as-is.</div></div></div>
+      <div class="sys"><span class="ln"></span><span>Assigned to Dennis</span><span class="ln"></span></div>
+      <div class="cmt"><span class="av" style="background:#0ea5a5">DM</span><div class="cb"><div class="ch"><b>Dennis</b><span>3:50 PM</span></div><div class="ctext">Confirmed. Scheduling a re-prep for tomorrow AM, will re-shoot the check-in photo too.</div></div></div>
+      <div class="sys"><span class="ln"></span><span>Status &rarr; In progress &middot; Dennis</span><span class="ln"></span></div>
+    </div>
+    <div class="comp">
+      <span class="av" style="background:#16a34a">YOU</span>
+      <input id="cmt" placeholder="Write a comment&hellip;  @mention" onkeydown="if(event.key==='Enter')sendC()">
+      <button class="send" onclick="sendC()">&#10148;</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  function sendC(){
+    var inp=document.getElementById('cmt'); var v=(inp.value||'').trim(); if(!v) return;
+    var tl=document.getElementById('timeline');
+    var el=document.createElement('div'); el.className='cmt me enter';
+    el.innerHTML='<span class="av" style="background:#16a34a">YOU</span><div class="cb"><div class="ch"><b>You</b><span>just now</span></div><div class="ctext"></div></div>';
+    el.querySelector('.ctext').textContent=v;
+    tl.appendChild(el);
+    requestAnimationFrame(function(){ requestAnimationFrame(function(){ el.classList.remove('enter'); }); });
+    inp.value=''; setTimeout(function(){ tl.scrollTop=tl.scrollHeight; },10);
+  }
+</script>

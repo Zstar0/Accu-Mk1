@@ -71,7 +71,7 @@ def world(db):
     # vial 2: full set; vial 3: purity + identity only (no quantity)
     _row(db, subs[2], pur, "99.1"); _row(db, subs[2], qty, "10.1"); _row(db, subs[2], idsvc, "BPC-157")
     _row(db, subs[3], pur, "97.21"); _row(db, subs[3], idsvc, "Out of Spec")
-    # core vial has a row — must be EXCLUDED
+    # core vial (seq1) has a result row — now included as Vial 1 in the series
     _row(db, subs[1], pur, "50.0")
     db.commit()
     return parent
@@ -80,12 +80,13 @@ def world(db):
 def test_variance_vials_only_in_sequence_order(world, db):
     out = build_variance_replicates(db, world)
     recs = out["BPC-157"]
-    assert [r["vial_sequence"] for r in recs] == [2, 3]  # core vial 1 excluded
+    assert [r["vial_sequence"] for r in recs] == [1, 2, 3]  # core vial 1 now included (has a result row)
 
 
 def test_per_vial_records_carry_their_analytes(world, db):
     recs = build_variance_replicates(db, world)["BPC-157"]
-    v2, v3 = recs[0], recs[1]
+    # recs[0] is core vial seq1; recs[1] and recs[2] are the variance vials
+    v2, v3 = recs[1], recs[2]
     assert v2["PURITY"] == "99.1%" and v2["QUANTITY"] == "10.1 mg" and v2["IDENTITY"] == "BPC-157"
     assert v3["PURITY"] == "97.21%" and v3["IDENTITY"] == "Out of Spec"
     assert "QUANTITY" not in v3  # vial 3 had no quantity row
@@ -206,6 +207,47 @@ def test_retested_vial_uses_current_result_not_superseded_original(db):
     recs = build_variance_replicates(db, parent)["BPC-157"]
     assert len(recs) == 1
     assert recs[0]["IDENTITY"] == "Does_Not_Conform"
+
+
+def test_core_vial_included_with_promoted_state(db):
+    """New contract: a variance sample's CORE vial (promoted state) is included
+    as a row, alongside the variance vials, in vial_sequence order."""
+    pep = Peptide(name="GHK-Cu", abbreviation="GHKCU", active=True)
+    db.add(pep); db.flush()
+    pur = _svc(db, "HPLC-PUR"); idsvc = _svc(db, "ID_GHKCU", pep.id)
+    parent = LimsSample(sample_id="P-1094", external_lims_uid="uid-p1094", container_mode=False)
+    db.add(parent); db.flush()
+    # P-1094 inverted: S01 = variance (seq1), S02 = core/promoted (seq2)
+    s1 = LimsSubSample(parent_sample_pk=parent.id, external_lims_uid="mk1://a",
+                       sample_id="P-1094-S01", vial_sequence=1,
+                       assignment_role="hplc", assignment_kind="variance")
+    s2 = LimsSubSample(parent_sample_pk=parent.id, external_lims_uid="mk1://b",
+                       sample_id="P-1094-S02", vial_sequence=2,
+                       assignment_role="hplc", assignment_kind="core")
+    db.add_all([s1, s2]); db.flush()
+    _row(db, s1, pur, "99.73", state="variance_verified"); _row(db, s1, idsvc, "GHK-Cu", state="variance_verified")
+    _row(db, s2, pur, "99.965", state="promoted");          _row(db, s2, idsvc, "GHK-Cu", state="promoted")
+    db.commit()
+    recs = build_variance_replicates(db, parent)["GHK-Cu"]
+    assert [r["vial_sequence"] for r in recs] == [1, 2]      # core (seq2) now included
+    assert recs[0]["PURITY"] == "99.73%" and recs[1]["PURITY"] == "99.965%"
+
+
+def test_non_variance_sample_sends_nothing(db):
+    """A sample with only CORE vials (no variance) must still return {} — the
+    variance path must never fire for non-variance certs."""
+    pep = Peptide(name="GHK-Cu", abbreviation="GHKCU", active=True)
+    db.add(pep); db.flush()
+    pur = _svc(db, "HPLC-PUR")
+    parent = LimsSample(sample_id="P-2000", external_lims_uid="uid-p2000", container_mode=True)
+    db.add(parent); db.flush()
+    s1 = LimsSubSample(parent_sample_pk=parent.id, external_lims_uid="mk1://c",
+                       sample_id="P-2000-S01", vial_sequence=1,
+                       assignment_role="hplc", assignment_kind="core")
+    db.add(s1); db.flush()
+    _row(db, s1, pur, "99.0", state="promoted")
+    db.commit()
+    assert build_variance_replicates(db, parent) == {}
 
 
 def test_vial_quantity_inherits_parent_unit_when_missing(prod_world, db):

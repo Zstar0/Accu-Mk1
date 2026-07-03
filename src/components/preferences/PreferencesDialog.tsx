@@ -1,6 +1,15 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Settings, Palette, Zap, Database, Timer, CalendarClock, ClipboardCheck } from 'lucide-react'
+import {
+  Settings,
+  Palette,
+  Zap,
+  Database,
+  Timer,
+  CalendarClock,
+  Flag,
+  ClipboardCheck,
+} from 'lucide-react'
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -32,9 +41,18 @@ import { DataPipelinePane } from './panes/DataPipelinePane'
 import { AdvancedPane } from './panes/AdvancedPane'
 import { SlaPane } from './panes/SlaPane'
 import { BusinessHoursPane } from './panes/BusinessHoursPane'
+import { FlagsPane } from './panes/FlagsPane'
 import { CheckInPane } from './panes/CheckInPane'
 
-type PreferencePane = 'general' | 'appearance' | 'dataPipeline' | 'sla' | 'businessHours' | 'checkIn' | 'advanced'
+type PreferencePane =
+  | 'general'
+  | 'appearance'
+  | 'dataPipeline'
+  | 'sla'
+  | 'businessHours'
+  | 'flags'
+  | 'checkIn'
+  | 'advanced'
 
 const navigationItems = [
   {
@@ -63,6 +81,11 @@ const navigationItems = [
     icon: CalendarClock,
   },
   {
+    id: 'flags' as const,
+    labelKey: 'preferences.flags',
+    icon: Flag,
+  },
+  {
     id: 'checkIn' as const,
     labelKey: 'preferences.checkIn',
     icon: ClipboardCheck,
@@ -86,7 +109,7 @@ export function PreferencesDialog() {
 
   return (
     <Dialog open={preferencesOpen} onOpenChange={setPreferencesOpen}>
-      <DialogContent className="overflow-hidden p-0 md:max-h-[600px] md:max-w-[900px] lg:max-w-[1000px] font-sans rounded-xl">
+      <DialogContent className="overflow-hidden p-0 md:h-[85vh] md:max-h-[85vh] md:w-[92vw] md:max-w-[1100px] lg:max-w-[1280px] font-sans rounded-xl">
         <DialogTitle className="sr-only">{t('preferences.title')}</DialogTitle>
         <DialogDescription className="sr-only">
           {t('preferences.description')}
@@ -141,12 +164,13 @@ export function PreferencesDialog() {
               </div>
             </header>
 
-            <div className="flex flex-1 flex-col gap-4 overflow-y-auto p-4 pt-0 max-h-[calc(600px-4rem)]">
+            <div className="flex flex-1 flex-col gap-4 overflow-y-auto p-4 pt-0 max-h-[calc(85vh-4rem)]">
               {activePane === 'general' && <GeneralPane />}
               {activePane === 'appearance' && <AppearancePane />}
               {activePane === 'dataPipeline' && <DataPipelinePane />}
               {activePane === 'sla' && <SlaPane />}
               {activePane === 'businessHours' && <BusinessHoursPane />}
+              {activePane === 'flags' && <FlagsPane />}
               {activePane === 'checkIn' && <CheckInPane />}
               {activePane === 'advanced' && <AdvancedPane />}
             </div>

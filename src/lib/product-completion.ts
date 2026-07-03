@@ -39,7 +39,19 @@ export interface ProductCompletionContext {
 
 type CompletionKind = 'endo' | 'ster' | 'hplc' | 'bundle' | 'variance'
 
-const NON_HPLC_GROUPS = new Set(['Microbiology', 'Endotoxin'])
+// Micro service groups. Prod folds endotoxin INTO 'Microbiology' — there is no
+// separate 'Endotoxin' group in prod — so endotoxin cannot be told apart by
+// group name; it is identified by keyword (see isEndotoxin). The historical
+// 'Endotoxin' group (dev/seed) is still treated as micro for back-compat.
+const MICRO_GROUPS = new Set(['Microbiology', 'Endotoxin'])
+
+/** Endotoxin analyses are keyed by KEYWORD (ENDO-LAL / ENDO-*), NOT by service
+ *  group: prod groups them under 'Microbiology', so a group-name match never
+ *  fired in prod (the P-0965 bug — endotoxin check stayed unchecked despite a
+ *  promoted ENDO-LAL result). */
+function isEndotoxin(a: SenaiteAnalysis): boolean {
+  return (a.keyword ?? '').toUpperCase().startsWith('ENDO')
+}
 
 /** Map an ordered-product key to its completion rule (null = no check shown).
  *  `core`/`hplcpurity_identity`/`bac_water_panel` are single-component HPLC
@@ -64,10 +76,11 @@ function completionKind(productKey: string): CompletionKind | null {
 }
 
 function inCategory(a: SenaiteAnalysis, kind: 'endo' | 'ster' | 'hplc'): boolean {
-  const group = a.service_group_name
-  if (kind === 'endo') return group === 'Endotoxin'
-  if (kind === 'ster') return group === 'Microbiology'
-  return !NON_HPLC_GROUPS.has(group ?? '') // hplc = everything not micro/endo
+  const micro = MICRO_GROUPS.has(a.service_group_name ?? '')
+  const endo = isEndotoxin(a)
+  if (kind === 'endo') return endo // ENDO-* keyword, any group
+  if (kind === 'ster') return micro && !endo // micro that isn't endotoxin
+  return !micro && !endo // hplc = not micro, not endotoxin
 }
 
 export function computeProductCompletion(

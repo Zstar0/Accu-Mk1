@@ -24,6 +24,31 @@ export function StateBadge({ state }: { state: string }) {
   )
 }
 
+/**
+ * Display-layer rounding for numeric analysis results.
+ *
+ * Promoted sub-sample values land on the parent SENAITE AR at full precision
+ * (e.g. Fill Volume 9.710267415 mL). The sample-details row should show 2 dp,
+ * but we never touch the stored value and we don't restyle results that are
+ * already fine. Surgical by design: only a clean finite number carrying MORE
+ * than 2 decimal places is trimmed to 2 dp. Integers, <=2dp values, values
+ * with a unit suffix, and any non-numeric text pass through verbatim.
+ *
+ * (A per-AnalysisService precision option will supersede this hardcoded 2 dp as
+ * part of the spec/validation-engine migration; until then 2 dp is the default.)
+ */
+export function formatNumericResult(result: string | null): string | null {
+  if (result == null) return result
+  const trimmed = result.trim()
+  if (trimmed === '') return result
+  const n = Number(trimmed)
+  if (!Number.isFinite(n)) return result // non-numeric (incl. unit suffix) — leave as-is
+  const dot = trimmed.indexOf('.')
+  if (dot === -1) return result // integer — leave as-is
+  if (trimmed.length - dot - 1 <= 2) return result // already <=2 dp — leave as-is
+  return n.toFixed(2)
+}
+
 export function formatDate(dateStr: string | null): string {
   if (!dateStr) return '—'
   const d = new Date(dateStr)

@@ -3396,6 +3396,12 @@ export async function deleteSamplePrep(id: number): Promise<void> {
 
 // --- HPLC Scan ---
 
+export interface LocalHplcFile {
+  filename: string
+  content: string
+  kind: 'peak' | 'chrom'
+}
+
 export interface HplcScanMatch {
   prep_id: number
   senaite_sample_id: string
@@ -3407,6 +3413,12 @@ export interface HplcScanMatch {
   /** TRUE when the folder was hand-picked via the per-prep override (not
    *  found by the name-prefix scan). Display hint only. */
   is_override?: boolean
+  /** Data source. Absent/'sharepoint' = files fetched from SharePoint by id.
+   *  'local' = files were read client-side; see `local_files`. */
+  source?: 'sharepoint' | 'local'
+  /** Present only when source === 'local': the already-read file content.
+   *  peak_files/chrom_files are [] for local matches. */
+  local_files?: LocalHplcFile[]
 }
 
 export interface HplcFolderMatchResult {

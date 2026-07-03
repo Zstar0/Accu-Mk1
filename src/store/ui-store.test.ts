@@ -136,6 +136,168 @@ describe('UIStore customer actions', () => {
   })
 })
 
+describe('UIStore flags flyout + thread', () => {
+  beforeEach(() => {
+    useUIStore.setState({ flagsFlyoutOpen: false, flagsThreadId: null })
+  })
+
+  it('defaults to closed with no active thread', () => {
+    const state = useUIStore.getState()
+    expect(state.flagsFlyoutOpen).toBe(false)
+    expect(state.flagsThreadId).toBeNull()
+  })
+
+  it('openFlagsFlyout() opens the flyout (triage list, no thread)', () => {
+    useUIStore.getState().openFlagsFlyout()
+    const state = useUIStore.getState()
+    expect(state.flagsFlyoutOpen).toBe(true)
+    expect(state.flagsThreadId).toBeNull()
+  })
+
+  it('openFlagThread(7) opens the flyout onto thread 7', () => {
+    useUIStore.getState().openFlagThread(7)
+    const state = useUIStore.getState()
+    expect(state.flagsFlyoutOpen).toBe(true)
+    expect(state.flagsThreadId).toBe(7)
+  })
+
+  it('openFlagsFlyout() preserves an already-open thread id', () => {
+    useUIStore.getState().openFlagThread(3)
+    useUIStore.getState().closeFlagsFlyout()
+    // Re-open the list without arg — thread id was reset by close, stays null.
+    useUIStore.getState().openFlagsFlyout()
+    expect(useUIStore.getState().flagsThreadId).toBeNull()
+  })
+
+  it('closeFlagThread() drops the thread but keeps the flyout open', () => {
+    useUIStore.getState().openFlagThread(5)
+    useUIStore.getState().closeFlagThread()
+    const state = useUIStore.getState()
+    expect(state.flagsFlyoutOpen).toBe(true)
+    expect(state.flagsThreadId).toBeNull()
+  })
+
+  it('closeFlagsFlyout() resets both flyout and thread', () => {
+    useUIStore.getState().openFlagThread(9)
+    useUIStore.getState().closeFlagsFlyout()
+    const state = useUIStore.getState()
+    expect(state.flagsFlyoutOpen).toBe(false)
+    expect(state.flagsThreadId).toBeNull()
+  })
+})
+
+describe('UIStore flags entity filter', () => {
+  beforeEach(() => {
+    useUIStore.setState({
+      flagsFlyoutOpen: false,
+      flagsThreadId: null,
+      flagsEntityFilter: null,
+    })
+  })
+
+  it('defaults to no entity filter', () => {
+    expect(useUIStore.getState().flagsEntityFilter).toBeNull()
+  })
+
+  it('openFlagsForEntity opens the flyout filtered to that entity (descendants default false)', () => {
+    useUIStore.getState().openFlagsForEntity('sub_sample', '42')
+    const state = useUIStore.getState()
+    expect(state.flagsFlyoutOpen).toBe(true)
+    expect(state.flagsThreadId).toBeNull()
+    expect(state.flagsEntityFilter).toEqual({
+      type: 'sub_sample',
+      id: '42',
+      includeDescendants: false,
+    })
+  })
+
+  it('openFlagsForEntity honors includeDescendants and drops any open thread', () => {
+    useUIStore.getState().openFlagThread(5)
+    useUIStore
+      .getState()
+      .openFlagsForEntity('sample', 'P-0071', { includeDescendants: true })
+    const state = useUIStore.getState()
+    expect(state.flagsThreadId).toBeNull()
+    expect(state.flagsEntityFilter).toEqual({
+      type: 'sample',
+      id: 'P-0071',
+      includeDescendants: true,
+    })
+  })
+
+  it('clearFlagsEntityFilter returns to the tabs (keeps flyout open)', () => {
+    useUIStore.getState().openFlagsForEntity('sample', 'P-0071')
+    useUIStore.getState().clearFlagsEntityFilter()
+    const state = useUIStore.getState()
+    expect(state.flagsEntityFilter).toBeNull()
+    expect(state.flagsFlyoutOpen).toBe(true)
+  })
+
+  it('closeFlagsFlyout clears the entity filter', () => {
+    useUIStore.getState().openFlagsForEntity('sample', 'P-0071')
+    useUIStore.getState().closeFlagsFlyout()
+    const state = useUIStore.getState()
+    expect(state.flagsEntityFilter).toBeNull()
+    expect(state.flagsFlyoutOpen).toBe(false)
+  })
+})
+
+describe('UIStore flags samples (order) filter', () => {
+  beforeEach(() => {
+    useUIStore.setState({
+      flagsFlyoutOpen: false,
+      flagsThreadId: null,
+      flagsEntityFilter: null,
+      flagsSamplesFilter: null,
+    })
+  })
+
+  it('defaults to no samples filter', () => {
+    expect(useUIStore.getState().flagsSamplesFilter).toBeNull()
+  })
+
+  it('openFlagsForSamples opens the flyout scoped to the sample ids', () => {
+    useUIStore.getState().openFlagsForSamples('#1042', ['P-0001', 'P-0002'])
+    const state = useUIStore.getState()
+    expect(state.flagsFlyoutOpen).toBe(true)
+    expect(state.flagsThreadId).toBeNull()
+    expect(state.flagsSamplesFilter).toEqual({
+      label: '#1042',
+      sampleIds: ['P-0001', 'P-0002'],
+    })
+  })
+
+  it('is mutually exclusive with the single-entity filter (each clears the other)', () => {
+    useUIStore.getState().openFlagsForEntity('sample', 'P-0071')
+    useUIStore.getState().openFlagsForSamples('#1042', ['P-0001'])
+    expect(useUIStore.getState().flagsEntityFilter).toBeNull()
+    expect(useUIStore.getState().flagsSamplesFilter).toEqual({
+      label: '#1042',
+      sampleIds: ['P-0001'],
+    })
+
+    // …and opening a single entity clears the samples scope.
+    useUIStore.getState().openFlagsForEntity('sample', 'P-0071')
+    expect(useUIStore.getState().flagsSamplesFilter).toBeNull()
+    expect(useUIStore.getState().flagsEntityFilter).not.toBeNull()
+  })
+
+  it('clearFlagsSamplesFilter returns to the tabs (keeps flyout open)', () => {
+    useUIStore.getState().openFlagsForSamples('#1042', ['P-0001'])
+    useUIStore.getState().clearFlagsSamplesFilter()
+    expect(useUIStore.getState().flagsSamplesFilter).toBeNull()
+    expect(useUIStore.getState().flagsFlyoutOpen).toBe(true)
+  })
+
+  it('closeFlagsFlyout clears the samples filter', () => {
+    useUIStore.getState().openFlagsForSamples('#1042', ['P-0001'])
+    useUIStore.getState().closeFlagsFlyout()
+    const state = useUIStore.getState()
+    expect(state.flagsSamplesFilter).toBeNull()
+    expect(state.flagsFlyoutOpen).toBe(false)
+  })
+})
+
 describe('UIStore customer detail tabs + order search', () => {
   beforeEach(() => {
     useUIStore.setState(useUIStore.getInitialState())
@@ -236,5 +398,65 @@ describe('UIStore customer detail tabs + order search', () => {
       sample_id: '',
       analyte: '',
     })
+  })
+})
+
+describe('UIStore active flag entity stack', () => {
+  beforeEach(() => {
+    useUIStore.setState({ activeFlagEntityStack: [] })
+  })
+
+  it('defaults to an empty stack', () => {
+    expect(useUIStore.getState().activeFlagEntityStack).toEqual([])
+  })
+
+  it('push adds to the top; overlays stack in order', () => {
+    useUIStore
+      .getState()
+      .pushActiveFlagEntity({ type: 'sample', id: 'P-0071', label: 'P-0071' })
+    useUIStore
+      .getState()
+      .pushActiveFlagEntity({ type: 'worksheet', id: '9', label: 'WS Alpha' })
+    const stack = useUIStore.getState().activeFlagEntityStack
+    expect(stack).toHaveLength(2)
+    expect(stack.at(-1)).toEqual({
+      type: 'worksheet',
+      id: '9',
+      label: 'WS Alpha',
+    })
+  })
+
+  it('pop removes the LAST matching entry and restores the one beneath', () => {
+    useUIStore
+      .getState()
+      .pushActiveFlagEntity({ type: 'sample', id: 'P-0071', label: 'P-0071' })
+    useUIStore
+      .getState()
+      .pushActiveFlagEntity({ type: 'worksheet', id: '9', label: 'WS Alpha' })
+    useUIStore.getState().popActiveFlagEntity({ type: 'worksheet', id: '9' })
+    const stack = useUIStore.getState().activeFlagEntityStack
+    expect(stack).toHaveLength(1)
+    expect(stack.at(-1)?.id).toBe('P-0071')
+  })
+
+  it('pop of a non-top entry removes just that entry (unmount order safety)', () => {
+    useUIStore
+      .getState()
+      .pushActiveFlagEntity({ type: 'sample', id: 'P-0071', label: 'P-0071' })
+    useUIStore
+      .getState()
+      .pushActiveFlagEntity({ type: 'worksheet', id: '9', label: 'WS Alpha' })
+    useUIStore.getState().popActiveFlagEntity({ type: 'sample', id: 'P-0071' })
+    const stack = useUIStore.getState().activeFlagEntityStack
+    expect(stack).toHaveLength(1)
+    expect(stack.at(-1)?.type).toBe('worksheet')
+  })
+
+  it('pop of an unknown entry is a no-op', () => {
+    useUIStore
+      .getState()
+      .pushActiveFlagEntity({ type: 'sample', id: 'P-0071', label: 'P-0071' })
+    useUIStore.getState().popActiveFlagEntity({ type: 'sample', id: 'NOPE' })
+    expect(useUIStore.getState().activeFlagEntityStack).toHaveLength(1)
   })
 })

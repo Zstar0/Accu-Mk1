@@ -1,0 +1,476 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Flags — User Guide</title>
+  <style>
+:root {
+  color-scheme: light dark;
+  --bg: #fbfbfa;
+  --fg: #1a1a1a;
+  --muted: #5a5a5a;
+  --border: #e0ddd6;
+  --accent: #2563eb;        /* royal blue */
+  --accent-soft: #dbeafe;
+  --callout-bg: #fef3c7;    /* amber-100 */
+  --callout-border: #f59e0b;
+  --callout-fg: #78350f;
+  --table-header-bg: #f3f1ec;
+  --table-row-alt: #faf8f3;
+  --code-bg: #f5f2eb;
+  --kbd-bg: #ffffff;
+  --kbd-border: #cbc7bd;
+  --link: #1d4ed8;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #181816;
+    --fg: #ededed;
+    --muted: #a8a8a8;
+    --border: #2e2c28;
+    --accent: #60a5fa;
+    --accent-soft: #1e3a8a;
+    --callout-bg: #3f2f0c;
+    --callout-border: #d97706;
+    --callout-fg: #fde68a;
+    --table-header-bg: #232220;
+    --table-row-alt: #1f1e1c;
+    --code-bg: #232220;
+    --kbd-bg: #1f1e1c;
+    --kbd-border: #3f3d38;
+    --link: #93c5fd;
+  }
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen,
+    Ubuntu, Cantarell, "Open Sans", "Helvetica Neue", sans-serif;
+  font-size: 16px;
+  line-height: 1.65;
+}
+
+main {
+  max-width: 840px;
+  margin: 0 auto;
+  padding: 48px 28px 96px;
+}
+
+header.page {
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 16px;
+  margin-bottom: 36px;
+}
+header.page .kicker {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+
+h1 {
+  font-size: 32px;
+  line-height: 1.2;
+  margin: 0;
+  font-weight: 700;
+}
+
+h2 {
+  font-size: 22px;
+  line-height: 1.3;
+  margin: 40px 0 12px;
+  font-weight: 700;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+}
+
+h3 {
+  font-size: 18px;
+  line-height: 1.4;
+  margin: 28px 0 8px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+h4 {
+  font-size: 15px;
+  margin: 20px 0 6px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+p { margin: 8px 0 12px; }
+
+a {
+  color: var(--link);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  text-decoration-thickness: 1px;
+}
+a:hover { text-decoration-thickness: 2px; }
+
+ul, ol { padding-left: 24px; margin: 8px 0 16px; }
+li { margin: 4px 0; }
+li > p { margin: 4px 0; }
+
+blockquote {
+  margin: 18px 0;
+  padding: 14px 18px;
+  background: var(--callout-bg);
+  border-left: 4px solid var(--callout-border);
+  color: var(--callout-fg);
+  border-radius: 4px;
+}
+blockquote p:first-child { margin-top: 0; }
+blockquote p:last-child { margin-bottom: 0; }
+blockquote strong { color: var(--callout-fg); }
+blockquote ul, blockquote ol { padding-left: 22px; }
+
+code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono",
+    monospace;
+  font-size: 0.88em;
+  background: var(--code-bg);
+  padding: 1px 5px;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+}
+pre {
+  background: var(--code-bg);
+  padding: 14px 16px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  overflow-x: auto;
+  font-size: 13px;
+}
+pre code {
+  background: transparent;
+  padding: 0;
+  border: 0;
+}
+
+kbd {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.85em;
+  background: var(--kbd-bg);
+  border: 1px solid var(--kbd-border);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  padding: 1px 6px;
+}
+
+table {
+  width: 100%;
+  margin: 16px 0;
+  border-collapse: collapse;
+  font-size: 0.95em;
+}
+thead th {
+  background: var(--table-header-bg);
+  text-align: left;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+}
+tbody td {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+tbody tr:nth-child(even) td {
+  background: var(--table-row-alt);
+}
+
+hr {
+  border: 0;
+  border-top: 1px solid var(--border);
+  margin: 36px 0;
+}
+
+/* Inline screenshot placeholders rendered from HTML comments */
+.screenshot-placeholder {
+  display: block;
+  margin: 14px 0;
+  padding: 14px 18px;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  background: var(--accent-soft);
+  color: var(--muted);
+  font-size: 13px;
+  font-style: italic;
+}
+.screenshot-placeholder::before {
+  content: "Screenshot — ";
+  font-weight: 600;
+  font-style: normal;
+}
+
+footer.page {
+  margin-top: 64px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 13px;
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+@media print {
+  body { background: #fff; color: #000; }
+  main { max-width: 100%; padding: 24px; }
+  blockquote { background: #fff8e1; }
+  .screenshot-placeholder { display: none; }
+  a { color: #000; text-decoration: underline; }
+}
+</style>
+</head>
+<body>
+  <main>
+    <header class="page">
+      <div class="kicker">Accu-Mk1 user guide</div>
+    </header>
+    <h1 id="flags-user-guide">Flags — User Guide</h1>
+<h2 id="at-a-glance">At a glance</h2>
+<p>Flags are how Accu-Mk1 keeps work moving without losing the thread in Slack. A <strong>flag</strong> is a small ticket pinned to a specific piece of work — a sample, a vial, or a worksheet — with an owner, a status, and a comment thread. Instead of &ldquo;hey, did anyone re-run P-0134?&rdquo; scrolling off in a channel, you raise a flag on P-0134, assign it, and everyone who cares can see exactly where it stands.</p>
+<blockquote>
+<p><strong>The one-minute version:</strong></p>
+<ul>
+<li>A flag lives <strong>on a work item</strong> (sample / vial / worksheet), not in a channel — open the item and the flag is right there.</li>
+<li>Every flag has a <strong>type</strong> (an Issue like <em>Blocker</em> or <em>Question</em>, or a Signal like <em>Ready for Verification</em>), an <strong>assignee</strong>, <strong>watchers</strong>, a <strong>status</strong>, and a <strong>comment thread</strong>.</li>
+<li>The <strong>Flags button</strong> (top-right, next to Worksheets) opens a slide-out with everything relevant to you — what&rsquo;s assigned to you, what you raised, what you&rsquo;re watching, and what&rsquo;s new.</li>
+<li><strong>@mention</strong> someone in a comment to pull them in as a watcher.</li>
+<li>Move a flag through its <strong>status</strong> (Open → In Progress → Blocked → Resolved → Closed) so its state is never a mystery.</li>
+<li><strong>Flag activity reaches you as a Slack DM automatically</strong> — on by default for everyone; tune it or turn it off under Account → Profile.</li>
+</ul>
+</blockquote>
+<p>Read this once end-to-end; after that the flyout and the flag buttons are self-explanatory.</p>
+<h2 id="anatomy-of-a-flag">Anatomy of a flag</h2>
+<p>Every flag has the same parts, whether it&rsquo;s a blocker on a vial or a &ldquo;ready for verification&rdquo; signal on a sample:</p>
+<table>
+<thead>
+<tr>
+<th>Part</th>
+<th>What it is</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Title</strong></td>
+<td>A one-line summary of what&rsquo;s going on (&ldquo;HPLC re-run needed — baseline drift&rdquo;).</td>
+</tr>
+<tr>
+<td><strong>Type</strong></td>
+<td>The kind of flag. Types are one of two <strong>kinds</strong>: an <strong>Issue</strong> (something&rsquo;s wrong / needs a decision) or a <strong>Signal</strong> (a heads-up / status). See below.</td>
+</tr>
+<tr>
+<td><strong>Entity</strong></td>
+<td>The work item it&rsquo;s attached to — a sample, a vial (sub-sample), or a worksheet. The flag shows the item&rsquo;s real label and links straight to it.</td>
+</tr>
+<tr>
+<td><strong>Assignee</strong></td>
+<td>The one person who owns moving it forward. Optional, but a flag with no owner tends to sit.</td>
+</tr>
+<tr>
+<td><strong>Watchers</strong></td>
+<td>People kept in the loop: the person who raised it, the assignee, and anyone @mentioned.</td>
+</tr>
+<tr>
+<td><strong>Status</strong></td>
+<td>Where it is in its lifecycle: Open, In Progress, Blocked, Resolved, or Closed.</td>
+</tr>
+<tr>
+<td><strong>Comments</strong></td>
+<td>A threaded discussion, with system lines (raised / assigned / status changes) woven in for a full history.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="issue-vs-signal">Issue vs Signal</h3>
+<ul>
+<li><strong>Issue</strong> — something needs attention or a decision. Types include <strong>Blocker</strong>, <strong>Critical</strong>, <strong>Question</strong>, and <strong>Waiting on Customer</strong>.</li>
+<li><strong>Signal</strong> — a status broadcast, not a problem. The main one is <strong>Ready for Verification</strong>.</li>
+</ul>
+<p>Your lab&rsquo;s exact list of types is managed by an admin (see <em>For admins</em> below), so what you see in the type picker may differ slightly from the defaults.</p>
+<h2 id="raising-a-flag">Raising a flag</h2>
+<p>You almost never type in an entity ID — you raise a flag <strong>from the work item itself</strong>, so it&rsquo;s already attached to the right thing.</p>
+
+<p><strong>From a sample, vial, or worksheet:</strong></p>
+<ol>
+<li>Open the item (a sample&rsquo;s detail page, a vial row, or the worksheet drawer).</li>
+<li>Click its <strong>flag button</strong>. If the item already has flags, the button is colored and shows a count; if not, it&rsquo;s a subtle outline.</li>
+<li>Choose <strong>Raise a flag</strong>, pick the <strong>type</strong>, give it a <strong>title</strong>, optionally assign it, and save.</li>
+</ol>
+<p><strong>From the Flags flyout:</strong></p>
+<ul>
+<li>When you&rsquo;re on an item&rsquo;s page, the flyout&rsquo;s <strong>Add Flag</strong> button is pre-targeted to that item (&ldquo;Add flag on P-0134-S02&rdquo;). If you&rsquo;re not on a specific item, Add Flag is hidden — that&rsquo;s intentional, because nobody memorizes raw entity IDs.</li>
+</ul>
+<blockquote>
+<p><strong>Raising several at once:</strong> an item can carry more than one flag. After you raise one, use <strong>Raise another flag</strong> to add the next. The flag button&rsquo;s count badge reflects the total.</p>
+</blockquote>
+<h2 id="assigning-watchers">Assigning &amp; watchers</h2>
+<p>A flag moves fastest when exactly one person owns it.</p>
+<ul>
+<li><strong>Assignee</strong> — set it when you raise the flag or any time after. The assignee is the person expected to act.</li>
+<li><strong>Watchers</strong> are added automatically:<ul>
+<li>the person who <strong>raised</strong> the flag,</li>
+<li>the <strong>assignee</strong>,</li>
+<li>anyone <strong>@mentioned</strong> in a comment.</li>
+</ul>
+</li>
+<li>You can watch a flag you weren&rsquo;t pulled into if you want to keep an eye on it — it then shows up under your <strong>Watching</strong> tab.</li>
+</ul>
+<p>Who gets a notification depends on the relationship and the per-person notification settings (see <em>Slack DM notifications</em>). As a rule: the assignee hears about assignments and status changes; @mentioned people hear about the mention.</p>
+<h2 id="the-status-lifecycle">The status lifecycle</h2>
+<p>Move a flag through its statuses so its state is always obvious at a glance. Colors on the flag chips track the status.</p>
+<table>
+<thead>
+<tr>
+<th>Status</th>
+<th>Meaning — use it when…</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Open</strong></td>
+<td>Just raised; nobody&rsquo;s actively working it yet.</td>
+</tr>
+<tr>
+<td><strong>In Progress</strong></td>
+<td>Someone (usually the assignee) is actively on it.</td>
+</tr>
+<tr>
+<td><strong>Blocked</strong></td>
+<td>Work has stalled on something external — waiting on a reagent, an instrument, a customer, another team. Flags the fact that it&rsquo;s <em>stuck</em>, not just unstarted.</td>
+</tr>
+<tr>
+<td><strong>Resolved</strong></td>
+<td>The work is done; kept visible for a beat so others can confirm.</td>
+</tr>
+<tr>
+<td><strong>Closed</strong></td>
+<td>Done and acknowledged; drops out of the &ldquo;open&rdquo; views.</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Open</strong>, <strong>In Progress</strong>, and <strong>Blocked</strong> are all &ldquo;open&rdquo; states — they show up in the <strong>All open</strong> tab and count toward the flag badges on items. <strong>Resolved</strong> and <strong>Closed</strong> are done states and drop out of those views.</p>
+<blockquote>
+<p><strong>Resolve when it&rsquo;s actually done.</strong> A flag left In Progress forever is as noisy as no flag at all. When the work is complete, move it to Resolved (or Closed) so it clears from everyone&rsquo;s open lists.</p>
+</blockquote>
+<h2 id="comments-mentions">Comments &amp; @mentions</h2>
+<p>Each flag has a <strong>thread</strong>. Use it the way you&rsquo;d use a Slack thread — but it stays pinned to the work.</p>
+<ul>
+<li>Type a comment and send; it animates into the thread.</li>
+<li><strong>@mention</strong> a colleague (<code>@Jane</code>) to pull them in. They become a <strong>watcher</strong> and get notified about the mention.</li>
+<li><strong>System lines</strong> — raised, assigned, status changes — are woven into the thread in grey, so the comment history and the audit history are one continuous story. That audit trail is also there for traceability.</li>
+</ul>
+<h2 id="the-flags-flyout">The Flags flyout</h2>
+<p>The <strong>Flags button</strong> sits at the top-right, next to Worksheets. It shows colored count chips and glows when something new arrives. Click it to open the full-height slide-out.</p>
+
+<p><strong>Tabs</strong> (each scoped to what&rsquo;s relevant to you):</p>
+<table>
+<thead>
+<tr>
+<th>Tab</th>
+<th>Shows</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Assigned to me</strong></td>
+<td>Flags you own.</td>
+</tr>
+<tr>
+<td><strong>Raised by me</strong></td>
+<td>Flags you created.</td>
+</tr>
+<tr>
+<td><strong>Watching</strong></td>
+<td>Flags you&rsquo;re a watcher on.</td>
+</tr>
+<tr>
+<td><strong>All open</strong></td>
+<td>Every open flag across the lab (Open / In Progress / Blocked).</td>
+</tr>
+<tr>
+<td><strong>Activity</strong></td>
+<td>A running feed of recent flag events relevant to you.</td>
+</tr>
+<tr>
+<td><strong>Unread</strong></td>
+<td>Flags with activity you haven&rsquo;t looked at yet.</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Other flyout controls:</strong></p>
+<ul>
+<li><strong>List / Table view</strong> — toggle between stacked cards and a dense table; your choice is remembered.</li>
+<li><strong>Filter bar</strong> — search by title or Sample ID, and filter by status or entity type.</li>
+<li><strong>Unread markers</strong> — a magenta marker flags threads with new activity; open one to clear it.</li>
+<li>Clicking a flag opens its <strong>thread</strong>; from there you can comment, assign, and change status.</li>
+</ul>
+<blockquote>
+<p><strong>A colored count on an item?</strong> If you&rsquo;re looking at a sample, vial, or worksheet and its flag button shows a number, that&rsquo;s how many flags are on it. Click it: one flag opens the thread directly; several open a short scoped list.</p>
+</blockquote>
+<h2 id="flags-on-your-work">Flags on your work</h2>
+<p>Flags surface wherever you assess work, not only in the flyout:</p>
+<ul>
+<li><strong>Sample details</strong> — a flag button in the header. On a parent sample it <strong>aggregates its vials&rsquo; flags</strong>, so you see the whole picture from the top.</li>
+<li><strong>Vials</strong> — each vial row has its own flag affordance.</li>
+<li><strong>Worksheets</strong> — the worksheet drawer header carries a flag button for that worksheet.</li>
+<li><strong>Order &amp; customer views</strong> — a flag indicator appears next to samples in the Order Status table and customer detail, so a coordinator can spot a flagged order at a glance.</li>
+</ul>
+<p>Everywhere, the <strong>count badge</strong> tells you how many flags are on the item, and the color reflects the most important one.</p>
+<h2 id="slack-dm-notifications">Slack DM notifications</h2>
+<p>Flag activity comes to you as <strong>Slack direct messages</strong> automatically — <strong>this is on by default for everyone.</strong> When a flag is assigned to you, someone @mentions you, there&rsquo;s activity on a flag you raised or watch, or a status changes, you get a DM. No setup required for most people.</p>
+<blockquote>
+<p><strong>On by default.</strong> You don&rsquo;t opt in — you&rsquo;re already in. If DMs are noisier than you&rsquo;d like, you <em>opt out</em> (all or part) under <strong>Account → Profile</strong>.</p>
+</blockquote>
+<p><strong>How you get linked (automatic).</strong> Accu-Mk1 matches your login email to your Slack account — including known alias domains, so a mixed-domain address (your Mk1 login on one domain, your Slack on another) still resolves — and links you the first time you&rsquo;d receive a DM. Nothing for you to do.</p>
+<p><strong>If you&rsquo;re <em>not</em> getting DMs.</strong> Your Slack account couldn&rsquo;t be matched to your email. Go to <strong>Account → Profile</strong>, paste your <strong>Slack member ID</strong>, and hit <strong>Send test DM</strong> to confirm. The page shows who your account resolved to (&ldquo;Slack linked → …&rdquo;) so you can be sure it mapped to you.</p>
+<p><strong>Turning it down.</strong> On <strong>Account → Profile</strong>, the master toggle switches DMs off entirely, and the per-category toggles mute just some kinds — for example, turn off <em>activity on flags you watch</em> if watched-flag chatter is too much.</p>
+<p>The five categories — <strong>assigned to you</strong>, <strong>mentioned</strong>, <strong>activity on flags you raised</strong>, <strong>activity on flags you watch</strong>, and <strong>status changes</strong> — are <strong>all on by default</strong>. Each DM deep-links back to the flagged item and opens the thread.</p>
+<h2 id="for-admins-managing-flag-types">For admins — managing flag types</h2>
+<p>Admins control the catalog of flag <strong>types</strong> (labels, colors, which are Issues vs Signals, which count as <em>blocking</em>, and which entity types they apply to).</p>
+
+<ul>
+<li>Open <strong>Preferences → Flags</strong>.</li>
+<li><strong>Create or edit a type:</strong> set its label, color, kind (Issue / Signal), whether it&rsquo;s blocking, and its scope (global, or restricted to samples / vials / worksheets).</li>
+<li><strong>Deactivating a type</strong> (not deleting) is the norm: a type that&rsquo;s still in use can&rsquo;t be hard-deleted, but you can <strong>deactivate</strong> it — it disappears from the raise picker while existing flags keep rendering. This keeps the audit history intact.</li>
+<li>The type <strong>slug</strong> is fixed once created (existing flags reference it); you can rename the label freely.</li>
+</ul>
+<h2 id="tips-etiquette">Tips &amp; etiquette</h2>
+<ul>
+<li><strong>One owner per flag.</strong> Assign it. Unowned flags drift.</li>
+<li><strong>Resolve when done.</strong> Clear finished work out of everyone&rsquo;s open lists.</li>
+<li><strong>Use Signal for status, Issue for problems.</strong> &ldquo;Ready for Verification&rdquo; is a Signal; &ldquo;Blocker&rdquo; is an Issue. Picking the right kind keeps the views meaningful.</li>
+<li><strong>@mention to pull someone in</strong>, rather than re-explaining context in Slack — the flag already has the context and the link to the work.</li>
+<li><strong>Don&rsquo;t over-flag.</strong> A flag is for something that needs tracking or a hand-off, not for every routine step.</li>
+</ul>
+<h2 id="glossary">Glossary</h2>
+<ul>
+<li><strong>Flag:</strong> A mini-ticket pinned to a work item (sample, vial, or worksheet), with a type, assignee, watchers, status, and comment thread.</li>
+<li><strong>Kind:</strong> Whether a flag type is an <strong>Issue</strong> (needs attention/decision) or a <strong>Signal</strong> (a status broadcast).</li>
+<li><strong>Type:</strong> The specific label within a kind — e.g. Blocker, Critical, Question, Waiting on Customer (Issues); Ready for Verification (Signal). Managed by admins.</li>
+<li><strong>Entity:</strong> The work item a flag is attached to. A parent sample aggregates its vials&rsquo; flags.</li>
+<li><strong>Assignee:</strong> The single person who owns moving a flag forward.</li>
+<li><strong>Watcher:</strong> Someone kept in the loop — the raiser, the assignee, and anyone @mentioned.</li>
+<li><strong>Blocked:</strong> An open status meaning work is stalled on something external, distinct from simply not-yet-started.</li>
+<li><strong>Signal (Ready for Verification):</strong> A flag kind used to broadcast that work is ready for the next step, rather than to report a problem.</li>
+</ul>
+    <footer class="page">
+      <span>Source: <code>flags-system-guide.md</code></span>
+      <span>Generated from the latest markdown source</span>
+    </footer>
+  </main>
+</body>
+</html>
