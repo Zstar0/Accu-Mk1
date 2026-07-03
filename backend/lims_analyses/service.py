@@ -351,6 +351,14 @@ def apply_transition(
             raise BadRequestError(
                 "variance_verify requires the host vial to be assigned to a variance bucket"
             )
+    elif kind == "unverify":
+        # Unlock is a traceable amendment (ISO 17025 7.5.2) — the audit row
+        # must say why, so a blank reason is rejected.
+        if not (reason or "").strip():
+            raise BadRequestError("unverify requires a non-empty reason")
+        # Mirror retract: clear the stale verified_at from the reverted
+        # variance sign-off (see the 'retract' guard below).
+        row.verified_at = None
     elif kind == "reset":
         # Clear any draft result + provenance on the way back to unassigned.
         row.result_value = None

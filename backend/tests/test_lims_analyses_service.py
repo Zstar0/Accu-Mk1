@@ -6,10 +6,13 @@ Each test cleans up its own rows. Uses the live subvial DB session
 
 from __future__ import annotations
 
-import pytest
-from sqlalchemy import delete, select
+from datetime import datetime
 
-from database import SessionLocal
+import pytest
+from sqlalchemy import create_engine, delete, select
+from sqlalchemy.orm import sessionmaker
+
+from database import Base, SessionLocal
 from lims_analyses.service import (
     BadRequestError,
     NotFoundError,
@@ -54,6 +57,32 @@ def sub_sample(db):
     if sub is None:
         pytest.skip("no lims_sub_samples row available — seed via Receive Wizard")
     return sub
+
+
+@pytest.fixture
+def db_with_vial_analysis():
+    """Isolated in-memory DB seeded with one vial-tier analysis in
+    to_be_verified. Used for unverify tests instead of the live `db` fixture
+    to avoid depending on/colliding with shared-DB seed data or a live
+    Postgres connection."""
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    db = sessionmaker(bind=engine)()
+    svc = AnalysisService(title="Purity (HPLC)", keyword="PURITY-HPLC")
+    db.add(svc); db.flush()
+    parent = LimsSample(sample_id="P-0001", external_lims_uid="uid-P-0001")
+    db.add(parent); db.flush()
+    sub = LimsSubSample(parent_sample_pk=parent.id, sample_id="P-0001-S01",
+                        external_lims_uid="uid-s1", vial_sequence=1)
+    db.add(sub); db.flush()
+    a = LimsAnalysis(lims_sub_sample_pk=sub.id, analysis_service_id=svc.id,
+                     keyword="PURITY-HPLC", title="Purity (HPLC)",
+                     review_state="to_be_verified", result_value="98.5")
+    db.add(a); db.commit(); db.refresh(a)
+    try:
+        yield db, a
+    finally:
+        db.close()
 
 
 @pytest.fixture(autouse=True)
@@ -259,6 +288,45 @@ def test_retract_from_verified_clears_verified_at(db, sub_sample, analysis_servi
     ).scalars().all()
     kinds = [t.transition_kind for t in txns]
     assert kinds == ["auto", "assign", "submit", "verify", "retract"]
+
+
+# ── unverify: reverts variance_verified, requires reason, clears verified_at ─
+
+
+def test_unverify_requires_reason(db_with_vial_analysis):
+    db, analysis = db_with_vial_analysis
+    analysis.review_state = "variance_verified"
+    db.commit()
+    with pytest.raises(BadRequestError):
+        apply_transition(db, analysis_id=analysis.id, kind="unverify",
+                         reason="   ", user_id=1)
+
+
+def test_unverify_reverts_and_audits(db_with_vial_analysis):
+    db, analysis = db_with_vial_analysis
+    analysis.review_state = "variance_verified"
+    db.commit()
+    row = apply_transition(db, analysis_id=analysis.id, kind="unverify",
+                           reason="tech verified the wrong replicate", user_id=1)
+    assert row.review_state == "to_be_verified"
+    audits = db.execute(
+        select(LimsAnalysisTransition).where(
+            LimsAnalysisTransition.analysis_id == analysis.id,
+            LimsAnalysisTransition.transition_kind == "unverify",
+        )
+    ).scalars().all()
+    assert len(audits) == 1
+    assert "wrong replicate" in (audits[0].reason or "")
+
+
+def test_unverify_clears_verified_at(db_with_vial_analysis):
+    db, analysis = db_with_vial_analysis
+    analysis.review_state = "variance_verified"
+    analysis.verified_at = datetime.utcnow()
+    db.commit()
+    row = apply_transition(db, analysis_id=analysis.id, kind="unverify",
+                           reason="unlock", user_id=1)
+    assert row.verified_at is None
 
 
 # ── reportable flag flip writes an audit row ─────────────────────────────────
