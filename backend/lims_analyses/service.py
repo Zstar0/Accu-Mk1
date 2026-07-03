@@ -1511,6 +1511,93 @@ def force_retract_analysis(
     )
 
 
+def unpromote_parent_analysis(
+    db: Session, *, parent_analysis_id: int, reason: str,
+    user_id: Optional[int],
+) -> Tuple[LimsAnalysis, List[int]]:
+    """Unlock a promotion: retract the parent-tier canonical row and revert
+    EVERY source vial in its promotion group to to_be_verified, so the normal
+    retest / re-verify / re-promote tools apply (vial unlock spec 2026-07-03).
+
+    Non-destructive counterpart to force_retract_analysis: promotion links are
+    KEPT (consumers already ignore links whose parent row is retracted), and
+    sources come back workable instead of rejected. The SENAITE-side guard
+    (parent AR line not verified/published) lives in the route — this function
+    only owns Mk1 state.
+
+    Returns (parent_row, reverted_source_ids).
+    """
+    from models import LimsAnalysisPromotion
+
+    if not (reason or "").strip():
+        raise BadRequestError("unpromote requires a non-empty reason")
+
+    parent_row = get_analysis(db, parent_analysis_id)
+    if parent_row.lims_sub_sample_pk is not None or parent_row.lims_sample_pk is None:
+        raise BadRequestError(
+            f"analysis {parent_analysis_id} is not a parent-tier row; "
+            f"unpromote targets the promoted parent value"
+        )
+    if parent_row.review_state != "verified":
+        raise InvalidTransitionError(
+            parent_row.review_state, "unpromote",
+            message=(
+                "parent result is published (cited by a COA) — invalidate via "
+                "the SENAITE/republish flow first"
+                if parent_row.review_state == "published"
+                else f"unpromote requires a 'verified' parent row, "
+                     f"got {parent_row.review_state!r}"
+            ),
+        )
+
+    links = list(db.execute(
+        select(LimsAnalysisPromotion).where(
+            LimsAnalysisPromotion.parent_analysis_id == parent_row.id
+        )
+    ).scalars().all())
+    if not links:
+        raise BadRequestError(
+            f"parent analysis {parent_row.id} has no promotion links; "
+            f"nothing to unpromote"
+        )
+
+    source_rows = [get_analysis(db, link.source_analysis_id) for link in links]
+    not_promoted = [r.id for r in source_rows if r.review_state != "promoted"]
+    if not_promoted:
+        raise InvalidTransitionError(
+            "mixed", "unpromote",
+            message=(
+                f"source analyses {not_promoted} are not in 'promoted' — the "
+                f"promotion group cannot be unlocked partially"
+            ),
+        )
+
+    now = datetime.utcnow()
+    parent_row.review_state = "retracted"
+    parent_row.verified_at = None
+    parent_row.updated_at = now
+    db.add(LimsAnalysisTransition(
+        analysis_id=parent_row.id, from_state="verified", to_state="retracted",
+        transition_kind="unpromote", user_id=user_id,
+        reason=f"un-promoted: {reason.strip()}",
+    ))
+
+    reverted: List[int] = []
+    for src in source_rows:
+        src.review_state = "to_be_verified"
+        src.updated_at = now
+        db.add(LimsAnalysisTransition(
+            analysis_id=src.id, from_state="promoted", to_state="to_be_verified",
+            transition_kind="unpromote", user_id=user_id,
+            reason=f"un-promoted from parent #{parent_row.id}: {reason.strip()}",
+        ))
+        reverted.append(src.id)
+
+    db.commit()
+    db.refresh(parent_row)
+    return parent_row, reverted
+
+
 def classify_slot_replacement_impact(
     db: Session, *, parent_sample_id: str, old_peptide_id: int,
 ) -> Dict[str, List[dict]]:
