@@ -118,6 +118,13 @@ class PromoteRequest(BaseModel):
     reason: Optional[str] = None
 
 
+class UnpromoteRequest(BaseModel):
+    """Unlock a promotion: retract the parent-tier row and revert every source
+    vial in its group to to_be_verified (vial unlock spec 2026-07-03)."""
+    parent_analysis_id: int
+    reason: str
+
+
 class TransitionInfo(BaseModel):
     """One audit-log row."""
     id: int
@@ -244,3 +251,9 @@ class PromoteResponse(BaseModel):
     """Returns the new parent-tier row and the promotion link rows."""
     parent: AnalysisResponse
     promotions: List[PromotionRow]
+
+
+class UnpromoteResponse(BaseModel):
+    """Returns the retracted parent-tier row and the reverted source ids."""
+    parent: AnalysisResponse
+    reverted_source_ids: List[int]

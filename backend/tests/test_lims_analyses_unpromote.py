@@ -112,3 +112,100 @@ def test_unpromote_then_repromote_round_trip(db):
     )
     assert new_parent.review_state == "verified"
     assert new_parent.id != parent_row.id
+
+
+# ─── Route-level tests ────────────────────────────────────────────────────────
+from unittest.mock import MagicMock, patch
+from fastapi.testclient import TestClient
+from sqlalchemy.pool import StaticPool
+from auth import get_current_user
+from database import get_db
+from main import app
+
+
+@pytest.fixture
+def route_client():
+    engine = create_engine("sqlite:///:memory:",
+                           connect_args={"check_same_thread": False},
+                           poolclass=StaticPool)
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine)
+    shared = Session()
+    def _override_get_db():
+        yield shared
+
+    prev_db = app.dependency_overrides.get(get_db)
+    prev_user = app.dependency_overrides.get(get_current_user)
+    app.dependency_overrides[get_db] = _override_get_db
+    app.dependency_overrides[get_current_user] = lambda: MagicMock(id=1, email="qa@x.t")
+    tc = TestClient(app)
+    tc._test_session = shared
+    yield tc
+    if prev_db is None: app.dependency_overrides.pop(get_db, None)
+    else: app.dependency_overrides[get_db] = prev_db
+    if prev_user is None: app.dependency_overrides.pop(get_current_user, None)
+    else: app.dependency_overrides[get_current_user] = prev_user
+    shared.close()
+
+
+def _line(state):
+    return {"uid": "senaite-uid-1", "review_state": state}
+
+
+def test_unpromote_route_happy_path(route_client):
+    db = route_client._test_session
+    _, parent_row, sources = _seed_promoted_group(db, 1)
+    with patch("lims_analyses.routes.senaite_writeback.find_parent_analysis_line",
+               return_value=_line("to_be_verified")):
+        resp = route_client.post("/api/lims-analyses/unpromote",
+                                 json={"parent_analysis_id": parent_row.id,
+                                       "reason": "swap fix"})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["parent"]["review_state"] == "retracted"
+    assert body["reverted_source_ids"] == [sources[0].id]
+
+
+def test_unpromote_route_senaite_verified_blocks(route_client):
+    db = route_client._test_session
+    _, parent_row, sources = _seed_promoted_group(db, 1)
+    with patch("lims_analyses.routes.senaite_writeback.find_parent_analysis_line",
+               return_value=_line("verified")):
+        resp = route_client.post("/api/lims-analyses/unpromote",
+                                 json={"parent_analysis_id": parent_row.id,
+                                       "reason": "swap fix"})
+    assert resp.status_code == 409
+    assert "SENAITE" in resp.json()["detail"]
+    db.refresh(parent_row)
+    assert parent_row.review_state == "verified"      # nothing mutated
+
+
+def test_unpromote_route_senaite_lookup_failure_fail_closed(route_client):
+    db = route_client._test_session
+    _, parent_row, _ = _seed_promoted_group(db, 1)
+    from lims_analyses.senaite_writeback import SenaiteWritebackError
+    with patch("lims_analyses.routes.senaite_writeback.find_parent_analysis_line",
+               side_effect=SenaiteWritebackError("boom")):
+        resp = route_client.post("/api/lims-analyses/unpromote",
+                                 json={"parent_analysis_id": parent_row.id,
+                                       "reason": "swap fix"})
+    assert resp.status_code == 409
+    db.refresh(parent_row)
+    assert parent_row.review_state == "verified"
+
+
+def test_unpromote_route_unknown_id_404(route_client):
+    resp = route_client.post("/api/lims-analyses/unpromote",
+                             json={"parent_analysis_id": 999999, "reason": "x"})
+    assert resp.status_code == 404
+
+
+def test_unpromote_route_blank_reason_400(route_client):
+    db = route_client._test_session
+    _, parent_row, _ = _seed_promoted_group(db, 1)
+    with patch("lims_analyses.routes.senaite_writeback.find_parent_analysis_line",
+               return_value=_line("to_be_verified")):
+        resp = route_client.post("/api/lims-analyses/unpromote",
+                                 json={"parent_analysis_id": parent_row.id,
+                                       "reason": "   "})
+    assert resp.status_code == 400
