@@ -3988,6 +3988,55 @@ export async function transitionAnalysis(
   return response.json()
 }
 
+/** Unlock a promotion: retracts the parent-tier value and reverts every
+ *  source vial in the group to to_be_verified. 409s carry the SENAITE
+ *  retract-first guidance in `detail`. */
+export async function unpromoteAnalysis(
+  parentAnalysisId: number,
+  reason: string
+): Promise<void> {
+  const response = await fetch(`${API_BASE_URL()}/api/lims-analyses/unpromote`, {
+    method: 'POST',
+    headers: getBearerHeaders('application/json'),
+    body: JSON.stringify({ parent_analysis_id: parentAnalysisId, reason }),
+  })
+  if (!response.ok) {
+    const err = await response.json().catch(() => null)
+    const detail = err?.detail
+    throw new Error(
+      typeof detail === 'string'
+        ? detail
+        : (detail?.message ?? `Unlock failed: ${response.status}`)
+    )
+  }
+}
+
+/** Unlock a variance replicate: variance_verified → to_be_verified with a
+ *  required audit reason. mk1: UIDs only. */
+export async function unverifyVarianceAnalysis(
+  uid: string,
+  reason: string
+): Promise<void> {
+  const limsId = parseInt(uid.slice('mk1:'.length), 10)
+  const response = await fetch(
+    `${API_BASE_URL()}/api/lims-analyses/${limsId}/transitions`,
+    {
+      method: 'POST',
+      headers: getBearerHeaders('application/json'),
+      body: JSON.stringify({ kind: 'unverify', reason }),
+    }
+  )
+  if (!response.ok) {
+    const err = await response.json().catch(() => null)
+    const detail = err?.detail
+    throw new Error(
+      typeof detail === 'string'
+        ? detail
+        : (detail?.message ?? `Unlock failed: ${response.status}`)
+    )
+  }
+}
+
 // ─── Phase 4b: promote_to_parent client ──────────────────────────────────────
 
 export interface PromoteSourceRef {
