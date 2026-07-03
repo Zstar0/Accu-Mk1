@@ -209,3 +209,31 @@ def test_unpromote_route_blank_reason_400(route_client):
                                  json={"parent_analysis_id": parent_row.id,
                                        "reason": "   "})
     assert resp.status_code == 400
+
+
+def test_unpromote_route_guard_runs_when_lims_sample_missing(route_client):
+    """Fail-closed even when the parent LimsSample row is unresolvable: the
+    guard must still RUN (with the raw-pk string fallback), never be skipped."""
+    from sqlalchemy import delete as sqla_delete
+    from lims_analyses.senaite_writeback import SenaiteWritebackError
+
+    db = route_client._test_session
+    parent, parent_row, _ = _seed_promoted_group(db, 1)
+    missing_pk = parent_row.lims_sample_pk
+    keyword = parent_row.keyword
+    db.execute(sqla_delete(LimsSample).where(LimsSample.id == parent.id))
+    db.commit()
+    # SQLite doesn't enforce FKs by default, so the parent-tier analysis row
+    # must survive the sample delete — verify that assumption holds.
+    assert db.get(LimsAnalysis, parent_row.id) is not None
+    assert db.get(LimsSample, missing_pk) is None
+
+    with patch("lims_analyses.routes.senaite_writeback.find_parent_analysis_line",
+               side_effect=SenaiteWritebackError("unknown sample")) as mock_find:
+        resp = route_client.post("/api/lims-analyses/unpromote",
+                                 json={"parent_analysis_id": parent_row.id,
+                                       "reason": "swap fix"})
+    assert resp.status_code == 409
+    mock_find.assert_called_once_with(str(missing_pk), keyword)   # guard ran
+    db.refresh(parent_row)
+    assert parent_row.review_state == "verified"                  # nothing mutated

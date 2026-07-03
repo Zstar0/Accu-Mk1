@@ -400,25 +400,33 @@ def unpromote(
         db.get(LimsSample, parent_row.lims_sample_pk)
         if parent_row.lims_sample_pk is not None else None
     )
-    parent_sample_id = parent_sample.sample_id if parent_sample else None
+    # Fallback mirrors the promote endpoint: if the LimsSample row can't be
+    # resolved, pass the raw pk string so the guard still RUNS (the lookup
+    # fails inside find_parent_analysis_line → SenaiteWritebackError → 409
+    # fail-closed) instead of being silently skipped.
+    parent_sample_id = (
+        parent_sample.sample_id if parent_sample
+        else str(parent_row.lims_sample_pk)
+    )
 
-    if parent_sample_id:
-        try:
-            line = senaite_writeback.find_parent_analysis_line(
-                parent_sample_id, parent_row.keyword)
-        except SenaiteWritebackError as e:
-            raise HTTPException(
-                status_code=409,
-                detail=f"SENAITE state could not be confirmed — unlock "
-                       f"blocked (fail-closed): {e}",
-            )
-        if line["review_state"] in ("verified", "published"):
-            raise HTTPException(
-                status_code=409,
-                detail=f"parent analysis line {parent_row.keyword!r} on "
-                       f"{parent_sample_id} is {line['review_state']} in "
-                       f"SENAITE — retract it in SENAITE first, then unlock",
-            )
+    try:
+        line = senaite_writeback.find_parent_analysis_line(
+            parent_sample_id, parent_row.keyword)
+    except SenaiteWritebackError as e:
+        raise HTTPException(
+            status_code=409,
+            detail=f"SENAITE state could not be confirmed — unlock "
+                   f"blocked (fail-closed): {e}",
+        )
+    # "verified" is defense-in-depth: the reader raises for verified-only
+    # lines today; "published" is the live path.
+    if line["review_state"] in ("verified", "published"):
+        raise HTTPException(
+            status_code=409,
+            detail=f"parent analysis line {parent_row.keyword!r} on "
+                   f"{parent_sample_id} is {line['review_state']} in "
+                   f"SENAITE — retract it in SENAITE first, then unlock",
+        )
 
     try:
         parent, reverted = service.unpromote_parent_analysis(
