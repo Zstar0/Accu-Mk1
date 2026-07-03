@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.0.23 — 2026-07-03
+
+### Fixed
+
+- **Backend memory no longer climbs ~2 GB/hour during active lab sessions** (the 2026-07-02 "Memory High - Droplet" New Relic alert — host hit 93% before a restart). Every SENAITE-proxying, SharePoint, and COA-resolver request constructed a throwaway `httpx` client, and each construction builds a fresh SSL context with a full CA-bundle parse (~340 kB of allocations — even for plain-http URLs) that the allocator never returns to the OS. All 60 ad-hoc client sites now share one module-level SSL context (`httpx_shared.HTTPX_SSL_CONTEXT`). Measured on an isolated stack: 343.7 → 0.1 kB/call steady-state on the SENAITE lookup endpoint. A new AST-based regression test fails on any future bare `httpx` client construction. Not related to the Flag System (explicitly ruled out — SSE bus is bounded and connection counts stayed flat).
+
 ## v1.0.22 — 2026-07-02
 
 ### Changed

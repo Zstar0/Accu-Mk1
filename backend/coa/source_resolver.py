@@ -21,6 +21,8 @@ import httpx
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from httpx_shared import HTTPX_SSL_CONTEXT
+
 from coa.schemas import (
     CandidateInfo,
     ResolvedSource,
@@ -495,7 +497,7 @@ class SenaiteAnalysesHttpReader:
     async def list_for_sample(self, sample_id: str) -> List[Dict]:
         url = f"{self._base_url}/senaite/@@API/senaite/v1/Analysis"
         params = {"getRequestID": sample_id, "complete": "yes", "limit": 200}
-        async with httpx.AsyncClient(
+        async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, 
             timeout=self._timeout, auth=self._auth, follow_redirects=True,
         ) as client:
             resp = await client.get(url, params=params)
