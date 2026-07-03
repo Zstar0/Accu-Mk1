@@ -35,6 +35,7 @@ import { setAnalysisMethodInstrument, promoteAnalyses } from '@/lib/api'
 import type { VialAssignment } from '@/lib/vial-assignment'
 import { ROLE_TEXT_CLASS, roleTextClass } from '@/lib/assignment-colors'
 import { PromotedFromBadge } from '@/components/senaite/PromotedFromBadge'
+import { UnlockDialog } from '@/components/senaite/UnlockDialog'
 import type { SampleSlaSnapshot } from '@/services/order-sla'
 import { AnalysisSlaCell } from '@/components/senaite/AnalysisSlaCell'
 import { formatNumericResult } from '@/components/senaite/senaite-utils'
@@ -286,6 +287,15 @@ export function visibleRowTransitions(
   return (ALLOWED_TRANSITIONS[a.review_state] ?? []).filter(
     t => (t !== 'submit' || !!a.result) && !(t === 'verify' && (isNativeAwaitingSignoff(a) || isPromoted(a))),
   )
+}
+
+/** Unlock is offered on live mk1 rows whose result is signed off: a promoted
+ *  row that knows its parent-tier id (needed for /unpromote), or a
+ *  variance_verified replicate (vial unlock spec 2026-07-03). */
+export function canUnlock(a: SenaiteAnalysis): boolean {
+  if (!a.uid?.startsWith('mk1:')) return false
+  if (a.review_state === 'promoted') return a.promoted_to_parent_id != null
+  return a.review_state === 'variance_verified'
 }
 
 const BULK_TRANSITIONS = ['submit', 'retest', 'verify', 'retract', 'reject'] as const
@@ -1249,6 +1259,7 @@ function AnalysisRow({
   const vialOverlay = vialAssign?.matches[0]?.mk1Analysis ?? null
   const vialOverlayEditable = vialAssign?.editable ?? false
   const [promoteOpen, setPromoteOpen] = useState(false)
+  const [unlockOpen, setUnlockOpen] = useState(false)
   const queryClient = useQueryClient()
   const isPending = !!analysis.uid && transition.pendingUids.has(analysis.uid)
   // Highlight the title text when this analysis is one of the "primary"
@@ -1426,7 +1437,7 @@ function AnalysisRow({
         {formatDate(analysis.captured)}
       </td>
       <td className="py-2 px-3 text-right">
-        {analysis.uid && (allowedTransitions.length > 0 || canPromote || canVarVerify) && (
+        {analysis.uid && (allowedTransitions.length > 0 || canPromote || canVarVerify || canUnlock(analysis)) && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <button
@@ -1459,6 +1470,11 @@ function AnalysisRow({
                   Verify (Variance)
                 </DropdownMenuItem>
               )}
+              {canUnlock(analysis) && (
+                <DropdownMenuItem onClick={() => setUnlockOpen(true)}>
+                  Unlock…
+                </DropdownMenuItem>
+              )}
               {allowedTransitions.map(t => (
                 <DropdownMenuItem
                   key={t}
@@ -1488,6 +1504,19 @@ function AnalysisRow({
               // AND fire the parent's onPromoted (SampleDetails uses
               // useState/useEffect, not react-query, so this is needed
               // to drive a re-fetch of the senaite_shape rows).
+              queryClient.invalidateQueries()
+              onPromoted?.()
+            }}
+          />
+        )}
+        {canUnlock(analysis) && (
+          <UnlockDialog
+            analysis={analysis}
+            open={unlockOpen}
+            onOpenChange={setUnlockOpen}
+            onUnlocked={() => {
+              // Same invalidate-then-notify path as PromoteDialog above —
+              // SampleDetails re-fetches senaite_shape rows via onPromoted.
               queryClient.invalidateQueries()
               onPromoted?.()
             }}
