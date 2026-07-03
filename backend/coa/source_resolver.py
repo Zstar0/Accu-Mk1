@@ -21,6 +21,8 @@ import httpx
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from httpx_shared import HTTPX_SSL_CONTEXT
+
 from coa.schemas import (
     CandidateInfo,
     ResolvedSource,

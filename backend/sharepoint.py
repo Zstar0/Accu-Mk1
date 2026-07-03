@@ -15,6 +15,8 @@ from pathlib import PurePosixPath
 import httpx
 import msal
 
+from httpx_shared import HTTPX_SSL_CONTEXT
+
 logger = logging.getLogger(__name__)
 
 # ── Configuration ──────────────────────────────────────────────────

@@ -8227,6 +8227,7 @@ async def reports_resync(
 # integration-service as the single source of truth for query logic.
 
 import httpx
+from httpx_shared import HTTPX_SSL_CONTEXT
 
 INTEGRATION_SERVICE_URL = os.environ.get("INTEGRATION_SERVICE_URL", "http://host.docker.internal:8000")
 INTEGRATION_SERVICE_API_KEY = os.environ.get("ACCU_MK1_API_KEY", "")

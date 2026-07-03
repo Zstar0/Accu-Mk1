@@ -50,3 +50,30 @@ def test_all_httpx_clients_share_ssl_context():
         "transport) — each such construction loads a fresh CA bundle and leaks "
         f"~340 kB RSS per call:\n  " + "\n  ".join(offenders)
     )
+
+
+def test_files_using_shared_context_import_it():
+    """A file that references HTTPX_SSL_CONTEXT must actually import it —
+    guards against the call-site patch landing without its import (runtime
+    NameError the kwarg scan above cannot see)."""
+    offenders = []
+    for path in _iter_backend_sources():
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        uses = any(
+            isinstance(n, ast.Name) and n.id == "HTTPX_SSL_CONTEXT"
+            and isinstance(n.ctx, ast.Load)
+            for n in ast.walk(tree)
+        )
+        if not uses:
+            continue
+        imports = any(
+            isinstance(n, ast.ImportFrom) and n.module == "httpx_shared"
+            and any(a.name == "HTTPX_SSL_CONTEXT" for a in n.names)
+            for n in ast.walk(tree)
+        )
+        if not imports:
+            offenders.append(str(path.relative_to(BACKEND)))
+    assert not offenders, (
+        "HTTPX_SSL_CONTEXT used without `from httpx_shared import "
+        "HTTPX_SSL_CONTEXT` (runtime NameError):\n  " + "\n  ".join(offenders)
+    )
