@@ -140,7 +140,7 @@ def main(argv=None) -> int:
                      checkpoint_path=args.checkpoint, dry_run=args.dry_run,
                      limit=args.limit)
     print(json.dumps(stats))  # coverage evidence line — retain (ISO 17025)
-    return 0
+    return 1 if stats["errors"] else 0  # nonzero so unattended runs surface partial failure
 
 
 if __name__ == "__main__":

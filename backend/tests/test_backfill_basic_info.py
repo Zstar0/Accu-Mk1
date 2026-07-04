@@ -210,3 +210,15 @@ def test_main_prints_stats_json(db_factory, tmp_path, capsys):
     assert rc == 0
     stats = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
     assert stats["created"] == 1
+
+
+def test_main_exit_code_reflects_errors(db_factory, tmp_path, capsys):
+    with patch("scripts.backfill_lims_sample_basic_info.senaite") as sen, \
+         patch("scripts.backfill_lims_sample_basic_info.time.sleep"), \
+         patch("scripts.backfill_lims_sample_basic_info.SessionLocal", db_factory):
+        sen.iter_all_sample_ids.return_value = iter([("P-0001", 0)])
+        sen.fetch_parent_metadata.side_effect = RuntimeError("senaite hiccup")
+        rc = main(["--checkpoint", str(tmp_path / "c.json"), "--sleep", "0"])
+    assert rc == 1
+    stats = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert stats["errors"] == 1
