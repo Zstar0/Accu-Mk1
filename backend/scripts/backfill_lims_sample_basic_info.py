@@ -7,8 +7,9 @@ Run INSIDE the backend container so the app's modules and env are available:
         python -m scripts.backfill_lims_sample_basic_info --sleep 0.5 --batch-size 50
 
 Idempotent: re-running only fills gaps / refreshes; never duplicates. Resumable
-via --checkpoint (JSON file holding the last page cursor). Use --dry-run for an
-enumerate-only rehearsal and --limit N for a smoke run.
+via --checkpoint (JSON file holding the last page cursor). Use --dry-run for a
+rehearsal that enumerates + fetches (throttled) but writes nothing (no DB rows,
+no checkpoint), and --limit N for a smoke run.
 
 SENAITE BULK-SCAN SAFETY (load-bearing — do not "optimize" away): SENAITE runs
 a single Zope core; an unthrottled jsonapi sweep over the full ~1,200+ AR set
@@ -107,10 +108,40 @@ def backfill(db_factory, *, sleep_s: float, batch_size: int,
                     db.close()
         except Exception as e:
             stats["errors"] += 1
-            log.warning("backfill error sample=%s err=%s", sample_id, e)
+            log.warning("backfill error sample=%s err=%s", sample_id, e, exc_info=True)
 
-        save_checkpoint(checkpoint_path, b_start, sample_id)
+        if not dry_run:
+            save_checkpoint(checkpoint_path, b_start, sample_id)
         time.sleep(sleep_s)  # bulk-scan safety: throttle EVERY sample
 
     log.info("backfill done: %s", stats)
     return stats
+
+
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser(
+        description="Backfill lims_samples basic info from SENAITE "
+                    "(throttled, resumable — see module docstring).")
+    ap.add_argument("--sleep", type=float, default=0.5,
+                    help="seconds between per-sample fetches (bulk-scan safety; default 0.5)")
+    ap.add_argument("--batch-size", type=int, default=50,
+                    help="enumeration page size (default 50)")
+    ap.add_argument("--checkpoint", default=DEFAULT_CHECKPOINT,
+                    help=f"resume-cursor JSON path (default {DEFAULT_CHECKPOINT})")
+    ap.add_argument("--dry-run", action="store_true",
+                    help="enumerate + fetch but write nothing (no DB rows, no checkpoint)")
+    ap.add_argument("--limit", type=int, default=None,
+                    help="stop after N samples (smoke runs)")
+    args = ap.parse_args(argv)
+
+    logging.basicConfig(level=logging.INFO,
+                        format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    stats = backfill(SessionLocal, sleep_s=args.sleep, batch_size=args.batch_size,
+                     checkpoint_path=args.checkpoint, dry_run=args.dry_run,
+                     limit=args.limit)
+    print(json.dumps(stats))  # coverage evidence line — retain (ISO 17025)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

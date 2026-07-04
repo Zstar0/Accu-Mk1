@@ -161,3 +161,52 @@ def test_backfill_container_mode_gate_applies(db_factory, tmp_path):
     assert db.query(LimsSample).filter_by(sample_id="P-0001").one().container_mode is False
     assert db.query(LimsSample).filter_by(sample_id="P-0002").one().container_mode is True
     db.close()
+
+
+def test_dry_run_leaves_no_checkpoint(db_factory, tmp_path):
+    ckpt = tmp_path / "c.json"
+    with patch("scripts.backfill_lims_sample_basic_info.senaite") as sen, \
+         patch("scripts.backfill_lims_sample_basic_info.time.sleep"):
+        sen.iter_all_sample_ids.return_value = iter([("P-0001", 0)])
+        sen.fetch_parent_metadata.return_value = _full_meta("P-0001")
+        backfill(db_factory, sleep_s=0, batch_size=50,
+                 checkpoint_path=str(ckpt), dry_run=True, limit=None)
+    assert not ckpt.exists()
+
+
+# --- checkpoint + CLI --------------------------------------------------------
+from scripts.backfill_lims_sample_basic_info import (
+    load_checkpoint, save_checkpoint, main,
+)
+
+
+def test_checkpoint_round_trip(tmp_path):
+    p = str(tmp_path / "ckpt.json")
+    assert load_checkpoint(p) == 0                    # missing file → fresh
+    save_checkpoint(p, 150, "P-0150")
+    assert load_checkpoint(p) == 150
+    (tmp_path / "ckpt.json").write_text("garbage")
+    assert load_checkpoint(p) == 0                    # corrupt file → fresh
+
+
+def test_backfill_resumes_from_checkpoint(db_factory, tmp_path):
+    ckpt = str(tmp_path / "ckpt.json")
+    save_checkpoint(ckpt, 100, "P-0100")
+    with patch("scripts.backfill_lims_sample_basic_info.senaite") as sen, \
+         patch("scripts.backfill_lims_sample_basic_info.time.sleep"):
+        sen.iter_all_sample_ids.return_value = iter([])
+        backfill(db_factory, sleep_s=0, batch_size=50,
+                 checkpoint_path=ckpt, dry_run=False, limit=None)
+    sen.iter_all_sample_ids.assert_called_once_with(batch_size=50, start=100)
+
+
+def test_main_prints_stats_json(db_factory, tmp_path, capsys):
+    with patch("scripts.backfill_lims_sample_basic_info.senaite") as sen, \
+         patch("scripts.backfill_lims_sample_basic_info.time.sleep"), \
+         patch("scripts.backfill_lims_sample_basic_info.SessionLocal", db_factory):
+        sen.iter_all_sample_ids.return_value = iter([("P-0001", 0)])
+        sen.fetch_parent_metadata.return_value = _full_meta("P-0001")
+        rc = main(["--checkpoint", str(tmp_path / "c.json"), "--sleep", "0"])
+    assert rc == 0
+    stats = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert stats["created"] == 1
