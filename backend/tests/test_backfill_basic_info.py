@@ -53,6 +53,18 @@ def test_enumeration_raises_on_http_error():
             list(senaite.iter_all_sample_ids())
 
 
+def test_enumeration_survives_server_page_clamp():
+    """If SENAITE returns fewer items than requested b_size (server-side
+    clamp), the cursor must advance by what was RECEIVED, not requested —
+    otherwise every page silently skips the difference."""
+    pages = [_page(["P-0001"]), _page(["P-0002"]), _page([])]
+    with patch("sub_samples.senaite._get", side_effect=pages) as g:
+        out = list(senaite.iter_all_sample_ids(batch_size=50))
+    assert out == [("P-0001", 0), ("P-0002", 1)]
+    second_params = g.call_args_list[1].kwargs.get("params") or g.call_args_list[1].args[1]
+    assert second_params["b_start"] == 1   # not 50
+
+
 # --- backfill core -----------------------------------------------------------
 from scripts.backfill_lims_sample_basic_info import backfill
 

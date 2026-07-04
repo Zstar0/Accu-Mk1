@@ -19,6 +19,15 @@ batches, sleeps between EVERY per-sample fetch, runs strictly sequentially
 
 The final stats line on stdout is the ISO 17025 coverage evidence (7.4.2 /
 7.11.2) — retain it with the run record.
+
+Checkpoint retention: after ANY completed run (clean or with per-sample
+errors) the checkpoint file remains at the FINAL cursor. Re-running with the
+same --checkpoint path resumes at the END and processes nothing. To re-scan
+from the start — including retrying samples that errored, since an errored
+sample still advances the cursor — DELETE the checkpoint file first.
+
+Exit code contract: 0 = clean run, no per-sample errors. 1 = run completed
+but one or more samples errored (see the "errors" count in the stats line).
 """
 import argparse
 import json
@@ -87,6 +96,7 @@ def backfill(db_factory, *, sleep_s: float, batch_size: int,
 
         if _SECONDARY_ID.search(sample_id):
             stats["skipped_secondary"] += 1
+            time.sleep(sleep_s)  # bulk-scan safety: throttle even skip-only pages
             continue
 
         try:
@@ -115,13 +125,19 @@ def backfill(db_factory, *, sleep_s: float, batch_size: int,
         time.sleep(sleep_s)  # bulk-scan safety: throttle EVERY sample
 
     log.info("backfill done: %s", stats)
+    if not dry_run:
+        log.info("checkpoint retained at %s — delete it to re-scan from the start",
+                 checkpoint_path)
     return stats
 
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(
         description="Backfill lims_samples basic info from SENAITE "
-                    "(throttled, resumable — see module docstring).")
+                    "(throttled, resumable — see module docstring).",
+        epilog="Exit codes: 0 = clean, 1 = completed with per-sample errors "
+               "(see stats line). Checkpoint is retained after completion — "
+               "delete it to re-scan from the start / retry errored samples.")
     ap.add_argument("--sleep", type=float, default=0.5,
                     help="seconds between per-sample fetches (bulk-scan safety; default 0.5)")
     ap.add_argument("--batch-size", type=int, default=50,
