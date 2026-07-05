@@ -90,6 +90,18 @@ def test_populate_basic_info_writes_full_field_set(db):
     assert row.last_synced_at is not None
 
 
+def test_populate_basic_info_client_id_getter_fallback(db):
+    """Live SENAITE complete=true payloads carry getClientID but NO bare
+    ClientID key (verified against a real instance 2026-07-05) — without the
+    fallback, client_id is silently NULL on every row."""
+    meta = _full_meta()
+    del meta["ClientID"]
+    meta["getClientID"] = "client-8-getter"
+    row = LimsSample(sample_id="P-0134")
+    service._populate_basic_info(row, meta)
+    assert row.client_id == "client-8-getter"
+
+
 def test_populate_basic_info_never_touches_non_basic_fields(db):
     row = LimsSample(sample_id="P-0134", container_mode=True,
                      assignment_role="ster", in_variance_set=False,
