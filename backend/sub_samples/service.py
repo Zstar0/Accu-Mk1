@@ -75,7 +75,9 @@ def _populate_basic_info(row: LimsSample, meta: dict) -> None:
     is_retest."""
     row.external_lims_uid = meta.get("uid")
     row.external_lims_system = "senaite"
-    row.client_id = meta.get("ClientID")
+    # complete=true detail payloads carry getClientID but no bare ClientID
+    # (verified live 2026-07-05); bare form kept first for back-compat.
+    row.client_id = meta.get("ClientID") or meta.get("getClientID")
     row.client_uid = _extract_uid(meta.get("ClientUID") or meta.get("Client"))
     row.contact_uid = _extract_uid(meta.get("ContactUID") or meta.get("Contact"))
     row.sample_type = _extract_uid(meta.get("SampleType"))
