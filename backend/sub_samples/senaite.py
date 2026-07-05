@@ -15,7 +15,7 @@ import os
 import re
 import logging
 from dataclasses import dataclass
-from typing import Optional, List, Any
+from typing import Optional, List, Any, Iterator, Tuple
 import requests
 
 log = logging.getLogger(__name__)
@@ -256,6 +256,43 @@ def fetch_parent_metadata(parent_sample_id: str) -> dict:
     if not detail_items:
         raise RuntimeError(f"SENAITE detail empty for uid={parent_uid}")
     return detail_items[0]
+
+
+def iter_all_sample_ids(batch_size: int = 50, start: int = 0) -> Iterator[Tuple[str, int]]:
+    """Yield (sample_id, page_b_start) for EVERY AnalysisRequest in SENAITE,
+    paged via b_size/b_start against the plain list endpoint (minimal
+    projection — deliberately NOT complete=true; per-sample detail is the
+    caller's separate, throttled fetch).
+
+    Yields the page cursor alongside each id so callers can checkpoint and
+    resume via `start`. NOTE: includes secondary ARs (…-S01) and retests —
+    filtering is caller policy. Mechanism only: no sleeping here; bulk-scan
+    throttling (single Zope core!) is the caller's responsibility.
+
+    Cursor advances by the number of items ACTUALLY RECEIVED, not the
+    requested batch_size — if SENAITE clamps the page size server-side,
+    advancing by the requested amount would silently skip ARs. Worst case
+    (advancing by less than the server would have allowed) just re-sees a
+    few items on the next page, which the caller's upsert handles
+    idempotently."""
+    b_start = start
+    while True:
+        resp = _get(
+            f"{SENAITE_BASE_URL}/@@API/senaite/v1/AnalysisRequest",
+            params={"b_size": batch_size, "b_start": b_start, "sort_on": "created"},
+        )
+        if resp.status_code >= 300:
+            raise RuntimeError(
+                f"SENAITE enumerate failed ({resp.status_code}): {resp.text}"
+            )
+        items = resp.json().get("items", [])
+        if not items:
+            return
+        for item in items:
+            sid = item.get("id")
+            if sid:
+                yield sid, b_start
+        b_start += len(items)
 
 
 # Parent analyses in these review states are dead — they must not feed the
