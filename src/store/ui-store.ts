@@ -76,7 +76,7 @@ interface UIState {
   peptideConfigTargetId: number | null
   orderExplorerTargetOrderId: string | null
   sampleDetailsTargetId: string | null
-  // Deep-link into Active Boxes: box label ("WP-3267-1") to seed the Box ID
+  // Deep-link into Active Boxes: box label ("BOX-3267-1") to seed the Box ID
   // search. Consume-and-clear — ActiveBoxesPage nulls it after applying.
   boxesSearchTarget: string | null
   samplePrepTargetId: number | null

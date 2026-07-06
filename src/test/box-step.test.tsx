@@ -4,14 +4,14 @@ import type { LimsBox } from '@/lib/api'
 
 const box: LimsBox = {
   id: 1, order_key: 'WP-20066', box_number: 3, role: 'ster',
-  label_code: 'WP-20066-3', vial_count: 4, printed_at: null,
+  label_code: 'BOX-20066-3', vial_count: 4, printed_at: null,
   created_at: '2026-07-01T12:00:00', stored_at: null,
 }
 
 describe('boxLabelLines', () => {
-  it('leads with the bare order key (the QR keeps physical labels unique)', () => {
+  it('leads with the full box name (label_code)', () => {
     const lines = boxLabelLines(box)
-    expect(lines[0]).toBe('WP-20066')
+    expect(lines[0]).toBe('BOX-20066-3')
   })
 
   it('meta line: short role (ster → PCR) · vial count · created date', () => {

@@ -1,3 +1,4 @@
+import re
 from datetime import datetime
 from typing import List
 
@@ -10,8 +11,11 @@ BOXABLE_ROLES = {"hplc", "endo", "ster", "xtra"}
 
 
 def box_label_code(box: LimsBox) -> str:
-    """Verbatim order key + running number; never adds a 'WP-' prefix."""
-    return f"{box.order_key}-{box.box_number}"
+    """Physical box name: 'BOX-<order#>-<n>'. Strips a leading 'WP-' from the
+    order key so it reads 'BOX-3267-1' (not 'BOX-WP-3267-1'); order-less
+    receives (order_key is a parent sample id) read 'BOX-P-0141-1'."""
+    key = re.sub(r"^WP-", "", box.order_key, flags=re.IGNORECASE)
+    return f"BOX-{key}-{box.box_number}"
 
 
 def _log_box_event(db: Session, sub_sample_pk: int, event: str, details: dict, user_id) -> None:

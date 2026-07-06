@@ -21,12 +21,12 @@ def test_create_box_returns_label_code():
     fake = MagicMock(id=3, order_key="WP-20066", box_number=2, role="hplc", printed_at=None,
                      created_at=None, stored_at=None)
     with patch("boxes.routes.service.next_box", return_value=fake), \
-         patch("boxes.routes.service.box_label_code", return_value="WP-20066-2"), \
+         patch("boxes.routes.service.box_label_code", return_value="BOX-20066-2"), \
          patch("boxes.routes.service.vial_count", return_value=0):
         resp = client.post("/api/boxes", json={"order_key": "WP-20066", "role": "hplc"})
     assert resp.status_code == 201
     body = resp.json()
-    assert body["label_code"] == "WP-20066-2"
+    assert body["label_code"] == "BOX-20066-2"
     assert body["box_number"] == 2
 
 
@@ -86,7 +86,7 @@ def test_active_boxes_include_vials():
               "assignment_role": "hplc", "vial_sequence": 1}]
     with patch("boxes.routes.service.list_active", return_value=[fake]), \
          patch("boxes.routes.service.vials_for_boxes", return_value={13: vials}), \
-         patch("boxes.routes.service.box_label_code", return_value="WP-3267-1"), \
+         patch("boxes.routes.service.box_label_code", return_value="BOX-3267-1"), \
          patch("boxes.routes.service.vial_count", return_value=1):
         resp = client.get("/api/boxes/active")
     assert resp.status_code == 200
@@ -97,7 +97,7 @@ def test_close_box_returns_stored_box():
     fake = MagicMock(id=13, order_key="WP-3267", box_number=1, role="hplc",
                      printed_at=None, created_at=None, stored_at="2026-07-01T13:00:00")
     with patch("boxes.routes.service.close_box", return_value=fake) as m, \
-         patch("boxes.routes.service.box_label_code", return_value="WP-3267-1"), \
+         patch("boxes.routes.service.box_label_code", return_value="BOX-3267-1"), \
          patch("boxes.routes.service.vial_count", return_value=0):
         resp = client.post("/api/boxes/13/close")
     assert resp.status_code == 200

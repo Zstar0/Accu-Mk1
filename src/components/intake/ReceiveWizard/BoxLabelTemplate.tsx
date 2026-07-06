@@ -5,13 +5,13 @@ export const ROLE_SHORT: Record<string, string> = { hplc: 'HPLC', endo: 'ENDO', 
 
 interface Props {
   boxId: number                // lims_boxes.id — the QR payload (scanner-station contract)
-  orderKey: string             // e.g. "WP-3267" — the big printed line
+  labelCode: string            // e.g. "BOX-3267-1" — the big printed line
   role: 'hplc' | 'endo' | 'ster' | 'xtra'
   vialCount: number
   createdAt: string | null     // ISO; printed as YYYY-MM-DD, omitted when null
 }
 
-export function BoxLabelTemplate({ boxId, orderKey, role, vialCount, createdAt }: Props) {
+export function BoxLabelTemplate({ boxId, labelCode, role, vialCount, createdAt }: Props) {
   return (
     <div className="label">
       {/* QR carries the bare numeric box id, NOT the label code: it must stay
@@ -19,7 +19,7 @@ export function BoxLabelTemplate({ boxId, orderKey, role, vialCount, createdAt }
           stations append their own bench id when they call check-in. */}
       <QRCodeSVG value={String(boxId)} size={64} level="M" marginSize={2} />
       <div className="box-label-text">
-        <div className="box-label-id">{orderKey}</div>
+        <div className="box-label-id">{labelCode}</div>
         <div className="box-label-meta">
           <span className="box-label-dept">
             {ROLE_SHORT[role]} · {vialCount} vial{vialCount === 1 ? '' : 's'}

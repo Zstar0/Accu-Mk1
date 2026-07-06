@@ -49,7 +49,7 @@ type OrderVial = SubSample
 export function boxLabelLines(box: LimsBox): string[] {
   const meta = `${ROLE_SHORT[box.role]} · ${box.vial_count} vial${box.vial_count === 1 ? '' : 's'}`
   return [
-    box.order_key,
+    box.label_code,
     box.created_at ? `${meta} · ${box.created_at.slice(0, 10)}` : meta,
   ]
 }
@@ -194,7 +194,7 @@ export function BoxStep({ orderKey, orderLabel, sampleIds }: Props) {
     printNode(
       <>
         {printableBoxes.map(b => (
-          <BoxLabelTemplate key={b.id} boxId={b.id} orderKey={b.order_key}
+          <BoxLabelTemplate key={b.id} boxId={b.id} labelCode={b.label_code}
             role={b.role} vialCount={b.vial_count} createdAt={b.created_at} />
         ))}
       </>,
@@ -323,7 +323,7 @@ function BoxCard({ box, boxVials, capacity, activeId, onCapacityChange, onAutoAs
         <div className="flex items-center gap-1">
           <Button size="sm" variant="outline" className="gap-2"
             onClick={() => { void printBox(box.id); printNode(
-              <BoxLabelTemplate boxId={box.id} orderKey={box.order_key}
+              <BoxLabelTemplate boxId={box.id} labelCode={box.label_code}
                 role={box.role} vialCount={box.vial_count} createdAt={box.created_at} />,
             ) }}>
             <Printer className="w-4 h-4" aria-hidden="true" />

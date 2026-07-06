@@ -36,7 +36,7 @@ def test_next_box_numbers_run_per_order(db):
     b3 = service.next_box(db, "WP-20071", "hplc", user_id=1)
     assert (b1.box_number, b2.box_number) == (1, 2)   # running across bins for one order
     assert b3.box_number == 1                          # separate order restarts
-    assert service.box_label_code(b2) == "WP-20066-2"
+    assert service.box_label_code(b2) == "BOX-20066-2"
 
 
 def test_assign_rejects_role_mismatch(db):

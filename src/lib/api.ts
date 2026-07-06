@@ -5068,7 +5068,7 @@ export interface SubSample {
   // FK to lims_boxes.id — which physical box this vial is assigned to, or null
   // when unboxed. Drives the boxing UI's per-box vial chips.
   box_id?: number | null
-  // Human box label ("<order_key>-<box_number>", e.g. "WP-3267-1"). Only the
+  // Human box label ("BOX-<order#>-<box_number>", e.g. "BOX-3267-1"). Only the
   // list endpoint populates it; null/absent when unboxed.
   box_label?: string | null
 }

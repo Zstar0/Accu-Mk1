@@ -95,7 +95,7 @@ function setupBackend(vials: Vial[]) {
       order_key: orderKey,
       box_number: nextNumber++,
       role,
-      label_code: `${orderKey}-${nextNumber - 1}`,
+      label_code: `BOX-${orderKey.replace(/^WP-/i, '')}-${nextNumber - 1}`,
       vial_count: 0,
       printed_at: null,
       created_at: null,
@@ -218,7 +218,7 @@ describe('BoxStep — capacity-driven boxing', () => {
     const { boxesState } = setupBackend([vial('P-101', 'hplc', 7)])
     boxesState.push({
       id: 7, order_key: ORDER, box_number: 1, role: 'hplc',
-      label_code: `${ORDER}-1`, vial_count: 1, printed_at: null,
+      label_code: 'BOX-1042-1', vial_count: 1, printed_at: null,
       created_at: null, stored_at: null,
     })
     renderBoxStep()
@@ -246,7 +246,7 @@ describe('BoxStep — capacity-driven boxing', () => {
     const { boxesState } = setupBackend([vial('P-101', 'hplc', 7)])
     boxesState.push({
       id: 7, order_key: ORDER, box_number: 1, role: 'hplc',
-      label_code: `${ORDER}-1`, vial_count: 1, printed_at: null,
+      label_code: 'BOX-1042-1', vial_count: 1, printed_at: null,
       created_at: null, stored_at: null,
     })
     renderBoxStep()
@@ -265,7 +265,7 @@ describe('BoxStep — capacity-driven boxing', () => {
     const { boxesState } = setupBackend([vial('P-101', 'hplc', 7)])
     boxesState.push({
       id: 7, order_key: ORDER, box_number: 1, role: 'hplc',
-      label_code: `${ORDER}-1`, vial_count: 1, printed_at: null,
+      label_code: 'BOX-1042-1', vial_count: 1, printed_at: null,
       created_at: null, stored_at: null,
     })
     renderBoxStep()
@@ -287,12 +287,12 @@ describe('BoxStep — capacity-driven boxing', () => {
     boxesState.push(
       {
         id: 7, order_key: ORDER, box_number: 1, role: 'hplc',
-        label_code: `${ORDER}-1`, vial_count: 1, printed_at: null,
+        label_code: 'BOX-1042-1', vial_count: 1, printed_at: null,
         created_at: '2026-07-01T12:00:00', stored_at: null,
       },
       {
         id: 8, order_key: ORDER, box_number: 2, role: 'hplc',
-        label_code: `${ORDER}-2`, vial_count: 0, printed_at: null,
+        label_code: 'BOX-1042-2', vial_count: 0, printed_at: null,
         created_at: null, stored_at: null,
       },
     )

@@ -53,7 +53,7 @@ const box = {
   order_key: 'WP-3267',
   box_number: 1,
   role: 'hplc' as const,
-  label_code: 'WP-3267-1',
+  label_code: 'BOX-3267-1',
   vial_count: 2,
   printed_at: null,
   created_at: '2026-07-01T12:00:00',
@@ -99,7 +99,7 @@ describe('ActiveBoxesPage', () => {
   it('renders active boxes with label, order, and vial count', async () => {
     mockList.mockResolvedValue([box])
     renderPage()
-    expect(await screen.findByText('WP-3267-1')).toBeInTheDocument()
+    expect(await screen.findByText('BOX-3267-1')).toBeInTheDocument()
     expect(screen.getByText('WP-3267')).toBeInTheDocument()
     expect(screen.getByText('2')).toBeInTheDocument()
   })
@@ -136,7 +136,7 @@ describe('ActiveBoxesPage', () => {
     mockList.mockResolvedValue([box])
     mockSamples.mockResolvedValue({ items: [orderSample], total: 1, b_start: 0 })
     renderPage()
-    fireEvent.click(await screen.findByRole('button', { name: 'WP-3267-1' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'BOX-3267-1' }))
     await waitFor(() =>
       expect(mockSamples).toHaveBeenCalledWith(undefined, 200, 0, 'WP-3267', 'order_number'),
     )
@@ -154,7 +154,7 @@ describe('ActiveBoxesPage', () => {
       b_start: 0,
     })
     renderPage()
-    fireEvent.click(await screen.findByRole('button', { name: 'WP-3267-1' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'BOX-3267-1' }))
     await waitFor(() =>
       expect(toast.error).toHaveBeenCalledWith('No order session available for WP-3267'),
     )
@@ -164,41 +164,41 @@ describe('ActiveBoxesPage', () => {
   it('expand chevron reveals the vials inside the box', async () => {
     mockList.mockResolvedValue([box])
     renderPage()
-    await screen.findByText('WP-3267-1')
+    await screen.findByText('BOX-3267-1')
     // Collapsed by default — the vial is hidden until the chevron is clicked.
     expect(screen.queryByText('P-0141-S01')).toBeNull()
-    fireEvent.click(screen.getByRole('button', { name: 'Expand WP-3267-1' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Expand BOX-3267-1' }))
     expect(screen.getByText('P-0141-S01')).toBeInTheDocument()
   })
 
   it('Sample ID search keeps matching boxes, auto-expands them, and hides the rest', async () => {
     mockList.mockResolvedValue([box])
     renderPage()
-    await screen.findByText('WP-3267-1')
+    await screen.findByText('BOX-3267-1')
     fireEvent.change(screen.getByLabelText('Sample ID'), { target: { value: 'P-0141-S01' } })
     // Box stays visible and is auto-expanded so the matching vial shows.
-    expect(screen.getByText('WP-3267-1')).toBeInTheDocument()
+    expect(screen.getByText('BOX-3267-1')).toBeInTheDocument()
     expect(screen.getByText('P-0141-S01')).toBeInTheDocument()
     fireEvent.change(screen.getByLabelText('Sample ID'), { target: { value: 'P-9999-S01' } })
-    expect(screen.queryByText('WP-3267-1')).toBeNull()
+    expect(screen.queryByText('BOX-3267-1')).toBeNull()
     expect(screen.getByText(/no boxes match your search/i)).toBeInTheDocument()
   })
 
   it('Order # search filters boxes by their order key', async () => {
     mockList.mockResolvedValue([box])
     renderPage()
-    await screen.findByText('WP-3267-1')
+    await screen.findByText('BOX-3267-1')
     fireEvent.change(screen.getByLabelText('Order #'), { target: { value: 'WP-9999' } })
-    expect(screen.queryByText('WP-3267-1')).toBeNull()
+    expect(screen.queryByText('BOX-3267-1')).toBeNull()
     expect(screen.getByText(/no boxes match your search/i)).toBeInTheDocument()
     fireEvent.change(screen.getByLabelText('Order #'), { target: { value: 'WP-3267' } })
-    expect(screen.getByText('WP-3267-1')).toBeInTheDocument()
+    expect(screen.getByText('BOX-3267-1')).toBeInTheDocument()
   })
 
   it('renders the coming-soon Location placeholder', async () => {
     mockList.mockResolvedValue([box])
     renderPage()
-    await screen.findByText('WP-3267-1')
+    await screen.findByText('BOX-3267-1')
     expect(screen.getByText('Location')).toBeInTheDocument()
     expect(screen.getByText('Coming soon')).toBeInTheDocument()
   })
