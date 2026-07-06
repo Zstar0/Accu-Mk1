@@ -4742,6 +4742,9 @@ export interface WorksheetListItem {
     lims_sub_sample_pk: number | null
     /** 'core' | 'variance' | null — null for parent-sample items. */
     assignment_kind?: 'core' | 'variance' | null
+    /** Current physical box; null for parent-sample items / unboxed vials. */
+    box_id: number | null
+    box_label: string | null
     analyses: {
       title: string
       keyword: string | null
