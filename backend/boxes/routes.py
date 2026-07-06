@@ -10,7 +10,9 @@ from .schemas import BoxResponse, CreateBoxRequest, AssignVialsRequest
 router = APIRouter(prefix="/api/boxes", tags=["boxes"])
 
 
-def _serialize(db: Session, box) -> BoxResponse:
+def _serialize(db: Session, box, vials=None) -> BoxResponse:
+    if vials is None:
+        vials = service.vials_for_boxes(db, [box.id]).get(box.id, [])
     return BoxResponse(
         id=box.id,
         order_key=box.order_key,
@@ -21,6 +23,7 @@ def _serialize(db: Session, box) -> BoxResponse:
         printed_at=box.printed_at,
         created_at=box.created_at,
         stored_at=box.stored_at,
+        vials=vials,
     )
 
 
@@ -33,7 +36,9 @@ def list_boxes(order_key: str = Query(...), db: Session = Depends(get_db),
 @router.get("/active", response_model=list[BoxResponse])
 def list_active_boxes(db: Session = Depends(get_db), user=Depends(get_current_user)):
     """Every box not yet closed out to storage, across all orders."""
-    return [_serialize(db, b) for b in service.list_active(db)]
+    boxes = service.list_active(db)
+    vmap = service.vials_for_boxes(db, [b.id for b in boxes])
+    return [_serialize(db, b, vmap.get(b.id, [])) for b in boxes]
 
 
 @router.post("", response_model=BoxResponse, status_code=201)

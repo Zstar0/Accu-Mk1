@@ -79,6 +79,20 @@ def test_list_active_boxes_returns_200():
     assert resp.json() == []
 
 
+def test_active_boxes_include_vials():
+    fake = MagicMock(id=13, order_key="WP-3267", box_number=1, role="hplc",
+                     printed_at=None, created_at=None, stored_at=None)
+    vials = [{"sample_id": "P-0141-S01", "parent_sample_id": "P-0141",
+              "assignment_role": "hplc", "vial_sequence": 1}]
+    with patch("boxes.routes.service.list_active", return_value=[fake]), \
+         patch("boxes.routes.service.vials_for_boxes", return_value={13: vials}), \
+         patch("boxes.routes.service.box_label_code", return_value="WP-3267-1"), \
+         patch("boxes.routes.service.vial_count", return_value=1):
+        resp = client.get("/api/boxes/active")
+    assert resp.status_code == 200
+    assert resp.json()[0]["vials"][0]["sample_id"] == "P-0141-S01"
+
+
 def test_close_box_returns_stored_box():
     fake = MagicMock(id=13, order_key="WP-3267", box_number=1, role="hplc",
                      printed_at=None, created_at=None, stored_at="2026-07-01T13:00:00")

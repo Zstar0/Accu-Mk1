@@ -1,8 +1,9 @@
 import { Fragment, useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Archive, Loader2 } from 'lucide-react'
+import { Archive, ChevronDown, ChevronRight, Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
@@ -12,8 +13,12 @@ import { closeBox, getSenaiteSamples, listActiveBoxes, type LimsBox } from '@/li
 import { getWordpressUrl } from '@/lib/api-profiles'
 import { roleBadgeClass, roleTextClass } from '@/lib/assignment-colors'
 import { groupSamplesByOrder } from '@/lib/inbox-orders'
+import { useUIStore } from '@/store/ui-store'
 
 const ROLE_LABEL: Record<string, string> = { hplc: 'HPLC', endo: 'Endotoxin', ster: 'Sterility', xtra: 'Extras' }
+
+const stripWp = (s: string) => s.replace(/^wp-/i, '')
+const inc = (hay: string, needle: string) => hay.toLowerCase().includes(needle.trim().toLowerCase())
 
 /** Group boxes by order_key preserving first-appearance order, so the API's
  *  oldest-box-first ordering holds within and across groups. */
@@ -58,6 +63,10 @@ export function ActiveBoxesPage() {
   // A label click opens that order's check-in overlay (OrderReceiveSession)
   // in place, landed on the Boxing tab — all boxes of one order share it.
   const [sessionOrderKey, setSessionOrderKey] = useState<string | null>(null)
+  const [sampleQ, setSampleQ] = useState('')
+  const [orderQ, setOrderQ] = useState('')
+  const [boxQ, setBoxQ] = useState('')
+  const [expanded, setExpanded] = useState<Set<number>>(new Set())
 
   const boxesQ = useQuery({ queryKey: ['active-boxes'], queryFn: listActiveBoxes })
 
@@ -97,6 +106,24 @@ export function ActiveBoxesPage() {
 
   const boxes = boxesQ.data ?? []
 
+  // All non-empty search fields AND together; order/box tolerate a WP- prefix
+  // either side, box matches the numeric id (QR scan) or the human label.
+  const filtered = boxes.filter(b =>
+    (orderQ.trim() === '' || inc(stripWp(b.order_key), stripWp(orderQ))) &&
+    (boxQ.trim() === '' || String(b.id).includes(boxQ.trim()) || inc(b.label_code, boxQ)) &&
+    (sampleQ.trim() === '' || (b.vials ?? []).some(v => inc(v.sample_id, sampleQ)))
+  )
+
+  const toggleExpanded = (id: number) =>
+    setExpanded(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  // A sample search auto-expands every box it leaves visible.
+  const isOpen = (b: LimsBox) => expanded.has(b.id) || sampleQ.trim() !== ''
+
   return (
     <div className="p-6">
       <div className="mb-4 flex items-center gap-2">
@@ -111,9 +138,40 @@ export function ActiveBoxesPage() {
       )}
 
       {boxes.length > 0 && (
+        <div className="mb-4 flex flex-wrap items-center gap-2">
+          <Input
+            value={sampleQ}
+            onChange={e => setSampleQ(e.target.value)}
+            placeholder="Sample ID"
+            aria-label="Sample ID"
+            className="w-48"
+          />
+          <Input
+            value={orderQ}
+            onChange={e => setOrderQ(e.target.value)}
+            placeholder="Order #"
+            aria-label="Order #"
+            className="w-48"
+          />
+          <Input
+            value={boxQ}
+            onChange={e => setBoxQ(e.target.value)}
+            placeholder="Box ID"
+            aria-label="Box ID"
+            className="w-48"
+          />
+        </div>
+      )}
+
+      {boxes.length > 0 && filtered.length === 0 && (
+        <div className="text-sm text-muted-foreground">No boxes match your search.</div>
+      )}
+
+      {filtered.length > 0 && (
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b text-left text-xs text-muted-foreground">
+              <th className="w-8 py-2 pr-2" aria-label="Expand" />
               <th className="py-2 pr-4">Label</th>
               <th className="py-2 pr-4">Type</th>
               <th className="py-2 pr-4">Vials</th>
@@ -123,10 +181,10 @@ export function ActiveBoxesPage() {
             </tr>
           </thead>
           <tbody>
-            {groupByOrder(boxes).map(g => (
+            {groupByOrder(filtered).map(g => (
               <Fragment key={g.orderKey}>
                 <tr className="border-b bg-muted/50">
-                  <td colSpan={6} className="py-2 pr-4">
+                  <td colSpan={7} className="py-2 pr-4">
                     <OrderLink orderKey={g.orderKey} />
                     <span className="ml-2 text-xs text-muted-foreground">
                       {g.boxes.length} box{g.boxes.length === 1 ? '' : 'es'}
@@ -134,38 +192,88 @@ export function ActiveBoxesPage() {
                   </td>
                 </tr>
                 {g.boxes.map(b => (
-                  <tr key={b.id} className="border-b">
-                    <td className="py-2 pr-4">
-                      <button
-                        type="button"
-                        onClick={() => setSessionOrderKey(b.order_key)}
-                        disabled={sessionOrderKey === b.order_key && sessionQ.isPending}
-                        className={`inline-flex items-center gap-1.5 font-mono font-semibold hover:underline ${roleTextClass(b.role)}`}
-                      >
-                        {b.label_code}
-                        {sessionOrderKey === b.order_key && sessionQ.isPending && (
-                          <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />
+                  <Fragment key={b.id}>
+                    <tr className="border-b">
+                      <td className="py-2 pr-2">
+                        {(b.vials ?? []).length > 0 ? (
+                          <button
+                            type="button"
+                            onClick={() => toggleExpanded(b.id)}
+                            aria-label={isOpen(b) ? `Collapse ${b.label_code}` : `Expand ${b.label_code}`}
+                            className="rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+                          >
+                            {isOpen(b) ? (
+                              <ChevronDown className="h-4 w-4" aria-hidden="true" />
+                            ) : (
+                              <ChevronRight className="h-4 w-4" aria-hidden="true" />
+                            )}
+                          </button>
+                        ) : (
+                          <span className="px-1 text-muted-foreground">—</span>
                         )}
-                      </button>
-                    </td>
-                    <td className="py-2 pr-4">
-                      <span className={`rounded px-2 py-0.5 text-xs ${roleBadgeClass(b.role)}`}>
-                        {ROLE_LABEL[b.role] ?? b.role}
-                      </span>
-                    </td>
-                    <td className="py-2 pr-4">{b.vial_count}</td>
-                    <td className="py-2 pr-4 text-muted-foreground">
-                      {b.created_at ? new Date(b.created_at).toLocaleDateString() : '—'}
-                    </td>
-                    {/* Fed by lims_box_location_events once the bench-scan slices land
-                        (spec 2026-07-01-box-location-tracking-design.md, slices 3-4). */}
-                    <td className="py-2 pr-4 italic text-muted-foreground">Coming soon</td>
-                    <td className="py-2 text-right">
-                      <Button size="sm" variant="outline" onClick={() => setClosing(b)}>
-                        Close
-                      </Button>
-                    </td>
-                  </tr>
+                      </td>
+                      <td className="py-2 pr-4">
+                        <button
+                          type="button"
+                          onClick={() => setSessionOrderKey(b.order_key)}
+                          disabled={sessionOrderKey === b.order_key && sessionQ.isPending}
+                          className={`inline-flex items-center gap-1.5 font-mono font-semibold hover:underline ${roleTextClass(b.role)}`}
+                        >
+                          {b.label_code}
+                          {sessionOrderKey === b.order_key && sessionQ.isPending && (
+                            <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />
+                          )}
+                        </button>
+                      </td>
+                      <td className="py-2 pr-4">
+                        <span className={`rounded px-2 py-0.5 text-xs ${roleBadgeClass(b.role)}`}>
+                          {ROLE_LABEL[b.role] ?? b.role}
+                        </span>
+                      </td>
+                      <td className="py-2 pr-4">{b.vial_count}</td>
+                      <td className="py-2 pr-4 text-muted-foreground">
+                        {b.created_at ? new Date(b.created_at).toLocaleDateString() : '—'}
+                      </td>
+                      {/* Fed by lims_box_location_events once the bench-scan slices land
+                          (spec 2026-07-01-box-location-tracking-design.md, slices 3-4). */}
+                      <td className="py-2 pr-4 italic text-muted-foreground">Coming soon</td>
+                      <td className="py-2 text-right">
+                        <Button size="sm" variant="outline" onClick={() => setClosing(b)}>
+                          Close
+                        </Button>
+                      </td>
+                    </tr>
+                    {isOpen(b) && (b.vials ?? []).map(v => (
+                      <tr
+                        key={v.sample_id}
+                        className={`border-b bg-muted/20 ${
+                          sampleQ.trim() && inc(v.sample_id, sampleQ) ? 'bg-primary/10' : ''
+                        }`}
+                      >
+                        <td className="py-1.5 pr-2" />
+                        <td className="py-1.5 pr-4">
+                          <button
+                            type="button"
+                            onClick={() => useUIStore.getState().navigateToSample(v.sample_id)}
+                            className="font-mono hover:underline"
+                          >
+                            {v.sample_id}
+                          </button>
+                          {v.parent_sample_id && !v.sample_id.startsWith(v.parent_sample_id) && (
+                            <span className="ml-2 text-xs text-muted-foreground">
+                              ↳ {v.parent_sample_id}
+                            </span>
+                          )}
+                        </td>
+                        <td className="py-1.5 pr-4">
+                          <span className={`rounded px-2 py-0.5 text-xs ${roleBadgeClass(v.assignment_role)}`}>
+                            {ROLE_LABEL[v.assignment_role ?? ''] ?? (v.assignment_role ?? '—')}
+                          </span>
+                        </td>
+                        <td colSpan={4} />
+                      </tr>
+                    ))}
+                  </Fragment>
                 ))}
               </Fragment>
             ))}

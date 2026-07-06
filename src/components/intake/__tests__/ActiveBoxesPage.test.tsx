@@ -16,6 +16,14 @@ const mockSamples = vi.mocked(getSenaiteSamples)
 
 vi.mock('sonner', () => ({ toast: { error: vi.fn() } }))
 
+// The vial-row sample button navigates via useUIStore.getState().navigateToSample.
+const { mockNavigateToSample } = vi.hoisted(() => ({ mockNavigateToSample: vi.fn() }))
+vi.mock('@/store/ui-store', () => ({
+  useUIStore: Object.assign(vi.fn(), {
+    getState: () => ({ navigateToSample: mockNavigateToSample }),
+  }),
+}))
+
 // Stub the heavy session shell with a sentinel echoing the order it was handed
 // and the landing tab, so we can assert what a box-label click opened.
 vi.mock('@/components/intake/OrderReceiveSession', () => ({
@@ -42,6 +50,9 @@ const box = {
   printed_at: null,
   created_at: '2026-07-01T12:00:00',
   stored_at: null,
+  vials: [
+    { sample_id: 'P-0141-S01', parent_sample_id: 'P-0141', assignment_role: 'hplc', vial_sequence: 1 },
+  ],
 }
 
 const orderSample = {
@@ -140,6 +151,40 @@ describe('ActiveBoxesPage', () => {
       expect(toast.error).toHaveBeenCalledWith('No order session available for WP-3267'),
     )
     expect(screen.queryByTestId('session')).toBeNull()
+  })
+
+  it('expand chevron reveals the vials inside the box', async () => {
+    mockList.mockResolvedValue([box])
+    renderPage()
+    await screen.findByText('WP-3267-1')
+    // Collapsed by default — the vial is hidden until the chevron is clicked.
+    expect(screen.queryByText('P-0141-S01')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Expand WP-3267-1' }))
+    expect(screen.getByText('P-0141-S01')).toBeInTheDocument()
+  })
+
+  it('Sample ID search keeps matching boxes, auto-expands them, and hides the rest', async () => {
+    mockList.mockResolvedValue([box])
+    renderPage()
+    await screen.findByText('WP-3267-1')
+    fireEvent.change(screen.getByLabelText('Sample ID'), { target: { value: 'P-0141-S01' } })
+    // Box stays visible and is auto-expanded so the matching vial shows.
+    expect(screen.getByText('WP-3267-1')).toBeInTheDocument()
+    expect(screen.getByText('P-0141-S01')).toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('Sample ID'), { target: { value: 'P-9999-S01' } })
+    expect(screen.queryByText('WP-3267-1')).toBeNull()
+    expect(screen.getByText(/no boxes match your search/i)).toBeInTheDocument()
+  })
+
+  it('Order # search filters boxes by their order key', async () => {
+    mockList.mockResolvedValue([box])
+    renderPage()
+    await screen.findByText('WP-3267-1')
+    fireEvent.change(screen.getByLabelText('Order #'), { target: { value: 'WP-9999' } })
+    expect(screen.queryByText('WP-3267-1')).toBeNull()
+    expect(screen.getByText(/no boxes match your search/i)).toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('Order #'), { target: { value: 'WP-3267' } })
+    expect(screen.getByText('WP-3267-1')).toBeInTheDocument()
   })
 
   it('renders the coming-soon Location placeholder', async () => {

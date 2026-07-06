@@ -4,7 +4,7 @@ from typing import List
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
-from models import LimsBox, LimsSubSample
+from models import LimsBox, LimsSample, LimsSubSample
 
 BOXABLE_ROLES = {"hplc", "endo", "ster", "xtra"}
 
@@ -18,6 +18,33 @@ def vial_count(db: Session, box_id: int) -> int:
     return db.scalar(
         select(func.count()).select_from(LimsSubSample).where(LimsSubSample.box_id == box_id)
     ) or 0
+
+
+def vials_for_boxes(db: Session, box_ids: List[int]) -> dict:
+    """Map box_id -> [{sample_id, parent_sample_id, assignment_role, vial_sequence}] for the given boxes."""
+    if not box_ids:
+        return {}
+    rows = db.execute(
+        select(
+            LimsSubSample.box_id,
+            LimsSubSample.sample_id,
+            LimsSubSample.assignment_role,
+            LimsSubSample.vial_sequence,
+            LimsSample.sample_id.label("parent_sample_id"),
+        )
+        .join(LimsSample, LimsSample.id == LimsSubSample.parent_sample_pk)
+        .where(LimsSubSample.box_id.in_(box_ids))
+        .order_by(LimsSubSample.sample_id)
+    ).all()
+    out: dict = {}
+    for r in rows:
+        out.setdefault(r.box_id, []).append({
+            "sample_id": r.sample_id,
+            "parent_sample_id": r.parent_sample_id,
+            "assignment_role": r.assignment_role,
+            "vial_sequence": r.vial_sequence,
+        })
+    return out
 
 
 def next_box(db: Session, order_key: str, role: str, user_id: int) -> LimsBox:

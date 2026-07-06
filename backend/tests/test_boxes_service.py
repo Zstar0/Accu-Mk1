@@ -152,6 +152,22 @@ def test_close_missing_box_raises_lookup(db):
         service.close_box(db, 9999, user_id=1)
 
 
+def test_vials_for_boxes(db):
+    p = LimsSample(sample_id="P-0630", external_lims_uid="u-630")
+    db.add(p); db.flush()
+    v = _vial(db, p, 1, "hplc")
+    box = service.next_box(db, "WP-20072", "hplc", user_id=1)
+    service.assign_vials(db, box.id, [v.sample_id])
+    vmap = service.vials_for_boxes(db, [box.id])
+    assert list(vmap.keys()) == [box.id]
+    (entry,) = vmap[box.id]
+    assert entry["sample_id"] == "P-0630-S01"
+    assert entry["parent_sample_id"] == "P-0630"
+    assert entry["vial_sequence"] == 1
+    # No ids → no query, empty map.
+    assert service.vials_for_boxes(db, []) == {}
+
+
 def test_list_active_excludes_stored(db):
     a = service.next_box(db, "WP-20069", "hplc", user_id=1)
     b = service.next_box(db, "WP-20069", "endo", user_id=1)

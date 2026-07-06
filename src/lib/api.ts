@@ -5548,6 +5548,12 @@ export interface LimsBox {
   printed_at: string | null
   created_at: string | null
   stored_at: string | null
+  vials?: {
+    sample_id: string
+    parent_sample_id: string | null
+    assignment_role: string | null
+    vial_sequence: number
+  }[]
 }
 
 export async function listOrderBoxes(orderKey: string): Promise<LimsBox[]> {

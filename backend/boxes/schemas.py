@@ -12,6 +12,13 @@ class AssignVialsRequest(BaseModel):
     sub_sample_ids: List[str]
 
 
+class BoxVial(BaseModel):
+    sample_id: str
+    parent_sample_id: Optional[str] = None
+    assignment_role: Optional[str] = None
+    vial_sequence: int
+
+
 class BoxResponse(BaseModel):
     id: int
     order_key: str
@@ -22,6 +29,7 @@ class BoxResponse(BaseModel):
     printed_at: Optional[datetime] = None
     created_at: Optional[datetime] = None
     stored_at: Optional[datetime] = None
+    vials: List[BoxVial] = []
 
     class Config:
         from_attributes = True
