@@ -17,11 +17,19 @@ const mockSamples = vi.mocked(getSenaiteSamples)
 vi.mock('sonner', () => ({ toast: { error: vi.fn() } }))
 
 // The vial-row sample button navigates via useUIStore.getState().navigateToSample.
+// The hook is selector-aware so the deep-link effect reads boxesSearchTarget: null
+// (no incoming target) instead of undefined.
 const { mockNavigateToSample } = vi.hoisted(() => ({ mockNavigateToSample: vi.fn() }))
 vi.mock('@/store/ui-store', () => ({
-  useUIStore: Object.assign(vi.fn(), {
-    getState: () => ({ navigateToSample: mockNavigateToSample }),
-  }),
+  useUIStore: Object.assign(
+    vi.fn((selector?: (s: { boxesSearchTarget: string | null }) => unknown) =>
+      selector ? selector({ boxesSearchTarget: null }) : undefined
+    ),
+    {
+      getState: () => ({ navigateToSample: mockNavigateToSample }),
+      setState: vi.fn(),
+    }
+  ),
 }))
 
 // Stub the heavy session shell with a sentinel echoing the order it was handed

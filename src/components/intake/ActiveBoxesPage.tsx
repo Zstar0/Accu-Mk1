@@ -68,6 +68,15 @@ export function ActiveBoxesPage() {
   const [boxQ, setBoxQ] = useState('')
   const [expanded, setExpanded] = useState<Set<number>>(new Set())
 
+  // Deep link (e.g. the sample-header box chip): seed the Box ID search with
+  // the incoming label, then consume-and-clear the store slot.
+  const boxesSearchTarget = useUIStore(s => s.boxesSearchTarget)
+  useEffect(() => {
+    if (boxesSearchTarget === null) return
+    setBoxQ(boxesSearchTarget)
+    useUIStore.setState({ boxesSearchTarget: null })
+  }, [boxesSearchTarget])
+
   const boxesQ = useQuery({ queryKey: ['active-boxes'], queryFn: listActiveBoxes })
 
   // Samples for the clicked order. reviewState is deliberately undefined —

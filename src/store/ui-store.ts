@@ -76,6 +76,9 @@ interface UIState {
   peptideConfigTargetId: number | null
   orderExplorerTargetOrderId: string | null
   sampleDetailsTargetId: string | null
+  // Deep-link into Active Boxes: box label ("WP-3267-1") to seed the Box ID
+  // search. Consume-and-clear — ActiveBoxesPage nulls it after applying.
+  boxesSearchTarget: string | null
   samplePrepTargetId: number | null
   methodsTargetId: number | null
   peptideRequestTargetId: string | null
@@ -111,6 +114,7 @@ interface UIState {
   navigateToPeptide: (peptideId: number) => void
   navigateToOrderExplorer: (orderId?: string) => void
   navigateToSample: (sampleId: string) => void
+  navigateToBoxes: (boxLabel?: string) => void
   navigateToSamplePrep: (prepId: number) => void
   navigateToMethod: (methodId: number) => void
   navigateToPeptideRequest: (requestId: string) => void
@@ -215,6 +219,7 @@ export const useUIStore = create<UIState>()(
       peptideConfigTargetId: null,
       orderExplorerTargetOrderId: null,
       sampleDetailsTargetId: null,
+      boxesSearchTarget: null,
       samplePrepTargetId: null,
       methodsTargetId: null,
       peptideRequestTargetId: null,
@@ -341,6 +346,18 @@ export const useUIStore = create<UIState>()(
           }),
           undefined,
           'navigateToSample'
+        ),
+
+      navigateToBoxes: boxLabel =>
+        set(
+          state => ({
+            activeSection: 'senaite',
+            activeSubSection: 'boxes',
+            boxesSearchTarget: boxLabel ?? null,
+            navigationKey: state.navigationKey + 1,
+          }),
+          undefined,
+          'navigateToBoxes'
         ),
 
       navigateToSamplePrep: prepId =>

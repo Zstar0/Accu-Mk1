@@ -20,6 +20,7 @@ import {
   X,
   XCircle,
   ArrowLeft,
+  Box,
   RefreshCw,
   Copy,
   Paperclip,
@@ -3683,6 +3684,12 @@ export function SampleDetails() {
       .catch(() => setParentLineStates({}))
   }, [parentSampleId])
 
+  // This vial's own record in the parent's sub-samples list (null on parent
+  // pages or before the list loads). Shared by the header's role lookup,
+  // vial-count line, and box chip.
+  const meVial =
+    parentSummary?.sub_samples.find(s => s.sample_id === sampleId) ?? null
+
   // Resolve this sample's vial-assignment role for the header label.
   // Parent pages: pull from lims_samples.assignment_role (defaults to 'hplc'
   // per migration; can change after AssignStep moves the parent into another
@@ -3694,8 +3701,7 @@ export function SampleDetails() {
         // so no "Assigned to" line / role badge (its vials carry the roles).
         null
       : (subData?.parent.assignment_role ?? 'hplc')
-    : (parentSummary?.sub_samples.find(s => s.sample_id === sampleId)
-        ?.assignment_role ?? null)
+    : (meVial?.assignment_role ?? null)
   const assignmentLabel = (() => {
     switch (currentAssignment) {
       case 'hplc':
@@ -4471,11 +4477,8 @@ export function SampleDetails() {
                     {parentSampleId}
                   </button>
                   {parentSummary &&
+                    meVial &&
                     (() => {
-                      const me = parentSummary.sub_samples.find(
-                        s => s.sample_id === sampleId
-                      )
-                      if (!me) return null
                       // Mode-aware family numbering: legacy counts the parent
                       // as Vial 1; container families count physical vials only.
                       const cm = parentSummary.parent.container_mode ?? false
@@ -4487,7 +4490,8 @@ export function SampleDetails() {
                         <>
                           <span aria-hidden>·</span>
                           <span>
-                            Vial {vialPosition(me.vial_sequence, cm)} of {total}
+                            Vial {vialPosition(meVial.vial_sequence, cm)} of{' '}
+                            {total}
                           </span>
                         </>
                       )
@@ -4496,6 +4500,22 @@ export function SampleDetails() {
                     <>
                       <span aria-hidden>·</span>
                       <RoleHeaderBadge role={currentAssignment} />
+                    </>
+                  )}
+                  {meVial?.box_label && (
+                    <>
+                      <span aria-hidden>·</span>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          useUIStore.getState().navigateToBoxes(meVial.box_label!)
+                        }
+                        title="View in Active Boxes"
+                        className="inline-flex items-center gap-1 rounded border px-1.5 py-0.5 font-mono text-[11px] hover:bg-muted transition-colors"
+                      >
+                        <Box className="h-3 w-3 shrink-0" aria-hidden="true" />
+                        {meVial.box_label}
+                      </button>
                     </>
                   )}
                 </div>

@@ -33,6 +33,10 @@ class SubSampleResponse(BaseModel):
     # FK to lims_boxes.id — which physical box this vial is assigned to, or
     # None when unboxed. Lets the boxing UI reflect server-side assignments.
     box_id: Optional[int] = None
+    # Human box label ("<order_key>-<box_number>", e.g. "WP-3267-1"). Populated
+    # by the LIST endpoint via a batched box lookup; single-item responses
+    # leave it None (their callers key off box_id).
+    box_label: Optional[str] = None
 
     class Config:
         from_attributes = True
