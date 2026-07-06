@@ -12,7 +12,7 @@ import json
 import logging
 import os
 import requests
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Tuple, List
 from sqlalchemy import select, func, delete, case
 from sqlalchemy.orm import Session
@@ -59,28 +59,49 @@ def ensure_sample_row(db: Session, parent_sample_id: str) -> LimsSample:
         return existing
 
     meta = senaite.fetch_parent_metadata(parent_sample_id)
+    return _create_sample_row(db, parent_sample_id, meta)
+
+
+def _populate_basic_info(row: LimsSample, meta: dict) -> None:
+    """Write the FULL canonical basic-info field set from a
+    fetch_parent_metadata payload (the raw complete=true item). The single
+    definition of "basic info" — create (ensure_sample_row), refresh
+    (_refresh_parent_from_senaite), and the backfill script all route through
+    here so rows come out identical and complete
+    (2026-07-02-lims-sample-canonical-basic-info-design.md).
+
+    Deliberately NOT basic info (owned elsewhere — never write here):
+    container_mode, assignment_role, variance fields, customer_remarks*,
+    is_retest."""
+    row.external_lims_uid = meta.get("uid")
+    row.external_lims_system = "senaite"
+    # complete=true detail payloads carry getClientID but no bare ClientID
+    # (verified live 2026-07-05); bare form kept first for back-compat.
+    row.client_id = meta.get("ClientID") or meta.get("getClientID")
+    row.client_uid = _extract_uid(meta.get("ClientUID") or meta.get("Client"))
+    row.contact_uid = _extract_uid(meta.get("ContactUID") or meta.get("Contact"))
+    row.sample_type = _extract_uid(meta.get("SampleType"))
+    row.client_sample_id = meta.get("ClientSampleID")
+    row.peptide_name = _extract_label(meta.get("Analyte1Peptide"))
+    row.date_received = _parse_senaite_date(meta.get("DateReceived"))
+    row.date_sampled = _parse_senaite_date(meta.get("DateSampled"))
+    row.status = meta.get("review_state")
+    row.last_synced_at = datetime.utcnow()
+
+
+def _create_sample_row(db: Session, parent_sample_id: str, meta: dict) -> LimsSample:
+    """Construct + populate + flush a new lims_samples row from an
+    already-fetched meta payload. Owns the container_mode first-touch gate —
+    the backfill script reuses this so the gate is defined exactly once."""
     row = LimsSample(
         sample_id=parent_sample_id,
-        external_lims_uid=meta.get("uid"),
-        external_lims_system="senaite",
-        client_uid=_extract_uid(meta.get("ClientUID") or meta.get("Client")),
-        client_id=meta.get("ClientID"),
-        contact_uid=_extract_uid(meta.get("ContactUID") or meta.get("Contact")),
-        sample_type=_extract_uid(meta.get("SampleType")),
-        status=meta.get("review_state"),
-        # Analyte1Peptide may come back as a {uid, url} dict from
-        # /complete=true; the lims_samples.peptide_name column is a string
-        # (display label), so reduce to title/string. Falls back to None when
-        # the parent has no analytes (non-peptide samples).
-        peptide_name=_extract_label(meta.get("Analyte1Peptide")),
-        client_sample_id=meta.get("ClientSampleID"),
-        last_synced_at=datetime.utcnow(),
         # Container family iff this row is born BEFORE check-in: pre-received
         # families have no parent-as-vial-1 history, so they start as pure
         # report depositories (2026-06-10-container-parent-design.md).
         # Already-received families predate the cutover -> legacy.
         container_mode=meta.get("review_state") in _PRE_RECEIVED_STATES,
     )
+    _populate_basic_info(row, meta)
     db.add(row)
     db.flush()
     return row
@@ -112,15 +133,31 @@ def _extract_label(value):
     return value
 
 
+def _parse_senaite_date(value) -> Optional[datetime]:
+    """SENAITE serializes dates as ISO-8601 strings, usually with a TZ offset
+    (e.g. '2026-05-01T10:23:00+00:00'), occasionally with a trailing 'Z'.
+    lims_samples date columns are naive UTC (datetime.utcnow() convention),
+    so normalize aware → UTC and strip tzinfo. Returns None for empty or
+    unparseable values — basic-info population is best-effort, never fatal."""
+    if not value or not isinstance(value, str):
+        return None
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        log.debug("sub_samples.basic_info: unparseable SENAITE date %r", value)
+        return None
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return dt
+
+
 def _refresh_parent_from_senaite(db: Session, parent: LimsSample) -> None:
-    """Refresh the cached lims_samples row from SENAITE in place."""
+    """Refresh the cached lims_samples row from SENAITE in place. Writes the
+    FULL basic-info set via _populate_basic_info (it used to write a 5-field
+    subset, which let client_sample_id / peptide_name / client_id / dates go
+    permanently stale)."""
     meta = senaite.fetch_parent_metadata(parent.sample_id)
-    parent.external_lims_uid = meta.get("uid")
-    parent.client_uid = _extract_uid(meta.get("ClientUID") or meta.get("Client"))
-    parent.contact_uid = _extract_uid(meta.get("ContactUID") or meta.get("Contact"))
-    parent.sample_type = _extract_uid(meta.get("SampleType"))
-    parent.status = meta.get("review_state")
-    parent.last_synced_at = datetime.utcnow()
+    _populate_basic_info(parent, meta)
     db.flush()
 
 
@@ -447,6 +484,9 @@ def list_sub_samples(db: Session, parent_sample_id: str) -> Tuple[Optional[LimsS
 def _reconcile_from_senaite(db: Session, parent: LimsSample) -> None:
     """SENAITE is canonical; insert SENAITE-only sub-samples missing locally.
 
+    Also refreshes the parent's basic info (best-effort) — the 5-minute
+    staleness trigger doubles as the registry's eventual-consistency mechanism.
+
     Never deletes local rows based on absence in SENAITE — surface to a human
     via WARN log instead.
 
@@ -457,6 +497,20 @@ def _reconcile_from_senaite(db: Session, parent: LimsSample) -> None:
     """
     if not parent.external_lims_uid:
         return
+
+    # Basic-info freshness piggyback (2026-07-02 canonical basic-info spec):
+    # this staleness path is the one existing re-sync trigger, so refresh the
+    # parent's basic info here too. Runs BEFORE the Model-D guard on purpose —
+    # native families' parent AR still lives in SENAITE (only the sub-sample
+    # set is Mk1-owned). Best-effort: a SENAITE hiccup must not take down
+    # list_sub_samples; stale-but-served beats 500.
+    try:
+        _refresh_parent_from_senaite(db, parent)
+    except Exception as e:
+        log.warning(
+            "sub_samples.basic_info_refresh_failed parent=%s err=%s",
+            parent.sample_id, e,
+        )
 
     # Model-D guard: if any vial in this family is native, OR the family is
     # empty while the native flag is on, Mk1 owns the sub-sample set. Pulling
