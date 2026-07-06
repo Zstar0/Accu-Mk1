@@ -217,6 +217,29 @@ def test_transition_raises_on_silent_rejection():
 
 
 # ---------------------------------------------------------------------------
+# retract_analysis_line — unlock flow (vial unlock spec, UAT amendment)
+# ---------------------------------------------------------------------------
+
+def test_retract_analysis_line_expects_retracted_state():
+    # SENAITE returns the ORIGINAL line (now 'retracted'); the editable retest
+    # sibling it spawns is a different object and never comes back here.
+    from lims_analyses.senaite_writeback import retract_analysis_line
+    with patch("lims_analyses.senaite_writeback._update",
+               return_value={"review_state": "retracted"}) as mock_update:
+        assert retract_analysis_line("uid-xyz") == "retracted"
+    mock_update.assert_called_once_with("uid-xyz", {"transition": "retract"})
+
+
+def test_retract_analysis_line_raises_on_silent_rejection():
+    from lims_analyses.senaite_writeback import retract_analysis_line
+    with patch("lims_analyses.senaite_writeback._update",
+               return_value={"review_state": "to_be_verified"}):
+        with pytest.raises(SenaiteWritebackError) as exc_info:
+            retract_analysis_line("uid-xyz")
+    assert "silently rejected" in str(exc_info.value)
+
+
+# ---------------------------------------------------------------------------
 # Task 3: new preference tests — active line preferred over verified
 # ---------------------------------------------------------------------------
 

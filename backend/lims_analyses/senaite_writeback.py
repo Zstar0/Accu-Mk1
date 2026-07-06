@@ -30,9 +30,12 @@ SENAITE_USER = os.environ.get("SENAITE_USER", "admin")
 SENAITE_PASSWORD = os.environ.get("SENAITE_PASSWORD", "admin")
 
 # Maps workflow action name → the review_state SENAITE must report after it.
+# retract: SENAITE returns the ORIGINAL line (now 'retracted'); the editable
+# retest sibling it spawns is a separate object and never comes back here.
 EXPECTED_POST_STATES: dict[str, str] = {
     "submit": "to_be_verified",
     "verify": "verified",
+    "retract": "retracted",
 }
 
 
@@ -180,6 +183,22 @@ def _transition(uid: str, action: str) -> str:
             f"expected review_state={expected!r} but got {new_state!r}"
         )
     return new_state
+
+
+def retract_analysis_line(uid: str) -> str:
+    """Retract a parent AR analysis line (unlock / un-promote flow).
+
+    The original promote SUBMITS the line (→ to_be_verified), and SENAITE's
+    jsonapi refuses field writes (Result/Remarks) on submitted lines — so a
+    re-promote after unlock would 401. Retracting moves the line itself to
+    ``retracted`` and spawns an editable retest sibling with the same keyword;
+    that sibling is what the next write-back targets via
+    ``find_parent_analysis_line``.
+
+    Returns the retracted line's review_state.
+    Raises SenaiteWritebackError on any failure (fail-closed).
+    """
+    return _transition(uid, "retract")
 
 
 def list_parent_line_states(parent_sample_id: str) -> dict[str, str]:

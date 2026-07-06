@@ -34,6 +34,8 @@ from lims_analyses.schemas import (
     SetReportableRequest,
     TransitionInfo,
     TransitionRequest,
+    UnpromoteRequest,
+    UnpromoteResponse,
 )
 from lims_analyses.state_machine import (
     InvalidTransitionError,
@@ -375,4 +377,95 @@ def promote(
     return PromoteResponse(
         parent=AnalysisResponse.model_validate(parent_row),
         promotions=[PromotionRow.model_validate(p) for p in promotion_rows],
+    )
+
+
+@router.post("/unpromote", response_model=UnpromoteResponse)
+def unpromote(
+    req: UnpromoteRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Unlock a promotion. SENAITE guard runs BEFORE any Mk1 mutation and is
+    fail-closed: if the parent AR line is verified/published — or its state
+    cannot be confirmed — the unlock is refused (retract in SENAITE first)."""
+    from models import LimsSample
+
+    try:
+        parent_row = service.get_analysis(db, req.parent_analysis_id)
+    except service.NotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+    # All local preconditions BEFORE any SENAITE call: a doomed request
+    # (blank reason, wrong tier/state, no links) must never retract the
+    # parent AR line first.
+    try:
+        service.validate_unpromote(
+            db, parent_analysis_id=req.parent_analysis_id, reason=req.reason
+        )
+    except Exception as e:
+        raise _handle_service_error(e)
+
+    parent_sample = (
+        db.get(LimsSample, parent_row.lims_sample_pk)
+        if parent_row.lims_sample_pk is not None else None
+    )
+    # Fallback mirrors the promote endpoint: if the LimsSample row can't be
+    # resolved, pass the raw pk string so the guard still RUNS (the lookup
+    # fails inside find_parent_analysis_line → SenaiteWritebackError → 409
+    # fail-closed) instead of being silently skipped.
+    parent_sample_id = (
+        parent_sample.sample_id if parent_sample
+        else str(parent_row.lims_sample_pk)
+    )
+
+    try:
+        line = senaite_writeback.find_parent_analysis_line(
+            parent_sample_id, parent_row.keyword)
+    except SenaiteWritebackError as e:
+        raise HTTPException(
+            status_code=409,
+            detail=f"SENAITE state could not be confirmed — unlock "
+                   f"blocked (fail-closed): {e}",
+        )
+    # "verified" is defense-in-depth: the reader raises for verified-only
+    # lines today; "published" is the live path.
+    if line["review_state"] in ("verified", "published"):
+        raise HTTPException(
+            status_code=409,
+            detail=f"parent analysis line {parent_row.keyword!r} on "
+                   f"{parent_sample_id} is {line['review_state']} in "
+                   f"SENAITE — retract it in SENAITE first, then unlock",
+        )
+
+    # The original promote SUBMITTED this line (→ to_be_verified) and SENAITE
+    # refuses field writes on submitted lines, so a re-promote after unlock
+    # would 401 on the Result/Remarks update. Retract it now — the editable
+    # retest sibling SENAITE spawns is what the next promote targets. Still
+    # BEFORE any Mk1 mutation and fail-closed, same as the guard above.
+    # Lines already at unassigned/assigned (e.g. manually retracted earlier)
+    # are field-writable and need nothing.
+    if line["review_state"] == "to_be_verified":
+        try:
+            senaite_writeback.retract_analysis_line(line["uid"])
+        except SenaiteWritebackError as e:
+            raise HTTPException(
+                status_code=409,
+                detail=f"SENAITE parent line could not be retracted — unlock "
+                       f"blocked (fail-closed): {e}",
+            )
+
+    try:
+        parent, reverted = service.unpromote_parent_analysis(
+            db,
+            parent_analysis_id=req.parent_analysis_id,
+            reason=req.reason,
+            user_id=getattr(current_user, "id", None),
+        )
+    except Exception as e:
+        raise _handle_service_error(e)
+
+    return UnpromoteResponse(
+        parent=AnalysisResponse.model_validate(parent),
+        reverted_source_ids=reverted,
     )

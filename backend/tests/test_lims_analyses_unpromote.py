@@ -1,0 +1,338 @@
+"""Unlock (un-promote): parent-tier retract + group source revert.
+
+Spec: docs/superpowers/specs/2026-07-03-vial-unlock-unpromote-design.md
+"""
+import os, sys
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
+import pytest
+from sqlalchemy import create_engine, select
+from sqlalchemy.orm import sessionmaker
+
+from database import Base
+from lims_analyses import service
+from models import (
+    AnalysisService, LimsAnalysis, LimsAnalysisPromotion,
+    LimsAnalysisTransition, LimsSample, LimsSubSample,
+)
+
+
+@pytest.fixture
+def db():
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    s = sessionmaker(bind=engine)()
+    try:
+        yield s
+    finally:
+        s.close()
+
+
+def _seed_promoted_group(db, n_sources=2):
+    """Parent sample + n vials, each with a to_be_verified analysis, promoted
+    through the REAL promote_to_parent so state/links match production."""
+    svc = AnalysisService(title="Purity (HPLC)", keyword="PURITY-HPLC")
+    db.add(svc); db.flush()
+    parent = LimsSample(sample_id="P-0001", external_lims_uid="uid-P-0001")
+    db.add(parent); db.flush()
+    sources = []
+    for i in range(1, n_sources + 1):
+        sub = LimsSubSample(parent_sample_pk=parent.id, sample_id=f"P-0001-S{i:02d}",
+                            external_lims_uid=f"uid-s{i}", vial_sequence=i)
+        db.add(sub); db.flush()
+        a = LimsAnalysis(lims_sub_sample_pk=sub.id, analysis_service_id=svc.id,
+                         keyword="PURITY-HPLC", title="Purity (HPLC)",
+                         review_state="to_be_verified", result_value=f"98.{i}")
+        db.add(a); db.flush()
+        sources.append(a)
+    kind = "aggregated_in" if n_sources > 1 else "chosen"
+    parent_row, _ = service.promote_to_parent(
+        db, keyword="PURITY-HPLC", result_value="98.5", result_unit="%",
+        method_id=None, instrument_id=None,
+        sources=[{"analysis_id": a.id, "contribution_kind": kind} for a in sources],
+        user_id=1, reason="test promote",
+    )
+    return parent, parent_row, sources
+
+
+def test_unpromote_reverts_group_and_retracts_parent(db):
+    parent, parent_row, sources = _seed_promoted_group(db, n_sources=2)
+    got_parent, reverted = service.unpromote_parent_analysis(
+        db, parent_analysis_id=parent_row.id, reason="purity/quantity swap", user_id=7)
+    assert got_parent.review_state == "retracted"
+    assert got_parent.verified_at is None
+    # Stale promoted figure cleared — the display path renders retracted
+    # parents (filters by retest_of_id, not state), so the value must go.
+    assert got_parent.result_value is None
+    assert got_parent.result_unit is None
+    assert sorted(reverted) == sorted(a.id for a in sources)
+    for a in sources:
+        db.refresh(a)
+        assert a.review_state == "to_be_verified"
+    # Links preserved (audit history), parent audit row written with the reason
+    links = db.execute(select(LimsAnalysisPromotion).where(
+        LimsAnalysisPromotion.parent_analysis_id == parent_row.id)).scalars().all()
+    assert len(links) == 2
+    parent_audit = db.execute(select(LimsAnalysisTransition).where(
+        LimsAnalysisTransition.analysis_id == parent_row.id,
+        LimsAnalysisTransition.transition_kind == "unpromote")).scalars().all()
+    assert len(parent_audit) == 1 and "purity/quantity swap" in parent_audit[0].reason
+
+
+def test_unpromote_blank_reason_rejected(db):
+    _, parent_row, _ = _seed_promoted_group(db, 1)
+    with pytest.raises(service.BadRequestError):
+        service.unpromote_parent_analysis(db, parent_analysis_id=parent_row.id,
+                                          reason="  ", user_id=1)
+
+
+def test_unpromote_published_parent_blocked(db):
+    _, parent_row, _ = _seed_promoted_group(db, 1)
+    parent_row.review_state = "published"
+    db.commit()
+    with pytest.raises(service.InvalidTransitionError):
+        service.unpromote_parent_analysis(db, parent_analysis_id=parent_row.id,
+                                          reason="x", user_id=1)
+
+
+def test_unpromote_rejects_vial_tier_target(db):
+    _, _, sources = _seed_promoted_group(db, 1)
+    with pytest.raises(service.BadRequestError):
+        service.unpromote_parent_analysis(db, parent_analysis_id=sources[0].id,
+                                          reason="x", user_id=1)
+
+
+def test_unpromote_then_repromote_round_trip(db):
+    _, parent_row, sources = _seed_promoted_group(db, 1)
+    service.unpromote_parent_analysis(db, parent_analysis_id=parent_row.id,
+                                      reason="redo", user_id=1)
+    # Source is back in to_be_verified and the unique parent slot is vacated —
+    # a fresh promote succeeds.
+    new_parent, _ = service.promote_to_parent(
+        db, keyword="PURITY-HPLC", result_value="97.9", result_unit="%",
+        method_id=None, instrument_id=None,
+        sources=[{"analysis_id": sources[0].id, "contribution_kind": "chosen"}],
+        user_id=1, reason="re-promote after unlock",
+    )
+    assert new_parent.review_state == "verified"
+    assert new_parent.id != parent_row.id
+
+
+# ─── SENAITE-initiated retract cascade (parent page / SENAITE UI proxy) ──────
+
+
+def test_retract_cascade_unpromotes_group(db):
+    """Retracting the parent AR line in SENAITE un-promotes the Mk1 side:
+    canonical row retracted+cleared, sources workable, activity log written."""
+    parent, parent_row, sources = _seed_promoted_group(db, n_sources=2)
+    reverted = service.cascade_parent_retract_to_unpromote(
+        db, parent_sample_id=parent.sample_id, keyword="PURITY-HPLC", user_id=7)
+    assert sorted(reverted) == sorted(a.id for a in sources)
+    db.refresh(parent_row)
+    assert parent_row.review_state == "retracted"
+    assert parent_row.result_value is None
+    for a in sources:
+        db.refresh(a)
+        assert a.review_state == "to_be_verified"
+    audit = db.execute(select(LimsAnalysisTransition).where(
+        LimsAnalysisTransition.analysis_id == parent_row.id,
+        LimsAnalysisTransition.transition_kind == "unpromote")).scalars().all()
+    assert len(audit) == 1 and "retracted in SENAITE" in audit[0].reason
+
+
+def test_retract_cascade_noop_on_unknown_sample(db):
+    assert service.cascade_parent_retract_to_unpromote(
+        db, parent_sample_id="P-9999", keyword="PURITY-HPLC", user_id=1) == []
+
+
+def test_retract_cascade_noop_on_unknown_keyword(db):
+    parent, parent_row, _ = _seed_promoted_group(db, 1)
+    assert service.cascade_parent_retract_to_unpromote(
+        db, parent_sample_id=parent.sample_id, keyword="NOPE", user_id=1) == []
+    db.refresh(parent_row)
+    assert parent_row.review_state == "verified"
+
+
+def test_retract_cascade_noop_when_not_a_promotion(db):
+    """A verified parent-tier row WITHOUT promotion links (legacy/manual value)
+    must be left alone — the cascade only unlocks promotions."""
+    svc = AnalysisService(title="pH", keyword="PH")
+    db.add(svc); db.flush()
+    parent = LimsSample(sample_id="P-0002", external_lims_uid="uid-P-0002")
+    db.add(parent); db.flush()
+    row = LimsAnalysis(lims_sample_pk=parent.id, analysis_service_id=svc.id,
+                       keyword="PH", title="pH",
+                       review_state="verified", result_value="7.1")
+    db.add(row); db.commit()
+    assert service.cascade_parent_retract_to_unpromote(
+        db, parent_sample_id="P-0002", keyword="PH", user_id=1) == []
+    db.refresh(row)
+    assert row.review_state == "verified"
+    assert row.result_value == "7.1"
+
+
+# ─── Route-level tests ────────────────────────────────────────────────────────
+from unittest.mock import MagicMock, patch
+from fastapi.testclient import TestClient
+from sqlalchemy.pool import StaticPool
+from auth import get_current_user
+from database import get_db
+from main import app
+
+
+@pytest.fixture
+def route_client():
+    engine = create_engine("sqlite:///:memory:",
+                           connect_args={"check_same_thread": False},
+                           poolclass=StaticPool)
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine)
+    shared = Session()
+    def _override_get_db():
+        yield shared
+
+    prev_db = app.dependency_overrides.get(get_db)
+    prev_user = app.dependency_overrides.get(get_current_user)
+    app.dependency_overrides[get_db] = _override_get_db
+    app.dependency_overrides[get_current_user] = lambda: MagicMock(id=1, email="qa@x.t")
+    tc = TestClient(app)
+    tc._test_session = shared
+    yield tc
+    if prev_db is None: app.dependency_overrides.pop(get_db, None)
+    else: app.dependency_overrides[get_db] = prev_db
+    if prev_user is None: app.dependency_overrides.pop(get_current_user, None)
+    else: app.dependency_overrides[get_current_user] = prev_user
+    shared.close()
+
+
+def _line(state):
+    return {"uid": "senaite-uid-1", "review_state": state}
+
+
+def test_unpromote_route_happy_path_retracts_senaite_line(route_client):
+    """The original promote SUBMITTED the SENAITE line (to_be_verified) —
+    unlock must retract it so a later re-promote can write Result/Remarks
+    (SENAITE refuses field writes on submitted lines: UAT 2026-07-03)."""
+    db = route_client._test_session
+    _, parent_row, sources = _seed_promoted_group(db, 1)
+    with patch("lims_analyses.routes.senaite_writeback.find_parent_analysis_line",
+               return_value=_line("to_be_verified")), \
+         patch("lims_analyses.routes.senaite_writeback.retract_analysis_line",
+               return_value="retracted") as mock_retract:
+        resp = route_client.post("/api/lims-analyses/unpromote",
+                                 json={"parent_analysis_id": parent_row.id,
+                                       "reason": "swap fix"})
+    assert resp.status_code == 200, resp.text
+    mock_retract.assert_called_once_with("senaite-uid-1")
+    body = resp.json()
+    assert body["parent"]["review_state"] == "retracted"
+    assert body["reverted_source_ids"] == [sources[0].id]
+
+
+def test_unpromote_route_skips_retract_when_line_editable(route_client):
+    """A line someone already retracted manually sits at unassigned/assigned —
+    field writes work there, so no retract is issued."""
+    db = route_client._test_session
+    _, parent_row, _ = _seed_promoted_group(db, 1)
+    with patch("lims_analyses.routes.senaite_writeback.find_parent_analysis_line",
+               return_value=_line("unassigned")), \
+         patch("lims_analyses.routes.senaite_writeback.retract_analysis_line") as mock_retract:
+        resp = route_client.post("/api/lims-analyses/unpromote",
+                                 json={"parent_analysis_id": parent_row.id,
+                                       "reason": "swap fix"})
+    assert resp.status_code == 200, resp.text
+    mock_retract.assert_not_called()
+
+
+def test_unpromote_route_retract_failure_fail_closed(route_client):
+    """SENAITE retract fails → 409, and NO Mk1 mutation happened."""
+    from lims_analyses.senaite_writeback import SenaiteWritebackError
+    db = route_client._test_session
+    _, parent_row, sources = _seed_promoted_group(db, 1)
+    with patch("lims_analyses.routes.senaite_writeback.find_parent_analysis_line",
+               return_value=_line("to_be_verified")), \
+         patch("lims_analyses.routes.senaite_writeback.retract_analysis_line",
+               side_effect=SenaiteWritebackError("retract refused")):
+        resp = route_client.post("/api/lims-analyses/unpromote",
+                                 json={"parent_analysis_id": parent_row.id,
+                                       "reason": "swap fix"})
+    assert resp.status_code == 409
+    assert "retract" in resp.json()["detail"].lower()
+    db.refresh(parent_row)
+    assert parent_row.review_state == "verified"      # nothing mutated
+    for a in sources:
+        db.refresh(a)
+        assert a.review_state == "promoted"
+
+
+def test_unpromote_route_senaite_verified_blocks(route_client):
+    db = route_client._test_session
+    _, parent_row, sources = _seed_promoted_group(db, 1)
+    with patch("lims_analyses.routes.senaite_writeback.find_parent_analysis_line",
+               return_value=_line("verified")):
+        resp = route_client.post("/api/lims-analyses/unpromote",
+                                 json={"parent_analysis_id": parent_row.id,
+                                       "reason": "swap fix"})
+    assert resp.status_code == 409
+    assert "SENAITE" in resp.json()["detail"]
+    db.refresh(parent_row)
+    assert parent_row.review_state == "verified"      # nothing mutated
+
+
+def test_unpromote_route_senaite_lookup_failure_fail_closed(route_client):
+    db = route_client._test_session
+    _, parent_row, _ = _seed_promoted_group(db, 1)
+    from lims_analyses.senaite_writeback import SenaiteWritebackError
+    with patch("lims_analyses.routes.senaite_writeback.find_parent_analysis_line",
+               side_effect=SenaiteWritebackError("boom")):
+        resp = route_client.post("/api/lims-analyses/unpromote",
+                                 json={"parent_analysis_id": parent_row.id,
+                                       "reason": "swap fix"})
+    assert resp.status_code == 409
+    db.refresh(parent_row)
+    assert parent_row.review_state == "verified"
+
+
+def test_unpromote_route_unknown_id_404(route_client):
+    resp = route_client.post("/api/lims-analyses/unpromote",
+                             json={"parent_analysis_id": 999999, "reason": "x"})
+    assert resp.status_code == 404
+
+
+def test_unpromote_route_blank_reason_400(route_client):
+    db = route_client._test_session
+    _, parent_row, _ = _seed_promoted_group(db, 1)
+    with patch("lims_analyses.routes.senaite_writeback.find_parent_analysis_line",
+               return_value=_line("to_be_verified")):
+        resp = route_client.post("/api/lims-analyses/unpromote",
+                                 json={"parent_analysis_id": parent_row.id,
+                                       "reason": "   "})
+    assert resp.status_code == 400
+
+
+def test_unpromote_route_guard_runs_when_lims_sample_missing(route_client):
+    """Fail-closed even when the parent LimsSample row is unresolvable: the
+    guard must still RUN (with the raw-pk string fallback), never be skipped."""
+    from sqlalchemy import delete as sqla_delete
+    from lims_analyses.senaite_writeback import SenaiteWritebackError
+
+    db = route_client._test_session
+    parent, parent_row, _ = _seed_promoted_group(db, 1)
+    missing_pk = parent_row.lims_sample_pk
+    keyword = parent_row.keyword
+    db.execute(sqla_delete(LimsSample).where(LimsSample.id == parent.id))
+    db.commit()
+    # SQLite doesn't enforce FKs by default, so the parent-tier analysis row
+    # must survive the sample delete — verify that assumption holds.
+    assert db.get(LimsAnalysis, parent_row.id) is not None
+    assert db.get(LimsSample, missing_pk) is None
+
+    with patch("lims_analyses.routes.senaite_writeback.find_parent_analysis_line",
+               side_effect=SenaiteWritebackError("unknown sample")) as mock_find:
+        resp = route_client.post("/api/lims-analyses/unpromote",
+                                 json={"parent_analysis_id": parent_row.id,
+                                       "reason": "swap fix"})
+    assert resp.status_code == 409
+    mock_find.assert_called_once_with(str(missing_pk), keyword)   # guard ran
+    db.refresh(parent_row)
+    assert parent_row.review_state == "verified"                  # nothing mutated

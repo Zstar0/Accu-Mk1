@@ -83,7 +83,7 @@ TERMINAL_STATES: FrozenSet[str] = frozenset({"published", "rejected"})
 
 TRANSITION_KINDS: FrozenSet[str] = frozenset({
     "assign", "submit", "verify", "retract", "reject",
-    "retest", "publish", "reset", "auto", "variance_verify",
+    "retest", "publish", "reset", "auto", "variance_verify", "unverify",
 })
 
 # Tier discriminator constants. Service layer reads these.
@@ -122,6 +122,10 @@ _ALLOWED: Dict[Tuple[str, str], str] = {
     # analyte was wrong is abandoned. Un-promotion retracts the parent
     # canonical row + drops the promotion link first, then rejects the source.
     ("promoted",       "reject"):   "rejected",
+
+    # Unlock: a signed-off variance replicate returns to to_be_verified so the
+    # normal retest/re-verify tools apply (vial unlock spec 2026-07-03).
+    ("variance_verified", "unverify"): "to_be_verified",
 }
 
 # Tier × kind matrix. Sub-sample (vial) rows do bench work (assign through
@@ -132,7 +136,7 @@ _ALLOWED: Dict[Tuple[str, str], str] = {
 _TIER_ALLOWED_KINDS: Dict[str, FrozenSet[str]] = {
     TIER_VIAL: frozenset({
         "assign", "submit", "retract", "reject", "reset", "retest", "auto",
-        "variance_verify",
+        "variance_verify", "unverify",
     }),
     TIER_PARENT: frozenset({
         "publish", "retract", "auto",

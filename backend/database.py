@@ -759,7 +759,8 @@ def _run_migrations():
         ALTER TABLE lims_analysis_transitions ADD CONSTRAINT lims_analysis_transitions_transition_kind_check
             CHECK (transition_kind IN
                 ('assign','submit','verify','retract','reject',
-                 'retest','publish','reset','auto','variance_verify'))
+                 'retest','publish','reset','auto','variance_verify','unverify',
+                 'unpromote'))
         """,
         # Variance addon: lab-side override until WP variance addon ships.
         "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS variance_override TEXT",
