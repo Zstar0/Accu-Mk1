@@ -1234,6 +1234,22 @@ async def get_sample_activity(
                     f"Worksheet analyst: {d.get('from_email') or '—'} → "
                     f"{d.get('to_email') or '—'}"
                 )
+            elif se.event == "box_assigned":
+                d = se.details or {}
+                label = f"Boxed: {d.get('box_label') or '?'}"
+            elif se.event == "box_moved":
+                d = se.details or {}
+                label = f"Box: {d.get('from_box_label') or '?'} → {d.get('to_box_label') or '?'}"
+            elif se.event == "box_removed":
+                d = se.details or {}
+                reason = d.get("reason")
+                bl = d.get("box_label") or "?"
+                if reason == "stored":
+                    label = f"Box stored: {bl}"
+                elif reason == "box_deleted":
+                    label = f"Removed from box {bl} (box deleted)"
+                else:
+                    label = f"Unboxed from {bl}"
             else:
                 label = se.event
 

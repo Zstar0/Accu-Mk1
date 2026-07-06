@@ -55,7 +55,7 @@ def create_box(body: CreateBoxRequest, db: Session = Depends(get_db),
 def assign(box_id: int, body: AssignVialsRequest, db: Session = Depends(get_db),
            user=Depends(get_current_user)):
     try:
-        box = service.assign_vials(db, box_id, body.sub_sample_ids)
+        box = service.assign_vials(db, box_id, body.sub_sample_ids, user_id=user.id)
     except LookupError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except ValueError as e:
@@ -68,7 +68,7 @@ def unassign(body: AssignVialsRequest, db: Session = Depends(get_db),
              user=Depends(get_current_user)):
     """Clear box membership for the given vials (drag back out to Unboxed).
     No role check — removing from a box is always allowed."""
-    count = service.unassign_vials(db, body.sub_sample_ids)
+    count = service.unassign_vials(db, body.sub_sample_ids, user_id=user.id)
     return {"unassigned": count}
 
 
@@ -84,7 +84,7 @@ def print_box(box_id: int, db: Session = Depends(get_db), user=Depends(get_curre
 @router.delete("/{box_id}", status_code=204)
 def delete_box(box_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
     try:
-        service.delete_box(db, box_id)
+        service.delete_box(db, box_id, user_id=user.id)
     except LookupError as e:
         raise HTTPException(status_code=404, detail=str(e))
 

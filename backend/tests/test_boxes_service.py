@@ -2,8 +2,10 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+from sqlalchemy import select
+
 from database import Base
-from models import LimsSample, LimsSubSample
+from models import LimsSample, LimsSubSample, LimsSubSampleEvent
 from boxes import service
 
 
@@ -175,3 +177,78 @@ def test_list_active_excludes_stored(db):
     ids = [x.id for x in service.list_active(db)]
     assert a.id not in ids
     assert b.id in ids
+
+
+def _events(db, sub_pk, event):
+    return db.scalars(
+        select(LimsSubSampleEvent).where(
+            LimsSubSampleEvent.sub_sample_pk == sub_pk,
+            LimsSubSampleEvent.event == event,
+        )
+    ).all()
+
+
+def test_assign_writes_box_assigned_event(db):
+    p = LimsSample(sample_id="P-0640", external_lims_uid="u-640")
+    db.add(p); db.flush()
+    v = _vial(db, p, 1, "hplc")
+    box = service.next_box(db, "WP-20080", "hplc", user_id=1)
+    service.assign_vials(db, box.id, [v.sample_id], user_id=7)
+    (ev,) = _events(db, v.id, "box_assigned")
+    assert ev.details["box_id"] == box.id
+    assert ev.details["box_label"] == service.box_label_code(box)
+    assert ev.user_id == 7
+
+
+def test_move_writes_box_moved_event(db):
+    p = LimsSample(sample_id="P-0641", external_lims_uid="u-641")
+    db.add(p); db.flush()
+    v = _vial(db, p, 1, "hplc")
+    a = service.next_box(db, "WP-20081", "hplc", user_id=1)
+    b = service.next_box(db, "WP-20081", "hplc", user_id=1)
+    service.assign_vials(db, a.id, [v.sample_id], user_id=7)
+    service.assign_vials(db, b.id, [v.sample_id], user_id=7)
+    (ev,) = _events(db, v.id, "box_moved")
+    assert ev.details["from_box_id"] == a.id
+    assert ev.details["from_box_label"] == service.box_label_code(a)
+    assert ev.details["to_box_id"] == b.id
+    assert ev.details["to_box_label"] == service.box_label_code(b)
+
+
+def test_unassign_writes_box_removed_event(db):
+    p = LimsSample(sample_id="P-0642", external_lims_uid="u-642")
+    db.add(p); db.flush()
+    v = _vial(db, p, 1, "hplc")
+    box = service.next_box(db, "WP-20082", "hplc", user_id=1)
+    service.assign_vials(db, box.id, [v.sample_id], user_id=7)
+    service.unassign_vials(db, [v.sample_id], user_id=7)
+    (ev,) = _events(db, v.id, "box_removed")
+    assert ev.details["box_id"] == box.id
+    assert ev.details["box_label"] == service.box_label_code(box)
+    assert "reason" not in ev.details
+
+
+def test_close_writes_box_removed_stored(db):
+    p = LimsSample(sample_id="P-0643", external_lims_uid="u-643")
+    db.add(p); db.flush()
+    v = _vial(db, p, 1, "hplc")
+    box = service.next_box(db, "WP-20083", "hplc", user_id=1)
+    service.assign_vials(db, box.id, [v.sample_id], user_id=7)
+    service.close_box(db, box.id, user_id=7)
+    (ev,) = _events(db, v.id, "box_removed")
+    assert ev.details["reason"] == "stored"
+    assert ev.details["box_label"] == service.box_label_code(box)
+    assert ev.user_id == 7
+
+
+def test_delete_writes_box_removed_deleted(db):
+    p = LimsSample(sample_id="P-0644", external_lims_uid="u-644")
+    db.add(p); db.flush()
+    v = _vial(db, p, 1, "hplc")
+    box = service.next_box(db, "WP-20084", "hplc", user_id=1)
+    label = service.box_label_code(box)
+    service.assign_vials(db, box.id, [v.sample_id], user_id=7)
+    service.delete_box(db, box.id, user_id=7)
+    (ev,) = _events(db, v.id, "box_removed")
+    assert ev.details["reason"] == "box_deleted"
+    assert ev.details["box_label"] == label

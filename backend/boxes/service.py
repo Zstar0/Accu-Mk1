@@ -4,7 +4,7 @@ from typing import List
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
-from models import LimsBox, LimsSample, LimsSubSample
+from models import LimsBox, LimsSample, LimsSubSample, LimsSubSampleEvent
 
 BOXABLE_ROLES = {"hplc", "endo", "ster", "xtra"}
 
@@ -12,6 +12,19 @@ BOXABLE_ROLES = {"hplc", "endo", "ster", "xtra"}
 def box_label_code(box: LimsBox) -> str:
     """Verbatim order key + running number; never adds a 'WP-' prefix."""
     return f"{box.order_key}-{box.box_number}"
+
+
+def _log_box_event(db: Session, sub_sample_pk: int, event: str, details: dict, user_id) -> None:
+    db.add(LimsSubSampleEvent(sub_sample_pk=sub_sample_pk, event=event, details=details, user_id=user_id))
+
+
+def _box_labels(db: Session, box_ids: List[int]) -> dict:
+    """box_id -> label_code for the given ids (skips None)."""
+    ids = [b for b in set(box_ids) if b is not None]
+    if not ids:
+        return {}
+    boxes = db.scalars(select(LimsBox).where(LimsBox.id.in_(ids))).all()
+    return {b.id: box_label_code(b) for b in boxes}
 
 
 def vial_count(db: Session, box_id: int) -> int:
@@ -65,7 +78,7 @@ def next_box(db: Session, order_key: str, role: str, user_id: int) -> LimsBox:
     return box
 
 
-def assign_vials(db: Session, box_id: int, sub_sample_ids: List[str]) -> LimsBox:
+def assign_vials(db: Session, box_id: int, sub_sample_ids: List[str], user_id=None) -> LimsBox:
     box = db.get(LimsBox, box_id)
     if box is None:
         raise LookupError(f"box {box_id} not found")
@@ -81,21 +94,46 @@ def assign_vials(db: Session, box_id: int, sub_sample_ids: List[str]) -> LimsBox
             raise ValueError(
                 f"vial {s.sample_id} role {s.assignment_role!r} != box role {box.role!r}"
             )
+    to_label = box_label_code(box)
+    prior_labels = _box_labels(db, [s.box_id for s in subs])
     for s in subs:
+        prior = s.box_id
         s.box_id = box.id
+        if prior is None:
+            _log_box_event(
+                db, s.id, "box_assigned",
+                {"box_id": box.id, "box_label": to_label}, user_id,
+            )
+        elif prior != box.id:
+            _log_box_event(
+                db, s.id, "box_moved",
+                {
+                    "from_box_id": prior,
+                    "from_box_label": prior_labels.get(prior),
+                    "to_box_id": box.id,
+                    "to_box_label": to_label,
+                },
+                user_id,
+            )
     db.commit()
     db.refresh(box)
     return box
 
 
-def unassign_vials(db: Session, sub_sample_ids: List[str]) -> int:
+def unassign_vials(db: Session, sub_sample_ids: List[str], user_id=None) -> int:
     """Clear box membership (box_id = None) for the given sub-samples. Mirrors
     how `assign_vials` selects rows. Idempotent: unassigning an already-unboxed
     vial is a no-op. Returns the number of rows that were updated."""
     subs = db.scalars(
         select(LimsSubSample).where(LimsSubSample.sample_id.in_(sub_sample_ids))
     ).all()
+    prior_labels = _box_labels(db, [s.box_id for s in subs])
     for s in subs:
+        if s.box_id is not None:
+            _log_box_event(
+                db, s.id, "box_removed",
+                {"box_id": s.box_id, "box_label": prior_labels.get(s.box_id)}, user_id,
+            )
         s.box_id = None
     db.commit()
     return len(subs)
@@ -112,13 +150,20 @@ def mark_printed(db: Session, box_id: int, user_id: int) -> LimsBox:
     return box
 
 
-def delete_box(db: Session, box_id: int) -> None:
+def delete_box(db: Session, box_id: int, user_id=None) -> None:
     """Delete a box, returning any still-assigned vials to Unboxed (box_id=None).
     Non-destructive: clearing box_id mirrors unassign_vials (the FK is ON DELETE
     SET NULL anyway). Raises LookupError if the box is missing."""
     box = db.get(LimsBox, box_id)
     if box is None:
         raise LookupError(f"box {box_id} not found")
+    label = box_label_code(box)
+    subs = db.scalars(select(LimsSubSample).where(LimsSubSample.box_id == box_id)).all()
+    for s in subs:
+        _log_box_event(
+            db, s.id, "box_removed",
+            {"box_id": box_id, "box_label": label, "reason": "box_deleted"}, user_id,
+        )
     db.execute(
         update(LimsSubSample).where(LimsSubSample.box_id == box_id).values(box_id=None)
     )
@@ -137,6 +182,13 @@ def close_box(db: Session, box_id: int, user_id: int) -> LimsBox:
     if box is None:
         raise LookupError(f"box {box_id} not found")
     if box.stored_at is None:
+        label = box_label_code(box)
+        subs = db.scalars(select(LimsSubSample).where(LimsSubSample.box_id == box_id)).all()
+        for s in subs:
+            _log_box_event(
+                db, s.id, "box_removed",
+                {"box_id": box_id, "box_label": label, "reason": "stored"}, user_id,
+            )
         db.execute(
             update(LimsSubSample).where(LimsSubSample.box_id == box_id).values(box_id=None)
         )
