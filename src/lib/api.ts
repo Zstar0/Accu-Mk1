@@ -4411,9 +4411,10 @@ export async function deleteSlaPriorityTier(
 ): Promise<void> {
   // Without serviceGroupId, deletes the global (NULL group) override; with it,
   // deletes only the per-group row.
-  const url = new URL(`${API_BASE_URL()}/sla-priority-tiers/${priority}`)
-  if (serviceGroupId != null) url.searchParams.set('service_group_id', String(serviceGroupId))
-  const response = await fetch(url.toString(), {
+  const params = new URLSearchParams()
+  if (serviceGroupId != null) params.set('service_group_id', String(serviceGroupId))
+  const qs = params.toString()
+  const response = await fetch(`${API_BASE_URL()}/sla-priority-tiers/${priority}${qs ? `?${qs}` : ''}`, {
     method: 'DELETE', headers: getBearerHeaders(),
   })
   if (!response.ok) throw new Error(`Failed to remove priority override: ${response.status}`)
@@ -5190,12 +5191,15 @@ export async function updateCustomerRemarks(
 export async function listLimsAnalysesForSubSample(
   subSamplePk: number
 ): Promise<SenaiteAnalysis[]> {
-  const url = new URL(`${API_BASE_URL()}/api/lims-analyses`)
-  url.searchParams.set('host_kind', 'sub_sample')
-  url.searchParams.set('host_pk', String(subSamplePk))
-  url.searchParams.set('as', 'senaite_shape')
-  url.searchParams.set('include_retests', 'true')
-  const response = await fetch(url.toString(), { headers: getBearerHeaders() })
+  const params = new URLSearchParams({
+    host_kind: 'sub_sample',
+    host_pk: String(subSamplePk),
+    as: 'senaite_shape',
+    include_retests: 'true',
+  })
+  const response = await fetch(`${API_BASE_URL()}/api/lims-analyses?${params}`, {
+    headers: getBearerHeaders(),
+  })
   if (!response.ok) {
     throw new Error(`listLimsAnalysesForSubSample failed: ${response.status}`)
   }
@@ -5222,9 +5226,10 @@ export interface ParentPromotionInfo {
 export async function listParentPromotions(
   parentSampleId: string
 ): Promise<ParentPromotionInfo[]> {
-  const url = new URL(`${API_BASE_URL()}/api/lims-analyses/promotions`)
-  url.searchParams.set('parent_sample_id', parentSampleId)
-  const response = await fetch(url.toString(), { headers: getBearerHeaders() })
+  const params = new URLSearchParams({ parent_sample_id: parentSampleId })
+  const response = await fetch(`${API_BASE_URL()}/api/lims-analyses/promotions?${params}`, {
+    headers: getBearerHeaders(),
+  })
   if (!response.ok) {
     throw new Error(`listParentPromotions failed: ${response.status}`)
   }
@@ -5240,9 +5245,10 @@ export async function listParentPromotions(
 export async function listParentLineStates(
   parentSampleId: string
 ): Promise<{ states: Record<string, string> }> {
-  const url = new URL(`${API_BASE_URL()}/api/lims-analyses/parent-line-states`)
-  url.searchParams.set('parent_sample_id', parentSampleId)
-  const response = await fetch(url.toString(), { headers: getBearerHeaders() })
+  const params = new URLSearchParams({ parent_sample_id: parentSampleId })
+  const response = await fetch(`${API_BASE_URL()}/api/lims-analyses/parent-line-states?${params}`, {
+    headers: getBearerHeaders(),
+  })
   if (!response.ok) {
     throw new Error(`listParentLineStates failed: ${response.status}`)
   }

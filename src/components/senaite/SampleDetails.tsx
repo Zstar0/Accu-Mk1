@@ -3884,8 +3884,9 @@ export function SampleDetails() {
               analyses: mk1Analyses,
             }
           }
-        } catch {
+        } catch (e) {
           // Mk1 lookup failed — fall through to the SENAITE lookup (legacy path).
+          console.warn(`[sample-details] Mk1 native lookup failed for ${id}; falling back to SENAITE`, e)
         }
       }
       return lookupSenaiteSample(id)
