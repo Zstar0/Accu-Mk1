@@ -7,7 +7,7 @@ from unittest.mock import patch, MagicMock, call
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from database import Base
-from models import LimsSample
+from models import LimsSample, LimsNativeIdSequence
 from sub_samples import senaite
 
 
@@ -234,3 +234,51 @@ def test_main_exit_code_reflects_errors(db_factory, tmp_path, capsys):
     assert rc == 1
     stats = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
     assert stats["errors"] == 1
+
+
+def test_backfill_retro_mints_native_id(db_factory, tmp_path):
+    stats, _, _ = _run(db_factory, [("P-0001", 0), ("PB-0042", 0)], tmp_path=tmp_path)
+    assert stats["native_minted"] == 2
+    db = db_factory()
+    assert db.query(LimsSample).filter_by(sample_id="P-0001").one().native_id == "aP-0001"
+    assert db.query(LimsSample).filter_by(sample_id="PB-0042").one().native_id == "aPB-0042"
+    db.close()
+
+
+def test_backfill_does_not_remint_existing_native_id(db_factory, tmp_path):
+    db = db_factory()
+    db.add(LimsSample(sample_id="P-0001", native_id="aP-OLD"))
+    db.commit(); db.close()
+    stats, _, _ = _run(db_factory, [("P-0001", 0)], tmp_path=tmp_path)
+    assert stats["native_minted"] == 0
+    db = db_factory()
+    assert db.query(LimsSample).filter_by(sample_id="P-0001").one().native_id == "aP-OLD"
+    db.close()
+
+
+def test_backfill_seeds_counters_on_complete_sweep(db_factory, tmp_path):
+    stats, _, _ = _run(db_factory, [("P-0007", 0), ("PB-0100", 0)], tmp_path=tmp_path)
+    assert stats["counters_seeded"] == 2
+    db = db_factory()
+    assert db.get(LimsNativeIdSequence, "aP").next_value == 8
+    assert db.get(LimsNativeIdSequence, "aPB").next_value == 101
+    db.close()
+
+
+def test_backfill_limit_run_does_not_seed_counters(db_factory, tmp_path):
+    _run(db_factory, [("P-0007", 0), ("P-0008", 0)], tmp_path=tmp_path, limit=1)
+    db = db_factory()
+    assert db.query(LimsNativeIdSequence).count() == 0   # partial sweep: no seed
+    db.close()
+
+
+def test_backfill_dry_run_does_not_seed_counters(db_factory, tmp_path):
+    with patch("scripts.backfill_lims_sample_basic_info.senaite") as sen, \
+         patch("scripts.backfill_lims_sample_basic_info.time.sleep"):
+        sen.iter_all_sample_ids.return_value = iter([("P-0007", 0)])
+        sen.fetch_parent_metadata.return_value = _full_meta("P-0007")
+        backfill(db_factory, sleep_s=0, batch_size=50,
+                 checkpoint_path=str(tmp_path / "c.json"), dry_run=True, limit=None)
+    db = db_factory()
+    assert db.query(LimsNativeIdSequence).count() == 0
+    db.close()

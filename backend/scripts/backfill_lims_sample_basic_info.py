@@ -47,6 +47,7 @@ from database import SessionLocal
 from models import LimsSample
 from sub_samples import senaite
 from sub_samples.service import _create_sample_row, _populate_basic_info
+from sub_samples.native_id import mint_native_id, seed_native_id_counters
 
 log = logging.getLogger("backfill_basic_info")
 
@@ -83,7 +84,8 @@ def backfill(db_factory, *, sleep_s: float, batch_size: int,
     upsert the full basic-info set. One sample's failure never aborts the run.
     Returns coverage stats."""
     stats = {"seen": 0, "created": 0, "updated": 0,
-             "skipped_secondary": 0, "errors": 0}
+             "skipped_secondary": 0, "errors": 0,
+             "native_minted": 0, "counters_seeded": 0}
     start = load_checkpoint(checkpoint_path)
     if start:
         log.info("resuming from checkpoint b_start=%s", start)
@@ -108,11 +110,14 @@ def backfill(db_factory, *, sleep_s: float, batch_size: int,
                         select(LimsSample).where(LimsSample.sample_id == sample_id)
                     ).scalar_one_or_none()
                     if row is None:
-                        _create_sample_row(db, sample_id, meta)
+                        row = _create_sample_row(db, sample_id, meta)
                         stats["created"] += 1
                     else:
                         _populate_basic_info(row, meta)
                         stats["updated"] += 1
+                    if row.native_id is None:
+                        row.native_id = mint_native_id(db, senaite_sample_id=sample_id)
+                        stats["native_minted"] += 1
                     db.commit()
                 finally:
                     db.close()
@@ -123,6 +128,14 @@ def backfill(db_factory, *, sleep_s: float, batch_size: int,
         if not dry_run:
             save_checkpoint(checkpoint_path, b_start, sample_id)
         time.sleep(sleep_s)  # bulk-scan safety: throttle EVERY sample
+
+    if not dry_run and limit is None:
+        db = db_factory()
+        try:
+            stats["counters_seeded"] = seed_native_id_counters(db)
+            db.commit()
+        finally:
+            db.close()
 
     log.info("backfill done: %s", stats)
     if not dry_run:
