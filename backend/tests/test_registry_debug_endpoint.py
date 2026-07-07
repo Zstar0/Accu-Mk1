@@ -106,3 +106,28 @@ def test_origin_inference(client):
          patch.object(main.senaite, "fetch_secondaries", return_value=[]):
         r = client.get("/debug/sample-registry/P-1")
     assert r.json()["origin"] == "creation-signal"
+
+
+def test_refresh_mutates_and_rediffs(client):
+    _seed(client)   # last_synced_at = 2026-01-01
+    fresh = _meta(ClientSampleID="CS-UPDATED")
+    with patch.object(main.senaite, "fetch_parent_metadata", return_value=fresh), \
+         patch.object(main.senaite, "fetch_secondaries", return_value=[]):
+        r = client.post("/debug/sample-registry/P-1/refresh")
+    assert r.status_code == 200
+    # after a forced refresh the row now matches SENAITE → no drift on that field
+    body = r.json()
+    csid = next(f for f in body["fields"] if f["field"] == "client_sample_id")
+    assert csid["status"] == "agree"
+    db = client._Session()
+    row = db.query(LimsSample).filter_by(sample_id="P-1").one()
+    assert row.last_synced_at != datetime(2026, 1, 1)   # mutated, as intended
+    assert row.client_sample_id == "CS-UPDATED"
+    db.close()
+
+
+def test_refresh_missing_row_is_noop_exists_false(client):
+    with patch.object(main.senaite, "fetch_parent_metadata", side_effect=RuntimeError("x")):
+        r = client.post("/debug/sample-registry/NOPE/refresh")
+    assert r.status_code == 200
+    assert r.json()["load"]["exists"] is False

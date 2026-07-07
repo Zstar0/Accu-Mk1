@@ -16799,6 +16799,28 @@ async def get_sample_registry_debug(
     return _build_registry_debug_response(db, sample_id)
 
 
+@app.post("/debug/sample-registry/{sample_id}/refresh")
+async def refresh_sample_registry_debug(
+    sample_id: str,
+    admin=Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Admin action: force a SENAITE reconcile of the registry row, then
+    return the re-diffed debug payload so drift can be watched resolving.
+    Distinct POST verb because it mutates."""
+    from sub_samples.service import _refresh_parent_from_senaite
+    row = db.execute(
+        select(LimsSample).where(LimsSample.sample_id == sample_id)
+    ).scalar_one_or_none()
+    if row is not None:
+        try:
+            _refresh_parent_from_senaite(db, row)
+            db.commit()
+        except Exception:
+            db.rollback()
+    return _build_registry_debug_response(db, sample_id)
+
+
 # ── Peptide requests API (integration-service bridge) ────────────────
 # Called server-to-server by integration-service when a WP user submits the
 # peptide-request form. Internal service token + idempotency key are required.
