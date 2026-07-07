@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.0.26 — 2026-07-07
+
+### Added
+
+- **Order # / Client search on receive-by-order.** A search box above the By-Order list on the Receive page filters orders by Order #, client name, or client email, with a "no matches" empty state; selection state is untouched by filtering.
+
+### Fixed
+
+- **Instant vial→box moves on the Boxing tab.** Drag, auto-assign, add-box, and delete-box no longer block ~5s on the awaited cache refetch (one SENAITE call per sample) — the UI now updates as soon as the save confirms (<100ms), the remaining box surfaces reconcile in the background, and a "Saving…" indicator shows while a save call is in flight.
+
 ## v1.0.25 — 2026-07-07
 
 ### Added
