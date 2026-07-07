@@ -10,6 +10,7 @@ import {
   ArrowDown,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import {
   Table,
@@ -48,6 +49,7 @@ import type { OrderSlaVerdict } from '@/lib/sla-resolution'
 import { useOrderSlaStatuses } from '@/services/order-sla'
 import { useSenaiteLookupMap } from '@/services/senaite-lookup-map'
 import { OrderListRow } from '@/components/intake/OrderListRow'
+import { getOrderEmail } from '@/components/explorer/helpers'
 import { OrderReceiveSession } from '@/components/intake/OrderReceiveSession'
 
 type SortColumn =
@@ -202,6 +204,7 @@ export function ReceiveSample() {
   const [sortDir, setSortDir] = useState<SortDir>('asc')
   const [showTestSamples, setShowTestSamples] = useState(false)
   const [receiveMode, setReceiveMode] = useState<'order' | 'sample'>('order')
+  const [orderSearch, setOrderSearch] = useState('')
   const [selectedOrders, setSelectedOrders] = useState<OrderGroup[] | null>(
     null
   )
@@ -276,6 +279,18 @@ export function ReceiveSample() {
   })
 
   const enriched = enrichOrderGroups(orderGroups, explorerOrders ?? [])
+
+  const orderQuery = orderSearch.trim().toLowerCase()
+  const visibleOrders = orderQuery
+    ? enriched.filter(
+        g =>
+          g.orderLabel.toLowerCase().includes(orderQuery) ||
+          (g.clientId ?? '').toLowerCase().includes(orderQuery) ||
+          (g.order ? (getOrderEmail(g.order) ?? '') : '')
+            .toLowerCase()
+            .includes(orderQuery),
+      )
+    : enriched
 
   // Page-level SLA verdicts for the By-Order table — mirror OrderStatusPage:
   // feed the matched ExplorerOrders to useSenaiteLookupMap (per-sample SENAITE
@@ -470,6 +485,14 @@ export function ReceiveSample() {
               </div>
             ) : receiveMode === 'order' ? (
               <div className="flex flex-col gap-3">
+                <Input
+                  type="search"
+                  value={orderSearch}
+                  onChange={e => setOrderSearch(e.target.value)}
+                  placeholder="Search Order # or Client…"
+                  aria-label="Search orders by number or client"
+                  className="max-w-sm"
+                />
                 {multiOrderEnabled && selectedKeys.size >= 1 && (
                   <div className="sticky top-0 z-10 flex items-center gap-3 rounded-md border bg-background/95 px-3 py-2 text-sm shadow-sm backdrop-blur">
                     <span className="font-medium">
@@ -504,7 +527,7 @@ export function ReceiveSample() {
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {enriched.map(group => (
+                      {visibleOrders.map(group => (
                         <OrderListRow
                           key={group.orderKey ?? '__none__'}
                           group={group}
@@ -518,6 +541,16 @@ export function ReceiveSample() {
                           onProcess={handleProcessOrder}
                         />
                       ))}
+                      {visibleOrders.length === 0 && (
+                        <TableRow>
+                          <TableCell
+                            colSpan={6}
+                            className="py-8 text-center text-sm text-muted-foreground"
+                          >
+                            No orders match “{orderSearch}”
+                          </TableCell>
+                        </TableRow>
+                      )}
                     </TableBody>
                   </Table>
                 </div>
