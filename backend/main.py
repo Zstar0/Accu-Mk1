@@ -9887,6 +9887,22 @@ async def publish_sample_coa(
                     )
                     code_resp.raise_for_status()
 
+                    # Dual-write mirror (registry slice 1): reflect the
+                    # freshly-written verification code onto the local
+                    # registry row. Best-effort — a mirror problem must
+                    # never fail the publish.
+                    try:
+                        from sub_samples.service import apply_senaite_fields_to_row
+                        if apply_senaite_fields_to_row(
+                            db, senaite_uid, {"VerificationCode": verification_code}
+                        ):
+                            db.commit()
+                    except Exception as mirror_err:
+                        logger.warning(
+                            "registry.field_mirror_failed uid=%s err=%s",
+                            senaite_uid, mirror_err,
+                        )
+
                 transition_resp = await client.post(
                     f"{SENAITE_URL}/senaite/@@API/senaite/v1/update/{senaite_uid}",
                     json={"transition": "publish"},
@@ -13347,6 +13363,7 @@ async def update_senaite_sample_fields(
     uid: str,
     req: SenaiteFieldUpdateRequest,
     current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
     """Update one or more fields on a SENAITE sample via the JSON API."""
     if SENAITE_URL is None:
@@ -13392,6 +13409,18 @@ async def update_senaite_sample_fields(
                     resp.raise_for_status()
                 else:
                     raise
+
+            # Dual-write mirror (registry slice 1): reflect the accepted
+            # SENAITE edit onto the local registry row. Best-effort — a
+            # mirror problem must never fail the user's edit.
+            try:
+                from sub_samples.service import apply_senaite_fields_to_row
+                if apply_senaite_fields_to_row(db, uid, req.fields):
+                    db.commit()
+            except Exception as mirror_err:
+                logger.warning(
+                    "registry.field_mirror_failed uid=%s err=%s", uid, mirror_err
+                )
 
             return SenaiteFieldUpdateResponse(
                 success=True,

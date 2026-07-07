@@ -155,3 +155,69 @@ def test_s2s_endpoint_rejects_missing_token():
         resp = client.post("/s2s/lims-samples",
                            json={"sample_id": "P-1", "meta": {}})
     assert resp.status_code in (401, 403)
+
+
+from sub_samples.service import apply_senaite_fields_to_row
+
+
+def _seeded(db, **kw):
+    row = LimsSample(sample_id="P-3001", external_lims_uid="U-3001", **kw)
+    db.add(row)
+    db.commit()
+    return row
+
+
+def test_field_mirror_maps_scalar_fields(db):
+    _seeded(db)
+    ok = apply_senaite_fields_to_row(db, "U-3001", {
+        "ClientSampleID": "NEW-CS",
+        "ClientLot": "LOT-9",
+        "DeclaredTotalQuantity": "55.5",
+        "CoaCompanyName": "NewCo",
+        "VerificationCode": "ZZ99-YY88",
+        "ClientOrderNumber": "WP-4000",
+        "ClientReference": "r2",
+        "CompanyLogoUrl": "/logo2.jpg",
+    })
+    assert ok is True
+    row = db.query(LimsSample).filter_by(sample_id="P-3001").one()
+    assert row.client_sample_id == "NEW-CS"
+    assert row.client_lot == "LOT-9"
+    assert row.declared_total_quantity == "55.5"
+    assert json.loads(row.coa_meta)["CoaCompanyName"] == "NewCo"
+    assert row.verification_code == "ZZ99-YY88"
+    assert row.client_order_number == "WP-4000"
+    assert row.client_reference == "r2"
+    assert row.company_logo_url == "/logo2.jpg"
+
+
+def test_field_mirror_merges_analyte_slot_edit(db):
+    _seeded(db, analytes=json.dumps([
+        {"name": "BPC-157", "declared_quantity": "10.00"},
+        {"name": "GHK-Cu", "declared_quantity": "5.00"},
+    ]), peptide_name="BPC-157")
+    apply_senaite_fields_to_row(db, "U-3001", {"Analyte1Peptide": "TB-500"})
+    row = db.query(LimsSample).filter_by(sample_id="P-3001").one()
+    slots = json.loads(row.analytes)
+    assert slots[0] == {"name": "TB-500", "declared_quantity": "10.00"}
+    assert slots[1]["name"] == "GHK-Cu"        # untouched
+    assert row.peptide_name == "TB-500"        # slot-1 back-compat follows
+
+
+def test_field_mirror_coa_merge_preserves_other_keys(db):
+    _seeded(db, coa_meta=json.dumps({"CoaAddress": "addr", "CoaCompanyName": "Old",
+                                     "CoaEmail": None, "CoaWebsite": None}))
+    apply_senaite_fields_to_row(db, "U-3001", {"CoaEmail": "c@x.com"})
+    row = db.query(LimsSample).filter_by(sample_id="P-3001").one()
+    meta = json.loads(row.coa_meta)
+    assert meta["CoaEmail"] == "c@x.com" and meta["CoaAddress"] == "addr"
+
+
+def test_field_mirror_noop_when_row_missing(db):
+    assert apply_senaite_fields_to_row(db, "UNKNOWN-UID", {"ClientLot": "x"}) is False
+
+
+def test_field_mirror_ignores_unmapped_fields(db):
+    _seeded(db)
+    ok = apply_senaite_fields_to_row(db, "U-3001", {"Remarks": "internal note"})
+    assert ok is True   # row found; nothing mapped; no error

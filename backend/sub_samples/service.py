@@ -11,6 +11,7 @@ Defense-in-depth protections (per Task 5 spike findings):
 import json
 import logging
 import os
+import re
 import requests
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Tuple, List
@@ -236,6 +237,70 @@ def _parse_analyte_slots(meta: dict) -> list[dict]:
             "declared_quantity": str(qty) if qty not in (None, "") else None,
         })
     return slots
+
+
+# SENAITE field name -> lims_samples column, for the dual-write mirror at
+# Mk1's field-edit sites. Analyte slots and Coa* fields are handled
+# structurally below; fields not listed here (e.g. Remarks) are
+# SENAITE-internal and deliberately unmirrored.
+_FIELD_MIRROR_SCALARS = {
+    "ClientSampleID": "client_sample_id",
+    "ClientLot": "client_lot",
+    "ClientReference": "client_reference",
+    "ClientOrderNumber": "client_order_number",
+    "DeclaredTotalQuantity": "declared_total_quantity",
+    "VerificationCode": "verification_code",
+    "CompanyLogoUrl": "company_logo_url",
+}
+_ANALYTE_KEY_RE = re.compile(r"^Analyte([1-8])(Peptide|DeclaredQuantity)$")
+
+
+def apply_senaite_fields_to_row(db: Session, senaite_uid: str, fields: dict) -> bool:
+    """Mirror a SENAITE field update onto the registry row (dual-write
+    slice 1). Returns False when no row carries this uid (pre-registry
+    samples) — callers treat that as a no-op, and callers must NEVER fail
+    the user's request over a mirror problem."""
+    row = db.execute(
+        select(LimsSample).where(LimsSample.external_lims_uid == senaite_uid)
+    ).scalar_one_or_none()
+    if row is None:
+        return False
+
+    for senaite_key, column in _FIELD_MIRROR_SCALARS.items():
+        if senaite_key in fields:
+            v = fields[senaite_key]
+            setattr(row, column, str(v) if v not in (None, "") else None)
+
+    coa_updates = {k: v for k, v in fields.items() if k in _COA_META_FIELDS}
+    if coa_updates:
+        meta = json.loads(row.coa_meta) if row.coa_meta else {k: None for k in _COA_META_FIELDS}
+        meta.update({k: (v if v not in ("",) else None) for k, v in coa_updates.items()})
+        row.coa_meta = json.dumps(meta)
+
+    # Plain-loop filter (equivalent to the walrus dict-comprehension in the
+    # design doc) — avoids re-matching the regex twice per key below.
+    analyte_edits = {}
+    for key, value in fields.items():
+        if _ANALYTE_KEY_RE.match(key):
+            analyte_edits[key] = value
+    if analyte_edits:
+        slots = json.loads(row.analytes) if row.analytes else []
+        for key, value in analyte_edits.items():
+            m = _ANALYTE_KEY_RE.match(key)
+            idx, kind = int(m.group(1)) - 1, m.group(2)
+            while len(slots) <= idx:
+                slots.append({"name": None, "declared_quantity": None})
+            if kind == "Peptide":
+                slots[idx]["name"] = str(value).strip() if value else None
+            else:
+                slots[idx]["declared_quantity"] = str(value) if value not in (None, "") else None
+        slots = [s for s in slots if s.get("name")]
+        row.analytes = json.dumps(slots) if slots else None
+        row.peptide_name = slots[0]["name"] if slots else None
+
+    row.last_synced_at = datetime.utcnow()
+    db.flush()
+    return True
 
 
 def _parse_senaite_date(value) -> Optional[datetime]:
