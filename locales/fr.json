@@ -104,9 +104,9 @@
   "preferences.businessHours.sun": "Sun",
 
   "preferences.checkIn": "Réception",
-  "preferences.checkIn.section": "Order Check-In",
-  "preferences.checkIn.multiOrderLabel": "Allow multi-order check-in",
-  "preferences.checkIn.multiOrderDescription": "Off = techs process one order completely before the next (SOP default); On = the By-Order receive list allows selecting and combining multiple orders.",
+  "preferences.checkIn.section": "Réception des commandes",
+  "preferences.checkIn.multiOrderLabel": "Autoriser la réception multi-commandes",
+  "preferences.checkIn.multiOrderDescription": "Désactivé = les techniciens traitent une commande entièrement avant la suivante (procédure par défaut) ; Activé = la liste de réception par commande permet de sélectionner et de combiner plusieurs commandes.",
   "preferences.flags": "Drapeaux",
   "preferences.flags.types": "Types de drapeaux",
   "preferences.flags.typesDescription": "Types proposés lors du signalement. Recolorez, limitez aux entités ou désactivez. Les drapeaux existants conservent la couleur d'un type désactivé.",
