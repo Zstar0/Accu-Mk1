@@ -1,6 +1,6 @@
 """Admin registry-debug endpoint: gate, non-mutation, linkage, errors."""
 import pytest
-from datetime import datetime, timedelta
+from datetime import datetime
 from unittest.mock import patch
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -61,6 +61,15 @@ def test_requires_admin():
     eng = create_engine("sqlite:///:memory:"); B.metadata.create_all(eng)
     c = TestClient(main.app)
     r = c.get("/debug/sample-registry/P-1")
+    assert r.status_code in (401, 403)
+
+
+def test_refresh_requires_admin():
+    # No override → real require_admin → unauthenticated request rejected.
+    from database import Base as B
+    eng = create_engine("sqlite:///:memory:"); B.metadata.create_all(eng)
+    c = TestClient(main.app)
+    r = c.post("/debug/sample-registry/P-1/refresh")
     assert r.status_code in (401, 403)
 
 

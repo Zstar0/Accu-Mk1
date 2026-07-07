@@ -82,3 +82,24 @@ def test_date_formatting_is_not_drift():
     row = _row_from(_meta())
     res = diff_registry_vs_senaite(row, _meta(DateReceived="2026-05-01T06:00:00-04:00"))
     assert _status_of(res, "date_received") == "agree"   # same instant
+
+
+def test_compared_fields_covers_all_populated_senaite_fields():
+    """Authoritative-by-reuse guard: every SENAITE-sourced field that
+    _populate_basic_info writes must be in _COMPARED_FIELDS, minus the two
+    documented local-bookkeeping exclusions. A field added to populate but
+    forgotten here would silently never be diffed."""
+    from sub_samples.registry_debug import _COMPARED_FIELDS
+    from sub_samples.service import _populate_basic_info
+    from models import LimsSample
+    row = LimsSample(sample_id="P-1")
+    _populate_basic_info(row, _meta())
+    # Columns populate actually set to a non-None value from this full meta.
+    populated = {
+        c.name for c in LimsSample.__table__.columns
+        if getattr(row, c.name) is not None and c.name != "sample_id"
+    }
+    # Documented exclusions: local bookkeeping, not SENAITE values.
+    exclusions = {"last_synced_at", "external_lims_system"}
+    missing = populated - set(_COMPARED_FIELDS) - exclusions
+    assert not missing, f"populate writes these but _COMPARED_FIELDS omits them: {missing}"
