@@ -16623,7 +16623,7 @@ class RegistrySampleSignalResponse(BaseModel):
 
 
 @app.post("/s2s/lims-samples", response_model=RegistrySampleSignalResponse)
-async def s2s_upsert_lims_sample(
+def s2s_upsert_lims_sample(
     req: RegistrySampleSignal,
     db: Session = Depends(get_db),
     _: None = Depends(require_internal_service_token),

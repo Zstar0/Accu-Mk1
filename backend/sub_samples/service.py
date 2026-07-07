@@ -139,9 +139,10 @@ def upsert_sample_from_signal(db: Session, sample_id: Optional[str],
     sample_id and external_lims_system = "mk1".
 
     Idempotent: keyed on sample_id; native_id minted exactly once; a repeat
-    signal refreshes fields but never re-mints and never regresses status
-    (the signal's state is stale the moment it's sent — live state is owned
-    by SENAITE until a line goes native).
+    signal refreshes fields but never re-mints and never regresses status,
+    identity (external_lims_uid/system), or date_received (the signal's
+    state is stale the moment it's sent — live state is owned by SENAITE
+    until a line goes native, and a signal can never un-receive a sample).
 
     Retry contract (SENAITE-free form): callers MUST retry with the returned
     sample_id (the native id echoed back). A retry with sample_id=None mints
@@ -163,17 +164,23 @@ def upsert_sample_from_signal(db: Session, sample_id: Optional[str],
 
     if existing:
         prior_status = existing.status
-        was_native = existing.external_lims_system == "mk1"
+        prior_uid = existing.external_lims_uid
+        prior_system = existing.external_lims_system
+        prior_received = existing.date_received
         _populate_basic_info(existing, meta)
         if prior_status:
             existing.status = prior_status
-        # _populate_basic_info unconditionally stamps "senaite"; a retry that
-        # echoes the native id back (per the retry contract above) must not
-        # flip a native row's identity. A signal that carries a senaite_uid
-        # is a genuine attach — it wins.
-        if was_native and not senaite_uid:
-            existing.external_lims_uid = None
-            existing.external_lims_system = "mk1"
+        # _populate_basic_info unconditionally stamps identity + date_received
+        # from the (possibly sparse) signal meta. A replayed/duplicate signal
+        # must never regress fields the row has since gained from richer
+        # sources: restore prior identity unless this signal carries a genuine
+        # senaite_uid attach, and restore prior date_received if the new meta
+        # didn't carry one (a signal can never un-receive a sample).
+        if not senaite_uid:
+            existing.external_lims_uid = prior_uid
+            existing.external_lims_system = prior_system
+        if existing.date_received is None and prior_received is not None:
+            existing.date_received = prior_received
         if existing.native_id is None:
             existing.native_id = mint_native_id(db, senaite_sample_id=existing.sample_id)
         db.flush()

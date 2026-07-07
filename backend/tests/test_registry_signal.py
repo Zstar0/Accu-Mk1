@@ -137,6 +137,30 @@ def test_native_row_later_attached_to_senaite_keeps_uid(db):
     assert attached.external_lims_system == "senaite"
 
 
+def test_resignal_does_not_regress_enriched_row(db):
+    """A replayed/duplicate signal carries sparse order-time meta; it must
+    not null fields the row has since gained from richer sources."""
+    row = upsert_sample_from_signal(db, "P-2001", "AR_UID_1", _signal_meta())
+    row.date_received = datetime(2026, 7, 1, 10, 0, 0)
+    db.commit()
+    replay = upsert_sample_from_signal(db, "P-2001", None,
+                                       _signal_meta(uid=None))
+    assert replay.external_lims_uid == "AR_UID_1"      # uid survives uid-less replay
+    assert replay.external_lims_system == "senaite"
+    assert replay.date_received == datetime(2026, 7, 1, 10, 0, 0)
+
+
+def test_senaite_free_retry_still_stays_native(db):
+    """The generalized restore must not break the native echo-id contract."""
+    first = upsert_sample_from_signal(db, sample_id=None, senaite_uid=None,
+                                      meta=_signal_meta(uid=None))
+    retry = upsert_sample_from_signal(db, sample_id=first.sample_id,
+                                      senaite_uid=None, meta=_signal_meta(uid=None))
+    assert retry.external_lims_system == "mk1"
+    assert retry.external_lims_uid is None
+    assert retry.native_id == first.native_id
+
+
 def test_s2s_endpoint_rejects_missing_token():
     """No X-Service-Token -> rejected (S2S endpoint, never anonymous).
 
