@@ -40,12 +40,19 @@ vi.mock('@/components/intake/ReceiveWizard/useParentSampleDetails', () => ({
 // Per-sample vial counts drive both the rail ✓ and the header's N-of-M count.
 // Default: no vials; individual tests override via `subCounts`.
 const subCounts: Record<string, number> = {}
+// The all-states order lookup feeding the boxing scope (already-received
+// samples have left the due list the session was opened from). Default: none;
+// individual tests push items.
+const allStatesItems: Array<{ id: string; client_order_number: string }> = []
 vi.mock('@/lib/api', async importOriginal => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
   return {
     ...actual,
     listSubSamples: vi.fn((id: string) =>
       Promise.resolve({ parent: { sub_sample_count: subCounts[id] ?? 0 } })
+    ),
+    getSenaiteSamples: vi.fn(() =>
+      Promise.resolve({ items: allStatesItems })
     ),
   }
 })
@@ -81,6 +88,7 @@ describe('OrderReceiveSession (orders[])', () => {
     receiveWizardProps.length = 0
     vi.mocked(completeCheckIn).mockClear()
     for (const k of Object.keys(subCounts)) delete subCounts[k]
+    allStatesItems.length = 0
   })
 
   const twoOrders = [
@@ -115,6 +123,20 @@ describe('OrderReceiveSession (orders[])', () => {
     const last = receiveWizardProps[receiveWizardProps.length - 1]
     expect(last?.boxing?.orderKey).toBe('WP-1042')
     expect(last?.boxing?.sampleIds).toEqual(['P-1101', 'P-1102'])
+  })
+
+  it('boxing scope unions already-received samples from the all-states order query', async () => {
+    allStatesItems.push(
+      { id: 'P-1101', client_order_number: 'WP-1042' }, // still due — deduped
+      { id: 'P-1099', client_order_number: 'WP-1042' }, // received earlier, off the due list
+      { id: 'P-9999', client_order_number: 'WP-9999' } // fuzzy-search noise from another order
+    )
+    renderSession(twoOrders)
+
+    await waitFor(() => {
+      const last = receiveWizardProps[receiveWizardProps.length - 1]
+      expect(last?.boxing?.sampleIds).toEqual(['P-1101', 'P-1102', 'P-1099'])
+    })
   })
 
   it('marks the embedded wizard order-managed so its finish does not receive', () => {

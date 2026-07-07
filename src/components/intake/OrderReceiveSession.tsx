@@ -10,7 +10,12 @@ import {
 import { Button } from '@/components/ui/button'
 import { ReceiveWizard } from '@/components/intake/ReceiveWizard/ReceiveWizard'
 import { useParentSampleDetails } from '@/components/intake/ReceiveWizard/useParentSampleDetails'
-import { listSubSamples, type SenaiteSample, type SubSampleListResponse } from '@/lib/api'
+import {
+  getSenaiteSamples,
+  listSubSamples,
+  type SenaiteSample,
+  type SubSampleListResponse,
+} from '@/lib/api'
 import type { SenaiteLookupResult } from '@/lib/api'
 import { completeCheckIn, type CompleteCheckInSample } from '@/lib/complete-checkin'
 import type { OrderGroup } from '@/lib/inbox-orders'
@@ -107,21 +112,10 @@ export function OrderReceiveSession({ orders, onClose, initialPhase }: Props) {
   // Hook runs unconditionally (stable order) even on the empty-order guard path.
   const details = useParentSampleDetails(current?.id ?? '')
 
-  if (!current) return null
-
-  const d = details.details
-  const clientName = d?.client ?? orders[0]?.clientId ?? current.client_id
-  const contact = d?.contact ?? null
-  const sampleType = d?.sample_type ?? current.sample_type
-  const orderNumber = d?.client_order_number ?? current.client_order_number ?? null
-  const clientSampleId = d?.client_sample_id ?? null
-  const lot = d?.client_lot ?? null
-  const declaredQty = d?.declared_weight_mg != null ? `${d.declared_weight_mg} mg` : null
-  const analytes = analyteLabel(d, current)
-
   // Per-order blocks carrying the base index of their first sample in the
   // flattened walk, so rail rows line up with the single `index`/`setIndex`
-  // stepper.
+  // stepper. Computed before the guards below — the boxing-scope query needs
+  // the active order and hooks must run unconditionally.
   let runningOffset = 0
   const orderBlocks = orders.map(o => {
     const base = runningOffset
@@ -136,9 +130,44 @@ export function OrderReceiveSession({ orders, onClose, initialPhase }: Props) {
       ({ order: o, base }) => index >= base && index < base + o.samples.length
     )?.order ?? orders[0]
 
+  // The active order's samples in ALL review states, same query key + shape as
+  // ActiveBoxesPage's overlay so the caches dedupe. Sessions opened from the
+  // due list only carry still-due samples, so a partially checked-in order
+  // would otherwise hide its already-received samples' unboxed vials from the
+  // Boxing tab. The boxing scope below unions this with the session's own
+  // samples, so due samples stay boxable while this loads (or if it fails).
+  const activeOrderKey = activeOrder?.orderKey ?? null
+  const allStatesQ = useQuery({
+    queryKey: ['boxes-session-samples', activeOrderKey],
+    queryFn: () =>
+      getSenaiteSamples(undefined, 200, 0, activeOrderKey!, 'order_number'),
+    enabled: activeOrderKey !== null,
+  })
+
+  if (!current) return null
+
+  const d = details.details
+  const clientName = d?.client ?? orders[0]?.clientId ?? current.client_id
+  const contact = d?.contact ?? null
+  const sampleType = d?.sample_type ?? current.sample_type
+  const orderNumber = d?.client_order_number ?? current.client_order_number ?? null
+  const clientSampleId = d?.client_sample_id ?? null
+  const lot = d?.client_lot ?? null
+  const declaredQty = d?.declared_weight_mg != null ? `${d.declared_weight_mg} mg` : null
+  const analytes = analyteLabel(d, current)
+
   // `current` guaranteed the union is non-empty, so an owning order always
   // exists; this narrows the type for the boxing scope below.
   if (!activeOrder) return null
+
+  // Boxing scope: the session's samples plus every all-states match (the
+  // search is fuzzy, so exact-match the order key like ActiveBoxesPage does).
+  const allStateIds = (allStatesQ.data?.items ?? [])
+    .filter(s => s.client_order_number === activeOrder.orderKey)
+    .map(s => s.id)
+  const boxingSampleIds = Array.from(
+    new Set([...activeOrder.samples.map(s => s.id), ...allStateIds])
+  )
 
   return (
     <Dialog open onOpenChange={open => { if (!open) onClose() }}>
@@ -248,7 +277,7 @@ export function OrderReceiveSession({ orders, onClose, initialPhase }: Props) {
                 orderKey: activeOrder.orderKey ?? activeOrder.samples[0]?.id ?? '',
                 orderLabel: activeOrder.orderLabel,
                 clientId: activeOrder.clientId,
-                sampleIds: activeOrder.samples.map(s => s.id),
+                sampleIds: boxingSampleIds,
               }}
             />
           </div>
