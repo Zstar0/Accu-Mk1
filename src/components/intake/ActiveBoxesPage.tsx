@@ -12,6 +12,7 @@ import { OrderReceiveSession } from '@/components/intake/OrderReceiveSession'
 import { closeBox, getSenaiteSamples, listActiveBoxes, type LimsBox } from '@/lib/api'
 import { getWordpressUrl } from '@/lib/api-profiles'
 import { roleBadgeClass, roleTextClass } from '@/lib/assignment-colors'
+import { invalidateBoxCaches } from '@/lib/box-cache'
 import { groupSamplesByOrder } from '@/lib/inbox-orders'
 import { useUIStore } from '@/store/ui-store'
 
@@ -107,9 +108,12 @@ export function ActiveBoxesPage() {
   }, [sessionOrderKey, sessionQ.isError])
   const closeM = useMutation({
     mutationFn: (boxId: number) => closeBox(boxId),
-    onSuccess: async () => {
+    onSuccess: async closed => {
       setClosing(null)
-      await qc.invalidateQueries({ queryKey: ['active-boxes'] })
+      // Closing returns the box's vials to Unboxed and stores the box — every
+      // box surface (Boxing tab, sample-header chip, worksheet Box column)
+      // must refresh, scoped by the closed box's own order key.
+      await invalidateBoxCaches(qc, closed.order_key)
     },
   })
 

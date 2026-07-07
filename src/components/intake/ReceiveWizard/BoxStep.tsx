@@ -13,6 +13,7 @@ import {
   listSubSamples, type LimsBox, type SubSample,
 } from '@/lib/api'
 import { ROLE_CHIP_CLASS, roleBadgeClass, roleTextClass } from '@/lib/assignment-colors'
+import { invalidateBoxCaches } from '@/lib/box-cache'
 
 // Snap the drag preview's CENTER to the cursor. Without it, the overlay is
 // offset by wherever inside the chip the grab started, so the "held" copy
@@ -111,7 +112,7 @@ export function BoxStep({ orderKey, orderLabel, sampleIds }: Props) {
           autoCreatedRef.current.add(key)
           await createBox(orderKey, role)
           if (cancelled) return
-          await qc.invalidateQueries({ queryKey: ['order-boxes', orderKey] })
+          await invalidateBoxCaches(qc, orderKey)
         }
       }
     }
@@ -138,13 +139,12 @@ export function BoxStep({ orderKey, orderLabel, sampleIds }: Props) {
       if (!boxId) return
       await assignVialsToBox(boxId, [subSampleId])
     }
-    await qc.invalidateQueries({ queryKey: ['order-boxes', orderKey] })
-    await qc.invalidateQueries({ queryKey: ['order-vials', orderKey] })
+    await invalidateBoxCaches(qc, orderKey)
   }, [qc, orderKey])
 
   const addBox = async (role: BoxRole) => {
     await createBox(orderKey, role)
-    await qc.invalidateQueries({ queryKey: ['order-boxes', orderKey] })
+    await invalidateBoxCaches(qc, orderKey)
   }
 
   // Auto-assign(box): fill up to `capacity - vial_count` of this box's role's
@@ -159,22 +159,20 @@ export function BoxStep({ orderKey, orderLabel, sampleIds }: Props) {
     const takenIds = roleUnboxed.slice(0, take).map(v => v.sample_id)
     if (takenIds.length > 0) {
       await assignVialsToBox(box.id, takenIds)
-      await qc.invalidateQueries({ queryKey: ['order-boxes', orderKey] })
-      await qc.invalidateQueries({ queryKey: ['order-vials', orderKey] })
+      await invalidateBoxCaches(qc, orderKey)
     }
     const remaining = roleUnboxed.slice(take)
     const otherEmptyBox = boxes.some(b => b.id !== box.id && b.role === role && b.vial_count === 0)
     const thisBoxStillEmpty = box.vial_count + takenIds.length === 0
     if (remaining.length > 0 && !otherEmptyBox && !thisBoxStillEmpty) {
       await createBox(orderKey, role)
-      await qc.invalidateQueries({ queryKey: ['order-boxes', orderKey] })
+      await invalidateBoxCaches(qc, orderKey)
     }
   }
 
   const handleRemoveBox = async (box: LimsBox) => {
     await deleteBox(box.id)
-    await qc.invalidateQueries({ queryKey: ['order-boxes', orderKey] })
-    await qc.invalidateQueries({ queryKey: ['order-vials', orderKey] })
+    await invalidateBoxCaches(qc, orderKey)
   }
 
   if (boxesQ.isLoading || vialsQ.isLoading) return <div className="p-6">Loading…</div>
@@ -199,8 +197,10 @@ export function BoxStep({ orderKey, orderLabel, sampleIds }: Props) {
         ))}
       </>,
     )
-    // Stamp printed_at on each box, same as the per-box button does.
-    for (const b of printableBoxes) void printBox(b.id)
+    // Stamp printed_at on each box, same as the per-box button does, then
+    // refresh the box surfaces so the buttons flip to "Reprint".
+    void Promise.all(printableBoxes.map(b => printBox(b.id)))
+      .then(() => invalidateBoxCaches(qc, orderKey))
   }
 
   return (
@@ -313,6 +313,7 @@ interface BoxCardProps {
 }
 
 function BoxCard({ box, boxVials, capacity, activeId, onCapacityChange, onAutoAssign, onRemove }: BoxCardProps) {
+  const qc = useQueryClient()
   const { setNodeRef, isOver } = useDroppable({ id: String(box.id) })
   const { printNode } = usePrintLabel()
   return (
@@ -322,7 +323,7 @@ function BoxCard({ box, boxVials, capacity, activeId, onCapacityChange, onAutoAs
         <span className={`font-mono font-semibold ${roleTextClass(box.role)}`}>{box.label_code}</span>
         <div className="flex items-center gap-1">
           <Button size="sm" variant="outline" className="gap-2"
-            onClick={() => { void printBox(box.id); printNode(
+            onClick={() => { void printBox(box.id).then(() => invalidateBoxCaches(qc, box.order_key)); printNode(
               <BoxLabelTemplate boxId={box.id} labelCode={box.label_code}
                 role={box.role} vialCount={box.vial_count} createdAt={box.created_at} />,
             ) }}>
