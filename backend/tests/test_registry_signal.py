@@ -114,6 +114,29 @@ def test_signal_senaite_free_form(db):
     assert row.external_lims_system == "mk1"
 
 
+def test_senaite_free_retry_with_echoed_id_stays_native(db):
+    first = upsert_sample_from_signal(db, sample_id=None, senaite_uid=None,
+                                      meta=_signal_meta(uid=None))
+    retry = upsert_sample_from_signal(db, sample_id=first.sample_id,
+                                      senaite_uid=None, meta=_signal_meta(uid=None))
+    assert retry.id == first.id
+    assert retry.native_id == first.native_id          # never re-minted
+    assert retry.external_lims_system == "mk1"          # identity preserved
+    assert retry.external_lims_uid is None
+
+
+def test_native_row_later_attached_to_senaite_keeps_uid(db):
+    """If a signal DOES carry a senaite uid for a previously-native row,
+    the attach wins (forward path for a line coming back onto SENAITE)."""
+    first = upsert_sample_from_signal(db, sample_id=None, senaite_uid=None,
+                                      meta=_signal_meta(uid=None))
+    attached = upsert_sample_from_signal(db, sample_id=first.sample_id,
+                                         senaite_uid="LATE_UID",
+                                         meta=_signal_meta(uid="LATE_UID"))
+    assert attached.external_lims_uid == "LATE_UID"
+    assert attached.external_lims_system == "senaite"
+
+
 def test_s2s_endpoint_rejects_missing_token():
     """No X-Service-Token -> rejected (S2S endpoint, never anonymous).
 

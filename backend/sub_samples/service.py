@@ -140,7 +140,15 @@ def upsert_sample_from_signal(db: Session, sample_id: Optional[str],
     Idempotent: keyed on sample_id; native_id minted exactly once; a repeat
     signal refreshes fields but never re-mints and never regresses status
     (the signal's state is stale the moment it's sent — live state is owned
-    by SENAITE until a line goes native)."""
+    by SENAITE until a line goes native).
+
+    Retry contract (SENAITE-free form): callers MUST retry with the returned
+    sample_id (the native id echoed back). A retry with sample_id=None mints
+    a brand-new sample by design — there is no natural key to dedupe on; the
+    IS-side Idempotency-Key becomes meaningful only when a later slice stores
+    it. An echoed-id retry without a senaite_uid preserves the row's native
+    identity (external_lims_system stays "mk1"); if a later signal DOES carry
+    a senaite_uid, the attach wins."""
     meta = dict(meta)
     meta.setdefault("review_state", "sample_due")
     if senaite_uid and not meta.get("uid"):
@@ -154,9 +162,17 @@ def upsert_sample_from_signal(db: Session, sample_id: Optional[str],
 
     if existing:
         prior_status = existing.status
+        was_native = existing.external_lims_system == "mk1"
         _populate_basic_info(existing, meta)
         if prior_status:
             existing.status = prior_status
+        # _populate_basic_info unconditionally stamps "senaite"; a retry that
+        # echoes the native id back (per the retry contract above) must not
+        # flip a native row's identity. A signal that carries a senaite_uid
+        # is a genuine attach — it wins.
+        if was_native and not senaite_uid:
+            existing.external_lims_uid = None
+            existing.external_lims_system = "mk1"
         if existing.native_id is None:
             existing.native_id = mint_native_id(db, senaite_sample_id=existing.sample_id)
         db.flush()
