@@ -7,8 +7,7 @@ import type { EnrichedOrderGroup } from '@/lib/inbox-orders'
 import type { ExplorerOrder, SenaiteSample } from '@/lib/api'
 
 // OrderExpectedVials fetches the box-label summary lazily — stub it so the row
-// renders without a real backend. The SLA cell pulls in i18n + tooltip; replace
-// it with a sentinel so the test stays focused on the email-link branch.
+// renders without a real backend.
 vi.mock('@/lib/api', async importOriginal => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
   return {
@@ -18,10 +17,6 @@ vi.mock('@/lib/api', async importOriginal => {
       .mockResolvedValue({ counts: { hplc: 0, endo: 0, ster: 0 } }),
   }
 })
-
-vi.mock('@/components/explorer/OrderSlaCell', () => ({
-  OrderSlaCell: () => <span data-testid="sla-cell" />,
-}))
 
 function makeGroup(
   customerId: number | null,

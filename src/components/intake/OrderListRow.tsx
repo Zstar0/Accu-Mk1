@@ -1,8 +1,6 @@
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
-import type { OrderSlaVerdict } from '@/lib/sla-resolution'
-import { OrderSlaCell } from '@/components/explorer/OrderSlaCell'
 import {
   STATE_BORDER_CLASS,
   STATE_PRIORITY,
@@ -15,9 +13,6 @@ import { OrderExpectedVials } from '@/components/intake/OrderExpectedVials'
 
 interface OrderListRowProps {
   group: EnrichedOrderGroup
-  // From useOrderSlaStatuses (wired in Task 1.5). Undefined → the SLA cell
-  // renders its inert "awaiting"/loading state.
-  slaVerdict?: OrderSlaVerdict
   // Selection state for multi-order combine. The No-order group (orderKey ===
   // null) is not selectable, so its checkbox cell is rendered disabled/empty.
   selected: boolean
@@ -57,12 +52,11 @@ function worstSampleState(group: EnrichedOrderGroup): string | null {
 /**
  * One order's single-row table item, mirroring `OrderRow` from the Order Status
  * explorer: Order # (with a muted sample-count / expected-vials sub-line), client
- * + linked email + sample-type chips, Created, SLA, and Process. The left border
+ * + linked email + sample-type chips, Created and Process. The left border
  * is tinted by the order's worst sample state.
  */
 export function OrderListRow({
   group,
-  slaVerdict,
   selected,
   selectable = true,
   onToggle,
@@ -152,12 +146,6 @@ export function OrderListRow({
       </td>
       <td className="py-3 px-3 whitespace-nowrap text-sm text-muted-foreground">
         {formatDate(order?.created_at ?? null)}
-      </td>
-      <td className="py-3 px-3 whitespace-nowrap align-top">
-        <OrderSlaCell
-          verdict={slaVerdict ?? { color: 'awaiting' }}
-          isLoading={!slaVerdict}
-        />
       </td>
       <td className="py-3 px-3 whitespace-nowrap text-right">
         <Button size="sm" onClick={() => onProcess(group)}>
