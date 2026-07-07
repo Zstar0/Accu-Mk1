@@ -35,6 +35,8 @@ function ws(sampleIds: string[], id = 1, title = 'WS-1'): WorksheetListItem {
       peptide_id: null,
       method_name: null,
       lims_sub_sample_pk: null,
+      box_id: null,
+      box_label: null,
       analyses: [],
       prep_status: 'pending',
     })),

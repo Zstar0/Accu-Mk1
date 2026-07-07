@@ -20,6 +20,7 @@ import {
   X,
   XCircle,
   ArrowLeft,
+  Box,
   RefreshCw,
   Copy,
   Paperclip,
@@ -106,9 +107,13 @@ import {
   type SubSampleAttachment,
   listWorksheets,
   getExplorerOrderById,
+  getSenaiteSamples,
   listSubSampleChromatograms,
   uploadChromatogramToSenaite,
   type SubSampleChromatogram,
+  listPackagingPhotos,
+  fetchPackagingPhotoUrl,
+  type PackagingPhoto,
 } from '@/lib/api'
 import { ReceiveWizard } from '@/components/intake/ReceiveWizard/ReceiveWizard'
 import type { ParentInfo } from '@/components/intake/ReceiveWizard/useReceiveWizard'
@@ -1049,6 +1054,71 @@ function AttachmentImage({ attachment }: { attachment: SenaiteAttachment }) {
       alt={attachment.filename}
       className="rounded-lg border border-border/30 max-h-40 w-auto object-contain"
     />
+  )
+}
+
+// ── Packaging photos (Mk1) — read-only thumbnails in Attachments ─────────────
+// Parent-sample packaging photos captured during check-in / the Manage
+// Sub-Samples overlay. This surface is READ-ONLY: all mutation (add/retake/
+// remove) happens in the wizard. The ['packaging-photos', parentSampleId]
+// query key is shared with the wizard so caches stay in sync.
+
+/** Single packaging photo thumbnail. Mirrors AttachmentImage's blob-backed
+ *  load/loading/error states. No controls — read-only. Bytes come through
+ *  react-query so the wizard's retake path (which PATCHes the SAME photo id
+ *  and invalidates ['packaging-photo-bytes', id]) refreshes this thumbnail. */
+function PackagingThumb({ photo }: { photo: PackagingPhoto }) {
+  const { data: src = null, isPending: loading, isError: error } = useQuery({
+    queryKey: ['packaging-photo-bytes', photo.id],
+    queryFn: () => fetchPackagingPhotoUrl(photo.id),
+  })
+
+  return (
+    <div className="space-y-1.5">
+      {loading ? (
+        <div className="flex items-center justify-center w-full h-48 rounded-lg bg-muted/40 border border-border/30">
+          <Spinner className="size-5" />
+        </div>
+      ) : error || !src ? (
+        <div className="flex flex-col items-center justify-center gap-2 w-full h-48 rounded-lg bg-muted/40 border border-border/30">
+          <ImageIcon size={24} className="text-muted-foreground" />
+          <span className="text-xs text-muted-foreground">Failed to load image</span>
+        </div>
+      ) : (
+        <img
+          src={src}
+          alt={photo.remarks ?? 'Packaging photo'}
+          className="rounded-lg border border-border/30 max-h-40 w-auto object-contain"
+        />
+      )}
+      {photo.remarks && (
+        <p className="text-xs text-muted-foreground">{photo.remarks}</p>
+      )}
+    </div>
+  )
+}
+
+/** Read-only "Packaging" group for the Attachments section. Renders nothing
+ *  when the parent sample has no packaging photos. Exported for isolated
+ *  testing (SampleDetails is too heavy to render whole in a unit test). */
+export function PackagingAttachmentsGroup({ parentSampleId }: { parentSampleId: string }) {
+  const { data: photos } = useQuery({
+    queryKey: ['packaging-photos', parentSampleId],
+    queryFn: () => listPackagingPhotos(parentSampleId),
+    enabled: !!parentSampleId,
+  })
+
+  if (!photos || photos.length === 0) return null
+
+  return (
+    <div className="space-y-2">
+      <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Packaging</p>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {photos.map(photo => (
+          <PackagingThumb key={photo.id} photo={photo} />
+        ))}
+      </div>
+    </div>
   )
 }
 
@@ -3340,6 +3410,33 @@ export function SampleDetails() {
   const subSamples = subData?.sub_samples ?? []
   const subCount = subData?.parent.sub_sample_count ?? 0
 
+  // Order scope for the Manage Sub-Samples overlay's Boxing tab. Mirrors
+  // ActiveBoxesPage: fetch the order's samples in ANY review state (the
+  // search can be fuzzy, so exact-match filter below) and share its
+  // ['boxes-session-samples', key] cache. Runs only while the overlay is
+  // open; order-less samples (or zero matches / errors) derive no boxing
+  // prop, so the overlay keeps its current tab set.
+  const boxingOrderKey = data?.client_order_number ?? null
+  const { data: boxingSamplesData } = useQuery({
+    queryKey: ['boxes-session-samples', boxingOrderKey],
+    queryFn: () => getSenaiteSamples(undefined, 200, 0, boxingOrderKey!, 'order_number'),
+    enabled: wizardParent !== null && boxingOrderKey !== null,
+  })
+  const boxingSamples = (boxingSamplesData?.items ?? []).filter(
+    s => s.client_order_number === boxingOrderKey
+  )
+  // SenaiteLookupResult carries no client_id, so take it off the matched
+  // order samples — same source groupSamplesByOrder uses for its groups.
+  const wizardBoxing =
+    boxingOrderKey !== null && boxingSamples.length > 0
+      ? {
+          orderKey: boxingOrderKey,
+          orderLabel: boxingOrderKey,
+          clientId: boxingSamples[0]?.client_id ?? null,
+          sampleIds: boxingSamples.map(s => s.id),
+        }
+      : undefined
+
   // Parent linkage breadcrumb — only for sub-samples
   const parentSampleId = useMemo(() => {
     if (!sampleId) return null
@@ -3581,6 +3678,12 @@ export function SampleDetails() {
       .catch(() => setParentLineStates({}))
   }, [parentSampleId])
 
+  // This vial's own record in the parent's sub-samples list (null on parent
+  // pages or before the list loads). Shared by the header's role lookup,
+  // vial-count line, and box chip.
+  const meVial =
+    parentSummary?.sub_samples.find(s => s.sample_id === sampleId) ?? null
+
   // Resolve this sample's vial-assignment role for the header label.
   // Parent pages: pull from lims_samples.assignment_role (defaults to 'hplc'
   // per migration; can change after AssignStep moves the parent into another
@@ -3592,8 +3695,7 @@ export function SampleDetails() {
         // so no "Assigned to" line / role badge (its vials carry the roles).
         null
       : (subData?.parent.assignment_role ?? 'hplc')
-    : (parentSummary?.sub_samples.find(s => s.sample_id === sampleId)
-        ?.assignment_role ?? null)
+    : (meVial?.assignment_role ?? null)
   const assignmentLabel = (() => {
     switch (currentAssignment) {
       case 'hplc':
@@ -3782,8 +3884,9 @@ export function SampleDetails() {
               analyses: mk1Analyses,
             }
           }
-        } catch {
+        } catch (e) {
           // Mk1 lookup failed — fall through to the SENAITE lookup (legacy path).
+          console.warn(`[sample-details] Mk1 native lookup failed for ${id}; falling back to SENAITE`, e)
         }
       }
       return lookupSenaiteSample(id)
@@ -4368,11 +4471,8 @@ export function SampleDetails() {
                     {parentSampleId}
                   </button>
                   {parentSummary &&
+                    meVial &&
                     (() => {
-                      const me = parentSummary.sub_samples.find(
-                        s => s.sample_id === sampleId
-                      )
-                      if (!me) return null
                       // Mode-aware family numbering: legacy counts the parent
                       // as Vial 1; container families count physical vials only.
                       const cm = parentSummary.parent.container_mode ?? false
@@ -4384,7 +4484,8 @@ export function SampleDetails() {
                         <>
                           <span aria-hidden>·</span>
                           <span>
-                            Vial {vialPosition(me.vial_sequence, cm)} of {total}
+                            Vial {vialPosition(meVial.vial_sequence, cm)} of{' '}
+                            {total}
                           </span>
                         </>
                       )
@@ -4393,6 +4494,22 @@ export function SampleDetails() {
                     <>
                       <span aria-hidden>·</span>
                       <RoleHeaderBadge role={currentAssignment} />
+                    </>
+                  )}
+                  {meVial?.box_label && (
+                    <>
+                      <span aria-hidden>·</span>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          useUIStore.getState().navigateToBoxes(meVial.box_label!)
+                        }
+                        title="View in Active Boxes"
+                        className="inline-flex items-center gap-1 rounded border px-1.5 py-0.5 font-mono text-[11px] hover:bg-muted transition-colors"
+                      >
+                        <Box className="h-3 w-3 shrink-0" aria-hidden="true" />
+                        {meVial.box_label}
+                      </button>
                     </>
                   )}
                 </div>
@@ -5589,6 +5706,14 @@ export function SampleDetails() {
                 onAttachmentsChanged={refreshVialAttachments}
               />
             )}
+            {/* Packaging photos (Mk1) — read-only; parent id is `parentSampleId`
+                on vial pages, else this page's own `data.sample_id`. Renders
+                nothing when the parent has no packaging photos. */}
+            {data.sample_id && (
+              <PackagingAttachmentsGroup
+                parentSampleId={parentSampleId ?? data.sample_id}
+              />
+            )}
             {/* Renderable attachments — newest image + newest HPLC graph side by side */}
             {(() => {
               const allImages = (data.attachments ?? []).filter(a =>
@@ -6199,14 +6324,15 @@ export function SampleDetails() {
             }
           }}
         >
-          <DialogContent className="max-w-6xl w-full p-0 sm:max-w-6xl h-[90vh] overflow-hidden">
+          <DialogContent className="max-w-[95vw] w-[95vw] sm:max-w-[95vw] h-[92vh] p-0 gap-0 grid-rows-[auto_1fr] overflow-hidden">
             <DialogHeader className="px-6 pt-4 pb-2 border-b">
               <DialogTitle>Receive {wizardParent.sample_id}</DialogTitle>
             </DialogHeader>
-            <div className="h-[calc(90vh-3.5rem)] overflow-hidden">
+            <div className="min-h-0 overflow-hidden">
               <ReceiveWizard
                 parent={wizardParent}
                 initialPhase="details"
+                boxing={wizardBoxing}
                 onClose={() => {
                   setWizardParent(null)
                   void refetchSubs()

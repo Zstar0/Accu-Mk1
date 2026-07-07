@@ -103,6 +103,10 @@
   "preferences.businessHours.sat": "Sat",
   "preferences.businessHours.sun": "Sun",
 
+  "preferences.checkIn": "الاستلام",
+  "preferences.checkIn.section": "استلام الطلبات",
+  "preferences.checkIn.multiOrderLabel": "السماح باستلام عدة طلبات معًا",
+  "preferences.checkIn.multiOrderDescription": "إيقاف = يعالج الفنيون طلبًا واحدًا بالكامل قبل الانتقال إلى التالي (الإجراء المعياري الافتراضي)؛ تشغيل = تتيح قائمة الاستلام حسب الطلب تحديد عدة طلبات ودمجها.",
   "preferences.flags": "الأعلام",
   "preferences.flags.types": "أنواع الأعلام",
   "preferences.flags.typesDescription": "الأنواع المتاحة عند رفع علم. غيّر اللون أو حدّد النطاق للكيانات أو ألغِ التفعيل. تحتفظ الأعلام الحالية بلون النوع المعطّل.",

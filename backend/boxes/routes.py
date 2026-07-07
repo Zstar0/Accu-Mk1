@@ -1,0 +1,100 @@
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy.orm import Session
+
+from database import get_db
+from auth import get_current_user
+
+from . import service
+from .schemas import BoxResponse, CreateBoxRequest, AssignVialsRequest
+
+router = APIRouter(prefix="/api/boxes", tags=["boxes"])
+
+
+def _serialize(db: Session, box, vials=None) -> BoxResponse:
+    if vials is None:
+        vials = service.vials_for_boxes(db, [box.id]).get(box.id, [])
+    return BoxResponse(
+        id=box.id,
+        order_key=box.order_key,
+        box_number=box.box_number,
+        role=box.role,
+        label_code=service.box_label_code(box),
+        vial_count=service.vial_count(db, box.id),
+        printed_at=box.printed_at,
+        created_at=box.created_at,
+        stored_at=box.stored_at,
+        vials=vials,
+    )
+
+
+@router.get("", response_model=list[BoxResponse])
+def list_boxes(order_key: str = Query(...), db: Session = Depends(get_db),
+               user=Depends(get_current_user)):
+    return [_serialize(db, b) for b in service.list_for_order(db, order_key)]
+
+
+@router.get("/active", response_model=list[BoxResponse])
+def list_active_boxes(db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """Every box not yet closed out to storage, across all orders."""
+    boxes = service.list_active(db)
+    vmap = service.vials_for_boxes(db, [b.id for b in boxes])
+    return [_serialize(db, b, vmap.get(b.id, [])) for b in boxes]
+
+
+@router.post("", response_model=BoxResponse, status_code=201)
+def create_box(body: CreateBoxRequest, db: Session = Depends(get_db),
+               user=Depends(get_current_user)):
+    try:
+        box = service.next_box(db, body.order_key, body.role, user_id=user.id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return _serialize(db, box)
+
+
+@router.post("/{box_id}/assign", response_model=BoxResponse)
+def assign(box_id: int, body: AssignVialsRequest, db: Session = Depends(get_db),
+           user=Depends(get_current_user)):
+    try:
+        box = service.assign_vials(db, box_id, body.sub_sample_ids, user_id=user.id)
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return _serialize(db, box)
+
+
+@router.post("/unassign")
+def unassign(body: AssignVialsRequest, db: Session = Depends(get_db),
+             user=Depends(get_current_user)):
+    """Clear box membership for the given vials (drag back out to Unboxed).
+    No role check — removing from a box is always allowed."""
+    count = service.unassign_vials(db, body.sub_sample_ids, user_id=user.id)
+    return {"unassigned": count}
+
+
+@router.post("/{box_id}/print", response_model=BoxResponse)
+def print_box(box_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    try:
+        box = service.mark_printed(db, box_id, user_id=user.id)
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return _serialize(db, box)
+
+
+@router.delete("/{box_id}", status_code=204)
+def delete_box(box_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    try:
+        service.delete_box(db, box_id, user_id=user.id)
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.post("/{box_id}/close", response_model=BoxResponse)
+def close_box(box_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """Close out a box: vials return to Unboxed, the box is stamped stored.
+    Idempotent — re-closing a stored box is a no-op."""
+    try:
+        box = service.close_box(db, box_id, user_id=user.id)
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return _serialize(db, box)

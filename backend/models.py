@@ -830,12 +830,41 @@ class LimsSubSample(Base):
     # core | variance — workflow bucket set at check-in. NULL = not yet
     # designated. Orthogonal to in_variance_set (stats inclusion).
     assignment_kind: Mapped[Optional[str]] = mapped_column(String(8), nullable=True)
+    box_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("lims_boxes.id", ondelete="SET NULL"))
     # Variance set membership (paired with lock state on parent LimsSample).
     in_variance_set: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true", default=True)
     variance_exclusion_reason: Mapped[Optional[str]] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     parent_sample: Mapped["LimsSample"] = relationship("LimsSample", back_populates="sub_samples")
+    box: Mapped[Optional["LimsBox"]] = relationship("LimsBox", back_populates="vials")
+
+
+class LimsBox(Base):
+    """A physical check-in box/bin holding an order's vials of one test type.
+
+    Keyed by `order_key` (the order number string as shown on labels, e.g.
+    'WP-20066'; falls back to a parent sample_id for order-less receives).
+    `box_number` runs 1..N per order_key across all of the order's samples.
+    A box holds vials of exactly one role (color-coded bin).
+    """
+    __tablename__ = "lims_boxes"
+    __table_args__ = (UniqueConstraint("order_key", "box_number", name="uq_lims_box_order_number"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    order_key: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    box_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    role: Mapped[str] = mapped_column(String(8), nullable=False)  # hplc | endo | ster | xtra
+    created_by_user_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("users.id", ondelete="SET NULL"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    printed_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    printed_by_user_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("users.id", ondelete="SET NULL"))
+    # Close-out ("stored"): set when the box's testing life ends and it goes to
+    # storage; its vials were returned to Unboxed. Active box = stored_at IS NULL.
+    stored_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    stored_by_user_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("users.id", ondelete="SET NULL"))
+
+    vials: Mapped[List["LimsSubSample"]] = relationship("LimsSubSample", back_populates="box")
 
 
 class LimsNativeIdSequence(Base):
@@ -872,6 +901,41 @@ class LimsSubSampleAttachment(Base):
     )
 
     sub_sample: Mapped["LimsSubSample"] = relationship("LimsSubSample")
+
+
+class LimsPackagingPhoto(Base):
+    """A packaging photo captured against a PARENT sample at check-in (and via
+    the Manage Sub-Samples overlay). Distinct from vial check-in photos and
+    sub-sample attachments: these document how the sample family arrived, so
+    they hang off lims_samples, not a specific vial.
+
+    Bytes live in the Mk1 photo store (sub_samples/photo_storage.py), keyed by
+    the parent sample_id. storage_key holds the mk1://{key} URI (same
+    convention as lims_sub_samples.photo_external_uid) so it stays consistent
+    with the rest of the Mk1-native storage pointers.
+
+    See docs/superpowers/specs/2026-06-30-packaging-photos-design.md.
+    """
+
+    __tablename__ = "lims_packaging_photos"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    parent_sample_pk: Mapped[int] = mapped_column(
+        Integer, ForeignKey("lims_samples.id", ondelete="CASCADE"),
+        index=True, nullable=False,
+    )
+    kind: Mapped[str] = mapped_column(String(20), default="packaging", nullable=False)
+    storage_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    filename: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    content_type: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    ordering: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    remarks: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_by_user_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+    parent_sample: Mapped["LimsSample"] = relationship("LimsSample")
 
 
 class SlaTier(Base):

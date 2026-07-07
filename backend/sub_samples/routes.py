@@ -14,7 +14,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 from database import get_db
 from auth import get_current_user
-from models import LimsSample, LimsSubSample
+from boxes.service import box_label_code
+from models import LimsBox, LimsSample, LimsSubSample
 from sub_samples import service
 from sub_samples.senaite import (
     SecondaryFalloutError,
@@ -57,6 +58,7 @@ def _serialize(sub) -> SubSampleResponse:
         assignment_role=sub.assignment_role,
         assignment_kind=sub.assignment_kind,
         external_lims_uid=sub.external_lims_uid,
+        box_id=sub.box_id,
     )
 
 
@@ -281,6 +283,18 @@ def list_sub_samples(
             ),
             sub_samples=[],
         )
+    items = [_serialize(s) for s in subs]
+    # Batch-resolve box labels (one SELECT, not per-vial) so the sample header
+    # can show which box a vial sits in without an extra round-trip.
+    box_ids = {s.box_id for s in subs if s.box_id is not None}
+    if box_ids:
+        boxes = db.execute(
+            select(LimsBox).where(LimsBox.id.in_(box_ids))
+        ).scalars().all()
+        label_by_id = {b.id: box_label_code(b) for b in boxes}
+        for item in items:
+            if item.box_id is not None:
+                item.box_label = label_by_id.get(item.box_id)
     return SubSampleListResponse(
         parent=ParentSampleSummary(
             sample_id=parent.sample_id,
@@ -295,7 +309,7 @@ def list_sub_samples(
             customer_remarks_include=parent.customer_remarks_include,
             customer_remarks_delivered_at=parent.customer_remarks_delivered_at,
         ),
-        sub_samples=[_serialize(s) for s in subs],
+        sub_samples=items,
     )
 
 

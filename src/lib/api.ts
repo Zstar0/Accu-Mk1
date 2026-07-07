@@ -4411,9 +4411,10 @@ export async function deleteSlaPriorityTier(
 ): Promise<void> {
   // Without serviceGroupId, deletes the global (NULL group) override; with it,
   // deletes only the per-group row.
-  const url = new URL(`${API_BASE_URL()}/sla-priority-tiers/${priority}`)
-  if (serviceGroupId != null) url.searchParams.set('service_group_id', String(serviceGroupId))
-  const response = await fetch(url.toString(), {
+  const params = new URLSearchParams()
+  if (serviceGroupId != null) params.set('service_group_id', String(serviceGroupId))
+  const qs = params.toString()
+  const response = await fetch(`${API_BASE_URL()}/sla-priority-tiers/${priority}${qs ? `?${qs}` : ''}`, {
     method: 'DELETE', headers: getBearerHeaders(),
   })
   if (!response.ok) throw new Error(`Failed to remove priority override: ${response.status}`)
@@ -4742,6 +4743,9 @@ export interface WorksheetListItem {
     lims_sub_sample_pk: number | null
     /** 'core' | 'variance' | null — null for parent-sample items. */
     assignment_kind?: 'core' | 'variance' | null
+    /** Current physical box; null for parent-sample items / unboxed vials. */
+    box_id: number | null
+    box_label: string | null
     analyses: {
       title: string
       keyword: string | null
@@ -5061,6 +5065,12 @@ export interface SubSample {
   // hex UID for legacy dual-written vials. Used to load native vials from Mk1
   // without calling SENAITE. Optional for back-compat with older responses.
   external_lims_uid?: string | null
+  // FK to lims_boxes.id — which physical box this vial is assigned to, or null
+  // when unboxed. Drives the boxing UI's per-box vial chips.
+  box_id?: number | null
+  // Human box label ("BOX-<order#>-<box_number>", e.g. "BOX-3267-1"). Only the
+  // list endpoint populates it; null/absent when unboxed.
+  box_label?: string | null
 }
 
 export interface ParentSampleSummary {
@@ -5184,12 +5194,15 @@ export async function updateCustomerRemarks(
 export async function listLimsAnalysesForSubSample(
   subSamplePk: number
 ): Promise<SenaiteAnalysis[]> {
-  const url = new URL(`${API_BASE_URL()}/api/lims-analyses`)
-  url.searchParams.set('host_kind', 'sub_sample')
-  url.searchParams.set('host_pk', String(subSamplePk))
-  url.searchParams.set('as', 'senaite_shape')
-  url.searchParams.set('include_retests', 'true')
-  const response = await fetch(url.toString(), { headers: getBearerHeaders() })
+  const params = new URLSearchParams({
+    host_kind: 'sub_sample',
+    host_pk: String(subSamplePk),
+    as: 'senaite_shape',
+    include_retests: 'true',
+  })
+  const response = await fetch(`${API_BASE_URL()}/api/lims-analyses?${params}`, {
+    headers: getBearerHeaders(),
+  })
   if (!response.ok) {
     throw new Error(`listLimsAnalysesForSubSample failed: ${response.status}`)
   }
@@ -5216,9 +5229,10 @@ export interface ParentPromotionInfo {
 export async function listParentPromotions(
   parentSampleId: string
 ): Promise<ParentPromotionInfo[]> {
-  const url = new URL(`${API_BASE_URL()}/api/lims-analyses/promotions`)
-  url.searchParams.set('parent_sample_id', parentSampleId)
-  const response = await fetch(url.toString(), { headers: getBearerHeaders() })
+  const params = new URLSearchParams({ parent_sample_id: parentSampleId })
+  const response = await fetch(`${API_BASE_URL()}/api/lims-analyses/promotions?${params}`, {
+    headers: getBearerHeaders(),
+  })
   if (!response.ok) {
     throw new Error(`listParentPromotions failed: ${response.status}`)
   }
@@ -5234,9 +5248,10 @@ export async function listParentPromotions(
 export async function listParentLineStates(
   parentSampleId: string
 ): Promise<{ states: Record<string, string> }> {
-  const url = new URL(`${API_BASE_URL()}/api/lims-analyses/parent-line-states`)
-  url.searchParams.set('parent_sample_id', parentSampleId)
-  const response = await fetch(url.toString(), { headers: getBearerHeaders() })
+  const params = new URLSearchParams({ parent_sample_id: parentSampleId })
+  const response = await fetch(`${API_BASE_URL()}/api/lims-analyses/parent-line-states?${params}`, {
+    headers: getBearerHeaders(),
+  })
   if (!response.ok) {
     throw new Error(`listParentLineStates failed: ${response.status}`)
   }
@@ -5524,6 +5539,77 @@ export async function patchVialAssignment(
     throw new ApiCodeError(message, code)
   }
   return response.json()
+}
+
+export interface LimsBox {
+  id: number
+  order_key: string
+  box_number: number
+  role: 'hplc' | 'endo' | 'ster' | 'xtra'
+  label_code: string
+  vial_count: number
+  printed_at: string | null
+  created_at: string | null
+  stored_at: string | null
+  vials?: {
+    sample_id: string
+    parent_sample_id: string | null
+    assignment_role: string | null
+    vial_sequence: number
+  }[]
+}
+
+export async function listOrderBoxes(orderKey: string): Promise<LimsBox[]> {
+  return apiFetch<LimsBox[]>(`/api/boxes?order_key=${encodeURIComponent(orderKey)}`)
+}
+
+export async function createBox(
+  orderKey: string,
+  role: 'hplc' | 'endo' | 'ster' | 'xtra',
+): Promise<LimsBox> {
+  return apiFetch<LimsBox>('/api/boxes', {
+    method: 'POST',
+    body: JSON.stringify({ order_key: orderKey, role }),
+  })
+}
+
+export async function assignVialsToBox(
+  boxId: number,
+  subSampleIds: string[],
+): Promise<LimsBox> {
+  return apiFetch<LimsBox>(`/api/boxes/${boxId}/assign`, {
+    method: 'POST',
+    body: JSON.stringify({ sub_sample_ids: subSampleIds }),
+  })
+}
+
+/** Clear box membership for the given vials (drag back out to the Unboxed
+ *  tray). Mirrors {@link assignVialsToBox}; backend responds `{ unassigned: N }`. */
+export async function unassignVialsFromBox(subSampleIds: string[]): Promise<void> {
+  await apiFetch<{ unassigned: number }>('/api/boxes/unassign', {
+    method: 'POST',
+    body: JSON.stringify({ sub_sample_ids: subSampleIds }),
+  })
+}
+
+export async function printBox(boxId: number): Promise<LimsBox> {
+  return apiFetch<LimsBox>(`/api/boxes/${boxId}/print`, { method: 'POST' })
+}
+
+/** Delete a box outright (mistake path): its vials return to Unboxed. */
+export async function deleteBox(boxId: number): Promise<void> {
+  await apiFetch<void>(`/api/boxes/${boxId}`, { method: 'DELETE' })
+}
+
+/** All boxes not yet closed out to storage, across all orders. */
+export async function listActiveBoxes(): Promise<LimsBox[]> {
+  return apiFetch<LimsBox[]>('/api/boxes/active')
+}
+
+/** Close out a box (end-of-life): vials return to Unboxed, box is stamped
+ *  stored and drops off active surfaces. Idempotent on the backend. */
+export async function closeBox(boxId: number): Promise<LimsBox> {
+  return apiFetch<LimsBox>(`/api/boxes/${boxId}/close`, { method: 'POST' })
 }
 
 /** Per-service variance counts the parent's order purchased. Empty when none
@@ -5927,4 +6013,133 @@ export async function getOrderedProducts(sampleId: string): Promise<OrderedProdu
     throw new OrderedProductsError(response.status, detail)
   }
   return response.json()
+}
+
+// ── Packaging photos (Mk1-native, stored in S3-gated PhotoStorage) ──────────
+
+export interface PackagingPhoto {
+  id: number
+  ordering: number
+  remarks: string | null
+  content_type: string | null
+  created_at: string
+  created_by_user_id: number | null
+}
+
+/**
+ * Create a packaging photo against a parent sample. Mirrors createSubSample's
+ * headers/base-URL/error handling.
+ */
+export async function createPackagingPhoto(args: {
+  parentSampleId: string
+  photoBase64: string
+  remarks?: string | null
+  filename?: string
+  contentType?: string
+}): Promise<PackagingPhoto> {
+  const response = await fetch(
+    `${API_BASE_URL()}/api/samples/${encodeURIComponent(args.parentSampleId)}/packaging-photos`,
+    {
+      method: 'POST',
+      headers: getBearerHeaders('application/json'),
+      body: JSON.stringify({
+        photo_base64: args.photoBase64,
+        remarks: args.remarks ?? null,
+        filename: args.filename ?? null,
+        content_type: args.contentType ?? null,
+      }),
+    }
+  )
+  if (!response.ok)
+    throw new Error(`createPackagingPhoto failed: ${response.status}`)
+  return response.json()
+}
+
+/**
+ * List a parent sample's packaging photos (ordered by `ordering`).
+ */
+export async function listPackagingPhotos(
+  parentSampleId: string
+): Promise<PackagingPhoto[]> {
+  const response = await fetch(
+    `${API_BASE_URL()}/api/samples/${encodeURIComponent(parentSampleId)}/packaging-photos`,
+    { headers: getBearerHeaders() }
+  )
+  if (!response.ok)
+    throw new Error(`listPackagingPhotos failed: ${response.status}`)
+  return response.json()
+}
+
+/**
+ * Resolve a renderable object URL for a packaging photo's raw bytes. The
+ * backend requires Bearer auth, so a plain `<img src=...>` would 401; we fetch
+ * as blob and wrap it in an object URL. Mirrors fetchSubSamplePhotoUrl.
+ * Returns null if the photo is missing (404). Cached per photoId.
+ */
+const _packagingPhotoCache = new Map<number, string>()
+
+export async function fetchPackagingPhotoUrl(
+  photoId: number
+): Promise<string | null> {
+  const cached = _packagingPhotoCache.get(photoId)
+  if (cached) return cached
+
+  const response = await fetch(
+    `${API_BASE_URL()}/api/packaging-photos/${photoId}`,
+    { headers: getBearerHeaders() }
+  )
+  if (response.status === 404) return null
+  if (!response.ok)
+    throw new Error(`fetchPackagingPhotoUrl failed: ${response.status}`)
+  const blob = await response.blob()
+  const url = URL.createObjectURL(blob)
+  _packagingPhotoCache.set(photoId, url)
+  return url
+}
+
+/**
+ * Drop a packaging photo's cached object URL so the next fetch hits the server.
+ * Call after the photo is replaced or removed.
+ */
+export function invalidatePackagingPhoto(photoId: number): void {
+  const prev = _packagingPhotoCache.get(photoId)
+  if (prev?.startsWith('blob:')) URL.revokeObjectURL(prev)
+  _packagingPhotoCache.delete(photoId)
+}
+
+/**
+ * Update a packaging photo (bytes and/or remarks). Mirrors updateSubSample.
+ */
+export async function updatePackagingPhoto(
+  photoId: number,
+  args: { photoBase64?: string; remarks?: string | null }
+): Promise<PackagingPhoto> {
+  const response = await fetch(
+    `${API_BASE_URL()}/api/packaging-photos/${photoId}`,
+    {
+      method: 'PATCH',
+      headers: getBearerHeaders('application/json'),
+      body: JSON.stringify({
+        photo_base64: args.photoBase64 ?? null,
+        remarks: args.remarks ?? null,
+      }),
+    }
+  )
+  if (!response.ok)
+    throw new Error(`updatePackagingPhoto failed: ${response.status}`)
+  if (args.photoBase64) invalidatePackagingPhoto(photoId)
+  return response.json()
+}
+
+/**
+ * Delete a packaging photo. Invalidates the local blob cache on success.
+ */
+export async function deletePackagingPhoto(photoId: number): Promise<void> {
+  const response = await fetch(
+    `${API_BASE_URL()}/api/packaging-photos/${photoId}`,
+    { method: 'DELETE', headers: getBearerHeaders() }
+  )
+  if (!response.ok && response.status !== 204)
+    throw new Error(`deletePackagingPhoto failed: ${response.status}`)
+  invalidatePackagingPhoto(photoId)
 }

@@ -39,7 +39,7 @@ from sqlalchemy.exc import IntegrityError
 
 from database import get_db, init_db
 from sla_engine import BusinessSchedule, compute_business_minutes, sla_status_dict
-from models import AuditLog, Settings, Job, Sample, Result, Instrument, AnalysisService, HplcMethod, Peptide, PeptideAnalyte, CalibrationCurve, HPLCAnalysis, User, SharePointFileCache, WizardSession, WizardMeasurement, peptide_methods, blend_components, ServiceGroup, service_group_members, SamplePriority, Worksheet, WorksheetItem, instrument_methods, SampleAnalyteAlias, SlaTier, SlaPriorityTier, BusinessHoursConfig, LabHoliday, LimsSample, LimsSubSample, FlagType
+from models import AuditLog, Settings, Job, Sample, Result, Instrument, AnalysisService, HplcMethod, Peptide, PeptideAnalyte, CalibrationCurve, HPLCAnalysis, User, SharePointFileCache, WizardSession, WizardMeasurement, peptide_methods, blend_components, ServiceGroup, service_group_members, SamplePriority, Worksheet, WorksheetItem, instrument_methods, SampleAnalyteAlias, SlaTier, SlaPriorityTier, BusinessHoursConfig, LabHoliday, LimsSample, LimsSubSample, LimsBox, FlagType
 from auth import (
     get_current_user, require_admin, create_access_token,
     verify_password, get_password_hash, seed_admin_user,
@@ -75,6 +75,9 @@ import sub_samples.service as sub_service
 from sub_samples.service import derive_base_demand
 from lims_analyses.routes import router as lims_analyses_router
 from families.routes import router as families_router  # Phase 5b
+from boxes.routes import router as boxes_router
+from boxes.service import box_label_code
+from packaging_photos.routes import router as packaging_photos_router
 from flags.routes import router as flags_router
 from slack_notify.routes import router as slack_prefs_router
 
@@ -403,6 +406,8 @@ file_watcher = FileWatcher()
 app.include_router(sub_samples_router)
 app.include_router(lims_analyses_router)
 app.include_router(families_router)
+app.include_router(boxes_router)
+app.include_router(packaging_photos_router)
 app.include_router(flags_router)
 app.include_router(slack_prefs_router)
 
@@ -1229,6 +1234,22 @@ async def get_sample_activity(
                     f"Worksheet analyst: {d.get('from_email') or '—'} → "
                     f"{d.get('to_email') or '—'}"
                 )
+            elif se.event == "box_assigned":
+                d = se.details or {}
+                label = f"Boxed: {d.get('box_label') or '?'}"
+            elif se.event == "box_moved":
+                d = se.details or {}
+                label = f"Box: {d.get('from_box_label') or '?'} → {d.get('to_box_label') or '?'}"
+            elif se.event == "box_removed":
+                d = se.details or {}
+                reason = d.get("reason")
+                bl = d.get("box_label") or "?"
+                if reason == "stored":
+                    label = f"Box stored: {bl}"
+                elif reason == "box_deleted":
+                    label = f"Removed from box {bl} (box deleted)"
+                else:
+                    label = f"Unboxed from {bl}"
             else:
                 label = se.event
 
@@ -1250,6 +1271,11 @@ async def get_sample_activity(
 
 
 # --- Settings Endpoints ---
+
+# Keys only admins may write/delete. The UI hides these toggles from
+# non-admins, but the gate must live server-side too.
+ADMIN_ONLY_SETTING_KEYS = {"checkin_multi_order_enabled"}
+
 
 @app.get("/settings", response_model=list[SettingResponse])
 async def get_settings(db: Session = Depends(get_db), _current_user=Depends(get_current_user)):
@@ -1274,9 +1300,11 @@ async def update_setting(
     key: str,
     data: SettingUpdate,
     db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
-    """Create or update a setting by key."""
+    """Create or update a setting by key. Admin-only keys require an admin caller."""
+    if key in ADMIN_ONLY_SETTING_KEYS and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="admin only")
     stmt = select(Settings).where(Settings.key == key)
     setting = db.execute(stmt).scalar_one_or_none()
 
@@ -1294,8 +1322,10 @@ async def update_setting(
 
 
 @app.delete("/settings/{key}")
-async def delete_setting(key: str, db: Session = Depends(get_db), _current_user=Depends(get_current_user)):
-    """Delete a setting by key."""
+async def delete_setting(key: str, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    """Delete a setting by key. Admin-only keys require an admin caller."""
+    if key in ADMIN_ONLY_SETTING_KEYS and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="admin only")
     stmt = select(Settings).where(Settings.key == key)
     setting = db.execute(stmt).scalar_one_or_none()
     if not setting:
@@ -15832,18 +15862,31 @@ async def list_worksheets(
         item_sample_ids = {it.sample_id for it in items if it.sample_id}
         sub_sample_pk_map: dict[str, int] = {}
         sub_kind_map: dict[str, Optional[str]] = {}
+        sub_box_id_map: dict[str, Optional[int]] = {}
         if item_sample_ids:
             sub_rows = db.execute(
                 select(
                     LimsSubSample.sample_id,
                     LimsSubSample.id,
                     LimsSubSample.assignment_kind,  # variance badge passthrough
+                    LimsSubSample.box_id,  # current physical box, if any
                 ).where(
                     LimsSubSample.sample_id.in_(item_sample_ids)
                 )
             ).all()
             sub_sample_pk_map = {r.sample_id: r.id for r in sub_rows}
             sub_kind_map = {r.sample_id: r.assignment_kind for r in sub_rows}
+            sub_box_id_map = {r.sample_id: r.box_id for r in sub_rows}
+
+        # Resolve current box labels for boxed vials so techs know which
+        # physical box to grab. None for parent-sample items / unboxed vials.
+        box_label_map: dict[int, str] = {}
+        boxed_ids = {b for b in sub_box_id_map.values() if b}
+        if boxed_ids:
+            box_rows = db.execute(
+                select(LimsBox).where(LimsBox.id.in_(boxed_ids))
+            ).scalars().all()
+            box_label_map = {b.id: box_label_code(b) for b in box_rows}
 
         def _resolve_method(it_instrument_uid: str | None, it_service_group_id: int | None) -> str | None:
             """Resolve HPLC method name from instrument + peptide (via service group)."""
@@ -15894,6 +15937,8 @@ async def list_worksheets(
                     # 'core' | 'variance' | None — None for parent-sample ids
                     # (no lims_sub_samples row), same join as lims_sub_sample_pk
                     "assignment_kind": sub_kind_map.get(it.sample_id),
+                    "box_id": sub_box_id_map.get(it.sample_id),
+                    "box_label": box_label_map.get(sub_box_id_map.get(it.sample_id)),
                     "analyses": json.loads(it.analyses_json) if it.analyses_json else (group_analyses_map.get(it.service_group_id, []) if it.service_group_id else []),
                     "prep_status": it.prep_status,
                 }

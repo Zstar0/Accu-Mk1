@@ -140,6 +140,7 @@ export function WorksheetDrawerItems({
           <div className="flex-1 min-w-[120px]">Peptide</div>
           <div className="w-[110px] shrink-0">Method</div>
           <div className="w-[120px] shrink-0">Instrument</div>
+          <div className="w-[80px] shrink-0">Box</div>
           <div className="w-[60px] shrink-0">SLA</div>
           <div className="w-[110px] shrink-0">Status</div>
           <div className="w-[80px] shrink-0 text-right">Actions</div>
@@ -344,6 +345,14 @@ function SortableItemRow({
             </SelectContent>
           </Select>
         )}
+      </div>
+
+      {/* Box — which physical box currently holds this vial; '—' for
+          parent-sample items / unboxed vials */}
+      <div className="w-[80px] shrink-0">
+        <span className={`text-xs font-mono truncate block ${item.box_label ? 'text-foreground' : 'text-muted-foreground'}`}>
+          {item.box_label ?? '—'}
+        </span>
       </div>
 
       {/* SLA */}

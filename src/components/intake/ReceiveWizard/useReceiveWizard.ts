@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import {
   listSubSamples,
   ensureParentSampleRow,
@@ -44,6 +45,7 @@ function bytesToBase64(bytes: Uint8Array): string {
 }
 
 export function useReceiveWizard(parent: ParentInfo) {
+  const qc = useQueryClient()
   const [vials, setVials] = useState<SessionVial[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -72,6 +74,17 @@ export function useReceiveWizard(parent: ParentInfo) {
 
   const isParentInPreReceivedState =
     PRE_RECEIVED_STATES.has(parent.status) && !parentReceivedThisSession
+
+  // Vial counts rendered OUTSIDE the wizard are react-query caches with a
+  // staleTime — the order session's rail/header (['order-rail-sub-count', id],
+  // which gates its "Complete Check-In" button) and the inbox row's VialCount
+  // (['sub-samples-count', id]). The wizard saves/deletes vials via direct API
+  // calls, so those caches must be invalidated here or they keep serving the
+  // pre-save count.
+  const invalidateVialCountCaches = useCallback(() => {
+    void qc.invalidateQueries({ queryKey: ['order-rail-sub-count', parent.sample_id] })
+    void qc.invalidateQueries({ queryKey: ['sub-samples-count', parent.sample_id] })
+  }, [qc, parent.sample_id])
 
   const refresh = useCallback(async () => {
     setLoading(true)
@@ -128,14 +141,16 @@ export function useReceiveWizard(parent: ParentInfo) {
       // "Single-vial check-in policy" section under Save semantics.
       //
       // CONTAINER families (container-parent design): the parent is a pure
-      // report depository and never a physical vial — the first photo still
-      // transitions the parent AR to received (bare: no photo/remarks on it),
-      // but the vial itself becomes S01 via the normal sub-sample path below.
+      // report depository and never a physical vial. Under deferred check-in
+      // the first vial does NOT transition the parent AR — the parent stays
+      // sample_due and is received later via the explicit "Complete Check-In"
+      // step. The vial itself becomes S01 via the normal sub-sample path below.
       if (isFirstVialEver) {
         if (isContainer) {
-          await receiveSenaiteSample(parent.uid, parent.sample_id, null, null)
-          setParentReceivedThisSession(true)
-          // fall through: this physical vial is S01, a real sub-sample
+          // Deferred check-in: the container parent stays sample_due here.
+          // The parent AR is received later via the explicit "Complete
+          // Check-In" step; this first physical vial still becomes S01 via
+          // the normal sub-sample path below.
         } else {
           await receiveSenaiteSample(
             parent.uid,
@@ -149,6 +164,7 @@ export function useReceiveWizard(parent: ParentInfo) {
           // photo-endpoint round-trip.
           seedSubSamplePhoto(parent.sample_id, photoBytes)
           setParentReceivedThisSession(true)
+          invalidateVialCountCaches()
           return { sampleId: parent.sample_id }
         }
       }
@@ -163,6 +179,7 @@ export function useReceiveWizard(parent: ParentInfo) {
       seedSubSamplePhoto(sub.sample_id, photoBytes)
       sessionSampleIdsRef.current.add(sub.sample_id)
       setVials(prev => [...prev, { sub, isThisSession: true }])
+      invalidateVialCountCaches()
       return { sampleId: sub.sample_id }
     },
     [
@@ -171,6 +188,7 @@ export function useReceiveWizard(parent: ParentInfo) {
       parent.uid,
       parent.sample_id,
       vials,
+      invalidateVialCountCaches,
     ],
   )
 
@@ -209,6 +227,7 @@ export function useReceiveWizard(parent: ParentInfo) {
           ...prev,
           ...result.created.map(sub => ({ sub, isThisSession: true })),
         ])
+        invalidateVialCountCaches()
       }
 
       // Run auto-assignment over the freshly created vials, then refresh so the
@@ -223,7 +242,7 @@ export function useReceiveWizard(parent: ParentInfo) {
 
       return { created: count }
     },
-    [isParentInPreReceivedState, parent.sample_id, vials, saveNewVial, refresh],
+    [isParentInPreReceivedState, parent.sample_id, vials, saveNewVial, refresh, invalidateVialCountCaches],
   )
 
   const editSessionVial = useCallback(
@@ -246,7 +265,8 @@ export function useReceiveWizard(parent: ParentInfo) {
     await deleteSubSample(sampleId)
     sessionSampleIdsRef.current.delete(sampleId)
     setVials(prev => prev.filter(v => v.sub.sample_id !== sampleId))
-  }, [])
+    invalidateVialCountCaches()
+  }, [invalidateVialCountCaches])
 
   const sessionVials = vials.filter(v => v.isThisSession).map(v => v.sub)
 

@@ -8,6 +8,7 @@ import {
   Timer,
   CalendarClock,
   Flag,
+  ClipboardCheck,
 } from 'lucide-react'
 import {
   Breadcrumb,
@@ -41,6 +42,7 @@ import { AdvancedPane } from './panes/AdvancedPane'
 import { SlaPane } from './panes/SlaPane'
 import { BusinessHoursPane } from './panes/BusinessHoursPane'
 import { FlagsPane } from './panes/FlagsPane'
+import { CheckInPane } from './panes/CheckInPane'
 
 type PreferencePane =
   | 'general'
@@ -49,6 +51,7 @@ type PreferencePane =
   | 'sla'
   | 'businessHours'
   | 'flags'
+  | 'checkIn'
   | 'advanced'
 
 const navigationItems = [
@@ -81,6 +84,11 @@ const navigationItems = [
     id: 'flags' as const,
     labelKey: 'preferences.flags',
     icon: Flag,
+  },
+  {
+    id: 'checkIn' as const,
+    labelKey: 'preferences.checkIn',
+    icon: ClipboardCheck,
   },
   {
     id: 'advanced' as const,
@@ -163,6 +171,7 @@ export function PreferencesDialog() {
               {activePane === 'sla' && <SlaPane />}
               {activePane === 'businessHours' && <BusinessHoursPane />}
               {activePane === 'flags' && <FlagsPane />}
+              {activePane === 'checkIn' && <CheckInPane />}
               {activePane === 'advanced' && <AdvancedPane />}
             </div>
           </main>
