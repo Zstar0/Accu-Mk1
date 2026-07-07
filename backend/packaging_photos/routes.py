@@ -36,12 +36,24 @@ def _decode_photo(photo_base64: str) -> bytes:
         raise HTTPException(status_code=400, detail=f"Invalid photo_base64: {e}")
 
 
+# Served Content-Type by stored-key extension. The client-supplied
+# content_type column is metadata only — serving it back would let a caller
+# store e.g. text/html and turn the download route into a stored-XSS surface.
+_EXT_MEDIA_TYPES = {
+    "jpg": "image/jpeg",
+    "jpeg": "image/jpeg",
+    "png": "image/png",
+    "gif": "image/gif",
+    "webp": "image/webp",
+}
+
+
 def _filename_from_bytes(photo_bytes: bytes) -> str:
     """Return a packaging filename whose extension matches the actual bytes.
 
-    The stored key's extension drives the served Content-Type, so it must stay
-    honest regardless of source. Sniff the leading magic bytes; fall back to
-    '.jpg'.
+    get_packaging_photo_bytes derives the served Content-Type from the stored
+    key's extension, so it must stay honest regardless of source. Sniff the
+    leading magic bytes; fall back to '.jpg'.
     """
     ext = ".jpg"
     if photo_bytes[:8] == b"\x89PNG\r\n\x1a\n":
@@ -103,12 +115,28 @@ def get_packaging_photo_bytes(
     db: Session = Depends(get_db),
     _user=Depends(get_current_user),
 ):
-    """Stream a packaging photo's raw bytes."""
+    """Stream a packaging photo's raw bytes.
+
+    The served Content-Type derives from the stored key's extension; the
+    client-supplied content_type on the row is never echoed back.
+    """
+    photo = service.get_packaging_photo(db, photo_id)
+    if photo is None:
+        raise HTTPException(status_code=404, detail=f"packaging photo {photo_id} not found")
     result = service.read_packaging_photo_bytes(db, photo_id)
     if result is None:
         raise HTTPException(status_code=404, detail=f"packaging photo {photo_id} not found")
-    raw, content_type = result
-    return Response(content=raw, media_type=content_type or "application/octet-stream")
+    raw, _ = result
+    basename = photo.storage_key.rsplit("/", 1)[-1]
+    ext = basename.rsplit(".", 1)[-1].lower() if "." in basename else ""
+    return Response(
+        content=raw,
+        media_type=_EXT_MEDIA_TYPES.get(ext, "application/octet-stream"),
+        headers={
+            "X-Content-Type-Options": "nosniff",
+            "Content-Disposition": f'inline; filename="{basename}"',
+        },
+    )
 
 
 @router.patch("/packaging-photos/{photo_id}", response_model=PackagingPhotoOut)

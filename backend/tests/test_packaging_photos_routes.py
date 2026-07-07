@@ -23,7 +23,8 @@ from sub_samples import photo_storage
 from sub_samples.photo_storage import FilesystemPhotoStorage, set_storage_for_tests
 
 
-# A one-pixel JPEG-magic payload; content-type is carried explicitly in the body.
+# A JPEG-magic payload; the served Content-Type derives from the stored key's
+# extension (sniffed from these bytes at create), NOT the body's content_type.
 _JPEG = b"\xff\xd8\xff\xe0hello-packaging"
 _B64 = base64.b64encode(_JPEG).decode()
 
@@ -104,12 +105,32 @@ def test_get_list_ordered(client, parent):
     assert [r["ordering"] for r in rows] == [0, 1, 2]
 
 
-def test_get_bytes_returns_content_type(client, parent):
+def test_get_bytes_returns_derived_content_type(client, parent):
     pid = _create(client).json()["id"]
     resp = client.get(f"/api/packaging-photos/{pid}")
     assert resp.status_code == 200
+    # image/jpeg because the stored key ends .jpg (sniffed from the bytes),
+    # not because the create body said so.
     assert resp.headers["content-type"] == "image/jpeg"
+    assert resp.headers["x-content-type-options"] == "nosniff"
+    assert resp.headers["content-disposition"].startswith('inline; filename="')
     assert resp.content == _JPEG
+
+
+def test_get_bytes_ignores_client_content_type(client, parent):
+    # A lying content_type (stored-XSS attempt) must not be echoed back; the
+    # served type comes from the stored key's extension (.png via byte sniff).
+    png = b"\x89PNG\r\n\x1a\n" + b"not-really-a-png-but-magic-says-so"
+    resp = client.post(
+        "/api/samples/P-0800/packaging-photos",
+        json={"photo_base64": base64.b64encode(png).decode(), "content_type": "text/html"},
+    )
+    assert resp.status_code == 201
+    pid = resp.json()["id"]
+    r = client.get(f"/api/packaging-photos/{pid}")
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "image/png"
+    assert r.headers["x-content-type-options"] == "nosniff"
 
 
 def test_patch_updates_remarks(client, parent):
