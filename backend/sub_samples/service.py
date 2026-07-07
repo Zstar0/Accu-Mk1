@@ -86,6 +86,24 @@ def _populate_basic_info(row: LimsSample, meta: dict) -> None:
     row.date_received = _parse_senaite_date(meta.get("DateReceived"))
     row.date_sampled = _parse_senaite_date(meta.get("DateSampled"))
     row.status = meta.get("review_state")
+    # Full sample record (dual-write slice 1). Getter-index keys first where
+    # the live complete=true payload verified them (2026-07-06); bare-key
+    # fallbacks keep old test fixtures and sparse payloads working.
+    row.client_title = meta.get("getClientTitle") or meta.get("ClientTitle")
+    row.contact_title = meta.get("ContactFullName") or meta.get("getContactFullName")
+    row.contact_email = meta.get("ContactEmail") or meta.get("getContactEmail")
+    row.sample_type_title = meta.get("getSampleTypeTitle") or meta.get("SampleTypeTitle")
+    row.date_created = _parse_senaite_date(meta.get("created"))
+    row.verification_code = meta.get("VerificationCode") or meta.get("getVerificationCode")
+    row.client_order_number = meta.get("ClientOrderNumber") or meta.get("getClientOrderNumber")
+    slots = _parse_analyte_slots(meta)
+    row.analytes = json.dumps(slots) if slots else None
+    dtq = meta.get("DeclaredTotalQuantity")
+    row.declared_total_quantity = str(dtq) if dtq not in (None, "") else None
+    row.client_lot = meta.get("ClientLot")
+    row.client_reference = meta.get("ClientReference")
+    row.company_logo_url = meta.get("CompanyLogoUrl")
+    row.coa_meta = json.dumps({k: meta.get(k) for k in _COA_META_FIELDS})
     row.last_synced_at = datetime.utcnow()
 
 
@@ -131,6 +149,25 @@ def _extract_label(value):
     if isinstance(value, dict):
         return value.get("title") or value.get("Title") or value.get("uid")
     return value
+
+
+_COA_META_FIELDS = ("CoaAddress", "CoaCompanyName", "CoaEmail", "CoaWebsite")
+
+
+def _parse_analyte_slots(meta: dict) -> list[dict]:
+    """Analyte slots 1-8 as ordered {name, declared_quantity} pairs; empty
+    slots omitted. IS writes up to 8 slots; the Mk1 UI shows 4."""
+    slots: list[dict] = []
+    for i in range(1, 9):
+        name = _extract_label(meta.get(f"Analyte{i}Peptide"))
+        if not name or not str(name).strip():
+            continue
+        qty = meta.get(f"Analyte{i}DeclaredQuantity")
+        slots.append({
+            "name": str(name).strip(),
+            "declared_quantity": str(qty) if qty not in (None, "") else None,
+        })
+    return slots
 
 
 def _parse_senaite_date(value) -> Optional[datetime]:
