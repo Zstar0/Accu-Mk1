@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import {
   Loader2,
@@ -36,7 +36,6 @@ import {
   getSenaiteStatus,
   getSetting,
   listSubSamples,
-  type ExplorerOrder,
   type SenaiteSample,
 } from '@/lib/api'
 import {
@@ -45,9 +44,6 @@ import {
   type EnrichedOrderGroup,
   type OrderGroup,
 } from '@/lib/inbox-orders'
-import type { OrderSlaVerdict } from '@/lib/sla-resolution'
-import { useOrderSlaStatuses } from '@/services/order-sla'
-import { useSenaiteLookupMap } from '@/services/senaite-lookup-map'
 import { OrderListRow } from '@/components/intake/OrderListRow'
 import { getOrderEmail } from '@/components/explorer/helpers'
 import { OrderReceiveSession } from '@/components/intake/OrderReceiveSession'
@@ -269,8 +265,7 @@ export function ReceiveSample() {
   const orderGroups = groupSamplesByOrder(filteredSamples)
 
   // Join the due-sample order groups to their ExplorerOrder for the By-Order
-  // table (email, Created, customer deep-link). SLA verdicts are wired in a
-  // follow-on task; OrderListRow renders the SLA cell in its awaiting state.
+  // table (email, Created, customer deep-link).
   const { data: explorerOrders } = useQuery({
     queryKey: ['explorer', 'orders', 'receive'],
     queryFn: () => getExplorerOrders(undefined, 200, 0),
@@ -291,30 +286,6 @@ export function ReceiveSample() {
             .includes(orderQuery),
       )
     : enriched
-
-  // Page-level SLA verdicts for the By-Order table — mirror OrderStatusPage:
-  // feed the matched ExplorerOrders to useSenaiteLookupMap (per-sample SENAITE
-  // lookups) and useOrderSlaStatuses (one /sla/status batch), then select a
-  // per-order verdict by order_id. Due-receive samples have no date_received
-  // yet, so the SLA clock hasn't started and most resolve to "awaiting" — the
-  // same not-started verdict Order Status shows for them.
-  const slaOrders = useMemo(
-    () =>
-      enriched
-        .map(g => g.order)
-        .filter((o): o is ExplorerOrder => o != null),
-    [enriched]
-  )
-  const { sampleLookupMap } = useSenaiteLookupMap(slaOrders)
-  const orderSla = useOrderSlaStatuses(slaOrders, sampleLookupMap)
-
-  const verdictFor = useCallback(
-    (group: EnrichedOrderGroup): OrderSlaVerdict | undefined =>
-      group.order
-        ? orderSla.verdictByOrderId.get(group.order.order_id)
-        : undefined,
-    [orderSla.verdictByOrderId]
-  )
 
   const toggleKey = useCallback((orderKey: string) => {
     setSelectedKeys(prev => {
@@ -522,7 +493,6 @@ export function ReceiveSample() {
                         <TableHead className="w-36">Order #</TableHead>
                         <TableHead>Client / Email</TableHead>
                         <TableHead className="w-36">Created</TableHead>
-                        <TableHead className="w-32">SLA</TableHead>
                         <TableHead className="w-24" />
                       </TableRow>
                     </TableHeader>
@@ -531,7 +501,6 @@ export function ReceiveSample() {
                         <OrderListRow
                           key={group.orderKey ?? '__none__'}
                           group={group}
-                          slaVerdict={verdictFor(group)}
                           selectable={multiOrderEnabled}
                           selected={
                             group.orderKey != null &&
@@ -544,7 +513,7 @@ export function ReceiveSample() {
                       {visibleOrders.length === 0 && (
                         <TableRow>
                           <TableCell
-                            colSpan={6}
+                            colSpan={5}
                             className="py-8 text-center text-sm text-muted-foreground"
                           >
                             No orders match “{orderSearch}”
