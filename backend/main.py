@@ -1272,6 +1272,11 @@ async def get_sample_activity(
 
 # --- Settings Endpoints ---
 
+# Keys only admins may write/delete. The UI hides these toggles from
+# non-admins, but the gate must live server-side too.
+ADMIN_ONLY_SETTING_KEYS = {"checkin_multi_order_enabled"}
+
+
 @app.get("/settings", response_model=list[SettingResponse])
 async def get_settings(db: Session = Depends(get_db), _current_user=Depends(get_current_user)):
     """Get all settings."""
@@ -1295,9 +1300,11 @@ async def update_setting(
     key: str,
     data: SettingUpdate,
     db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
-    """Create or update a setting by key."""
+    """Create or update a setting by key. Admin-only keys require an admin caller."""
+    if key in ADMIN_ONLY_SETTING_KEYS and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="admin only")
     stmt = select(Settings).where(Settings.key == key)
     setting = db.execute(stmt).scalar_one_or_none()
 
@@ -1315,8 +1322,10 @@ async def update_setting(
 
 
 @app.delete("/settings/{key}")
-async def delete_setting(key: str, db: Session = Depends(get_db), _current_user=Depends(get_current_user)):
-    """Delete a setting by key."""
+async def delete_setting(key: str, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    """Delete a setting by key. Admin-only keys require an admin caller."""
+    if key in ADMIN_ONLY_SETTING_KEYS and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="admin only")
     stmt = select(Settings).where(Settings.key == key)
     setting = db.execute(stmt).scalar_one_or_none()
     if not setting:
