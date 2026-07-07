@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  DndContext, DragOverlay, PointerSensor, useSensor, useSensors, useDroppable, useDraggable,
-  type DragEndEvent, type DragStartEvent, type Modifier,
+  DndContext, DragOverlay, KeyboardSensor, PointerSensor, useSensor, useSensors,
+  useDroppable, useDraggable,
+  type DragEndEvent, type DragStartEvent, type KeyboardCoordinateGetter, type Modifier,
 } from '@dnd-kit/core'
 import { Printer, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
@@ -32,6 +33,47 @@ const snapCenterToCursor: Modifier = ({ activatorEvent, draggingNodeRect, transf
     }
   }
   return transform
+}
+
+const ARROW_CODES = new Set(['ArrowRight', 'ArrowLeft', 'ArrowUp', 'ArrowDown'])
+
+// Keyboard path for the vial→box move: arrow keys jump the lifted chip between
+// enabled drop targets (box cards + the Unboxed tray) instead of dnd-kit's
+// default 25px-per-keypress nudging, which is unusable across column-spread
+// targets. Enter/Space on a focused chip lifts it, arrows pick the nearest
+// target in that direction, Enter drops, Esc cancels. Exported for testing.
+export const boxKeyboardCoordinates: KeyboardCoordinateGetter = (
+  event,
+  { context: { droppableRects, droppableContainers, collisionRect } },
+) => {
+  if (!ARROW_CODES.has(event.code) || !collisionRect) return undefined
+  event.preventDefault()
+  const cx = collisionRect.left + collisionRect.width / 2
+  const cy = collisionRect.top + collisionRect.height / 2
+  let best: { x: number; y: number } | undefined
+  let bestDist = Infinity
+  for (const container of droppableContainers.getEnabled()) {
+    const rect = droppableRects.get(container.id)
+    if (!rect) continue
+    const dx = rect.left + rect.width / 2 - cx
+    const dy = rect.top + rect.height / 2 - cy
+    const inDirection =
+      event.code === 'ArrowRight' ? dx > 1 :
+      event.code === 'ArrowLeft' ? dx < -1 :
+      event.code === 'ArrowDown' ? dy > 1 : dy < -1
+    if (!inDirection) continue
+    const dist = dx * dx + dy * dy
+    if (dist < bestDist) {
+      bestDist = dist
+      // Coordinates are the lifted rect's new top-left: center the chip over
+      // the target so collision detection resolves to exactly this droppable.
+      best = {
+        x: rect.left + (rect.width - collisionRect.width) / 2,
+        y: rect.top + (rect.height - collisionRect.height) / 2,
+      }
+    }
+  }
+  return best
 }
 
 type BoxRole = 'hplc' | 'endo' | 'ster' | 'xtra'
@@ -67,7 +109,10 @@ interface Props {
 
 export function BoxStep({ orderKey, orderLabel, sampleIds }: Props) {
   const qc = useQueryClient()
-  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }))
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: boxKeyboardCoordinates }),
+  )
   const { printNode } = usePrintLabel()
 
   // Capacity is frontend-only (ephemeral) — local per-box state driving the

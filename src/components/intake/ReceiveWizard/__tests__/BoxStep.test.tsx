@@ -17,6 +17,7 @@ vi.mock('@dnd-kit/core', () => ({
   },
   DragOverlay: ({ children }: { children: ReactNode }) => <div>{children}</div>,
   PointerSensor: class {},
+  KeyboardSensor: class {},
   useSensor: () => ({}),
   useSensors: () => [],
   useDroppable: () => ({ setNodeRef: () => {}, isOver: false }),
@@ -45,7 +46,7 @@ vi.mock('@/lib/api', () => ({
   listSubSamples: vi.fn(),
 }))
 
-import { BoxStep } from '@/components/intake/ReceiveWizard/BoxStep'
+import { BoxStep, boxKeyboardCoordinates } from '@/components/intake/ReceiveWizard/BoxStep'
 
 const mockListOrderBoxes = vi.mocked(listOrderBoxes)
 const mockCreateBox = vi.mocked(createBox)
@@ -277,6 +278,55 @@ describe('BoxStep — capacity-driven boxing', () => {
 
     expect(mockAssignVialsToBox).toHaveBeenCalledWith(7, ['P-101'])
     expect(mockUnassignVialsFromBox).not.toHaveBeenCalled()
+  })
+
+  describe('boxKeyboardCoordinates — arrows jump the lifted chip between drop targets', () => {
+    const rect = (left: number, top: number, width = 120, height = 80) =>
+      ({ left, top, width, height, right: left + width, bottom: top + height })
+
+    // A lifted chip is small relative to the box-card droppables.
+    const chip = rect(0, 0, 40, 16)
+
+    const call = (code: string, rects: Record<string, ReturnType<typeof rect>>) =>
+      boxKeyboardCoordinates(
+        new KeyboardEvent('keydown', { code, cancelable: true }),
+        {
+          active: 'P-101',
+          currentCoordinates: { x: chip.left, y: chip.top },
+          context: {
+            droppableRects: new Map(Object.entries(rects)),
+            droppableContainers: {
+              getEnabled: () => Object.keys(rects).map(id => ({ id })),
+            },
+            collisionRect: chip,
+          },
+        } as unknown as Parameters<typeof boxKeyboardCoordinates>[1],
+      )
+
+    it('centers the chip over the nearest target in the pressed direction', () => {
+      const coords = call('ArrowRight', {
+        unboxed: rect(-300, 0), // behind the chip — must be ignored
+        near: rect(200, 0),
+        far: rect(500, 0),
+      })
+      expect(coords).toEqual({ x: 200 + (120 - 40) / 2, y: (80 - 16) / 2 })
+    })
+
+    it('returns nothing when no target lies in the pressed direction', () => {
+      expect(call('ArrowLeft', { box7: rect(200, 0) })).toBeUndefined()
+    })
+
+    it('ignores non-arrow keys (Enter/Esc stay dnd-kit\'s drop/cancel)', () => {
+      expect(call('Enter', { box7: rect(200, 0) })).toBeUndefined()
+    })
+
+    it('moves vertically within a column', () => {
+      const coords = call('ArrowDown', {
+        above: rect(0, -200),
+        below: rect(0, 150),
+      })
+      expect(coords).toEqual({ x: (120 - 40) / 2, y: 150 + (80 - 16) / 2 })
+    })
   })
 
   it('"Print box labels" prints one job covering only the vialed boxes', async () => {
