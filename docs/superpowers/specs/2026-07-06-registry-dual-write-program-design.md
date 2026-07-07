@@ -32,7 +32,7 @@ Later horizons, explicitly not in this program: status/workflow ownership (arriv
 
 1. **Dual-write, migrating reads.** SENAITE keeps being written; no freeze, no bidirectional sync.
 2. **Status: mirror SENAITE states to start**; vocabulary/ownership evolve later to fit lab workflows.
-3. **Native IDs are internal-only and forward-only.** Customers keep seeing `P-xxxx` until a line is SENAITE-free. No retro-mint (nullable column; a later one-time script may retro-mint if ISO coverage ever wants it).
+3. **Native IDs mirror the SENAITE id's number and are retro-minted at backfill.** *(Revised 2026-07-07, supersedes the original internal-only/forward-only/no-retro-mint decision.)* `PB-0216` → `aPB-0216` (whole-id mirror, retests included), so existing samples carry a native id that lines up with what staff already know instead of a blind counter value. The prod backfill mints one for **every** row (nothing stays `native_id=∅`). A per-prefix counter exists **only** for SENAITE-free lines (which have no SENAITE number to mirror), seeded past each prefix's max SENAITE number after backfill (collision strategy (a); `native_id` `UNIQUE` is the backstop). SENAITE id stays stored (`external_lims_uid`) as the durable cross-ref in case it diverges. Still **internal-only** — customers keep seeing the SENAITE id until a line is SENAITE-free.
 4. **Creation signal fires after SENAITE AR creation**, carrying both ids in one call. Rationale: `sample_id` is the registry's natural key; minting rows before SENAITE assigns `P-xxxx` and re-keying seconds later buys nothing. The endpoint accepts a missing SENAITE id so future SENAITE-free lines use the same contract with `sample_id = native_id`.
 5. **`Coa*` custom fields land as one JSON map (`coa_meta`)**, not individual columns — COABuilder consumes the map in Slice 4; no schema churn per field.
 6. **Corrections strategy** (Slice 3, recorded now): Mk1 edit + audit; SENAITE write-through best-effort; SENAITE refusal = logged drift flag, never a blocker. The force-script era ends because nothing user-facing reads the refused copy.
@@ -70,12 +70,16 @@ Later horizons, explicitly not in this program: status/workflow ownership (arriv
 | `coa_meta` | Text (JSON) | all `Coa*` custom fields, verbatim map | enumerate exact field names from a live payload at plan time |
 | `native_id` | String(20), unique, nullable | minted by Mk1 | internal-only; see minting |
 
-### Native-ID minting
+### Native-ID minting (revised 2026-07-07 — mirror-the-SENAITE-number)
 
-- New table **`lims_native_id_sequences`** (`prefix` String PK, `next_value` Integer) — `lims_` prefix per house rule.
-- Allocation under `SELECT … FOR UPDATE` on the prefix row (same idiom as vial-sequence assignment); format `a{PREFIX}-{NNNN}` zero-padded to 4, growing naturally past 9999.
-- **Prefix derivation:** from the SENAITE id's own prefix at signal time (`P-1234` → `aP`, `PB-` → `aPB`, `BW-` → `aBW`) — zero configuration for the SENAITE-attached world. A sample-type→prefix map becomes necessary only for SENAITE-free lines (1F concern; the map slots in without schema change).
-- Minted exactly once per row (idempotent signal never re-mints); never reused; never exposed customer-facing in this program.
+> **Delta from slice 1 (dormant, so cheap to change now):** shipped `mint_native_id` uses a blind per-prefix counter for *every* mint, and the backfill leaves historical rows `native_id=∅`. This revision replaces the counter-for-linked path with SENAITE-number mirroring and makes the backfill retro-mint. None of it is in prod (nothing minted), so revising before the prod backfill costs nothing; after the backfill it would mean re-minting.
+
+- **SENAITE-linked samples (the overwhelming majority) → mirror the number.** `native_id = "a" + <full SENAITE id>`: `PB-0216` → `aPB-0216`, retests included (`PB-0216-R01` → `aPB-0216-R01`). Deterministic, no counter draw, and unique because SENAITE ids are unique. (`-S\d+` secondaries are sub-samples, not parents — excluded from minting entirely, as today.)
+- **SENAITE-free samples (future 1F native lines) → counter.** New table **`lims_native_id_sequences`** (`prefix` String PK, `next_value` Integer, `lims_` house prefix). Allocation under `SELECT … FOR UPDATE` on the prefix row (vial-sequence idiom); format `a{PREFIX}-{NNNN}` zero-padded to 4, growing past 9999. Prefix from a sample-type→prefix map (these lines have no SENAITE id to derive from).
+- **Retro-mint at backfill.** The prod backfill mints `native_id` for **every** row it touches (mirror-derived), so the whole back-catalog lines up (`aPB-0216`) and nothing stays `∅`.
+- **Collision strategy (a) — seed the counter past SENAITE.** After the backfill, seed each prefix's `next_value` to `max(mirrored SENAITE number for that prefix) + 1`. Safe because during the dual-write transition a given prefix has exactly **one** issuer: SENAITE issues the existing prefixes (P/PB/BW, always mirrored); the counter issues only the *new* native-only prefixes SENAITE never touches. The seed only becomes load-bearing at full SENAITE retirement, when the counter takes over the old prefixes. `native_id`'s `UNIQUE` constraint is the backstop — any accidental overlap raises IntegrityError (loud), never a silent duplicate; the counter path retries-and-bumps on conflict.
+- **SENAITE id stays the cross-ref** (`external_lims_uid` + `sample_id`) so if SENAITE ever reissues/diverges, `native_id` remains the stable anchor.
+- Minted **once per row**; never re-minted (idempotent signal/backfill leave an existing `native_id` untouched); never reused; internal-only in this program.
 
 ## The IS → Mk1 creation signal
 
@@ -85,7 +89,7 @@ Later horizons, explicitly not in this program: status/workflow ownership (arriv
 
 **Payload (per sample):** order number; client block (title, uid — title derived from the WP order's customer email, same transform as SENAITE client resolution); contact block (full name from WP billing, email, uid); SENAITE sample id + uid; sample type uid; client sample id; dates (created = signal time; sampled from order; received null at creation); analyte slots 1–8 (name + declared quantity); declared total; lot; reference; `Coa*` map; company logo url; verification code. *(Amended 2026-07-07 post-build: the client id-slug and sample-type TITLE are not cleanly in IS scope — they are reconcile-filled from SENAITE on first family view / re-sweep; Slice 2 must treat them as nullable.)*
 
-**Mk1 behavior:** upsert keyed on `sample_id` — create (mint `native_id`, apply the `container_mode` first-touch gate exactly as `_create_sample_row` does today — at creation time the state is pre-received, so new rows are container families, consistent with the wizard) or update (fill/refresh fields; `native_id` untouched). Returns the row's ids.
+**Mk1 behavior:** upsert keyed on `sample_id` — create (mint `native_id` — mirror-derived from the SENAITE id, see Native-ID minting — apply the `container_mode` first-touch gate exactly as `_create_sample_row` does today — at creation time the state is pre-received, so new rows are container families, consistent with the wizard) or update (fill/refresh fields; `native_id` untouched). Returns the row's ids.
 
 **Failure handling:** the signal is best-effort from IS's perspective — a failed call logs + does **not** fail order processing; the sample is caught later by the existing lazy first-touch / reconcile / backfill machinery (which after this slice writes the identical full field set). Signal retries are safe (idempotent upsert).
 
@@ -105,7 +109,7 @@ Every Mk1 code path that currently updates sample fields in SENAITE (the sample-
 
 ## Backfill re-sweep
 
-The existing script gains nothing structurally: `_populate_basic_info`'s extension means a re-run (delete checkpoint first) fills all new columns across history — the rehearsed `created 0, updated N` gap-fill. `native_id` stays NULL for historical rows (forward-only decision). One full off-hours sweep after deploy.
+The existing script gains nothing structurally for the columns: `_populate_basic_info`'s extension means a re-run (delete checkpoint first) fills all new columns across history — the rehearsed `created 0, updated N` gap-fill. **New in the 2026-07-07 revision:** the backfill also **mints `native_id` for every row** (mirror-derived from the SENAITE id — see Native-ID minting), then **seeds each prefix counter** to `max(SENAITE number) + 1`. One full off-hours sweep after deploy.
 
 ## ISO 17025 alignment
 
