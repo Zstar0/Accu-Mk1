@@ -673,6 +673,7 @@ export function ReceiveSample() {
       {selectedOrders && selectedOrders.length > 0 && (
         <OrderReceiveSession
           orders={selectedOrders}
+          initialPhase="packaging"
           onClose={() => {
             setSelectedOrders(null)
             void loadDueSamples()
