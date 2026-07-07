@@ -161,6 +161,26 @@ describe('ActiveBoxesPage', () => {
     expect(screen.queryByTestId('session')).toBeNull()
   })
 
+  it('a failed sample fetch toasts once, and a later reopen retries cleanly', async () => {
+    mockList.mockResolvedValue([box])
+    // First click fails; the cached error must not poison the second click.
+    mockSamples.mockRejectedValueOnce(new Error('boom'))
+    mockSamples.mockResolvedValue({ items: [orderSample], total: 1, b_start: 0 })
+    renderPage()
+
+    fireEvent.click(await screen.findByRole('button', { name: 'BOX-3267-1' }))
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith('Failed to load samples for WP-3267'),
+    )
+    expect(screen.queryByTestId('session')).toBeNull()
+
+    // Reopen: a fresh fetch runs (no insta-fail off the cached error) and the
+    // session opens.
+    fireEvent.click(screen.getByRole('button', { name: 'BOX-3267-1' }))
+    expect(await screen.findByTestId('session')).toHaveTextContent('WP-3267')
+    expect(toast.error).toHaveBeenCalledTimes(1)
+  })
+
   it('expand chevron reveals the vials inside the box', async () => {
     mockList.mockResolvedValue([box])
     renderPage()

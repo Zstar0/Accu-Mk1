@@ -101,11 +101,16 @@ export function ActiveBoxesPage() {
     toast.error(`No order session available for ${sessionOrderKey}`)
     setSessionOrderKey(null)
   }, [sessionOrderKey, sessionQ.data, sessionGroup])
+  // Gate on !isFetching so a reopen against a cached error waits for its
+  // retry instead of insta-failing, and drop the errored cache entry when
+  // closing so the next label click starts a clean fetch (not a replay of
+  // the stale error until gcTime).
   useEffect(() => {
-    if (!sessionOrderKey || !sessionQ.isError) return
+    if (!sessionOrderKey || !sessionQ.isError || sessionQ.isFetching) return
     toast.error(`Failed to load samples for ${sessionOrderKey}`)
     setSessionOrderKey(null)
-  }, [sessionOrderKey, sessionQ.isError])
+    qc.removeQueries({ queryKey: ['boxes-session-samples', sessionOrderKey] })
+  }, [sessionOrderKey, sessionQ.isError, sessionQ.isFetching, qc])
   const closeM = useMutation({
     mutationFn: (boxId: number) => closeBox(boxId),
     onSuccess: async closed => {
