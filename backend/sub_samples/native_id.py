@@ -17,10 +17,11 @@ lock as a no-op.
 -S\\d+ secondaries are sub-samples, not parents -- never minted (callers
 exclude them upstream).
 """
+import re
 from typing import Optional
 from sqlalchemy import select
 from sqlalchemy.orm import Session
-from models import LimsNativeIdSequence
+from models import LimsNativeIdSequence, LimsSample
 
 _SAMPLE_TYPE_PREFIXES = {
     "peptide": "aP",
@@ -29,6 +30,10 @@ _SAMPLE_TYPE_PREFIXES = {
 }
 _GENERIC_PREFIX = "aS"
 _PAD = 4
+
+# native_id -> (prefix, base number); the -R\d+ retest suffix is intentionally
+# not captured so aPB-0216-R01 seeds from 216, not a parse failure.
+_MIRRORED_NUM = re.compile(r"^(a[A-Za-z]+)-(\d+)")
 
 
 def mint_native_id(db: Session,
@@ -65,3 +70,44 @@ def mint_native_id(db: Session,
     seq.next_value = value + 1
     db.flush()
     return f"{prefix}-{value:0{_PAD}d}"
+
+
+def seed_native_id_counters(db: Session) -> int:
+    """Collision strategy (a): after a COMPLETE retro-mint sweep, seed each
+    prefix's counter to max(native number) + 1, so the SENAITE-free counter
+    cannot collide with an existing mirrored id once it takes over a prefix at
+    SENAITE retirement.
+
+    Idempotent / re-run-safe: never regresses an already-advanced counter.
+    Computes maxima from a DB aggregate over lims_samples (not a run's
+    in-memory stats), so a --limit / resumed sweep can never seed from partial
+    data. The -R\\d+ retest suffix is stripped before parsing the number.
+    Returns the number of prefixes seeded or advanced.
+    """
+    maxes: dict[str, int] = {}
+    for nid in db.execute(
+        select(LimsSample.native_id).where(LimsSample.native_id.is_not(None))
+    ).scalars():
+        m = _MIRRORED_NUM.match(nid)
+        if not m:
+            continue
+        prefix, num = m.group(1), int(m.group(2))
+        if num > maxes.get(prefix, 0):
+            maxes[prefix] = num
+
+    seeded = 0
+    for prefix, mx in maxes.items():
+        target = mx + 1
+        seq = db.execute(
+            select(LimsNativeIdSequence)
+            .where(LimsNativeIdSequence.prefix == prefix)
+            .with_for_update()
+        ).scalar_one_or_none()
+        if seq is None:
+            db.add(LimsNativeIdSequence(prefix=prefix, next_value=target))
+            seeded += 1
+        elif seq.next_value < target:
+            seq.next_value = target
+            seeded += 1
+    db.flush()
+    return seeded

@@ -65,3 +65,63 @@ def test_senaite_free_counter_grows_past_9999(db):
 def test_requires_some_identity_source(db):
     with pytest.raises(ValueError):
         mint_native_id(db)
+
+
+from sub_samples.native_id import seed_native_id_counters
+from models import LimsSample
+
+
+def _sample(sid, nid):
+    return LimsSample(sample_id=sid, native_id=nid)
+
+
+def test_seed_sets_counter_past_max_per_prefix(db):
+    db.add_all([_sample("P-0007", "aP-0007"), _sample("P-0003", "aP-0003"),
+                _sample("PB-0100", "aPB-0100")])
+    db.commit()
+    seed_native_id_counters(db)
+    db.commit()
+    assert db.get(LimsNativeIdSequence, "aP").next_value == 8
+    assert db.get(LimsNativeIdSequence, "aPB").next_value == 101
+
+
+def test_seed_strips_retest_suffix_before_parsing(db):
+    db.add_all([_sample("PB-0216-R01", "aPB-0216-R01"), _sample("PB-0100", "aPB-0100")])
+    db.commit()
+    seed_native_id_counters(db)
+    db.commit()
+    # base number 216 (retest suffix ignored) wins over 100
+    assert db.get(LimsNativeIdSequence, "aPB").next_value == 217
+
+
+def test_seed_never_regresses_an_advanced_counter(db):
+    db.add(_sample("P-0002", "aP-0002"))
+    db.add(LimsNativeIdSequence(prefix="aP", next_value=500))
+    db.commit()
+    seed_native_id_counters(db)
+    db.commit()
+    assert db.get(LimsNativeIdSequence, "aP").next_value == 500  # not regressed to 3
+
+
+def test_seed_is_rerun_safe(db):
+    db.add(_sample("P-0007", "aP-0007"))
+    db.commit()
+    seed_native_id_counters(db)
+    db.commit()
+    seed_native_id_counters(db)
+    db.commit()
+    assert db.get(LimsNativeIdSequence, "aP").next_value == 8  # stable across runs
+
+
+def test_seed_ignores_rows_without_native_id(db):
+    db.add_all([_sample("P-0007", "aP-0007"), LimsSample(sample_id="P-9999")])
+    db.commit()
+    seed_native_id_counters(db)
+    db.commit()
+    assert db.get(LimsNativeIdSequence, "aP").next_value == 8
+
+
+def test_seed_returns_prefix_count(db):
+    db.add_all([_sample("P-0007", "aP-0007"), _sample("PB-0100", "aPB-0100")])
+    db.commit()
+    assert seed_native_id_counters(db) == 2
