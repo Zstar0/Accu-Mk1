@@ -115,14 +115,18 @@ def update_packaging_photo(
 ) -> Optional[LimsPackagingPhoto]:
     """Update a packaging photo's remarks and/or bytes; None if missing.
 
-    When photo_bytes is given: save the new file, swap storage_key, then delete
-    the old key. remarks is only written when provided (None leaves it alone).
+    When photo_bytes is given: save the new file, swap storage_key, commit,
+    and only then delete the old key — deleting before the commit would lose
+    both copies if the commit fails (same order as delete_packaging_photo).
+    remarks is only written when provided (None leaves it alone).
     """
     photo = db.get(LimsPackagingPhoto, photo_id)
     if photo is None:
         return None
     if remarks is not None:
         photo.remarks = remarks
+    old_key = None
+    new_key = None
     if photo_bytes is not None:
         parent = db.get(LimsSample, photo.parent_sample_pk)
         parent_sample_id = parent.sample_id if parent else str(photo.parent_sample_pk)
@@ -134,10 +138,10 @@ def update_packaging_photo(
             parent_sample_id, photo_bytes, photo.filename or "packaging.jpg"
         )
         photo.storage_key = f"{_PREFIX}{new_key}"
-        if old_key and old_key != new_key:
-            _delete_stored_photo_quietly(old_key)
     db.commit()
     db.refresh(photo)
+    if old_key and old_key != new_key:
+        _delete_stored_photo_quietly(old_key)
     return photo
 
 
