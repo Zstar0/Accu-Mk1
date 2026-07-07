@@ -1064,20 +1064,14 @@ function AttachmentImage({ attachment }: { attachment: SenaiteAttachment }) {
 // query key is shared with the wizard so caches stay in sync.
 
 /** Single packaging photo thumbnail. Mirrors AttachmentImage's blob-backed
- *  load/loading/error states. No controls — read-only. */
+ *  load/loading/error states. No controls — read-only. Bytes come through
+ *  react-query so the wizard's retake path (which PATCHes the SAME photo id
+ *  and invalidates ['packaging-photo-bytes', id]) refreshes this thumbnail. */
 function PackagingThumb({ photo }: { photo: PackagingPhoto }) {
-  const [src, setSrc] = useState<string | null>(null)
-  const [error, setError] = useState(false)
-  const [loading, setLoading] = useState(true)
-
-  useEffect(() => {
-    let cancelled = false
-    fetchPackagingPhotoUrl(photo.id)
-      .then(url => { if (!cancelled) setSrc(url) })
-      .catch(() => { if (!cancelled) setError(true) })
-      .finally(() => { if (!cancelled) setLoading(false) })
-    return () => { cancelled = true }
-  }, [photo.id])
+  const { data: src = null, isPending: loading, isError: error } = useQuery({
+    queryKey: ['packaging-photo-bytes', photo.id],
+    queryFn: () => fetchPackagingPhotoUrl(photo.id),
+  })
 
   return (
     <div className="space-y-1.5">

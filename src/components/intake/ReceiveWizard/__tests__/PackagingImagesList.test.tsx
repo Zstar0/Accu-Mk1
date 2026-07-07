@@ -77,6 +77,28 @@ describe('PackagingImagesList', () => {
     expect(mockDelete).toHaveBeenCalledWith(7)
   })
 
+  it('refreshes the thumbnail when the bytes query is invalidated (retake keeps the id)', async () => {
+    mockList.mockResolvedValue([photo(5, 'sealed')])
+    mockFetchUrl
+      .mockResolvedValueOnce('blob:old')
+      .mockResolvedValueOnce('blob:new')
+    const { qc } = renderList()
+
+    // The thumbnail img is decorative (alt="") so it exposes no img role.
+    await waitFor(() =>
+      expect(document.querySelector('img')).toHaveAttribute('src', 'blob:old')
+    )
+
+    // What PackagingPanel's save path issues after a retake PATCH — the photo
+    // id is unchanged, so only this invalidation can swap the stale bytes.
+    await qc.invalidateQueries({ queryKey: ['packaging-photo-bytes', 5] })
+
+    await waitFor(() =>
+      expect(document.querySelector('img')).toHaveAttribute('src', 'blob:new')
+    )
+    expect(mockFetchUrl).toHaveBeenCalledTimes(2)
+  })
+
   it('clicking an item calls onEdit with the photo', async () => {
     mockList.mockResolvedValue([photo(9, 'lid')])
     const onEdit = vi.fn()

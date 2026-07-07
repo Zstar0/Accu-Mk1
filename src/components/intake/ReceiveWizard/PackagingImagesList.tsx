@@ -1,4 +1,3 @@
-import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Trash2 } from 'lucide-react'
 import {
@@ -14,25 +13,15 @@ interface PackagingImagesListProps {
   onEdit?: (photo: PackagingPhoto) => void
 }
 
-// Resolves the packaging photo's Bearer-gated bytes to an object URL. Keyed on
-// photoId so a retake (new id via PATCH invalidation) re-runs the fetch instead
-// of showing the stale shot — mirrors VialsList's VialThumb.
+// Resolves the packaging photo's Bearer-gated bytes to an object URL. Fetched
+// through react-query (not a photoId-keyed effect) because a retake PATCHes
+// the SAME id — only the ['packaging-photo-bytes', id] invalidation the save
+// path issues makes the on-screen thumbnail refresh.
 function PackagingThumb({ photoId }: { photoId: number }) {
-  const [url, setUrl] = useState<string | null>(null)
-
-  useEffect(() => {
-    let cancelled = false
-    void fetchPackagingPhotoUrl(photoId)
-      .then(u => {
-        if (!cancelled) setUrl(u)
-      })
-      .catch(() => {
-        if (!cancelled) setUrl(null)
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [photoId])
+  const { data: url } = useQuery({
+    queryKey: ['packaging-photo-bytes', photoId],
+    queryFn: () => fetchPackagingPhotoUrl(photoId),
+  })
 
   return (
     <div className="w-9 h-9 rounded bg-muted/60 border shrink-0 overflow-hidden flex items-center justify-center">

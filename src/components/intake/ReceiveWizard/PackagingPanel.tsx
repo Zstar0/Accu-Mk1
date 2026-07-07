@@ -248,6 +248,13 @@ export function PackagingPanel({
           photoBase64,
           remarks: trimmedRemarks ?? null,
         })
+        if (photoBase64) {
+          // A retake keeps the photo id, so the list refetch alone leaves the
+          // stale bytes on screen — drop every thumbnail query for this id.
+          void queryClient.invalidateQueries({
+            queryKey: ['packaging-photo-bytes', editing.id],
+          })
+        }
       } else {
         if (!photoBase64) {
           setLocalError('Photo is required.')
