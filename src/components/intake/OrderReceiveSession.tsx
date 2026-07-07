@@ -1,6 +1,7 @@
 import { useState, type ComponentProps } from 'react'
 import { useQuery, useQueries, useQueryClient } from '@tanstack/react-query'
 import { Check, Loader2 } from 'lucide-react'
+import { toast } from 'sonner'
 import {
   Dialog,
   DialogContent,
@@ -89,6 +90,8 @@ export function OrderReceiveSession({ orders, onClose, initialPhase }: Props) {
       }))
       await completeCheckIn(freshSamples)
       onClose()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Complete Check-In failed')
     } finally {
       setCompleting(false)
     }

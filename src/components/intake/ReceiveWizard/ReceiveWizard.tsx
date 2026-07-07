@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { ArrowRight, ArrowLeft, Check } from 'lucide-react'
+import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useReceiveWizard, type ParentInfo } from './useReceiveWizard'
@@ -160,6 +161,8 @@ export function ReceiveWizard({
     try {
       await receiveSenaiteSample(parent.uid, parent.sample_id, null, null)
       onClose()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Complete Check-In failed')
     } finally {
       setCompleting(false)
     }

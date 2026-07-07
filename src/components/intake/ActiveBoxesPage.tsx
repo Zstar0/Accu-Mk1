@@ -115,6 +115,8 @@ export function ActiveBoxesPage() {
       // must refresh, scoped by the closed box's own order key.
       await invalidateBoxCaches(qc, closed.order_key)
     },
+    onError: err =>
+      toast.error(err instanceof Error ? err.message : 'Failed to close box'),
   })
 
   const boxes = boxesQ.data ?? []

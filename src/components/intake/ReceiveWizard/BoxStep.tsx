@@ -5,6 +5,7 @@ import {
   type DragEndEvent, type DragStartEvent, type Modifier,
 } from '@dnd-kit/core'
 import { Printer, Trash2 } from 'lucide-react'
+import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { usePrintLabel } from '@/components/samples/usePrintLabel'
 import { BoxLabelTemplate, ROLE_SHORT } from './BoxLabelTemplate'
@@ -130,21 +131,29 @@ export function BoxStep({ orderKey, orderLabel, sampleIds }: Props) {
     const { active, over } = event
     if (!over) return
     const subSampleId = String(active.id)
-    if (over.id === 'unboxed') {
-      // Dropped on the Unboxed tray → clear box membership.
-      await unassignVialsFromBox([subSampleId])
-    } else {
-      // Dropped on a box column → assign to that (numeric) box id.
-      const boxId = Number(over.id)
-      if (!boxId) return
-      await assignVialsToBox(boxId, [subSampleId])
+    try {
+      if (over.id === 'unboxed') {
+        // Dropped on the Unboxed tray → clear box membership.
+        await unassignVialsFromBox([subSampleId])
+      } else {
+        // Dropped on a box column → assign to that (numeric) box id.
+        const boxId = Number(over.id)
+        if (!boxId) return
+        await assignVialsToBox(boxId, [subSampleId])
+      }
+      await invalidateBoxCaches(qc, orderKey)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : `Failed to move ${subSampleId}`)
     }
-    await invalidateBoxCaches(qc, orderKey)
   }, [qc, orderKey])
 
   const addBox = async (role: BoxRole) => {
-    await createBox(orderKey, role)
-    await invalidateBoxCaches(qc, orderKey)
+    try {
+      await createBox(orderKey, role)
+      await invalidateBoxCaches(qc, orderKey)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to add box')
+    }
   }
 
   // Auto-assign(box): fill up to `capacity - vial_count` of this box's role's
@@ -157,22 +166,30 @@ export function BoxStep({ orderKey, orderLabel, sampleIds }: Props) {
     const capacity = capacities[box.id] ?? DEFAULT_BOX_CAPACITY
     const take = Math.max(0, capacity - box.vial_count)
     const takenIds = roleUnboxed.slice(0, take).map(v => v.sample_id)
-    if (takenIds.length > 0) {
-      await assignVialsToBox(box.id, takenIds)
-      await invalidateBoxCaches(qc, orderKey)
-    }
-    const remaining = roleUnboxed.slice(take)
-    const otherEmptyBox = boxes.some(b => b.id !== box.id && b.role === role && b.vial_count === 0)
-    const thisBoxStillEmpty = box.vial_count + takenIds.length === 0
-    if (remaining.length > 0 && !otherEmptyBox && !thisBoxStillEmpty) {
-      await createBox(orderKey, role)
-      await invalidateBoxCaches(qc, orderKey)
+    try {
+      if (takenIds.length > 0) {
+        await assignVialsToBox(box.id, takenIds)
+        await invalidateBoxCaches(qc, orderKey)
+      }
+      const remaining = roleUnboxed.slice(take)
+      const otherEmptyBox = boxes.some(b => b.id !== box.id && b.role === role && b.vial_count === 0)
+      const thisBoxStillEmpty = box.vial_count + takenIds.length === 0
+      if (remaining.length > 0 && !otherEmptyBox && !thisBoxStillEmpty) {
+        await createBox(orderKey, role)
+        await invalidateBoxCaches(qc, orderKey)
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Auto-assign failed')
     }
   }
 
   const handleRemoveBox = async (box: LimsBox) => {
-    await deleteBox(box.id)
-    await invalidateBoxCaches(qc, orderKey)
+    try {
+      await deleteBox(box.id)
+      await invalidateBoxCaches(qc, orderKey)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : `Failed to delete ${box.label_code}`)
+    }
   }
 
   if (boxesQ.isLoading || vialsQ.isLoading) return <div className="p-6">Loading…</div>
