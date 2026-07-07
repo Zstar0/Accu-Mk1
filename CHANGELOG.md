@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.0.27 — 2026-07-07
+
+### Changed
+
+- **Dropped the SLA column from the by-order receive list.** Rendering it called `useSenaiteLookupMap`, which fired one `/wizard/senaite/lookup` per sample across the entire due list (200+ SENAITE round-trips, ~6.5 MB on load) to compute a verdict that is structurally always "awaiting" for not-yet-received samples. The column, its cell, and the per-sample lookup fan-out are removed; the cheap left-border state tint stays. `OrderSlaCell` is unchanged — the explorer / dashboard / customer pages still use it.
+
 ## v1.0.26 — 2026-07-07
 
 ### Added
