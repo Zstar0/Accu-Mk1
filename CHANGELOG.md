@@ -1,5 +1,18 @@
 # Changelog
 
+## v1.0.25 — 2026-07-07
+
+### Added
+
+- **Order-first check-in + boxing.** Receive samples grouped by WooCommerce order, with an order-scoped boxing workflow: an **Active Boxes** page (Analysis → Boxes) with expand-to-vials and Sample ID / Order # / Box ID search; an order-scoped **Boxing tab** in the Manage Sub-Samples overlay; a **Box column** on the worksheet drawer; a **box chip** on the sample-details header; **ISO-17025 custody events** for box assign/move/remove/store; order-style **`BOX-{order#}-{n}`** labels with a **Print box labels** action; an **`xtra` (Extras)** boxable role; box location-tracking slices 1–2 (`stored_at`/`stored_by`, `GET /api/boxes/active`, `POST /api/boxes/{id}/close`); and an admin-gated **multi-order check-in** toggle (default off). The order Process button opens on the Packaging tab.
+- **Canonical basic-info registry (base).** Server-side canonical basic-info population for LIMS samples, with a backfill script for historical rows (new COAs auto-populate).
+
+### Fixed
+
+- Pre-COA order-number sample search now resolves via `order_submissions.sample_results` (was ingestions-only, so nothing showed in check-in).
+- Relative-base-safe URL building in `src/lib/api.ts` — `new URL()` threw `Invalid URL` on proxy stacks, silently 404-ing native `mk1://` vial pages.
+- Server-side admin gate on admin-only settings keys; packaging-photo download serves a **derived** Content-Type (never the client-supplied value) with `X-Content-Type-Options: nosniff`; `next_box` retries on concurrent-create conflicts (was a 500); vials can no longer be assigned to a closed/stored box; box mutations invalidate every box surface (Active Boxes, header chip, worksheets).
+
 ## v1.0.24 — 2026-07-03
 
 ### Fixed

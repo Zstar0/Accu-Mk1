@@ -25,19 +25,6 @@ vi.mock('@/components/intake/OrderReceiveSession', () => ({
   ),
 }))
 
-// The SLA cell pulls in i18n + tooltip; replace it with a sentinel.
-vi.mock('@/components/explorer/OrderSlaCell', () => ({
-  OrderSlaCell: () => <span data-testid="sla-cell" />,
-}))
-
-// Page-level SLA + lookup hooks hit the backend; stub to stable empty shapes.
-vi.mock('@/services/order-sla', () => ({
-  useOrderSlaStatuses: () => ({ verdictByOrderId: new Map() }),
-}))
-vi.mock('@/services/senaite-lookup-map', () => ({
-  useSenaiteLookupMap: () => ({ sampleLookupMap: new Map() }),
-}))
-
 vi.mock('@/lib/api', async importOriginal => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
   return {
