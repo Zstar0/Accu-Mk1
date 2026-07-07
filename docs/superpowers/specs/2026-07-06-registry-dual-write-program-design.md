@@ -83,7 +83,7 @@ Later horizons, explicitly not in this program: status/workflow ownership (arriv
 
 **When:** IS calls once per sample, immediately after it creates the SENAITE AR in order processing — so the payload carries **both** the SENAITE `sample_id`/`uid` and the full composition IS just authored the AR from.
 
-**Payload (per sample):** order number; client block (title, id-slug, uid); contact block (title, email, uid); SENAITE sample id + uid; sample type (uid + title); client sample id; dates (created/sampled; received null at creation); analyte slots 1–8 (name + declared quantity); declared total; lot; reference; `Coa*` map; company logo url; verification code.
+**Payload (per sample):** order number; client block (title, uid — title derived from the WP order's customer email, same transform as SENAITE client resolution); contact block (full name from WP billing, email, uid); SENAITE sample id + uid; sample type uid; client sample id; dates (created = signal time; sampled from order; received null at creation); analyte slots 1–8 (name + declared quantity); declared total; lot; reference; `Coa*` map; company logo url; verification code. *(Amended 2026-07-07 post-build: the client id-slug and sample-type TITLE are not cleanly in IS scope — they are reconcile-filled from SENAITE on first family view / re-sweep; Slice 2 must treat them as nullable.)*
 
 **Mk1 behavior:** upsert keyed on `sample_id` — create (mint `native_id`, apply the `container_mode` first-touch gate exactly as `_create_sample_row` does today — at creation time the state is pre-received, so new rows are container families, consistent with the wizard) or update (fill/refresh fields; `native_id` untouched). Returns the row's ids.
 
