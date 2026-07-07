@@ -1,5 +1,21 @@
 # Changelog
 
+## v1.0.27 — 2026-07-07
+
+### Changed
+
+- **Dropped the SLA column from the by-order receive list.** Rendering it called `useSenaiteLookupMap`, which fired one `/wizard/senaite/lookup` per sample across the entire due list (200+ SENAITE round-trips, ~6.5 MB on load) to compute a verdict that is structurally always "awaiting" for not-yet-received samples. The column, its cell, and the per-sample lookup fan-out are removed; the cheap left-border state tint stays. `OrderSlaCell` is unchanged — the explorer / dashboard / customer pages still use it.
+
+## v1.0.26 — 2026-07-07
+
+### Added
+
+- **Order # / Client search on receive-by-order.** A search box above the By-Order list on the Receive page filters orders by Order #, client name, or client email, with a "no matches" empty state; selection state is untouched by filtering.
+
+### Fixed
+
+- **Instant vial→box moves on the Boxing tab.** Drag, auto-assign, add-box, and delete-box no longer block ~5s on the awaited cache refetch (one SENAITE call per sample) — the UI now updates as soon as the save confirms (<100ms), the remaining box surfaces reconcile in the background, and a "Saving…" indicator shows while a save call is in flight.
+
 ## v1.0.25 — 2026-07-07
 
 ### Added
