@@ -3,6 +3,7 @@ from datetime import datetime
 from typing import List
 
 from sqlalchemy import func, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from models import LimsBox, LimsSample, LimsSubSample, LimsSubSampleEvent
@@ -67,19 +68,27 @@ def vials_for_boxes(db: Session, box_ids: List[int]) -> dict:
 def next_box(db: Session, order_key: str, role: str, user_id: int) -> LimsBox:
     if role not in BOXABLE_ROLES:
         raise ValueError(f"role {role!r} is not boxable")
-    current_max = db.scalar(
-        select(func.max(LimsBox.box_number)).where(LimsBox.order_key == order_key)
-    )
-    box = LimsBox(
-        order_key=order_key,
-        box_number=(current_max or 0) + 1,
-        role=role,
-        created_by_user_id=user_id,
-    )
-    db.add(box)
-    db.commit()
-    db.refresh(box)
-    return box
+    # Concurrent creates for one order race on uq_lims_box_order_number:
+    # recompute max+1 and retry a few times before giving up.
+    for _ in range(5):
+        current_max = db.scalar(
+            select(func.max(LimsBox.box_number)).where(LimsBox.order_key == order_key)
+        )
+        box = LimsBox(
+            order_key=order_key,
+            box_number=(current_max or 0) + 1,
+            role=role,
+            created_by_user_id=user_id,
+        )
+        db.add(box)
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            continue
+        db.refresh(box)
+        return box
+    raise ValueError(f"could not allocate a box number for order {order_key!r} (concurrent creates)")
 
 
 def assign_vials(db: Session, box_id: int, sub_sample_ids: List[str], user_id=None) -> LimsBox:

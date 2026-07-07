@@ -1,5 +1,6 @@
 import pytest
 from sqlalchemy import create_engine
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 
 from sqlalchemy import select
@@ -37,6 +38,35 @@ def test_next_box_numbers_run_per_order(db):
     assert (b1.box_number, b2.box_number) == (1, 2)   # running across bins for one order
     assert b3.box_number == 1                          # separate order restarts
     assert service.box_label_code(b2) == "BOX-20066-2"
+
+
+def test_next_box_retries_on_integrity_error(db, monkeypatch):
+    # A concurrent create that steals our box_number surfaces as IntegrityError
+    # on commit; next_box must recompute max+1 and retry, not 500.
+    service.next_box(db, "WP-20090", "hplc", user_id=1)
+    real_commit = db.commit
+    failures = {"left": 2}
+
+    def flaky_commit():
+        if failures["left"] > 0:
+            failures["left"] -= 1
+            raise IntegrityError("INSERT", {}, Exception("uq_lims_box_order_number"))
+        real_commit()
+
+    monkeypatch.setattr(db, "commit", flaky_commit)
+    box = service.next_box(db, "WP-20090", "hplc", user_id=1)
+    assert box.box_number == 2
+    assert failures["left"] == 0
+
+
+def test_next_box_exhausted_retries_raises_value_error(db, monkeypatch):
+    def always_conflict():
+        raise IntegrityError("INSERT", {}, Exception("uq_lims_box_order_number"))
+
+    monkeypatch.setattr(db, "commit", always_conflict)
+    # ValueError, not IntegrityError → the route answers 400, not 500.
+    with pytest.raises(ValueError):
+        service.next_box(db, "WP-20091", "hplc", user_id=1)
 
 
 def test_assign_rejects_role_mismatch(db):
