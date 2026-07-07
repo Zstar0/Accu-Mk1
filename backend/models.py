@@ -776,6 +776,32 @@ class LimsSample(Base):
     customer_remarks_delivered_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime, nullable=True
     )
+    # --- Registry dual-write slice 1 (2026-07-06 spec): the complete sample
+    # record. All nullable/additive; SENAITE stays the write surface upstream.
+    client_title: Mapped[Optional[str]] = mapped_column(String(200))
+    contact_title: Mapped[Optional[str]] = mapped_column(String(200))
+    contact_email: Mapped[Optional[str]] = mapped_column(String(320))
+    # sample_type (above) is the SENAITE UID and stays load-bearing for
+    # secondary creation; this is the human-readable title.
+    sample_type_title: Mapped[Optional[str]] = mapped_column(String(200))
+    # AR creation time in SENAITE — distinct from created_at (row creation).
+    date_created: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    verification_code: Mapped[Optional[str]] = mapped_column(String(50))
+    client_order_number: Mapped[Optional[str]] = mapped_column(String(100))
+    # JSON list of {"name": str, "declared_quantity": str|None}, analyte
+    # slots 1-8 in order, empty slots omitted. peptide_name stays = slot-1
+    # label for back-compat.
+    analytes: Mapped[Optional[str]] = mapped_column(Text)
+    declared_total_quantity: Mapped[Optional[str]] = mapped_column(String(50))
+    client_lot: Mapped[Optional[str]] = mapped_column(String(100))
+    client_reference: Mapped[Optional[str]] = mapped_column(String(200))
+    company_logo_url: Mapped[Optional[str]] = mapped_column(Text)
+    # Verbatim map of SENAITE's Coa* custom fields (CoaAddress, CoaCompanyName,
+    # CoaEmail, CoaWebsite) — COABuilder consumes this in slice 4.
+    coa_meta: Mapped[Optional[str]] = mapped_column(Text)
+    # Internal-only Mk1-native identifier (aP-0001 …), forward-only, minted
+    # once by sub_samples.native_id. Never customer-facing in this program.
+    native_id: Mapped[Optional[str]] = mapped_column(String(20), unique=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     last_synced_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
@@ -810,6 +836,16 @@ class LimsSubSample(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     parent_sample: Mapped["LimsSample"] = relationship("LimsSample", back_populates="sub_samples")
+
+
+class LimsNativeIdSequence(Base):
+    """Per-prefix counters for native sample IDs (aP-0001, aPB-0001, …).
+    Allocation happens under SELECT ... FOR UPDATE on the prefix row —
+    same idiom as vial_sequence assignment."""
+    __tablename__ = "lims_native_id_sequences"
+
+    prefix: Mapped[str] = mapped_column(String(8), primary_key=True)
+    next_value: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
 
 
 class LimsSubSampleAttachment(Base):
