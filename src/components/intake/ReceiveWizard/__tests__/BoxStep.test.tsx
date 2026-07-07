@@ -329,6 +329,63 @@ describe('BoxStep — capacity-driven boxing', () => {
     })
   })
 
+  it('moves the chip into the box card from the cache patch, before the vials refetch lands', async () => {
+    // Pre-existing empty hplc box (id 7) so no auto-create fires; P-101 unboxed.
+    const { boxesState } = setupBackend([vial('P-101', 'hplc')])
+    boxesState.push({
+      id: 7, order_key: ORDER, box_number: 1, role: 'hplc',
+      label_code: 'BOX-1042-1', vial_count: 0, printed_at: null,
+      created_at: null, stored_at: null,
+    })
+    renderBoxStep()
+    await screen.findByText('P-101')
+
+    // From here on, every listSubSamples refetch hangs forever — so anything
+    // that renders after the drop can only have come from the cache patch,
+    // not from the background invalidation's refetch.
+    mockListSubSamples.mockImplementation(() => new Promise(() => {}))
+
+    await act(async () => {
+      await dnd.onDragEnd!({ active: { id: 'P-101' }, over: { id: '7' } })
+    })
+
+    // The chip left the Unboxed panel (it now reports empty) and still renders
+    // — i.e. inside the box card — and the patched box shows its new count.
+    expect(await screen.findByText('All vials boxed.')).toBeInTheDocument()
+    expect(screen.getByText('P-101')).toBeInTheDocument()
+    expect(screen.getByText('1 vials')).toBeInTheDocument()
+  })
+
+  it('shows "Saving…" while the assign call is in flight and hides it after it settles', async () => {
+    const { boxesState } = setupBackend([vial('P-101', 'hplc')])
+    const box7: LimsBox = {
+      id: 7, order_key: ORDER, box_number: 1, role: 'hplc',
+      label_code: 'BOX-1042-1', vial_count: 0, printed_at: null,
+      created_at: null, stored_at: null,
+    }
+    boxesState.push(box7)
+    renderBoxStep()
+    await screen.findByText('P-101')
+
+    // A deferred assign: the handler is pending until we resolve it.
+    let resolveAssign!: (b: LimsBox) => void
+    mockAssignVialsToBox.mockImplementation(() => new Promise(r => { resolveAssign = r }))
+
+    let dragDone!: Promise<unknown>
+    act(() => {
+      dragDone = Promise.resolve(dnd.onDragEnd!({ active: { id: 'P-101' }, over: { id: '7' } }))
+    })
+
+    expect(await screen.findByText('Saving…')).toBeInTheDocument()
+
+    await act(async () => {
+      resolveAssign({ ...box7, vial_count: 1 })
+      await dragDone
+    })
+
+    await waitFor(() => expect(screen.queryByText('Saving…')).not.toBeInTheDocument())
+  })
+
   it('"Print box labels" prints one job covering only the vialed boxes', async () => {
     // Two pre-existing boxes: id 7 holds the order's only vial, id 8 is empty.
     // The toolbar button must stamp printed_at for the vialed box only and

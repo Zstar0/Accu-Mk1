@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query'
 import {
   DndContext, DragOverlay, KeyboardSensor, PointerSensor, useSensor, useSensors,
   useDroppable, useDraggable,
@@ -98,6 +98,47 @@ export function boxLabelLines(box: LimsBox): string[] {
   ]
 }
 
+// --- Patch-on-confirm cache helpers -----------------------------------------
+// The DB save lands in <100ms but a full awaited invalidateBoxCaches blocks
+// ~5s on the ['order-vials'] refetch (one SENAITE listSubSamples call per
+// sample). So each mutation handler patches the two caches this screen
+// renders from — ['order-vials', orderKey, sampleIds] and
+// ['order-boxes', orderKey] — straight from the API response as soon as the
+// call confirms, then fires invalidateBoxCaches WITHOUT awaiting so the
+// worksheet/sub-sample/active-boxes surfaces reconcile in the background.
+
+/** Cancel in-flight refetches of the two order-scoped box queries so a stale
+ *  response (from a previous op's background invalidation) can't land after
+ *  the local patch and briefly revert it. */
+async function cancelBoxRefetches(qc: QueryClient, orderKey: string): Promise<void> {
+  await Promise.all([
+    qc.cancelQueries({ queryKey: ['order-vials', orderKey] }),
+    qc.cancelQueries({ queryKey: ['order-boxes', orderKey] }),
+  ])
+}
+
+/** Set box_id on the moved vials in the ['order-vials'] cache (null = unboxed). */
+function patchVialBoxIds(
+  qc: QueryClient, orderKey: string, sampleIds: string[],
+  movedIds: string[], boxId: number | null,
+): void {
+  qc.setQueryData<OrderVial[]>(['order-vials', orderKey, sampleIds], old =>
+    old?.map(v => (movedIds.includes(v.sample_id) ? { ...v, box_id: boxId } : v)))
+}
+
+/** Apply a local transform to the ['order-boxes'] cache (replace/append/remove). */
+function patchBoxes(
+  qc: QueryClient, orderKey: string, fn: (old: LimsBox[]) => LimsBox[],
+): void {
+  qc.setQueryData<LimsBox[]>(['order-boxes', orderKey], old => (old ? fn(old) : old))
+}
+
+/** Adjust one box's vial_count by delta, clamped at ≥ 0. */
+function adjustBoxCount(boxes: LimsBox[], boxId: number, delta: number): LimsBox[] {
+  return boxes.map(b =>
+    b.id === boxId ? { ...b, vial_count: Math.max(0, b.vial_count + delta) } : b)
+}
+
 interface Props {
   orderKey: string
   orderLabel: string
@@ -122,6 +163,10 @@ export function BoxStep({ orderKey, orderLabel, sampleIds }: Props) {
   // The vial being dragged, driving the DragOverlay preview ("holding the
   // item") and the source-chip dimming. Null while nothing is dragging.
   const [activeId, setActiveId] = useState<string | null>(null)
+  // Count of in-flight save calls (assign/unassign/create/delete) driving the
+  // "Saving…" indicator — a counter, not a boolean, so overlapping ops don't
+  // clear it early.
+  const [pendingSaves, setPendingSaves] = useState(0)
   // Guards the in-flight window of the first-box auto-create effect so a
   // refetch/HMR never double-creates. Keyed `${orderKey}:${role}`.
   const autoCreatedRef = useRef<Set<string>>(new Set())
@@ -176,28 +221,51 @@ export function BoxStep({ orderKey, orderLabel, sampleIds }: Props) {
     const { active, over } = event
     if (!over) return
     const subSampleId = String(active.id)
+    setPendingSaves(n => n + 1)
     try {
+      // The vial's current box, read from the cache — not the closed-over
+      // `vials` array, which is stale inside this useCallback.
+      const prevBoxId = qc.getQueryData<OrderVial[]>(['order-vials', orderKey, sampleIds])
+        ?.find(v => v.sample_id === subSampleId)?.box_id ?? null
       if (over.id === 'unboxed') {
         // Dropped on the Unboxed tray → clear box membership.
         await unassignVialsFromBox([subSampleId])
+        await cancelBoxRefetches(qc, orderKey)
+        patchVialBoxIds(qc, orderKey, sampleIds, [subSampleId], null)
+        if (prevBoxId != null) {
+          patchBoxes(qc, orderKey, old => adjustBoxCount(old, prevBoxId, -1))
+        }
       } else {
         // Dropped on a box column → assign to that (numeric) box id.
         const boxId = Number(over.id)
         if (!boxId) return
-        await assignVialsToBox(boxId, [subSampleId])
+        const updated = await assignVialsToBox(boxId, [subSampleId])
+        await cancelBoxRefetches(qc, orderKey)
+        patchVialBoxIds(qc, orderKey, sampleIds, [subSampleId], boxId)
+        patchBoxes(qc, orderKey, old => old.map(b => (b.id === updated.id ? updated : b)))
+        if (prevBoxId != null && prevBoxId !== boxId) {
+          patchBoxes(qc, orderKey, old => adjustBoxCount(old, prevBoxId, -1))
+        }
       }
-      await invalidateBoxCaches(qc, orderKey)
+      void invalidateBoxCaches(qc, orderKey)
     } catch (err) {
       toast.error(err instanceof Error ? err.message : `Failed to move ${subSampleId}`)
+    } finally {
+      setPendingSaves(n => Math.max(0, n - 1))
     }
-  }, [qc, orderKey])
+  }, [qc, orderKey, sampleIds])
 
   const addBox = async (role: BoxRole) => {
+    setPendingSaves(n => n + 1)
     try {
-      await createBox(orderKey, role)
-      await invalidateBoxCaches(qc, orderKey)
+      const created = await createBox(orderKey, role)
+      await cancelBoxRefetches(qc, orderKey)
+      patchBoxes(qc, orderKey, old => [...old, created])
+      void invalidateBoxCaches(qc, orderKey)
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to add box')
+    } finally {
+      setPendingSaves(n => Math.max(0, n - 1))
     }
   }
 
@@ -211,29 +279,47 @@ export function BoxStep({ orderKey, orderLabel, sampleIds }: Props) {
     const capacity = capacities[box.id] ?? DEFAULT_BOX_CAPACITY
     const take = Math.max(0, capacity - box.vial_count)
     const takenIds = roleUnboxed.slice(0, take).map(v => v.sample_id)
+    setPendingSaves(n => n + 1)
     try {
       if (takenIds.length > 0) {
-        await assignVialsToBox(box.id, takenIds)
-        await invalidateBoxCaches(qc, orderKey)
+        const updated = await assignVialsToBox(box.id, takenIds)
+        await cancelBoxRefetches(qc, orderKey)
+        // Taken vials were all unboxed, so no source-box decrement is needed.
+        patchVialBoxIds(qc, orderKey, sampleIds, takenIds, box.id)
+        patchBoxes(qc, orderKey, old => old.map(b => (b.id === updated.id ? updated : b)))
+        void invalidateBoxCaches(qc, orderKey)
       }
       const remaining = roleUnboxed.slice(take)
       const otherEmptyBox = boxes.some(b => b.id !== box.id && b.role === role && b.vial_count === 0)
       const thisBoxStillEmpty = box.vial_count + takenIds.length === 0
       if (remaining.length > 0 && !otherEmptyBox && !thisBoxStillEmpty) {
-        await createBox(orderKey, role)
-        await invalidateBoxCaches(qc, orderKey)
+        const created = await createBox(orderKey, role)
+        await cancelBoxRefetches(qc, orderKey)
+        patchBoxes(qc, orderKey, old => [...old, created])
+        void invalidateBoxCaches(qc, orderKey)
       }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Auto-assign failed')
+    } finally {
+      setPendingSaves(n => Math.max(0, n - 1))
     }
   }
 
   const handleRemoveBox = async (box: LimsBox) => {
+    setPendingSaves(n => n + 1)
     try {
       await deleteBox(box.id)
-      await invalidateBoxCaches(qc, orderKey)
+      await cancelBoxRefetches(qc, orderKey)
+      patchBoxes(qc, orderKey, old => old.filter(b => b.id !== box.id))
+      // The backend returns the deleted box's vials to Unboxed — mirror that.
+      const orphanedIds = (qc.getQueryData<OrderVial[]>(['order-vials', orderKey, sampleIds]) ?? [])
+        .filter(v => v.box_id === box.id).map(v => v.sample_id)
+      patchVialBoxIds(qc, orderKey, sampleIds, orphanedIds, null)
+      void invalidateBoxCaches(qc, orderKey)
     } catch (err) {
       toast.error(err instanceof Error ? err.message : `Failed to delete ${box.label_code}`)
+    } finally {
+      setPendingSaves(n => Math.max(0, n - 1))
     }
   }
 
@@ -269,12 +355,13 @@ export function BoxStep({ orderKey, orderLabel, sampleIds }: Props) {
     <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}
       onDragCancel={() => setActiveId(null)}>
       <div className="p-6 flex flex-col gap-4 h-full overflow-hidden">
-        <div className="flex items-center">
+        <div className="flex items-center gap-3">
           <Button type="button" variant="outline" size="sm" className="gap-2"
             onClick={handlePrintAllLabels} disabled={printableBoxes.length === 0}>
             <Printer className="w-4 h-4" aria-hidden="true" />
             Print box labels
           </Button>
+          {pendingSaves > 0 && <span className="text-xs text-muted-foreground animate-pulse">Saving…</span>}
         </div>
         <div className="flex gap-4 flex-1 min-h-0">
           {/* LEFT: per-role box columns + in-column drop targets (manual override). */}
