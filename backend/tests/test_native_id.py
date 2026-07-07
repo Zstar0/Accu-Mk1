@@ -1,6 +1,6 @@
-"""Native-ID minting: prefix derivation, zero-padding, sequence isolation."""
+"""Native-ID minting: SENAITE-number mirror + SENAITE-free counter."""
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 from database import Base
 from models import LimsNativeIdSequence
@@ -17,17 +17,28 @@ def db():
     s.close()
 
 
-def test_prefix_derived_from_senaite_id(db):
-    assert mint_native_id(db, senaite_sample_id="P-1234") == "aP-0001"
-    assert mint_native_id(db, senaite_sample_id="PB-0007") == "aPB-0001"
-    assert mint_native_id(db, senaite_sample_id="BW-0013") == "aBW-0001"
+def test_senaite_linked_mirrors_the_whole_id(db):
+    assert mint_native_id(db, senaite_sample_id="P-1234") == "aP-1234"
+    assert mint_native_id(db, senaite_sample_id="PB-0007") == "aPB-0007"
+    assert mint_native_id(db, senaite_sample_id="BW-0013") == "aBW-0013"
 
 
-def test_sequences_are_per_prefix_and_monotonic(db):
+def test_mirror_includes_retest_suffix(db):
+    assert mint_native_id(db, senaite_sample_id="PB-0216-R01") == "aPB-0216-R01"
+
+
+def test_mirror_draws_no_counter(db):
+    """The mirror path must never touch lims_native_id_sequences — it is
+    deterministic. A counter row appearing would mean a wasted sequence
+    value and a drift risk at SENAITE retirement."""
+    mint_native_id(db, senaite_sample_id="P-1234")
+    mint_native_id(db, senaite_sample_id="P-5678")
+    assert db.execute(select(LimsNativeIdSequence)).scalars().all() == []
+
+
+def test_mirror_is_pure_same_in_same_out(db):
     assert mint_native_id(db, senaite_sample_id="P-0001") == "aP-0001"
-    assert mint_native_id(db, senaite_sample_id="P-0002") == "aP-0002"
-    assert mint_native_id(db, senaite_sample_id="PB-0001") == "aPB-0001"
-    assert mint_native_id(db, senaite_sample_id="P-0003") == "aP-0003"
+    assert mint_native_id(db, senaite_sample_id="P-0001") == "aP-0001"
 
 
 def test_senaite_free_uses_sample_type_map(db):
@@ -38,10 +49,17 @@ def test_senaite_free_uses_sample_type_map(db):
     assert mint_native_id(db, sample_type_title="Mystery Goo") == "aS-0001"
 
 
-def test_padding_grows_past_9999(db):
+def test_senaite_free_counter_is_per_prefix_and_monotonic(db):
+    assert mint_native_id(db, sample_type_title="Peptide") == "aP-0001"
+    assert mint_native_id(db, sample_type_title="Peptide") == "aP-0002"
+    assert mint_native_id(db, sample_type_title="Peptide Blend") == "aPB-0001"
+    assert mint_native_id(db, sample_type_title="Peptide") == "aP-0003"
+
+
+def test_senaite_free_counter_grows_past_9999(db):
     db.add(LimsNativeIdSequence(prefix="aP", next_value=10000))
     db.commit()
-    assert mint_native_id(db, senaite_sample_id="P-9999") == "aP-10000"
+    assert mint_native_id(db, sample_type_title="Peptide") == "aP-10000"
 
 
 def test_requires_some_identity_source(db):

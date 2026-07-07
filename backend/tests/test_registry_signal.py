@@ -37,13 +37,13 @@ def test_new_columns_and_sequence_table_exist(db):
         client_reference="ref-1",
         company_logo_url="/wp-content/uploads/logo.jpg",
         coa_meta=json.dumps({"CoaCompanyName": "Ftest"}),
-        native_id="aP-0001",
+        native_id="aP-0134",
     )
     db.add(row)
     db.add(LimsNativeIdSequence(prefix="aP", next_value=2))
     db.commit()
     got = db.query(LimsSample).filter_by(sample_id="P-0134").one()
-    assert got.native_id == "aP-0001"
+    assert got.native_id == "aP-0134"
     assert json.loads(got.analytes)[0]["declared_quantity"] == "10.00"
     assert db.query(LimsNativeIdSequence).get("aP").next_value == 2
 
@@ -79,7 +79,7 @@ def test_signal_creates_row_and_mints_native_id(db):
                                     senaite_uid="AR_UID_1", meta=_signal_meta())
     assert row.sample_id == "P-2001"
     assert row.external_lims_uid == "AR_UID_1"
-    assert row.native_id == "aP-0001"
+    assert row.native_id == "aP-2001"
     assert row.client_order_number == "WP-3031"
     # signal fires at order time -> pre-received -> container family,
     # matching the wizard's first-touch gate
@@ -92,7 +92,7 @@ def test_signal_is_idempotent_and_never_reminets(db):
     r2 = upsert_sample_from_signal(db, "P-2001", "AR_UID_1",
                                    _signal_meta(ClientSampleID="CS-9"))
     assert r2.id == r1.id
-    assert r2.native_id == "aP-0001"          # minted once
+    assert r2.native_id == "aP-2001"          # minted once
     assert r2.client_sample_id == "CS-9"      # fields refreshed
 
 
