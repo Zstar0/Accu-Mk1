@@ -763,6 +763,23 @@ def _run_migrations():
         """,
         # Variance addon: lab-side override until WP variance addon ships.
         "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS variance_override TEXT",
+        # --- Registry dual-write slice 1: the complete sample record ---
+        # (2026-07-06-registry-dual-write-program-design.md)
+        "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS client_title VARCHAR(200)",
+        "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS contact_title VARCHAR(200)",
+        "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS contact_email VARCHAR(320)",
+        "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS sample_type_title VARCHAR(200)",
+        "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS date_created TIMESTAMP",
+        "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS verification_code VARCHAR(50)",
+        "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS client_order_number VARCHAR(100)",
+        "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS analytes TEXT",
+        "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS declared_total_quantity VARCHAR(50)",
+        "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS client_lot VARCHAR(100)",
+        "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS client_reference VARCHAR(200)",
+        "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS company_logo_url TEXT",
+        "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS coa_meta TEXT",
+        "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS native_id VARCHAR(20)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_lims_samples_native_id ON lims_samples (native_id)",
         # variance_capable on analysis_services. Run-once: the ADD + seed only
         # fire when the column is missing (first boot after deploy). On every
         # later boot the guard is false, so a lab's toggle choices stick.

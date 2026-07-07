@@ -1,5 +1,6 @@
 """Unit tests for the canonical basic-info registry
 (2026-07-02-lims-sample-canonical-basic-info-design.md)."""
+import json as _json
 import pytest
 from datetime import datetime, timedelta
 from unittest.mock import patch
@@ -40,6 +41,24 @@ def _full_meta(**overrides):
         "DateReceived": "2026-05-01T10:23:00+00:00",
         "DateSampled": "2026-04-30T08:00:00+02:00",
         "review_state": "received",
+        "getClientTitle": "forrest@valenceanalytical.com",
+        "ContactFullName": "Forrest P",
+        "ContactEmail": "fp@example.com",
+        "getSampleTypeTitle": "Peptide",
+        "created": "2026-02-02T03:59:29+00:00",
+        "VerificationCode": "AB12-CD34",
+        "ClientOrderNumber": "WP-3031",
+        "Analyte1DeclaredQuantity": "10.00",
+        "Analyte2Peptide": "GHK-Cu",
+        "Analyte2DeclaredQuantity": None,
+        "DeclaredTotalQuantity": "123.00",
+        "ClientLot": "123",
+        "ClientReference": "ref-1",
+        "CompanyLogoUrl": "/wp-content/uploads/logo.jpg",
+        "CoaCompanyName": "Ftest' 123",
+        "CoaAddress": None,
+        "CoaEmail": None,
+        "CoaWebsite": None,
     }
     meta.update(overrides)
     return meta
@@ -212,3 +231,44 @@ def test_native_family_still_gets_basic_info_refresh(db, monkeypatch):
     fpm.assert_called_once()          # basic info refreshed
     fsec.assert_not_called()          # Model-D: sub-sample pull skipped
     assert parent.client_sample_id == "CS-001"
+
+
+def test_populate_full_record_fields(db):
+    row = LimsSample(sample_id="P-0134")
+    service._populate_basic_info(row, _full_meta())
+    assert row.client_title == "forrest@valenceanalytical.com"
+    assert row.contact_title == "Forrest P"
+    assert row.contact_email == "fp@example.com"
+    assert row.sample_type_title == "Peptide"
+    assert row.date_created == datetime(2026, 2, 2, 3, 59, 29)
+    assert row.verification_code == "AB12-CD34"
+    assert row.client_order_number == "WP-3031"
+    assert row.declared_total_quantity == "123.00"
+    assert row.client_lot == "123"
+    assert row.client_reference == "ref-1"
+    assert row.company_logo_url == "/wp-content/uploads/logo.jpg"
+    assert _json.loads(row.coa_meta) == {
+        "CoaAddress": None, "CoaCompanyName": "Ftest' 123",
+        "CoaEmail": None, "CoaWebsite": None,
+    }
+
+
+def test_populate_analyte_slots_pairs_ordered(db):
+    row = LimsSample(sample_id="P-0134")
+    service._populate_basic_info(row, _full_meta())
+    slots = _json.loads(row.analytes)
+    assert slots == [
+        {"name": "BPC-157", "declared_quantity": "10.00"},
+        {"name": "GHK-Cu", "declared_quantity": None},
+    ]
+    # peptide_name stays slot-1 label (back-compat)
+    assert row.peptide_name == "BPC-157"
+
+
+def test_populate_missing_new_keys_yields_nulls(db):
+    """Old-shape metas (tests, sparse SENAITE objects) must not break."""
+    meta = {"uid": "U1", "ClientID": "c", "review_state": "received"}
+    row = LimsSample(sample_id="P-0200")
+    service._populate_basic_info(row, meta)
+    assert row.analytes is None and row.coa_meta is not None  # map of Nones
+    assert row.client_title is None and row.date_created is None
