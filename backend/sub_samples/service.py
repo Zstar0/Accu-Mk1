@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 from models import LimsSample, LimsSubSample, LimsSubSampleEvent
 from sub_samples import native
 from sub_samples import senaite
+from sub_samples.native_id import mint_native_id
 from sub_samples.senaite import SecondaryFalloutError
 
 
@@ -121,6 +122,57 @@ def _create_sample_row(db: Session, parent_sample_id: str, meta: dict) -> LimsSa
     )
     _populate_basic_info(row, meta)
     db.add(row)
+    db.flush()
+    return row
+
+
+def upsert_sample_from_signal(db: Session, sample_id: Optional[str],
+                              senaite_uid: Optional[str], meta: dict) -> LimsSample:
+    """Create/refresh a registry row from the IS creation signal
+    (2026-07-06 dual-write spec). The payload is a SENAITE-shaped meta dict,
+    so population runs through the same _populate_basic_info as every other
+    writer.
+
+    SENAITE-attached form: sample_id = the fresh P-xxxx id. SENAITE-free form
+    (future native lines): sample_id None -> the minted native id becomes the
+    sample_id and external_lims_system = "mk1".
+
+    Idempotent: keyed on sample_id; native_id minted exactly once; a repeat
+    signal refreshes fields but never re-mints and never regresses status
+    (the signal's state is stale the moment it's sent — live state is owned
+    by SENAITE until a line goes native)."""
+    meta = dict(meta)
+    meta.setdefault("review_state", "sample_due")
+    if senaite_uid and not meta.get("uid"):
+        meta["uid"] = senaite_uid
+
+    existing = None
+    if sample_id:
+        existing = db.execute(
+            select(LimsSample).where(LimsSample.sample_id == sample_id)
+        ).scalar_one_or_none()
+
+    if existing:
+        prior_status = existing.status
+        _populate_basic_info(existing, meta)
+        if prior_status:
+            existing.status = prior_status
+        if existing.native_id is None:
+            existing.native_id = mint_native_id(db, senaite_sample_id=existing.sample_id)
+        db.flush()
+        return existing
+
+    native_id_value = mint_native_id(
+        db,
+        senaite_sample_id=sample_id,
+        sample_type_title=(meta.get("getSampleTypeTitle")
+                           or meta.get("SampleTypeTitle")),
+    )
+    row = _create_sample_row(db, sample_id or native_id_value, meta)
+    row.native_id = native_id_value
+    if not sample_id:
+        row.external_lims_uid = None
+        row.external_lims_system = "mk1"
     db.flush()
     return row
 

@@ -16567,6 +16567,39 @@ def get_sample_variance_payload(
     }
 
 
+# ── Registry creation signal (integration-service bridge) ────────────
+# Called server-to-server by integration-service immediately after it creates
+# a SENAITE AR (dual-write slice 1, 2026-07-06 spec). Idempotent upsert into
+# lims_samples + native-id mint; see sub_samples.service.upsert_sample_from_signal.
+
+class RegistrySampleSignal(BaseModel):
+    """IS -> Mk1 creation signal (dual-write slice 1). meta is a
+    SENAITE-shaped field dict (same keys as a complete=true AR payload)."""
+    sample_id: Optional[str] = None
+    senaite_uid: Optional[str] = None
+    meta: dict
+
+
+class RegistrySampleSignalResponse(BaseModel):
+    sample_id: str
+    native_id: Optional[str]
+
+
+@app.post("/s2s/lims-samples", response_model=RegistrySampleSignalResponse)
+async def s2s_upsert_lims_sample(
+    req: RegistrySampleSignal,
+    db: Session = Depends(get_db),
+    _: None = Depends(require_internal_service_token),
+):
+    """Server-to-server registry upsert, called by the Integration Service
+    immediately after it creates a SENAITE AR (or, for future SENAITE-free
+    lines, with no SENAITE id at all). Idempotent."""
+    from sub_samples.service import upsert_sample_from_signal
+    row = upsert_sample_from_signal(db, req.sample_id, req.senaite_uid, req.meta)
+    db.commit()
+    return RegistrySampleSignalResponse(sample_id=row.sample_id, native_id=row.native_id)
+
+
 # ── Peptide requests API (integration-service bridge) ────────────────
 # Called server-to-server by integration-service when a WP user submits the
 # peptide-request form. Internal service token + idempotency key are required.
