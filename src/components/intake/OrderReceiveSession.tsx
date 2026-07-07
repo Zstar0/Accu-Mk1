@@ -1,5 +1,5 @@
 import { useState, type ComponentProps } from 'react'
-import { useQuery, useQueries } from '@tanstack/react-query'
+import { useQuery, useQueries, useQueryClient } from '@tanstack/react-query'
 import { Check, Loader2 } from 'lucide-react'
 import {
   Dialog,
@@ -9,7 +9,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { ReceiveWizard } from '@/components/intake/ReceiveWizard/ReceiveWizard'
 import { useParentSampleDetails } from '@/components/intake/ReceiveWizard/useParentSampleDetails'
-import { listSubSamples, type SenaiteSample } from '@/lib/api'
+import { listSubSamples, type SenaiteSample, type SubSampleListResponse } from '@/lib/api'
 import type { SenaiteLookupResult } from '@/lib/api'
 import { completeCheckIn, type CompleteCheckInSample } from '@/lib/complete-checkin'
 import type { OrderGroup } from '@/lib/inbox-orders'
@@ -39,6 +39,7 @@ function analyteLabel(
 }
 
 export function OrderReceiveSession({ orders, onClose, initialPhase }: Props) {
+  const qc = useQueryClient()
   // Walk the flattened union of every order's samples; a combined session is
   // just one stepper over `order 1`'s samples, then `order 2`'s, … . Boxing is
   // no longer a stage here — it lives as an order-scoped tab inside the wizard.
@@ -74,7 +75,19 @@ export function OrderReceiveSession({ orders, onClose, initialPhase }: Props) {
   const handleCompleteCheckIn = async () => {
     setCompleting(true)
     try {
-      await completeCheckIn(checkInSamples)
+      // The wizard invalidates these counts as vials save, but an invalidated
+      // refetch may still be in flight (or a path could miss) — refetch and
+      // rebuild the sample list from the fresh cache so a just-vialed sample
+      // is never skipped by a stale zero.
+      await qc.refetchQueries({ queryKey: ['order-rail-sub-count'] })
+      const freshSamples: CompleteCheckInSample[] = samples.map(s => ({
+        uid: s.uid,
+        sampleId: s.id,
+        vialCount:
+          qc.getQueryData<SubSampleListResponse>(['order-rail-sub-count', s.id])
+            ?.parent.sub_sample_count ?? 0,
+      }))
+      await completeCheckIn(freshSamples)
       onClose()
     } finally {
       setCompleting(false)

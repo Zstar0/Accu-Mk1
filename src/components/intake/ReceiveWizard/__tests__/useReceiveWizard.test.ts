@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { renderHook, waitFor, act } from '@testing-library/react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { createElement, type ReactNode } from 'react'
 
 // Mock the API surface the hook touches. Deferred check-in means the FIRST
 // vial of a sample_due container parent must NOT call receiveSenaiteSample.
@@ -24,6 +26,15 @@ import {
 import { useReceiveWizard } from '@/components/intake/ReceiveWizard/useReceiveWizard'
 
 const parent = { uid: 'U-1', sample_id: 'PB-0075', status: 'sample_due' }
+
+// The hook invalidates the outside-the-wizard vial-count caches (order rail /
+// inbox VialCount) on save/delete, so it needs a QueryClient in scope.
+function renderWizardHook() {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  const wrapper = ({ children }: { children: ReactNode }) =>
+    createElement(QueryClientProvider, { client: qc }, children)
+  return { qc, ...renderHook(() => useReceiveWizard(parent), { wrapper }) }
+}
 
 function subSampleFixture(sampleId: string) {
   return {
@@ -69,7 +80,7 @@ describe('useReceiveWizard — deferred check-in (container first vial)', () => 
   })
 
   it('saving the first vial of a sample_due container parent does NOT receive the parent, and creates S01', async () => {
-    const { result } = renderHook(() => useReceiveWizard(parent))
+    const { result } = renderWizardHook()
 
     // Let mount-time ensure + refresh resolve.
     await waitFor(() => expect(result.current.loading).toBe(false))
@@ -87,5 +98,25 @@ describe('useReceiveWizard — deferred check-in (container first vial)', () => 
     )
     // Parent stays due — not received this session.
     expect(result.current.parentReceivedThisSession).toBe(false)
+  })
+
+  it('saving a vial invalidates the outside vial-count caches (order rail + inbox count)', async () => {
+    const { qc, result } = renderWizardHook()
+    const invalidateSpy = vi.spyOn(qc, 'invalidateQueries')
+
+    await waitFor(() => expect(result.current.loading).toBe(false))
+
+    await act(async () => {
+      await result.current.saveNewVial(new Uint8Array([1, 2, 3]))
+    })
+
+    // The order session's rail/header count (gates its Complete Check-In
+    // button) and the inbox row's VialCount must both refetch after a save.
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: ['order-rail-sub-count', parent.sample_id],
+    })
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: ['sub-samples-count', parent.sample_id],
+    })
   })
 })

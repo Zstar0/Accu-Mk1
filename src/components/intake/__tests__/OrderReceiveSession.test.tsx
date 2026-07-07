@@ -164,6 +164,28 @@ describe('OrderReceiveSession (orders[])', () => {
     await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1))
   })
 
+  it('re-fetches counts before receiving so a just-vialed sample is not skipped', async () => {
+    subCounts['P-1101'] = 1
+    renderSession(twoOrders)
+
+    const btn = await screen.findByRole('button', {
+      name: /Complete Check-In · 1 of 3 samples/i,
+    })
+    await waitFor(() => expect(btn).not.toBeDisabled())
+
+    // A vial lands on P-1102 AFTER the initial fetch (the wizard's save path
+    // hits the API directly) — the pre-receive refetch must pick it up.
+    subCounts['P-1102'] = 2
+    fireEvent.click(btn)
+
+    await waitFor(() => expect(completeCheckIn).toHaveBeenCalledTimes(1))
+    expect(completeCheckIn).toHaveBeenCalledWith([
+      { uid: 'uid-P-1101', sampleId: 'P-1101', vialCount: 1 },
+      { uid: 'uid-P-1102', sampleId: 'P-1102', vialCount: 2 },
+      { uid: 'uid-P-1108', sampleId: 'P-1108', vialCount: 0 },
+    ])
+  })
+
   it('disables Complete Check-In when no sample has a vial', async () => {
     renderSession(twoOrders)
     const btn = await screen.findByRole('button', {
