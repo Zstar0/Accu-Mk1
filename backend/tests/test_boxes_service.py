@@ -78,6 +78,19 @@ def test_assign_rejects_role_mismatch(db):
         service.assign_vials(db, box.id, [endo_vial.sample_id])
 
 
+def test_assign_to_stored_box_rejected(db):
+    # A closed/stored box is off every active surface; assigning into it would
+    # orphan the vial. Service raises ValueError → route answers 400.
+    p = LimsSample(sample_id="P-0612", external_lims_uid="u-612")
+    db.add(p); db.flush()
+    v = _vial(db, p, 1, "hplc")
+    box = service.next_box(db, "WP-20086", "hplc", user_id=1)
+    service.close_box(db, box.id, user_id=1)
+    with pytest.raises(ValueError):
+        service.assign_vials(db, box.id, [v.sample_id])
+    assert v.box_id is None
+
+
 def test_xtra_is_boxable(db):
     p = LimsSample(sample_id="P-0620", external_lims_uid="u-620")
     db.add(p); db.flush()

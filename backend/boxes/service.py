@@ -95,6 +95,9 @@ def assign_vials(db: Session, box_id: int, sub_sample_ids: List[str], user_id=No
     box = db.get(LimsBox, box_id)
     if box is None:
         raise LookupError(f"box {box_id} not found")
+    if box.stored_at is not None:
+        # No surface lists stored boxes, so a vial assigned here would be orphaned.
+        raise ValueError(f"box {box_id} is closed/stored")
     subs = db.scalars(
         select(LimsSubSample).where(LimsSubSample.sample_id.in_(sub_sample_ids))
     ).all()
