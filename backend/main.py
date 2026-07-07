@@ -9898,6 +9898,10 @@ async def publish_sample_coa(
                         ):
                             db.commit()
                     except Exception as mirror_err:
+                        try:
+                            db.rollback()
+                        except Exception:
+                            pass
                         logger.warning(
                             "registry.field_mirror_failed uid=%s err=%s",
                             senaite_uid, mirror_err,
@@ -13418,6 +13422,10 @@ async def update_senaite_sample_fields(
                 if apply_senaite_fields_to_row(db, uid, req.fields):
                     db.commit()
             except Exception as mirror_err:
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
                 logger.warning(
                     "registry.field_mirror_failed uid=%s err=%s", uid, mirror_err
                 )

@@ -221,3 +221,18 @@ def test_field_mirror_ignores_unmapped_fields(db):
     _seeded(db)
     ok = apply_senaite_fields_to_row(db, "U-3001", {"Remarks": "internal note"})
     assert ok is True   # row found; nothing mapped; no error
+
+
+def test_field_mirror_failure_leaves_session_usable(db):
+    """A DB-level failure inside the mirror must not poison the session for
+    subsequent use — the endpoints' except-blocks rollback and move on (the
+    swallow contract). Exercises the REAL mirror failing mid-write (its
+    flush raises after mutating the row), then the caller-side rollback,
+    then proves the session still serves queries."""
+    _seeded(db)
+    with patch.object(db, "flush", side_effect=RuntimeError("db blew up")):
+        with pytest.raises(RuntimeError):
+            apply_senaite_fields_to_row(db, "U-3001", {"ClientLot": "x"})
+    db.rollback()   # what both main.py except-blocks do before logging
+    # session still works
+    assert db.query(LimsSample).filter_by(sample_id="P-3001").one() is not None

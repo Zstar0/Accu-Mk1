@@ -277,8 +277,8 @@ def apply_senaite_fields_to_row(db: Session, senaite_uid: str, fields: dict) -> 
         meta.update({k: (v if v not in ("",) else None) for k, v in coa_updates.items()})
         row.coa_meta = json.dumps(meta)
 
-    # Plain-loop filter (equivalent to the walrus dict-comprehension in the
-    # design doc) — avoids re-matching the regex twice per key below.
+    # Plain-loop filter (behavior-identical to the walrus dict-comprehension
+    # in the design doc).
     analyte_edits = {}
     for key, value in fields.items():
         if _ANALYTE_KEY_RE.match(key):
