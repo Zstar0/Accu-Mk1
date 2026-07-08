@@ -1,4 +1,8 @@
-"""Admin registry-overlay read endpoint: gate, overlay-vs-fallback, analytes-shape guard."""
+"""Registry-overlay read endpoint: auth gate, overlay-vs-fallback, analytes-shape guard.
+
+The endpoint is authenticated-user-gated (not admin-only) — it's a read-only
+projection of data the requesting user already sees via the SENAITE lookup
+it wraps."""
 import json
 from datetime import datetime
 from unittest.mock import AsyncMock, patch
@@ -10,7 +14,7 @@ from sqlalchemy.pool import StaticPool
 from database import Base, get_db
 from models import LimsSample
 import main
-from auth import require_admin, get_current_user
+from auth import get_current_user
 from sub_samples.registry_read import OVERLAY_FIELDS
 
 
@@ -32,7 +36,9 @@ def client():
             db.close()
 
     main.app.dependency_overrides[get_db] = _get_db
-    main.app.dependency_overrides[require_admin] = lambda: {"email": "a@x", "role": "admin"}
+    # Endpoint is gated by get_current_user now (any authenticated user), not
+    # role — most tests below don't care whether this is an admin or not.
+    main.app.dependency_overrides[get_current_user] = lambda: {"email": "a@x", "role": "admin"}
     c = TestClient(main.app)
     c._Session = Session
     yield c
@@ -147,14 +153,25 @@ def test_field_sources_covers_overlay_fields(client):
     assert set(body["field_sources"].keys()) == set(OVERLAY_FIELDS)
 
 
-def test_non_admin_rejected():
-    # No override -> real require_admin -> unauthenticated request rejected.
+def test_unauthenticated_rejected_401():
+    # No override, no bearer token -> real get_current_user -> 401, not 403.
     from database import Base as B
     eng = create_engine("sqlite:///:memory:")
     B.metadata.create_all(eng)
     c = TestClient(main.app)
     r = c.get("/registry/sample/P-1/details")
-    assert r.status_code in (401, 403)
+    assert r.status_code == 401
+
+
+def test_authenticated_non_admin_can_read(client):
+    # The endpoint is a read-only projection of data the user already sees
+    # via the wrapped SENAITE lookup — it's gated by auth, not by role.
+    main.app.dependency_overrides[get_current_user] = lambda: {"email": "u@x", "role": "standard"}
+    _seed(client, client_title="RegistryCo")
+    with _mock_lookup(_senaite_result(client="SenaiteCo")):
+        r = client.get("/registry/sample/P-1/details")
+    assert r.status_code == 200
+    assert r.json()["client"] == "RegistryCo"
 
 
 def test_analytes_shape_mismatch_guarded(client):

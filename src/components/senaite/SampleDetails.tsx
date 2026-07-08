@@ -150,7 +150,7 @@ import { ReplaceAnalyteDialog } from '@/components/senaite/ReplaceAnalyteDialog'
 import { isHplcAnalyteService } from '@/lib/hplc-analyte-services'
 import { needsMk1AnalysesSwap } from '@/lib/mk1-analyses-swap'
 import { buildNativeSubSampleLookup } from '@/lib/native-sub-sample'
-import { useReadSource } from '@/lib/read-source'
+import { useEffectiveReadSource } from '@/lib/read-source'
 import {
   buildVialAssignmentMap,
   PARENT_OVERLAY_QUERY_KEY,
@@ -163,6 +163,7 @@ import { SamplePrepHplcFlyout } from '@/components/hplc/SamplePrepHplcFlyout'
 import { SampleActivityLog } from '@/components/senaite/SampleActivityLog'
 import { SampleRegistryDebug } from '@/components/senaite/SampleRegistryDebug'
 import { ReadSourceBanner } from '@/components/senaite/ReadSourceBanner'
+import { ReadSourceIndicator } from '@/components/senaite/ReadSourceIndicator'
 import {
   OrderedProducts,
   useOrderedProducts,
@@ -3314,12 +3315,15 @@ export function SampleDetails() {
   const { printLabel, target: printTarget } = usePrintLabel()
 
   // Registry read-source toggle: 'mk1' routes the parent-page lookup to the
-  // Mk1 registry endpoint instead of the live SENAITE lookup.
-  const { source: readSource } = useReadSource()
-  // The registry read endpoint is admin-gated (403 for everyone else). A
-  // non-admin who hand-sets sessionStorage['registryReadSource']='mk1'
-  // must still always read SENAITE.
-  const effectiveReadSource = isAdmin ? readSource : 'senaite'
+  // Mk1 registry endpoint instead of the live SENAITE lookup. Precedence is
+  // this page's override, then the org-wide default, then 'senaite' — see
+  // useEffectiveReadSource. The details endpoint is authenticated-user-gated
+  // (not admin-only), so this is available to everyone.
+  const {
+    effective: effectiveReadSource,
+    override: readSourceOverride,
+    setOverride: setReadSourceOverride,
+  } = useEffectiveReadSource('sample_details')
 
   // Retest relationship metadata (banner + chain links)
   const [retestInfo, setRetestInfo] = useState<
@@ -4479,6 +4483,40 @@ export function SampleDetails() {
                     {data.sample_type}
                   </Badge>
                 )}
+                {/* Read-source indicator + tri-state override — visible to
+                    everyone, not just admins (that's the point of widening
+                    the details endpoint). Precedence: override > org default
+                    > 'senaite'; see useEffectiveReadSource. */}
+                <div className="flex items-center gap-2">
+                  <ReadSourceIndicator source={effectiveReadSource} />
+                  <div className="flex items-center gap-0.5 rounded border p-0.5">
+                    {(
+                      [
+                        ['follow', null],
+                        ['senaite', 'senaite'],
+                        ['mk1', 'mk1'],
+                      ] as const
+                    ).map(([label, val]) => (
+                      <button
+                        key={label}
+                        type="button"
+                        onClick={() => setReadSourceOverride(val)}
+                        className={cn(
+                          'px-1.5 py-0.5 text-[10px] font-mono rounded',
+                          readSourceOverride === val
+                            ? 'bg-emerald-600/30 text-emerald-400'
+                            : 'text-muted-foreground hover:text-foreground'
+                        )}
+                      >
+                        {label === 'follow'
+                          ? 'Follow default'
+                          : label === 'senaite'
+                            ? 'SENAITE'
+                            : 'Accu-Mk1'}
+                      </button>
+                    ))}
+                  </div>
+                </div>
               </div>
               {!isParent && parentSampleId && (
                 <div className="flex items-center gap-2 text-sm text-muted-foreground mt-1 flex-wrap">

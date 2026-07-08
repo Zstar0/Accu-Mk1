@@ -13,7 +13,7 @@ import {
   getSampleRegistryDebug, refreshSampleRegistry,
   type SampleRegistryDebug as DebugData, type RegistryFieldStatus,
 } from '@/lib/api'
-import { useReadSource } from '@/lib/read-source'
+import { useReadSourceOverride } from '@/lib/read-source'
 
 const statusGlyph: Record<RegistryFieldStatus, string> = {
   agree: '✔', drift: '⚠', registry_null: '○', senaite_null: '—',
@@ -36,7 +36,7 @@ export function SampleRegistryDebug({ open, onClose, sampleId }: Props) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [showRaw, setShowRaw] = useState(false)
-  const { source, setSource } = useReadSource()
+  const { override: source, setOverride: setSource } = useReadSourceOverride('sample_details')
 
   async function load() {
     setLoading(true); setError(null)

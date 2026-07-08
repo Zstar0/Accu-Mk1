@@ -80,9 +80,3 @@ export function useEffectiveReadSource(page: PageKey) {
   const globalDefault = globalMap[page] ?? DEFAULT_READ_SOURCE
   return { effective: resolveEffective(page, override, globalMap), override, setOverride: set, globalDefault }
 }
-
-/** @deprecated temporary back-compat shim — removed in Task 4 when consumers migrate to useEffectiveReadSource. */
-export function useReadSource() {
-  const { override, setOverride } = useReadSourceOverride('sample_details')
-  return { source: override ?? DEFAULT_READ_SOURCE, setSource: (s: ReadSource) => setOverride(s) }
-}
