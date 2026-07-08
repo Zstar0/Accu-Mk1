@@ -3316,6 +3316,10 @@ export function SampleDetails() {
   // Registry read-source toggle: 'mk1' routes the parent-page lookup to the
   // Mk1 registry endpoint instead of the live SENAITE lookup.
   const { source: readSource } = useReadSource()
+  // The registry read endpoint is admin-gated (403 for everyone else). A
+  // non-admin who hand-sets sessionStorage['registryReadSource']='mk1'
+  // must still always read SENAITE.
+  const effectiveReadSource = isAdmin ? readSource : 'senaite'
 
   // Retest relationship metadata (banner + chain links)
   const [retestInfo, setRetestInfo] = useState<
@@ -3906,9 +3910,9 @@ export function SampleDetails() {
       // fallthrough above (parentId set but not mk1://-native, or the Mk1
       // lookup threw) — only route the parent read through the toggle so
       // sub-sample behavior stays untouched regardless of readSource.
-      return lookupSenaiteSample(id, true, parentId === undefined ? readSource : 'senaite')
+      return lookupSenaiteSample(id, true, parentId === undefined ? effectiveReadSource : 'senaite')
     },
-    [readSource]
+    [effectiveReadSource]
   )
 
   const fetchSample = (id: string) => {

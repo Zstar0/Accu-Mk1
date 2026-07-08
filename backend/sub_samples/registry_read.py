@@ -9,7 +9,7 @@ from models import LimsSample
 # Every SenaiteLookupResult field this mapper can populate. The overlay's
 # field_sources map is built over exactly this set.
 OVERLAY_FIELDS: tuple[str, ...] = (
-    "sample_uid", "client", "contact", "sample_type",
+    "client", "contact", "sample_type",
     "date_received", "date_sampled", "client_order_number",
     "client_sample_id", "client_lot", "review_state",
     "declared_weight_mg", "analytes",
@@ -23,7 +23,6 @@ def registry_row_to_display(row: LimsSample) -> dict[str, Any]:
         if value is not None and value != "":
             out[key] = value
 
-    put("sample_uid", row.external_lims_uid)
     put("client", row.client_title)
     put("contact", row.contact_title)
     put("sample_type", row.sample_type_title)

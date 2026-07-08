@@ -88,6 +88,24 @@ def test_overlay_applies_registry_over_senaite(client):
     assert body["field_sources"]["client"] == "mk1"
 
 
+def test_sample_uid_never_overlaid(client):
+    # sample_uid keys real SENAITE writes (inline field edits, sub-sample
+    # wizard parent uid). It must always come from the fresh SENAITE lookup,
+    # even in mk1 read mode — overlaying a drifted registry uid could
+    # misdirect a write to the wrong AR. The seeded row's external_lims_uid
+    # ("AR_UID") deliberately differs from the mocked SENAITE uid
+    # ("SEN-UID") so a regression here would fail loudly.
+    _seed(client, client_title="RegistryCo")
+    with _mock_lookup(_senaite_result(sample_uid="SEN-UID")):
+        r = client.get("/registry/sample/P-1/details")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["sample_uid"] == "SEN-UID"
+    # sample_uid is no longer an overlay field, so it has no entry in
+    # field_sources at all (it's implicitly always SENAITE-sourced).
+    assert "sample_uid" not in body["field_sources"]
+
+
 def test_fallback_keeps_senaite_where_registry_null(client):
     _seed(client, client_title="RegistryCo")  # client_lot deliberately left None
     with _mock_lookup(_senaite_result(client_lot="L-SEN")):

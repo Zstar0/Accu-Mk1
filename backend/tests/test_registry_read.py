@@ -11,11 +11,10 @@ def _row(**kw):
 
 
 def test_scalar_fields_map_to_lookup_shape():
-    row = _row(external_lims_uid="U1", client_title="Acme", contact_title="Jane Doe",
+    row = _row(client_title="Acme", contact_title="Jane Doe",
                sample_type_title="Peptide Blend", client_order_number="WP-1", client_sample_id="CS-9",
                client_lot="L1", status="sample_received")
     out = registry_row_to_display(row)
-    assert out["sample_uid"] == "U1"
     assert out["client"] == "Acme"
     assert out["contact"] == "Jane Doe"
     assert out["sample_type"] == "Peptide Blend"
