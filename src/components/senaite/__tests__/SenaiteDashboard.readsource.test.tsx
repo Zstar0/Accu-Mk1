@@ -74,6 +74,45 @@ describe('SenaiteDashboard read source', () => {
     await waitFor(() => expect(screen.getByText('Registered')).toBeInTheDocument())
   })
 
+  it('mk1 mode: hide-test filter uses the client_id merged from the SENAITE refresh, not the registry slug', async () => {
+    vi.spyOn(api, 'getSenaiteStatus').mockResolvedValue({ enabled: true })
+    vi.spyOn(api, 'getSettings').mockResolvedValue([
+      { key: 'registry_read_source', value: '{"samples_list":"mk1"}' } as api.Setting,
+    ])
+    vi.spyOn(api, 'fetchSampleAggregates').mockResolvedValue({ aggregates: {} })
+    // The registry stores a SENAITE client slug, which never matches
+    // TEST_CLIENT_ID (an email) — so the fast render lets a test sample
+    // through even with "hide test samples" on.
+    const slugItem: api.SenaiteSample = {
+      ...registryItem,
+      id: 'P-2',
+      client_id: 'forrest-valenceanalytical-com-WP',
+    }
+    // /senaite/samples returns the email form the filter actually checks for.
+    const emailItem: api.SenaiteSample = {
+      ...slugItem,
+      client_id: 'forrest@valenceanalytical.com',
+    }
+    vi.spyOn(api, 'getRegistrySamples').mockResolvedValue({
+      items: [slugItem],
+      total: 1,
+      b_start: 0,
+    })
+    const getSenaite = vi.spyOn(api, 'getSenaiteSamples').mockResolvedValue({
+      items: [emailItem],
+      total: 1,
+      b_start: 0,
+    })
+
+    renderDashboard()
+
+    await waitFor(() => expect(getSenaite).toHaveBeenCalled())
+    // Once the batched refresh merges the authoritative (email-form) client_id,
+    // "hide test samples" (on by default) matches it and the row drops out —
+    // the registry's slug form never would have matched TEST_CLIENT_ID.
+    await waitFor(() => expect(screen.queryByText('P-2')).not.toBeInTheDocument())
+  })
+
   it('senaite mode: only getSenaiteSamples is called — no registry fetch', async () => {
     vi.spyOn(api, 'getSenaiteStatus').mockResolvedValue({ enabled: true })
     vi.spyOn(api, 'getSettings').mockResolvedValue([])

@@ -750,7 +750,12 @@ export function SenaiteDashboard() {
           onRefresh(
             baseItems.map(item => {
               const live = liveById.get(item.id)
-              return live ? { ...item, review_state: live.review_state, analytes: live.analytes } : item
+              // Also take client_id from the SENAITE refresh: the registry stores
+              // a SENAITE client slug (e.g. "forrest-valenceanalytical-com-WP"),
+              // but the hide-test filter above keys on the email form that only
+              // /senaite/samples returns — without this, hide-test never matches
+              // in mk1 mode.
+              return live ? { ...item, review_state: live.review_state, analytes: live.analytes, client_id: live.client_id } : item
             })
           )
         })
