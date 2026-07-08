@@ -16895,7 +16895,9 @@ async def list_samples_from_registry(
 
     stmt = select(LimsSample)
     if review_state:
-        stmt = stmt.where(LimsSample.status == review_state)
+        states = [s.strip() for s in review_state.split(",") if s.strip()]
+        if states:
+            stmt = stmt.where(LimsSample.status.in_(states))
     if search:
         s = f"%{search.strip()}%"
         if search_field == "order_number":

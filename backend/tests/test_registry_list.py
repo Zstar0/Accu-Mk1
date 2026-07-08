@@ -96,6 +96,21 @@ def test_review_state_filter_narrows(client):
     assert [item["id"] for item in body["items"]] == ["P-2"]
 
 
+def test_review_state_filter_accepts_comma_separated_multi_state(client):
+    _seed(client, sample_id="P-1", external_lims_uid="u1", status="sample_due")
+    _seed(client, sample_id="P-2", external_lims_uid="u2", status="sample_received")
+    _seed(client, sample_id="P-3", external_lims_uid="u3", status="to_be_verified")
+    _seed(client, sample_id="P-4", external_lims_uid="u4", status="published")
+    r = client.get(
+        "/registry/samples",
+        params={"review_state": "sample_due,sample_received,to_be_verified"},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["total"] == 3
+    assert sorted(item["id"] for item in body["items"]) == ["P-1", "P-2", "P-3"]
+
+
 def test_unauthenticated_rejected_401():
     from database import Base as B
     eng = create_engine("sqlite:///:memory:")
