@@ -162,6 +162,7 @@ import { useAnalysisSlaMap } from '@/services/analysis-sla'
 import { SamplePrepHplcFlyout } from '@/components/hplc/SamplePrepHplcFlyout'
 import { SampleActivityLog } from '@/components/senaite/SampleActivityLog'
 import { SampleRegistryDebug } from '@/components/senaite/SampleRegistryDebug'
+import { ReadSourceBanner } from '@/components/senaite/ReadSourceBanner'
 import {
   OrderedProducts,
   useOrderedProducts,
@@ -4597,6 +4598,11 @@ export function SampleDetails() {
                       </>
                     )}
                 </p>
+                <ReadSourceBanner
+                  readSource={data.read_source}
+                  registryMissing={data.registry_missing}
+                  fieldSources={data.field_sources}
+                />
               </div>
             </div>
           </div>
