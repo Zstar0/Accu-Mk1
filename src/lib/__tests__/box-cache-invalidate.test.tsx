@@ -29,7 +29,7 @@ function mountProbes(qc: QueryClient) {
       useQuery({ queryKey: ['order-vials', 'WP-1042', ['P-1']], queryFn: orderVialsFn, staleTime: Infinity })
       useQuery({ queryKey: ['active-boxes'], queryFn: activeBoxesFn, staleTime: Infinity })
       useQuery({ queryKey: ['sub-samples', 'P-1'], queryFn: subsFn, staleTime: Infinity })
-      useQuery({ queryKey: ['worksheets'], queryFn: worksheetsFn, staleTime: Infinity })
+      useQuery({ queryKey: ['worksheets-list', undefined], queryFn: worksheetsFn, staleTime: Infinity })
       useQuery({ queryKey: ['order-boxes', 'WP-9999'], queryFn: foreignOrderBoxesFn, staleTime: Infinity })
     },
     { wrapper },
