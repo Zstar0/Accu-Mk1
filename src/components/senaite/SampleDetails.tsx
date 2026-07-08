@@ -150,6 +150,7 @@ import { ReplaceAnalyteDialog } from '@/components/senaite/ReplaceAnalyteDialog'
 import { isHplcAnalyteService } from '@/lib/hplc-analyte-services'
 import { needsMk1AnalysesSwap } from '@/lib/mk1-analyses-swap'
 import { buildNativeSubSampleLookup } from '@/lib/native-sub-sample'
+import { useReadSource } from '@/lib/read-source'
 import {
   buildVialAssignmentMap,
   PARENT_OVERLAY_QUERY_KEY,
@@ -3311,6 +3312,10 @@ export function SampleDetails() {
   // Print Label — single-label print for this sample / its sub-samples
   const { printLabel, target: printTarget } = usePrintLabel()
 
+  // Registry read-source toggle: 'mk1' routes the parent-page lookup to the
+  // Mk1 registry endpoint instead of the live SENAITE lookup.
+  const { source: readSource } = useReadSource()
+
   // Retest relationship metadata (banner + chain links)
   const [retestInfo, setRetestInfo] = useState<
     import('@/lib/api').SampleRetestInfo | null
@@ -3896,9 +3901,13 @@ export function SampleDetails() {
           console.warn(`[sample-details] Mk1 native lookup failed for ${id}; falling back to SENAITE`, e)
         }
       }
-      return lookupSenaiteSample(id)
+      // This return is shared by the parent branch and the legacy sub-sample
+      // fallthrough above (parentId set but not mk1://-native, or the Mk1
+      // lookup threw) — only route the parent read through the toggle so
+      // sub-sample behavior stays untouched regardless of readSource.
+      return lookupSenaiteSample(id, true, parentId === undefined ? readSource : 'senaite')
     },
-    []
+    [readSource]
   )
 
   const fetchSample = (id: string) => {
