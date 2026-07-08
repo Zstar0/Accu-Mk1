@@ -21,6 +21,9 @@ import {
   type ActiveSection,
   type ActiveSubSection,
 } from '@/store/ui-store'
+import { queryClient } from '@/lib/query-client'
+import { getFlag } from '@/lib/flags-api'
+import { flagKeys } from '@/hooks/use-flags'
 
 const VALID_SECTIONS = new Set<string>([
   'dashboard',
@@ -106,8 +109,18 @@ function applyNavToStore(nav: ParsedNav) {
 
   // Slack DM deep link (spec 2026-07-02): one-shot open of a flag thread.
   // buildHash never re-emits ?flag=, so the param clears on the next nav.
-  if (nav.flagId != null) {
-    store.openFlagThread(nav.flagId)
+  const flagId = nav.flagId
+  if (flagId != null) {
+    // Dispatch the thread fetch NOW. FlagThread mounts inside a portaled
+    // Sheet, so its query otherwise enters the browser's request queue after
+    // the whole page burst and, over HTTP/1.1's 6-connection cap, renders
+    // ~10s late on a cold deep link (prod trace 2026-07-06). Same query key
+    // as useFlag, so the mount dedupes against this prefetch.
+    void queryClient.prefetchQuery({
+      queryKey: flagKeys.detail(flagId),
+      queryFn: () => getFlag(flagId),
+    })
+    store.openFlagThread(flagId)
   }
 }
 
