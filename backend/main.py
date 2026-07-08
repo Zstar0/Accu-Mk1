@@ -15733,12 +15733,20 @@ async def create_worksheet(
 
 
 @app.get("/worksheets")
-async def list_worksheets(
+def list_worksheets(
     status: Optional[str] = None,
     db: Session = Depends(get_db),
     _current_user=Depends(get_current_user),
 ):
-    """List worksheets with summary. Excludes staging worksheets."""
+    """List worksheets with summary. Excludes staging worksheets.
+
+    Deliberately sync (`def`, not `async def`): the body is ~2.5s of pure
+    synchronous DB work with zero awaits, and the page fires it twice — as
+    `async def` it ran ON the event loop and froze every other request
+    behind it (a 32ms flag GET measured 5.3s during two in-flight calls,
+    prod probe 2026-07-07). Sync endpoints run in the threadpool. Keep it
+    `def` unless the body becomes genuinely async end-to-end.
+    """
     query = (
         select(Worksheet)
         .where(Worksheet.status != "staging")
