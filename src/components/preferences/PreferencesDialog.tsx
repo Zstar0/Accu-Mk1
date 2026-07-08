@@ -5,6 +5,7 @@ import {
   Palette,
   Zap,
   Database,
+  DatabaseZap,
   Timer,
   CalendarClock,
   Flag,
@@ -38,6 +39,7 @@ import { useUIStore } from '@/store/ui-store'
 import { GeneralPane } from './panes/GeneralPane'
 import { AppearancePane } from './panes/AppearancePane'
 import { DataPipelinePane } from './panes/DataPipelinePane'
+import { DataSourcePane } from './panes/DataSourcePane'
 import { AdvancedPane } from './panes/AdvancedPane'
 import { SlaPane } from './panes/SlaPane'
 import { BusinessHoursPane } from './panes/BusinessHoursPane'
@@ -48,6 +50,7 @@ type PreferencePane =
   | 'general'
   | 'appearance'
   | 'dataPipeline'
+  | 'dataSource'
   | 'sla'
   | 'businessHours'
   | 'flags'
@@ -69,6 +72,11 @@ const navigationItems = [
     id: 'dataPipeline' as const,
     labelKey: 'preferences.dataPipeline',
     icon: Database,
+  },
+  {
+    id: 'dataSource' as const,
+    labelKey: 'preferences.dataSource',
+    icon: DatabaseZap,
   },
   {
     id: 'sla' as const,
@@ -168,6 +176,7 @@ export function PreferencesDialog() {
               {activePane === 'general' && <GeneralPane />}
               {activePane === 'appearance' && <AppearancePane />}
               {activePane === 'dataPipeline' && <DataPipelinePane />}
+              {activePane === 'dataSource' && <DataSourcePane />}
               {activePane === 'sla' && <SlaPane />}
               {activePane === 'businessHours' && <BusinessHoursPane />}
               {activePane === 'flags' && <FlagsPane />}

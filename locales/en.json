@@ -17,6 +17,7 @@
   "preferences.general": "General",
   "preferences.appearance": "Appearance",
   "preferences.dataPipeline": "Data Pipeline",
+  "preferences.dataSource": "Data Source",
   "preferences.advanced": "Advanced",
 
   "preferences.general.keyboardShortcuts": "Keyboard Shortcuts",
