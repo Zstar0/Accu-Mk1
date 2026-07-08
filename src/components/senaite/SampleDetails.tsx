@@ -163,7 +163,7 @@ import { SamplePrepHplcFlyout } from '@/components/hplc/SamplePrepHplcFlyout'
 import { SampleActivityLog } from '@/components/senaite/SampleActivityLog'
 import { SampleRegistryDebug } from '@/components/senaite/SampleRegistryDebug'
 import { ReadSourceBanner } from '@/components/senaite/ReadSourceBanner'
-import { ReadSourceIndicator } from '@/components/senaite/ReadSourceIndicator'
+import { ReadSourceControls } from '@/components/senaite/ReadSourceControls'
 import {
   OrderedProducts,
   useOrderedProducts,
@@ -4491,38 +4491,15 @@ export function SampleDetails() {
                     either there would misstate data provenance. Visible to
                     everyone, not just admins (that's the point of widening
                     the details endpoint). Precedence: override > org default
-                    > 'senaite'; see useEffectiveReadSource. */}
+                    > 'senaite'; see useEffectiveReadSource. The control itself
+                    is shared with the samples-list page (ReadSourceControls);
+                    this isParent gate stays local to sample-details. */}
                 {isParent && (
-                  <div className="flex items-center gap-2">
-                    <ReadSourceIndicator source={effectiveReadSource} />
-                    <div className="flex items-center gap-0.5 rounded border p-0.5">
-                      {(
-                        [
-                          ['follow', null],
-                          ['senaite', 'senaite'],
-                          ['mk1', 'mk1'],
-                        ] as const
-                      ).map(([label, val]) => (
-                        <button
-                          key={label}
-                          type="button"
-                          onClick={() => setReadSourceOverride(val)}
-                          className={cn(
-                            'px-1.5 py-0.5 text-[10px] font-mono rounded',
-                            readSourceOverride === val
-                              ? 'bg-emerald-600/30 text-emerald-400'
-                              : 'text-muted-foreground hover:text-foreground'
-                          )}
-                        >
-                          {label === 'follow'
-                            ? 'Follow default'
-                            : label === 'senaite'
-                              ? 'SENAITE'
-                              : 'Accu-Mk1'}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
+                  <ReadSourceControls
+                    effective={effectiveReadSource}
+                    override={readSourceOverride}
+                    setOverride={setReadSourceOverride}
+                  />
                 )}
               </div>
               {!isParent && parentSampleId && (
