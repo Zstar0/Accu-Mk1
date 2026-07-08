@@ -10,7 +10,7 @@ import type { QueryClient } from '@tanstack/react-query'
  * A box change touches more than the Boxing tab: the Active Boxes page's
  * counts (['active-boxes']), the sample-header box chip fed by the parent's
  * sub-samples list (['sub-samples']), and the worksheet Box column
- * (['worksheets']) all carry box membership. Pass the orderKey to scope the
+ * (['worksheets-list']) all carry box membership. Pass the orderKey to scope the
  * order-level keys (['order-boxes'|'order-vials', orderKey, ...] match by
  * prefix); omit it where the order is unknown (e.g. closing from the Active
  * Boxes list) to invalidate every order's box/vial queries.
@@ -28,6 +28,6 @@ export async function invalidateBoxCaches(
     }),
     queryClient.invalidateQueries({ queryKey: ['active-boxes'] }),
     queryClient.invalidateQueries({ queryKey: ['sub-samples'] }),
-    queryClient.invalidateQueries({ queryKey: ['worksheets'] }),
+    queryClient.invalidateQueries({ queryKey: ['worksheets-list'] }),
   ])
 }

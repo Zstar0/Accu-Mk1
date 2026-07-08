@@ -20,7 +20,12 @@ export function useWorksheetDrawer() {
   const drawerOpen = useUIStore(state => state.worksheetDrawerOpen)
 
   const { data: worksheets = [], isLoading, isError, refetch } = useQuery({
-    queryKey: ['worksheets'],
+    // Same cache entry as SampleDetails' worksheet-chip query and
+    // WorksheetsListPage's 'all' filter — /worksheets is ~2.5s of server DB
+    // work returning 1.3MB, and under a separate key a cold sample-details
+    // load fetched it twice (2026-07-07 prod trace). Keep the key literal in
+    // sync with those consumers.
+    queryKey: ['worksheets-list', undefined],
     queryFn: () => listWorksheets(),
     staleTime: 0,
     refetchInterval: drawerOpen ? 30_000 : false,
@@ -41,7 +46,7 @@ export function useWorksheetDrawer() {
       worksheetId: number
       data: { title?: string; assigned_analyst?: number; notes?: string }
     }) => updateWorksheet(worksheetId, data),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['worksheets'] }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['worksheets-list'] }),
     onError: (err) => toast.error(err instanceof Error ? err.message : 'Update failed'),
   })
 
@@ -54,7 +59,7 @@ export function useWorksheetDrawer() {
       itemId: number
     }) => removeWorksheetItem(worksheetId, itemId),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['worksheets'] })
+      queryClient.invalidateQueries({ queryKey: ['worksheets-list'] })
       queryClient.invalidateQueries({ queryKey: ['inbox-samples'] })
       toast.success('Item removed — now back in inbox')
     },
@@ -64,7 +69,7 @@ export function useWorksheetDrawer() {
   const completeMutation = useMutation({
     mutationFn: (worksheetId: number) => completeWorksheet(worksheetId),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['worksheets'] })
+      queryClient.invalidateQueries({ queryKey: ['worksheets-list'] })
       toast.success('Worksheet completed')
       useUIStore.getState().closeWorksheetDrawer()
     },
@@ -83,7 +88,7 @@ export function useWorksheetDrawer() {
       targetWorksheetId: number
     }) => reassignWorksheetItem(worksheetId, itemId, targetWorksheetId),
     onSuccess: (_data, variables) => {
-      queryClient.invalidateQueries({ queryKey: ['worksheets'] })
+      queryClient.invalidateQueries({ queryKey: ['worksheets-list'] })
       const target = worksheets.find(ws => ws.id === variables.targetWorksheetId)
       toast.success(`Item moved to ${target?.title ?? 'worksheet'}`)
     },
@@ -100,7 +105,7 @@ export function useWorksheetDrawer() {
       itemId: number
       data: { instrument_uid?: string }
     }) => updateWorksheetItem(worksheetId, itemId, data),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['worksheets'] }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['worksheets-list'] }),
     onError: (err) => toast.error(err instanceof Error ? err.message : 'Update item failed'),
   })
 
@@ -112,7 +117,7 @@ export function useWorksheetDrawer() {
       worksheetId: number
       itemIds: number[]
     }) => reorderWorksheetItems(worksheetId, itemIds),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['worksheets'] }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['worksheets-list'] }),
     onError: (err) => toast.error(err instanceof Error ? err.message : 'Reorder failed'),
   })
 
@@ -125,7 +130,7 @@ export function useWorksheetDrawer() {
       data: { sample_uid: string; sample_id: string; service_group_id: number; analyses?: { title: string; keyword?: string | null; peptide_name?: string | null; method?: string | null }[] }
     }) => addGroupToWorksheet(worksheetId, data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['worksheets'] })
+      queryClient.invalidateQueries({ queryKey: ['worksheets-list'] })
       queryClient.invalidateQueries({ queryKey: ['inbox-samples'] })
     },
     onError: (err) => toast.error(err instanceof Error ? err.message : 'Add failed'),
