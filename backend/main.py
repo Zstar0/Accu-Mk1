@@ -16878,6 +16878,39 @@ async def get_sample_read_from_registry(
                                     registry_missing=False, field_sources=field_sources)
 
 
+@app.get("/registry/samples", response_model=SenaiteSamplesResponse)
+async def list_samples_from_registry(
+    review_state: Optional[str] = None,
+    limit: int = 50,
+    b_start: int = 0,
+    search: Optional[str] = None,
+    search_field: Optional[str] = None,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Samples-list read sourced from the local lims_samples registry (no SENAITE
+    round-trip). Live/SENAITE-only fields (analytes, current review_state) are
+    refreshed per-row on the client via progressive backfill."""
+    from sub_samples.registry_list import registry_rows_to_list
+
+    stmt = select(LimsSample)
+    if review_state:
+        stmt = stmt.where(LimsSample.status == review_state)
+    if search:
+        s = f"%{search.strip()}%"
+        if search_field == "order_number":
+            stmt = stmt.where(LimsSample.client_order_number.ilike(s))
+        elif search_field == "verification_code":
+            stmt = stmt.where(LimsSample.verification_code.ilike(s))
+        else:
+            stmt = stmt.where(LimsSample.sample_id.ilike(s))
+    total = db.execute(select(func.count()).select_from(stmt.subquery())).scalar_one()
+    rows = db.execute(
+        stmt.order_by(LimsSample.id.desc()).offset(b_start).limit(limit)
+    ).scalars().all()
+    return SenaiteSamplesResponse(items=registry_rows_to_list(rows), total=total, b_start=b_start)
+
+
 # ── Peptide requests API (integration-service bridge) ────────────────
 # Called server-to-server by integration-service when a WP user submits the
 # peptide-request form. Internal service token + idempotency key are required.
