@@ -41,6 +41,22 @@ def test_analytes_empty_when_missing_or_bad_json():
     assert registry_rows_to_list([_row(analytes='not json')])[0]['analytes'] == []
 
 
+def test_client_id_prefers_client_title_parity_with_senaite_samples():
+    # /senaite/samples maps client_id from getClientTitle or ClientID (main.py
+    # _item_to_model) — mirror that precedence here so the "Client" column and
+    # the hide-test email filter match in Accu-Mk1 mode.
+    row = _row(client_id='forrest-valenceanalytical-com-WP',
+               client_title='forrest@valenceanalytical.com')
+    [out] = registry_rows_to_list([row])
+    assert out['client_id'] == 'forrest@valenceanalytical.com'
+
+
+def test_client_id_falls_back_to_slug_when_no_client_title():
+    row = _row(client_id='forrest-valenceanalytical-com-WP', client_title=None)
+    [out] = registry_rows_to_list([row])
+    assert out['client_id'] == 'forrest-valenceanalytical-com-WP'
+
+
 @pytest.fixture
 def client():
     # StaticPool + check_same_thread=False (per test_registry_read_endpoint.py

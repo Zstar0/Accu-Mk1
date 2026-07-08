@@ -30,7 +30,11 @@ def registry_rows_to_list(rows: list[LimsSample]) -> list[dict[str, Any]]:
             "uid": r.external_lims_uid or r.sample_id,
             "id": r.sample_id,
             "title": r.sample_id,
-            "client_id": r.client_id,
+            # Prefer client_title (SENAITE getClientTitle, e.g. the email) over
+            # the client_id slug, matching /senaite/samples' getClientTitle-or-
+            # ClientID precedence (main.py _item_to_model) so the Client column
+            # and hide-test email filter agree in Accu-Mk1 mode.
+            "client_id": r.client_title or r.client_id,
             "client_order_number": r.client_order_number,
             "date_created": r.date_created.isoformat() if r.date_created else None,
             "date_received": r.date_received.isoformat() if r.date_received else None,
