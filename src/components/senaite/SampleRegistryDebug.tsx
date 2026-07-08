@@ -130,14 +130,26 @@ export function SampleRegistryDebug({ open, onClose, sampleId }: Props) {
                 {data.fields.length > 0 && (
                   <div className="pt-2">
                     <div className="font-mono text-[11px] text-zinc-700 pb-1">{'─'.repeat(3)} fields {'─'.repeat(40)}</div>
-                    {data.fields.map(f => (
-                      <div key={f.field} className={cn(line, statusColor[f.status])}>
-                        <span className={statusColor[f.status]}>{statusGlyph[f.status]}</span>{'  '}
-                        <span className="text-zinc-400">{f.field.padEnd(22)}</span>
-                        <span className="text-zinc-500" title={val(f.registry)}>{val(f.registry).slice(0, 22).padEnd(24)}</span>
-                        <span className="text-zinc-600" title={val(f.senaite)}>{val(f.senaite).slice(0, 22)}</span>
-                      </div>
-                    ))}
+                    {data.fields.map(f => {
+                      const rv = val(f.registry), sv = val(f.senaite)
+                      const differ = rv !== sv
+                      return (
+                        <div key={f.field} className={cn('font-mono text-[12px] leading-relaxed flex gap-1.5', statusColor[f.status])}>
+                          <span className={cn('shrink-0', statusColor[f.status])}>{statusGlyph[f.status]}</span>
+                          <span className="text-zinc-400 shrink-0 w-48">{f.field}</span>
+                          <div className="min-w-0 flex-1">
+                            <div className="text-zinc-400 whitespace-pre-wrap break-all">
+                              {differ && <span className="text-zinc-700">reg </span>}{rv}
+                            </div>
+                            {differ && (
+                              <div className="text-zinc-600 whitespace-pre-wrap break-all">
+                                <span className="text-zinc-700">sen </span>{sv}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      )
+                    })}
                   </div>
                 )}
 

@@ -33,6 +33,20 @@ describe('SampleRegistryDebug', () => {
     expect(screen.getByText('creation-signal')).toBeInTheDocument()
   })
 
+  it('renders long field values in full (no truncation)', async () => {
+    // 3-analyte JSON: the 3rd entry sits well past the old 22-char clip, so
+    // finding it proves the value is rendered whole for accurate cross-check.
+    const analytes = '[{"name": "KPV - Identity (HPLC)", "declared_quantity": "2.00"}, ' +
+      '{"name": "GHK-Cu - Identity (HPLC)", "declared_quantity": "3.00"}, ' +
+      '{"name": "DSIP - Identity (HPLC)", "declared_quantity": "4.00"}]'
+    vi.spyOn(api, 'getSampleRegistryDebug').mockResolvedValue({
+      ...base,
+      fields: [{ field: 'analytes', registry: analytes, senaite: analytes, status: 'agree' }],
+    })
+    render(<SampleRegistryDebug open onClose={() => {}} sampleId="P-1" />)
+    await waitFor(() => expect(screen.getByText(/DSIP - Identity \(HPLC\)/)).toBeInTheDocument())
+  })
+
   it('shows the missing-record state', async () => {
     vi.spyOn(api, 'getSampleRegistryDebug').mockResolvedValue({
       ...base, load: { ...base.load, exists: false }, fields: [], summary: null,
