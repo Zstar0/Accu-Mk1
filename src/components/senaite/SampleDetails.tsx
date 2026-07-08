@@ -4483,40 +4483,47 @@ export function SampleDetails() {
                     {data.sample_type}
                   </Badge>
                 )}
-                {/* Read-source indicator + tri-state override — visible to
+                {/* Read-source indicator + tri-state override — parent-only.
+                    The override only affects parent basic-info reads (see
+                    resolveSampleData: sub-sample fetches are hardcoded to
+                    'senaite' regardless of readSource), so on a sub-sample/
+                    vial page there is nothing to indicate or control; showing
+                    either there would misstate data provenance. Visible to
                     everyone, not just admins (that's the point of widening
                     the details endpoint). Precedence: override > org default
                     > 'senaite'; see useEffectiveReadSource. */}
-                <div className="flex items-center gap-2">
-                  <ReadSourceIndicator source={effectiveReadSource} />
-                  <div className="flex items-center gap-0.5 rounded border p-0.5">
-                    {(
-                      [
-                        ['follow', null],
-                        ['senaite', 'senaite'],
-                        ['mk1', 'mk1'],
-                      ] as const
-                    ).map(([label, val]) => (
-                      <button
-                        key={label}
-                        type="button"
-                        onClick={() => setReadSourceOverride(val)}
-                        className={cn(
-                          'px-1.5 py-0.5 text-[10px] font-mono rounded',
-                          readSourceOverride === val
-                            ? 'bg-emerald-600/30 text-emerald-400'
-                            : 'text-muted-foreground hover:text-foreground'
-                        )}
-                      >
-                        {label === 'follow'
-                          ? 'Follow default'
-                          : label === 'senaite'
-                            ? 'SENAITE'
-                            : 'Accu-Mk1'}
-                      </button>
-                    ))}
+                {isParent && (
+                  <div className="flex items-center gap-2">
+                    <ReadSourceIndicator source={effectiveReadSource} />
+                    <div className="flex items-center gap-0.5 rounded border p-0.5">
+                      {(
+                        [
+                          ['follow', null],
+                          ['senaite', 'senaite'],
+                          ['mk1', 'mk1'],
+                        ] as const
+                      ).map(([label, val]) => (
+                        <button
+                          key={label}
+                          type="button"
+                          onClick={() => setReadSourceOverride(val)}
+                          className={cn(
+                            'px-1.5 py-0.5 text-[10px] font-mono rounded',
+                            readSourceOverride === val
+                              ? 'bg-emerald-600/30 text-emerald-400'
+                              : 'text-muted-foreground hover:text-foreground'
+                          )}
+                        >
+                          {label === 'follow'
+                            ? 'Follow default'
+                            : label === 'senaite'
+                              ? 'SENAITE'
+                              : 'Accu-Mk1'}
+                        </button>
+                      ))}
+                    </div>
                   </div>
-                </div>
+                )}
               </div>
               {!isParent && parentSampleId && (
                 <div className="flex items-center gap-2 text-sm text-muted-foreground mt-1 flex-wrap">
