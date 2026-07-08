@@ -1,0 +1,53 @@
+"""Map a lims_samples registry row into the SenaiteLookupResult field shape,
+for the sample-details read-source toggle. Only fields the registry actually
+supplies are emitted (a null column is omitted, so the overlay layer keeps the
+SENAITE value + tags the field 'senaite')."""
+import json
+from typing import Any
+from models import LimsSample
+
+# Every SenaiteLookupResult field this mapper can populate. The overlay's
+# field_sources map is built over exactly this set.
+OVERLAY_FIELDS: tuple[str, ...] = (
+    "sample_uid", "client", "contact", "sample_type",
+    "date_received", "date_sampled", "client_order_number",
+    "client_sample_id", "client_lot", "review_state",
+    "declared_weight_mg", "analytes",
+)
+
+
+def registry_row_to_display(row: LimsSample) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+
+    def put(key: str, value: Any) -> None:
+        if value is not None and value != "":
+            out[key] = value
+
+    put("sample_uid", row.external_lims_uid)
+    put("client", row.client_title)
+    put("contact", row.contact_title)
+    put("sample_type", row.sample_type_title)
+    put("client_order_number", row.client_order_number)
+    put("client_sample_id", row.client_sample_id)
+    put("client_lot", row.client_lot)
+    put("review_state", row.status)
+    if row.date_received is not None:
+        out["date_received"] = row.date_received.isoformat()
+    if row.date_sampled is not None:
+        out["date_sampled"] = row.date_sampled.isoformat()
+
+    if row.declared_total_quantity not in (None, ""):
+        try:
+            out["declared_weight_mg"] = float(row.declared_total_quantity)
+        except (ValueError, TypeError):
+            pass
+
+    if row.analytes:
+        try:
+            parsed = json.loads(row.analytes)
+            if isinstance(parsed, list):
+                out["analytes"] = parsed
+        except (ValueError, TypeError):
+            pass
+
+    return out
