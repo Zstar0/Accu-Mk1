@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.0.28 — 2026-07-08
+
+### Fixed
+
+- **Slack flag deep links no longer take ~10s to open the thread.** Three compounding causes fixed across two layers (the third, HTTP/2 at the prod edge, shipped as host-nginx config on 2026-07-07):
+  - `GET /worksheets` was `async def` with zero awaits — ~2.5s of synchronous DB work running directly on the event loop, freezing every other request behind it (a 32ms flag fetch measured 5.3s behind two in-flight calls). Now a sync `def` handled in the threadpool.
+  - The full worksheets list was fetched **twice** per sample-details load — `useWorksheetDrawer` (header badge) and the SampleDetails worksheet chip cached the identical list under different query keys. Both now share one cache entry; drawer mutations also refresh the worksheets inbox/list pages that previously went stale.
+  - A `?flag=` deep link now prefetches the flag thread at navigation time, so its fetch leads the boot burst instead of dispatching last from the portaled flyout.
+
 ## v1.0.27 — 2026-07-07
 
 ### Changed
