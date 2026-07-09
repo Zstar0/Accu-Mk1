@@ -483,6 +483,48 @@ def search_sample_ids_by_verification_code(search: str, limit: int = 50) -> list
             return [row[0] for row in cur.fetchall()]
 
 
+def fetch_verification_codes_for_samples(sample_ids: list[str]) -> dict[str, str]:
+    """The ACTIVE verification code per sample, for a batch of sample ids.
+
+    Codes are minted at order time (ingestions) and REPLACED whenever a COA is
+    regenerated (coa_generations) — the IS DB is the authority, not any cached
+    copy (lims_samples.verification_code is only a fallback; BW-0002 drift,
+    2026-07-09). Per-sample precedence mirrors fetch_primary_generation: the
+    newest non-superseded primary generation wins; samples with no generations
+    fall back to their newest ingestion code. Samples with no code anywhere are
+    omitted from the result (caller keeps its fallback).
+    """
+    if not sample_ids:
+        return {}
+    gen_query = """
+        SELECT DISTINCT ON (sample_id) sample_id, verification_code
+        FROM coa_generations
+        WHERE sample_id = ANY(%s)
+          AND parent_generation_id IS NULL
+          AND status <> 'superseded'
+          AND verification_code IS NOT NULL
+        ORDER BY sample_id, generation_number DESC
+    """
+    ing_query = """
+        SELECT DISTINCT ON (sample_id) sample_id, verification_code
+        FROM ingestions
+        WHERE sample_id = ANY(%s) AND verification_code IS NOT NULL
+        ORDER BY sample_id, created_at DESC
+    """
+    out: dict[str, str] = {}
+    with get_integration_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(gen_query, [sample_ids])
+            for sid, code in cur.fetchall():
+                out[sid] = code
+            missing = [sid for sid in sample_ids if sid not in out]
+            if missing:
+                cur.execute(ing_query, [missing])
+                for sid, code in cur.fetchall():
+                    out[sid] = code
+    return out
+
+
 def search_sample_ids_by_order_number(search: str, limit: int = 50) -> list[str]:
     """
     Search for SENAITE sample IDs by WordPress order number (ILIKE).

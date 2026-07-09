@@ -16950,14 +16950,41 @@ async def list_samples_from_registry(
         if search_field == "order_number":
             stmt = stmt.where(LimsSample.client_order_number.ilike(s))
         elif search_field == "verification_code":
-            stmt = stmt.where(LimsSample.verification_code.ilike(s))
+            # Codes are IS-owned and REPLACED on COA regeneration — resolve ids
+            # against the IS DB (parity with /senaite/samples' search) so a
+            # regenerated code still finds its sample. The stored column is a
+            # stale-prone cache; ILIKE on it is only the IS-down fallback.
+            # run_in_threadpool: sync psycopg2 inside an async handler.
+            from starlette.concurrency import run_in_threadpool
+            from integration_db import search_sample_ids_by_verification_code
+            try:
+                ids = await run_in_threadpool(
+                    search_sample_ids_by_verification_code, search.strip())
+                stmt = stmt.where(LimsSample.sample_id.in_(ids))
+            except Exception:
+                stmt = stmt.where(LimsSample.verification_code.ilike(s))
         else:
             stmt = stmt.where(LimsSample.sample_id.ilike(s))
     total = db.execute(select(func.count()).select_from(stmt.subquery())).scalar_one()
     rows = db.execute(
         stmt.order_by(LimsSample.id.desc()).offset(b_start).limit(limit)
     ).scalars().all()
-    return SenaiteSamplesResponse(items=registry_rows_to_list(rows), total=total, b_start=b_start)
+    items = registry_rows_to_list(rows)
+    # Verification codes: overlay the ACTIVE code from the IS DB (one batched
+    # query per page). The stored lims_samples copy goes stale when a COA is
+    # regenerated (IS-side mutation the registry never sees); on IS-DB failure
+    # the stored values stand — the page always renders.
+    if items:
+        from starlette.concurrency import run_in_threadpool
+        from integration_db import fetch_verification_codes_for_samples
+        try:
+            codes = await run_in_threadpool(
+                fetch_verification_codes_for_samples, [it["id"] for it in items])
+            for it in items:
+                it["verification_code"] = codes.get(it["id"]) or it["verification_code"]
+        except Exception:
+            pass
+    return SenaiteSamplesResponse(items=items, total=total, b_start=b_start)
 
 
 # ── Peptide requests API (integration-service bridge) ────────────────
