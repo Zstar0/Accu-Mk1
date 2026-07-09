@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.0.29 — 2026-07-09
+
+### Fixed
+
+- **SharePoint folder crawl no longer OOMs the backend.** Listing the LIMS-CSV root (which grows daily) was unbounded, and the Sample Preps HPLC flows triggered it on dialog open plus a whole-root scan per prep — repeatedly OOM-killing `uvicorn` during lab hours (kernel oom-kill at 6.09 GiB, 2026-07-08).
+  - **Backend:** `sharepoint.py` folder listing is now bounded (item / page / wall-clock caps) so a single listing can't crawl for hours; `/sharepoint/browse` reports a `truncated` flag.
+  - **Frontend (Sample Preps):** the "Scan HPLC" button (whole-root crawl + per-prep recursive listing) is temporarily disabled pending a bounded rework, and the "Pick HPLC data folder" picker now defaults to the **Local files** tab — the SharePoint browser (and its root crawl) only loads if that tab is selected.
+
 ## v1.0.28 — 2026-07-08
 
 ### Fixed
