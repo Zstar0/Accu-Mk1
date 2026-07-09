@@ -150,7 +150,8 @@ import { ReplaceAnalyteDialog } from '@/components/senaite/ReplaceAnalyteDialog'
 import { isHplcAnalyteService } from '@/lib/hplc-analyte-services'
 import { needsMk1AnalysesSwap } from '@/lib/mk1-analyses-swap'
 import { buildNativeSubSampleLookup } from '@/lib/native-sub-sample'
-import { useEffectiveReadSource } from '@/lib/read-source'
+import { useEffectiveReadSource, detailsFieldSource } from '@/lib/read-source'
+import { FieldSourceGlyph } from '@/components/senaite/FieldSourceGlyph'
 import {
   buildVialAssignmentMap,
   PARENT_OVERLAY_QUERY_KEY,
@@ -2429,16 +2430,20 @@ function DataRow({
   value,
   mono = false,
   emphasis = false,
+  sourceGlyph,
 }: {
   label: string
   value: React.ReactNode
   mono?: boolean
   emphasis?: boolean
+  /** Per-field provenance marker (FieldSourceGlyph) — mk1 read mode only. */
+  sourceGlyph?: React.ReactNode
 }) {
   return (
     <div className="flex items-baseline justify-between py-1.5 border-b border-border/50 last:border-0">
-      <span className="text-xs text-muted-foreground shrink-0 min-w-28 mr-3">
+      <span className="text-xs text-muted-foreground shrink-0 min-w-28 mr-3 inline-flex items-center gap-1">
         {label}
+        {sourceGlyph}
       </span>
       <div className="flex items-center gap-1">
         <span
@@ -2458,11 +2463,14 @@ function DataRow({
 function SectionHeader({
   icon: Icon,
   title,
+  titleSuffix,
   children,
   defaultOpen = true,
 }: {
   icon: React.ComponentType<{ size?: number; className?: string }>
   title: string
+  /** Rendered immediately after the title text (e.g. a FieldSourceGlyph). */
+  titleSuffix?: React.ReactNode
   children: React.ReactNode
   defaultOpen?: boolean
 }) {
@@ -2487,6 +2495,7 @@ function SectionHeader({
         <span className="text-sm font-semibold text-foreground tracking-wide uppercase">
           {title}
         </span>
+        {titleSuffix}
       </button>
       {open && <div id={contentId}>{children}</div>}
     </div>
@@ -4157,6 +4166,14 @@ export function SampleDetails() {
     )
   }
 
+  // Per-field provenance markers (mk1 read mode only; null in SENAITE mode).
+  const fieldGlyph = (field: string, label: string) => (
+    <FieldSourceGlyph
+      source={detailsFieldSource(data.read_source, data.field_sources, field)}
+      field={label}
+    />
+  )
+
   const hasDraftCOA = coaGenerations.some(g => g.status === 'draft')
 
   /** Kicks off the animated console and returns a `resolve(ok, errMsg?)` function. */
@@ -4474,7 +4491,12 @@ export function SampleDetails() {
                     data.sample_id
                   )}
                 </h1>
-                {data.review_state && <StatusBadge state={data.review_state} />}
+                {data.review_state && (
+                  <span className="inline-flex items-center gap-1">
+                    <StatusBadge state={data.review_state} />
+                    {fieldGlyph('review_state', 'Status')}
+                  </span>
+                )}
                 {data.sample_type && (
                   <Badge
                     variant="outline"
@@ -5024,6 +5046,7 @@ export function SampleDetails() {
                     label="Sample Type"
                     value={data.sample_type}
                     emphasis
+                    sourceGlyph={fieldGlyph('sample_type', 'Sample Type')}
                   />
                   <EditableDataRow
                     label="Date Sampled"
@@ -5038,10 +5061,12 @@ export function SampleDetails() {
                           : prev
                       )
                     }
+                    sourceGlyph={fieldGlyph('date_sampled', 'Date Sampled')}
                   />
                   <DataRow
                     label="Date Received"
                     value={formatDate(data.date_received)}
+                    sourceGlyph={fieldGlyph('date_received', 'Date Received')}
                   />
                 </div>
               </SectionHeader>
@@ -5069,6 +5094,10 @@ export function SampleDetails() {
                               : prev
                           )
                         }
+                        sourceGlyph={fieldGlyph(
+                          'client_order_number',
+                          'Order #'
+                        )}
                       />
                     </div>
                     {data.client_order_number &&
@@ -5107,6 +5136,10 @@ export function SampleDetails() {
                           : prev
                       )
                     }
+                    sourceGlyph={fieldGlyph(
+                      'client_sample_id',
+                      'Client Sample ID'
+                    )}
                   />
                   <EditableDataRow
                     label="Client Lot"
@@ -5121,8 +5154,13 @@ export function SampleDetails() {
                           : prev
                       )
                     }
+                    sourceGlyph={fieldGlyph('client_lot', 'Client Lot')}
                   />
-                  <DataRow label="Contact" value={data.contact} />
+                  <DataRow
+                    label="Contact"
+                    value={data.contact}
+                    sourceGlyph={fieldGlyph('contact', 'Contact')}
+                  />
                   <DataRow
                     label="Client"
                     value={
@@ -5134,6 +5172,7 @@ export function SampleDetails() {
                         '—'
                       )
                     }
+                    sourceGlyph={fieldGlyph('client', 'Client')}
                   />
                 </div>
                 <OrderedProducts
@@ -5516,7 +5555,11 @@ export function SampleDetails() {
               })()}
 
             <Card className="p-4">
-              <SectionHeader icon={Layers} title="Analytes">
+              <SectionHeader
+                icon={Layers}
+                title="Analytes"
+                titleSuffix={fieldGlyph('analytes', 'Analytes')}
+              >
                 {data.analytes.length > 0 ? (
                   <div className="space-y-3">
                     {data.analytes.map(analyte => {
@@ -5678,6 +5721,10 @@ export function SampleDetails() {
                         </span>
                       }
                       emphasis
+                      sourceGlyph={fieldGlyph(
+                        'declared_weight_mg',
+                        'Total Declared Qty'
+                      )}
                     />
                   </div>
                 )}
