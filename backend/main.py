@@ -73,6 +73,8 @@ from file_watcher import FileWatcher
 from sub_samples.routes import router as sub_samples_router
 import sub_samples.service as sub_service
 from sub_samples.service import derive_base_demand
+from sub_samples import senaite
+from sub_samples.registry_debug import diff_registry_vs_senaite
 from lims_analyses.routes import router as lims_analyses_router
 from families.routes import router as families_router  # Phase 5b
 from boxes.routes import router as boxes_router
@@ -16691,6 +16693,143 @@ def s2s_upsert_lims_sample(
     row = upsert_sample_from_signal(db, req.sample_id, req.senaite_uid, req.meta)
     db.commit()
     return RegistrySampleSignalResponse(sample_id=row.sample_id, native_id=row.native_id)
+
+
+# ── Registry debug (admin diagnostic) ─────────────────────────────────
+# Non-mutating registry-vs-SENAITE compare for the admin debug panel
+# (2026-07-07-sample-registry-debug-panel-design.md). Reads the raw
+# LimsSample row directly — never ensure_sample_row / list_sub_samples /
+# _reconcile_from_senaite — so drift is observable instead of auto-healed.
+
+def _registry_origin(row) -> str:
+    if row.external_lims_system == "mk1":
+        return "native"
+    if row.native_id:
+        return "creation-signal"
+    return "lazy-or-backfill"
+
+
+def _build_registry_debug_response(db: Session, sample_id: str) -> dict:
+    """Assemble the registry-debug payload. NON-MUTATING: reads the raw row
+    directly (never ensure_sample_row / list_sub_samples / reconcile), so
+    drift is observable instead of auto-healed."""
+    row = db.execute(
+        select(LimsSample).where(LimsSample.sample_id == sample_id)
+    ).scalar_one_or_none()
+
+    if row is None:
+        return {
+            "sample_id": sample_id,
+            "load": {"exists": False, "native_id": None, "external_lims_system": None,
+                     "last_synced_at": None, "age_seconds": None, "reconcile_due": None},
+            "linkage": None, "origin": None, "container": None,
+            "fields": [], "summary": None, "vials": None,
+            "verdict": None, "senaite_error": None, "raw": None,
+        }
+
+    age = None
+    reconcile_due = None
+    if row.last_synced_at:
+        age = int((datetime.utcnow() - row.last_synced_at).total_seconds())
+        reconcile_due = age > 300  # CACHE_FRESHNESS = 5 min
+    load = {
+        "exists": True, "native_id": row.native_id,
+        "external_lims_system": row.external_lims_system,
+        "last_synced_at": row.last_synced_at.isoformat() if row.last_synced_at else None,
+        "age_seconds": age, "reconcile_due": reconcile_due,
+    }
+    container = {"container_mode": row.container_mode, "assignment_role": row.assignment_role}
+
+    meta = None
+    senaite_error = None
+    try:
+        meta = senaite.fetch_parent_metadata(sample_id)
+    except Exception as e:
+        senaite_error = str(e)
+
+    if meta is None:
+        return {
+            "sample_id": sample_id, "load": load,
+            "linkage": {"registry_uid": row.external_lims_uid, "senaite_uid": None,
+                        "status": "senaite_missing"},
+            "origin": _registry_origin(row), "container": container,
+            "fields": [], "summary": None, "vials": None, "verdict": None,
+            "senaite_error": senaite_error,
+            "raw": {"registry": _row_to_dict(row), "senaite": None},
+        }
+
+    diff = diff_registry_vs_senaite(row, meta)
+    senaite_uid = meta.get("uid")
+    linkage_status = ("match" if row.external_lims_uid == senaite_uid
+                      else "senaite_missing" if not senaite_uid else "mismatch")
+
+    vials = None
+    try:
+        local_ct = db.execute(
+            select(func.count()).select_from(LimsSubSample)
+            .where(LimsSubSample.parent_sample_pk == row.id)
+        ).scalar_one()
+        senaite_ct = len(senaite.fetch_secondaries(sample_id))
+        vstatus = ("in_sync" if local_ct == senaite_ct
+                   else "local_extra" if local_ct > senaite_ct else "senaite_extra")
+        vials = {"local": local_ct, "senaite": senaite_ct, "status": vstatus}
+    except Exception:
+        vials = None
+
+    return {
+        "sample_id": sample_id, "load": load,
+        "linkage": {"registry_uid": row.external_lims_uid, "senaite_uid": senaite_uid,
+                    "status": linkage_status},
+        "origin": _registry_origin(row), "container": container,
+        "fields": diff["fields"], "summary": diff["summary"], "vials": vials,
+        "verdict": {"linkage_ok": linkage_status == "match",
+                    "vials_ok": (vials or {}).get("status") == "in_sync" if vials else None,
+                    "drift": diff["summary"]["drift"],
+                    "registry_null": diff["summary"]["registry_null"]},
+        "senaite_error": None,
+        "raw": {"registry": _row_to_dict(row), "senaite": meta},
+    }
+
+
+def _row_to_dict(row) -> dict:
+    """Registry row → JSON-safe dict for the raw panel."""
+    out = {}
+    for col in row.__table__.columns:
+        v = getattr(row, col.name)
+        out[col.name] = v.isoformat() if isinstance(v, datetime) else v
+    return out
+
+
+@app.get("/debug/sample-registry/{sample_id}")
+async def get_sample_registry_debug(
+    sample_id: str,
+    admin=Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Admin registry diagnostic — non-mutating registry-vs-SENAITE compare."""
+    return _build_registry_debug_response(db, sample_id)
+
+
+@app.post("/debug/sample-registry/{sample_id}/refresh")
+async def refresh_sample_registry_debug(
+    sample_id: str,
+    admin=Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Admin action: force a SENAITE reconcile of the registry row, then
+    return the re-diffed debug payload so drift can be watched resolving.
+    Distinct POST verb because it mutates."""
+    from sub_samples.service import _refresh_parent_from_senaite
+    row = db.execute(
+        select(LimsSample).where(LimsSample.sample_id == sample_id)
+    ).scalar_one_or_none()
+    if row is not None:
+        try:
+            _refresh_parent_from_senaite(db, row)
+            db.commit()
+        except Exception:
+            db.rollback()
+    return _build_registry_debug_response(db, sample_id)
 
 
 # ── Peptide requests API (integration-service bridge) ────────────────

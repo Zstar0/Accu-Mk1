@@ -5016,6 +5016,49 @@ export async function getSampleActivity(sampleId: string): Promise<SampleActivit
   return response.json()
 }
 
+// ─── Registry Debug Panel (admin) ────────────────────────────────────────────
+
+export type RegistryFieldStatus = 'agree' | 'drift' | 'registry_null' | 'senaite_null'
+
+export interface RegistryDebugField {
+  field: string
+  registry: unknown
+  senaite: unknown
+  status: RegistryFieldStatus
+}
+
+export interface SampleRegistryDebug {
+  sample_id: string
+  load: {
+    exists: boolean
+    native_id: string | null
+    external_lims_system: string | null
+    last_synced_at: string | null
+    age_seconds: number | null
+    reconcile_due: boolean | null
+  }
+  linkage: { registry_uid: string | null; senaite_uid: string | null; status: string } | null
+  origin: string | null
+  container: { container_mode: boolean; assignment_role: string } | null
+  fields: RegistryDebugField[]
+  summary: { agree: number; drift: number; registry_null: number; senaite_null: number } | null
+  vials: { local: number; senaite: number; status: string } | null
+  verdict: { linkage_ok: boolean; vials_ok: boolean | null; drift: number; registry_null: number } | null
+  senaite_error: string | null
+  raw: { registry: Record<string, unknown> | null; senaite: Record<string, unknown> | null } | null
+}
+
+export async function getSampleRegistryDebug(sampleId: string): Promise<SampleRegistryDebug> {
+  return apiFetch<SampleRegistryDebug>(`/debug/sample-registry/${encodeURIComponent(sampleId)}`)
+}
+
+export async function refreshSampleRegistry(sampleId: string): Promise<SampleRegistryDebug> {
+  return apiFetch<SampleRegistryDebug>(
+    `/debug/sample-registry/${encodeURIComponent(sampleId)}/refresh`,
+    { method: 'POST' },
+  )
+}
+
 // ─── Sample Retest Info ──────────────────────────────────────────────────────
 
 export interface RetestForwardLink {

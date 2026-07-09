@@ -30,6 +30,7 @@ import {
   FileText,
   Terminal,
   CornerDownRight,
+  Radar,
 } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -159,6 +160,7 @@ import { SampleHeaderSla } from '@/components/senaite/SampleHeaderSla'
 import { useAnalysisSlaMap } from '@/services/analysis-sla'
 import { SamplePrepHplcFlyout } from '@/components/hplc/SamplePrepHplcFlyout'
 import { SampleActivityLog } from '@/components/senaite/SampleActivityLog'
+import { SampleRegistryDebug } from '@/components/senaite/SampleRegistryDebug'
 import {
   OrderedProducts,
   useOrderedProducts,
@@ -171,6 +173,7 @@ import {
 import { VialsQuickLookDialog } from '@/components/senaite/VialsQuickLookDialog'
 import { EntityFlagButton } from '@/components/flags/EntityFlagButton'
 import { useRegisterActiveFlagEntity } from '@/components/flags/use-active-flag-entity'
+import { useAuthStore } from '@/store/auth-store'
 import {
   Eye,
   Microscope,
@@ -3298,6 +3301,10 @@ export function SampleDetails() {
   // Activity log flyout
   const [activityLogOpen, setActivityLogOpen] = useState(false)
 
+  // Registry debug panel (admin-only)
+  const [registryDebugOpen, setRegistryDebugOpen] = useState(false)
+  const isAdmin = useAuthStore(s => s.user?.role === 'admin')
+
   // Variance summary dialog (worksheet-variance design 2026-06-02)
   const [varianceSummaryOpen, setVarianceSummaryOpen] = useState(false)
 
@@ -4757,6 +4764,17 @@ export function SampleDetails() {
                 <ScrollText size={12} />
                 Activity
               </Button>
+              {isAdmin && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 w-7 px-0 cursor-pointer"
+                  title="Registry debug (admin)"
+                  onClick={() => setRegistryDebugOpen(true)}
+                >
+                  <Radar size={12} />
+                </Button>
+              )}
               <Button
                 variant="outline"
                 size="sm"
@@ -6374,6 +6392,13 @@ export function SampleDetails() {
         open={activityLogOpen}
         onClose={() => setActivityLogOpen(false)}
         sampleId={sampleId || ''}
+      />
+
+      {/* Registry debug panel (admin-only) */}
+      <SampleRegistryDebug
+        open={registryDebugOpen}
+        onClose={() => setRegistryDebugOpen(false)}
+        sampleId={sampleId ?? ''}
       />
 
       {/* Single-label print portal — off-screen DOM the print CSS reveals */}
