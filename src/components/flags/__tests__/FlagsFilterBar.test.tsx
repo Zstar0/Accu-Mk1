@@ -13,7 +13,7 @@ vi.mock('@/components/flags/flag-users', () => ({
 
 describe('FlagsFilterBar', () => {
   it('renders the assignee select by default', () => {
-    render(<FlagsFilterBar value={EMPTY_FLAG_FILTER} onChange={() => {}} />)
+    render(<FlagsFilterBar value={EMPTY_FLAG_FILTER} onChange={vi.fn()} />)
     expect(screen.getByLabelText('Filter by assignee')).toBeInTheDocument()
   })
 
@@ -21,7 +21,7 @@ describe('FlagsFilterBar', () => {
     render(
       <FlagsFilterBar
         value={EMPTY_FLAG_FILTER}
-        onChange={() => {}}
+        onChange={vi.fn()}
         showAssignee={false}
       />
     )

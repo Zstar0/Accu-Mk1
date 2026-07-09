@@ -36,13 +36,12 @@ function load(tab: string): FlagFilterState {
 export function useFlagFilter(
   tab: string
 ): [FlagFilterState, (next: FlagFilterState) => void] {
-  // Bump to re-read after writes; load() is cheap.
-  const [, setTick] = useState(0)
+  // Free text is session-only; a write bumps `session` (new ref), which
+  // re-runs the memo and re-reads localStorage. load() is cheap.
   const [session, setSession] = useState<Record<string, string>>({})
 
   const filter = useMemo(
     () => ({ ...load(tab), text: session[tab] ?? '' }),
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- tick invalidates
     [tab, session]
   )
 
@@ -55,7 +54,6 @@ export function useFlagFilter(
         /* quota/SSR — session-only */
       }
       setSession(s => ({ ...s, [tab]: text }))
-      setTick(t => t + 1)
     },
     [tab]
   )

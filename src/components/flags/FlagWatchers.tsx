@@ -17,7 +17,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { type Watcher } from '@/lib/flags-api'
+import type { Watcher } from '@/lib/flags-api'
 import { useAddWatcher, useRemoveWatcher } from '@/hooks/use-flags'
 import {
   useFlagUsers,

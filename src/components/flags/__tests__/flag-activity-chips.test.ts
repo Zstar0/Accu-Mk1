@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { filterActivity } from '@/components/flags/FlagActivityFeed'
+import { filterActivity } from '@/components/flags/flag-activity'
 import type { ActivityItem } from '@/lib/flags-api'
 
 const item = (id: number, relevance: string[]): ActivityItem => ({

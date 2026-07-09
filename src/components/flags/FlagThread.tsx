@@ -57,13 +57,10 @@ type TimelineEntry =
   | { kind: 'event'; at: string; event: EventResponse }
 
 /**
- * One flag's thread: breadcrumb + entity/resolve header, status/assignee/watch
- * controls, an interleaved audit+comment timeline, and a composer. Visual
- * target: flag-thread-dark.html.
- *
- * Gaps vs the mockup (API limits, noted): the detail API exposes no watchers
- * list, so the watcher count is derived best-effort from the event trail and
- * the Watch toggle's initial state is inferred the same way.
+ * One flag's thread: breadcrumb + entity/resolve header, status/assignee
+ * controls, a watcher row (FlagWatchers, backed by the detail API's watchers
+ * list), an interleaved audit+comment timeline, and a composer. Visual target:
+ * flag-thread-dark.html.
  */
 export function FlagThread({
   flagId,
@@ -309,7 +306,6 @@ export function FlagThread({
               ))}
             </SelectContent>
           </Select>
-
         </div>
 
         {/* Watchers: real list from the detail API (add / remove / self-toggle). */}
