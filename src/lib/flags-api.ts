@@ -110,7 +110,9 @@ export interface FlagDetailResponse extends FlagResponse {
   watchers: Watcher[]
 }
 
-/** Mirrors `ActivityItem` — one audit event + its (entity-resolved) flag. */
+/** Mirrors `ActivityItem` — one audit event + its (entity-resolved) flag.
+ *  `relevance` marks why this event is in the requesting user's feed:
+ *  a subset of `actor | assigned | raised | watching | mentioned`. */
 export interface ActivityItem {
   id: number
   event_type: string
@@ -119,6 +121,7 @@ export interface ActivityItem {
   to_value: string | null
   created_at: string
   flag: FlagResponse
+  relevance: string[]
 }
 
 /** Mirrors `ActivityPage` — one keyset page of the activity feed. */
