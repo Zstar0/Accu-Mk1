@@ -208,6 +208,10 @@ export function SamplePreps() {
   const [scanMatches, setScanMatches] = useState<Map<number, HplcScanMatch>>(new Map())
   const [showConsole, setShowConsole] = useState(false)
   const cancelScanRef = useRef<(() => void) | null>(null)
+  // Scan HPLC temporarily disabled (2026-07-09 hotfix). The whole-root crawl +
+  // per-prep recursive listing behind this button OOM'd prod. Re-enable once it
+  // is reworked into a bounded / local-file search. Flip to true to restore.
+  const SCAN_HPLC_ENABLED = false
 
   // Flyout state
   const [flyoutPrep, setFlyoutPrep] = useState<SamplePrep | null>(null)
@@ -218,7 +222,7 @@ export function SamplePreps() {
   // scanMatches, so Process HPLC works identically downstream.
   const [overrideTarget, setOverrideTarget] = useState<SamplePrep | null>(null)
   const [overrideLoading, setOverrideLoading] = useState(false)
-  const [overrideTab, setOverrideTab] = useState<'sharepoint' | 'local'>('sharepoint')
+  const [overrideTab, setOverrideTab] = useState<'sharepoint' | 'local'>('local')
 
   const load = useCallback(async (q?: string) => {
     setLoading(true)
@@ -355,7 +359,7 @@ export function SamplePreps() {
       }
       setScanMatches(prev => new Map(prev).set(prep.id, match))
       setOverrideTarget(null)
-      setOverrideTab('sharepoint')
+      setOverrideTab('local')
       toast.success(`"${res.folder_name}" pinned to ${prep.senaite_sample_id ?? prep.sample_id}`, {
         description: `${res.peak_files.length} PeakData, ${res.chrom_files.length} chromatogram file(s) — use Process HPLC.`,
       })
@@ -389,7 +393,7 @@ export function SamplePreps() {
     }
     setScanMatches(prev => new Map(prev).set(prep.id, match))
     setOverrideTarget(null)
-    setOverrideTab('sharepoint')
+    setOverrideTab('local')
     const chromCount = localFiles.filter(f => f.kind === 'chrom').length
     toast.success(`"${folderName}" pinned to ${prep.senaite_sample_id ?? prep.sample_id}`, {
       description: `${peakCount} PeakData, ${chromCount} chromatogram file(s) — use Process HPLC.`,
@@ -416,19 +420,21 @@ export function SamplePreps() {
             <RefreshCw className={`h-4 w-4 mr-1.5 ${loading ? 'animate-spin' : ''}`} />
             Refresh
           </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={scanPhase === 'running' ? undefined : startScan}
-            disabled={scanPhase === 'running'}
-            className="gap-1.5"
-          >
-            {scanPhase === 'running' ? (
-              <><Loader2 className="h-4 w-4 animate-spin" /> Scanning...</>
-            ) : (
-              <><ScanLine className="h-4 w-4" /> Scan HPLC</>
-            )}
-          </Button>
+          {SCAN_HPLC_ENABLED && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={scanPhase === 'running' ? undefined : startScan}
+              disabled={scanPhase === 'running'}
+              className="gap-1.5"
+            >
+              {scanPhase === 'running' ? (
+                <><Loader2 className="h-4 w-4 animate-spin" /> Scanning...</>
+              ) : (
+                <><ScanLine className="h-4 w-4" /> Scan HPLC</>
+              )}
+            </Button>
+          )}
           <Button size="sm" onClick={() => navigateTo('hplc-analysis', 'new-analysis')}>
             <Plus className="h-4 w-4 mr-1.5" />
             New Prep
@@ -641,7 +647,7 @@ export function SamplePreps() {
       )}
 
       {/* HPLC data folder override picker — SharePoint or Local files */}
-      <Dialog open={overrideTarget !== null} onOpenChange={v => { if (!v && !overrideLoading) { setOverrideTarget(null); setOverrideTab('sharepoint') } }}>
+      <Dialog open={overrideTarget !== null} onOpenChange={v => { if (!v && !overrideLoading) { setOverrideTarget(null); setOverrideTab('local') } }}>
         <DialogContent className="sm:max-w-3xl">
           <DialogHeader>
             <DialogTitle>

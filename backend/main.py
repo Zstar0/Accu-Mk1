@@ -10200,10 +10200,13 @@ async def sharepoint_browse(
     """
     try:
         if root == "lims":
-            items = await sp.list_lims_folder(path)
+            items, truncated = await sp.list_lims_folder(path, with_truncation=True)
         else:
-            items = await sp.list_folder(path)
-        return {"path": path, "root": root, "items": items}
+            items, truncated = await sp.list_folder(path, with_truncation=True)
+        # `truncated` is True when the folder was too large to list in full
+        # (bounded crawl). The client can surface a "showing first N — open a
+        # subfolder" hint rather than treating the listing as complete.
+        return {"path": path, "root": root, "items": items, "truncated": truncated}
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"SharePoint error: {e}")
 

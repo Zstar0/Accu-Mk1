@@ -32,6 +32,19 @@ SHAREPOINT_LIMS_CSV_PATH = os.getenv("SHAREPOINT_LIMS_CSV_PATH", "Analytical/LIM
 GRAPH_BASE_URL = "https://graph.microsoft.com/v1.0"
 GRAPH_SCOPES = ["https://graph.microsoft.com/.default"]
 
+# ── Folder-listing bounds ──────────────────────────────────────────
+# Graph paginates folder children via @odata.nextLink. An unbounded
+# `while url:` crawl of a very large folder (the LIMS-CSV root grows with
+# every HPLC dump) accumulated GiBs of RSS over hours and OOM-killed the
+# backend (prod, 2026-07-08). Cap every listing on three axes so a crawl
+# always terminates; truncation is logged (never silent) and surfaced to
+# callers that pass with_truncation=True. Overridable via env for ops.
+# _MAX_LIST_ITEMS is page-granular: the result may overshoot by up to one
+# Graph page (the page is already fetched when the cap is checked).
+_MAX_LIST_ITEMS = int(os.getenv("SHAREPOINT_MAX_LIST_ITEMS", "20000"))
+_MAX_LIST_PAGES = int(os.getenv("SHAREPOINT_MAX_LIST_PAGES", "30"))
+_LIST_DEADLINE_S = float(os.getenv("SHAREPOINT_LIST_DEADLINE_S", "25"))
+
 # ── Token Cache ────────────────────────────────────────────────────
 _token_cache: dict = {"access_token": None, "expires_at": 0}
 _site_id_cache: Optional[str] = None
@@ -141,16 +154,23 @@ async def _get_drive_id() -> str:
 
 # ── File Operations ────────────────────────────────────────────────
 
-async def _list_folder_at_root(root_path: str, path: str = "") -> list[dict]:
+async def _list_folder_at_root(root_path: str, path: str = "", *, with_truncation: bool = False):
     """
     List children of a folder relative to a given root path.
 
     Args:
         root_path: The base path in the document library (e.g. Peptides or LIMS CSVs)
         path: Relative path within the root (empty = root itself)
+        with_truncation: when True, return (items, truncated); default False
+            returns just items (back-compat with existing callers).
 
     Returns:
-        List of dicts with keys: name, type ('folder'|'file'), size, id, last_modified
+        list[dict] — or (list[dict], truncated_bool) when with_truncation=True.
+        Each dict has keys: name, type ('folder'|'file'), size, id, last_modified.
+
+    The crawl is bounded (see _MAX_LIST_* / _LIST_DEADLINE_S): a folder large
+    enough to page past any limit returns a partial listing with truncated=True
+    rather than crawling unbounded and leaking RSS (prod OOM 2026-07-08).
     """
     drive_id = await _get_drive_id()
 
@@ -171,6 +191,9 @@ async def _list_folder_at_root(root_path: str, path: str = "") -> list[dict]:
     }
 
     items = []
+    truncated = False
+    pages = 0
+    deadline = time.monotonic() + _LIST_DEADLINE_S
     retried_auth = False
     async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, timeout=30.0) as client:
         while url:
@@ -196,28 +219,42 @@ async def _list_folder_at_root(root_path: str, path: str = "") -> list[dict]:
                     "mime_type": item.get("file", {}).get("mimeType") if "file" in item else None,
                 })
 
+            pages += 1
             # Handle pagination
             url = data.get("@odata.nextLink")
             params = {}  # nextLink already includes params
 
-    return items
+            if url and (len(items) >= _MAX_LIST_ITEMS or pages >= _MAX_LIST_PAGES
+                        or time.monotonic() > deadline):
+                truncated = True
+                logger.warning(
+                    "SharePoint listing bounded for folder '%s' (items=%d, pages=%d) "
+                    "— returning partial listing; drill into a subfolder to see the rest.",
+                    full_path, len(items), pages,
+                )
+                break
+
+    return (items, truncated) if with_truncation else items
 
 
-async def list_folder(path: str = "") -> list[dict]:
-    """List children in the Peptides root."""
-    return await _list_folder_at_root(SHAREPOINT_PEPTIDES_PATH, path)
+async def list_folder(path: str = "", *, with_truncation: bool = False):
+    """List children in the Peptides root. See _list_folder_at_root for the
+    return shape and the with_truncation flag."""
+    return await _list_folder_at_root(SHAREPOINT_PEPTIDES_PATH, path, with_truncation=with_truncation)
 
 
-async def list_lims_folder(path: str = "") -> list[dict]:
-    """List children in the LIMS CSVs root."""
-    return await _list_folder_at_root(SHAREPOINT_LIMS_CSV_PATH, path)
+async def list_lims_folder(path: str = "", *, with_truncation: bool = False):
+    """List children in the LIMS CSVs root. See _list_folder_at_root for the
+    return shape and the with_truncation flag."""
+    return await _list_folder_at_root(SHAREPOINT_LIMS_CSV_PATH, path, with_truncation=with_truncation)
 
 
-async def list_folder_by_id(folder_id: str) -> list[dict]:
+async def list_folder_by_id(folder_id: str, *, with_truncation: bool = False):
     """List the children of a SharePoint folder using its Graph item ID.
 
     Useful when you have an item ID from a previous browse/scan rather than a path.
-    Returns the same dict shape as _list_folder_at_root.
+    Returns the same dict shape as _list_folder_at_root (and the same bounded-crawl
+    behavior + with_truncation flag).
     """
     drive_id = await _get_drive_id()
     url = f"{GRAPH_BASE_URL}/drives/{drive_id}/items/{folder_id}/children"
@@ -227,6 +264,9 @@ async def list_folder_by_id(folder_id: str) -> list[dict]:
     }
 
     items = []
+    truncated = False
+    pages = 0
+    deadline = time.monotonic() + _LIST_DEADLINE_S
     retried_auth = False
     auth_headers = _headers()
     async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, timeout=30.0) as client:
@@ -253,10 +293,20 @@ async def list_folder_by_id(folder_id: str) -> list[dict]:
                     "mime_type": item.get("file", {}).get("mimeType") if "file" in item else None,
                 })
 
+            pages += 1
             url = data.get("@odata.nextLink")
             params = {}
 
-    return items
+            if url and (len(items) >= _MAX_LIST_ITEMS or pages >= _MAX_LIST_PAGES
+                        or time.monotonic() > deadline):
+                truncated = True
+                logger.warning(
+                    "SharePoint listing bounded for folder id '%s' (items=%d, pages=%d) "
+                    "— returning partial listing.", folder_id, len(items), pages,
+                )
+                break
+
+    return (items, truncated) if with_truncation else items
 
 
 async def search_sample_folder(sample_id: str) -> Optional[dict]:
