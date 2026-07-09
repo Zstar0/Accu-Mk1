@@ -743,18 +743,18 @@ export function SenaiteDashboard() {
       if (effective !== 'mk1') return
       const requestId = ++requestIdRef.current
       setRefreshingCount(c => c + 1)
-      getSenaiteSamples(reviewState, limit, bStart, search, searchField)
+      getSenaiteSamples(reviewState, limit, bStart, search, searchField, true)
         .then(refreshResult => {
           if (requestIdRef.current !== requestId) return // superseded — drop it
           const liveById = new Map(refreshResult.items.map(s => [s.id, s]))
           onRefresh(
             baseItems.map(item => {
               const live = liveById.get(item.id)
-              // Merge ONLY what mutates after order time: review_state (workflow)
-              // and analytes (Replace-able). Everything else — including client —
-              // is IS→registry-native and immutable (/registry/samples already
-              // returns client_title, matching /senaite/samples' getClientTitle).
-              return live ? { ...item, review_state: live.review_state, analytes: live.analytes } : item
+              // Merge ONLY review_state — the one field SENAITE alone mutates
+              // (receive/verify/publish workflow). Analytes are registry-owned
+              // now (Replace dual-writes lims_samples), and the slim payload
+              // deliberately has none. Everything else is IS→registry-native.
+              return live ? { ...item, review_state: live.review_state } : item
             })
           )
         })

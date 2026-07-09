@@ -4087,7 +4087,11 @@ export async function getSenaiteSamples(
   limit = 50,
   bStart = 0,
   search?: string,
-  searchField?: 'verification_code' | 'order_number'
+  searchField?: 'verification_code' | 'order_number',
+  /** Catalog-brains only (no complete=yes hydration on the SENAITE side).
+   *  Items carry live review_state/id/uid but empty analytes/verification
+   *  code. Only the mk1-read-mode list refresh passes this. */
+  slim?: boolean
 ): Promise<SenaiteSamplesResponse> {
   const params = new URLSearchParams({
     limit: String(limit),
@@ -4096,6 +4100,7 @@ export async function getSenaiteSamples(
   if (reviewState) params.set('review_state', reviewState)
   if (search) params.set('search', search)
   if (searchField) params.set('search_field', searchField)
+  if (slim) params.set('slim', 'true')
   const response = await fetch(`${API_BASE_URL()}/senaite/samples?${params}`, {
     headers: getBearerHeaders(),
   })
