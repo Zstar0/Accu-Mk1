@@ -150,7 +150,7 @@ import { ReplaceAnalyteDialog } from '@/components/senaite/ReplaceAnalyteDialog'
 import { isHplcAnalyteService } from '@/lib/hplc-analyte-services'
 import { needsMk1AnalysesSwap } from '@/lib/mk1-analyses-swap'
 import { buildNativeSubSampleLookup } from '@/lib/native-sub-sample'
-import { useReadSource } from '@/lib/read-source'
+import { useEffectiveReadSource } from '@/lib/read-source'
 import {
   buildVialAssignmentMap,
   PARENT_OVERLAY_QUERY_KEY,
@@ -163,6 +163,7 @@ import { SamplePrepHplcFlyout } from '@/components/hplc/SamplePrepHplcFlyout'
 import { SampleActivityLog } from '@/components/senaite/SampleActivityLog'
 import { SampleRegistryDebug } from '@/components/senaite/SampleRegistryDebug'
 import { ReadSourceBanner } from '@/components/senaite/ReadSourceBanner'
+import { ReadSourceControls } from '@/components/senaite/ReadSourceControls'
 import {
   OrderedProducts,
   useOrderedProducts,
@@ -3314,12 +3315,15 @@ export function SampleDetails() {
   const { printLabel, target: printTarget } = usePrintLabel()
 
   // Registry read-source toggle: 'mk1' routes the parent-page lookup to the
-  // Mk1 registry endpoint instead of the live SENAITE lookup.
-  const { source: readSource } = useReadSource()
-  // The registry read endpoint is admin-gated (403 for everyone else). A
-  // non-admin who hand-sets sessionStorage['registryReadSource']='mk1'
-  // must still always read SENAITE.
-  const effectiveReadSource = isAdmin ? readSource : 'senaite'
+  // Mk1 registry endpoint instead of the live SENAITE lookup. Precedence is
+  // this page's override, then the org-wide default, then 'senaite' — see
+  // useEffectiveReadSource. The details endpoint is authenticated-user-gated
+  // (not admin-only), so this is available to everyone.
+  const {
+    effective: effectiveReadSource,
+    override: readSourceOverride,
+    setOverride: setReadSourceOverride,
+  } = useEffectiveReadSource('sample_details')
 
   // Retest relationship metadata (banner + chain links)
   const [retestInfo, setRetestInfo] = useState<
@@ -4478,6 +4482,24 @@ export function SampleDetails() {
                   >
                     {data.sample_type}
                   </Badge>
+                )}
+                {/* Read-source indicator + tri-state override — parent-only.
+                    The override only affects parent basic-info reads (see
+                    resolveSampleData: sub-sample fetches are hardcoded to
+                    'senaite' regardless of readSource), so on a sub-sample/
+                    vial page there is nothing to indicate or control; showing
+                    either there would misstate data provenance. Visible to
+                    everyone, not just admins (that's the point of widening
+                    the details endpoint). Precedence: override > org default
+                    > 'senaite'; see useEffectiveReadSource. The control itself
+                    is shared with the samples-list page (ReadSourceControls);
+                    this isParent gate stays local to sample-details. */}
+                {isParent && (
+                  <ReadSourceControls
+                    effective={effectiveReadSource}
+                    override={readSourceOverride}
+                    setOverride={setReadSourceOverride}
+                  />
                 )}
               </div>
               {!isParent && parentSampleId && (

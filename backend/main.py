@@ -16844,19 +16844,22 @@ async def refresh_sample_registry_debug(
 @app.get("/registry/sample/{sample_id}/details", response_model=RegistrySampleReadResult)
 async def get_sample_read_from_registry(
     sample_id: str,
-    admin=Depends(require_admin),
+    current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Admin diagnostic read path: the sample-details basic-info sourced
-    registry-first (Accu-Mk1 lims_samples) with per-field SENAITE fallback.
-    Analyses and everything else come from the unchanged SENAITE lookup.
+    """Sample-details read path: basic-info sourced registry-first (Accu-Mk1
+    lims_samples) with per-field SENAITE fallback. Analyses and everything
+    else come from the unchanged SENAITE lookup.
 
-    `admin` is resolved before `db` (auth gate before any DB dependency is
-    entered) — matches the sibling debug endpoints above.
+    Gated by `get_current_user` (any authenticated user), not `require_admin`
+    — it's a read-only projection of data the user already sees via the
+    SENAITE lookup it wraps (see spec Access-control). `current_user` is
+    resolved before `db` (auth gate before any DB dependency is entered) —
+    matches the sibling debug endpoints above.
     """
     from sub_samples.registry_read import registry_row_to_display, OVERLAY_FIELDS
 
-    base = await lookup_senaite_sample(id=sample_id, no_cache=True, db=db, _current_user=admin)
+    base = await lookup_senaite_sample(id=sample_id, no_cache=True, db=db, _current_user=current_user)
     payload = base.model_dump()
 
     row = db.execute(
@@ -16884,6 +16887,41 @@ async def get_sample_read_from_registry(
 
     return RegistrySampleReadResult(**payload, read_source="mk1",
                                     registry_missing=False, field_sources=field_sources)
+
+
+@app.get("/registry/samples", response_model=SenaiteSamplesResponse)
+async def list_samples_from_registry(
+    review_state: Optional[str] = None,
+    limit: int = 50,
+    b_start: int = 0,
+    search: Optional[str] = None,
+    search_field: Optional[str] = None,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Samples-list read sourced from the local lims_samples registry (no SENAITE
+    round-trip). Live/SENAITE-only fields (analytes, current review_state) are
+    refreshed per-row on the client via progressive backfill."""
+    from sub_samples.registry_list import registry_rows_to_list
+
+    stmt = select(LimsSample)
+    if review_state:
+        states = [s.strip() for s in review_state.split(",") if s.strip()]
+        if states:
+            stmt = stmt.where(LimsSample.status.in_(states))
+    if search:
+        s = f"%{search.strip()}%"
+        if search_field == "order_number":
+            stmt = stmt.where(LimsSample.client_order_number.ilike(s))
+        elif search_field == "verification_code":
+            stmt = stmt.where(LimsSample.verification_code.ilike(s))
+        else:
+            stmt = stmt.where(LimsSample.sample_id.ilike(s))
+    total = db.execute(select(func.count()).select_from(stmt.subquery())).scalar_one()
+    rows = db.execute(
+        stmt.order_by(LimsSample.id.desc()).offset(b_start).limit(limit)
+    ).scalars().all()
+    return SenaiteSamplesResponse(items=registry_rows_to_list(rows), total=total, b_start=b_start)
 
 
 # ── Peptide requests API (integration-service bridge) ────────────────

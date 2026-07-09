@@ -1,4 +1,5 @@
-import { Fragment, useState, useEffect, useCallback, useMemo } from 'react'
+import { Fragment, useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import {
   RefreshCw,
   XCircle,
@@ -36,15 +37,20 @@ import {
 } from '@/components/ui/table'
 import {
   getSenaiteSamples,
+  getRegistrySamples,
   getSenaiteStatus,
+  getSettings,
   fetchSampleAggregates,
   listSubSamples,
   type SenaiteSample,
+  type SenaiteSamplesResponse,
   type ParentAggregate,
   type SubSample,
 } from '@/lib/api'
 import { useUIStore } from '@/store/ui-store'
 import { StateBadge, formatDate } from '@/components/senaite/senaite-utils'
+import { useEffectiveReadSource } from '@/lib/read-source'
+import { ReadSourceControls } from '@/components/senaite/ReadSourceControls'
 
 // --- Constants ---
 
@@ -641,10 +647,27 @@ const PAGE_SIZE = 50
 
 export function SenaiteDashboard() {
   const navigateToSample = useUIStore(state => state.navigateToSample)
+  // Precedence: per-page override > org-wide default (registry_read_source
+  // setting) > 'senaite'. `settingsFetched` reads the same ['settings']
+  // query cache useEffectiveReadSource subscribes to (react-query dedupes —
+  // no extra request) so the load-gating effect below can tell whether the
+  // global default has actually resolved yet.
+  const { effective, override, setOverride } = useEffectiveReadSource('samples_list')
+  const { isFetched: settingsFetched } = useQuery({ queryKey: ['settings'], queryFn: getSettings })
   const [activeTab, setActiveTab] = useState('open')
   const [connected, setConnected] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  // Count rather than boolean: guards against a stale "not refreshing" flip
+  // if a second background refresh starts before the first one's `finally`
+  // runs (e.g. rapid tab switching while effective === 'mk1').
+  const [refreshingCount, setRefreshingCount] = useState(0)
+  const refreshing = refreshingCount > 0
+  // Bumped on every fetchSamplesForEffectiveSource call; a background
+  // SENAITE refresh only applies its merge if it's still the latest request,
+  // so a superseded refresh (user switched tab/search mid-flight) can't
+  // clobber newer state.
+  const requestIdRef = useRef(0)
   const [samplesByTab, setSamplesByTab] = useState<
     Record<string, SenaiteSample[]>
   >({})
@@ -680,6 +703,67 @@ export function SenaiteDashboard() {
   // Alias for backward compat with search logic
   const sampleIdSearch = committedFilters.id
 
+  // Samples-list read source switch. In 'mk1' mode, fetch the fast registry
+  // render — the actual SENAITE refresh is a separate step (startBackgroundRefresh
+  // below), kicked off only once the fast render is already committed to
+  // state, so there's no race between "initial set" and "merge" overwriting
+  // each other depending on which microtask lands first.
+  const fetchSamplesForEffectiveSource = useCallback(
+    (
+      reviewState: string | undefined,
+      limit: number,
+      bStart: number,
+      search?: string,
+      searchField?: 'verification_code' | 'order_number'
+    ): Promise<SenaiteSamplesResponse> =>
+      effective === 'mk1'
+        ? getRegistrySamples(reviewState, limit, bStart, search, searchField)
+        : getSenaiteSamples(reviewState, limit, bStart, search, searchField),
+    [effective]
+  )
+
+  // Fires exactly ONE batched getSenaiteSamples call in the background to
+  // refresh review_state + analytes for a page already rendered from the
+  // registry — never per-row (a per-row lookup on a ~50-row list recreates
+  // the /wizard/senaite/lookup flood PR #49 removed, which can take down the
+  // single-Zope SENAITE instance). No-ops outside 'mk1' mode. `baseItems` is
+  // the exact array the fast render just committed, so the merge is computed
+  // against a known baseline rather than "whatever's in state right now" —
+  // `onRefresh` always receives the complete merged array to set directly.
+  const startBackgroundRefresh = useCallback(
+    (
+      baseItems: SenaiteSample[],
+      reviewState: string | undefined,
+      limit: number,
+      bStart: number,
+      search: string | undefined,
+      searchField: 'verification_code' | 'order_number' | undefined,
+      onRefresh: (items: SenaiteSample[]) => void
+    ) => {
+      if (effective !== 'mk1') return
+      const requestId = ++requestIdRef.current
+      setRefreshingCount(c => c + 1)
+      getSenaiteSamples(reviewState, limit, bStart, search, searchField)
+        .then(refreshResult => {
+          if (requestIdRef.current !== requestId) return // superseded — drop it
+          const liveById = new Map(refreshResult.items.map(s => [s.id, s]))
+          onRefresh(
+            baseItems.map(item => {
+              const live = liveById.get(item.id)
+              // Merge ONLY what mutates after order time: review_state (workflow)
+              // and analytes (Replace-able). Everything else — including client —
+              // is IS→registry-native and immutable (/registry/samples already
+              // returns client_title, matching /senaite/samples' getClientTitle).
+              return live ? { ...item, review_state: live.review_state, analytes: live.analytes } : item
+            })
+          )
+        })
+        .catch(() => { /* swallow: the fast registry render stands */ })
+        .finally(() => setRefreshingCount(c => c - 1))
+    },
+    [effective]
+  )
+
   const loadTab = useCallback(
     async (tabId: string, _page = 0, searchQuery = '', searchField?: 'verification_code' | 'order_number') => {
       const tab = TABS.find(t => t.id === tabId)
@@ -693,18 +777,22 @@ export function SenaiteDashboard() {
           // - no searchField: Uses SENAITE's getId catalog index (sample ID)
           // - verification_code: Postgres lookup → sample IDs → SENAITE getId
           // - order_number: Postgres lookup → sample IDs → SENAITE getId
-          const result = await getSenaiteSamples(undefined, 50, 0, searchQuery, searchField)
+          const result = await fetchSamplesForEffectiveSource(undefined, 50, 0, searchQuery, searchField)
           setSearchResults(result.items)
+          startBackgroundRefresh(
+            result.items, undefined, 50, 0, searchQuery, searchField,
+            merged => setSearchResults(prev => (prev ? merged : prev))
+          )
         } else {
           setSearchResults(null)
-          const result = await getSenaiteSamples(
-            tab.reviewState,
-            PAGE_SIZE,
-            _page * PAGE_SIZE
-          )
+          const result = await fetchSamplesForEffectiveSource(tab.reviewState, PAGE_SIZE, _page * PAGE_SIZE)
           setSamplesByTab(prev => ({ ...prev, [tabId]: result.items }))
           setTotalsByTab(prev => ({ ...prev, [tabId]: result.total }))
           setPageByTab(prev => ({ ...prev, [tabId]: _page }))
+          startBackgroundRefresh(
+            result.items, tab.reviewState, PAGE_SIZE, _page * PAGE_SIZE, undefined, undefined,
+            merged => setSamplesByTab(prev => ({ ...prev, [tabId]: merged }))
+          )
         }
       } catch (e) {
         setError(e instanceof Error ? e.message : 'Failed to load samples')
@@ -712,7 +800,7 @@ export function SenaiteDashboard() {
         setLoading(false)
       }
     },
-    []
+    [fetchSamplesForEffectiveSource, startBackgroundRefresh]
   )
 
   const refresh = useCallback(async () => {
@@ -735,28 +823,22 @@ export function SenaiteDashboard() {
     }
   }, [activeTab, loadTab])
 
-  // Initial load
+  // Initial load: status check only. The actual sample fetch is owned by the
+  // effect below, gated on both `connected` and `settingsFetched` — see its
+  // comment for why the fetch can't live here directly.
   useEffect(() => {
     let cancelled = false
     async function init() {
-      setLoading(true)
       try {
         const status = await getSenaiteStatus()
         if (cancelled) return
         setConnected(status.enabled)
-        if (status.enabled) {
-          const tab = TABS.find(t => t.id === activeTab)!
-          const result = await getSenaiteSamples(tab.reviewState, PAGE_SIZE, 0)
-          if (cancelled) return
-          setSamplesByTab({ [activeTab]: result.items })
-          setTotalsByTab({ [activeTab]: result.total })
-          setPageByTab({ [activeTab]: 0 })
-        }
+        if (!status.enabled) setLoading(false)
       } catch (e) {
-        if (!cancelled)
+        if (!cancelled) {
           setError(e instanceof Error ? e.message : 'Failed to connect')
-      } finally {
-        if (!cancelled) setLoading(false)
+          setLoading(false)
+        }
       }
     }
     init()
@@ -765,6 +847,18 @@ export function SenaiteDashboard() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // Load the active tab once both async races this page depends on have
+  // settled: whether SENAITE is reachable (`connected`) and the org-wide
+  // read-source default (`settingsFetched`, backing `effective`). These
+  // resolve independently and in no guaranteed order — gating on both (not
+  // just `connected`) avoids loading against a stale 'senaite' `effective`
+  // closure when the settings fetch happens to land after the status check.
+  useEffect(() => {
+    if (!connected || !settingsFetched) return
+    loadTab(activeTab, 0)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connected, settingsFetched, effective])
 
   // Server-side search — fires when user commits filters (Enter key)
   useEffect(() => {
@@ -819,17 +913,26 @@ export function SenaiteDashboard() {
               Sample tracking and workflow status
             </p>
           </div>
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={refresh}
-            className="h-8 w-8"
-            title="Refresh"
-          >
-            <RefreshCw
-              className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`}
-            />
-          </Button>
+          <div className="flex items-center gap-3">
+            <ReadSourceControls effective={effective} override={override} setOverride={setOverride} />
+            {refreshing && (
+              <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                <Loader2 className="h-3 w-3 animate-spin" />
+                Refreshing from SENAITE…
+              </span>
+            )}
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={refresh}
+              className="h-8 w-8"
+              title="Refresh"
+            >
+              <RefreshCw
+                className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`}
+              />
+            </Button>
+          </div>
         </div>
 
         {/* Samples Card with Tabs */}

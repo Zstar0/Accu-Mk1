@@ -4106,6 +4106,33 @@ export async function getSenaiteSamples(
   return response.json()
 }
 
+/** Fast samples-list read sourced from the local lims_samples registry
+ *  (GET /registry/samples) instead of a live SENAITE round-trip. Same shape
+ *  as getSenaiteSamples so callers can switch between them by read source. */
+export async function getRegistrySamples(
+  reviewState?: string,
+  limit = 50,
+  bStart = 0,
+  search?: string,
+  searchField?: 'verification_code' | 'order_number'
+): Promise<SenaiteSamplesResponse> {
+  const params = new URLSearchParams({
+    limit: String(limit),
+    b_start: String(bStart),
+  })
+  if (reviewState) params.set('review_state', reviewState)
+  if (search) params.set('search', search)
+  if (searchField) params.set('search_field', searchField)
+  const response = await fetch(`${API_BASE_URL()}/registry/samples?${params}`, {
+    headers: getBearerHeaders(),
+  })
+  if (!response.ok) {
+    const err = await response.json().catch(() => null)
+    throw new Error(err?.detail || `Registry samples failed: ${response.status}`)
+  }
+  return response.json()
+}
+
 export interface SenaiteReceiveSampleResponse {
   success: boolean
   message: string
