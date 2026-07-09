@@ -8892,6 +8892,32 @@ async def replace_analyte(
     except (_BadRequestError, _NotFoundError) as e:
         raise HTTPException(400, str(e))
 
+    # ── 7. refresh the registry row (registry-owned analytes) ────────────────
+    # lims_samples.analytes is the samples-list's authoritative analyte source
+    # in Accu-Mk1 read mode, and this endpoint is the only Mk1-side mutation
+    # of the slots. Re-read SENAITE truth (not in-memory state) so whatever
+    # Replace actually landed is what the registry serves. Best-effort: a
+    # failure never fails the replace — repair via the registry-debug refresh
+    # or the backfill re-sweep. Commit the replace work FIRST so a refresh
+    # error can't roll it back; run the sync SENAITE fetch in the threadpool
+    # (this is an async-def handler — a blocking call would freeze the loop).
+    db.commit()
+    if not _is_presubsample:
+        from starlette.concurrency import run_in_threadpool
+        from sub_samples.service import _refresh_parent_from_senaite
+        try:
+            _row = db.execute(
+                _select(LimsSample).where(LimsSample.sample_id == sample_id)
+            ).scalar_one_or_none()
+            if _row is not None:
+                await run_in_threadpool(_refresh_parent_from_senaite, db, _row)
+                db.commit()
+        except Exception as _e:
+            db.rollback()
+            _rep_logger.warning(
+                "replace_analyte: registry refresh failed for %s: %s", sample_id, _e
+            )
+
     return {
         "success": True,
         "field_updated": f"Analyte{slot}Peptide",
