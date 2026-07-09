@@ -121,7 +121,8 @@ class FlagDetailResponse(FlagResponse):
 
 
 class ActivityItem(BaseModel):
-    """One audit event + its (entity-resolved) flag — a row of the feed."""
+    """One audit event + its (entity-resolved) flag — a row of the feed.
+    `relevance` marks why this event is in the requesting user's feed."""
     id: int
     event_type: str
     actor_id: Optional[int] = None
@@ -129,6 +130,7 @@ class ActivityItem(BaseModel):
     to_value: Optional[str] = None
     created_at: datetime
     flag: FlagResponse
+    relevance: List[str] = Field(default_factory=list)
 
 
 class ActivityPage(BaseModel):

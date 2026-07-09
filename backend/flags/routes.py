@@ -90,13 +90,16 @@ def activity(cursor: Optional[str] = None, limit: int = Query(25, ge=1, le=50),
              db: Session = Depends(get_db), user=Depends(get_current_user)):
     # Literal /activity is registered ABOVE /{flag_id} so it wins the match.
     try:
+        user_id = getattr(user, "id", None)
         rows, next_cursor = service.list_activity(
-            db, user_id=getattr(user, "id", None), cursor=cursor, limit=limit)
+            db, user_id=user_id, cursor=cursor, limit=limit)
+        rel = service.compute_relevance(db, rows, user_id=user_id)
         items = [
             ActivityItem(
                 id=ev.id, event_type=ev.event_type, actor_id=ev.actor_id,
                 from_value=ev.from_value, to_value=ev.to_value,
                 created_at=ev.created_at, flag=_with_entity(db, ev.flag),
+                relevance=rel.get(ev.id, []),
             )
             for ev in rows
         ]

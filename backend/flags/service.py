@@ -188,6 +188,36 @@ def list_activity(db: Session, *, user_id: int, cursor: Optional[str] = None,
     return rows, next_cursor
 
 
+def compute_relevance(db: Session, events: list[FlagEvent], *,
+                      user_id: int) -> dict[int, list[str]]:
+    """Why each event is in this user's feed, keyed by event id. Markers are a
+    subset of actor/assigned/raised/watching/mentioned. Batch queries — no N+1."""
+    flag_ids = {e.flag_id for e in events}
+    flags = {f.id: f for f in db.execute(
+        select(FlagFlag).where(FlagFlag.id.in_(flag_ids))).scalars()}
+    watching = {fid for (fid,) in db.execute(
+        select(FlagParticipant.flag_id).where(
+            FlagParticipant.user_id == user_id,
+            FlagParticipant.flag_id.in_(flag_ids),
+            FlagParticipant.role == "watcher"))}
+    out: dict[int, list[str]] = {}
+    for e in events:
+        rel: list[str] = []
+        f = flags.get(e.flag_id)
+        if e.actor_id == user_id:
+            rel.append("actor")
+        if f is not None and f.assignee_id == user_id:
+            rel.append("assigned")
+        if f is not None and f.created_by == user_id:
+            rel.append("raised")
+        if e.flag_id in watching:
+            rel.append("watching")
+        if user_id in ((e.details or {}).get("mentions") or []):
+            rel.append("mentioned")
+        out[e.id] = rel
+    return out
+
+
 def list_unread(db: Session, *, user_id: int) -> list[FlagFlag]:
     """Flags relevant to the user that changed since they last read them
     (never-read counts as unread), newest-updated first."""
