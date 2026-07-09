@@ -17,6 +17,7 @@
   - The full worksheets list was fetched **twice** per sample-details load — `useWorksheetDrawer` (header badge) and the SampleDetails worksheet chip cached the identical list under different query keys. Both now share one cache entry; drawer mutations also refresh the worksheets inbox/list pages that previously went stale.
   - A `?flag=` deep link now prefetches the flag thread at navigation time, so its fetch leads the boot burst instead of dispatching last from the portaled flyout.
 
+
 ## v1.0.27 — 2026-07-07
 
 ### Changed

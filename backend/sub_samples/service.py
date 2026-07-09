@@ -11,6 +11,7 @@ Defense-in-depth protections (per Task 5 spike findings):
 import json
 import logging
 import os
+import re
 import requests
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Tuple, List
@@ -19,6 +20,7 @@ from sqlalchemy.orm import Session
 from models import LimsSample, LimsSubSample, LimsSubSampleEvent
 from sub_samples import native
 from sub_samples import senaite
+from sub_samples.native_id import mint_native_id
 from sub_samples.senaite import SecondaryFalloutError
 
 
@@ -86,6 +88,24 @@ def _populate_basic_info(row: LimsSample, meta: dict) -> None:
     row.date_received = _parse_senaite_date(meta.get("DateReceived"))
     row.date_sampled = _parse_senaite_date(meta.get("DateSampled"))
     row.status = meta.get("review_state")
+    # Full sample record (dual-write slice 1). Getter-index keys first where
+    # the live complete=true payload verified them (2026-07-06); bare-key
+    # fallbacks keep old test fixtures and sparse payloads working.
+    row.client_title = meta.get("getClientTitle") or meta.get("ClientTitle")
+    row.contact_title = meta.get("ContactFullName") or meta.get("getContactFullName")
+    row.contact_email = meta.get("ContactEmail") or meta.get("getContactEmail")
+    row.sample_type_title = meta.get("getSampleTypeTitle") or meta.get("SampleTypeTitle")
+    row.date_created = _parse_senaite_date(meta.get("created"))
+    row.verification_code = meta.get("VerificationCode") or meta.get("getVerificationCode")
+    row.client_order_number = meta.get("ClientOrderNumber") or meta.get("getClientOrderNumber")
+    slots = _parse_analyte_slots(meta)
+    row.analytes = json.dumps(slots) if slots else None
+    dtq = meta.get("DeclaredTotalQuantity")
+    row.declared_total_quantity = str(dtq) if dtq not in (None, "") else None
+    row.client_lot = meta.get("ClientLot")
+    row.client_reference = meta.get("ClientReference")
+    row.company_logo_url = meta.get("CompanyLogoUrl")
+    row.coa_meta = json.dumps({k: meta.get(k) for k in _COA_META_FIELDS})
     row.last_synced_at = datetime.utcnow()
 
 
@@ -103,6 +123,80 @@ def _create_sample_row(db: Session, parent_sample_id: str, meta: dict) -> LimsSa
     )
     _populate_basic_info(row, meta)
     db.add(row)
+    db.flush()
+    return row
+
+
+def upsert_sample_from_signal(db: Session, sample_id: Optional[str],
+                              senaite_uid: Optional[str], meta: dict) -> LimsSample:
+    """Create/refresh a registry row from the IS creation signal
+    (2026-07-06 dual-write spec). The payload is a SENAITE-shaped meta dict,
+    so population runs through the same _populate_basic_info as every other
+    writer.
+
+    SENAITE-attached form: sample_id = the fresh P-xxxx id. SENAITE-free form
+    (future native lines): sample_id None -> the minted native id becomes the
+    sample_id and external_lims_system = "mk1".
+
+    Idempotent: keyed on sample_id; native_id minted exactly once; a repeat
+    signal refreshes fields but never re-mints and never regresses status,
+    identity (external_lims_uid/system), or date_received (the signal's
+    state is stale the moment it's sent — live state is owned by SENAITE
+    until a line goes native, and a signal can never un-receive a sample).
+
+    Retry contract (SENAITE-free form): callers MUST retry with the returned
+    sample_id (the native id echoed back). A retry with sample_id=None mints
+    a brand-new sample by design — there is no natural key to dedupe on; the
+    IS-side Idempotency-Key becomes meaningful only when a later slice stores
+    it. An echoed-id retry without a senaite_uid preserves the row's native
+    identity (external_lims_system stays "mk1"); if a later signal DOES carry
+    a senaite_uid, the attach wins."""
+    meta = dict(meta)
+    meta.setdefault("review_state", "sample_due")
+    if senaite_uid and not meta.get("uid"):
+        meta["uid"] = senaite_uid
+
+    existing = None
+    if sample_id:
+        existing = db.execute(
+            select(LimsSample).where(LimsSample.sample_id == sample_id)
+        ).scalar_one_or_none()
+
+    if existing:
+        prior_status = existing.status
+        prior_uid = existing.external_lims_uid
+        prior_system = existing.external_lims_system
+        prior_received = existing.date_received
+        _populate_basic_info(existing, meta)
+        if prior_status:
+            existing.status = prior_status
+        # _populate_basic_info unconditionally stamps identity + date_received
+        # from the (possibly sparse) signal meta. A replayed/duplicate signal
+        # must never regress fields the row has since gained from richer
+        # sources: restore prior identity unless this signal carries a genuine
+        # senaite_uid attach, and restore prior date_received if the new meta
+        # didn't carry one (a signal can never un-receive a sample).
+        if not senaite_uid:
+            existing.external_lims_uid = prior_uid
+            existing.external_lims_system = prior_system
+        if existing.date_received is None and prior_received is not None:
+            existing.date_received = prior_received
+        if existing.native_id is None:
+            existing.native_id = mint_native_id(db, senaite_sample_id=existing.sample_id)
+        db.flush()
+        return existing
+
+    native_id_value = mint_native_id(
+        db,
+        senaite_sample_id=sample_id,
+        sample_type_title=(meta.get("getSampleTypeTitle")
+                           or meta.get("SampleTypeTitle")),
+    )
+    row = _create_sample_row(db, sample_id or native_id_value, meta)
+    row.native_id = native_id_value
+    if not sample_id:
+        row.external_lims_uid = None
+        row.external_lims_system = "mk1"
     db.flush()
     return row
 
@@ -131,6 +225,89 @@ def _extract_label(value):
     if isinstance(value, dict):
         return value.get("title") or value.get("Title") or value.get("uid")
     return value
+
+
+_COA_META_FIELDS = ("CoaAddress", "CoaCompanyName", "CoaEmail", "CoaWebsite")
+
+
+def _parse_analyte_slots(meta: dict) -> list[dict]:
+    """Analyte slots 1-8 as ordered {name, declared_quantity} pairs; empty
+    slots omitted. IS writes up to 8 slots; the Mk1 UI shows 4."""
+    slots: list[dict] = []
+    for i in range(1, 9):
+        name = _extract_label(meta.get(f"Analyte{i}Peptide"))
+        if not name or not str(name).strip():
+            continue
+        qty = meta.get(f"Analyte{i}DeclaredQuantity")
+        slots.append({
+            "name": str(name).strip(),
+            "declared_quantity": str(qty) if qty not in (None, "") else None,
+        })
+    return slots
+
+
+# SENAITE field name -> lims_samples column, for the dual-write mirror at
+# Mk1's field-edit sites. Analyte slots and Coa* fields are handled
+# structurally below; fields not listed here (e.g. Remarks) are
+# SENAITE-internal and deliberately unmirrored.
+_FIELD_MIRROR_SCALARS = {
+    "ClientSampleID": "client_sample_id",
+    "ClientLot": "client_lot",
+    "ClientReference": "client_reference",
+    "ClientOrderNumber": "client_order_number",
+    "DeclaredTotalQuantity": "declared_total_quantity",
+    "VerificationCode": "verification_code",
+    "CompanyLogoUrl": "company_logo_url",
+}
+_ANALYTE_KEY_RE = re.compile(r"^Analyte([1-8])(Peptide|DeclaredQuantity)$")
+
+
+def apply_senaite_fields_to_row(db: Session, senaite_uid: str, fields: dict) -> bool:
+    """Mirror a SENAITE field update onto the registry row (dual-write
+    slice 1). Returns False when no row carries this uid (pre-registry
+    samples) — callers treat that as a no-op, and callers must NEVER fail
+    the user's request over a mirror problem."""
+    row = db.execute(
+        select(LimsSample).where(LimsSample.external_lims_uid == senaite_uid)
+    ).scalar_one_or_none()
+    if row is None:
+        return False
+
+    for senaite_key, column in _FIELD_MIRROR_SCALARS.items():
+        if senaite_key in fields:
+            v = fields[senaite_key]
+            setattr(row, column, str(v) if v not in (None, "") else None)
+
+    coa_updates = {k: v for k, v in fields.items() if k in _COA_META_FIELDS}
+    if coa_updates:
+        meta = json.loads(row.coa_meta) if row.coa_meta else {k: None for k in _COA_META_FIELDS}
+        meta.update({k: (v if v not in ("",) else None) for k, v in coa_updates.items()})
+        row.coa_meta = json.dumps(meta)
+
+    # Plain-loop filter (behavior-identical to the walrus dict-comprehension
+    # in the design doc).
+    analyte_edits = {}
+    for key, value in fields.items():
+        if _ANALYTE_KEY_RE.match(key):
+            analyte_edits[key] = value
+    if analyte_edits:
+        slots = json.loads(row.analytes) if row.analytes else []
+        for key, value in analyte_edits.items():
+            m = _ANALYTE_KEY_RE.match(key)
+            idx, kind = int(m.group(1)) - 1, m.group(2)
+            while len(slots) <= idx:
+                slots.append({"name": None, "declared_quantity": None})
+            if kind == "Peptide":
+                slots[idx]["name"] = str(value).strip() if value else None
+            else:
+                slots[idx]["declared_quantity"] = str(value) if value not in (None, "") else None
+        slots = [s for s in slots if s.get("name")]
+        row.analytes = json.dumps(slots) if slots else None
+        row.peptide_name = slots[0]["name"] if slots else None
+
+    row.last_synced_at = datetime.utcnow()
+    db.flush()
+    return True
 
 
 def _parse_senaite_date(value) -> Optional[datetime]:

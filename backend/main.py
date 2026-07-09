@@ -9917,6 +9917,26 @@ async def publish_sample_coa(
                     )
                     code_resp.raise_for_status()
 
+                    # Dual-write mirror (registry slice 1): reflect the
+                    # freshly-written verification code onto the local
+                    # registry row. Best-effort — a mirror problem must
+                    # never fail the publish.
+                    try:
+                        from sub_samples.service import apply_senaite_fields_to_row
+                        if apply_senaite_fields_to_row(
+                            db, senaite_uid, {"VerificationCode": verification_code}
+                        ):
+                            db.commit()
+                    except Exception as mirror_err:
+                        try:
+                            db.rollback()
+                        except Exception:
+                            pass
+                        logger.warning(
+                            "registry.field_mirror_failed uid=%s err=%s",
+                            senaite_uid, mirror_err,
+                        )
+
                 transition_resp = await client.post(
                     f"{SENAITE_URL}/senaite/@@API/senaite/v1/update/{senaite_uid}",
                     json={"transition": "publish"},
@@ -13380,6 +13400,7 @@ async def update_senaite_sample_fields(
     uid: str,
     req: SenaiteFieldUpdateRequest,
     current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
     """Update one or more fields on a SENAITE sample via the JSON API."""
     if SENAITE_URL is None:
@@ -13425,6 +13446,22 @@ async def update_senaite_sample_fields(
                     resp.raise_for_status()
                 else:
                     raise
+
+            # Dual-write mirror (registry slice 1): reflect the accepted
+            # SENAITE edit onto the local registry row. Best-effort — a
+            # mirror problem must never fail the user's edit.
+            try:
+                from sub_samples.service import apply_senaite_fields_to_row
+                if apply_senaite_fields_to_row(db, uid, req.fields):
+                    db.commit()
+            except Exception as mirror_err:
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+                logger.warning(
+                    "registry.field_mirror_failed uid=%s err=%s", uid, mirror_err
+                )
 
             return SenaiteFieldUpdateResponse(
                 success=True,
@@ -16621,6 +16658,39 @@ def get_sample_variance_payload(
         "variance_replicates": build_variance_replicates(db, parent) or {},
         "variance_analytes": build_variance_analyte_series(db, parent) or {},
     }
+
+
+# ── Registry creation signal (integration-service bridge) ────────────
+# Called server-to-server by integration-service immediately after it creates
+# a SENAITE AR (dual-write slice 1, 2026-07-06 spec). Idempotent upsert into
+# lims_samples + native-id mint; see sub_samples.service.upsert_sample_from_signal.
+
+class RegistrySampleSignal(BaseModel):
+    """IS -> Mk1 creation signal (dual-write slice 1). meta is a
+    SENAITE-shaped field dict (same keys as a complete=true AR payload)."""
+    sample_id: Optional[str] = None
+    senaite_uid: Optional[str] = None
+    meta: dict
+
+
+class RegistrySampleSignalResponse(BaseModel):
+    sample_id: str
+    native_id: Optional[str]
+
+
+@app.post("/s2s/lims-samples", response_model=RegistrySampleSignalResponse)
+def s2s_upsert_lims_sample(
+    req: RegistrySampleSignal,
+    db: Session = Depends(get_db),
+    _: None = Depends(require_internal_service_token),
+):
+    """Server-to-server registry upsert, called by the Integration Service
+    immediately after it creates a SENAITE AR (or, for future SENAITE-free
+    lines, with no SENAITE id at all). Idempotent."""
+    from sub_samples.service import upsert_sample_from_signal
+    row = upsert_sample_from_signal(db, req.sample_id, req.senaite_uid, req.meta)
+    db.commit()
+    return RegistrySampleSignalResponse(sample_id=row.sample_id, native_id=row.native_id)
 
 
 # ── Peptide requests API (integration-service bridge) ────────────────
