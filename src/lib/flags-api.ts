@@ -95,10 +95,19 @@ export interface FlagResponse {
   entity?: EntityContext | null
 }
 
-/** Mirrors `FlagDetailResponse` (adds comments + events). */
+/** Mirrors backend `WatcherOut` — a watcher participant (ids only; names
+ *  resolve client-side via the shared user directory). */
+export interface Watcher {
+  user_id: number
+  added_at: string
+  added_by: number | null
+}
+
+/** Mirrors `FlagDetailResponse` (adds comments + events + watchers). */
 export interface FlagDetailResponse extends FlagResponse {
   comments: CommentResponse[]
   events: EventResponse[]
+  watchers: Watcher[]
 }
 
 /** Mirrors `ActivityItem` — one audit event + its (entity-resolved) flag. */
