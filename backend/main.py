@@ -12899,6 +12899,7 @@ async def list_senaite_samples(
     search: Optional[str] = None,
     search_field: Optional[str] = None,
     include_sub_samples: bool = False,
+    slim: bool = False,
     _current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -12916,12 +12917,21 @@ async def list_senaite_samples(
       Note: pages can be slightly shorter than `limit` when many
       sub-samples are interleaved in the SENAITE result; the caller
       should bump `limit` if a denser display is desired.
+    - slim: when True, skip SENAITE's complete=yes hydration and serve
+      catalog brains only — review_state/id/uid are live, but analytes and
+      verification_code come back empty (brains don't carry the custom
+      Analyte{N}Peptide/VerificationCode schema fields; spike-verified
+      2026-07-08). Used by the mk1-read-mode list refresh, which merges
+      review_state only. SENAITE-mode callers must NOT pass it.
     """
     if SENAITE_URL is None:
         raise HTTPException(status_code=503, detail="SENAITE not configured")
 
     url = f"{SENAITE_URL}/senaite/@@API/senaite/v1/AnalysisRequest"
-    base_params: dict = {"complete": "yes", "sort_on": "created", "sort_order": "descending"}
+    base_params: dict = {"sort_on": "created", "sort_order": "descending"}
+    if not slim:
+        # Full hydration wakes every object in Zope — the expensive mode.
+        base_params["complete"] = "yes"
 
     # SENAITE secondary AR ID convention. Used to drop sub-sample rows
     # from the parent listing unless include_sub_samples=True.
