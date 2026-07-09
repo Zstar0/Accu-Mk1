@@ -1,22 +1,23 @@
-import { useQuery } from '@tanstack/react-query'
-import { getOrderBoxLabelSummary } from '@/lib/api'
+import type { OrderBoxLabelSummary } from '@/lib/api'
 
 /**
- * Per-order expected-vials cell. Lazily fetches the box-label summary for the
- * order and renders the integer sum of hplc + endo + ster vials. Shows '—'
- * while loading or when there is no order number. Mirrors the `VialCount`
- * lazy-query pattern in `ReceiveSample.tsx`.
+ * Per-order expected-vials cell. PRESENTATIONAL: the summary comes from the
+ * parent list's single batched box-label-summaries query — this component
+ * must never fetch per-row. (Its old per-row useQuery fired ~50 concurrent
+ * requests under HTTP/2 and exhausted the backend DB pool — prod brownout
+ * 2026-07-09.) Shows '—' while the batch is loading or when the order has no
+ * resolvable summary.
  */
-export function OrderExpectedVials({ orderNumber }: { orderNumber: string | null }) {
-  const { data, isLoading } = useQuery({
-    queryKey: ['order-expected-vials', orderNumber],
-    queryFn: () => getOrderBoxLabelSummary(orderNumber as string),
-    enabled: !!orderNumber,
-    staleTime: 60_000,
-  })
-  if (!orderNumber || isLoading) return <span className="text-muted-foreground">—</span>
-  const c = data?.counts
-  const total = c ? c.hplc + c.endo + c.ster : 0
+export function OrderExpectedVials({
+  summary,
+  loading = false,
+}: {
+  summary: OrderBoxLabelSummary | undefined
+  loading?: boolean
+}) {
+  if (loading || !summary) return <span className="text-muted-foreground">—</span>
+  const c = summary.counts
+  const total = c.hplc + c.endo + c.ster
   return (
     <span>
       {total} expected vial{total !== 1 ? 's' : ''}

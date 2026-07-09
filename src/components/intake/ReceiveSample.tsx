@@ -45,6 +45,7 @@ import {
   type OrderGroup,
 } from '@/lib/inbox-orders'
 import { OrderListRow } from '@/components/intake/OrderListRow'
+import { getOrderBoxLabelSummaries } from '@/lib/api'
 import { getOrderEmail } from '@/components/explorer/helpers'
 import { OrderReceiveSession } from '@/components/intake/OrderReceiveSession'
 
@@ -275,6 +276,25 @@ export function ReceiveSample() {
 
   const enriched = enrichOrderGroups(orderGroups, explorerOrders ?? [])
 
+  // ONE batched expected-vials query for the whole by-order list. Never
+  // per-row: ~50 concurrent per-row summary calls under HTTP/2 exhausted the
+  // backend DB pool and took login down with it (prod brownout 2026-07-09).
+  const expectedVialsKeys = Array.from(
+    new Set(
+      enriched
+        .map(g => g.orderKey)
+        .filter((k): k is string => k != null)
+    )
+  )
+    .sort()
+    .slice(0, 100) // backend cap per request
+  const expectedVialsQ = useQuery({
+    queryKey: ['order-expected-vials-batch', expectedVialsKeys.join(',')],
+    queryFn: () => getOrderBoxLabelSummaries(expectedVialsKeys),
+    enabled: expectedVialsKeys.length > 0,
+    staleTime: 60_000,
+  })
+
   const orderQuery = orderSearch.trim().toLowerCase()
   const visibleOrders = orderQuery
     ? enriched.filter(
@@ -501,6 +521,12 @@ export function ReceiveSample() {
                         <OrderListRow
                           key={group.orderKey ?? '__none__'}
                           group={group}
+                          expectedVialsSummary={
+                            group.orderKey != null
+                              ? expectedVialsQ.data?.summaries[group.orderKey]
+                              : undefined
+                          }
+                          expectedVialsLoading={expectedVialsQ.isLoading}
                           selectable={multiOrderEnabled}
                           selected={
                             group.orderKey != null &&
