@@ -49,8 +49,9 @@ import {
 } from '@/lib/api'
 import { useUIStore } from '@/store/ui-store'
 import { StateBadge, formatDate } from '@/components/senaite/senaite-utils'
-import { useEffectiveReadSource } from '@/lib/read-source'
+import { useEffectiveReadSource, type ReadSource } from '@/lib/read-source'
 import { ReadSourceControls } from '@/components/senaite/ReadSourceControls'
+import { FieldSourceGlyph } from '@/components/senaite/FieldSourceGlyph'
 
 // --- Constants ---
 
@@ -215,6 +216,7 @@ function SampleTable({
   onColumnFilterChange,
   onColumnFilterCommit,
   onColumnFilterClear,
+  readSource,
 }: {
   samples: SenaiteSample[]
   loading: boolean
@@ -227,6 +229,7 @@ function SampleTable({
   onColumnFilterChange: (column: keyof ColumnFilters, value: string) => void
   onColumnFilterCommit: () => void
   onColumnFilterClear: (column: keyof ColumnFilters) => void
+  readSource?: ReadSource
 }) {
   const navigateToOrderExplorer = useUIStore(
     state => state.navigateToOrderExplorer
@@ -421,6 +424,13 @@ function SampleTable({
               >
                 <span className="inline-flex items-center gap-1">
                   {col.label}
+                  {col.key === 'review_state' && readSource === 'mk1' && (
+                    <FieldSourceGlyph
+                      source="senaite"
+                      field="State"
+                      note="Refreshed live from SENAITE on each page load. All other columns read from the Accu-Mk1 registry."
+                    />
+                  )}
                   <SortIcon column={col.key} sort={sort} />
                 </span>
               </TableHead>
@@ -1032,6 +1042,7 @@ export function SenaiteDashboard() {
                     onColumnFilterChange={handleColumnFilterChange}
                     onColumnFilterCommit={handleColumnFilterCommit}
                     onColumnFilterClear={handleColumnFilterClear}
+                    readSource={effective}
                   />
                 </TabsContent>
               ))}

@@ -165,4 +165,39 @@ describe('SenaiteDashboard read source', () => {
     // SENAITE mode never asks for the slim payload — it needs full hydration.
     expect(getSenaite.mock.calls[0]![5]).toBeUndefined()
   })
+
+  it('mk1 mode: State column header carries the SENAITE provenance glyph', async () => {
+    vi.spyOn(api, 'getSenaiteStatus').mockResolvedValue({ enabled: true })
+    vi.spyOn(api, 'getSettings').mockResolvedValue([
+      { key: 'registry_read_source', value: '{"samples_list":"mk1"}' } as api.Setting,
+    ])
+    vi.spyOn(api, 'fetchSampleAggregates').mockResolvedValue({ aggregates: {} })
+    vi.spyOn(api, 'getRegistrySamples').mockResolvedValue({
+      items: [registryItem], total: 1, b_start: 0,
+    })
+    vi.spyOn(api, 'getSenaiteSamples').mockResolvedValue({
+      items: [refreshedItem], total: 1, b_start: 0,
+    })
+
+    renderDashboard()
+
+    await waitFor(() =>
+      expect(screen.getAllByLabelText('State: live from SENAITE').length).toBeGreaterThan(0)
+    )
+  })
+
+  it('senaite mode: no provenance glyph anywhere', async () => {
+    vi.spyOn(api, 'getSenaiteStatus').mockResolvedValue({ enabled: true })
+    vi.spyOn(api, 'getSettings').mockResolvedValue([])
+    vi.spyOn(api, 'fetchSampleAggregates').mockResolvedValue({ aggregates: {} })
+    vi.spyOn(api, 'getRegistrySamples').mockResolvedValue({ items: [], total: 0, b_start: 0 })
+    const getSenaite = vi.spyOn(api, 'getSenaiteSamples').mockResolvedValue({
+      items: [registryItem], total: 1, b_start: 0,
+    })
+
+    renderDashboard()
+
+    await waitFor(() => expect(getSenaite).toHaveBeenCalled())
+    expect(screen.queryByLabelText('State: live from SENAITE')).not.toBeInTheDocument()
+  })
 })
