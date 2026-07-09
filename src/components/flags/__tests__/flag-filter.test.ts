@@ -173,4 +173,35 @@ describe('filterFlags', () => {
     const flags = [flag({ id: 1, title: 'A' })]
     expect(filterFlags(flags, filter({ text: 'zzz' }))).toEqual([])
   })
+
+  it("assignee 'all' passes everything", () => {
+    const flags = [
+      flag({ id: 1, assignee_id: 7 }),
+      flag({ id: 2, assignee_id: 9 }),
+      flag({ id: 3, assignee_id: null }),
+    ]
+    expect(filterFlags(flags, filter({ assignee: 'all' }))).toHaveLength(3)
+  })
+
+  it('assignee matches a specific user id', () => {
+    const flags = [
+      flag({ id: 1, assignee_id: 7 }),
+      flag({ id: 2, assignee_id: 9 }),
+      flag({ id: 3, assignee_id: null }),
+    ]
+    expect(
+      filterFlags(flags, filter({ assignee: '7' })).map(f => f.id)
+    ).toEqual([1])
+  })
+
+  it("assignee 'none' matches unassigned only", () => {
+    const flags = [
+      flag({ id: 1, assignee_id: 7 }),
+      flag({ id: 2, assignee_id: 9 }),
+      flag({ id: 3, assignee_id: null }),
+    ]
+    expect(
+      filterFlags(flags, filter({ assignee: 'none' })).map(f => f.id)
+    ).toEqual([3])
+  })
 })
