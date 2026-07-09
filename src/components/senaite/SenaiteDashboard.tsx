@@ -722,8 +722,8 @@ export function SenaiteDashboard() {
     [effective]
   )
 
-  // Fires exactly ONE batched getSenaiteSamples call in the background to
-  // refresh review_state + analytes for a page already rendered from the
+  // Fires exactly ONE batched slim getSenaiteSamples call in the background
+  // to refresh review_state for a page already rendered from the
   // registry — never per-row (a per-row lookup on a ~50-row list recreates
   // the /wizard/senaite/lookup flood PR #49 removed, which can take down the
   // single-Zope SENAITE instance). No-ops outside 'mk1' mode. `baseItems` is
