@@ -12,9 +12,12 @@ import {
   STATUS_LABELS,
   STATUS_DOT,
   STATUS_ORDER,
+  OPEN_STATUSES,
 } from '@/components/flags/flag-status'
 import { entityMeta } from '@/components/flags/flag-entity'
 import { useFlagTypes } from '@/services/flag-types'
+import { useFlagUsers } from '@/components/flags/flag-users'
+import { displayName } from '@/lib/user-display'
 import type { FlagFilterState } from '@/components/flags/flag-filter'
 
 /** Entity types offered in the filter, in display order. Labels resolve via
@@ -40,15 +43,24 @@ function Dot({ color }: { color: string }) {
 export function FlagsFilterBar({
   value,
   onChange,
+  showAssignee = true,
 }: {
   value: FlagFilterState
   onChange: (next: FlagFilterState) => void
+  /** Hidden on the Assigned-to-me tab (every flag there is already mine). */
+  showAssignee?: boolean
 }) {
   // Managed type catalog (incl. inactive, so a deactivated type with open flags
   // is still filterable), ordered by sort_order.
   const { data: typeRows } = useFlagTypes({})
   const types = [...(typeRows ?? [])].sort(
     (a, b) => a.sort_order - b.sort_order
+  )
+  // Shared user directory (same query mention-autocomplete loads), sorted by
+  // display name for the assignee dropdown.
+  const userMap = useFlagUsers()
+  const users = [...userMap.values()].sort((a, b) =>
+    displayName(a).localeCompare(displayName(b))
   )
 
   return (
@@ -77,6 +89,14 @@ export function FlagsFilterBar({
         </SelectTrigger>
         <SelectContent>
           <SelectItem value="all">All statuses</SelectItem>
+          <SelectItem value="all_open">
+            <span className="flex -space-x-0.5">
+              {OPEN_STATUSES.map(s => (
+                <Dot key={s} color={STATUS_DOT[s]} />
+              ))}
+            </span>
+            All open
+          </SelectItem>
           {STATUS_ORDER.map(s => (
             <SelectItem key={s} value={s}>
               <Dot color={STATUS_DOT[s]} />
@@ -128,6 +148,30 @@ export function FlagsFilterBar({
           ))}
         </SelectContent>
       </Select>
+
+      {showAssignee && (
+        <Select
+          value={value.assignee}
+          onValueChange={assignee => onChange({ ...value, assignee })}
+        >
+          <SelectTrigger
+            size="sm"
+            aria-label="Filter by assignee"
+            className="h-8 w-auto text-xs"
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">Anyone</SelectItem>
+            <SelectItem value="none">Unassigned</SelectItem>
+            {users.map(u => (
+              <SelectItem key={u.id} value={String(u.id)}>
+                {displayName(u)}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      )}
     </div>
   )
 }
