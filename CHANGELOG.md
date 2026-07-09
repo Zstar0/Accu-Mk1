@@ -1,5 +1,36 @@
 # Changelog
 
+## v1.1.0 — 2026-07-09
+
+First release of the 1.1.x series: the SENAITE phase-out line. Ships the full
+read-from-Accu-Mk1 program — **inert by default** (every page still reads from
+SENAITE until the Data Source preference is flipped, post-backfill).
+
+### Added
+
+- **Read-source settings + per-page toggle.** Admin "Data Source" Preferences
+  pane sets a per-page global default (samples list / sample details); any user
+  can override per-session. Sample details reads basic-info registry-first with
+  per-field SENAITE fallback (`field_sources`); the samples list renders
+  instantly from the registry with one batched SENAITE refresh.
+- **Slim SENAITE listing** (`GET /senaite/samples?slim=true`): catalog-brains
+  only — in Accu-Mk1 mode a list page load costs SENAITE one catalog query and
+  zero object wake-ups (was: full `complete=yes` hydration of every row).
+- **Registry-owned analytes.** Replace-analyte now refreshes the sample's
+  registry row (the only Mk1-side slot mutation), so the list serves analytes
+  registry-native; the background refresh merges workflow state only.
+- **Provenance glyphs.** In Accu-Mk1 mode, SENAITE-pulled values are marked —
+  per-field on sample details, and on the samples-list State column header.
+- **Admin sample-registry debug panel** (dual-write observability): per-field
+  registry-vs-SENAITE drift view with a one-click refresh.
+
+### Fixed
+
+- Sample-details registry overlay no longer shadows the live SENAITE
+  `review_state` (workflow state is always live).
+- `/registry/samples` accepts comma-separated multi-state `review_state`
+  filters and prefers `client_title` for the Client column (hide-test parity).
+
 ## v1.0.29 — 2026-07-09
 
 ### Fixed
