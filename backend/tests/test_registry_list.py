@@ -3,6 +3,7 @@
 Authenticated (not admin-only) — same access-control rationale as
 test_registry_read_endpoint.py's /registry/sample/{id}/details."""
 import json
+from unittest.mock import patch
 from sub_samples.registry_list import registry_rows_to_list
 from models import LimsSample
 import pytest
@@ -78,7 +79,10 @@ def client():
     main.app.dependency_overrides[get_current_user] = lambda: {"email": "a@x", "role": "standard"}
     c = TestClient(main.app)
     c._Session = Session
-    yield c
+    # No IS DB in the test env — default the code overlay to "nothing found"
+    # (stored values stand). Overlay-specific tests re-patch inside their body.
+    with patch("integration_db.fetch_verification_codes_for_samples", return_value={}):
+        yield c
     main.app.dependency_overrides.clear()
 
 
@@ -141,3 +145,64 @@ def test_null_uid_falls_back_to_sample_id_not_500(client):
     r = client.get("/registry/samples")
     assert r.status_code == 200
     assert r.json()["items"][0]["uid"] == "P-3"
+
+
+# ── Verification code: IS DB is the authority ────────────────────────────────
+# Codes are minted at order time and REPLACED on COA regeneration — an IS-side
+# mutation the registry never sees (BW-0002 drift, 2026-07-09). The stored
+# lims_samples.verification_code is only a fallback cache.
+
+def test_verification_code_overlaid_from_is_db(client):
+    _seed(client, sample_id="P-1", verification_code="OLD1-OLD1")
+    with patch("integration_db.fetch_verification_codes_for_samples",
+               return_value={"P-1": "NEW1-NEW1"}) as m:
+        r = client.get("/registry/samples")
+    assert r.status_code == 200
+    assert r.json()["items"][0]["verification_code"] == "NEW1-NEW1"
+    m.assert_called_once_with(["P-1"])
+
+
+def test_verification_code_falls_back_to_stored_when_is_db_unavailable(client):
+    _seed(client, sample_id="P-1", verification_code="OLD1-OLD1")
+    with patch("integration_db.fetch_verification_codes_for_samples",
+               side_effect=RuntimeError("IS db down")):
+        r = client.get("/registry/samples")
+    assert r.status_code == 200
+    assert r.json()["items"][0]["verification_code"] == "OLD1-OLD1"
+
+
+def test_verification_code_missing_in_is_keeps_stored(client):
+    # A sample the IS DB has no code for (e.g. pre-IS legacy) keeps the
+    # backfilled SENAITE value.
+    _seed(client, sample_id="P-1", verification_code="OLD1-OLD1")
+    with patch("integration_db.fetch_verification_codes_for_samples",
+               return_value={}):
+        r = client.get("/registry/samples")
+    assert r.json()["items"][0]["verification_code"] == "OLD1-OLD1"
+
+
+def test_search_by_verification_code_resolves_via_is_db(client):
+    # Searching a REGENERATED code must find the sample even though the stored
+    # column still holds the old code — parity with /senaite/samples' search.
+    _seed(client, sample_id="P-1", verification_code="OLD1-OLD1")
+    _seed(client, sample_id="P-2", external_lims_uid="u2",
+          verification_code="XXXX-YYYY")
+    with patch("integration_db.search_sample_ids_by_verification_code",
+               return_value=["P-1"]) as m, \
+         patch("integration_db.fetch_verification_codes_for_samples",
+               return_value={"P-1": "NEW1-NEW1"}):
+        r = client.get("/registry/samples",
+                       params={"search": "NEW1", "search_field": "verification_code"})
+    body = r.json()
+    assert [i["id"] for i in body["items"]] == ["P-1"]
+    assert body["items"][0]["verification_code"] == "NEW1-NEW1"
+    m.assert_called_once()
+
+
+def test_search_by_verification_code_falls_back_to_stored_column_on_is_error(client):
+    _seed(client, sample_id="P-1", verification_code="OLD1-OLD1")
+    with patch("integration_db.search_sample_ids_by_verification_code",
+               side_effect=RuntimeError("down")):
+        r = client.get("/registry/samples",
+                       params={"search": "OLD1", "search_field": "verification_code"})
+    assert [i["id"] for i in r.json()["items"]] == ["P-1"]
