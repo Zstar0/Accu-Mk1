@@ -54,6 +54,13 @@ function renderRow(group: EnrichedOrderGroup) {
       selected={false}
       onToggle={vi.fn()}
       onProcess={vi.fn()}
+      // Presentational now: the parent list supplies the batched summary
+      // (per-row fetching melted the DB pool — prod brownout 2026-07-09).
+      expectedVialsSummary={{
+        order_number: '7',
+        order_date: null,
+        counts: { hplc: 2, endo: 1, ster: 0 },
+      }}
     />,
     { wrapper }
   )
@@ -91,9 +98,9 @@ describe('OrderListRow', () => {
   it('omits standalone "—" placeholders when client and email are present', async () => {
     renderRow(makeGroup(7, 'a@b.com'))
     expect(screen.getByText('acme')).toBeInTheDocument()
-    // Wait for the expected-vials query to settle (it renders "—" only while
-    // loading) so the remaining dash-check reflects steady state.
-    await screen.findByText(/expected vial/)
+    // The batched summary is passed as a prop, so the cell renders
+    // immediately — no query to settle.
+    expect(screen.getByText(/expected vial/)).toBeInTheDocument()
     expect(screen.queryByText('—')).toBeNull()
   })
 

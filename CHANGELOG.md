@@ -1,5 +1,23 @@
 # Changelog
 
+## v1.1.1 — 2026-07-09
+
+### Fixed
+
+- **Receive-by-order list no longer melts the backend (login outage fix).** The
+  per-row expected-vials cell fired ~50 concurrent `box-label-summary` calls
+  under HTTP/2, each holding a DB pool connection through a per-sample IS
+  fan-out — exhausting the pool (30s `QueuePool` timeout waves) and taking
+  `get_current_user`, and therefore login, down with it. The list now makes
+  ONE batched `POST /orders/box-label-summaries` per page (bounded 8-thread IS
+  fan-out server-side, per-order failure isolation, 100-order cap); the cell is
+  presentational. The temporary edge guard on the per-row route can come off.
+- **Verification codes read from the IS DB.** COA regeneration mints a new code
+  the registry never sees; `/registry/samples` now overlays the active code
+  (newest non-superseded primary generation, ingestion fallback) and
+  verification-code search resolves via the IS DB — the stored column is only
+  an IS-down fallback.
+
 ## v1.1.0 — 2026-07-09
 
 First release of the 1.1.x series: the SENAITE phase-out line. Ships the full

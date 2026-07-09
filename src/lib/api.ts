@@ -5515,6 +5515,26 @@ export async function getOrderBoxLabelSummary(
   )
 }
 
+export interface OrderBoxLabelSummaries {
+  /** Keyed by the REQUESTED order number (absent = not found). */
+  summaries: Record<string, OrderBoxLabelSummary>
+  /** Orders whose IS services fetch failed (never silently undercounted). */
+  errors: string[]
+}
+
+/** Batched box-label summaries — ONE call per receive-by-order page. The
+ *  per-row endpoint above melted the backend DB pool when ~50 row cells fired
+ *  concurrently under HTTP/2 (prod brownout 2026-07-09); never call it in a
+ *  per-row loop. Max 100 order numbers per request. */
+export async function getOrderBoxLabelSummaries(
+  orderNumbers: string[],
+): Promise<OrderBoxLabelSummaries> {
+  return apiFetch<OrderBoxLabelSummaries>('/orders/box-label-summaries', {
+    method: 'POST',
+    body: JSON.stringify({ order_numbers: orderNumbers }),
+  })
+}
+
 /**
  * Get the vial plan for a parent sample (demand, assignment roles, etc.).
  */

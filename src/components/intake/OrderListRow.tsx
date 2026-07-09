@@ -10,6 +10,7 @@ import {
 import type { EnrichedOrderGroup } from '@/lib/inbox-orders'
 import { customerDetailHash } from '@/lib/inbox-orders'
 import { OrderExpectedVials } from '@/components/intake/OrderExpectedVials'
+import type { OrderBoxLabelSummary } from '@/lib/api'
 
 interface OrderListRowProps {
   group: EnrichedOrderGroup
@@ -21,6 +22,10 @@ interface OrderListRowProps {
   selectable?: boolean
   onToggle: (orderKey: string) => void
   onProcess: (group: EnrichedOrderGroup) => void
+  // From the parent's ONE batched box-label-summaries query — never fetched
+  // per-row (the per-row fetch melted the DB pool; prod brownout 2026-07-09).
+  expectedVialsSummary?: OrderBoxLabelSummary
+  expectedVialsLoading?: boolean
 }
 
 // SENAITE review_state → the STATE_PRIORITY key used for the worst-state border.
@@ -61,6 +66,8 @@ export function OrderListRow({
   selectable = true,
   onToggle,
   onProcess,
+  expectedVialsSummary,
+  expectedVialsLoading = false,
 }: OrderListRowProps) {
   const order = group.order
   const canSelect = selectable && group.orderKey != null
@@ -106,7 +113,10 @@ export function OrderListRow({
             {group.samples.length} sample
             {group.samples.length !== 1 ? 's' : ''}{' '}
             <span aria-hidden="true">·</span>{' '}
-            <OrderExpectedVials orderNumber={group.orderKey} />
+            <OrderExpectedVials
+              summary={expectedVialsSummary}
+              loading={expectedVialsLoading}
+            />
           </span>
         </div>
       </td>

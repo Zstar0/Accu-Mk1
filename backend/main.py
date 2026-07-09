@@ -8450,6 +8450,139 @@ def get_order_box_label_summary(order_number: str, _current_user=Depends(get_cur
     return BoxLabelSummary(order_number=row["order_number"], order_date=order_date, counts=counts)
 
 
+def _fetch_order_submission_rows_batch(order_numbers: list[str]) -> dict[str, dict]:
+    """Batched _fetch_order_submission_row: ONE IS-DB query for a page of
+    order numbers. Returns {requested_number: row} (absent = not found);
+    row keys mirror the single helper. Newest submission wins per order."""
+    from integration_db import get_integration_db
+    from psycopg2.extras import RealDictCursor
+
+    wanted: dict[str, set[str]] = {}  # requested → its match forms
+    for raw in order_numbers:
+        raw = (raw or "").strip()
+        if not raw:
+            continue
+        stripped = raw[3:] if raw.upper().startswith("WP-") else raw
+        wanted[raw] = {raw, stripped}
+    if not wanted:
+        return {}
+    all_forms = sorted({f for forms in wanted.values() for f in forms})
+    with get_integration_db() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT order_number, order_id, created_at, sample_results
+                  FROM order_submissions
+                 WHERE order_number = ANY(%(forms)s) OR order_id = ANY(%(forms)s)
+                 ORDER BY created_at DESC
+                """,
+                {"forms": all_forms},
+            )
+            rows = cur.fetchall()
+    out: dict[str, dict] = {}
+    for requested, forms in wanted.items():
+        for row in rows:  # rows are newest-first; first hit wins
+            if row.get("order_number") in forms or row.get("order_id") in forms:
+                out[requested] = {
+                    "order_number": requested,
+                    "created_at": row.get("created_at"),
+                    "sample_results": row.get("sample_results") or {},
+                }
+                break
+    return out
+
+
+class BoxLabelSummariesRequest(BaseModel):
+    order_numbers: list[str]
+
+
+class BoxLabelSummariesResponse(BaseModel):
+    summaries: dict[str, BoxLabelSummary]  # keyed by REQUESTED order number
+    errors: list[str] = []  # orders whose IS fetch failed (never undercounted)
+
+
+@app.post("/orders/box-label-summaries", response_model=BoxLabelSummariesResponse)
+def get_order_box_label_summaries(
+    body: BoxLabelSummariesRequest,
+    _current_user=Depends(get_current_user),
+):
+    """Batched box-label summaries: ONE request per receive-by-order PAGE.
+
+    The per-row endpoint above holds this request's DB pool connection through
+    a per-sample IS fan-out; ~50 concurrent row cells under HTTP/2 (no browser
+    connection cap) exhausted the pool (QueuePool 30s timeout waves) and took
+    get_current_user — and login — down with it (prod brownout 2026-07-09).
+    Here a whole page costs one batched IS-DB order lookup + a bounded
+    (8-thread) IS fan-out over UNIQUE sample ids, holding a single pool
+    connection briefly. Per-order failure isolation mirrors the single
+    endpoint's fail-loud rule: an order whose services fetch raises lands in
+    `errors` (never a silent undercount); the rest resolve normally.
+    """
+    requested = [n.strip() for n in body.order_numbers if n and n.strip()]
+    if len(requested) > 100:
+        raise HTTPException(status_code=400, detail="At most 100 order_numbers per request")
+    if not requested:
+        return BoxLabelSummariesResponse(summaries={}, errors=[])
+
+    rows = _fetch_order_submission_rows_batch(requested)
+
+    order_sids: dict[str, list[str]] = {}
+    for num, row in rows.items():
+        sids: list[str] = []
+        for entry in (row["sample_results"] or {}).values():
+            sid = entry.get("senaite_id") if isinstance(entry, dict) else None
+            if sid:
+                sids.append(sid)
+        order_sids[num] = sids
+    unique_sids = sorted({s for sids in order_sids.values() for s in sids})
+
+    services_by_sid: dict[str, Optional[dict]] = {}
+    failed_sids: set[str] = set()
+    if unique_sids:
+        from concurrent.futures import ThreadPoolExecutor
+
+        def _one(sid: str):
+            try:
+                return sid, sub_service.fetch_sample_services(sid), False
+            except Exception:
+                return sid, None, True
+
+        # Bounded fan-out: 8 concurrent IS calls regardless of page size —
+        # never a herd, and this handler's own threadpool slot is the only
+        # anyio worker consumed.
+        with ThreadPoolExecutor(max_workers=8) as ex:
+            for sid, resp, failed in ex.map(_one, unique_sids):
+                if failed:
+                    failed_sids.add(sid)
+                else:
+                    services_by_sid[sid] = resp
+
+    summaries: dict[str, BoxLabelSummary] = {}
+    errors: list[str] = []
+    for num, row in rows.items():
+        sids = order_sids[num]
+        if any(s in failed_sids for s in sids):
+            errors.append(num)
+            continue
+        counts = {"hplc": 0, "endo": 0, "ster": 0}
+        for sid in sids:
+            resp = services_by_sid.get(sid)
+            if not resp:
+                continue  # legit 404 / unmapped sample → contributes 0
+            services = resp.get("services") or {}
+            d = derive_base_demand(services)
+            counts["hplc"] += d["hplc"]
+            counts["endo"] += d["endo"]
+            counts["ster"] += d["ster"]
+        created = row.get("created_at")
+        summaries[num] = BoxLabelSummary(
+            order_number=row["order_number"],
+            order_date=created.date().isoformat() if created else None,
+            counts=counts,
+        )
+    return BoxLabelSummariesResponse(summaries=summaries, errors=errors)
+
+
 @app.get("/explorer/samples/{sample_id}/additional-coas")
 async def get_sample_additional_coas(sample_id: str, _current_user=Depends(get_current_user)):
     """Get additional COA configs for a sample (proxied to Integration Service)."""
