@@ -74,32 +74,52 @@ describe('SenaiteDashboard read source', () => {
     await waitFor(() => expect(screen.getByText('Registered')).toBeInTheDocument())
   })
 
-  it('mk1 mode: hide-test filter uses the client_id merged from the SENAITE refresh, not the registry slug', async () => {
+  it('mk1 mode: hide-test filter works off the registry client_id alone — no SENAITE refresh needed', async () => {
     vi.spyOn(api, 'getSenaiteStatus').mockResolvedValue({ enabled: true })
     vi.spyOn(api, 'getSettings').mockResolvedValue([
       { key: 'registry_read_source', value: '{"samples_list":"mk1"}' } as api.Setting,
     ])
     vi.spyOn(api, 'fetchSampleAggregates').mockResolvedValue({ aggregates: {} })
-    // The registry stores a SENAITE client slug, which never matches
-    // TEST_CLIENT_ID (an email) — so the fast render lets a test sample
-    // through even with "hide test samples" on.
-    const slugItem: api.SenaiteSample = {
+    // /registry/samples now returns client_title (the email form) as client_id
+    // (parity with /senaite/samples' getClientTitle), so hide-test matches on
+    // the fast render itself.
+    const emailItem: api.SenaiteSample = {
       ...registryItem,
       id: 'P-2',
-      client_id: 'forrest-valenceanalytical-com-WP',
-    }
-    // /senaite/samples returns the email form the filter actually checks for.
-    const emailItem: api.SenaiteSample = {
-      ...slugItem,
       client_id: 'forrest@valenceanalytical.com',
     }
-    vi.spyOn(api, 'getRegistrySamples').mockResolvedValue({
-      items: [slugItem],
+    const getRegistry = vi.spyOn(api, 'getRegistrySamples').mockResolvedValue({
+      items: [emailItem],
       total: 1,
       b_start: 0,
     })
+    // The refresh never resolves — proving the fast render filters unaided.
+    vi.spyOn(api, 'getSenaiteSamples').mockReturnValue(new Promise(() => {}))
+
+    renderDashboard()
+
+    await waitFor(() => expect(getRegistry).toHaveBeenCalled())
+    await waitFor(() =>
+      expect(screen.getByText(/Read from Accu-Mk1/i)).toBeInTheDocument()
+    )
+    expect(screen.queryByText('P-2')).not.toBeInTheDocument()
+  })
+
+  it('mk1 mode: SENAITE refresh merges only review_state + analytes — client_id is left registry-native', async () => {
+    vi.spyOn(api, 'getSenaiteStatus').mockResolvedValue({ enabled: true })
+    vi.spyOn(api, 'getSettings').mockResolvedValue([
+      { key: 'registry_read_source', value: '{"samples_list":"mk1"}' } as api.Setting,
+    ])
+    vi.spyOn(api, 'fetchSampleAggregates').mockResolvedValue({ aggregates: {} })
+    vi.spyOn(api, 'getRegistrySamples').mockResolvedValue({
+      items: [registryItem], // client_id 'acme' — not a test client
+      total: 1,
+      b_start: 0,
+    })
+    // The refresh reports the TEST client for the same row; if client_id were
+    // still merged, hide-test (on by default) would drop the row after refresh.
     const getSenaite = vi.spyOn(api, 'getSenaiteSamples').mockResolvedValue({
-      items: [emailItem],
+      items: [{ ...refreshedItem, client_id: 'forrest@valenceanalytical.com' }],
       total: 1,
       b_start: 0,
     })
@@ -107,10 +127,10 @@ describe('SenaiteDashboard read source', () => {
     renderDashboard()
 
     await waitFor(() => expect(getSenaite).toHaveBeenCalled())
-    // Once the batched refresh merges the authoritative (email-form) client_id,
-    // "hide test samples" (on by default) matches it and the row drops out —
-    // the registry's slug form never would have matched TEST_CLIENT_ID.
-    await waitFor(() => expect(screen.queryByText('P-2')).not.toBeInTheDocument())
+    // review_state DID merge (Due → Registered)…
+    await waitFor(() => expect(screen.getByText('Registered')).toBeInTheDocument())
+    // …but client_id did not: the row survives hide-test.
+    expect(screen.getByText('P-1')).toBeInTheDocument()
   })
 
   it('senaite mode: only getSenaiteSamples is called — no registry fetch', async () => {
