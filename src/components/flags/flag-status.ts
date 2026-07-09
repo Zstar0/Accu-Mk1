@@ -34,3 +34,7 @@ export const STATUS_ORDER: FlagStatus[] = [
   'resolved',
   'closed',
 ]
+
+/** Statuses that count as "open" for the composite All-Open filter.
+ *  Mirrors backend OPEN_STATES (catalog.py). */
+export const OPEN_STATUSES: FlagStatus[] = ['open', 'in_progress', 'blocked']

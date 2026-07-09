@@ -106,6 +106,19 @@ describe('filterFlags', () => {
     ).toEqual([2])
   })
 
+  it("'all_open' keeps open/in_progress/blocked, drops resolved/closed", () => {
+    const flags = [
+      flag({ id: 1, status: 'open' }),
+      flag({ id: 2, status: 'in_progress' }),
+      flag({ id: 3, status: 'blocked' }),
+      flag({ id: 4, status: 'resolved' }),
+      flag({ id: 5, status: 'closed' }),
+    ]
+    expect(
+      filterFlags(flags, filter({ status: 'all_open' })).map(f => f.id)
+    ).toEqual([1, 2, 3])
+  })
+
   it('filters by entity type', () => {
     const flags = [
       flag({ id: 1, entity_type: 'sample' }),

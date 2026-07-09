@@ -7,11 +7,12 @@
  * status/entity narrow by exact match (or `'all'` to pass everything).
  */
 
-import type { FlagResponse } from '@/lib/flags-api'
+import type { FlagResponse, FlagStatus } from '@/lib/flags-api'
+import { OPEN_STATUSES } from '@/components/flags/flag-status'
 
 export interface FlagFilterState {
   text: string
-  /** A `FlagStatus` slug, or `'all'`. */
+  /** A `FlagStatus` slug, `'all_open'` (open ∪ in_progress ∪ blocked), or `'all'`. */
   status: string
   /** An entity-type slug (e.g. `sample`), or `'all'`. */
   entityType: string
@@ -45,7 +46,9 @@ export function filterFlags(
     return flags
 
   return flags.filter(flag => {
-    if (status !== 'all' && flag.status !== status) return false
+    if (status === 'all_open') {
+      if (!OPEN_STATUSES.includes(flag.status as FlagStatus)) return false
+    } else if (status !== 'all' && flag.status !== status) return false
     if (entityType !== 'all' && flag.entity_type !== entityType) return false
     if (type !== 'all' && flag.type !== type) return false
     if (text) {
