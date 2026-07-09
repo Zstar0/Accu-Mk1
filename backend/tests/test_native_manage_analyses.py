@@ -15,6 +15,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 from unittest.mock import MagicMock, patch, AsyncMock
 
+import main
 from database import Base
 from models import AnalysisService, LimsAnalysis, LimsAnalysisTransition, LimsSubSample, LimsSample, Peptide
 
@@ -600,6 +601,116 @@ class TestReplaceAnalyteGates:
         assert resp.status_code == 412
         detail = resp.json()["detail"]
         assert [r["keyword"] for r in detail["worked_unverified"]] == ["PUR_TP500"]
+
+
+class TestReplaceRegistryDualWrite:
+    """POST …/analytes/{slot}/replace refreshes lims_samples (registry-owned
+    analytes): the samples list in Accu-Mk1 read mode serves analytes from
+    the registry, and Replace is the only Mk1-side mutation of the slots.
+    Best-effort — a refresh failure must never fail the replace itself."""
+
+    def _peptide(self, db, name, abbr):
+        p = Peptide(name=name, abbreviation=abbr)
+        db.add(p)
+        db.flush()
+        return p
+
+    def _svc(self, db, *, keyword, peptide_id):
+        s = AnalysisService(title=keyword, keyword=keyword, peptide_id=peptide_id,
+                            senaite_uid=f"SN-{keyword}")
+        db.add(s)
+        db.flush()
+        return s
+
+    def _setup(self, db):
+        old_pep = self._peptide(db, "TP500", "TP500")
+        new_pep = self._peptide(db, "TB500 (Thymosin Beta 4)", "TB500B4")
+        self._svc(db, keyword="ID_TP500", peptide_id=old_pep.id)
+        self._svc(db, keyword="PUR_TP500", peptide_id=old_pep.id)
+        for cat in ("ID", "PUR", "QTY"):
+            self._svc(db, keyword=f"{cat}_TB500B4", peptide_id=new_pep.id)
+        parent = _make_sample(db, sample_id="P-RDW01")
+        sub = _make_sub(db, parent, uid="mk1://rdw01-v1", sample_id="P-RDW01-S01")
+        sub.assignment_role = "hplc"
+        db.commit()
+        return old_pep, new_pep, parent
+
+    def _field_write_ok(self):
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock, patch as _patch
+        return _patch.object(
+            main, "update_senaite_sample_fields",
+            AsyncMock(return_value=SimpleNamespace(success=True)),
+        )
+
+    def _is_proxy_mock(self):
+        """Steps 4/5 (alias reset + IS identity swap) are best-effort httpx
+        calls — give them a happy mock so no real network is attempted."""
+        from unittest.mock import AsyncMock, MagicMock, patch as _patch
+        mock_instance = AsyncMock()
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json = MagicMock(return_value={"success": True})
+        mock_instance.post = AsyncMock(return_value=mock_resp)
+        mock_instance.delete = AsyncMock(return_value=mock_resp)
+        mock_instance.get = AsyncMock(return_value=mock_resp)
+        p = _patch("httpx.AsyncClient")
+        cls = p.start()
+        cls.return_value.__aenter__ = AsyncMock(return_value=mock_instance)
+        cls.return_value.__aexit__ = AsyncMock(return_value=False)
+        return p
+
+    def test_replace_refreshes_registry_analytes(self, route_client):
+        import json as _json
+        from unittest.mock import patch as _patch
+        db = route_client._test_session
+        old_pep, new_pep, parent = self._setup(db)
+
+        meta = {
+            "uid": "AR-RDW01",
+            "Analyte2Peptide": "TB500 (Thymosin Beta 4) - Identity (HPLC)",
+            "review_state": "sample_received",
+        }
+        proxy = self._is_proxy_mock()
+        try:
+            with self._field_write_ok(), \
+                 _patch("sub_samples.senaite.fetch_parent_metadata", return_value=meta):
+                resp = route_client.post(
+                    "/explorer/samples/P-RDW01/analytes/2/replace",
+                    json={"new_peptide_id": new_pep.id, "old_peptide_id": old_pep.id,
+                          "senaite_uid": "AR-RDW01"},
+                )
+        finally:
+            proxy.stop()
+
+        assert resp.status_code == 200, resp.json()
+        db.expire_all()
+        row = db.execute(
+            select(LimsSample).where(LimsSample.sample_id == "P-RDW01")
+        ).scalar_one()
+        assert row.analytes is not None
+        names = [a["name"] for a in _json.loads(row.analytes)]
+        assert any("TB500" in n for n in names)
+
+    def test_registry_refresh_failure_is_non_fatal(self, route_client):
+        from unittest.mock import patch as _patch
+        db = route_client._test_session
+        old_pep, new_pep, parent = self._setup(db)
+
+        proxy = self._is_proxy_mock()
+        try:
+            with self._field_write_ok(), \
+                 _patch("sub_samples.senaite.fetch_parent_metadata",
+                        side_effect=RuntimeError("senaite down")):
+                resp = route_client.post(
+                    "/explorer/samples/P-RDW01/analytes/2/replace",
+                    json={"new_peptide_id": new_pep.id, "old_peptide_id": old_pep.id,
+                          "senaite_uid": "AR-RDW01"},
+                )
+        finally:
+            proxy.stop()
+
+        assert resp.status_code == 200, resp.json()
 
 
 class TestNonNativeFallthrough:

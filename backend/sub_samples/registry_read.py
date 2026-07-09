@@ -7,11 +7,14 @@ from typing import Any
 from models import LimsSample
 
 # Every SenaiteLookupResult field this mapper can populate. The overlay's
-# field_sources map is built over exactly this set.
+# field_sources map is built over exactly this set. review_state is
+# deliberately ABSENT: workflow state is SENAITE-owned (it mutates after
+# order time), and the details endpoint has the live value in hand — the
+# registry's cached status may lag and must never shadow it.
 OVERLAY_FIELDS: tuple[str, ...] = (
     "client", "contact", "sample_type",
     "date_received", "date_sampled", "client_order_number",
-    "client_sample_id", "client_lot", "review_state",
+    "client_sample_id", "client_lot",
     "declared_weight_mg", "analytes",
 )
 
@@ -29,7 +32,6 @@ def registry_row_to_display(row: LimsSample) -> dict[str, Any]:
     put("client_order_number", row.client_order_number)
     put("client_sample_id", row.client_sample_id)
     put("client_lot", row.client_lot)
-    put("review_state", row.status)
     if row.date_received is not None:
         out["date_received"] = row.date_received.isoformat()
     if row.date_sampled is not None:

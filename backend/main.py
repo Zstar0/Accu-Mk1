@@ -8892,6 +8892,32 @@ async def replace_analyte(
     except (_BadRequestError, _NotFoundError) as e:
         raise HTTPException(400, str(e))
 
+    # ── 7. refresh the registry row (registry-owned analytes) ────────────────
+    # lims_samples.analytes is the samples-list's authoritative analyte source
+    # in Accu-Mk1 read mode, and this endpoint is the only Mk1-side mutation
+    # of the slots. Re-read SENAITE truth (not in-memory state) so whatever
+    # Replace actually landed is what the registry serves. Best-effort: a
+    # failure never fails the replace — repair via the registry-debug refresh
+    # or the backfill re-sweep. Commit the replace work FIRST so a refresh
+    # error can't roll it back; run the sync SENAITE fetch in the threadpool
+    # (this is an async-def handler — a blocking call would freeze the loop).
+    db.commit()
+    if not _is_presubsample:
+        from starlette.concurrency import run_in_threadpool
+        from sub_samples.service import _refresh_parent_from_senaite
+        try:
+            _row = db.execute(
+                _select(LimsSample).where(LimsSample.sample_id == sample_id)
+            ).scalar_one_or_none()
+            if _row is not None:
+                await run_in_threadpool(_refresh_parent_from_senaite, db, _row)
+                db.commit()
+        except Exception as _e:
+            db.rollback()
+            _rep_logger.warning(
+                "replace_analyte: registry refresh failed for %s: %s", sample_id, _e
+            )
+
     return {
         "success": True,
         "field_updated": f"Analyte{slot}Peptide",
@@ -12902,6 +12928,7 @@ async def list_senaite_samples(
     search: Optional[str] = None,
     search_field: Optional[str] = None,
     include_sub_samples: bool = False,
+    slim: bool = False,
     _current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -12919,12 +12946,21 @@ async def list_senaite_samples(
       Note: pages can be slightly shorter than `limit` when many
       sub-samples are interleaved in the SENAITE result; the caller
       should bump `limit` if a denser display is desired.
+    - slim: when True, skip SENAITE's complete=yes hydration and serve
+      catalog brains only — review_state/id/uid are live, but analytes and
+      verification_code come back empty (brains don't carry the custom
+      Analyte{N}Peptide/VerificationCode schema fields; spike-verified
+      2026-07-08). Used by the mk1-read-mode list refresh, which merges
+      review_state only. SENAITE-mode callers must NOT pass it.
     """
     if SENAITE_URL is None:
         raise HTTPException(status_code=503, detail="SENAITE not configured")
 
     url = f"{SENAITE_URL}/senaite/@@API/senaite/v1/AnalysisRequest"
-    base_params: dict = {"complete": "yes", "sort_on": "created", "sort_order": "descending"}
+    base_params: dict = {"sort_on": "created", "sort_order": "descending"}
+    if not slim:
+        # Full hydration wakes every object in Zope — the expensive mode.
+        base_params["complete"] = "yes"
 
     # SENAITE secondary AR ID convention. Used to drop sub-sample rows
     # from the parent listing unless include_sub_samples=True.

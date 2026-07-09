@@ -153,6 +153,18 @@ def test_field_sources_covers_overlay_fields(client):
     assert set(body["field_sources"].keys()) == set(OVERLAY_FIELDS)
 
 
+def test_review_state_is_never_overlaid(client):
+    # Workflow state is SENAITE-owned (mutates after order time) — the
+    # registry's cached status may lag. The live lookup value must stand.
+    _seed(client, status="sample_due")  # stale registry status
+    with _mock_lookup(_senaite_result(review_state="published")):
+        r = client.get("/registry/sample/P-1/details")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["review_state"] == "published"
+    assert "review_state" not in body["field_sources"]
+
+
 def test_unauthenticated_rejected_401():
     # No override, no bearer token -> real get_current_user -> 401, not 403.
     from database import Base as B

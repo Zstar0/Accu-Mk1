@@ -211,6 +211,8 @@ interface EditableDataRowProps {
   onSaved?: (newValue: string | number | null) => void
   onSave?: (newValue: string | number | null) => Promise<void>
   children?: React.ReactNode
+  /** Per-field provenance marker (FieldSourceGlyph) — mk1 read mode only. */
+  sourceGlyph?: React.ReactNode
 }
 
 export function EditableDataRow({
@@ -227,10 +229,14 @@ export function EditableDataRow({
   onSaved,
   onSave,
   children,
+  sourceGlyph,
 }: EditableDataRowProps) {
   return (
     <div className="flex items-baseline justify-between py-1.5 border-b border-border/50 last:border-0">
-      <span className="text-xs text-muted-foreground shrink-0 min-w-28 mr-3">{label}</span>
+      <span className="text-xs text-muted-foreground shrink-0 min-w-28 mr-3 inline-flex items-center gap-1">
+        {label}
+        {sourceGlyph}
+      </span>
       <div className="flex items-center gap-2 min-w-0 flex-1 justify-end">
         {children}
         <EditableField

@@ -49,8 +49,9 @@ import {
 } from '@/lib/api'
 import { useUIStore } from '@/store/ui-store'
 import { StateBadge, formatDate } from '@/components/senaite/senaite-utils'
-import { useEffectiveReadSource } from '@/lib/read-source'
+import { useEffectiveReadSource, type ReadSource } from '@/lib/read-source'
 import { ReadSourceControls } from '@/components/senaite/ReadSourceControls'
+import { FieldSourceGlyph } from '@/components/senaite/FieldSourceGlyph'
 
 // --- Constants ---
 
@@ -215,6 +216,7 @@ function SampleTable({
   onColumnFilterChange,
   onColumnFilterCommit,
   onColumnFilterClear,
+  readSource,
 }: {
   samples: SenaiteSample[]
   loading: boolean
@@ -227,6 +229,7 @@ function SampleTable({
   onColumnFilterChange: (column: keyof ColumnFilters, value: string) => void
   onColumnFilterCommit: () => void
   onColumnFilterClear: (column: keyof ColumnFilters) => void
+  readSource?: ReadSource
 }) {
   const navigateToOrderExplorer = useUIStore(
     state => state.navigateToOrderExplorer
@@ -421,6 +424,13 @@ function SampleTable({
               >
                 <span className="inline-flex items-center gap-1">
                   {col.label}
+                  {col.key === 'review_state' && readSource === 'mk1' && (
+                    <FieldSourceGlyph
+                      source="senaite"
+                      field="State"
+                      note="Refreshed live from SENAITE on each page load. All other columns read from the Accu-Mk1 registry."
+                    />
+                  )}
                   <SortIcon column={col.key} sort={sort} />
                 </span>
               </TableHead>
@@ -722,8 +732,8 @@ export function SenaiteDashboard() {
     [effective]
   )
 
-  // Fires exactly ONE batched getSenaiteSamples call in the background to
-  // refresh review_state + analytes for a page already rendered from the
+  // Fires exactly ONE batched slim getSenaiteSamples call in the background
+  // to refresh review_state for a page already rendered from the
   // registry — never per-row (a per-row lookup on a ~50-row list recreates
   // the /wizard/senaite/lookup flood PR #49 removed, which can take down the
   // single-Zope SENAITE instance). No-ops outside 'mk1' mode. `baseItems` is
@@ -743,18 +753,18 @@ export function SenaiteDashboard() {
       if (effective !== 'mk1') return
       const requestId = ++requestIdRef.current
       setRefreshingCount(c => c + 1)
-      getSenaiteSamples(reviewState, limit, bStart, search, searchField)
+      getSenaiteSamples(reviewState, limit, bStart, search, searchField, true)
         .then(refreshResult => {
           if (requestIdRef.current !== requestId) return // superseded — drop it
           const liveById = new Map(refreshResult.items.map(s => [s.id, s]))
           onRefresh(
             baseItems.map(item => {
               const live = liveById.get(item.id)
-              // Merge ONLY what mutates after order time: review_state (workflow)
-              // and analytes (Replace-able). Everything else — including client —
-              // is IS→registry-native and immutable (/registry/samples already
-              // returns client_title, matching /senaite/samples' getClientTitle).
-              return live ? { ...item, review_state: live.review_state, analytes: live.analytes } : item
+              // Merge ONLY review_state — the one field SENAITE alone mutates
+              // (receive/verify/publish workflow). Analytes are registry-owned
+              // now (Replace dual-writes lims_samples), and the slim payload
+              // deliberately has none. Everything else is IS→registry-native.
+              return live ? { ...item, review_state: live.review_state } : item
             })
           )
         })
@@ -1032,6 +1042,7 @@ export function SenaiteDashboard() {
                     onColumnFilterChange={handleColumnFilterChange}
                     onColumnFilterCommit={handleColumnFilterCommit}
                     onColumnFilterClear={handleColumnFilterClear}
+                    readSource={effective}
                   />
                 </TabsContent>
               ))}

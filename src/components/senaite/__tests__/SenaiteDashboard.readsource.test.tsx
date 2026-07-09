@@ -72,6 +72,11 @@ describe('SenaiteDashboard read source', () => {
     // The registry-sourced row's review_state is overwritten in place once
     // the single batched SENAITE refresh resolves.
     await waitFor(() => expect(screen.getByText('Registered')).toBeInTheDocument())
+    // The refresh is slim (catalog-only, arg 6) and merges review_state ONLY:
+    // analytes are registry-owned now (Replace dual-writes lims_samples), so
+    // the refreshed item's extra analyte must NOT appear.
+    expect(getSenaite.mock.calls[0]![5]).toBe(true)
+    expect(screen.queryByText('DSIP - Purity (HPLC)')).not.toBeInTheDocument()
   })
 
   it('mk1 mode: hide-test filter works off the registry client_id alone — no SENAITE refresh needed', async () => {
@@ -105,7 +110,7 @@ describe('SenaiteDashboard read source', () => {
     expect(screen.queryByText('P-2')).not.toBeInTheDocument()
   })
 
-  it('mk1 mode: SENAITE refresh merges only review_state + analytes — client_id is left registry-native', async () => {
+  it('mk1 mode: SENAITE refresh merges only review_state — client_id and analytes stay registry-native', async () => {
     vi.spyOn(api, 'getSenaiteStatus').mockResolvedValue({ enabled: true })
     vi.spyOn(api, 'getSettings').mockResolvedValue([
       { key: 'registry_read_source', value: '{"samples_list":"mk1"}' } as api.Setting,
@@ -131,6 +136,8 @@ describe('SenaiteDashboard read source', () => {
     await waitFor(() => expect(screen.getByText('Registered')).toBeInTheDocument())
     // …but client_id did not: the row survives hide-test.
     expect(screen.getByText('P-1')).toBeInTheDocument()
+    // …and analytes did not merge either (registry-owned).
+    expect(screen.queryByText('DSIP - Purity (HPLC)')).not.toBeInTheDocument()
   })
 
   it('senaite mode: only getSenaiteSamples is called — no registry fetch', async () => {
@@ -155,5 +162,42 @@ describe('SenaiteDashboard read source', () => {
       expect(screen.getByText(/Read from SENAITE/i)).toBeInTheDocument()
     )
     expect(getRegistry).not.toHaveBeenCalled()
+    // SENAITE mode never asks for the slim payload — it needs full hydration.
+    expect(getSenaite.mock.calls[0]![5]).toBeUndefined()
+  })
+
+  it('mk1 mode: State column header carries the SENAITE provenance glyph', async () => {
+    vi.spyOn(api, 'getSenaiteStatus').mockResolvedValue({ enabled: true })
+    vi.spyOn(api, 'getSettings').mockResolvedValue([
+      { key: 'registry_read_source', value: '{"samples_list":"mk1"}' } as api.Setting,
+    ])
+    vi.spyOn(api, 'fetchSampleAggregates').mockResolvedValue({ aggregates: {} })
+    vi.spyOn(api, 'getRegistrySamples').mockResolvedValue({
+      items: [registryItem], total: 1, b_start: 0,
+    })
+    vi.spyOn(api, 'getSenaiteSamples').mockResolvedValue({
+      items: [refreshedItem], total: 1, b_start: 0,
+    })
+
+    renderDashboard()
+
+    await waitFor(() =>
+      expect(screen.getAllByLabelText('State: live from SENAITE').length).toBeGreaterThan(0)
+    )
+  })
+
+  it('senaite mode: no provenance glyph anywhere', async () => {
+    vi.spyOn(api, 'getSenaiteStatus').mockResolvedValue({ enabled: true })
+    vi.spyOn(api, 'getSettings').mockResolvedValue([])
+    vi.spyOn(api, 'fetchSampleAggregates').mockResolvedValue({ aggregates: {} })
+    vi.spyOn(api, 'getRegistrySamples').mockResolvedValue({ items: [], total: 0, b_start: 0 })
+    const getSenaite = vi.spyOn(api, 'getSenaiteSamples').mockResolvedValue({
+      items: [registryItem], total: 1, b_start: 0,
+    })
+
+    renderDashboard()
+
+    await waitFor(() => expect(getSenaite).toHaveBeenCalled())
+    expect(screen.queryByLabelText('State: live from SENAITE')).not.toBeInTheDocument()
   })
 })

@@ -80,3 +80,17 @@ export function useEffectiveReadSource(page: PageKey) {
   const globalDefault = globalMap[page] ?? DEFAULT_READ_SOURCE
   return { effective: resolveEffective(page, override, globalMap), override, setOverride: set, globalDefault }
 }
+
+/** Per-field provenance for the sample-details page. Returns undefined
+ *  outside mk1 read mode (glyphs render nothing — SENAITE mode is untouched).
+ *  In mk1 mode, an ABSENT key means SENAITE-owned: the backend deliberately
+ *  keeps workflow state (review_state) out of field_sources because the
+ *  registry must never shadow it. */
+export function detailsFieldSource(
+  readSource: string | undefined,
+  fieldSources: Record<string, 'mk1' | 'senaite'> | undefined,
+  field: string,
+): ReadSource | undefined {
+  if (readSource !== 'mk1') return undefined
+  return (fieldSources ?? {})[field] ?? 'senaite'
+}
