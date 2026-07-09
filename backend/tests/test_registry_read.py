@@ -21,7 +21,9 @@ def test_scalar_fields_map_to_lookup_shape():
     assert out["client_order_number"] == "WP-1"
     assert out["client_sample_id"] == "CS-9"
     assert out["client_lot"] == "L1"
-    assert out["review_state"] == "sample_received"
+    # review_state is SENAITE-owned; the mapper never emits it even when the
+    # registry row has a populated status.
+    assert "review_state" not in out
 
 
 def test_dates_render_iso():
