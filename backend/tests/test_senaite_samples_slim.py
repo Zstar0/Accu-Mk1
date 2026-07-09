@@ -93,3 +93,18 @@ def test_default_listing_still_sends_complete_yes(client):
         p.stop()
     assert r.status_code == 200
     assert captured[0]["params"].get("complete") == "yes"
+
+
+def test_slim_applies_to_search_path_too(client):
+    # search= routes through the handler's _query helper (a different code
+    # path than browse) — it must inherit the slim/complete decision from
+    # base_params identically.
+    captured = []
+    p = _mock_senaite(captured)
+    try:
+        r = client.get("/senaite/samples?slim=true&search=P-0001")
+    finally:
+        p.stop()
+    assert r.status_code == 200
+    assert len(captured) >= 1
+    assert all("complete" not in c["params"] for c in captured)
