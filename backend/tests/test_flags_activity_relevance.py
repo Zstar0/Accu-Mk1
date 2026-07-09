@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
 
 @pytest.fixture
@@ -83,3 +84,46 @@ def test_comment_event_carries_mentions(db):
     ev = [e for e in service.get_flag(db, f.id).events
           if e.event_type == "commented"][-1]
     assert (ev.details or {}).get("mentions") == [5]
+
+
+@pytest.fixture
+def client():
+    from fastapi.testclient import TestClient
+    from main import app
+    from auth import get_current_user
+    from database import get_db, Base
+    import models  # noqa: F401
+    import flags.models  # noqa: F401
+    from flags import seams, types_service
+    seams.set_event_sink(seams.InMemoryEventSink())
+    seams.register_mk1_entities()
+
+    engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False},
+                           poolclass=StaticPool)
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine)
+    shared = Session()
+    types_service.seed_builtins(shared)
+
+    def _db():
+        yield shared
+    prev_db = app.dependency_overrides.get(get_db)
+    prev_user = app.dependency_overrides.get(get_current_user)
+    app.dependency_overrides[get_db] = _db
+    app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(id=42, role="standard", email="t@x.t")
+    tc = TestClient(app)
+    yield tc
+    app.dependency_overrides.pop(get_db, None) if prev_db is None else app.dependency_overrides.__setitem__(get_db, prev_db)
+    app.dependency_overrides.pop(get_current_user, None) if prev_user is None else app.dependency_overrides.__setitem__(get_current_user, prev_user)
+    shared.close()
+
+
+def test_activity_endpoint_serializes_relevance(client):
+    # Requesting user (42) raises the flag → the raised event carries actor+raised.
+    r = client.post("/api/flags", json={"entity_type": "sub_sample", "entity_id": "1",
+                                        "type": "blocker", "title": "rel"})
+    assert r.status_code == 201, r.text
+    body = client.get("/api/flags/activity?limit=10").json()
+    raised = next(i for i in body["items"] if i["event_type"] == "raised")
+    assert "relevance" in raised
+    assert "actor" in raised["relevance"] and "raised" in raised["relevance"]
