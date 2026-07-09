@@ -13,6 +13,7 @@ import {
   getSampleRegistryDebug, refreshSampleRegistry,
   type SampleRegistryDebug as DebugData, type RegistryFieldStatus,
 } from '@/lib/api'
+import { useReadSource } from '@/lib/read-source'
 
 const statusGlyph: Record<RegistryFieldStatus, string> = {
   agree: '✔', drift: '⚠', registry_null: '○', senaite_null: '—',
@@ -35,6 +36,7 @@ export function SampleRegistryDebug({ open, onClose, sampleId }: Props) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [showRaw, setShowRaw] = useState(false)
+  const { source, setSource } = useReadSource()
 
   async function load() {
     setLoading(true); setError(null)
@@ -69,6 +71,15 @@ export function SampleRegistryDebug({ open, onClose, sampleId }: Props) {
               </span>
             </div>
             <div className="flex items-center gap-1.5 shrink-0">
+              <div className="flex items-center gap-0.5 rounded border border-zinc-800 p-0.5 mr-1">
+                {(['senaite', 'mk1'] as const).map((s) => (
+                  <button key={s} onClick={() => setSource(s)}
+                    className={cn('px-1.5 py-0.5 text-[10px] font-mono rounded transition-colors',
+                      source === s ? 'bg-emerald-600/30 text-emerald-300' : 'text-zinc-600 hover:text-zinc-300')}>
+                    {s === 'senaite' ? 'SENAITE' : 'Accu-Mk1'}
+                  </button>
+                ))}
+              </div>
               <button onClick={reconcile} disabled={loading} title="force reconcile"
                 className="text-amber-600/70 hover:text-amber-400 transition-colors disabled:opacity-30">
                 <RotateCw size={12} />

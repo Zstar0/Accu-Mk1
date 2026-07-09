@@ -11860,6 +11860,15 @@ class SenaiteLookupResult(BaseModel):
     cached_at: Optional[str] = None  # ISO timestamp when this result was cached
 
 
+class RegistrySampleReadResult(SenaiteLookupResult):
+    """SenaiteLookupResult with basic-info overlaid from the Accu-Mk1 registry.
+    field_sources records, per overlay field, whether the value shown came from
+    the registry ('mk1') or fell back to SENAITE ('senaite')."""
+    read_source: str = "mk1"
+    registry_missing: bool = False
+    field_sources: dict[str, str] = {}
+
+
 class SenaiteStatusResponse(BaseModel):
     enabled: bool
 
@@ -16830,6 +16839,51 @@ async def refresh_sample_registry_debug(
         except Exception:
             db.rollback()
     return _build_registry_debug_response(db, sample_id)
+
+
+@app.get("/registry/sample/{sample_id}/details", response_model=RegistrySampleReadResult)
+async def get_sample_read_from_registry(
+    sample_id: str,
+    admin=Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Admin diagnostic read path: the sample-details basic-info sourced
+    registry-first (Accu-Mk1 lims_samples) with per-field SENAITE fallback.
+    Analyses and everything else come from the unchanged SENAITE lookup.
+
+    `admin` is resolved before `db` (auth gate before any DB dependency is
+    entered) — matches the sibling debug endpoints above.
+    """
+    from sub_samples.registry_read import registry_row_to_display, OVERLAY_FIELDS
+
+    base = await lookup_senaite_sample(id=sample_id, no_cache=True, db=db, _current_user=admin)
+    payload = base.model_dump()
+
+    row = db.execute(
+        select(LimsSample).where(LimsSample.sample_id == sample_id.strip().upper())
+    ).scalar_one_or_none()
+
+    field_sources = {f: "senaite" for f in OVERLAY_FIELDS}
+    if row is None:
+        return RegistrySampleReadResult(**payload, read_source="mk1",
+                                        registry_missing=True, field_sources=field_sources)
+
+    overlay = registry_row_to_display(row)
+    for field, value in overlay.items():
+        # `analytes` is the one OVERLAY_FIELDS entry whose registry shape
+        # ({"name", "declared_quantity"}) is NOT the response_model's typed
+        # SenaiteAnalyte shape ({"raw_name", "slot_number", ...}). Overlaying
+        # it verbatim would raise a Pydantic ValidationError (500) on every
+        # sample with registry-populated analytes. Leave SENAITE's typed
+        # analytes untouched and keep field_sources["analytes"] == "senaite",
+        # which honestly reflects where the shown value came from.
+        if field == "analytes":
+            continue
+        payload[field] = value
+        field_sources[field] = "mk1"
+
+    return RegistrySampleReadResult(**payload, read_source="mk1",
+                                    registry_missing=False, field_sources=field_sources)
 
 
 # ── Peptide requests API (integration-service bridge) ────────────────

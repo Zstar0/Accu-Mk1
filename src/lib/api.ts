@@ -3617,6 +3617,12 @@ export interface SenaiteLookupResult {
   published_coa: SenaitePublishedCOA | null
   senaite_url: string | null
   cached_at: string | null
+  /** Per-field provenance when read from the Mk1 registry (source==='mk1'). */
+  field_sources?: Record<string, 'mk1' | 'senaite'>
+  /** Present when the response was served from the Mk1 registry. */
+  read_source?: 'mk1'
+  /** True when a 'mk1' read fell back because no registry record exists yet. */
+  registry_missing?: boolean
 }
 
 export interface SenaiteStatusResponse {
@@ -3665,14 +3671,19 @@ export async function clearSenaiteLookupCache(): Promise<void> {
 export async function lookupSenaiteSample(
   sampleId: string,
   /** Pass false to use the 15-min server-side cache. Only Order Status page should do this. */
-  noCache = true
+  noCache = true,
+  /** 'mk1' reads from the Mk1 registry endpoint instead of the live SENAITE lookup. */
+  source: 'senaite' | 'mk1' = 'senaite'
 ): Promise<SenaiteLookupResult> {
+  const url = source === 'mk1'
+    ? `${API_BASE_URL()}/registry/sample/${encodeURIComponent(sampleId)}/details`
+    : `${API_BASE_URL()}/wizard/senaite/lookup?id=${encodeURIComponent(sampleId)}&no_cache=${noCache}`
   return senaiteLimiter(async () => {
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(), 15_000)
     try {
       const response = await fetch(
-        `${API_BASE_URL()}/wizard/senaite/lookup?id=${encodeURIComponent(sampleId)}&no_cache=${noCache}`,
+        url,
         { headers: getBearerHeaders(), signal: controller.signal }
       )
       if (!response.ok) {
