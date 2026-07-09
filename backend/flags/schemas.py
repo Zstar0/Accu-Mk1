@@ -105,9 +105,19 @@ class FlagResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class WatcherOut(BaseModel):
+    """A watcher participant on a flag (ids only — display resolves client-side
+    via the shared user directory, keeping the flags module host-agnostic)."""
+    user_id: int
+    added_at: datetime
+    added_by: Optional[int] = None
+    model_config = ConfigDict(from_attributes=True)
+
+
 class FlagDetailResponse(FlagResponse):
     comments: List[CommentResponse] = Field(default_factory=list)
     events: List[EventResponse] = Field(default_factory=list)
+    watchers: List[WatcherOut] = Field(default_factory=list)
 
 
 class ActivityItem(BaseModel):

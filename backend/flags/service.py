@@ -315,6 +315,17 @@ def remove_watcher(db: Session, *, user, flag_id, user_id) -> None:
         _commit_and_emit(db)
 
 
+def list_watchers(db: Session, flag_id: int) -> list[FlagParticipant]:
+    """Watcher participants for a flag, oldest first. 404s on a missing flag."""
+    get_flag(db, flag_id)
+    return list(db.execute(
+        select(FlagParticipant)
+        .where(FlagParticipant.flag_id == flag_id,
+               FlagParticipant.role == "watcher")
+        .order_by(FlagParticipant.added_at.asc(), FlagParticipant.id.asc())
+    ).scalars().all())
+
+
 def change_status(db: Session, *, user, flag_id, to_status) -> FlagFlag:
     from flags.errors import ConflictError
     flag = get_flag(db, flag_id)

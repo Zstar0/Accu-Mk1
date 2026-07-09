@@ -19,7 +19,7 @@ from flags.schemas import (
     ActivityItem, ActivityPage, AssignRequest, CommentRequest, CommentResponse,
     CreateFlagRequest, EntityContext, FlagDetailResponse, FlagResponse,
     FlagTypeCreate, FlagTypeResponse, FlagTypeUpdate, StatusRequest,
-    SummaryResponse, WatcherRequest,
+    SummaryResponse, WatcherOut, WatcherRequest,
 )
 
 router = APIRouter(prefix="/api/flags", tags=["flags"])
@@ -200,7 +200,10 @@ def list_entity_types(db: Session = Depends(get_db), user=Depends(get_current_us
 @router.get("/{flag_id}", response_model=FlagDetailResponse)
 def get_flag(flag_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
     try:
-        return _with_entity(db, service.get_flag(db, flag_id), FlagDetailResponse)
+        resp = _with_entity(db, service.get_flag(db, flag_id), FlagDetailResponse)
+        resp.watchers = [WatcherOut.model_validate(w)
+                         for w in service.list_watchers(db, flag_id)]
+        return resp
     except Exception as e:
         raise _http(e)
 
