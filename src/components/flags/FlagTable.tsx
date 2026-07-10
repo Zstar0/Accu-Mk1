@@ -1,4 +1,5 @@
-import { ArrowUpRight } from 'lucide-react'
+import { useState } from 'react'
+import { ArrowUpRight, ArrowUpDown } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/store/auth-store'
 import { useUIStore } from '@/store/ui-store'
@@ -17,8 +18,12 @@ import {
   initialsForUser,
   avatarColor,
 } from '@/components/flags/flag-users'
-import { relativeTime } from '@/components/flags/flag-format'
-import { STATUS_LABELS, STATUS_DOT } from '@/components/flags/flag-status'
+import { relativeTime, dueLabel } from '@/components/flags/flag-format'
+import {
+  STATUS_LABELS,
+  STATUS_DOT,
+  OPEN_STATUSES,
+} from '@/components/flags/flag-status'
 import { FlagAvatar } from '@/components/flags/FlagAvatar'
 import type { UserMap } from '@/components/flags/flag-users'
 import type { FlagTypeDef } from '@/components/flags/flag-catalog'
@@ -30,10 +35,17 @@ import type { FlagTypeDef } from '@/components/flags/flag-catalog'
  * shifts. Title is the ONLY flexible column (`minmax(0,1fr)`); everything else
  * is fixed-width and every cell truncates — content never wraps or misaligns.
  *
- * Columns: accent · Entity · Type · Title · Assignee · Status · Age
+ * Columns: accent · Entity · Type · Title · Assignee · Status · Due · Age
  */
 const GRID_TEMPLATE =
-  'grid grid-cols-[3px_130px_104px_minmax(0,1fr)_120px_108px_44px] items-center gap-x-2'
+  'grid grid-cols-[3px_130px_104px_minmax(0,1fr)_120px_108px_88px_44px] items-center gap-x-2'
+
+/** Due sort key: ascending by due date, nulls (no due date) last. */
+function dueSortKey(f: FlagResponse): number {
+  if (!f.due_at) return Number.POSITIVE_INFINITY
+  const ms = new Date(f.due_at).getTime()
+  return Number.isNaN(ms) ? Number.POSITIVE_INFINITY : ms
+}
 
 /**
  * The aligned-columns table view for the flyout list (Plan 8). `highlightIds`
@@ -52,12 +64,21 @@ export function FlagTable({
   const users = useFlagUsers()
   const typesMap = useFlagTypesMap()
   const currentUserId = useAuthStore(state => state.user?.id ?? null)
+  // Optional due-ascending sort (nulls last); off by default so the server's
+  // updated_at order is preserved.
+  const [sortByDue, setSortByDue] = useState(false)
+  const rows = sortByDue
+    ? [...flags].sort((a, b) => dueSortKey(a) - dueSortKey(b))
+    : flags
 
   return (
     <div role="table" aria-label="Flags" className="text-sm">
-      <FlagTableHeader />
+      <FlagTableHeader
+        sortByDue={sortByDue}
+        onToggleDueSort={() => setSortByDue(s => !s)}
+      />
       <div role="rowgroup">
-        {flags.map(flag => (
+        {rows.map(flag => (
           <FlagTableRow
             key={flag.id}
             flag={flag}
@@ -74,7 +95,13 @@ export function FlagTable({
 }
 
 /** Muted label row, sticky under the (out-of-scroll) filter bar. */
-function FlagTableHeader() {
+function FlagTableHeader({
+  sortByDue,
+  onToggleDueSort,
+}: {
+  sortByDue: boolean
+  onToggleDueSort: () => void
+}) {
   return (
     <div
       role="row"
@@ -89,6 +116,17 @@ function FlagTableHeader() {
       <span className="truncate">Title</span>
       <span className="truncate">Assignee</span>
       <span className="truncate">Status</span>
+      <button
+        type="button"
+        onClick={onToggleDueSort}
+        aria-pressed={sortByDue}
+        className={cn(
+          'inline-flex items-center gap-1 truncate uppercase tracking-wide hover:text-foreground',
+          sortByDue && 'text-foreground'
+        )}
+      >
+        Due <ArrowUpDown className="h-2.5 w-2.5" />
+      </button>
       <span className="truncate text-end">Age</span>
     </div>
   )
@@ -121,6 +159,8 @@ function FlagTableRow({
   const status = flag.status as FlagStatus
   const statusLabel = STATUS_LABELS[status] ?? flag.status
   const statusColor = STATUS_DOT[status] ?? '#94a3b8'
+  const due = dueLabel(flag.due_at)
+  const isOverdue = (due?.overdue ?? false) && OPEN_STATUSES.includes(status)
 
   return (
     <div
@@ -219,6 +259,17 @@ function FlagTableRow({
           <span className="truncate">{statusLabel}</span>
         </span>
       </div>
+
+      {/* Due */}
+      <span
+        className={cn(
+          'truncate text-[11px] tabular-nums',
+          isOverdue ? 'font-medium text-destructive' : 'text-muted-foreground'
+        )}
+        title={due?.text}
+      >
+        {due?.text ?? '—'}
+      </span>
 
       {/* Age */}
       <span className="truncate text-end text-[11px] tabular-nums text-muted-foreground">

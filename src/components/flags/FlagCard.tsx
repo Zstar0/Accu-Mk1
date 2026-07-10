@@ -17,8 +17,12 @@ import {
   initialsForUser,
   avatarColor,
 } from '@/components/flags/flag-users'
-import { relativeTime } from '@/components/flags/flag-format'
-import { STATUS_LABELS, STATUS_DOT } from '@/components/flags/flag-status'
+import { relativeTime, dueLabel } from '@/components/flags/flag-format'
+import {
+  STATUS_LABELS,
+  STATUS_DOT,
+  OPEN_STATUSES,
+} from '@/components/flags/flag-status'
 import { FlagAvatar } from '@/components/flags/FlagAvatar'
 
 /**
@@ -63,6 +67,10 @@ export function FlagCard({
   const statusLabel = STATUS_LABELS[status] ?? flag.status
   const statusColor = STATUS_DOT[status] ?? '#94a3b8'
 
+  // Due-date treatment: overdue only "counts" while the flag is still open.
+  const due = dueLabel(flag.due_at)
+  const isOverdue = (due?.overdue ?? false) && OPEN_STATUSES.includes(status)
+
   // Secondary context line (vials/samples): "Sample P-0071 · PEPT-Total, …".
   // Omit the "Sample {id}" prefix when it would just repeat the chip label
   // (sample cards, where label === sample_id).
@@ -90,7 +98,11 @@ export function FlagCard({
       <div
         className="w-[3px] shrink-0 rounded-full"
         style={{
-          backgroundColor: unread ? 'var(--flag-unread)' : 'transparent',
+          backgroundColor: unread
+            ? 'var(--flag-unread)'
+            : isOverdue
+              ? '#e5484d'
+              : 'transparent',
         }}
         aria-hidden
       />
@@ -134,6 +146,18 @@ export function FlagCard({
             />
             {statusLabel}
           </span>
+          {due && (
+            <span
+              className={cn(
+                'rounded-full px-2 py-0.5 text-[10px] font-medium',
+                isOverdue
+                  ? 'bg-destructive/10 text-destructive'
+                  : 'text-muted-foreground'
+              )}
+            >
+              {due.text}
+            </span>
+          )}
         </div>
 
         <div className="truncate text-sm font-semibold text-foreground">

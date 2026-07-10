@@ -7,6 +7,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Input } from '@/components/ui/input'
+import { Button } from '@/components/ui/button'
 import type { FlagStatus } from '@/lib/flags-api'
 import {
   STATUS_LABELS,
@@ -173,6 +174,17 @@ export function FlagsFilterBar({
           </SelectContent>
         </Select>
       )}
+
+      <Button
+        type="button"
+        variant={value.overdueOnly ? 'default' : 'ghost'}
+        size="sm"
+        aria-pressed={value.overdueOnly}
+        className="h-8 px-2 text-xs"
+        onClick={() => onChange({ ...value, overdueOnly: !value.overdueOnly })}
+      >
+        Overdue
+      </Button>
     </div>
   )
 }

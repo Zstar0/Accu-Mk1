@@ -206,6 +206,19 @@ describe('filterFlags', () => {
     ).toEqual([1])
   })
 
+  it('overdueOnly keeps only overdue OPEN flags', () => {
+    const now = new Date('2026-07-09T12:00:00Z')
+    const flags = [
+      flag({ id: 1, status: 'open', due_at: '2026-07-06T17:00:00Z' }), // overdue+open
+      flag({ id: 2, status: 'open', due_at: '2026-07-20T17:00:00Z' }), // future
+      flag({ id: 3, status: 'resolved', due_at: '2026-07-06T17:00:00Z' }), // overdue but resolved
+      flag({ id: 4, status: 'open', due_at: null }), // no due date
+    ]
+    expect(
+      filterFlags(flags, filter({ overdueOnly: true }), now).map(f => f.id)
+    ).toEqual([1])
+  })
+
   it("assignee 'none' matches unassigned only", () => {
     const flags = [
       flag({ id: 1, assignee_id: 7 }),
