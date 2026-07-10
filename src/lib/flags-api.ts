@@ -300,6 +300,22 @@ export const searchFlags = (q: string, limit = 50) => {
   return apiFetch<FlagSearchHit[]>(`/api/flags/search?${qs.toString()}`)
 }
 
+/** Mirrors `EntitySearchHit` — one typeahead result for an entity link picker:
+ *  the `entity_id` to link and a human `label` to show. */
+export interface EntitySearchHit {
+  entity_id: string
+  label: string
+}
+
+/** `GET /api/flags/entity-search?entity_type=&q=` — typeahead over a registered
+ *  entity type. Caller gates at ≥2 chars + debounce. */
+export const entitySearch = (entityType: string, q: string) => {
+  const qs = new URLSearchParams({ entity_type: entityType, q })
+  return apiFetch<EntitySearchHit[]>(
+    `/api/flags/entity-search?${qs.toString()}`
+  )
+}
+
 /** `POST /api/flags/{id}/read` — stamp this flag read for me (204). */
 export const markRead = (id: number) =>
   apiFetch<undefined>(`/api/flags/${id}/read`, { method: 'POST' })

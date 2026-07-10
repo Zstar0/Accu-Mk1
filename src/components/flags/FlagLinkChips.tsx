@@ -1,29 +1,21 @@
 /**
  * Related-links row for the flag thread: navigational entity references and
- * related-flag chips, each with a remove ✕, plus two small add-pickers.
+ * related-flag chips, each with a remove ✕, plus two typeahead add-pickers.
  * Links are navigation only — NOT counted in rollups/indicators (spec §2).
  */
-import { useState } from 'react'
-import { Plus, X } from 'lucide-react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
+import { X } from 'lucide-react'
 import { flagKeys } from '@/hooks/use-flags'
 import {
-  addEntityLink,
   removeEntityLink,
-  addFlagLink,
   removeFlagLink,
   type FlagDetailResponse,
 } from '@/lib/flags-api'
 import { entityMeta, navigateForFlag } from '@/components/flags/flag-entity'
+import {
+  EntityLinkPicker,
+  FlagLinkPicker,
+} from '@/components/flags/flag-link-pickers'
 import { useUIStore } from '@/store/ui-store'
 
 function Chip({ children }: { children: React.ReactNode }) {
@@ -43,31 +35,9 @@ export function FlagLinkChips({
 }) {
   const qc = useQueryClient()
   const invalidate = () => qc.invalidateQueries({ queryKey: flagKeys.all })
-  const [addingEntity, setAddingEntity] = useState(false)
-  const [addingFlag, setAddingFlag] = useState(false)
-  const [etype, setEtype] = useState('sub_sample')
-  const [eid, setEid] = useState('')
-  const [otherFlag, setOtherFlag] = useState('')
-
-  const addEnt = useMutation({
-    mutationFn: () => addEntityLink(flagId, etype, eid.trim()),
-    onSuccess: () => {
-      invalidate()
-      setAddingEntity(false)
-      setEid('')
-    },
-  })
   const rmEnt = useMutation({
     mutationFn: (linkId: number) => removeEntityLink(flagId, linkId),
     onSuccess: invalidate,
-  })
-  const addFl = useMutation({
-    mutationFn: () => addFlagLink(flagId, Number(otherFlag)),
-    onSuccess: () => {
-      invalidate()
-      setAddingFlag(false)
-      setOtherFlag('')
-    },
   })
   const rmFl = useMutation({
     mutationFn: (linkId: number) => removeFlagLink(flagId, linkId),
@@ -101,44 +71,7 @@ export function FlagLinkChips({
             </button>
           </Chip>
         ))}
-        {addingEntity ? (
-          <span className="inline-flex items-center gap-1">
-            <Select value={etype} onValueChange={setEtype}>
-              <SelectTrigger size="sm" className="h-6 w-24 text-xs">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="sub_sample">Vial</SelectItem>
-                <SelectItem value="sample">Sample</SelectItem>
-                <SelectItem value="worksheet">Worksheet</SelectItem>
-              </SelectContent>
-            </Select>
-            <Input
-              value={eid}
-              onChange={e => setEid(e.target.value)}
-              placeholder="id"
-              aria-label="Related item id"
-              className="h-6 w-20 text-xs"
-            />
-            <Button
-              size="sm"
-              className="h-6 px-2 text-xs"
-              disabled={!eid.trim() || addEnt.isPending}
-              onClick={() => addEnt.mutate()}
-            >
-              Add
-            </Button>
-          </span>
-        ) : (
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-6 px-2 text-xs"
-            onClick={() => setAddingEntity(true)}
-          >
-            <Plus className="h-3 w-3" /> item
-          </Button>
-        )}
+        <EntityLinkPicker flagId={flagId} />
       </div>
 
       <div className="flex flex-wrap items-center gap-1.5">
@@ -162,35 +95,7 @@ export function FlagLinkChips({
             </button>
           </Chip>
         ))}
-        {addingFlag ? (
-          <span className="inline-flex items-center gap-1">
-            <Input
-              value={otherFlag}
-              onChange={e => setOtherFlag(e.target.value)}
-              placeholder="Flag #"
-              aria-label="Related flag id"
-              className="h-6 w-20 text-xs"
-              inputMode="numeric"
-            />
-            <Button
-              size="sm"
-              className="h-6 px-2 text-xs"
-              disabled={!otherFlag.trim() || addFl.isPending}
-              onClick={() => addFl.mutate()}
-            >
-              Add
-            </Button>
-          </span>
-        ) : (
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-6 px-2 text-xs"
-            onClick={() => setAddingFlag(true)}
-          >
-            <Plus className="h-3 w-3" /> flag
-          </Button>
-        )}
+        <FlagLinkPicker flagId={flagId} />
       </div>
     </div>
   )

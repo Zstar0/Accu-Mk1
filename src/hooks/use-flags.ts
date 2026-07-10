@@ -30,6 +30,7 @@ import {
   removeReaction,
   setDue,
   searchFlags,
+  entitySearch,
   armWatch,
   cancelWatch,
   listWatches,
@@ -56,6 +57,8 @@ export const flagKeys = {
   activity: () => ['flags', 'activity'] as const,
   unread: () => ['flags', 'unread'] as const,
   search: (q: string) => ['flags', 'search', q] as const,
+  entitySearch: (entityType: string, q: string) =>
+    ['flags', 'entity-search', entityType, q] as const,
   detail: (id: number) => ['flags', id] as const,
   watches: (flagId: number) => ['flags', 'watches', flagId] as const,
 }
@@ -120,6 +123,19 @@ export function useFlagUnread() {
   return useQuery({
     queryKey: flagKeys.unread(),
     queryFn: getUnread,
+    staleTime: 5_000,
+  })
+}
+
+/** Entity-link typeahead hits for `q` scoped to `entityType`. Disabled below 2
+ *  chars (the picker also debounces). Keyed on both type + query so switching
+ *  the entity-type Select refetches rather than showing stale rows. */
+export function useEntitySearch(entityType: string, q: string) {
+  const trimmed = q.trim()
+  return useQuery({
+    queryKey: flagKeys.entitySearch(entityType, trimmed),
+    queryFn: () => entitySearch(entityType, trimmed),
+    enabled: trimmed.length >= 2,
     staleTime: 5_000,
   })
 }

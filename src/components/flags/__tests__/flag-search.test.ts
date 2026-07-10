@@ -23,7 +23,9 @@ const mk = (id: number): FlagResponse =>
 
 // Fills the decorative title/status/type fields (not exercised here) so each
 // case states only the flag_id/snippet/matched_in it cares about.
-const hit = (h: Partial<FlagSearchHit> & { flag_id: number }): FlagSearchHit => ({
+const hit = (
+  h: Partial<FlagSearchHit> & { flag_id: number }
+): FlagSearchHit => ({
   snippet: '',
   matched_in: [],
   title: '',
