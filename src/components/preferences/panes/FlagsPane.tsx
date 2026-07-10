@@ -176,7 +176,7 @@ export function FlagsPane() {
             <TypeCard
               key={type.id}
               type={type}
-              entityTypes={entityTypes}
+              scopeChoices={scopeBuckets}
               readOnly={!isAdmin}
               onSave={data => updateType.mutate({ id: type.id, data })}
               onDelete={onConflict =>
@@ -658,13 +658,16 @@ function RecurringCard({
 
 function TypeCard({
   type,
-  entityTypes,
+  scopeChoices,
   readOnly,
   onSave,
   onDelete,
 }: {
   type: FlagType
-  entityTypes: string[]
+  // Code entities (Sample, Sub Sample, …) AND active item kinds — the same
+  // vocabulary the scope board scopes into, so both editors agree on what a
+  // type can be scoped to.
+  scopeChoices: Bucket[]
   readOnly: boolean
   onSave: (data: FlagTypeUpdate) => void
   onDelete: (onConflict: () => void) => void
@@ -812,10 +815,10 @@ function TypeCard({
           disabled={readOnly}
           onClick={() => !isGlobal && onSave({ entity_types: [] })}
         />
-        {entityTypes.map(slug => (
+        {scopeChoices.map(({ slug, label }) => (
           <ScopeChip
             key={slug}
-            label={entityMeta(slug).label}
+            label={label}
             active={type.entity_types.includes(slug)}
             disabled={readOnly}
             onClick={() => toggleEntity(slug)}
@@ -847,6 +850,7 @@ function ScopeChip({
   return (
     <button
       type="button"
+      aria-pressed={active}
       disabled={disabled}
       onClick={onClick}
       className={cn(
