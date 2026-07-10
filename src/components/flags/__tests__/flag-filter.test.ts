@@ -131,6 +131,17 @@ describe('filterFlags', () => {
     ).toEqual([3])
   })
 
+  it("entityType 'general' keeps only null-anchor flags", () => {
+    const flags = [
+      flag({ id: 1, entity_type: 'sample' }),
+      flag({ id: 2, entity_type: null }),
+      flag({ id: 3, entity_type: 'worksheet' }),
+    ]
+    expect(
+      filterFlags(flags, filter({ entityType: 'general' })).map(f => f.id)
+    ).toEqual([2])
+  })
+
   it('filters by flag type', () => {
     const flags = [
       flag({ id: 1, type: 'blocker' }),

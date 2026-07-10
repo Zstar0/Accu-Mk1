@@ -146,6 +146,7 @@ export function FlagsFilterBar({
               {entityMeta(t).label}
             </SelectItem>
           ))}
+          <SelectItem value="general">General</SelectItem>
         </SelectContent>
       </Select>
 

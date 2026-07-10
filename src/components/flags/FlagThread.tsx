@@ -51,6 +51,7 @@ import { formatClock } from '@/components/flags/flag-format'
 import { STATUS_LABELS, STATUS_DOT } from '@/components/flags/flag-status'
 import { FlagAvatar } from '@/components/flags/FlagAvatar'
 import { FlagWatchers } from '@/components/flags/FlagWatchers'
+import { FlagLinkChips } from '@/components/flags/FlagLinkChips'
 
 type TimelineEntry =
   | { kind: 'comment'; at: string; comment: CommentResponse }
@@ -315,6 +316,11 @@ export function FlagThread({
             watchers={flag.watchers ?? []}
             currentUserId={currentUserId}
           />
+        </div>
+
+        {/* Related entity + flag links (navigational only — not in rollups). */}
+        <div className="mt-3">
+          <FlagLinkChips flagId={flag.id} currentFlag={flag} />
         </div>
       </div>
 

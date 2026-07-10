@@ -106,11 +106,31 @@ export interface Watcher {
   added_by: number | null
 }
 
-/** Mirrors `FlagDetailResponse` (adds comments + events + watchers). */
+/** Mirrors backend `EntityLinkOut` — a navigational related-item reference. */
+export interface EntityLink {
+  id: number
+  entity_type: string
+  entity_id: string
+  entity: EntityContext | null
+}
+
+/** Mirrors backend `FlagLinkOut` — a related flag, pre-resolved for the viewer
+ *  (`flag_id` is THE OTHER flag). */
+export interface FlagLink {
+  id: number
+  flag_id: number
+  title: string
+  status: string
+  type: string
+}
+
+/** Mirrors `FlagDetailResponse` (adds comments + events + watchers + links). */
 export interface FlagDetailResponse extends FlagResponse {
   comments: CommentResponse[]
   events: EventResponse[]
   watchers: Watcher[]
+  entity_links: EntityLink[]
+  flag_links: FlagLink[]
 }
 
 /** Mirrors `ActivityItem` — one audit event + its (entity-resolved) flag.
@@ -293,6 +313,38 @@ export const addWatcher = (id: number, user_id: number) =>
 /** `DELETE /api/flags/{id}/watchers/{user_id}` — stop watching (204). */
 export const removeWatcher = (id: number, user_id: number) =>
   apiFetch<undefined>(`/api/flags/${id}/watchers/${user_id}`, {
+    method: 'DELETE',
+  })
+
+// --- links (Phase 2 slice 2) ---------------------------------------------
+
+/** `POST /api/flags/{id}/links/entities` — attach a related entity. */
+export const addEntityLink = (
+  id: number,
+  entity_type: string,
+  entity_id: string
+) =>
+  apiFetch<{ id: number }>(`/api/flags/${id}/links/entities`, {
+    method: 'POST',
+    body: JSON.stringify({ entity_type, entity_id }),
+  })
+
+/** `DELETE /api/flags/{id}/links/entities/{link_id}` — detach (204). */
+export const removeEntityLink = (id: number, linkId: number) =>
+  apiFetch<undefined>(`/api/flags/${id}/links/entities/${linkId}`, {
+    method: 'DELETE',
+  })
+
+/** `POST /api/flags/{id}/links/flags` — link another flag as related. */
+export const addFlagLink = (id: number, otherId: number) =>
+  apiFetch<{ id: number }>(`/api/flags/${id}/links/flags`, {
+    method: 'POST',
+    body: JSON.stringify({ flag_id: otherId }),
+  })
+
+/** `DELETE /api/flags/{id}/links/flags/{link_id}` — unlink (204). */
+export const removeFlagLink = (id: number, linkId: number) =>
+  apiFetch<undefined>(`/api/flags/${id}/links/flags/${linkId}`, {
     method: 'DELETE',
   })
 

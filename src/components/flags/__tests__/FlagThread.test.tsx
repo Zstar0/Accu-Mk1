@@ -85,6 +85,8 @@ function detail(): FlagDetailResponse {
       },
     ],
     watchers: [],
+    entity_links: [],
+    flag_links: [],
   }
 }
 

@@ -59,7 +59,10 @@ export function filterFlags(
     if (status === 'all_open') {
       if (!OPEN_STATUSES.includes(flag.status as FlagStatus)) return false
     } else if (status !== 'all' && flag.status !== status) return false
-    if (entityType !== 'all' && flag.entity_type !== entityType) return false
+    if (entityType === 'general') {
+      if (flag.entity_type != null) return false
+    } else if (entityType !== 'all' && flag.entity_type !== entityType)
+      return false
     if (type !== 'all' && flag.type !== type) return false
     if (assignee === 'none') {
       if (flag.assignee_id != null) return false
