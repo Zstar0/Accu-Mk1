@@ -314,6 +314,13 @@ export const changeStatus = (id: number, to_status: FlagStatus) =>
     body: JSON.stringify({ to_status }),
   })
 
+/** `PUT /api/flags/{id}/due` — set, change, or clear (null) the due date. */
+export const setDue = (id: number, due_at: string | null) =>
+  apiFetch<FlagResponse>(`/api/flags/${id}/due`, {
+    method: 'PUT',
+    body: JSON.stringify({ due_at }),
+  })
+
 /** `POST /api/flags/{id}/watchers` — start watching a flag. */
 export const addWatcher = (id: number, user_id: number) =>
   apiFetch<{ ok: boolean }>(`/api/flags/${id}/watchers`, {

@@ -28,6 +28,7 @@ import {
   removeWatcher,
   addReaction,
   removeReaction,
+  setDue,
   type FlagTab,
   type ListFlagsParams,
   type FlagStatus,
@@ -182,6 +183,18 @@ export function useChangeStatus(flagId: number) {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (toStatus: FlagStatus) => changeStatus(flagId, toStatus),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: flagKeys.detail(flagId) })
+      invalidateListsAndSummary(qc)
+    },
+  })
+}
+
+/** Set / change / clear the due date → thread + lists (overdue accents) + summary. */
+export function useSetDue(flagId: number) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (dueAt: string | null) => setDue(flagId, dueAt),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: flagKeys.detail(flagId) })
       invalidateListsAndSummary(qc)

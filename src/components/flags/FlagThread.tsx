@@ -19,6 +19,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Skeleton } from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
@@ -29,6 +30,7 @@ import {
   useChangeStatus,
   useAssignFlag,
   useAddComment,
+  useSetDue,
   flagKeys,
 } from '@/hooks/use-flags'
 import { markRead, addFlagAttachment } from '@/lib/flags-api'
@@ -56,7 +58,11 @@ import {
   activeMentionQuery,
   mentionIdsInBody,
 } from '@/components/flags/mention-parse'
-import { formatClock } from '@/components/flags/flag-format'
+import {
+  formatClock,
+  formatDateTime,
+  dueLabel,
+} from '@/components/flags/flag-format'
 import { STATUS_LABELS, STATUS_DOT } from '@/components/flags/flag-status'
 import { FlagAvatar } from '@/components/flags/FlagAvatar'
 import { FlagWatchers } from '@/components/flags/FlagWatchers'
@@ -89,6 +95,7 @@ export function FlagThread({
   const changeStatus = useChangeStatus(flagId)
   const assign = useAssignFlag(flagId)
   const addComment = useAddComment(flagId)
+  const setDueM = useSetDue(flagId)
 
   const [draft, setDraft] = useState('')
   // @mention picker state: the users chosen (id → display name), the open
@@ -250,6 +257,12 @@ export function FlagThread({
         return `${actor} started watching`
       case 'watcher_removed':
         return `${actor} stopped watching`
+      case 'due_set':
+        return `${actor} set the due date to ${e.to_value ? formatDateTime(e.to_value) : ''}`
+      case 'due_changed':
+        return `${actor} changed the due date to ${e.to_value ? formatDateTime(e.to_value) : ''}`
+      case 'due_cleared':
+        return `${actor} cleared the due date`
       default:
         return `${actor} · ${e.event_type}`
     }
@@ -351,6 +364,45 @@ export function FlagThread({
               ))}
             </SelectContent>
           </Select>
+
+          {/* Due date: display + inline edit/clear (PUT /due; Slice 2 backend). */}
+          <div className="flex items-center gap-1.5">
+            <Input
+              type="date"
+              aria-label="Due date"
+              className="h-8 w-36 text-xs"
+              value={flag.due_at ? flag.due_at.slice(0, 10) : ''}
+              onChange={e =>
+                setDueM.mutate(
+                  // 5pm local = end-of-workday semantics (matches the composer).
+                  e.target.value
+                    ? new Date(`${e.target.value}T17:00:00`).toISOString()
+                    : null
+                )
+              }
+            />
+            {flag.due_at && (
+              <>
+                <span
+                  className={
+                    dueLabel(flag.due_at)?.overdue
+                      ? 'text-xs font-medium text-destructive'
+                      : 'text-xs text-muted-foreground'
+                  }
+                >
+                  {dueLabel(flag.due_at)?.text}
+                </span>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-6 px-1.5 text-xs"
+                  onClick={() => setDueM.mutate(null)}
+                >
+                  Clear
+                </Button>
+              </>
+            )}
+          </div>
         </div>
 
         {/* Watchers: real list from the detail API (add / remove / self-toggle). */}
