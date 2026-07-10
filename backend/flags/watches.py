@@ -21,6 +21,12 @@ from flags.models import FlagEntityWatch
 
 log = logging.getLogger(__name__)
 
+# Abuse/noise ceiling (pre-deploy security review, finding #2): each fire
+# creates a flag or comment, so an unbounded armed set is a spam vector even
+# though fires carry only the creator's own privileges. Generous for a
+# 10-40 person lab; cancelled/fired watches don't count.
+MAX_ARMED_WATCHES_PER_USER = 25
+
 
 @dataclass
 class _ActorRef:
@@ -73,6 +79,15 @@ def arm_watch(db: Session, *, user, entity_type: str, entity_id: str,
     _validate_action(db, action)
     flag = service.get_flag(db, watch_flag_id) if watch_flag_id is not None else None
     uid = getattr(user, "id", None)
+    armed = db.execute(
+        select(FlagEntityWatch.id)
+        .where(FlagEntityWatch.created_by == uid,
+               FlagEntityWatch.status == "armed")
+    ).all()
+    if len(armed) >= MAX_ARMED_WATCHES_PER_USER:
+        raise BadRequestError(
+            f"you already have {MAX_ARMED_WATCHES_PER_USER} armed watches — "
+            "cancel one before arming another")
     watch = FlagEntityWatch(entity_type=entity_type, entity_id=str(entity_id),
                             condition=condition, action=action, created_by=uid,
                             watch_flag_id=watch_flag_id, status="armed")

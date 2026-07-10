@@ -93,6 +93,29 @@ def test_arm_rejects_unwatchable_entity(db):
                           action={"kind": "create_flag", "type": "blocker", "title": "x"})
 
 
+def test_arm_capped_per_user_and_frees_on_cancel(db):
+    from flags import watches
+    from flags.errors import BadRequestError
+
+    def _arm(user_id):
+        return watches.arm_watch(
+            db, user=_user(user_id), entity_type="sample", entity_id="PB-1",
+            condition={"field": "state", "equals": "received"},
+            action={"kind": "create_flag", "type": "blocker", "title": "x"})
+
+    watches.MAX_ARMED_WATCHES_PER_USER, saved = 2, watches.MAX_ARMED_WATCHES_PER_USER
+    try:
+        w1 = _arm(1)
+        _arm(1)
+        with pytest.raises(BadRequestError, match="armed watches"):
+            _arm(1)
+        _arm(2)                                        # cap is per-user
+        watches.cancel_watch(db, user=_user(1), watch_id=w1.id)
+        _arm(1)                                        # cancelled frees a slot
+    finally:
+        watches.MAX_ARMED_WATCHES_PER_USER = saved
+
+
 def test_cancel_requires_creator_or_admin(db):
     from flags import watches
     from flags.errors import PermissionDeniedError
