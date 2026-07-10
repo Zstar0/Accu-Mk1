@@ -367,6 +367,16 @@ async def lifespan(app: FastAPI):
     _flag_scheduler = _Scheduler(_SessionLocal)
     # Job registration is appended by later Slice-5 tasks (recurring, digest, GC)
     # immediately BELOW, before start(). Registering zero jobs is harmless.
+    from flags import recurring as _recurring
+
+    def _recurring_job(now):
+        db = _SessionLocal()
+        try:
+            _recurring.run_due(db, now=now)
+        finally:
+            db.close()
+    _flag_scheduler.register("recurring_mint", interval=_timedelta(minutes=5),
+                             fn=_recurring_job)
     _flag_scheduler.start()
     # Seed default settings and admin user
     from database import SessionLocal

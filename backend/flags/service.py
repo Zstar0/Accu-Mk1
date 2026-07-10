@@ -84,7 +84,8 @@ def _commit_and_emit(db):
 
 
 def create_flag(db: Session, *, user, entity_type, entity_id, type, title,
-                assignee_id=None, first_comment=None, due_at=None) -> FlagFlag:
+                assignee_id=None, first_comment=None, due_at=None,
+                event_details=None) -> FlagFlag:
     # A NULL anchor = a general task (spec §5). entity_id without an entity_type
     # is malformed; a present entity_type must be registered.
     if entity_type is None:
@@ -116,7 +117,8 @@ def create_flag(db: Session, *, user, entity_type, entity_id, type, title,
     db.add(flag)
     db.flush()  # populate flag.id
 
-    _audit(db, flag, actor_id, "raised", to_value="open", details={"type": type})
+    _audit(db, flag, actor_id, "raised", to_value="open",
+           details={"type": type, **(event_details or {})})
     if due_at is not None:
         _audit(db, flag, actor_id, "due_set", to_value=due_at.isoformat())
     if assignee_id is not None:
