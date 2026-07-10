@@ -236,6 +236,36 @@ export interface FlagTypeUpdate {
   entity_types?: string[]
 }
 
+/** Mirrors `FlagItemKindResponse` — a user-managed virtual item kind (slice 7):
+ *  a pure category a general task anchors to (entity_type=<slug>, entity_id
+ *  null). Kind slugs join the flag_types `entity_types` scoping vocabulary. */
+export interface FlagItemKind {
+  id: number
+  slug: string
+  label: string
+  color: string
+  is_active: boolean
+  is_builtin: boolean
+  sort_order: number
+}
+
+/** Mirrors `FlagItemKindCreate`. */
+export interface FlagItemKindCreate {
+  label: string
+  color: string
+  slug?: string
+  is_active?: boolean
+  sort_order?: number
+}
+
+/** Mirrors `FlagItemKindUpdate` (all-optional; no slug — it's immutable). */
+export interface FlagItemKindUpdate {
+  label?: string
+  color?: string
+  is_active?: boolean
+  sort_order?: number
+}
+
 /** Optional server-side narrowing filters for the list endpoint. The primary
  *  axis is `tab`; these scope further (e.g. one entity's flags). */
 export interface ListFlagsParams {
@@ -607,6 +637,45 @@ export const deleteFlagType = async (id: number): Promise<void> => {
  *  names resolved client-side via flag-entity.ts ENTITY_META). */
 export const getFlagEntityTypes = () =>
   apiFetch<string[]>('/api/flags/entity-types')
+
+// --- item kinds (Slice 7) -----------------------------------------------
+
+/** `GET /api/flags/item-kinds` — the managed item-kind catalog. `active_only`
+ *  is for the compose/filter picker; omit it for label resolution so a
+ *  deactivated-but-still-referenced kind resolves. */
+export const getItemKinds = (params?: { active_only?: boolean }) => {
+  const suffix = params?.active_only ? '?active_only=true' : ''
+  return apiFetch<FlagItemKind[]>(`/api/flags/item-kinds${suffix}`)
+}
+
+/** `POST /api/flags/item-kinds` — create a kind (admin). */
+export const createItemKind = (body: FlagItemKindCreate) =>
+  apiFetch<FlagItemKind>('/api/flags/item-kinds', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+
+/** `PUT /api/flags/item-kinds/{id}` — edit a kind (admin). */
+export const updateItemKind = (id: number, body: FlagItemKindUpdate) =>
+  apiFetch<FlagItemKind>(`/api/flags/item-kinds/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  })
+
+/** `DELETE /api/flags/item-kinds/{id}` — hard-delete an unused custom kind
+ *  (admin). Throws {@link FlagTypeApiError} with `status === 409` when the kind
+ *  is built-in or in use (the caller should deactivate instead). */
+export const deleteItemKind = async (id: number): Promise<void> => {
+  try {
+    await apiFetch<undefined>(`/api/flags/item-kinds/${id}`, { method: 'DELETE' })
+  } catch (e) {
+    const match = e instanceof Error ? e.message.match(/(\d{3})$/) : null
+    throw new FlagTypeApiError(
+      match ? Number(match[1]) : 0,
+      e instanceof Error ? e.message : 'delete failed'
+    )
+  }
+}
 
 // --- recurring tasks (Slice 5, admin-only) ------------------------------
 

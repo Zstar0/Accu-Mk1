@@ -19,6 +19,7 @@ import { Label } from '@/components/ui/label'
 import { notifications } from '@/lib/notifications'
 import { useCreateFlag } from '@/hooks/use-flags'
 import { useFlagTypes } from '@/services/flag-types'
+import { useItemKinds, BUILTIN_ITEM_KINDS } from '@/services/item-kinds'
 import { useFlagUsers, nameForUser } from '@/components/flags/flag-users'
 import { entityLabel } from '@/components/flags/flag-entity'
 
@@ -67,6 +68,13 @@ export function RaiseFlagButton({
 }) {
   const create = useCreateFlag()
   const users = useFlagUsers()
+  // Active item kinds a general task can anchor to (General Task, Purchase
+  // Task, …). Falls back to the general_task builtin so the compose always has
+  // at least one kind before the query resolves.
+  const { data: kindRows } = useItemKinds({ active_only: true })
+  const kinds = [...(kindRows?.length ? kindRows : BUILTIN_ITEM_KINDS)].sort(
+    (a, b) => a.sort_order - b.sort_order
+  )
   const presetEntity = entityType != null && entityId != null
   const hasCandidates =
     !presetEntity && candidates != null && candidates.length > 0
@@ -81,12 +89,12 @@ export function RaiseFlagButton({
   const [candidateId, setCandidateId] = useState<string>(
     candidates?.[0]?.entityId ?? ''
   )
-  // Anchor mode: 'item' (preset entity), 'manual' (free entity form), or
-  // 'general' (no entity — a general task). Preset defaults to its item; with
-  // neither a preset nor candidates the compose defaults to a general task.
+  // Anchor mode: 'item' (preset entity), 'manual' (free item form), or
+  // 'kind:<slug>' (a virtual item kind — a general task with no id). Preset
+  // defaults to its item; otherwise the compose defaults to a General Task.
   // The candidate (order-scope) flow keeps its own picker and ignores this.
   const [anchor, setAnchor] = useState<string>(
-    presetEntity ? 'item' : 'general'
+    presetEntity ? 'item' : 'kind:general_task'
   )
   // Optional deadline as a native date string ('YYYY-MM-DD').
   const [due, setDue] = useState('')
@@ -96,8 +104,11 @@ export function RaiseFlagButton({
     ? (candidates.find(c => c.entityId === candidateId) ?? candidates[0])
     : undefined
 
-  // General only applies where the anchor select is shown (not the candidate flow).
-  const isGeneral = !hasCandidates && anchor === 'general'
+  // A kind anchor ('kind:<slug>') posts a general task on that kind (no id).
+  // Only meaningful outside the candidate (order-scope) flow.
+  const kindSlug =
+    !hasCandidates && anchor.startsWith('kind:') ? anchor.slice(5) : null
+  const isKind = kindSlug != null
 
   const reset = () => {
     setType('blocker')
@@ -106,18 +117,18 @@ export function RaiseFlagButton({
     setFirstComment('')
     setEntityIdInput('')
     setCandidateId(candidates?.[0]?.entityId ?? '')
-    setAnchor(presetEntity ? 'item' : 'general')
+    setAnchor(presetEntity ? 'item' : 'kind:general_task')
     setDue('')
   }
 
-  const resolvedEntityType: string | null = isGeneral
-    ? null
+  const resolvedEntityType: string | null = isKind
+    ? kindSlug
     : presetEntity
       ? (entityType ?? '')
       : selectedCandidate
         ? selectedCandidate.entityType
         : entityTypeInput
-  const resolvedEntityId: string | null = isGeneral
+  const resolvedEntityId: string | null = isKind
     ? null
     : presetEntity
       ? (entityId ?? '')
@@ -125,24 +136,28 @@ export function RaiseFlagButton({
         ? selectedCandidate.entityId
         : entityIdInput.trim()
 
-  // Only types active AND allowed for this entity, ordered by sort_order
-  // (the backend returns them ordered). Colors come from the row. General tasks
-  // may only carry global-scoped types (entity_types empty).
+  // Only types active AND allowed for this anchor, ordered by sort_order (the
+  // backend returns them ordered). A kind slug joins the scoping vocabulary, so
+  // the same rule applies to code entities and kinds alike: keep globals plus
+  // types scoped to the current anchor. Filtered client-side too so a broader
+  // cached list never offers a type the anchor can't carry.
   const typesQuery = useFlagTypes({
-    entity_type: isGeneral ? undefined : resolvedEntityType || undefined,
+    entity_type: resolvedEntityType || undefined,
     active_only: true,
   })
   const flagTypes = (typesQuery.data ?? []).filter(
-    t => !isGeneral || t.entity_types.length === 0
+    t =>
+      t.entity_types.length === 0 ||
+      (resolvedEntityType != null && t.entity_types.includes(resolvedEntityType))
   )
-  // Keep the selection valid as the entity (and thus the allowed set) changes.
+  // Keep the selection valid as the anchor (and thus the allowed set) changes.
   const selectedType = flagTypes.some(t => t.slug === type)
     ? type
     : (flagTypes[0]?.slug ?? type)
 
   const canSubmit =
     title.trim().length > 0 &&
-    (isGeneral || (resolvedEntityId != null && resolvedEntityId.length > 0)) &&
+    (isKind || (resolvedEntityId != null && resolvedEntityId.length > 0)) &&
     !create.isPending
 
   const submit = () => {
@@ -216,7 +231,11 @@ export function RaiseFlagButton({
                 <SelectItem value="item">
                   {targetLabel ?? entityLabel(entityType, entityId)}
                 </SelectItem>
-                <SelectItem value="general">General (no item)</SelectItem>
+                {kinds.map(k => (
+                  <SelectItem key={k.slug} value={`kind:${k.slug}`}>
+                    {k.label}
+                  </SelectItem>
+                ))}
               </SelectContent>
             </Select>
           </div>
@@ -230,7 +249,11 @@ export function RaiseFlagButton({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="general">General (no item)</SelectItem>
+                {kinds.map(k => (
+                  <SelectItem key={k.slug} value={`kind:${k.slug}`}>
+                    {k.label}
+                  </SelectItem>
+                ))}
                 <SelectItem value="manual">Specific item…</SelectItem>
               </SelectContent>
             </Select>

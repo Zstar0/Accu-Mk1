@@ -37,11 +37,30 @@ vi.mock('@/services/flag-types', async orig => {
     }),
   }
 })
+vi.mock('@/services/item-kinds', async orig => {
+  const actual = (await orig()) as Record<string, unknown>
+  return {
+    ...actual,
+    useItemKinds: () => ({
+      data: [
+        {
+          id: 1,
+          slug: 'general_task',
+          label: 'General Task',
+          color: '#6b7280',
+          is_active: true,
+          is_builtin: true,
+          sort_order: 0,
+        },
+      ],
+    }),
+  }
+})
 
 describe('RaiseFlagButton general task', () => {
   beforeEach(() => create.mockReset())
 
-  it('composes a general task when there is no preset or candidates', async () => {
+  it('composes a general task on the general_task kind (no preset/candidates)', async () => {
     const { RaiseFlagButton } =
       await import('@/components/flags/RaiseFlagButton')
     render(<RaiseFlagButton />)
@@ -52,8 +71,10 @@ describe('RaiseFlagButton general task', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Raise flag' }))
 
     expect(create).toHaveBeenCalledTimes(1)
+    // Slice 7: general tasks now anchor to the general_task kind (entity_id
+    // null), not a bare null anchor; only the global 'task' type is offered.
     expect(create.mock.calls[0]?.[0]).toMatchObject({
-      entity_type: null,
+      entity_type: 'general_task',
       entity_id: null,
       type: 'task',
       title: 'pick up equipment',

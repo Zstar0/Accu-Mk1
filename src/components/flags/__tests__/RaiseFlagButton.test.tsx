@@ -38,6 +38,35 @@ vi.mock('@/services/flag-types', async orig => {
     }),
   }
 })
+// Active item kinds offered in the anchor selector.
+vi.mock('@/services/item-kinds', async orig => {
+  const actual = (await orig()) as Record<string, unknown>
+  return {
+    ...actual,
+    useItemKinds: () => ({
+      data: [
+        {
+          id: 1,
+          slug: 'general_task',
+          label: 'General Task',
+          color: '#6b7280',
+          is_active: true,
+          is_builtin: true,
+          sort_order: 0,
+        },
+        {
+          id: 2,
+          slug: 'purchase_task',
+          label: 'Purchase Task',
+          color: '#111111',
+          is_active: true,
+          is_builtin: false,
+          sort_order: 1,
+        },
+      ],
+    }),
+  }
+})
 
 describe('RaiseFlagButton candidates (order sample picker)', () => {
   beforeEach(() => create.mockReset())
@@ -84,6 +113,31 @@ describe('RaiseFlagButton candidates (order sample picker)', () => {
       entity_type: 'sample',
       entity_id: 'P-0001',
       title: 'Needs re-prep',
+    })
+  })
+})
+
+describe('RaiseFlagButton item kinds (general-task anchor)', () => {
+  beforeEach(() => create.mockReset())
+
+  it('defaults a generic compose to the General Task kind and posts its slug', async () => {
+    const { RaiseFlagButton } =
+      await import('@/components/flags/RaiseFlagButton')
+    render(<RaiseFlagButton />)
+
+    fireEvent.click(screen.getByRole('button', { name: /raise a flag/i }))
+    const title = await screen.findByPlaceholderText('What needs attention?')
+    // No manual id form by default — the anchor is a kind.
+    expect(screen.queryByText('Item id')).toBeNull()
+
+    fireEvent.change(title, { target: { value: 'Sweep the bench' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Raise flag' }))
+
+    expect(create).toHaveBeenCalledTimes(1)
+    expect(create.mock.calls[0]?.[0]).toMatchObject({
+      entity_type: 'general_task',
+      entity_id: null,
+      title: 'Sweep the bench',
     })
   })
 })

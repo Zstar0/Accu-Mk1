@@ -137,9 +137,21 @@ export function navigateForFlag(flag: EntityCarrier): boolean {
   return navigateToEntity(flag.entity_type, flag.entity_id)
 }
 
-/** Best human label: the server-resolved one if present, else "Vial 42". */
-export function entityDisplayLabel(flag: EntityCarrier): string {
-  return flag.entity?.label ?? entityLabel(flag.entity_type, flag.entity_id)
+/** Best human label: the server-resolved one if present, else a virtual-kind
+ *  label from `kindLabels` (slug → label, e.g. from useItemKindsMap), else the
+ *  pure "Sample 42" / "General Task" fallback. */
+export function entityDisplayLabel(
+  flag: EntityCarrier,
+  kindLabels?: Record<string, string>
+): string {
+  if (flag.entity?.label != null) return flag.entity.label
+  // A kind-anchored flag carries no entity_id; resolve its label from the
+  // catalog so admin-created kinds render their real name, not the slug.
+  if (flag.entity_id == null && flag.entity_type != null) {
+    const kindLabel = kindLabels?.[flag.entity_type]
+    if (kindLabel != null) return kindLabel
+  }
+  return entityLabel(flag.entity_type, flag.entity_id)
 }
 
 /** Whether a flag has a usable navigation target (drives the chip's arrow). */

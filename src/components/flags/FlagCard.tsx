@@ -5,6 +5,7 @@ import { useUIStore } from '@/store/ui-store'
 import type { FlagResponse, FlagStatus } from '@/lib/flags-api'
 import { flagTypeDef } from '@/components/flags/flag-catalog'
 import { useFlagTypesMap } from '@/services/flag-types'
+import { useItemKindLabels } from '@/services/item-kinds'
 import {
   entityMeta,
   entityDisplayLabel,
@@ -56,11 +57,12 @@ export function FlagCard({
 }) {
   const users = useFlagUsers()
   const typesMap = useFlagTypesMap()
+  const kindLabels = useItemKindLabels()
   const currentUserId = useAuthStore(state => state.user?.id ?? null)
 
   const def = typesMap[flag.type] ?? flagTypeDef(flag.type)
   const { Icon } = entityMeta(flag.entity_type)
-  const label = entityDisplayLabel(flag)
+  const label = entityDisplayLabel(flag, kindLabels)
   const canNavigate = flagCanNavigate(flag)
   const assigneeName =
     flag.assignee_id == null

@@ -6,6 +6,7 @@ import { useUIStore } from '@/store/ui-store'
 import type { FlagResponse, FlagStatus } from '@/lib/flags-api'
 import { flagTypeDef } from '@/components/flags/flag-catalog'
 import { useFlagTypesMap } from '@/services/flag-types'
+import { useItemKindLabels } from '@/services/item-kinds'
 import {
   entityMeta,
   entityDisplayLabel,
@@ -66,6 +67,7 @@ export function FlagTable({
 }) {
   const users = useFlagUsers()
   const typesMap = useFlagTypesMap()
+  const kindLabels = useItemKindLabels()
   const currentUserId = useAuthStore(state => state.user?.id ?? null)
   // Optional due-ascending sort (nulls last); off by default so the server's
   // updated_at order is preserved.
@@ -87,6 +89,7 @@ export function FlagTable({
             flag={flag}
             users={users}
             typesMap={typesMap}
+            kindLabels={kindLabels}
             currentUserId={currentUserId}
             highlight={highlightIds?.has(flag.id) ?? false}
             unread={unreadIds?.has(flag.id) ?? false}
@@ -140,6 +143,7 @@ function FlagTableRow({
   flag,
   users,
   typesMap,
+  kindLabels,
   currentUserId,
   highlight = false,
   unread = false,
@@ -148,6 +152,7 @@ function FlagTableRow({
   flag: FlagResponse
   users: UserMap
   typesMap: Record<string, FlagTypeDef>
+  kindLabels: Record<string, string>
   currentUserId: number | null
   highlight?: boolean
   unread?: boolean
@@ -155,7 +160,7 @@ function FlagTableRow({
 }) {
   const def = typesMap[flag.type] ?? flagTypeDef(flag.type)
   const { Icon } = entityMeta(flag.entity_type)
-  const label = entityDisplayLabel(flag)
+  const label = entityDisplayLabel(flag, kindLabels)
   const canNavigate = flagCanNavigate(flag)
   const assigneeName =
     flag.assignee_id == null
