@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, vi, beforeEach } from 'vitest'
+import { useAuthStore } from '@/store/auth-store'
 
 const toast = vi.hoisted(() => ({
   info: vi.fn(),
@@ -31,6 +32,10 @@ vi.mock('@/lib/flag-stream', () => ({
 }))
 
 describe('stream glue ignores comment_reaction', () => {
+  // Make the reaction event RELEVANT (I am the assignee) so the notify path
+  // WOULD toast + markUnseen if the guard were removed — this discriminates it.
+  beforeEach(() => useAuthStore.setState({ user: { id: 42 } as never }))
+
   it('does not toast or mark unseen on a reaction event', async () => {
     const { useFlagStreamGlue } =
       await import('@/components/flags/use-flag-stream-glue')
