@@ -1109,6 +1109,13 @@ def _run_migrations():
         # WHERE clause never re-matches once a row is stamped). Runs AFTER the
         # kind is seeded; the anchor was made nullable in slice 2 (above).
         "UPDATE flag_flags SET entity_type='general_task' WHERE entity_type IS NULL",
+        # One Slack identity → at most one Mk1 user (security review S1): the
+        # interactions endpoint resolves Slack→Mk1 through this field. Partial
+        # unique keeps multiple NULLs legal. If legacy duplicates exist, only
+        # this statement fails (migration_skipped) and the app-level 409 still
+        # guards — dedupe manually and it applies on the next start.
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_slack_dm_prefs_member "
+        "ON slack_dm_prefs (slack_member_id) WHERE slack_member_id IS NOT NULL",
     ]
     # Per-statement isolation: a failure in one statement (e.g., a table that
     # create_all hasn't built yet on first run) must not skip subsequent

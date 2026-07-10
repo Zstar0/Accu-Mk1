@@ -1462,7 +1462,11 @@ class SlackDmPrefs(Base):
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(Integer, unique=True, nullable=False, index=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-    slack_member_id: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    # unique: one Slack identity maps to at most one Mk1 user (the interactions
+    # endpoint authenticates through this field). NULLs stay non-unique. Prod
+    # gets the equivalent partial index via the DDL block (S1 review fix).
+    slack_member_id: Mapped[Optional[str]] = mapped_column(String(32), nullable=True,
+                                                           unique=True)
     # WHO the link resolved to (Slack display/real name) — cached at link time
     # so the prefs UI can show "Linked → forrest" for mapping confidence.
     slack_display_name: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)

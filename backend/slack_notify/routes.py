@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from typing import Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -76,13 +76,46 @@ async def put_prefs(body: SlackPrefsUpdate, db: Session = Depends(get_db),
         # Best-effort: no token / bad id → name just stays empty.
         row.slack_display_name = None
         row.slack_avatar_url = None
-        token = os.getenv("MK1_SLACK_BOT_TOKEN")
-        if token and row.slack_member_id:
-            from slack_notify.client import SlackClient
-            prof = await SlackClient(token).user_profile(row.slack_member_id)
-            if prof:
-                row.slack_display_name = prof.display_name
-                row.slack_avatar_url = prof.avatar_url
+        if row.slack_member_id:
+            # One Slack identity maps to at most ONE Mk1 user. The internet-
+            # facing interactions endpoint resolves Slack→Mk1 through this
+            # field, so an ambiguous mapping is an impersonation/misrouting
+            # vector (security review S1). Independent of Slack config.
+            # no_autoflush: the pending row must not flush (and trip the DB
+            # unique index) before this check gets to answer politely.
+            with db.no_autoflush:
+                other = (db.query(SlackDmPrefs)
+                         .filter(SlackDmPrefs.slack_member_id == row.slack_member_id,
+                                 SlackDmPrefs.user_id != user.id).first())
+            if other is not None:
+                db.rollback()
+                raise HTTPException(status_code=409,
+                                    detail="that Slack account is already "
+                                           "linked to another user")
+            token = os.getenv("MK1_SLACK_BOT_TOKEN")
+            if token:
+                from slack_notify.client import SlackClient
+                from slack_notify.emails import alias_domains_from_env, candidate_emails
+                client = SlackClient(token)
+                # Ownership check where possible: if the user's email resolves
+                # to a Slack account, a pasted id must BE that account.
+                # Unresolvable emails keep the manual-paste escape hatch
+                # (Slack under a different email) — same trade-off as /test.
+                resolved = None
+                for cand in candidate_emails(user.email, alias_domains_from_env()):
+                    resolved = await client.lookup_by_email(cand)
+                    if resolved:
+                        break
+                if resolved and resolved != row.slack_member_id:
+                    db.rollback()
+                    raise HTTPException(status_code=400,
+                                        detail="that Slack member ID belongs to "
+                                               "a different account than your "
+                                               "email resolves to")
+                prof = await client.user_profile(row.slack_member_id)
+                if prof:
+                    row.slack_display_name = prof.display_name
+                    row.slack_avatar_url = prof.avatar_url
     db.commit()
     db.refresh(row)
     return _serialize(row)
@@ -108,6 +141,12 @@ async def test_dm(db: Session = Depends(get_db),
         if member_id is None:
             return {"ok": False, "detail": "No Slack account matched your "
                                            "email — paste your Slack member ID."}
+        other = (db.query(SlackDmPrefs)
+                 .filter(SlackDmPrefs.slack_member_id == member_id,
+                         SlackDmPrefs.user_id != user.id).first())
+        if other is not None:
+            return {"ok": False, "detail": "That Slack account is already "
+                                           "linked to another user."}
         if row is None:
             row = SlackDmPrefs(user_id=user.id)
             db.add(row)
