@@ -21,6 +21,24 @@ from flags.models import (
 MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024
 _ATTACHMENT_TOKEN = re.compile(r"\{attachment:(\d+)\}")
 
+_MD_LINK = re.compile(r"\[([^\]]+)\]\([^)]*\)")
+_MD_INLINE = re.compile(r"[*_`~]+")
+_MD_BULLET = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+", re.MULTILINE)
+
+
+def strip_markdown(text: str) -> str:
+    """Flatten markdown-lite source to plain text for the Slack excerpt.
+    Keeps @mentions literal; drops attachment tokens and formatting marks."""
+    t = _MD_LINK.sub(r"\1", text or "")           # [label](url) -> label
+    t = _ATTACHMENT_TOKEN.sub("", t)              # drop {attachment:ID}
+    t = _MD_BULLET.sub("", t)                     # list markers
+    t = _MD_INLINE.sub("", t)                     # ** * _ ` ~
+    return " ".join(t.split())                    # collapse whitespace/newlines
+
+
+def _excerpt_for_comment(body: str) -> str:
+    return (strip_markdown(body) or "📎 image")[:140]
+
 
 def _flag_summary(flag) -> dict:
     return {
@@ -302,8 +320,8 @@ def add_comment(db: Session, *, user, flag_id, body, mention_ids=None) -> FlagCo
                                    role="watcher", added_by=actor_id))
     flag.updated_at = datetime.utcnow()
     # body_excerpt rides the event for notification transports (Slack DMs);
-    # additive detail key — consumers ignore unknown keys.
-    details = {"body_excerpt": body.strip()[:140]}
+    # markdown-stripped to plain text (image-only comments -> "📎 image").
+    details = {"body_excerpt": _excerpt_for_comment(body)}
     if valid:
         details["mentions"] = valid
     _audit(db, flag, actor_id, "commented", details=details)
