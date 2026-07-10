@@ -33,16 +33,22 @@ class EntitySpec:
     # None when unresolvable. ONLY entity types that register a `state` closure
     # are watchable; the rest 400 at arm time.
     state: Optional[Callable[[Session, str], Optional[str]]] = None
+    # Optional typeahead resolver (Plan 6 follow-up — link pickers). Given a
+    # query string, returns up to a handful of `{"entity_id", "label"}` hits for
+    # a search-as-you-type picker. Pure host-domain closure; the core never
+    # learns how a sample or worksheet is matched.
+    search: Optional[Callable[[Session, str], list]] = None
 
 
 _REGISTRY: dict[str, EntitySpec] = {}
 
 
 def register_entity(entity_type: str, *, label, deep_link, can_flag,
-                    context=None, descendants=None, state=None) -> None:
+                    context=None, descendants=None, state=None,
+                    search=None) -> None:
     _REGISTRY[entity_type] = EntitySpec(entity_type, label, deep_link, can_flag,
                                         context=context, descendants=descendants,
-                                        state=state)
+                                        state=state, search=search)
 
 
 def is_registered(entity_type: str) -> bool:
@@ -93,6 +99,22 @@ def resolve_state(db: Session, entity_type: str, entity_id: str) -> Optional[str
         return spec.state(db, str(entity_id))
     except Exception:  # noqa: BLE001 — state read is best-effort
         return None
+
+
+def resolve_entity_search(db: Session, entity_type: str, q: str) -> list:
+    """Typeahead hits for a registered entity type, as
+    `[{"entity_id": str, "label": str}, …]`. Returns [] for an unregistered
+    type, a type with no `search` resolver, or on resolver error — never raises
+    into a request (mirrors resolve_context/resolve_state; a picker with no
+    results is fine, a 500 is not)."""
+    spec = _REGISTRY.get(entity_type)
+    if spec is None or spec.search is None:
+        return []
+    try:
+        rows = spec.search(db, str(q))
+    except Exception:  # noqa: BLE001 — search is best-effort decoration
+        return []
+    return list(rows or [])
 
 
 def resolve_descendants(db: Session, entity_type: str, entity_id: str) -> list:
