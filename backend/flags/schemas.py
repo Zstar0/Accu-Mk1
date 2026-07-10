@@ -137,11 +137,26 @@ class EntityLinkRequest(BaseModel):
     entity_id: str
 
 
+class FlagLinkOut(BaseModel):
+    """A related-flag link, resolved for the viewer. `flag_id` is THE OTHER
+    flag (symmetric render); title/status/type pre-resolved for the chip."""
+    id: int
+    flag_id: int
+    title: str
+    status: str
+    type: str
+
+
+class FlagLinkRequest(BaseModel):
+    flag_id: int
+
+
 class FlagDetailResponse(FlagResponse):
     comments: List[CommentResponse] = Field(default_factory=list)
     events: List[EventResponse] = Field(default_factory=list)
     watchers: List[WatcherOut] = Field(default_factory=list)
     entity_links: List[EntityLinkOut] = Field(default_factory=list)
+    flag_links: List[FlagLinkOut] = Field(default_factory=list)
 
 
 class ActivityItem(BaseModel):

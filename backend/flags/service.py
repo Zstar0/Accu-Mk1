@@ -13,7 +13,8 @@ from sqlalchemy.orm import Session
 from flags import catalog, permissions, seams, types_service
 from flags.errors import BadRequestError, NotFoundError, PermissionDeniedError
 from flags.models import (
-    FlagComment, FlagEntityLink, FlagEvent, FlagFlag, FlagParticipant, FlagRead,
+    FlagComment, FlagEntityLink, FlagEvent, FlagFlag, FlagLink, FlagParticipant,
+    FlagRead,
 )
 
 
@@ -411,6 +412,49 @@ def list_entity_links(db: Session, flag_id: int) -> list[FlagEntityLink]:
     return list(db.execute(select(FlagEntityLink)
         .where(FlagEntityLink.flag_id == flag_id)
         .order_by(FlagEntityLink.created_at.asc())).scalars().all())
+
+
+# --- flag <-> flag links (Phase 2 slice 2) ------------------------------
+def add_flag_link(db: Session, *, user, flag_id: int, other_id: int) -> FlagLink:
+    """Link two flags 'related'. Stored normalized (lo/hi) so a pair is one row;
+    events land on BOTH flags. Symmetric — the link shows in both threads."""
+    if flag_id == other_id:
+        raise BadRequestError("cannot link a flag to itself")
+    flag = get_flag(db, flag_id)
+    other = get_flag(db, other_id)
+    lo, hi = sorted((flag_id, other_id))
+    dup = db.execute(select(FlagLink).where(
+        FlagLink.flag_id == lo, FlagLink.linked_flag_id == hi)).scalar_one_or_none()
+    if dup is not None:
+        raise BadRequestError("already linked")
+    link = FlagLink(flag_id=lo, linked_flag_id=hi, added_by=getattr(user, "id", None))
+    db.add(link)
+    actor = getattr(user, "id", None)
+    _audit(db, flag, actor, "flag_link_added", to_value=str(other_id))
+    _audit(db, other, actor, "flag_link_added", to_value=str(flag_id))
+    _commit_and_emit(db)
+    db.refresh(link)
+    return link
+
+
+def remove_flag_link(db: Session, *, user, flag_id: int, link_id: int) -> None:
+    flag = get_flag(db, flag_id)
+    link = db.get(FlagLink, link_id)
+    if link is None or flag_id not in (link.flag_id, link.linked_flag_id):
+        raise NotFoundError(f"link {link_id} not found on flag {flag_id}")
+    other_id = link.linked_flag_id if link.flag_id == flag_id else link.flag_id
+    other = get_flag(db, other_id)
+    db.delete(link)
+    actor = getattr(user, "id", None)
+    _audit(db, flag, actor, "flag_link_removed", from_value=str(other_id))
+    _audit(db, other, actor, "flag_link_removed", from_value=str(flag_id))
+    _commit_and_emit(db)
+
+
+def list_flag_links(db: Session, flag_id: int) -> list[FlagLink]:
+    return list(db.execute(select(FlagLink).where(
+        or_(FlagLink.flag_id == flag_id, FlagLink.linked_flag_id == flag_id))
+        .order_by(FlagLink.created_at.asc())).scalars().all())
 
 
 def change_status(db: Session, *, user, flag_id, to_status) -> FlagFlag:

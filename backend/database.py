@@ -948,6 +948,21 @@ def _run_migrations():
         )
         """,
         "CREATE INDEX IF NOT EXISTS ix_flag_entity_links_flag ON flag_entity_links (flag_id)",
+        # Flag<->flag related links: one row per unordered pair (lo/hi normalized).
+        """
+        CREATE TABLE IF NOT EXISTS flag_links (
+            id             SERIAL PRIMARY KEY,
+            flag_id        INTEGER NOT NULL REFERENCES flag_flags(id) ON DELETE CASCADE,
+            linked_flag_id INTEGER NOT NULL REFERENCES flag_flags(id) ON DELETE CASCADE,
+            relation       TEXT NOT NULL DEFAULT 'related',
+            added_by       INTEGER,
+            created_at     TIMESTAMP NOT NULL DEFAULT NOW(),
+            CONSTRAINT uq_flag_link UNIQUE (flag_id, linked_flag_id),
+            CONSTRAINT ck_flag_link_no_self CHECK (flag_id <> linked_flag_id)
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS ix_flag_links_flag   ON flag_links (flag_id)",
+        "CREATE INDEX IF NOT EXISTS ix_flag_links_linked ON flag_links (linked_flag_id)",
         # Slack DM prefs: cached Slack display name for mapping confidence
         "ALTER TABLE slack_dm_prefs ADD COLUMN IF NOT EXISTS slack_display_name TEXT",
         # Order-first check-in boxing: lims_boxes + sub_sample.box_id link.

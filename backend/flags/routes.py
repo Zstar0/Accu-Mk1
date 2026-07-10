@@ -18,8 +18,9 @@ from flags.errors import BadRequestError, ConflictError, NotFoundError, Permissi
 from flags.schemas import (
     ActivityItem, ActivityPage, AssignRequest, CommentRequest, CommentResponse,
     CreateFlagRequest, DueRequest, EntityContext, EntityLinkOut, EntityLinkRequest,
-    FlagDetailResponse, FlagResponse, FlagTypeCreate, FlagTypeResponse,
-    FlagTypeUpdate, StatusRequest, SummaryResponse, WatcherOut, WatcherRequest,
+    FlagDetailResponse, FlagLinkOut, FlagLinkRequest, FlagResponse, FlagTypeCreate,
+    FlagTypeResponse, FlagTypeUpdate, StatusRequest, SummaryResponse, WatcherOut,
+    WatcherRequest,
 )
 
 router = APIRouter(prefix="/api/flags", tags=["flags"])
@@ -212,6 +213,12 @@ def get_flag(flag_id: int, db: Session = Depends(get_db), user=Depends(get_curre
             ctx = seams.resolve_context(db, link.entity_type, link.entity_id)
             out.entity = EntityContext(**ctx) if ctx else None
             resp.entity_links.append(out)
+        resp.flag_links = []
+        for link in service.list_flag_links(db, flag_id):
+            oid = link.linked_flag_id if link.flag_id == flag_id else link.flag_id
+            o = service.get_flag(db, oid)
+            resp.flag_links.append(FlagLinkOut(
+                id=link.id, flag_id=o.id, title=o.title, status=o.status, type=o.type))
         return resp
     except Exception as e:
         raise _http(e)
@@ -291,5 +298,22 @@ def add_entity_link(flag_id: int, req: EntityLinkRequest, db: Session = Depends(
 def remove_entity_link(flag_id: int, link_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
     try:
         service.remove_entity_link(db, user=user, flag_id=flag_id, link_id=link_id)
+    except Exception as e:
+        raise _http(e)
+
+
+@router.post("/{flag_id}/links/flags", status_code=201)
+def add_flag_link(flag_id: int, req: FlagLinkRequest, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    try:
+        link = service.add_flag_link(db, user=user, flag_id=flag_id, other_id=req.flag_id)
+        return {"id": link.id}
+    except Exception as e:
+        raise _http(e)
+
+
+@router.delete("/{flag_id}/links/flags/{link_id}", status_code=204)
+def remove_flag_link(flag_id: int, link_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    try:
+        service.remove_flag_link(db, user=user, flag_id=flag_id, link_id=link_id)
     except Exception as e:
         raise _http(e)

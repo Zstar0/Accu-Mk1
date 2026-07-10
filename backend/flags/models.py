@@ -129,3 +129,20 @@ class FlagEntityLink(Base):
     entity_id: Mapped[str] = mapped_column(Text, nullable=False)
     added_by: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class FlagLink(Base):
+    """Flag↔flag 'related' link, one row per unordered pair (lo/hi normalized)."""
+    __tablename__ = "flag_links"
+    __table_args__ = (UniqueConstraint("flag_id", "linked_flag_id",
+                                       name="uq_flag_link"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    flag_id: Mapped[int] = mapped_column(Integer, ForeignKey("flag_flags.id", ondelete="CASCADE"),
+                                         nullable=False, index=True)
+    linked_flag_id: Mapped[int] = mapped_column(Integer, ForeignKey("flag_flags.id", ondelete="CASCADE"),
+                                                nullable=False, index=True)
+    relation: Mapped[str] = mapped_column(Text, nullable=False, default="related",
+                                          server_default="related")
+    added_by: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
