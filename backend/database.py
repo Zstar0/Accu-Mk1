@@ -1025,6 +1025,37 @@ def _run_migrations():
         "ALTER TABLE lims_sub_samples ADD COLUMN IF NOT EXISTS box_id INTEGER REFERENCES lims_boxes(id) ON DELETE SET NULL",
         "ALTER TABLE lims_boxes ADD COLUMN IF NOT EXISTS stored_at TIMESTAMP",
         "ALTER TABLE lims_boxes ADD COLUMN IF NOT EXISTS stored_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL",
+        # --- flags Slice 5: scheduler + recurring + digest prefs ---
+        """
+        CREATE TABLE IF NOT EXISTS flag_scheduler_runs (
+            name         TEXT PRIMARY KEY,
+            last_run_at  TIMESTAMP,
+            last_status  TEXT
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS flag_recurring (
+            id                   SERIAL PRIMARY KEY,
+            title                TEXT NOT NULL,
+            body                 TEXT,
+            type                 TEXT NOT NULL,
+            assignee_id          INTEGER,
+            watchers             JSONB NOT NULL DEFAULT '[]'::jsonb,
+            entity_type          TEXT,
+            entity_id            TEXT,
+            cadence              TEXT NOT NULL,
+            next_run_at          TIMESTAMP NOT NULL,
+            active               BOOLEAN NOT NULL DEFAULT TRUE,
+            skip_if_open         BOOLEAN NOT NULL DEFAULT TRUE,
+            created_by           INTEGER NOT NULL,
+            created_at           TIMESTAMP NOT NULL DEFAULT NOW(),
+            last_minted_flag_id  INTEGER
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS ix_flag_recurring_next_run ON flag_recurring (next_run_at)",
+        "ALTER TABLE slack_dm_prefs ADD COLUMN IF NOT EXISTS digest_enabled BOOLEAN NOT NULL DEFAULT FALSE",
+        "ALTER TABLE slack_dm_prefs ADD COLUMN IF NOT EXISTS digest_hour INTEGER NOT NULL DEFAULT 8",
+        "ALTER TABLE slack_dm_prefs ADD COLUMN IF NOT EXISTS last_digest_date DATE",
     ]
     # Per-statement isolation: a failure in one statement (e.g., a table that
     # create_all hasn't built yet on first run) must not skip subsequent

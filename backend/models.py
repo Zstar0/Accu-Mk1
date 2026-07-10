@@ -1431,6 +1431,14 @@ class SlackDmPrefs(Base):
     # WHO the link resolved to (Slack display/real name) — cached at link time
     # so the prefs UI can show "Linked → forrest" for mapping confidence.
     slack_display_name: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    # Morning digest (Slice 5). Opt-in; hour is lab-local (MK1_LAB_TZ, UTC default).
+    digest_enabled: Mapped[bool] = mapped_column(Boolean, default=False,
+                                                 server_default="false", nullable=False)
+    digest_hour: Mapped[int] = mapped_column(Integer, default=8,
+                                             server_default="8", nullable=False)
+    # Last local date a digest DM went out — dedupes the ~15-min ticker to one
+    # send per user per day.
+    last_digest_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     notify_assigned: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     notify_mentioned: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     notify_raised_activity: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)

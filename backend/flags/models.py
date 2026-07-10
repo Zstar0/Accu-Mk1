@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import Integer, Text, DateTime, ForeignKey, JSON, UniqueConstraint
+from sqlalchemy import Integer, Text, DateTime, ForeignKey, JSON, UniqueConstraint, Boolean
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -165,6 +165,41 @@ class FlagAttachment(Base):
     size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
     storage_key: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class FlagSchedulerRun(Base):
+    """Per-job bookkeeping for the in-process scheduler. `name` is the PK so a
+    restart reads the last run and never double-fires. `last_status` is a short
+    'ok' / 'error: …' string for ops health (surfaced via a health route later)."""
+    __tablename__ = "flag_scheduler_runs"
+
+    name: Mapped[str] = mapped_column(Text, primary_key=True)
+    last_run_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    last_status: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+
+class FlagRecurring(Base):
+    """A recurring-task template. The scheduler mints a flag from it each time
+    `next_run_at` arrives, then advances `next_run_at` per `cadence`. Watchers are
+    an opaque id list (no FK — same convention as the rest of the module)."""
+    __tablename__ = "flag_recurring"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    body: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    type: Mapped[str] = mapped_column(Text, nullable=False)
+    assignee_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    watchers: Mapped[Optional[list]] = mapped_column(
+        JSONB().with_variant(JSON(), "sqlite"), nullable=True)
+    entity_type: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    entity_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    cadence: Mapped[str] = mapped_column(Text, nullable=False)  # daily | weekly:<0-6> | monthly:<1-28>
+    next_run_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true", nullable=False)
+    skip_if_open: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true", nullable=False)
+    created_by: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    last_minted_flag_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
 
 class FlagCommentReaction(Base):
