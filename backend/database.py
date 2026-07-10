@@ -969,6 +969,18 @@ def _run_migrations():
               AND review_state NOT IN ('retracted', 'rejected')
               AND provenance = 'canonical'
         """,
+        # parent-analysis-native-mirror Task 3: fail-loud backstop for the
+        # shadow mirror's own "live row" invariant. At most one non-retested
+        # shadow row may exist per (parent, service) at a time — an
+        # accidental duplicate becomes a loud IntegrityError instead of
+        # silent mirror death (e.g. a second concurrent writer, or a bug in
+        # the retest branch's flush ordering).
+        "DROP INDEX IF EXISTS uq_lims_analyses_parent_service_shadow",
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_lims_analyses_parent_service_shadow
+            ON lims_analyses (lims_sample_pk, analysis_service_id)
+            WHERE provenance = 'shadow' AND retested = FALSE AND lims_sample_pk IS NOT NULL
+        """,
     ]
     # Per-statement isolation: a failure in one statement (e.g., a table that
     # create_all hasn't built yet on first run) must not skip subsequent
