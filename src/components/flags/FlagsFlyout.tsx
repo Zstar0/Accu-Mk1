@@ -7,7 +7,12 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useUIStore } from '@/store/ui-store'
 import { useAuthStore } from '@/store/auth-store'
-import { useFlagsList, useEntityFlags, useFlagUnread } from '@/hooks/use-flags'
+import {
+  useFlagsList,
+  useEntityFlags,
+  useFlagUnread,
+  useFlagSearch,
+} from '@/hooks/use-flags'
 import { useFlagUnseen } from '@/components/flags/use-flag-unseen'
 import { unreadBuckets } from '@/components/flags/unread-buckets'
 import type { FlagTab, FlagResponse } from '@/lib/flags-api'
@@ -27,10 +32,18 @@ import {
 import { entityLabel } from '@/components/flags/flag-entity'
 import { filterFlags } from '@/components/flags/flag-filter'
 import { useFlagFilter } from '@/components/flags/use-flag-filter'
+import { useDebouncedValue } from '@/hooks/use-debounced-value'
+import {
+  mergeSearchHits,
+  type FlagSearchMeta,
+} from '@/components/flags/flag-search'
 
 /** The flyout's tab axis. Four map 1:1 to the API's `FlagTab`; `activity` (event
  *  feed) and `unread` (unread flags) are FE-only tabs. */
 type FlyoutTab = FlagTab | 'activity' | 'unread'
+
+/** Shared empty map for the non-search branch (avoids a new Map() per render). */
+const EMPTY_SEARCH_META = new Map<number, FlagSearchMeta>()
 
 const TABS: { value: FlyoutTab; label: string }[] = [
   { value: 'assigned', label: 'Assigned to me' },
@@ -211,9 +224,27 @@ export function FlagsFlyout() {
 
   // Client-side triage filters layered on the fetched list (no API change).
   const total = flags?.length ?? 0
-  const visibleFlags = flags ? filterFlags(flags, filter) : []
+  const clientVisible = flags ? filterFlags(flags, filter) : []
+
+  // Comment search: the instant client filter above stays untouched; for a
+  // 3+ char query (debounced) we ALSO fetch comment/title matches server-side
+  // and merge in the ones the client dropped (comment-only hits). Search is
+  // tab-agnostic server-side; mergeSearchHits intersects with this tab's list.
+  const liveText = filter.text.trim()
+  const debouncedText = useDebouncedValue(liveText, 300)
+  const searchActive = liveText.length >= 3 && debouncedText.length >= 3
+  const searchQuery = useFlagSearch(searchActive ? debouncedText : '')
+  const hits = searchQuery.data ?? []
+
+  const { flags: visibleFlags, searchMeta } = searchActive
+    ? mergeSearchHits(flags ?? [], clientVisible, hits)
+    : { flags: clientVisible, searchMeta: EMPTY_SEARCH_META }
+
   const hasFlags = total > 0
-  const filteredOut = hasFlags && visibleFlags.length === 0
+  // Don't flash "no matches" while a comment query is still in flight — a
+  // comment-only query has clientVisible === [] until the hits land.
+  const searchPending = searchActive && searchQuery.isFetching
+  const filteredOut = hasFlags && visibleFlags.length === 0 && !searchPending
 
   return (
     <Sheet
@@ -385,6 +416,9 @@ export function FlagsFlyout() {
                 {!isLoading && !isError && hasFlags && (
                   <div className="px-1 pb-1.5 text-[11px] text-muted-foreground">
                     {visibleFlags.length} of {total}
+                    {searchPending && (
+                      <span className="ml-2 italic">searching comments…</span>
+                    )}
                   </div>
                 )}
 
@@ -461,6 +495,7 @@ export function FlagsFlyout() {
                       flags={visibleFlags}
                       highlightIds={highlightIds}
                       unreadIds={unreadIds}
+                      searchMeta={searchMeta}
                     />
                   ) : (
                     visibleFlags.map(flag => (
@@ -469,6 +504,7 @@ export function FlagsFlyout() {
                         flag={flag}
                         highlight={highlightIds.has(flag.id)}
                         unread={unreadIds.has(flag.id)}
+                        search={searchMeta.get(flag.id)}
                       />
                     ))
                   ))}

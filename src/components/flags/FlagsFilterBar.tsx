@@ -71,8 +71,8 @@ export function FlagsFilterBar({
         <Input
           value={value.text}
           onChange={e => onChange({ ...value, text: e.target.value })}
-          placeholder="Search title or Sample ID…"
-          aria-label="Search flags"
+          placeholder="Search title, Sample ID, or comments…"
+          aria-label="Search flags by title, Sample ID, or comment"
           className="h-8 ps-8 text-xs"
         />
       </div>
