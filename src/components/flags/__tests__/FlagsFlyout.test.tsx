@@ -306,8 +306,8 @@ describe('FlagsFlyout context-aware Add Flag', () => {
     await userEvent.click(
       await screen.findByRole('button', { name: /add flag/i })
     )
-    // Compose targets the page entity: label line present, no raw-id input.
+    // Compose targets the page item: label line present, no raw-id input.
     expect(await screen.findByText('on P-0071')).toBeInTheDocument()
-    expect(screen.queryByText('Entity id')).not.toBeInTheDocument()
+    expect(screen.queryByText('Item id')).not.toBeInTheDocument()
   })
 })

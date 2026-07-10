@@ -135,13 +135,13 @@ export function FlagsFilterBar({
       >
         <SelectTrigger
           size="sm"
-          aria-label="Filter by entity"
+          aria-label="Filter by item"
           className="h-8 w-auto text-xs"
         >
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
-          <SelectItem value="all">All entities</SelectItem>
+          <SelectItem value="all">All items</SelectItem>
           {ENTITY_TYPES.map(t => (
             <SelectItem key={t} value={t}>
               {entityMeta(t).label}

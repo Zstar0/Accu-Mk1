@@ -73,8 +73,8 @@ describe('RaiseFlagButton candidates (order sample picker)', () => {
     const title = await screen.findByPlaceholderText('What needs attention?')
     // No picker — single candidate is prefilled.
     expect(screen.queryByText('Which sample?')).toBeNull()
-    // …and no manual entity fields either.
-    expect(screen.queryByText('Entity id')).toBeNull()
+    // …and no manual item fields either.
+    expect(screen.queryByText('Item id')).toBeNull()
 
     fireEvent.change(title, { target: { value: 'Needs re-prep' } })
     fireEvent.click(screen.getByRole('button', { name: 'Raise flag' }))

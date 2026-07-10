@@ -261,7 +261,7 @@ export function RaiseFlagButton({
         {!presetEntity && !hasCandidates && anchor === 'manual' && (
           <div className="grid grid-cols-2 gap-2">
             <div className="space-y-1">
-              <Label className="text-xs">Entity type</Label>
+              <Label className="text-xs">Item type</Label>
               <Select
                 value={entityTypeInput}
                 onValueChange={setEntityTypeInput}
@@ -270,14 +270,14 @@ export function RaiseFlagButton({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="sub_sample">Vial</SelectItem>
+                  <SelectItem value="sub_sample">Sub Sample</SelectItem>
                   <SelectItem value="sample">Sample</SelectItem>
                   <SelectItem value="worksheet">Worksheet</SelectItem>
                 </SelectContent>
               </Select>
             </div>
             <div className="space-y-1">
-              <Label className="text-xs">Entity id</Label>
+              <Label className="text-xs">Item id</Label>
               <Input
                 value={entityIdInput}
                 onChange={e => setEntityIdInput(e.target.value)}

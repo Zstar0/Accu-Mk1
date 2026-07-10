@@ -115,7 +115,7 @@ function FlagTableHeader({
       )}
     >
       <span aria-hidden />
-      <span className="truncate">Entity</span>
+      <span className="truncate">Item</span>
       <span className="truncate">Type</span>
       <span className="truncate">Title</span>
       <span className="truncate">Assignee</span>

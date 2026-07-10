@@ -291,7 +291,7 @@ export function FlagThread({
             {canDeepLink && (
               <button
                 type="button"
-                aria-label="Open entity"
+                aria-label="Open item"
                 onClick={() =>
                   navigateToEntity(flag.entity_type, flag.entity_id)
                 }
