@@ -26,6 +26,9 @@ _BUILTINS = [
     ("question", "Question", "#3b82f6", "issue", False, 2),
     ("waiting_on_customer", "Waiting on Customer", "#8b5cf6", "issue", False, 3),
     ("ready_for_verification", "Ready for Verification", "#22c55e", "signal", False, 4),
+    # Phase 2 slice 2: global-scoped task types for general (no-entity) flags.
+    ("task", "Task", "#0ea5a5", "issue", False, 5),
+    ("feature_request", "Feature Request", "#ec4899", "issue", False, 6),
 ]
 
 

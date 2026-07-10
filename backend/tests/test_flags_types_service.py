@@ -26,7 +26,8 @@ def test_list_types_returns_builtins(db):
     rows = types_service.list_types(db)
     slugs = [r.slug for r in rows]
     assert slugs == ["blocker", "critical", "question",
-                     "waiting_on_customer", "ready_for_verification"]
+                     "waiting_on_customer", "ready_for_verification",
+                     "task", "feature_request"]
 
 
 def test_is_valid_type(db):

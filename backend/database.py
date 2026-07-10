@@ -900,6 +900,17 @@ def _run_migrations():
         SELECT 'ready_for_verification', 'Ready for Verification', '#22c55e', 'signal', FALSE, TRUE, 4, '[]'::jsonb, TRUE
         WHERE NOT EXISTS (SELECT 1 FROM flag_types WHERE slug='ready_for_verification')
         """,
+        # Phase 2 slice 2: global task types for general (no-entity) flags.
+        """
+        INSERT INTO flag_types (slug, label, color, kind, is_blocking, is_active, sort_order, entity_types, is_builtin)
+        SELECT 'task', 'Task', '#0ea5a5', 'issue', FALSE, TRUE, 5, '[]'::jsonb, TRUE
+        WHERE NOT EXISTS (SELECT 1 FROM flag_types WHERE slug='task')
+        """,
+        """
+        INSERT INTO flag_types (slug, label, color, kind, is_blocking, is_active, sort_order, entity_types, is_builtin)
+        SELECT 'feature_request', 'Feature Request', '#ec4899', 'issue', FALSE, TRUE, 6, '[]'::jsonb, TRUE
+        WHERE NOT EXISTS (SELECT 1 FROM flag_types WHERE slug='feature_request')
+        """,
         # Extend the NAMED status CHECK to admit 'blocked' (Plan 5). A dedicated
         # DROP+ADD statement — NOT an edit to the IF-NOT-EXISTS flag_flags create
         # (which never re-runs once the table exists). Postgres-only; on the

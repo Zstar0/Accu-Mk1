@@ -41,6 +41,14 @@ def test_flag_row_allows_null_anchor_and_due(db):
     assert f.id and f.entity_type is None and f.due_at is None
 
 
+def test_p2_builtins_seeded(db):
+    from flags import types_service
+    assert types_service.get_type_by_slug(db, "task").is_builtin
+    assert types_service.get_type_by_slug(db, "feature_request").color == "#ec4899"
+    # both are global (raisable as general tasks)
+    assert types_service.get_type_by_slug(db, "task").entity_types == []
+
+
 def test_create_general_task(db):
     # A global-scoped type (entity_types == []) may be raised with no anchor.
     from flags import service, types_service
