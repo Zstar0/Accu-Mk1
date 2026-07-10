@@ -14,6 +14,10 @@ keyword; `mirror_parent_analysis`'s get-or-create/update is the safety net —
 this script can be re-run any number of times without duplicating rows. Use
 --dry-run for a rehearsal that iterates the registry + fetches (throttled)
 but writes nothing (no DB rows, no checkpoint), and --limit N for a smoke run.
+--dry-run's stats report `would_create`/`would_update` (read-only: target +
+live-shadow existence resolved per keyword, never committed) instead of the
+real run's `created`/`updated` — distinct keys so a rehearsal's evidence line
+can never be misread as an actual migration result.
 
 MECHANISM (differs from backfill_lims_sample_basic_info.py's SENAITE-side
 enumeration): this script iterates Mk1's OWN `lims_samples` registry table,
@@ -184,6 +188,7 @@ def backfill(db_factory, *, sleep_s: float, batch_size: int,
     documented coverage evidence for this migration) overcount rows that
     never landed. On any per-parent exception only `errors` increments."""
     stats = {"seen": 0, "created": 0, "updated": 0,
+             "would_create": 0, "would_update": 0,
              "skipped_no_uid": 0, "skipped_secondary": 0, "errors": 0}
     start_id = load_checkpoint(checkpoint_path)
     if start_id:
@@ -245,6 +250,28 @@ def backfill(db_factory, *, sleep_s: float, batch_size: int,
                     stats["updated"] += updated_here
                 finally:
                     db.close()
+            else:
+                # Rehearsal: READS ONLY. Resolve the shadow target + check
+                # live-shadow existence per keyword (same helpers the real
+                # run uses) purely to tally would_create/would_update — never
+                # calls mirror_parent_analysis, so the no-write contract
+                # stays airtight. Session is closed WITHOUT a commit.
+                db = db_factory()
+                would_create_here = 0
+                would_update_here = 0
+                try:
+                    for keyword in selected:
+                        target = resolve_shadow_target(db, sample_id=sample_id, keyword=keyword)
+                        if target is None:
+                            continue  # mirror_parent_analysis would no-op too
+                        if _has_live_shadow(db, sample_id, keyword):
+                            would_update_here += 1
+                        else:
+                            would_create_here += 1
+                finally:
+                    db.close()  # read-only rehearsal — nothing to commit
+                stats["would_create"] += would_create_here
+                stats["would_update"] += would_update_here
         except Exception as e:
             stats["errors"] += 1
             log.warning("backfill error sample=%s err=%s", sample_id, e, exc_info=True)

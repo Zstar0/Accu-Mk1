@@ -446,6 +446,47 @@ def test_backfill_dry_run_writes_nothing(db, checkpoint_from_now, two_analysis_s
     assert stats["seen"] == 1
     fetch.assert_called_once()  # dry-run still fetches (rehearsal), just doesn't write
     assert db.query(LimsAnalysis).filter_by(lims_sample_pk=parent.id).count() == 0
+    # Preview counts: no existing shadow row for this keyword yet, so the
+    # rehearsal reports a would-create — distinct from the real-run keys,
+    # which must stay at zero since nothing was actually written.
+    assert stats["would_create"] == 1
+    assert stats["would_update"] == 0
+    assert stats["created"] == 0 and stats["updated"] == 0
+
+
+def test_backfill_dry_run_over_already_backfilled_data_reports_would_update(
+        db, checkpoint_from_now, two_analysis_services):
+    """Dry-run against a parent that already HAS a live shadow row (i.e. a
+    prior real backfill already ran) must report would_update, not
+    would_create — the preview has to mirror the real run's upsert
+    semantics (existing shadow -> update in place, not a fresh insert)."""
+    svc_a, _svc_b = two_analysis_services
+    parent = LimsSample(sample_id="TEST-PM9-PARENT", sample_type="x",
+                        status="received", external_lims_uid="SENAITE-UID-1")
+    db.add(parent); db.commit(); db.refresh(parent)
+
+    items = [_item("A", svc_a.keyword, result="1", review_state="to_be_verified")]
+    with patch("scripts.backfill_parent_analysis_shadows.fetch_parent_analyses",
+               return_value=items):
+        real_stats = _run(checkpoint_from_now)  # seed a real shadow row first
+    assert real_stats["created"] == 1
+
+    # Re-seed the checkpoint below this parent so the rehearsal re-scans it —
+    # same resume-gotcha idiom as test_backfill_idempotent_rerun_updates_not_duplicates.
+    save_checkpoint(checkpoint_from_now, db.execute(
+        select(func.max(LimsSample.id)).where(LimsSample.id < parent.id)
+    ).scalar() or 0, "reseed")
+    rows_before = db.query(LimsAnalysis).filter_by(lims_sample_pk=parent.id).count()
+
+    with patch("scripts.backfill_parent_analysis_shadows.fetch_parent_analyses",
+               return_value=items):
+        dry_stats = _run(checkpoint_from_now, dry_run=True)
+
+    assert dry_stats["would_update"] == 1
+    assert dry_stats["would_create"] == 0
+    assert dry_stats["created"] == 0 and dry_stats["updated"] == 0
+    # Rehearsal persisted nothing new/changed — same row count as before.
+    assert db.query(LimsAnalysis).filter_by(lims_sample_pk=parent.id).count() == rows_before
 
 
 def test_backfill_dry_run_leaves_no_checkpoint(db, tmp_path, two_analysis_services):
