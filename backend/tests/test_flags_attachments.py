@@ -78,3 +78,18 @@ def test_upload_emits_attachment_added_event(client):
 
 def test_serve_missing_attachment_404s(client):
     assert client.get("/api/flags/attachments/99999").status_code == 404
+
+
+def test_serve_sets_nosniff_and_sanitized_disposition(client):
+    fid = _new_flag(client)
+    up = client.post(f"/api/flags/{fid}/attachments",
+                     files={"file": ('we"ird name.png', _PNG, "image/png")})
+    assert up.status_code == 201, up.text
+    got = client.get(f"/api/flags/attachments/{up.json()['id']}")
+    assert got.status_code == 200
+    assert got.headers["x-content-type-options"] == "nosniff"
+    cd = got.headers["content-disposition"]
+    assert cd.startswith('inline; filename="')
+    # Header-syntax characters (quotes/spaces) must not survive sanitization.
+    inner = cd[len('inline; filename="'):-1]
+    assert '"' not in inner and ' ' not in inner and inner.endswith(".png")

@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from typing import List, Optional
 
 from fastapi import (
@@ -317,7 +318,18 @@ def get_attachment(attachment_id: int, db: Session = Depends(get_db), user=Depen
         raise HTTPException(status_code=404, detail="attachment file missing from storage")
     except Exception as e:
         raise _http(e)
-    return Response(content=data, media_type=att.content_type)
+    # Defense-in-depth: content_type is magic-byte-derived (raster images only),
+    # but never let a browser second-guess it, and pin a download name that
+    # can't smuggle header syntax (quotes/CRLF stripped to a safe subset).
+    safe_name = re.sub(r"[^A-Za-z0-9._-]", "_", att.filename or "") or "attachment"
+    return Response(
+        content=data,
+        media_type=att.content_type,
+        headers={
+            "X-Content-Type-Options": "nosniff",
+            "Content-Disposition": f'inline; filename="{safe_name}"',
+        },
+    )
 
 
 @router.get("/search", response_model=List[FlagSearchHit])
