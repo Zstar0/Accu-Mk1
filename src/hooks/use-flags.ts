@@ -29,6 +29,7 @@ import {
   addReaction,
   removeReaction,
   setDue,
+  searchFlags,
   type FlagTab,
   type ListFlagsParams,
   type FlagStatus,
@@ -50,6 +51,7 @@ export const flagKeys = {
     ['flags', 'entity', entityType, entityId, includeDescendants] as const,
   activity: () => ['flags', 'activity'] as const,
   unread: () => ['flags', 'unread'] as const,
+  search: (q: string) => ['flags', 'search', q] as const,
   detail: (id: number) => ['flags', id] as const,
 }
 
@@ -113,6 +115,19 @@ export function useFlagUnread() {
   return useQuery({
     queryKey: flagKeys.unread(),
     queryFn: getUnread,
+    staleTime: 5_000,
+  })
+}
+
+/** Comment/title search hits for `q`. Disabled below 3 chars (the flyout also
+ *  debounces the input). Under ['flags', …] so the SSE glue's blanket
+ *  invalidate keeps results fresh as comments arrive live. */
+export function useFlagSearch(q: string) {
+  const trimmed = q.trim()
+  return useQuery({
+    queryKey: flagKeys.search(trimmed),
+    queryFn: () => searchFlags(trimmed),
+    enabled: trimmed.length >= 3,
     staleTime: 5_000,
   })
 }

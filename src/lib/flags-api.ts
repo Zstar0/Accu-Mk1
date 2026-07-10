@@ -170,6 +170,14 @@ export interface SummaryResponse {
   by_type: Record<string, number>
 }
 
+/** Mirrors `FlagSearchHit` (spec §7). `snippet` is a cleaned comment excerpt
+ *  (empty on a title-only hit); `matched_in` ⊆ `['comment','title']`. */
+export interface FlagSearchHit {
+  flag_id: number
+  snippet: string
+  matched_in: string[]
+}
+
 // --- request bodies (mirror schemas.py request models) ---
 
 /** Mirrors `CreateFlagRequest`. `type` is a DB-managed type slug (Plan 5).
@@ -279,6 +287,13 @@ export const getActivity = (cursor?: string, limit = 25) => {
 
 /** `GET /api/flags/unread` — flags relevant to me with unread changes. */
 export const getUnread = () => apiFetch<FlagResponse[]>('/api/flags/unread')
+
+/** `GET /api/flags/search?q=` — flags whose title or a comment body matches `q`
+ *  (comment matches carry a snippet). Caller gates at ≥3 chars + debounce. */
+export const searchFlags = (q: string, limit = 50) => {
+  const qs = new URLSearchParams({ q, limit: String(limit) })
+  return apiFetch<FlagSearchHit[]>(`/api/flags/search?${qs.toString()}`)
+}
 
 /** `POST /api/flags/{id}/read` — stamp this flag read for me (204). */
 export const markRead = (id: number) =>
