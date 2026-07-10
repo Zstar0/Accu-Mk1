@@ -13754,15 +13754,23 @@ def _mirror_parent_analysis_bg(**kwargs) -> None:
     None). Existing callers (A1/A2/A3) never pass these kwargs — pop() with a
     None default plus the resolvers' own None-safety makes this a pure,
     backward-compatible extension.
+
+    `SessionLocal()`, the resolver/helper imports, and the kwargs.pop() calls
+    all live INSIDE the try (not just the mirror call) so that even a
+    pathological construction/import failure is caught here rather than
+    escaping to the caller — this function must never raise. `db` is set to
+    None before the try so the finally block can guard `db.close()` for the
+    case where SessionLocal() itself never returned a session.
     """
-    from database import SessionLocal
-    from lims_analyses.parent_mirror import (
-        mirror_parent_analysis, resolve_instrument_id, resolve_method_id,
-    )
-    method_uid = kwargs.pop("method_uid", None)
-    instrument_uid = kwargs.pop("instrument_uid", None)
-    db = SessionLocal()
+    db = None
     try:
+        from database import SessionLocal
+        from lims_analyses.parent_mirror import (
+            mirror_parent_analysis, resolve_instrument_id, resolve_method_id,
+        )
+        method_uid = kwargs.pop("method_uid", None)
+        instrument_uid = kwargs.pop("instrument_uid", None)
+        db = SessionLocal()
         method_id = resolve_method_id(db, method_uid)
         instrument_id = resolve_instrument_id(db, instrument_uid)
         if method_id is not None:
@@ -13772,14 +13780,16 @@ def _mirror_parent_analysis_bg(**kwargs) -> None:
         if mirror_parent_analysis(db, **kwargs):
             db.commit()
     except Exception as mirror_err:  # noqa: BLE001
-        try:
-            db.rollback()
-        except Exception:
-            pass
+        if db is not None:
+            try:
+                db.rollback()
+            except Exception:
+                pass
         logger.warning("registry.analysis_mirror_failed kw=%s err=%s",
                        kwargs.get("keyword"), mirror_err)
     finally:
-        db.close()
+        if db is not None:
+            db.close()
 
 
 def _mark_shadows_published_bg(sample_id: str) -> None:
@@ -13788,22 +13798,29 @@ def _mark_shadows_published_bg(sample_id: str) -> None:
     mirror_review_state='published' (mark_parent_shadows_published). Never
     holds the request `db` across the SENAITE HTTP calls in publish_sample_coa;
     never raises — a mirror failure must never fail the publish.
+
+    `SessionLocal()` and the helper import live INSIDE the try, same
+    hardening rationale as `_mirror_parent_analysis_bg`: `db` starts as None
+    so `finally` can guard `db.close()` if construction itself failed.
     """
-    from database import SessionLocal
-    from lims_analyses.parent_mirror import mark_parent_shadows_published
-    db = SessionLocal()
+    db = None
     try:
+        from database import SessionLocal
+        from lims_analyses.parent_mirror import mark_parent_shadows_published
+        db = SessionLocal()
         if mark_parent_shadows_published(db, sample_id=sample_id):
             db.commit()
     except Exception as mirror_err:  # noqa: BLE001
-        try:
-            db.rollback()
-        except Exception:
-            pass
+        if db is not None:
+            try:
+                db.rollback()
+            except Exception:
+                pass
         logger.warning("registry.publish_shadow_mark_failed sample_id=%s err=%s",
                        sample_id, mirror_err)
     finally:
-        db.close()
+        if db is not None:
+            db.close()
 
 
 class AnalysisResultRequest(BaseModel):
@@ -14155,11 +14172,23 @@ async def transition_analysis(
             from fastapi.concurrency import run_in_threadpool
             _sid = item.get("getRequestID") or item.get("RequestID")
             if _sid and keyword:
+                _is_retest = req.transition == "retest"
+                # For retest, `actual_state` ("verified", per
+                # EXPECTED_POST_STATES["retest"]) describes the OLD SENAITE
+                # analysis line SENAITE echoed back — not the NEW retest
+                # analysis object spawned under the hood, which is born
+                # unassigned. The mirror helper's is_retest branch creates
+                # that new row and stamps it with whatever mirror_review_state
+                # is passed here, so passing actual_state would mislabel the
+                # brand-new row as already verified. The old row keeps its own
+                # (correct) mirror_review_state — is_retest only marks it
+                # retested, it doesn't touch that field.
+                _mirror_state = "unassigned" if _is_retest else actual_state
                 await run_in_threadpool(
                     _mirror_parent_analysis_bg,
                     sample_id=_sid, keyword=keyword,
-                    mirror_review_state=actual_state,
-                    is_retest=(req.transition == "retest"),
+                    mirror_review_state=_mirror_state,
+                    is_retest=_is_retest,
                 )
 
             return AnalysisResultResponse(

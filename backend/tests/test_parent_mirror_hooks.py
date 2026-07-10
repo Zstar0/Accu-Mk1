@@ -369,8 +369,13 @@ def test_transition_retest_mirrors_new_row(db, seed_parent_and_service):
     assert any(row.retested for row in rows)
     live = [row for row in rows if not row.retested]
     assert len(live) == 1
-    assert live[0].mirror_review_state == "verified"
+    # FIX 2: the new live retest row is born unassigned, NOT stamped with
+    # `actual_state` ("verified") — that state describes the OLD line
+    # SENAITE echoed back, not the freshly-spawned retest analysis.
+    assert live[0].mirror_review_state == "unassigned"
     assert live[0].retest_of_id is not None
+    superseded = [row for row in rows if row.retested]
+    assert superseded[0].mirror_review_state == "verified"  # old row untouched
 
 
 def test_transition_silent_rejection_no_mirror(db, seed_parent_and_service):

@@ -16,11 +16,13 @@ from sqlalchemy import delete, select
 from database import SessionLocal
 from lims_analyses.parent_mirror import (
     SHADOW_STATE, mark_parent_shadows_published, mirror_parent_analysis,
+    resolve_shadow_target,
 )
 from models import AnalysisService, LimsAnalysis, LimsAnalysisTransition, LimsSample
 
 TEST_SAMPLE_ID = "TEST-PM2-PARENT"
 TEST_NOEXIST_SAMPLE_ID = "TEST-PM2-NOEXIST"
+TEST_DUP_KEYWORD = "TEST-PM2-DUPKW"
 
 
 @pytest.fixture
@@ -75,6 +77,12 @@ def cleanup(db):
     db.execute(delete(LimsSample).where(
         LimsSample.sample_id.in_([TEST_SAMPLE_ID, TEST_NOEXIST_SAMPLE_ID])
     ))
+    # FIX 1 test seeds two TEST-prefixed AnalysisService rows sharing a
+    # keyword — no other fixture in this file ever touches AnalysisService,
+    # so it needs its own explicit cleanup to avoid polluting the shared
+    # dev DB (and the `analysis_service` fixture's "first non-null keyword"
+    # pick in every other test module).
+    db.execute(delete(AnalysisService).where(AnalysisService.keyword == TEST_DUP_KEYWORD))
     db.commit()
 
 
@@ -99,6 +107,66 @@ def test_creates_shadow_row_with_sentinel_state(db, seed_parent_and_service):
     assert row.analysis_service_id == svc.id
     tr = db.query(LimsAnalysisTransition).filter_by(analysis_id=row.id).all()
     assert len(tr) == 1  # audit row for the mirrored create
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# FIX 1: resolve_shadow_target must resolve a duplicate keyword deterministically
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+@pytest.fixture
+def dup_keyword_services(db):
+    """Two TEST-prefixed AnalysisService rows sharing one keyword — prod
+    precedent: a re-run of the analysis-services sync cloned two
+    PUR_TB500BETA4 rows (see `service.py:73-81`'s identical defensive
+    pattern). `keyword` carries no unique constraint on the model."""
+    lower = AnalysisService(title="TEST: dup keyword lower", keyword=TEST_DUP_KEYWORD)
+    db.add(lower)
+    db.commit()
+    db.refresh(lower)
+    higher = AnalysisService(title="TEST: dup keyword higher", keyword=TEST_DUP_KEYWORD)
+    db.add(higher)
+    db.commit()
+    db.refresh(higher)
+    assert lower.id < higher.id
+    return lower, higher
+
+
+def test_resolve_shadow_target_dup_keyword_picks_lower_id(db, dup_keyword_services):
+    lower, _higher = dup_keyword_services
+    parent = LimsSample(sample_id=TEST_SAMPLE_ID, sample_type="x", status="received")
+    db.add(parent)
+    db.commit()
+    db.refresh(parent)
+
+    target = resolve_shadow_target(db, sample_id=parent.sample_id, keyword=TEST_DUP_KEYWORD)
+    assert target is not None
+    resolved_parent, resolved_svc = target
+    assert resolved_parent.id == parent.id
+    assert resolved_svc.id == lower.id  # deterministic: lower id wins
+
+
+def test_mirror_parent_analysis_dup_keyword_succeeds_not_multipleresultsfound(
+        db, dup_keyword_services):
+    """Pre-fix, `scalar_one_or_none()` raises MultipleResultsFound on a dup
+    keyword; the caller's best-effort guard swallows it, so every mirror
+    write for that line silently no-ops forever. Post-fix this must succeed
+    and land on the lower-id service deterministically."""
+    lower, _higher = dup_keyword_services
+    parent = LimsSample(sample_id=TEST_SAMPLE_ID, sample_type="x", status="received")
+    db.add(parent)
+    db.commit()
+    db.refresh(parent)
+
+    ok = mirror_parent_analysis(
+        db, sample_id=parent.sample_id, keyword=TEST_DUP_KEYWORD,
+        mirror_review_state="to_be_verified", result_value="1",
+    )
+    assert ok is True
+    row = db.query(LimsAnalysis).filter_by(
+        lims_sample_pk=parent.id, provenance="shadow"
+    ).one()
+    assert row.analysis_service_id == lower.id
 
 
 def test_second_call_updates_same_shadow_row(db, seed_parent_and_service):
@@ -224,3 +292,67 @@ def test_mark_shadows_published_flips_only_live_shadow_rows(
     assert live2.mirror_review_state == "published"
     assert superseded.mirror_review_state == "verified"  # unchanged
     assert canonical.mirror_review_state is None  # unchanged (never set)
+
+
+@pytest.fixture
+def three_analysis_services(db):
+    """Three distinct seeded services with non-null keyword. Needed (rather
+    than reusing two_analysis_services) because the FIX 3 test below needs a
+    dedicated service per live shadow row: the shadow partial unique index
+    is (lims_sample_pk, analysis_service_id) WHERE provenance='shadow' AND
+    retested=FALSE, so a rejected LIVE row (still retested=False) cannot
+    share a service with another live row for the same parent."""
+    svcs = db.execute(
+        select(AnalysisService).where(AnalysisService.keyword.isnot(None))
+    ).scalars().all()[:3]
+    if len(svcs) < 3:
+        pytest.skip("need >=3 seeded analysis_services rows with a keyword")
+    return svcs
+
+
+def test_mark_shadows_published_skips_rejected_and_retracted_live_shadows(
+        db, seed_parent_and_service, three_analysis_services):
+    """FIX 3: a live shadow row already stamped rejected/retracted (from
+    A7-remove / A5-replace) must NOT flip to 'published' on AR publish — a
+    removed/replaced analysis line doesn't publish with the AR. A live row
+    with mirror_review_state still NULL (never stamped) MUST still flip:
+    `NOT IN` against NULL is neither true nor false in SQL, so the fix has
+    to explicitly OR in an IS NULL branch rather than relying on NOT IN
+    alone."""
+    parent, _ = seed_parent_and_service
+    svc_ok, svc_rejected, svc_retracted = three_analysis_services
+
+    live_ok = LimsAnalysis(
+        lims_sample_pk=parent.id, analysis_service_id=svc_ok.id,
+        keyword=svc_ok.keyword, title=svc_ok.title,
+        review_state=SHADOW_STATE, provenance="shadow",
+        mirror_review_state=None,  # never stamped — must still flip
+    )
+    live_rejected = LimsAnalysis(
+        lims_sample_pk=parent.id, analysis_service_id=svc_rejected.id,
+        keyword=svc_rejected.keyword, title=svc_rejected.title,
+        review_state=SHADOW_STATE, provenance="shadow",
+        mirror_review_state="rejected",
+    )
+    live_retracted = LimsAnalysis(
+        lims_sample_pk=parent.id, analysis_service_id=svc_retracted.id,
+        keyword=svc_retracted.keyword, title=svc_retracted.title,
+        review_state=SHADOW_STATE, provenance="shadow",
+        mirror_review_state="retracted",
+    )
+    db.add_all([live_ok, live_rejected, live_retracted])
+    db.commit()
+    db.refresh(live_ok)
+    db.refresh(live_rejected)
+    db.refresh(live_retracted)
+
+    count = mark_parent_shadows_published(db, sample_id=parent.sample_id)
+    db.commit()
+    assert count == 1  # only the NULL/unstamped row flips
+
+    db.refresh(live_ok)
+    db.refresh(live_rejected)
+    db.refresh(live_retracted)
+    assert live_ok.mirror_review_state == "published"
+    assert live_rejected.mirror_review_state == "rejected"  # unchanged
+    assert live_retracted.mirror_review_state == "retracted"  # unchanged

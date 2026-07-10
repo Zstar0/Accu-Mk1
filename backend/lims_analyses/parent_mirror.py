@@ -8,7 +8,7 @@ up (fail-closed). SENAITE stays system-of-record; nothing reads shadows this sli
 from __future__ import annotations
 from datetime import datetime
 from typing import Optional, Tuple
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 from models import (
     AnalysisService, HplcMethod, Instrument, LimsAnalysis,
@@ -64,7 +64,17 @@ def resolve_shadow_target(db: Session, *, sample_id: str, keyword: str
                           ) -> Optional[Tuple[LimsSample, AnalysisService]]:
     """Resolve (parent LimsSample, AnalysisService) from a SENAITE getRequestID
     + Keyword. Returns None when the parent isn't in the registry yet, or the
-    service keyword is unknown — the documented no-op contract."""
+    service keyword is unknown — the documented no-op contract.
+
+    `AnalysisService.keyword` carries no unique constraint (prod precedent:
+    a re-run of the analysis-services sync cloned two PUR_TB500BETA4 rows —
+    see the same defensive pattern at `service.py:73-81`), so this uses
+    `.order_by(AnalysisService.id).scalars().first()` rather than
+    `scalar_one_or_none()`: a duplicate keyword must resolve deterministically
+    to the lower/oldest id instead of raising MultipleResultsFound, which
+    would otherwise be swallowed by the caller's best-effort guard and leave
+    a permanent, silent mirror gap for every write against that keyword.
+    """
     parent = db.execute(
         select(LimsSample).where(LimsSample.sample_id == sample_id)
     ).scalar_one_or_none()
@@ -72,7 +82,8 @@ def resolve_shadow_target(db: Session, *, sample_id: str, keyword: str
         return None
     svc = db.execute(
         select(AnalysisService).where(AnalysisService.keyword == keyword)
-    ).scalar_one_or_none()
+        .order_by(AnalysisService.id)
+    ).scalars().first()
     if svc is None:
         return None
     return parent, svc
@@ -183,10 +194,16 @@ def mark_parent_shadows_published(db: Session, *, sample_id: str) -> int:
     Updates only provenance='shadow' AND retested=False rows — the live
     ones; a retested/superseded shadow row keeps whatever state it was
     superseded at, and canonical (native) rows are untouched (publish there
-    runs its own native state machine). Sets mirror_review_state="published"
-    + updated_at, flushes, never commits (caller commits). Returns the
-    count of rows updated; 0 = no-op (unregistered parent or no live shadow
-    rows yet — both legitimate, not errors).
+    runs its own native state machine). Also excludes live shadows already
+    stamped mirror_review_state IN ('rejected', 'retracted') (from A7-remove /
+    A5-replace): a removed/replaced analysis line doesn't publish with the
+    AR. NULL mirror_review_state (never yet stamped) is NOT excluded — plain
+    `NOT IN` would silently drop NULL rows since SQL's NOT IN against NULL is
+    neither true nor false, so the exclusion is OR'd with an explicit
+    `IS NULL` branch. Sets mirror_review_state="published" + updated_at,
+    flushes, never commits (caller commits). Returns the count of rows
+    updated; 0 = no-op (unregistered parent or no live shadow rows yet —
+    both legitimate, not errors).
     """
     parent = db.execute(
         select(LimsSample).where(LimsSample.sample_id == sample_id)
@@ -198,6 +215,10 @@ def mark_parent_shadows_published(db: Session, *, sample_id: str) -> int:
             LimsAnalysis.lims_sample_pk == parent.id,
             LimsAnalysis.provenance == "shadow",
             LimsAnalysis.retested.is_(False),
+            or_(
+                LimsAnalysis.mirror_review_state.is_(None),
+                LimsAnalysis.mirror_review_state.not_in(("rejected", "retracted")),
+            ),
         )
     ).scalars().all()
     now = datetime.utcnow()
