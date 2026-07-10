@@ -64,6 +64,7 @@ import os
 import re
 import sys
 import time
+from typing import Optional
 
 # Make the /app package root importable when run as a file (python -m from
 # /app makes this a no-op).
@@ -168,10 +169,16 @@ def _pick_newest_line(items: list[dict]) -> dict:
     value win, compared as strings (SENAITE's ISO-8601 timestamps sort
     correctly lexicographically); when NONE of the remaining items carry a
     created value, falls back to the last item in SENAITE's own catalog
-    order (its natural insertion/brain order) rather than picking arbitrarily."""
+    order (its natural insertion/brain order) rather than picking arbitrarily.
+
+    Tie-break consistency: bare `max()` returns the FIRST maximal element,
+    which would contradict the no-dates fallback's last-in-list rule whenever
+    two lines share a created timestamp — so position is folded into the sort
+    key and ties break toward the LAST item in catalog order, matching the
+    fallback."""
     dated = [it for it in items if it.get("created")]
     if dated:
-        return max(dated, key=lambda it: it["created"])
+        return max(enumerate(dated), key=lambda p: (p[1]["created"], p[0]))[1]
     return items[-1]
 
 
@@ -245,10 +252,18 @@ def _has_live_shadow(db, sample_id: str, keyword: str) -> bool:
 
 
 def backfill(db_factory, *, sleep_s: float, batch_size: int,
-             checkpoint_path: str, dry_run: bool, limit) -> dict:
+             checkpoint_path: str, dry_run: bool,
+             limit: Optional[int]) -> dict:
     """Iterate the lims_samples registry; for each PARENT with a SENAITE AR,
     fetch its analyses ONCE and mirror the current line per keyword. One
-    parent's failure never aborts the run. Returns coverage stats."""
+    parent's failure never aborts the run. Returns coverage stats.
+
+    Stats integrity: created/updated are accumulated in per-parent LOCALS
+    and folded into `stats` only AFTER that parent's `db.commit()` returns —
+    a later keyword's exception rolls back the parent's ENTIRE transaction
+    (nothing persisted), so counting per-call would let the stats line (the
+    documented coverage evidence for this migration) overcount rows that
+    never landed. On any per-parent exception only `errors` increments."""
     stats = {"seen": 0, "created": 0, "updated": 0,
              "skipped_no_uid": 0, "skipped_secondary": 0, "errors": 0}
     start_id = load_checkpoint(checkpoint_path)
@@ -280,6 +295,8 @@ def backfill(db_factory, *, sleep_s: float, batch_size: int,
             selected = select_current_lines(items)
             if not dry_run:
                 db = db_factory()
+                created_here = 0
+                updated_here = 0
                 try:
                     for keyword, line in selected.items():
                         existed = _has_live_shadow(db, sample_id, keyword)
@@ -293,7 +310,10 @@ def backfill(db_factory, *, sleep_s: float, batch_size: int,
                             is_retest=False,  # backfill records CURRENT state, not history
                         )
                         if ok:
-                            stats["updated" if existed else "created"] += 1
+                            if existed:
+                                updated_here += 1
+                            else:
+                                created_here += 1
                         else:
                             log.debug(
                                 "backfill_no_op sample=%s keyword=%s "
@@ -301,6 +321,9 @@ def backfill(db_factory, *, sleep_s: float, batch_size: int,
                                 sample_id, keyword,
                             )
                     db.commit()
+                    # Fold in ONLY after the commit succeeded — see docstring.
+                    stats["created"] += created_here
+                    stats["updated"] += updated_here
                 finally:
                     db.close()
         except Exception as e:

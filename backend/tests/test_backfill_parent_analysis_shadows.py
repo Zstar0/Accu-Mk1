@@ -149,6 +149,19 @@ def test_select_current_lines_falls_back_to_last_in_list_when_no_dates():
     assert out["KW1"]["uid"] == "X2"  # last in list
 
 
+def test_select_current_lines_created_date_tie_breaks_to_last_in_list():
+    """Tie-break consistency: when two lines share a created timestamp the
+    LAST one in catalog order must win — the same rule as the no-dates
+    fallback. A bare max() returns the FIRST maximal element and would
+    contradict that fallback."""
+    items = [
+        _item("X1", "KW1", created="2026-01-01T00:00:00+00:00"),
+        _item("X2", "KW1", created="2026-01-01T00:00:00+00:00"),
+    ]
+    out = select_current_lines(items)
+    assert out["KW1"]["uid"] == "X2"
+
+
 def test_select_current_lines_skips_items_without_a_keyword():
     items = [_item("A", None, result="1"), _item("B", "KW1", result="2")]
     out = select_current_lines(items)
@@ -511,6 +524,45 @@ def test_backfill_one_parent_error_does_not_abort_others(
     assert stats["seen"] == 2
     assert stats["errors"] == 1
     assert stats["created"] == 1
+
+
+def test_backfill_stats_count_only_committed_rows_on_partial_keyword_failure(
+        db, checkpoint_from_now, two_analysis_services):
+    """Reviewer reproduction (Task 9 review, Important): two-keyword parent,
+    first mirror call succeeds, second raises. The per-parent transaction
+    rolls back the WHOLE parent (session closed uncommitted), so NOTHING
+    persists — the stats line (the run's documented coverage evidence) must
+    therefore report created=0/updated=0/errors=1, NOT the pre-fix
+    created=1/errors=1 overcount for a row that never landed."""
+    from lims_analyses.parent_mirror import mirror_parent_analysis as real_mirror
+    svc_a, svc_b = two_analysis_services
+    parent = LimsSample(sample_id="TEST-PM9-PARENT", sample_type="x",
+                        status="received", external_lims_uid="SENAITE-UID-1")
+    db.add(parent); db.commit(); db.refresh(parent)
+
+    items = [
+        _item("A", svc_a.keyword, result="1"),
+        _item("B", svc_b.keyword, result="2"),
+    ]
+    calls = {"n": 0}
+
+    def _flaky_mirror(db_arg, **kw):
+        calls["n"] += 1
+        if calls["n"] >= 2:
+            raise RuntimeError("boom on second keyword")
+        return real_mirror(db_arg, **kw)
+
+    with patch("scripts.backfill_parent_analysis_shadows.fetch_parent_analyses",
+               return_value=items), \
+         patch("scripts.backfill_parent_analysis_shadows.mirror_parent_analysis",
+               side_effect=_flaky_mirror):
+        stats = _run(checkpoint_from_now)
+
+    assert calls["n"] == 2  # first keyword really did write (then rolled back)
+    assert stats["errors"] == 1
+    assert stats["created"] == 0 and stats["updated"] == 0
+    # And the DB agrees with the stats: nothing persisted for this parent.
+    assert db.query(LimsAnalysis).filter_by(lims_sample_pk=parent.id).count() == 0
 
 
 def test_backfill_respects_limit(db, checkpoint_from_now, two_analysis_services):
