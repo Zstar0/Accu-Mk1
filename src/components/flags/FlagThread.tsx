@@ -41,9 +41,10 @@ import type {
 } from '@/lib/flags-api'
 import { flagTypeDef } from '@/components/flags/flag-catalog'
 import { useFlagTypesMap } from '@/services/flag-types'
+import { useItemKindLabels } from '@/services/item-kinds'
 import {
   entityMeta,
-  entityLabel,
+  entityDisplayLabel,
   navigateToEntity,
 } from '@/components/flags/flag-entity'
 import {
@@ -91,6 +92,7 @@ export function FlagThread({
   const { data: flag, isLoading, isError } = useFlag(flagId)
   const users = useFlagUsers()
   const typesMap = useFlagTypesMap()
+  const kindLabels = useItemKindLabels()
   const currentUserId = useAuthStore(state => state.user?.id ?? null)
 
   const changeStatus = useChangeStatus(flagId)
@@ -287,7 +289,7 @@ export function FlagThread({
         <div className="flex items-center justify-between gap-2">
           <span className="inline-flex items-center gap-1.5 rounded-md bg-muted px-2 py-1 text-[11px] font-bold text-foreground/80">
             <Icon className="h-3.5 w-3.5" />
-            {entityLabel(flag.entity_type, flag.entity_id)}
+            {entityDisplayLabel(flag, kindLabels)}
             {canDeepLink && (
               <button
                 type="button"

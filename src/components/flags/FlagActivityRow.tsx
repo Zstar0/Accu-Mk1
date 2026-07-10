@@ -3,6 +3,7 @@ import { useUIStore } from '@/store/ui-store'
 import type { ActivityItem, FlagStatus } from '@/lib/flags-api'
 import { flagTypeDef } from '@/components/flags/flag-catalog'
 import { useFlagTypesMap } from '@/services/flag-types'
+import { useItemKindLabels } from '@/services/item-kinds'
 import { entityDisplayLabel } from '@/components/flags/flag-entity'
 import {
   useFlagUsers,
@@ -20,6 +21,7 @@ import { activityVerb } from '@/components/flags/flag-activity'
 export function FlagActivityRow({ item }: { item: ActivityItem }) {
   const users = useFlagUsers()
   const typesMap = useFlagTypesMap()
+  const kindLabels = useItemKindLabels()
   const me = useAuthStore(state => state.user?.id ?? null)
 
   const def = typesMap[item.flag.type] ?? flagTypeDef(item.flag.type)
@@ -33,7 +35,7 @@ export function FlagActivityRow({ item }: { item: ActivityItem }) {
     nameOf: id => (id == null ? 'someone' : nameForUser(users, id)),
     statusLabelOf: slug => STATUS_LABELS[slug as FlagStatus] ?? slug,
   })
-  const entity = entityDisplayLabel(item.flag)
+  const entity = entityDisplayLabel(item.flag, kindLabels)
 
   return (
     <div
