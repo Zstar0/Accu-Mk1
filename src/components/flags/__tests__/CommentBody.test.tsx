@@ -19,7 +19,11 @@ describe('CommentBody', () => {
     fetchUrl.mockResolvedValue('blob:abc')
     const { CommentBody } = await import('@/components/flags/CommentBody')
     render(
-      <CommentBody body="**hi** {attachment:5}" mentions={[]} users={new Map()} />
+      <CommentBody
+        body="**hi** {attachment:5}"
+        mentions={[]}
+        users={new Map()}
+      />
     )
     expect(document.querySelector('strong')?.textContent).toBe('hi')
     await waitFor(() =>
@@ -33,7 +37,9 @@ describe('CommentBody', () => {
   it('opens a lightbox when an attachment image is clicked', async () => {
     fetchUrl.mockResolvedValue('blob:abc')
     const { CommentBody } = await import('@/components/flags/CommentBody')
-    render(<CommentBody body="{attachment:5}" mentions={[]} users={new Map()} />)
+    render(
+      <CommentBody body="{attachment:5}" mentions={[]} users={new Map()} />
+    )
     const img = await waitFor(() => {
       const el = document.querySelector('img.flag-attach') as HTMLImageElement
       expect(el.getAttribute('src')).toBe('blob:abc')

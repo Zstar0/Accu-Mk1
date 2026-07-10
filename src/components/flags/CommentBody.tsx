@@ -56,7 +56,7 @@ export function CommentBody({
       <div
         ref={ref}
         className="flag-body text-[13px] leading-relaxed text-foreground/90 [&_p]:m-0 [&_a]:text-primary [&_a]:underline [&_code]:rounded [&_code]:bg-muted [&_code]:px-1 [&_pre]:overflow-x-auto [&_pre]:rounded [&_pre]:bg-muted [&_pre]:p-2 [&_ul]:list-disc [&_ul]:pl-4 [&_ol]:list-decimal [&_ol]:pl-4 [&_.flag-mention]:rounded [&_.flag-mention]:bg-primary/15 [&_.flag-mention]:px-1 [&_.flag-mention]:font-medium [&_.flag-mention]:text-primary [&_img.flag-attach]:mt-1 [&_img.flag-attach]:max-h-48 [&_img.flag-attach]:cursor-pointer [&_img.flag-attach]:rounded [&_img.flag-attach]:border"
-        // eslint-disable-next-line react/no-danger -- sanitized by DOMPurify in renderCommentHtml
+        // Safe: `html` is DOMPurify-sanitized in renderCommentHtml (spec §6/§11).
         dangerouslySetInnerHTML={{ __html: html }}
         onClick={e => {
           const t = e.target as HTMLElement
