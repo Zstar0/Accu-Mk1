@@ -6,8 +6,11 @@ Defaults wire Mk1, but the core depends only on these callables.
 """
 from __future__ import annotations
 
+import os
+import uuid
 from dataclasses import dataclass
-from typing import Callable, Optional
+from pathlib import Path
+from typing import Callable, Optional, Protocol
 
 from sqlalchemy.orm import Session
 
@@ -105,6 +108,102 @@ EVENT_SINK: InMemoryEventSink = InMemoryEventSink()
 def set_event_sink(sink) -> None:
     global EVENT_SINK
     EVENT_SINK = sink
+
+
+# --- attachment storage seam (Plan 3) ------------------------------------
+# The flags module never imports boto3 or host storage modules. The host wires
+# an S3-backed adapter (see main.py) that satisfies this Protocol; the default
+# is a local filesystem store so dev/test work with zero config.
+class AttachmentNotFound(LookupError):
+    """fetch() could not locate a key."""
+
+
+class AttachmentStorageError(RuntimeError):
+    """Any storage-layer failure (bad key, write/read error)."""
+
+
+class AttachmentStorage(Protocol):
+    def save(self, flag_id: str, data: bytes, filename: str) -> str: ...
+    def fetch(self, key: str) -> bytes: ...
+    def delete(self, key: str) -> None: ...
+
+
+def _attach_ext(filename: str) -> str:
+    ext = Path(filename or "").suffix.lower()
+    return ext if ext in {".png", ".jpg", ".jpeg", ".gif", ".webp"} else ".bin"
+
+
+class InMemoryAttachmentStorage:
+    """No-disk store for tests/dev. Key = 'flag_id/uuid.ext'."""
+    def __init__(self) -> None:
+        self._blobs: dict[str, bytes] = {}
+
+    def save(self, flag_id: str, data: bytes, filename: str) -> str:
+        key = f"{flag_id}/{uuid.uuid4().hex}{_attach_ext(filename)}"
+        self._blobs[key] = data
+        return key
+
+    def fetch(self, key: str) -> bytes:
+        if key not in self._blobs:
+            raise AttachmentNotFound(key)
+        return self._blobs[key]
+
+    def delete(self, key: str) -> None:
+        self._blobs.pop(key, None)
+
+
+class FilesystemAttachmentStorage:
+    """Prod default. One file per attachment under {root}/{flag_id}/{uuid}.{ext}."""
+    def __init__(self, root: str | None = None) -> None:
+        self.root = Path(root or os.environ.get("MK1_FLAG_ATTACH_DIR", "/data/flag_attachments"))
+        self.root.mkdir(parents=True, exist_ok=True)
+
+    def save(self, flag_id: str, data: bytes, filename: str) -> str:
+        rel = f"{flag_id}/{uuid.uuid4().hex}{_attach_ext(filename)}"
+        p = self.root / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(data)
+        return rel
+
+    def fetch(self, key: str) -> bytes:
+        p = self._safe(key)
+        if not p.exists():
+            raise AttachmentNotFound(key)
+        return p.read_bytes()
+
+    def delete(self, key: str) -> None:
+        p = self._safe(key)
+        if p.exists():
+            p.unlink()
+
+    def _safe(self, key: str) -> Path:
+        if not key or key.startswith("/") or ".." in key.split("/"):
+            raise AttachmentStorageError(f"unsafe key: {key!r}")
+        resolved = (self.root / key).resolve()
+        try:
+            resolved.relative_to(self.root.resolve())
+        except ValueError as e:
+            raise AttachmentStorageError(f"key escapes root: {key!r}") from e
+        return resolved
+
+
+_ATTACHMENT_STORAGE: "AttachmentStorage | None" = None
+
+
+def get_attachment_storage() -> "AttachmentStorage":
+    global _ATTACHMENT_STORAGE
+    if _ATTACHMENT_STORAGE is None:
+        _ATTACHMENT_STORAGE = FilesystemAttachmentStorage()
+    return _ATTACHMENT_STORAGE
+
+
+def set_attachment_storage(storage: "AttachmentStorage") -> None:
+    global _ATTACHMENT_STORAGE
+    _ATTACHMENT_STORAGE = storage
+
+
+def set_attachment_storage_for_tests(storage: "AttachmentStorage") -> None:
+    set_attachment_storage(storage)
 
 
 # --- Mk1 registrations ---------------------------------------------------
