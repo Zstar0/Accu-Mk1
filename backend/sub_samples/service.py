@@ -1690,6 +1690,13 @@ def _fetch_mk1_results_for_host(
             LimsAnalysis.lims_sample_pk == host_pk,
             LimsAnalysis.retest_of_id.is_(None),
             LimsAnalysis.result_value.is_not(None),
+            # SENAITE phase-out fail-closed (Task 7): this branch has no
+            # review_state filter, so without this clause a SENAITE-mirror
+            # SHADOW row (sentinel review_state='senaite_mirror') carrying a
+            # result_value would surface as a phantom parent result in the
+            # variance-set/lock view. Same gap class as
+            # lims_analyses.service.list_analyses_for_host's sample branch.
+            LimsAnalysis.provenance == "canonical",
         )
     elif host_kind == "sub_sample":
         stmt = base.where(
@@ -1698,6 +1705,10 @@ def _fetch_mk1_results_for_host(
             # returns the superseded original once a retest exists (P-0149 S03).
             LimsAnalysis.retested.is_(False),
             LimsAnalysis.result_value.is_not(None),
+            # No provenance filter needed here: shadow rows are parent-tier
+            # only (lims_sub_sample_pk IS NULL, per lims_analyses/parent_mirror
+            # .py), so a vial-host query can never match one. Safe by
+            # construction — evaluated in the Task 7 fail-closed audit.
         )
     else:
         return {}

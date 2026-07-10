@@ -155,3 +155,33 @@ def test_list_analyses_for_host_excludes_shadow_rows_for_sample_host(db, seed_pa
     rows = list_analyses_for_host(db, host_kind="sample", host_pk=parent.id)
     assert all(r.keyword != "ID_SHADOW" for r in rows)
     assert all(r.provenance == "canonical" for r in rows)
+
+
+# ─── sub_samples/service.py::_fetch_mk1_results_for_host — MANDATORY filter ─
+# Controller-added scope (post-report review): this is a SEPARATE,
+# copy-pasted parent-host query (NOT a reuse of list_analyses_for_host), so
+# the fix above does not cover it. It feeds get_variance_set — the lab-facing
+# variance-set/lock view — where a shadow row carrying a result_value would
+# have rendered as a phantom parent result. Pre-fix: EXPECTED RED. The
+# sub_sample branch needs no filter: shadow rows are parent-tier only
+# (lims_sub_sample_pk IS NULL, per parent_mirror.py), so a vial-host query
+# can never match one — safe by construction.
+
+
+def test_variance_set_parent_results_exclude_shadow_rows(db, seed_parent_and_service):
+    parent, svc = seed_parent_and_service
+    # a canonical parent-tier result + a shadow row for a DIFFERENT keyword,
+    # both carrying result_values (the query requires result_value IS NOT NULL)
+    db.add(LimsAnalysis(lims_sample_pk=parent.id, analysis_service_id=svc.id,
+                        keyword=svc.keyword, title=svc.title, review_state="verified",
+                        provenance="canonical", result_value="42.0", reportable=True))
+    db.add(LimsAnalysis(lims_sample_pk=parent.id, analysis_service_id=svc.id,
+                        keyword="QTY_SHADOW_VS", title="x", review_state="senaite_mirror",
+                        provenance="shadow", mirror_review_state="verified",
+                        result_value="99.9", result_unit="mg", reportable=True))
+    db.commit()
+    from sub_samples.service import _fetch_mk1_results_for_host
+    out = _fetch_mk1_results_for_host(db, host_kind="sample", host_pk=parent.id)
+    assert "QTY_SHADOW_VS" not in out  # shadow keyword must not appear
+    assert svc.keyword in out  # the canonical row is unaffected
+    assert out[svc.keyword]["value"] == "42.0"
