@@ -59,20 +59,31 @@ def _commit_and_emit(db):
 
 def create_flag(db: Session, *, user, entity_type, entity_id, type, title,
                 assignee_id=None, first_comment=None) -> FlagFlag:
-    if not seams.is_registered(entity_type):
-        raise BadRequestError(f"unknown entity_type {entity_type!r}")
+    # A NULL anchor = a general task (spec §5). entity_id without an entity_type
+    # is malformed; a present entity_type must be registered.
+    if entity_type is None:
+        if entity_id is not None:
+            raise BadRequestError("entity_id requires entity_type")
+    else:
+        if not seams.is_registered(entity_type):
+            raise BadRequestError(f"unknown entity_type {entity_type!r}")
     if not types_service.is_valid_type(db, type):
         raise BadRequestError(f"unknown flag type {type!r}")
     if not permissions.can(user, "create", None):
         raise PermissionDeniedError("not allowed to create flags")
-    spec = seams.get_entity_spec(entity_type)
-    if not spec.can_flag(user, str(entity_id)):
-        raise PermissionDeniedError(f"not allowed to flag {entity_type} {entity_id}")
+    if entity_type is not None:
+        spec = seams.get_entity_spec(entity_type)
+        if not spec.can_flag(user, str(entity_id)):
+            raise PermissionDeniedError(f"not allowed to flag {entity_type} {entity_id}")
+    # Enforces "general task ⇒ global type": is_allowed_for_entity returns True
+    # for entity_type=None only when the type's entity_types list is empty.
     if not types_service.is_allowed_for_entity(db, type, entity_type):
-        raise BadRequestError(f"flag type {type!r} is not allowed for {entity_type}")
+        raise BadRequestError(
+            f"flag type {type!r} is not allowed for {entity_type or 'general tasks'}")
 
     actor_id = getattr(user, "id", None)
-    flag = FlagFlag(entity_type=entity_type, entity_id=str(entity_id),
+    flag = FlagFlag(entity_type=entity_type,
+                    entity_id=str(entity_id) if entity_id is not None else None,
                     kind=types_service.kind_for_type(db, type), type=type, status="open",
                     title=title, created_by=actor_id, assignee_id=assignee_id)
     db.add(flag)

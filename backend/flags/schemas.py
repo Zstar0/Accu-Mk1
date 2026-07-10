@@ -13,8 +13,9 @@ FlagTab = Literal["assigned", "raised", "watching", "all_open"]
 
 
 class CreateFlagRequest(BaseModel):
-    entity_type: str
-    entity_id: str
+    # Null anchor = a general task (Phase 2 slice 2).
+    entity_type: Optional[str] = None
+    entity_id: Optional[str] = None
     type: str
     title: str
     assignee_id: Optional[int] = None
@@ -88,8 +89,9 @@ class EntityContext(BaseModel):
 
 class FlagResponse(BaseModel):
     id: int
-    entity_type: str
-    entity_id: str
+    # Nullable since Phase 2: a null anchor = a general task.
+    entity_type: Optional[str] = None
+    entity_id: Optional[str] = None
     kind: str
     type: str
     status: str
@@ -100,6 +102,7 @@ class FlagResponse(BaseModel):
     updated_at: datetime
     resolved_at: Optional[datetime]
     resolved_by: Optional[int]
+    due_at: Optional[datetime] = None
     # Optional server-resolved entity context (label/sample_id/analyses/deep_link).
     entity: Optional[EntityContext] = None
     model_config = ConfigDict(from_attributes=True)

@@ -95,10 +95,12 @@ def kind_for_type(db: Session, slug: str) -> str:
     return t.kind
 
 
-def is_allowed_for_entity(db: Session, slug: str, entity_type: str) -> bool:
+def is_allowed_for_entity(db: Session, slug: str,
+                          entity_type: Optional[str]) -> bool:
     """Whether a flag of this type may be RAISED on this entity type: the type
     must exist, be active, and be global (entity_types empty) or scope this
-    entity type."""
+    entity type. `entity_type=None` (a general task) is allowed only for global
+    types — `None in t.entity_types` is False, so scoped types reject."""
     t = get_type_by_slug(db, slug)
     if t is None or not t.is_active:
         return False
