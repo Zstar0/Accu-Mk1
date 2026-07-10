@@ -185,3 +185,94 @@ def test_variance_set_parent_results_exclude_shadow_rows(db, seed_parent_and_ser
     assert "QTY_SHADOW_VS" not in out  # shadow keyword must not appear
     assert svc.keyword in out  # the canonical row is unaffected
     assert out[svc.keyword]["value"] == "42.0"
+
+
+# ─── lims_analyses/service.py::cascade_parent_retest_to_sources ─────────────
+# Reviewer-required shadow-seeding proof for the task's one genuine
+# behavior-affecting gap (audit site #8). Pre-fix, the active-parent lookup
+# (`review_state.not_in(("retracted","rejected"))` — which does NOT exclude
+# the sentinel 'senaite_mirror' — with no ORDER BY, `.scalars().first()`)
+# could nondeterministically resolve to a SHADOW row when one coexists with
+# the canonical parent row for the same (parent, keyword). A shadow row
+# carries no LimsAnalysisPromotion links, so the cascade would silently
+# no-op instead of retesting the promoted vial sources. With the provenance
+# filter the lookup must deterministically target the CANONICAL row.
+#
+# The shadow row is inserted FIRST (lower id) to bias an unordered scan
+# toward it — pre-fix failure is still nondeterministic by nature, but
+# post-fix correctness (what this test pins) is deterministic.
+# Setup mirrors test_parent_retest_cascade_unpromotes_verified_parent
+# (test_lims_analyses_service.py): promoted vial source + verified canonical
+# parent + promotion link; post-conditions per the function's contract:
+# source retested, canonical parent retracted with figure cleared.
+
+
+def test_retest_cascade_targets_canonical_not_shadow(db, seed_parent_and_service):
+    from models import LimsAnalysisPromotion, LimsSubSample
+
+    parent, svc = seed_parent_and_service
+    vial = LimsSubSample(
+        parent_sample_pk=parent.id, external_lims_uid="TEST-PM7-CASCADE-UID",
+        sample_id=f"{TEST_SAMPLE_ID}-S01", vial_sequence=1, assignment_kind="core",
+    )
+    db.add(vial)
+    db.flush()
+
+    shadow = LimsAnalysis(
+        lims_sample_pk=parent.id, analysis_service_id=svc.id,
+        keyword=svc.keyword, title="x", review_state="senaite_mirror",
+        provenance="shadow", mirror_review_state="verified",
+        result_value="88.8", reportable=True,
+    )
+    db.add(shadow)
+    db.flush()  # shadow gets the lower id
+    src = LimsAnalysis(
+        lims_sub_sample_pk=vial.id, analysis_service_id=svc.id,
+        keyword=svc.keyword, title="TEST: src", result_value="4",
+        result_unit="mg", review_state="promoted",
+    )
+    canonical = LimsAnalysis(
+        lims_sample_pk=parent.id, analysis_service_id=svc.id,
+        keyword=svc.keyword, title="TEST: parent", result_value="4",
+        result_unit="mg", review_state="verified", provenance="canonical",
+    )
+    db.add_all([src, canonical])
+    db.flush()
+    db.add(LimsAnalysisPromotion(
+        parent_analysis_id=canonical.id, source_analysis_id=src.id,
+        contribution_kind="chosen",
+    ))
+    db.commit()
+
+    from lims_analyses.service import cascade_parent_retest_to_sources
+    created_ids: list[int] = []
+    try:
+        created_ids = cascade_parent_retest_to_sources(
+            db, parent_sample_id=parent.sample_id, keyword=svc.keyword, user_id=None,
+        )
+        db.refresh(shadow)
+        db.refresh(src)
+        db.refresh(canonical)
+        # (a) the cascade resolved the CANONICAL row: the promoted vial source
+        # was retested and the canonical parent was un-promoted (retracted,
+        # stale figure cleared) — the function's documented post-conditions.
+        # An empty created_ids here means the lookup grabbed the shadow row
+        # (no promotion links) and silently no-opped: the pre-fix bug.
+        assert created_ids, "cascade no-opped — parent lookup did not resolve to the canonical row"
+        assert src.retested is True
+        assert canonical.review_state == "retracted"
+        assert canonical.result_value is None
+        # (b) the SHADOW row is untouched in every respect.
+        assert shadow.review_state == "senaite_mirror"
+        assert shadow.mirror_review_state == "verified"
+        assert shadow.result_value == "88.8"
+        assert shadow.retested is False
+    finally:
+        all_ids = [shadow.id, src.id, canonical.id, *created_ids]
+        db.execute(delete(LimsAnalysisPromotion).where(
+            LimsAnalysisPromotion.parent_analysis_id == canonical.id))
+        db.execute(delete(LimsAnalysisTransition).where(
+            LimsAnalysisTransition.analysis_id.in_(all_ids)))
+        db.execute(delete(LimsAnalysis).where(LimsAnalysis.id.in_(all_ids)))
+        db.execute(delete(LimsSubSample).where(LimsSubSample.id == vial.id))
+        db.commit()
