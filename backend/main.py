@@ -14183,11 +14183,24 @@ async def transition_analysis(
                 # brand-new row as already verified. The old row keeps its own
                 # (correct) mirror_review_state — is_retest only marks it
                 # retested, it doesn't touch that field.
+                #
+                # Live registry-inspect UAT showed SENAITE's retest
+                # transition also copies the OLD line's Result onto the new
+                # retest analysis under the hood (new line born unassigned
+                # but already carrying the old Result) — so `item["Result"]`
+                # here is that carried-over value, not a real new result.
+                # Mirror it onto the new row for the same reason as the
+                # state above: leaving result_value=None would drift from
+                # SENAITE truth. `or None` guards against mirroring an
+                # empty-string Result. Non-retest transitions are unchanged —
+                # they never pass result_value (state-only mirror).
                 _mirror_state = "unassigned" if _is_retest else actual_state
+                _retest_result = (item.get("Result") or None) if _is_retest else None
                 await run_in_threadpool(
                     _mirror_parent_analysis_bg,
                     sample_id=_sid, keyword=keyword,
                     mirror_review_state=_mirror_state,
+                    result_value=_retest_result,
                     is_retest=_is_retest,
                 )
 

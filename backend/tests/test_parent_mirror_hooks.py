@@ -222,20 +222,27 @@ def replace_analyte_peptides(db):
     )
 
 
-def _mock_senaite_update(*, review_state, keyword, get_request_id):
+def _mock_senaite_update(*, review_state, keyword, get_request_id, result=None):
     """Patch httpx.AsyncClient so set_analysis_result's POST to SENAITE's
     /update/{uid} returns items[0] echoing review_state/Keyword/getRequestID.
-    Caller must .stop() the returned patcher."""
+    Caller must .stop() the returned patcher.
+
+    `result` optionally adds a "Result" field to the mocked item -- used by
+    the retest-carried-result test, where SENAITE's retest transition copies
+    the OLD line's Result onto the newly-spawned retest analysis. Omitted
+    (None) by default so existing callers' mocked items carry no Result key,
+    matching prior behavior exactly."""
     mock_instance = AsyncMock()
     mock_resp = MagicMock()
     mock_resp.raise_for_status = MagicMock()
-    mock_resp.json = MagicMock(return_value={
-        "items": [{
-            "review_state": review_state,
-            "Keyword": keyword,
-            "getRequestID": get_request_id,
-        }]
-    })
+    item = {
+        "review_state": review_state,
+        "Keyword": keyword,
+        "getRequestID": get_request_id,
+    }
+    if result is not None:
+        item["Result"] = result
+    mock_resp.json = MagicMock(return_value={"items": [item]})
     mock_instance.post = AsyncMock(return_value=mock_resp)
     p = patch("httpx.AsyncClient")
     cls = p.start()
@@ -376,6 +383,55 @@ def test_transition_retest_mirrors_new_row(db, seed_parent_and_service):
     assert live[0].retest_of_id is not None
     superseded = [row for row in rows if row.retested]
     assert superseded[0].mirror_review_state == "verified"  # old row untouched
+
+
+def test_transition_retest_mirrors_carried_over_result(db, seed_parent_and_service):
+    """Live registry-inspect UAT showed SENAITE's retest transition copies
+    the OLD line's Result onto the freshly-spawned retest analysis under the
+    hood (new line born review_state='unassigned' but result='.892', carried
+    over from the old line). A state-only mirror leaves the new shadow row's
+    result_value=None, drifting from SENAITE truth -- the retest branch must
+    also carry the Result the /update response echoes onto the NEW row.
+
+    The OLD row's own result_value is never set in this test (the initial
+    'verify' mirror call never touches it -- state-only), so it must remain
+    None afterwards -- proving the fix doesn't cross-contaminate the two
+    rows by e.g. writing the carried-over Result onto the old row too."""
+    parent, svc = seed_parent_and_service
+    # Same mocked item is returned for both requests below (verify's
+    # EXPECTED_POST_STATES is also "verified"); the Result field is only
+    # consumed by transition_analysis's retest branch, so its presence
+    # during the 'verify' call is inert.
+    proxy = _mock_senaite_update(
+        review_state="verified", keyword=svc.keyword, get_request_id=parent.sample_id,
+        result=".892",
+    )
+    try:
+        with patch.object(main, "SENAITE_URL", "http://senaite.test"):
+            client = _client()
+            r1 = client.post(
+                "/wizard/senaite/analyses/UID-1/transition", json={"transition": "verify"}
+            )
+            r2 = client.post(
+                "/wizard/senaite/analyses/UID-1/transition", json={"transition": "retest"}
+            )
+    finally:
+        proxy.stop()
+
+    assert r1.status_code == 200 and r1.json()["success"] is True
+    assert r2.status_code == 200 and r2.json()["success"] is True
+
+    rows = db.query(LimsAnalysis).filter_by(
+        lims_sample_pk=parent.id, provenance="shadow"
+    ).all()
+    assert len(rows) == 2
+    live = [row for row in rows if not row.retested]
+    superseded = [row for row in rows if row.retested]
+    assert len(live) == 1 and len(superseded) == 1
+
+    assert live[0].mirror_review_state == "unassigned"
+    assert live[0].result_value == ".892"
+    assert superseded[0].result_value is None  # old row's own result, untouched
 
 
 def test_transition_silent_rejection_no_mirror(db, seed_parent_and_service):
