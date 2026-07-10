@@ -377,6 +377,20 @@ async def lifespan(app: FastAPI):
             db.close()
     _flag_scheduler.register("recurring_mint", interval=_timedelta(minutes=5),
                              fn=_recurring_job)
+    # Morning digest — token-gated (needs the Slack client). Ticks every ~15 min;
+    # digest.run dedupes to one DM per user per lab-local day.
+    if os.getenv("MK1_SLACK_BOT_TOKEN"):
+        from slack_notify.client import SlackClient as _SlackClient
+        from slack_notify import digest as _digest
+        _digest_base = os.getenv("MK1_PUBLIC_URL",
+                                 "https://accumk1.valenceanalytical.com")
+
+        async def _digest_job(now):
+            await _digest.run(_SessionLocal,
+                              _SlackClient(os.environ["MK1_SLACK_BOT_TOKEN"]),
+                              _digest_base, now=now)
+        _flag_scheduler.register("slack_digest", interval=_timedelta(minutes=15),
+                                 fn=_digest_job)
     _flag_scheduler.start()
     # Seed default settings and admin user
     from database import SessionLocal
