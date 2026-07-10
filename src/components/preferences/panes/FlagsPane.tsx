@@ -37,6 +37,10 @@ import {
 import { useFlagUsers, nameForUser } from '@/components/flags/flag-users'
 import { entityMeta } from '@/components/flags/flag-entity'
 import {
+  TypeBucketBoard,
+  type Bucket,
+} from '@/components/flags/TypeBucketBoard'
+import {
   FlagTypeApiError,
   type FlagType,
   type FlagTypeUpdate,
@@ -69,10 +73,21 @@ export function FlagsPane() {
   // the admin can add the next type).
   const createInFlight = useRef(false)
 
+  // Active item kinds for the scope board's buckets (the per-card chips only
+  // scope to code entities; the board is the one place to scope to a kind).
+  const activeKindsQuery = useItemKinds({ active_only: true })
+
   const types = [...(typesQuery.data ?? [])].sort(
     (a, b) => a.sort_order - b.sort_order || a.label.localeCompare(b.label)
   )
   const entityTypes = entityTypesQuery.data ?? []
+  // Board buckets: code entities (Sample, Sub Sample, Worksheet) + active kinds.
+  const scopeBuckets: Bucket[] = [
+    ...entityTypes.map(slug => ({ slug, label: entityMeta(slug).label })),
+    ...[...(activeKindsQuery.data ?? [])]
+      .sort((a, b) => a.sort_order - b.sort_order)
+      .map(k => ({ slug: k.slug, label: k.label })),
+  ]
 
   if (typesQuery.isLoading) {
     return (
@@ -175,6 +190,20 @@ export function FlagsPane() {
             />
           ))}
         </div>
+      </SettingsSection>
+
+      <SettingsSection title={t('preferences.flags.scope.title')}>
+        <p className="text-sm text-muted-foreground">
+          {t('preferences.flags.scope.description')}
+        </p>
+        <TypeBucketBoard
+          types={types}
+          buckets={scopeBuckets}
+          readOnly={!isAdmin}
+          onScope={(id, entity_types) =>
+            updateType.mutate({ id, data: { entity_types } })
+          }
+        />
       </SettingsSection>
 
       <ItemKindsSection readOnly={!isAdmin} />

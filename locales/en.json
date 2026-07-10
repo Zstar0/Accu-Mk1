@@ -169,6 +169,8 @@
   "preferences.flags.recurring.delete": "Delete recurring task",
   "preferences.flags.recurring.skipIfOpen": "Skip if previous is still open",
   "preferences.flags.recurring.skipIfOpenHint": "don't mint a new flag while the last one it created is still unresolved.",
+  "preferences.flags.scope.title": "Type availability",
+  "preferences.flags.scope.description": "Drag a flag type onto an item to restrict it to that item, or onto All items to make it global. A type can sit in several buckets; use the ✕ on a chip to remove it from one.",
   "preferences.flags.items.title": "Items",
   "preferences.flags.items.description": "Virtual categories a general task can attach to (e.g. Purchase Task). Rename, recolor, or deactivate. Existing flags keep a deactivated kind's label.",
   "preferences.flags.items.add": "Add item",

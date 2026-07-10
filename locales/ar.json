@@ -148,6 +148,8 @@
   "preferences.flags.recurring.delete": "حذف المهمة المتكررة",
   "preferences.flags.recurring.skipIfOpen": "تخطَّ إذا كان السابق ما زال مفتوحًا",
   "preferences.flags.recurring.skipIfOpenHint": "لا تنشئ علمًا جديدًا ما دام آخر علم أنشأته لم يُحَل بعد.",
+  "preferences.flags.scope.title": "توفّر الأنواع",
+  "preferences.flags.scope.description": "اسحب نوع العلم إلى عنصر لقصره على ذلك العنصر، أو إلى كل العناصر لجعله عامًا. يمكن أن يظهر النوع في عدة سلال؛ استخدم ✕ على الشريحة لإزالته من إحداها.",
   "preferences.flags.items.title": "العناصر",
   "preferences.flags.items.description": "فئات افتراضية يمكن ربط مهمة عامة بها (مثل مهمة شراء). أعد التسمية أو اللون أو التعطيل. تحتفظ الأعلام الحالية بتسمية النوع المعطَّل.",
   "preferences.flags.items.add": "إضافة عنصر",
