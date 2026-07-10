@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import base64
 import re
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional
 
@@ -268,6 +269,98 @@ def list_unread(db: Session, *, user_id: int) -> list[FlagFlag]:
                        FlagFlag.updated_at > FlagRead.last_read_at))
             .order_by(FlagFlag.updated_at.desc()))
     return list(db.execute(stmt).scalars().all())
+
+
+# --- comment/title search (Plan 4) --------------------------------------
+_WS_RE = re.compile(r"\s+")
+
+
+@dataclass
+class SearchHit:
+    """One title/comment search match (service-internal; the route maps it to
+    the FlagSearchHit wire model). `snippet` is empty on a title-only hit."""
+    flag_id: int
+    snippet: str = ""
+    matched_in: list[str] = field(default_factory=list)
+
+
+def _clean_body(body: str) -> str:
+    """Drop Slice-3 `{attachment:N}` tokens and collapse whitespace so a snippet
+    reads as one clean line. @mention tokens (`@name`) are readable — kept."""
+    return _WS_RE.sub(" ", _ATTACHMENT_TOKEN.sub("", body or "")).strip()
+
+
+def _snippet(body: str, needle: str, *, radius: int = 48) -> str:
+    """A one-line excerpt of `body` centered on the first case-insensitive
+    occurrence of `needle`, ellipsized when truncated."""
+    text = _clean_body(body)
+    idx = text.lower().find(needle.lower())
+    if idx < 0:
+        # The match sat inside a stripped token or spanned a token boundary —
+        # show the head of the cleaned body rather than nothing.
+        head = text[: 2 * radius]
+        return head + "…" if len(text) > len(head) else head
+    start = max(0, idx - radius)
+    end = min(len(text), idx + len(needle) + radius)
+    out = text[start:end]
+    if start > 0:
+        out = "…" + out
+    if end < len(text):
+        out = out + "…"
+    return out
+
+
+def _like_pattern(q: str) -> str:
+    r"""A `%…%` ILIKE pattern with LIKE metacharacters escaped (escape char = `\`)
+    so a user typing `%` or `_` searches for the literal, not a wildcard."""
+    esc = q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{esc}%"
+
+
+def search_flags(db: Session, *, q: str, limit: int = 50) -> list[SearchHit]:
+    """Flags whose title OR any comment body contains `q` (case-insensitive
+    substring). Portable ILIKE: a pg_trgm GIN index accelerates it on Postgres,
+    and the identical query degrades to a `lower() LIKE` seqscan on SQLite / when
+    the extension is absent. Newest-first (flag_id DESC), capped at `limit`."""
+    q = (q or "").strip()
+    if len(q) < 3:
+        return []
+    limit = max(1, min(limit, 100))
+    pattern = _like_pattern(q)
+
+    # Comment matches: the first matching comment per flag drives its snippet.
+    # Bounded scan (limit*4) — enough matching comments to still cover `limit`
+    # distinct newest flags without pulling an unbounded set.
+    comment_rows = db.execute(
+        select(FlagComment.flag_id, FlagComment.body)
+        .where(FlagComment.body.ilike(pattern, escape="\\"))
+        .order_by(FlagComment.flag_id.desc(), FlagComment.id.asc())
+        .limit(limit * 4)
+    ).all()
+    snippet_by_flag: dict[int, str] = {}
+    for flag_id, body in comment_rows:
+        if flag_id not in snippet_by_flag:
+            snippet_by_flag[flag_id] = _snippet(body, q)
+
+    title_ids = {
+        fid for (fid,) in db.execute(
+            select(FlagFlag.id)
+            .where(FlagFlag.title.ilike(pattern, escape="\\"))
+            .order_by(FlagFlag.id.desc())
+            .limit(limit)
+        ).all()
+    }
+
+    hit_ids = sorted(set(snippet_by_flag) | title_ids, reverse=True)[:limit]
+    hits: list[SearchHit] = []
+    for fid in hit_ids:
+        matched_in: list[str] = []
+        if fid in snippet_by_flag:
+            matched_in.append("comment")
+        if fid in title_ids:
+            matched_in.append("title")
+        hits.append(SearchHit(fid, snippet_by_flag.get(fid, ""), matched_in))
+    return hits
 
 
 def mark_read(db: Session, *, user_id: int, flag_id: int) -> None:
