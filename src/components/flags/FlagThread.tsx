@@ -674,7 +674,7 @@ function CommentRow({
       <FlagAvatar initials={initials} color={color} isYou={isMe} size={22} />
       <div
         className={cn(
-          'max-w-[300px] rounded-xl border px-3 py-2',
+          'min-w-0 max-w-[300px] rounded-xl border px-3 py-2',
           isMe ? 'border-primary/40 bg-primary/10' : 'border-border bg-muted/60'
         )}
       >

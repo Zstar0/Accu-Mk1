@@ -34,6 +34,17 @@ describe('CommentBody', () => {
     expect(fetchUrl).toHaveBeenCalledWith(5)
   })
 
+  it('wraps long unbroken tokens: the body container carries an anywhere overflow-wrap', async () => {
+    fetchUrl.mockResolvedValue('')
+    const { CommentBody } = await import('@/components/flags/CommentBody')
+    const longUrl = `https://example.com/${'a'.repeat(300)}`
+    render(<CommentBody body={longUrl} mentions={[]} users={new Map()} />)
+    const container = document.querySelector('.flag-body') as HTMLElement
+    // jsdom can't prove visual wrapping, so assert the wrap utility is present
+    // (paired with a visual-pass eyeball of the bubble/flyout).
+    expect(container.className).toContain('[overflow-wrap:anywhere]')
+  })
+
   it('opens a lightbox when an attachment image is clicked', async () => {
     fetchUrl.mockResolvedValue('blob:abc')
     const { CommentBody } = await import('@/components/flags/CommentBody')
