@@ -359,6 +359,14 @@ async def lifespan(app: FastAPI):
     # Slack DM notifications (spec 2026-07-02) — dormant without the token.
     from slack_notify.notifier import maybe_start as _slack_maybe_start
     _slack_notifier_task = _slack_maybe_start(_flag_bus.BUS)
+    # Flag scheduler (Slice 5) — in-process ticker; jobs registered below.
+    from datetime import timedelta as _timedelta
+    from flags.scheduler import Scheduler as _Scheduler
+    from database import SessionLocal as _SessionLocal
+    _flag_scheduler = _Scheduler(_SessionLocal)
+    # Job registration is appended by later Slice-5 tasks (recurring, digest, GC)
+    # immediately BELOW, before start(). Registering zero jobs is harmless.
+    _flag_scheduler.start()
     # Seed default settings and admin user
     from database import SessionLocal
     db = SessionLocal()
