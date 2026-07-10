@@ -37,12 +37,16 @@ from sqlalchemy import delete, select
 import main
 from auth import get_current_user
 from database import SessionLocal
+from lims_analyses.parent_mirror import SHADOW_STATE
 from models import (
     AnalysisService, HplcMethod, Instrument, LimsAnalysis,
     LimsAnalysisTransition, LimsSample,
 )
 
 TEST_SAMPLE_ID = "TEST-PM4-PARENT"
+# A7-add needs a dedicated AnalysisService (not a shared seeded row we'd have
+# to mutate) so the endpoint can resolve service_uid -> keyword; see Task 8.
+TEST_ADD_SERVICE_KEYWORD = "TEST-PM8-ADDKW"
 
 
 def _client() -> TestClient:
@@ -50,6 +54,46 @@ def _client() -> TestClient:
     main.app.dependency_overrides[get_current_user] = (
         lambda: {"email": "a@x", "role": "standard"})
     return TestClient(main.app)
+
+
+def _client_as_user(user_id: int = 42) -> TestClient:
+    """Task 8 endpoints (add/remove/replace) read `_current_user.id` — the
+    plain-dict override used by `_client()` for A1/A2/A4 has no `.id` and
+    would AttributeError before those handlers ever reach the mirror hook."""
+    main.app.dependency_overrides.clear()
+    main.app.dependency_overrides[get_current_user] = (
+        lambda: MagicMock(id=user_id, email="a@x", role="standard"))
+    return TestClient(main.app)
+
+
+def _mock_is_proxy(*, post_json=None, delete_json=None, get_json=None):
+    """Patch httpx.AsyncClient for the non-native IS-proxy branches of
+    add/remove/replace (see test_native_manage_analyses.py's _is_proxy_mock).
+    Caller must .stop() the returned patcher."""
+    mock_instance = AsyncMock()
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.json = MagicMock(return_value={})
+    if post_json is not None:
+        post_resp = MagicMock()
+        post_resp.raise_for_status = MagicMock()
+        post_resp.json = MagicMock(return_value=post_json)
+        mock_instance.post = AsyncMock(return_value=post_resp)
+    if delete_json is not None:
+        delete_resp = MagicMock()
+        delete_resp.raise_for_status = MagicMock()
+        delete_resp.json = MagicMock(return_value=delete_json)
+        mock_instance.delete = AsyncMock(return_value=delete_resp)
+    if get_json is not None:
+        get_resp = MagicMock()
+        get_resp.raise_for_status = MagicMock()
+        get_resp.json = MagicMock(return_value=get_json)
+        mock_instance.get = AsyncMock(return_value=get_resp)
+    p = patch("httpx.AsyncClient")
+    cls = p.start()
+    cls.return_value.__aenter__ = AsyncMock(return_value=mock_instance)
+    cls.return_value.__aexit__ = AsyncMock(return_value=False)
+    return p
 
 
 @pytest.fixture
@@ -115,7 +159,67 @@ def cleanup(db):
         )
     ))
     db.execute(delete(LimsSample).where(LimsSample.sample_id == TEST_SAMPLE_ID))
+    # Task 8: the dedicated A7-add AnalysisService (LimsAnalysis rows that
+    # reference it are already gone via the delete above).
+    db.execute(delete(AnalysisService).where(
+        AnalysisService.keyword == TEST_ADD_SERVICE_KEYWORD
+    ))
     db.commit()
+
+
+@pytest.fixture
+def seed_add_service(db):
+    """A fresh TEST-prefixed AnalysisService with a real senaite_uid — used
+    only by the A7-add test. The IS proxy response for add carries no
+    keyword, so the endpoint must resolve service_uid -> keyword via this
+    table; a real seeded service row is never mutated for this (would
+    corrupt shared seed data), hence a dedicated throwaway row."""
+    svc = AnalysisService(
+        title="TEST PM8 Add Service",
+        keyword=TEST_ADD_SERVICE_KEYWORD,
+        senaite_uid="TEST-PM8-ADD-UID",
+    )
+    db.add(svc)
+    db.commit()
+    db.refresh(svc)
+    return svc
+
+
+@pytest.fixture
+def replace_analyte_peptides(db):
+    """Two distinct seeded peptides, each with a full ID_/PUR_/QTY_ service
+    set (replace_analyte's offer-only gate) — the NEW peptide's Identity
+    service also needs a senaite_uid to drive the IS-proxy add in step 5.
+    Picked from real seed data; nothing is created or mutated."""
+    from lims_analyses.service import peptide_has_full_service_set
+
+    pids = db.execute(
+        select(AnalysisService.peptide_id)
+        .where(AnalysisService.peptide_id.is_not(None)).distinct()
+    ).scalars().all()
+    full = [pid for pid in pids if peptide_has_full_service_set(db, peptide_id=pid)]
+
+    def _id_svc(pid):
+        return db.execute(
+            select(AnalysisService).where(
+                AnalysisService.peptide_id == pid,
+                AnalysisService.keyword.like("ID%"),
+            )
+        ).scalars().first()
+
+    for new_pid in full:
+        new_id_svc = _id_svc(new_pid)
+        if not (new_id_svc and new_id_svc.senaite_uid):
+            continue
+        for old_pid in full:
+            if old_pid == new_pid:
+                continue
+            if _id_svc(old_pid) is not None:
+                return old_pid, new_pid
+    pytest.skip(
+        "need >=2 seeded peptides with a full ID_/PUR_/QTY_ service set "
+        "(new peptide's Identity service also needing a senaite_uid)"
+    )
 
 
 def _mock_senaite_update(*, review_state, keyword, get_request_id):
@@ -368,3 +472,206 @@ def test_method_instrument_unresolvable_uids_writes_row_with_none(
     ).one()
     assert row.method_id is None
     assert row.instrument_id is None
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Task 8: A7 remove — remove_sample_analysis (non-native IS-proxy branch)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def test_remove_marks_shadow_row_rejected(db, seed_parent_and_service):
+    parent, svc = seed_parent_and_service
+    from lims_analyses.parent_mirror import mirror_parent_analysis
+    mirror_parent_analysis(
+        db, sample_id=parent.sample_id, keyword=svc.keyword,
+        mirror_review_state="to_be_verified", result_value="1",
+    )
+    db.commit()
+
+    proxy = _mock_is_proxy(delete_json={"success": True, "message": "proxied"})
+    try:
+        r = _client_as_user().delete(
+            f"/explorer/samples/{parent.sample_id}/analyses/{svc.keyword}"
+        )
+    finally:
+        proxy.stop()
+
+    assert r.status_code == 200
+    assert r.json()["success"] is True
+
+    row = db.query(LimsAnalysis).filter_by(
+        lims_sample_pk=parent.id, provenance="shadow"
+    ).one()
+    # The shadow row is stamped, never deleted (audit trail) — its sentinel
+    # review_state is untouched; only mirror_review_state records SENAITE truth.
+    assert row.review_state == SHADOW_STATE
+    assert row.mirror_review_state == "rejected"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Task 8: A7 add — add_sample_analysis (non-native IS-proxy branch)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def test_add_creates_shadow_row_unassigned(db, seed_parent_and_service, seed_add_service):
+    parent, _svc = seed_parent_and_service
+
+    proxy = _mock_is_proxy(post_json={"success": True, "message": "proxied"})
+    try:
+        r = _client_as_user().post(
+            f"/explorer/samples/{parent.sample_id}/analyses",
+            json={"service_uid": seed_add_service.senaite_uid},
+        )
+    finally:
+        proxy.stop()
+
+    assert r.status_code == 200
+
+    row = db.query(LimsAnalysis).filter_by(
+        lims_sample_pk=parent.id, provenance="shadow",
+        analysis_service_id=seed_add_service.id,
+    ).one()
+    assert row.keyword == seed_add_service.keyword
+    assert row.mirror_review_state == "unassigned"
+    # No result yet — the shadow row mirrors the line's existence, not a result.
+    assert row.result_value is None
+
+
+def test_add_unresolvable_service_uid_skips_mirror_silently(db, seed_parent_and_service):
+    """service_uid with no matching AnalysisService.senaite_uid -> the mirror
+    is a documented no-op. Response is unaffected."""
+    parent, _svc = seed_parent_and_service
+
+    proxy = _mock_is_proxy(post_json={"success": True, "message": "proxied"})
+    try:
+        r = _client_as_user().post(
+            f"/explorer/samples/{parent.sample_id}/analyses",
+            json={"service_uid": "TEST-NO-SUCH-SERVICE-UID"},
+        )
+    finally:
+        proxy.stop()
+
+    assert r.status_code == 200
+    assert r.json()["success"] is True
+
+    rows = db.query(LimsAnalysis).filter_by(
+        lims_sample_pk=parent.id, provenance="shadow"
+    ).all()
+    assert rows == []
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Task 8: A5 replace-analyte — replace_analyte (identity swap)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def test_replace_analyte_mirrors_old_rejected_new_unassigned(
+        db, seed_parent_and_service, replace_analyte_peptides):
+    parent, _svc = seed_parent_and_service
+    old_pid, new_pid = replace_analyte_peptides
+
+    old_id_kw = db.execute(
+        select(AnalysisService.keyword).where(
+            AnalysisService.peptide_id == old_pid,
+            AnalysisService.keyword.like("ID%"),
+        )
+    ).scalars().first()
+    new_id_svc = db.execute(
+        select(AnalysisService).where(
+            AnalysisService.peptide_id == new_pid,
+            AnalysisService.keyword.like("ID%"),
+        )
+    ).scalars().first()
+
+    proxy = _mock_is_proxy(post_json={"success": True}, delete_json={"success": True})
+    try:
+        with patch.object(main, "SENAITE_URL", "http://senaite.test"), \
+             patch.object(
+                 main, "update_senaite_sample_fields",
+                 AsyncMock(return_value=MagicMock(success=True)),
+             ), \
+             patch("sub_samples.senaite.fetch_parent_metadata",
+                   side_effect=RuntimeError("no live SENAITE in tests")):
+            r = _client_as_user().post(
+                f"/explorer/samples/{parent.sample_id}/analytes/1/replace",
+                json={
+                    "new_peptide_id": new_pid,
+                    "old_peptide_id": old_pid,
+                    "senaite_uid": "TEST-PM8-REPLACE-AR-UID",
+                },
+            )
+    finally:
+        proxy.stop()
+
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["success"] is True
+
+    rows = db.query(LimsAnalysis).filter_by(
+        lims_sample_pk=parent.id, provenance="shadow"
+    ).all()
+    by_kw = {row.keyword: row for row in rows}
+    assert by_kw[old_id_kw].mirror_review_state == "rejected"
+    assert by_kw[new_id_svc.keyword].mirror_review_state == "unassigned"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Task 8: A6 publish — publish_sample_coa (call-site presence; see
+# test_parent_mirror_helper.py for the mark_parent_shadows_published
+# behavior-level coverage — full-flow httpx stubbing of publish-coa's three
+# external calls (IS publish, SENAITE VerificationCode write, SENAITE
+# publish transition) was disproportionately brittle for this slice, per the
+# controller's pre-authorized fallback).
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def test_publish_wires_mark_shadows_published_on_success(db, seed_parent_and_service):
+    """Drives the real publish-coa endpoint through its external calls, all
+    served by ONE generic httpx.AsyncClient mock — publish-coa's own logic
+    short-circuits the VerificationCode POST when the IS response carries no
+    `verification_code`, so a single {"success": True, "items": [...]} body
+    satisfies both the IS publish-coa gate and the SENAITE transition's
+    accepted-state check. Asserts `_mark_shadows_published_bg` (not the DB
+    effect — that's helper-level, see test_parent_mirror_helper.py) fires
+    with the resolved sample_id once the transition succeeds. Kept
+    deliberately minimal per the controller's pre-authorized fallback for
+    A6 (full multi-branch httpx routing would be disproportionate here)."""
+    parent, _svc = seed_parent_and_service
+
+    mock_instance = AsyncMock()
+    search_resp = MagicMock()
+    search_resp.raise_for_status = MagicMock()
+    search_resp.json = MagicMock(
+        return_value={"items": [{"uid": "AR-UID-PUBLISH-1"}]}
+    )
+    mock_instance.get = AsyncMock(return_value=search_resp)
+
+    post_resp = MagicMock()
+    post_resp.raise_for_status = MagicMock()
+    post_resp.json = MagicMock(return_value={
+        "success": True, "message": "ok",
+        "items": [{"review_state": "published"}],
+    })
+    mock_instance.post = AsyncMock(return_value=post_resp)
+
+    p = patch("httpx.AsyncClient")
+    cls = p.start()
+    cls.return_value.__aenter__ = AsyncMock(return_value=mock_instance)
+    cls.return_value.__aexit__ = AsyncMock(return_value=False)
+
+    calls = []
+    try:
+        with patch.object(main, "SENAITE_URL", "http://senaite.test"), \
+             patch.object(
+                 main, "_mark_shadows_published_bg",
+                 lambda sample_id: calls.append(sample_id),
+             ):
+            r = _client_as_user().post(
+                f"/wizard/senaite/samples/{parent.sample_id}/publish-coa"
+            )
+    finally:
+        p.stop()
+
+    assert r.status_code == 200, r.text
+    assert r.json()["success"] is True
+    assert calls == [parent.sample_id]

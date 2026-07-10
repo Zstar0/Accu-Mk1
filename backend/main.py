@@ -8696,6 +8696,27 @@ async def add_sample_analysis(
             sample_id, _add_err,
         )
 
+    # ── Parent analysis shadow mirror (A7 add, best-effort) ───────────────
+    # A shadow row for an analysis with no result yet is correct — it
+    # mirrors the line's existence. The IS proxy response carries no
+    # keyword (just {success, message}), so resolve service_uid -> keyword
+    # via the locally-synced analysis_services table (senaite_uid isn't
+    # unique — see resolve_instrument_id's note — hence order_by + first()).
+    # Unresolvable service_uid is the documented no-op: skip silently.
+    _svc_uid = body.get("service_uid")
+    if _svc_uid:
+        _add_svc = db.execute(
+            _select(AnalysisService).where(AnalysisService.senaite_uid == _svc_uid)
+            .order_by(AnalysisService.id)
+        ).scalars().first()
+        if _add_svc is not None and _add_svc.keyword:
+            from fastapi.concurrency import run_in_threadpool
+            await run_in_threadpool(
+                _mirror_parent_analysis_bg,
+                sample_id=sample_id, keyword=_add_svc.keyword,
+                mirror_review_state="unassigned",
+            )
+
     return result
 
 
@@ -8825,6 +8846,17 @@ async def remove_sample_analysis(
             "cascade_parent_remove: unexpected error for sample=%s keyword=%s: %s",
             sample_id, keyword, _rm_err,
         )
+
+    # ── Parent analysis shadow mirror (A7 remove, best-effort) ───────────
+    # Mark the keyword's live shadow row rejected — never deleted (audit
+    # trail). Own session via _mirror_parent_analysis_bg, never the request
+    # `db` used by the cascade above.
+    from fastapi.concurrency import run_in_threadpool
+    await run_in_threadpool(
+        _mirror_parent_analysis_bg,
+        sample_id=sample_id, keyword=keyword,
+        mirror_review_state="rejected",
+    )
 
     return result
 
@@ -9014,6 +9046,24 @@ async def replace_analyte(
                 identity["added"] = new_id_svc.keyword
             except Exception as _e:
                 _rep_logger.warning("replace_analyte: add %s failed: %s", new_id_svc.keyword, _e)
+
+    # ── 5b. parent analysis shadow mirror (best-effort) ───────────────────────
+    # Mirror the OLD identity keyword as rejected and the NEW as unassigned —
+    # gated per-op on the swap actually succeeding above (identity["removed"]
+    # / identity["added"] are only set on a successful IS call each).
+    from fastapi.concurrency import run_in_threadpool
+    if identity["removed"]:
+        await run_in_threadpool(
+            _mirror_parent_analysis_bg,
+            sample_id=sample_id, keyword=identity["removed"],
+            mirror_review_state="rejected",
+        )
+    if identity["added"]:
+        await run_in_threadpool(
+            _mirror_parent_analysis_bg,
+            sample_id=sample_id, keyword=identity["added"],
+            mirror_review_state="unassigned",
+        )
 
     # ── 6. re-mirror the slot across vials ────────────────────────────────────
     try:
@@ -10103,6 +10153,21 @@ async def publish_sample_coa(
                     json={"transition": "publish"},
                 )
                 transition_resp.raise_for_status()
+
+                # ── Parent shadow mirror (A6 publish, best-effort) ────────────
+                # AR-level publish cascades all its analyses to published in
+                # SENAITE; mark our shadow rows to match. By this point the
+                # COA is already published in our system (IS's success gate
+                # passed above, verification code written) regardless of how
+                # the state-reconciliation below ultimately reads SENAITE's
+                # workflow state — so this fires unconditionally on the HTTP
+                # success of the transition POST, not gated on the
+                # accepted_states check further down (unlike A2/A3, which
+                # skip on silent rejection: A6's trigger is "COA is out",
+                # not "AR review_state == published"). Own session via
+                # _mark_shadows_published_bg — never the request `db`.
+                from fastapi.concurrency import run_in_threadpool
+                await run_in_threadpool(_mark_shadows_published_bg, sample_id=sample_id)
 
                 # SENAITE returns 200 OK even when it silently rejects a
                 # transition (e.g. sample still in `to_be_verified`, not
@@ -13708,6 +13773,30 @@ def _mirror_parent_analysis_bg(**kwargs) -> None:
             pass
         logger.warning("registry.analysis_mirror_failed kw=%s err=%s",
                        kwargs.get("keyword"), mirror_err)
+    finally:
+        db.close()
+
+
+def _mark_shadows_published_bg(sample_id: str) -> None:
+    """Best-effort A6 sibling of _mirror_parent_analysis_bg: on its own
+    short-lived session, flip every LIVE parent shadow row to
+    mirror_review_state='published' (mark_parent_shadows_published). Never
+    holds the request `db` across the SENAITE HTTP calls in publish_sample_coa;
+    never raises — a mirror failure must never fail the publish.
+    """
+    from database import SessionLocal
+    from lims_analyses.parent_mirror import mark_parent_shadows_published
+    db = SessionLocal()
+    try:
+        if mark_parent_shadows_published(db, sample_id=sample_id):
+            db.commit()
+    except Exception as mirror_err:  # noqa: BLE001
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        logger.warning("registry.publish_shadow_mark_failed sample_id=%s err=%s",
+                       sample_id, mirror_err)
     finally:
         db.close()
 

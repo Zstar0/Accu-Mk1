@@ -173,3 +173,39 @@ def mirror_parent_analysis(db: Session, *, sample_id: str, keyword: str,
     row.updated_at = datetime.utcnow()
     db.flush()
     return True
+
+
+def mark_parent_shadows_published(db: Session, *, sample_id: str) -> int:
+    """A6 publish: flip every LIVE shadow row for a parent to
+    mirror_review_state='published'.
+
+    Resolves the parent by LimsSample.sample_id (0 = not registered, no-op).
+    Updates only provenance='shadow' AND retested=False rows — the live
+    ones; a retested/superseded shadow row keeps whatever state it was
+    superseded at, and canonical (native) rows are untouched (publish there
+    runs its own native state machine). Sets mirror_review_state="published"
+    + updated_at, flushes, never commits (caller commits). Returns the
+    count of rows updated; 0 = no-op (unregistered parent or no live shadow
+    rows yet — both legitimate, not errors).
+    """
+    parent = db.execute(
+        select(LimsSample).where(LimsSample.sample_id == sample_id)
+    ).scalar_one_or_none()
+    if parent is None:
+        return 0
+    rows = db.execute(
+        select(LimsAnalysis).where(
+            LimsAnalysis.lims_sample_pk == parent.id,
+            LimsAnalysis.provenance == "shadow",
+            LimsAnalysis.retested.is_(False),
+        )
+    ).scalars().all()
+    now = datetime.utcnow()
+    count = 0
+    for row in rows:
+        row.mirror_review_state = "published"
+        row.updated_at = now
+        count += 1
+    if count:
+        db.flush()
+    return count

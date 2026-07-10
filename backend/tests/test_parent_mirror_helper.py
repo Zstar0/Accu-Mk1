@@ -14,7 +14,9 @@ import pytest
 from sqlalchemy import delete, select
 
 from database import SessionLocal
-from lims_analyses.parent_mirror import SHADOW_STATE, mirror_parent_analysis
+from lims_analyses.parent_mirror import (
+    SHADOW_STATE, mark_parent_shadows_published, mirror_parent_analysis,
+)
 from models import AnalysisService, LimsAnalysis, LimsAnalysisTransition, LimsSample
 
 TEST_SAMPLE_ID = "TEST-PM2-PARENT"
@@ -144,3 +146,81 @@ def test_update_after_retest_targets_retest_row_not_a_third(db, seed_parent_and_
     assert rows[1].retested is False
     assert rows[1].result_value == "3"
     assert rows[1].mirror_review_state == "to_be_verified"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Task 8: A6 publish — mark_parent_shadows_published
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+@pytest.fixture
+def two_analysis_services(db):
+    """Two distinct seeded services with non-null keyword — the shadow
+    partial unique index is (lims_sample_pk, analysis_service_id) WHERE
+    provenance='shadow' AND retested=FALSE, so two LIVE shadow rows for the
+    same parent must sit on different services."""
+    svcs = db.execute(
+        select(AnalysisService).where(AnalysisService.keyword.isnot(None))
+    ).scalars().all()[:2]
+    if len(svcs) < 2:
+        pytest.skip("need >=2 seeded analysis_services rows with a keyword")
+    return svcs
+
+
+def test_mark_shadows_published_no_op_when_parent_not_registered(db):
+    assert mark_parent_shadows_published(db, sample_id=TEST_NOEXIST_SAMPLE_ID) == 0
+
+
+def test_mark_shadows_published_flips_only_live_shadow_rows(
+        db, seed_parent_and_service, two_analysis_services):
+    parent, _ = seed_parent_and_service
+    svc_a, svc_b = two_analysis_services
+
+    live1 = LimsAnalysis(
+        lims_sample_pk=parent.id, analysis_service_id=svc_a.id,
+        keyword=svc_a.keyword, title=svc_a.title,
+        review_state=SHADOW_STATE, provenance="shadow",
+        mirror_review_state="verified",
+    )
+    live2 = LimsAnalysis(
+        lims_sample_pk=parent.id, analysis_service_id=svc_b.id,
+        keyword=svc_b.keyword, title=svc_b.title,
+        review_state=SHADOW_STATE, provenance="shadow",
+        mirror_review_state="to_be_verified",
+    )
+    db.add_all([live1, live2])
+    db.commit()
+    db.refresh(live1)
+    db.refresh(live2)
+
+    # A retested (superseded) shadow row on svc_a — must NOT flip, since
+    # it's no longer live (retested=True).
+    superseded = LimsAnalysis(
+        lims_sample_pk=parent.id, analysis_service_id=svc_a.id,
+        keyword=svc_a.keyword, title=svc_a.title,
+        review_state=SHADOW_STATE, provenance="shadow",
+        mirror_review_state="verified", retested=True,
+    )
+    db.add(superseded)
+    # A canonical (native) row — must NOT flip; publish there is a
+    # separate native state machine.
+    canonical = LimsAnalysis(
+        lims_sample_pk=parent.id, analysis_service_id=svc_a.id,
+        keyword=svc_a.keyword, title=svc_a.title,
+        review_state="verified", provenance="canonical",
+    )
+    db.add(canonical)
+    db.commit()
+
+    count = mark_parent_shadows_published(db, sample_id=parent.sample_id)
+    db.commit()
+    assert count == 2
+
+    db.refresh(live1)
+    db.refresh(live2)
+    db.refresh(superseded)
+    db.refresh(canonical)
+    assert live1.mirror_review_state == "published"
+    assert live2.mirror_review_state == "published"
+    assert superseded.mirror_review_state == "verified"  # unchanged
+    assert canonical.mirror_review_state is None  # unchanged (never set)
