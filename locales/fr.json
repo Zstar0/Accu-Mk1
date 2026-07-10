@@ -151,6 +151,7 @@
   "preferences.slack.title": "Notifications Slack",
   "preferences.slack.blurb": "Recevez les notifications de drapeaux en messages directs Slack — assignations, mentions et activité sur vos drapeaux suivis ou créés.",
   "preferences.slack.master": "M'envoyer des DM Slack",
+  "preferences.slack.digest": "Résumé du matin",
   "preferences.slack.linked": "Slack lié",
   "preferences.slack.notLinked": "Non lié",
   "preferences.slack.memberIdPlaceholder": "ID membre Slack (ex. U0123ABCD)",

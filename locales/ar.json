@@ -151,6 +151,7 @@
   "preferences.slack.title": "إشعارات Slack",
   "preferences.slack.blurb": "استقبل إشعارات الأعلام كرسائل مباشرة في Slack — التعيينات والإشارات والنشاط على الأعلام التي أنشأتها أو تتابعها.",
   "preferences.slack.master": "أرسل لي رسائل Slack مباشرة",
+  "preferences.slack.digest": "الملخص الصباحي",
   "preferences.slack.linked": "Slack مرتبط",
   "preferences.slack.notLinked": "غير مرتبط",
   "preferences.slack.memberIdPlaceholder": "معرّف عضو Slack (مثال U0123ABCD)",

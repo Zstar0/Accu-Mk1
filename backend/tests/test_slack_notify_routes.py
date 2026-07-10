@@ -65,3 +65,19 @@ def test_test_endpoint_without_token_reports_not_configured(client, monkeypatch)
     assert r.status_code == 200
     assert r.json()["ok"] is False
     assert "not configured" in r.json()["detail"].lower()
+
+
+def test_digest_prefs_roundtrip(client):
+    r = client.put("/api/slack-prefs", json={"digest_enabled": True, "digest_hour": 7})
+    assert r.status_code == 200 and r.json()["digest_enabled"] is True
+    assert r.json()["digest_hour"] == 7
+    assert client.get("/api/slack-prefs").json()["digest_hour"] == 7
+
+
+def test_digest_defaults(client):
+    body = client.get("/api/slack-prefs").json()
+    assert body["digest_enabled"] is False and body["digest_hour"] == 8
+
+
+def test_digest_hour_out_of_range_rejected(client):
+    assert client.put("/api/slack-prefs", json={"digest_hour": 25}).status_code == 422

@@ -6,7 +6,7 @@ import os
 from typing import Optional
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from auth import get_current_user
@@ -28,6 +28,9 @@ class SlackPrefsUpdate(BaseModel):
     notify_raised_activity: Optional[bool] = None
     notify_watching_activity: Optional[bool] = None
     notify_status_changes: Optional[bool] = None
+    # Morning digest (Slice 5). hour is lab-local; ge/le gives a 422 outside 0–23.
+    digest_enabled: Optional[bool] = None
+    digest_hour: Optional[int] = Field(default=None, ge=0, le=23)
 
 
 def _row(db: Session, user_id: int) -> Optional[SlackDmPrefs]:
@@ -36,14 +39,17 @@ def _row(db: Session, user_id: int) -> Optional[SlackDmPrefs]:
 
 def _serialize(row: Optional[SlackDmPrefs]) -> dict:
     if row is None:
+        # digest is opt-IN (default off) unlike the notify toggles (default on).
         out = {f: True for f in _FIELDS}
         out.update({"slack_member_id": None, "slack_display_name": None,
-                    "linked": False})
+                    "linked": False, "digest_enabled": False, "digest_hour": 8})
         return out
     out = {f: bool(getattr(row, f)) for f in _FIELDS}
     out["slack_member_id"] = row.slack_member_id
     out["slack_display_name"] = row.slack_display_name
     out["linked"] = bool(row.slack_member_id)
+    out["digest_enabled"] = bool(row.digest_enabled)
+    out["digest_hour"] = row.digest_hour
     return out
 
 

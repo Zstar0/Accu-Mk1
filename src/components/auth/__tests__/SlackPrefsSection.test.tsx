@@ -14,6 +14,8 @@ const prefs = {
   notify_raised_activity: true,
   notify_watching_activity: true,
   notify_status_changes: true,
+  digest_enabled: false,
+  digest_hour: 8,
 }
 vi.mock('@/services/slack-prefs', () => ({
   useSlackPrefs: () => ({ data: prefs, isLoading: false, isError: false }),
@@ -45,8 +47,20 @@ describe('SlackPrefsSection', () => {
       await import('@/components/auth/SlackPrefsSection')
     render(<SlackPrefsSection />)
     expect(screen.getByText(/not linked/i)).toBeInTheDocument()
-    // master + 5 categories
-    expect(screen.getAllByRole('switch')).toHaveLength(6)
+    // master + 5 categories + digest
+    expect(screen.getAllByRole('switch')).toHaveLength(7)
+  })
+
+  it('flipping the digest toggle enables the morning digest', async () => {
+    const { SlackPrefsSection } =
+      await import('@/components/auth/SlackPrefsSection')
+    render(<SlackPrefsSection />)
+    // The digest switch is the last one (after master + 5 categories).
+    const switches = screen.getAllByRole('switch')
+    await userEvent.click(switches[6]!)
+    expect(update).toHaveBeenCalledWith(
+      expect.objectContaining({ digest_enabled: true })
+    )
   })
 
   it('toggling a category saves that field', async () => {
