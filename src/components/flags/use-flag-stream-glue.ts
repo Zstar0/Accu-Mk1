@@ -172,6 +172,15 @@ export function useFlagStreamGlue(): void {
     // Cheap blanket refresh: lists, summary badge, and any open thread.
     queryClient.invalidateQueries({ queryKey: flagKeys.all })
 
+    // Reactions (and in-flight attachment uploads) refresh the thread live but
+    // must NOT toast, ping unread, or fly home — reactions never mark a thread
+    // unread (spec §6). Guard first, before any relevance/e.flag access.
+    if (
+      e.event_type === 'comment_reaction' ||
+      e.event_type === 'attachment_added'
+    )
+      return
+
     const me = useAuthStore.getState().user?.id ?? null
     const ui = useUIStore.getState()
     const showingThisThread =

@@ -26,6 +26,8 @@ import {
   changeStatus,
   addWatcher,
   removeWatcher,
+  addReaction,
+  removeReaction,
   type FlagTab,
   type ListFlagsParams,
   type FlagStatus,
@@ -208,5 +210,26 @@ export function useRemoveWatcher(flagId: number) {
       qc.invalidateQueries({ queryKey: flagKeys.detail(flagId) })
       qc.invalidateQueries({ queryKey: flagKeys.lists() })
     },
+  })
+}
+
+/** Toggle a reaction on a comment → refresh the open thread. */
+export function useAddReaction(flagId: number) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ commentId, emoji }: { commentId: number; emoji: string }) =>
+      addReaction(commentId, emoji),
+    onSuccess: () =>
+      qc.invalidateQueries({ queryKey: flagKeys.detail(flagId) }),
+  })
+}
+
+export function useRemoveReaction(flagId: number) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ commentId, emoji }: { commentId: number; emoji: string }) =>
+      removeReaction(commentId, emoji),
+    onSuccess: () =>
+      qc.invalidateQueries({ queryKey: flagKeys.detail(flagId) }),
   })
 }

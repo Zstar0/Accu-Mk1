@@ -62,6 +62,7 @@ import { FlagAvatar } from '@/components/flags/FlagAvatar'
 import { FlagWatchers } from '@/components/flags/FlagWatchers'
 import { FlagLinkChips } from '@/components/flags/FlagLinkChips'
 import { CommentBody } from '@/components/flags/CommentBody'
+import { FlagReactions } from '@/components/flags/FlagReactions'
 
 type TimelineEntry =
   | { kind: 'comment'; at: string; comment: CommentResponse }
@@ -395,6 +396,8 @@ export function FlagThread({
               color={avatarColor(entry.comment.author_id)}
               users={users}
               index={i}
+              flagId={flagId}
+              currentUserId={currentUserId}
             />
           )
         )}
@@ -585,6 +588,8 @@ function CommentRow({
   color,
   users,
   index,
+  flagId,
+  currentUserId,
 }: {
   comment: CommentResponse
   isMe: boolean
@@ -593,6 +598,8 @@ function CommentRow({
   color: string
   users: UserMap
   index: number
+  flagId: number
+  currentUserId: number | null
 }) {
   return (
     <div
@@ -616,6 +623,12 @@ function CommentRow({
           body={comment.body}
           mentions={comment.mentions ?? []}
           users={users}
+        />
+        <FlagReactions
+          commentId={comment.id}
+          flagId={flagId}
+          currentUserId={currentUserId}
+          reactions={comment.reactions ?? []}
         />
       </div>
     </div>

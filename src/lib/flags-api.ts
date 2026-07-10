@@ -33,6 +33,13 @@ export type FlagTab = 'assigned' | 'raised' | 'watching' | 'all_open'
 
 // --- response shapes (mirror schemas.py) ---
 
+/** Mirrors backend `ReactionAggregate`. */
+export interface ReactionAggregate {
+  emoji: string
+  count: number
+  user_ids: number[]
+}
+
 /** Mirrors `CommentResponse`. `mentions` = user ids called out in the body. */
 export interface CommentResponse {
   id: number
@@ -43,6 +50,8 @@ export interface CommentResponse {
   mentions: number[]
   created_at: string
   edited_at: string | null
+  /** Optional — backend always sends `[]`; older cached payloads may omit it. */
+  reactions?: ReactionAggregate[]
 }
 
 /** Mirrors `EventResponse` — one audit-trail entry. */
@@ -376,11 +385,14 @@ export async function addFlagAttachment(
 ): Promise<FlagAttachment> {
   const form = new FormData()
   form.append('file', file)
-  const res = await fetch(`${getApiBaseUrl()}/api/flags/${flagId}/attachments`, {
-    method: 'POST',
-    headers: bearerHeaders(),
-    body: form,
-  })
+  const res = await fetch(
+    `${getApiBaseUrl()}/api/flags/${flagId}/attachments`,
+    {
+      method: 'POST',
+      headers: bearerHeaders(),
+      body: form,
+    }
+  )
   if (!res.ok) throw new Error(`attachment upload failed: ${res.status}`)
   return res.json() as Promise<FlagAttachment>
 }
@@ -412,6 +424,36 @@ export function invalidateFlagAttachment(attachmentId: number): void {
   if (prev?.startsWith('blob:')) URL.revokeObjectURL(prev)
   _flagAttachmentCache.delete(attachmentId)
 }
+
+// --- reactions (Phase 2 slice 3) -----------------------------------------
+
+/** Curated reaction set (spec §6). BYTE-IDENTICAL to backend CURATED_EMOJI —
+ *  VS16-carrying glyphs included, or the server 400s a reaction the UI sent. */
+export const FLAG_REACTION_EMOJI = [
+  '👍',
+  '✅',
+  '👀',
+  '🎉',
+  '❤️',
+  '😂',
+  '🤔',
+  '🚨',
+] as const
+export type FlagReactionEmoji = (typeof FLAG_REACTION_EMOJI)[number]
+
+/** `PUT /api/flags/comments/{id}/reactions/{emoji}` — idempotent add. */
+export const addReaction = (commentId: number, emoji: string) =>
+  apiFetch<ReactionAggregate[]>(
+    `/api/flags/comments/${commentId}/reactions/${encodeURIComponent(emoji)}`,
+    { method: 'PUT' }
+  )
+
+/** `DELETE /api/flags/comments/{id}/reactions/{emoji}` — remove own. */
+export const removeReaction = (commentId: number, emoji: string) =>
+  apiFetch<ReactionAggregate[]>(
+    `/api/flags/comments/${commentId}/reactions/${encodeURIComponent(emoji)}`,
+    { method: 'DELETE' }
+  )
 
 // --- flag types (Plan 5) -------------------------------------------------
 
