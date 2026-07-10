@@ -35,6 +35,7 @@ const VALID_SECTIONS = new Set<string>([
   'account',
   'peptide-requests',
   'admin-clickup-users',
+  'settings',
 ])
 
 interface ParsedNav {
