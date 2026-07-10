@@ -73,9 +73,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from sqlalchemy import select
 
 from database import SessionLocal
-from lims_analyses.parent_mirror import mirror_parent_analysis, resolve_instrument_id, resolve_shadow_target
+from lims_analyses.parent_mirror import (
+    mirror_parent_analysis, resolve_instrument_id, resolve_shadow_target,
+    select_current_lines,
+)
 from models import LimsAnalysis, LimsSample
-from sub_samples import senaite
+from sub_samples.senaite import fetch_parent_analyses
 
 log = logging.getLogger("backfill_parent_shadows")
 
@@ -109,104 +112,20 @@ def save_checkpoint(path: str, last_id: int, last_sample_id: str) -> None:
     os.replace(tmp, path)
 
 
-def fetch_parent_analyses(sample_id: str) -> list[dict]:
-    """ONE throttled SENAITE Analysis-catalog query for every analysis line
-    on a parent AR. Same endpoint + params + field-extraction shape as
-    `coa.source_resolver.SenaiteAnalysesHttpReader.list_for_sample` (sync via
-    `sub_samples.senaite._get` rather than an async httpx client), plus two
-    additions this backfill needs that the COA reader doesn't:
+# `fetch_parent_analyses` (SENAITE Analysis-catalog fetch) now lives in
+# `sub_samples/senaite.py` — the registry-inspect debug panel's analyses
+# column (main.py) needs the identical query, so it moved next to its
+# siblings (`fetch_parent_metadata`, `fetch_secondaries`) rather than being
+# imported out of `scripts/` into prod request-handling code. Imported above
+# and available under this module's original name so existing callers/tests
+# (`from scripts.backfill_parent_analysis_shadows import fetch_parent_analyses`,
+# `patch("scripts.backfill_parent_analysis_shadows.fetch_parent_analyses", ...)`)
+# keep working unchanged.
 
-      * `instrument_uid` — the SENAITE Analysis catalog carries the
-        instrument as a nested `Instrument` object ref ({"uid": ..., "title":
-        ...}), the same shape backend/main.py's AR-detail analyses fetch
-        reads at ~12504-12510 (same `/v1/Analysis?getRequestID=...` endpoint).
-        Only the uid is extracted; None when absent (SENAITE analyses with no
-        instrument assigned yet, or instrument recorded as free text only).
-      * `created` — best-effort creation timestamp for newest-line selection
-        when a keyword has more than one non-superseded line (should not
-        normally happen outside a retest chain, but the fallback exists so
-        selection is deterministic instead of order-dependent). Falls back
-        through the same field-name variants main.py's report-date code uses
-        elsewhere (`created`/`creation_date`/`DateCreated`/`getDateCreated`);
-        None when the catalog brain carries none of them (falls back to
-        last-in-list — see `_pick_newest_line`).
-
-    Raises RuntimeError on a non-2xx SENAITE response — the caller's
-    per-parent try/except turns this into a logged error + stats increment,
-    never aborting the whole run.
-    """
-    url = f"{senaite.SENAITE_BASE_URL}/@@API/senaite/v1/Analysis"
-    resp = senaite._get(url, params={"getRequestID": sample_id, "complete": "yes", "limit": 200})
-    if resp.status_code >= 300:
-        raise RuntimeError(f"SENAITE fetch_parent_analyses failed ({resp.status_code}): {resp.text}")
-    items = resp.json().get("items", []) or []
-    out: list[dict] = []
-    for it in items:
-        instrument_obj = it.get("Instrument")
-        instrument_uid = instrument_obj.get("uid") if isinstance(instrument_obj, dict) else None
-        out.append({
-            "uid": it.get("uid"),
-            "keyword": it.get("getKeyword") or it.get("Keyword"),
-            "result": it.get("Result"),
-            "unit": it.get("Unit"),
-            "review_state": it.get("review_state"),
-            "retest_of_uid": (
-                it.get("getRetestOfUID")
-                or (it.get("RetestOf") or {}).get("uid")
-                or None
-            ),
-            "instrument_uid": instrument_uid,
-            "created": (
-                it.get("created") or it.get("creation_date")
-                or it.get("DateCreated") or it.get("getDateCreated")
-            ),
-        })
-    return out
-
-
-def _pick_newest_line(items: list[dict]) -> dict:
-    """Newest remaining line in a keyword group. Items carrying a `created`
-    value win, compared as strings (SENAITE's ISO-8601 timestamps sort
-    correctly lexicographically); when NONE of the remaining items carry a
-    created value, falls back to the last item in SENAITE's own catalog
-    order (its natural insertion/brain order) rather than picking arbitrarily.
-
-    Tie-break consistency: bare `max()` returns the FIRST maximal element,
-    which would contradict the no-dates fallback's last-in-list rule whenever
-    two lines share a created timestamp — so position is folded into the sort
-    key and ties break toward the LAST item in catalog order, matching the
-    fallback."""
-    dated = [it for it in items if it.get("created")]
-    if dated:
-        return max(enumerate(dated), key=lambda p: (p[1]["created"], p[0]))[1]
-    return items[-1]
-
-
-def select_current_lines(items: list[dict]) -> dict[str, dict]:
-    """Group analysis lines by keyword; drop any line whose uid is referenced
-    by another line's `retest_of_uid` (superseded by a retest); return
-    {keyword: newest remaining line} — exactly ONE line per keyword, the
-    current state to mirror. Items without a keyword are skipped (nothing to
-    key a shadow row on). If every line in a group were (implausibly)
-    superseded — e.g. a cross-keyword retest_of_uid anomaly — falls back to
-    the full group rather than dropping the keyword entirely (defensive:
-    under-exclusion, not silent data loss, is the safe error direction here,
-    same posture as senaite.py's `_INACTIVE_ANALYSIS_STATES` default-open
-    comment)."""
-    by_keyword: dict[str, list[dict]] = {}
-    for it in items:
-        kw = it.get("keyword")
-        if not kw:
-            continue
-        by_keyword.setdefault(kw, []).append(it)
-
-    superseded_uids = {it["retest_of_uid"] for it in items if it.get("retest_of_uid")}
-
-    selected: dict[str, dict] = {}
-    for kw, group in by_keyword.items():
-        remaining = [it for it in group if it.get("uid") not in superseded_uids] or group
-        selected[kw] = _pick_newest_line(remaining)
-    return selected
+# `select_current_lines` / `_pick_newest_line` (newest-line-per-keyword
+# selection) now live in `lims_analyses/parent_mirror.py` for the same
+# reason — the debug panel needs the exact same selection logic. Imported
+# above under the original name for the same back-compat reason.
 
 
 def iter_registry_rows(db_factory, *, start_id: int, page_size: int):

@@ -17089,6 +17089,98 @@ def _registry_origin(row) -> str:
     return "lazy-or-backfill"
 
 
+def _build_analysis_debug_rows(db: Session, row: LimsSample, sample_id: str) -> dict:
+    """Registry-debug panel's analyses column (Task 10, 2026-07-07-sample-
+    registry-debug-panel-design.md amendment): per-keyword compare of current
+    SENAITE parent-analysis lines vs native `lims_analyses` rows (live shadow
+    + current canonical) for this parent. Non-mutating — read-only, same
+    posture as the rest of this panel.
+
+    Independent try/except around the SENAITE analyses-catalog fetch: this is
+    a SEPARATE SENAITE call from the basic-info `fetch_parent_metadata` above
+    (own failure mode), so a failure here must not blank the field diff, and
+    a `senaite_error` on the basic-info side must not blank this section. On
+    failure, short-circuits to an empty rows/summary (same posture as the
+    `meta is None` early-return above it) rather than rendering shadow/
+    canonical rows as misleading "shadow_only" — we genuinely don't know
+    whether a current SENAITE line exists, so showing none beats showing a
+    wrong signal."""
+    from lims_analyses.parent_mirror import build_analysis_sync_rows, select_current_lines
+    from models import LimsAnalysis
+
+    try:
+        items = senaite.fetch_parent_analyses(sample_id)
+    except Exception as e:
+        return {"rows": [], "summary": None, "error": str(e)}
+
+    current = select_current_lines(items)  # same selection as the backfill
+    senaite_map = {
+        kw: {"review_state": line.get("review_state"), "result": line.get("result")}
+        for kw, line in current.items()
+    }
+
+    native_rows = db.execute(
+        select(LimsAnalysis).where(LimsAnalysis.lims_sample_pk == row.id)
+    ).scalars().all()
+
+    def _is_live_canonical(r) -> bool:
+        # Mirrors the DB's own `uq_lims_analyses_parent_service_root` partial
+        # unique index definition (database.py) exactly: at most one
+        # canonical row per (parent, keyword) may have retest_of_id IS NULL
+        # AND review_state NOT IN ('retracted', 'rejected') at a time.
+        return r.retest_of_id is None and r.review_state not in ("retracted", "rejected")
+
+    # Newest-wins per keyword, same "prefer live, else fallback to newest"
+    # idiom as parent_mirror.py's _existing_shadow / resolve_instrument_id.
+    shadow_best: dict = {}
+    canonical_best: dict = {}
+    for r in native_rows:
+        if r.provenance == "shadow" and not r.retested:
+            cur = shadow_best.get(r.keyword)
+            if cur is None or r.id > cur.id:
+                shadow_best[r.keyword] = r
+        elif r.provenance == "canonical":
+            cur = canonical_best.get(r.keyword)
+            if cur is None:
+                canonical_best[r.keyword] = r
+            else:
+                r_live, cur_live = _is_live_canonical(r), _is_live_canonical(cur)
+                if (r_live and not cur_live) or (r_live == cur_live and r.id > cur.id):
+                    canonical_best[r.keyword] = r
+
+    shadow_map = {
+        kw: {"mirror_review_state": r.mirror_review_state, "result": r.result_value, "title": r.title}
+        for kw, r in shadow_best.items()
+    }
+    canonical_map = {
+        kw: {"review_state": r.review_state, "result": r.result_value, "title": r.title}
+        for kw, r in canonical_best.items()
+    }
+
+    # Resolve a display title for SENAITE-only keywords (no native row to
+    # source one from) with a single batched lookup.
+    missing_title_kws = [
+        kw for kw in senaite_map if kw not in shadow_map and kw not in canonical_map
+    ]
+    title_lookup: dict = {}
+    if missing_title_kws:
+        svc_rows = db.execute(
+            select(AnalysisService.keyword, AnalysisService.title)
+            .where(AnalysisService.keyword.in_(missing_title_kws))
+        ).all()
+        title_lookup = {kw: title for kw, title in svc_rows}
+    for kw, entry in senaite_map.items():
+        entry["title"] = (
+            shadow_map.get(kw, {}).get("title")
+            or canonical_map.get(kw, {}).get("title")
+            or title_lookup.get(kw) or kw
+        )
+
+    result = build_analysis_sync_rows(senaite_map, shadow_map, canonical_map)
+    result["error"] = None
+    return result
+
+
 def _build_registry_debug_response(db: Session, sample_id: str) -> dict:
     """Assemble the registry-debug payload. NON-MUTATING: reads the raw row
     directly (never ensure_sample_row / list_sub_samples / reconcile), so
@@ -17105,6 +17197,7 @@ def _build_registry_debug_response(db: Session, sample_id: str) -> dict:
             "linkage": None, "origin": None, "container": None,
             "fields": [], "summary": None, "vials": None,
             "verdict": None, "senaite_error": None, "raw": None,
+            "analyses": None,
         }
 
     age = None
@@ -17119,6 +17212,11 @@ def _build_registry_debug_response(db: Session, sample_id: str) -> dict:
         "age_seconds": age, "reconcile_due": reconcile_due,
     }
     container = {"container_mode": row.container_mode, "assignment_role": row.assignment_role}
+
+    # Independent of the basic-info meta fetch below — its own try/except,
+    # its own error surface (analyses.error), never blanked by nor blanking
+    # the field diff.
+    analyses = _build_analysis_debug_rows(db, row, sample_id)
 
     meta = None
     senaite_error = None
@@ -17136,6 +17234,7 @@ def _build_registry_debug_response(db: Session, sample_id: str) -> dict:
             "fields": [], "summary": None, "vials": None, "verdict": None,
             "senaite_error": senaite_error,
             "raw": {"registry": _row_to_dict(row), "senaite": None},
+            "analyses": analyses,
         }
 
     diff = diff_registry_vs_senaite(row, meta)
@@ -17168,6 +17267,7 @@ def _build_registry_debug_response(db: Session, sample_id: str) -> dict:
                     "registry_null": diff["summary"]["registry_null"]},
         "senaite_error": None,
         "raw": {"registry": _row_to_dict(row), "senaite": meta},
+        "analyses": analyses,
     }
 
 

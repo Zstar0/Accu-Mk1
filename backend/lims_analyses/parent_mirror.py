@@ -186,6 +186,138 @@ def mirror_parent_analysis(db: Session, *, sample_id: str, keyword: str,
     return True
 
 
+def _pick_newest_line(items: list[dict]) -> dict:
+    """Newest remaining line in a keyword group. Items carrying a `created`
+    value win, compared as strings (SENAITE's ISO-8601 timestamps sort
+    correctly lexicographically); when NONE of the remaining items carry a
+    created value, falls back to the last item in SENAITE's own catalog
+    order (its natural insertion/brain order) rather than picking arbitrarily.
+
+    Tie-break consistency: bare `max()` returns the FIRST maximal element,
+    which would contradict the no-dates fallback's last-in-list rule whenever
+    two lines share a created timestamp — so position is folded into the sort
+    key and ties break toward the LAST item in catalog order, matching the
+    fallback."""
+    dated = [it for it in items if it.get("created")]
+    if dated:
+        return max(enumerate(dated), key=lambda p: (p[1]["created"], p[0]))[1]
+    return items[-1]
+
+
+def select_current_lines(items: list[dict]) -> dict[str, dict]:
+    """Group analysis lines by keyword; drop any line whose uid is referenced
+    by another line's `retest_of_uid` (superseded by a retest); return
+    {keyword: newest remaining line} — exactly ONE line per keyword, the
+    current state to mirror. Items without a keyword are skipped (nothing to
+    key a shadow row on). If every line in a group were (implausibly)
+    superseded — e.g. a cross-keyword retest_of_uid anomaly — falls back to
+    the full group rather than dropping the keyword entirely (defensive:
+    under-exclusion, not silent data loss, is the safe error direction here,
+    same posture as senaite.py's `_INACTIVE_ANALYSIS_STATES` default-open
+    comment).
+
+    Shared by `scripts/backfill_parent_analysis_shadows.py` (one-time
+    backfill) and main.py's registry-inspect debug panel analyses column
+    (live current-state read) — both need the exact same "what's the current
+    line per keyword" answer."""
+    by_keyword: dict[str, list[dict]] = {}
+    for it in items:
+        kw = it.get("keyword")
+        if not kw:
+            continue
+        by_keyword.setdefault(kw, []).append(it)
+
+    superseded_uids = {it["retest_of_uid"] for it in items if it.get("retest_of_uid")}
+
+    selected: dict[str, dict] = {}
+    for kw, group in by_keyword.items():
+        remaining = [it for it in group if it.get("uid") not in superseded_uids] or group
+        selected[kw] = _pick_newest_line(remaining)
+    return selected
+
+
+def _norm_result(v: Optional[str]) -> Optional[str]:
+    return None if v is None else str(v).strip()
+
+
+def _analysis_row_status(senaite: Optional[dict], shadow: Optional[dict]) -> str:
+    """Per-keyword sync status for the registry-inspect analyses column.
+
+    - no_shadow: a current SENAITE line exists but no live shadow row yet
+      (expected pre-backfill).
+    - shadow_only: no current SENAITE line for this keyword, but SOME native
+      record does exist — a live shadow row (the common case: the SENAITE
+      line was itself removed/retested-away without a corresponding shadow
+      update) or, rarely, only a canonical row with neither a current
+      SENAITE line nor a live shadow (the union in `build_analysis_sync_rows`
+      includes canonical-only keywords too — this branch keeps that case
+      from raising instead of inventing a 5th status). Surfaced as a
+      warning, not silently dropped.
+    - in_sync / drift: both sides present; compares mirror_review_state to
+      the live SENAITE review_state, and result values trimmed (so trailing
+      whitespace never reads as drift)."""
+    if senaite is not None and shadow is None:
+        return "no_shadow"
+    if senaite is None:
+        return "shadow_only"
+    state_match = shadow["mirror_review_state"] == senaite["review_state"]
+    result_match = _norm_result(shadow["result"]) == _norm_result(senaite["result"])
+    return "in_sync" if (state_match and result_match) else "drift"
+
+
+def build_analysis_sync_rows(senaite_map: dict, shadow_map: dict, canonical_map: dict) -> dict:
+    """Pure per-keyword comparison for the registry-inspect debug panel's
+    analyses column: union of current SENAITE analysis lines (already
+    reduced to one per keyword by `select_current_lines`) + native
+    `lims_analyses` rows (live shadow + current canonical) for one parent.
+
+    No I/O — all three maps are pre-fetched by the caller (main.py), keyed by
+    keyword:
+      senaite_map[kw]   = {"review_state": ..., "result": ...}
+      shadow_map[kw]    = {"mirror_review_state": ..., "result": ..., "title": ...}
+      canonical_map[kw] = {"review_state": ..., "result": ..., "title": ...}
+
+    Returns {"rows": [...], "summary": {...}}. Summary counting follows the
+    two natural identities a reader can eyeball:
+      senaite = in_sync + drift + missing   (rows with a current SENAITE line)
+      shadow  = in_sync + drift + shadow_only  (rows with a live shadow row)
+    `missing` is the no_shadow count (the ○ glyph — expected pre-backfill).
+    `shadow_only` has no dedicated summary slot (by design — it's implicit:
+    shadow - in_sync - drift) but stays visible per-row via its own status
+    value and ⚠ glyph on the frontend."""
+    keywords = sorted(set(senaite_map) | set(shadow_map) | set(canonical_map))
+    rows = []
+    counts = {"senaite": 0, "shadow": 0, "in_sync": 0, "drift": 0, "missing": 0}
+    for kw in keywords:
+        s = senaite_map.get(kw)
+        sh = shadow_map.get(kw)
+        c = canonical_map.get(kw)
+        title = (
+            (sh or {}).get("title") or (c or {}).get("title")
+            or (s or {}).get("title") or kw
+        )
+        if s is not None:
+            counts["senaite"] += 1
+        if sh is not None:
+            counts["shadow"] += 1
+        status = _analysis_row_status(s, sh)
+        if status == "in_sync":
+            counts["in_sync"] += 1
+        elif status == "drift":
+            counts["drift"] += 1
+        elif status == "no_shadow":
+            counts["missing"] += 1
+        rows.append({
+            "keyword": kw, "title": title,
+            "senaite": {"review_state": s["review_state"], "result": s["result"]} if s else None,
+            "shadow": ({"mirror_review_state": sh["mirror_review_state"], "result": sh["result"]}
+                       if sh else None),
+            "canonical": {"review_state": c["review_state"], "result": c["result"]} if c else None,
+            "status": status,
+        })
+    return {"rows": rows, "summary": counts}
+
+
 def mark_parent_shadows_published(db: Session, *, sample_id: str) -> int:
     """A6 publish: flip every LIVE shadow row for a parent to
     mirror_review_state='published'.
