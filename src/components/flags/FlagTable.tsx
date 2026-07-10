@@ -27,6 +27,7 @@ import {
 import { FlagAvatar } from '@/components/flags/FlagAvatar'
 import type { UserMap } from '@/components/flags/flag-users'
 import type { FlagTypeDef } from '@/components/flags/flag-catalog'
+import type { FlagSearchMeta } from '@/components/flags/flag-search'
 
 /**
  * ONE column template shared by the header row and every data row so the
@@ -56,10 +57,12 @@ export function FlagTable({
   flags,
   highlightIds,
   unreadIds,
+  searchMeta,
 }: {
   flags: FlagResponse[]
   highlightIds?: Set<number>
   unreadIds?: Set<number>
+  searchMeta?: Map<number, FlagSearchMeta>
 }) {
   const users = useFlagUsers()
   const typesMap = useFlagTypesMap()
@@ -87,6 +90,7 @@ export function FlagTable({
             currentUserId={currentUserId}
             highlight={highlightIds?.has(flag.id) ?? false}
             unread={unreadIds?.has(flag.id) ?? false}
+            search={searchMeta?.get(flag.id)}
           />
         ))}
       </div>
@@ -139,6 +143,7 @@ function FlagTableRow({
   currentUserId,
   highlight = false,
   unread = false,
+  search,
 }: {
   flag: FlagResponse
   users: UserMap
@@ -146,6 +151,7 @@ function FlagTableRow({
   currentUserId: number | null
   highlight?: boolean
   unread?: boolean
+  search?: FlagSearchMeta
 }) {
   const def = typesMap[flag.type] ?? flagTypeDef(flag.type)
   const { Icon } = entityMeta(flag.entity_type)
@@ -224,10 +230,18 @@ function FlagTableRow({
 
       {/* Title */}
       <span
-        className="min-w-0 truncate font-semibold text-foreground"
-        title={flag.title}
+        className="flex min-w-0 items-center gap-1.5 font-semibold text-foreground"
+        title={search ? search.snippet : flag.title}
       >
-        {flag.title}
+        <span className="truncate">{flag.title}</span>
+        {search && (
+          <span
+            className="shrink-0 rounded-full bg-[var(--flag-unread)]/15 px-1.5 text-[9px] font-medium text-foreground/70"
+            title={search.snippet}
+          >
+            💬
+          </span>
+        )}
       </span>
 
       {/* Assignee */}

@@ -24,6 +24,7 @@ import {
   OPEN_STATUSES,
 } from '@/components/flags/flag-status'
 import { FlagAvatar } from '@/components/flags/FlagAvatar'
+import type { FlagSearchMeta } from '@/components/flags/flag-search'
 
 /**
  * One flag in the flyout's stacked LIST view (Plan 8 restored the pre-Plan-7
@@ -45,10 +46,13 @@ export function FlagCard({
   flag,
   unread = false,
   highlight = false,
+  search,
 }: {
   flag: FlagResponse
   unread?: boolean
   highlight?: boolean
+  /** Set when a comment body matched the flyout search — adds a badge + snippet. */
+  search?: FlagSearchMeta
 }) {
   const users = useFlagUsers()
   const typesMap = useFlagTypesMap()
@@ -158,11 +162,22 @@ export function FlagCard({
               {due.text}
             </span>
           )}
+          {search && (
+            <span className="inline-flex items-center gap-1 rounded-full bg-[var(--flag-unread)]/15 px-2 py-0.5 text-[10px] font-medium text-foreground/70">
+              matched in comments
+            </span>
+          )}
         </div>
 
         <div className="truncate text-sm font-semibold text-foreground">
           {flag.title}
         </div>
+
+        {search && (
+          <div className="mt-0.5 truncate text-[11px] italic text-muted-foreground">
+            {search.snippet}
+          </div>
+        )}
 
         {hasContext && (
           <div className="mt-0.5 flex items-center gap-1 truncate text-[11px] text-muted-foreground">
