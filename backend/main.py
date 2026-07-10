@@ -15808,13 +15808,26 @@ async def get_worksheets_users(
     db: Session = Depends(get_db),
     _current_user=Depends(get_current_user),
 ):
-    """Return active users for analyst assignment. Accessible to all authenticated users (not admin-only)."""
+    """Return active users for analyst assignment. Accessible to all authenticated users (not admin-only).
+
+    LEFT JOINs slack_dm_prefs so Slack-linked users carry their profile photo
+    (avatar_url); others come back null and keep the initials fallback. This
+    directory is SHARED with the worksheets UI, so worksheet avatars get photos
+    from the same field.
+    """
+    from models import SlackDmPrefs
     users = db.execute(
-        select(User.id, User.email, User.first_name, User.last_name).where(User.is_active == True)  # noqa: E712
+        select(
+            User.id, User.email, User.first_name, User.last_name,
+            SlackDmPrefs.slack_avatar_url,
+        )
+        .outerjoin(SlackDmPrefs, SlackDmPrefs.user_id == User.id)
+        .where(User.is_active == True)  # noqa: E712
         .order_by(User.email)
     ).all()
     return [
-        {"id": row.id, "email": row.email, "first_name": row.first_name, "last_name": row.last_name}
+        {"id": row.id, "email": row.email, "first_name": row.first_name,
+         "last_name": row.last_name, "avatar_url": row.slack_avatar_url}
         for row in users
     ]
 

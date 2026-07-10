@@ -1466,6 +1466,9 @@ class SlackDmPrefs(Base):
     # WHO the link resolved to (Slack display/real name) — cached at link time
     # so the prefs UI can show "Linked → forrest" for mapping confidence.
     slack_display_name: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    # Slack profile photo (image_72), captured alongside the display name at link
+    # time. Surfaces on flag/worksheet avatars; null = keep the initials circle.
+    slack_avatar_url: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
     # Morning digest (Slice 5). Opt-in; hour is lab-local (MK1_LAB_TZ, UTC default).
     digest_enabled: Mapped[bool] = mapped_column(Boolean, default=False,
                                                  server_default="false", nullable=False)

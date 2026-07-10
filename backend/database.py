@@ -1056,6 +1056,7 @@ def _run_migrations():
         "ALTER TABLE slack_dm_prefs ADD COLUMN IF NOT EXISTS digest_enabled BOOLEAN NOT NULL DEFAULT FALSE",
         "ALTER TABLE slack_dm_prefs ADD COLUMN IF NOT EXISTS digest_hour INTEGER NOT NULL DEFAULT 8",
         "ALTER TABLE slack_dm_prefs ADD COLUMN IF NOT EXISTS last_digest_date DATE",
+        "ALTER TABLE slack_dm_prefs ADD COLUMN IF NOT EXISTS slack_avatar_url VARCHAR(512)",
         # --- Phase 2 slice 6: state-change watches ---
         """
         CREATE TABLE IF NOT EXISTS flag_entity_watches (

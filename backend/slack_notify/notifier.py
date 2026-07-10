@@ -70,7 +70,8 @@ class SlackNotifier:
             db.close()
 
     def _cache_member_id(self, user_id: int, member_id: str,
-                         display_name: Optional[str] = None) -> None:
+                         display_name: Optional[str] = None,
+                         avatar_url: Optional[str] = None) -> None:
         from models import SlackDmPrefs
         db = self._session_factory()
         try:
@@ -81,6 +82,8 @@ class SlackNotifier:
             row.slack_member_id = member_id
             if display_name:
                 row.slack_display_name = display_name
+            if avatar_url:
+                row.slack_avatar_url = avatar_url
             db.commit()
         finally:
             db.close()
@@ -101,9 +104,11 @@ class SlackNotifier:
                             break
                     if member_id is None:
                         continue          # unresolved — UI shows "Not linked"
-                    display_name = await self._client.user_info(member_id)
-                    await asyncio.to_thread(self._cache_member_id,
-                                            user_id, member_id, display_name)
+                    prof = await self._client.user_profile(member_id)
+                    await asyncio.to_thread(
+                        self._cache_member_id, user_id, member_id,
+                        prof.display_name if prof else None,
+                        prof.avatar_url if prof else None)
                 channel = await self._client.open_dm(member_id)
                 if channel is None:
                     continue

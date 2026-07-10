@@ -75,11 +75,14 @@ async def put_prefs(body: SlackPrefsUpdate, db: Session = Depends(get_db),
         # Refresh WHO the id resolves to (mapping confidence in the UI).
         # Best-effort: no token / bad id → name just stays empty.
         row.slack_display_name = None
+        row.slack_avatar_url = None
         token = os.getenv("MK1_SLACK_BOT_TOKEN")
         if token and row.slack_member_id:
             from slack_notify.client import SlackClient
-            row.slack_display_name = await SlackClient(token).user_info(
-                row.slack_member_id)
+            prof = await SlackClient(token).user_profile(row.slack_member_id)
+            if prof:
+                row.slack_display_name = prof.display_name
+                row.slack_avatar_url = prof.avatar_url
     db.commit()
     db.refresh(row)
     return _serialize(row)
@@ -109,7 +112,10 @@ async def test_dm(db: Session = Depends(get_db),
             row = SlackDmPrefs(user_id=user.id)
             db.add(row)
         row.slack_member_id = member_id
-        row.slack_display_name = await client.user_info(member_id)
+        prof = await client.user_profile(member_id)
+        if prof:
+            row.slack_display_name = prof.display_name
+            row.slack_avatar_url = prof.avatar_url
         db.commit()
     channel = await client.open_dm(member_id)
     if channel and await client.post_dm(
