@@ -17281,24 +17281,33 @@ def _row_to_dict(row) -> dict:
 
 
 @app.get("/debug/sample-registry/{sample_id}")
-async def get_sample_registry_debug(
+def get_sample_registry_debug(
     sample_id: str,
     admin=Depends(require_admin),
     db: Session = Depends(get_db),
 ):
-    """Admin registry diagnostic — non-mutating registry-vs-SENAITE compare."""
+    """Admin registry diagnostic — non-mutating registry-vs-SENAITE compare.
+
+    Plain `def` (not `async def`): the SENAITE calls behind this (fetch_parent_
+    analyses / fetch_parent_metadata / fetch_secondaries, all `requests`-based)
+    are blocking. FastAPI runs sync `def` route handlers in the threadpool so
+    they no longer stall the event loop while holding this request's `db`."""
     return _build_registry_debug_response(db, sample_id)
 
 
 @app.post("/debug/sample-registry/{sample_id}/refresh")
-async def refresh_sample_registry_debug(
+def refresh_sample_registry_debug(
     sample_id: str,
     admin=Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     """Admin action: force a SENAITE reconcile of the registry row, then
     return the re-diffed debug payload so drift can be watched resolving.
-    Distinct POST verb because it mutates."""
+    Distinct POST verb because it mutates.
+
+    Plain `def` for the same reason as the GET sibling: `_refresh_parent_
+    from_senaite` and `_build_registry_debug_response` both make blocking
+    SENAITE calls; threadpool execution keeps them off the event loop."""
     from sub_samples.service import _refresh_parent_from_senaite
     row = db.execute(
         select(LimsSample).where(LimsSample.sample_id == sample_id)
