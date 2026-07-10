@@ -201,6 +201,15 @@ class SummaryResponse(BaseModel):
     by_type: dict
 
 
+class FlagSearchHit(BaseModel):
+    """One comment/title search match (spec §7). `snippet` is a cleaned comment
+    excerpt (empty on a title-only hit); `matched_in` ⊆ {"comment","title"}."""
+    flag_id: int
+    snippet: str = ""
+    matched_in: List[str] = Field(default_factory=list)
+    model_config = ConfigDict(from_attributes=True)
+
+
 # --- flag types (Plan 5) -------------------------------------------------
 class FlagTypeResponse(BaseModel):
     id: int

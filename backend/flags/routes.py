@@ -21,8 +21,8 @@ from flags.schemas import (
     ActivityItem, ActivityPage, AssignRequest, AttachmentResponse, CommentRequest,
     CommentResponse, CreateFlagRequest, DueRequest, EntityContext, EntityLinkOut,
     EntityLinkRequest, FlagDetailResponse, FlagLinkOut, FlagLinkRequest, FlagResponse,
-    FlagTypeCreate, FlagTypeResponse, FlagTypeUpdate, ReactionAggregate,
-    StatusRequest, SummaryResponse, WatcherOut, WatcherRequest,
+    FlagSearchHit, FlagTypeCreate, FlagTypeResponse, FlagTypeUpdate,
+    ReactionAggregate, StatusRequest, SummaryResponse, WatcherOut, WatcherRequest,
 )
 
 router = APIRouter(prefix="/api/flags", tags=["flags"])
@@ -232,6 +232,20 @@ def get_attachment(attachment_id: int, db: Session = Depends(get_db), user=Depen
     except Exception as e:
         raise _http(e)
     return Response(content=data, media_type=att.content_type)
+
+
+@router.get("/search", response_model=List[FlagSearchHit])
+def search_flags(q: str = Query("", description="substring; <3 chars → empty"),
+                 limit: int = Query(50, ge=1, le=100),
+                 db: Session = Depends(get_db), user=Depends(get_current_user)):
+    # Literal /search registered ABOVE /{flag_id} so it wins the match
+    # (literal-before-param). The service returns [] for <3 chars; the client
+    # also gates at 3 chars + a 300ms debounce.
+    try:
+        return [FlagSearchHit.model_validate(h)
+                for h in service.search_flags(db, q=q, limit=limit)]
+    except Exception as e:
+        raise _http(e)
 
 
 @router.get("/{flag_id}", response_model=FlagDetailResponse)
