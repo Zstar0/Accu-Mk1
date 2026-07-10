@@ -14,8 +14,8 @@ from sqlalchemy.orm import Session
 from flags import catalog, permissions, seams, types_service
 from flags.errors import BadRequestError, NotFoundError, PermissionDeniedError
 from flags.models import (
-    FlagAttachment, FlagComment, FlagEntityLink, FlagEvent, FlagFlag, FlagLink,
-    FlagParticipant, FlagRead,
+    FlagAttachment, FlagComment, FlagCommentReaction, FlagEntityLink, FlagEvent,
+    FlagFlag, FlagLink, FlagParticipant, FlagRead,
 )
 
 MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024
@@ -446,6 +446,78 @@ def get_attachment(db: Session, attachment_id: int) -> FlagAttachment:
     if att is None:
         raise NotFoundError(f"attachment {attachment_id} not found")
     return att
+
+
+# --- comment emoji reactions (Plan 3) -----------------------------------
+CURATED_EMOJI = ("👍", "✅", "👀", "🎉", "❤️", "😂", "🤔", "🚨")
+
+
+def _load_comment(db: Session, comment_id: int) -> FlagComment:
+    c = db.get(FlagComment, comment_id)
+    if c is None:
+        raise NotFoundError(f"comment {comment_id} not found")
+    return c
+
+
+def aggregate_reactions(db: Session, comment_ids) -> dict[int, list[dict]]:
+    """Batch: comment_id -> [{emoji, count, user_ids}]. One query, no N+1."""
+    ids = list(comment_ids)
+    if not ids:
+        return {}
+    rows = db.execute(select(FlagCommentReaction).where(
+        FlagCommentReaction.comment_id.in_(ids))
+        .order_by(FlagCommentReaction.id.asc())).scalars().all()
+    by_comment: dict[int, dict[str, list[int]]] = {}
+    for r in rows:
+        by_comment.setdefault(r.comment_id, {}).setdefault(r.emoji, []).append(r.user_id)
+    return {cid: [{"emoji": e, "count": len(us), "user_ids": us}
+                  for e, us in emo.items()]
+            for cid, emo in by_comment.items()}
+
+
+def _emit_reaction(db: Session, comment: FlagComment, actor_id, emoji: str, action: str) -> None:
+    """Fan a reaction onto the SSE bus WITHOUT an audit row or updated_at bump —
+    reactions must not mark a thread unread (spec §6). event_id stays None (no
+    flag_events row backs it)."""
+    flag = db.get(FlagFlag, comment.flag_id)
+    seams.EVENT_SINK.emit({
+        "event_type": "comment_reaction", "flag_id": comment.flag_id,
+        "comment_id": comment.id, "emoji": emoji, "action": action,
+        "actor_id": actor_id, "from_value": None, "to_value": None,
+        "details": {}, "event_id": None, "flag": _flag_summary(flag),
+    })
+
+
+def add_reaction(db: Session, *, user, comment_id, emoji) -> list[dict]:
+    if emoji not in CURATED_EMOJI:
+        raise BadRequestError(f"unsupported emoji {emoji!r}")
+    comment = _load_comment(db, comment_id)
+    if not permissions.can(user, "comment", get_flag(db, comment.flag_id)):
+        raise PermissionDeniedError("not allowed to react")
+    uid = getattr(user, "id", None)
+    existing = db.execute(select(FlagCommentReaction).where(
+        FlagCommentReaction.comment_id == comment_id,
+        FlagCommentReaction.user_id == uid,
+        FlagCommentReaction.emoji == emoji)).scalar_one_or_none()
+    if existing is None:
+        db.add(FlagCommentReaction(comment_id=comment_id, user_id=uid, emoji=emoji))
+        db.commit()
+        _emit_reaction(db, comment, uid, emoji, "added")
+    return aggregate_reactions(db, [comment_id]).get(comment_id, [])
+
+
+def remove_reaction(db: Session, *, user, comment_id, emoji) -> list[dict]:
+    comment = _load_comment(db, comment_id)
+    uid = getattr(user, "id", None)
+    row = db.execute(select(FlagCommentReaction).where(
+        FlagCommentReaction.comment_id == comment_id,
+        FlagCommentReaction.user_id == uid,
+        FlagCommentReaction.emoji == emoji)).scalar_one_or_none()
+    if row is not None:
+        db.delete(row)
+        db.commit()
+        _emit_reaction(db, comment, uid, emoji, "removed")
+    return aggregate_reactions(db, [comment_id]).get(comment_id, [])
 
 
 def _link_attachments(db: Session, flag_id: int, comment_id: int, body: str) -> None:

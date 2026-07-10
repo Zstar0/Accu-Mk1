@@ -979,6 +979,18 @@ def _run_migrations():
         """,
         "CREATE INDEX IF NOT EXISTS ix_flag_attachments_flag ON flag_attachments (flag_id)",
         "CREATE INDEX IF NOT EXISTS ix_flag_attachments_comment ON flag_attachments (comment_id)",
+        # --- flag comment reactions (Plan 3) ---
+        """
+        CREATE TABLE IF NOT EXISTS flag_comment_reactions (
+            id         SERIAL PRIMARY KEY,
+            comment_id INTEGER NOT NULL REFERENCES flag_comments(id) ON DELETE CASCADE,
+            user_id    INTEGER NOT NULL,
+            emoji      TEXT NOT NULL,
+            created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+            CONSTRAINT uq_flag_comment_reaction UNIQUE (comment_id, user_id, emoji)
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS ix_flag_comment_reactions_comment ON flag_comment_reactions (comment_id)",
         # Slack DM prefs: cached Slack display name for mapping confidence
         "ALTER TABLE slack_dm_prefs ADD COLUMN IF NOT EXISTS slack_display_name TEXT",
         # Order-first check-in boxing: lims_boxes + sub_sample.box_id link.

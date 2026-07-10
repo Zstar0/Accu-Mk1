@@ -21,8 +21,8 @@ from flags.schemas import (
     ActivityItem, ActivityPage, AssignRequest, AttachmentResponse, CommentRequest,
     CommentResponse, CreateFlagRequest, DueRequest, EntityContext, EntityLinkOut,
     EntityLinkRequest, FlagDetailResponse, FlagLinkOut, FlagLinkRequest, FlagResponse,
-    FlagTypeCreate, FlagTypeResponse, FlagTypeUpdate, StatusRequest, SummaryResponse,
-    WatcherOut, WatcherRequest,
+    FlagTypeCreate, FlagTypeResponse, FlagTypeUpdate, ReactionAggregate,
+    StatusRequest, SummaryResponse, WatcherOut, WatcherRequest,
 )
 
 router = APIRouter(prefix="/api/flags", tags=["flags"])
@@ -203,6 +203,23 @@ def list_entity_types(db: Session = Depends(get_db), user=Depends(get_current_us
     return sorted(seams._REGISTRY.keys())
 
 
+@router.put("/comments/{comment_id}/reactions/{emoji}", response_model=List[ReactionAggregate])
+def add_reaction(comment_id: int, emoji: str, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    # Literal /comments/... registered ABOVE /{flag_id} so it wins the match.
+    try:
+        return service.add_reaction(db, user=user, comment_id=comment_id, emoji=emoji)
+    except Exception as e:
+        raise _http(e)
+
+
+@router.delete("/comments/{comment_id}/reactions/{emoji}", response_model=List[ReactionAggregate])
+def remove_reaction(comment_id: int, emoji: str, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    try:
+        return service.remove_reaction(db, user=user, comment_id=comment_id, emoji=emoji)
+    except Exception as e:
+        raise _http(e)
+
+
 @router.get("/attachments/{attachment_id}")
 def get_attachment(attachment_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
     # Literal /attachments/... registered ABOVE /{flag_id} so it wins the match.
@@ -235,6 +252,10 @@ def get_flag(flag_id: int, db: Session = Depends(get_db), user=Depends(get_curre
             o = service.get_flag(db, oid)
             resp.flag_links.append(FlagLinkOut(
                 id=link.id, flag_id=o.id, title=o.title, status=o.status, type=o.type))
+        # Reactions are an aggregate (batch query) — can't ride from_attributes.
+        agg = service.aggregate_reactions(db, [c.id for c in resp.comments])
+        for c in resp.comments:
+            c.reactions = [ReactionAggregate(**a) for a in agg.get(c.id, [])]
         return resp
     except Exception as e:
         raise _http(e)

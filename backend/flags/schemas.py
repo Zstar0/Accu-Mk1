@@ -55,6 +55,12 @@ class AttachmentResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class ReactionAggregate(BaseModel):
+    emoji: str
+    count: int
+    user_ids: List[int] = Field(default_factory=list)
+
+
 class CommentResponse(BaseModel):
     id: int
     flag_id: int
@@ -64,6 +70,7 @@ class CommentResponse(BaseModel):
     mentions: List[int] = Field(default_factory=list)
     created_at: datetime
     edited_at: Optional[datetime]
+    reactions: List[ReactionAggregate] = Field(default_factory=list)
     model_config = ConfigDict(from_attributes=True)
 
     @field_validator("mentions", mode="before")

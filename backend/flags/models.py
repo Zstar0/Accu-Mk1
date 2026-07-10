@@ -165,3 +165,18 @@ class FlagAttachment(Base):
     size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
     storage_key: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class FlagCommentReaction(Base):
+    """An emoji reaction on a comment. Social metadata — deliberately NOT in
+    flag_events (spec §6); this table is the analytics source."""
+    __tablename__ = "flag_comment_reactions"
+    __table_args__ = (UniqueConstraint("comment_id", "user_id", "emoji",
+                                       name="uq_flag_comment_reaction"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    comment_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("flag_comments.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    emoji: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
