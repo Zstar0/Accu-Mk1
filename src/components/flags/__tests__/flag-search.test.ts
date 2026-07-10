@@ -21,13 +21,24 @@ const mk = (id: number): FlagResponse =>
     entity: null,
   }) as FlagResponse
 
+// Fills the decorative title/status/type fields (not exercised here) so each
+// case states only the flag_id/snippet/matched_in it cares about.
+const hit = (h: Partial<FlagSearchHit> & { flag_id: number }): FlagSearchHit => ({
+  snippet: '',
+  matched_in: [],
+  title: '',
+  status: '',
+  type: '',
+  ...h,
+})
+
 describe('mergeSearchHits', () => {
   const tab = [mk(1), mk(2), mk(3)]
 
   it('appends comment-hit flags the client filter dropped, in tab order', () => {
     const clientVisible = [mk(1)] // e.g. flag 1 matched by title client-side
     const hits: FlagSearchHit[] = [
-      { flag_id: 3, snippet: '…residue…', matched_in: ['comment'] },
+      hit({ flag_id: 3, snippet: '…residue…', matched_in: ['comment'] }),
     ]
     const { flags, searchMeta } = mergeSearchHits(tab, clientVisible, hits)
     expect(flags.map(f => f.id)).toEqual([1, 3])
@@ -38,7 +49,7 @@ describe('mergeSearchHits', () => {
   it('does not duplicate a flag matched both client-side and in a comment', () => {
     const clientVisible = [mk(2)]
     const hits: FlagSearchHit[] = [
-      { flag_id: 2, snippet: '…foo…', matched_in: ['comment'] },
+      hit({ flag_id: 2, snippet: '…foo…', matched_in: ['comment'] }),
     ]
     const { flags, searchMeta } = mergeSearchHits(tab, clientVisible, hits)
     expect(flags.map(f => f.id)).toEqual([2])
@@ -47,14 +58,14 @@ describe('mergeSearchHits', () => {
 
   it('ignores title-only hits (the client already matches titles)', () => {
     const hits: FlagSearchHit[] = [
-      { flag_id: 3, snippet: '', matched_in: ['title'] },
+      hit({ flag_id: 3, snippet: '', matched_in: ['title'] }),
     ]
     expect(mergeSearchHits(tab, [], hits).flags).toEqual([])
   })
 
   it('ignores hits for flags outside the current tab', () => {
     const hits: FlagSearchHit[] = [
-      { flag_id: 99, snippet: '…x…', matched_in: ['comment'] },
+      hit({ flag_id: 99, snippet: '…x…', matched_in: ['comment'] }),
     ]
     expect(mergeSearchHits(tab, [], hits).flags).toEqual([])
   })

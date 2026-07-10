@@ -49,6 +49,16 @@ def test_short_query_returns_empty(db):
     assert service.search_flags(db, q="  ") == []
 
 
+def test_hits_carry_title_status_type(db):
+    from flags import service
+    f = _mk(db, title="Pump seal issue", entity_id="1", comment="cloudy residue")
+    hit = service.search_flags(db, q="residue")[0]
+    assert hit.flag_id == f.id
+    assert hit.title == f.title == "Pump seal issue"
+    assert hit.type == f.type == "blocker"
+    assert hit.status == f.status and hit.status  # decorated, non-empty
+
+
 def test_matches_comment_body_with_snippet(db):
     from flags import service
     f = _mk(db, title="Pump seal", entity_id="1",

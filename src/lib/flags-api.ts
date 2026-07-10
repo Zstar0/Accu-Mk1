@@ -171,11 +171,16 @@ export interface SummaryResponse {
 }
 
 /** Mirrors `FlagSearchHit` (spec §7). `snippet` is a cleaned comment excerpt
- *  (empty on a title-only hit); `matched_in` ⊆ `['comment','title']`. */
+ *  (empty on a title-only hit); `matched_in` ⊆ `['comment','title']`.
+ *  `title`/`status`/`type` decorate the hit so a picker renders it without a
+ *  follow-up fetch. */
 export interface FlagSearchHit {
   flag_id: number
   snippet: string
   matched_in: string[]
+  title: string
+  status: string
+  type: string
 }
 
 // --- request bodies (mirror schemas.py request models) ---

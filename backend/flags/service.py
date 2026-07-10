@@ -280,10 +280,15 @@ _WS_RE = re.compile(r"\s+")
 @dataclass
 class SearchHit:
     """One title/comment search match (service-internal; the route maps it to
-    the FlagSearchHit wire model). `snippet` is empty on a title-only hit."""
+    the FlagSearchHit wire model). `snippet` is empty on a title-only hit.
+    `title`/`status`/`type` decorate the hit so a picker renders without a
+    follow-up fetch."""
     flag_id: int
     snippet: str = ""
     matched_in: list[str] = field(default_factory=list)
+    title: str = ""
+    status: str = ""
+    type: str = ""
 
 
 def _clean_body(body: str) -> str:
@@ -354,6 +359,13 @@ def search_flags(db: Session, *, q: str, limit: int = 50) -> list[SearchHit]:
     }
 
     hit_ids = sorted(set(snippet_by_flag) | title_ids, reverse=True)[:limit]
+    # Batch-load the flag rows for the hits to decorate them (title/status/type)
+    # in one query — no per-hit N+1.
+    flag_by_id = {
+        f.id: f for f in db.execute(
+            select(FlagFlag).where(FlagFlag.id.in_(hit_ids))
+        ).scalars()
+    } if hit_ids else {}
     hits: list[SearchHit] = []
     for fid in hit_ids:
         matched_in: list[str] = []
@@ -361,7 +373,13 @@ def search_flags(db: Session, *, q: str, limit: int = 50) -> list[SearchHit]:
             matched_in.append("comment")
         if fid in title_ids:
             matched_in.append("title")
-        hits.append(SearchHit(fid, snippet_by_flag.get(fid, ""), matched_in))
+        fr = flag_by_id.get(fid)
+        hits.append(SearchHit(
+            fid, snippet_by_flag.get(fid, ""), matched_in,
+            title=getattr(fr, "title", "") or "",
+            status=getattr(fr, "status", "") or "",
+            type=getattr(fr, "type", "") or "",
+        ))
     return hits
 
 

@@ -203,10 +203,15 @@ class SummaryResponse(BaseModel):
 
 class FlagSearchHit(BaseModel):
     """One comment/title search match (spec §7). `snippet` is a cleaned comment
-    excerpt (empty on a title-only hit); `matched_in` ⊆ {"comment","title"}."""
+    excerpt (empty on a title-only hit); `matched_in` ⊆ {"comment","title"}.
+    `title`/`status`/`type` decorate the hit so a picker renders it without a
+    follow-up fetch (additive — existing consumers ignore them)."""
     flag_id: int
     snippet: str = ""
     matched_in: List[str] = Field(default_factory=list)
+    title: str = ""
+    status: str = ""
+    type: str = ""
     model_config = ConfigDict(from_attributes=True)
 
 
