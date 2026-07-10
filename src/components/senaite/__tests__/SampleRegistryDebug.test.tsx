@@ -52,6 +52,16 @@ describe('SampleRegistryDebug', () => {
     expect(screen.getByText('creation-signal')).toBeInTheDocument()
   })
 
+  it('caps the panel width so it never exceeds the viewport', async () => {
+    // Regression pin for the viewport-clipping fix: `max-w-[92vw]` (unprefixed,
+    // so it applies at every width) must stay on the Sheet's width class list —
+    // without it the fixed 1180px panel clips the analyses column below ~1200px.
+    vi.spyOn(api, 'getSampleRegistryDebug').mockResolvedValue(base)
+    render(<SampleRegistryDebug open onClose={() => {}} sampleId="P-1" />)
+    await waitFor(() => expect(screen.getByRole('dialog')).toBeInTheDocument())
+    expect(screen.getByRole('dialog')).toHaveClass('max-w-[92vw]')
+  })
+
   it('renders long field values in full (no truncation)', async () => {
     // 3-analyte JSON: the 3rd entry sits well past the old 22-char clip, so
     // finding it proves the value is rendered whole for accurate cross-check.

@@ -68,7 +68,7 @@ export function SampleRegistryDebug({ open, onClose, sampleId }: Props) {
 
   return (
     <Sheet open={open} onOpenChange={v => !v && onClose()}>
-      <SheetContent side="right" className="w-[1180px] sm:max-w-[1180px] p-0 border-l-0 bg-transparent [&>button]:hidden">
+      <SheetContent side="right" className="w-[1180px] max-w-[92vw] p-0 border-l-0 bg-transparent [&>button]:hidden sm:max-w-[min(1180px,92vw)]">
         <SheetHeader className="sr-only"><SheetTitle>Registry Debug — {sampleId}</SheetTitle></SheetHeader>
         <div className="m-3 flex flex-1 h-[calc(100%-24px)] flex-col rounded-lg overflow-hidden border border-zinc-800/80 shadow-2xl shadow-black/90">
           <div className="bg-zinc-900 border-b border-zinc-800/80 px-3 py-2 flex items-center justify-between gap-3 shrink-0">
