@@ -134,3 +134,44 @@ describe('FlagThread', () => {
     })
   })
 })
+
+describe('FlagThread — timeline view mode', () => {
+  beforeEach(() => {
+    window.localStorage.clear()
+    useFlag.mockReset()
+    useFlag.mockReturnValue({
+      data: detail(),
+      isLoading: false,
+      isError: false,
+    })
+  })
+
+  it('defaults to the bubble view', async () => {
+    const { FlagThread } = await import('@/components/flags/FlagThread')
+    render(<FlagThread flagId={7} tabLabel="Assigned to me" />)
+
+    expect(
+      screen.getByRole('button', { name: 'Bubble view' })
+    ).toHaveAttribute('aria-pressed', 'true')
+    expect(
+      screen.getByRole('button', { name: 'Compact view' })
+    ).toHaveAttribute('aria-pressed', 'false')
+  })
+
+  it('switches to compact and keeps comment content rendering', async () => {
+    const { FlagThread } = await import('@/components/flags/FlagThread')
+    render(<FlagThread flagId={7} tabLabel="Assigned to me" />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Compact view' }))
+
+    expect(
+      screen.getByRole('button', { name: 'Compact view' })
+    ).toHaveAttribute('aria-pressed', 'true')
+    // The chosen mode persists (mirrors the flyout view-mode idiom).
+    expect(window.localStorage.getItem('flags:threadView')).toBe('compact')
+    // Content still renders after the wrapper presentation swaps.
+    expect(
+      screen.getByText('cloudy after reconstitution')
+    ).toBeInTheDocument()
+  })
+})
