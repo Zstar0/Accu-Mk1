@@ -142,7 +142,16 @@ def list_analyses_for_host(
     set include_retests=False to filter to the current (non-retest) rows
     that drive the AnalysisTable view."""
     if host_kind == "sample":
-        stmt = select(LimsAnalysis).where(LimsAnalysis.lims_sample_pk == host_pk)
+        # SENAITE phase-out fail-closed: this branch has no review_state
+        # filter, so a SENAITE-mirror SHADOW row (sentinel review_state=
+        # 'senaite_mirror') would otherwise surface unfiltered straight into
+        # the AnalysisTable API / senaite_shape adapter. provenance='canonical'
+        # is a no-op for sub_sample-hosted rows (shadows are always parent-tier)
+        # but REQUIRED here.
+        stmt = select(LimsAnalysis).where(
+            LimsAnalysis.lims_sample_pk == host_pk,
+            LimsAnalysis.provenance == "canonical",
+        )
     elif host_kind == "sub_sample":
         stmt = select(LimsAnalysis).where(LimsAnalysis.lims_sub_sample_pk == host_pk)
     else:
@@ -700,6 +709,13 @@ def promote_to_parent(
                 # an issued COA; that conflict surfaces as the 409 instead.
                 LimsAnalysis.review_state == "verified",
                 LimsAnalysis.lims_sub_sample_pk.is_(None),
+                # SENAITE phase-out defense-in-depth: review_state=='verified'
+                # already excludes the shadow sentinel ('senaite_mirror'), so
+                # this can't change behavior — the canonical partial unique
+                # index this lookup protects already scopes to
+                # provenance='canonical' (Task 1), so this is a correctness
+                # clarification, not a behavior change.
+                LimsAnalysis.provenance == "canonical",
             )
         ).scalars().first()
         if old_parent is not None:
@@ -814,6 +830,15 @@ def list_promotions_for_parent(
         select(LimsAnalysis).where(
             LimsAnalysis.lims_sample_pk == parent.id,
             LimsAnalysis.lims_sub_sample_pk.is_(None),
+            # SENAITE phase-out defense-in-depth: this query has no
+            # review_state filter, so it would otherwise structurally match a
+            # shadow row (same lims_sample_pk, lims_sub_sample_pk IS NULL). In
+            # practice shadow rows never carry a LimsAnalysisPromotion link
+            # (only promote_to_parent creates those, and it always writes
+            # provenance='canonical'), so the `if not promo_rows: continue`
+            # below already filters them out — this clause makes the exclusion
+            # direct instead of incidental.
+            LimsAnalysis.provenance == "canonical",
         )
     ).scalars().all()
 
@@ -979,6 +1004,18 @@ def cascade_parent_retest_to_sources(
 
     # 2. Find the active parent-tier analysis for this keyword
     #    (lims_sub_sample_pk IS NULL, retest_of_id IS NULL, state not terminal-bad)
+    #
+    # SENAITE phase-out fail-closed (REQUIRED, not defense-in-depth): unlike
+    # the other readers in this module, `review_state.not_in(("retracted",
+    # "rejected"))` does NOT exclude the shadow sentinel state
+    # ('senaite_mirror') — a shadow row for this (parent, keyword) would match
+    # this filter. Without provenance=='canonical', `.scalars().first()` (no
+    # ORDER BY) could nondeterministically return the shadow row instead of
+    # the real canonical parent row when both exist for the same keyword. That
+    # shadow row never has a LimsAnalysisPromotion link, so step 3 below would
+    # find `promo_rows == []` and this cascade would silently no-op instead of
+    # retesting the vial sources the canonical row actually promoted — a real
+    # (not cosmetic) correctness gap.
     parent_analysis = db.execute(
         select(LimsAnalysis).where(
             LimsAnalysis.lims_sample_pk == parent_sample.id,
@@ -986,6 +1023,7 @@ def cascade_parent_retest_to_sources(
             LimsAnalysis.keyword == keyword,
             LimsAnalysis.retest_of_id.is_(None),
             LimsAnalysis.review_state.not_in(("retracted", "rejected")),
+            LimsAnalysis.provenance == "canonical",
         )
     ).scalars().first()
     if parent_analysis is None:
@@ -1154,6 +1192,11 @@ def cascade_parent_reject_to_vials(
         db, parent_sample_id=parent_sample_id, keyword=keyword
     )
 
+    # SENAITE phase-out audit (Task 7): evaluated, no provenance filter needed.
+    # This is a vial-tier query (INNER JOIN on LimsSubSample.id ==
+    # LimsAnalysis.lims_sub_sample_pk) — shadow rows are always parent-tier
+    # only (lims_sub_sample_pk IS NULL, per parent_mirror.py), so they can
+    # never satisfy this join regardless of review_state. Safe by construction.
     targets = db.execute(
         select(LimsAnalysis)
         .join(LimsSubSample, LimsSubSample.id == LimsAnalysis.lims_sub_sample_pk)
@@ -1221,6 +1264,9 @@ def cascade_parent_remove_from_vials(
         db, parent_sample_id=parent_sample_id, keyword=keyword
     )
 
+    # SENAITE phase-out audit (Task 7): evaluated, no provenance filter needed
+    # — same reasoning as cascade_parent_reject_to_vials above (vial-tier join,
+    # shadow rows are parent-tier only). Safe by construction.
     targets = db.execute(
         select(LimsAnalysis.lims_sub_sample_pk, LimsAnalysis.keyword,
                LimsSubSample.sample_id)

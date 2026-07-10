@@ -80,6 +80,10 @@ def _parent_quantity_unit(db: Session, parent) -> Optional[str]:
             LimsAnalysis.review_state.in_(_SERIES_STATES),
             LimsAnalysis.reportable == True,  # noqa: E712
             LimsAnalysis.result_unit.isnot(None),
+            # SENAITE phase-out defense-in-depth: sentinel review_state
+            # 'senaite_mirror' isn't in _SERIES_STATES, so a shadow row can't
+            # reach this already — explicit clause per the fail-closed audit.
+            LimsAnalysis.provenance == "canonical",
         )
     ).all()
     for kw, unit in rows:
