@@ -86,7 +86,7 @@ function Row({
 }
 
 const ENTITY_TYPES: { value: string; label: string }[] = [
-  { value: 'sub_sample', label: 'Vial' },
+  { value: 'sub_sample', label: 'Sub Sample' },
   { value: 'sample', label: 'Sample' },
   { value: 'worksheet', label: 'Worksheet' },
 ]

@@ -295,7 +295,7 @@ def register_mk1_entities() -> None:
     def _sub_sample_label(db, eid):
         from models import LimsSubSample
         row = db.get(LimsSubSample, int(eid)) if str(eid).isdigit() else None
-        return getattr(row, "sample_id", None) or f"Vial {eid}"
+        return getattr(row, "sample_id", None) or f"Sub Sample {eid}"
 
     def _sample_context(db, eid):
         row = _load_sample(db, eid)

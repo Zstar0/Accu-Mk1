@@ -44,7 +44,7 @@ describe('useRegisterActiveFlagEntity', () => {
   it('defaults the label from entityLabel when omitted', () => {
     renderHook(() => useRegisterActiveFlagEntity('sub_sample', '42'))
     expect(useUIStore.getState().activeFlagEntityStack.at(-1)?.label).toBe(
-      'Vial 42'
+      'Sub Sample 42'
     )
   })
 })

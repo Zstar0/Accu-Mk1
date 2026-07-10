@@ -33,7 +33,7 @@ interface EntityMeta {
 
 const ENTITY_META: Record<string, EntityMeta> = {
   sample: { Icon: FlaskConical, label: 'Sample', canDeepLink: true },
-  sub_sample: { Icon: TestTube2, label: 'Vial', canDeepLink: false },
+  sub_sample: { Icon: TestTube2, label: 'Sub Sample', canDeepLink: false },
   worksheet: { Icon: ClipboardList, label: 'Worksheet', canDeepLink: true },
 }
 
