@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import { useQueryClient, type QueryClient } from '@tanstack/react-query'
 import { useFlagStream, type FlagStreamEvent } from '@/lib/flag-stream'
 import { flagKeys } from '@/hooks/use-flags'
@@ -12,6 +12,11 @@ import { flagTypeDef, type FlagTypeDef } from '@/components/flags/flag-catalog'
 import { flagToastBody, flagToastHeading } from '@/components/flags/flag-toast'
 import type { FlagTab, FlagType } from '@/lib/flags-api'
 import { FLAGS_BUTTON_ID } from '@/components/flags/FlagsHeaderButton'
+
+/** Trailing-debounce window for coalescing SSE-driven query invalidation. Event
+ *  bursts (reaction storms, digest-time activity) collapse into one refetch
+ *  cycle fired this long after the last event. */
+const INVALIDATE_DEBOUNCE_MS = 300
 
 /** Resolve a type slug → {label,color,kind} at event time, reading the managed
  *  catalog from the query cache (incl. inactive types) and falling back to the
@@ -153,6 +158,103 @@ function flyToFlagsButton(color: string) {
 export function useFlagStreamGlue(): void {
   const queryClient = useQueryClient()
 
+  // --- scoped + coalesced query invalidation (perf) ---------------------
+  // Every SSE event marks a BOUNDED set of query keys stale (its lists/tabs,
+  // summary, unread, activity, own detail, and — crucially — only its OWN
+  // entity's button, not all 10–40 per-vial EntityFlagButtons). A trailing
+  // debounce collapses bursts into one refetch cycle. Toasts / unseen marking /
+  // fly-home stay synchronous below — only the invalidation is deferred.
+  const pendingKeys = useRef<Map<string, readonly unknown[]>>(new Map())
+  const pendingRollup = useRef(false)
+  const pendingBlanket = useRef(false)
+  const flushTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const flushInvalidations = () => {
+    if (flushTimer.current) {
+      clearTimeout(flushTimer.current)
+      flushTimer.current = null
+    }
+    const blanket = pendingBlanket.current
+    const rollup = pendingRollup.current
+    const keys = [...pendingKeys.current.values()]
+    pendingKeys.current.clear()
+    pendingRollup.current = false
+    pendingBlanket.current = false
+
+    // Defensive fallback: a degenerate payload we couldn't scope. One blanket
+    // refresh subsumes every scoped target (correctness over efficiency).
+    if (blanket) {
+      queryClient.invalidateQueries({ queryKey: flagKeys.all })
+      return
+    }
+    for (const key of keys) {
+      queryClient.invalidateQueries({ queryKey: key })
+    }
+    // Descendant events (a vial) can restate a PARENT's rollup button, but the
+    // payload names only the descendant. Rollup (includeDescendants=true) entity
+    // queries are page-scoped and few (≤1 in practice: the open parent page), so
+    // refetch just those to keep the aggregate live — the per-vial buttons
+    // (includeDescendants=false) stay untouched.
+    if (rollup) {
+      queryClient.invalidateQueries({
+        predicate: q => {
+          const k = q.queryKey
+          return (
+            Array.isArray(k) &&
+            k[0] === 'flags' &&
+            k[1] === 'entity' &&
+            k[4] === true
+          )
+        },
+      })
+    }
+  }
+
+  const enqueueInvalidations = (e: FlagStreamEvent) => {
+    const mark = (key: readonly unknown[]) =>
+      pendingKeys.current.set(JSON.stringify(key), key)
+
+    // Standard set — every event can restate these regardless of anchor.
+    mark(flagKeys.lists())
+    mark(flagKeys.summary())
+    mark(flagKeys.unread())
+    mark(flagKeys.activity())
+    if (typeof e.flag_id === 'number') mark(flagKeys.detail(e.flag_id))
+
+    const et = e.flag?.entity_type
+    const eid = e.flag?.entity_id
+    const hasType = et != null && et !== ''
+    const hasId = eid != null && eid !== ''
+    if (hasType && hasId) {
+      // Scope to just this entity's button(s) (both includeDescendants variants);
+      // flag the rollup pass for the descendant→parent case.
+      mark(flagKeys.entityScope(et as string, eid as string))
+      pendingRollup.current = true
+    } else if (hasType !== hasId || !e.flag) {
+      // Half-present anchor, or no flag snapshot at all — can't trust a scope.
+      // General tasks (both fields absent) are NOT this case: the standard set
+      // already covers them, and blanket-ing them would re-create the per-vial
+      // storm this fix exists to kill.
+      pendingBlanket.current = true
+    }
+
+    // Trailing debounce: reset the window on each event so a burst collapses
+    // into a single flush fired after it quiets.
+    if (flushTimer.current) clearTimeout(flushTimer.current)
+    flushTimer.current = setTimeout(flushInvalidations, INVALIDATE_DEBOUNCE_MS)
+  }
+
+  // Keep a stable handle to the latest flush so the unmount cleanup can call it
+  // WITHOUT taking a reactive dependency — disabling a hook rule to silence that
+  // dependency would switch React Compiler off for this whole component.
+  const flushRef = useRef<() => void>(() => undefined)
+  useEffect(() => {
+    flushRef.current = flushInvalidations
+  })
+  // Flush anything still pending on unmount so nothing is dropped, and never
+  // leak the debounce timer (flush is a no-op when the queue is empty).
+  useEffect(() => () => flushRef.current(), [])
+
   // Opening the flyout is where you see what's new: snapshot the unseen set into
   // `justOpened` (so the pinged rows can pulse) and clear the persisted set (so
   // the bar pulse stops). Closing drops that snapshot so a re-open doesn't
@@ -169,8 +271,10 @@ export function useFlagStreamGlue(): void {
   }, [])
 
   useFlagStream((e: FlagStreamEvent) => {
-    // Cheap blanket refresh: lists, summary badge, and any open thread.
-    queryClient.invalidateQueries({ queryKey: flagKeys.all })
+    // Scoped + coalesced refresh (replaces the per-event blanket): lists,
+    // summary badge, unread, activity, this flag's thread, and only the affected
+    // entity's button(s).
+    enqueueInvalidations(e)
 
     // Reactions (and in-flight attachment uploads) refresh the thread live but
     // must NOT toast, ping unread, or fly home — reactions never mark a thread
