@@ -13674,11 +13674,31 @@ async def update_senaite_sample_fields(
 
 def _mirror_parent_analysis_bg(**kwargs) -> None:
     """Best-effort parent-analysis shadow mirror on its own short-lived session
-    (never holds the request DB across the SENAITE HTTP call). Never raises."""
+    (never holds the request DB across the SENAITE HTTP call). Never raises.
+
+    Accepts optional `method_uid`/`instrument_uid` (raw SENAITE uids) — popped
+    and resolved to Mk1 ids on THIS function's own session (never on the event
+    loop) via resolve_method_id/resolve_instrument_id, then passed through to
+    mirror_parent_analysis as method_id/instrument_id, but only when resolved
+    non-None (an unresolvable uid must never overwrite an existing value with
+    None). Existing callers (A1/A2/A3) never pass these kwargs — pop() with a
+    None default plus the resolvers' own None-safety makes this a pure,
+    backward-compatible extension.
+    """
     from database import SessionLocal
-    from lims_analyses.parent_mirror import mirror_parent_analysis
+    from lims_analyses.parent_mirror import (
+        mirror_parent_analysis, resolve_instrument_id, resolve_method_id,
+    )
+    method_uid = kwargs.pop("method_uid", None)
+    instrument_uid = kwargs.pop("instrument_uid", None)
     db = SessionLocal()
     try:
+        method_id = resolve_method_id(db, method_uid)
+        instrument_id = resolve_instrument_id(db, instrument_uid)
+        if method_id is not None:
+            kwargs["method_id"] = method_id
+        if instrument_id is not None:
+            kwargs["instrument_id"] = instrument_id
         if mirror_parent_analysis(db, **kwargs):
             db.commit()
     except Exception as mirror_err:  # noqa: BLE001
@@ -13827,6 +13847,18 @@ async def set_analysis_method_instrument(
                     message="SENAITE returned no items — update may have failed",
                 )
             item = items[0]
+
+            from fastapi.concurrency import run_in_threadpool
+            _sid = item.get("getRequestID") or item.get("RequestID")
+            _kw = item.get("Keyword")
+            if _sid and _kw:
+                await run_in_threadpool(
+                    _mirror_parent_analysis_bg,
+                    sample_id=_sid, keyword=_kw,
+                    mirror_review_state=item.get("review_state"),
+                    method_uid=req.method_uid, instrument_uid=req.instrument_uid,
+                )
+
             return AnalysisResultResponse(
                 success=True,
                 message="Updated",

@@ -37,7 +37,10 @@ from sqlalchemy import delete, select
 import main
 from auth import get_current_user
 from database import SessionLocal
-from models import AnalysisService, LimsAnalysis, LimsAnalysisTransition, LimsSample
+from models import (
+    AnalysisService, HplcMethod, Instrument, LimsAnalysis,
+    LimsAnalysisTransition, LimsSample,
+)
 
 TEST_SAMPLE_ID = "TEST-PM4-PARENT"
 
@@ -75,6 +78,22 @@ def seed_parent_and_service(db, analysis_service):
     db.commit()
     db.refresh(parent)
     return parent, analysis_service
+
+
+@pytest.fixture
+def seed_method_instrument(db):
+    """An existing seeded HplcMethod (senaite_id set) + Instrument
+    (senaite_uid set) — prefer real seeded rows over TEST-prefixed ones per
+    the house convention, since the dev DB reliably carries both."""
+    method = db.execute(
+        select(HplcMethod).where(HplcMethod.senaite_id.isnot(None))
+    ).scalars().first()
+    instrument = db.execute(
+        select(Instrument).where(Instrument.senaite_uid.isnot(None))
+    ).scalars().first()
+    if method is None or instrument is None:
+        pytest.skip("no seeded HplcMethod/Instrument with a senaite id/uid available")
+    return method, instrument
 
 
 @pytest.fixture(autouse=True)
@@ -274,3 +293,78 @@ def test_transition_silent_rejection_no_mirror(db, seed_parent_and_service):
         lims_sample_pk=parent.id, provenance="shadow"
     ).one_or_none()
     assert row is None
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Task 6: hook A4 — set_analysis_method_instrument (SENAITE-uid resolution)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def test_method_instrument_mirrors_resolved_ids(db, seed_parent_and_service,
+                                                 seed_method_instrument):
+    """A method_uid/instrument_uid that resolve to a real Mk1 HplcMethod /
+    Instrument land as method_id/instrument_id on the shadow row.
+
+    NOTE: HplcMethod has no senaite_uid column — resolve_method_id matches
+    on senaite_id instead (see parent_mirror.py docstring). The seeded
+    method's senaite_id doubles as the "uid" sent to the endpoint here for
+    exactly that reason.
+    """
+    parent, svc = seed_parent_and_service
+    method, instrument = seed_method_instrument
+    proxy = _mock_senaite_update(
+        review_state="to_be_verified", keyword=svc.keyword,
+        get_request_id=parent.sample_id,
+    )
+    try:
+        with patch.object(main, "SENAITE_URL", "http://senaite.test"):
+            r = _client().post(
+                "/wizard/senaite/analyses/UID-1/method-instrument",
+                json={
+                    "method_uid": method.senaite_id,
+                    "instrument_uid": instrument.senaite_uid,
+                },
+            )
+    finally:
+        proxy.stop()
+
+    assert r.status_code == 200
+    assert r.json()["success"] is True
+
+    row = db.query(LimsAnalysis).filter_by(
+        lims_sample_pk=parent.id, provenance="shadow"
+    ).one()
+    assert row.method_id == method.id
+    assert row.instrument_id == instrument.id
+
+
+def test_method_instrument_unresolvable_uids_writes_row_with_none(
+        db, seed_parent_and_service):
+    """Unknown method_uid/instrument_uid (no matching Mk1 row) must not kill
+    the mirror — the shadow row is still written/updated, with method_id and
+    instrument_id left None."""
+    parent, svc = seed_parent_and_service
+    proxy = _mock_senaite_update(
+        review_state="to_be_verified", keyword=svc.keyword,
+        get_request_id=parent.sample_id,
+    )
+    try:
+        with patch.object(main, "SENAITE_URL", "http://senaite.test"):
+            r = _client().post(
+                "/wizard/senaite/analyses/UID-1/method-instrument",
+                json={
+                    "method_uid": "TEST-NO-SUCH-METHOD-UID",
+                    "instrument_uid": "TEST-NO-SUCH-INSTRUMENT-UID",
+                },
+            )
+    finally:
+        proxy.stop()
+
+    assert r.status_code == 200
+    assert r.json()["success"] is True
+
+    row = db.query(LimsAnalysis).filter_by(
+        lims_sample_pk=parent.id, provenance="shadow"
+    ).one()
+    assert row.method_id is None
+    assert row.instrument_id is None
