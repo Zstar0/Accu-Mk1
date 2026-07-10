@@ -79,8 +79,9 @@ export interface EntityContext {
  *  backend stores them as text); narrow to the unions at the UI boundary. */
 export interface FlagResponse {
   id: number
-  entity_type: string
-  entity_id: string
+  /** Nullable since Phase 2: a null anchor = a general task. */
+  entity_type: string | null
+  entity_id: string | null
   kind: string
   type: string
   status: string
@@ -91,6 +92,8 @@ export interface FlagResponse {
   updated_at: string
   resolved_at: string | null
   resolved_by: number | null
+  /** Optional deadline (Phase 2 slice 2); null when unset. */
+  due_at: string | null
   /** Server-resolved entity context; absent when unresolvable (Plan 4). */
   entity?: EntityContext | null
 }
@@ -138,14 +141,16 @@ export interface SummaryResponse {
 
 // --- request bodies (mirror schemas.py request models) ---
 
-/** Mirrors `CreateFlagRequest`. `type` is a DB-managed type slug (Plan 5). */
+/** Mirrors `CreateFlagRequest`. `type` is a DB-managed type slug (Plan 5).
+ *  A null anchor (`entity_type`/`entity_id`) raises a general task (Phase 2). */
 export interface CreateFlagBody {
-  entity_type: string
-  entity_id: string
+  entity_type: string | null
+  entity_id: string | null
   type: string
   title: string
   assignee_id?: number | null
   first_comment?: string | null
+  due_at?: string | null
 }
 
 /** Mirrors `FlagTypeResponse` — a row of the user-managed flag-type catalog

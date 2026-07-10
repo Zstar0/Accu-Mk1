@@ -44,6 +44,7 @@ function f(id: number, type = 'blocker'): FlagResponse {
     updated_at: '2026-06-30T12:00:00',
     resolved_at: null,
     resolved_by: null,
+    due_at: null,
   }
 }
 

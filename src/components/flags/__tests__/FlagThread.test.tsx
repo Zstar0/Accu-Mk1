@@ -41,6 +41,7 @@ function detail(): FlagDetailResponse {
     updated_at: '2026-06-30T15:50:00Z',
     resolved_at: null,
     resolved_by: null,
+    due_at: null,
     comments: [
       {
         id: 11,

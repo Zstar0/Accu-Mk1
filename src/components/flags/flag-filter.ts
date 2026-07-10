@@ -30,9 +30,10 @@ export const EMPTY_FLAG_FILTER: FlagFilterState = {
   assignee: 'all',
 }
 
-/** The best "Sample ID"-ish token to match free text against. */
+/** The best "Sample ID"-ish token to match free text against. Empty for a
+ *  null-anchor general task. */
 function sampleToken(flag: FlagResponse): string {
-  return flag.entity?.sample_id ?? flag.entity?.label ?? flag.entity_id
+  return flag.entity?.sample_id ?? flag.entity?.label ?? flag.entity_id ?? ''
 }
 
 /** Filter a flag list by free text (title OR sample id), status, entity type,

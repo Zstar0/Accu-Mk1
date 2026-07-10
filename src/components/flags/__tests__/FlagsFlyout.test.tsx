@@ -47,6 +47,7 @@ function flag(id: number, title: string): FlagResponse {
     updated_at: '2026-06-30T12:00:00',
     resolved_at: null,
     resolved_by: null,
+    due_at: null,
   }
 }
 
@@ -281,13 +282,16 @@ describe('FlagsFlyout context-aware Add Flag', () => {
     })
   })
 
-  it('hides Add Flag when no entity page is active', async () => {
+  it('shows Add Flag (general compose) when no entity page is active', async () => {
+    // Phase 2: Add Flag is always visible; with no page entity it composes a
+    // general (no-item) task rather than being hidden.
     const { FlagsFlyout } = await import('@/components/flags/FlagsFlyout')
     render(<FlagsFlyout />)
     await screen.findByRole('tab', { name: 'Assigned to me' })
-    expect(
-      screen.queryByRole('button', { name: /add flag/i })
-    ).not.toBeInTheDocument()
+    await userEvent.click(
+      await screen.findByRole('button', { name: /add flag/i })
+    )
+    expect(await screen.findByText('Attach to')).toBeInTheDocument()
   })
 
   it('shows Add Flag preset to the active entity (no manual id form)', async () => {

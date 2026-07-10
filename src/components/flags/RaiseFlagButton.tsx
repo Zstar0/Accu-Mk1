@@ -20,6 +20,7 @@ import { notifications } from '@/lib/notifications'
 import { useCreateFlag } from '@/hooks/use-flags'
 import { useFlagTypes } from '@/services/flag-types'
 import { useFlagUsers, nameForUser } from '@/components/flags/flag-users'
+import { entityLabel } from '@/components/flags/flag-entity'
 
 /**
  * Raise-flag compose. Prop-driven so any entity surface can drop it in with a
@@ -80,11 +81,23 @@ export function RaiseFlagButton({
   const [candidateId, setCandidateId] = useState<string>(
     candidates?.[0]?.entityId ?? ''
   )
+  // Anchor mode: 'item' (preset entity), 'manual' (free entity form), or
+  // 'general' (no entity — a general task). Preset defaults to its item; with
+  // neither a preset nor candidates the compose defaults to a general task.
+  // The candidate (order-scope) flow keeps its own picker and ignores this.
+  const [anchor, setAnchor] = useState<string>(
+    presetEntity ? 'item' : 'general'
+  )
+  // Optional deadline as a native date string ('YYYY-MM-DD').
+  const [due, setDue] = useState('')
 
   // The chosen candidate (order scope), defaulting to the first.
   const selectedCandidate = hasCandidates
     ? (candidates.find(c => c.entityId === candidateId) ?? candidates[0])
     : undefined
+
+  // General only applies where the anchor select is shown (not the candidate flow).
+  const isGeneral = !hasCandidates && anchor === 'general'
 
   const reset = () => {
     setType('blocker')
@@ -93,33 +106,44 @@ export function RaiseFlagButton({
     setFirstComment('')
     setEntityIdInput('')
     setCandidateId(candidates?.[0]?.entityId ?? '')
+    setAnchor(presetEntity ? 'item' : 'general')
+    setDue('')
   }
 
-  const resolvedEntityType = presetEntity
-    ? (entityType ?? '')
-    : selectedCandidate
-      ? selectedCandidate.entityType
-      : entityTypeInput
-  const resolvedEntityId = presetEntity
-    ? (entityId ?? '')
-    : selectedCandidate
-      ? selectedCandidate.entityId
-      : entityIdInput.trim()
+  const resolvedEntityType: string | null = isGeneral
+    ? null
+    : presetEntity
+      ? (entityType ?? '')
+      : selectedCandidate
+        ? selectedCandidate.entityType
+        : entityTypeInput
+  const resolvedEntityId: string | null = isGeneral
+    ? null
+    : presetEntity
+      ? (entityId ?? '')
+      : selectedCandidate
+        ? selectedCandidate.entityId
+        : entityIdInput.trim()
 
   // Only types active AND allowed for this entity, ordered by sort_order
-  // (the backend returns them ordered). Colors come from the row.
+  // (the backend returns them ordered). Colors come from the row. General tasks
+  // may only carry global-scoped types (entity_types empty).
   const typesQuery = useFlagTypes({
-    entity_type: resolvedEntityType || undefined,
+    entity_type: isGeneral ? undefined : resolvedEntityType || undefined,
     active_only: true,
   })
-  const flagTypes = typesQuery.data ?? []
+  const flagTypes = (typesQuery.data ?? []).filter(
+    t => !isGeneral || t.entity_types.length === 0
+  )
   // Keep the selection valid as the entity (and thus the allowed set) changes.
   const selectedType = flagTypes.some(t => t.slug === type)
     ? type
     : (flagTypes[0]?.slug ?? type)
 
   const canSubmit =
-    title.trim().length > 0 && resolvedEntityId.length > 0 && !create.isPending
+    title.trim().length > 0 &&
+    (isGeneral || (resolvedEntityId != null && resolvedEntityId.length > 0)) &&
+    !create.isPending
 
   const submit = () => {
     if (!canSubmit) return
@@ -131,6 +155,8 @@ export function RaiseFlagButton({
         title: title.trim(),
         assignee_id: assigneeId,
         first_comment: firstComment.trim() || null,
+        // 5pm local = end-of-workday semantics for a date-only picker.
+        due_at: due ? new Date(`${due}T17:00:00`).toISOString() : null,
       },
       {
         onSuccess: () => {
@@ -179,6 +205,38 @@ export function RaiseFlagButton({
           )}
         </div>
 
+        {presetEntity && (
+          <div className="space-y-1">
+            <Label className="text-xs">Attach to</Label>
+            <Select value={anchor} onValueChange={setAnchor}>
+              <SelectTrigger className="h-8 text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="item">
+                  {targetLabel ?? entityLabel(entityType, entityId)}
+                </SelectItem>
+                <SelectItem value="general">General (no item)</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        )}
+
+        {!presetEntity && !hasCandidates && (
+          <div className="space-y-1">
+            <Label className="text-xs">Attach to</Label>
+            <Select value={anchor} onValueChange={setAnchor}>
+              <SelectTrigger className="h-8 text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="general">General (no item)</SelectItem>
+                <SelectItem value="manual">Specific item…</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        )}
+
         {hasCandidates && candidates.length > 1 && (
           <div className="space-y-1">
             <Label className="text-xs">Which sample?</Label>
@@ -200,7 +258,7 @@ export function RaiseFlagButton({
           </div>
         )}
 
-        {!presetEntity && !hasCandidates && (
+        {!presetEntity && !hasCandidates && anchor === 'manual' && (
           <div className="grid grid-cols-2 gap-2">
             <div className="space-y-1">
               <Label className="text-xs">Entity type</Label>
@@ -250,6 +308,19 @@ export function RaiseFlagButton({
               ))}
             </SelectContent>
           </Select>
+        </div>
+
+        <div className="space-y-1">
+          <Label htmlFor="flag-due" className="text-xs">
+            Due date (optional)
+          </Label>
+          <Input
+            id="flag-due"
+            type="date"
+            value={due}
+            onChange={e => setDue(e.target.value)}
+            className="h-8 w-40 text-xs"
+          />
         </div>
 
         <div className="space-y-1">

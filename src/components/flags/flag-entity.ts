@@ -14,7 +14,13 @@
  *     suppressed for vials (documented gap, deferred to a follow-up).
  */
 
-import { FlaskConical, TestTube2, ClipboardList, Tag } from 'lucide-react'
+import {
+  FlaskConical,
+  TestTube2,
+  ClipboardList,
+  Tag,
+  ListTodo,
+} from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { useUIStore } from '@/store/ui-store'
 import type { DeepLink, EntityContext, FlagResponse } from '@/lib/flags-api'
@@ -31,7 +37,15 @@ const ENTITY_META: Record<string, EntityMeta> = {
   worksheet: { Icon: ClipboardList, label: 'Worksheet', canDeepLink: true },
 }
 
-export function entityMeta(entityType: string): EntityMeta {
+/** Meta for a null-anchor general task (Phase 2). */
+const GENERAL_META: EntityMeta = {
+  Icon: ListTodo,
+  label: 'General',
+  canDeepLink: false,
+}
+
+export function entityMeta(entityType: string | null | undefined): EntityMeta {
+  if (entityType == null) return GENERAL_META
   return (
     ENTITY_META[entityType] ?? {
       Icon: Tag,
@@ -41,8 +55,13 @@ export function entityMeta(entityType: string): EntityMeta {
   )
 }
 
-/** Short "Vial 42" style label for the entity chip. */
-export function entityLabel(entityType: string, entityId: string): string {
+/** Short "Vial 42" style label for the entity chip; "General task" for a null
+ *  anchor. Non-null behavior is unchanged. */
+export function entityLabel(
+  entityType: string | null | undefined,
+  entityId: string | null | undefined
+): string {
+  if (entityType == null) return 'General task'
   return `${entityMeta(entityType).label} ${entityId}`
 }
 
@@ -54,9 +73,10 @@ export function entityLabel(entityType: string, entityId: string): string {
  * deep_link) is absent — prefer {@link navigateForFlag}.
  */
 export function navigateToEntity(
-  entityType: string,
-  entityId: string
+  entityType: string | null | undefined,
+  entityId: string | null | undefined
 ): boolean {
+  if (entityType == null || entityId == null) return false
   const store = useUIStore.getState()
   switch (entityType) {
     case 'sample':

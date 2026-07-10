@@ -286,26 +286,32 @@ export function FlagsFlyout() {
                     {!isActivity && (
                       <ViewToggle mode={viewMode} onChange={setViewMode} />
                     )}
-                    {/* Context-aware Add Flag: targets the entity page the
-                        user is on; hidden when there isn't one (nobody knows
-                        raw entity ids — staff review 2026-07-01). */}
-                    {activeEntity && (
-                      <RaiseFlagButton
-                        entityType={activeEntity.type}
-                        entityId={activeEntity.id}
-                        targetLabel={activeEntity.label}
-                        trigger={
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="h-7 gap-1.5"
-                            title={`Add flag on ${activeEntity.label}`}
-                          >
-                            <Plus className="h-3.5 w-3.5" /> Add Flag
-                          </Button>
-                        }
-                      />
-                    )}
+                    {/* Add Flag: targets the entity page the user is on when
+                        there is one; otherwise composes a General task (Phase 2
+                        — always visible now that general tasks exist). */}
+                    <RaiseFlagButton
+                      {...(activeEntity
+                        ? {
+                            entityType: activeEntity.type,
+                            entityId: activeEntity.id,
+                            targetLabel: activeEntity.label,
+                          }
+                        : {})}
+                      trigger={
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-7 gap-1.5"
+                          title={
+                            activeEntity
+                              ? `Add flag on ${activeEntity.label}`
+                              : 'Add a flag or general task'
+                          }
+                        >
+                          <Plus className="h-3.5 w-3.5" /> Add Flag
+                        </Button>
+                      }
+                    />
                   </div>
                 </div>
 
