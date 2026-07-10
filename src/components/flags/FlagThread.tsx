@@ -45,13 +45,13 @@ import { displayName } from '@/lib/user-display'
 import {
   activeMentionQuery,
   mentionIdsInBody,
-  renderCommentSegments,
 } from '@/components/flags/mention-parse'
 import { formatClock } from '@/components/flags/flag-format'
 import { STATUS_LABELS, STATUS_DOT } from '@/components/flags/flag-status'
 import { FlagAvatar } from '@/components/flags/FlagAvatar'
 import { FlagWatchers } from '@/components/flags/FlagWatchers'
 import { FlagLinkChips } from '@/components/flags/FlagLinkChips'
+import { CommentBody } from '@/components/flags/CommentBody'
 
 type TimelineEntry =
   | { kind: 'comment'; at: string; comment: CommentResponse }
@@ -486,22 +486,11 @@ function CommentRow({
             {formatClock(comment.created_at)}
           </span>
         </div>
-        <div className="text-[13px] leading-relaxed text-foreground/90">
-          {renderCommentSegments(comment.body, comment.mentions ?? [], id =>
-            nameForUser(users, id)
-          ).map((seg, i) =>
-            seg.mentionId != null ? (
-              <span
-                key={i}
-                className="rounded bg-primary/15 px-1 font-medium text-primary"
-              >
-                {seg.text}
-              </span>
-            ) : (
-              <span key={i}>{seg.text}</span>
-            )
-          )}
-        </div>
+        <CommentBody
+          body={comment.body}
+          mentions={comment.mentions ?? []}
+          users={users}
+        />
       </div>
     </div>
   )

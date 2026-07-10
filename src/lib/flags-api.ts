@@ -7,6 +7,8 @@
  */
 
 import { apiFetch } from './api'
+import { getApiBaseUrl } from '@/lib/config'
+import { getAuthToken } from '@/store/auth-store'
 
 // --- string unions (mirror schemas.py FlagStatus/FlagTab) ---
 
@@ -347,6 +349,69 @@ export const removeFlagLink = (id: number, linkId: number) =>
   apiFetch<undefined>(`/api/flags/${id}/links/flags/${linkId}`, {
     method: 'DELETE',
   })
+
+// --- attachments (Phase 2 slice 3) ---------------------------------------
+
+/** Mirrors backend `AttachmentResponse`. */
+export interface FlagAttachment {
+  id: number
+  flag_id: number
+  comment_id: number | null
+  filename: string
+  content_type: string
+  size_bytes: number
+  created_at: string
+}
+
+function bearerHeaders(): Record<string, string> {
+  const token = getAuthToken()
+  return token ? { Authorization: `Bearer ${token}` } : {}
+}
+
+/** Upload an image to a flag (multipart). The browser sets the multipart
+ *  boundary — do NOT set Content-Type. */
+export async function addFlagAttachment(
+  flagId: number,
+  file: File
+): Promise<FlagAttachment> {
+  const form = new FormData()
+  form.append('file', file)
+  const res = await fetch(`${getApiBaseUrl()}/api/flags/${flagId}/attachments`, {
+    method: 'POST',
+    headers: bearerHeaders(),
+    body: form,
+  })
+  if (!res.ok) throw new Error(`attachment upload failed: ${res.status}`)
+  return res.json() as Promise<FlagAttachment>
+}
+
+const _flagAttachmentCache = new Map<number, string>()
+
+/** Resolve an attachment's bytes to a renderable blob object URL. The serve
+ *  endpoint requires Bearer auth, so a plain <img src> would 401; we fetch as a
+ *  blob and wrap it. Mirrors fetchPackagingPhotoUrl. Cached per id. */
+export async function fetchFlagAttachmentUrl(
+  attachmentId: number
+): Promise<string | null> {
+  const cached = _flagAttachmentCache.get(attachmentId)
+  if (cached) return cached
+  const res = await fetch(
+    `${getApiBaseUrl()}/api/flags/attachments/${attachmentId}`,
+    { headers: bearerHeaders() }
+  )
+  if (res.status === 404) return null
+  if (!res.ok) throw new Error(`fetchFlagAttachmentUrl failed: ${res.status}`)
+  const blob = await res.blob()
+  const url = URL.createObjectURL(blob)
+  _flagAttachmentCache.set(attachmentId, url)
+  return url
+}
+
+export function invalidateFlagAttachment(attachmentId: number): void {
+  const prev = _flagAttachmentCache.get(attachmentId)
+  if (prev?.startsWith('blob:')) URL.revokeObjectURL(prev)
+  _flagAttachmentCache.delete(attachmentId)
+}
 
 // --- flag types (Plan 5) -------------------------------------------------
 
