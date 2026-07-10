@@ -14021,6 +14021,21 @@ async def transition_analysis(
                     )
             # ── end parent retest/reject cascade ──────────────────────────────
 
+            # ── Parent analysis shadow mirror (A2/A3, best-effort) ───────────
+            # Only reached after the silent-rejection check above passes, i.e.
+            # SENAITE actually applied the transition. Uses its own SessionLocal
+            # via _mirror_parent_analysis_bg — never the request's `db` (that
+            # session is reserved for the retest/reject cascade above).
+            from fastapi.concurrency import run_in_threadpool
+            _sid = item.get("getRequestID") or item.get("RequestID")
+            if _sid and keyword:
+                await run_in_threadpool(
+                    _mirror_parent_analysis_bg,
+                    sample_id=_sid, keyword=keyword,
+                    mirror_review_state=actual_state,
+                    is_retest=(req.transition == "retest"),
+                )
+
             return AnalysisResultResponse(
                 success=True,
                 message=f"Transition '{req.transition}' completed",

@@ -1,4 +1,5 @@
-"""Tests for Task 4: threadpool wrapper + hook A1 (set_analysis_result).
+"""Tests for Task 4/5: threadpool wrapper + hooks A1 (set_analysis_result) and
+A2/A3 (transition_analysis).
 
 Hooks the parent-analysis SENAITE->Mk1 shadow mirror into
 POST /wizard/senaite/analyses/{uid}/result. The endpoint is `async def`,
@@ -8,6 +9,14 @@ takes NO `db` dependency, and calls SENAITE via httpx inside its own
 via `await run_in_threadpool(_mirror_parent_analysis_bg, ...)` — the wrapper
 opens its own SessionLocal(), commits, and swallows every exception so a
 mirror failure can never fail or delay-fail the user's edit.
+
+Task 5 wires the SAME wrapper into POST
+/wizard/senaite/analyses/{uid}/transition (`transition_analysis`). That
+endpoint DOES take a `db: Session = Depends(get_db)` (used by the existing
+retest/reject vial cascades) — the mirror hook does NOT use that session; it
+opens its own via `_mirror_parent_analysis_bg`, same as A1. The hook fires
+only after the DATA-04 silent-rejection check (`actual_state ==
+expected_state`) passes, so a silently-rejected transition never mirrors.
 
 House pattern: TestClient(main.app) with get_current_user overridden (see
 test_box_label_summaries_batch.py) + httpx.AsyncClient mocked via
@@ -179,3 +188,89 @@ def test_missing_request_id_skips_mirror_silently(db):
 
     assert r.status_code == 200
     assert r.json()["success"] is True
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Task 5: hook A2/A3 — transition_analysis (state mirror + retest)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def test_transition_verify_mirrors_state(db, seed_parent_and_service):
+    parent, svc = seed_parent_and_service
+    proxy = _mock_senaite_update(
+        review_state="verified", keyword=svc.keyword, get_request_id=parent.sample_id,
+    )
+    try:
+        with patch.object(main, "SENAITE_URL", "http://senaite.test"):
+            r = _client().post(
+                "/wizard/senaite/analyses/UID-1/transition", json={"transition": "verify"}
+            )
+    finally:
+        proxy.stop()
+
+    assert r.status_code == 200
+    assert r.json()["success"] is True
+
+    row = db.query(LimsAnalysis).filter_by(
+        lims_sample_pk=parent.id, provenance="shadow"
+    ).one()
+    assert row.mirror_review_state == "verified"
+
+
+def test_transition_retest_mirrors_new_row(db, seed_parent_and_service):
+    parent, svc = seed_parent_and_service
+    # EXPECTED_POST_STATES["retest"] == "verified" too — SENAITE keeps the OLD
+    # line at 'verified' and spawns a new analysis object under the hood.
+    proxy = _mock_senaite_update(
+        review_state="verified", keyword=svc.keyword, get_request_id=parent.sample_id,
+    )
+    try:
+        with patch.object(main, "SENAITE_URL", "http://senaite.test"):
+            client = _client()
+            r1 = client.post(
+                "/wizard/senaite/analyses/UID-1/transition", json={"transition": "verify"}
+            )
+            r2 = client.post(
+                "/wizard/senaite/analyses/UID-1/transition", json={"transition": "retest"}
+            )
+    finally:
+        proxy.stop()
+
+    assert r1.status_code == 200 and r1.json()["success"] is True
+    assert r2.status_code == 200 and r2.json()["success"] is True
+
+    rows = db.query(LimsAnalysis).filter_by(
+        lims_sample_pk=parent.id, provenance="shadow"
+    ).all()
+    assert len(rows) == 2
+    assert any(row.retested for row in rows)
+    live = [row for row in rows if not row.retested]
+    assert len(live) == 1
+    assert live[0].mirror_review_state == "verified"
+    assert live[0].retest_of_id is not None
+
+
+def test_transition_silent_rejection_no_mirror(db, seed_parent_and_service):
+    """SENAITE returns a review_state that doesn't match EXPECTED_POST_STATES
+    for the requested transition (silent rejection, DATA-04) -> success=False
+    AND the mirror hook must not run at all (no shadow row written)."""
+    parent, svc = seed_parent_and_service
+    proxy = _mock_senaite_update(
+        review_state="unassigned", keyword=svc.keyword, get_request_id=parent.sample_id,
+    )
+    try:
+        with patch.object(main, "SENAITE_URL", "http://senaite.test"):
+            r = _client().post(
+                "/wizard/senaite/analyses/UID-1/transition", json={"transition": "verify"}
+            )
+    finally:
+        proxy.stop()
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["success"] is False
+
+    row = db.query(LimsAnalysis).filter_by(
+        lims_sample_pk=parent.id, provenance="shadow"
+    ).one_or_none()
+    assert row is None
