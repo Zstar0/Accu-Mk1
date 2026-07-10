@@ -14,13 +14,14 @@ from sqlalchemy.orm import Session
 
 from auth import get_current_user, require_admin
 from database import get_db
-from flags import seams, service, types_service
+from flags import recurring, seams, service, types_service
 from flags.bus import BUS
 from flags.errors import BadRequestError, ConflictError, NotFoundError, PermissionDeniedError
 from flags.schemas import (
     ActivityItem, ActivityPage, AssignRequest, AttachmentResponse, CommentRequest,
     CommentResponse, CreateFlagRequest, DueRequest, EntityContext, EntityLinkOut,
     EntityLinkRequest, FlagDetailResponse, FlagLinkOut, FlagLinkRequest, FlagResponse,
+    FlagRecurringCreate, FlagRecurringResponse, FlagRecurringUpdate,
     FlagSearchHit, FlagTypeCreate, FlagTypeResponse, FlagTypeUpdate,
     ReactionAggregate, StatusRequest, SummaryResponse, WatcherOut, WatcherRequest,
 )
@@ -191,6 +192,46 @@ def delete_flag_type(type_id: int, db: Session = Depends(get_db),
     # → 409, signalling the client to offer the deactivate path instead.
     try:
         types_service.delete_type(db, type_id)
+    except Exception as e:
+        raise _http(e)
+
+
+@router.get("/recurring", response_model=List[FlagRecurringResponse])
+def list_recurring(db: Session = Depends(get_db), admin=Depends(require_admin)):
+    # Admin-only config (like flag-type management); registered ABOVE /{flag_id}.
+    try:
+        return recurring.list_recurring(db)
+    except Exception as e:
+        raise _http(e)
+
+
+@router.post("/recurring", response_model=FlagRecurringResponse, status_code=201)
+def create_recurring(req: FlagRecurringCreate, db: Session = Depends(get_db),
+                     admin=Depends(require_admin)):
+    try:
+        return recurring.create_recurring(
+            db, user=admin, title=req.title, type=req.type, cadence=req.cadence,
+            body=req.body, assignee_id=req.assignee_id, watchers=req.watchers,
+            entity_type=req.entity_type, entity_id=req.entity_id,
+            skip_if_open=req.skip_if_open)
+    except Exception as e:
+        raise _http(e)
+
+
+@router.put("/recurring/{rid}", response_model=FlagRecurringResponse)
+def update_recurring(rid: int, req: FlagRecurringUpdate, db: Session = Depends(get_db),
+                     admin=Depends(require_admin)):
+    try:
+        return recurring.update_recurring(db, rid, **req.model_dump(exclude_unset=True))
+    except Exception as e:
+        raise _http(e)
+
+
+@router.delete("/recurring/{rid}", status_code=204)
+def delete_recurring(rid: int, db: Session = Depends(get_db),
+                     admin=Depends(require_admin)):
+    try:
+        recurring.delete_recurring(db, rid)
     except Exception as e:
         raise _http(e)
 

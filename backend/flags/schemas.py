@@ -248,3 +248,53 @@ class FlagTypeUpdate(BaseModel):
     is_active: Optional[bool] = None
     sort_order: Optional[int] = None
     entity_types: Optional[List[str]] = None
+
+
+# --- recurring tasks (Slice 5) ------------------------------------------
+class FlagRecurringResponse(BaseModel):
+    id: int
+    title: str
+    body: Optional[str] = None
+    type: str
+    assignee_id: Optional[int] = None
+    watchers: List[int] = Field(default_factory=list)
+    entity_type: Optional[str] = None
+    entity_id: Optional[str] = None
+    cadence: str
+    next_run_at: datetime
+    active: bool
+    skip_if_open: bool
+    created_by: int
+    created_at: datetime
+    last_minted_flag_id: Optional[int] = None
+    model_config = ConfigDict(from_attributes=True)
+
+    @field_validator("watchers", mode="before")
+    @classmethod
+    def _none_to_list(cls, v):
+        return v or []
+
+
+class FlagRecurringCreate(BaseModel):
+    title: str
+    type: str
+    cadence: str
+    body: Optional[str] = None
+    assignee_id: Optional[int] = None
+    watchers: List[int] = Field(default_factory=list)
+    entity_type: Optional[str] = None
+    entity_id: Optional[str] = None
+    skip_if_open: bool = True
+
+
+class FlagRecurringUpdate(BaseModel):
+    title: Optional[str] = None
+    type: Optional[str] = None
+    cadence: Optional[str] = None
+    body: Optional[str] = None
+    assignee_id: Optional[int] = None
+    watchers: Optional[List[int]] = None
+    entity_type: Optional[str] = None
+    entity_id: Optional[str] = None
+    active: Optional[bool] = None
+    skip_if_open: Optional[bool] = None
