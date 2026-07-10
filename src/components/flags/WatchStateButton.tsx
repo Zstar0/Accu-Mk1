@@ -98,6 +98,11 @@ export function WatchStateButton({
             placeholder="received"
             onChange={e => setEquals(e.target.value)}
             className="h-8 text-xs"
+            // Lone text inputs in a small form read as login fields to
+            // password managers; opt out so 1Password doesn't overlay the box.
+            autoComplete="off"
+            data-1p-ignore
+            data-lpignore="true"
           />
         </div>
         <div className="space-y-1">
@@ -110,6 +115,9 @@ export function WatchStateButton({
             placeholder={`${targetLabel} reached ${equals || '…'}`}
             onChange={e => setTitle(e.target.value)}
             className="h-8 text-xs"
+            autoComplete="off"
+            data-1p-ignore
+            data-lpignore="true"
           />
         </div>
         <div className="space-y-1">
