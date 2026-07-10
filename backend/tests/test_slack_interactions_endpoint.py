@@ -113,3 +113,18 @@ def test_disabled_when_secret_unset(client, monkeypatch):
     monkeypatch.delenv("SLACK_SIGNING_SECRET", raising=False)
     r = _post(client, _payload("flag_mark_read"))
     assert r.status_code == 404
+
+
+def test_unauthorized_actor_declined_flag_untouched(client):
+    # Ruling: all 3 buttons ride EVERY DM (incl. watchers); the endpoint enforces
+    # permissions. A mapped-but-unauthorized actor (not raiser/assignee/admin)
+    # clicking Resolve must be declined with a line, and the flag must not move.
+    from models import User, SlackDmPrefs
+    from flags.models import FlagFlag
+    client.session.add(User(id=6, email="w@x.t", hashed_password="x", role="standard"))
+    client.session.add(SlackDmPrefs(user_id=6, slack_member_id="U6"))
+    client.session.commit()
+    r = _post(client, _payload("flag_resolve", member="U6"))
+    assert r.status_code == 200                       # never a 500 into Slack
+    assert client.session.get(FlagFlag, 1).status == "open"
+    assert "permission" in str(client.fake.updates[-1][2]).lower()
