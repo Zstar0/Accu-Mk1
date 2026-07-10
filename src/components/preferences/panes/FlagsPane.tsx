@@ -323,7 +323,10 @@ function RecurringCard({
           <span className="text-muted-foreground">
             {t('preferences.flags.recurring.type')}
           </span>
-          <Select value={recurring.type} onValueChange={v => onSave({ type: v })}>
+          <Select
+            value={recurring.type}
+            onValueChange={v => onSave({ type: v })}
+          >
             <SelectTrigger className="h-8 w-40 text-xs">
               <SelectValue />
             </SelectTrigger>

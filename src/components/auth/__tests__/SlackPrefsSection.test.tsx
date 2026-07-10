@@ -56,8 +56,9 @@ describe('SlackPrefsSection', () => {
       await import('@/components/auth/SlackPrefsSection')
     render(<SlackPrefsSection />)
     // The digest switch is the last one (after master + 5 categories).
-    const switches = screen.getAllByRole('switch')
-    await userEvent.click(switches[6]!)
+    const digestSwitch = screen.getAllByRole('switch').at(-1)
+    if (!digestSwitch) throw new Error('digest switch not found')
+    await userEvent.click(digestSwitch)
     expect(update).toHaveBeenCalledWith(
       expect.objectContaining({ digest_enabled: true })
     )
@@ -67,8 +68,9 @@ describe('SlackPrefsSection', () => {
     const { SlackPrefsSection } =
       await import('@/components/auth/SlackPrefsSection')
     render(<SlackPrefsSection />)
-    const switches = screen.getAllByRole('switch')
-    await userEvent.click(switches[4]!)
+    const watchingSwitch = screen.getAllByRole('switch').at(4)
+    if (!watchingSwitch) throw new Error('watching-activity switch not found')
+    await userEvent.click(watchingSwitch)
     expect(update).toHaveBeenCalledWith(
       expect.objectContaining({ notify_watching_activity: false })
     )

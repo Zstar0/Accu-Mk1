@@ -566,7 +566,12 @@ export type FlagRecurringCreate = Pick<
   Partial<
     Pick<
       FlagRecurring,
-      'body' | 'assignee_id' | 'watchers' | 'entity_type' | 'entity_id' | 'skip_if_open'
+      | 'body'
+      | 'assignee_id'
+      | 'watchers'
+      | 'entity_type'
+      | 'entity_id'
+      | 'skip_if_open'
     >
   >
 export type FlagRecurringUpdate = Partial<
@@ -589,4 +594,4 @@ export const updateRecurring = (id: number, body: FlagRecurringUpdate) =>
     body: JSON.stringify(body),
   })
 export const deleteRecurring = (id: number) =>
-  apiFetch<void>(`/api/flags/recurring/${id}`, { method: 'DELETE' })
+  apiFetch<undefined>(`/api/flags/recurring/${id}`, { method: 'DELETE' })

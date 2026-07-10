@@ -25,7 +25,11 @@ vi.mock('@/lib/flags-api', async () => {
         is_builtin: true,
       },
     ]),
-    getFlagEntityTypes: vi.fn(async () => ['sample', 'sub_sample', 'worksheet']),
+    getFlagEntityTypes: vi.fn(async () => [
+      'sample',
+      'sub_sample',
+      'worksheet',
+    ]),
     createFlagType: vi.fn(),
     updateFlagType: vi.fn(),
     deleteFlagType: vi.fn(),
@@ -61,11 +65,12 @@ describe('FlagsPane recurring section', () => {
   })
 
   it('lists recurring templates for an admin', async () => {
-    const { FlagsPane } = await import(
-      '@/components/preferences/panes/FlagsPane'
-    )
+    const { FlagsPane } =
+      await import('@/components/preferences/panes/FlagsPane')
     render(<FlagsPane />)
     // The template title renders in an editable Input (mirrors TypeCard).
-    expect(await screen.findByDisplayValue('Calibrate HPLC')).toBeInTheDocument()
+    expect(
+      await screen.findByDisplayValue('Calibrate HPLC')
+    ).toBeInTheDocument()
   })
 })
