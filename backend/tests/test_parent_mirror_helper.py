@@ -193,6 +193,68 @@ def test_retest_creates_new_row_and_marks_old(db, seed_parent_and_service):
     assert rows[1].retest_of_id == rows[0].id and rows[1].retested is False
 
 
+def test_retest_default_old_mirror_review_state_leaves_old_row_untouched(
+        db, seed_parent_and_service):
+    """Regression pin: the default (`old_mirror_review_state=None`) retest call
+    must stay byte-identical to pre-existing behavior — the old row's
+    mirror_review_state is left alone (SENAITE's real retest leaves the old
+    line at whatever state it was, e.g. still 'verified'), only `retested`
+    flips, and the audit reason stays 'shadow mirror: superseded by retest'."""
+    parent, svc = seed_parent_and_service
+    mirror_parent_analysis(db, sample_id=parent.sample_id, keyword=svc.keyword,
+                           mirror_review_state="verified", result_value="1")
+    mirror_parent_analysis(db, sample_id=parent.sample_id, keyword=svc.keyword,
+                           mirror_review_state="unassigned", result_value="2", is_retest=True)
+    rows = db.query(LimsAnalysis).filter_by(
+        lims_sample_pk=parent.id, provenance="shadow"
+    ).order_by(LimsAnalysis.id).all()
+    assert len(rows) == 2
+    old, new = rows
+    assert old.retested is True
+    assert old.mirror_review_state == "verified"  # untouched
+    assert new.mirror_review_state == "unassigned"
+    assert new.retest_of_id == old.id
+
+    tr = db.query(LimsAnalysisTransition).filter_by(
+        analysis_id=old.id, transition_kind="retest"
+    ).one()
+    assert tr.reason == "shadow mirror: superseded by retest"
+
+
+def test_retest_with_old_mirror_review_state_updates_old_row_to_retracted(
+        db, seed_parent_and_service):
+    """The retract chain: passing `old_mirror_review_state="retracted"` must
+    stamp the OLD row's mirror_review_state to 'retracted' (SENAITE's retract
+    retires the original line, it doesn't leave it at its prior state) AND
+    use the retract-specific audit reason, while the NEW row is born with
+    whatever state/result the caller passes through (the retest copy)."""
+    parent, svc = seed_parent_and_service
+    mirror_parent_analysis(db, sample_id=parent.sample_id, keyword=svc.keyword,
+                           mirror_review_state="verified", result_value="30")
+    ok = mirror_parent_analysis(
+        db, sample_id=parent.sample_id, keyword=svc.keyword,
+        mirror_review_state="unassigned", result_value="30",
+        is_retest=True, old_mirror_review_state="retracted",
+    )
+    assert ok is True
+    rows = db.query(LimsAnalysis).filter_by(
+        lims_sample_pk=parent.id, provenance="shadow"
+    ).order_by(LimsAnalysis.id).all()
+    assert len(rows) == 2
+    old, new = rows
+    assert old.retested is True
+    assert old.mirror_review_state == "retracted"
+    assert new.mirror_review_state == "unassigned"
+    assert new.result_value == "30"
+    assert new.retest_of_id == old.id
+    assert new.retested is False
+
+    tr = db.query(LimsAnalysisTransition).filter_by(
+        analysis_id=old.id, transition_kind="retest"
+    ).one()
+    assert tr.reason == "shadow mirror: superseded by retract"
+
+
 def test_update_after_retest_targets_retest_row_not_a_third(db, seed_parent_and_service):
     """Amendment 1 regression test: the pre-fix `_existing_shadow` filter
     (retest_of_id IS NULL AND retested IS FALSE) misses the live row after a

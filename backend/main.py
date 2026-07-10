@@ -13999,6 +13999,12 @@ class AnalysisTransitionRequest(BaseModel):
 
 # After a successful transition, SENAITE should move to this review_state.
 # If the actual state differs, SENAITE silently rejected the transition (DATA-04).
+# NOTE: "retract"'s "unassigned" entry is DEAD for validation purposes —
+# retract is retire-and-replace, not an in-place flip (see the dedicated
+# early-return branch in transition_analysis), so its real post-state
+# ('retracted') is checked there instead of via this dict/DATA-04. The key
+# stays here only so the membership gate a few lines below still accepts
+# "retract" as a valid transition name.
 EXPECTED_POST_STATES: dict[str, str] = {
     "submit": "to_be_verified",
     "verify": "verified",
@@ -14053,6 +14059,83 @@ async def transition_analysis(
                 update_url, json={"transition": req.transition}
             )
             resp.raise_for_status()
+
+            # ── Retract: retire-and-replace, not an in-place state flip ──────
+            # SENAITE's retract transition retires the ORIGINAL analysis line
+            # (review_state -> 'retracted') and spawns a brand-new, DIFFERENT
+            # analysis object born 'unassigned' carrying the old Result, with
+            # retest_of_uid pointing at the original (live evidence: BW-0002
+            # FILL-NET-CONTENT — original 800582b9 -> retracted result=30;
+            # new copy 736bb35a -> unassigned result=30
+            # retest_of_uid=800582b9). Two bugs this exposes in the generic
+            # path below:
+            #   1. SENAITE's /update response for retract comes back with an
+            #      EMPTY items list even on success — the items-empty guard
+            #      a few lines down would report a false failure.
+            #   2. EXPECTED_POST_STATES["retract"] == "unassigned" models the
+            #      in-place flip that doesn't exist; the original's true
+            #      post-state is 'retracted' — the unassigned thing is a
+            #      DIFFERENT object, so DATA-04 below can't validate retract.
+            # Handled as a self-contained early-return branch so every other
+            # verb (submit/verify/reject/retest) stays byte-identical to
+            # before: whether or not the POST's items came back, re-fetch the
+            # target uid's current state (same GET-by-uid shape as the
+            # retest/reject cascade's getRequestID fallback further below) and
+            # use its review_state as the sole success criterion.
+            if req.transition == "retract":
+                _fetch_url = (
+                    f"{SENAITE_URL}/senaite/@@API/senaite/v1/Analysis/{uid}"
+                )
+                _fetch_resp = await client.get(_fetch_url)
+                _retract_item: dict = {}
+                if _fetch_resp.status_code == 200:
+                    _fetch_items = _fetch_resp.json().get("items", [])
+                    if _fetch_items:
+                        _retract_item = _fetch_items[0]
+
+                _retracted_state = _retract_item.get("review_state", "")
+                _retract_keyword = _retract_item.get("Keyword", "")
+
+                if _retracted_state != "retracted":
+                    return AnalysisResultResponse(
+                        success=False,
+                        message=(
+                            "Transition 'retract' was silently rejected by "
+                            f"SENAITE. Expected state 'retracted' but got "
+                            f"'{_retracted_state or 'unknown'}'."
+                        ),
+                        new_review_state=_retracted_state,
+                        keyword=_retract_keyword,
+                    )
+
+                # Confirmed retracted — fire the chained shadow mirror:
+                # the OLD live shadow row is stamped retracted+retested, and
+                # a NEW live row is born unassigned carrying the re-fetched
+                # Result (SENAITE's copy). Best-effort, own session, same
+                # posture as the A2/A3 mirror block below.
+                _retract_sid = (
+                    _retract_item.get("getRequestID")
+                    or _retract_item.get("RequestID")
+                )
+                if _retract_sid and _retract_keyword:
+                    from fastapi.concurrency import run_in_threadpool
+                    await run_in_threadpool(
+                        _mirror_parent_analysis_bg,
+                        sample_id=_retract_sid, keyword=_retract_keyword,
+                        mirror_review_state="unassigned",
+                        result_value=(_retract_item.get("Result") or None),
+                        is_retest=True,
+                        old_mirror_review_state="retracted",
+                    )
+
+                return AnalysisResultResponse(
+                    success=True,
+                    message="Transition 'retract' completed",
+                    new_review_state=_retracted_state,
+                    keyword=_retract_keyword,
+                )
+            # ── end retract special-case ──────────────────────────────────────
+
             data = resp.json()
             items = data.get("items", [])
             if not items:

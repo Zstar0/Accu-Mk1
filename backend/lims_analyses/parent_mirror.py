@@ -117,9 +117,23 @@ def mirror_parent_analysis(db: Session, *, sample_id: str, keyword: str,
                            result_unit: Optional[str] = None,
                            method_id: Optional[int] = None,
                            instrument_id: Optional[int] = None,
-                           is_retest: bool = False) -> bool:
+                           is_retest: bool = False,
+                           old_mirror_review_state: Optional[str] = None) -> bool:
     """Upsert a parent shadow row. Returns False (no-op) if the parent isn't
-    registered. Caller commits. Best-effort — callers wrap in try/except."""
+    registered. Caller commits. Best-effort — callers wrap in try/except.
+
+    `old_mirror_review_state` is honored ONLY in the `is_retest` branch: when
+    provided, it's stamped onto the OLD (superseded) row's
+    mirror_review_state before it's marked retested — modeling SENAITE's
+    retract transition, which is retire-and-replace (the original line
+    becomes 'retracted' and a NEW copy is born carrying the result, distinct
+    from a plain retest where the old line simply stays at whatever state it
+    was verified/submitted at). Default None preserves the exact prior
+    behavior (old row's mirror_review_state left untouched) — every existing
+    caller (plain retest) is unaffected. The audit reason is derived from
+    this kwarg: "shadow mirror: superseded by retract" when it's "retracted",
+    "shadow mirror: superseded by retest" otherwise (including the default
+    None case)."""
     target = resolve_shadow_target(db, sample_id=sample_id, keyword=keyword)
     if target is None:
         return False
@@ -128,10 +142,17 @@ def mirror_parent_analysis(db: Session, *, sample_id: str, keyword: str,
     if is_retest:
         old = _existing_shadow(db, parent.id, svc.id)
         if old is not None:
+            if old_mirror_review_state is not None:
+                old.mirror_review_state = old_mirror_review_state
             old.retested = True
+            superseded_reason = (
+                "shadow mirror: superseded by retract"
+                if old_mirror_review_state == "retracted"
+                else "shadow mirror: superseded by retest"
+            )
             db.add(LimsAnalysisTransition(
                 analysis_id=old.id, from_state=old.review_state, to_state=old.review_state,
-                transition_kind="retest", reason="shadow mirror: superseded by retest",
+                transition_kind="retest", reason=superseded_reason,
             ))
             # Flush the old row's retested=True BEFORE inserting the new row:
             # the shadow partial unique index (lims_sample_pk,

@@ -461,6 +461,144 @@ def test_transition_silent_rejection_no_mirror(db, seed_parent_and_service):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# Retract fix: retire-and-replace, not an in-place state flip.
+#
+# SENAITE's retract transition on an analysis retires the ORIGINAL line
+# (review_state -> 'retracted') and spawns a brand-new, DIFFERENT analysis
+# object born 'unassigned' carrying the old Result, with retest_of_uid
+# pointing at the original. Live evidence (BW-0002 FILL-NET-CONTENT):
+# original 800582b9 -> retracted result=30; new copy 736bb35a -> unassigned
+# result=30 retest_of_uid=800582b9.
+#
+# Two bugs this exposes in transition_analysis's generic path:
+#   1. SENAITE's /update response for retract comes back with an EMPTY items
+#      list even on success -> the pre-existing items-empty guard falsely
+#      reports success=False ("SENAITE returned no items").
+#   2. EXPECTED_POST_STATES["retract"] == "unassigned" models the in-place
+#      flip that doesn't exist -- the original's true post-state is
+#      'retracted' (the unassigned thing is a DIFFERENT object).
+#
+# Fix: a self-contained early-return branch for req.transition == "retract",
+# BEFORE the items-empty guard / DATA-04 check, that always re-fetches the
+# target uid's current Analysis state via GET and treats
+# review_state == "retracted" as the success criterion -- regardless of what
+# (if anything) the POST response's items carried.
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def _mock_senaite_retract(*, get_review_state, keyword, get_request_id,
+                          result=None, post_items=None):
+    """Patch httpx.AsyncClient for the retract path: POST /update/{uid} with
+    {"transition": "retract"} returns `post_items` (default [] -- the
+    documented real-world empty-items-on-success behavior), and the
+    endpoint's retract branch re-fetches via GET /Analysis/{uid}, which
+    returns the item this function's kwargs describe. `.get` is explicitly
+    configured as an AsyncMock returning a response with `status_code = 200`
+    and the re-fetched item -- a bare AsyncMock's auto-created `.get` return
+    value has no real `status_code`, which would make the endpoint's
+    `status_code == 200` check silently fail. Caller must .stop() the
+    returned patcher."""
+    mock_instance = AsyncMock()
+
+    post_resp = MagicMock()
+    post_resp.raise_for_status = MagicMock()
+    post_resp.json = MagicMock(return_value={"items": post_items if post_items is not None else []})
+    mock_instance.post = AsyncMock(return_value=post_resp)
+
+    get_item = {
+        "review_state": get_review_state,
+        "Keyword": keyword,
+        "getRequestID": get_request_id,
+    }
+    if result is not None:
+        get_item["Result"] = result
+    get_resp = MagicMock()
+    get_resp.status_code = 200
+    get_resp.json = MagicMock(return_value={"items": [get_item]})
+    mock_instance.get = AsyncMock(return_value=get_resp)
+
+    p = patch("httpx.AsyncClient")
+    cls = p.start()
+    cls.return_value.__aenter__ = AsyncMock(return_value=mock_instance)
+    cls.return_value.__aexit__ = AsyncMock(return_value=False)
+    return p
+
+
+def test_transition_retract_empty_items_refetch_confirms_succeeds(
+        db, seed_parent_and_service):
+    """Empty-items POST response (the real-world retract behavior) + a
+    mocked re-fetch confirming review_state == 'retracted' -> success=True,
+    new_review_state='retracted', and the chained shadow mirror fires: the
+    pre-existing live shadow row is retired (mirror_review_state='retracted',
+    retested=True) and a new live row is born unassigned carrying the
+    re-fetched Result, linked via retest_of_id."""
+    parent, svc = seed_parent_and_service
+    from lims_analyses.parent_mirror import mirror_parent_analysis
+    mirror_parent_analysis(
+        db, sample_id=parent.sample_id, keyword=svc.keyword,
+        mirror_review_state="verified", result_value="30",
+    )
+    db.commit()
+
+    proxy = _mock_senaite_retract(
+        get_review_state="retracted", keyword=svc.keyword,
+        get_request_id=parent.sample_id, result="30", post_items=[],
+    )
+    try:
+        with patch.object(main, "SENAITE_URL", "http://senaite.test"):
+            r = _client().post(
+                "/wizard/senaite/analyses/UID-1/transition", json={"transition": "retract"}
+            )
+    finally:
+        proxy.stop()
+
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["success"] is True
+    assert body["new_review_state"] == "retracted"
+
+    rows = db.query(LimsAnalysis).filter_by(
+        lims_sample_pk=parent.id, provenance="shadow"
+    ).order_by(LimsAnalysis.id).all()
+    assert len(rows) == 2
+    old, new = rows
+    assert old.retested is True
+    assert old.mirror_review_state == "retracted"
+    assert new.retested is False
+    assert new.mirror_review_state == "unassigned"
+    assert new.result_value == "30"
+    assert new.retest_of_id == old.id
+
+
+def test_transition_retract_refetch_not_retracted_fails_no_mirror(
+        db, seed_parent_and_service):
+    """The re-fetch shows the target uid did NOT land on 'retracted' (a
+    genuine silent rejection) -> success=False, and the mirror hook must not
+    fire at all (no shadow row written)."""
+    parent, svc = seed_parent_and_service
+    proxy = _mock_senaite_retract(
+        get_review_state="unassigned", keyword=svc.keyword,
+        get_request_id=parent.sample_id, post_items=[],
+    )
+    try:
+        with patch.object(main, "SENAITE_URL", "http://senaite.test"):
+            r = _client().post(
+                "/wizard/senaite/analyses/UID-1/transition", json={"transition": "retract"}
+            )
+    finally:
+        proxy.stop()
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["success"] is False
+
+    row = db.query(LimsAnalysis).filter_by(
+        lims_sample_pk=parent.id, provenance="shadow"
+    ).one_or_none()
+    assert row is None
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # Task 6: hook A4 — set_analysis_method_instrument (SENAITE-uid resolution)
 # ═══════════════════════════════════════════════════════════════════════════
 
