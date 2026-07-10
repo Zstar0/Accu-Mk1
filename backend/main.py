@@ -403,6 +403,12 @@ async def lifespan(app: FastAPI):
             db.close()
     _flag_scheduler.register("attachment_gc", interval=_timedelta(hours=1),
                              fn=_gc_job)
+    # State-change watches poller (Plan 6) — polls the host `state` seam every
+    # ~2 min and fires armed watches once. Job fn takes `now` (the ticker calls
+    # fn(now=now)); run_watch_poll owns its own Session via _watch_poll_job.
+    from flags import watches as _flag_watches
+    _flag_scheduler.register("flag_watch_poller", interval=_timedelta(minutes=2),
+                             fn=_flag_watches._watch_poll_job)
     _flag_scheduler.start()
     # Seed default settings and admin user
     from database import SessionLocal

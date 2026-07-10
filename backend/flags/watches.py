@@ -115,3 +115,91 @@ def list_watches(db: Session, *, flag_id: Optional[int] = None,
         stmt = stmt.where(FlagEntityWatch.watch_flag_id == flag_id)
     return list(db.execute(
         stmt.order_by(FlagEntityWatch.created_at.asc())).scalars().all())
+
+
+# --- poller --------------------------------------------------------------
+def _condition_met(db: Session, watch: FlagEntityWatch) -> bool:
+    cond = watch.condition or {}
+    if cond.get("field") != "state":
+        return False  # v1 evaluates state-equality only
+    current = seams.resolve_state(db, watch.entity_type, watch.entity_id)
+    return current is not None and current == cond.get("equals")
+
+
+def _fire(db: Session, watch: FlagEntityWatch) -> None:
+    """Execute the action + mark the watch fired ATOMICALLY (spec §9 one-shot).
+
+    `status='fired'`/`fired_at` are set on the session BEFORE the service call;
+    the action's own `_commit_and_emit` commit flushes the dirty watch in the
+    SAME transaction — action + status-flip are all-or-nothing (a raise inside
+    the action rolls both back, leaving the watch armed for the next tick). The
+    `watch_fired` audit event is emitted in a follow-up commit (best-effort:
+    losing only the meta event on a mid-fire crash beats double-firing).
+
+    Attributes the watch CREATOR and stamps {automated, watch_id} on the action's
+    own event via service's existing `event_details` merge (spec §10 lineage)."""
+    action = watch.action or {}
+    kind = action.get("kind")
+    actor = _ActorRef(id=watch.created_by)
+    marker = {"automated": True, "watch_id": watch.id}
+    watch.status = "fired"
+    watch.fired_at = datetime.utcnow()
+    if kind == "create_flag":
+        flag = service.create_flag(
+            db, user=actor, entity_type=None, entity_id=None,
+            type=action.get("type") or "task", title=action["title"],
+            assignee_id=action.get("assignee_id"), event_details=marker)
+        if watch.watch_flag_id is None:
+            watch.watch_flag_id = flag.id      # link standalone watch to its flag
+        target_flag_id = flag.id
+    elif kind == "comment":
+        service.add_comment(db, user=actor, flag_id=int(action["flag_id"]),
+                            body=action["body"], event_details=marker)
+        target_flag_id = watch.watch_flag_id or int(action["flag_id"])
+    else:
+        raise BadRequestError(f"unknown action kind {kind!r}")
+    target = service.get_flag(db, target_flag_id)
+    service._audit(db, target, watch.created_by, "watch_fired", details=marker)
+    service._commit_and_emit(db)
+
+
+def run_watch_poll(db: Session, *, now: Optional[datetime] = None) -> int:
+    """Evaluate every armed watch once; fire the matches; return the fire count.
+
+    Pure + injectable — no scheduler, no sleeps, opens no Session (the caller
+    owns it) — so slice-§12 tests drive it directly with a fake `state` seam.
+    Each watch is re-fetched by id and re-checked `armed` inside the loop so a
+    `rollback()` in one iteration never acts on stale batch-loaded rows; a
+    per-watch try/except isolates one poison watch from the rest."""
+    _ = now  # v1 conditions are state-only; `now` reserved for future time conds
+    armed_ids = list(db.execute(
+        select(FlagEntityWatch.id)
+        .where(FlagEntityWatch.status == "armed")
+        .order_by(FlagEntityWatch.id.asc())).scalars().all())
+    fired = 0
+    for wid in armed_ids:
+        try:
+            watch = db.get(FlagEntityWatch, wid)
+            if watch is None or watch.status != "armed":
+                continue
+            if not _condition_met(db, watch):
+                continue
+            _fire(db, watch)
+            fired += 1
+        except Exception:  # noqa: BLE001 — isolate one poison watch
+            db.rollback()
+            log.warning("flag_watch_fire_failed watch_id=%s", wid, exc_info=True)
+    return fired
+
+
+def _watch_poll_job(now: Optional[datetime] = None) -> None:
+    """Scheduler entry point: open a Session, run one poll pass, close it. Thin
+    wrapper so `run_watch_poll` stays Session-injectable + test-friendly (§12).
+    Sync `def` run in the scheduler's threadpool; accepts the `now` the ticker
+    passes (Slice-5 Scheduler calls `fn(now=now)`)."""
+    from database import SessionLocal
+    db = SessionLocal()
+    try:
+        run_watch_poll(db, now=now)
+    finally:
+        db.close()
