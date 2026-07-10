@@ -13672,6 +13672,26 @@ async def update_senaite_sample_fields(
 # --- Analysis result and transition endpoints ---
 
 
+def _mirror_parent_analysis_bg(**kwargs) -> None:
+    """Best-effort parent-analysis shadow mirror on its own short-lived session
+    (never holds the request DB across the SENAITE HTTP call). Never raises."""
+    from database import SessionLocal
+    from lims_analyses.parent_mirror import mirror_parent_analysis
+    db = SessionLocal()
+    try:
+        if mirror_parent_analysis(db, **kwargs):
+            db.commit()
+    except Exception as mirror_err:  # noqa: BLE001
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        logger.warning("registry.analysis_mirror_failed kw=%s err=%s",
+                       kwargs.get("keyword"), mirror_err)
+    finally:
+        db.close()
+
+
 class AnalysisResultRequest(BaseModel):
     result: str  # The result value to set
 
@@ -13721,6 +13741,18 @@ async def set_analysis_result(
                     message="SENAITE returned no items — update may have failed",
                 )
             item = items[0]
+
+            from fastapi.concurrency import run_in_threadpool
+            _sid = item.get("getRequestID") or item.get("RequestID")
+            _kw = item.get("Keyword")
+            if _sid and _kw:
+                await run_in_threadpool(
+                    _mirror_parent_analysis_bg,
+                    sample_id=_sid, keyword=_kw,
+                    mirror_review_state=item.get("review_state"),
+                    result_value=req.result,
+                )
+
             return AnalysisResultResponse(
                 success=True,
                 message="Result updated",
