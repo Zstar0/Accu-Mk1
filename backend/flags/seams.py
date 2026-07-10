@@ -256,6 +256,16 @@ def set_attachment_storage_for_tests(storage: "AttachmentStorage") -> None:
 
 
 # --- Mk1 registrations ---------------------------------------------------
+def _ilike_prefix(q: str) -> str:
+    r"""An escaped `q%` ILIKE pattern for search-as-you-type. LIKE metacharacters
+    are matched literally (escape char `\`), so typing `%`/`_` finds the literal
+    rather than a wildcard. Prefix (not substring) — a typeahead over ids/titles
+    anchors on the start. Mirrors service._like_pattern's escaping; kept local so
+    seams does not depend on the higher service layer."""
+    esc = str(q).replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"{esc}%"
+
+
 def register_mk1_entities() -> None:
     """Register the Phase-1 flaggable entity types. Called at startup.
 
@@ -345,6 +355,40 @@ def register_mk1_entities() -> None:
             "deep_link": {"kind": "worksheet", "id": str(eid)},
         }
 
+    # --- typeahead search closures (link pickers) ------------------------
+    # entity_id is per-type to match how each type's context/deep-link
+    # resolves and how existing links dedup: sample → human sample_id,
+    # sub_sample/worksheet → the pk their resolvers accept.
+    def _sample_search(db, q):
+        from models import LimsSample
+        pattern = _ilike_prefix(q)
+        rows = (db.query(LimsSample)
+                .filter(LimsSample.sample_id.ilike(pattern, escape="\\"))
+                .order_by(LimsSample.sample_id)
+                .limit(10).all())
+        return [{"entity_id": r.sample_id, "label": r.sample_id} for r in rows]
+
+    def _sub_sample_search(db, q):
+        from models import LimsSubSample
+        pattern = _ilike_prefix(q)
+        rows = (db.query(LimsSubSample)
+                .filter(LimsSubSample.sample_id.ilike(pattern, escape="\\"))
+                .order_by(LimsSubSample.sample_id)
+                .limit(10).all())
+        return [{"entity_id": str(r.id), "label": r.sample_id} for r in rows]
+
+    def _worksheet_search(db, q):
+        from sqlalchemy import or_
+        from models import Worksheet
+        cond = Worksheet.title.ilike(_ilike_prefix(q), escape="\\")
+        if str(q).isdigit():
+            cond = or_(cond, Worksheet.id == int(q))
+        rows = (db.query(Worksheet).filter(cond)
+                .order_by(Worksheet.id.desc())
+                .limit(10).all())
+        return [{"entity_id": str(r.id), "label": r.title or f"Worksheet {r.id}"}
+                for r in rows]
+
     # Deep links reconciled against the real frontend useHashNavigation routes
     # (Plan 3 Task 7). Hash format is `#<section>/<subsection>?id=<id>`.
     register_entity("sample",
@@ -353,14 +397,17 @@ def register_mk1_entities() -> None:
                     can_flag=lambda user, eid: True,
                     context=_sample_context,
                     descendants=_sample_descendants,
-                    state=_sample_state)
+                    state=_sample_state,
+                    search=_sample_search)
     register_entity("sub_sample",
                     label=_sub_sample_label,
                     deep_link=lambda eid: f"/#senaite/sample-details?id={eid}",
                     can_flag=lambda user, eid: True,
-                    context=_sub_sample_context)
+                    context=_sub_sample_context,
+                    search=_sub_sample_search)
     register_entity("worksheet",
                     label=lambda db, eid: f"Worksheet {eid}",
                     deep_link=lambda eid: f"/#hplc-analysis/worksheet-detail?id={eid}",
                     can_flag=lambda user, eid: True,
-                    context=_worksheet_context)
+                    context=_worksheet_context,
+                    search=_worksheet_search)
