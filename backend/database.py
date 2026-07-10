@@ -1056,6 +1056,25 @@ def _run_migrations():
         "ALTER TABLE slack_dm_prefs ADD COLUMN IF NOT EXISTS digest_enabled BOOLEAN NOT NULL DEFAULT FALSE",
         "ALTER TABLE slack_dm_prefs ADD COLUMN IF NOT EXISTS digest_hour INTEGER NOT NULL DEFAULT 8",
         "ALTER TABLE slack_dm_prefs ADD COLUMN IF NOT EXISTS last_digest_date DATE",
+        # --- Phase 2 slice 6: state-change watches ---
+        """
+        CREATE TABLE IF NOT EXISTS flag_entity_watches (
+            id            SERIAL PRIMARY KEY,
+            entity_type   TEXT NOT NULL,
+            entity_id     TEXT NOT NULL,
+            condition     JSONB NOT NULL,
+            action        JSONB NOT NULL,
+            created_by    INTEGER NOT NULL,
+            watch_flag_id INTEGER REFERENCES flag_flags(id) ON DELETE CASCADE,
+            status        TEXT NOT NULL DEFAULT 'armed'
+                          CONSTRAINT flag_entity_watches_status_check
+                          CHECK (status IN ('armed','fired','cancelled')),
+            created_at    TIMESTAMP NOT NULL DEFAULT NOW(),
+            fired_at      TIMESTAMP
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS ix_flag_entity_watches_status ON flag_entity_watches (status)",
+        "CREATE INDEX IF NOT EXISTS ix_flag_entity_watches_flag   ON flag_entity_watches (watch_flag_id)",
     ]
     # Per-statement isolation: a failure in one statement (e.g., a table that
     # create_all hasn't built yet on first run) must not skip subsequent

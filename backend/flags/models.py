@@ -215,3 +215,31 @@ class FlagCommentReaction(Base):
     user_id: Mapped[int] = mapped_column(Integer, nullable=False)
     emoji: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class FlagEntityWatch(Base):
+    """An armed watch on a host entity's workflow state (Plan 6).
+
+    A scheduler poller (flags/watches.py) evaluates `condition` against the
+    `state` seam every ~2 min and fires `action` ONCE (one-shot v1; re-arm is
+    manual). Anchors by opaque (entity_type, entity_id) like a flag — NO FK to
+    host tables. `watch_flag_id` is set when armed from a flag thread (fire =
+    comment on that flag); NULL for a standalone watch armed from an entity page
+    (fire = mint a new flag)."""
+    __tablename__ = "flag_entity_watches"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    entity_type: Mapped[str] = mapped_column(Text, nullable=False)
+    entity_id: Mapped[str] = mapped_column(Text, nullable=False)
+    condition: Mapped[dict] = mapped_column(
+        JSONB().with_variant(JSON(), "sqlite"), nullable=False)
+    action: Mapped[dict] = mapped_column(
+        JSONB().with_variant(JSON(), "sqlite"), nullable=False)
+    created_by: Mapped[int] = mapped_column(Integer, nullable=False)
+    watch_flag_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("flag_flags.id", ondelete="CASCADE"),
+        nullable=True, index=True)
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="armed",
+                                        server_default="armed", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    fired_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
