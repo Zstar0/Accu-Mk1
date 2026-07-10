@@ -10,6 +10,7 @@ import {
   nameForUser,
   initialsForUser,
   avatarColor,
+  avatarUrlForUser,
 } from '@/components/flags/flag-users'
 import { relativeTime } from '@/components/flags/flag-format'
 import { STATUS_LABELS } from '@/components/flags/flag-status'
@@ -53,6 +54,7 @@ export function FlagActivityRow({ item }: { item: ActivityItem }) {
       <FlagAvatar
         initials={initialsForUser(users, item.actor_id, me)}
         color={avatarColor(item.actor_id)}
+        avatarUrl={avatarUrlForUser(users, item.actor_id)}
         isYou={item.actor_id != null && item.actor_id === me}
       />
       <span className="min-w-0 flex-1 truncate text-[13px]">

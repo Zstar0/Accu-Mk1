@@ -17,6 +17,7 @@ import {
   nameForUser,
   initialsForUser,
   avatarColor,
+  avatarUrlForUser,
 } from '@/components/flags/flag-users'
 import { relativeTime, dueLabel } from '@/components/flags/flag-format'
 import {
@@ -202,6 +203,7 @@ export function FlagCard({
           <FlagAvatar
             initials={initialsForUser(users, flag.assignee_id, currentUserId)}
             color={avatarColor(flag.assignee_id)}
+            avatarUrl={avatarUrlForUser(users, flag.assignee_id)}
             isYou={
               flag.assignee_id != null && flag.assignee_id === currentUserId
             }

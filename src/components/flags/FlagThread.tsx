@@ -54,6 +54,7 @@ import {
   nameForUser,
   initialsForUser,
   avatarColor,
+  avatarUrlForUser,
   type UserMap,
 } from '@/components/flags/flag-users'
 import { displayName } from '@/lib/user-display'
@@ -469,6 +470,7 @@ export function FlagThread({
                 currentUserId
               )}
               color={avatarColor(entry.comment.author_id)}
+              avatarUrl={avatarUrlForUser(users, entry.comment.author_id)}
               users={users}
               index={i}
               flagId={flagId}
@@ -489,6 +491,7 @@ export function FlagThread({
         <FlagAvatar
           initials={initialsForUser(users, currentUserId, currentUserId)}
           color={avatarColor(currentUserId)}
+          avatarUrl={avatarUrlForUser(users, currentUserId)}
           isYou
           size={22}
         />
@@ -510,6 +513,7 @@ export function FlagThread({
                 <FlagAvatar
                   initials={initialsForUser(users, u.id, currentUserId)}
                   color={avatarColor(u.id)}
+                  avatarUrl={avatarUrlForUser(users, u.id)}
                   size={18}
                 />
                 <span className="truncate">{displayName(u)}</span>
@@ -703,6 +707,7 @@ function CommentRow({
   name,
   initials,
   color,
+  avatarUrl,
   users,
   index,
   flagId,
@@ -714,6 +719,7 @@ function CommentRow({
   name: string
   initials: string
   color: string
+  avatarUrl: string | null
   users: UserMap
   index: number
   flagId: number
@@ -745,7 +751,13 @@ function CommentRow({
         className="flag-cmt-in group -mx-2 flex items-start gap-2 rounded-md px-2 py-1 transition-colors hover:bg-muted/40"
         style={{ animationDelay }}
       >
-        <FlagAvatar initials={initials} color={color} isYou={isMe} size={20} />
+        <FlagAvatar
+          initials={initials}
+          color={color}
+          avatarUrl={avatarUrl}
+          isYou={isMe}
+          size={20}
+        />
         <div className="min-w-0 flex-1">
           <div className="flex items-baseline gap-2">
             <b className="text-xs text-foreground">{isMe ? 'You' : name}</b>
@@ -764,7 +776,13 @@ function CommentRow({
       className="flag-cmt-in flex gap-2.5"
       style={{ animationDelay }}
     >
-      <FlagAvatar initials={initials} color={color} isYou={isMe} size={22} />
+      <FlagAvatar
+        initials={initials}
+        color={color}
+        avatarUrl={avatarUrl}
+        isYou={isMe}
+        size={22}
+      />
       <div
         className={cn(
           'min-w-0 max-w-full rounded-xl border px-3 py-2',

@@ -8,6 +8,7 @@ vi.mock('@/components/flags/flag-users', () => ({
     id == null ? '—' : `User ${id}`,
   initialsForUser: () => 'U',
   avatarColor: () => '#888',
+  avatarUrlForUser: () => null,
 }))
 const addFlagAttachment = vi.hoisted(() => vi.fn())
 vi.mock('@/lib/flags-api', async orig => ({
