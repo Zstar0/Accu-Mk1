@@ -168,7 +168,10 @@ describe('flag mutations invalidate the right keys', () => {
     await waitFor(() => expect(api.listFlags).toHaveBeenCalledTimes(1))
 
     await act(async () => {
-      await result.current.comment.mutateAsync({ body: 'hello', mentionIds: [] })
+      await result.current.comment.mutateAsync({
+        body: 'hello',
+        mentionIds: [],
+      })
     })
 
     // Comment touches the thread detail only — the list stays put.
@@ -214,7 +217,9 @@ describe('useFlagSearch', () => {
   beforeEach(() => vi.clearAllMocks())
 
   it('stays disabled (no fetch) below 3 chars', async () => {
-    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
     renderHook(() => useFlagSearch('ph'), { wrapper: makeWrapper(qc) })
     await new Promise(r => setTimeout(r, 20))
     expect(api.searchFlags).not.toHaveBeenCalled()
@@ -222,7 +227,9 @@ describe('useFlagSearch', () => {
   })
 
   it('queries once at 3+ chars', async () => {
-    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
     renderHook(() => useFlagSearch('precip'), { wrapper: makeWrapper(qc) })
     await waitFor(() => expect(api.searchFlags).toHaveBeenCalledWith('precip'))
     qc.clear()
