@@ -17,7 +17,7 @@ from flags.bus import BUS
 from flags.errors import BadRequestError, ConflictError, NotFoundError, PermissionDeniedError
 from flags.schemas import (
     ActivityItem, ActivityPage, AssignRequest, CommentRequest, CommentResponse,
-    CreateFlagRequest, EntityContext, FlagDetailResponse, FlagResponse,
+    CreateFlagRequest, DueRequest, EntityContext, FlagDetailResponse, FlagResponse,
     FlagTypeCreate, FlagTypeResponse, FlagTypeUpdate, StatusRequest,
     SummaryResponse, WatcherOut, WatcherRequest,
 )
@@ -60,7 +60,7 @@ def create_flag(req: CreateFlagRequest, db: Session = Depends(get_db), user=Depe
         flag = service.create_flag(
             db, user=user, entity_type=req.entity_type, entity_id=req.entity_id,
             type=req.type, title=req.title, assignee_id=req.assignee_id,
-            first_comment=req.first_comment)
+            first_comment=req.first_comment, due_at=req.due_at)
         return _with_entity(db, flag)
     except Exception as e:
         raise _http(e)
@@ -241,6 +241,15 @@ def assign(flag_id: int, req: AssignRequest, db: Session = Depends(get_db), user
 def change_status(flag_id: int, req: StatusRequest, db: Session = Depends(get_db), user=Depends(get_current_user)):
     try:
         return FlagResponse.model_validate(service.change_status(db, user=user, flag_id=flag_id, to_status=req.to_status))
+    except Exception as e:
+        raise _http(e)
+
+
+@router.put("/{flag_id}/due", response_model=FlagResponse)
+def set_due(flag_id: int, req: DueRequest, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    try:
+        return _with_entity(db, service.set_due(db, user=user, flag_id=flag_id,
+                                                due_at=req.due_at), FlagResponse)
     except Exception as e:
         raise _http(e)
 

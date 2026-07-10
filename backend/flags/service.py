@@ -58,7 +58,7 @@ def _commit_and_emit(db):
 
 
 def create_flag(db: Session, *, user, entity_type, entity_id, type, title,
-                assignee_id=None, first_comment=None) -> FlagFlag:
+                assignee_id=None, first_comment=None, due_at=None) -> FlagFlag:
     # A NULL anchor = a general task (spec §5). entity_id without an entity_type
     # is malformed; a present entity_type must be registered.
     if entity_type is None:
@@ -85,11 +85,14 @@ def create_flag(db: Session, *, user, entity_type, entity_id, type, title,
     flag = FlagFlag(entity_type=entity_type,
                     entity_id=str(entity_id) if entity_id is not None else None,
                     kind=types_service.kind_for_type(db, type), type=type, status="open",
-                    title=title, created_by=actor_id, assignee_id=assignee_id)
+                    title=title, created_by=actor_id, assignee_id=assignee_id,
+                    due_at=due_at)
     db.add(flag)
     db.flush()  # populate flag.id
 
     _audit(db, flag, actor_id, "raised", to_value="open", details={"type": type})
+    if due_at is not None:
+        _audit(db, flag, actor_id, "due_set", to_value=due_at.isoformat())
     if assignee_id is not None:
         db.add(FlagParticipant(flag_id=flag.id, user_id=assignee_id, role="watcher", added_by=actor_id))
         _audit(db, flag, actor_id, "assigned", to_value=str(assignee_id))
@@ -385,6 +388,28 @@ def change_status(db: Session, *, user, flag_id, to_status) -> FlagFlag:
         flag.resolved_at = None
         flag.resolved_by = None
     _audit(db, flag, actor_id, "status_changed", from_value=from_status, to_value=to_status)
+    _commit_and_emit(db)
+    db.refresh(flag)
+    return flag
+
+
+def set_due(db: Session, *, user, flag_id: int,
+            due_at: Optional[datetime]) -> FlagFlag:
+    """Set/change/clear a flag's due date; no-op if unchanged. Same permission
+    tier as status changes (assignee/creator/admin) per spec §5."""
+    flag = get_flag(db, flag_id)
+    if not permissions.can(user, "change_status", flag):
+        raise PermissionDeniedError("not allowed to edit this flag")
+    if flag.due_at == due_at:
+        return flag
+    old = flag.due_at
+    flag.due_at = due_at
+    flag.updated_at = datetime.utcnow()
+    event = ("due_set" if old is None else
+             "due_cleared" if due_at is None else "due_changed")
+    _audit(db, flag, getattr(user, "id", None), event,
+           from_value=old.isoformat() if old else None,
+           to_value=due_at.isoformat() if due_at else None)
     _commit_and_emit(db)
     db.refresh(flag)
     return flag

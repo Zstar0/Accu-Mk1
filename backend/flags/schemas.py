@@ -20,6 +20,11 @@ class CreateFlagRequest(BaseModel):
     title: str
     assignee_id: Optional[int] = None
     first_comment: Optional[str] = None
+    due_at: Optional[datetime] = None
+
+
+class DueRequest(BaseModel):
+    due_at: Optional[datetime] = None
 
 
 class CommentRequest(BaseModel):
