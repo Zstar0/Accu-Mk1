@@ -46,6 +46,35 @@ def _with_entity(db: Session, flag, resp_cls=FlagResponse):
     return resp
 
 
+def _with_entities(db: Session, flags, resp_cls=FlagResponse):
+    """Batch form of `_with_entity` for list endpoints: decorate many flags with
+    resolved entity context in a BOUNDED number of queries (one batch per entity
+    type) instead of the per-flag N+1. Output per flag is identical to
+    `_with_entity`; order is preserved.
+
+    Virtual item kinds (entity_type set, entity_id NULL) and general tasks
+    (entity_type NULL) carry no seam context — they're skipped here and their
+    `entity` stays unset, exactly as `resolve_context` would leave them.
+    """
+    resps = [resp_cls.model_validate(f) for f in flags]
+    # Group the ids that CAN resolve (both parts present) by entity type.
+    ids_by_type: dict[str, set] = {}
+    for f in flags:
+        if f.entity_type is not None and f.entity_id is not None:
+            ids_by_type.setdefault(f.entity_type, set()).add(str(f.entity_id))
+    ctx_by_type = {
+        et: seams.resolve_contexts(db, et, list(ids))
+        for et, ids in ids_by_type.items()
+    }
+    for resp, f in zip(resps, flags):
+        if f.entity_type is None or f.entity_id is None:
+            continue
+        ctx = ctx_by_type.get(f.entity_type, {}).get(str(f.entity_id))
+        if ctx is not None:
+            resp.entity = EntityContext.model_validate(ctx)
+    return resps
+
+
 def _http(e: Exception) -> HTTPException:
     if isinstance(e, NotFoundError):
         return HTTPException(status_code=404, detail=str(e))
@@ -82,7 +111,7 @@ def list_flags(tab: str = Query("all_open"), status: Optional[str] = None,
         rows = service.list_flags(db, user_id=getattr(user, "id", None), tab=tab,
                                   status=status, entity_type=entity_type, entity_id=entity_id,
                                   include_descendants=include_descendants)
-        return [_with_entity(db, r) for r in rows]
+        return _with_entities(db, rows)
     except Exception as e:
         raise _http(e)
 
@@ -101,14 +130,15 @@ def activity(cursor: Optional[str] = None, limit: int = Query(25, ge=1, le=50),
         rows, next_cursor = service.list_activity(
             db, user_id=user_id, cursor=cursor, limit=limit)
         rel = service.compute_relevance(db, rows, user_id=user_id)
+        flag_resps = _with_entities(db, [ev.flag for ev in rows])
         items = [
             ActivityItem(
                 id=ev.id, event_type=ev.event_type, actor_id=ev.actor_id,
                 from_value=ev.from_value, to_value=ev.to_value,
-                created_at=ev.created_at, flag=_with_entity(db, ev.flag),
+                created_at=ev.created_at, flag=fr,
                 relevance=rel.get(ev.id, []),
             )
-            for ev in rows
+            for ev, fr in zip(rows, flag_resps)
         ]
         return ActivityPage(items=items, next_cursor=next_cursor)
     except Exception as e:
@@ -120,7 +150,7 @@ def unread(db: Session = Depends(get_db), user=Depends(get_current_user)):
     # Literal /unread above /{flag_id}.
     try:
         rows = service.list_unread(db, user_id=getattr(user, "id", None))
-        return [_with_entity(db, r) for r in rows]
+        return _with_entities(db, rows)
     except Exception as e:
         raise _http(e)
 

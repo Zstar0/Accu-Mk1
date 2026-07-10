@@ -27,6 +27,14 @@ class EntitySpec:
     # (e.g. a sample's vials). Both are pure host-domain closures — the module
     # core never learns what a "vial" is.
     context: Optional[Callable[[Session, str], Optional[dict]]] = None
+    # Optional BATCH context resolver (perf). Given many ids of this type,
+    # returns `{entity_id: ctx}` for the ids that resolve — the SAME raw ctx dict
+    # `context` returns per id (unstamped; `resolve_contexts` stamps
+    # entity_type/entity_id, exactly like `resolve_context`). Types without it
+    # fall back to a per-id `context` loop (identical results). Only the
+    # query-heavy types (sample/sub_sample) bother; it kills the list-endpoint
+    # N+1 without the core learning any host domain.
+    contexts: Optional[Callable[[Session, list], dict]] = None
     descendants: Optional[Callable[[Session, str], list]] = None
     # Optional state resolver (Plan 6 — state-change watches). Returns the
     # entity's current host-domain workflow state (e.g. a sample's status) or
@@ -44,10 +52,11 @@ _REGISTRY: dict[str, EntitySpec] = {}
 
 
 def register_entity(entity_type: str, *, label, deep_link, can_flag,
-                    context=None, descendants=None, state=None,
+                    context=None, contexts=None, descendants=None, state=None,
                     search=None) -> None:
     _REGISTRY[entity_type] = EntitySpec(entity_type, label, deep_link, can_flag,
-                                        context=context, descendants=descendants,
+                                        context=context, contexts=contexts,
+                                        descendants=descendants,
                                         state=state, search=search)
 
 
@@ -78,6 +87,44 @@ def resolve_context(db: Session, entity_type: str, entity_id: str) -> Optional[d
     if ctx is None:
         return None
     return {"entity_type": entity_type, "entity_id": str(entity_id), **ctx}
+
+
+def resolve_contexts(db: Session, entity_type: str, ids: list) -> dict:
+    """Batch form of `resolve_context`: resolve many ids of ONE entity type in
+    one shot. Returns `{entity_id: ctx}` for the ids that resolve; ids that
+    don't resolve (unregistered type, no resolver, missing/deleted row) are
+    simply absent — same None-semantics as `resolve_context`, just expressed as
+    an omitted key. Each returned ctx is byte-identical to the per-id path:
+    stamped with `entity_type`/`entity_id` around the closure's raw dict.
+
+    Types that register a `contexts` batch closure use it (one `IN (...)` sweep
+    instead of N round-trips); the rest fall back to a per-id `resolve_context`
+    loop. A batch-closure error falls back to the per-id loop too — correctness
+    over efficiency, and it still never raises into a request.
+    """
+    ids = [str(i) for i in ids]
+    spec = _REGISTRY.get(entity_type)
+    if spec is None or spec.context is None:
+        return {}
+
+    def _per_id() -> dict:
+        out: dict = {}
+        for eid in ids:
+            ctx = resolve_context(db, entity_type, eid)
+            if ctx is not None:
+                out[eid] = ctx
+        return out
+
+    if spec.contexts is None:
+        return _per_id()
+    try:
+        raw = spec.contexts(db, ids)
+    except Exception:  # noqa: BLE001 — batch is best-effort; fall back per-id
+        return _per_id()
+    if raw is None:
+        return _per_id()
+    return {str(eid): {"entity_type": entity_type, "entity_id": str(eid), **ctx}
+            for eid, ctx in raw.items() if ctx is not None}
 
 
 def has_state_seam(entity_type: str) -> bool:
@@ -332,6 +379,36 @@ def register_mk1_entities() -> None:
             "deep_link": {"kind": "sample", "id": row.sample_id},
         }
 
+    def _sample_contexts(db, eids):
+        """Batch of `_sample_context`. Mirrors `_load_sample`'s pk-then-human-id
+        precedence over an `IN (...)` sweep, keyed by the INPUT id (a flag may
+        anchor a sample by pk OR by its human Sample ID, e.g. P-0071)."""
+        from sqlalchemy import or_
+        from models import LimsSample
+        eids = [str(e) for e in eids]
+        numeric = [int(e) for e in eids if e.isdigit()]
+        conds = [LimsSample.sample_id.in_(eids)]
+        if numeric:
+            conds.append(LimsSample.id.in_(numeric))
+        rows = db.query(LimsSample).filter(or_(*conds)).all()
+        by_pk = {r.id: r for r in rows}
+        by_sid = {r.sample_id: r for r in rows}
+        out = {}
+        for e in eids:
+            row = by_pk.get(int(e)) if e.isdigit() else None
+            if row is None:
+                row = by_sid.get(e)
+            if row is None:
+                continue
+            out[e] = {
+                "label": row.sample_id,
+                "sample_id": row.sample_id,
+                "analyses": [],
+                "lot": None,
+                "deep_link": {"kind": "sample", "id": row.sample_id},
+            }
+        return out
+
     def _sample_descendants(db, eid):
         from models import LimsSubSample
         row = _load_sample(db, eid)
@@ -369,6 +446,55 @@ def register_mk1_entities() -> None:
             "deep_link": deep_link,
         }
 
+    def _sub_sample_contexts(db, eids):
+        """Batch of `_sub_sample_context`: one sweep for the vials, one for their
+        parents, one for their analyses — three queries for the whole set,
+        replacing the per-vial (get + lazy parent + analyses) N+1. Non-digit ids
+        never resolve (mirrors the per-id `int(eid)` gate → None)."""
+        from models import LimsSubSample, LimsSample, LimsAnalysis
+        eids = [str(e) for e in eids]
+        numeric = [int(e) for e in eids if e.isdigit()]
+        if not numeric:
+            return {}
+        vials = db.query(LimsSubSample).filter(LimsSubSample.id.in_(numeric)).all()
+        by_id = {v.id: v for v in vials}
+        parent_pks = {v.parent_sample_pk for v in vials
+                      if v.parent_sample_pk is not None}
+        parents = {}
+        if parent_pks:
+            parents = {p.id: p for p in db.query(LimsSample).filter(
+                LimsSample.id.in_(parent_pks)).all()}
+        # Analyses grouped per vial, ordered by id, de-duped title-wise
+        # (first occurrence wins) — identical to the per-id closure.
+        titles_by_vial: dict = {}
+        if by_id:
+            for sub_pk, title in db.query(
+                    LimsAnalysis.lims_sub_sample_pk, LimsAnalysis.title).filter(
+                    LimsAnalysis.lims_sub_sample_pk.in_(list(by_id))
+                    ).order_by(LimsAnalysis.id).all():
+                lst = titles_by_vial.setdefault(sub_pk, [])
+                if title not in lst:
+                    lst.append(title)
+        out = {}
+        for e in eids:
+            if not e.isdigit():
+                continue
+            vial = by_id.get(int(e))
+            if vial is None:
+                continue
+            parent = parents.get(vial.parent_sample_pk)
+            parent_sample_id = getattr(parent, "sample_id", None)
+            deep_link = ({"kind": "sample", "id": parent_sample_id}
+                         if parent_sample_id else {"kind": "none", "id": str(e)})
+            out[e] = {
+                "label": vial.sample_id,
+                "sample_id": parent_sample_id,
+                "analyses": titles_by_vial.get(vial.id, []),
+                "lot": None,
+                "deep_link": deep_link,
+            }
+        return out
+
     def _worksheet_context(db, eid):
         return {
             "label": f"Worksheet {eid}",
@@ -377,6 +503,12 @@ def register_mk1_entities() -> None:
             "lot": None,
             "deep_link": {"kind": "worksheet", "id": str(eid)},
         }
+
+    def _worksheet_contexts(db, eids):
+        """Batch of `_worksheet_context`. The per-id resolver is already
+        DB-free; batching just keeps the three registered types symmetric so the
+        list route never falls back to a per-id loop for a real entity."""
+        return {str(e): _worksheet_context(db, str(e)) for e in eids}
 
     # --- typeahead search closures (link pickers) ------------------------
     # entity_id is per-type to match how each type's context/deep-link
@@ -419,6 +551,7 @@ def register_mk1_entities() -> None:
                     deep_link=lambda eid: f"/#senaite/sample-details?id={eid}",
                     can_flag=lambda user, eid: True,
                     context=_sample_context,
+                    contexts=_sample_contexts,
                     descendants=_sample_descendants,
                     state=_sample_state,
                     search=_sample_search)
@@ -427,10 +560,12 @@ def register_mk1_entities() -> None:
                     deep_link=lambda eid: f"/#senaite/sample-details?id={eid}",
                     can_flag=lambda user, eid: True,
                     context=_sub_sample_context,
+                    contexts=_sub_sample_contexts,
                     search=_sub_sample_search)
     register_entity("worksheet",
                     label=lambda db, eid: f"Worksheet {eid}",
                     deep_link=lambda eid: f"/#hplc-analysis/worksheet-detail?id={eid}",
                     can_flag=lambda user, eid: True,
                     context=_worksheet_context,
+                    contexts=_worksheet_contexts,
                     search=_worksheet_search)
