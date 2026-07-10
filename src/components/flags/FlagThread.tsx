@@ -67,6 +67,7 @@ import { STATUS_LABELS, STATUS_DOT } from '@/components/flags/flag-status'
 import { FlagAvatar } from '@/components/flags/FlagAvatar'
 import { FlagWatchers } from '@/components/flags/FlagWatchers'
 import { FlagLinkChips } from '@/components/flags/FlagLinkChips'
+import { FlagWatchChips } from '@/components/flags/FlagWatchChips'
 import { CommentBody } from '@/components/flags/CommentBody'
 import { FlagReactions } from '@/components/flags/FlagReactions'
 
@@ -417,6 +418,16 @@ export function FlagThread({
         {/* Related entity + flag links (navigational only — not in rollups). */}
         <div className="mt-3">
           <FlagLinkChips flagId={flag.id} currentFlag={flag} />
+        </div>
+
+        {/* State-change watches on the anchor entity (Plan 6); renders nothing
+            when the anchor type has no backend state seam. */}
+        <div className="mt-3">
+          <FlagWatchChips
+            flagId={flag.id}
+            entityType={flag.entity_type}
+            entityId={flag.entity_id}
+          />
         </div>
       </div>
 
