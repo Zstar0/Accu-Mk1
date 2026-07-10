@@ -35,6 +35,10 @@ const ENTITY_META: Record<string, EntityMeta> = {
   sample: { Icon: FlaskConical, label: 'Sample', canDeepLink: true },
   sub_sample: { Icon: TestTube2, label: 'Sub Sample', canDeepLink: false },
   worksheet: { Icon: ClipboardList, label: 'Worksheet', canDeepLink: true },
+  // The seeded builtin item kind (slice 7). Legacy null-anchor general tasks are
+  // backfilled to this slug; the chip must show a human label, never the slug.
+  // Other (admin-created) kinds resolve their label FE-side via useItemKinds.
+  general_task: { Icon: ListTodo, label: 'General Task', canDeepLink: false },
 }
 
 /** Entity types with a backend `state` seam (→ watchable). Mirror of the
@@ -67,6 +71,9 @@ export function entityLabel(
   entityId: string | null | undefined
 ): string {
   if (entityType == null) return 'General task'
+  // A virtual item kind carries no entity_id — render just the kind label
+  // (avoids the "general_task null" the backfill would otherwise produce).
+  if (entityId == null) return entityMeta(entityType).label
   return `${entityMeta(entityType).label} ${entityId}`
 }
 

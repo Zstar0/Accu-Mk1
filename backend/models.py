@@ -1008,6 +1008,41 @@ class FlagType(Base):
         return f"<FlagType(id={self.id}, slug='{self.slug}', is_active={self.is_active})>"
 
 
+class FlagItemKind(Base):
+    """A user-managed virtual "item kind" (Phase 2 slice 7).
+
+    Item kinds are pure categories a general task can anchor to (e.g. "General
+    Task", "Purchase Task"). Unlike the code entities (sample/worksheet) there is
+    NO Mk1 row behind a kind — a flag anchored to a kind carries
+    `entity_type=<slug>` with `entity_id` NULL. Kinds join the same
+    `flag_types.entity_types` scoping vocabulary, so a flag type can be scoped to
+    a kind exactly like it is scoped to `sample`.
+
+    `slug` is the stable wire key stamped onto `flag_flags.entity_type` — it is
+    IMMUTABLE. Deletion is soft (deactivate) for built-in or in-use kinds; only
+    unused custom kinds hard-delete. Mirrors FlagType.
+    """
+
+    __tablename__ = "flag_item_kinds"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    slug: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
+    label: Mapped[str] = mapped_column(Text, nullable=False)
+    color: Mapped[str] = mapped_column(Text, nullable=False)
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true"
+    )
+    is_builtin: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+    def __repr__(self) -> str:
+        return f"<FlagItemKind(id={self.id}, slug='{self.slug}', is_active={self.is_active})>"
+
+
 class SlaPriorityTier(Base):
     """Priority -> SLA tier override, optionally scoped to a single service group.
 

@@ -130,6 +130,29 @@ def resolve_descendants(db: Session, entity_type: str, entity_id: str) -> list:
         return []
 
 
+# --- virtual item kinds (Phase 2 slice 7) --------------------------------
+def resolve_virtual_kind(db: Session, entity_type: str):
+    """Return the active FlagItemKind row for `entity_type`, or None.
+
+    A "virtual kind" is a user-managed category (general_task, purchase_task, …)
+    a flag anchors to WITHOUT a registered entity seam and WITHOUT a Mk1 row —
+    `entity_id` is NULL. This is the one place the create-flag validation
+    consults so a kind slug passes the `is_registered` gate; watches/entity-links
+    stay `is_registered`-only, so arming a watch or linking a related item on a
+    kind still 400s / returns [] (no deep-link/state/search affordances). Only
+    ACTIVE kinds resolve — a deactivated kind can't take new flags. Kept here
+    (not in the pure core) so the module still reaches host models only through a
+    seam, mirroring resolve_user."""
+    from sqlalchemy import select
+    from models import FlagItemKind
+    return db.execute(
+        select(FlagItemKind).where(
+            FlagItemKind.slug == entity_type,
+            FlagItemKind.is_active.is_(True),
+        )
+    ).scalar_one_or_none()
+
+
 # --- user provider -------------------------------------------------------
 def resolve_user(db: Session, user_id: int) -> dict:
     """Default Mk1 provider: id -> {id, display, avatar}. Host-swappable."""

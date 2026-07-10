@@ -1075,6 +1075,35 @@ def _run_migrations():
         """,
         "CREATE INDEX IF NOT EXISTS ix_flag_entity_watches_status ON flag_entity_watches (status)",
         "CREATE INDEX IF NOT EXISTS ix_flag_entity_watches_flag   ON flag_entity_watches (watch_flag_id)",
+        # --- Phase 2 slice 7: virtual item kinds ---
+        # User-managed categories a general task anchors to (entity_type=<slug>,
+        # entity_id NULL). Kinds join flag_types.entity_types scoping. Mirrors
+        # flag_types; deactivate-not-delete for built-in/in-use.
+        """
+        CREATE TABLE IF NOT EXISTS flag_item_kinds (
+            id         SERIAL PRIMARY KEY,
+            slug       TEXT NOT NULL UNIQUE,
+            label      TEXT NOT NULL,
+            color      TEXT NOT NULL,
+            is_active  BOOLEAN NOT NULL DEFAULT TRUE,
+            is_builtin BOOLEAN NOT NULL DEFAULT FALSE,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+        )
+        """,
+        # Seed the general_task builtin idempotently. is_builtin=true blocks
+        # hard-delete (deactivate only); backfilled flags reference this slug.
+        """
+        INSERT INTO flag_item_kinds (slug, label, color, is_active, is_builtin, sort_order)
+        SELECT 'general_task', 'General Task', '#6b7280', TRUE, TRUE, 0
+        WHERE NOT EXISTS (SELECT 1 FROM flag_item_kinds WHERE slug='general_task')
+        """,
+        # Backfill legacy NULL-anchor general tasks onto the general_task kind so
+        # there is one representation forever. Idempotent by construction (the
+        # WHERE clause never re-matches once a row is stamped). Runs AFTER the
+        # kind is seeded; the anchor was made nullable in slice 2 (above).
+        "UPDATE flag_flags SET entity_type='general_task' WHERE entity_type IS NULL",
     ]
     # Per-statement isolation: a failure in one statement (e.g., a table that
     # create_all hasn't built yet on first run) must not skip subsequent

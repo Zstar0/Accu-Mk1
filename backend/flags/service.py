@@ -87,18 +87,26 @@ def create_flag(db: Session, *, user, entity_type, entity_id, type, title,
                 assignee_id=None, first_comment=None, due_at=None,
                 event_details=None) -> FlagFlag:
     # A NULL anchor = a general task (spec §5). entity_id without an entity_type
-    # is malformed; a present entity_type must be registered.
+    # is malformed. A present entity_type is either a registered code entity
+    # (sample/worksheet — carries an entity_id) or a virtual item kind
+    # (general_task/purchase_task — pure category, entity_id MUST be NULL).
+    is_virtual_kind = False
     if entity_type is None:
         if entity_id is not None:
             raise BadRequestError("entity_id requires entity_type")
     else:
-        if not seams.is_registered(entity_type):
+        is_virtual_kind = seams.resolve_virtual_kind(db, entity_type) is not None
+        if not seams.is_registered(entity_type) and not is_virtual_kind:
             raise BadRequestError(f"unknown entity_type {entity_type!r}")
+        if is_virtual_kind and entity_id is not None:
+            raise BadRequestError(f"item kind {entity_type!r} takes no entity_id")
     if not types_service.is_valid_type(db, type):
         raise BadRequestError(f"unknown flag type {type!r}")
     if not permissions.can(user, "create", None):
         raise PermissionDeniedError("not allowed to create flags")
-    if entity_type is not None:
+    # can_flag only applies to registered code entities; a virtual kind has no
+    # seam (and no entity_id) to authorize against.
+    if entity_type is not None and not is_virtual_kind:
         spec = seams.get_entity_spec(entity_type)
         if not spec.can_flag(user, str(entity_id)):
             raise PermissionDeniedError(f"not allowed to flag {entity_type} {entity_id}")

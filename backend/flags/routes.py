@@ -14,14 +14,15 @@ from sqlalchemy.orm import Session
 
 from auth import get_current_user, require_admin
 from database import get_db
-from flags import recurring, seams, service, types_service, watches
+from flags import kinds_service, recurring, seams, service, types_service, watches
 from flags.bus import BUS
 from flags.errors import BadRequestError, ConflictError, NotFoundError, PermissionDeniedError
 from flags.schemas import (
     ActivityItem, ActivityPage, AssignRequest, AttachmentResponse, CommentRequest,
     CommentResponse, CreateFlagRequest, DueRequest, EntityContext, EntityLinkOut,
     EntityLinkRequest, FlagDetailResponse, FlagLinkOut, FlagLinkRequest, FlagResponse,
-    ArmWatchRequest, EntitySearchHit, FlagRecurringCreate, FlagRecurringResponse,
+    ArmWatchRequest, EntitySearchHit, FlagItemKindCreate, FlagItemKindResponse,
+    FlagItemKindUpdate, FlagRecurringCreate, FlagRecurringResponse,
     FlagRecurringUpdate, FlagSearchHit, FlagTypeCreate, FlagTypeResponse, FlagTypeUpdate,
     ReactionAggregate, StatusRequest, SummaryResponse, WatchResponse,
     WatcherOut, WatcherRequest,
@@ -193,6 +194,49 @@ def delete_flag_type(type_id: int, db: Session = Depends(get_db),
     # → 409, signalling the client to offer the deactivate path instead.
     try:
         types_service.delete_type(db, type_id)
+    except Exception as e:
+        raise _http(e)
+
+
+# --- item kinds (Slice 7) ------------------------------------------------
+# Literal `/item-kinds*` routes are defined ABOVE `/{flag_id}` so they win the
+# match (literal-before-param). Reads are open; mutations are admin-gated.
+@router.get("/item-kinds", response_model=List[FlagItemKindResponse])
+def list_item_kinds(active_only: bool = False, db: Session = Depends(get_db),
+                    user=Depends(get_current_user)):
+    try:
+        return kinds_service.list_kinds(db, active_only=active_only)
+    except Exception as e:
+        raise _http(e)
+
+
+@router.post("/item-kinds", response_model=FlagItemKindResponse, status_code=201)
+def create_item_kind(req: FlagItemKindCreate, db: Session = Depends(get_db),
+                     admin=Depends(require_admin)):
+    try:
+        return kinds_service.create_kind(
+            db, label=req.label, color=req.color, slug=req.slug,
+            is_active=req.is_active, sort_order=req.sort_order)
+    except Exception as e:
+        raise _http(e)
+
+
+@router.put("/item-kinds/{kind_id}", response_model=FlagItemKindResponse)
+def update_item_kind(kind_id: int, req: FlagItemKindUpdate,
+                     db: Session = Depends(get_db), admin=Depends(require_admin)):
+    try:
+        return kinds_service.update_kind(db, kind_id, **req.model_dump(exclude_unset=True))
+    except Exception as e:
+        raise _http(e)
+
+
+@router.delete("/item-kinds/{kind_id}", status_code=204)
+def delete_item_kind(kind_id: int, db: Session = Depends(get_db),
+                     admin=Depends(require_admin)):
+    # Hard-delete only unused custom kinds; built-in/in-use raise ConflictError
+    # → 409, signalling the client to offer the deactivate path instead.
+    try:
+        kinds_service.delete_kind(db, kind_id)
     except Exception as e:
         raise _http(e)
 
