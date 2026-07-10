@@ -391,7 +391,8 @@ def summary(db: Session, *, user_id: int) -> dict:
     return {"assigned_to_me": len(assigned), "by_type": by_type}
 
 
-def add_comment(db: Session, *, user, flag_id, body, mention_ids=None) -> FlagComment:
+def add_comment(db: Session, *, user, flag_id, body, mention_ids=None,
+                event_details=None) -> FlagComment:
     flag = get_flag(db, flag_id)
     if not permissions.can(user, "comment", flag):
         raise PermissionDeniedError("not allowed to comment")
@@ -419,6 +420,8 @@ def add_comment(db: Session, *, user, flag_id, body, mention_ids=None) -> FlagCo
     details = {"body_excerpt": _excerpt_for_comment(body)}
     if valid:
         details["mentions"] = valid
+    if event_details:
+        details.update(event_details)
     _audit(db, flag, actor_id, "commented", details=details)
     _commit_and_emit(db)
     db.refresh(c)
