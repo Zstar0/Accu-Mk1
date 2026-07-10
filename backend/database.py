@@ -991,6 +991,20 @@ def _run_migrations():
         )
         """,
         "CREATE INDEX IF NOT EXISTS ix_flag_comment_reactions_comment ON flag_comment_reactions (comment_id)",
+        # --- flag comment search (Slice 4) ---
+        # pg_trgm makes ILIKE '%q%' index-accelerated. CREATE EXTENSION needs
+        # superuser; if it fails (insufficient privilege) the two index creates
+        # below also fail — and the per-statement isolation loop (see end of this
+        # function) swallows each with a `migration_skipped` warning rather than
+        # crashing startup. Search then degrades to a sequential-scan ILIKE:
+        # correct, just slower (fine at lab scale). On the SQLite test path all
+        # three fail (no pg_trgm/GIN) and are likewise swallowed; the service's
+        # portable .ilike() still returns correct results there.
+        "CREATE EXTENSION IF NOT EXISTS pg_trgm",
+        "CREATE INDEX IF NOT EXISTS ix_flag_comments_body_trgm "
+        "ON flag_comments USING gin (body gin_trgm_ops)",
+        "CREATE INDEX IF NOT EXISTS ix_flag_flags_title_trgm "
+        "ON flag_flags USING gin (title gin_trgm_ops)",
         # Slack DM prefs: cached Slack display name for mapping confidence
         "ALTER TABLE slack_dm_prefs ADD COLUMN IF NOT EXISTS slack_display_name TEXT",
         # Order-first check-in boxing: lims_boxes + sub_sample.box_id link.
