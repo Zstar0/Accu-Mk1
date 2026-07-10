@@ -62,3 +62,43 @@ def test_add_comment_merges_event_details(db):
     ev = [e for e in service.get_flag(db, f.id).events
           if e.event_type == "commented"][-1]
     assert ev.details["automated"] is True and ev.details["body_excerpt"] == "done"
+
+
+def test_arm_cancel_list_lifecycle(db):
+    from flags import service, watches
+    f = service.create_flag(db, user=_user(1), entity_type="sample",
+                            entity_id="PB-1", type="blocker", title="t")
+    w = watches.arm_watch(db, user=_user(1), entity_type="sample",
+                          entity_id="PB-1",
+                          condition={"field": "state", "equals": "received"},
+                          action={"kind": "comment", "flag_id": f.id, "body": "here"},
+                          watch_flag_id=f.id)
+    assert w.status == "armed"
+    assert [x.id for x in watches.list_watches(db, flag_id=f.id)] == [w.id]
+    # watch_armed rode the associated flag
+    assert "watch_armed" in [e.event_type for e in service.get_flag(db, f.id).events]
+    watches.cancel_watch(db, user=_user(1), watch_id=w.id)
+    assert db.get(type(w), w.id).status == "cancelled"
+    assert watches.list_watches(db, flag_id=f.id) == []          # armed-only
+    assert "watch_cancelled" in [e.event_type for e in service.get_flag(db, f.id).events]
+
+
+def test_arm_rejects_unwatchable_entity(db):
+    from flags import watches
+    from flags.errors import BadRequestError
+    with pytest.raises(BadRequestError):
+        watches.arm_watch(db, user=_user(1), entity_type="sub_sample",
+                          entity_id="9",
+                          condition={"field": "state", "equals": "received"},
+                          action={"kind": "create_flag", "type": "blocker", "title": "x"})
+
+
+def test_cancel_requires_creator_or_admin(db):
+    from flags import watches
+    from flags.errors import PermissionDeniedError
+    w = watches.arm_watch(db, user=_user(1), entity_type="sample", entity_id="PB-2",
+                          condition={"field": "state", "equals": "received"},
+                          action={"kind": "create_flag", "type": "blocker", "title": "x"})
+    with pytest.raises(PermissionDeniedError):
+        watches.cancel_watch(db, user=_user(2), watch_id=w.id)         # not creator
+    watches.cancel_watch(db, user=SimpleNamespace(id=99, role="admin"), watch_id=w.id)
