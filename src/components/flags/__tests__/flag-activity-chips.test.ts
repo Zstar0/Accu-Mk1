@@ -30,4 +30,18 @@ describe('filterActivity', () => {
     expect(filterActivity(items, 'watching').map(i => i.id)).toEqual([3]))
   it('mentioned', () =>
     expect(filterActivity(items, 'mentioned').map(i => i.id)).toEqual([4]))
+
+  // "For me" = notifications I received: events NOT authored by me (no 'actor')
+  // that involve my flags/mentions (assigned|raised|watching|mentioned).
+  it('forme excludes my own actions but keeps events others did on my flags', () => {
+    const set = [
+      item(1, ['actor']), // my own action → excluded
+      item(2, ['assigned']), // someone assigned me → included
+      item(3, ['raised', 'watching']), // on a flag I raised/watch → included
+      item(4, ['mentioned']), // I was mentioned → included
+      item(5, ['actor', 'assigned']), // I did it (even on my flag) → excluded
+      item(6, ['watching']), // change on a flag I watch → included
+    ]
+    expect(filterActivity(set, 'forme').map(i => i.id)).toEqual([2, 3, 4, 6])
+  })
 })
