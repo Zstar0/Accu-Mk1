@@ -37,6 +37,11 @@ const ENTITY_META: Record<string, EntityMeta> = {
   worksheet: { Icon: ClipboardList, label: 'Worksheet', canDeepLink: true },
 }
 
+/** Entity types with a backend `state` seam (→ watchable). Mirror of the
+ *  `state=` registrations in backend/flags/seams.py `register_mk1_entities`.
+ *  Update both together if another type opts in. */
+export const WATCHABLE_ENTITY_TYPES: ReadonlySet<string> = new Set(['sample'])
+
 /** Meta for a null-anchor general task (Phase 2). */
 const GENERAL_META: EntityMeta = {
   Icon: ListTodo,

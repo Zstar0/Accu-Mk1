@@ -30,11 +30,15 @@ import {
   removeReaction,
   setDue,
   searchFlags,
+  armWatch,
+  cancelWatch,
+  listWatches,
   type FlagTab,
   type ListFlagsParams,
   type FlagStatus,
   type CreateFlagBody,
   type ActivityPage,
+  type ArmWatchBody,
 } from '@/lib/flags-api'
 
 // --- query keys (exported so tests + the SSE glue share the literals) ---
@@ -53,6 +57,7 @@ export const flagKeys = {
   unread: () => ['flags', 'unread'] as const,
   search: (q: string) => ['flags', 'search', q] as const,
   detail: (id: number) => ['flags', id] as const,
+  watches: (flagId: number) => ['flags', 'watches', flagId] as const,
 }
 
 // --- queries ---
@@ -259,5 +264,45 @@ export function useRemoveReaction(flagId: number) {
       removeReaction(commentId, emoji),
     onSuccess: () =>
       qc.invalidateQueries({ queryKey: flagKeys.detail(flagId) }),
+  })
+}
+
+// --- state-change watches (Plan 6) --------------------------------------
+
+/** Armed watches on one thread. Under ['flags', …] for live blanket-invalidate. */
+export function useFlagWatches(flagId: number | null) {
+  return useQuery({
+    queryKey: flagKeys.watches(flagId ?? -1),
+    queryFn: () => listWatches(flagId as number),
+    enabled: flagId != null,
+    staleTime: 5_000,
+  })
+}
+
+/** Arm a watch → refresh the thread's watch chips + its detail. */
+export function useArmWatch(flagId?: number) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (body: ArmWatchBody) => armWatch(body),
+    onSuccess: () => {
+      if (flagId != null) {
+        qc.invalidateQueries({ queryKey: flagKeys.watches(flagId) })
+        qc.invalidateQueries({ queryKey: flagKeys.detail(flagId) })
+      }
+    },
+  })
+}
+
+/** Cancel a watch → same refresh. */
+export function useCancelWatch(flagId?: number) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id: number) => cancelWatch(id),
+    onSuccess: () => {
+      if (flagId != null) {
+        qc.invalidateQueries({ queryKey: flagKeys.watches(flagId) })
+        qc.invalidateQueries({ queryKey: flagKeys.detail(flagId) })
+      }
+    },
   })
 }

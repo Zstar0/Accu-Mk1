@@ -349,6 +349,54 @@ export const removeWatcher = (id: number, user_id: number) =>
     method: 'DELETE',
   })
 
+// --- state-change watches (Plan 6) --------------------------------------
+
+/** Mirrors `WatchResponse`. `condition`/`action` are the stored JSON blobs. */
+export interface EntityWatch {
+  id: number
+  entity_type: string
+  entity_id: string
+  condition: { field: 'state'; equals: string }
+  action:
+    | {
+        kind: 'create_flag'
+        type?: string
+        title?: string
+        assignee_id?: number | null
+      }
+    | { kind: 'comment'; flag_id?: number; body?: string }
+  created_by: number
+  watch_flag_id: number | null
+  status: 'armed' | 'fired' | 'cancelled'
+  created_at: string
+  fired_at: string | null
+}
+
+/** Mirrors `ArmWatchRequest`. */
+export interface ArmWatchBody {
+  entity_type: string
+  entity_id: string
+  condition: { field: 'state'; equals: string }
+  action: EntityWatch['action']
+  watch_flag_id?: number | null
+}
+
+/** `POST /api/flags/watches` — arm a watch (comment-on-fire with `watch_flag_id`,
+ *  else create-flag-on-fire). 400 when the entity type has no watchable state. */
+export const armWatch = (body: ArmWatchBody) =>
+  apiFetch<EntityWatch>('/api/flags/watches', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+
+/** `DELETE /api/flags/watches/{id}` — cancel an armed watch (204). */
+export const cancelWatch = (id: number) =>
+  apiFetch<undefined>(`/api/flags/watches/${id}`, { method: 'DELETE' })
+
+/** `GET /api/flags/watches?flag_id=` — armed watches on a thread. */
+export const listWatches = (flagId: number) =>
+  apiFetch<EntityWatch[]>(`/api/flags/watches?flag_id=${flagId}`)
+
 // --- links (Phase 2 slice 2) ---------------------------------------------
 
 /** `POST /api/flags/{id}/links/entities` — attach a related entity. */
