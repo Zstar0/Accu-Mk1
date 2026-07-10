@@ -963,6 +963,22 @@ def _run_migrations():
         """,
         "CREATE INDEX IF NOT EXISTS ix_flag_links_flag   ON flag_links (flag_id)",
         "CREATE INDEX IF NOT EXISTS ix_flag_links_linked ON flag_links (linked_flag_id)",
+        # --- flag attachments (Plan 3) ---
+        """
+        CREATE TABLE IF NOT EXISTS flag_attachments (
+            id           SERIAL PRIMARY KEY,
+            flag_id      INTEGER NOT NULL REFERENCES flag_flags(id) ON DELETE CASCADE,
+            comment_id   INTEGER REFERENCES flag_comments(id) ON DELETE SET NULL,
+            uploaded_by  INTEGER,
+            filename     TEXT NOT NULL,
+            content_type TEXT NOT NULL,
+            size_bytes   INTEGER NOT NULL,
+            storage_key  TEXT NOT NULL,
+            created_at   TIMESTAMP NOT NULL DEFAULT NOW()
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS ix_flag_attachments_flag ON flag_attachments (flag_id)",
+        "CREATE INDEX IF NOT EXISTS ix_flag_attachments_comment ON flag_attachments (comment_id)",
         # Slack DM prefs: cached Slack display name for mapping confidence
         "ALTER TABLE slack_dm_prefs ADD COLUMN IF NOT EXISTS slack_display_name TEXT",
         # Order-first check-in boxing: lims_boxes + sub_sample.box_id link.

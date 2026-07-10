@@ -44,6 +44,17 @@ class WatcherRequest(BaseModel):
     user_id: int
 
 
+class AttachmentResponse(BaseModel):
+    id: int
+    flag_id: int
+    comment_id: Optional[int] = None
+    filename: str
+    content_type: str
+    size_bytes: int
+    created_at: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+
 class CommentResponse(BaseModel):
     id: int
     flag_id: int

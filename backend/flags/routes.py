@@ -6,8 +6,10 @@ import json
 import logging
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from fastapi.responses import StreamingResponse
+from fastapi import (
+    APIRouter, Depends, File, HTTPException, Query, Request, UploadFile, status,
+)
+from fastapi.responses import Response, StreamingResponse
 from sqlalchemy.orm import Session
 
 from auth import get_current_user, require_admin
@@ -16,11 +18,11 @@ from flags import seams, service, types_service
 from flags.bus import BUS
 from flags.errors import BadRequestError, ConflictError, NotFoundError, PermissionDeniedError
 from flags.schemas import (
-    ActivityItem, ActivityPage, AssignRequest, CommentRequest, CommentResponse,
-    CreateFlagRequest, DueRequest, EntityContext, EntityLinkOut, EntityLinkRequest,
-    FlagDetailResponse, FlagLinkOut, FlagLinkRequest, FlagResponse, FlagTypeCreate,
-    FlagTypeResponse, FlagTypeUpdate, StatusRequest, SummaryResponse, WatcherOut,
-    WatcherRequest,
+    ActivityItem, ActivityPage, AssignRequest, AttachmentResponse, CommentRequest,
+    CommentResponse, CreateFlagRequest, DueRequest, EntityContext, EntityLinkOut,
+    EntityLinkRequest, FlagDetailResponse, FlagLinkOut, FlagLinkRequest, FlagResponse,
+    FlagTypeCreate, FlagTypeResponse, FlagTypeUpdate, StatusRequest, SummaryResponse,
+    WatcherOut, WatcherRequest,
 )
 
 router = APIRouter(prefix="/api/flags", tags=["flags"])
@@ -201,6 +203,20 @@ def list_entity_types(db: Session = Depends(get_db), user=Depends(get_current_us
     return sorted(seams._REGISTRY.keys())
 
 
+@router.get("/attachments/{attachment_id}")
+def get_attachment(attachment_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    # Literal /attachments/... registered ABOVE /{flag_id} so it wins the match.
+    # Authenticated serve — no public URLs (spec §11).
+    try:
+        att = service.get_attachment(db, attachment_id)
+        data = seams.get_attachment_storage().fetch(att.storage_key)
+    except seams.AttachmentNotFound:
+        raise HTTPException(status_code=404, detail="attachment file missing from storage")
+    except Exception as e:
+        raise _http(e)
+    return Response(content=data, media_type=att.content_type)
+
+
 @router.get("/{flag_id}", response_model=FlagDetailResponse)
 def get_flag(flag_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
     try:
@@ -315,5 +331,19 @@ def add_flag_link(flag_id: int, req: FlagLinkRequest, db: Session = Depends(get_
 def remove_flag_link(flag_id: int, link_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
     try:
         service.remove_flag_link(db, user=user, flag_id=flag_id, link_id=link_id)
+    except Exception as e:
+        raise _http(e)
+
+
+# SYNC def (not async) so the blocking storage put + DB write run in the
+# threadpool, per the documented event-loop-blocking incident.
+@router.post("/{flag_id}/attachments", response_model=AttachmentResponse, status_code=201)
+def add_attachment(flag_id: int, file: UploadFile = File(...),
+                   db: Session = Depends(get_db), user=Depends(get_current_user)):
+    try:
+        data = file.file.read()  # sync read of the spooled upload; threadpool-safe
+        att = service.add_attachment(db, user=user, flag_id=flag_id, data=data,
+                                     filename=file.filename or "upload")
+        return AttachmentResponse.model_validate(att)
     except Exception as e:
         raise _http(e)

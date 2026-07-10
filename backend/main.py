@@ -329,6 +329,29 @@ async def lifespan(app: FastAPI):
     init_db()
     from flags import seams as _flag_seams
     _flag_seams.register_mk1_entities()
+    # Flag attachments reuse the S3 blob store used by vial photos when
+    # configured (module purity: the adapter lives here, not in flags/).
+    if os.environ.get("MK1_PHOTO_S3_BUCKET"):
+        from sub_samples.photo_storage import S3PhotoStorage, PhotoNotFoundError
+
+        class _S3FlagAttachmentStorage:
+            def __init__(self):
+                self._s3 = S3PhotoStorage(
+                    prefix=os.environ.get("MK1_FLAG_ATTACH_S3_PREFIX", "flag-attachments/"))
+
+            def save(self, flag_id, data, filename):
+                return self._s3.save_photo(flag_id, data, filename)
+
+            def fetch(self, key):
+                try:
+                    return self._s3.fetch_photo(key)
+                except PhotoNotFoundError as e:
+                    raise _flag_seams.AttachmentNotFound(str(e))
+
+            def delete(self, key):
+                self._s3.delete_photo(key)
+
+        _flag_seams.set_attachment_storage(_S3FlagAttachmentStorage())
     import asyncio as _asyncio
     from flags import bus as _flag_bus
     _flag_bus.BUS.set_loop(_asyncio.get_running_loop())

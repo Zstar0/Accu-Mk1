@@ -4,6 +4,7 @@ transaction boundary."""
 from __future__ import annotations
 
 import base64
+import re
 from datetime import datetime
 from typing import Optional
 
@@ -13,9 +14,12 @@ from sqlalchemy.orm import Session
 from flags import catalog, permissions, seams, types_service
 from flags.errors import BadRequestError, NotFoundError, PermissionDeniedError
 from flags.models import (
-    FlagComment, FlagEntityLink, FlagEvent, FlagFlag, FlagLink, FlagParticipant,
-    FlagRead,
+    FlagAttachment, FlagComment, FlagEntityLink, FlagEvent, FlagFlag, FlagLink,
+    FlagParticipant, FlagRead,
 )
+
+MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024
+_ATTACHMENT_TOKEN = re.compile(r"\{attachment:(\d+)\}")
 
 
 def _flag_summary(flag) -> dict:
@@ -285,6 +289,8 @@ def add_comment(db: Session, *, user, flag_id, body, mention_ids=None) -> FlagCo
     c = FlagComment(flag_id=flag.id, author_id=actor_id, body=body.strip(),
                     mentions=valid or None)
     db.add(c)
+    db.flush()  # populate c.id for attachment linkage
+    _link_attachments(db, flag.id, c.id, c.body)
     # A mention loops the user in: add as a watcher (silent — no watcher_added
     # event; dedup against existing participants).
     for uid in valid:
@@ -371,6 +377,70 @@ def list_watchers(db: Session, flag_id: int) -> list[FlagParticipant]:
                FlagParticipant.role == "watcher")
         .order_by(FlagParticipant.added_at.asc(), FlagParticipant.id.asc())
     ).scalars().all())
+
+
+# --- image attachments (Plan 3) -----------------------------------------
+def _sniff_image(data: bytes) -> str:
+    """Return the image content-type from magic bytes; raise on non-image.
+    Do NOT trust the client's Content-Type header (spec §11)."""
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return "image/png"
+    if data[:3] == b"\xff\xd8\xff":
+        return "image/jpeg"
+    if data[:6] in (b"GIF87a", b"GIF89a"):
+        return "image/gif"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    raise BadRequestError("attachment must be a PNG, JPEG, GIF, or WEBP image")
+
+
+_EXT_FOR_CT = {"image/png": ".png", "image/jpeg": ".jpg",
+               "image/gif": ".gif", "image/webp": ".webp"}
+
+
+def add_attachment(db: Session, *, user, flag_id, data: bytes, filename: str) -> FlagAttachment:
+    flag = get_flag(db, flag_id)
+    if not permissions.can(user, "comment", flag):
+        raise PermissionDeniedError("not allowed to attach")
+    if not data:
+        raise BadRequestError("empty upload")
+    if len(data) > MAX_ATTACHMENT_BYTES:
+        raise BadRequestError("attachment exceeds 10 MB")
+    content_type = _sniff_image(data)
+    actor_id = getattr(user, "id", None)
+    key = seams.get_attachment_storage().save(str(flag.id), data, f"upload{_EXT_FOR_CT[content_type]}")
+    att = FlagAttachment(flag_id=flag.id, comment_id=None, uploaded_by=actor_id,
+                         filename=(filename or f"upload{_EXT_FOR_CT[content_type]}")[:255],
+                         content_type=content_type, size_bytes=len(data), storage_key=key)
+    db.add(att)
+    db.flush()  # populate att.id for the event detail
+    # attachment_added is analytics+audit (real actor_id). It does NOT bump
+    # updated_at — the comment that references it is the unread trigger.
+    _audit(db, flag, actor_id, "attachment_added",
+           details={"attachment_id": att.id, "body_excerpt": "📎 image"})
+    _commit_and_emit(db)
+    db.refresh(att)
+    return att
+
+
+def get_attachment(db: Session, attachment_id: int) -> FlagAttachment:
+    att = db.get(FlagAttachment, attachment_id)
+    if att is None:
+        raise NotFoundError(f"attachment {attachment_id} not found")
+    return att
+
+
+def _link_attachments(db: Session, flag_id: int, comment_id: int, body: str) -> None:
+    """FK the {attachment:ID} tokens in a saved comment's body back to it, so
+    they survive orphan GC. Only unlinked rows on THIS flag are claimed."""
+    ids = {int(m) for m in _ATTACHMENT_TOKEN.findall(body or "")}
+    if not ids:
+        return
+    for att in db.execute(select(FlagAttachment).where(
+            FlagAttachment.flag_id == flag_id,
+            FlagAttachment.id.in_(ids),
+            FlagAttachment.comment_id.is_(None))).scalars():
+        att.comment_id = comment_id
 
 
 # --- entity reference links (Phase 2 slice 2) ---------------------------

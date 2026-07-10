@@ -146,3 +146,22 @@ class FlagLink(Base):
                                           server_default="related")
     added_by: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class FlagAttachment(Base):
+    """An uploaded image on a flag. Linked to a comment (comment_id) once the
+    comment referencing {attachment:ID} is saved; unlinked rows are GC'd by the
+    scheduler (Plan 5)."""
+    __tablename__ = "flag_attachments"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    flag_id: Mapped[int] = mapped_column(Integer, ForeignKey("flag_flags.id", ondelete="CASCADE"),
+                                         nullable=False, index=True)
+    comment_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("flag_comments.id", ondelete="SET NULL"), nullable=True, index=True)
+    uploaded_by: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    filename: Mapped[str] = mapped_column(Text, nullable=False)
+    content_type: Mapped[str] = mapped_column(Text, nullable=False)
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    storage_key: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
