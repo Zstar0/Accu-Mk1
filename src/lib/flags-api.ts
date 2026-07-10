@@ -538,3 +538,55 @@ export const deleteFlagType = async (id: number): Promise<void> => {
  *  names resolved client-side via flag-entity.ts ENTITY_META). */
 export const getFlagEntityTypes = () =>
   apiFetch<string[]>('/api/flags/entity-types')
+
+// --- recurring tasks (Slice 5, admin-only) ------------------------------
+
+/** Mirrors backend FlagRecurringResponse. cadence: 'daily' | 'weekly:<0-6>' | 'monthly:<1-28>'. */
+export interface FlagRecurring {
+  id: number
+  title: string
+  body: string | null
+  type: string
+  assignee_id: number | null
+  watchers: number[]
+  entity_type: string | null
+  entity_id: string | null
+  cadence: string
+  next_run_at: string
+  active: boolean
+  skip_if_open: boolean
+  created_by: number
+  created_at: string
+  last_minted_flag_id: number | null
+}
+export type FlagRecurringCreate = Pick<
+  FlagRecurring,
+  'title' | 'type' | 'cadence'
+> &
+  Partial<
+    Pick<
+      FlagRecurring,
+      'body' | 'assignee_id' | 'watchers' | 'entity_type' | 'entity_id' | 'skip_if_open'
+    >
+  >
+export type FlagRecurringUpdate = Partial<
+  Omit<
+    FlagRecurring,
+    'id' | 'created_by' | 'created_at' | 'last_minted_flag_id' | 'next_run_at'
+  >
+>
+
+export const listRecurring = () =>
+  apiFetch<FlagRecurring[]>('/api/flags/recurring')
+export const createRecurring = (body: FlagRecurringCreate) =>
+  apiFetch<FlagRecurring>('/api/flags/recurring', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+export const updateRecurring = (id: number, body: FlagRecurringUpdate) =>
+  apiFetch<FlagRecurring>(`/api/flags/recurring/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  })
+export const deleteRecurring = (id: number) =>
+  apiFetch<void>(`/api/flags/recurring/${id}`, { method: 'DELETE' })

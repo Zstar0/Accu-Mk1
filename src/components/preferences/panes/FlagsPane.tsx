@@ -22,11 +22,20 @@ import {
   useUpdateFlagType,
   useDeleteFlagType,
 } from '@/services/flag-types'
+import {
+  useRecurring,
+  useCreateRecurring,
+  useUpdateRecurring,
+  useDeleteRecurring,
+} from '@/services/flag-recurring'
+import { useFlagUsers, nameForUser } from '@/components/flags/flag-users'
 import { entityMeta } from '@/components/flags/flag-entity'
 import {
   FlagTypeApiError,
   type FlagType,
   type FlagTypeUpdate,
+  type FlagRecurring,
+  type FlagRecurringUpdate,
 } from '@/lib/flags-api'
 
 /**
@@ -159,6 +168,274 @@ export function FlagsPane() {
           ))}
         </div>
       </SettingsSection>
+
+      {/* Recurring tasks are admin-only config — non-admins never see them, and
+          the section's queries only run for admins because it lives in a child
+          that mounts only here. */}
+      {isAdmin && <RecurringSection types={types} />}
+    </div>
+  )
+}
+
+/**
+ * Recurring-task templates (Slice 5). Admin-only. Each template mints a flag on
+ * its cadence; edits commit on blur / on change (same UX as TypeCard).
+ */
+function RecurringSection({ types }: { types: FlagType[] }) {
+  const { t } = useTranslation()
+  const recurringQuery = useRecurring()
+  const createRecurring = useCreateRecurring()
+  const updateRecurring = useUpdateRecurring()
+  const deleteRecurring = useDeleteRecurring()
+  const users = useFlagUsers()
+  const createInFlight = useRef(false)
+
+  // Recurring flags default to a global (no-entity) type — mirror the backend's
+  // "general task ⇒ global type" rule; fall back to 'task' before types load.
+  const firstGlobalType =
+    types.find(type => type.entity_types.length === 0)?.slug ?? 'task'
+  const rows = recurringQuery.data ?? []
+
+  return (
+    <SettingsSection title={t('preferences.flags.recurring.title')}>
+      <div className="flex items-center justify-between">
+        <p className="text-sm text-muted-foreground">
+          {t('preferences.flags.recurring.description')}
+        </p>
+        <Button
+          size="sm"
+          disabled={createRecurring.isPending}
+          onClick={() => {
+            if (createInFlight.current) return
+            createInFlight.current = true
+            createRecurring.mutate(
+              {
+                title: t('preferences.flags.recurring.newDefault'),
+                type: firstGlobalType,
+                cadence: 'weekly:0',
+              },
+              { onSettled: () => (createInFlight.current = false) }
+            )
+          }}
+        >
+          <Plus className="mr-1 h-4 w-4" />{' '}
+          {t('preferences.flags.recurring.add')}
+        </Button>
+      </div>
+
+      <div className="space-y-3">
+        {rows.map(r => (
+          <RecurringCard
+            key={r.id}
+            recurring={r}
+            types={types}
+            users={users}
+            onSave={data => updateRecurring.mutate({ id: r.id, data })}
+            onDelete={() => deleteRecurring.mutate(r.id)}
+          />
+        ))}
+      </div>
+    </SettingsSection>
+  )
+}
+
+type CadenceUnit = 'daily' | 'weekly' | 'monthly'
+// Days of the week, Monday=0 (matches the backend cadence weekday index).
+const DOW = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+
+function parseCadence(c: string): { unit: CadenceUnit; n: number } {
+  if (c.startsWith('weekly:'))
+    return { unit: 'weekly', n: Number(c.split(':')[1]) || 0 }
+  if (c.startsWith('monthly:'))
+    return { unit: 'monthly', n: Number(c.split(':')[1]) || 1 }
+  return { unit: 'daily', n: 0 }
+}
+
+function formatCadence(unit: CadenceUnit, n: number): string {
+  if (unit === 'weekly') return `weekly:${n}`
+  if (unit === 'monthly') return `monthly:${n}`
+  return 'daily'
+}
+
+function RecurringCard({
+  recurring,
+  types,
+  users,
+  onSave,
+  onDelete,
+}: {
+  recurring: FlagRecurring
+  types: FlagType[]
+  users: ReturnType<typeof useFlagUsers>
+  onSave: (data: FlagRecurringUpdate) => void
+  onDelete: () => void
+}) {
+  const { t } = useTranslation()
+  const [title, setTitle] = useState(recurring.title)
+  const { unit, n } = parseCadence(recurring.cadence)
+
+  const commitTitle = () => {
+    const next = title.trim()
+    if (!next) {
+      setTitle(recurring.title)
+      return
+    }
+    if (next !== recurring.title) onSave({ title: next })
+  }
+
+  const setCadence = (u: CadenceUnit, num: number) =>
+    onSave({ cadence: formatCadence(u, num) })
+
+  return (
+    <div className="space-y-3 rounded-lg border p-4">
+      {/* Title + active toggle + delete */}
+      <div className="flex items-center justify-between gap-2">
+        <Input
+          value={title}
+          aria-label={t('preferences.flags.recurring.titleLabel')}
+          onChange={e => setTitle(e.target.value)}
+          onBlur={commitTitle}
+          className="h-8 w-64 font-medium"
+        />
+        <div className="flex shrink-0 items-center gap-3">
+          <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            {t('preferences.flags.recurring.active')}
+            <Switch
+              checked={recurring.active}
+              onCheckedChange={v => onSave({ active: v })}
+            />
+          </label>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7 text-destructive"
+            aria-label={t('preferences.flags.recurring.delete')}
+            onClick={onDelete}
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </Button>
+        </div>
+      </div>
+
+      {/* Type + cadence + assignee */}
+      <div className="flex flex-wrap items-center gap-4">
+        <div className="flex items-center gap-2 text-sm">
+          <span className="text-muted-foreground">
+            {t('preferences.flags.recurring.type')}
+          </span>
+          <Select value={recurring.type} onValueChange={v => onSave({ type: v })}>
+            <SelectTrigger className="h-8 w-40 text-xs">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {types.map(type => (
+                <SelectItem key={type.slug} value={type.slug}>
+                  {type.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+
+        <div className="flex items-center gap-2 text-sm">
+          <span className="text-muted-foreground">
+            {t('preferences.flags.recurring.every')}
+          </span>
+          <Select
+            value={unit}
+            onValueChange={v =>
+              setCadence(v as CadenceUnit, v === 'monthly' ? 1 : 0)
+            }
+          >
+            <SelectTrigger className="h-8 w-28 text-xs">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="daily">
+                {t('preferences.flags.recurring.daily')}
+              </SelectItem>
+              <SelectItem value="weekly">
+                {t('preferences.flags.recurring.weekly')}
+              </SelectItem>
+              <SelectItem value="monthly">
+                {t('preferences.flags.recurring.monthly')}
+              </SelectItem>
+            </SelectContent>
+          </Select>
+          {unit === 'weekly' && (
+            <Select
+              value={String(n)}
+              onValueChange={v => setCadence('weekly', Number(v))}
+            >
+              <SelectTrigger className="h-8 w-24 text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {DOW.map((d, i) => (
+                  <SelectItem key={i} value={String(i)}>
+                    {d}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+          {unit === 'monthly' && (
+            <Select
+              value={String(n)}
+              onValueChange={v => setCadence('monthly', Number(v))}
+            >
+              <SelectTrigger className="h-8 w-20 text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {Array.from({ length: 28 }, (_, i) => i + 1).map(day => (
+                  <SelectItem key={day} value={String(day)}>
+                    {day}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+        </div>
+
+        <div className="flex items-center gap-2 text-sm">
+          <span className="text-muted-foreground">
+            {t('preferences.flags.recurring.assignee')}
+          </span>
+          <Select
+            value={String(recurring.assignee_id ?? 'none')}
+            onValueChange={v =>
+              onSave({ assignee_id: v === 'none' ? null : Number(v) })
+            }
+          >
+            <SelectTrigger className="h-8 w-40 text-xs">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="none">
+                {t('preferences.flags.recurring.unassigned')}
+              </SelectItem>
+              {[...users.values()].map(u => (
+                <SelectItem key={u.id} value={String(u.id)}>
+                  {nameForUser(users, u.id)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
+
+      {/* Skip-if-open guard */}
+      <label className="flex items-center gap-2 text-sm">
+        <Switch
+          checked={recurring.skip_if_open}
+          onCheckedChange={v => onSave({ skip_if_open: v })}
+        />
+        <span>{t('preferences.flags.recurring.skipIfOpen')}</span>
+        <span className="text-xs text-muted-foreground">
+          — {t('preferences.flags.recurring.skipIfOpenHint')}
+        </span>
+      </label>
     </div>
   )
 }
