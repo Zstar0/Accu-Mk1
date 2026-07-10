@@ -625,32 +625,35 @@ def test_replace_analyte_mirrors_old_rejected_new_unassigned(
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-def test_publish_wires_mark_shadows_published_on_success(db, seed_parent_and_service):
-    """Drives the real publish-coa endpoint through its external calls, all
+def _drive_publish_coa(sample_id: str, *, transition_state: str,
+                       reread_state: str | None = None):
+    """Drive the real publish-coa endpoint through its external calls, all
     served by ONE generic httpx.AsyncClient mock — publish-coa's own logic
     short-circuits the VerificationCode POST when the IS response carries no
     `verification_code`, so a single {"success": True, "items": [...]} body
-    satisfies both the IS publish-coa gate and the SENAITE transition's
-    accepted-state check. Asserts `_mark_shadows_published_bg` (not the DB
-    effect — that's helper-level, see test_parent_mirror_helper.py) fires
-    with the resolved sample_id once the transition succeeds. Kept
-    deliberately minimal per the controller's pre-authorized fallback for
-    A6 (full multi-branch httpx routing would be disproportionate here)."""
-    parent, _svc = seed_parent_and_service
-
+    satisfies both the IS publish-coa gate and the SENAITE transition
+    response. `transition_state` is the review_state the transition POST
+    echoes; `reread_state`, when set, is what the verify re-read GET returns
+    (the search GET body carries it too — harmless, the search only reads
+    `uid`). `_mark_shadows_published_bg` is stubbed to a recording list.
+    Returns (response, calls). Kept deliberately minimal per the
+    controller's pre-authorized fallback for A6 (full multi-branch httpx
+    routing would be disproportionate here)."""
     mock_instance = AsyncMock()
-    search_resp = MagicMock()
-    search_resp.raise_for_status = MagicMock()
-    search_resp.json = MagicMock(
-        return_value={"items": [{"uid": "AR-UID-PUBLISH-1"}]}
-    )
-    mock_instance.get = AsyncMock(return_value=search_resp)
+    get_item = {"uid": "AR-UID-PUBLISH-1"}
+    if reread_state is not None:
+        get_item["review_state"] = reread_state
+    get_resp = MagicMock()
+    get_resp.raise_for_status = MagicMock()
+    get_resp.status_code = 200
+    get_resp.json = MagicMock(return_value={"items": [get_item]})
+    mock_instance.get = AsyncMock(return_value=get_resp)
 
     post_resp = MagicMock()
     post_resp.raise_for_status = MagicMock()
     post_resp.json = MagicMock(return_value={
         "success": True, "message": "ok",
-        "items": [{"review_state": "published"}],
+        "items": [{"review_state": transition_state}],
     })
     mock_instance.post = AsyncMock(return_value=post_resp)
 
@@ -667,11 +670,57 @@ def test_publish_wires_mark_shadows_published_on_success(db, seed_parent_and_ser
                  lambda sample_id: calls.append(sample_id),
              ):
             r = _client_as_user().post(
-                f"/wizard/senaite/samples/{parent.sample_id}/publish-coa"
+                f"/wizard/senaite/samples/{sample_id}/publish-coa"
             )
     finally:
         p.stop()
+    return r, calls
+
+
+def test_publish_wires_mark_shadows_published_on_success(db, seed_parent_and_service):
+    """AR actually reached 'published' -> `_mark_shadows_published_bg` (not
+    the DB effect — that's helper-level, see test_parent_mirror_helper.py)
+    fires exactly once with the resolved sample_id, after the reconciliation
+    block passes."""
+    parent, _svc = seed_parent_and_service
+    r, calls = _drive_publish_coa(parent.sample_id, transition_state="published")
 
     assert r.status_code == 200, r.text
     assert r.json()["success"] is True
     assert calls == [parent.sample_id]
+
+
+def test_publish_no_mirror_when_prepublish_state(db, seed_parent_and_service):
+    """Transition echoes a non-accepted state and the verify re-read resolves
+    to a PRE-PUBLISH state (ready_for_initial_review): the endpoint succeeds
+    with a warning (the COA is live in our system) but the SENAITE analyses
+    are NOT published — the shadow mirror must not stamp 'published'."""
+    parent, _svc = seed_parent_and_service
+    r, calls = _drive_publish_coa(
+        parent.sample_id,
+        transition_state="ready_for_initial_review",
+        reread_state="ready_for_initial_review",
+    )
+
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["success"] is True
+    assert body["warning"]  # the pre-publish warning path was taken
+    assert calls == []
+
+
+def test_publish_no_mirror_when_partial_publish_deferred(db, seed_parent_and_service):
+    """Transition echoes an ACCEPTED-but-not-published state
+    (to_be_verified — the lab partial-publish / addon flow): the endpoint
+    succeeds cleanly, but SENAITE deferred the workflow publish, so the
+    analyses are not published there and the mirror must not fire. When
+    publish lands later, per-line A2/A3 hooks and/or the next publish call
+    record it."""
+    parent, _svc = seed_parent_and_service
+    r, calls = _drive_publish_coa(
+        parent.sample_id, transition_state="to_be_verified",
+    )
+
+    assert r.status_code == 200, r.text
+    assert r.json()["success"] is True
+    assert calls == []

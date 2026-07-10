@@ -10154,21 +10154,6 @@ async def publish_sample_coa(
                 )
                 transition_resp.raise_for_status()
 
-                # ── Parent shadow mirror (A6 publish, best-effort) ────────────
-                # AR-level publish cascades all its analyses to published in
-                # SENAITE; mark our shadow rows to match. By this point the
-                # COA is already published in our system (IS's success gate
-                # passed above, verification code written) regardless of how
-                # the state-reconciliation below ultimately reads SENAITE's
-                # workflow state — so this fires unconditionally on the HTTP
-                # success of the transition POST, not gated on the
-                # accepted_states check further down (unlike A2/A3, which
-                # skip on silent rejection: A6's trigger is "COA is out",
-                # not "AR review_state == published"). Own session via
-                # _mark_shadows_published_bg — never the request `db`.
-                from fastapi.concurrency import run_in_threadpool
-                await run_in_threadpool(_mark_shadows_published_bg, sample_id=sample_id)
-
                 # SENAITE returns 200 OK even when it silently rejects a
                 # transition (e.g. sample still in `to_be_verified`, not
                 # `verified`), AND returns 200 OK with an empty `items`
@@ -10235,6 +10220,26 @@ async def publish_sample_coa(
                                 f"Verify the sample in SENAITE, then retry."
                             ),
                         )
+
+                # ── Parent shadow mirror (A6 publish, best-effort) ────────────
+                # mirror_review_state records SENAITE-side truth, so this is
+                # gated on the AR having ACTUALLY reached 'published' — after
+                # the reconciliation above (so the silent-rejection 502 path
+                # can never leave a durable 'published' mirror behind), and
+                # deliberately NOT on the broader accepted/pre-publish sets:
+                # to_be_verified / waiting_for_addon_results mean the
+                # customer-facing COA is live but SENAITE deferred the
+                # workflow publish (partial-publish / addon flow) — the
+                # SENAITE analyses are NOT published there, and mirroring
+                # 'published' would be false. When publish lands later,
+                # per-line A2/A3 hooks and/or the next publish call record
+                # it. Own session via _mark_shadows_published_bg — never the
+                # request `db`.
+                if actual_state == "published":
+                    from fastapi.concurrency import run_in_threadpool
+                    await run_in_threadpool(
+                        _mark_shadows_published_bg, sample_id=sample_id
+                    )
         except HTTPException:
             raise
         except Exception as e:
