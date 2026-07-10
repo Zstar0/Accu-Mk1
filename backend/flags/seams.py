@@ -28,15 +28,21 @@ class EntitySpec:
     # core never learns what a "vial" is.
     context: Optional[Callable[[Session, str], Optional[dict]]] = None
     descendants: Optional[Callable[[Session, str], list]] = None
+    # Optional state resolver (Plan 6 — state-change watches). Returns the
+    # entity's current host-domain workflow state (e.g. a sample's status) or
+    # None when unresolvable. ONLY entity types that register a `state` closure
+    # are watchable; the rest 400 at arm time.
+    state: Optional[Callable[[Session, str], Optional[str]]] = None
 
 
 _REGISTRY: dict[str, EntitySpec] = {}
 
 
 def register_entity(entity_type: str, *, label, deep_link, can_flag,
-                    context=None, descendants=None) -> None:
+                    context=None, descendants=None, state=None) -> None:
     _REGISTRY[entity_type] = EntitySpec(entity_type, label, deep_link, can_flag,
-                                        context=context, descendants=descendants)
+                                        context=context, descendants=descendants,
+                                        state=state)
 
 
 def is_registered(entity_type: str) -> bool:
@@ -66,6 +72,27 @@ def resolve_context(db: Session, entity_type: str, entity_id: str) -> Optional[d
     if ctx is None:
         return None
     return {"entity_type": entity_type, "entity_id": str(entity_id), **ctx}
+
+
+def has_state_seam(entity_type: str) -> bool:
+    """True when the entity type registered a `state` closure (→ watchable).
+    Deliberately distinct from `resolve_state` returning None, which can mean
+    'unresolvable right now'. Arm-time validation uses THIS."""
+    spec = _REGISTRY.get(entity_type)
+    return spec is not None and spec.state is not None
+
+
+def resolve_state(db: Session, entity_type: str, entity_id: str) -> Optional[str]:
+    """Current host state for an entity, or None (unregistered, no `state`
+    closure, row gone, or resolver error). Best-effort — never raises into the
+    poller (a transient None just means 'no match this tick')."""
+    spec = _REGISTRY.get(entity_type)
+    if spec is None or spec.state is None:
+        return None
+    try:
+        return spec.state(db, str(entity_id))
+    except Exception:  # noqa: BLE001 — state read is best-effort
+        return None
 
 
 def resolve_descendants(db: Session, entity_type: str, entity_id: str) -> list:
@@ -229,6 +256,10 @@ def register_mk1_entities() -> None:
         row = _load_sample(db, eid)
         return getattr(row, "sample_id", None) or f"Sample {eid}"
 
+    def _sample_state(db, eid):
+        row = _load_sample(db, eid)
+        return getattr(row, "status", None)
+
     def _sub_sample_label(db, eid):
         from models import LimsSubSample
         row = db.get(LimsSubSample, int(eid)) if str(eid).isdigit() else None
@@ -299,7 +330,8 @@ def register_mk1_entities() -> None:
                     deep_link=lambda eid: f"/#senaite/sample-details?id={eid}",
                     can_flag=lambda user, eid: True,
                     context=_sample_context,
-                    descendants=_sample_descendants)
+                    descendants=_sample_descendants,
+                    state=_sample_state)
     register_entity("sub_sample",
                     label=_sub_sample_label,
                     deep_link=lambda eid: f"/#senaite/sample-details?id={eid}",
