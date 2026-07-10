@@ -177,4 +177,21 @@ describe('flag stream glue — scoped + coalesced invalidation', () => {
     expect(hasKey(['flags'])).toBe(false)
     expect(usedRollupPredicate()).toBe(false)
   })
+
+  it('kind-anchored event (virtual item kind) uses the standard set, not blanket', async () => {
+    await mountGlue()
+    // Type set, id NULL — LEGAL since slice 7 (general_task backfill, admin
+    // kinds like purchase_task). Kinds have no entity buttons: the standard
+    // set fully covers them, and blanket-ing every Purchase-Task comment
+    // would re-create the per-vial storm.
+    for (const kind of ['general_task', 'purchase_task']) {
+      invalidateQueries.mockClear()
+      handler(evt({ flag: { entity_type: kind, entity_id: null } }))
+      vi.advanceTimersByTime(300)
+
+      expect(hasKey(['flags', 'list'])).toBe(true)
+      expect(hasKey(['flags'])).toBe(false) // never blanket
+      expect(usedRollupPredicate()).toBe(false)
+    }
+  })
 })

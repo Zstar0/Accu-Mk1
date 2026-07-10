@@ -46,6 +46,17 @@ const ENTITY_META: Record<string, EntityMeta> = {
  *  Update both together if another type opts in. */
 export const WATCHABLE_ENTITY_TYPES: ReadonlySet<string> = new Set(['sample'])
 
+/** The Mk1-backed ("code") entity types — anchors that always carry an
+ *  entity_id and can have per-entity flag buttons. NOT derived from
+ *  ENTITY_META (it also styles `general_task`, a virtual kind). Everything
+ *  outside this set in entity_type space is a virtual item kind whose
+ *  entity_id is NULL by design. Mirrors ENTITY_TYPES in FlagsFilterBar. */
+export const CODE_ENTITY_TYPES: ReadonlySet<string> = new Set([
+  'sample',
+  'sub_sample',
+  'worksheet',
+])
+
 /** Meta for a null-anchor general task (Phase 2). */
 const GENERAL_META: EntityMeta = {
   Icon: ListTodo,

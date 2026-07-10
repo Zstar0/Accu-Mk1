@@ -7,6 +7,7 @@ import { useUIStore } from '@/store/ui-store'
 import { useAuthStore } from '@/store/auth-store'
 import { useFlagUnseen } from '@/components/flags/use-flag-unseen'
 import { evaluateRelevance } from '@/components/flags/flag-relevance'
+import { CODE_ENTITY_TYPES } from '@/components/flags/flag-entity'
 import { toast } from 'sonner'
 import { flagTypeDef, type FlagTypeDef } from '@/components/flags/flag-catalog'
 import { flagToastBody, flagToastHeading } from '@/components/flags/flag-toast'
@@ -230,11 +231,17 @@ export function useFlagStreamGlue(): void {
       // flag the rollup pass for the descendant→parent case.
       mark(flagKeys.entityScope(et as string, eid as string))
       pendingRollup.current = true
-    } else if (hasType !== hasId || !e.flag) {
-      // Half-present anchor, or no flag snapshot at all — can't trust a scope.
-      // General tasks (both fields absent) are NOT this case: the standard set
-      // already covers them, and blanket-ing them would re-create the per-vial
-      // storm this fix exists to kill.
+    } else if (
+      !e.flag ||
+      (hasId && !hasType) ||
+      (hasType && !hasId && CODE_ENTITY_TYPES.has(et as string))
+    ) {
+      // Un-scopeable: no flag snapshot, an id without a type, or a CODE entity
+      // missing its id (all three impossible via create_flag — pure defense).
+      // General tasks (both absent) and KIND-ANCHORED flags (non-code type,
+      // id NULL — legal since slice 7; kinds have no entity buttons) are NOT
+      // this case: the standard set already covers them, and blanket-ing them
+      // would re-create the per-vial storm this fix exists to kill.
       pendingBlanket.current = true
     }
 
