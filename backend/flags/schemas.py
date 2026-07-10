@@ -210,6 +210,15 @@ class FlagSearchHit(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class EntitySearchHit(BaseModel):
+    """One typeahead hit for an entity link picker: the `entity_id` to link and
+    a human `label` to show. Shape is host-defined by the entity's `search`
+    seam closure."""
+    entity_id: str
+    label: str
+    model_config = ConfigDict(from_attributes=True)
+
+
 # --- flag types (Plan 5) -------------------------------------------------
 class FlagTypeResponse(BaseModel):
     id: int

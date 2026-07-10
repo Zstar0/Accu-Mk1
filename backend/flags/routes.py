@@ -21,8 +21,8 @@ from flags.schemas import (
     ActivityItem, ActivityPage, AssignRequest, AttachmentResponse, CommentRequest,
     CommentResponse, CreateFlagRequest, DueRequest, EntityContext, EntityLinkOut,
     EntityLinkRequest, FlagDetailResponse, FlagLinkOut, FlagLinkRequest, FlagResponse,
-    ArmWatchRequest, FlagRecurringCreate, FlagRecurringResponse, FlagRecurringUpdate,
-    FlagSearchHit, FlagTypeCreate, FlagTypeResponse, FlagTypeUpdate,
+    ArmWatchRequest, EntitySearchHit, FlagRecurringCreate, FlagRecurringResponse,
+    FlagRecurringUpdate, FlagSearchHit, FlagTypeCreate, FlagTypeResponse, FlagTypeUpdate,
     ReactionAggregate, StatusRequest, SummaryResponse, WatchResponse,
     WatcherOut, WatcherRequest,
 )
@@ -286,6 +286,23 @@ def search_flags(q: str = Query("", description="substring; <3 chars → empty")
     try:
         return [FlagSearchHit.model_validate(h)
                 for h in service.search_flags(db, q=q, limit=limit)]
+    except Exception as e:
+        raise _http(e)
+
+
+@router.get("/entity-search", response_model=List[EntitySearchHit])
+def entity_search(entity_type: str = Query(..., description="registered entity type"),
+                  q: str = Query("", description="query; <2 chars → empty"),
+                  db: Session = Depends(get_db), user=Depends(get_current_user)):
+    # Literal /entity-search registered ABOVE /{flag_id} (literal-before-param).
+    # The seam is best-effort ([] for unregistered/no-resolver/error); a <2-char
+    # query short-circuits before hitting the DB. The client also debounces.
+    query = (q or "").strip()
+    if len(query) < 2:
+        return []
+    try:
+        return [EntitySearchHit.model_validate(h)
+                for h in seams.resolve_entity_search(db, entity_type, query)]
     except Exception as e:
         raise _http(e)
 
