@@ -20,6 +20,25 @@ const base: api.SampleRegistryDebug = {
   verdict: { linkage_ok: true, vials_ok: true, drift: 1, registry_null: 1 },
   senaite_error: null,
   raw: { registry: { sample_id: 'P-1' }, senaite: { uid: 'U1' } },
+  analyses: null,
+}
+
+const analysesBase: api.AnalysesSync = {
+  rows: [
+    {
+      keyword: 'PUR_KPV', title: 'KPV - Purity (HPLC)',
+      senaite: { review_state: 'verified', result: '99.2' },
+      shadow: { mirror_review_state: 'to_be_verified', result: '99.2' },
+      canonical: null, status: 'drift',
+    },
+    {
+      keyword: 'QTY_KPV', title: 'KPV - Quantity (HPLC)',
+      senaite: { review_state: 'submitted', result: '2.00' },
+      shadow: null, canonical: null, status: 'no_shadow',
+    },
+  ],
+  summary: { senaite: 2, shadow: 1, in_sync: 0, drift: 1, missing: 1 },
+  error: null,
 }
 
 beforeEach(() => vi.restoreAllMocks())
@@ -53,5 +72,49 @@ describe('SampleRegistryDebug', () => {
     })
     render(<SampleRegistryDebug open onClose={() => {}} sampleId="P-9" />)
     await waitFor(() => expect(screen.getByText(/no registry record/i)).toBeInTheDocument())
+  })
+
+  it('renders analyses rows with keyword/title and senaite + shadow sides', async () => {
+    vi.spyOn(api, 'getSampleRegistryDebug').mockResolvedValue({ ...base, analyses: analysesBase })
+    render(<SampleRegistryDebug open onClose={() => {}} sampleId="P-1" />)
+    await waitFor(() => expect(screen.getByText('PUR_KPV')).toBeInTheDocument())
+    expect(screen.getByText(/KPV - Purity \(HPLC\)/)).toBeInTheDocument()
+    expect(screen.getByText(/\bverified\b/)).toBeInTheDocument()
+    expect(screen.getByText(/to_be_verified/)).toBeInTheDocument()
+  })
+
+  it('shows a drift glyph/marker on a row whose shadow state differs from SENAITE', async () => {
+    vi.spyOn(api, 'getSampleRegistryDebug').mockResolvedValue({ ...base, analyses: analysesBase })
+    render(<SampleRegistryDebug open onClose={() => {}} sampleId="P-1" />)
+    await waitFor(() => expect(screen.getByText('PUR_KPV')).toBeInTheDocument())
+    const driftRow = screen.getByText('PUR_KPV').closest('[data-status]')
+    expect(driftRow).toHaveAttribute('data-status', 'drift')
+  })
+
+  it('marks a SENAITE-only row as no-shadow (expected pre-backfill)', async () => {
+    vi.spyOn(api, 'getSampleRegistryDebug').mockResolvedValue({ ...base, analyses: analysesBase })
+    render(<SampleRegistryDebug open onClose={() => {}} sampleId="P-1" />)
+    await waitFor(() => expect(screen.getByText('QTY_KPV')).toBeInTheDocument())
+    const noShadowRow = screen.getByText('QTY_KPV').closest('[data-status]')
+    expect(noShadowRow).toHaveAttribute('data-status', 'no_shadow')
+  })
+
+  it('renders the analyses summary line', async () => {
+    vi.spyOn(api, 'getSampleRegistryDebug').mockResolvedValue({ ...base, analyses: analysesBase })
+    render(<SampleRegistryDebug open onClose={() => {}} sampleId="P-1" />)
+    await waitFor(() =>
+      expect(screen.getByText(/analyses senaite=2 shadow=1 in_sync=0 drift=1 missing=1/)).toBeInTheDocument()
+    )
+  })
+
+  it('degrades gracefully when the analyses SENAITE fetch errored (fields still render)', async () => {
+    vi.spyOn(api, 'getSampleRegistryDebug').mockResolvedValue({
+      ...base, analyses: { rows: [], summary: null, error: 'senaite down' },
+    })
+    render(<SampleRegistryDebug open onClose={() => {}} sampleId="P-1" />)
+    // The unrelated basic-info field diff must still render...
+    await waitFor(() => expect(screen.getByText('client_sample_id')).toBeInTheDocument())
+    // ...alongside the analyses error.
+    expect(screen.getByText(/senaite down/)).toBeInTheDocument()
   })
 })

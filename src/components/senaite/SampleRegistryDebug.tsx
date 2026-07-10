@@ -12,6 +12,7 @@ import { X, RefreshCw, RotateCw } from 'lucide-react'
 import {
   getSampleRegistryDebug, refreshSampleRegistry,
   type SampleRegistryDebug as DebugData, type RegistryFieldStatus,
+  type AnalysisSyncStatus,
 } from '@/lib/api'
 import { useReadSourceOverride } from '@/lib/read-source'
 
@@ -21,6 +22,17 @@ const statusGlyph: Record<RegistryFieldStatus, string> = {
 const statusColor: Record<RegistryFieldStatus, string> = {
   agree: 'text-emerald-400', drift: 'text-amber-400',
   registry_null: 'text-zinc-500', senaite_null: 'text-zinc-500',
+}
+
+// Analyses column (Task 10): same visual vocabulary as the field-diff glyphs
+// above — ✔ in-sync / ⚠ drift & shadow-only (both "something's off") / ○ no
+// current shadow yet (expected pre-backfill).
+const analysisStatusGlyph: Record<AnalysisSyncStatus, string> = {
+  in_sync: '✔', drift: '⚠', shadow_only: '⚠', no_shadow: '○',
+}
+const analysisStatusColor: Record<AnalysisSyncStatus, string> = {
+  in_sync: 'text-emerald-400', drift: 'text-amber-400',
+  shadow_only: 'text-amber-400', no_shadow: 'text-zinc-500',
 }
 
 function val(v: unknown): string {
@@ -56,7 +68,7 @@ export function SampleRegistryDebug({ open, onClose, sampleId }: Props) {
 
   return (
     <Sheet open={open} onOpenChange={v => !v && onClose()}>
-      <SheetContent side="right" className="w-[600px] sm:max-w-[600px] p-0 border-l-0 bg-transparent [&>button]:hidden">
+      <SheetContent side="right" className="w-[1180px] sm:max-w-[1180px] p-0 border-l-0 bg-transparent [&>button]:hidden">
         <SheetHeader className="sr-only"><SheetTitle>Registry Debug — {sampleId}</SheetTitle></SheetHeader>
         <div className="m-3 flex flex-1 h-[calc(100%-24px)] flex-col rounded-lg overflow-hidden border border-zinc-800/80 shadow-2xl shadow-black/90">
           <div className="bg-zinc-900 border-b border-zinc-800/80 px-3 py-2 flex items-center justify-between gap-3 shrink-0">
@@ -94,7 +106,7 @@ export function SampleRegistryDebug({ open, onClose, sampleId }: Props) {
             </div>
           </div>
 
-          <div className="bg-[#0d0d0d] px-3 py-3 flex-1 overflow-y-auto">
+          <div className="bg-[#0d0d0d] px-3 py-3 flex-1 min-h-0 flex flex-col overflow-hidden">
             {loading && !data && (
               <div className="flex items-center gap-2 py-8 justify-center">
                 <Spinner className="size-3" />
@@ -110,75 +122,121 @@ export function SampleRegistryDebug({ open, onClose, sampleId }: Props) {
             )}
 
             {data && data.load.exists && (
-              <div className="space-y-2">
-                {/* status block */}
-                <div className={cn(line, 'text-zinc-300')}>
-                  <span className="text-zinc-600">load</span>   exists=<span className="text-emerald-400">true</span>{'  '}
-                  native_id={data.load.native_id ?? '∅'}{'  '}system={data.load.external_lims_system}
-                </div>
-                {data.linkage && (
-                  <div className={cn(line)}>
-                    <span className="text-zinc-600">link</span>   uid {data.linkage.registry_uid ?? '∅'} vs {data.linkage.senaite_uid ?? '∅'}{'  '}
-                    <span className={data.linkage.status === 'match' ? 'text-emerald-400' : 'text-red-400'}>{data.linkage.status}</span>
-                  </div>
-                )}
-                <div className={cn(line, 'text-zinc-300')}>
-                  <span className="text-zinc-600">orig</span>   <span>{data.origin}</span>{'   '}
-                  <span className="text-zinc-600">sync</span> {data.load.last_synced_at ?? '∅'}
-                  {data.load.reconcile_due ? <span className="text-amber-400">  (reconcile due)</span> : null}
-                </div>
-                {data.container && (
-                  <div className={cn(line, 'text-zinc-400')}>
-                    <span className="text-zinc-600">cont</span>   container_mode={String(data.container.container_mode)}{'  '}role={data.container.assignment_role}
-                  </div>
-                )}
-
-                {data.senaite_error && (
-                  <div className={cn(line, 'text-red-400')}>senaite_error: {data.senaite_error}</div>
-                )}
-
-                {/* field diff */}
-                {data.fields.length > 0 && (
-                  <div className="pt-2">
-                    <div className="font-mono text-[11px] text-zinc-700 pb-1">{'─'.repeat(3)} fields {'─'.repeat(40)}</div>
-                    {data.fields.map(f => {
-                      const rv = val(f.registry), sv = val(f.senaite)
-                      const differ = rv !== sv
-                      return (
-                        <div key={f.field} className={cn('font-mono text-[12px] leading-relaxed flex gap-1.5', statusColor[f.status])}>
-                          <span className={cn('shrink-0', statusColor[f.status])}>{statusGlyph[f.status]}</span>
-                          <span className="text-zinc-400 shrink-0 w-48">{f.field}</span>
-                          <div className="min-w-0 flex-1">
-                            <div className="text-zinc-400 whitespace-pre-wrap break-all">
-                              {differ && <span className="text-zinc-700">reg </span>}{rv}
-                            </div>
-                            {differ && (
-                              <div className="text-zinc-600 whitespace-pre-wrap break-all">
-                                <span className="text-zinc-700">sen </span>{sv}
-                              </div>
-                            )}
-                          </div>
+              <div className="flex-1 min-h-0 flex gap-3">
+                {/* LEFT column: analysis line items (SENAITE vs shadow vs canonical) */}
+                <div className="flex-[3] min-w-0 h-full overflow-y-auto pr-2 border-r border-zinc-900/80 space-y-1.5">
+                  <div className="font-mono text-[11px] text-zinc-700 pb-1">{'─'.repeat(3)} analyses {'─'.repeat(30)}</div>
+                  {data.analyses?.summary && (
+                    <div className={cn(line, 'text-zinc-400')}>
+                      {`analyses senaite=${data.analyses.summary.senaite} shadow=${data.analyses.summary.shadow} `
+                        + `in_sync=${data.analyses.summary.in_sync} drift=${data.analyses.summary.drift} `
+                        + `missing=${data.analyses.summary.missing}`}
+                    </div>
+                  )}
+                  {data.analyses?.error && (
+                    <div className={cn(line, 'text-red-400')}>analyses_error: {data.analyses.error}</div>
+                  )}
+                  {data.analyses?.rows.map(r => (
+                    <div key={r.keyword} data-status={r.status}
+                      className={cn('font-mono text-[12px] leading-relaxed flex gap-1.5', analysisStatusColor[r.status])}>
+                      <span className={cn('shrink-0', analysisStatusColor[r.status])}>{analysisStatusGlyph[r.status]}</span>
+                      <div className="min-w-0 flex-1">
+                        <div className="text-zinc-300">
+                          <span className="text-zinc-300">{r.keyword}</span>{'  '}
+                          <span className="text-zinc-600">{r.title}</span>
                         </div>
-                      )
-                    })}
-                  </div>
-                )}
+                        <div className="text-zinc-500">
+                          <span className="text-zinc-700">sen </span>
+                          {r.senaite ? `${r.senaite.review_state ?? '∅'} ${r.senaite.result ?? '∅'}` : '∅'}
+                        </div>
+                        <div className="text-zinc-500">
+                          <span className="text-zinc-700">sh  </span>
+                          {r.shadow ? `${r.shadow.mirror_review_state ?? '∅'} ${r.shadow.result ?? '∅'}` : '∅'}
+                        </div>
+                        {r.canonical && (
+                          <div className="text-zinc-700">
+                            {`canon: ${r.canonical.review_state ?? '∅'} ${r.canonical.result ?? '∅'}`}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                  {data.analyses && data.analyses.rows.length === 0 && !data.analyses.error && (
+                    <div className="font-mono text-[11px] text-zinc-600">no analysis lines</div>
+                  )}
+                </div>
 
-                {data.vials && (
-                  <div className={cn(line, data.vials.status === 'in_sync' ? 'text-zinc-400' : 'text-amber-400')}>
-                    <span className="text-zinc-600">vial</span>   local={data.vials.local} senaite={data.vials.senaite}{'  '}{data.vials.status}
+                {/* RIGHT column: basic-info status block + field diff (unchanged) */}
+                <div className="flex-[2] min-w-0 h-full overflow-y-auto space-y-2 pl-0.5">
+                  {/* status block */}
+                  <div className={cn(line, 'text-zinc-300')}>
+                    <span className="text-zinc-600">load</span>   exists=<span className="text-emerald-400">true</span>{'  '}
+                    native_id={data.load.native_id ?? '∅'}{'  '}system={data.load.external_lims_system}
                   </div>
-                )}
+                  {data.linkage && (
+                    <div className={cn(line)}>
+                      <span className="text-zinc-600">link</span>   uid {data.linkage.registry_uid ?? '∅'} vs {data.linkage.senaite_uid ?? '∅'}{'  '}
+                      <span className={data.linkage.status === 'match' ? 'text-emerald-400' : 'text-red-400'}>{data.linkage.status}</span>
+                    </div>
+                  )}
+                  <div className={cn(line, 'text-zinc-300')}>
+                    <span className="text-zinc-600">orig</span>   <span>{data.origin}</span>{'   '}
+                    <span className="text-zinc-600">sync</span> {data.load.last_synced_at ?? '∅'}
+                    {data.load.reconcile_due ? <span className="text-amber-400">  (reconcile due)</span> : null}
+                  </div>
+                  {data.container && (
+                    <div className={cn(line, 'text-zinc-400')}>
+                      <span className="text-zinc-600">cont</span>   container_mode={String(data.container.container_mode)}{'  '}role={data.container.assignment_role}
+                    </div>
+                  )}
 
-                {/* raw toggle */}
-                <button onClick={() => setShowRaw(v => !v)} className="font-mono text-[11px] text-zinc-600 hover:text-zinc-400 pt-2">
-                  {showRaw ? '▾' : '▸'} raw json
-                </button>
-                {showRaw && data.raw && (
-                  <pre className="font-mono text-[10px] text-zinc-500 whitespace-pre-wrap bg-black/40 rounded p-2 overflow-x-auto">
-                    {JSON.stringify(data.raw, null, 2)}
-                  </pre>
-                )}
+                  {data.senaite_error && (
+                    <div className={cn(line, 'text-red-400')}>senaite_error: {data.senaite_error}</div>
+                  )}
+
+                  {/* field diff */}
+                  {data.fields.length > 0 && (
+                    <div className="pt-2">
+                      <div className="font-mono text-[11px] text-zinc-700 pb-1">{'─'.repeat(3)} fields {'─'.repeat(40)}</div>
+                      {data.fields.map(f => {
+                        const rv = val(f.registry), sv = val(f.senaite)
+                        const differ = rv !== sv
+                        return (
+                          <div key={f.field} className={cn('font-mono text-[12px] leading-relaxed flex gap-1.5', statusColor[f.status])}>
+                            <span className={cn('shrink-0', statusColor[f.status])}>{statusGlyph[f.status]}</span>
+                            <span className="text-zinc-400 shrink-0 w-48">{f.field}</span>
+                            <div className="min-w-0 flex-1">
+                              <div className="text-zinc-400 whitespace-pre-wrap break-all">
+                                {differ && <span className="text-zinc-700">reg </span>}{rv}
+                              </div>
+                              {differ && (
+                                <div className="text-zinc-600 whitespace-pre-wrap break-all">
+                                  <span className="text-zinc-700">sen </span>{sv}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )}
+
+                  {data.vials && (
+                    <div className={cn(line, data.vials.status === 'in_sync' ? 'text-zinc-400' : 'text-amber-400')}>
+                      <span className="text-zinc-600">vial</span>   local={data.vials.local} senaite={data.vials.senaite}{'  '}{data.vials.status}
+                    </div>
+                  )}
+
+                  {/* raw toggle */}
+                  <button onClick={() => setShowRaw(v => !v)} className="font-mono text-[11px] text-zinc-600 hover:text-zinc-400 pt-2">
+                    {showRaw ? '▾' : '▸'} raw json
+                  </button>
+                  {showRaw && data.raw && (
+                    <pre className="font-mono text-[10px] text-zinc-500 whitespace-pre-wrap bg-black/40 rounded p-2 overflow-x-auto">
+                      {JSON.stringify(data.raw, null, 2)}
+                    </pre>
+                  )}
+                </div>
               </div>
             )}
           </div>

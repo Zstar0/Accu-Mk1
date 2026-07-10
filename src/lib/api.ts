@@ -5070,6 +5070,25 @@ export interface RegistryDebugField {
   status: RegistryFieldStatus
 }
 
+// Task 10: registry-inspect analyses sync column (parent analysis line
+// items — SENAITE current line vs native lims_analyses shadow/canonical).
+export type AnalysisSyncStatus = 'in_sync' | 'drift' | 'no_shadow' | 'shadow_only'
+
+export interface AnalysisSyncRow {
+  keyword: string
+  title: string
+  senaite: { review_state: string | null; result: string | null } | null
+  shadow: { mirror_review_state: string | null; result: string | null } | null
+  canonical: { review_state: string | null; result: string | null } | null
+  status: AnalysisSyncStatus
+}
+
+export interface AnalysesSync {
+  rows: AnalysisSyncRow[]
+  summary: { senaite: number; shadow: number; in_sync: number; drift: number; missing: number } | null
+  error: string | null
+}
+
 export interface SampleRegistryDebug {
   sample_id: string
   load: {
@@ -5089,6 +5108,7 @@ export interface SampleRegistryDebug {
   verdict: { linkage_ok: boolean; vials_ok: boolean | null; drift: number; registry_null: number } | null
   senaite_error: string | null
   raw: { registry: Record<string, unknown> | null; senaite: Record<string, unknown> | null } | null
+  analyses: AnalysesSync | null
 }
 
 export async function getSampleRegistryDebug(sampleId: string): Promise<SampleRegistryDebug> {
