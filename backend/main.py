@@ -391,6 +391,18 @@ async def lifespan(app: FastAPI):
                               _digest_base, now=now)
         _flag_scheduler.register("slack_digest", interval=_timedelta(minutes=15),
                                  fn=_digest_job)
+    # Orphaned-attachment GC — always registered (no Slack env needed); hourly is
+    # plenty for a 24h TTL. Lives in flags/ (zero Slack coupling).
+    from flags import attachments_gc as _attachments_gc
+
+    def _gc_job(now):
+        db = _SessionLocal()
+        try:
+            _attachments_gc.gc_orphaned_attachments(db, now=now)
+        finally:
+            db.close()
+    _flag_scheduler.register("attachment_gc", interval=_timedelta(hours=1),
+                             fn=_gc_job)
     _flag_scheduler.start()
     # Seed default settings and admin user
     from database import SessionLocal
