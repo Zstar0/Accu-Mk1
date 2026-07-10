@@ -1,6 +1,16 @@
 import { useEffect, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, ArrowUpRight, Check, Send } from 'lucide-react'
+import {
+  ArrowLeft,
+  ArrowUpRight,
+  Check,
+  Send,
+  Bold,
+  Italic,
+  Code,
+  List,
+  Link as LinkIcon,
+} from 'lucide-react'
 import {
   Select,
   SelectContent,
@@ -9,7 +19,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
+import { Textarea } from '@/components/ui/textarea'
 import { Skeleton } from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/store/auth-store'
@@ -21,7 +31,7 @@ import {
   useAddComment,
   flagKeys,
 } from '@/hooks/use-flags'
-import { markRead } from '@/lib/flags-api'
+import { markRead, addFlagAttachment } from '@/lib/flags-api'
 import type {
   FlagStatus,
   CommentResponse,
@@ -87,7 +97,7 @@ export function FlagThread({
     null
   )
   const [activeIdx, setActiveIdx] = useState(0)
-  const inputRef = useRef<HTMLInputElement | null>(null)
+  const inputRef = useRef<HTMLTextAreaElement | null>(null)
 
   const mentionCandidates = menu
     ? [...users.values()]
@@ -116,6 +126,39 @@ export function FlagThread({
     setSelected(prev => new Map(prev).set(u.id, name))
     setMenu(null)
     queueMicrotask(() => inputRef.current?.focus())
+  }
+
+  // Wrap the current selection with markdown tokens (bold/italic/code/link).
+  const surround = (before: string, after = before) => {
+    const ta = inputRef.current
+    if (!ta) return
+    const s = ta.selectionStart ?? draft.length
+    const e = ta.selectionEnd ?? s
+    const next =
+      draft.slice(0, s) + before + draft.slice(s, e) + after + draft.slice(e)
+    setDraft(next)
+    queueMicrotask(() => {
+      ta.focus()
+      ta.setSelectionRange(s + before.length, e + before.length)
+    })
+  }
+  const insertAtCaret = (text: string) => {
+    const ta = inputRef.current
+    const at = ta?.selectionStart ?? draft.length
+    setDraft(draft.slice(0, at) + text + draft.slice(at))
+    queueMicrotask(() => {
+      ta?.focus()
+      const pos = at + text.length
+      ta?.setSelectionRange(pos, pos)
+    })
+  }
+  const uploadImage = async (file: File) => {
+    try {
+      const att = await addFlagAttachment(flagId, file)
+      insertAtCaret(`{attachment:${att.id}}`)
+    } catch {
+      /* surfaced by the failing send if the token dangles; no toast in v1 */
+    }
   }
 
   // Opening a flag marks it read (clears its unread bar). Keyed on the flag's
@@ -395,51 +438,134 @@ export function FlagThread({
             ))}
           </div>
         )}
-        <Input
-          ref={inputRef}
-          value={draft}
-          onChange={e =>
-            onDraftChange(
-              e.target.value,
-              e.target.selectionStart ?? e.target.value.length
-            )
-          }
-          onKeyDown={e => {
-            if (menu && mentionCandidates.length > 0) {
-              if (e.key === 'ArrowDown') {
-                e.preventDefault()
-                setActiveIdx(i => Math.min(i + 1, mentionCandidates.length - 1))
-                return
-              }
-              if (e.key === 'ArrowUp') {
-                e.preventDefault()
-                setActiveIdx(i => Math.max(i - 1, 0))
-                return
-              }
-              // Enter or Tab completes the highlighted candidate.
-              if (e.key === 'Enter' || e.key === 'Tab') {
-                e.preventDefault()
-                const chosen = mentionCandidates[activeIdx]
-                if (chosen) pickMention(chosen)
-                return
-              }
-              if (e.key === 'Escape') {
-                e.preventDefault()
-                setMenu(null)
-                return
-              }
+        <div className="flex min-w-0 flex-1 flex-col gap-1">
+          <div className="flex items-center gap-0.5">
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6"
+              aria-label="Bold"
+              onClick={() => surround('**')}
+            >
+              <Bold className="h-3.5 w-3.5" />
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6"
+              aria-label="Italic"
+              onClick={() => surround('_')}
+            >
+              <Italic className="h-3.5 w-3.5" />
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6"
+              aria-label="Code"
+              onClick={() => surround('`')}
+            >
+              <Code className="h-3.5 w-3.5" />
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6"
+              aria-label="List"
+              onClick={() => insertAtCaret('\n- ')}
+            >
+              <List className="h-3.5 w-3.5" />
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6"
+              aria-label="Link"
+              onClick={() => surround('[', '](url)')}
+            >
+              <LinkIcon className="h-3.5 w-3.5" />
+            </Button>
+          </div>
+          <Textarea
+            ref={inputRef}
+            value={draft}
+            rows={2}
+            onChange={e =>
+              onDraftChange(
+                e.target.value,
+                e.target.selectionStart ?? e.target.value.length
+              )
             }
-            if (e.key === 'Enter' && !e.shiftKey) {
-              e.preventDefault()
-              submit()
-            }
-          }}
-          placeholder="Write a comment… use @ to mention"
-          className="h-10 flex-1"
-        />
+            onKeyDown={e => {
+              if (menu && mentionCandidates.length > 0) {
+                if (e.key === 'ArrowDown') {
+                  e.preventDefault()
+                  setActiveIdx(i =>
+                    Math.min(i + 1, mentionCandidates.length - 1)
+                  )
+                  return
+                }
+                if (e.key === 'ArrowUp') {
+                  e.preventDefault()
+                  setActiveIdx(i => Math.max(i - 1, 0))
+                  return
+                }
+                // Enter or Tab completes the highlighted candidate.
+                if (e.key === 'Enter' || e.key === 'Tab') {
+                  e.preventDefault()
+                  const chosen = mentionCandidates[activeIdx]
+                  if (chosen) pickMention(chosen)
+                  return
+                }
+                if (e.key === 'Escape') {
+                  e.preventDefault()
+                  setMenu(null)
+                  return
+                }
+              }
+              if (
+                (e.metaKey || e.ctrlKey) &&
+                (e.key === 'b' || e.key === 'i')
+              ) {
+                e.preventDefault()
+                surround(e.key === 'b' ? '**' : '_')
+                return
+              }
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault()
+                submit()
+              }
+            }}
+            onPaste={e => {
+              const img = Array.from(e.clipboardData?.files ?? []).find(f =>
+                f.type.startsWith('image/')
+              )
+              if (img) {
+                e.preventDefault()
+                void uploadImage(img)
+              }
+            }}
+            onDrop={e => {
+              const img = Array.from(e.dataTransfer?.files ?? []).find(f =>
+                f.type.startsWith('image/')
+              )
+              if (img) {
+                e.preventDefault()
+                void uploadImage(img)
+              }
+            }}
+            placeholder="Write a comment… use @ to mention"
+            className="max-h-40 min-h-10 flex-1 resize-none"
+          />
+        </div>
         <Button
           size="icon"
-          className="h-10 w-10 shrink-0"
+          className="h-10 w-10 shrink-0 self-end"
           disabled={!draft.trim() || addComment.isPending}
           onClick={submit}
           aria-label="Send comment"
