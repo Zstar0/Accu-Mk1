@@ -686,6 +686,26 @@ git commit -m "feat(phaseout): extend A5/A6/A7 to stamp parent shadow rows"
 
 ---
 
+### Task 9: Backfill script — shadow rows for existing parent analyses
+
+**Files:**
+- Create: `backend/scripts/backfill_parent_analysis_shadows.py`
+- Test: `backend/tests/test_backfill_parent_analysis_shadows.py`
+
+**Interfaces:**
+- Consumes: `mirror_parent_analysis` (idempotent upsert — makes the whole script re-runnable), `resolve_instrument_id`; `LimsSample` registry rows as the iteration cursor.
+- Produces: a standalone CLI script, same conventions as `backfill_lims_sample_basic_info.py` (`--dry-run`, `--limit`, `--sleep`, checkpoint-resumable, stats line, exit 1 on errors), run inside the prod backend container off-hours.
+
+**Behavior:**
+- Iterate `lims_samples` ordered by id (checkpoint = last processed id). Skip rows with NULL `external_lims_uid` (native-only samples have no SENAITE AR). Skip `-S\d+` secondaries if any slipped in.
+- Per parent: ONE throttled SENAITE Analysis-catalog query (`getRequestID=<sample_id>`, `complete=yes`, `limit=200` — same shape as `SenaiteAnalysesHttpReader.list_for_sample`, sync).
+- Per keyword group: drop lines superseded by a retest (uid referenced by another line's `retest_of_uid`), then take the newest remaining line; mirror it via `mirror_parent_analysis` (result, unit, `mirror_review_state`=its review_state, instrument via `resolve_instrument_id`; method stays None — known gap; `is_retest=False` — backfill records current state, not supersession history).
+- Dry-run writes nothing; errored parent advances the checkpoint (documented, same as basic-info); stats line: seen/mirrored-created/mirrored-updated/skipped/errors.
+
+**Steps:** TDD as usual — failing tests (newest-line-per-keyword selection incl. retest supersession; idempotent re-run updates not duplicates; dry-run writes nothing; NULL-uid skip), then implement, then commit.
+
+---
+
 ## Deferred to later slices (NOT in this plan)
 
 - **State-system slice:** flip provenance semantics so shadow rows become read-authoritative (`review_state` ← `mirror_review_state`), take ownership of the native state machine, re-point the readers off `provenance='canonical'`, retire the sentinel.
