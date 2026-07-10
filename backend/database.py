@@ -817,6 +817,8 @@ def _run_migrations():
         "CREATE INDEX IF NOT EXISTS ix_flag_flags_entity   ON flag_flags (entity_type, entity_id)",
         "CREATE INDEX IF NOT EXISTS ix_flag_flags_assignee ON flag_flags (assignee_id)",
         "CREATE INDEX IF NOT EXISTS ix_flag_flags_status   ON flag_flags (status, updated_at)",
+        # raised tab + _relevant_flag_ids filter on created_by (perf review #4)
+        "CREATE INDEX IF NOT EXISTS ix_flag_flags_created_by ON flag_flags (created_by)",
         """
         CREATE TABLE IF NOT EXISTS flag_comments (
             id         SERIAL PRIMARY KEY,
@@ -855,6 +857,8 @@ def _run_migrations():
         )
         """,
         "CREATE INDEX IF NOT EXISTS ix_flag_events_flag ON flag_events (flag_id)",
+        # activity feed's actor_id OR-branch (perf review #3)
+        "CREATE INDEX IF NOT EXISTS ix_flag_events_actor ON flag_events (actor_id)",
         # --- flag_types catalog (Plan 5) ---
         """
         CREATE TABLE IF NOT EXISTS flag_types (

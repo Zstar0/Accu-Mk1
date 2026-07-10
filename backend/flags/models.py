@@ -29,7 +29,7 @@ class FlagFlag(Base):
     status: Mapped[str] = mapped_column(Text, nullable=False, default="open",
                                         server_default="open", index=True)
     title: Mapped[str] = mapped_column(Text, nullable=False)
-    created_by: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_by: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     assignee_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow,
@@ -93,7 +93,7 @@ class FlagEvent(Base):
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     flag_id: Mapped[int] = mapped_column(Integer, ForeignKey("flag_flags.id", ondelete="CASCADE"),
                                          nullable=False, index=True)
-    actor_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    actor_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
     event_type: Mapped[str] = mapped_column(Text, nullable=False)
     from_value: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     to_value: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
