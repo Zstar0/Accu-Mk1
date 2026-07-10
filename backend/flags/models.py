@@ -21,8 +21,9 @@ class FlagFlag(Base):
     __tablename__ = "flag_flags"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    entity_type: Mapped[str] = mapped_column(Text, nullable=False, index=True)
-    entity_id: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    # Nullable since Phase 2: a NULL anchor = a "general task" (spec §5).
+    entity_type: Mapped[Optional[str]] = mapped_column(Text, nullable=True, index=True)
+    entity_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True, index=True)
     kind: Mapped[str] = mapped_column(Text, nullable=False)          # 'issue' | 'signal'
     type: Mapped[str] = mapped_column(Text, nullable=False)          # 'blocker' | ...
     status: Mapped[str] = mapped_column(Text, nullable=False, default="open",
@@ -35,6 +36,8 @@ class FlagFlag(Base):
                                                  onupdate=datetime.utcnow, nullable=False)
     resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     resolved_by: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # Optional deadline (Phase 2 slice 2). Overdue is computed, never stored.
+    due_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, index=True)
 
     comments: Mapped[list["FlagComment"]] = relationship(
         "FlagComment", back_populates="flag", cascade="all, delete-orphan",

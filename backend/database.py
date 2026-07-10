@@ -797,8 +797,8 @@ def _run_migrations():
         """
         CREATE TABLE IF NOT EXISTS flag_flags (
             id           SERIAL PRIMARY KEY,
-            entity_type  TEXT NOT NULL,
-            entity_id    TEXT NOT NULL,
+            entity_type  TEXT,
+            entity_id    TEXT,
             kind         TEXT NOT NULL,
             type         TEXT NOT NULL,
             status       TEXT NOT NULL DEFAULT 'open'
@@ -810,7 +810,8 @@ def _run_migrations():
             created_at   TIMESTAMP NOT NULL DEFAULT NOW(),
             updated_at   TIMESTAMP NOT NULL DEFAULT NOW(),
             resolved_at  TIMESTAMP,
-            resolved_by  INTEGER
+            resolved_by  INTEGER,
+            due_at       TIMESTAMP
         )
         """,
         "CREATE INDEX IF NOT EXISTS ix_flag_flags_entity   ON flag_flags (entity_type, entity_id)",
@@ -915,6 +916,14 @@ def _run_migrations():
         "CREATE INDEX IF NOT EXISTS ix_flag_events_created_at_id ON flag_events (created_at DESC, id DESC)",
         # Flag @mentions: user ids called out in a comment
         "ALTER TABLE flag_comments ADD COLUMN IF NOT EXISTS mentions JSON",
+        # --- Phase 2 slice 2: general tasks + due dates ---
+        # Relax the anchor so a NULL (entity_type, entity_id) = a general task.
+        # DROP NOT NULL is idempotent in Postgres; the fresh-install CREATE TABLE
+        # above already omits NOT NULL + carries due_at, so new DBs match migrated.
+        "ALTER TABLE flag_flags ALTER COLUMN entity_type DROP NOT NULL",
+        "ALTER TABLE flag_flags ALTER COLUMN entity_id DROP NOT NULL",
+        "ALTER TABLE flag_flags ADD COLUMN IF NOT EXISTS due_at TIMESTAMP",
+        "CREATE INDEX IF NOT EXISTS ix_flag_flags_due ON flag_flags (due_at)",
         # Slack DM prefs: cached Slack display name for mapping confidence
         "ALTER TABLE slack_dm_prefs ADD COLUMN IF NOT EXISTS slack_display_name TEXT",
         # Order-first check-in boxing: lims_boxes + sub_sample.box_id link.
