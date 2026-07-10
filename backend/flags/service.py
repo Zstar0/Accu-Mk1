@@ -12,7 +12,9 @@ from sqlalchemy.orm import Session
 
 from flags import catalog, permissions, seams, types_service
 from flags.errors import BadRequestError, NotFoundError, PermissionDeniedError
-from flags.models import FlagComment, FlagEvent, FlagFlag, FlagParticipant, FlagRead
+from flags.models import (
+    FlagComment, FlagEntityLink, FlagEvent, FlagFlag, FlagParticipant, FlagRead,
+)
 
 
 def _flag_summary(flag) -> dict:
@@ -368,6 +370,47 @@ def list_watchers(db: Session, flag_id: int) -> list[FlagParticipant]:
                FlagParticipant.role == "watcher")
         .order_by(FlagParticipant.added_at.asc(), FlagParticipant.id.asc())
     ).scalars().all())
+
+
+# --- entity reference links (Phase 2 slice 2) ---------------------------
+def add_entity_link(db: Session, *, user, flag_id: int, entity_type: str,
+                    entity_id: str) -> FlagEntityLink:
+    """Attach a navigational 'related item' to a flag. NOT a rollup anchor."""
+    flag = get_flag(db, flag_id)
+    if not seams.is_registered(entity_type):
+        raise BadRequestError(f"unknown entity_type {entity_type!r}")
+    dup = db.execute(select(FlagEntityLink).where(
+        FlagEntityLink.flag_id == flag_id,
+        FlagEntityLink.entity_type == entity_type,
+        FlagEntityLink.entity_id == str(entity_id))).scalar_one_or_none()
+    if dup is not None:
+        raise BadRequestError("already linked")
+    link = FlagEntityLink(flag_id=flag_id, entity_type=entity_type,
+                          entity_id=str(entity_id),
+                          added_by=getattr(user, "id", None))
+    db.add(link)
+    _audit(db, flag, getattr(user, "id", None), "entity_link_added",
+           to_value=f"{entity_type}:{entity_id}")
+    _commit_and_emit(db)
+    db.refresh(link)
+    return link
+
+
+def remove_entity_link(db: Session, *, user, flag_id: int, link_id: int) -> None:
+    flag = get_flag(db, flag_id)
+    link = db.get(FlagEntityLink, link_id)
+    if link is None or link.flag_id != flag_id:
+        raise NotFoundError(f"link {link_id} not found on flag {flag_id}")
+    db.delete(link)
+    _audit(db, flag, getattr(user, "id", None), "entity_link_removed",
+           from_value=f"{link.entity_type}:{link.entity_id}")
+    _commit_and_emit(db)
+
+
+def list_entity_links(db: Session, flag_id: int) -> list[FlagEntityLink]:
+    return list(db.execute(select(FlagEntityLink)
+        .where(FlagEntityLink.flag_id == flag_id)
+        .order_by(FlagEntityLink.created_at.asc())).scalars().all())
 
 
 def change_status(db: Session, *, user, flag_id, to_status) -> FlagFlag:

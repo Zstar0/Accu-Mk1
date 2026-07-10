@@ -114,3 +114,18 @@ class FlagRead(Base):
     flag_id: Mapped[int] = mapped_column(Integer, ForeignKey("flag_flags.id", ondelete="CASCADE"),
                                          nullable=False, index=True)
     last_read_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class FlagEntityLink(Base):
+    """A navigational 'related item' reference — NOT a rollup anchor (spec §2)."""
+    __tablename__ = "flag_entity_links"
+    __table_args__ = (UniqueConstraint("flag_id", "entity_type", "entity_id",
+                                       name="uq_flag_entity_link"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    flag_id: Mapped[int] = mapped_column(Integer, ForeignKey("flag_flags.id", ondelete="CASCADE"),
+                                         nullable=False, index=True)
+    entity_type: Mapped[str] = mapped_column(Text, nullable=False)
+    entity_id: Mapped[str] = mapped_column(Text, nullable=False)
+    added_by: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)

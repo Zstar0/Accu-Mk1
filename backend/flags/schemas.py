@@ -122,10 +122,26 @@ class WatcherOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class EntityLinkOut(BaseModel):
+    """A navigational entity reference link, with resolved context like the
+    anchor. NOT counted in rollups/indicators (spec §2 link model b)."""
+    id: int
+    entity_type: str
+    entity_id: str
+    entity: Optional[EntityContext] = None
+    model_config = ConfigDict(from_attributes=True)
+
+
+class EntityLinkRequest(BaseModel):
+    entity_type: str
+    entity_id: str
+
+
 class FlagDetailResponse(FlagResponse):
     comments: List[CommentResponse] = Field(default_factory=list)
     events: List[EventResponse] = Field(default_factory=list)
     watchers: List[WatcherOut] = Field(default_factory=list)
+    entity_links: List[EntityLinkOut] = Field(default_factory=list)
 
 
 class ActivityItem(BaseModel):

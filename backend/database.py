@@ -935,6 +935,19 @@ def _run_migrations():
         "ALTER TABLE flag_flags ALTER COLUMN entity_id DROP NOT NULL",
         "ALTER TABLE flag_flags ADD COLUMN IF NOT EXISTS due_at TIMESTAMP",
         "CREATE INDEX IF NOT EXISTS ix_flag_flags_due ON flag_flags (due_at)",
+        # Entity reference links: navigational 'related items' (NOT rollup anchors).
+        """
+        CREATE TABLE IF NOT EXISTS flag_entity_links (
+            id          SERIAL PRIMARY KEY,
+            flag_id     INTEGER NOT NULL REFERENCES flag_flags(id) ON DELETE CASCADE,
+            entity_type TEXT NOT NULL,
+            entity_id   TEXT NOT NULL,
+            added_by    INTEGER,
+            created_at  TIMESTAMP NOT NULL DEFAULT NOW(),
+            CONSTRAINT uq_flag_entity_link UNIQUE (flag_id, entity_type, entity_id)
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS ix_flag_entity_links_flag ON flag_entity_links (flag_id)",
         # Slack DM prefs: cached Slack display name for mapping confidence
         "ALTER TABLE slack_dm_prefs ADD COLUMN IF NOT EXISTS slack_display_name TEXT",
         # Order-first check-in boxing: lims_boxes + sub_sample.box_id link.

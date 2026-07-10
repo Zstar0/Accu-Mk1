@@ -17,9 +17,9 @@ from flags.bus import BUS
 from flags.errors import BadRequestError, ConflictError, NotFoundError, PermissionDeniedError
 from flags.schemas import (
     ActivityItem, ActivityPage, AssignRequest, CommentRequest, CommentResponse,
-    CreateFlagRequest, DueRequest, EntityContext, FlagDetailResponse, FlagResponse,
-    FlagTypeCreate, FlagTypeResponse, FlagTypeUpdate, StatusRequest,
-    SummaryResponse, WatcherOut, WatcherRequest,
+    CreateFlagRequest, DueRequest, EntityContext, EntityLinkOut, EntityLinkRequest,
+    FlagDetailResponse, FlagResponse, FlagTypeCreate, FlagTypeResponse,
+    FlagTypeUpdate, StatusRequest, SummaryResponse, WatcherOut, WatcherRequest,
 )
 
 router = APIRouter(prefix="/api/flags", tags=["flags"])
@@ -206,6 +206,12 @@ def get_flag(flag_id: int, db: Session = Depends(get_db), user=Depends(get_curre
         resp = _with_entity(db, service.get_flag(db, flag_id), FlagDetailResponse)
         resp.watchers = [WatcherOut.model_validate(w)
                          for w in service.list_watchers(db, flag_id)]
+        resp.entity_links = []
+        for link in service.list_entity_links(db, flag_id):
+            out = EntityLinkOut.model_validate(link)
+            ctx = seams.resolve_context(db, link.entity_type, link.entity_id)
+            out.entity = EntityContext(**ctx) if ctx else None
+            resp.entity_links.append(out)
         return resp
     except Exception as e:
         raise _http(e)
@@ -267,5 +273,23 @@ def add_watcher(flag_id: int, req: WatcherRequest, db: Session = Depends(get_db)
 def remove_watcher(flag_id: int, user_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
     try:
         service.remove_watcher(db, user=user, flag_id=flag_id, user_id=user_id)
+    except Exception as e:
+        raise _http(e)
+
+
+@router.post("/{flag_id}/links/entities", status_code=201)
+def add_entity_link(flag_id: int, req: EntityLinkRequest, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    try:
+        link = service.add_entity_link(db, user=user, flag_id=flag_id,
+                                       entity_type=req.entity_type, entity_id=req.entity_id)
+        return {"id": link.id}
+    except Exception as e:
+        raise _http(e)
+
+
+@router.delete("/{flag_id}/links/entities/{link_id}", status_code=204)
+def remove_entity_link(flag_id: int, link_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    try:
+        service.remove_entity_link(db, user=user, flag_id=flag_id, link_id=link_id)
     except Exception as e:
         raise _http(e)
