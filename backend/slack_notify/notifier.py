@@ -21,12 +21,16 @@ logger = logging.getLogger(__name__)
 
 class SlackNotifier:
     def __init__(self, client, session_factory, base_url: str,
-                 alias_domains: Optional[list] = None) -> None:
+                 alias_domains: Optional[list] = None,
+                 interactive: bool = False) -> None:
         self._client = client
         self._session_factory = session_factory
         self._base_url = base_url
         # Aliased login/Slack domains — retry lookup across them (emails.py).
         self._alias_domains = alias_domains or []
+        # Emit DM action buttons only when the interactions endpoint is live
+        # (SLACK_SIGNING_SECRET set) — no dead buttons otherwise.
+        self._interactive = interactive
 
     # -- sync helpers (run via to_thread) ---------------------------------
     def _plan_and_enrich(self, event: dict):
@@ -105,7 +109,8 @@ class SlackNotifier:
                     continue
                 text, blocks = build_message(event, category, actor_label,
                                              self._base_url,
-                                             link_hash=link_hash)
+                                             link_hash=link_hash,
+                                             interactive=self._interactive)
                 if await self._client.post_dm(channel, text, blocks):
                     sent += 1
             return sent
@@ -136,5 +141,6 @@ def maybe_start(bus) -> Optional["asyncio.Task"]:
     from database import SessionLocal
     base_url = os.getenv("MK1_PUBLIC_URL", "https://accumk1.valenceanalytical.com")
     notifier = SlackNotifier(SlackClient(token), SessionLocal, base_url,
-                             alias_domains=alias_domains_from_env())
+                             alias_domains=alias_domains_from_env(),
+                             interactive=bool(os.getenv("SLACK_SIGNING_SECRET")))
     return notifier.start(bus)

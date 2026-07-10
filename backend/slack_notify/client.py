@@ -59,3 +59,11 @@ class SlackClient:
         return await self._call("chat.postMessage",
                                 {"channel": channel, "text": text,
                                  "blocks": blocks}) is not None
+
+    async def update_message(self, channel: str, ts: str, text: str,
+                             blocks: list) -> bool:
+        # chat.update takes JSON like chat.postMessage — the form=True path is
+        # only for users.lookupByEmail / users.info.
+        return await self._call("chat.update",
+                                {"channel": channel, "ts": ts, "text": text,
+                                 "blocks": blocks}) is not None

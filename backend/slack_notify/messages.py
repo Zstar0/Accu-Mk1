@@ -47,7 +47,8 @@ def link_hash_for(deep_link: Optional[dict], flag_id: int) -> str:
 
 def build_message(event: dict, category: str, actor_label: str,
                   base_url: str,
-                  link_hash: Optional[str] = None) -> tuple[str, list[dict]]:
+                  link_hash: Optional[str] = None,
+                  *, interactive: bool = False) -> tuple[str, list[dict]]:
     flag = event.get("flag") or {}
     verb = "commented on" if event.get("event_type") == "commented" else "updated"
     # Escape user-supplied text (actor name, title, entity id/type, excerpt)
@@ -74,4 +75,24 @@ def build_message(event: dict, category: str, actor_label: str,
         blocks.insert(1, {"type": "section",
                           "text": {"type": "mrkdwn",
                                    "text": f"> {_esc(excerpt[:_EXCERPT_MAX])}"}})
+    if interactive:
+        # Emitted ONLY when the interactions endpoint is live (signing secret
+        # present). All three buttons show on every DM; the endpoint enforces
+        # permission on click (declines with a confirmation line).
+        fid = flag.get("id")
+        blocks.append({
+            "type": "actions",
+            "block_id": f"flag_{fid}",
+            "elements": [
+                {"type": "button", "action_id": "flag_assign_me",
+                 "text": {"type": "plain_text", "text": "Assign to me"},
+                 "value": str(fid)},
+                {"type": "button", "action_id": "flag_mark_read",
+                 "text": {"type": "plain_text", "text": "Mark read"},
+                 "value": str(fid)},
+                {"type": "button", "action_id": "flag_resolve", "style": "primary",
+                 "text": {"type": "plain_text", "text": "Resolve"},
+                 "value": str(fid)},
+            ],
+        })
     return text, blocks
