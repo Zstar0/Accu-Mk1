@@ -14,16 +14,17 @@ from sqlalchemy.orm import Session
 
 from auth import get_current_user, require_admin
 from database import get_db
-from flags import recurring, seams, service, types_service
+from flags import recurring, seams, service, types_service, watches
 from flags.bus import BUS
 from flags.errors import BadRequestError, ConflictError, NotFoundError, PermissionDeniedError
 from flags.schemas import (
     ActivityItem, ActivityPage, AssignRequest, AttachmentResponse, CommentRequest,
     CommentResponse, CreateFlagRequest, DueRequest, EntityContext, EntityLinkOut,
     EntityLinkRequest, FlagDetailResponse, FlagLinkOut, FlagLinkRequest, FlagResponse,
-    FlagRecurringCreate, FlagRecurringResponse, FlagRecurringUpdate,
+    ArmWatchRequest, FlagRecurringCreate, FlagRecurringResponse, FlagRecurringUpdate,
     FlagSearchHit, FlagTypeCreate, FlagTypeResponse, FlagTypeUpdate,
-    ReactionAggregate, StatusRequest, SummaryResponse, WatcherOut, WatcherRequest,
+    ReactionAggregate, StatusRequest, SummaryResponse, WatchResponse,
+    WatcherOut, WatcherRequest,
 )
 
 router = APIRouter(prefix="/api/flags", tags=["flags"])
@@ -285,6 +286,41 @@ def search_flags(q: str = Query("", description="substring; <3 chars → empty")
     try:
         return [FlagSearchHit.model_validate(h)
                 for h in service.search_flags(db, q=q, limit=limit)]
+    except Exception as e:
+        raise _http(e)
+
+
+# --- state-change watches (Plan 6) --------------------------------------
+# Literal `/watches*` routes ABOVE `/{flag_id}` so they win the match.
+@router.post("/watches", response_model=WatchResponse, status_code=201)
+def arm_watch(req: ArmWatchRequest, db: Session = Depends(get_db),
+              user=Depends(get_current_user)):
+    try:
+        w = watches.arm_watch(
+            db, user=user, entity_type=req.entity_type, entity_id=req.entity_id,
+            condition=req.condition.model_dump(),
+            action=req.action.model_dump(exclude_none=True),
+            watch_flag_id=req.watch_flag_id)
+        return WatchResponse.model_validate(w)
+    except Exception as e:
+        raise _http(e)
+
+
+@router.get("/watches", response_model=List[WatchResponse])
+def list_watches(flag_id: Optional[int] = None, db: Session = Depends(get_db),
+                 user=Depends(get_current_user)):
+    try:
+        return [WatchResponse.model_validate(w)
+                for w in watches.list_watches(db, flag_id=flag_id)]
+    except Exception as e:
+        raise _http(e)
+
+
+@router.delete("/watches/{watch_id}", status_code=204)
+def cancel_watch(watch_id: int, db: Session = Depends(get_db),
+                 user=Depends(get_current_user)):
+    try:
+        watches.cancel_watch(db, user=user, watch_id=watch_id)
     except Exception as e:
         raise _http(e)
 

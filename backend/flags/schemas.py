@@ -298,3 +298,42 @@ class FlagRecurringUpdate(BaseModel):
     entity_id: Optional[str] = None
     active: Optional[bool] = None
     skip_if_open: Optional[bool] = None
+
+
+# --- state-change watches (Plan 6) --------------------------------------
+class WatchConditionModel(BaseModel):
+    field: Literal["state"]
+    equals: str
+
+
+class WatchActionModel(BaseModel):
+    kind: Literal["create_flag", "comment"]
+    # create_flag
+    type: Optional[str] = None
+    title: Optional[str] = None
+    assignee_id: Optional[int] = None
+    # comment
+    flag_id: Optional[int] = None
+    body: Optional[str] = None
+
+
+class ArmWatchRequest(BaseModel):
+    entity_type: str
+    entity_id: str
+    condition: WatchConditionModel
+    action: WatchActionModel
+    watch_flag_id: Optional[int] = None
+
+
+class WatchResponse(BaseModel):
+    id: int
+    entity_type: str
+    entity_id: str
+    condition: dict
+    action: dict
+    created_by: int
+    watch_flag_id: Optional[int] = None
+    status: str
+    created_at: datetime
+    fired_at: Optional[datetime] = None
+    model_config = ConfigDict(from_attributes=True)
