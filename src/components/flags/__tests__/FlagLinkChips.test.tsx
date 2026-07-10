@@ -56,7 +56,13 @@ describe('FlagLinkChips', () => {
             },
           ],
           flag_links: [
-            { id: 2, flag_id: 12, title: 'Pump seal', status: 'open', type: 'blocker' },
+            {
+              id: 2,
+              flag_id: 12,
+              title: 'Pump seal',
+              status: 'open',
+              type: 'blocker',
+            },
           ],
         })}
       />

@@ -19,13 +19,22 @@ vi.mock('@/hooks/use-flags', async orig => {
 vi.mock('@/services/flag-types', async orig => {
   const actual = (await orig()) as Record<string, unknown>
   const t = (slug: string, entity_types: string[], sort_order: number) => ({
-    id: sort_order, slug, label: slug, color: '#111', kind: 'issue',
-    is_blocking: false, is_active: true, sort_order, entity_types,
+    id: sort_order,
+    slug,
+    label: slug,
+    color: '#111',
+    kind: 'issue',
+    is_blocking: false,
+    is_active: true,
+    sort_order,
+    entity_types,
     is_builtin: true,
   })
   return {
     ...actual,
-    useFlagTypes: () => ({ data: [t('sample_only', ['sample'], 0), t('task', [], 5)] }),
+    useFlagTypes: () => ({
+      data: [t('sample_only', ['sample'], 0), t('task', [], 5)],
+    }),
   }
 })
 
